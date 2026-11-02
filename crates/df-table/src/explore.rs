@@ -5,23 +5,25 @@
 //! and calls `step` with the decision (RES27), so this machine proposes the check and the rules
 //! owner settles it. When the decision is a roll the player must make, the machine reports
 //! `Waiting{pending_id}` and holds only that id (RES26); the answer comes back as a `Dice` input
-//! for the same pending. Resolving the beat leaves as a `BeatResolved` effect and a request to
-//! hand the table back to `lobby`. It owns three states (`presenting`, `awaiting_roll`,
-//! `resolved`).
+//! for the same pending. Resolving the beat leaves as a `BeatResolved` effect, and the machine is
+//! then finished: it asks to hand the table back to `lobby`, for as long as the table has not
+//! moved on. A decline from the rules owner changes nothing, so a declined roll answer leaves the
+//! pending open for the pending handler (C4) to cancel or re-ask. The seats at the scene are
+//! read from the table on every call, so a seat that left cannot act. It owns three states
+//! (`presenting`, `awaiting_roll`, `resolved`).
 //!
 //! `Resolution` says only whether the rules applied the action, so this machine treats an applied
 //! check as made; it never compares a total with a difficulty, because the rules owner decides
 //! mechanics. It declines any other input `not_viable`; spells, hazards, light and searching are
-//! the rules adapter's `not_supported_yet` (RES31). It never imports another machine, draws a
-//! die, reads a clock or calls a port.
-
-use std::collections::BTreeSet;
+//! the rules adapter's `not_supported_yet` (RES31). Going back to the lobby is the test pair's
+//! flow, not a plan row (see the plan's note on explore). It never imports another machine,
+//! draws a die, reads a clock or calls a port.
 
 use serde::{Deserialize, Serialize};
 
 use crate::effects::{BeatName, TableEffect, TableState};
 use crate::element::NameError;
-use crate::identity::{SceneId, SeatId};
+use crate::identity::SceneId;
 use crate::machine::{
     CarryItem, Decision, Entry, EntryRefusal, HandOff, InspectReport, Machine, MachineError,
     MachineId, MachineInput, MachineReadout, MachineSpec, Scope, SpecError, StateName, StepInput,
@@ -32,6 +34,7 @@ use crate::outcome::{Decline, DeclineCode};
 use crate::ports::{ActionId, Audience, PortName, Resolution};
 
 const EXPLORE_SCHEMA_VERSION: u32 = 1;
+const PHASE_TAG: &str = "phase";
 const PRESENTING: &str = "presenting";
 const AWAITING_ROLL: &str = "awaiting_roll";
 const RESOLVED: &str = "resolved";
@@ -53,49 +56,21 @@ impl AuthoredBeat {
     }
 }
 
-/// The explore machine's closed states. The seats are those carried in, sorted.
+/// The explore machine's closed states.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
 enum ExploreState {
-    Presenting {
-        scene: SceneId,
-        seats: Vec<SeatId>,
-    },
-    AwaitingRoll {
-        scene: SceneId,
-        seats: Vec<SeatId>,
-        roller: SeatId,
-        pending: u64,
-    },
-    Resolved {
-        scene: SceneId,
-        seats: Vec<SeatId>,
-        beat: BeatName,
-    },
+    Presenting { scene: SceneId },
+    AwaitingRoll { scene: SceneId, pending: u64 },
+    Resolved { scene: SceneId, beat: BeatName },
 }
 
 impl ExploreState {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Presenting { .. } => PRESENTING,
-            Self::AwaitingRoll { .. } => AWAITING_ROLL,
-            Self::Resolved { .. } => RESOLVED,
-        }
-    }
-
     fn scene(&self) -> SceneId {
         match self {
-            Self::Presenting { scene, .. }
+            Self::Presenting { scene }
             | Self::AwaitingRoll { scene, .. }
             | Self::Resolved { scene, .. } => *scene,
-        }
-    }
-
-    fn seats(&self) -> &[SeatId] {
-        match self {
-            Self::Presenting { seats, .. }
-            | Self::AwaitingRoll { seats, .. }
-            | Self::Resolved { seats, .. } => seats,
         }
     }
 }
@@ -119,7 +94,8 @@ impl ExploreMachine {
         )?
         .handing_off_to(NEXT_MACHINE)?
         .requiring_port(PortName::RulesOwner)
-        .with_rules_action(beat.check.clone())?;
+        .with_rules_action(beat.check.clone())?
+        .reading_entry();
         let next_machine = MachineId::new(NEXT_MACHINE).map_err(SpecError::InvalidName)?;
         Ok(Self {
             spec,
@@ -136,11 +112,11 @@ impl ExploreMachine {
         Ok(MachineSlot::encode(&self.spec, state)?)
     }
 
-    /// Whether the input is one the machine handles in this state.
-    fn handles(&self, state: &ExploreState, input: &MachineInput) -> bool {
+    /// Whether the input is one the machine handles in this state, for the table as it is now.
+    fn handles(&self, table: &TableState, state: &ExploreState, input: &MachineInput) -> bool {
         match (state, input) {
-            (ExploreState::Presenting { seats, .. }, MachineInput::Intent { seat, action }) => {
-                *action == self.beat.check && seats.contains(seat)
+            (ExploreState::Presenting { .. }, MachineInput::Intent { seat, action }) => {
+                *action == self.beat.check && table.seats().contains(seat)
             }
             (
                 ExploreState::AwaitingRoll { pending, .. },
@@ -148,22 +124,25 @@ impl ExploreMachine {
                     pending: answered, ..
                 },
             ) => answered.get() == *pending,
+            (
+                ExploreState::AwaitingRoll { pending, .. },
+                MachineInput::PendingCancelled { pending: cancelled },
+            ) => cancelled.get() == *pending,
             _ => false,
         }
     }
 
-    fn resolve(&self, state: &ExploreState) -> Result<StepResult, MachineError> {
+    fn settle(&self, state: &ExploreState) -> Result<StepResult, MachineError> {
         let scene = state.scene();
         let next = self.encode(&ExploreState::Resolved {
             scene,
-            seats: state.seats().to_vec(),
             beat: self.beat.id.clone(),
         })?;
         let effects = vec![TableEffect::BeatResolved {
             scene,
             beat: self.beat.id.clone(),
         }];
-        Ok(StepResult::applied(next, effects).asking_for_hand_off())
+        Ok(StepResult::applied(next, effects))
     }
 }
 
@@ -177,88 +156,85 @@ impl Machine for ExploreMachine {
         if table.active_scene() != Some(scene) {
             return Err(EntryRefusal::SceneNotActive { scene }.into());
         }
-        let seats: BTreeSet<SeatId> = entry.seats().collect();
-        if seats.is_empty() {
+        let mut seats = entry.seats().peekable();
+        if seats.peek().is_none() {
             return Err(EntryRefusal::NoSeats.into());
         }
-        if let Some(seat) = seats.iter().find(|seat| !table.seats().contains(seat)) {
-            return Err(EntryRefusal::SeatNotAtTable { seat: *seat }.into());
+        if let Some(seat) = seats.find(|seat| !table.seats().contains(seat)) {
+            return Err(EntryRefusal::SeatNotAtTable { seat }.into());
         }
-        self.encode(&ExploreState::Presenting {
-            scene,
-            seats: seats.into_iter().collect(),
-        })
+        self.encode(&ExploreState::Presenting { scene })
     }
 
-    fn accepts(&self, input: &MachineInput, state: &MachineSlot) -> bool {
+    fn accepts(&self, table: &TableState, input: &MachineInput, state: &MachineSlot) -> bool {
         self.state_of(state)
-            .is_ok_and(|state| self.handles(&state, input))
+            .is_ok_and(|state| self.handles(table, &state, input))
     }
 
-    fn step(&self, slot: &MachineSlot, input: &StepInput) -> Result<StepResult, MachineError> {
+    fn step(&self, slot: &MachineSlot, input: &StepInput<'_>) -> Result<StepResult, MachineError> {
         let state = self.state_of(slot)?;
         let not_viable = || {
-            Ok(StepResult::declined(
-                slot,
-                Decline::with_default_reason(DeclineCode::NotViable),
-            ))
+            Ok(StepResult::declined(Decline::with_default_reason(
+                DeclineCode::NotViable,
+            )))
         };
-        if !self.handles(&state, &input.input) {
+        if !self.handles(input.table, &state, &input.input) {
             return not_viable();
         }
-        match (&state, &input.input, &input.decision) {
-            (
-                ExploreState::Presenting { scene, seats },
-                MachineInput::Intent { seat, .. },
-                Some(Decision::RollPending(pending)),
-            ) => {
+        if let (ExploreState::AwaitingRoll { scene, .. }, MachineInput::PendingCancelled { .. }) =
+            (&state, &input.input)
+        {
+            let back = self.encode(&ExploreState::Presenting { scene: *scene })?;
+            return Ok(StepResult::applied(back, Vec::new()));
+        }
+        match (&state, &input.decision) {
+            (ExploreState::Presenting { scene }, Some(Decision::RollPending(pending))) => {
                 let next = self.encode(&ExploreState::AwaitingRoll {
                     scene: *scene,
-                    seats: seats.clone(),
-                    roller: *seat,
                     pending: pending.get(),
                 })?;
                 let mut result = StepResult::applied(next, Vec::new());
                 result.outcome = StepOutcome::Waiting(*pending);
                 Ok(result)
             }
-            (_, _, Some(Decision::Resolved(Resolution::Applied))) => self.resolve(&state),
-            (_, _, Some(Decision::Resolved(Resolution::Declined(decline)))) => {
-                let unchanged = match &state {
-                    ExploreState::AwaitingRoll { scene, seats, .. } => {
-                        self.encode(&ExploreState::Presenting {
-                            scene: *scene,
-                            seats: seats.clone(),
-                        })?
-                    }
-                    ExploreState::Presenting { .. } | ExploreState::Resolved { .. } => slot.clone(),
-                };
-                Ok(StepResult::declined(&unchanged, decline.clone()))
+            (_, Some(Decision::Resolved(Resolution::Applied(_)))) => self.settle(&state),
+            (_, Some(Decision::Resolved(Resolution::Declined(decline)))) => {
+                Ok(StepResult::declined(decline.clone()))
             }
             _ => not_viable(),
         }
     }
 
-    fn exit(&self, slot: &MachineSlot) -> Result<HandOff, MachineError> {
-        let state = self.state_of(slot)?;
-        let mut carry = vec![CarryItem::Scene(state.scene())];
-        carry.extend(state.seats().iter().copied().map(CarryItem::Seat));
+    fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {
+        Ok(self.state_name(slot)?.as_str() == RESOLVED)
+    }
+
+    fn exit(&self, table: &TableState, slot: &MachineSlot) -> Result<HandOff, MachineError> {
+        let scene = self.state_of(slot)?.scene();
+        let carry = std::iter::once(CarryItem::Scene(scene))
+            .chain(table.seats().iter().copied().map(CarryItem::Seat))
+            .collect();
         Ok(HandOff::new(self.next_machine.clone(), carry)?)
     }
 
     fn state_name(&self, slot: &MachineSlot) -> Result<StateName, MachineError> {
-        Ok(StateName::new(self.state_of(slot)?.name())?)
+        Ok(slot.named_state(&self.spec, PHASE_TAG)?)
+    }
+
+    fn validate(&self, slot: &MachineSlot) -> Result<(), MachineError> {
+        self.state_of(slot).map(|_| ())
     }
 
     fn project(
         &self,
+        table: &TableState,
         slot: &MachineSlot,
         audience: Audience,
     ) -> Result<MachineReadout, MachineError> {
         let beat = self.beat.id.as_str();
         let text = match (self.state_of(slot)?, audience) {
-            (ExploreState::Presenting { seats, .. }, Audience::Seat(seat))
-                if seats.contains(&seat) =>
+            (ExploreState::Presenting { .. }, Audience::Seat(seat))
+                if table.seats().contains(&seat) =>
             {
                 format!(
                     "You can make the {} check at {beat}.",

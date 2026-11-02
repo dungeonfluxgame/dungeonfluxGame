@@ -1,17 +1,23 @@
-//! The checks that do not need a script: registration, entry, the saved record, damage, strays
-//! and exit. Each reports a `Finding` against its named check and never panics.
+//! The checks that do not need a script: registration, entry, the saved record and every way to
+//! damage it, input addressed to nothing, the hand-off ask and exit. Each reports a `Finding`
+//! against its named check and never panics. The per-state probes run in every state the script
+//! reaches, so what a fixture leaves out is probed anyway.
+
+use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::effects::{ApplyOutcome, TableEffect, TableState};
-use crate::envelope::{PendingId, TimerName};
-use crate::event::TableEvent;
+use crate::effects::TableState;
+use crate::envelope::{PendingId, ProposalOrigin, ProposerRef, TimerName};
 use crate::identity::{MachineId, SeatId, TableId, TableScope};
-use crate::machine::{CarryItem, Machine, MachineError, MachineInput, StepInput, StepOutcome};
+use crate::machine::{
+    CarryItem, InputClaim, Machine, MachineError, MachineInput, RequestKey, ResourceOutcome,
+    StepInput, StepOutcome, exited_event,
+};
 use crate::machine_slot::MachineSlot;
 use crate::outcome::Outcome;
-use crate::ports::{Audience, PortName, Readiness, ResourceHandle};
-use crate::registry::RegistryBuilder;
+use crate::ports::ActionId;
+use crate::registry::{Enablement, RegistryBuilder, check_hand_off_route};
 use crate::testkit::correlation;
 
 use super::{ConformanceCheck, ConformanceFixture, ConformanceReport};
@@ -20,6 +26,17 @@ use super::{ConformanceCheck, ConformanceFixture, ConformanceReport};
 pub(super) const PROBE_TABLE: TableId = TableId::new(1);
 /// A turn number far from any scripted step, so a probe's operation id never repeats a step's.
 const PROBE_TURN: u64 = u64::MAX / 2;
+/// The action no machine is meant to know.
+const UNKNOWN_ACTION: &str = "conformance_unknown_action";
+const PROBE_NAME: &str = "conformance_probe";
+
+/// What the per-state probes need to know besides the state.
+pub(super) struct Context<'a> {
+    pub machine: &'a dyn Machine,
+    pub neighbours: &'a [Arc<dyn Machine>],
+    /// The actions the script sends, which a seat that is not at the table must not be able to use.
+    pub actions: &'a [ActionId],
+}
 
 pub(super) fn registration(fixture: &ConformanceFixture, report: &mut ConformanceReport) {
     let id = fixture.machine.spec().id().clone();
@@ -27,7 +44,7 @@ pub(super) fn registration(fixture: &ConformanceFixture, report: &mut Conformanc
     for neighbour in &fixture.neighbours {
         builder = builder.register_shared(neighbour.clone());
     }
-    if let Err(errors) = builder.build(PortName::ALL) {
+    if let Err(errors) = builder.build(&fixture.wired) {
         for error in errors.iter().filter(|error| error.machine() == Some(&id)) {
             report.fail(ConformanceCheck::Registration, error.to_string());
         }
@@ -36,6 +53,14 @@ pub(super) fn registration(fixture: &ConformanceFixture, report: &mut Conformanc
 
 pub(super) fn entry_refusal(fixture: &ConformanceFixture, report: &mut ConformanceReport) {
     let Some(entry) = &fixture.refused_entry else {
+        if fixture.machine.spec().reads_entry() {
+            report.fail(
+                ConformanceCheck::EntryRefusal,
+                "the spec says the machine reads its entry, but the fixture has no refused entry",
+            );
+        } else {
+            report.skipped.push(ConformanceCheck::EntryRefusal);
+        }
         return;
     };
     match fixture.machine.enter(&fixture.table, entry) {
@@ -51,23 +76,29 @@ pub(super) fn entry_refusal(fixture: &ConformanceFixture, report: &mut Conforman
     }
 }
 
-fn audiences(table: &TableState) -> Vec<Audience> {
-    let mut audiences = vec![Audience::Public];
-    audiences.extend(table.seats().iter().copied().map(Audience::Seat));
-    audiences.push(Audience::Seat(SeatId::new(u64::MAX)));
+fn audiences(table: &TableState) -> Vec<crate::ports::Audience> {
+    let mut audiences = vec![crate::ports::Audience::Public];
+    audiences.extend(
+        table
+            .seats()
+            .iter()
+            .copied()
+            .map(crate::ports::Audience::Seat),
+    );
+    audiences.push(crate::ports::Audience::Seat(SeatId::new(u64::MAX)));
     audiences
 }
 
-/// What every state the machine is in must satisfy. A result for a request can only be for one
-/// the machine has outstanding, so the stray result is tried only when there is none.
+/// What every state the machine is in must satisfy, whatever the script did to get there. It
+/// returns the machine's ask for a hand-off, the first time it was asked.
 pub(super) fn check_slot(
-    machine: &dyn Machine,
+    context: &Context<'_>,
     table: &TableState,
     slot: &MachineSlot,
-    outstanding_requests: usize,
     label: &str,
     report: &mut ConformanceReport,
-) {
+) -> Option<bool> {
+    let machine = context.machine;
     let spec = machine.spec();
     if slot.machine() != spec.id() || slot.schema_version() != spec.schema_version() {
         report.fail(
@@ -100,6 +131,12 @@ pub(super) fn check_slot(
                     format!("{label}: the state {name} is not in the spec"),
                 );
             }
+            if machine.state_name(slot).as_ref() != Ok(&name) {
+                report.fail(
+                    ConformanceCheck::Determinism,
+                    format!("{label}: state_name gave two different names"),
+                );
+            }
             Some(name)
         }
         Err(error) => {
@@ -111,11 +148,19 @@ pub(super) fn check_slot(
         }
     };
     for audience in audiences(table) {
-        if let Err(error) = machine.project(slot, audience) {
-            report.fail(
+        match machine.project(table, slot, audience) {
+            Ok(readout) => {
+                if machine.project(table, slot, audience).as_ref() != Ok(&readout) {
+                    report.fail(
+                        ConformanceCheck::Determinism,
+                        format!("{label}: project gave two different readouts for {audience:?}"),
+                    );
+                }
+            }
+            Err(error) => report.fail(
                 ConformanceCheck::Projection,
                 format!("{label}: nothing to show {audience:?}: {error}"),
-            );
+            ),
         }
     }
     match machine.inspect(slot) {
@@ -129,37 +174,99 @@ pub(super) fn check_slot(
                     format!("{label}: the report does not describe the machine's own state"),
                 );
             }
+            if machine.inspect(slot).as_ref() != Ok(&inspected) {
+                report.fail(
+                    ConformanceCheck::Determinism,
+                    format!("{label}: inspect gave two different reports"),
+                );
+            }
         }
         Err(error) => report.fail(
             ConformanceCheck::InspectReport,
             format!("{label}: no report: {error}"),
         ),
     }
-    let stray_roll = MachineInput::Dice {
-        pending: PendingId::new(u64::MAX),
-        draws: Vec::new(),
-    };
-    let stray_result = MachineInput::ResourceResult {
-        handle: ResourceHandle::new(u64::MAX),
-        readiness: Readiness::Ready,
-    };
-    refuses(
-        machine,
-        slot,
-        stray_roll,
-        ConformanceCheck::DiceAndWaiting,
-        label,
-        report,
-    );
-    if outstanding_requests == 0 {
-        refuses(
-            machine,
-            slot,
-            stray_result,
+    load_damage(machine, slot, label, report);
+    strays(context, table, slot, label, report);
+    let asks = hand_off_ask(machine, slot, label, report);
+    exit_hand_off(context, table, slot, label, report);
+    asks
+}
+
+fn claims(machine: &dyn Machine, claim: InputClaim) -> bool {
+    machine.spec().claimed_inputs().contains(&claim)
+}
+
+/// Every input that is for nothing the machine holds, in this state.
+fn strays(
+    context: &Context<'_>,
+    table: &TableState,
+    slot: &MachineSlot,
+    label: &str,
+    report: &mut ConformanceReport,
+) {
+    let machine = context.machine;
+    let seated = table
+        .seats()
+        .iter()
+        .next()
+        .copied()
+        .unwrap_or(SeatId::new(1));
+    let absent = SeatId::new(u64::MAX);
+    let mut probes = vec![
+        (
+            MachineInput::Dice {
+                pending: PendingId::new(u64::MAX),
+                draws: Vec::new(),
+            },
+            ConformanceCheck::DiceAndWaiting,
+        ),
+        (
+            MachineInput::ResourceResult {
+                key: RequestKey::new(u64::MAX),
+                outcome: ResourceOutcome::Ready,
+            },
             ConformanceCheck::ResourceResults,
-            label,
-            report,
-        );
+        ),
+    ];
+    if let Ok(action) = ActionId::new(UNKNOWN_ACTION) {
+        probes.push((
+            MachineInput::Intent {
+                seat: seated,
+                action,
+            },
+            ConformanceCheck::Accepts,
+        ));
+    }
+    if !claims(machine, InputClaim::Timer)
+        && let Ok(timer) = TimerName::new(PROBE_NAME)
+    {
+        probes.push((MachineInput::Timer { timer }, ConformanceCheck::Accepts));
+    }
+    if !claims(machine, InputClaim::EngineProposal)
+        && let Ok(proposer) = ProposerRef::new(PROBE_NAME)
+    {
+        probes.push((
+            MachineInput::Proposal {
+                origin: ProposalOrigin::World,
+                proposer,
+            },
+            ConformanceCheck::Accepts,
+        ));
+    }
+    for action in context.actions {
+        if !machine.spec().unseated_actions().contains(action) {
+            probes.push((
+                MachineInput::Intent {
+                    seat: absent,
+                    action: action.clone(),
+                },
+                ConformanceCheck::Accepts,
+            ));
+        }
+    }
+    for (input, check) in probes {
+        refuses(machine, table, slot, input, check, label, report);
     }
 }
 
@@ -167,44 +274,78 @@ pub(super) fn check_slot(
 /// it and change nothing.
 fn refuses(
     machine: &dyn Machine,
+    table: &TableState,
     slot: &MachineSlot,
     input: MachineInput,
     check: ConformanceCheck,
     label: &str,
     report: &mut ConformanceReport,
 ) {
-    if machine.accepts(&input, slot) {
+    if machine.accepts(table, &input, slot) {
         report.fail(
             check,
-            format!("{label}: accepted {input:?}, which names nothing it holds"),
+            format!("{label}: accepted {input:?}, which is addressed to nothing it holds"),
         );
         return;
     }
     let step_input = StepInput {
         correlation: correlation(PROBE_TURN),
         now_ms: 0,
-        input,
+        table,
+        input: input.clone(),
         decision: None,
     };
     match machine.step(slot, &step_input) {
         Ok(result) => {
             let declined = matches!(result.outcome, StepOutcome::Settled(Outcome::Declined(_)));
-            let unchanged = result.state == *slot
+            let unchanged = result.state.is_none()
                 && result.table_effects.is_empty()
                 && result.resource_requests.is_empty();
             if !declined || !unchanged {
                 report.fail(
                     check,
-                    format!("{label}: an input for nothing it holds was not declined cleanly"),
+                    format!("{label}: {input:?} was not declined cleanly"),
                 );
             }
         }
         Err(error) => report.fail(
             check,
-            format!(
-                "{label}: an input for nothing it holds failed instead of being declined: {error}"
-            ),
+            format!("{label}: {input:?} failed instead of being declined: {error}"),
         ),
+    }
+}
+
+/// The ask for a hand-off is read from the state, so asking again, after a refused hand-off or
+/// after other input, gives the same answer. The first answer is returned for the script.
+fn hand_off_ask(
+    machine: &dyn Machine,
+    slot: &MachineSlot,
+    label: &str,
+    report: &mut ConformanceReport,
+) -> Option<bool> {
+    let answers = [
+        machine.wants_hand_off(slot),
+        machine.wants_hand_off(slot),
+        machine.wants_hand_off(slot),
+    ];
+    match answers {
+        [Ok(first), Ok(second), Ok(third)] if first == second && second == third => Some(first),
+        [Ok(first), Ok(_), Ok(_)] => {
+            report.fail(
+                ConformanceCheck::HandOffAsk,
+                format!(
+                    "{label}: the ask for a hand-off changed between calls, so a refusal strands the table"
+                ),
+            );
+            Some(first)
+        }
+        _ => {
+            report.fail(
+                ConformanceCheck::HandOffAsk,
+                format!("{label}: wants_hand_off failed for the machine's own state"),
+            );
+            None
+        }
     }
 }
 
@@ -215,8 +356,59 @@ fn other_machine_id(id: &MachineId) -> Option<MachineId> {
         .find(|candidate| candidate != id)
 }
 
+/// A record damaged from the machine's own: each field removed, each field nulled, and the
+/// previous schema version, must all be refused at load.
+fn load_damage(
+    machine: &dyn Machine,
+    slot: &MachineSlot,
+    label: &str,
+    report: &mut ConformanceReport,
+) {
+    let spec = machine.spec();
+    let id = spec.id();
+    let version = slot.schema_version();
+    let mut cases: Vec<(String, MachineSlot)> = Vec::new();
+    if let Some(fields) = slot.payload().as_object() {
+        for key in fields.keys() {
+            let mut removed = fields.clone();
+            removed.remove(key);
+            cases.push((
+                format!("the field {key} removed"),
+                MachineSlot::from_parts(id.clone(), version, Value::Object(removed)),
+            ));
+            let mut nulled = fields.clone();
+            nulled.insert(key.clone(), Value::Null);
+            cases.push((
+                format!("the field {key} null"),
+                MachineSlot::from_parts(id.clone(), version, Value::Object(nulled)),
+            ));
+        }
+    }
+    if let Some(older) = spec
+        .schema_version()
+        .checked_sub(1)
+        .filter(|older| *older > 0)
+    {
+        cases.push((
+            format!("the previous schema version {older}"),
+            MachineSlot::from_parts(id.clone(), older, slot.payload().clone()),
+        ));
+    }
+    for (what, record) in cases {
+        match machine.load(&record) {
+            Ok(_) => report.fail(
+                ConformanceCheck::LoadRefusal,
+                format!("{label}: loaded a record with {what}"),
+            ),
+            Err(error) => report
+                .events
+                .push(error.refusal_event(PROBE_TABLE, spec, &record)),
+        }
+    }
+}
+
 /// The record must be refused when it is for another machine, newer than the engine, versionless
-/// or damaged.
+/// or not a state at all.
 pub(super) fn load_refusal(
     machine: &dyn Machine,
     slot: &MachineSlot,
@@ -249,7 +441,9 @@ pub(super) fn load_refusal(
     for (what, record) in cases {
         match machine.load(&record) {
             Ok(_) => report.fail(ConformanceCheck::LoadRefusal, format!("loaded {what}")),
-            Err(error) => report.events.push(error.refusal_event(spec, &record)),
+            Err(error) => report
+                .events
+                .push(error.refusal_event(PROBE_TABLE, spec, &record)),
         }
     }
 }
@@ -259,10 +453,14 @@ fn damaged(id: &MachineId, version: u32) -> MachineSlot {
 }
 
 /// A damaged record is a typed failure everywhere: never a default state, never a projection.
-pub(super) fn failure_events(machine: &dyn Machine, report: &mut ConformanceReport) {
+pub(super) fn failure_events(
+    machine: &dyn Machine,
+    table: &TableState,
+    report: &mut ConformanceReport,
+) {
     let spec = machine.spec();
     let record = damaged(spec.id(), spec.schema_version());
-    let Ok(timer) = TimerName::new("conformance_probe") else {
+    let Ok(timer) = TimerName::new(PROBE_NAME) else {
         return;
     };
     let probe = correlation(PROBE_TURN);
@@ -271,6 +469,7 @@ pub(super) fn failure_events(machine: &dyn Machine, report: &mut ConformanceRepo
     let step_input = StepInput {
         correlation: probe,
         now_ms: 0,
+        table,
         input: input.clone(),
         decision: None,
     };
@@ -282,12 +481,16 @@ pub(super) fn failure_events(machine: &dyn Machine, report: &mut ConformanceRepo
         ),
     }
     let silent = [
-        ("accepts", machine.accepts(&input, &record)),
+        ("accepts", machine.accepts(table, &input, &record)),
         ("state_name", machine.state_name(&record).is_ok()),
-        ("exit", machine.exit(&record).is_ok()),
+        ("validate", machine.validate(&record).is_ok()),
+        ("wants_hand_off", machine.wants_hand_off(&record).is_ok()),
+        ("exit", machine.exit(table, &record).is_ok()),
         (
             "project",
-            machine.project(&record, Audience::Public).is_ok(),
+            machine
+                .project(table, &record, crate::ports::Audience::Public)
+                .is_ok(),
         ),
         ("inspect", machine.inspect(&record).is_ok()),
     ];
@@ -301,76 +504,61 @@ pub(super) fn failure_events(machine: &dyn Machine, report: &mut ConformanceRepo
     }
 }
 
-/// Exit names a declared target and a typed carry list the table backs, twice the same, and
-/// recording the hand-off leaves the seats, the scene and the beat as they were.
-pub(super) fn exit_hand_off(
-    machine: &dyn Machine,
+/// Exit, in every state, names a hand-off the registry rules accept, twice the same, carrying
+/// only what the table backs.
+fn exit_hand_off(
+    context: &Context<'_>,
     table: &TableState,
     slot: &MachineSlot,
+    label: &str,
     report: &mut ConformanceReport,
 ) {
+    let machine = context.machine;
     let spec = machine.spec();
-    let hand_off = match machine.exit(slot) {
+    let hand_off = match machine.exit(table, slot) {
         Ok(hand_off) => hand_off,
         Err(error) => {
             report.fail(
                 ConformanceCheck::ExitHandOff,
-                format!("exit failed: {error}"),
+                format!("{label}: exit failed: {error}"),
             );
             return;
         }
     };
-    if machine.exit(slot).as_ref() != Ok(&hand_off) {
+    if machine.exit(table, slot).as_ref() != Ok(&hand_off) {
         report.fail(
             ConformanceCheck::Determinism,
-            "exit gave two different hand-offs",
+            format!("{label}: exit gave two different hand-offs"),
         );
     }
-    if !spec.hand_off_targets().contains(hand_off.target()) {
+    let neighbour = |id: &MachineId| {
+        context
+            .neighbours
+            .iter()
+            .find(|candidate| candidate.spec().id() == id)
+            .map(|candidate| (candidate.spec().scope(), Enablement::Enabled))
+    };
+    if let Err(refusal) = check_hand_off_route(spec, &hand_off, neighbour) {
         report.fail(
             ConformanceCheck::ExitHandOff,
-            format!(
-                "exit names {}, which the spec does not declare",
-                hand_off.target()
-            ),
+            format!("{label}: the hand-off is refused: {refusal}"),
         );
     }
     for item in hand_off.carry() {
         match item {
             CarryItem::Seat(seat) if !table.seats().contains(seat) => report.fail(
                 ConformanceCheck::ExitHandOff,
-                format!("exit carries seat {seat}, which is not at the table"),
+                format!("{label}: exit carries seat {seat}, which is not at the table"),
             ),
             CarryItem::Scene(scene) if table.active_scene() != Some(*scene) => report.fail(
                 ConformanceCheck::ExitHandOff,
-                format!("exit carries scene {scene}, which is not the active scene"),
+                format!("{label}: exit carries scene {scene}, which is not the active scene"),
             ),
             CarryItem::Seat(_) | CarryItem::Scene(_) => {}
         }
     }
-    let probe = correlation(PROBE_TURN);
     let scope = TableScope::of_table(PROBE_TABLE).in_machine(spec.id().clone());
-    report.events.push(TableEvent::MachineExited {
-        scope: scope.clone(),
-        correlation: probe,
-        target: hand_off.target().clone(),
-        carried: hand_off.carry().len(),
-    });
-    let mut after = table.clone();
-    let record = TableEffect::HandOffRecorded {
-        from: spec.id().clone(),
-        to: hand_off.target().clone(),
-        carried: hand_off.carry().len(),
-    };
-    match after.apply(&scope, probe, &[record]) {
-        Ok(ApplyOutcome::Applied(_)) if after.same_world_as(table) => {}
-        Ok(_) => report.fail(
-            ConformanceCheck::ExitHandOff,
-            "recording the hand-off changed the seats, the scene or the beat",
-        ),
-        Err(error) => report.fail(
-            ConformanceCheck::ExitHandOff,
-            format!("the hand-off could not be recorded: {error}"),
-        ),
-    }
+    report
+        .events
+        .push(exited_event(&scope, correlation(PROBE_TURN), &hand_off));
 }

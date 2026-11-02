@@ -22,6 +22,9 @@ fn complete_configuration() -> Value {
         "seat_pending_limit": 4,
         "seat_rate_burst": 6,
         "seat_rate_sustained_per_s": 2,
+        "held_nudge_s": 40,
+        "ruling_nudge_s": 25,
+        "decide_deadline_s": 90,
     })
 }
 
@@ -44,6 +47,9 @@ fn the_defaults_are_the_numbers_of_section_j4() {
     assert_eq!(settings.seat_pending_limit(), 3);
     assert_eq!(settings.seat_rate_burst(), 3);
     assert_eq!(settings.seat_rate_sustained_per_s(), 1);
+    assert_eq!(settings.held_nudge_s(), 30);
+    assert_eq!(settings.ruling_nudge_s(), 20);
+    assert_eq!(settings.decide_deadline_s(), 60);
 }
 
 #[test]
@@ -89,6 +95,9 @@ fn a_complete_valid_configuration_loads_every_value_and_reports_nothing() {
     assert_eq!(loaded.settings.seat_pending_limit(), 4);
     assert_eq!(loaded.settings.seat_rate_burst(), 6);
     assert_eq!(loaded.settings.seat_rate_sustained_per_s(), 2);
+    assert_eq!(loaded.settings.held_nudge_s(), 40);
+    assert_eq!(loaded.settings.ruling_nudge_s(), 25);
+    assert_eq!(loaded.settings.decide_deadline_s(), 90);
 }
 
 #[test]

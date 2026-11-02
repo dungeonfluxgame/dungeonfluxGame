@@ -1,6 +1,6 @@
 //! A small test machine with a migration and resource requests, so the parts of the contract the
-//! lobby and explore do not use (a schema migration, a request to the broker and its result) have
-//! a machine that keeps them.
+//! lobby and explore do not use (a schema migration, a keyed request to the broker and its
+//! result) have a machine that keeps them.
 
 use std::sync::Arc;
 
@@ -13,23 +13,23 @@ use crate::identity::MachineId;
 use crate::lobby_tests::{action, lobby, seat};
 use crate::machine::{
     Entry, HandOff, InspectReport, Machine, MachineError, MachineInput, MachineReadout,
-    MachineSpec, ResourceRequest, Scope, StateName, StepInput, StepOutcome, StepResult,
-    SuspendPolicy,
+    MachineSpec, RequestKey, ResourceOutcome, ResourceRequest, Scope, StateName, StepInput,
+    StepOutcome, StepResult, SuspendPolicy,
 };
-use crate::machine_slot::{LoadError, MachineSlot};
+use crate::machine_slot::{ErrorClass, LoadError, MachineSlot};
 use crate::outcome::{Decline, DeclineCode, Outcome};
-use crate::ports::{Audience, PortName, PurposeName, Readiness, ResourceHandle};
+use crate::ports::{Audience, PortName, PurposeName};
 use crate::testkit::{QueuedDice, ScriptedBroker, ScriptedRulesOwner};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TickState {
     ticks: u32,
-    in_flight: u32,
+    outstanding: Vec<u64>,
 }
 
-/// Counts ticks, asks the broker for a picture on each, and takes the results back. Its schema
-/// is version 2: version 1 called `ticks` `count` and had no request in flight.
+/// Counts ticks, asks the broker for a picture on each under a key it stores, and takes the keyed
+/// results back. Its schema is version 2: version 1 called `ticks` `count` and kept no keys.
 #[derive(Debug, Clone)]
 pub(crate) struct TickMachine {
     spec: MachineSpec,
@@ -74,52 +74,56 @@ impl Machine for TickMachine {
     fn enter(&self, _table: &TableState, _entry: &Entry) -> Result<MachineSlot, MachineError> {
         self.encode(&TickState {
             ticks: 0,
-            in_flight: 0,
+            outstanding: Vec::new(),
         })
     }
 
-    fn accepts(&self, input: &MachineInput, state: &MachineSlot) -> bool {
+    fn accepts(&self, table: &TableState, input: &MachineInput, state: &MachineSlot) -> bool {
         let Ok(state) = self.state_of(state) else {
             return false;
         };
         match input {
-            MachineInput::Intent { action, .. } => action.as_str() == "tick",
-            MachineInput::ResourceResult { .. } => state.in_flight > 0,
+            MachineInput::Intent { seat, action } => {
+                action.as_str() == "tick" && table.seats().contains(seat)
+            }
+            MachineInput::ResourceResult { key, .. } => state.outstanding.contains(&key.get()),
             _ => false,
         }
     }
 
-    fn step(&self, slot: &MachineSlot, input: &StepInput) -> Result<StepResult, MachineError> {
-        let state = self.state_of(slot)?;
-        if !self.accepts(&input.input, slot) {
-            return Ok(StepResult::declined(
-                slot,
-                Decline::with_default_reason(DeclineCode::NotViable),
-            ));
+    fn step(&self, slot: &MachineSlot, input: &StepInput<'_>) -> Result<StepResult, MachineError> {
+        let mut state = self.state_of(slot)?;
+        if !self.accepts(input.table, &input.input, slot) {
+            return Ok(StepResult::declined(Decline::with_default_reason(
+                DeclineCode::NotViable,
+            )));
         }
         match &input.input {
             MachineInput::Intent { .. } => {
-                let next = self.encode(&TickState {
-                    ticks: state.ticks + 1,
-                    in_flight: state.in_flight + 1,
-                })?;
-                let mut result = StepResult::applied(next, Vec::new());
+                state.ticks += 1;
+                let key = RequestKey::new(u64::from(state.ticks));
+                state.outstanding.push(key.get());
+                let mut result = StepResult::applied(self.encode(&state)?, Vec::new());
                 result.resource_requests.push(ResourceRequest {
+                    key,
                     purpose: PurposeName::new("tick_art").expect("valid purpose"),
                 });
                 Ok(result)
             }
-            _ => {
-                let next = self.encode(&TickState {
-                    ticks: state.ticks,
-                    in_flight: state.in_flight - 1,
-                })?;
-                Ok(StepResult::applied(next, Vec::new()))
+            MachineInput::ResourceResult { key, .. } => {
+                state.outstanding.retain(|open| *open != key.get());
+                Ok(StepResult::applied(self.encode(&state)?, Vec::new()))
             }
+            _ => unreachable!("accepts is false for every other input"),
         }
     }
 
-    fn exit(&self, slot: &MachineSlot) -> Result<HandOff, MachineError> {
+    fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {
+        self.state_of(slot)?;
+        Ok(false)
+    }
+
+    fn exit(&self, _table: &TableState, slot: &MachineSlot) -> Result<HandOff, MachineError> {
         self.state_of(slot)?;
         Ok(HandOff::new(
             MachineId::new("lobby").expect("valid id"),
@@ -132,8 +136,13 @@ impl Machine for TickMachine {
         Ok(StateName::new("counting")?)
     }
 
+    fn validate(&self, slot: &MachineSlot) -> Result<(), MachineError> {
+        self.state_of(slot).map(|_| ())
+    }
+
     fn project(
         &self,
+        _table: &TableState,
         slot: &MachineSlot,
         _audience: Audience,
     ) -> Result<MachineReadout, MachineError> {
@@ -155,6 +164,7 @@ impl Machine for TickMachine {
     fn migrate(&self, from: &MachineSlot) -> Result<MachineSlot, LoadError> {
         let malformed = LoadError::Malformed {
             version: from.schema_version(),
+            class: ErrorClass::Data,
         };
         if from.schema_version() != 1 {
             return Err(LoadError::UnsupportedVersion {
@@ -171,32 +181,41 @@ impl Machine for TickMachine {
         Ok(MachineSlot::from_parts(
             self.spec.id().clone(),
             2,
-            json!({ "ticks": ticks, "in_flight": 0 }),
+            json!({ "ticks": ticks, "outstanding": [] }),
         ))
     }
 }
 
 pub(crate) fn tick_fixture() -> ConformanceFixture {
-    let table = TableState::new(2).expect("valid table");
+    let table = TableState::seated(2, &[seat(1)]).expect("valid table");
     ConformanceFixture {
         machine: Arc::new(TickMachine::new()),
         neighbours: vec![Arc::new(lobby())],
+        wired: vec![PortName::Broker],
         table,
         entry: Entry::empty(),
         refused_entry: None,
         script: vec![
             ScriptedStep::player(seat(1), action("tick"), Expectation::applied()),
+            ScriptedStep::player(seat(1), action("tick"), Expectation::applied()),
             ScriptedStep::raw(
                 MachineInput::ResourceResult {
-                    handle: ResourceHandle::new(1),
-                    readiness: Readiness::Ready,
+                    key: RequestKey::new(77),
+                    outcome: ResourceOutcome::Ready,
+                },
+                Expectation::refused(),
+            ),
+            ScriptedStep::raw(
+                MachineInput::ResourceResult {
+                    key: RequestKey::new(1),
+                    outcome: ResourceOutcome::Ready,
                 },
                 Expectation::applied(),
             ),
             ScriptedStep::raw(
                 MachineInput::ResourceResult {
-                    handle: ResourceHandle::new(2),
-                    readiness: Readiness::Ready,
+                    key: RequestKey::new(1),
+                    outcome: ResourceOutcome::Ready,
                 },
                 Expectation::refused(),
             ),
@@ -207,10 +226,11 @@ pub(crate) fn tick_fixture() -> ConformanceFixture {
     }
 }
 
-fn tick_input() -> StepInput {
+fn tick_input(table: &TableState) -> StepInput<'_> {
     StepInput {
         correlation: crate::testkit::correlation(1),
         now_ms: 0,
+        table,
         input: MachineInput::Intent {
             seat: seat(1),
             action: action("tick"),
@@ -226,15 +246,38 @@ fn a_machine_that_requests_a_resource_passes_the_whole_conformance_suite() {
 }
 
 #[test]
-fn a_step_that_wants_a_picture_returns_the_request_and_never_calls_the_broker() {
+fn a_step_that_wants_a_picture_returns_a_keyed_request_and_never_calls_the_broker() {
     let machine = TickMachine::new();
-    let slot = machine
-        .enter(&TableState::new(2).expect("valid table"), &Entry::empty())
-        .expect("enters");
-    let result = machine.step(&slot, &tick_input()).expect("steps");
+    let table = TableState::seated(2, &[seat(1)]).expect("valid table");
+    let slot = machine.enter(&table, &Entry::empty()).expect("enters");
+    let result = machine.step(&slot, &tick_input(&table)).expect("steps");
     assert_eq!(result.outcome, StepOutcome::Settled(Outcome::Applied));
     assert_eq!(result.resource_requests.len(), 1);
     assert_eq!(result.resource_requests[0].purpose.as_str(), "tick_art");
+    assert_eq!(result.resource_requests[0].key, RequestKey::new(1));
+}
+
+#[test]
+fn a_result_is_matched_by_its_key_and_a_key_no_request_used_is_declined_with_requests_open() {
+    let machine = TickMachine::new();
+    let table = TableState::seated(2, &[seat(1)]).expect("valid table");
+    let slot = machine.enter(&table, &Entry::empty()).expect("enters");
+    let two_requests = {
+        let first = machine.step(&slot, &tick_input(&table)).expect("steps");
+        let state = first.state.expect("state");
+        machine
+            .step(&state, &tick_input(&table))
+            .expect("steps")
+            .state
+            .expect("state")
+    };
+    let result = |key: u64| MachineInput::ResourceResult {
+        key: RequestKey::new(key),
+        outcome: ResourceOutcome::Ready,
+    };
+    assert!(!machine.accepts(&table, &result(77), &two_requests));
+    assert!(machine.accepts(&table, &result(1), &two_requests));
+    assert!(machine.accepts(&table, &result(2), &two_requests));
 }
 
 #[test]
@@ -244,15 +287,16 @@ fn a_version_one_record_migrates_to_the_current_version_when_it_is_loaded() {
         .load(&TickMachine::version_one_record(41))
         .expect("version one migrates");
     assert_eq!(loaded.schema_version(), 2);
-    assert_eq!(loaded.payload(), &json!({ "ticks": 41, "in_flight": 0 }));
+    assert_eq!(loaded.payload(), &json!({ "ticks": 41, "outstanding": [] }));
+    let table = TableState::new(2).expect("valid table");
     let readout = machine
-        .project(&loaded, Audience::Public)
+        .project(&table, &loaded, Audience::Public)
         .expect("projects");
     assert_eq!(readout.as_str(), "Ticked 41 times.");
 }
 
 #[test]
-fn a_record_that_fails_its_migration_is_refused_and_never_loaded_wrongly() {
+fn a_record_that_fails_its_migration_is_refused_with_its_cause_and_never_loaded_wrongly() {
     let machine = TickMachine::new();
     let id = MachineId::new("ticker").expect("valid id");
     let missing = MachineSlot::from_parts(id.clone(), 1, json!({ "other": 1 }));
@@ -260,7 +304,67 @@ fn a_record_that_fails_its_migration_is_refused_and_never_loaded_wrongly() {
     for record in [missing, too_big] {
         assert!(matches!(
             machine.load(&record),
-            Err(LoadError::Malformed { version: 1 })
+            Err(LoadError::Malformed {
+                version: 1,
+                class: ErrorClass::Data
+            })
         ));
     }
+}
+
+#[test]
+fn a_migration_that_does_not_advance_the_version_is_refused() {
+    struct Stuck(TickMachine);
+    impl Machine for Stuck {
+        fn spec(&self) -> &MachineSpec {
+            self.0.spec()
+        }
+        fn enter(&self, table: &TableState, entry: &Entry) -> Result<MachineSlot, MachineError> {
+            self.0.enter(table, entry)
+        }
+        fn accepts(&self, table: &TableState, input: &MachineInput, state: &MachineSlot) -> bool {
+            self.0.accepts(table, input, state)
+        }
+        fn step(
+            &self,
+            state: &MachineSlot,
+            input: &StepInput<'_>,
+        ) -> Result<StepResult, MachineError> {
+            self.0.step(state, input)
+        }
+        fn wants_hand_off(&self, state: &MachineSlot) -> Result<bool, MachineError> {
+            self.0.wants_hand_off(state)
+        }
+        fn exit(&self, table: &TableState, state: &MachineSlot) -> Result<HandOff, MachineError> {
+            self.0.exit(table, state)
+        }
+        fn state_name(&self, state: &MachineSlot) -> Result<StateName, MachineError> {
+            self.0.state_name(state)
+        }
+        fn validate(&self, state: &MachineSlot) -> Result<(), MachineError> {
+            self.0.validate(state)
+        }
+        fn project(
+            &self,
+            table: &TableState,
+            state: &MachineSlot,
+            audience: Audience,
+        ) -> Result<MachineReadout, MachineError> {
+            self.0.project(table, state, audience)
+        }
+        fn inspect(&self, state: &MachineSlot) -> Result<InspectReport, MachineError> {
+            self.0.inspect(state)
+        }
+        fn migrate(&self, from: &MachineSlot) -> Result<MachineSlot, LoadError> {
+            Ok(from.clone())
+        }
+    }
+    let record = TickMachine::version_one_record(3);
+    assert_eq!(
+        Stuck(TickMachine::new()).load(&record),
+        Err(LoadError::UnsupportedVersion {
+            found: 1,
+            expected: 2
+        })
+    );
 }

@@ -1,14 +1,21 @@
 //! The lobby: the table machine before the first scene (RES28, D.4, question 90).
 //!
 //! Seats join and leave, say they are ready, and one of them starts the game. It owns two states
-//! (`gathering` and `started`), the five lobby actions, and the lobby's own record of who is ready.
-//! Which seats sit at the table is a shared fact, so a join and a leave leave as `SeatJoined` and
-//! `SeatLeft` effects, and starting leaves as `SceneEntered` for the first scene; the lobby never
-//! reads or writes another machine's state. It models `df_session::lobby::decide_start` by
-//! reading it, without depending on `df-session`: a start needs at least one seat and every seat
-//! ready. The character, display and funding blockers of that function belong to the creation
-//! machine and the host, not to this machine. It asks for a hand-off to `explore` when the game
-//! starts and carries the roster and the first scene.
+//! (`gathering` and `started`), the five lobby actions, and the lobby's own fact: which seats said
+//! they are ready. Which seats sit at the table, and how many fit, are shared facts that the table
+//! owns, so the lobby reads them from the table view on every call and never keeps a copy that can
+//! go stale: a seat the host removed cannot hold up a start, and a join is judged against the
+//! seats now. A join and a leave leave as `SeatJoined` and `SeatLeft` effects, and starting
+//! leaves as `SceneEntered` for the first scene; the lobby never reads or writes another
+//! machine's state.
+//!
+//! It models `df_session::lobby::decide_start` by reading it, without depending on `df-session`:
+//! a start needs at least one seat and every seat ready. `decide_start` returns every blocker at
+//! once; the machine declines with the first it finds. The campaign, character, display, funding
+//! and authorization blockers of that function belong to the creation machine and the host (a
+//! seat that is not authorized never reaches the table), not to this machine. The machine is
+//! finished once it has started, and it then asks for a hand-off to `explore` carrying the seats
+//! and the first scene, for as long as the table has not moved on.
 //!
 //! It never draws a die, reads a clock or calls a port, and it declines (never panics on) an
 //! input it does not handle.
@@ -27,6 +34,7 @@ use crate::outcome::{Decline, DeclineCode};
 use crate::ports::{ActionId, Audience};
 
 const LOBBY_SCHEMA_VERSION: u32 = 1;
+const PHASE_TAG: &str = "phase";
 const GATHERING: &str = "gathering";
 const STARTED: &str = "started";
 const NEXT_MACHINE: &str = "explore";
@@ -69,34 +77,12 @@ impl LobbyAction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SeatEntry {
-    seat: SeatId,
-    ready: bool,
-}
-
-/// The lobby's closed states. Seats stay sorted by id so equal tables give equal records.
+/// The lobby's closed states. The ready seats stay sorted so equal tables give equal records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
 enum LobbyState {
-    Gathering {
-        capacity: usize,
-        seats: Vec<SeatEntry>,
-    },
-    Started {
-        scene: SceneId,
-        roster: Vec<SeatId>,
-    },
-}
-
-impl LobbyState {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Gathering { .. } => GATHERING,
-            Self::Started { .. } => STARTED,
-        }
-    }
+    Gathering { ready: Vec<SeatId> },
+    Started { scene: SceneId },
 }
 
 /// The lobby machine. `first_scene` is the scene the game starts in: authored content, handed in
@@ -110,6 +96,7 @@ pub struct LobbyMachine {
 
 impl LobbyMachine {
     pub fn new(first_scene: SceneId) -> Result<Self, SpecError> {
+        let join = ActionId::new(LobbyAction::Join.key()).map_err(SpecError::InvalidName)?;
         let spec = MachineSpec::new(
             "lobby",
             Scope::Table,
@@ -117,7 +104,8 @@ impl LobbyMachine {
             &[GATHERING, STARTED],
             SuspendPolicy::FinishAndHold,
         )?
-        .handing_off_to(NEXT_MACHINE)?;
+        .handing_off_to(NEXT_MACHINE)?
+        .with_unseated_action(join)?;
         let next_machine = MachineId::new(NEXT_MACHINE).map_err(SpecError::InvalidName)?;
         Ok(Self {
             spec,
@@ -133,6 +121,12 @@ impl LobbyMachine {
     fn encode(&self, state: &LobbyState) -> Result<MachineSlot, MachineError> {
         Ok(MachineSlot::encode(&self.spec, state)?)
     }
+
+    fn gathering(&self, mut ready: Vec<SeatId>) -> Result<MachineSlot, MachineError> {
+        ready.sort();
+        ready.dedup();
+        self.encode(&LobbyState::Gathering { ready })
+    }
 }
 
 /// The seat and action of an input the lobby handles, if it is one.
@@ -145,8 +139,20 @@ fn recognised(input: &MachineInput) -> Option<(SeatId, LobbyAction)> {
     }
 }
 
-fn refusal(code: DeclineCode, reason: &str) -> Result<Decline, MachineError> {
-    Ok(Decline::new(code, reason)?)
+fn decline(reason: &str) -> Result<StepResult, MachineError> {
+    Ok(StepResult::declined(Decline::new(
+        DeclineCode::NotViable,
+        reason,
+    )?))
+}
+
+fn carry_of(scene: Option<SceneId>, table: &TableState) -> Vec<CarryItem> {
+    let seats = table.seats().iter().copied().map(CarryItem::Seat);
+    scene
+        .map(CarryItem::Scene)
+        .into_iter()
+        .chain(seats)
+        .collect()
 }
 
 impl Machine for LobbyMachine {
@@ -154,127 +160,130 @@ impl Machine for LobbyMachine {
         &self.spec
     }
 
-    fn enter(&self, table: &TableState, _entry: &Entry) -> Result<MachineSlot, MachineError> {
-        let seats = table
-            .seats()
-            .iter()
-            .map(|seat| SeatEntry {
-                seat: *seat,
-                ready: false,
-            })
-            .collect();
-        self.encode(&LobbyState::Gathering {
-            capacity: table.seat_capacity(),
-            seats,
-        })
+    fn enter(&self, _table: &TableState, _entry: &Entry) -> Result<MachineSlot, MachineError> {
+        self.gathering(Vec::new())
     }
 
-    fn accepts(&self, input: &MachineInput, state: &MachineSlot) -> bool {
+    fn accepts(&self, table: &TableState, input: &MachineInput, state: &MachineSlot) -> bool {
         let gathering = matches!(self.state_of(state), Ok(LobbyState::Gathering { .. }));
-        gathering && recognised(input).is_some()
+        let addressed = recognised(input).is_some_and(|(seat, action)| {
+            action == LobbyAction::Join || table.seats().contains(&seat)
+        });
+        gathering && addressed
     }
 
-    fn step(&self, slot: &MachineSlot, input: &StepInput) -> Result<StepResult, MachineError> {
-        let not_viable = || {
-            Ok(StepResult::declined(
-                slot,
-                Decline::with_default_reason(DeclineCode::NotViable),
-            ))
-        };
-        let LobbyState::Gathering {
-            capacity,
-            mut seats,
-        } = self.state_of(slot)?
-        else {
-            return not_viable();
+    fn step(&self, slot: &MachineSlot, input: &StepInput<'_>) -> Result<StepResult, MachineError> {
+        let LobbyState::Gathering { mut ready } = self.state_of(slot)? else {
+            return Ok(StepResult::declined(Decline::with_default_reason(
+                DeclineCode::NotViable,
+            )));
         };
         let Some((seat, action)) = recognised(&input.input) else {
-            return not_viable();
+            return Ok(StepResult::declined(Decline::with_default_reason(
+                DeclineCode::NotViable,
+            )));
         };
-        let is_seated = seats.iter().any(|entry| entry.seat == seat);
+        let table = input.table;
+        let is_seated = table.seats().contains(&seat);
         match (action, is_seated) {
-            (LobbyAction::Join, true) => decline(slot, ALREADY_SEATED),
-            (LobbyAction::Join, false) if seats.len() >= capacity => decline(slot, TABLE_FULL),
-            (LobbyAction::Join, false) => {
-                seats.push(SeatEntry { seat, ready: false });
-                seats.sort_by_key(|entry| entry.seat);
-                let next = self.encode(&LobbyState::Gathering { capacity, seats })?;
-                Ok(StepResult::applied(
-                    next,
-                    vec![TableEffect::SeatJoined { seat }],
-                ))
+            (LobbyAction::Join, true) => decline(ALREADY_SEATED),
+            (LobbyAction::Join, false) if table.seats().len() >= table.seat_capacity() => {
+                decline(TABLE_FULL)
             }
-            (_, false) => decline(slot, NOT_SEATED),
+            (LobbyAction::Join, false) => Ok(StepResult::applied_in_place(vec![
+                TableEffect::SeatJoined { seat },
+            ])),
+            (_, false) => decline(NOT_SEATED),
             (LobbyAction::Leave, true) => {
-                seats.retain(|entry| entry.seat != seat);
-                let next = self.encode(&LobbyState::Gathering { capacity, seats })?;
-                Ok(StepResult::applied(
-                    next,
-                    vec![TableEffect::SeatLeft { seat }],
-                ))
-            }
-            (LobbyAction::Ready | LobbyAction::Unready, true) => {
-                for entry in seats.iter_mut().filter(|entry| entry.seat == seat) {
-                    entry.ready = action == LobbyAction::Ready;
+                let effects = vec![TableEffect::SeatLeft { seat }];
+                if !ready.contains(&seat) {
+                    return Ok(StepResult::applied_in_place(effects));
                 }
-                let next = self.encode(&LobbyState::Gathering { capacity, seats })?;
-                Ok(StepResult::applied(next, Vec::new()))
+                ready.retain(|other| *other != seat);
+                Ok(StepResult::applied(self.gathering(ready)?, effects))
+            }
+            (LobbyAction::Ready, true) => {
+                if ready.contains(&seat) {
+                    return Ok(StepResult::applied_in_place(Vec::new()));
+                }
+                ready.push(seat);
+                Ok(StepResult::applied(self.gathering(ready)?, Vec::new()))
+            }
+            (LobbyAction::Unready, true) => {
+                if !ready.contains(&seat) {
+                    return Ok(StepResult::applied_in_place(Vec::new()));
+                }
+                ready.retain(|other| *other != seat);
+                Ok(StepResult::applied(self.gathering(ready)?, Vec::new()))
             }
             (LobbyAction::Start, true) => {
-                if seats.iter().any(|entry| !entry.ready) {
-                    let decline = refusal(DeclineCode::NotViable, NOBODY_READY)?
+                if table.seats().iter().any(|seated| !ready.contains(seated)) {
+                    let decline = Decline::new(DeclineCode::NotViable, NOBODY_READY)?
                         .with_missing_piece(ALL_READY)?;
-                    return Ok(StepResult::declined(slot, decline));
+                    return Ok(StepResult::declined(decline));
                 }
-                let roster = seats.iter().map(|entry| entry.seat).collect();
                 let next = self.encode(&LobbyState::Started {
                     scene: self.first_scene,
-                    roster,
                 })?;
                 let effects = vec![TableEffect::SceneEntered {
                     scene: self.first_scene,
                 }];
-                Ok(StepResult::applied(next, effects).asking_for_hand_off())
+                Ok(StepResult::applied(next, effects))
             }
         }
     }
 
-    fn exit(&self, slot: &MachineSlot) -> Result<HandOff, MachineError> {
-        let (scene, roster): (SceneId, Vec<SeatId>) = match self.state_of(slot)? {
-            LobbyState::Gathering { seats, .. } => (
-                self.first_scene,
-                seats.into_iter().map(|entry| entry.seat).collect(),
-            ),
-            LobbyState::Started { scene, roster } => (scene, roster),
+    fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {
+        Ok(self.state_name(slot)?.as_str() == STARTED)
+    }
+
+    fn exit(&self, table: &TableState, slot: &MachineSlot) -> Result<HandOff, MachineError> {
+        let scene = match self.state_of(slot)? {
+            LobbyState::Gathering { .. } => None,
+            LobbyState::Started { scene } => Some(scene),
         };
-        let mut carry = vec![CarryItem::Scene(scene)];
-        carry.extend(roster.into_iter().map(CarryItem::Seat));
-        Ok(HandOff::new(self.next_machine.clone(), carry)?)
+        Ok(HandOff::new(
+            self.next_machine.clone(),
+            carry_of(scene, table),
+        )?)
     }
 
     fn state_name(&self, slot: &MachineSlot) -> Result<StateName, MachineError> {
-        Ok(StateName::new(self.state_of(slot)?.name())?)
+        Ok(slot.named_state(&self.spec, PHASE_TAG)?)
+    }
+
+    fn validate(&self, slot: &MachineSlot) -> Result<(), MachineError> {
+        self.state_of(slot).map(|_| ())
     }
 
     fn project(
         &self,
+        table: &TableState,
         slot: &MachineSlot,
         audience: Audience,
     ) -> Result<MachineReadout, MachineError> {
         let text = match self.state_of(slot)? {
-            LobbyState::Started { roster, .. } => {
-                format!("The game has started with {} seats.", roster.len())
+            LobbyState::Started { .. } => {
+                format!("The game has started with {} seats.", table.seats().len())
             }
-            LobbyState::Gathering { seats, .. } => {
-                let ready = seats.iter().filter(|entry| entry.ready).count();
-                let summary = format!("{ready} of {} seats are ready.", seats.len());
+            LobbyState::Gathering { ready } => {
+                let ready_seated = table.seats().iter().filter(|seat| ready.contains(seat));
+                let summary = format!(
+                    "{} of {} seats are ready.",
+                    ready_seated.count(),
+                    table.seats().len()
+                );
                 match audience {
+                    Audience::Seat(seat)
+                        if ready.contains(&seat) && table.seats().contains(&seat) =>
+                    {
+                        format!("You are ready. {summary}")
+                    }
+                    Audience::Seat(seat) if table.seats().contains(&seat) => {
+                        format!("You have a seat and are not ready. {summary}")
+                    }
+                    Audience::Seat(_) => format!("Join the table to take a seat. {summary}"),
                     Audience::Public => summary,
-                    Audience::Seat(seat) => match seats.iter().find(|entry| entry.seat == seat) {
-                        Some(entry) if entry.ready => format!("You are ready. {summary}"),
-                        Some(_) => format!("You have a seat and are not ready. {summary}"),
-                        None => format!("Join the table to take a seat. {summary}"),
-                    },
                 }
             }
         };
@@ -288,11 +297,4 @@ impl Machine for LobbyMachine {
             schema_version: slot.schema_version(),
         })
     }
-}
-
-fn decline(slot: &MachineSlot, reason: &str) -> Result<StepResult, MachineError> {
-    Ok(StepResult::declined(
-        slot,
-        refusal(DeclineCode::NotViable, reason)?,
-    ))
 }

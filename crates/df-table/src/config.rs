@@ -181,8 +181,44 @@ const SEAT_RATE_SUSTAINED_PER_S: SettingSpec = SettingSpec {
     cost_effect: CostEffect::BoundsModelCalls,
 };
 
+const HELD_NUDGE_S: SettingSpec = SettingSpec {
+    name: "held_nudge_s",
+    owner: SettingOwner::LauncherSettings,
+    default: 30,
+    range: SettingRange {
+        minimum: 1,
+        maximum: LARGE_SETTING_MAXIMUM,
+    },
+    unit: SettingUnit::Seconds,
+    cost_effect: CostEffect::None,
+};
+
+const RULING_NUDGE_S: SettingSpec = SettingSpec {
+    name: "ruling_nudge_s",
+    owner: SettingOwner::LauncherSettings,
+    default: 20,
+    range: SettingRange {
+        minimum: 1,
+        maximum: LARGE_SETTING_MAXIMUM,
+    },
+    unit: SettingUnit::Seconds,
+    cost_effect: CostEffect::None,
+};
+
+const DECIDE_DEADLINE_S: SettingSpec = SettingSpec {
+    name: "decide_deadline_s",
+    owner: SettingOwner::LauncherSettings,
+    default: 60,
+    range: SettingRange {
+        minimum: 1,
+        maximum: LARGE_SETTING_MAXIMUM,
+    },
+    unit: SettingUnit::Seconds,
+    cost_effect: CostEffect::None,
+};
+
 listed_enum! {
-    /// The settings the first steps of the build read (O.9 C0 to C3).
+    /// The settings the first steps of the build read (O.9 C0 to C4).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum SettingId {
         NarrationLateS,
@@ -190,6 +226,9 @@ listed_enum! {
         SeatPendingLimit,
         SeatRateBurst,
         SeatRateSustainedPerS,
+        HeldNudgeS,
+        RulingNudgeS,
+        DecideDeadlineS,
     }
 }
 
@@ -201,6 +240,9 @@ impl SettingId {
             Self::SeatPendingLimit => &SEAT_PENDING_LIMIT,
             Self::SeatRateBurst => &SEAT_RATE_BURST,
             Self::SeatRateSustainedPerS => &SEAT_RATE_SUSTAINED_PER_S,
+            Self::HeldNudgeS => &HELD_NUDGE_S,
+            Self::RulingNudgeS => &RULING_NUDGE_S,
+            Self::DecideDeadlineS => &DECIDE_DEADLINE_S,
         }
     }
 
@@ -345,5 +387,22 @@ impl Settings {
     /// How many inputs per second one seat may sustain.
     pub fn seat_rate_sustained_per_s(&self) -> u32 {
         self.get(SettingId::SeatRateSustainedPerS)
+    }
+
+    /// How long a pending resolution or a held turn waits before the table shows one line about
+    /// it, in seconds (J.4). Waiting itself never ends in a timeout.
+    pub fn held_nudge_s(&self) -> u32 {
+        self.get(SettingId::HeldNudgeS)
+    }
+
+    /// How long DECIDE may keep drawing dice and asking the rules owner for one input, in seconds:
+    /// the rules owner is a call-out, so a loop over it needs a deadline and not only a count.
+    pub fn decide_deadline_s(&self) -> u32 {
+        self.get(SettingId::DecideDeadlineS)
+    }
+
+    /// How long a ruling waits before the host sees who is waiting, in seconds (K.4).
+    pub fn ruling_nudge_s(&self) -> u32 {
+        self.get(SettingId::RulingNudgeS)
     }
 }

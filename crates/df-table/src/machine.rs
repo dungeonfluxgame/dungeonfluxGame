@@ -1,45 +1,60 @@
 //! The machine contract: what a machine is given, what it returns and how it fails (RES27, O.3).
 //!
 //! A machine is a pure, synchronous module that owns a closed enum of states and nothing else
-//! (principle 1, D24). It reads no clock, draws no dice and calls no port: the time, the rules
-//! owner's decision and the dice all arrive in the `StepInput`, and everything it wants done
-//! leaves in the `StepResult` as table effects and resource requests (principle 2). The pipeline
-//! (C3) owns the calls: it asks `accepts`, decides with the rules owner, then calls `step` and
-//! commits.
+//! (principle 1, D24). It reads no clock, draws no dice and calls no port: the time, a read view
+//! of the table, the rules owner's decision and the dice all arrive as arguments, and everything it
+//! wants done leaves in the `StepResult` as table effects and resource requests (principle 2).
+//! The pipeline (C3) owns the calls: it asks `accepts`, decides with the rules owner, calls `step`,
+//! commits, and polls `wants_hand_off`.
 //!
-//! The trait follows RES27. `enter(table, entry) -> state`, `accepts(input, state) -> bool` (the
-//! seat is the one inside `MachineInput::Intent`, so a seat and its input cannot disagree),
-//! `step(state, input) -> StepResult`, and `exit(state) -> HandOff`. State crosses the trait as a
-//! `MachineSlot`, a versioned saved record, because the registry holds machines of different
-//! state types; a machine decodes it into its closed enum at the start of `step` and encodes the
-//! new state at the end. `step` returns `Waiting{pending_id}` as a `StepOutcome` value, not as an
-//! `Outcome` (O.7). Three small stubs stand in for later steps: `project` for C5, `inspect` for C7
-//! and `migrate` for H.12.
+//! The trait follows RES27. `enter(table, entry) -> state`, `accepts(table, input, state) -> bool`
+//! (the seat is the one inside `MachineInput::Intent`, so a seat and its input cannot disagree),
+//! `step(state, input) -> StepResult` and `exit(table, state) -> HandOff`. The table is passed
+//! read-only to every call that needs a shared fact, so a machine keeps only its own facts in its
+//! state and never a copy of the seats or the capacity that can go stale. State crosses the trait
+//! as a `MachineSlot`, a versioned saved record, because the registry holds machines of different
+//! state types; a machine decodes it into its closed enum at the start of a call and encodes the
+//! new state at the end, and a step that changes nothing returns no state at all. `step` returns
+//! `Waiting{pending_id}` as a `StepOutcome` value, not as an `Outcome` (O.7).
 //!
-//! RES27 has no field that lets a machine ask to leave, though RES21 says a machine may ask for a
-//! hand-off and the DM applies it, so `StepResult::asks_for_hand_off` carries the ask; the target
-//! and the typed carry list come from `exit`.
+//! Leaving is level-triggered: `wants_hand_off(state)` is derived from the state, so a hand-off the
+//! engine refuses (`pending_open`, a full stack) leaves the machine asking, and a restart asks
+//! again. RES21 says a machine may ask for a hand-off and the DM applies it; the pipeline polls
+//! this after a step and enqueues the ask as an engine proposal, and `exit` gives the target and
+//! the typed carry list. A hand-off names a machine, releases a seat lane, or returns to the
+//! frame below (`HandOffTarget`); the registry checks the value `exit` returned (`check_hand_off`).
+//!
+//! A resource request carries a key the machine chose and stores in its state; the broker handle
+//! never reaches a machine, and a result is delivered only when final (`ResourceOutcome` has no
+//! pending value), keyed by the same key. `project` and `inspect` are stubs for C5 and C7;
+//! `migrate` and `validate` are the H.12 hooks, and `resume` for the hand-off stack waits for C6.
 //!
 //! It never validates a hand-off against the stack or the pending resolutions (C6, C4), never
-//! applies an effect (`effects` does) and never records an event by itself: `step_events` turns a
-//! step into events for whoever drives it.
+//! applies an effect (`effects` does) and never records an event by itself. Each event has a
+//! builder next to the code that knows the fact, for the pipeline (C3) to call: `step_events`
+//! (transitioned, declined), `entered_event`, `exited_event`, `MachineError::event` (failed),
+//! `TableState::apply` and `EffectError::event` (effect applied, refused) and
+//! `LoadError::refusal_event` and `RecordRefused::event` (load refused). Until C3 exists the
+//! conformance driver is their only caller.
 
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 use crate::effects::{TableEffect, TableState};
 use crate::element::NameError;
 use crate::envelope::{PendingId, ProposalOrigin, ProposerRef, TimerName};
-use crate::event::TableEvent;
+use crate::event::{FailureCause, TableEvent};
 use crate::identity::{Correlation, SceneId, SeatId, TableScope};
 use crate::listed::listed_enum;
-use crate::machine_slot::{LoadError, MachineSlot, SlotError};
+use crate::machine_slot::{LoadError, LoadFault, MachineSlot, SlotError};
 use crate::outcome::{Decline, DeclineError, Outcome};
-use crate::ports::{ActionId, Audience, Draw, PurposeName, Readiness, Resolution, ResourceHandle};
+use crate::ports::{ActionId, Audience, Draw, PurposeName, Resolution};
 
 pub use crate::identity::MachineId;
-pub use crate::machine_spec::{MachineSpec, Scope, SpecError, StateName, SuspendPolicy};
-
-use serde::{Deserialize, Serialize};
+pub use crate::machine_spec::{
+    InputClaim, MachineSpec, Scope, SpecError, StateName, SuspendPolicy,
+};
 
 /// The most items a hand-off carries. Seats are bounded by `MAXIMUM_SEATS`, so this never limits
 /// play; scope it down later (owner, 2026-11-02).
@@ -73,23 +88,76 @@ impl fmt::Display for HandOffError {
 
 impl std::error::Error for HandOffError {}
 
+listed_enum! {
+    /// The three ways a machine can end, without their payload.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum HandOffKind {
+        Machine,
+        ReleaseLane,
+        ReturnToFrameBelow,
+    }
+}
+
+impl HandOffKind {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Machine => "machine",
+            Self::ReleaseLane => "release_lane",
+            Self::ReturnToFrameBelow => "return_to_frame_below",
+        }
+    }
+}
+
+/// Where the table goes when a machine ends. A seat lane has no machine to go to, so it releases
+/// the lane; a group machine pushed onto the stack may return to the frame below it (C6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandOffTarget {
+    Machine(MachineId),
+    ReleaseLane,
+    ReturnToFrameBelow,
+}
+
+impl HandOffTarget {
+    pub fn kind(&self) -> HandOffKind {
+        match self {
+            Self::Machine(_) => HandOffKind::Machine,
+            Self::ReleaseLane => HandOffKind::ReleaseLane,
+            Self::ReturnToFrameBelow => HandOffKind::ReturnToFrameBelow,
+        }
+    }
+}
+
 /// Where the table goes when a machine exits, and what goes with it (RES27).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HandOff {
-    target: MachineId,
+    target: HandOffTarget,
     carry: Vec<CarryItem>,
 }
 
 impl HandOff {
+    /// A hand-off to another machine.
     pub fn new(target: MachineId, carry: Vec<CarryItem>) -> Result<Self, HandOffError> {
+        Self::to(HandOffTarget::Machine(target), carry)
+    }
+
+    pub fn to(target: HandOffTarget, carry: Vec<CarryItem>) -> Result<Self, HandOffError> {
         if carry.len() > MAXIMUM_CARRY_ITEMS {
             return Err(HandOffError::TooManyCarryItems);
         }
         Ok(Self { target, carry })
     }
 
-    pub fn target(&self) -> &MachineId {
+    pub fn target(&self) -> &HandOffTarget {
         &self.target
+    }
+
+    /// The machine the hand-off names, if it names one.
+    pub fn machine_target(&self) -> Option<&MachineId> {
+        match &self.target {
+            HandOffTarget::Machine(machine) => Some(machine),
+            HandOffTarget::ReleaseLane | HandOffTarget::ReturnToFrameBelow => None,
+        }
     }
 
     pub fn carry(&self) -> &[CarryItem] {
@@ -177,12 +245,14 @@ impl fmt::Display for ReadoutError {
 impl std::error::Error for ReadoutError {}
 
 listed_enum! {
-    /// The closed cause of a failed machine call, as the `MachineFailed` event records it.
+    /// The closed cause of a failed machine call, as the `MachineFailed` event records it. A
+    /// record that could not be read keeps the fault that `load.refused` would name.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum MachineFailureCause {
-        /// The saved state could not be read for this machine.
-        SlotRefused,
+        SlotWrongMachine,
+        SlotUnsupportedVersion,
+        SlotMalformed,
         EntryRefused,
         /// A state or its name could not be written.
         StateInvalid,
@@ -197,12 +267,24 @@ listed_enum! {
 impl MachineFailureCause {
     pub fn key(self) -> &'static str {
         match self {
-            Self::SlotRefused => "slot_refused",
+            Self::SlotWrongMachine => "slot_wrong_machine",
+            Self::SlotUnsupportedVersion => "slot_unsupported_version",
+            Self::SlotMalformed => "slot_malformed",
             Self::EntryRefused => "entry_refused",
             Self::StateInvalid => "state_invalid",
             Self::HandOffRefused => "hand_off_refused",
             Self::ProjectionBlank => "projection_blank",
             Self::DeclineInvalid => "decline_invalid",
+        }
+    }
+}
+
+impl From<LoadFault> for MachineFailureCause {
+    fn from(fault: LoadFault) -> Self {
+        match fault {
+            LoadFault::WrongMachine => Self::SlotWrongMachine,
+            LoadFault::UnsupportedVersion => Self::SlotUnsupportedVersion,
+            LoadFault::Malformed => Self::SlotMalformed,
         }
     }
 }
@@ -222,7 +304,7 @@ pub enum MachineError {
 impl MachineError {
     pub fn cause(&self) -> MachineFailureCause {
         match self {
-            Self::Load(_) => MachineFailureCause::SlotRefused,
+            Self::Load(error) => error.fault().into(),
             Self::Entry(_) => MachineFailureCause::EntryRefused,
             Self::Slot(_) => MachineFailureCause::StateInvalid,
             Self::HandOff(_) => MachineFailureCause::HandOffRefused,
@@ -283,11 +365,36 @@ impl From<NameError> for MachineError {
     }
 }
 
+/// A key a machine chose for one of its resource requests, and stores in its state to recognise
+/// the result by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RequestKey(u64);
+
+impl RequestKey {
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// How a resource request ended. Only a final answer is delivered to a machine: a request still
+/// pending is not an input, so there is no value for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceOutcome {
+    Ready,
+    Failed(FailureCause),
+}
+
 /// What reaches a machine. Typed text never does: a free line was interpreted into an action
-/// before the pipeline got here, and a tap already is one (C.1).
+/// before the pipeline got here, and a tap already is one (C.1). The operation id is in the
+/// correlation and the view revision was checked at ADMIT, so neither is a machine's concern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MachineInput {
-    /// A seat's intent: a tap or an interpreted line.
+    /// A seat's intent: a tap or an interpreted line. A target joins it at C3.
     Intent {
         seat: SeatId,
         action: ActionId,
@@ -297,10 +404,10 @@ pub enum MachineInput {
         pending: PendingId,
         draws: Vec<Draw>,
     },
-    /// A resource request this machine made has finished or failed (RES22).
+    /// A resource request this machine made has finished, keyed by the key it chose (RES22).
     ResourceResult {
-        handle: ResourceHandle,
-        readiness: Readiness,
+        key: RequestKey,
+        outcome: ResourceOutcome,
     },
     Timer {
         timer: TimerName,
@@ -308,6 +415,12 @@ pub enum MachineInput {
     Proposal {
         origin: ProposalOrigin,
         proposer: ProposerRef,
+    },
+    /// The pending this machine reported `Waiting` on was cancelled without an answer (a seat left
+    /// for good, the host moved on, C.4): the machine drops what it held for it and nothing is
+    /// spent. A machine that is not waiting on that pending declines it.
+    PendingCancelled {
+        pending: PendingId,
     },
 }
 
@@ -318,21 +431,27 @@ pub enum Decision {
     Resolved(Resolution),
     /// A player must roll: the pending handler opened this pending (RES26).
     RollPending(PendingId),
+    /// A window or a roller's choice is open: the pending handler opened this pending and the
+    /// machine reports `Waiting` on it until the answers come back as a `Dice` input (C.4).
+    Pending(PendingId),
 }
 
-/// Everything `step` may read besides the saved state. Time and the decision are here so the
-/// machine never asks for them.
+/// Everything `step` may read besides the saved state. Time, the table and the decision are here
+/// so the machine never asks for them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StepInput {
+pub struct StepInput<'a> {
     pub correlation: Correlation,
     pub now_ms: u64,
+    pub table: &'a TableState,
     pub input: MachineInput,
     pub decision: Option<Decision>,
 }
 
-/// A request for a resource. The broker answers later with an input; the machine never waits.
+/// A request for a resource. The broker answers later with an input keyed by `key`; the machine
+/// never waits and never sees the broker's handle.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceRequest {
+    pub key: RequestKey,
     pub purpose: PurposeName,
 }
 
@@ -344,44 +463,51 @@ pub enum StepOutcome {
     Waiting(PendingId),
 }
 
-/// What one step produced: the new state, what the table should change, what is wanted from the
-/// broker, how it ended and whether the machine asks to hand off.
+/// What one step produced. A declined or clarified step changes nothing: no state, no effects,
+/// no requests. A waiting step may change only the state, to record the pending it waits on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepResult {
-    pub state: MachineSlot,
+    /// The new state, or `None` when the state did not change.
+    pub state: Option<MachineSlot>,
     pub table_effects: Vec<TableEffect>,
     pub resource_requests: Vec<ResourceRequest>,
     pub outcome: StepOutcome,
-    pub asks_for_hand_off: bool,
 }
 
 impl StepResult {
     /// An input that changed nothing and was refused.
-    pub fn declined(state: &MachineSlot, decline: Decline) -> Self {
+    pub fn declined(decline: Decline) -> Self {
         Self {
-            state: state.clone(),
+            state: None,
             table_effects: Vec::new(),
             resource_requests: Vec::new(),
             outcome: StepOutcome::Settled(Outcome::Declined(decline)),
-            asks_for_hand_off: false,
         }
     }
 
     /// An input that was applied, moving to `state` and proposing `table_effects`.
     pub fn applied(state: MachineSlot, table_effects: Vec<TableEffect>) -> Self {
         Self {
-            state,
+            state: Some(state),
             table_effects,
             resource_requests: Vec::new(),
             outcome: StepOutcome::Settled(Outcome::Applied),
-            asks_for_hand_off: false,
         }
     }
 
-    /// The same result, with the machine asking the DM for a hand-off (RES21).
-    pub fn asking_for_hand_off(mut self) -> Self {
-        self.asks_for_hand_off = true;
-        self
+    /// An input that was applied without changing the machine's own state.
+    pub fn applied_in_place(table_effects: Vec<TableEffect>) -> Self {
+        Self {
+            state: None,
+            table_effects,
+            resource_requests: Vec::new(),
+            outcome: StepOutcome::Settled(Outcome::Applied),
+        }
+    }
+
+    /// The state after the step: the new one, or the one the step started from.
+    pub fn state_after<'a>(&'a self, before: &'a MachineSlot) -> &'a MachineSlot {
+        self.state.as_ref().unwrap_or(before)
     }
 }
 
@@ -423,19 +549,28 @@ pub trait Machine: Send + Sync {
     /// Whether this input is addressed to the machine in this state. An input that is not
     /// accepted is declined by `step` and leaves the state as it was. A slot that cannot be read
     /// accepts nothing.
-    fn accepts(&self, input: &MachineInput, state: &MachineSlot) -> bool;
+    fn accepts(&self, table: &TableState, input: &MachineInput, state: &MachineSlot) -> bool;
 
-    fn step(&self, state: &MachineSlot, input: &StepInput) -> Result<StepResult, MachineError>;
+    fn step(&self, state: &MachineSlot, input: &StepInput<'_>) -> Result<StepResult, MachineError>;
 
-    /// Where the table goes from here and what goes with it.
-    fn exit(&self, state: &MachineSlot) -> Result<HandOff, MachineError>;
+    /// Whether the machine is finished and asks the DM for a hand-off (RES21). It is derived from
+    /// the state, so it is still true after a hand-off the engine refused, and after a restart.
+    fn wants_hand_off(&self, state: &MachineSlot) -> Result<bool, MachineError>;
 
-    /// The closed name of the state the slot holds; every name is one the spec lists.
+    /// Where the table goes from here and what goes with it, for the table as it is now.
+    fn exit(&self, table: &TableState, state: &MachineSlot) -> Result<HandOff, MachineError>;
+
+    /// The closed name of the state the slot holds, read from its tag without decoding the rest;
+    /// every name is one the spec lists.
     fn state_name(&self, state: &MachineSlot) -> Result<StateName, MachineError>;
+
+    /// Decodes the whole state, proving every field of the record readable.
+    fn validate(&self, state: &MachineSlot) -> Result<(), MachineError>;
 
     /// What the machine shows `audience`, never empty (stub until C5).
     fn project(
         &self,
+        table: &TableState,
         state: &MachineSlot,
         audience: Audience,
     ) -> Result<MachineReadout, MachineError>;
@@ -453,7 +588,8 @@ pub trait Machine: Send + Sync {
     }
 
     /// Reads a saved record: migrates it step by step to the current schema version, then checks
-    /// that its state can be read. An unmigratable or unreadable record is refused (H.12).
+    /// that its whole state can be read. An unmigratable or unreadable record is refused (H.12),
+    /// with the typed reason `validate` gave.
     fn load(&self, saved: &MachineSlot) -> Result<MachineSlot, LoadError> {
         let spec = self.spec();
         if saved.machine() != spec.id() {
@@ -476,9 +612,14 @@ pub trait Machine: Send + Sync {
             }
             slot = next;
         }
-        self.state_name(&slot)
-            .map_err(|_| LoadError::Malformed { version: expected })?;
-        Ok(slot)
+        match self.validate(&slot) {
+            Ok(()) => Ok(slot),
+            Err(MachineError::Load(error)) => Err(error),
+            Err(_) => Err(LoadError::Malformed {
+                version: expected,
+                class: crate::machine_slot::ErrorClass::Data,
+            }),
+        }
     }
 }
 
@@ -509,4 +650,28 @@ pub fn step_events(
         });
     }
     events
+}
+
+/// The event for a machine starting in `state`.
+pub fn entered_event(scope: &TableScope, correlation: Correlation, state: StateName) -> TableEvent {
+    TableEvent::MachineEntered {
+        scope: scope.clone(),
+        correlation,
+        state,
+    }
+}
+
+/// The event for a machine ending with this hand-off.
+pub fn exited_event(
+    scope: &TableScope,
+    correlation: Correlation,
+    hand_off: &HandOff,
+) -> TableEvent {
+    TableEvent::MachineExited {
+        scope: scope.clone(),
+        correlation,
+        kind: hand_off.target().kind(),
+        target: hand_off.machine_target().cloned(),
+        carried: hand_off.carry().len(),
+    }
 }

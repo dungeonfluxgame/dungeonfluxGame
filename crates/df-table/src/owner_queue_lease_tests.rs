@@ -582,3 +582,45 @@ fn a_duplicate_at_exactly_the_remembered_limit_still_finds_its_result_and_one_mo
         "the oldest ended operation was forgotten"
     );
 }
+
+#[test]
+fn a_released_input_forgets_its_operation_id_and_frees_its_seat() {
+    let mut queue = quiet_queue(1);
+    queue.admit(tap(7, 1), 0).expect("admitted");
+    let served = serve_at(&mut queue, 10);
+    let (sender, operation_id) = (served.envelope.sender(), served.envelope.operation_id());
+
+    queue
+        .release(sender, operation_id, FailureCause::Unavailable, 30)
+        .expect("releases");
+
+    assert_eq!(queue.status(sender, operation_id), None);
+    assert_eq!(queue.seat_pending(SeatId::new(1)), Some(0));
+    assert_eq!(
+        queue.finish(sender, operation_id, OutcomeKind::Applied),
+        Err(FinishError::UnknownOperation)
+    );
+    queue
+        .admit(tap(7, 1), 40)
+        .expect("the same id is a new operation after a release");
+    let again = serve_at(&mut queue, 50);
+    assert_eq!(again.envelope.operation_id(), operation_id);
+    end(&mut queue, &again);
+    assert!(matches!(
+        queue.status(sender, operation_id),
+        Some(OperationStatus::Finished { .. })
+    ));
+}
+
+#[test]
+fn releasing_an_input_that_is_not_in_progress_is_refused() {
+    let mut queue = quiet_queue(1);
+    let waiting = tap(3, 1);
+    let (sender, operation_id) = (waiting.sender(), waiting.operation_id());
+    queue.admit(waiting, 0).expect("admitted");
+
+    assert!(matches!(
+        queue.release(sender, operation_id, FailureCause::Unavailable, 1),
+        Err(FinishError::NotInProgress { .. })
+    ));
+}

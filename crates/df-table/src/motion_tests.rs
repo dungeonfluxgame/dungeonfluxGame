@@ -1,8 +1,7 @@
 use crate::ecs::{Entities, Entity, Store};
 use crate::element::Position;
-use crate::motion::{
-    MAXIMUM_SPEED, MAXIMUM_TICK_SECONDS, MINIMUM_SPEED, Motion, Speed, SpeedError, advance,
-};
+use crate::limits::{MAXIMUM_SPEED, MAXIMUM_TICK_SECONDS};
+use crate::motion::{Motion, Speed, SpeedError, advance};
 
 fn speed(value: f32) -> Speed {
     Speed::new(value).expect("a valid speed")
@@ -14,7 +13,7 @@ fn one_mover(
     units_per_second: f32,
 ) -> (Entity, Store<Position>, Store<Motion>) {
     let mut entities = Entities::default();
-    let entity = entities.spawn();
+    let entity = entities.spawn().expect("room");
     let mut positions = Store::default();
     let mut motions = Store::default();
     positions.insert(entity, from);
@@ -30,15 +29,8 @@ fn one_mover(
 
 #[test]
 fn a_speed_inside_the_limits_is_accepted_and_anything_else_is_refused() {
-    assert!(Speed::new(MINIMUM_SPEED).is_ok() && Speed::new(MAXIMUM_SPEED).is_ok());
-    for bad in [
-        0.0,
-        -1.0,
-        MINIMUM_SPEED / 2.0,
-        MAXIMUM_SPEED + 1.0,
-        f32::NAN,
-        f32::INFINITY,
-    ] {
+    assert!(Speed::new(f32::MIN_POSITIVE).is_ok() && Speed::new(MAXIMUM_SPEED).is_ok());
+    for bad in [0.0, -1.0, MAXIMUM_SPEED + 1.0, f32::NAN, f32::INFINITY] {
         assert!(matches!(Speed::new(bad), Err(SpeedError(_))), "{bad}");
     }
     assert_eq!(speed(12.5).units_per_second(), 12.5);
@@ -48,7 +40,7 @@ fn a_speed_inside_the_limits_is_accepted_and_anything_else_is_refused() {
 fn a_refused_speed_says_the_limits() {
     let message = Speed::new(0.0).expect_err("refused").to_string();
     assert!(
-        message.contains("0.1") && message.contains("400"),
+        message.contains("above 0") && message.contains(&MAXIMUM_SPEED.to_string()),
         "{message}"
     );
 }
@@ -125,7 +117,7 @@ fn many_travellers_each_move_independently() {
     let mut motions = Store::default();
     let mut all = Vec::new();
     for index in 0..50 {
-        let entity = entities.spawn();
+        let entity = entities.spawn().expect("room");
         positions.insert(entity, Position::new(0.0, 0.0));
         motions.insert(
             entity,

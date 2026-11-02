@@ -3,9 +3,10 @@
 //! For each scripted step it does what the pipeline will do: asks `accepts`, decides a rules
 //! action with the scripted rules owner, opens a pending for a roll, draws the dice, calls
 //! `step` (twice, to prove it deterministic), turns the step into events, commits the effects to
-//! a table state, and hands resource requests to the scripted broker. Then it checks the result
-//! against what the script expects. It owns no rule of its own: every finding names the check of
-//! the contract that was broken.
+//! a table state, hands resource requests to the scripted broker and polls `wants_hand_off`. Then
+//! it checks the result against what the script expects, and runs the per-state probes of
+//! `probes` on every state it reaches. It owns no rule of its own: every finding names the check
+//! of the contract that was broken. Pending handling here is a stand-in that C4 replaces.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -15,20 +16,20 @@ use crate::envelope::PendingId;
 use crate::event::TableEvent;
 use crate::identity::{Correlation, SeatId, TableScope};
 use crate::machine::{
-    Decision, Machine, MachineInput, MachineSpec, StepInput, StepOutcome, StepResult, step_events,
+    Decision, Machine, MachineInput, MachineSpec, StepInput, StepOutcome, StepResult,
+    entered_event, step_events,
 };
 use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, Outcome};
 use crate::ports::{
-    ActionId, Broker, Clock, Dice, Draw, DrawRequest, Preparation, Resolution, ResourceHandle,
-    RulesOwner,
+    ActionId, Broker, Clock, Dice, Draw, DrawRequest, Preparation, Resolution, RulesOwner,
 };
 use crate::testkit::{ManualClock, QueuedDice, ScriptedBroker, ScriptedRulesOwner, correlation};
 
-use super::probes::{self, PROBE_TABLE};
+use super::probes::{self, Context, PROBE_TABLE};
 use super::{
     ConformanceCheck, ConformanceFixture, ConformanceReport, Expectation, ExpectedResult,
-    ScriptedInput, ScriptedStep,
+    ScriptedInput, ScriptedStep, guarded,
 };
 
 /// How far the clock moves before each step, so a machine that reads the time would show it.
@@ -43,7 +44,9 @@ struct OpenRoll {
 
 struct Driver {
     machine: Arc<dyn Machine>,
+    neighbours: Vec<Arc<dyn Machine>>,
     spec: MachineSpec,
+    actions: Vec<ActionId>,
     table: TableState,
     slot: MachineSlot,
     rules: ScriptedRulesOwner,
@@ -53,9 +56,6 @@ struct Driver {
     open_rolls: VecDeque<OpenRoll>,
     next_pending: u64,
     turn: u64,
-    /// The handles the broker gave this machine's requests, and how many results came back.
-    issued: Vec<ResourceHandle>,
-    answered: usize,
 }
 
 /// What the pipeline's CHECK and DECIDE made of an intent before the machine saw it.
@@ -70,8 +70,15 @@ enum Decided {
 pub(super) fn play(fixture: ConformanceFixture, report: &mut ConformanceReport) {
     let machine = fixture.machine;
     let spec = machine.spec().clone();
-    let entered = machine.enter(&fixture.table, &fixture.entry);
-    let again = machine.enter(&fixture.table, &fixture.entry);
+    let entered = guarded(report, "enter", |_| {
+        (
+            machine.enter(&fixture.table, &fixture.entry),
+            machine.enter(&fixture.table, &fixture.entry),
+        )
+    });
+    let Some((entered, again)) = entered else {
+        return;
+    };
     if entered != again {
         report.fail(
             ConformanceCheck::Determinism,
@@ -88,9 +95,19 @@ pub(super) fn play(fixture: ConformanceFixture, report: &mut ConformanceReport) 
             return;
         }
     };
+    let mut actions: Vec<ActionId> = spec.rules_actions().to_vec();
+    for step in &fixture.script {
+        if let ScriptedInput::Player { action, .. } = &step.input
+            && !actions.contains(action)
+        {
+            actions.push(action.clone());
+        }
+    }
     let mut driver = Driver {
         machine,
+        neighbours: fixture.neighbours,
         spec,
+        actions,
         table: fixture.table,
         slot,
         rules: fixture.rules,
@@ -100,16 +117,19 @@ pub(super) fn play(fixture: ConformanceFixture, report: &mut ConformanceReport) 
         open_rolls: VecDeque::new(),
         next_pending: 1,
         turn: 0,
-        issued: Vec::new(),
-        answered: 0,
     };
-    driver.start(report);
+    guarded(report, "after enter", |report| driver.start(report));
     for (index, step) in fixture.script.iter().enumerate() {
-        driver.play_step(index, step, report);
+        guarded(report, &format!("step {index}"), |report| {
+            driver.play_step(index, step, report);
+        });
     }
-    probes::exit_hand_off(driver.machine.as_ref(), &driver.table, &driver.slot, report);
-    probes::load_refusal(driver.machine.as_ref(), &driver.slot, report);
-    probes::failure_events(driver.machine.as_ref(), report);
+    guarded(report, "load refusal", |report| {
+        probes::load_refusal(driver.machine.as_ref(), &driver.slot, report);
+    });
+    guarded(report, "failure events", |report| {
+        probes::failure_events(driver.machine.as_ref(), &driver.table, report);
+    });
 }
 
 impl Driver {
@@ -123,14 +143,21 @@ impl Driver {
     }
 
     fn start(&self, report: &mut ConformanceReport) {
-        self.check_slot("after enter", report);
+        let _ = self.check_slot("after enter", report);
         if let Ok(state) = self.machine.state_name(&self.slot) {
-            report.events.push(TableEvent::MachineEntered {
-                scope: self.scope(),
-                correlation: correlation(0),
-                state,
-            });
+            report
+                .events
+                .push(entered_event(&self.scope(), correlation(0), state));
         }
+    }
+
+    fn check_slot(&self, label: &str, report: &mut ConformanceReport) -> Option<bool> {
+        let context = Context {
+            machine: self.machine.as_ref(),
+            neighbours: &self.neighbours,
+            actions: &self.actions,
+        };
+        probes::check_slot(&context, &self.table, &self.slot, label, report)
     }
 
     fn play_step(&mut self, index: usize, step: &ScriptedStep, report: &mut ConformanceReport) {
@@ -138,10 +165,14 @@ impl Driver {
         self.clock.advance_ms(STEP_INTERVAL_MS);
         let probe = correlation(self.turn);
         let label = format!("step {index}");
+        if let ScriptedInput::TableChange(effect) = &step.input {
+            self.change_table(&label, probe, std::slice::from_ref(effect), report);
+            return;
+        }
         let Some((input, prepared)) = self.input_for(&step.input, probe, &label, report) else {
             return;
         };
-        let accepted = self.machine.accepts(&input, &self.slot);
+        let accepted = self.machine.accepts(&self.table, &input, &self.slot);
         if accepted != step.expect.accepted {
             report.fail(
                 ConformanceCheck::Accepts,
@@ -172,6 +203,7 @@ impl Driver {
         let step_input = StepInput {
             correlation: probe,
             now_ms: self.clock.now_ms(),
+            table: &self.table,
             input,
             decision,
         };
@@ -194,6 +226,30 @@ impl Driver {
         }
     }
 
+    /// The host changes the table between inputs; the machine is not called, but every probe runs
+    /// again, so a machine that kept its own copy of a shared fact is caught following it.
+    fn change_table(
+        &mut self,
+        label: &str,
+        probe: Correlation,
+        effects: &[crate::effects::TableEffect],
+        report: &mut ConformanceReport,
+    ) {
+        let scope = self.scope();
+        match self.table.apply(&scope, probe, effects) {
+            Ok(ApplyOutcome::Applied(events)) => report.events.extend(events),
+            Ok(ApplyOutcome::AlreadyApplied) => report.fail(
+                ConformanceCheck::RunAlone,
+                format!("{label}: the stand-in reused an operation id"),
+            ),
+            Err(error) => report.fail(
+                ConformanceCheck::RunAlone,
+                format!("{label}: the table change did not apply: {error}"),
+            ),
+        }
+        let _ = self.check_slot(label, report);
+    }
+
     /// The machine input for a scripted step, and the decision that goes with it when the step
     /// answers a roll. `None` when the script cannot be played.
     fn input_for(
@@ -212,6 +268,7 @@ impl Driver {
                 None,
             )),
             ScriptedInput::Raw(input) => Some((input.clone(), None)),
+            ScriptedInput::TableChange(_) => None,
             ScriptedInput::AnswerOpenRoll => {
                 let Some(roll) = self.open_rolls.pop_front() else {
                     report.fail(
@@ -343,8 +400,45 @@ impl Driver {
         accepted: bool,
         report: &mut ConformanceReport,
     ) {
+        self.check_transition(label, step, probe, &result, report);
+        check_result(label, &step.expect, &result.outcome, report);
+        self.check_promises(label, accepted, &result, report);
+        self.commit_effects(label, probe, &result, report);
+        for request in &result.resource_requests {
+            if let Err(error) = self.broker.request(probe, &request.purpose) {
+                report.fail(
+                    ConformanceCheck::ResourceResults,
+                    format!("{label}: the broker took no request: {error}"),
+                );
+            }
+        }
+        self.check_waiting(label, &result.outcome, report);
+        if let Some(next) = result.state {
+            self.slot = next;
+        }
+        if let Some(asks) = self.check_slot(label, report)
+            && asks != step.expect.wants_hand_off
+        {
+            report.fail(
+                ConformanceCheck::RunAlone,
+                format!(
+                    "{label}: wants_hand_off was {asks}, the script says {}",
+                    step.expect.wants_hand_off
+                ),
+            );
+        }
+    }
+
+    fn check_transition(
+        &self,
+        label: &str,
+        step: &ScriptedStep,
+        probe: Correlation,
+        result: &StepResult,
+        report: &mut ConformanceReport,
+    ) {
         let before = self.machine.state_name(&self.slot);
-        let after = self.machine.state_name(&result.state);
+        let after = self.machine.state_name(result.state_after(&self.slot));
         if let (Ok(before), Ok(after)) = (&before, &after) {
             let observed = (before.as_str(), after.as_str());
             let expected = step
@@ -357,70 +451,52 @@ impl Driver {
                     format!("{label}: the state went {observed:?}, the script says {expected:?}"),
                 );
             }
-            let scope = self.scope();
-            let events = step_events(&scope, probe, before, after, &result.outcome);
-            let moved = events
-                .iter()
-                .any(|event| matches!(event, TableEvent::MachineTransitioned { .. }));
-            if moved != (before != after) {
-                report.fail(
-                    ConformanceCheck::TransitionEvents,
-                    format!("{label}: a change of state did not produce a transition event"),
-                );
-            }
-            report.events.extend(events);
+            report.events.extend(step_events(
+                &self.scope(),
+                probe,
+                before,
+                after,
+                &result.outcome,
+            ));
         }
-        check_result(label, &step.expect, &result.outcome, report);
-        if result.asks_for_hand_off != step.expect.asks_for_hand_off {
-            report.fail(
-                ConformanceCheck::RunAlone,
-                format!(
-                    "{label}: asks_for_hand_off was {}, the script says {}",
-                    result.asks_for_hand_off, step.expect.asks_for_hand_off
-                ),
-            );
-        }
-        if !accepted
-            && (result.state != self.slot
-                || !result.table_effects.is_empty()
-                || !result.resource_requests.is_empty())
-        {
-            report.fail(
-                ConformanceCheck::Accepts,
-                format!("{label}: an input the machine does not accept changed something"),
-            );
-        }
-        self.commit_effects(label, probe, &result, report);
-        for request in &result.resource_requests {
-            match self.broker.request(probe, &request.purpose) {
-                Ok(handle) => self.issued.push(handle),
-                Err(error) => report.fail(
-                    ConformanceCheck::ResourceResults,
-                    format!("{label}: the broker took no request: {error}"),
-                ),
-            }
-        }
-        if let ScriptedInput::Raw(MachineInput::ResourceResult { handle, .. }) = &step.input
-            && self.issued.contains(handle)
-            && self.answered < self.issued.len()
-        {
-            self.answered += 1;
-        }
-        self.check_waiting(label, &result.outcome, report);
-        self.slot = result.state;
-        self.check_slot(label, report);
     }
 
-    fn check_slot(&self, label: &str, report: &mut ConformanceReport) {
-        let outstanding_requests = self.issued.len() - self.answered;
-        probes::check_slot(
-            self.machine.as_ref(),
-            &self.table,
-            &self.slot,
-            outstanding_requests,
-            label,
-            report,
-        );
+    /// What a result may change. An input the machine does not accept changes nothing. A decline
+    /// or a clarification changes nothing. A waiting step may change only the state.
+    fn check_promises(
+        &self,
+        label: &str,
+        accepted: bool,
+        result: &StepResult,
+        report: &mut ConformanceReport,
+    ) {
+        let touches_table =
+            !result.table_effects.is_empty() || !result.resource_requests.is_empty();
+        let changes_state = result.state.is_some();
+        if !accepted {
+            if changes_state || touches_table {
+                report.fail(
+                    ConformanceCheck::Accepts,
+                    format!("{label}: an input the machine does not accept changed something"),
+                );
+            }
+            return;
+        }
+        let broken = match &result.outcome {
+            StepOutcome::Settled(Outcome::Declined(_) | Outcome::NeedsClarification) => {
+                changes_state || touches_table
+            }
+            StepOutcome::Waiting(_) | StepOutcome::Settled(Outcome::Pending(_)) => touches_table,
+            StepOutcome::Settled(Outcome::Applied) => false,
+        };
+        if broken {
+            report.fail(
+                ConformanceCheck::DeclineChangesNothing,
+                format!(
+                    "{label}: a declined, clarified or waiting result changed more than it may"
+                ),
+            );
+        }
     }
 
     fn commit_effects(

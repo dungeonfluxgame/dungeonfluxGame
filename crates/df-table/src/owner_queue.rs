@@ -382,6 +382,35 @@ impl OwnerQueue {
         Ok(())
     }
 
+    /// Gives up a served input whose result was never kept, such as one whose commit failed, and
+    /// forgets its operation id: the seat has room again and the same id sent again is a new
+    /// operation, not a duplicate of one that never happened (H.2, H.4). It records the input as
+    /// abandoned with the cause. Nothing about it is remembered, so a later `finish` of the same
+    /// id is `UnknownOperation`.
+    pub fn release(
+        &mut self,
+        sender: Sender,
+        operation_id: OperationId,
+        cause: FailureCause,
+        now_ms: u64,
+    ) -> Result<(), FinishError> {
+        let key = self
+            .key_of(sender, operation_id)
+            .ok_or(FinishError::UnknownOperation)?;
+        let (turn_seq, entry) = self.end_in_progress(key, Ending::Released)?;
+        self.record(TableEvent::InputAbandoned {
+            scope: self.scope(),
+            correlation: Correlation {
+                operation_id,
+                turn_seq,
+                revision: entry.revision,
+            },
+            cause,
+            ms: now_ms.saturating_sub(entry.served_ms),
+        });
+        Ok(())
+    }
+
     /// The inputs served and not ended, oldest first, with how long each has been running.
     pub fn in_progress(&self, now_ms: u64) -> Vec<InProgressOperation> {
         self.in_progress
@@ -432,6 +461,12 @@ impl OwnerQueue {
     /// bounds), or `None` when the seat is not at the table.
     pub fn seat_pending(&self, seat: SeatId) -> Option<usize> {
         self.seats.get(&seat).map(SeatState::pending)
+    }
+
+    /// The seats that have a lane, in seat order: what `table_state::reconcile_lanes` compares with
+    /// the table's own seats, since the table state is the membership truth.
+    pub fn seated(&self) -> std::collections::BTreeSet<SeatId> {
+        self.seats.iter().map(|(seat, _)| *seat).collect()
     }
 
     /// The operations the queue remembers: waiting, in progress and ended. It never exceeds the
@@ -703,11 +738,15 @@ impl OwnerQueue {
             .ok_or(FinishError::UnknownOperation)?;
         record.status = match ending {
             Ending::Finished(outcome) => OperationStatus::Finished { turn_seq, outcome },
-            Ending::Abandoned => OperationStatus::Abandoned { turn_seq },
+            Ending::Abandoned | Ending::Released => OperationStatus::Abandoned { turn_seq },
         };
         let (holder, lane, free_text) = (record.holder, record.lane, record.free_text);
         if let Some(hold) = holder {
             self.release_seat(hold, lane, free_text);
+        }
+        if matches!(ending, Ending::Released) {
+            self.operations.remove(&key);
+            return Ok((turn_seq, entry));
         }
         self.ended.push_back(key);
         self.forget_oldest_ended();

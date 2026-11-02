@@ -511,7 +511,8 @@ fn the_widest_possible_line_of_every_event_fits_the_reserved_capacity() {
         TableEvent::MachineExited {
             scope: scope.clone(),
             correlation,
-            target,
+            kind: crate::machine::HandOffKind::ReturnToFrameBelow,
+            target: Some(target),
             carried: usize::MAX,
         },
         TableEvent::InputReceived {

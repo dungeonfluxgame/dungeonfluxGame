@@ -39,27 +39,26 @@ pub struct Entities {
 }
 
 impl Entities {
-    pub fn spawn(&mut self) -> Entity {
-        self.live += 1;
+    /// Makes an entity, reusing a freed slot when there is one. `None` when every one of the 2^32
+    /// slots an index can name is in use: this type bounds itself, whatever its owner checks.
+    pub fn spawn(&mut self) -> Option<Entity> {
         if let Some(index) = self.free.pop() {
+            self.live += 1;
             let slot = index as usize;
             self.alive[slot] = true;
-            return Entity {
+            return Some(Entity {
                 index,
                 generation: self.generations[slot],
-            };
+            });
         }
-        // A slot is added only when none is free, so there are never more slots than the most
-        // entities alive at once, and the canvas holds at most `MAXIMUM_ELEMENTS` (far below
-        // 2^32). The caller checks that bound before it spawns.
-        let index = u32::try_from(self.generations.len())
-            .expect("the canvas bounds live entities far below 2^32");
+        let index = u32::try_from(self.generations.len()).ok()?;
+        self.live += 1;
         self.generations.push(0);
         self.alive.push(true);
-        Entity {
+        Some(Entity {
             index,
             generation: 0,
-        }
+        })
     }
 
     /// Removes the entity and returns whether it existed. A stale handle removes nothing.
@@ -123,10 +122,10 @@ impl<T> Store<T> {
         if self.sparse.len() <= entity.slot() {
             self.sparse.resize(entity.slot() + 1, None);
         }
-        // A store holds at most one component per entity, so it is as long as the live entities
-        // that have it: below the bound of the line above.
+        // A store holds at most one component per entity, and `Entities::spawn` refuses to make
+        // more than 2^32 entities, so a store never holds more items than a `u32` can count.
         let dense = u32::try_from(self.items.len())
-            .expect("a store holds at most one component per live entity, far below 2^32");
+            .expect("a store holds one item per entity and there are at most 2^32 entities");
         self.sparse[entity.slot()] = Some(dense);
         self.entities.push(entity);
         self.items.push(item);
@@ -157,7 +156,7 @@ impl<T> Store<T> {
         self.sparse[entity.slot()] = None;
         if dense != last {
             let moved = self.entities[dense];
-            // `dense` is an index into the store, which is shorter than the bound above.
+            // `dense` is an index into the store, whose length fits a `u32` (see `insert`).
             self.sparse[moved.slot()] = Some(
                 u32::try_from(dense).expect("a dense index is below the store length, below 2^32"),
             );

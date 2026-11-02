@@ -32,6 +32,8 @@ fn committed() -> CommittedOutcome {
         seat: SeatId::new(1),
         action: action("attack"),
         outcome: OutcomeKind::Applied,
+        steps: vec![action("attack")],
+        facts: Vec::new(),
     }
 }
 
@@ -191,7 +193,7 @@ fn the_scripted_rules_owner_lists_choices_prepares_and_resolves() {
             Preparation::Ready {
                 draws: vec![DrawRequest { sides: sides(20) }],
             },
-            Resolution::Applied,
+            Resolution::applied(),
         );
     let seat = SeatId::new(1);
     assert_eq!(
@@ -206,7 +208,7 @@ fn the_scripted_rules_owner_lists_choices_prepares_and_resolves() {
     );
     assert_eq!(
         rules.resolve(correlation(1), seat, &action("attack"), &[]),
-        Ok(Resolution::Applied)
+        Ok(Resolution::applied())
     );
 }
 

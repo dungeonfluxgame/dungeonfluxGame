@@ -22,7 +22,8 @@ use std::num::NonZeroU16;
 
 use serde::{Deserialize, Serialize};
 
-use crate::element::name_type;
+use crate::effects::TableEffect;
+use crate::element::{NameError, name_type};
 use crate::event::{FailureCause, TableEvent};
 use crate::identity::{Correlation, FactId, SeatId};
 use crate::listed::listed_enum;
@@ -141,11 +142,225 @@ pub enum Preparation {
     Declined(Decline),
 }
 
+name_type!(
+    /// The name of one typed fact of a resolved action, such as `slashing_damage` (C.7, RES18).
+    ResultLabel
+);
+
+/// One typed fact of a resolved action: a closed label and a whole number, from which the
+/// structured readout is written ("Pip hits Dain Rusk for 7 slashing"). Never model text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResultFact {
+    pub label: ResultLabel,
+    pub amount: u64,
+}
+
+/// What a resolved action did: the table effects the rules owner produced (RES18: mechanical
+/// effects come only from the rules owner) and the typed facts of the result. APPLY commits the
+/// effects with the machine's own, and the readout names the facts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Resolved {
+    pub effects: Vec<TableEffect>,
+    pub facts: Vec<ResultFact>,
+}
+
+impl Resolved {
+    pub fn with_effects(effects: Vec<TableEffect>) -> Self {
+        Self {
+            effects,
+            facts: Vec::new(),
+        }
+    }
+
+    /// Adds a typed fact, refusing a label that is not a valid name.
+    pub fn with_fact(mut self, label: &str, amount: u64) -> Result<Self, NameError> {
+        self.facts.push(ResultFact {
+            label: ResultLabel::new(label)?,
+            amount,
+        });
+        Ok(self)
+    }
+}
+
 /// What the rules decided about a prepared action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Resolution {
-    Applied,
+    /// The action was resolved: what it changed and its typed facts.
+    Applied(Resolved),
     Declined(Decline),
+    /// The rules need more dice before they can decide, asked for one stage at a time (the
+    /// roller's later stages, a damage roll only a hit reaches). The pipeline draws them and asks
+    /// again with every die drawn so far.
+    NeedsDraws(Vec<DrawRequest>),
+    /// Someone must answer before the rules can go on: a window, a choice or a roll (C.4).
+    Await(Awaiting),
+}
+
+impl Resolution {
+    /// A resolved action that changed nothing the rules owner reports.
+    pub fn applied() -> Self {
+        Self::Applied(Resolved::default())
+    }
+}
+
+/// What an `Awaiting` resolution waits for, which is the kind of pending it opens (RES26).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AwaitingKind {
+    /// The roller's own choice after a roll stage (M2-D4), or the order of simultaneous effects.
+    Choice,
+    /// A roll a player must make: the draws are made when the player answers `roll` (RES26).
+    Roll,
+    /// A window in which other seats may react (C.4).
+    Reaction,
+}
+
+/// What one seat may answer, in the order the phone shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Offer {
+    pub seat: SeatId,
+    pub choices: Vec<ActionId>,
+}
+
+/// A resolution that cannot go on until its offers are answered. Every seat with an offer answers
+/// once; the rules owner is then asked to resume with all the answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Awaiting {
+    pub kind: AwaitingKind,
+    pub offers: Vec<Offer>,
+    /// The dice a `Roll` makes when it is answered; empty for the other kinds.
+    pub draws: Vec<DrawRequest>,
+}
+
+/// One seat's answer to its offer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowAnswer {
+    pub seat: SeatId,
+    pub choice: ActionId,
+}
+
+/// Everything the rules owner is given to resume or finish a resolution: every die drawn so far in
+/// order (recovery never draws again), the answers in the order of the offers, and a ruling that
+/// applies.
+#[derive(Debug, Clone, Copy)]
+pub struct Resumption<'a> {
+    pub draws: &'a [Draw],
+    pub answers: &'a [WindowAnswer],
+    pub ruling: Option<&'a RulingAnswer>,
+}
+
+name_type!(
+    /// The normalised source-question key of a ruling, with the affordance id inside it (RES48).
+    RulingKey
+);
+name_type!(
+    /// One answer a ruling may have, a name the rules owner defines and validates (RES48).
+    RulingAnswer
+);
+
+listed_enum! {
+    /// Why an action needs a one-tap confirmation from its own seat (C.5).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ConfirmationReason {
+        HarmsAnAlly,
+        HarmsANeutral,
+        Irreversible,
+    }
+}
+
+impl ConfirmationReason {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::HarmsAnAlly => "harms_an_ally",
+            Self::HarmsANeutral => "harms_a_neutral",
+            Self::Irreversible => "irreversible",
+        }
+    }
+}
+
+listed_enum! {
+    /// How much a ruling gives, as the source's tiers name it (RES48).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum RulingTier {
+        Ordinary,
+        Advantage,
+        AutomaticSuccess,
+    }
+}
+
+impl RulingTier {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Ordinary => "ordinary",
+            Self::Advantage => "advantage",
+            Self::AutomaticSuccess => "automatic_success",
+        }
+    }
+
+    /// A reuse that grants advantage or automatic success is confirmed once a scene (RES48).
+    pub fn needs_reconfirmation(self) -> bool {
+        match self {
+            Self::Ordinary => false,
+            Self::Advantage | Self::AutomaticSuccess => true,
+        }
+    }
+}
+
+listed_enum! {
+    /// How far a ruling binds later play.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum RulingScope {
+        Table,
+        /// Only the scene it was made in.
+        Scene,
+    }
+}
+
+/// An answer a ruling may take and what it gives.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RulingOption {
+    pub answer: RulingAnswer,
+    pub tier: RulingTier,
+}
+
+/// Where the source leaves a real choice open (RES15): the question, the engine's suggestion and
+/// the supported alternatives. A model never sets a die, a DC or an automatic success.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RulingRequest {
+    pub key: RulingKey,
+    pub scope: RulingScope,
+    pub suggested: RulingOption,
+    pub alternatives: Vec<RulingOption>,
+    /// A reviewed, source-grounded automatic adjudication settles it at once (RES15).
+    pub reviewed_automatic: bool,
+}
+
+listed_enum! {
+    /// The dispositions that are not an action (C.8, K.1).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum NonActionKind {
+        Question,
+        Social,
+        PlanOnly,
+        Meta,
+        Joke,
+    }
+}
+
+impl NonActionKind {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Question => "question",
+            Self::Social => "social",
+            Self::PlanOnly => "plan_only",
+            Self::Meta => "meta",
+            Self::Joke => "joke",
+        }
+    }
 }
 
 /// What a line of free text means, as a closed choice (C.7).
@@ -153,17 +368,37 @@ pub enum Resolution {
 pub enum Interpretation {
     /// One of the legal choices it was shown.
     Action(ActionId),
+    /// An `ActionPlan`: the steps in order, at most six (C.0).
+    Plan(Vec<ActionId>),
     NeedsClarification,
+    /// Ambiguous between these choices: the phone shows exactly them (C.5, G.4).
+    Ambiguous {
+        candidates: Vec<ActionId>,
+    },
+    /// A question, a social line, a plan note, a rules question or a joke (C.8).
+    NonAction(NonActionKind),
     /// Not usable as input; the pipeline declines `intent_invalid`.
     Rejected,
 }
 
-/// What the storyteller is asked to put into words: an outcome that is already committed.
+/// What the storyteller is asked to put into words: an outcome that is already committed. For a
+/// plan, `steps` lists every applied step in order and `action` is the last of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommittedOutcome {
     pub seat: SeatId,
     pub action: ActionId,
     pub outcome: OutcomeKind,
+    pub steps: Vec<ActionId>,
+    pub facts: Vec<ResultFact>,
+}
+
+/// What the earlier steps of a plan have already done when a later step is checked (C.2): the
+/// steps applied so far and the effects they staged, so the rules owner sees the economy they
+/// spent and can decline the step that no longer fits.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanSoFar<'a> {
+    pub steps: &'a [ActionId],
+    pub effects: &'a [TableEffect],
 }
 
 /// A resource request the broker accepted.
@@ -213,6 +448,64 @@ pub trait RulesOwner: Send + Sync {
         action: &ActionId,
         draws: &[Draw],
     ) -> Result<Resolution, PortError>;
+
+    /// Checks one step of a plan against what its earlier steps already did (C.2). The default
+    /// ignores them and checks the step alone, which is right only for an owner that tracks no
+    /// economy.
+    fn prepare_in_plan(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        _so_far: &PlanSoFar<'_>,
+    ) -> Result<Preparation, PortError> {
+        self.prepare(correlation, seat, action)
+    }
+
+    /// Releases what a resolution that awaited answers had reserved, because it will not be
+    /// resumed (its pending was cancelled, C.4). The default has nothing reserved.
+    fn abandon(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        _action: &ActionId,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+
+    /// Whether the action needs the seat's one-tap confirmation first (C.5). The default asks for
+    /// none; an adapter that knows an ally or a neutral would be harmed says so.
+    fn confirmation_needed(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        _action: &ActionId,
+    ) -> Result<Option<ConfirmationReason>, PortError> {
+        Ok(None)
+    }
+
+    /// The ruling the source leaves open for this action, if any (RES15). The default has none.
+    fn ruling_needed(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        _action: &ActionId,
+    ) -> Result<Option<RulingRequest>, PortError> {
+        Ok(None)
+    }
+
+    /// Continues a resolution that was waiting for answers or a ruling, re-validating it against
+    /// the state now (C.4). The default resolves with the dice drawn so far and ignores the rest,
+    /// which is right only for an owner with no windows and no rulings.
+    fn resume(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        resumption: &Resumption<'_>,
+    ) -> Result<Resolution, PortError> {
+        self.resolve(correlation, seat, action, resumption.draws)
+    }
 }
 
 /// The interpreter: free text to a closed choice, never to a guess.
@@ -224,6 +517,18 @@ pub trait Interpreter: Send + Sync {
         text: &PlayerText,
         legal_choices: &[ActionId],
     ) -> Result<Interpretation, PortError>;
+
+    /// The one retry after a failure (C.7): a shorter prompt that carries only the legal choices.
+    /// The default asks the same question again.
+    fn retry_with_choices_only(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        text: &PlayerText,
+        legal_choices: &[ActionId],
+    ) -> Result<Interpretation, PortError> {
+        self.interpret(correlation, seat, text, legal_choices)
+    }
 }
 
 /// The narrator: a committed outcome to words.

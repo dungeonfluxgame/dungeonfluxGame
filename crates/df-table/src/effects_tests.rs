@@ -5,6 +5,7 @@ use crate::effects::{
     TableEffectKind, TableState, TableStateError,
 };
 use crate::identity::{MachineId, SceneId, SeatId, TableId, TableScope};
+use crate::machine_slot::LoadFault;
 use crate::testkit::correlation;
 
 fn seat(number: u64) -> SeatId {
@@ -39,6 +40,53 @@ fn sample(kind: TableEffectKind) -> TableEffect {
             from: machine("lobby"),
             to: machine("explore"),
             carried: 3,
+        },
+        TableEffectKind::SeatPresenceChanged => TableEffect::SeatPresenceChanged {
+            seat: seat(1),
+            presence: crate::table_state::Presence::Sleeping,
+        },
+        TableEffectKind::SeatMoved => TableEffect::SeatMoved {
+            seat: seat(1),
+            scene: SceneId::new(5),
+        },
+        TableEffectKind::TimeAdvanced => TableEffect::TimeAdvanced { advance_s: 6 },
+        TableEffectKind::TablePaused => TableEffect::TablePaused,
+        TableEffectKind::TableResumed => TableEffect::TableResumed,
+        TableEffectKind::TableIdled => TableEffect::TableIdled,
+        TableEffectKind::CastEntered => TableEffect::CastEntered {
+            entry: crate::table_state_tests::creature("goblin", "Goblin", 4, 60),
+        },
+        TableEffectKind::CastLeft => TableEffect::CastLeft {
+            cast: crate::table_state_tests::element("goblin"),
+        },
+        TableEffectKind::CastChanged => TableEffect::CastChanged {
+            cast: crate::table_state_tests::element("goblin"),
+            change: crate::table_state::CastChange::HitPoints { hit_points: 3 },
+        },
+        TableEffectKind::ActiveMachineSet => TableEffect::ActiveMachineSet {
+            home: crate::table_state::MachineHome::Scene {
+                scene: SceneId::new(4),
+            },
+            machine: machine("explore"),
+            slot: crate::table_state_tests::slot_with("explore", "presenting"),
+        },
+        TableEffectKind::ActiveSlotUpdated => TableEffect::ActiveSlotUpdated {
+            home: crate::table_state::MachineHome::Scene {
+                scene: SceneId::new(4),
+            },
+            slot: crate::table_state_tests::slot_with("explore", "resolved"),
+        },
+        TableEffectKind::HandOffPushed => TableEffect::HandOffPushed {
+            scene: SceneId::new(4),
+            machine: machine("explore"),
+            slot: crate::machine_slot::MachineSlot::from_parts(
+                machine("explore"),
+                1,
+                serde_json::json!({"phase": "presenting"}),
+            ),
+        },
+        TableEffectKind::HandOffPopped => TableEffect::HandOffPopped {
+            scene: SceneId::new(4),
         },
     }
 }
@@ -90,9 +138,9 @@ fn an_effect_with_an_unknown_field_or_kind_does_not_parse() {
 }
 
 #[test]
-fn a_stamped_record_opens_and_a_newer_or_versionless_one_is_refused() {
+fn a_stamped_record_opens_and_a_newer_or_versionless_one_is_refused_with_its_fault() {
     let effect = sample(TableEffectKind::SeatJoined);
-    let record = EffectRecord::stamp(effect.clone());
+    let record = EffectRecord::stamp(&effect).expect("stamps");
     let json = serde_json::to_value(&record).expect("serializes");
     assert_eq!(json["schema_version"], TABLE_EFFECT_SCHEMA_VERSION);
     assert_eq!(record.open(), Ok(effect.clone()));
@@ -103,7 +151,65 @@ fn a_stamped_record_opens_and_a_newer_or_versionless_one_is_refused() {
         let refused = record.open().expect_err("refused");
         assert_eq!(refused.found, version);
         assert_eq!(refused.expected, TABLE_EFFECT_SCHEMA_VERSION);
+        assert_eq!(refused.fault, LoadFault::UnsupportedVersion);
     }
+}
+
+#[test]
+fn a_record_from_a_newer_engine_with_an_effect_this_one_does_not_know_is_a_version_refusal() {
+    let text = r#"{"schema_version":2,"effect":{"effect":"quest_started","quest":"q1"}}"#;
+    let record: EffectRecord = serde_json::from_str(text).expect("the record itself parses");
+    let refused = record.open().expect_err("refused");
+    assert_eq!(refused.fault, LoadFault::UnsupportedVersion);
+    assert_eq!(
+        (refused.found, refused.expected),
+        (2, TABLE_EFFECT_SCHEMA_VERSION)
+    );
+    let event = refused.event(TableId::new(4));
+    assert_eq!(
+        event.render_audit_line(),
+        "LOAD refused table=4 record=effect_intent version=2 expected=1 cause=unsupported_version"
+    );
+    assert!(refused.to_string().contains("unsupported_version"));
+}
+
+#[test]
+fn a_record_at_a_known_version_that_holds_no_effect_is_malformed_not_a_serde_error() {
+    for effect in [
+        serde_json::json!({"effect": "quest_started", "quest": "q1"}),
+        serde_json::json!({"effect": "seat_joined"}),
+        serde_json::json!("seat_joined"),
+        serde_json::json!(null),
+    ] {
+        let refused = EffectRecord::from_parts(TABLE_EFFECT_SCHEMA_VERSION, effect)
+            .open()
+            .expect_err("refused");
+        assert_eq!(refused.fault, LoadFault::Malformed);
+        assert_eq!(refused.found, TABLE_EFFECT_SCHEMA_VERSION);
+    }
+}
+
+#[test]
+fn an_effect_record_for_every_kind_round_trips_through_json() {
+    for kind in TableEffectKind::ALL {
+        let effect = sample(*kind);
+        let record = EffectRecord::stamp(&effect).expect("stamps");
+        let text = serde_json::to_string(&record).expect("serializes");
+        let parsed: EffectRecord = serde_json::from_str(&text).expect("parses");
+        assert_eq!(parsed.open(), Ok(effect));
+    }
+}
+
+#[test]
+fn a_commit_with_no_effects_is_remembered_and_changes_nothing() {
+    let mut table = table();
+    let before = table.clone();
+    assert_eq!(
+        apply(&mut table, 1, &[]),
+        Ok(ApplyOutcome::Applied(Vec::new()))
+    );
+    assert!(table.same_world_as(&before));
+    assert_eq!(apply(&mut table, 1, &[]), Ok(ApplyOutcome::AlreadyApplied));
 }
 
 #[test]

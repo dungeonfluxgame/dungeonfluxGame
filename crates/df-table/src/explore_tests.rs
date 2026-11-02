@@ -5,6 +5,7 @@ use crate::conformance::{self, ConformanceFixture, Expectation, ScriptedStep};
 use crate::effects::{BeatName, TableEffect, TableState};
 use crate::envelope::{PendingId, TimerName};
 use crate::explore::{AuthoredBeat, ExploreMachine};
+use crate::identity::{SceneId, TableId, TableScope};
 use crate::lobby_tests::{FIRST_SCENE, action, explore_for_neighbour, lobby, seat};
 use crate::machine::{
     CarryItem, Decision, Entry, EntryRefusal, Machine, MachineError, MachineInput, StepInput,
@@ -12,7 +13,7 @@ use crate::machine::{
 };
 use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode, Outcome};
-use crate::ports::{Audience, Draw, DrawRequest, Preparation, Resolution};
+use crate::ports::{Audience, Draw, DrawRequest, PortName, Preparation, Resolution};
 use crate::testkit::{QueuedDice, ScriptedBroker, ScriptedRulesOwner, correlation};
 
 fn d20() -> DrawRequest {
@@ -24,7 +25,7 @@ fn d20() -> DrawRequest {
 /// A table whose active scene is the lobby's first scene, with seats 1 and 2 at it.
 pub(crate) fn table_in_the_first_scene() -> TableState {
     let mut table = TableState::seated(4, &[seat(1), seat(2)]).expect("valid table");
-    let scope = crate::identity::TableScope::of_table(crate::identity::TableId::new(1));
+    let scope = TableScope::of_table(TableId::new(1));
     table
         .apply(
             &scope,
@@ -49,11 +50,12 @@ pub(crate) fn explore_fixture() -> ConformanceFixture {
     let rules = ScriptedRulesOwner::default().with_action(
         action("investigate"),
         Preparation::Ready { draws: vec![d20()] },
-        Resolution::Applied,
+        Resolution::applied(),
     );
     ConformanceFixture {
         machine: Arc::new(explore_for_neighbour()),
         neighbours: vec![Arc::new(lobby())],
+        wired: vec![PortName::RulesOwner],
         table: table_in_the_first_scene(),
         entry: entry_to_the_first_scene(),
         refused_entry: Some(Entry::empty()),
@@ -76,7 +78,7 @@ pub(crate) fn explore_fixture() -> ConformanceFixture {
                     .moving("awaiting_roll", "resolved")
                     .handing_off(),
             ),
-            intent(1, "investigate", Expectation::refused()),
+            intent(1, "investigate", Expectation::refused().handing_off()),
         ],
         rules,
         dice: QueuedDice::new([14]),
@@ -88,12 +90,13 @@ fn explore() -> ExploreMachine {
     explore_for_neighbour()
 }
 
-fn entered() -> (ExploreMachine, MachineSlot) {
+fn entered() -> (ExploreMachine, MachineSlot, TableState) {
     let machine = explore();
+    let table = table_in_the_first_scene();
     let slot = machine
-        .enter(&table_in_the_first_scene(), &entry_to_the_first_scene())
+        .enter(&table, &entry_to_the_first_scene())
         .expect("enters");
-    (machine, slot)
+    (machine, slot, table)
 }
 
 fn investigate(who: u64) -> MachineInput {
@@ -110,10 +113,11 @@ fn dice_for(pending: u64) -> MachineInput {
     }
 }
 
-fn with(input: MachineInput, decision: Option<Decision>) -> StepInput {
+fn with(table: &TableState, input: MachineInput, decision: Option<Decision>) -> StepInput<'_> {
     StepInput {
         correlation: correlation(1),
         now_ms: 0,
+        table,
         input,
         decision,
     }
@@ -126,10 +130,27 @@ fn declined_code(result: &StepResult) -> Option<DeclineCode> {
     }
 }
 
+/// The state after a roll was opened for pending 5.
+fn waiting_state(machine: &ExploreMachine, slot: &MachineSlot, table: &TableState) -> MachineSlot {
+    machine
+        .step(
+            slot,
+            &with(
+                table,
+                investigate(1),
+                Some(Decision::RollPending(PendingId::new(5))),
+            ),
+        )
+        .expect("steps")
+        .state
+        .expect("waiting records the pending")
+}
+
 #[test]
 fn explore_passes_the_whole_conformance_suite() {
     let report = conformance::run(explore_fixture());
     assert!(report.is_clean(), "{:#?}", report.findings());
+    assert!(report.skipped().is_empty());
 }
 
 #[test]
@@ -144,7 +165,7 @@ fn the_conformance_run_shows_explore_waiting_then_resolving() {
     assert!(has("from=presenting to=awaiting_roll"), "{lines:#?}");
     assert!(has("from=awaiting_roll to=resolved"));
     assert!(has("effect=beat_resolved"));
-    assert!(has("target=lobby"));
+    assert!(has("kind=machine target=lobby"));
 }
 
 #[test]
@@ -159,11 +180,11 @@ fn entering_needs_a_scene_the_table_is_in_and_seats_it_holds() {
         ),
         (
             Entry::carrying(vec![
-                CarryItem::Scene(crate::identity::SceneId::new(99)),
+                CarryItem::Scene(SceneId::new(99)),
                 CarryItem::Seat(seat(1)),
             ]),
             EntryRefusal::SceneNotActive {
-                scene: crate::identity::SceneId::new(99),
+                scene: SceneId::new(99),
             },
         ),
         (
@@ -188,51 +209,69 @@ fn entering_needs_a_scene_the_table_is_in_and_seats_it_holds() {
 }
 
 #[test]
-fn only_a_seat_at_the_scene_can_make_the_check() {
-    let (machine, slot) = entered();
-    assert!(machine.accepts(&investigate(1), &slot));
-    assert!(!machine.accepts(&investigate(9), &slot));
+fn only_a_seat_at_the_table_can_make_the_check() {
+    let (machine, slot, table) = entered();
+    assert!(machine.accepts(&table, &investigate(1), &slot));
+    assert!(!machine.accepts(&table, &investigate(9), &slot));
     let other_action = MachineInput::Intent {
         seat: seat(1),
         action: action("attack"),
     };
-    assert!(!machine.accepts(&other_action, &slot));
+    assert!(!machine.accepts(&table, &other_action, &slot));
+}
+
+#[test]
+fn a_seat_that_left_the_table_can_no_longer_act() {
+    let (machine, slot, mut table) = entered();
+    let scope = TableScope::of_table(TableId::new(1));
+    table
+        .apply(
+            &scope,
+            correlation(101),
+            &[TableEffect::SeatLeft { seat: seat(1) }],
+        )
+        .expect("the seat leaves");
+    assert!(!machine.accepts(&table, &investigate(1), &slot));
+    assert!(machine.accepts(&table, &investigate(2), &slot));
+    let hand_off = machine.exit(&table, &slot).expect("exits");
+    assert_eq!(
+        hand_off.carry(),
+        [CarryItem::Scene(FIRST_SCENE), CarryItem::Seat(seat(2))]
+    );
 }
 
 #[test]
 fn a_roll_decision_makes_the_machine_wait_on_that_pending_and_hold_only_its_id() {
-    let (machine, slot) = entered();
+    let (machine, slot, table) = entered();
     let pending = PendingId::new(5);
     let waiting = machine
         .step(
             &slot,
-            &with(investigate(1), Some(Decision::RollPending(pending))),
+            &with(&table, investigate(1), Some(Decision::RollPending(pending))),
         )
         .expect("steps");
     assert_eq!(waiting.outcome, StepOutcome::Waiting(pending));
     assert!(waiting.table_effects.is_empty());
-    assert!(!waiting.asks_for_hand_off);
-    assert!(!machine.accepts(&investigate(1), &waiting.state));
-    assert!(machine.accepts(&dice_for(5), &waiting.state));
-    assert!(!machine.accepts(&dice_for(6), &waiting.state));
+    assert!(waiting.resource_requests.is_empty());
+    let state = waiting.state.expect("the pending is recorded");
+    assert!(!machine.wants_hand_off(&state).expect("asks"));
+    assert!(!machine.accepts(&table, &investigate(1), &state));
+    assert!(machine.accepts(&table, &dice_for(5), &state));
+    assert!(!machine.accepts(&table, &dice_for(6), &state));
 }
 
 #[test]
-fn the_dice_of_the_open_roll_resolve_the_beat_and_ask_to_hand_back_to_the_lobby() {
-    let (machine, slot) = entered();
-    let waiting = machine
-        .step(
-            &slot,
-            &with(
-                investigate(1),
-                Some(Decision::RollPending(PendingId::new(5))),
-            ),
-        )
-        .expect("steps");
+fn the_dice_of_the_open_roll_resolve_the_beat_and_the_machine_then_asks_to_hand_back() {
+    let (machine, slot, table) = entered();
+    let waiting = waiting_state(&machine, &slot, &table);
     let resolved = machine
         .step(
-            &waiting.state,
-            &with(dice_for(5), Some(Decision::Resolved(Resolution::Applied))),
+            &waiting,
+            &with(
+                &table,
+                dice_for(5),
+                Some(Decision::Resolved(Resolution::applied())),
+            ),
         )
         .expect("steps");
     assert_eq!(resolved.outcome, StepOutcome::Settled(Outcome::Applied));
@@ -243,9 +282,18 @@ fn the_dice_of_the_open_roll_resolve_the_beat_and_ask_to_hand_back_to_the_lobby(
             beat: BeatName::new("locked_gate").expect("valid beat"),
         }]
     );
-    assert!(resolved.asks_for_hand_off);
-    let hand_off = machine.exit(&resolved.state).expect("exits");
-    assert_eq!(hand_off.target().as_str(), "lobby");
+    let done = resolved.state.expect("resolved is a new state");
+    assert!(machine.wants_hand_off(&done).expect("asks"));
+    assert!(
+        machine
+            .wants_hand_off(&done)
+            .expect("asks again after a refusal")
+    );
+    let hand_off = machine.exit(&table, &done).expect("exits");
+    assert_eq!(
+        hand_off.machine_target().map(|id| id.as_str()),
+        Some("lobby")
+    );
     assert_eq!(
         hand_off.carry(),
         [
@@ -258,28 +306,31 @@ fn the_dice_of_the_open_roll_resolve_the_beat_and_ask_to_hand_back_to_the_lobby(
 
 #[test]
 fn a_check_the_rules_resolve_at_once_resolves_the_beat_without_a_pending() {
-    let (machine, slot) = entered();
+    let (machine, slot, table) = entered();
     let resolved = machine
         .step(
             &slot,
             &with(
+                &table,
                 investigate(1),
-                Some(Decision::Resolved(Resolution::Applied)),
+                Some(Decision::Resolved(Resolution::applied())),
             ),
         )
         .expect("steps");
     assert_eq!(resolved.outcome, StepOutcome::Settled(Outcome::Applied));
-    assert!(resolved.asks_for_hand_off);
+    let done = resolved.state.expect("state");
+    assert!(machine.wants_hand_off(&done).expect("asks"));
 }
 
 #[test]
-fn a_decline_from_the_rules_owner_changes_nothing_and_reopens_the_beat_after_a_roll() {
-    let (machine, slot) = entered();
+fn a_decline_from_the_rules_owner_changes_nothing_even_for_a_roll_answer() {
+    let (machine, slot, table) = entered();
     let decline = Decline::with_default_reason(DeclineCode::MissingRequirement);
     let refused = machine
         .step(
             &slot,
             &with(
+                &table,
                 investigate(1),
                 Some(Decision::Resolved(Resolution::Declined(decline.clone()))),
             ),
@@ -289,74 +340,68 @@ fn a_decline_from_the_rules_owner_changes_nothing_and_reopens_the_beat_after_a_r
         declined_code(&refused),
         Some(DeclineCode::MissingRequirement)
     );
-    assert_eq!(refused.state, slot);
-    let waiting = machine
+    assert!(refused.state.is_none() && refused.table_effects.is_empty());
+    let waiting = waiting_state(&machine, &slot, &table);
+    let declined_roll = machine
         .step(
-            &slot,
+            &waiting,
             &with(
-                investigate(1),
-                Some(Decision::RollPending(PendingId::new(5))),
-            ),
-        )
-        .expect("steps");
-    let reopened = machine
-        .step(
-            &waiting.state,
-            &with(
+                &table,
                 dice_for(5),
                 Some(Decision::Resolved(Resolution::Declined(decline))),
             ),
         )
         .expect("steps");
     assert_eq!(
-        declined_code(&reopened),
+        declined_code(&declined_roll),
         Some(DeclineCode::MissingRequirement)
     );
-    assert_eq!(reopened.state, slot);
-    assert!(machine.accepts(&investigate(1), &reopened.state));
+    assert!(
+        declined_roll.state.is_none(),
+        "the pending stays open for C4 to cancel or re-ask"
+    );
+    assert!(machine.accepts(&table, &dice_for(5), &waiting));
 }
 
 #[test]
 fn a_check_with_no_decision_is_declined_and_never_applied() {
-    let (machine, slot) = entered();
+    let (machine, slot, table) = entered();
     let result = machine
-        .step(&slot, &with(investigate(1), None))
+        .step(&slot, &with(&table, investigate(1), None))
         .expect("steps");
     assert_eq!(declined_code(&result), Some(DeclineCode::NotViable));
-    assert_eq!(result.state, slot);
+    assert!(result.state.is_none());
 }
 
 #[test]
 fn a_roll_decision_on_a_dice_answer_is_declined_and_keeps_the_wait() {
-    let (machine, slot) = entered();
-    let waiting = machine
+    let (machine, slot, table) = entered();
+    let waiting = waiting_state(&machine, &slot, &table);
+    let result = machine
         .step(
-            &slot,
+            &waiting,
             &with(
-                investigate(1),
-                Some(Decision::RollPending(PendingId::new(5))),
+                &table,
+                dice_for(5),
+                Some(Decision::RollPending(PendingId::new(6))),
             ),
         )
         .expect("steps");
-    let result = machine
-        .step(
-            &waiting.state,
-            &with(dice_for(5), Some(Decision::RollPending(PendingId::new(6)))),
-        )
-        .expect("steps");
     assert_eq!(declined_code(&result), Some(DeclineCode::NotViable));
-    assert_eq!(result.state, waiting.state);
+    assert!(result.state.is_none());
 }
 
 #[test]
 fn explore_shows_each_audience_something_true_in_every_state() {
-    let (machine, slot) = entered();
-    let public = machine.project(&slot, Audience::Public).expect("projects");
+    let (machine, slot, table) = entered();
+    let public = machine
+        .project(&table, &slot, Audience::Public)
+        .expect("projects");
     let seated = machine
-        .project(&slot, Audience::Seat(seat(1)))
+        .project(&table, &slot, Audience::Seat(seat(1)))
         .expect("projects");
     let stranger = machine
-        .project(&slot, Audience::Seat(seat(9)))
+        .project(&table, &slot, Audience::Seat(seat(9)))
         .expect("projects");
     assert_eq!(public, stranger);
     assert_ne!(public, seated);
@@ -370,10 +415,23 @@ fn an_authored_beat_needs_valid_names() {
 }
 
 #[test]
-fn explore_declares_the_rules_action_and_the_port_it_needs() {
+fn explore_declares_the_rules_action_the_port_and_the_entry_it_needs() {
     let machine = explore();
     let spec = machine.spec();
     assert_eq!(spec.rules_actions(), [action("investigate")]);
-    assert_eq!(spec.required_ports(), [crate::ports::PortName::RulesOwner]);
+    assert_eq!(spec.required_ports(), [PortName::RulesOwner]);
     assert_eq!(spec.scope(), crate::machine::Scope::Group);
+    assert!(spec.reads_entry());
+}
+
+#[test]
+fn a_fixture_without_a_refused_entry_fails_for_a_machine_that_reads_its_entry() {
+    let mut fixture = explore_fixture();
+    fixture.refused_entry = None;
+    let report = conformance::run(fixture);
+    assert!(
+        report
+            .failed_checks()
+            .contains(&conformance::ConformanceCheck::EntryRefusal)
+    );
 }

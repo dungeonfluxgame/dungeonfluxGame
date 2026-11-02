@@ -21,9 +21,10 @@ use crate::kind::KindRegistry;
 use crate::kind_file::KindFile;
 use crate::outcome::{Decline, DeclineCode};
 use crate::ports::{
-    ActionId, Audience, Broker, Clock, CommittedOutcome, Dice, Draw, DrawRequest, EventSink,
-    Interpretation, Interpreter, KnowledgeView, Narrator, PortError, PortName, Preparation,
-    PurposeName, Readiness, Resolution, ResourceHandle, RulesOwner,
+    ActionId, Audience, Broker, Clock, CommittedOutcome, ConfirmationReason, Dice, Draw,
+    DrawRequest, EventSink, Interpretation, Interpreter, KnowledgeView, Narrator, PlanSoFar,
+    PortError, PortName, Preparation, PurposeName, Readiness, Resolution, ResourceHandle,
+    Resumption, RulesOwner, RulingAnswer, RulingRequest,
 };
 use crate::private_data::{Narration, PlayerText, Secret};
 
@@ -282,11 +283,21 @@ impl Broker for ScriptedBroker {
     }
 }
 
-/// An interpreter that knows exactly the lines a test gave it, or fails every call.
+/// An interpreter that knows exactly the lines a test gave it, answers a queue of attempts in
+/// order, or fails every call. A queued attempt serves the first call and the retry alike.
 #[derive(Debug, Default)]
 pub struct ScriptedInterpreter {
     lines: Vec<(String, Interpretation)>,
     failure: Option<FailureCause>,
+    attempts: Mutex<VecDeque<Result<Interpretation, FailureCause>>>,
+    calls: Mutex<InterpreterCalls>,
+}
+
+/// How often the pipeline asked the scripted interpreter, and how often it was the retry.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct InterpreterCalls {
+    pub first_attempts: usize,
+    pub retries: usize,
 }
 
 impl ScriptedInterpreter {
@@ -295,11 +306,41 @@ impl ScriptedInterpreter {
         self
     }
 
+    /// The answers of the next calls, one per call (the first attempt and then its retry), taking
+    /// precedence over the lines.
+    pub fn with_attempts(
+        self,
+        attempts: impl IntoIterator<Item = Result<Interpretation, FailureCause>>,
+    ) -> Self {
+        locked(&self.attempts).extend(attempts);
+        self
+    }
+
     /// An interpreter whose every call fails, as a model that is down does.
     pub fn failing(cause: FailureCause) -> Self {
         Self {
-            lines: Vec::new(),
             failure: Some(cause),
+            ..Self::default()
+        }
+    }
+
+    pub fn calls(&self) -> InterpreterCalls {
+        *locked(&self.calls)
+    }
+
+    fn answer(&self, text: &PlayerText) -> Result<Interpretation, PortError> {
+        if let Some(cause) = self.failure {
+            return Err(PortError::new(PortName::Interpreter, cause));
+        }
+        if let Some(attempt) = locked(&self.attempts).pop_front() {
+            return attempt.map_err(|cause| PortError::new(PortName::Interpreter, cause));
+        }
+        match self.lines.iter().find(|(line, _)| line == text.expose()) {
+            Some((_, interpretation)) => Ok(interpretation.clone()),
+            None => unscripted(
+                PortName::Interpreter,
+                &format!("to interpret a line ({text:?})"),
+            ),
         }
     }
 }
@@ -312,26 +353,73 @@ impl Interpreter for ScriptedInterpreter {
         text: &PlayerText,
         _legal_choices: &[ActionId],
     ) -> Result<Interpretation, PortError> {
-        if let Some(cause) = self.failure {
-            return Err(PortError::new(PortName::Interpreter, cause));
-        }
-        match self.lines.iter().find(|(line, _)| line == text.expose()) {
-            Some((_, interpretation)) => Ok(interpretation.clone()),
-            None => unscripted(
-                PortName::Interpreter,
-                &format!("to interpret a line ({text:?})"),
-            ),
-        }
+        locked(&self.calls).first_attempts += 1;
+        self.answer(text)
     }
+
+    fn retry_with_choices_only(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        text: &PlayerText,
+        _legal_choices: &[ActionId],
+    ) -> Result<Interpretation, PortError> {
+        locked(&self.calls).retries += 1;
+        self.answer(text)
+    }
+}
+
+/// One question the pipeline asked the scripted rules owner, kept so a test can assert what was
+/// asked and with how many dice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RulesCall {
+    LegalChoices(SeatId),
+    Prepare(ActionId),
+    /// The rules owner was told a resolution that awaited answers will not be resumed.
+    Abandon(ActionId),
+    Resolve {
+        action: ActionId,
+        draws: usize,
+    },
+    Resume {
+        action: ActionId,
+        draws: usize,
+        answers: Vec<(SeatId, ActionId)>,
+        ruling: Option<RulingAnswer>,
+    },
+}
+
+#[derive(Debug, Default)]
+struct RulesScript {
+    resolutions: BTreeMap<ActionId, VecDeque<Resolution>>,
+    resumptions: BTreeMap<ActionId, VecDeque<Resolution>>,
+    calls: Vec<RulesCall>,
+    plan_checks: Vec<PlanCheck>,
+}
+
+/// One step of a plan checked against what the steps before it did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanCheck {
+    pub action: ActionId,
+    pub steps_before: usize,
+    pub effects_before: usize,
 }
 
 /// A rules owner with a table of choices per seat and an answer per action. An action or seat the
 /// table does not hold is a forgotten script line, not a decline: a test that wants
-/// `not_supported_yet` scripts it.
+/// `not_supported_yet` scripts it. An action may also have a scripted sequence of resolutions and
+/// of resumptions (one is used per call), a confirmation and a ruling; every question asked is
+/// kept for `calls`.
 #[derive(Debug, Default)]
 pub struct ScriptedRulesOwner {
     choices: BTreeMap<SeatId, Vec<ActionId>>,
     actions: BTreeMap<ActionId, (Preparation, Resolution)>,
+    confirmations: BTreeMap<ActionId, ConfirmationReason>,
+    rulings: BTreeMap<ActionId, RulingRequest>,
+    /// Actions that decline as a later step once their own name is among the earlier steps.
+    once_per_plan: BTreeMap<ActionId, Decline>,
+    failure: Option<FailureCause>,
+    script: Mutex<RulesScript>,
 }
 
 impl ScriptedRulesOwner {
@@ -360,6 +448,63 @@ impl ScriptedRulesOwner {
         )
     }
 
+    /// The successive answers of `resolve` for the action, one per call; the action's fixed
+    /// resolution answers once they run out.
+    pub fn with_resolutions(self, action: ActionId, resolutions: Vec<Resolution>) -> Self {
+        self.locked_script()
+            .resolutions
+            .insert(action, resolutions.into());
+        self
+    }
+
+    /// The successive answers of `resume` for the action, one per call; once they run out `resume`
+    /// answers with the action's fixed resolution, like the trait's default.
+    pub fn with_resumptions(self, action: ActionId, resumptions: Vec<Resolution>) -> Self {
+        self.locked_script()
+            .resumptions
+            .insert(action, resumptions.into());
+        self
+    }
+
+    pub fn with_confirmation(mut self, action: ActionId, reason: ConfirmationReason) -> Self {
+        self.confirmations.insert(action, reason);
+        self
+    }
+
+    pub fn with_ruling(mut self, action: ActionId, request: RulingRequest) -> Self {
+        self.rulings.insert(action, request);
+        self
+    }
+
+    /// The action spends something a plan has only once: checked after a step that is the same
+    /// action, it declines with `decline` (the economy of C.2).
+    pub fn with_once_per_plan(mut self, action: ActionId, decline: Decline) -> Self {
+        self.once_per_plan.insert(action, decline);
+        self
+    }
+
+    /// A rules owner whose every call fails, as one that is down does.
+    pub fn failing(cause: FailureCause) -> Self {
+        Self {
+            failure: Some(cause),
+            ..Self::default()
+        }
+    }
+
+    /// Every step of a plan checked so far, oldest first, with what the steps before it did.
+    pub fn plan_checks(&self) -> Vec<PlanCheck> {
+        self.locked_script().plan_checks.clone()
+    }
+
+    /// Every question asked so far, oldest first.
+    pub fn calls(&self) -> Vec<RulesCall> {
+        self.locked_script().calls.clone()
+    }
+
+    fn locked_script(&self) -> MutexGuard<'_, RulesScript> {
+        locked(&self.script)
+    }
+
     fn scripted_action(&self, action: &ActionId) -> &(Preparation, Resolution) {
         match self.actions.get(action) {
             Some(scripted) => scripted,
@@ -367,6 +512,13 @@ impl ScriptedRulesOwner {
                 PortName::RulesOwner,
                 &format!("about the action {}", action.as_str()),
             ),
+        }
+    }
+
+    fn fail_if_down(&self) -> Result<(), PortError> {
+        match self.failure {
+            Some(cause) => Err(PortError::new(PortName::RulesOwner, cause)),
+            None => Ok(()),
         }
     }
 }
@@ -377,6 +529,10 @@ impl RulesOwner for ScriptedRulesOwner {
         _correlation: Correlation,
         seat: SeatId,
     ) -> Result<Vec<ActionId>, PortError> {
+        self.fail_if_down()?;
+        self.locked_script()
+            .calls
+            .push(RulesCall::LegalChoices(seat));
         match self.choices.get(&seat) {
             Some(choices) => Ok(choices.clone()),
             None => unscripted(
@@ -392,7 +548,45 @@ impl RulesOwner for ScriptedRulesOwner {
         _seat: SeatId,
         action: &ActionId,
     ) -> Result<Preparation, PortError> {
+        self.fail_if_down()?;
+        self.locked_script()
+            .calls
+            .push(RulesCall::Prepare(action.clone()));
         Ok(self.scripted_action(action).0.clone())
+    }
+
+    fn prepare_in_plan(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        so_far: &PlanSoFar<'_>,
+    ) -> Result<Preparation, PortError> {
+        self.fail_if_down()?;
+        self.locked_script().plan_checks.push(PlanCheck {
+            action: action.clone(),
+            steps_before: so_far.steps.len(),
+            effects_before: so_far.effects.len(),
+        });
+        if let Some(decline) = self.once_per_plan.get(action)
+            && so_far.steps.contains(action)
+        {
+            return Ok(Preparation::Declined(decline.clone()));
+        }
+        self.prepare(correlation, seat, action)
+    }
+
+    fn abandon(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        action: &ActionId,
+    ) -> Result<(), PortError> {
+        self.fail_if_down()?;
+        self.locked_script()
+            .calls
+            .push(RulesCall::Abandon(action.clone()));
+        Ok(())
     }
 
     fn resolve(
@@ -400,13 +594,71 @@ impl RulesOwner for ScriptedRulesOwner {
         _correlation: Correlation,
         _seat: SeatId,
         action: &ActionId,
-        _draws: &[Draw],
+        draws: &[Draw],
     ) -> Result<Resolution, PortError> {
-        Ok(self.scripted_action(action).1.clone())
+        self.fail_if_down()?;
+        let mut script = self.locked_script();
+        script.calls.push(RulesCall::Resolve {
+            action: action.clone(),
+            draws: draws.len(),
+        });
+        let scripted = script
+            .resolutions
+            .get_mut(action)
+            .and_then(VecDeque::pop_front);
+        drop(script);
+        Ok(scripted.unwrap_or_else(|| self.scripted_action(action).1.clone()))
+    }
+
+    fn confirmation_needed(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        action: &ActionId,
+    ) -> Result<Option<ConfirmationReason>, PortError> {
+        self.fail_if_down()?;
+        Ok(self.confirmations.get(action).copied())
+    }
+
+    fn ruling_needed(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        action: &ActionId,
+    ) -> Result<Option<RulingRequest>, PortError> {
+        self.fail_if_down()?;
+        Ok(self.rulings.get(action).cloned())
+    }
+
+    fn resume(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        action: &ActionId,
+        resumption: &Resumption<'_>,
+    ) -> Result<Resolution, PortError> {
+        self.fail_if_down()?;
+        let mut script = self.locked_script();
+        script.calls.push(RulesCall::Resume {
+            action: action.clone(),
+            draws: resumption.draws.len(),
+            answers: resumption
+                .answers
+                .iter()
+                .map(|answer| (answer.seat, answer.choice.clone()))
+                .collect(),
+            ruling: resumption.ruling.cloned(),
+        });
+        let scripted = script
+            .resumptions
+            .get_mut(action)
+            .and_then(VecDeque::pop_front);
+        drop(script);
+        Ok(scripted.unwrap_or_else(|| self.scripted_action(action).1.clone()))
     }
 }
 
-/// A narrator that speaks the lines a test queued, in order. Asking for more lines than were
+// A narrator that speaks the lines a test queued, in order. Asking for more lines than were
 /// queued is a forgotten script line.
 #[derive(Debug, Default)]
 pub struct ScriptedNarrator {

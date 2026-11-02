@@ -13,14 +13,20 @@ use std::fmt;
 use crate::config::{SettingFault, SettingName};
 use crate::effects::{EffectRefusal, TableEffectKind};
 use crate::element::{Degrees, ElementId, FieldName, KindName, Percent};
+use crate::envelope::{CancelCause, PendingId};
 use crate::event::{EffectKind, FailureCause, PipelineStep, RejectionCause, TransformKind};
-use crate::identity::{EvidenceRef, MachineId, OperationId, SceneId, TableId, TurnSeq};
-use crate::machine::{MachineFailureCause, StateName};
-use crate::machine_slot::LoadFault;
-use crate::outcome::{DeclineCode, OutcomeKind};
+use crate::identity::{EvidenceRef, MachineId, OperationId, SceneId, SeatId, TableId, TurnSeq};
+use crate::machine::{HandOffKind, MachineFailureCause, StateName};
+use crate::machine_slot::{LoadFault, RecordKind};
+use crate::outcome::{DeclineCode, OutcomeKind, PendingKind};
 use crate::owner_queue::{Lane, NotDeclinedCause};
+use crate::pending::RulingSource;
+use crate::pipeline::events::ClarifyCause;
 use crate::ports::PortName;
+use crate::ports::{NonActionKind, RulingKey, RulingTier};
 use crate::private_data::LengthClass;
+use crate::projection::{AudienceKind, StatusKind};
+use crate::table_state::StaleCause;
 
 mod sealed {
     pub trait Sealed {}
@@ -75,6 +81,8 @@ event_field_by_display!(
     OperationId,
     EvidenceRef,
     StateName,
+    SeatId,
+    RulingKey,
 );
 
 event_field_by_key!(
@@ -94,7 +102,26 @@ event_field_by_key!(
     EffectRefusal,
     MachineFailureCause,
     LoadFault,
+    HandOffKind,
+    RecordKind,
+    PendingKind,
+    RulingTier,
+    RulingSource,
+    ClarifyCause,
+    CancelCause,
+    NonActionKind,
+    StaleCause,
+    AudienceKind,
+    StatusKind,
 );
+
+impl sealed::Sealed for PendingId {}
+
+impl EventField for PendingId {
+    fn write_value<W: fmt::Write>(&self, out: &mut W) -> fmt::Result {
+        write!(out, "{}", self.get())
+    }
+}
 
 /// Writes one audit line piece by piece: the verb, then ` key=value` pairs.
 pub(crate) struct LineWriter<'a, W: fmt::Write> {

@@ -178,7 +178,11 @@ impl fmt::Display for SlotError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotEncodable { class } => {
-                write!(formatter, "a state could not be written as data ({})", class.key())
+                write!(
+                    formatter,
+                    "a state could not be written as data ({})",
+                    class.key()
+                )
             }
             Self::InvalidStateName(error) => write!(formatter, "a state name is invalid: {error}"),
         }
@@ -194,6 +198,7 @@ listed_enum! {
     pub enum RecordKind {
         MachineSlot,
         EffectIntent,
+        PendingBook,
     }
 }
 
@@ -202,6 +207,7 @@ impl RecordKind {
         match self {
             Self::MachineSlot => "machine_slot",
             Self::EffectIntent => "effect_intent",
+            Self::PendingBook => "pending_book",
         }
     }
 }
@@ -256,7 +262,12 @@ impl LoadError {
 
     /// The `load.refused` event of refusing `slot` for the machine `spec` describes, when the
     /// host loads `table` (H.12).
-    pub fn refusal_event(&self, table: TableId, spec: &MachineSpec, slot: &MachineSlot) -> TableEvent {
+    pub fn refusal_event(
+        &self,
+        table: TableId,
+        spec: &MachineSpec,
+        slot: &MachineSlot,
+    ) -> TableEvent {
         TableEvent::LoadRefused {
             table,
             record: RecordKind::MachineSlot,

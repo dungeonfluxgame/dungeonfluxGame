@@ -12,11 +12,14 @@
 //! sits at the table (the owner queue does) and never assigns a `turn_seq` (the queue does, when it
 //! serves the input).
 
+use serde::{Deserialize, Serialize};
+
 use crate::element::name_type;
 use crate::identity::{EvidenceRef, OperationId, SeatId, SessionRevision};
 use crate::listed::listed_enum;
-use crate::ports::{ActionId, Readiness, ResourceHandle};
+use crate::ports::{ActionId, Readiness, ResourceHandle, RulingKey, RulingScope};
 use crate::private_data::{LengthClass, Measured, PlayerText};
+use crate::table_state::Presence;
 
 name_type!(
     /// The registered name of a timer, such as `idle_nudge`; the owner of the timer decides what it
@@ -46,7 +49,8 @@ impl UtteranceId {
 
 /// Names one open pending resolution that an answer is for (RES26). Step C4 (`pending`) owns the
 /// pendings; the id is declared here until it exists.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct PendingId(u64);
 
 impl PendingId {
@@ -173,9 +177,54 @@ pub enum ProposalOrigin {
     Machine,
 }
 
+listed_enum! {
+    /// Why a pending resolution was cancelled by the engine rather than answered (C.4).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CancelCause {
+        /// A seat the pending waits on left the table for good.
+        SeatLeft,
+        /// The scene the pending belongs to is not the table's scene any more.
+        SceneChanged,
+        /// The host chose to move on without the answer (the commands of `remote-play.md`).
+        HostDecision,
+    }
+}
+
+impl CancelCause {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::SeatLeft => "seat_left",
+            Self::SceneChanged => "scene_changed",
+            Self::HostDecision => "host_decision",
+        }
+    }
+}
+
+/// A change the engine asks for that is not a proposal of the story: every one is an input with an
+/// operation id, so it is committed, recorded in a turn record and replayable (O.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineControl {
+    /// A seat connected, fell asleep, dropped or stepped away: the turns and windows it holds are
+    /// held or released and nothing is spent (C.4, D.4).
+    SeatPresence { seat: SeatId, presence: Presence },
+    /// The host takes a stored ruling back (RES48).
+    RevokeRuling { key: RulingKey, scope: RulingScope },
+    /// A pending resolution ends without an answer and without spending anything: the exit for a
+    /// window whose seat left for good, or one the host moves past.
+    CancelPending {
+        pending: PendingId,
+        cause: CancelCause,
+    },
+    /// A paused or idle table plays again.
+    ResumeTable,
+}
+
 /// What the engine itself sent: it skips ADMIT's seat checks and INTERPRET (RES21).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineInput {
+    /// A table, seat, ruling or pending control (see `EngineControl`).
+    Control(EngineControl),
     Proposal {
         origin: ProposalOrigin,
         proposer: ProposerRef,
@@ -193,7 +242,7 @@ pub enum EngineInput {
 impl EngineInput {
     fn kind(&self) -> InputKind {
         match self {
-            Self::Proposal { .. } => InputKind::EngineProposal,
+            Self::Proposal { .. } | Self::Control(_) => InputKind::EngineProposal,
             Self::Timer { .. } => InputKind::Timer,
             Self::ResourceResult { .. } => InputKind::ResourceResult,
         }

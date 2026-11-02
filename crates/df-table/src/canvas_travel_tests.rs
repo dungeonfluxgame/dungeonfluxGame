@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use crate::canvas::{Canvas, CanvasEffect, CanvasError};
 use crate::element::{ElementId, FieldName, FieldValue, KindName, Position};
 use crate::event::{EffectKind, RejectionCause, TableEvent};
-use crate::motion::{MAXIMUM_SPEED, Speed};
+use crate::limits::MAXIMUM_SPEED;
+use crate::motion::Speed;
 use crate::testkit::{CHARACTER_KIND, RecordingSink, registry_from};
 
 fn id(text: &str) -> ElementId {

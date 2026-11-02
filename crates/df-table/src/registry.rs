@@ -11,6 +11,13 @@
 //! machine silently left out. A disabled machine is registered and reported, but nothing is
 //! checked about its neighbours and it is never returned by `machine`.
 //!
+//! A table is startable when an enabled `Table` machine can begin it and an enabled `Group`
+//! machine can run a scene; without both the registry is refused (`NotStartable`). A seat lane
+//! ends by releasing itself and a group machine may return to the frame below it, so neither
+//! needs a target machine. Startup checks what a spec declares; `Registry::check_hand_off`
+//! applies the same declared-target, enabled and scope rules to the value a machine's `exit`
+//! actually returned, which is what the pipeline calls before it moves the table.
+//!
 //! Adding a machine is its module plus one `register` line. It never runs a machine and never
 //! routes an input: the pipeline does.
 
@@ -19,7 +26,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::listed::listed_enum;
-use crate::machine::{Machine, MachineId, Scope};
+use crate::machine::{HandOff, HandOffTarget, Machine, MachineId, MachineSpec, Scope};
 use crate::ports::PortName;
 
 /// A table's choice to run a machine or not. A machine with no flag runs.
@@ -98,6 +105,7 @@ listed_enum! {
         MissingPort,
         RulesActionsNeedRulesOwner,
         NoEnabledMachines,
+        NotStartable,
     }
 }
 
@@ -132,6 +140,10 @@ pub enum RegistryError {
         machine: MachineId,
     },
     NoEnabledMachines,
+    /// No enabled machine of this scope exists, so no table can start or run a scene.
+    NotStartable {
+        missing: Scope,
+    },
 }
 
 impl RegistryError {
@@ -147,6 +159,7 @@ impl RegistryError {
                 RegistryErrorKind::RulesActionsNeedRulesOwner
             }
             Self::NoEnabledMachines => RegistryErrorKind::NoEnabledMachines,
+            Self::NotStartable { .. } => RegistryErrorKind::NotStartable,
         }
     }
 
@@ -160,7 +173,7 @@ impl RegistryError {
             | Self::ScopeRuleBroken { machine, .. }
             | Self::MissingPort { machine, .. }
             | Self::RulesActionsNeedRulesOwner { machine } => Some(machine),
-            Self::NoEnabledMachines => None,
+            Self::NoEnabledMachines | Self::NotStartable { .. } => None,
         }
     }
 }
@@ -209,6 +222,11 @@ impl fmt::Display for RegistryError {
                 "{machine} sends actions to the rules owner but does not require that port"
             ),
             Self::NoEnabledMachines => formatter.write_str("no machine is enabled"),
+            Self::NotStartable { missing } => write!(
+                formatter,
+                "no enabled machine has {} scope, so the table cannot start",
+                missing.key()
+            ),
         }
     }
 }
@@ -291,6 +309,16 @@ impl RegistryBuilder {
             .any(|entry| entry.enablement == Enablement::Enabled);
         if !any_enabled {
             errors.push(RegistryError::NoEnabledMachines);
+        } else {
+            for needed in [Scope::Table, Scope::Group] {
+                let present = registered.values().any(|entry| {
+                    entry.enablement == Enablement::Enabled
+                        && entry.machine.spec().scope() == needed
+                });
+                if !present {
+                    errors.push(RegistryError::NotStartable { missing: needed });
+                }
+            }
         }
         if errors.is_empty() {
             Ok(Registry { registered })
@@ -347,6 +375,121 @@ fn check_enabled_machine(
     }
 }
 
+/// Why the value a machine's `exit` returned cannot be applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandOffRefusal {
+    /// The machine that is leaving is not registered and enabled.
+    UnknownSource {
+        machine: MachineId,
+    },
+    UndeclaredTarget {
+        target: MachineId,
+    },
+    UnknownTarget {
+        target: MachineId,
+    },
+    TargetDisabled {
+        target: MachineId,
+    },
+    ScopeRuleBroken {
+        from: Scope,
+        to: Scope,
+    },
+    /// Only a seat lane can release itself.
+    LaneNotReleasable {
+        scope: Scope,
+    },
+    /// Only a group machine has a frame below it to return to.
+    NothingBelow {
+        scope: Scope,
+    },
+}
+
+impl fmt::Display for HandOffRefusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownSource { machine } => {
+                write!(formatter, "{machine} is not registered and enabled")
+            }
+            Self::UndeclaredTarget { target } => {
+                write!(
+                    formatter,
+                    "the spec does not declare a hand-off to {target}"
+                )
+            }
+            Self::UnknownTarget { target } => write!(formatter, "{target} is not registered"),
+            Self::TargetDisabled { target } => write!(formatter, "{target} is disabled"),
+            Self::ScopeRuleBroken { from, to } => write!(
+                formatter,
+                "a {} machine may not hand off to a {} machine",
+                from.key(),
+                to.key()
+            ),
+            Self::LaneNotReleasable { scope } => {
+                write!(
+                    formatter,
+                    "a {} machine has no seat lane to release",
+                    scope.key()
+                )
+            }
+            Self::NothingBelow { scope } => {
+                write!(formatter, "a {} machine has no frame below it", scope.key())
+            }
+        }
+    }
+}
+
+impl std::error::Error for HandOffRefusal {}
+
+/// Applies the declared-target, enabled and scope rules to a hand-off `from` returned. `lookup`
+/// answers for a machine id: its scope and whether it is enabled, or `None` when unknown.
+pub fn check_hand_off_route(
+    from: &MachineSpec,
+    hand_off: &HandOff,
+    lookup: impl Fn(&MachineId) -> Option<(Scope, Enablement)>,
+) -> Result<(), HandOffRefusal> {
+    match hand_off.target() {
+        HandOffTarget::Machine(target) => {
+            if !from.hand_off_targets().contains(target) {
+                return Err(HandOffRefusal::UndeclaredTarget {
+                    target: target.clone(),
+                });
+            }
+            let (to, enablement) = lookup(target).ok_or_else(|| HandOffRefusal::UnknownTarget {
+                target: target.clone(),
+            })?;
+            if enablement == Enablement::Disabled {
+                return Err(HandOffRefusal::TargetDisabled {
+                    target: target.clone(),
+                });
+            }
+            if !from.scope().may_hand_off_to(to) {
+                return Err(HandOffRefusal::ScopeRuleBroken {
+                    from: from.scope(),
+                    to,
+                });
+            }
+            Ok(())
+        }
+        HandOffTarget::ReleaseLane if from.scope() == Scope::Seat => Ok(()),
+        HandOffTarget::ReleaseLane => Err(HandOffRefusal::LaneNotReleasable {
+            scope: from.scope(),
+        }),
+        HandOffTarget::ReturnToFrameBelow if from.scope() == Scope::Group => Ok(()),
+        HandOffTarget::ReturnToFrameBelow => Err(HandOffRefusal::NothingBelow {
+            scope: from.scope(),
+        }),
+    }
+}
+
+/// Where a checked hand-off sends the table.
+#[derive(Clone)]
+pub enum HandOffRoute<'a> {
+    To(&'a Arc<dyn Machine>),
+    ReleasesLane,
+    ReturnsBelow,
+}
+
 /// The validated set of machines.
 pub struct Registry {
     registered: BTreeMap<MachineId, Registered>,
@@ -359,6 +502,37 @@ impl Registry {
             .get(id)
             .filter(|entry| entry.enablement == Enablement::Enabled)
             .map(|entry| &entry.machine)
+    }
+
+    /// Checks the hand-off the machine `from` returned from `exit`, and says where it goes. The
+    /// stack rules (depth, pending resolutions) are checked by the table (C4, C6), not here.
+    pub fn check_hand_off(
+        &self,
+        from: &MachineId,
+        hand_off: &HandOff,
+    ) -> Result<HandOffRoute<'_>, HandOffRefusal> {
+        let source = self
+            .machine(from)
+            .ok_or_else(|| HandOffRefusal::UnknownSource {
+                machine: from.clone(),
+            })?;
+        check_hand_off_route(source.spec(), hand_off, |id| {
+            self.registered
+                .get(id)
+                .map(|entry| (entry.machine.spec().scope(), entry.enablement))
+        })?;
+        Ok(match hand_off.target() {
+            HandOffTarget::Machine(target) => match self.machine(target) {
+                Some(machine) => HandOffRoute::To(machine),
+                None => {
+                    return Err(HandOffRefusal::TargetDisabled {
+                        target: target.clone(),
+                    });
+                }
+            },
+            HandOffTarget::ReleaseLane => HandOffRoute::ReleasesLane,
+            HandOffTarget::ReturnToFrameBelow => HandOffRoute::ReturnsBelow,
+        })
     }
 
     pub fn report(&self) -> RegistryReport {

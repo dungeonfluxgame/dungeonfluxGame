@@ -108,6 +108,8 @@ pub(super) type OperationKey = (Sender, u64, OperationId);
 pub(super) enum Ending {
     Finished(OutcomeKind),
     Abandoned,
+    /// Given up with nothing kept: the operation id is forgotten, so the same id may be sent again.
+    Released,
 }
 
 /// Which engine lane an input joins.
@@ -120,7 +122,7 @@ pub(super) enum EngineLane {
 impl EngineLane {
     pub(super) fn of(input: &EngineInput) -> Self {
         match input {
-            EngineInput::Proposal { .. } => Self::Proposals,
+            EngineInput::Proposal { .. } | EngineInput::Control(_) => Self::Proposals,
             EngineInput::Timer { .. } | EngineInput::ResourceResult { .. } => {
                 Self::TimersAndResults
             }

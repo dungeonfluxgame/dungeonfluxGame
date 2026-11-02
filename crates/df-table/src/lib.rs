@@ -11,11 +11,22 @@
 //!
 //! How the built crate differs from section O, so nobody is surprised:
 //!
-//! - There is no `pipeline`, `pending`, `table_state`, `projection` or `inspect` yet (C3 to C7).
-//!   `envelope` and `owner_queue` are built (C1). `machine` (with `machine_spec` and
-//!   `machine_slot`), `registry`, `effects`, the `lobby` and `explore` machines and the
-//!   `conformance` suite are built (C2); `effects::TableState` is the minimal table state until
-//!   `table_state` exists.
+//! - There is no `inspect` yet (C7). `pipeline` (C3) and `pending` (C4) are built. `envelope` and
+//!   `owner_queue` are built (C1). `machine` (with `machine_spec` and `machine_slot`), `registry`, `effects`, the
+//!   `lobby` and `explore` machines and the `conformance` suite are built (C2). `table_state`
+//!   (C6) holds the applier and the table's facts, and `effects` re-exports `TableState` so the
+//!   machines' imports did not change. `projection` (C5) turns an immutable snapshot and the
+//!   owners' attachments into one view per audience.
+//! - `pipeline` is a set of stages over a `PipelineTable` that the host owns, not a pipeline that
+//!   keeps state: `Pipeline::run` changes the table in memory for one input and releases nothing
+//!   visible, so a batch of inputs is a way of grouping commits (O.16 S1). The host, after its
+//!   durable commit, calls `TurnResult::release_events`, `Pipeline::issue_requests` and
+//!   `Pipeline::attach_narration` (the narrator is a job the host runs, never a wait of the
+//!   pipeline), and takes `PipelineTable::checkpoint` before a batch to undo one it refuses. A
+//!   `TurnRecord` carries what the turn did and no commit identity; the host stamps that
+//!   (`PipelineTable::stamp_commit_revision`). `pending` holds the open pendings, windows and
+//!   keyed rulings the table keeps, and `golden` is the runner of the golden sessions (`World` is
+//!   the scripted fakes and `SceneMachine` the machine they play in).
 //! - `CanvasEffect` is the workbench's own effect and lives in `canvas.rs`. `effects::TableEffect`
 //!   is the engine's, for the facts the whole table shares; the two do not share an applier yet.
 //! - The canvas events keep their bare `revision` counter. `SessionRevision`, `OperationId` and the
@@ -42,8 +53,10 @@
 //! `canvas` (effects, ticks and the revision), `identity`, `private_data`, `outcome`, `config`,
 //! `event` and `event_field` (what is recorded and how it is rendered), `ports` (where it goes and
 //! what the engine asks), `effects`, `machine_spec`, `machine_slot`, `machine`, `registry`, `lobby`
-//! and `explore` (the shared language of change and the machines), `testkit` (fakes and sample
-//! data) and `conformance` (the suite a machine must pass).
+//! and `explore` (the shared language of change and the machines), `table_state` and `projection`
+//! (the table's facts and what each audience sees), `pipeline` and `pending` (an input's seven
+//! stages and the questions that wait for answers), `testkit` (fakes and sample data), `golden`
+//! (scripted worlds and golden sessions) and `conformance` (the suite a machine must pass).
 
 pub mod canvas;
 pub mod config;
@@ -54,9 +67,12 @@ pub mod effects;
 pub mod element;
 pub mod envelope;
 pub mod event;
+mod event_cause;
 pub mod event_field;
 pub mod explore;
 pub mod field_type;
+#[cfg(any(test, feature = "testkit"))]
+pub mod golden;
 pub mod identity;
 pub mod kind;
 pub mod kind_file;
@@ -69,9 +85,13 @@ pub mod machine_spec;
 pub mod motion;
 pub mod outcome;
 pub mod owner_queue;
+pub mod pending;
+pub mod pipeline;
 pub mod ports;
 pub mod private_data;
+pub mod projection;
 pub mod registry;
+pub mod table_state;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 pub mod world;
@@ -107,6 +127,8 @@ mod kind_tests;
 #[cfg(test)]
 mod lobby_tests;
 #[cfg(test)]
+mod machine_scan_tests;
+#[cfg(test)]
 mod machine_tests;
 #[cfg(test)]
 mod motion_tests;
@@ -123,11 +145,49 @@ mod owner_queue_property_tests;
 #[cfg(test)]
 mod owner_queue_tests;
 #[cfg(test)]
+mod pending_digest_tests;
+#[cfg(test)]
+mod pending_tests;
+#[cfg(test)]
+mod pending_window_tests;
+#[cfg(test)]
+mod pipeline_batch_tests;
+#[cfg(test)]
+mod pipeline_failure_tests;
+#[cfg(test)]
+mod pipeline_fixtures_tests;
+#[cfg(test)]
+mod pipeline_golden_tests;
+#[cfg(test)]
+mod pipeline_review_tests;
+#[cfg(test)]
+mod pipeline_tests;
+#[cfg(test)]
 mod ports_tests;
 #[cfg(test)]
 mod private_data_tests;
 #[cfg(test)]
+mod projection_attachments_tests;
+#[cfg(test)]
+mod projection_cost_tests;
+#[cfg(test)]
+mod projection_privacy_tests;
+#[cfg(test)]
+mod projection_tests;
+#[cfg(test)]
+mod projection_wire_tests;
+#[cfg(test)]
 mod registry_tests;
+#[cfg(test)]
+mod table_state_digest_tests;
+#[cfg(test)]
+mod table_state_lanes_tests;
+#[cfg(test)]
+mod table_state_rules_tests;
+#[cfg(test)]
+mod table_state_snapshot_tests;
+#[cfg(test)]
+mod table_state_tests;
 #[cfg(test)]
 mod testkit_tests;
 #[cfg(test)]

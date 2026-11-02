@@ -56,7 +56,7 @@ impl World {
         self.by_name.contains_key(id)
     }
 
-    /// Makes an element, or returns `None` when the name is taken.
+    /// Makes an element, or returns `None` when the name is taken or the entities are used up.
     pub fn spawn(
         &mut self,
         id: ElementId,
@@ -67,7 +67,7 @@ impl World {
         if self.by_name.contains_key(&id) {
             return None;
         }
-        let entity = self.entities.spawn();
+        let entity = self.entities.spawn()?;
         self.names.insert(entity, id.clone());
         self.kinds.insert(entity, kind);
         self.positions.insert(entity, position);

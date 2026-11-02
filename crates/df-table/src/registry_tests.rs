@@ -4,15 +4,15 @@ use crate::effects::TableState;
 use crate::identity::MachineId;
 use crate::lobby_tests::{action, explore_for_neighbour, lobby};
 use crate::machine::{
-    Entry, EntryRefusal, HandOff, InspectReport, Machine, MachineError, MachineInput,
-    MachineReadout, MachineSpec, ReadoutError, Scope, StateName, StepInput, StepResult,
-    SuspendPolicy,
+    CarryItem, Entry, EntryRefusal, HandOff, HandOffTarget, InspectReport, Machine, MachineError,
+    MachineInput, MachineReadout, MachineSpec, ReadoutError, Scope, StateName, StepInput,
+    StepResult, SuspendPolicy,
 };
 use crate::machine_slot::{LoadError, MachineSlot};
 use crate::ports::{Audience, PortName};
 use crate::registry::{
-    Enablement, EnablementReason, FlagState, MachineFlags, RegistryBuilder, RegistryError,
-    RegistryErrorKind,
+    Enablement, EnablementReason, FlagState, HandOffRefusal, HandOffRoute, MachineFlags,
+    RegistryBuilder, RegistryError, RegistryErrorKind, check_hand_off_route,
 };
 
 /// A machine that is only a spec: every call refuses, so a registry test sees nothing else.
@@ -33,18 +33,27 @@ impl Machine for SpecOnly {
         Err(EntryRefusal::NoSeats.into())
     }
 
-    fn accepts(&self, _input: &MachineInput, _state: &MachineSlot) -> bool {
+    fn accepts(&self, _table: &TableState, _input: &MachineInput, _state: &MachineSlot) -> bool {
         false
     }
 
-    fn step(&self, state: &MachineSlot, _input: &StepInput) -> Result<StepResult, MachineError> {
-        Err(LoadError::Malformed {
-            version: state.schema_version(),
+    fn step(
+        &self,
+        state: &MachineSlot,
+        _input: &StepInput<'_>,
+    ) -> Result<StepResult, MachineError> {
+        Err(LoadError::UnsupportedVersion {
+            found: state.schema_version(),
+            expected: self.spec.schema_version(),
         }
         .into())
     }
 
-    fn exit(&self, _state: &MachineSlot) -> Result<HandOff, MachineError> {
+    fn wants_hand_off(&self, _state: &MachineSlot) -> Result<bool, MachineError> {
+        Err(EntryRefusal::NoSeats.into())
+    }
+
+    fn exit(&self, _table: &TableState, _state: &MachineSlot) -> Result<HandOff, MachineError> {
         Err(EntryRefusal::NoSeats.into())
     }
 
@@ -52,8 +61,13 @@ impl Machine for SpecOnly {
         Err(EntryRefusal::NoSeats.into())
     }
 
+    fn validate(&self, _state: &MachineSlot) -> Result<(), MachineError> {
+        Err(EntryRefusal::NoSeats.into())
+    }
+
     fn project(
         &self,
+        _table: &TableState,
         _state: &MachineSlot,
         _audience: Audience,
     ) -> Result<MachineReadout, MachineError> {
@@ -69,6 +83,10 @@ fn id(name: &str) -> MachineId {
     MachineId::new(name).expect("valid id")
 }
 
+fn stub_spec(name: &str, scope: Scope) -> MachineSpec {
+    MachineSpec::new(name, scope, 1, &["idle"], SuspendPolicy::FinishAndHold).expect("valid spec")
+}
+
 fn seat_lane_spec(target: &str) -> MachineSpec {
     MachineSpec::new(
         "creation",
@@ -82,11 +100,23 @@ fn seat_lane_spec(target: &str) -> MachineSpec {
     .expect("valid target")
 }
 
+fn table_stub() -> SpecOnly {
+    spec_only(stub_spec("table_stub", Scope::Table))
+}
+
+fn group_stub() -> SpecOnly {
+    spec_only(stub_spec("group_stub", Scope::Group))
+}
+
 fn errors_of(builder: RegistryBuilder) -> Vec<RegistryError> {
     builder
         .build(PortName::ALL)
         .err()
         .expect("the registry is refused")
+}
+
+fn kinds(errors: &[RegistryError]) -> Vec<RegistryErrorKind> {
+    errors.iter().map(RegistryError::kind).collect()
 }
 
 #[test]
@@ -123,25 +153,20 @@ fn a_flag_turns_a_machine_off_or_on_and_the_report_says_why() {
             .flags(flags),
     );
     assert_eq!(
-        errors.iter().map(RegistryError::kind).collect::<Vec<_>>(),
-        [RegistryErrorKind::HandOffTargetDisabled]
+        kinds(&errors),
+        [
+            RegistryErrorKind::HandOffTargetDisabled,
+            RegistryErrorKind::NotStartable
+        ]
     );
     let flags = MachineFlags::default()
         .with_flag(id("lobby"), FlagState::On)
         .with_flag(id("explore"), FlagState::On)
         .with_flag(id("spare"), FlagState::Off);
-    let spare = MachineSpec::new(
-        "spare",
-        Scope::Group,
-        1,
-        &["idle"],
-        SuspendPolicy::FinishAndHold,
-    )
-    .expect("valid spec");
     let registry = RegistryBuilder::new()
         .register(lobby())
         .register(explore_for_neighbour())
-        .register(spec_only(spare))
+        .register(spec_only(stub_spec("spare", Scope::Group)))
         .flags(flags)
         .build(PortName::ALL)
         .expect("valid registry");
@@ -165,7 +190,6 @@ fn a_flag_turns_a_machine_off_or_on_and_the_report_says_why() {
 
 /// Each scenario breaks exactly one rule; the map must reach every kind of error.
 fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
-    let ghost = || id("ghost");
     let duplicate = errors_of(
         RegistryBuilder::new()
             .register(lobby())
@@ -176,13 +200,18 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
         RegistryBuilder::new()
             .register(lobby())
             .register(explore_for_neighbour())
-            .flags(MachineFlags::default().with_flag(ghost(), FlagState::Off)),
+            .flags(MachineFlags::default().with_flag(id("ghost"), FlagState::Off)),
     );
-    let unknown_target = errors_of(RegistryBuilder::new().register(lobby()));
+    let unknown_target = errors_of(
+        RegistryBuilder::new()
+            .register(lobby())
+            .register(group_stub()),
+    );
     let disabled_target = errors_of(
         RegistryBuilder::new()
             .register(lobby())
             .register(explore_for_neighbour())
+            .register(group_stub())
             .flags(MachineFlags::default().with_flag(id("explore"), FlagState::Off)),
     );
     let scope = errors_of(
@@ -198,18 +227,13 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
         .err()
         .expect("the registry is refused");
     let rules_without_port = errors_of(
-        RegistryBuilder::new().register(spec_only(
-            MachineSpec::new(
-                "quiz",
-                Scope::Group,
-                1,
-                &["asking"],
-                SuspendPolicy::FinishAndHold,
-            )
-            .expect("valid spec")
-            .with_rules_action(action("answer"))
-            .expect("first action"),
-        )),
+        RegistryBuilder::new()
+            .register(table_stub())
+            .register(spec_only(
+                stub_spec("quiz", Scope::Group)
+                    .with_rules_action(action("answer"))
+                    .expect("first action"),
+            )),
     );
     let nothing_enabled = errors_of(
         RegistryBuilder::new()
@@ -221,6 +245,7 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
                     .with_flag(id("explore"), FlagState::Off),
             ),
     );
+    let not_startable = errors_of(RegistryBuilder::new().register(table_stub()));
     vec![
         (RegistryErrorKind::DuplicateMachine, duplicate),
         (RegistryErrorKind::UnknownFlagTarget, unknown_flag),
@@ -233,6 +258,7 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
             rules_without_port,
         ),
         (RegistryErrorKind::NoEnabledMachines, nothing_enabled),
+        (RegistryErrorKind::NotStartable, not_startable),
     ]
 }
 
@@ -240,12 +266,35 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
 fn each_startup_error_is_reachable_and_each_scenario_breaks_exactly_one_rule() {
     let mut reached = BTreeSet::new();
     for (expected, errors) in scenarios() {
-        let kinds: Vec<RegistryErrorKind> = errors.iter().map(RegistryError::kind).collect();
-        assert_eq!(kinds, [expected], "{errors:?}");
+        assert_eq!(kinds(&errors), [expected], "{errors:?}");
         reached.insert(expected);
     }
     let all: BTreeSet<RegistryErrorKind> = RegistryErrorKind::ALL.iter().copied().collect();
     assert_eq!(reached, all, "an error kind has no scenario");
+}
+
+#[test]
+fn a_table_needs_a_machine_that_starts_it_and_a_machine_that_runs_a_scene() {
+    let only_a_lane =
+        errors_of(RegistryBuilder::new().register(spec_only(stub_spec("lane", Scope::Seat))));
+    assert_eq!(
+        only_a_lane,
+        [
+            RegistryError::NotStartable {
+                missing: Scope::Table
+            },
+            RegistryError::NotStartable {
+                missing: Scope::Group
+            }
+        ]
+    );
+    let no_table = errors_of(RegistryBuilder::new().register(group_stub()));
+    assert_eq!(
+        no_table,
+        [RegistryError::NotStartable {
+            missing: Scope::Table
+        }]
+    );
 }
 
 #[test]
@@ -287,6 +336,7 @@ fn startup_errors_name_the_machine_and_what_to_fix() {
         }
     }
     assert_eq!(find(RegistryErrorKind::NoEnabledMachines).machine(), None);
+    assert_eq!(find(RegistryErrorKind::NotStartable).machine(), None);
     assert_eq!(
         find(RegistryErrorKind::DuplicateMachine).machine(),
         Some(&id("lobby"))
@@ -302,13 +352,130 @@ fn every_problem_comes_back_at_once_in_a_fixed_order() {
         .build(&[])
         .err()
         .expect("the registry is refused");
-    let kinds: Vec<RegistryErrorKind> = errors.iter().map(RegistryError::kind).collect();
     assert_eq!(
-        kinds,
+        kinds(&errors),
         [
             RegistryErrorKind::UnknownFlagTarget,
             RegistryErrorKind::UnknownHandOffTarget,
             RegistryErrorKind::UnknownHandOffTarget,
+            RegistryErrorKind::NotStartable,
         ]
+    );
+}
+
+fn running_registry() -> crate::registry::Registry {
+    RegistryBuilder::new()
+        .register(lobby())
+        .register(explore_for_neighbour())
+        .register(spec_only(stub_spec("lane", Scope::Seat)))
+        .build(PortName::ALL)
+        .expect("valid registry")
+}
+
+fn to(name: &str) -> HandOff {
+    HandOff::new(
+        id(name),
+        vec![CarryItem::Seat(crate::identity::SeatId::new(1))],
+    )
+    .expect("builds")
+}
+
+#[test]
+fn the_hand_off_a_machine_returned_is_checked_against_the_declared_enabled_and_scope_rules() {
+    let registry = running_registry();
+    assert!(matches!(
+        registry.check_hand_off(&id("lobby"), &to("explore")),
+        Ok(HandOffRoute::To(machine)) if machine.spec().id() == &id("explore")
+    ));
+    assert!(matches!(
+        registry.check_hand_off(&id("explore"), &to("lobby")),
+        Ok(HandOffRoute::To(_))
+    ));
+    assert_eq!(
+        registry.check_hand_off(&id("lobby"), &to("lane")).err(),
+        Some(HandOffRefusal::UndeclaredTarget { target: id("lane") })
+    );
+    assert_eq!(
+        registry.check_hand_off(&id("ghost"), &to("lobby")).err(),
+        Some(HandOffRefusal::UnknownSource {
+            machine: id("ghost")
+        })
+    );
+}
+
+#[test]
+fn the_route_rules_refuse_an_unknown_a_disabled_and_a_forbidden_target() {
+    let lobby = lobby();
+    let from = lobby.spec();
+    let hand_off = to("explore");
+    let lookup = |scope: Option<(Scope, Enablement)>| move |_: &MachineId| scope;
+    assert_eq!(
+        check_hand_off_route(from, &hand_off, lookup(None)),
+        Err(HandOffRefusal::UnknownTarget {
+            target: id("explore")
+        })
+    );
+    assert_eq!(
+        check_hand_off_route(
+            from,
+            &hand_off,
+            lookup(Some((Scope::Group, Enablement::Disabled)))
+        ),
+        Err(HandOffRefusal::TargetDisabled {
+            target: id("explore")
+        })
+    );
+    assert_eq!(
+        check_hand_off_route(
+            from,
+            &hand_off,
+            lookup(Some((Scope::Seat, Enablement::Enabled)))
+        ),
+        Err(HandOffRefusal::ScopeRuleBroken {
+            from: Scope::Table,
+            to: Scope::Seat
+        })
+    );
+    assert_eq!(
+        check_hand_off_route(
+            from,
+            &hand_off,
+            lookup(Some((Scope::Group, Enablement::Enabled)))
+        ),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_seat_lane_ends_by_releasing_itself_and_a_group_machine_may_return_below() {
+    let registry = running_registry();
+    let release = HandOff::to(HandOffTarget::ReleaseLane, Vec::new()).expect("builds");
+    let below = HandOff::to(HandOffTarget::ReturnToFrameBelow, Vec::new()).expect("builds");
+    assert!(matches!(
+        registry.check_hand_off(&id("lane"), &release),
+        Ok(HandOffRoute::ReleasesLane)
+    ));
+    assert!(matches!(
+        registry.check_hand_off(&id("explore"), &below),
+        Ok(HandOffRoute::ReturnsBelow)
+    ));
+    for (from, scope) in [("lobby", Scope::Table), ("explore", Scope::Group)] {
+        assert_eq!(
+            registry.check_hand_off(&id(from), &release).err(),
+            Some(HandOffRefusal::LaneNotReleasable { scope }),
+            "{from}"
+        );
+    }
+    for (from, scope) in [("lobby", Scope::Table), ("lane", Scope::Seat)] {
+        assert_eq!(
+            registry.check_hand_off(&id(from), &below).err(),
+            Some(HandOffRefusal::NothingBelow { scope }),
+            "{from}"
+        );
+    }
+    assert!(
+        !HandOffRefusal::NothingBelow { scope: Scope::Seat }
+            .to_string()
+            .is_empty()
     );
 }

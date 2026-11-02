@@ -9,15 +9,9 @@ use std::fmt;
 
 use crate::ecs::{Entity, Store};
 use crate::element::Position;
+use crate::limits::{MAXIMUM_SPEED, MAXIMUM_TICK_SECONDS};
 
-/// Slowest travel accepted, in canvas units per second.
-pub const MINIMUM_SPEED: f32 = 0.1;
-/// Fastest travel accepted, in canvas units per second: the whole canvas in a quarter second.
-pub const MAXIMUM_SPEED: f32 = 400.0;
-/// Longest tick the system will advance, in seconds. A longer gap is cut to this.
-pub const MAXIMUM_TICK_SECONDS: f32 = 0.25;
-
-/// A speed that has been checked: finite and within the limits.
+/// A speed that has been checked: finite, above zero and at most `MAXIMUM_SPEED`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Speed(f32);
 
@@ -29,7 +23,7 @@ impl fmt::Display for SpeedError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "a speed is from {MINIMUM_SPEED} to {MAXIMUM_SPEED} canvas units per second, not {}",
+            "a speed is a number above 0 and at most {MAXIMUM_SPEED} canvas units per second, not {}",
             self.0
         )
     }
@@ -38,7 +32,8 @@ impl fmt::Display for SpeedError {
 impl Speed {
     pub fn new(units_per_second: f32) -> Result<Self, SpeedError> {
         if units_per_second.is_finite()
-            && (MINIMUM_SPEED..=MAXIMUM_SPEED).contains(&units_per_second)
+            && units_per_second > 0.0
+            && units_per_second <= MAXIMUM_SPEED
         {
             Ok(Self(units_per_second))
         } else {

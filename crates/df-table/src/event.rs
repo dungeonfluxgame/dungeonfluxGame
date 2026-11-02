@@ -22,15 +22,17 @@ use crate::config::{SettingFault, SettingName};
 use crate::effects::{EffectRefusal, TableEffectKind};
 use crate::element::{Degrees, ElementId, FieldName, KindName, Percent};
 use crate::event_field::LineWriter;
-use crate::identity::{Correlation, EvidenceRef, MachineId, TableScope};
+use crate::identity::{Correlation, EvidenceRef, MachineId, TableId, TableScope};
 use crate::limits::MAXIMUM_NAME_LENGTH;
-use crate::listed::listed_enum;
-use crate::machine::{MachineFailureCause, StateName};
-use crate::machine_slot::LoadFault;
+use crate::machine::{HandOffKind, MachineFailureCause, StateName};
+use crate::machine_slot::{LoadFault, RecordKind};
 use crate::outcome::{DeclineCode, OutcomeKind};
 use crate::owner_queue::{Lane, NotDeclinedCause};
+use crate::pipeline::events::PipelineEvent;
 use crate::ports::PortName;
 use crate::private_data::LengthClass;
+use crate::projection::ProjectionEvent;
+use crate::table_state::TableStateEvent;
 
 /// Everything in the widest audit line that is not a name: the area and verb, every key, 20-digit
 /// numbers and 32-digit ids. The widest line has about 270 such bytes; this leaves room.
@@ -54,158 +56,9 @@ pub enum EventClass {
     Verbose,
 }
 
-/// The kinds of change the canvas accepts, named for the audit line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EffectKind {
-    Spawn,
-    Despawn,
-    Set,
-    Move,
-    Travel,
-    Stop,
-    Clear,
-    Transform,
-}
-
-impl EffectKind {
-    /// The closed key written into an audit line.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Spawn => "spawn",
-            Self::Despawn => "despawn",
-            Self::Set => "set",
-            Self::Move => "move",
-            Self::Travel => "travel",
-            Self::Stop => "stop",
-            Self::Clear => "clear",
-            Self::Transform => "transform",
-        }
-    }
-}
-
-listed_enum! {
-    /// Which appearance a transform changed, named for the audit line.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum TransformKind {
-        Rotate,
-    }
-}
-
-impl TransformKind {
-    /// The closed key written into an audit line.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Rotate => "rotate",
-        }
-    }
-}
-
-/// Why a change or a request was rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RejectionCause {
-    UnknownKind,
-    DuplicateElement,
-    UnknownElement,
-    UnknownField,
-    InvalidValue,
-    InvalidName,
-    MissingRequiredField,
-    TooManyElements,
-    OutOfBounds,
-    InvalidSpeed,
-    /// A rotation or pivot outside its range.
-    InvalidTransform,
-    /// A request that could not be read as an effect at all.
-    MalformedRequest,
-    /// A request that did not come from the local machine, or not as JSON.
-    ForbiddenRequest,
-}
-
-impl RejectionCause {
-    /// The closed key written into an audit line.
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::UnknownKind => "unknown_kind",
-            Self::DuplicateElement => "duplicate_element",
-            Self::UnknownElement => "unknown_element",
-            Self::UnknownField => "unknown_field",
-            Self::InvalidValue => "invalid_value",
-            Self::InvalidName => "invalid_name",
-            Self::MissingRequiredField => "missing_required_field",
-            Self::TooManyElements => "too_many_elements",
-            Self::OutOfBounds => "out_of_bounds",
-            Self::InvalidSpeed => "invalid_speed",
-            Self::InvalidTransform => "invalid_transform",
-            Self::MalformedRequest => "malformed_request",
-            Self::ForbiddenRequest => "forbidden_request",
-        }
-    }
-}
-
-listed_enum! {
-    /// The seven stages an input passes through (section C of the plan).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum PipelineStep {
-        Admit,
-        Interpret,
-        Check,
-        Decide,
-        Apply,
-        Narrate,
-        Project,
-    }
-}
-
-impl PipelineStep {
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Admit => "admit",
-            Self::Interpret => "interpret",
-            Self::Check => "check",
-            Self::Decide => "decide",
-            Self::Apply => "apply",
-            Self::Narrate => "narrate",
-            Self::Project => "project",
-        }
-    }
-}
-
-listed_enum! {
-    /// Why work at a boundary failed: a closed cause, never an error text.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum FailureCause {
-        /// The owner or provider could not be reached or had nothing to give.
-        Unavailable,
-        TimedOut,
-        /// A provider refused; a refusal is never retried with other wording (pattern 11).
-        Refused,
-        /// Model text that is empty, over-length, the wrong shape or the wrong language (C.7).
-        TextInvalid,
-        /// An answer outside what the question allows, such as a die value off the die.
-        InvalidAnswer,
-        /// A result for an older revision or scene generation (RES42), or a handle that is no
-        /// longer current or never was.
-        Stale,
-    }
-}
-
-impl FailureCause {
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Unavailable => "unavailable",
-            Self::TimedOut => "timed_out",
-            Self::Refused => "refused",
-            Self::TextInvalid => "text_invalid",
-            Self::InvalidAnswer => "invalid_answer",
-            Self::Stale => "stale",
-        }
-    }
-}
+pub use crate::event_cause::{
+    EffectKind, FailureCause, PipelineStep, RejectionCause, TransformKind,
+};
 
 /// One thing the table did or refused to do. The first group is the canvas workbench; the second
 /// is the engine (O.6). Every variant is class A except `ElementMoved` and `StepFinished`.
@@ -366,11 +219,13 @@ pub enum TableEvent {
         from: StateName,
         to: StateName,
     },
-    /// A machine left the table to `target`, handing over `carried` items.
+    /// A machine ended. `kind` says how, `target` names the machine it handed the table to when
+    /// it named one, and `carried` counts the items it handed over.
     MachineExited {
         scope: TableScope,
         correlation: Correlation,
-        target: MachineId,
+        kind: HandOffKind,
+        target: Option<MachineId>,
         carried: usize,
     },
     /// A machine call failed; recorded once, by the code that handles it.
@@ -392,14 +247,23 @@ pub enum TableEvent {
         effect: TableEffectKind,
         cause: EffectRefusal,
     },
-    /// A saved machine record could not be used (`load.refused`, H.12): `version` is the one it
-    /// carries and `expected` the one the machine reads.
+    /// A saved record could not be used (`load.refused{type, version, expected}`, H.12) when the
+    /// host loaded `table`: `record` is its type, `machine` the machine a slot belongs to,
+    /// `version` the one it carries and `expected` the one this engine reads.
     LoadRefused {
-        machine: MachineId,
+        table: TableId,
+        record: RecordKind,
+        machine: Option<MachineId>,
         version: u64,
         expected: u64,
         cause: LoadFault,
     },
+    /// What the pipeline and the pending resolutions did that explains a turn (`pipeline.rs`).
+    Pipeline(PipelineEvent),
+    /// What the table state did that explains a turn: a stale result set aside (`table_state`).
+    TableState(TableStateEvent),
+    /// An audience's view was built (`projection`).
+    Projection(ProjectionEvent),
 }
 
 impl TableEvent {
@@ -434,6 +298,9 @@ impl TableEvent {
             | Self::EffectApplied { .. }
             | Self::EffectRefused { .. }
             | Self::LoadRefused { .. } => EventClass::Always,
+            Self::Pipeline(event) => event.class(),
+            Self::TableState(event) => event.class(),
+            Self::Projection(event) => event.class(),
         }
     }
 
@@ -469,6 +336,9 @@ impl TableEvent {
             | Self::MachineFailed { .. } => "MACHINE",
             Self::EffectApplied { .. } | Self::EffectRefused { .. } => "EFFECT",
             Self::LoadRefused { .. } => "LOAD",
+            Self::Pipeline(event) => event.area(),
+            Self::TableState(event) => event.area(),
+            Self::Projection(event) => event.area(),
         }
     }
 
@@ -697,12 +567,14 @@ impl TableEvent {
             Self::MachineExited {
                 scope,
                 correlation,
+                kind,
                 target,
                 carried,
             } => {
                 let mut line = LineWriter::start(out, "exited")?;
                 write_context(&mut line, scope, correlation)?;
-                line.field("target", target)?;
+                line.field("kind", kind)?;
+                line.field_if_present("target", target)?;
                 line.field("carried", carried)
             }
             Self::MachineFailed {
@@ -735,17 +607,24 @@ impl TableEvent {
                 line.field("cause", cause)
             }
             Self::LoadRefused {
+                table,
+                record,
                 machine,
                 version,
                 expected,
                 cause,
             } => {
                 let mut line = LineWriter::start(out, "refused")?;
-                line.field("machine", machine)?;
+                line.field("table", table)?;
+                line.field("record", record)?;
+                line.field_if_present("machine", machine)?;
                 line.field("version", version)?;
                 line.field("expected", expected)?;
                 line.field("cause", cause)
             }
+            Self::Pipeline(event) => event.write_audit_body(out),
+            Self::TableState(event) => event.write_audit_body(out),
+            Self::Projection(event) => event.write_audit_body(out),
         }
     }
 }
@@ -762,7 +641,7 @@ fn write_element_line<W: Write>(
 }
 
 /// The keys every engine event shares, always in this order. They are pinned (question 89).
-fn write_context<W: Write>(
+pub(crate) fn write_context<W: Write>(
     line: &mut LineWriter<'_, W>,
     scope: &TableScope,
     correlation: &Correlation,

@@ -437,8 +437,10 @@ impl Canvas {
             appearance: Appearance::default(),
         };
         check_element(&self.registry, &element)?;
+        // The name was checked above, so `None` means the entities are used up.
         self.world
-            .spawn(id.clone(), kind.clone(), position, element.fields);
+            .spawn(id.clone(), kind.clone(), position, element.fields)
+            .ok_or(CanvasError::TooManyElements)?;
         let revision = self.advance();
         Ok(TableEvent::ElementSpawned {
             element: id,
