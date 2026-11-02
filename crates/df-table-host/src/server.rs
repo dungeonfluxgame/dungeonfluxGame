@@ -24,6 +24,7 @@ use serde::Deserialize;
 
 use crate::guard;
 use crate::kind_files::load_kind_files_async;
+use crate::media_library;
 use crate::playground;
 use crate::render;
 use crate::request::RequestError;
@@ -81,7 +82,9 @@ async fn announce_changes(
     request: Request,
     next: Next,
 ) -> Response {
-    let is_change = request.method() == Method::POST;
+    // A page's report of what it shows is a reading, not a change, and must not wake pages.
+    let is_change =
+        request.method() == Method::POST && request.uri().path() != route::DEV_CLIENT_REPORT;
     let response = next.run(request).await;
     if is_change {
         state.announce_change();
@@ -271,6 +274,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(route::RELOAD, post(reload))
         .with_state(state.clone());
     api.merge(playground::router(state.clone()))
+        .merge(media_library::router(state.clone()))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),

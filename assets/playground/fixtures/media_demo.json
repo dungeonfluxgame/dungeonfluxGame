@@ -1,0 +1,28 @@
+{
+  "name": "Pictures and sound",
+  "description": "A backdrop and a card on the shared screen and a picture on the phone, all from the media library. Try: scene sound bell.wav, scene music ambience.wav, then clients to see what the page played.",
+  "tv": {
+    "place": "The Gilded Flagon",
+    "status": { "kind": "ok" },
+    "caption": { "speaker": "Marta", "text": "That letter has been waiting for you a long while." },
+    "backdrop": { "media": "tavern.png", "caption": "The common room, late" },
+    "card": { "media": "letter.png", "caption": "The letter" },
+    "party": [
+      { "name": "Pip", "hit_points": 7, "maximum_hit_points": 9, "color": "#4f8cff" },
+      { "name": "Vex", "hit_points": 10, "maximum_hit_points": 10, "color": "#e5546b" }
+    ],
+    "elements": [
+      { "id": "pip", "kind": "character", "label": "Pip", "x": 30, "y": 42, "color": "#4f8cff", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "vex", "kind": "character", "label": "Vex", "x": 70, "y": 42, "color": "#e5546b", "shape": "circle", "width_units": 5, "height_units": 5 }
+    ]
+  },
+  "phone": {
+    "hero": "Pip",
+    "goal": "Read the letter",
+    "status": { "kind": "ok" },
+    "image": { "media": "map.png", "caption": "The road north, marked in red" },
+    "narration": ["Marta slides a folded letter across the bar. A red seal holds it shut."],
+    "suggested": [{ "label": "Break the seal" }, { "label": "Ask who sent it" }],
+    "groups": [{ "name": "Look", "choices": [{ "label": "Study the seal" }] }]
+  }
+}

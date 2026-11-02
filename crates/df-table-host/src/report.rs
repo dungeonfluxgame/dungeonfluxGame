@@ -3,7 +3,7 @@
 //! It owns wording and layout only. It never sends a request and never reads a file.
 
 use crate::view::CanvasView;
-use crate::wire::{ControlsReply, EventsReply, Reply};
+use crate::wire::{ClientView, ControlsReply, EventsReply, Reply};
 
 /// The text of an answer to a change: `Ok` when the change was made, `Err` when it was not.
 pub fn describe_reply(reply: &Reply) -> Result<String, String> {
@@ -111,6 +111,10 @@ fn changed_parts(scene: &df_playground::scene::SceneOverlay) -> String {
         ("suggested", scene.suggested.is_some()),
         ("groups", scene.groups.is_some()),
         ("unavailable", scene.unavailable.is_some()),
+        ("backdrop", scene.backdrop.is_some()),
+        ("card", scene.card.is_some()),
+        ("phone picture", scene.phone_image.is_some()),
+        ("music", scene.music.is_some()),
     ]
     .into_iter()
     .filter_map(|(name, changed)| changed.then_some(name))
@@ -120,4 +124,58 @@ fn changed_parts(scene: &df_playground::scene::SceneOverlay) -> String {
     } else {
         format!("changed: {}", parts.join(", "))
     }
+}
+
+/// The media library, one file per line.
+pub fn format_media(entries: &[df_playground::media::MediaEntry]) -> String {
+    if entries.is_empty() {
+        return "no media (add one with: media add FILE)".to_owned();
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{:<32} {:<5} {} bytes",
+                entry.name,
+                entry.kind.key(),
+                entry.bytes
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// What each open page says it is showing and playing. An agent cannot see or hear a screen, so
+/// this is how it checks that a picture or a sound arrived.
+pub fn format_clients(clients: &[ClientView]) -> String {
+    use df_playground::media::AudioState;
+    if clients.is_empty() {
+        return "clients: none (open the playground page)".to_owned();
+    }
+    let mut lines = Vec::new();
+    for client in clients {
+        let report = &client.report;
+        let audio = match report.audio {
+            AudioState::Unlocked => "audio unlocked",
+            AudioState::Locked => {
+                "audio LOCKED (the browser plays sound only after someone clicks the page)"
+            }
+        };
+        let music = report.music.as_deref().unwrap_or("none");
+        let shown = if report.images_shown.is_empty() {
+            "none".to_owned()
+        } else {
+            report.images_shown.join(", ")
+        };
+        lines.push(format!(
+            "client {} ({:.1} s ago): {audio}; last sound cue {}; music {music}; pictures shown {shown}",
+            client.client,
+            client.age_ms as f64 / 1000.0,
+            report.last_cue
+        ));
+        for error in &report.errors {
+            lines.push(format!("  error: {error}"));
+        }
+    }
+    lines.join("\n")
 }

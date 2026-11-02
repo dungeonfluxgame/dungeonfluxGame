@@ -13,14 +13,16 @@ use gloo_timers::future::TimeoutFuture;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
-use web_sys::{Document, Element, Event, HtmlSelectElement};
+use web_sys::{Document, Element, Event, HtmlImageElement, HtmlSelectElement};
 
+use crate::audio;
 use crate::controls::{Controls, ControlsChange, ControlsReply, Device, FIXTURE_STATUS_KEY};
 use crate::copy::{ReadingPace, STATUS_KEYS};
 use crate::dom::{append, clear, document, element, set_action, text_element};
 use crate::fixture::{ElementSource, Fixture, StageElement};
+use crate::media::{AudioState, ClientReport, ClientReportPost};
 use crate::net::{fetch_text, post_json};
-use crate::scene::SceneOverlay;
+use crate::scene::{Override, SceneOverlay};
 use crate::{view_phone, view_tv};
 
 /// Milliseconds between looks at the server for changed files, a rebuilt package and a changed
@@ -36,6 +38,9 @@ const FIXTURE_DIRECTORY_ADDRESS: &str = "/playground/fixtures/";
 const FRAME_ADDRESS: &str = "/playground/frame";
 const CONTROLS_ADDRESS: &str = "/playground/controls.json";
 const CHANGE_ADDRESS: &str = "/dev/playground/controls";
+const REPORT_ADDRESS: &str = "/dev/playground/report";
+/// Polls between reports sent even when nothing changed, so the host can tell the page is alive.
+const HEARTBEAT_POLLS: u32 = 10;
 const ROOT_ID: &str = "playground";
 const THEME_ID: &str = "playground-theme";
 
@@ -64,6 +69,11 @@ struct App {
     live: Option<LiveCanvas>,
     /// The count of the newest frame drawn, which the next frame request names.
     frame: Option<u64>,
+    /// This page's name for itself in reports to the host.
+    client_id: String,
+    /// The text of the last report sent, so an unchanged report is not sent again.
+    last_report: Option<String>,
+    polls_since_report: u32,
     asset_revision: String,
     controls: Controls,
     /// Live changes to the scene, drawn on top of the loaded fixture.
@@ -184,6 +194,7 @@ async fn send_change(change: ControlsChange) {
     match answer {
         Ok(reply) => {
             let update = apply_controls(reply);
+            sync_audio();
             if update.fixture_changed {
                 load_selected_fixture().await;
             }
@@ -252,6 +263,7 @@ fn render_stage() {
 async fn apply_frame(frame: LiveFrame) {
     let was_down = with_app(|app| app.connection_problem.is_some());
     let update = apply_controls(frame.controls);
+    sync_audio();
     let canvas_changed = with_app_mut(|app| {
         app.frame = Some(frame.frame);
         let changed = app
@@ -342,11 +354,23 @@ async fn poll() {
     if files_changed || update.changed {
         render();
     }
+    sync_audio();
+    let beat = with_app_mut(|app| {
+        app.polls_since_report += 1;
+        if app.polls_since_report >= HEARTBEAT_POLLS {
+            app.polls_since_report = 0;
+            true
+        } else {
+            false
+        }
+    });
+    send_report(beat).await;
 }
 
 async fn run() {
     refresh_assets().await;
     refresh_controls().await;
+    sync_audio();
     load_selected_fixture().await;
     render();
     spawn_local(follow_frames());
@@ -354,6 +378,86 @@ async fn run() {
         TimeoutFuture::new(POLL_MS).await;
         poll().await;
     }
+}
+
+/// The pictures on the page that loaded without error, by media name.
+fn images_shown() -> Vec<String> {
+    let Ok(document) = document() else {
+        return Vec::new();
+    };
+    let Ok(nodes) = document.query_selector_all("img[data-media]") else {
+        return Vec::new();
+    };
+    let mut shown = Vec::new();
+    for index in 0..nodes.length() {
+        if let Some(node) = nodes.item(index)
+            && let Ok(image) = node.dyn_into::<HtmlImageElement>()
+            && image.complete()
+            && image.natural_width() > 0
+            && let Some(name) = image.get_attribute("data-media")
+            && !shown.contains(&name)
+        {
+            shown.push(name);
+        }
+    }
+    shown
+}
+
+fn build_report() -> ClientReport {
+    let status = audio::status();
+    ClientReport {
+        audio: status.state,
+        last_cue: status.last_cue,
+        music: status.music,
+        images_shown: images_shown(),
+        errors: status.errors,
+    }
+    .bounded()
+}
+
+/// Tells the host what this page shows and plays, when that has changed (or when `force` says to,
+/// as a sign of life). The dev CLI reads it: an agent cannot see or hear the page.
+async fn send_report(force: bool) {
+    let post = ClientReportPost {
+        client: with_app(|app| app.client_id.clone()),
+        report: build_report(),
+    };
+    let Ok(text) = serde_json::to_string(&post) else {
+        return;
+    };
+    let send = with_app_mut(|app| {
+        let changed = app.last_report.as_deref() != Some(text.as_str());
+        if changed || force {
+            app.last_report = Some(text.clone());
+        }
+        changed || force
+    });
+    if send && let Err(message) = post_json(REPORT_ADDRESS, &text).await {
+        log_error(&format!("could not report to the host: {message}"));
+    }
+}
+
+fn schedule_report() {
+    spawn_local(send_report(false));
+}
+
+/// Makes the music and the sounds match the scene: music is started, replaced or stopped, and each
+/// new sound cue is played once.
+fn sync_audio() {
+    let (music, cues, count, device) = with_app(|app| {
+        let music = match &app.scene.music {
+            Some(Override::Set(track)) => Some(track.clone()),
+            Some(Override::Clear) | None => None,
+        };
+        (
+            music,
+            app.scene.cues.clone(),
+            app.scene.cue_count,
+            app.controls.device,
+        )
+    });
+    audio::sync_music(music.as_ref(), device);
+    audio::play_cues(&cues, count, device);
 }
 
 fn option(
@@ -501,6 +605,16 @@ fn toolbar(document: &Document, app: &App) -> Result<Element, JsValue> {
         &bar,
         &button(document, "toggle:grid", "Show grid", app.controls.show_grid)?,
     )?;
+    let unlocked = audio::state() == AudioState::Unlocked;
+    append(
+        &bar,
+        &button(
+            document,
+            "audio:unlock",
+            if unlocked { "Sound on" } else { "Enable sound" },
+            unlocked,
+        )?,
+    )?;
     Ok(bar)
 }
 
@@ -638,8 +752,35 @@ fn action_of(event: &Event) -> Option<(Element, String)> {
     Some((carrier, action))
 }
 
+/// A click or a key press is what lets the browser play sound. Redraws the toolbar when it is the
+/// first one, so the sound button says so, and tells the host.
+fn note_gesture() {
+    if audio::unlock() {
+        render();
+        schedule_report();
+    }
+}
+
+fn on_media_event(event: &Event, failed: bool) {
+    let Some(target) = event.target() else {
+        return;
+    };
+    let Ok(image) = target.dyn_into::<HtmlImageElement>() else {
+        return;
+    };
+    let Some(name) = image.get_attribute("data-media") else {
+        return;
+    };
+    if failed {
+        audio::note_error(format!("picture '{name}' did not load"));
+    }
+    schedule_report();
+}
+
 fn on_click(event: &Event) {
-    let Some((_, action)) = action_of(event) else {
+    let action = action_of(event);
+    note_gesture();
+    let Some((_, action)) = action else {
         return;
     };
     let change = with_app(|app| match action.split_once(':') {
@@ -699,6 +840,24 @@ pub fn start() -> Result<(), JsValue> {
     root.add_event_listener_with_callback("change", change.as_ref().unchecked_ref())?;
     change.forget();
 
+    // A key press is a gesture too, and a picture says when it has loaded or failed. Those events
+    // do not bubble, so they are caught on the way down.
+    let key = Closure::<dyn FnMut(Event)>::new(|_: Event| note_gesture());
+    body.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref())?;
+    key.forget();
+    let loaded = Closure::<dyn FnMut(Event)>::new(|event: Event| on_media_event(&event, false));
+    root.add_event_listener_with_callback_and_bool("load", loaded.as_ref().unchecked_ref(), true)?;
+    loaded.forget();
+    let failed = Closure::<dyn FnMut(Event)>::new(|event: Event| on_media_event(&event, true));
+    root.add_event_listener_with_callback_and_bool("error", failed.as_ref().unchecked_ref(), true)?;
+    failed.forget();
+
+    with_app_mut(|app| {
+        app.client_id = format!(
+            "page-{:08x}",
+            (js_sys::Math::random() * 4_294_967_295.0) as u32
+        );
+    });
     spawn_local(run());
     Ok(())
 }

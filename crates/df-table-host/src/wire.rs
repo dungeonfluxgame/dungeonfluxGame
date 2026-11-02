@@ -6,6 +6,7 @@
 //! never touches the canvas, a socket or a file.
 
 pub use df_playground::controls::ControlsReply;
+use df_playground::media::ClientReport;
 use df_table::event::RejectionCause;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,18 @@ pub mod route {
     /// A long poll for the next frame (GET with `?after=N`): answers at once when the host has
     /// changed since frame N, otherwise holds the request until it does or a wait runs out.
     pub const PLAYGROUND_FRAME: &str = "/playground/frame";
+    /// The media library: the list and each file (GET).
+    pub const PLAYGROUND_MEDIA_LIST: &str = "/playground/media.json";
+    pub const PLAYGROUND_MEDIA_FILE: &str = "/playground/media/{name}";
+    /// What each open page says it is showing and playing (GET).
+    pub const PLAYGROUND_CLIENTS: &str = "/playground/clients.json";
+    /// A page tells the host what it is showing and playing (POST a `ClientReportPost`). It does
+    /// not wake other pages.
+    pub const DEV_CLIENT_REPORT: &str = "/dev/playground/report";
+    /// Adds or replaces a media file (POST a `MediaAdd`).
+    pub const DEV_MEDIA_ADD: &str = "/dev/playground/media";
+    /// Deletes a media file (POST a `MediaRemove`).
+    pub const DEV_MEDIA_REMOVE: &str = "/dev/playground/media/remove";
     /// What the playground page is showing (GET), so the page and the dev CLI agree.
     pub const PLAYGROUND_CONTROLS: &str = "/playground/controls.json";
     /// Changes what the playground shows (POST a `ControlsChange`).
@@ -139,6 +152,29 @@ pub struct FixtureWrite {
 #[serde(deny_unknown_fields)]
 pub struct FixtureRemove {
     pub name: String,
+}
+
+/// A media file to add or replace: a plain name ending in a known type, and the file's bytes as
+/// base64.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaAdd {
+    pub name: String,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MediaRemove {
+    pub name: String,
+}
+
+/// One open page and what it last said, with how long ago.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientView {
+    pub client: String,
+    pub age_ms: u64,
+    pub report: ClientReport,
 }
 
 /// Everything the playground page draws, taken at one moment: the canvas and what the

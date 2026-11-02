@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use df_playground::controls::{ControlsChange, Device};
 use df_playground::copy::ReadingPace;
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
-use df_playground::scene::SceneChange;
+use df_playground::scene::{ImageSlot, MAXIMUM_VOLUME, SceneChange, Target};
 
 use crate::wire::{EffectRequest, ValueForm};
 
@@ -26,10 +26,17 @@ const DESPAWN_USAGE: &str = "despawn <id> [<id> ...]";
 const EVENTS_USAGE: &str = "events [after]";
 const SCRIPT_USAGE: &str = "script <file>";
 const PLAYGROUND_USAGE: &str = "playground [set <key>=<value> ...]";
-const SCENE_USAGE: &str =
-    "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | reset";
+const SCENE_USAGE: &str = "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | image ... | music ... | sound ... | reset";
 const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
 const PARTY_USAGE: &str = "scene party add <name> hp=N [max=N] [color=#rrggbb] [conditions=a,b] | set <name> [hp=N] [max=N] [conditions=a,b] | remove <name> | clear";
+const IMAGE_USAGE: &str =
+    "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] | scene image-clear <slot>";
+const MUSIC_USAGE: &str =
+    "scene music <name> [on=both|tv|phone] [volume=0-100] [loop=true|false] | scene music-stop";
+const SOUND_USAGE: &str = "scene sound <name> [on=both|tv|phone] [volume=0-100]";
+const MEDIA_USAGE: &str = "media | media add <file> [as=NAME] | media remove <name>";
+/// Volume of music and sounds when none is given, in percent.
+pub const DEFAULT_VOLUME: u8 = 80;
 const CHOICES_USAGE: &str = "scene choices suggested [<label>[=<explanation>] ...] | group <name> [<label> ...] | unavailable [<label>=<reason> ...] | clear";
 const FIXTURE_USAGE: &str =
     "fixture show <name> | fixture write <name> <file> | fixture remove <name>";
@@ -55,8 +62,18 @@ pub enum Command {
     Playground,
     /// Change what the playground shows, in order.
     PlaygroundSet(Vec<ControlsChange>),
-    /// One live change to the caption, the party or the phone's choices.
+    /// One live change to the caption, the party, the phone's choices, pictures or sound.
     Scene(SceneChange),
+    /// List the media library.
+    Media,
+    /// Add a local file to the media library, under its own name or `name`.
+    MediaAdd {
+        path: PathBuf,
+        name: Option<String>,
+    },
+    MediaRemove(String),
+    /// What each open page says it is showing and playing.
+    Clients,
     /// The names of the fixture files.
     Fixtures,
     FixtureShow(String),
@@ -148,6 +165,11 @@ pub fn usage_text() -> String {
          \n  reload\n      re-read the kind files without a restart\n\
          \n  {PLAYGROUND_USAGE}\n      show or change what the playground page shows; keys: {PLAYGROUND_KEYS}\n\
          \n  {SCENE_USAGE}\n      change the playground's caption, party strip or phone choices live;\n      {PARTY_USAGE}\n      {CHOICES_USAGE}\n      a fixture is not changed; scene reset or another fixture goes back to the file\n\
+         \n  {IMAGE_USAGE}\n      put a picture from the media library on the shared screen (tv-backdrop behind the\n      figures, tv-card in the middle) or at the top of a phone's story\n\
+         \n  {MUSIC_USAGE}\n      play music until it is stopped or replaced\n\
+         \n  {SOUND_USAGE}\n      play a sound once\n\
+         \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove pictures and sounds\n\
+         \n  clients\n      what each open page says it is showing and playing, and whether its sound is\n      locked (a browser plays sound only after someone clicks the page)\n\
          \n  fixtures\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\
          \n  {SCRIPT_USAGE}\n      run a file of commands, one per line; a line may start with #\n\
@@ -462,6 +484,102 @@ fn choices(words: &[String]) -> Result<Command, CommandError> {
     }
 }
 
+fn target(value: &str) -> Result<Target, CommandError> {
+    Target::from_key(value).ok_or_else(|| CommandError::BadChoice {
+        key: "on".to_owned(),
+        text: value.to_owned(),
+        allowed: "both, tv or phone",
+    })
+}
+
+fn volume(value: &str) -> Result<u8, CommandError> {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|volume| *volume <= MAXIMUM_VOLUME)
+        .ok_or_else(|| CommandError::BadChoice {
+            key: "volume".to_owned(),
+            text: value.to_owned(),
+            allowed: "a whole number from 0 to 100",
+        })
+}
+
+fn image(words: &[String]) -> Result<Command, CommandError> {
+    let [slot, media, rest @ ..] = words else {
+        return Err(CommandError::Usage(IMAGE_USAGE));
+    };
+    let slot = ImageSlot::from_key(slot).ok_or_else(|| CommandError::BadChoice {
+        key: "the picture slot".to_owned(),
+        text: slot.clone(),
+        allowed: "tv-backdrop, tv-card or phone",
+    })?;
+    let mut caption = None;
+    for (_, value) in keyed(rest, "caption=TEXT", &["caption"])? {
+        caption = Some(value.to_owned());
+    }
+    Ok(Command::Scene(SceneChange::Image {
+        slot,
+        media: media.clone(),
+        caption,
+    }))
+}
+
+fn music(words: &[String]) -> Result<Command, CommandError> {
+    let [media, rest @ ..] = words else {
+        return Err(CommandError::Usage(MUSIC_USAGE));
+    };
+    let (mut on, mut level, mut looping) = (Target::Both, DEFAULT_VOLUME, true);
+    for (key, value) in keyed(rest, "on=, volume=, loop=", &["on", "volume", "loop"])? {
+        match key {
+            "on" => on = target(value)?,
+            "volume" => level = volume(value)?,
+            _ => looping = truth(key, value)?,
+        }
+    }
+    Ok(Command::Scene(SceneChange::Music {
+        media: media.clone(),
+        target: on,
+        volume: level,
+        looping,
+    }))
+}
+
+fn sound(words: &[String]) -> Result<Command, CommandError> {
+    let [media, rest @ ..] = words else {
+        return Err(CommandError::Usage(SOUND_USAGE));
+    };
+    let (mut on, mut level) = (Target::Both, DEFAULT_VOLUME);
+    for (key, value) in keyed(rest, "on=, volume=", &["on", "volume"])? {
+        match key {
+            "on" => on = target(value)?,
+            _ => level = volume(value)?,
+        }
+    }
+    Ok(Command::Scene(SceneChange::Sound {
+        media: media.clone(),
+        target: on,
+        volume: level,
+    }))
+}
+
+fn media(words: &[String]) -> Result<Command, CommandError> {
+    match words {
+        [] => Ok(Command::Media),
+        [verb, name] if verb == "remove" => Ok(Command::MediaRemove(name.clone())),
+        [verb, path, rest @ ..] if verb == "add" => {
+            let mut name = None;
+            for (_, value) in keyed(rest, "as=NAME", &["as"])? {
+                name = Some(value.to_owned());
+            }
+            Ok(Command::MediaAdd {
+                path: PathBuf::from(path),
+                name,
+            })
+        }
+        _ => Err(CommandError::Usage(MEDIA_USAGE)),
+    }
+}
+
 fn scene(words: &[String]) -> Result<Command, CommandError> {
     match words.split_first() {
         Some((verb, rest)) if verb == "caption" => caption(rest),
@@ -470,6 +588,22 @@ fn scene(words: &[String]) -> Result<Command, CommandError> {
         }
         Some((verb, rest)) if verb == "party" => party(rest),
         Some((verb, rest)) if verb == "choices" => choices(rest),
+        Some((verb, rest)) if verb == "image" => image(rest),
+        Some((verb, rest)) if verb == "image-clear" => match rest {
+            [slot] => ImageSlot::from_key(slot)
+                .map(|slot| Command::Scene(SceneChange::ClearImage { slot }))
+                .ok_or_else(|| CommandError::BadChoice {
+                    key: "the picture slot".to_owned(),
+                    text: slot.clone(),
+                    allowed: "tv-backdrop, tv-card or phone",
+                }),
+            _ => Err(CommandError::Usage(IMAGE_USAGE)),
+        },
+        Some((verb, rest)) if verb == "music" => music(rest),
+        Some((verb, rest)) if verb == "music-stop" && rest.is_empty() => {
+            Ok(Command::Scene(SceneChange::StopMusic {}))
+        }
+        Some((verb, rest)) if verb == "sound" => sound(rest),
         Some((verb, rest)) if verb == "reset" && rest.is_empty() => {
             Ok(Command::Scene(SceneChange::Reset {}))
         }
@@ -584,6 +718,8 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "reload" => Ok(Command::Reload),
         "playground" => playground(rest),
         "scene" => scene(rest),
+        "media" => media(rest),
+        "clients" if rest.is_empty() => Ok(Command::Clients),
         "fixtures" => {
             if rest.is_empty() {
                 Ok(Command::Fixtures)

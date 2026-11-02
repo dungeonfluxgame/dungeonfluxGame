@@ -3143,6 +3143,26 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   screen in about 50 ms including the CLI's process start; a 70-unit travel produced about 32 updates
   a second and about 120 rendered frames a second with 2.4 to 2.7 px steps; 200 travelling elements
   cost about 3 ms per frame on the host and the page kept up with 6,000 style updates a second.
+- **Pictures and sound on both screens, and a way for an agent to check.** A media library
+  (`assets/playground/media`; pictures png, jpg, webp and gif, sounds mp3, ogg, wav, m4a and opus; no SVG
+  because opened on its own it can run script from the host's origin) is filled with `media add FILE`,
+  listed with `media` and emptied with `media remove NAME`, and served by name with a content type, `nosniff`
+  and an entity tag, so an unchanged file costs a 304. `scene image tv-backdrop|tv-card|phone NAME`
+  puts a picture behind the figures, in the middle of the shared screen, or at the top of a phone's story;
+  `scene music NAME [on=both|tv|phone] [volume=N] [loop=BOOL]` plays until stopped or replaced;
+  `scene sound NAME` plays once. A fixture may name pictures too. A change that names a file the library
+  does not hold, or the wrong kind, is refused with the names that exist. A sound is a numbered cue: the
+  host keeps the newest sixteen, a page plays each id once, the first frame of a page only learns the
+  count (no replay of old sounds), and a reset or a new fixture keeps the count rising so a cue is never
+  mistaken for an old one.
+  An agent cannot see or hear a screen, so each page reports what it shows and plays
+  (`/dev/playground/report`, sent when it changes and every ten seconds) and `clients` prints it: whether
+  sound is unlocked, the newest cue taken in, the music playing, the pictures that loaded, and the errors.
+  A browser plays sound only after someone clicks the page; a refusal is reported as such, not hidden, and a
+  sound that started counts as proof that sound is allowed. A page not heard from for 45 seconds is
+  forgotten. A report is a reading, not a change: it is not an audit line and wakes no other page.
+  Measured: pictures loaded and were reported on both screens; sound cues were taken in and played with
+  no error; a missing or mistyped name was refused with the list of what exists.
 - **Where it goes next.** The same pattern carries the real engine: a `TableEffect` applied by one
   function and recorded as one event; machines and the DM pipeline added behind the same CLI verbs
   (`spawn machine`, `input <seat> <text>`, `viable <seat>`, `projection show <audience>`); the scene

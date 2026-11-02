@@ -25,6 +25,7 @@ fn scene() -> PhoneScene {
         groups: Vec::new(),
         unavailable: Vec::new(),
         note: None,
+        image: None,
     }
 }
 

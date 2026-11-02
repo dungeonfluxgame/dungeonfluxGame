@@ -12,7 +12,7 @@ use web_sys::{Document, Element};
 
 use crate::controls::Controls;
 use crate::copy::{caption_dwell_ms, status_blocks_input, status_copy, word_count};
-use crate::dom::{append, element, set_style, text_element};
+use crate::dom::{append, element, picture, set_style, text_element};
 use crate::fixture::{ElementShape, PartyMember, StageElement, Status, TvScene};
 use crate::layout::{hit_point_permille, stage_percent, stage_size_percent};
 use crate::style::css_color;
@@ -200,6 +200,9 @@ pub fn render(
     let frame = element(document, "section", "device device-tv")?;
     frame.set_attribute("aria-label", "The shared screen")?;
     let stage = element(document, "div", "tv-stage")?;
+    if let Some(backdrop) = &scene.backdrop {
+        append(&stage, &picture(document, "tv-backdrop", backdrop)?)?;
+    }
     append(
         &stage,
         &text_element(document, "div", "tv-place", &scene.place)?,
@@ -210,6 +213,9 @@ pub fn render(
     let layer = element(document, "div", FIGURE_LAYER_CLASS)?;
     sync_figures(document, &layer, elements)?;
     append(&stage, &layer)?;
+    if let Some(card) = &scene.card {
+        append(&stage, &picture(document, "tv-card", card)?)?;
+    }
     if let Some(banner) = status_banner(document, status)? {
         append(&stage, &banner)?;
     }

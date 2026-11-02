@@ -11,7 +11,7 @@ use web_sys::{Document, Element};
 use crate::choices::{ChoiceListView, build};
 use crate::controls::Controls;
 use crate::copy::{status_blocks_input, status_copy};
-use crate::dom::{append, element, text_element};
+use crate::dom::{append, element, picture, text_element};
 use crate::fixture::{Choice, PhoneScene, Status};
 
 fn choice_button(document: &Document, choice: &Choice) -> Result<Element, JsValue> {
@@ -142,6 +142,9 @@ pub fn render(
     }
 
     let story = element(document, "div", "phone-story")?;
+    if let Some(image) = &scene.image {
+        append(&story, &picture(document, "phone-picture", image)?)?;
+    }
     for line in &scene.narration {
         append(&story, &text_element(document, "p", "phone-line", line)?)?;
     }

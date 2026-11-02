@@ -80,12 +80,24 @@ pub struct PartyMember {
 }
 
 /// What the shared screen shows.
+/// A picture from the media library, by file name, with an optional line under it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageRef {
+    pub media: String,
+    pub caption: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TvScene {
     pub place: String,
     pub status: Status,
     pub caption: Option<Caption>,
+    /// A picture drawn behind the figures, filling the stage.
+    pub backdrop: Option<ImageRef>,
+    /// A picture shown in the middle of the screen, such as a handout or a portrait.
+    pub card: Option<ImageRef>,
     #[serde(default)]
     pub party: Vec<PartyMember>,
     pub elements: ElementSource,
@@ -136,6 +148,8 @@ pub struct PhoneScene {
     #[serde(default)]
     pub unavailable: Vec<UnavailableChoice>,
     pub note: Option<NoteCard>,
+    /// A picture shown at the top of the story, such as a handout or a portrait.
+    pub image: Option<ImageRef>,
 }
 
 /// One complete scenario: the shared screen and one phone, drawn together.

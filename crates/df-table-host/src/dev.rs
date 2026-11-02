@@ -5,17 +5,21 @@
 //! prints and never starts a server.
 
 use std::fmt;
+
+use base64::Engine;
 use std::path::{Path, PathBuf};
 
 use crate::client::{self, ClientError, Response};
 use crate::command::{self, Command, CommandError, usage_text};
 use crate::playground::fixture_file_name;
 use crate::report::{
-    describe_reply, format_canvas, format_events, format_kinds, format_playground,
+    describe_reply, format_canvas, format_clients, format_events, format_kinds, format_media,
+    format_playground,
 };
 use crate::view::CanvasView;
 use crate::wire::{
-    ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove, FixtureWrite, Reply, route,
+    ClientView, ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove, FixtureWrite,
+    MediaAdd, MediaRemove, Reply, route,
 };
 
 /// Most characters of an unexpected answer echoed in an error.
@@ -167,7 +171,46 @@ async fn show_playground(port: u16) -> Result<String, DevError> {
         .await
         .map_err(DevError::Client)?;
     let reply: ControlsReply = read_json(&response)?;
-    Ok(format_playground(&reply, &fetch_fixture_names(port).await?))
+    let mut text = format_playground(&reply, &fetch_fixture_names(port).await?);
+    text.push('\n');
+    text.push_str(&format_clients(&fetch_clients(port).await?));
+    Ok(text)
+}
+
+async fn fetch_clients(port: u16) -> Result<Vec<ClientView>, DevError> {
+    let response = client::get(port, route::PLAYGROUND_CLIENTS)
+        .await
+        .map_err(DevError::Client)?;
+    read_json(&response)
+}
+
+async fn fetch_media(port: u16) -> Result<Vec<df_playground::media::MediaEntry>, DevError> {
+    let response = client::get(port, route::PLAYGROUND_MEDIA_LIST)
+        .await
+        .map_err(DevError::Client)?;
+    read_json(&response)
+}
+
+/// Reads a local file's bytes, refusing one over the library's limit without reading it.
+async fn read_binary_file(path: &Path) -> Result<Vec<u8>, DevError> {
+    let owned = path.to_path_buf();
+    let unreadable = |message: String| DevError::UnreadableFile {
+        path: path.to_path_buf(),
+        message,
+    };
+    tokio::task::spawn_blocking(move || {
+        let size = std::fs::metadata(&owned)?.len();
+        if size > crate::media_library::MAXIMUM_MEDIA_BYTES as u64 {
+            return Err(std::io::Error::other(format!(
+                "the file is larger than {} bytes",
+                crate::media_library::MAXIMUM_MEDIA_BYTES
+            )));
+        }
+        std::fs::read(&owned)
+    })
+    .await
+    .map_err(|error| unreadable(error.to_string()))?
+    .map_err(|error| unreadable(error.to_string()))
 }
 
 async fn show_fixture(port: u16, name: &str) -> Result<String, DevError> {
@@ -234,6 +277,27 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             )
             .await
         }
+        Command::Media => Ok(format_media(&fetch_media(port).await?)),
+        Command::MediaAdd { path, name } => {
+            let name = match name {
+                Some(name) => name,
+                None => path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .ok_or_else(|| {
+                        DevError::Rejected(format!("{} has no file name", path.display()))
+                    })?,
+            };
+            let bytes = read_binary_file(&path).await?;
+            let data_base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+            let body = to_body(&MediaAdd { name, data_base64 })?;
+            send_each(port, route::DEV_MEDIA_ADD, "media", &[body], read_reply).await
+        }
+        Command::MediaRemove(name) => {
+            let body = to_body(&MediaRemove { name })?;
+            send_each(port, route::DEV_MEDIA_REMOVE, "media", &[body], read_reply).await
+        }
+        Command::Clients => Ok(format_clients(&fetch_clients(port).await?)),
         Command::Fixtures => Ok(fetch_fixture_names(port).await?.join(
             "
 ",

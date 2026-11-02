@@ -6,11 +6,12 @@
 //! canvas and never interprets a file. Names that reach the disk are checked first, and every
 //! answer says not to cache it.
 
+use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::UNIX_EPOCH;
+use std::time::{Instant, UNIX_EPOCH};
 
 use axum::body::Bytes;
 use axum::extract::{Path as UrlPath, State};
@@ -20,16 +21,18 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use df_playground::controls::{Controls, ControlsChange};
 use df_playground::fixture::Fixture;
+use df_playground::media::{ClientReport, ClientReportPost};
 use df_playground::scene::{SceneChange, SceneOverlay};
 use df_table::event::RejectionCause;
 
+use crate::media_library::{media_directory, media_entries, media_problem};
 use crate::state::AppState;
-use crate::wire::{ControlsReply, FixtureRemove, FixtureWrite, Reply, route};
+use crate::wire::{ClientView, ControlsReply, FixtureRemove, FixtureWrite, Reply, route};
 
 /// Largest file served, in bytes. The compiled package is the biggest file.
 pub const MAXIMUM_FILE_BYTES: u64 = 32 * 1024 * 1024;
 /// Longest file name accepted from a request.
-const MAXIMUM_NAME_LENGTH: usize = 64;
+const MAXIMUM_NAME_LENGTH: usize = df_playground::media::MAXIMUM_NAME_LENGTH;
 const INDEX_FILE: &str = "index.html";
 const THEME_FILE: &str = "theme.css";
 const FIXTURE_DIRECTORY: &str = "fixtures";
@@ -64,7 +67,17 @@ impl PlaygroundFiles {
 pub struct PlaygroundState {
     files: PlaygroundFiles,
     shown: Mutex<ControlsReply>,
+    /// What each open page last said it was showing and playing, by the page's own name.
+    clients: Mutex<BTreeMap<String, (Instant, ClientReport)>>,
 }
+
+/// Most pages remembered at once; a new page pushes out the one heard from longest ago.
+pub const MAXIMUM_CLIENTS: usize = 8;
+/// A page not heard from for this long is forgotten: it sends a sign of life every ten seconds,
+/// so silence means it was closed.
+pub const FORGET_CLIENT_AFTER: std::time::Duration = std::time::Duration::from_secs(45);
+/// Longest name a page may give itself.
+const MAXIMUM_CLIENT_NAME: usize = 40;
 
 impl PlaygroundState {
     pub fn new(files: PlaygroundFiles) -> Self {
@@ -75,7 +88,49 @@ impl PlaygroundState {
                 controls: Controls::default(),
                 scene: SceneOverlay::default(),
             }),
+            clients: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn lock_clients(&self) -> MutexGuard<'_, BTreeMap<String, (Instant, ClientReport)>> {
+        self.clients.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Remembers what a page said. The report is bounded, and a ninth page replaces the page
+    /// heard from longest ago.
+    pub fn record_client(&self, client: String, report: ClientReport) {
+        let mut clients = self.lock_clients();
+        if !clients.contains_key(&client)
+            && clients.len() >= MAXIMUM_CLIENTS
+            && let Some(oldest) = clients
+                .iter()
+                .min_by_key(|(_, (heard, _))| *heard)
+                .map(|(name, _)| name.clone())
+        {
+            clients.remove(&oldest);
+        }
+        clients.insert(client, (Instant::now(), report.bounded()));
+    }
+
+    /// The pages heard from, by name, with how long ago each last spoke.
+    pub fn clients(&self) -> Vec<ClientView> {
+        self.clients_at(Instant::now())
+    }
+
+    /// `clients` as of `now`, which tests move forward. A page silent for `FORGET_CLIENT_AFTER` is
+    /// dropped from the answer and from memory.
+    pub fn clients_at(&self, now: Instant) -> Vec<ClientView> {
+        let mut clients = self.lock_clients();
+        clients.retain(|_, (heard, _)| now.saturating_duration_since(*heard) < FORGET_CLIENT_AFTER);
+        clients
+            .iter()
+            .map(|(client, (heard, report))| ClientView {
+                client: client.clone(),
+                age_ms: u64::try_from(now.saturating_duration_since(*heard).as_millis())
+                    .unwrap_or(u64::MAX),
+                report: report.clone(),
+            })
+            .collect()
     }
 
     pub fn files(&self) -> &PlaygroundFiles {
@@ -129,7 +184,7 @@ impl PlaygroundState {
             .is_some_and(|chosen| names.contains(chosen));
         if !present && shown.controls.fixture != names.first().cloned() {
             shown.controls.fixture = names.first().cloned();
-            shown.scene = SceneOverlay::default();
+            shown.scene = shown.scene.cleared();
             shown.revision += 1;
         }
         shown.clone()
@@ -159,7 +214,7 @@ impl PlaygroundState {
         if next != shown.controls {
             // Another scenario starts from its own file, without the last one's live changes.
             if next.fixture != shown.controls.fixture {
-                shown.scene = SceneOverlay::default();
+                shown.scene = shown.scene.cleared();
             }
             shown.controls = next;
             shown.revision += 1;
@@ -200,24 +255,14 @@ impl FileProblem {
     }
 }
 
-fn problem_from(error: &std::io::Error) -> FileProblem {
+pub(crate) fn problem_from(error: &std::io::Error) -> FileProblem {
     match error.kind() {
         std::io::ErrorKind::NotFound => FileProblem::NotFound,
         _ => FileProblem::Unreadable(error.to_string()),
     }
 }
 
-/// True for a name that cannot leave its directory: letters, digits, `_`, `-` and `.`, no leading
-/// dot and no `..`.
-pub fn is_plain_file_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= MAXIMUM_NAME_LENGTH
-        && !name.starts_with('.')
-        && !name.contains("..")
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "_-.".contains(character))
-}
+pub use df_playground::media::is_plain_file_name;
 
 fn extension_of(name: &str) -> Option<&str> {
     name.rsplit_once('.').map(|(_, extension)| extension)
@@ -418,7 +463,7 @@ async fn revision_text(State(state): State<Arc<AppState>>) -> Response {
         .await
 }
 
-fn refused(status: StatusCode, message: String) -> Response {
+pub(crate) fn refused(status: StatusCode, message: String) -> Response {
     (
         status,
         Json(Reply::Rejected {
@@ -448,7 +493,7 @@ async fn controls_json(State(state): State<Arc<AppState>>) -> Response {
 }
 
 /// A line for the audit log: the area, the verb and `key=value` pairs, like the canvas's lines.
-fn playground_line(verb: &str, pairs: &[(&str, String)]) -> String {
+pub(crate) fn playground_line(verb: &str, pairs: &[(&str, String)]) -> String {
     let mut line = format!("PLAYGROUND {verb}");
     for (key, value) in pairs {
         line.push_str(&format!(" {key}={value}"));
@@ -456,7 +501,7 @@ fn playground_line(verb: &str, pairs: &[(&str, String)]) -> String {
     line
 }
 
-fn reject_malformed(state: &AppState, error: &serde_json::Error) -> Response {
+pub(crate) fn reject_malformed(state: &AppState, error: &serde_json::Error) -> Response {
     state.record_line(playground_line(
         "reject",
         &[("cause", RejectionCause::MalformedRequest.key().to_owned())],
@@ -530,6 +575,22 @@ async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
         },
         Err(problem) => return refused(problem.status(), problem.message()),
     };
+    let media_directory = media_directory(state.playground().files());
+    let library = tokio::task::spawn_blocking(move || media_entries(&media_directory))
+        .await
+        .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
+    let library = match library {
+        Ok(library) => library,
+        Err(problem) => return refused(problem.status(), problem.message()),
+    };
+    if let Some(message) = media_problem(&change, &library) {
+        state.record_line(playground_line(
+            "reject",
+            &[("cause", RejectionCause::InvalidValue.key().to_owned())],
+        ));
+        state.echo_new_lines();
+        return refused(StatusCode::BAD_REQUEST, message);
+    }
     let verb = scene_change_name(&change);
     let response = match state.playground().change_scene(change, &base) {
         Ok(reply) => {
@@ -692,12 +753,41 @@ async fn remove_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Resp
     response
 }
 
-fn done(state: &AppState) -> Response {
+pub(crate) fn done(state: &AppState) -> Response {
     Json(Reply::Done {
         revision: state.playground().revision(),
         notices: Vec::new(),
     })
     .into_response()
+}
+
+async fn clients_json(State(state): State<Arc<AppState>>) -> Response {
+    Json(state.playground().clients()).into_response()
+}
+
+/// A page says what it is showing and playing. Nothing is recorded in the audit log and no other
+/// page is woken: a report is a reading, not a change.
+async fn receive_report(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let post: ClientReportPost = match serde_json::from_slice(&body) {
+        Ok(post) => post,
+        Err(error) => return reject_malformed(&state, &error),
+    };
+    let name_ok = !post.client.is_empty()
+        && post.client.len() <= MAXIMUM_CLIENT_NAME
+        && post
+            .client
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_-".contains(character));
+    if !name_ok {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "a client name is letters, digits, '_' and '-', up to {MAXIMUM_CLIENT_NAME} characters"
+            ),
+        );
+    }
+    state.playground().record_client(post.client, post.report);
+    done(&state)
 }
 
 /// The playground's routes: its files, what it is showing, and the fixture commands. The page
@@ -714,6 +804,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(route::PLAYGROUND_CONTROLS, get(controls_json))
         .route(route::DEV_PLAYGROUND_CONTROLS, post(change_controls))
         .route(route::DEV_PLAYGROUND_SCENE, post(change_scene))
+        .route(route::PLAYGROUND_CLIENTS, get(clients_json))
+        .route(route::DEV_CLIENT_REPORT, post(receive_report))
         .route(route::DEV_FIXTURE_WRITE, post(write_fixture))
         .route(route::DEV_FIXTURE_REMOVE, post(remove_fixture))
         .with_state(state)

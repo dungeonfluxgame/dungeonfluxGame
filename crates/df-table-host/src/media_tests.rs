@@ -1,0 +1,617 @@
+//! Pictures and sound: the library, the scene commands and what a page reports back.
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use df_playground::media::{AudioState, ClientReport};
+use df_playground::scene::{ImageSlot, SceneChange, Target};
+use serde_json::json;
+use tempfile::TempDir;
+
+use crate::client::{get, post_json};
+use crate::command::{Command, CommandError, DEFAULT_VOLUME, parse, split_words, usage_text};
+use crate::dev::{DevError, run_dev};
+use crate::media_library::{MAXIMUM_MEDIA_FILES, media_entries, media_problem};
+use crate::test_support::{Running, STARTER_FILES, raw_exchange, start};
+use crate::wire::{ClientView, ControlsReply};
+
+const PNG: &[u8] = b"not really a picture";
+const WAV: &[u8] = b"RIFFnot really a sound";
+
+fn words(line: &str) -> Vec<String> {
+    split_words(line).expect("the line splits")
+}
+
+fn scene(line: &str) -> Result<SceneChange, CommandError> {
+    match parse(&words(line))? {
+        Command::Scene(change) => Ok(change),
+        other => panic!("expected a scene change, got {other:?}"),
+    }
+}
+
+async fn run(running: &Running, line: &str) -> Result<String, DevError> {
+    run_dev(running.port, &words(line)).await
+}
+
+async fn add(running: &Running, name: &str, bytes: &[u8]) -> (u16, String) {
+    let body = json!({"name": name, "data_base64": STANDARD.encode(bytes)}).to_string();
+    let response = post_json(running.port, "/dev/playground/media", &body)
+        .await
+        .expect("answers");
+    (response.status, response.body)
+}
+
+async fn with_library(running: &Running) {
+    add(running, "tavern.png", PNG).await;
+    add(running, "bell.wav", WAV).await;
+    running.write_asset(
+        "fixtures/one.json",
+        r#"{"name":"One","tv":{"place":"Here","status":{"kind":"ok"},"elements":[]},"phone":{"hero":"Pip","status":{"kind":"ok"}}}"#,
+    );
+    get(running.port, "/playground/controls.json")
+        .await
+        .expect("answers");
+}
+
+async fn shown(running: &Running) -> ControlsReply {
+    let response = get(running.port, "/playground/controls.json")
+        .await
+        .expect("answers");
+    serde_json::from_str(&response.body).expect("controls")
+}
+
+// ---- grammar
+
+#[test]
+fn an_image_names_a_slot_a_file_and_an_optional_caption() {
+    assert_eq!(
+        scene(r#"scene image tv-backdrop tavern.png caption="The Flagon""#),
+        Ok(SceneChange::Image {
+            slot: ImageSlot::TvBackdrop,
+            media: "tavern.png".into(),
+            caption: Some("The Flagon".into())
+        })
+    );
+    assert_eq!(
+        scene("scene image phone map.png"),
+        Ok(SceneChange::Image {
+            slot: ImageSlot::PhoneImage,
+            media: "map.png".into(),
+            caption: None
+        })
+    );
+    assert_eq!(
+        scene("scene image-clear tv-card"),
+        Ok(SceneChange::ClearImage {
+            slot: ImageSlot::TvCard
+        })
+    );
+    assert!(matches!(
+        scene("scene image wall a.png"),
+        Err(CommandError::BadChoice { .. })
+    ));
+    assert!(matches!(
+        scene("scene image tv-card"),
+        Err(CommandError::Usage(_))
+    ));
+    assert!(matches!(
+        scene("scene image-clear"),
+        Err(CommandError::Usage(_))
+    ));
+}
+
+#[test]
+fn music_and_sound_take_a_screen_a_volume_and_music_loops_unless_told_not_to() {
+    assert_eq!(
+        scene("scene music ambience.wav"),
+        Ok(SceneChange::Music {
+            media: "ambience.wav".into(),
+            target: Target::Both,
+            volume: DEFAULT_VOLUME,
+            looping: true
+        })
+    );
+    assert_eq!(
+        scene("scene music a.wav on=tv volume=30 loop=false"),
+        Ok(SceneChange::Music {
+            media: "a.wav".into(),
+            target: Target::Tv,
+            volume: 30,
+            looping: false
+        })
+    );
+    assert_eq!(scene("scene music-stop"), Ok(SceneChange::StopMusic {}));
+    assert_eq!(
+        scene("scene sound bell.wav on=phone volume=100"),
+        Ok(SceneChange::Sound {
+            media: "bell.wav".into(),
+            target: Target::Phone,
+            volume: 100
+        })
+    );
+}
+
+#[test]
+fn a_screen_or_volume_that_is_not_allowed_is_refused_by_name() {
+    for line in [
+        "scene sound a.wav on=watch",
+        "scene sound a.wav volume=101",
+        "scene sound a.wav volume=-1",
+        "scene sound a.wav volume=loud",
+        "scene music a.wav loop=maybe",
+    ] {
+        assert!(
+            matches!(scene(line), Err(CommandError::BadChoice { .. })),
+            "{line}"
+        );
+    }
+    assert!(matches!(scene("scene sound"), Err(CommandError::Usage(_))));
+    assert_eq!(
+        scene("scene sound a.wav volume=1 volume=2"),
+        Err(CommandError::DuplicateKey("volume".into()))
+    );
+}
+
+#[test]
+fn media_and_clients_commands_parse_and_the_help_lists_every_new_verb() {
+    assert_eq!(parse(&words("media")), Ok(Command::Media));
+    assert_eq!(
+        parse(&words("media add pics/tavern.png as=inn.png")),
+        Ok(Command::MediaAdd {
+            path: "pics/tavern.png".into(),
+            name: Some("inn.png".into())
+        })
+    );
+    assert_eq!(
+        parse(&words("media add bell.wav")),
+        Ok(Command::MediaAdd {
+            path: "bell.wav".into(),
+            name: None
+        })
+    );
+    assert_eq!(
+        parse(&words("media remove a.png")),
+        Ok(Command::MediaRemove("a.png".into()))
+    );
+    assert_eq!(parse(&words("clients")), Ok(Command::Clients));
+    assert!(matches!(
+        parse(&words("media add")),
+        Err(CommandError::Usage(_))
+    ));
+    assert!(matches!(
+        parse(&words("clients now")),
+        Err(CommandError::Unknown(_))
+    ));
+    let help = usage_text();
+    for text in [
+        "scene image",
+        "scene music",
+        "scene sound",
+        "media add",
+        "clients",
+    ] {
+        assert!(help.contains(text), "{text}");
+    }
+}
+
+// ---- the library
+
+#[tokio::test]
+async fn a_file_is_added_listed_served_with_its_type_and_removed() {
+    let running = start(&STARTER_FILES).await;
+    assert_eq!(add(&running, "tavern.png", PNG).await.0, 200);
+    let listed = run(&running, "media").await.expect("lists");
+    assert!(
+        listed.contains("tavern.png") && listed.contains("image"),
+        "{listed}"
+    );
+
+    let raw = raw_exchange(
+        running.port,
+        "GET /playground/media/tavern.png HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let head = raw.to_ascii_lowercase();
+    assert!(head.starts_with("http/1.1 200"), "{head}");
+    assert!(
+        head.contains("content-type: image/png")
+            && head.contains("x-content-type-options: nosniff")
+    );
+    assert!(head.contains("cache-control: no-cache") && head.contains("etag:"));
+
+    let removed = run(&running, "media remove tavern.png")
+        .await
+        .expect("removes");
+    assert!(removed.starts_with("ok"));
+    assert_eq!(
+        run(&running, "media").await.expect("lists"),
+        "no media (add one with: media add FILE)"
+    );
+}
+
+#[tokio::test]
+async fn a_file_that_has_not_changed_is_answered_with_a_short_not_modified() {
+    let running = start(&STARTER_FILES).await;
+    add(&running, "bell.wav", WAV).await;
+    let first = raw_exchange(
+        running.port,
+        "GET /playground/media/bell.wav HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let tag = first
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("etag: ")
+                .or_else(|| line.strip_prefix("ETag: "))
+        })
+        .expect("has an etag")
+        .trim()
+        .to_owned();
+    let second = raw_exchange(
+        running.port,
+        &format!("GET /playground/media/bell.wav HTTP/1.1\r\nHost: 127.0.0.1\r\nIf-None-Match: {tag}\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(second.starts_with("HTTP/1.1 304"), "{second}");
+    add(&running, "bell.wav", b"RIFFa different and longer sound").await;
+    let third = raw_exchange(
+        running.port,
+        &format!("GET /playground/media/bell.wav HTTP/1.1\r\nHost: 127.0.0.1\r\nIf-None-Match: {tag}\r\nConnection: close\r\n\r\n"),
+    )
+    .await;
+    assert!(
+        third.starts_with("HTTP/1.1 200"),
+        "a replaced file is sent again"
+    );
+}
+
+#[tokio::test]
+async fn a_name_that_is_not_a_picture_or_sound_is_refused_and_nothing_is_written() {
+    let running = start(&STARTER_FILES).await;
+    for name in [
+        "logo.svg",
+        "run.exe",
+        "page.html",
+        "../escape.png",
+        "a/b.png",
+        "noextension",
+        "",
+    ] {
+        let (status, _) = add(&running, name, PNG).await;
+        assert_eq!(status, 400, "{name:?}");
+    }
+    assert_eq!(
+        run(&running, "media").await.expect("lists"),
+        "no media (add one with: media add FILE)"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_file_and_data_that_is_not_base64_are_refused() {
+    let running = start(&STARTER_FILES).await;
+    assert_eq!(add(&running, "a.png", b"").await.0, 400);
+    let body = json!({"name": "a.png", "data_base64": "not base64 !!"}).to_string();
+    let response = post_json(running.port, "/dev/playground/media", &body)
+        .await
+        .expect("answers");
+    assert_eq!(response.status, 400);
+    assert!(response.body.contains("base64"));
+}
+
+#[tokio::test]
+async fn the_library_has_a_file_count_limit_but_a_replacement_is_always_allowed() {
+    let running = start(&STARTER_FILES).await;
+    let directory = running.playground_path("assets/media");
+    std::fs::create_dir_all(&directory).expect("makes the directory");
+    for index in 0..MAXIMUM_MEDIA_FILES {
+        std::fs::write(directory.join(format!("f{index}.png")), PNG).expect("writes");
+    }
+    assert_eq!(add(&running, "one-too-many.png", PNG).await.0, 400);
+    assert_eq!(
+        add(&running, "f0.png", b"a replacement picture").await.0,
+        200
+    );
+    assert_eq!(
+        media_entries(&directory).expect("lists").len(),
+        MAXIMUM_MEDIA_FILES
+    );
+}
+
+#[tokio::test]
+async fn removing_a_file_that_is_not_there_says_so() {
+    let running = start(&STARTER_FILES).await;
+    let error = run(&running, "media remove ghost.png")
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&error, DevError::Rejected(text) if text.contains("ghost.png")),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_file_is_added_from_the_command_line_under_its_own_name_or_another() {
+    let running = start(&STARTER_FILES).await;
+    let directory = TempDir::new().expect("makes a directory");
+    let path = directory.path().join("tavern.png");
+    std::fs::write(&path, PNG).expect("writes");
+    let words = vec![
+        "media".to_owned(),
+        "add".to_owned(),
+        path.to_string_lossy().into_owned(),
+    ];
+    run_dev(running.port, &words).await.expect("adds");
+    let words = vec![
+        "media".to_owned(),
+        "add".to_owned(),
+        path.to_string_lossy().into_owned(),
+        "as=inn.png".to_owned(),
+    ];
+    run_dev(running.port, &words).await.expect("adds");
+    let listed = run(&running, "media").await.expect("lists");
+    assert!(
+        listed.contains("tavern.png") && listed.contains("inn.png"),
+        "{listed}"
+    );
+    let missing = vec![
+        "media".to_owned(),
+        "add".to_owned(),
+        "no/such.png".to_owned(),
+    ];
+    assert!(matches!(
+        run_dev(running.port, &missing).await,
+        Err(DevError::UnreadableFile { .. })
+    ));
+}
+
+// ---- the scene refers to the library
+
+#[tokio::test]
+async fn a_picture_and_a_sound_are_shown_and_cued_from_the_library() {
+    let running = start(&STARTER_FILES).await;
+    with_library(&running).await;
+    run(&running, "scene image tv-backdrop tavern.png caption=Inn")
+        .await
+        .expect("shows");
+    run(&running, "scene music bell.wav volume=20")
+        .await
+        .expect("plays");
+    run(&running, "scene sound bell.wav on=tv")
+        .await
+        .expect("cues");
+    let reply = shown(&running).await;
+    assert!(reply.scene.backdrop.is_some() && reply.scene.music.is_some());
+    assert_eq!(reply.scene.cue_count, 1);
+    assert_eq!(reply.scene.cues[0].media, "bell.wav");
+    assert!(
+        run(&running, "playground")
+            .await
+            .expect("shows")
+            .contains("scene: changed:")
+    );
+}
+
+#[tokio::test]
+async fn a_media_name_that_is_missing_or_the_wrong_kind_is_refused_and_says_what_exists() {
+    let running = start(&STARTER_FILES).await;
+    with_library(&running).await;
+    let missing = run(&running, "scene image tv-card ghost.png")
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&missing, DevError::Rejected(text) if text.contains("there is no picture 'ghost.png'") && text.contains("tavern.png")),
+        "{missing}"
+    );
+    let wrong = run(&running, "scene image tv-card bell.wav")
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&wrong, DevError::Rejected(text) if text.contains("is a sound, not a picture")),
+        "{wrong}"
+    );
+    let wrong = run(&running, "scene sound tavern.png")
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&wrong, DevError::Rejected(text) if text.contains("is a picture, not a sound")),
+        "{wrong}"
+    );
+    assert!(shown(&running).await.scene.is_empty());
+}
+
+#[tokio::test]
+async fn with_an_empty_library_the_refusal_says_how_to_add_one() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/one.json", r#"{"name":"One","tv":{"place":"Here","status":{"kind":"ok"},"elements":[]},"phone":{"hero":"Pip","status":{"kind":"ok"}}}"#);
+    get(running.port, "/playground/controls.json")
+        .await
+        .expect("answers");
+    let error = run(&running, "scene sound bell.wav")
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&error, DevError::Rejected(text) if text.contains("media add FILE")),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_library_check_is_only_for_changes_that_name_media() {
+    assert_eq!(media_problem(&SceneChange::StopMusic {}, &[]), None);
+    assert_eq!(media_problem(&SceneChange::Reset {}, &[]), None);
+    assert_eq!(
+        media_problem(
+            &SceneChange::ClearImage {
+                slot: ImageSlot::TvCard
+            },
+            &[]
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn choosing_another_fixture_drops_pictures_but_cues_keep_counting() {
+    let running = start(&STARTER_FILES).await;
+    with_library(&running).await;
+    running.write_asset("fixtures/two.json", r#"{"name":"Two","tv":{"place":"There","status":{"kind":"ok"},"elements":[]},"phone":{"hero":"Pip","status":{"kind":"ok"}}}"#);
+    run(&running, "scene image tv-card tavern.png")
+        .await
+        .expect("shows");
+    run(&running, "scene sound bell.wav").await.expect("cues");
+    run(&running, "playground set fixture=two.json")
+        .await
+        .expect("switches");
+    let reply = shown(&running).await;
+    assert!(reply.scene.card.is_none());
+    assert_eq!(
+        reply.scene.cue_count, 1,
+        "a page that played cue 1 must not replay it"
+    );
+    run(&running, "scene sound bell.wav").await.expect("cues");
+    assert_eq!(shown(&running).await.scene.cues[0].id, 2);
+}
+
+// ---- what a page reports
+
+fn report(audio: AudioState, last_cue: u64) -> ClientReport {
+    ClientReport {
+        audio,
+        last_cue,
+        music: Some("bell.wav".into()),
+        images_shown: vec!["tavern.png".into()],
+        errors: vec!["could not load ghost.png".into()],
+    }
+}
+
+async fn send_report(running: &Running, client: &str, report: &ClientReport) -> u16 {
+    let body = json!({"client": client, "report": report}).to_string();
+    post_json(running.port, "/dev/playground/report", &body)
+        .await
+        .expect("answers")
+        .status
+}
+
+#[tokio::test]
+async fn a_pages_report_is_kept_and_shown_by_clients_and_playground() {
+    let running = start(&STARTER_FILES).await;
+    assert!(
+        run(&running, "clients")
+            .await
+            .expect("reads")
+            .starts_with("clients: none")
+    );
+    assert_eq!(
+        send_report(&running, "page-1", &report(AudioState::Locked, 2)).await,
+        200
+    );
+    let text = run(&running, "clients").await.expect("reads");
+    assert!(
+        text.contains("client page-1") && text.contains("audio LOCKED"),
+        "{text}"
+    );
+    assert!(text.contains("last sound cue 2") && text.contains("music bell.wav"));
+    assert!(
+        text.contains("pictures shown tavern.png")
+            && text.contains("error: could not load ghost.png")
+    );
+    assert_eq!(
+        send_report(&running, "page-1", &report(AudioState::Unlocked, 3)).await,
+        200
+    );
+    let text = run(&running, "clients").await.expect("reads");
+    assert!(text.contains("audio unlocked") && text.contains("last sound cue 3"));
+    assert_eq!(
+        text.matches("client page-1").count(),
+        1,
+        "the same page is one entry"
+    );
+    assert!(
+        run(&running, "playground")
+            .await
+            .expect("shows")
+            .contains("client page-1")
+    );
+}
+
+#[tokio::test]
+async fn a_report_does_not_wake_pages_and_is_not_an_audit_line() {
+    let running = start(&STARTER_FILES).await;
+    let before = running.state.change_count();
+    send_report(&running, "page-1", &report(AudioState::Locked, 0)).await;
+    assert_eq!(running.state.change_count(), before);
+    let events = get(running.port, "/events.json")
+        .await
+        .expect("answers")
+        .body;
+    assert!(!events.contains("page-1"));
+}
+
+#[tokio::test]
+async fn a_report_with_a_bad_client_name_or_body_is_refused() {
+    let running = start(&STARTER_FILES).await;
+    for name in ["", "has space", "a/b", &"x".repeat(41)] {
+        assert_eq!(
+            send_report(&running, name, &report(AudioState::Locked, 0)).await,
+            400,
+            "{name:?}"
+        );
+    }
+    let response = post_json(running.port, "/dev/playground/report", "nope")
+        .await
+        .expect("answers");
+    assert_eq!(response.status, 400);
+}
+
+#[tokio::test]
+async fn only_the_newest_few_pages_are_remembered() {
+    let running = start(&STARTER_FILES).await;
+    for index in 0..10 {
+        send_report(
+            &running,
+            &format!("page-{index}"),
+            &report(AudioState::Locked, 0),
+        )
+        .await;
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    let body = get(running.port, "/playground/clients.json")
+        .await
+        .expect("answers")
+        .body;
+    let clients: Vec<ClientView> = serde_json::from_str(&body).expect("clients");
+    assert_eq!(clients.len(), crate::playground::MAXIMUM_CLIENTS);
+    assert!(
+        clients
+            .iter()
+            .all(|client| client.client != "page-0" && client.client != "page-1")
+    );
+}
+
+#[tokio::test]
+async fn a_report_keeps_only_its_newest_errors() {
+    let running = start(&STARTER_FILES).await;
+    let mut noisy = report(AudioState::Locked, 0);
+    noisy.errors = (0..20).map(|index| format!("error {index}")).collect();
+    send_report(&running, "page-1", &noisy).await;
+    let body = get(running.port, "/playground/clients.json")
+        .await
+        .expect("answers")
+        .body;
+    let clients: Vec<ClientView> = serde_json::from_str(&body).expect("clients");
+    assert_eq!(clients[0].report.errors.len(), 8);
+    assert_eq!(clients[0].report.errors[7], "error 19");
+}
+
+#[tokio::test]
+async fn a_page_that_has_gone_quiet_is_forgotten() {
+    let running = start(&STARTER_FILES).await;
+    send_report(&running, "page-1", &report(AudioState::Locked, 0)).await;
+    let soon = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    assert_eq!(running.state.playground().clients_at(soon).len(), 1);
+    let later = std::time::Instant::now() + crate::playground::FORGET_CLIENT_AFTER;
+    assert!(running.state.playground().clients_at(later).is_empty());
+    assert!(
+        running.state.playground().clients().is_empty(),
+        "and it is gone from memory"
+    );
+}

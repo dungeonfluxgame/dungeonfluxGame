@@ -24,6 +24,7 @@ pub mod dev;
 pub mod event_log;
 pub mod guard;
 pub mod kind_files;
+pub mod media_library;
 pub mod options;
 pub mod playground;
 pub mod render;
@@ -51,6 +52,8 @@ mod event_log_tests;
 mod guard_tests;
 #[cfg(test)]
 mod kind_files_tests;
+#[cfg(test)]
+mod media_tests;
 #[cfg(test)]
 mod motion_command_tests;
 #[cfg(test)]

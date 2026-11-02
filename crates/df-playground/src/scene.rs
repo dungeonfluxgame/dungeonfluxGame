@@ -1,5 +1,5 @@
-//! Live changes to the scene a fixture describes: the caption, the party strip and the phone's
-//! choices, made from the dev CLI while the page is open.
+//! Live changes to the scene a fixture describes: the caption, the party strip, the phone's
+//! choices, pictures and sound, made from the dev CLI while the page is open.
 //!
 //! A fixture is a file; a change here is not saved to it. The changes are kept as an overlay that
 //! is drawn on top of the fixture, so `scene reset` (or choosing another fixture) returns to the
@@ -11,7 +11,10 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::fixture::{Caption, Choice, ChoiceGroup, Fixture, PartyMember, UnavailableChoice};
+use crate::controls::Device;
+use crate::fixture::{
+    Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, UnavailableChoice,
+};
 
 /// Most characters in a caption line.
 pub const MAXIMUM_CAPTION_CHARACTERS: usize = 600;
@@ -22,12 +25,91 @@ pub const MAXIMUM_PARTY_MEMBERS: usize = 8;
 /// Most choices in one list (suggested, a group or unavailable).
 pub const MAXIMUM_CHOICES_PER_LIST: usize = 24;
 
-/// What the overlay does to the caption.
+/// Most sound cues kept for pages to collect; a page that was away longer misses the older ones.
+pub const MAXIMUM_CUES_KEPT: usize = 16;
+/// Loudest volume, in percent.
+pub const MAXIMUM_VOLUME: u8 = 100;
+
+/// What the overlay does to one part of the scene: put something there, or take what is there away.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CaptionOverride {
-    Set(Caption),
+pub enum Override<T> {
+    Set(T),
     Clear,
+}
+
+/// What the overlay does to the caption.
+pub type CaptionOverride = Override<Caption>;
+
+/// Which screens a sound is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Target {
+    Both,
+    Tv,
+    Phone,
+}
+
+impl Target {
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "both" => Some(Self::Both),
+            "tv" => Some(Self::Tv),
+            "phone" => Some(Self::Phone),
+            _ => None,
+        }
+    }
+
+    /// Whether a page showing `device` should play a sound meant for this target.
+    pub fn plays_on(self, device: Device) -> bool {
+        match self {
+            Self::Both => true,
+            Self::Tv => device.shows_tv(),
+            Self::Phone => device.shows_phone(),
+        }
+    }
+}
+
+/// A picture slot on the screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageSlot {
+    /// Behind the figures on the shared screen.
+    TvBackdrop,
+    /// In the middle of the shared screen.
+    TvCard,
+    /// At the top of a phone's story.
+    PhoneImage,
+}
+
+impl ImageSlot {
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "tv-backdrop" => Some(Self::TvBackdrop),
+            "tv-card" => Some(Self::TvCard),
+            "phone" => Some(Self::PhoneImage),
+            _ => None,
+        }
+    }
+}
+
+/// Music that plays until it is stopped or replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Track {
+    pub media: String,
+    pub target: Target,
+    /// Percent, 0 to 100.
+    pub volume: u8,
+    pub looping: bool,
+}
+
+/// A sound played once. Pages play each cue they have not played yet, by its id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cue {
+    pub id: u64,
+    pub target: Target,
+    pub media: String,
+    pub volume: u8,
 }
 
 /// The changes drawn on top of a fixture. A field that is `None` leaves the fixture's own.
@@ -38,6 +120,17 @@ pub struct SceneOverlay {
     pub suggested: Option<Vec<Choice>>,
     pub groups: Option<Vec<ChoiceGroup>>,
     pub unavailable: Option<Vec<UnavailableChoice>>,
+    pub backdrop: Option<Override<ImageRef>>,
+    pub card: Option<Override<ImageRef>>,
+    pub phone_image: Option<Override<ImageRef>>,
+    pub music: Option<Override<Track>>,
+    /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
+    /// has played even after a reset.
+    #[serde(default)]
+    pub cue_count: u64,
+    /// The newest cues, oldest first.
+    #[serde(default)]
+    pub cues: Vec<Cue>,
 }
 
 /// One change to the scene, as the dev CLI sends it.
@@ -78,7 +171,30 @@ pub enum SceneChange {
     },
     /// Empties the suggested list, every group and the unavailable list.
     ClearChoices {},
-    /// Drops every change and returns to the fixture.
+    /// Shows a picture from the media library in a slot.
+    Image {
+        slot: ImageSlot,
+        media: String,
+        caption: Option<String>,
+    },
+    ClearImage {
+        slot: ImageSlot,
+    },
+    /// Starts music, replacing any that was playing.
+    Music {
+        media: String,
+        target: Target,
+        volume: u8,
+        looping: bool,
+    },
+    StopMusic {},
+    /// Plays a sound once.
+    Sound {
+        media: String,
+        target: Target,
+        volume: u8,
+    },
+    /// Drops every change and returns to the fixture. Cues already made stay counted.
     Reset {},
 }
 
@@ -92,6 +208,7 @@ pub enum SceneError {
     TooManyMembers,
     TooManyChoices { limit: usize },
     BadMaximum,
+    BadVolume(u8),
 }
 
 impl fmt::Display for SceneError {
@@ -111,6 +228,12 @@ impl fmt::Display for SceneError {
                 write!(formatter, "a list holds at most {limit} choices")
             }
             Self::BadMaximum => formatter.write_str("maximum hit points must be at least 1"),
+            Self::BadVolume(volume) => {
+                write!(
+                    formatter,
+                    "a volume is from 0 to {MAXIMUM_VOLUME} percent, not {volume}"
+                )
+            }
         }
     }
 }
@@ -127,6 +250,14 @@ fn text(what: &'static str, value: &str, limit: usize) -> Result<(), SceneError>
 
 fn labelled(what: &'static str, value: &str) -> Result<(), SceneError> {
     text(what, value, MAXIMUM_NAME_CHARACTERS)
+}
+
+fn check_volume(volume: u8) -> Result<(), SceneError> {
+    if volume > MAXIMUM_VOLUME {
+        Err(SceneError::BadVolume(volume))
+    } else {
+        Ok(())
+    }
 }
 
 fn check_count(count: usize) -> Result<(), SceneError> {
@@ -266,14 +397,81 @@ impl SceneOverlay {
                 self.groups = Some(Vec::new());
                 self.unavailable = Some(Vec::new());
             }
-            SceneChange::Reset {} => *self = Self::default(),
+            SceneChange::Image {
+                slot,
+                media,
+                caption,
+            } => {
+                labelled("a media name", &media)?;
+                if let Some(caption) = &caption {
+                    labelled("a picture caption", caption)?;
+                }
+                *self.image_slot_mut(slot) = Some(Override::Set(ImageRef { media, caption }));
+            }
+            SceneChange::ClearImage { slot } => *self.image_slot_mut(slot) = Some(Override::Clear),
+            SceneChange::Music {
+                media,
+                target,
+                volume,
+                looping,
+            } => {
+                labelled("a media name", &media)?;
+                check_volume(volume)?;
+                self.music = Some(Override::Set(Track {
+                    media,
+                    target,
+                    volume,
+                    looping,
+                }));
+            }
+            SceneChange::StopMusic {} => self.music = Some(Override::Clear),
+            SceneChange::Sound {
+                media,
+                target,
+                volume,
+            } => {
+                labelled("a media name", &media)?;
+                check_volume(volume)?;
+                self.cue_count += 1;
+                self.cues.push(Cue {
+                    id: self.cue_count,
+                    target,
+                    media,
+                    volume,
+                });
+                if self.cues.len() > MAXIMUM_CUES_KEPT {
+                    self.cues.remove(0);
+                }
+            }
+            SceneChange::Reset {} => *self = self.cleared(),
         }
         Ok(())
     }
 
-    /// True when the overlay changes nothing.
+    fn image_slot_mut(&mut self, slot: ImageSlot) -> &mut Option<Override<ImageRef>> {
+        match slot {
+            ImageSlot::TvBackdrop => &mut self.backdrop,
+            ImageSlot::TvCard => &mut self.card,
+            ImageSlot::PhoneImage => &mut self.phone_image,
+        }
+    }
+
+    /// The overlay with every change dropped but the count of cues, which only rises. Used when a
+    /// scene is reset or another fixture is chosen, so a page never mistakes a new cue for an old one.
+    pub fn cleared(&self) -> Self {
+        Self {
+            cue_count: self.cue_count,
+            ..Self::default()
+        }
+    }
+
+    /// True when the overlay changes nothing about what is drawn. Past cues do not count.
     pub fn is_empty(&self) -> bool {
-        *self == Self::default()
+        Self {
+            cue_count: 0,
+            cues: Vec::new(),
+            ..self.clone()
+        } == Self::default()
     }
 
     /// Draws the overlay onto a copy of the fixture.
@@ -295,5 +493,16 @@ impl SceneOverlay {
         if let Some(unavailable) = &self.unavailable {
             fixture.phone.unavailable.clone_from(unavailable);
         }
+        apply_image(&self.backdrop, &mut fixture.tv.backdrop);
+        apply_image(&self.card, &mut fixture.tv.card);
+        apply_image(&self.phone_image, &mut fixture.phone.image);
+    }
+}
+
+fn apply_image(change: &Option<Override<ImageRef>>, slot: &mut Option<ImageRef>) {
+    match change {
+        Some(Override::Set(image)) => *slot = Some(image.clone()),
+        Some(Override::Clear) => *slot = None,
+        None => {}
     }
 }

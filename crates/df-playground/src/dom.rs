@@ -3,6 +3,9 @@
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
+use crate::fixture::ImageRef;
+use crate::media::{MediaKind, media_kind};
+
 pub fn document() -> Result<Document, JsValue> {
     web_sys::window()
         .and_then(|window| window.document())
@@ -47,4 +50,36 @@ pub fn set_action(element: &Element, action: &str) -> Result<(), JsValue> {
 
 pub fn clear(element: &Element) {
     element.set_text_content(None);
+}
+
+/// A picture from the media library, with its caption under it, in an element of class `class`.
+/// A name that is not a picture of a known type is shown as a note instead of a broken image, so
+/// the mistake is visible. The image says which media file it is, so the page can report which
+/// pictures loaded.
+pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Element, JsValue> {
+    let frame = element(document, "div", class)?;
+    if media_kind(&image.media) != Some(MediaKind::Image) {
+        append(
+            &frame,
+            &text_element(
+                document,
+                "div",
+                "media-missing",
+                &format!("'{}' is not a picture the playground can show", image.media),
+            )?,
+        )?;
+        return Ok(frame);
+    }
+    let picture = element(document, "img", &format!("{class}-image"))?;
+    picture.set_attribute("src", &format!("/playground/media/{}", image.media))?;
+    picture.set_attribute("data-media", &image.media)?;
+    picture.set_attribute("alt", image.caption.as_deref().unwrap_or(&image.media))?;
+    append(&frame, &picture)?;
+    if let Some(caption) = &image.caption {
+        append(
+            &frame,
+            &text_element(document, "div", &format!("{class}-caption"), caption)?,
+        )?;
+    }
+    Ok(frame)
 }

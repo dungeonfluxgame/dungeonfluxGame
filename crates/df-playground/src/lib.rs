@@ -11,11 +11,14 @@ pub mod controls;
 pub mod copy;
 pub mod fixture;
 pub mod layout;
+pub mod media;
 pub mod scene;
 pub mod style;
 
 #[cfg(target_arch = "wasm32")]
 mod app;
+#[cfg(target_arch = "wasm32")]
+mod audio;
 #[cfg(target_arch = "wasm32")]
 mod dom;
 #[cfg(target_arch = "wasm32")]
@@ -35,6 +38,10 @@ mod copy_tests;
 mod fixture_tests;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(test)]
+mod media_tests;
+#[cfg(test)]
+mod scene_media_tests;
 #[cfg(test)]
 mod scene_tests;
 #[cfg(test)]

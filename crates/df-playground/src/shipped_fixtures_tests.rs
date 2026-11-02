@@ -54,3 +54,47 @@ fn every_shipped_fixture_but_the_deliberate_one_follows_the_choice_rules() {
         }
     }
 }
+
+#[test]
+fn every_picture_a_shipped_fixture_names_is_in_the_media_library_and_is_a_picture() {
+    use crate::media::{MediaKind, media_kind};
+    let media = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/playground/media");
+    for (name, fixture) in fixtures() {
+        let slots = [
+            fixture.tv.backdrop.as_ref(),
+            fixture.tv.card.as_ref(),
+            fixture.phone.image.as_ref(),
+        ];
+        for image in slots.into_iter().flatten() {
+            assert_eq!(
+                media_kind(&image.media),
+                Some(MediaKind::Image),
+                "{name}: {}",
+                image.media
+            );
+            assert!(
+                media.join(&image.media).is_file(),
+                "{name} names {}, which is not in assets/playground/media",
+                image.media
+            );
+        }
+    }
+}
+
+#[test]
+fn the_shipped_media_are_plain_names_of_known_types_within_the_size_limit() {
+    use crate::media::media_kind;
+    let media = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/playground/media");
+    let mut count = 0;
+    for entry in std::fs::read_dir(&media).expect("the media directory exists") {
+        let entry = entry.expect("reads an entry");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        assert!(
+            media_kind(&name).is_some(),
+            "{name} is not a known media file"
+        );
+        assert!(entry.metadata().expect("has metadata").len() < 16 * 1024 * 1024);
+        count += 1;
+    }
+    assert!(count >= 5);
+}
