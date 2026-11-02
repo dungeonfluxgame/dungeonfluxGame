@@ -68,7 +68,8 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
         Ok(SceneChange::Image {
             slot: ImageSlot::TvBackdrop,
             media: "tavern.png".into(),
-            caption: Some("The Flagon".into())
+            caption: Some("The Flagon".into()),
+            rotation_degrees: 0
         })
     );
     assert_eq!(
@@ -76,7 +77,8 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
         Ok(SceneChange::Image {
             slot: ImageSlot::PhoneImage,
             media: "map.png".into(),
-            caption: None
+            caption: None,
+            rotation_degrees: 0
         })
     );
     assert_eq!(
@@ -614,4 +616,27 @@ async fn a_page_that_has_gone_quiet_is_forgotten() {
         running.state.playground().clients().is_empty(),
         "and it is gone from memory"
     );
+}
+
+#[test]
+fn an_image_can_be_turned_with_rotate_and_a_bad_turn_is_refused() {
+    assert_eq!(
+        scene("scene image tv-card finn-alder.webp rotate=180"),
+        Ok(SceneChange::Image {
+            slot: ImageSlot::TvCard,
+            media: "finn-alder.webp".into(),
+            caption: None,
+            rotation_degrees: 180
+        })
+    );
+    for bad in ["rotate=360", "rotate=-90", "rotate=upside", "rotate=1.5"] {
+        assert!(
+            matches!(
+                scene(&format!("scene image tv-card a.png {bad}")),
+                Err(CommandError::BadChoice { .. })
+            ),
+            "{bad}"
+        );
+    }
+    assert!(usage_text().contains("rotate=0-359"));
 }

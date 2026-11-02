@@ -88,6 +88,9 @@ pub struct PartyMember {
 pub struct ImageRef {
     pub media: String,
     pub caption: Option<String>,
+    /// Clockwise turn in degrees, 0 to 359 (180 shows it upside down). Defaults to 0.
+    #[serde(default)]
+    pub rotation_degrees: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

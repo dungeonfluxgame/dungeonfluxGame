@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use df_playground::controls::{ControlsChange, Device, MAXIMUM_TRANSITION_MS, TransitionStyle};
 use df_playground::copy::ReadingPace;
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
-use df_playground::scene::{ImageSlot, MAXIMUM_VOLUME, SceneChange, Target};
+use df_playground::scene::{
+    ImageSlot, MAXIMUM_ROTATION_DEGREES, MAXIMUM_VOLUME, SceneChange, Target,
+};
 
 use crate::wire::{EffectRequest, ValueForm};
 
@@ -37,8 +39,7 @@ pub const DEFAULT_HOLD_MS: u64 = 2_000;
 const SCENE_USAGE: &str = "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | image ... | music ... | sound ... | reset";
 const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
 const PARTY_USAGE: &str = "scene party add <name> hp=N [max=N] [color=#rrggbb] [conditions=a,b] | set <name> [hp=N] [max=N] [conditions=a,b] | remove <name> | clear";
-const IMAGE_USAGE: &str =
-    "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] | scene image-clear <slot>";
+const IMAGE_USAGE: &str = "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] [rotate=0-359] | scene image-clear <slot>";
 const MUSIC_USAGE: &str =
     "scene music <name> [on=both|tv|phone] [volume=0-100] [loop=true|false] | scene music-stop";
 const SOUND_USAGE: &str = "scene sound <name> [on=both|tv|phone] [volume=0-100]";
@@ -533,14 +534,27 @@ fn image(words: &[String]) -> Result<Command, CommandError> {
         text: slot.clone(),
         allowed: "tv-backdrop, tv-card or phone",
     })?;
-    let mut caption = None;
-    for (_, value) in keyed(rest, "caption=TEXT", &["caption"])? {
-        caption = Some(value.to_owned());
+    let (mut caption, mut rotation_degrees) = (None, 0_u16);
+    for (key, value) in keyed(rest, "caption=TEXT, rotate=0-359", &["caption", "rotate"])? {
+        if key == "rotate" {
+            rotation_degrees = value
+                .parse::<u16>()
+                .ok()
+                .filter(|degrees| *degrees <= MAXIMUM_ROTATION_DEGREES)
+                .ok_or_else(|| CommandError::BadChoice {
+                    key: "rotate".to_owned(),
+                    text: value.to_owned(),
+                    allowed: "a whole number of degrees from 0 to 359 (180 is upside down)",
+                })?;
+        } else {
+            caption = Some(value.to_owned());
+        }
     }
     Ok(Command::Scene(SceneChange::Image {
         slot,
         media: media.clone(),
         caption,
+        rotation_degrees,
     }))
 }
 

@@ -74,6 +74,13 @@ pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Ele
     picture.set_attribute("src", &format!("/playground/media/{}", image.media))?;
     picture.set_attribute("data-media", &image.media)?;
     picture.set_attribute("alt", image.caption.as_deref().unwrap_or(&image.media))?;
+    if !image.rotation_degrees.is_multiple_of(360) {
+        // A number, never text from a fixture, so it cannot carry style.
+        picture.set_attribute(
+            "style",
+            &format!("transform: rotate({}deg);", image.rotation_degrees % 360),
+        )?;
+    }
     append(&frame, &picture)?;
     if let Some(caption) = &image.caption {
         append(

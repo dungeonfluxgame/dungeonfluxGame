@@ -27,6 +27,8 @@ pub const MAXIMUM_CHOICES_PER_LIST: usize = 24;
 
 /// Most sound cues kept for pages to collect; a page that was away longer misses the older ones.
 pub const MAXIMUM_CUES_KEPT: usize = 16;
+/// Largest rotation of a picture, in degrees (a full turn is 360, which is the same as 0).
+pub const MAXIMUM_ROTATION_DEGREES: u16 = 359;
 /// Loudest volume, in percent.
 pub const MAXIMUM_VOLUME: u8 = 100;
 
@@ -176,6 +178,9 @@ pub enum SceneChange {
         slot: ImageSlot,
         media: String,
         caption: Option<String>,
+        /// Clockwise turn in degrees, 0 to 359.
+        #[serde(default)]
+        rotation_degrees: u16,
     },
     ClearImage {
         slot: ImageSlot,
@@ -209,6 +214,7 @@ pub enum SceneError {
     TooManyChoices { limit: usize },
     BadMaximum,
     BadVolume(u8),
+    BadRotation(u16),
 }
 
 impl fmt::Display for SceneError {
@@ -228,6 +234,10 @@ impl fmt::Display for SceneError {
                 write!(formatter, "a list holds at most {limit} choices")
             }
             Self::BadMaximum => formatter.write_str("maximum hit points must be at least 1"),
+            Self::BadRotation(degrees) => write!(
+                formatter,
+                "a rotation is from 0 to {MAXIMUM_ROTATION_DEGREES} degrees, not {degrees}"
+            ),
             Self::BadVolume(volume) => {
                 write!(
                     formatter,
@@ -401,12 +411,20 @@ impl SceneOverlay {
                 slot,
                 media,
                 caption,
+                rotation_degrees,
             } => {
                 labelled("a media name", &media)?;
+                if rotation_degrees > MAXIMUM_ROTATION_DEGREES {
+                    return Err(SceneError::BadRotation(rotation_degrees));
+                }
                 if let Some(caption) = &caption {
                     labelled("a picture caption", caption)?;
                 }
-                *self.image_slot_mut(slot) = Some(Override::Set(ImageRef { media, caption }));
+                *self.image_slot_mut(slot) = Some(Override::Set(ImageRef {
+                    media,
+                    caption,
+                    rotation_degrees,
+                }));
             }
             SceneChange::ClearImage { slot } => *self.image_slot_mut(slot) = Some(Override::Clear),
             SceneChange::Music {

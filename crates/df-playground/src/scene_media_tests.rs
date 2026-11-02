@@ -30,6 +30,7 @@ fn image(media: &str) -> ImageRef {
     ImageRef {
         media: media.to_owned(),
         caption: None,
+        rotation_degrees: 0,
     }
 }
 
@@ -48,7 +49,8 @@ fn a_fixture_may_carry_pictures_and_refuses_unknown_picture_keys() {
         fixture.tv.backdrop,
         Some(ImageRef {
             media: "tavern.png".into(),
-            caption: Some("The Gilded Flagon".into())
+            caption: Some("The Gilded Flagon".into()),
+            rotation_degrees: 0
         })
     );
     assert_eq!((fixture.tv.card, fixture.phone.image), (None, None));
@@ -70,6 +72,7 @@ fn a_picture_is_set_in_its_slot_and_replaces_what_the_fixture_has() {
                     slot,
                     media: media.into(),
                     caption: None,
+                    rotation_degrees: 0,
                 },
                 &base(),
             )
@@ -104,6 +107,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
         slot: ImageSlot::TvCard,
         media: String::new(),
         caption: None,
+        rotation_degrees: 0,
     };
     assert_eq!(
         overlay.apply(empty, &base()),
@@ -113,6 +117,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
         slot: ImageSlot::TvCard,
         media: "a.png".into(),
         caption: Some("x".repeat(200)),
+        rotation_degrees: 0,
     };
     assert!(matches!(
         overlay.apply(long, &base()),
@@ -233,6 +238,7 @@ fn a_reset_drops_the_changes_and_the_old_cues_but_the_count_keeps_rising() {
                 slot: ImageSlot::TvCard,
                 media: "x.png".into(),
                 caption: None,
+                rotation_degrees: 0,
             },
             &base(),
         )
@@ -301,4 +307,63 @@ fn media_changes_are_written_and_read_by_name() {
             slot: ImageSlot::TvBackdrop
         }
     );
+}
+
+#[test]
+fn a_picture_can_be_turned_and_a_turn_over_359_degrees_is_refused() {
+    let mut overlay = SceneOverlay::default();
+    overlay
+        .apply(
+            SceneChange::Image {
+                slot: ImageSlot::TvCard,
+                media: "finn-alder.webp".into(),
+                caption: None,
+                rotation_degrees: 180,
+            },
+            &base(),
+        )
+        .expect("applies");
+    assert_eq!(
+        drawn(&overlay).tv.card.map(|card| card.rotation_degrees),
+        Some(180)
+    );
+    let error = overlay
+        .apply(
+            SceneChange::Image {
+                slot: ImageSlot::TvCard,
+                media: "finn-alder.webp".into(),
+                caption: None,
+                rotation_degrees: 360,
+            },
+            &base(),
+        )
+        .expect_err("refused");
+    assert_eq!(error, SceneError::BadRotation(360));
+    assert!(error.to_string().contains("0 to 359"));
+}
+
+#[test]
+fn a_fixture_picture_may_name_its_rotation_and_leaves_it_at_zero_otherwise() {
+    let text = r#"{"media": "a.png", "caption": null, "rotation_degrees": 90}"#;
+    assert_eq!(
+        serde_json::from_str::<ImageRef>(text)
+            .expect("reads")
+            .rotation_degrees,
+        90
+    );
+    let plain = r#"{"media": "a.png"}"#;
+    assert_eq!(
+        serde_json::from_str::<ImageRef>(plain)
+            .expect("reads")
+            .rotation_degrees,
+        0
+    );
+    let change = r#"{"change":"image","slot":"tv_card","media":"a.png","caption":null}"#;
+    assert!(matches!(
+        serde_json::from_str::<SceneChange>(change),
+        Ok(SceneChange::Image {
+            rotation_degrees: 0,
+            ..
+        })
+    ));
 }
