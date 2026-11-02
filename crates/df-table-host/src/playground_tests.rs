@@ -1,7 +1,7 @@
 use tempfile::TempDir;
 
 use crate::client::get;
-use crate::limits::MAXIMUM_FILE_BYTES;
+use crate::limits::MAXIMUM_ASSET_FILE_BYTES;
 use crate::playground::{
     FileProblem, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
     revision,
@@ -79,9 +79,11 @@ fn a_directory_named_like_a_file_is_not_served() {
 #[test]
 fn the_size_limit_is_stated_in_the_problem() {
     assert!(
-        FileProblem::TooLarge
-            .message()
-            .contains(&MAXIMUM_FILE_BYTES.to_string())
+        FileProblem::TooLarge {
+            maximum_bytes: MAXIMUM_ASSET_FILE_BYTES
+        }
+        .message()
+        .contains(&MAXIMUM_ASSET_FILE_BYTES.to_string())
     );
 }
 
@@ -90,7 +92,7 @@ fn each_problem_has_a_status_and_a_message() {
     for (problem, status) in [
         (FileProblem::BadName, 404),
         (FileProblem::NotFound, 404),
-        (FileProblem::TooLarge, 413),
+        (FileProblem::TooLarge { maximum_bytes: 1 }, 413),
         (FileProblem::Unreadable("denied".into()), 500),
     ] {
         assert_eq!(problem.status().as_u16(), status);

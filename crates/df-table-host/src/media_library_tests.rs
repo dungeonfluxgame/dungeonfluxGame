@@ -55,7 +55,7 @@ async fn a_file_replaced_after_it_was_opened_is_answered_wholly_from_the_version
     let directory = TempDir::new().expect("makes a directory");
     let path = write_file(&directory, "a.mp4", &[b'o'; 40]);
     let opened = File::open(&path).expect("opens");
-    let opened_tag = entity_tag(&opened.metadata().expect("measures"));
+    let opened_tag = entity_tag(&opened.metadata().expect("measures")).expect("a tag");
     replace_file(&directory, "a.mp4", &[b'n'; 5]);
 
     let served = serve_file(opened, &range("bytes=30-"), false, &MediaLimits::DEFAULT);
@@ -114,7 +114,7 @@ fn a_file_over_the_size_limit_is_refused_from_its_length() {
         false,
         &limits,
     );
-    assert!(matches!(served, Err(FileProblem::TooLarge)));
+    assert!(matches!(served, Err(FileProblem::TooLarge { .. })));
     let at_limit = MediaLimits {
         maximum_file_bytes: 100,
         ..MediaLimits::DEFAULT

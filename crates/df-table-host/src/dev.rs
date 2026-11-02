@@ -429,8 +429,24 @@ async fn fetch_canvas(port: u16) -> Result<CanvasView, DevError> {
     read_json(&response)
 }
 
+/// Runs one parsed command: the groups of commands that talk about the playground or the library
+/// are run by their own functions.
 async fn execute(port: u16, command: Command) -> Result<String, DevError> {
     match command {
+        Command::Playground
+        | Command::PlaygroundSet(_)
+        | Command::PlaygroundGo(_)
+        | Command::PlaygroundCycle { .. }
+        | Command::Scene(_)
+        | Command::Wait(_) => execute_playground(port, command).await,
+        Command::Media
+        | Command::MediaAdd { .. }
+        | Command::MediaRemove(_)
+        | Command::Clients
+        | Command::Fixtures
+        | Command::FixtureShow(_)
+        | Command::FixtureWrite { .. }
+        | Command::FixtureRemove(_) => execute_library(port, command).await,
         Command::Effects(requests) => {
             let bodies = requests
                 .iter()
@@ -438,6 +454,41 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
                 .collect::<Result<Vec<_>, _>>()?;
             send_each(port, route::EFFECT, "effect", &bodies, read_reply).await
         }
+        Command::Canvas => {
+            let view = fetch_canvas(port).await?;
+            format_canvas(&view).map_err(|error| DevError::Unwritable {
+                what: "canvas",
+                reason: error.to_string(),
+            })
+        }
+        Command::Kinds => Ok(format_kinds(&fetch_canvas(port).await?)),
+        Command::Events { after } => {
+            let path = match after {
+                Some(after) => format!("{}?{EVENTS_AFTER_PARAMETER}={after}", route::EVENTS),
+                None => route::EVENTS.to_owned(),
+            };
+            let response = client::get(port, &path).await.map_err(DevError::Client)?;
+            let reply: EventsReply = read_json(&response)?;
+            Ok(format_events(&reply, after))
+        }
+        Command::Reload => {
+            let response = client::post_json(port, route::RELOAD, "")
+                .await
+                .map_err(DevError::Client)?;
+            read_reply(&response)?.map_err(DevError::Rejected)
+        }
+        Command::Help => Ok(usage_text()),
+        Command::Engine(command) => crate::engine::run(port, command).await,
+        Command::Repl => Err(DevError::Rejected(
+            "repl is started from the command line: df-table dev repl".to_owned(),
+        )),
+        Command::Script(path) => run_script(port, &path).await,
+    }
+}
+
+/// The commands that change or show what the playground shows, and `wait`.
+async fn execute_playground(port: u16, command: Command) -> Result<String, DevError> {
+    match command {
         Command::Playground => show_playground(port).await,
         Command::PlaygroundSet(changes) => {
             let bodies = changes.iter().map(to_body).collect::<Result<Vec<_>, _>>()?;
@@ -473,6 +524,15 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             hold_ms,
             transition,
         } => cycle(port, [first, second], times, hold_ms, &transition).await,
+        other => Err(DevError::Rejected(format!(
+            "{other:?} is not a playground command"
+        ))),
+    }
+}
+
+/// The commands about the media library, the open pages and the fixture files.
+async fn execute_library(port: u16, command: Command) -> Result<String, DevError> {
+    match command {
         Command::Media => Ok(format_media(&fetch_media(port).await?)),
         Command::MediaAdd { path, name } => {
             let name = match name {
@@ -519,34 +579,9 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             )
             .await
         }
-        Command::Canvas => {
-            let view = fetch_canvas(port).await?;
-            format_canvas(&view).map_err(|error| DevError::Unwritable {
-                what: "canvas",
-                reason: error.to_string(),
-            })
-        }
-        Command::Kinds => Ok(format_kinds(&fetch_canvas(port).await?)),
-        Command::Events { after } => {
-            let path = match after {
-                Some(after) => format!("{}?{EVENTS_AFTER_PARAMETER}={after}", route::EVENTS),
-                None => route::EVENTS.to_owned(),
-            };
-            let response = client::get(port, &path).await.map_err(DevError::Client)?;
-            let reply: EventsReply = read_json(&response)?;
-            Ok(format_events(&reply, after))
-        }
-        Command::Reload => {
-            let response = client::post_json(port, route::RELOAD, "")
-                .await
-                .map_err(DevError::Client)?;
-            read_reply(&response)?.map_err(DevError::Rejected)
-        }
-        Command::Help => Ok(usage_text()),
-        Command::Repl => Err(DevError::Rejected(
-            "repl is started from the command line: df-table dev repl".to_owned(),
-        )),
-        Command::Script(path) => run_script(port, &path).await,
+        other => Err(DevError::Rejected(format!(
+            "{other:?} is not a library command"
+        ))),
     }
 }
 

@@ -63,6 +63,12 @@ pub mod route {
 
 /// The query parameter of `route::PLAYGROUND_FRAME` that names the last frame already seen.
 pub const FRAME_AFTER_PARAMETER: &str = "after";
+/// The query parameter of `route::PLAYGROUND_FRAME` with which a page says it accepts an empty
+/// answer when nothing changed before the wait ran out: `idle=204`. Without it the host answers
+/// the timeout with the whole frame, as it always did.
+pub const FRAME_IDLE_PARAMETER: &str = "idle";
+/// The value of `FRAME_IDLE_PARAMETER` that asks for a bodiless 204 on a timeout.
+pub const FRAME_IDLE_NO_CONTENT: u16 = 204;
 /// The query parameter of `route::EVENTS` that names the last sequence already seen.
 pub const EVENTS_AFTER_PARAMETER: &str = "after";
 

@@ -18,13 +18,16 @@
 //! Differences from section O of the plan are listed in the `df-table` crate docs. The host has no
 //! player surfaces yet: this is the workbench the machines and pipeline plug into.
 
+pub mod broker;
 pub mod client;
 pub mod command;
 pub mod dev;
+pub mod engine;
 pub mod event_log;
 pub mod guard;
 pub mod kind_files;
 pub mod limits;
+pub mod machine_wire;
 mod media_ingest;
 pub mod media_library;
 mod media_range;
@@ -64,11 +67,15 @@ mod echo_tests;
 #[cfg(test)]
 mod event_log_tests;
 #[cfg(test)]
+mod fixture_contract_tests;
+#[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
 mod kind_files_tests;
+#[cfg(test)]
+mod machine_wire_tests;
 #[cfg(test)]
 mod media_range_tests;
 #[cfg(test)]
@@ -90,6 +97,8 @@ mod playground_control_tests;
 #[cfg(test)]
 mod playground_tests;
 #[cfg(test)]
+mod projection_samples;
+#[cfg(test)]
 mod render_tests;
 #[cfg(test)]
 mod repl_tests;
@@ -99,6 +108,8 @@ mod report_tests;
 mod request_tests;
 #[cfg(test)]
 mod rotation_command_tests;
+#[cfg(test)]
+mod round_two_tests;
 #[cfg(test)]
 mod scene_command_tests;
 #[cfg(test)]

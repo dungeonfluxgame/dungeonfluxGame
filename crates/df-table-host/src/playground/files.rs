@@ -7,15 +7,18 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 
-use crate::limits::MAXIMUM_FILE_BYTES;
+use crate::limits::{MAXIMUM_ASSET_FILE_BYTES, MAXIMUM_PACKAGE_FILE_BYTES};
+use crate::media_library::read_in_chunks;
 use crate::state::AppState;
 
 const INDEX_FILE: &str = "index.html";
@@ -52,7 +55,10 @@ pub enum FileProblem {
     /// The name is not a plain file name of an allowed type.
     BadName,
     NotFound,
-    TooLarge,
+    /// The file is larger than `maximum_bytes`, the most this kind of file may be.
+    TooLarge {
+        maximum_bytes: u64,
+    },
     Unreadable(String),
 }
 
@@ -60,7 +66,7 @@ impl FileProblem {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::BadName | Self::NotFound => StatusCode::NOT_FOUND,
-            Self::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Unreadable(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -72,7 +78,9 @@ impl FileProblem {
                 "that playground file is missing (is the directory right? see df-table serve --help)"
                     .to_owned()
             }
-            Self::TooLarge => format!("the file is larger than {MAXIMUM_FILE_BYTES} bytes"),
+            Self::TooLarge { maximum_bytes } => {
+                format!("the file is larger than {maximum_bytes} bytes")
+            }
             Self::Unreadable(message) => format!("the file could not be read: {message}"),
         }
     }
@@ -107,7 +115,9 @@ pub fn content_type(name: &str) -> &'static str {
     }
 }
 
-/// Reads `name` from `directory` if it is a plain file name with one of `extensions`.
+/// Reads `name` from `directory` if it is a plain file name with one of `extensions`, and at most
+/// `MAXIMUM_ASSET_FILE_BYTES` long (a page, a theme or a fixture; the package is streamed, not
+/// read whole). A file that grows while it is read is refused the same way.
 pub fn read_file(
     directory: &Path,
     name: &str,
@@ -116,15 +126,30 @@ pub fn read_file(
     if !is_plain_file_name(name) || !has_extension(name, extensions) {
         return Err(FileProblem::BadName);
     }
-    let path = directory.join(name);
-    let metadata = std::fs::metadata(&path).map_err(|error| problem_from(&error))?;
+    let file = open_plain_file(&directory.join(name), MAXIMUM_ASSET_FILE_BYTES)?;
+    let mut bytes = Vec::new();
+    // One byte past the limit shows that the file outgrew it after it was measured.
+    file.take(MAXIMUM_ASSET_FILE_BYTES.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| problem_from(&error))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAXIMUM_ASSET_FILE_BYTES {
+        return Err(FileProblem::TooLarge {
+            maximum_bytes: MAXIMUM_ASSET_FILE_BYTES,
+        });
+    }
+    Ok(bytes)
+}
+
+/// Opens `path` if it is a file of at most `maximum_bytes`.
+fn open_plain_file(path: &Path, maximum_bytes: u64) -> Result<std::fs::File, FileProblem> {
+    let metadata = std::fs::metadata(path).map_err(|error| problem_from(&error))?;
     if !metadata.is_file() {
         return Err(FileProblem::NotFound);
     }
-    if metadata.len() > MAXIMUM_FILE_BYTES {
-        return Err(FileProblem::TooLarge);
+    if metadata.len() > maximum_bytes {
+        return Err(FileProblem::TooLarge { maximum_bytes });
     }
-    std::fs::read(&path).map_err(|error| problem_from(&error))
+    std::fs::File::open(path).map_err(|error| problem_from(&error))
 }
 
 /// The plain files in `directory` with one of `extensions`, sorted by name. A missing directory
@@ -265,11 +290,38 @@ pub(super) async fn package_file(
     UrlPath(name): UrlPath<String>,
 ) -> Response {
     let files = state.playground().files().clone();
-    blocking(move || {
-        read_file(&files.package, &name, &PACKAGE_EXTENSIONS)
-            .map(|bytes| (bytes, content_type(&name)))
-    })
-    .await
+    let opened = {
+        let name = name.clone();
+        tokio::task::spawn_blocking(move || open_package_file(&files.package, &name))
+            .await
+            .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())))
+    };
+    match opened {
+        Ok((file, length)) => {
+            // The package is the biggest file there is: it is streamed in chunks, never held whole.
+            let mut response = Response::new(Body::from_stream(read_in_chunks(file, length)));
+            let headers = response.headers_mut();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(content_type(&name)),
+            );
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
+            response
+        }
+        Err(problem) => respond(Err(problem)),
+    }
+}
+
+/// Opens the package file `name` and measures it, if it is a plain name with a package extension
+/// and at most `MAXIMUM_PACKAGE_FILE_BYTES`.
+fn open_package_file(directory: &Path, name: &str) -> Result<(std::fs::File, u64), FileProblem> {
+    if !is_plain_file_name(name) || !has_extension(name, &PACKAGE_EXTENSIONS) {
+        return Err(FileProblem::BadName);
+    }
+    let file = open_plain_file(&directory.join(name), MAXIMUM_PACKAGE_FILE_BYTES)?;
+    let length = file.metadata().map_err(|error| problem_from(&error))?.len();
+    Ok((file, length))
 }
 
 pub(super) async fn fixture_list(State(state): State<Arc<AppState>>) -> Response {

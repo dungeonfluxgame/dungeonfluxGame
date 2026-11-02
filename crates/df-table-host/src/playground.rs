@@ -40,12 +40,10 @@ pub use self::files::{
     FileProblem, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
     revision,
 };
+use crate::limits::MAXIMUM_FIXTURE_NAME_LENGTH;
 use crate::media_library::{media_directory, media_entries, media_problem};
 use crate::state::AppState;
 use crate::wire::{ControlsBatch, FixtureRemove, FixtureWrite, Reply, route};
-
-/// Longest file name accepted from a request.
-const MAXIMUM_NAME_LENGTH: usize = df_playground::media::MAXIMUM_NAME_LENGTH;
 
 pub(crate) fn refused(status: StatusCode, message: String) -> Response {
     (
@@ -86,7 +84,7 @@ impl fmt::Display for FixtureNameError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "'{}' is not a fixture name: use letters, digits, '_', '-' and '.', up to {MAXIMUM_NAME_LENGTH} characters",
+            "'{}' is not a fixture name: use letters, digits, '_', '-' and '.', up to {MAXIMUM_FIXTURE_NAME_LENGTH} characters",
             self.name
         )
     }
@@ -101,7 +99,10 @@ pub fn fixture_file_name(name: &str) -> Result<String, FixtureNameError> {
         format!("{name}.json")
     };
     let stem = file_name.trim_end_matches(".json");
-    if stem.is_empty() || !is_plain_file_name(&file_name) {
+    if stem.is_empty()
+        || file_name.len() > MAXIMUM_FIXTURE_NAME_LENGTH
+        || !is_plain_file_name(&file_name)
+    {
         return Err(FixtureNameError {
             name: name.to_owned(),
         });
@@ -114,8 +115,8 @@ pub fn fixture_file_name(name: &str) -> Result<String, FixtureNameError> {
 /// caller announces it: every POST does.
 pub(crate) fn reconcile_fixtures(state: &AppState) -> Result<Option<ControlsReply>, FileProblem> {
     let names = fixture_names(state.playground().files())?;
-    let reconciled = state.playground().reconcile(&names);
-    if let Some(reply) = &reconciled {
+    // The line is written with the playground's lock held, so it is in revision order.
+    let reconciled = state.playground().reconcile(&names, |reply| {
         state.record_line(playground_line(
             "reconcile",
             &[
@@ -130,7 +131,7 @@ pub(crate) fn reconcile_fixtures(state: &AppState) -> Result<Option<ControlsRepl
                 ("revision", reply.revision.to_string()),
             ],
         ));
-    }
+    });
     Ok(reconciled)
 }
 
@@ -163,29 +164,39 @@ fn with_fixture_files(
         .collect()
 }
 
-/// Applies the changes together or not at all, writes one `PLAYGROUND set` line naming each of
-/// them, and answers.
+/// Applies the changes together or not at all, and answers. A change that counts writes one
+/// `PLAYGROUND set` line naming each part, with the playground's lock held so the log is in
+/// revision order; one that alters nothing writes none; a refusal writes a reject line with its
+/// reason.
 async fn apply_controls(state: &Arc<AppState>, changes: Vec<ControlsChange>) -> Response {
     let changes = match with_fixture_files(changes) {
         Ok(changes) => changes,
         Err(error) => return refused(StatusCode::BAD_REQUEST, error.to_string()),
     };
+    // The generation is read before the names: a fixture written or removed after this makes the
+    // choice of a fixture refuse as changed instead of applying to a list that is out of date.
+    let generation = state.playground().generation();
     let names = match current_fixture_names(state.playground().files().clone()).await {
         Ok(names) => names,
         Err(problem) => return refused(problem.status(), problem.message()),
     };
-    let response = match state.playground().change_all(changes.clone(), &names) {
-        Ok(reply) => {
-            let mut pairs = controls_pairs(&changes);
-            pairs.push(("revision", reply.revision.to_string()));
-            state.record_line(playground_line("set", &pairs));
-            Json(reply).into_response()
-        }
-        Err(refusal) => {
-            state.record_line(reject_line(RejectionCause::InvalidValue, &[]));
-            refused(refusal.status(), refusal.to_string())
-        }
-    };
+    let response =
+        match state
+            .playground()
+            .change_all(changes.clone(), &names, generation, |reply| {
+                let mut pairs = controls_pairs(&changes);
+                pairs.push(("revision", reply.revision.to_string()));
+                state.record_line(playground_line("set", &pairs));
+            }) {
+            Ok(reply) => Json(reply).into_response(),
+            Err(refusal) => {
+                state.record_line(reject_line(
+                    RejectionCause::InvalidValue,
+                    &[("reason", refusal.reason().to_owned())],
+                ));
+                refused(refusal.status(), refusal.to_string())
+            }
+        };
     state.echo_new_lines();
     response
 }
@@ -241,8 +252,11 @@ fn stage_ids(state: &AppState, base: &Fixture) -> Vec<String> {
     }
 }
 
-fn refuse_scene_change(state: &AppState, message: String) -> Response {
-    state.record_line(reject_line(RejectionCause::InvalidValue, &[]));
+fn refuse_scene_change(state: &AppState, reason: &'static str, message: String) -> Response {
+    state.record_line(reject_line(
+        RejectionCause::InvalidValue,
+        &[("reason", reason.to_owned())],
+    ));
     state.echo_new_lines();
     refused(StatusCode::BAD_REQUEST, message)
 }
@@ -272,30 +286,27 @@ async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
         Err(problem) => return refused(problem.status(), problem.message()),
     };
     if let Some(message) = media_problem(&change, &library) {
-        return refuse_scene_change(&state, message);
+        return refuse_scene_change(&state, "no_such_media", message);
     }
     if let Some(message) = camera_problem(&change, &stage_ids(&state, &base)) {
-        return refuse_scene_change(&state, message);
+        return refuse_scene_change(&state, "no_such_element", message);
     }
     // The change is applied only if the fixture is still the one it was checked against.
-    let response = match state
-        .playground()
-        .change_scene(change.clone(), &base, generation)
-    {
-        Ok(reply) => {
-            state.record_line(scene_line(&change, &reply.scene, reply.revision));
-            Json(reply).into_response()
-        }
-        Err(refusal) => {
-            let extra: &[(&str, String)] = if refusal == SceneRefusal::FixtureChanged {
-                &[("reason", "fixture_changed".to_owned())]
-            } else {
-                &[]
-            };
-            state.record_line(reject_line(RejectionCause::InvalidValue, extra));
-            refused(refusal.status(), refusal.to_string())
-        }
-    };
+    let response =
+        match state
+            .playground()
+            .change_scene(change.clone(), &base, generation, |reply| {
+                state.record_line(scene_line(&change, &reply.scene, reply.revision));
+            }) {
+            Ok(reply) => Json(reply).into_response(),
+            Err(refusal) => {
+                state.record_line(reject_line(
+                    RejectionCause::InvalidValue,
+                    &[("reason", refusal.reason().to_owned())],
+                ));
+                refused(refusal.status(), refusal.to_string())
+            }
+        };
     state.echo_new_lines();
     response
 }
@@ -323,12 +334,44 @@ pub fn camera_problem(change: &SceneChange, stage_ids: &[String]) -> Option<Stri
     })
 }
 
-/// Writes `text` to `directory/file_name` through a temporary file, so a reader never sees half
-/// of it.
+/// A name for a temporary file that no other write of this host shares, so two writes of the same
+/// fixture at once each fill their own file and the last rename wins whole.
+fn temporary_name(file_name: &str) -> String {
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let ordinal = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!(".{file_name}.{}.{ordinal}.tmp", std::process::id())
+}
+
+/// Pulls the camera back to the whole stage if it looks at one of the elements in `gone`
+/// (despawned or cleared), as a recorded change: `PLAYGROUND camera_wide reason=target_gone
+/// element=.. over=0 serial=.. revision=..`. The caller announces it.
+pub(crate) fn release_camera_from(state: &AppState, gone: &[String]) {
+    state
+        .playground()
+        .release_camera_from(gone, |reply, element| {
+            let serial = reply.scene.camera_count;
+            state.record_line(playground_line(
+                "camera_wide",
+                &[
+                    ("reason", "target_gone".to_owned()),
+                    ("element", element.to_owned()),
+                    ("over", "0".to_owned()),
+                    ("serial", serial.to_string()),
+                    ("revision", reply.revision.to_string()),
+                ],
+            ));
+        });
+}
+
+/// Writes `text` to `directory/file_name` through a temporary file of its own, so a reader never
+/// sees half of it and a concurrent write of the same name never shares the file.
 fn write_fixture_file(directory: &Path, file_name: &str, text: &str) -> Result<(), FileProblem> {
     std::fs::create_dir_all(directory).map_err(|error| problem_from(&error))?;
-    let temporary = directory.join(format!(".{file_name}.tmp"));
-    std::fs::write(&temporary, text).map_err(|error| problem_from(&error))?;
+    let temporary = directory.join(temporary_name(file_name));
+    std::fs::write(&temporary, text).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        problem_from(&error)
+    })?;
     std::fs::rename(&temporary, directory.join(file_name)).map_err(|error| {
         let _ = std::fs::remove_file(&temporary);
         problem_from(&error)

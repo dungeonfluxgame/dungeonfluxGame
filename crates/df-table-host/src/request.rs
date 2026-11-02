@@ -57,6 +57,12 @@ pub enum RequestError {
         number: String,
         range: String,
     },
+    /// A new pivot while the page is still gliding the element's last turn: `transform-origin` does
+    /// not glide, so the figure would jump. The element's pivot may change after `wait_ms`.
+    PivotDuringTurn {
+        element: String,
+        wait_ms: u64,
+    },
     Canvas(CanvasError),
 }
 
@@ -66,9 +72,10 @@ impl RequestError {
             Self::Name { .. } => RejectionCause::InvalidName,
             Self::Value { .. } => RejectionCause::InvalidValue,
             Self::Speed(_) => RejectionCause::InvalidSpeed,
-            Self::Rotation(_) | Self::Pivot(_) | Self::NotWhole { .. } => {
-                RejectionCause::InvalidTransform
-            }
+            Self::Rotation(_)
+            | Self::Pivot(_)
+            | Self::NotWhole { .. }
+            | Self::PivotDuringTurn { .. } => RejectionCause::InvalidTransform,
             Self::Canvas(error) => error.cause(),
         }
     }
@@ -82,6 +89,11 @@ impl fmt::Display for RequestError {
             Self::Speed(error) => write!(formatter, "{error}"),
             Self::Rotation(error) => write!(formatter, "{error}"),
             Self::Pivot(error) => write!(formatter, "pivot: {error}"),
+            Self::PivotDuringTurn { element, wait_ms } => write!(
+                formatter,
+                "'{element}' was just turned and the page is still turning it, so its pivot cannot \
+                 change without a jump: try again in {wait_ms} ms (wait {wait_ms} in a script)"
+            ),
             Self::NotWhole {
                 what,
                 number,

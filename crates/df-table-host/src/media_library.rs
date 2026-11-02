@@ -129,14 +129,19 @@ pub fn media_problem(change: &SceneChange, entries: &[MediaEntry]) -> Option<Str
     }
 }
 
-/// A value that changes when the file does, so a page can ask whether it has the current one.
-fn entity_tag(metadata: &std::fs::Metadata) -> String {
+/// A value that changes when the file does, so a page can ask whether it has the current one. A
+/// file whose modification time cannot be read has no such value, and the answer says so: a
+/// made-up value would let a replaced file of the same size answer 304 with stale bytes.
+fn entity_tag(metadata: &std::fs::Metadata) -> Result<String, FileProblem> {
     let modified = metadata
         .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    format!("\"{:x}-{:x}\"", metadata.len(), modified)
+        .map_err(|error| {
+            FileProblem::Unreadable(format!("its modification time cannot be read: {error}"))
+        })?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| FileProblem::Unreadable("its modification time is before 1970".to_owned()))?
+        .as_nanos();
+    Ok(format!("\"{:x}-{:x}\"", metadata.len(), modified))
 }
 
 /// The request headers that decide how a media file is answered.
@@ -212,7 +217,7 @@ fn read_chunk(mut file: File, remaining: u64) -> std::io::Result<(File, Vec<u8>)
 
 /// The next `length` bytes of the file as a stream of chunks, each read on a blocking thread. The
 /// stream owns the file; dropping the answer (the page went away) stops the reading.
-fn read_in_chunks(
+pub(crate) fn read_in_chunks(
     file: File,
     length: u64,
 ) -> impl Stream<Item = std::io::Result<Bytes>> + Send + 'static {
@@ -282,9 +287,11 @@ fn serve_file(
     }
     let file_bytes = metadata.len();
     if file_bytes > limits.maximum_file_bytes {
-        return Err(FileProblem::TooLarge);
+        return Err(FileProblem::TooLarge {
+            maximum_bytes: limits.maximum_file_bytes,
+        });
     }
-    let tag = entity_tag(&metadata);
+    let tag = entity_tag(&metadata)?;
     if conditions.if_none_match.as_deref() == Some(tag.as_str()) {
         return Ok(Served::NotModified(tag));
     }
@@ -381,7 +388,16 @@ async fn media_file(
     };
     match served {
         Ok(served) => served_response(served, content_type(&name)),
-        Err(problem) => refused(problem.status(), problem.message()),
+        Err(problem) => {
+            if matches!(problem, FileProblem::Unreadable(_)) {
+                state.record_line(playground_line(
+                    "media_unreadable",
+                    &[("name", name.clone())],
+                ));
+                state.echo_new_lines();
+            }
+            refused(problem.status(), problem.message())
+        }
     }
 }
 

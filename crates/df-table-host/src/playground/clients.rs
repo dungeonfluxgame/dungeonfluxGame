@@ -18,7 +18,9 @@ use axum::response::{IntoResponse, Response};
 use df_playground::media::{ClientReport, ClientReportPost};
 
 use super::{done, refused, reject_malformed};
-use crate::limits::{FORGET_CLIENT_AFTER, MAXIMUM_CLIENT_NAME, MAXIMUM_CLIENTS};
+use crate::limits::{
+    FORGET_CLIENT_AFTER, MAXIMUM_CLIENT_NAME, MAXIMUM_CLIENTS, MAXIMUM_REPORT_BYTES,
+};
 use crate::state::AppState;
 use crate::wire::ClientView;
 
@@ -112,8 +114,15 @@ pub(super) async fn clients_json(State(state): State<Arc<AppState>>) -> Response
 }
 
 /// A page says what it is showing and playing. Nothing is recorded in the audit log and no other
-/// page is woken: a report is a reading, not a change.
+/// page is woken: a report is a reading, not a change. A report is at most `MAXIMUM_REPORT_BYTES`,
+/// so the whole table is at most that many bytes for each of `MAXIMUM_CLIENTS` pages.
 pub(super) async fn receive_report(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    if body.len() > MAXIMUM_REPORT_BYTES {
+        return refused(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("a report is at most {MAXIMUM_REPORT_BYTES} bytes"),
+        );
+    }
     let post: ClientReportPost = match serde_json::from_slice(&body) {
         Ok(post) => post,
         Err(error) => return reject_malformed(&state, &error),

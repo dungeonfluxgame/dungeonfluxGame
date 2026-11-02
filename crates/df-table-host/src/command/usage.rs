@@ -47,6 +47,7 @@ pub(super) fn playground_keys() -> String {
 pub fn usage_text() -> String {
     let video_limits = crate::media_library::video_limits_text();
     let playground_keys = playground_keys();
+    let engine_help = crate::engine::help_text();
     format!(
         "df-table dev [--port N] <command>\n\
          \n  {SPAWN_USAGE}\n      put an element on the canvas (x and y are its position; a field\n      called x or y can be changed with set)\n\
@@ -75,7 +76,7 @@ pub fn usage_text() -> String {
          \n  {FIXTURES_USAGE}\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\
          \n  {SCRIPT_USAGE}\n      run a file of commands, one per line; a line may start with #\n\
-         \n  help\n      this text\n\
+         {engine_help}\n  help\n      this text\n\
          \nQuote a value with spaces: name=\"Pip the Brave\".\n\
          Several effects in one command are applied in order and every failure is reported;\n\
          a script stops at its first failing line.\n\

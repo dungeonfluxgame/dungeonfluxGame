@@ -90,6 +90,9 @@ pub enum Command {
     /// A file of commands, one per line.
     Script(PathBuf),
     Help,
+    /// A verb of the owner actor: `input`, `viable`, `dump`, `force`, `projection`, `queue`,
+    /// `describe` or `broker`.
+    Engine(crate::engine::EngineCommand),
 }
 
 /// Why a command line was refused.
@@ -450,6 +453,9 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
             _ => Err(CommandError::Usage(SCRIPT_USAGE)),
         },
         "help" => Ok(Command::Help),
+        verb if crate::engine::VERBS.contains(&verb) => {
+            crate::engine::parse_verb(verb, rest).map(Command::Engine)
+        }
         other => Err(CommandError::Unknown(other.to_owned())),
     }
 }

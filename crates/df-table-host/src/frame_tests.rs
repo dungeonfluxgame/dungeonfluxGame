@@ -27,18 +27,17 @@ async fn run(running: &Running, line: &str) {
 async fn one_change_count_is_built_once_and_every_reader_gets_the_same_bytes() {
     let running = start(&STARTER_FILES).await;
     run(&running, "spawn marker m1").await;
-    let first = running.state.frame().expect("builds");
-    let second = running.state.frame().expect("builds");
+    let first = running.state.frame().await.expect("builds");
+    let second = running.state.frame().await.expect("builds");
     assert!(
-        Arc::ptr_eq(&first.json, &second.json),
-        "the second reader shares the first's bytes"
+        Arc::ptr_eq(&first.canvas, &second.canvas),
+        "the second reader shares the first's canvas bytes"
     );
     run(&running, "spawn marker m2").await;
-    let third = running.state.frame().expect("builds");
-    assert!(third.count > first.count);
+    let third = running.state.frame().await.expect("builds");
     assert!(
-        !Arc::ptr_eq(&first.json, &third.json),
-        "a change builds a new frame"
+        !Arc::ptr_eq(&first.canvas, &third.canvas),
+        "a change builds a new canvas"
     );
 }
 

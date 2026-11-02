@@ -84,7 +84,11 @@ fn queuing_lines_does_not_wait_for_a_terminal_that_is_blocked() {
 fn past_the_byte_bound_lines_are_dropped_counted_and_reported_when_the_terminal_moves() {
     let log = Arc::new(EventLog::default());
     let (writer, terminal) = blocked_terminal();
-    let echo = Arc::new(LineEcho::bounded(&log, 64, writer));
+    let echo = Arc::new(LineEcho::bounded(
+        &log,
+        2 * (28 + crate::limits::ECHO_LINE_OVERHEAD_BYTES),
+        writer,
+    ));
     for number in 0..20 {
         log.push(format!("line {number:02} {}", "x".repeat(20)));
     }

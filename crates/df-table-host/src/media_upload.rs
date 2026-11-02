@@ -15,14 +15,11 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use df_playground::media::media_kind;
 
+use crate::limits::{MAXIMUM_UPLOAD_KEY_BYTES, MAXIMUM_UPLOAD_NAME_BYTES};
 use crate::media_ingest::{IngestRefusal, MediaLimits};
 
 const NAME_KEY: &[u8] = b"name";
 const DATA_KEY: &[u8] = b"data_base64";
-/// Longest key worth reading: a longer one cannot be either field.
-const MAXIMUM_KEY_BYTES: usize = 16;
-/// Longest name as written in the request, escapes included.
-const MAXIMUM_NAME_BYTES: usize = 512;
 const BASE64_GROUP_BYTES: usize = 4;
 
 /// What is wrong with the shape of an add request.
@@ -206,7 +203,7 @@ impl EnvelopeParser {
 
     fn read_key(&mut self, mut key: Vec<u8>, byte: u8) -> Result<State, IngestRefusal> {
         if byte != b'"' {
-            if key.len() >= MAXIMUM_KEY_BYTES {
+            if key.len() >= MAXIMUM_UPLOAD_KEY_BYTES {
                 return Err(malformed(EnvelopeProblem::UnknownField));
             }
             key.push(byte);
@@ -239,7 +236,7 @@ impl EnvelopeParser {
             self.name = Some(parse_name(&raw)?);
             return Ok(State::AfterValue);
         }
-        if raw.len() >= MAXIMUM_NAME_BYTES {
+        if raw.len() >= MAXIMUM_UPLOAD_NAME_BYTES {
             return Err(malformed(EnvelopeProblem::NameTooLong));
         }
         raw.push(byte);

@@ -80,7 +80,9 @@ pub(crate) fn controls_pairs(changes: &[ControlsChange]) -> Vec<(&'static str, S
         .collect()
 }
 
-/// The verb and pairs of an applied scene change. `scene` is the overlay after the change, which
+/// The verb and pairs of an applied scene change. It is one match with an arm for each kind of
+/// change, kept whole on purpose: every verb's typed fields are read in one place, and the compiler
+/// refuses a new kind of change until it has an arm. `scene` is the overlay after the change, which
 /// holds the serial the host gave a camera move, a slide or a sound.
 fn scene_fields(
     change: &SceneChange,

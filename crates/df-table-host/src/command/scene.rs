@@ -6,6 +6,7 @@
 
 use df_playground::fixture::Slide;
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
+use df_playground::limits::MAXIMUM_SLIDE_PERCENT;
 use df_playground::scene::{
     ImageSlot, MAXIMUM_CAMERA_MS, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME,
     MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT, SceneChange, Target,
@@ -217,12 +218,14 @@ fn percent(key: &str, value: &str) -> Result<u8, CommandError> {
     value
         .parse::<u8>()
         .ok()
-        .filter(|share| *share <= 100)
+        .filter(|share| *share <= MAXIMUM_SLIDE_PERCENT)
         .ok_or_else(|| {
             bad_choice(
                 key,
                 value,
-                "a whole number from 0 to 100 (a share of the screen's width)",
+                format!(
+                    "a whole number from 0 to {MAXIMUM_SLIDE_PERCENT} (a share of the screen's width)"
+                ),
             )
         })
 }

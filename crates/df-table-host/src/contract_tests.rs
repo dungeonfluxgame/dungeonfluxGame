@@ -76,6 +76,11 @@ fn an_element_view_with_a_turn_and_a_pivot_reads_as_the_pages_stage_element() {
     assert_eq!(stage.color.as_deref(), Some("#ff8800"));
 }
 
+/// Waits until the page has finished gliding a turn, so a new pivot may be given.
+async fn settle() {
+    tokio::time::sleep(crate::limits::TURN_SETTLE + std::time::Duration::from_millis(60)).await;
+}
+
 async fn run(running: &Running, line: &str) -> Result<String, DevError> {
     run_dev(running.port, &split_words(line).expect("the line splits")).await
 }
@@ -172,6 +177,7 @@ async fn turning_back_to_zero_first_lets_the_pivot_change_without_a_jump() {
         .expect("spawns");
     run(&running, "rotate m1 90").await.expect("turns");
     run(&running, "rotate m1 0").await.expect("turns back");
+    settle().await;
     let level = frame_elements(&running).await;
     run(&running, "rotate m1 0 pivot=0,50")
         .await

@@ -312,3 +312,104 @@ async fn the_shipped_tour_script_runs_and_ends_on_the_whole_stage_after_both_zoo
         (None, 100, 3)
     );
 }
+
+async fn log_lines(running: &Running) -> Vec<String> {
+    let events = get(running.port, "/events.json").await.expect("answers");
+    let events: EventsReply = serde_json::from_str(&events.body).expect("events");
+    events.events.into_iter().map(|line| line.text).collect()
+}
+
+#[tokio::test]
+async fn a_camera_on_an_element_that_is_despawned_goes_back_to_the_stage_and_says_so() {
+    let running = with_the_camera_scene().await;
+    with_two_avatars(&running).await;
+    run(&running, "scene camera finn zoom=250 over=1500")
+        .await
+        .expect("zooms into Finn");
+    let woken = running.state.change_count();
+    run(&running, "despawn finn").await.expect("despawns");
+    let camera = camera_of(&running).await.expect("a camera");
+    assert_eq!(
+        (camera.target, camera.zoom_percent, camera.duration_ms),
+        (None, 100, 0),
+        "the overlay no longer says zoomed on Finn"
+    );
+    assert_eq!(camera.serial, 2, "the pull-back is its own numbered move");
+    assert!(running.state.change_count() > woken);
+    let lines = log_lines(&running).await;
+    assert!(
+        lines.iter().any(|line| line.starts_with(
+            "PLAYGROUND camera_wide reason=target_gone element=finn over=0 serial=2 revision="
+        )),
+        "{lines:?}"
+    );
+    run(
+        &running,
+        "spawn avatar finn x=30 y=20 name=Finn portrait=finn-alder.webp",
+    )
+    .await
+    .expect("a new Finn");
+    assert_eq!(
+        camera_of(&running).await.expect("a camera").target,
+        None,
+        "a respawn does not zoom back in with no command"
+    );
+}
+
+#[tokio::test]
+async fn a_despawn_of_another_element_or_a_clear_follows_the_same_rule() {
+    let running = with_the_camera_scene().await;
+    with_two_avatars(&running).await;
+    run(&running, "scene camera finn zoom=250 over=1500")
+        .await
+        .expect("zooms into Finn");
+    run(&running, "despawn sigrun").await.expect("despawns");
+    assert_eq!(
+        camera_of(&running)
+            .await
+            .expect("a camera")
+            .target
+            .as_deref(),
+        Some("finn"),
+        "the camera was not on Sigrun"
+    );
+    run(&running, "clear").await.expect("clears");
+    assert_eq!(camera_of(&running).await.expect("a camera").target, None);
+    assert_eq!(
+        log_lines(&running)
+            .await
+            .iter()
+            .filter(|line| line.starts_with("PLAYGROUND camera_wide reason=target_gone"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_late_reader_of_the_same_change_count_gets_the_moves_age_now() {
+    let running = with_the_camera_scene().await;
+    with_two_avatars(&running).await;
+    run(&running, "scene camera finn zoom=250 over=60000")
+        .await
+        .expect("a long move");
+    let elapsed = |frame: &crate::state::BuiltFrame| {
+        let json: serde_json::Value =
+            serde_json::from_slice(&frame.to_vec()).expect("the frame is JSON");
+        json["controls"]["scene"]["camera"]["elapsed_ms"]
+            .as_u64()
+            .expect("a camera with an age")
+    };
+    let first = running.state.frame().await.expect("builds");
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    let late = running.state.frame().await.expect("builds");
+    assert!(
+        std::sync::Arc::ptr_eq(&first.canvas, &late.canvas),
+        "the canvas half is shared: nothing changed"
+    );
+    assert!(
+        elapsed(&late) >= elapsed(&first) + 200,
+        "the late reader continues from where the move is: {} then {}",
+        elapsed(&first),
+        elapsed(&late)
+    );
+}

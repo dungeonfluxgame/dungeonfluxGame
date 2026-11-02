@@ -243,8 +243,17 @@ fn state_showing(names: &[&str]) -> (PlaygroundState, Vec<String>) {
         "test-boot".to_owned(),
     );
     let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
-    state.reconcile(&names);
+    state.reconcile(&names, |_| {});
     (state, names)
+}
+
+/// One change of the controls against the fixture names as read just now.
+fn choose(
+    state: &PlaygroundState,
+    change: ControlsChange,
+    names: &[String],
+) -> Result<ControlsReply, ControlsRefusal> {
+    state.change_all(vec![change], names, state.generation(), |_| {})
 }
 
 fn caption() -> SceneChange {
@@ -260,15 +269,15 @@ fn a_scene_change_checked_against_one_fixture_is_refused_after_another_is_shown(
     let base = Fixture::parse(SCENE).expect("parses");
     let (shown, generation) = state.scene_target().expect("a fixture is shown");
     assert_eq!(shown, "camera_demo.json");
-    state
-        .change(
-            ControlsChange::Fixture("scene_quay.json".to_owned()),
-            &names,
-        )
-        .expect("another scene is chosen while the check was running");
+    choose(
+        &state,
+        ControlsChange::Fixture("scene_quay.json".to_owned()),
+        &names,
+    )
+    .expect("another scene is chosen while the check was running");
     let revision = state.revision();
     assert_eq!(
-        state.change_scene(caption(), &base, generation),
+        state.change_scene(caption(), &base, generation, |_| {}),
         Err(SceneRefusal::FixtureChanged)
     );
     assert_eq!(state.revision(), revision, "nothing was applied");
@@ -276,7 +285,7 @@ fn a_scene_change_checked_against_one_fixture_is_refused_after_another_is_shown(
     let refusal = SceneRefusal::FixtureChanged;
     assert!(refusal.to_string().contains("try again"));
     let (_, fresh) = state.scene_target().expect("shown");
-    assert!(state.change_scene(caption(), &base, fresh).is_ok());
+    assert!(state.change_scene(caption(), &base, fresh, |_| {}).is_ok());
 }
 
 #[test]
@@ -286,7 +295,7 @@ fn a_scene_change_is_refused_when_the_fixture_file_was_written_after_it_was_read
     let (_, generation) = state.scene_target().expect("shown");
     state.fixture_files_changed();
     assert_eq!(
-        state.change_scene(caption(), &base, generation),
+        state.change_scene(caption(), &base, generation, |_| {}),
         Err(SceneRefusal::FixtureChanged)
     );
 }
@@ -294,9 +303,8 @@ fn a_scene_change_is_refused_when_the_fixture_file_was_written_after_it_was_read
 #[test]
 fn choosing_a_fixture_that_is_not_there_is_a_typed_refusal_that_names_the_ones_that_are() {
     let (state, names) = state_showing(&["a.json", "b.json"]);
-    let refusal = state
-        .change(ControlsChange::Fixture("c.json".to_owned()), &names)
-        .expect_err("refused");
+    let refusal =
+        choose(&state, ControlsChange::Fixture("c.json".to_owned()), &names).expect_err("refused");
     assert_eq!(
         refusal,
         ControlsRefusal::NoSuchFixture {

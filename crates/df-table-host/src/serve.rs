@@ -117,21 +117,30 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
     let stop = Arc::new(Notify::new());
     let stopped = Arc::clone(&stop);
     let _clock = StopWhenDropped(server::spawn_clock(Arc::clone(&state)));
+    let echoing = Arc::clone(&state);
     let serving = server::serve_listener(listener, state, async move {
         stopped.notified().await;
     });
     tokio::pin!(serving);
-    tokio::select! {
+    let result = tokio::select! {
         result = &mut serving => result.map_err(|error| ServeError::Serving(error.to_string())),
-        interrupt = tokio::signal::ctrl_c() => {
-            interrupt.map_err(|error| ServeError::Interrupt(error.to_string()))?;
-            stop.notify_one();
-            if let Ok(result) = tokio::time::timeout(SHUTDOWN_GRACE, &mut serving).await {
-                result.map_err(|error| ServeError::Serving(error.to_string()))
-            } else {
-                announce("open connections did not finish in time; closing them");
-                Ok(())
+        interrupt = tokio::signal::ctrl_c() => match interrupt {
+            Err(error) => Err(ServeError::Interrupt(error.to_string())),
+            Ok(()) => {
+                stop.notify_one();
+                if let Ok(result) = tokio::time::timeout(SHUTDOWN_GRACE, &mut serving).await {
+                    result.map_err(|error| ServeError::Serving(error.to_string()))
+                } else {
+                    announce("open connections did not finish in time; closing them");
+                    Ok(())
+                }
             }
-        }
+        },
+    };
+    // The last audit lines before the stop (a final arrival, a reject) reach the terminal.
+    echoing.echo_new_lines();
+    if !echoing.finish_echo(SHUTDOWN_GRACE) {
+        announce("the terminal did not take the last audit lines in time");
     }
+    result
 }

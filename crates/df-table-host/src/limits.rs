@@ -17,8 +17,15 @@ const MEBIBYTE: usize = 1024 * KIBIBYTE;
 const GIBIBYTE: u64 = 1024 * 1024 * 1024;
 
 /// Most audit lines kept. The log is the evidence of a playtest, and 30 arrivals a tick can push
-/// hundreds of lines out in a second, so the bound is a memory bound.
+/// hundreds of lines out in a second.
 pub const MAXIMUM_LOGGED_LINES: usize = 100_000;
+/// Most bytes of audit lines kept, whatever their number: the memory bound of the log. A line is
+/// bounded too (a batch holds at most `MAXIMUM_BATCH_CHANGES` changes), so this is reached only by
+/// a very long run of long lines.
+pub const MAXIMUM_LOGGED_BYTES: usize = 256 * MEBIBYTE;
+/// Most changes one batch of playground controls holds. There are eight kinds of change and a
+/// repeat is useless, so this is far above any real batch; it bounds the audit line of a batch.
+pub const MAXIMUM_BATCH_CHANGES: usize = 256;
 /// Most event lines one events answer and the viewer carry.
 pub const MAXIMUM_EVENTS_PER_ANSWER: usize = 10_000;
 /// Largest request body accepted on the developer API, in bytes. The media add route reads its
@@ -30,8 +37,18 @@ pub const MAXIMUM_LISTED_PROBLEMS: usize = 10_000;
 pub const MAXIMUM_RESPONSE_BYTES: usize = 256 * MEBIBYTE;
 /// Most characters of an unexpected answer echoed in an error.
 pub const MAXIMUM_ECHOED_ANSWER: usize = 8_192;
-/// Largest playground file served (the compiled package is the biggest), in bytes.
-pub const MAXIMUM_FILE_BYTES: u64 = GIBIBYTE;
+/// Largest compiled package file served, in bytes. It is streamed, never held whole, so this
+/// bounds a response and not memory.
+pub const MAXIMUM_PACKAGE_FILE_BYTES: u64 = GIBIBYTE;
+/// Largest page, theme or fixture file read, in bytes. These are read whole (a fixture is parsed
+/// into a tree several times its size), so the bound is what such a file is for, not what a disk
+/// holds.
+pub const MAXIMUM_ASSET_FILE_BYTES: u64 = 32 * MEBIBYTE as u64;
+/// Longest name of a fixture file, in bytes: the longest a common file system allows.
+pub const MAXIMUM_FIXTURE_NAME_LENGTH: usize = 255;
+/// Largest report a page may send about what it shows and plays, in bytes. With
+/// `MAXIMUM_CLIENTS` this bounds the whole client table (about 64 MiB), whatever a report holds.
+pub const MAXIMUM_REPORT_BYTES: usize = 64 * KIBIBYTE;
 /// Most open pages remembered at once; a page silent for `FORGET_CLIENT_AFTER` is forgotten
 /// first, so this bounds a flood of page names, not real pages.
 pub const MAXIMUM_CLIENTS: usize = 1_024;
@@ -47,10 +64,18 @@ pub const MAXIMUM_KIND_FILES: usize = 4_096;
 pub const MAXIMUM_KIND_FILE_BYTES: u64 = 4 * MEBIBYTE as u64;
 /// Most characters of an element's label the debugging view draws (the text maximum of a field).
 pub const MAXIMUM_LABEL_CHARACTERS: usize = 65_536;
-/// Most bytes of audit lines waiting for the terminal. A terminal that stops accepting output
-/// fills this and then lines are dropped and counted, so a blocked console costs memory up to
-/// this and nothing else.
+/// Most bytes of audit lines waiting for the terminal, each counted with
+/// `ECHO_LINE_OVERHEAD_BYTES`. A terminal that stops accepting output fills this and then lines
+/// are dropped and counted, so a blocked console costs memory up to this and nothing else.
 pub const MAXIMUM_PENDING_ECHO_BYTES: usize = 256 * MEBIBYTE;
+/// What a queued audit line costs besides its text: the string header, allocator slack and the
+/// queue node.
+pub const ECHO_LINE_OVERHEAD_BYTES: usize = 128;
+/// Longest name of a key of the media upload envelope (`name`, `data_base64`), in bytes.
+pub const MAXIMUM_UPLOAD_KEY_BYTES: usize = 16;
+/// Longest media name in the upload envelope, in bytes: a media name is at most 255 plain
+/// characters, and the envelope may spell it with escapes.
+pub const MAXIMUM_UPLOAD_NAME_BYTES: usize = 512;
 
 /// Tuning values, not caps: how often and how long, collected here so they are found together.
 /// How often the host's clock moves travelling elements (about 30 times a second), while
@@ -65,3 +90,11 @@ pub const FORGET_CLIENT_AFTER: Duration = Duration::from_secs(45);
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 /// Deadline for connecting, sending and reading one answer on the command line.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long the echo writer waits for a line before it reports what it dropped.
+pub const ECHO_NOTICE_AFTER: Duration = Duration::from_millis(500);
+/// The page glides a turn over this long (`.figure` in `theme.css`, `CAMERA_GLIDE_MS` in the
+/// playground), and `transform-origin` does not glide, so a pivot changed during a glide jumps.
+pub const FIGURE_GLIDE_MS: u64 = 90;
+/// How long after a change of an element's turn its pivot may not change: the glide and a margin
+/// for the frame that carries it to the page.
+pub const TURN_SETTLE: Duration = Duration::from_millis(150);

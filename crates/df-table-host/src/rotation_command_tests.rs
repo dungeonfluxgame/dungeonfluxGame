@@ -348,13 +348,13 @@ async fn a_repl_line_and_a_script_both_rotate() {
     let path = directory.path().join("turn.txt");
     std::fs::write(
         &path,
-        "rotate m1 90\n# a note\nrotate m1 0\nrotate m1 180 pivot=0,0\n",
+        "rotate m1 90\n# a note\nrotate m1 0\nwait 250\nrotate m1 180 pivot=0,0\n",
     )
     .expect("writes the script");
     let said = run(&running, &format!("script {}", path.display()))
         .await
         .expect("runs");
-    assert!(said.ends_with("ran 3 commands, all ok"), "{said}");
+    assert!(said.ends_with("ran 4 commands, all ok"), "{said}");
     let turned = element(&running, "m1").await;
     assert_eq!(turned.rotation_degrees, 180);
     assert_eq!((turned.pivot.x_percent, turned.pivot.y_percent), (0, 0));
@@ -462,6 +462,7 @@ async fn a_pivot_change_on_a_turned_element_is_refused_once_and_the_log_says_why
     );
     assert_eq!(element(&running, "m1").await.pivot, PivotView::default());
     run(&running, "rotate m1 0").await.expect("back to zero");
+    tokio::time::sleep(crate::limits::TURN_SETTLE + std::time::Duration::from_millis(60)).await;
     run(&running, "rotate m1 0 pivot=0,50")
         .await
         .expect("now it may");

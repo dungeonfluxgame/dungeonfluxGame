@@ -1,8 +1,8 @@
 //! A bounded, ordered record of the audit lines the host has seen, for the viewer and the
 //! `events` command.
 //!
-//! It owns the bound and the numbering. It never interprets a line and never grows without limit:
-//! the oldest lines are forgotten first. Every list it returns is oldest first, so a reader that
+//! It owns the bound and the numbering. It never interprets a line and never grows without limit,
+//! in lines or in bytes: the oldest lines are forgotten first. Every list it returns is oldest first, so a reader that
 //! wants newest first reverses it.
 
 use std::collections::VecDeque;
@@ -10,7 +10,7 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use crate::limits::MAXIMUM_LOGGED_LINES;
+use crate::limits::{MAXIMUM_LOGGED_BYTES, MAXIMUM_LOGGED_LINES};
 
 /// One recorded line and its place in the order. Sequences start at 1 and restart when the host
 /// does.
@@ -24,15 +24,34 @@ pub struct LoggedLine {
 struct Lines {
     last_sequence: u64,
     kept: VecDeque<LoggedLine>,
+    /// Bytes of text in `kept`.
+    bytes: usize,
 }
 
 /// The log of audit lines.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EventLog {
     lines: Mutex<Lines>,
+    maximum_lines: usize,
+    maximum_bytes: usize,
+}
+
+impl Default for EventLog {
+    fn default() -> Self {
+        Self::with_bounds(MAXIMUM_LOGGED_LINES, MAXIMUM_LOGGED_BYTES)
+    }
 }
 
 impl EventLog {
+    /// A log that keeps at most `maximum_lines` lines and `maximum_bytes` bytes of text.
+    pub fn with_bounds(maximum_lines: usize, maximum_bytes: usize) -> Self {
+        Self {
+            lines: Mutex::new(Lines::default()),
+            maximum_lines,
+            maximum_bytes,
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Lines> {
         self.lines.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -41,9 +60,16 @@ impl EventLog {
         let mut lines = self.lock();
         lines.last_sequence += 1;
         let sequence = lines.last_sequence;
-        if lines.kept.len() >= MAXIMUM_LOGGED_LINES {
-            lines.kept.pop_front();
+        let length = text.len();
+        while lines.kept.len() >= self.maximum_lines
+            || (lines.bytes.saturating_add(length) > self.maximum_bytes && !lines.kept.is_empty())
+        {
+            let Some(forgotten) = lines.kept.pop_front() else {
+                break;
+            };
+            lines.bytes = lines.bytes.saturating_sub(forgotten.text.len());
         }
+        lines.bytes = lines.bytes.saturating_add(length);
         lines.kept.push_back(LoggedLine { sequence, text });
     }
 

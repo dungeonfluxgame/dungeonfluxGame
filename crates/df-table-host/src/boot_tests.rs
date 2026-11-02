@@ -1,8 +1,6 @@
 //! Which run of the host an answer is from, and how long ago a move began, so a page that keeps
 //! running across a host restart or opens mid-move can carry on correctly.
 
-use std::time::Duration;
-
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use df_playground::fixture::Camera;
@@ -81,43 +79,66 @@ async fn the_controls_and_the_frame_name_the_run_of_the_host_and_a_restart_has_a
     );
 }
 
+#[test]
+fn run_names_have_one_width_and_sort_in_the_order_the_runs_started() {
+    // Built the way `AppState` builds one: the page orders runs by comparing the names.
+    let names = [
+        crate::state::new_boot_id(),
+        crate::state::new_boot_id(),
+        crate::state::new_boot_id(),
+    ];
+    assert!(names.iter().all(|name| name.len() == names[0].len()));
+    assert!(names.windows(2).all(|pair| pair[0] < pair[1]), "{names:?}");
+}
+
+/// A move reads as having begun at the host's clock, with the time since in `elapsed_ms`. The clock
+/// is the host's own and is not set here, so the test holds what does not depend on how long it
+/// takes: the start is stamped once and never moves, the age never goes down between reads, and
+/// how an age is made from a start is tested without a clock in `continuity_tests`.
 #[tokio::test]
-async fn a_move_says_how_long_ago_it_began_by_the_hosts_clock_and_a_new_move_begins_again() {
+async fn a_move_is_stamped_with_the_hosts_clock_once_and_every_read_says_how_old_it_is() {
     let running = with_finn().await;
     run(&running, "scene camera finn over=60000")
         .await
         .expect("moves");
-    let at_once = camera_of(&running).await;
-    assert!(at_once.elapsed_ms < 1_000, "{at_once:?}");
-    tokio::time::sleep(Duration::from_millis(250)).await;
-    let later = camera_of(&running).await;
-    assert_eq!(later.serial, at_once.serial);
-    assert_eq!(later.began_ms, at_once.began_ms, "the start does not move");
+    let first = camera_of(&running).await;
+    let second = camera_of(&running).await;
+    assert_eq!(second.serial, first.serial);
+    assert_eq!(second.began_ms, first.began_ms, "the start does not move");
     assert!(
-        later.elapsed_ms >= at_once.elapsed_ms + 200,
-        "{at_once:?} then {later:?}"
+        second.elapsed_ms >= first.elapsed_ms,
+        "{first:?} then {second:?}"
     );
+    let in_frame = frame(&running)
+        .await
+        .controls
+        .scene
+        .camera
+        .expect("the frame carries the move too");
     assert_eq!(
-        frame(&running)
-            .await
-            .controls
-            .scene
-            .camera
-            .map(|camera| camera.serial),
-        Some(later.serial),
-        "the frame carries the move too"
+        (in_frame.serial, in_frame.began_ms),
+        (first.serial, first.began_ms)
     );
+    assert!(in_frame.elapsed_ms >= second.elapsed_ms);
+}
+
+#[tokio::test]
+async fn a_new_move_is_the_next_serial_and_begins_no_earlier_than_the_last() {
+    let running = with_finn().await;
+    run(&running, "scene camera finn over=60000")
+        .await
+        .expect("moves");
+    let first = camera_of(&running).await;
     run(&running, "scene camera finn over=60000")
         .await
         .expect("moves again");
     let again = camera_of(&running).await;
-    assert_eq!(again.serial, later.serial + 1);
-    assert!(again.began_ms >= later.began_ms + 200);
-    assert!(again.elapsed_ms < later.elapsed_ms);
+    assert_eq!(again.serial, first.serial + 1);
+    assert!(again.began_ms >= first.began_ms);
 }
 
 #[tokio::test]
-async fn a_slide_says_how_long_ago_it_began_too() {
+async fn a_slide_is_stamped_the_same_way() {
     let running = with_finn().await;
     let body = json!({"name": "map.png", "data_base64": STANDARD.encode(b"not really a picture")})
         .to_string();
@@ -133,11 +154,8 @@ async fn a_slide_says_how_long_ago_it_began_too() {
         other => panic!("a card with a slide, got {other:?}"),
     };
     let first = slide(controls(&running).await);
-    tokio::time::sleep(Duration::from_millis(250)).await;
     let later = slide(controls(&running).await);
     assert_eq!(later.serial, first.serial);
-    assert!(
-        later.elapsed_ms >= first.elapsed_ms + 200,
-        "{first:?} then {later:?}"
-    );
+    assert_eq!(later.began_ms, first.began_ms);
+    assert!(later.elapsed_ms >= first.elapsed_ms);
 }

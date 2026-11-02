@@ -1,0 +1,297 @@
+//! The `/dev/engine/*` routes: the owner actor's developer API.
+//!
+//! They sit behind the same guard as every route of the host (loopback host names, JSON for any
+//! change, no foreign origin), because they are merged into the one router before its layers.
+//! A read is a GET and a change is a POST of JSON; every answer is an `EngineReply`, `done` with
+//! the value or `rejected` with a typed error and its message, and a refusal that is the owner's
+//! busy or stopped state is a 503 while any other refusal is a 400. The routes hold no state of
+//! their own beyond the handle to the owner thread, which they start with the router.
+
+use std::sync::Arc;
+
+use axum::body::Bytes;
+use axum::extract::{Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+use crate::state::AppState;
+
+use super::adapters::{
+    Adapters, BrokerSide, ChaosInterpreter, DevClock, DevControls, DevDice, DevKnowledge,
+    DevNarrator, DevRulesOwner,
+};
+use super::audit::LogBrokerAudit;
+use super::commit::ScriptedCommitStore;
+use super::handle::EngineHandle;
+use super::report::{EngineError, EngineReply};
+use super::request::{
+    AudienceSpec, ChaosRequest, ClockControl, DiceControl, ForceRequest, InputRequest, QueueControl,
+};
+use super::setup::{EngineConfig, EngineStartError, dev_machines};
+
+/// The addresses of the dev engine API.
+pub mod path {
+    pub const INPUT: &str = "/dev/engine/input";
+    pub const DUMP: &str = "/dev/engine/dump";
+    pub const VIABLE: &str = "/dev/engine/viable";
+    pub const FORCE: &str = "/dev/engine/force";
+    pub const PROJECTION: &str = "/dev/engine/projection";
+    pub const QUEUE: &str = "/dev/engine/queue";
+    pub const DESCRIBE: &str = "/dev/engine/describe";
+    pub const BROKER_QUEUES: &str = "/dev/engine/broker/queues";
+    pub const BROKER_LEDGER: &str = "/dev/engine/broker/ledger";
+    pub const BROKER_REQUEST: &str = "/dev/engine/broker/request";
+    pub const HEALTH: &str = "/dev/engine/health";
+    pub const CLOCK: &str = "/dev/engine/clock";
+    pub const DICE: &str = "/dev/engine/dice";
+    pub const CHAOS: &str = "/dev/engine/chaos";
+}
+
+/// The query parameter of `path::VIABLE`.
+pub const SEAT_PARAMETER: &str = "seat";
+/// The query parameter of `path::PROJECTION`: `tv`, or a seat number.
+pub const AUDIENCE_PARAMETER: &str = "audience";
+
+/// The body of `path::BROKER_REQUEST`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerRequestBody {
+    pub purpose: String,
+}
+
+#[derive(Clone)]
+struct EngineRoutes {
+    app: Arc<AppState>,
+    engine: Arc<Result<EngineHandle, EngineStartError>>,
+}
+
+/// Starts the dev engine over the host's log: the real machines and queue over fake adapters.
+fn start_dev_engine(app: &AppState) -> Result<EngineHandle, EngineStartError> {
+    let config = EngineConfig::dev();
+    let log = Arc::clone(app.log());
+    let clock = Arc::new(DevClock::starting_now());
+    let dice = Arc::new(DevDice::seeded(DEV_DICE_SEED));
+    let interpreter = Arc::new(ChaosInterpreter::default());
+    let store = Arc::new(ScriptedCommitStore::default());
+    let machines = dev_machines(config.first_scene)?;
+    let adapters = Adapters {
+        broker: BrokerSide::dev(
+            clock.clone(),
+            Arc::new(LogBrokerAudit::new(Arc::clone(&log))),
+        )?,
+        rules: Arc::new(DevRulesOwner::new(machines.check)),
+        interpreter: interpreter.clone(),
+        narrator: Arc::new(DevNarrator),
+        dice: dice.clone(),
+        knowledge: Arc::new(DevKnowledge),
+        controls: DevControls {
+            clock: Some(clock.clone()),
+            dice: Some(dice),
+            interpreter: Some(interpreter),
+            commit: Some(store.clone()),
+        },
+        clock,
+    };
+    EngineHandle::start(config, adapters, store, log)
+}
+
+/// The seed of the dev engine's dice, so a run is reproducible.
+const DEV_DICE_SEED: u64 = 20_261_102;
+
+fn status_of(error: &EngineError) -> StatusCode {
+    match error {
+        EngineError::MailboxFull | EngineError::Stopped | EngineError::NotStarted { .. } => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        EngineError::NoAnswer | EngineError::Unwritable { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
+    }
+}
+
+fn reply<T: Serialize>(routes: &EngineRoutes, result: Result<T, EngineError>) -> Response {
+    routes.app.echo_new_lines();
+    let status = result.as_ref().err().map_or(StatusCode::OK, status_of);
+    (status, Json(EngineReply::from_result(result))).into_response()
+}
+
+fn engine(routes: &EngineRoutes) -> Result<&EngineHandle, EngineError> {
+    match routes.engine.as_ref() {
+        Ok(handle) => Ok(handle),
+        Err(error) => Err(EngineError::NotStarted {
+            reason: error.to_string(),
+        }),
+    }
+}
+
+fn body<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, EngineError> {
+    serde_json::from_slice(bytes).map_err(|error| EngineError::BadRequest {
+        reason: format!("the request body is not valid: {error}"),
+    })
+}
+
+async fn input(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+    let result = async {
+        let request: InputRequest = body(&bytes)?;
+        engine(&routes)?.submit(request).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+async fn dump(State(routes): State<EngineRoutes>) -> Response {
+    let result = async { engine(&routes)?.dump().await }.await;
+    reply(&routes, result)
+}
+
+#[derive(Debug, Deserialize)]
+struct ViableQuery {
+    seat: Option<u64>,
+}
+
+async fn viable(State(routes): State<EngineRoutes>, Query(query): Query<ViableQuery>) -> Response {
+    let result = async {
+        let seat = query.seat.ok_or_else(|| EngineError::BadRequest {
+            reason: format!("give ?{SEAT_PARAMETER}=N"),
+        })?;
+        engine(&routes)?.viable(seat).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+async fn force(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+    let result = async {
+        let request: ForceRequest = body(&bytes)?;
+        engine(&routes)?.force(request).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectionQuery {
+    audience: Option<String>,
+}
+
+fn audience_of(text: Option<&str>) -> Result<AudienceSpec, EngineError> {
+    let bad = || EngineError::BadRequest {
+        reason: format!("give ?{AUDIENCE_PARAMETER}=tv or a seat number"),
+    };
+    match text.ok_or_else(bad)? {
+        "tv" => Ok(AudienceSpec::Tv),
+        seat => seat
+            .parse::<u64>()
+            .map(|seat| AudienceSpec::Seat { seat })
+            .map_err(|_| bad()),
+    }
+}
+
+async fn projection(
+    State(routes): State<EngineRoutes>,
+    Query(query): Query<ProjectionQuery>,
+) -> Response {
+    let result = async {
+        let audience = audience_of(query.audience.as_deref())?;
+        engine(&routes)?.projection(audience).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+async fn queue_show(State(routes): State<EngineRoutes>) -> Response {
+    let result = async { engine(&routes)?.queue_show().await }.await;
+    reply(&routes, result)
+}
+
+async fn queue_control(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+    let result = async {
+        let control: QueueControl = body(&bytes)?;
+        engine(&routes)?.queue_control(control).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+async fn describe(State(routes): State<EngineRoutes>) -> Response {
+    let result = async { engine(&routes)?.describe().await }.await;
+    reply(&routes, result)
+}
+
+async fn health(State(routes): State<EngineRoutes>) -> Response {
+    let result = async { engine(&routes)?.health().await }.await;
+    reply(&routes, result)
+}
+
+async fn clock(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+    let result = async {
+        let control: ClockControl = body(&bytes)?;
+        engine(&routes)?.clock(control).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+async fn dice(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+    let result = async {
+        let control: DiceControl = body(&bytes)?;
+        engine(&routes)?.dice(control).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+async fn chaos(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+    let result = async {
+        let request: ChaosRequest = body(&bytes)?;
+        engine(&routes)?.chaos(request).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+async fn broker_queues(State(routes): State<EngineRoutes>) -> Response {
+    let result = async { engine(&routes)?.broker_queues().await }.await;
+    reply(&routes, result)
+}
+
+async fn broker_ledger(State(routes): State<EngineRoutes>) -> Response {
+    let result = async { engine(&routes)?.broker_ledger().await }.await;
+    reply(&routes, result)
+}
+
+async fn broker_request(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+    let result = async {
+        let request: BrokerRequestBody = body(&bytes)?;
+        engine(&routes)?.broker_request(request.purpose).await
+    }
+    .await;
+    reply(&routes, result)
+}
+
+/// The routes of the dev engine, with the owner thread they talk to. The guard and the body limit
+/// of the host's router apply to them when this is merged into it.
+pub fn router(app: Arc<AppState>) -> Router {
+    let engine = Arc::new(start_dev_engine(&app));
+    let routes = EngineRoutes { app, engine };
+    Router::new()
+        .route(path::INPUT, post(input))
+        .route(path::DUMP, get(dump))
+        .route(path::VIABLE, get(viable))
+        .route(path::FORCE, post(force))
+        .route(path::PROJECTION, get(projection))
+        .route(path::QUEUE, get(queue_show).post(queue_control))
+        .route(path::DESCRIBE, get(describe))
+        .route(path::BROKER_QUEUES, get(broker_queues))
+        .route(path::BROKER_LEDGER, get(broker_ledger))
+        .route(path::BROKER_REQUEST, post(broker_request))
+        .route(path::HEALTH, get(health))
+        .route(path::CLOCK, post(clock))
+        .route(path::DICE, post(dice))
+        .route(path::CHAOS, post(chaos))
+        .with_state(routes)
+}

@@ -4,14 +4,17 @@
 //! It owns the lock discipline in one place. A route takes the canvas lock briefly and never across
 //! an `.await`, and queues new audit lines for the terminal only after the lock is released (the
 //! echo never waits for the terminal). It also owns what is shared between readers: the frame, built
-//! once for each change and handed to every page as the same bytes, and the signal that wakes the
-//! host's clock when something starts to move. It decides nothing about requests: `server` and
+//! once for each change (the canvas half, off the runtime threads) and handed to every page as the
+//! same bytes, and the signal that wakes the host's clock when something starts to move. It decides nothing about requests: `server` and
 //! `playground` own their routes.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
+use axum::body::Bytes;
 use tokio::sync::{Notify, watch};
 
 use df_table::canvas::Canvas;
@@ -20,16 +23,44 @@ use df_table::event::{EffectKind, RejectionCause, TableEvent};
 use df_table::ports::EventSink;
 
 use crate::event_log::EventLog;
+use crate::limits::TURN_SETTLE;
 use crate::playground::{PlaygroundFiles, PlaygroundState};
 use crate::sink::{HostSink, LineEcho};
 use crate::view::{FrameCanvas, ViewError};
-use crate::wire::Frame;
 
-/// The frame as bytes for the change count it was built at, shared by every reader of it.
+/// A frame as the pieces of its JSON: the canvas half is built once for a change count and shared
+/// by every reader of it; the head (the count) and the tail (what the playground shows, with each
+/// move's age as of now) are made for each reader, because a move's age grows while the canvas
+/// does not change.
 #[derive(Debug, Clone)]
 pub(crate) struct BuiltFrame {
-    pub(crate) count: u64,
-    pub(crate) json: Arc<[u8]>,
+    pub(crate) canvas: Arc<[u8]>,
+    head: Vec<u8>,
+    tail: Vec<u8>,
+}
+
+impl BuiltFrame {
+    /// The JSON of the whole frame as the pieces in order, without copying the canvas.
+    pub(crate) fn chunks(&self) -> [Bytes; 3] {
+        [
+            Bytes::copy_from_slice(&self.head),
+            Bytes::from_owner(Arc::clone(&self.canvas)),
+            Bytes::copy_from_slice(&self.tail),
+        ]
+    }
+
+    /// The JSON of the whole frame in one piece, for a test.
+    #[cfg(test)]
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
+        [self.head.as_slice(), &self.canvas, self.tail.as_slice()].concat()
+    }
+}
+
+/// The canvas half of the frame for one change count.
+#[derive(Debug, Clone)]
+struct CachedCanvas {
+    count: u64,
+    json: Arc<[u8]>,
 }
 
 /// Why a frame could not be built.
@@ -37,6 +68,8 @@ pub(crate) struct BuiltFrame {
 pub(crate) enum FrameError {
     View(ViewError),
     Json(serde_json::Error),
+    /// The thread that builds the canvas half did not finish.
+    Task(String),
 }
 
 impl std::fmt::Display for FrameError {
@@ -44,21 +77,27 @@ impl std::fmt::Display for FrameError {
         match self {
             Self::View(error) => write!(formatter, "{error}"),
             Self::Json(error) => write!(formatter, "the frame could not be written: {error}"),
+            Self::Task(error) => write!(formatter, "the frame could not be built: {error}"),
         }
     }
 }
 
 /// A name for this run of the host: the time it started and the process, so two runs never share
-/// one and a page can tell a restarted host from the same one. A clock before 1970 reads as zero,
+/// one and a page can tell a restarted host from the same one and an older run from a newer. A
+/// clock before 1970 reads as zero,
 /// and the process number still tells the runs apart.
-fn new_boot_id() -> String {
+pub(crate) fn new_boot_id() -> String {
     let nanoseconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
     static STARTED_IN_THIS_PROCESS: std::sync::atomic::AtomicU64 =
         std::sync::atomic::AtomicU64::new(0);
     let ordinal = STARTED_IN_THIS_PROCESS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!("{nanoseconds:x}-{:x}-{ordinal:x}", std::process::id())
+    // Fixed width, so ids sort in the order the runs started and a page can tell an older run.
+    format!(
+        "{nanoseconds:032x}-{:08x}-{ordinal:08x}",
+        std::process::id()
+    )
 }
 
 /// Everything the handlers share.
@@ -70,8 +109,13 @@ pub struct AppState {
     playground: PlaygroundState,
     /// Counts the host's changes. A reader waiting for news waits on this.
     changes: watch::Sender<u64>,
-    /// The frame last built, for the change count it was built at.
-    frame: Mutex<Option<BuiltFrame>>,
+    /// The canvas half of the frame last built, for the change count it was built at.
+    frame: Mutex<Option<CachedCanvas>>,
+    /// Held while the canvas half is built, so readers that miss the cache at the same moment wait
+    /// for one build instead of each making their own.
+    building: tokio::sync::Mutex<()>,
+    /// When each element's turn last changed, for as long as the page is still gliding it.
+    turns: Mutex<BTreeMap<ElementId, Instant>>,
     /// Signalled when an element starts to travel, so the clock can sleep while nothing moves.
     motion: Notify,
     /// How many ticks took the canvas lock, so a test can see that an idle clock does not.
@@ -95,6 +139,8 @@ impl AppState {
             playground: PlaygroundState::new(playground_files, new_boot_id()),
             changes: watch::channel(0).0,
             frame: Mutex::new(None),
+            building: tokio::sync::Mutex::new(()),
+            turns: Mutex::new(BTreeMap::new()),
             motion: Notify::new(),
             ticks: AtomicU64::new(0),
         }
@@ -126,6 +172,30 @@ impl AppState {
         self.motion.notified().await;
     }
 
+    /// Says that the turn of `element` just changed, so the page is gliding it for `TURN_SETTLE`.
+    /// Elements whose glide is over are forgotten, so this holds only the ones turned lately.
+    pub(crate) fn note_turn(&self, element: ElementId) {
+        let now = Instant::now();
+        let mut turns = self.turns.lock().unwrap_or_else(PoisonError::into_inner);
+        turns.retain(|_, turned| now.saturating_duration_since(*turned) < TURN_SETTLE);
+        turns.insert(element, now);
+    }
+
+    /// How much longer the page is gliding the turn of `element`, or `None` when it is not.
+    pub(crate) fn turn_settling(&self, element: &ElementId) -> Option<Duration> {
+        let turns = self.turns.lock().unwrap_or_else(PoisonError::into_inner);
+        let turned = turns.get(element)?;
+        TURN_SETTLE.checked_sub(Instant::now().saturating_duration_since(*turned))
+    }
+
+    /// Forgets the turns of `elements` that no longer exist.
+    pub(crate) fn forget_turns(&self, elements: &[String]) {
+        self.turns
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|element, _| !elements.iter().any(|gone| gone == element.as_str()));
+    }
+
     /// Whether any element is travelling.
     pub(crate) fn is_moving(&self) -> bool {
         self.canvas().is_moving()
@@ -136,25 +206,56 @@ impl AppState {
         self.ticks.load(Ordering::Relaxed)
     }
 
-    /// The frame for the current change count, as bytes. It is built once per count: the first
-    /// reader builds it (the canvas is copied under its lock, and written as JSON after the lock
-    /// is released) and every other reader of that count gets the same bytes.
-    pub(crate) fn frame(&self) -> Result<BuiltFrame, FrameError> {
-        let mut cached = self.frame.lock().unwrap_or_else(PoisonError::into_inner);
-        let count = self.change_count();
-        if let Some(built) = cached.as_ref().filter(|built| built.count == count) {
-            return Ok(built.clone());
-        }
+    fn cached_canvas(&self, count: u64) -> Option<Arc<[u8]>> {
+        self.frame
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|cached| cached.count == count)
+            .map(|cached| Arc::clone(&cached.json))
+    }
+
+    /// The canvas half of the frame as JSON: every element is copied once under the canvas lock,
+    /// and written after the lock is released. Blocking work: call it off the runtime threads.
+    fn build_canvas_json(&self) -> Result<Arc<[u8]>, FrameError> {
         let canvas = FrameCanvas::from_canvas(&self.canvas()).map_err(FrameError::View)?;
-        let frame = Frame {
-            frame: count,
-            canvas,
-            controls: self.playground.snapshot(),
+        let json = serde_json::to_vec(&canvas).map_err(FrameError::Json)?;
+        Ok(json.into())
+    }
+
+    /// The frame for the current change count. The canvas half is built once per count, on the
+    /// blocking pool, and every reader of that count shares the same bytes; the playground half is
+    /// made for each reader, so a move's `elapsed_ms` is its age now and a late reader continues
+    /// from where the move is.
+    pub(crate) async fn frame(self: &Arc<Self>) -> Result<BuiltFrame, FrameError> {
+        let mut count = self.change_count();
+        let canvas = match self.cached_canvas(count) {
+            Some(canvas) => canvas,
+            None => {
+                let _building = self.building.lock().await;
+                // Another reader may have built it while this one waited.
+                count = self.change_count();
+                match self.cached_canvas(count) {
+                    Some(canvas) => canvas,
+                    None => {
+                        let builder = Arc::clone(self);
+                        let json = tokio::task::spawn_blocking(move || builder.build_canvas_json())
+                            .await
+                            .map_err(|error| FrameError::Task(error.to_string()))??;
+                        *self.frame.lock().unwrap_or_else(PoisonError::into_inner) =
+                            Some(CachedCanvas {
+                                count,
+                                json: Arc::clone(&json),
+                            });
+                        json
+                    }
+                }
+            }
         };
-        let json: Arc<[u8]> = serde_json::to_vec(&frame).map_err(FrameError::Json)?.into();
-        let built = BuiltFrame { count, json };
-        *cached = Some(built.clone());
-        Ok(built)
+        let controls = serde_json::to_vec(&self.playground.snapshot()).map_err(FrameError::Json)?;
+        let head = format!("{{\"frame\":{count},\"canvas\":").into_bytes();
+        let tail = [b",\"controls\":".as_slice(), controls.as_slice(), b"}"].concat();
+        Ok(BuiltFrame { canvas, head, tail })
     }
 
     /// Advances every travelling element by `seconds` of the host's clock. Idle, it takes the lock
@@ -213,6 +314,12 @@ impl AppState {
     /// Records one audit line that is not a table event, such as a playground change.
     pub(crate) fn record_line(&self, text: String) {
         self.log().push(text);
+    }
+
+    /// Waits up to `patience` for the terminal echo to print what is queued, and stops it taking
+    /// more. `true` when it did (or there is no echo).
+    pub fn finish_echo(&self, patience: Duration) -> bool {
+        self.echo.as_ref().is_none_or(|echo| echo.finish(patience))
     }
 
     /// Prints new audit lines. Call it with no lock held.
