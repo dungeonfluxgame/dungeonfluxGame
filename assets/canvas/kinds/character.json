@@ -1,0 +1,16 @@
+{
+  "name": "character",
+  "description": "A person: a hero, an NPC or a foe.",
+  "shape": "circle",
+  "width": 6,
+  "height": 6,
+  "label_field": "name",
+  "color_field": "color",
+  "fields": [
+    { "name": "name", "type": "text", "maximum_length": 24, "required": true },
+    { "name": "role", "type": "choice", "choices": ["hero", "npc", "foe"], "default": "hero" },
+    { "name": "color", "type": "color", "default": "#4f8cff" },
+    { "name": "hit_points", "type": "number", "minimum": 0, "maximum": 999, "default": 10 },
+    { "name": "hidden", "type": "flag", "default": false }
+  ]
+}

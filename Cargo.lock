@@ -981,6 +981,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "df-table"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "df-table-host"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "df-table",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "df-telemetry"
 version = "0.1.0"
 dependencies = [

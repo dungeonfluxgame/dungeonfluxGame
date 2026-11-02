@@ -1,0 +1,13 @@
+{
+  "name": "marker",
+  "description": "A small mark for a point of interest, a trigger or a note.",
+  "shape": "circle",
+  "width": 2,
+  "height": 2,
+  "label_field": "note",
+  "color_field": "color",
+  "fields": [
+    { "name": "note", "type": "text", "maximum_length": 40, "default": "" },
+    { "name": "color", "type": "color", "default": "#e5546b" }
+  ]
+}

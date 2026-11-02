@@ -2997,6 +2997,40 @@ surface. The old L.6 slices are void because the old code is gone.
 **O.11 Questions for the owner.** 87 (new crate edge and host crate), 88 (which port set is the
 minimum for C0), 89 (event class A fields that must never change), 90 (first machines for C2).
 
+**O.12 Blank canvas mode (the first host slice, built).** The owner asked to start with a mode where the
+table is empty and the dev CLI spawns elements at run time, so the engine can be iterated on without
+recompiling. It is built in `crates/df-table` (the pure model) and `crates/df-table-host` (the host and
+the `df-table` binary), and it is the workbench the machines and the pipeline will plug into.
+
+- **What it is.** A table that starts with nothing on it. Elements are placed on a 100 by 56.25 canvas
+  and drawn by a live viewer. Every change is an effect that is checked, applied and recorded as a typed
+  event, and every refusal is recorded too.
+- **Kinds are data.** A kind of element (character, item, set piece, marker) is a JSON file in
+  `assets/canvas/kinds/`: its shape and size, its label and colour fields, and its typed fields
+  (text, number with limits, flag, colour, choice) with defaults and required flags. Adding a kind or
+  changing a field is a file edit and `df-table dev reload`, never a build. A reload that has problems
+  reports every one of them at once and leaves the loaded kinds untouched. An element that no longer
+  fits a reloaded kind stays on the canvas and is flagged, so fixing a file never loses the scene.
+- **How to run it.** `df-table serve` starts the viewer and the developer API on `127.0.0.1:7878`
+  (`--port`, `--kinds DIR`, `--moves`, `--quiet`). `df-table dev <command>` talks to it:
+  `spawn <kind> <id> [x=N] [y=N] [field=value ...]`, `set <id> field=value ...`, `move`, `despawn`,
+  `clear`, `canvas`, `kinds`, `events [after]`, `reload`, `script <file>` (a file of commands, one per
+  line, checked in full before anything runs) and `help`. A command that sends several effects applies
+  them in order and reports every failure. The debugging viewer is server-rendered SVG that refreshes
+  itself with a meta tag and no JavaScript, as the project rules require; it reloads the page each
+  second, so the live view for design work is the browser playground (`crates/df-playground`).
+- **Observability and safety.** Each effect produces one audit line (`CANVAS spawn element=pip
+  kind=character revision=3`) in a bounded log that `events` and the viewer read; moves are recorded
+  only with `--moves`, and a refusal, including a malformed or forbidden request, is an event too. The
+  API listens on `127.0.0.1` only, checks the Host header on every request, accepts changes only as
+  JSON from a same-origin caller (so a web page cannot trigger a reload), caps a request at 64 KiB, and
+  every piece of text that reaches the page is escaped.
+- **Where it goes next.** The same pattern carries the real engine: a `TableEffect` applied by one
+  function and recorded as one event; machines and the DM pipeline added behind the same CLI verbs
+  (`spawn machine`, `input <seat> <text>`, `viable <seat>`, `projection show <audience>`); the scene
+  record, hotspots and the plate scheduler drawn on this canvas first; and the dev CLI verbs of H.16
+  generated from the registry instead of written by hand.
+
 ### P. Round log
 
 - **Round 1.** 91 findings merged, 19 contradictions settled (RES1 to RES19), the machine list

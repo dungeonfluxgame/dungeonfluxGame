@@ -1,0 +1,15 @@
+{
+  "name": "set_piece",
+  "description": "A fixture of the place: a counter, a door, a crate, a chandelier.",
+  "shape": "rect",
+  "width": 12,
+  "height": 6,
+  "label_field": "name",
+  "color_field": "color",
+  "fields": [
+    { "name": "name", "type": "text", "maximum_length": 24, "required": true },
+    { "name": "color", "type": "color", "default": "#5b6b86" },
+    { "name": "cover", "type": "choice", "choices": ["none", "half", "three_quarters", "total"], "default": "none" },
+    { "name": "blocks_sight", "type": "flag", "default": false }
+  ]
+}
