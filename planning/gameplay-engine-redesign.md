@@ -1287,12 +1287,17 @@ the union; and engine inputs skip DECIDE unless they need dice.
 utterance ids. The redesign adds the `view_revision` the input was drawn from (the wire's existing
 `observed_revision`) and uses the existing `OperationId` (`df-types`) as the operation id, which
 `OperationContext` (`df-observe`) correlates with a trace. The seat comes from the authenticated
-session, and phones send intents and never state. Player input uses one serial owner queue served
-round-robin by seat, with at most three pending per seat; overflow is declined `table_busy` for
-that seat only and logged. Timers and resource results use separate capped lanes whose overflow
-is a stall and not a decline (RES22). A seat is limited to 3 inputs a second in a burst and 1
-sustained, and to one free-text line in INTERPRET at a time (these limit rate, not money, and are
-config). `rpc-api.md` sets no inbound rate numbers, but `service-operations.md` sets default service
+session, and phones send intents and never state. Player input (taps, free text, private messages) uses one
+serial owner queue lane served round-robin by seat, with at most three pending per seat; overflow is
+declined `table_busy` for that seat only and logged. `SafetyCard` and `PendingAnswer` use their own
+seat controls lane, served before every other lane: they are never `table_busy` or `rate_limited`,
+make no model call, and have their own bounds (a per-seat count and a table-wide count, both large
+named constants until measured; overflow is a stall). Engine proposals, and timers and resource
+results, use separate capped lanes whose overflow is a stall and not a decline (RES22). A seat is
+limited, in the player lane only, to 3 inputs a second in a burst and 1 sustained, and to one
+free-text line in INTERPRET at a time: the queue owns that rule, and a tap or a later line behind a
+held free-text line of the same seat waits for it, the seat's order kept (these limit rate, not
+money, and are config). `rpc-api.md` sets no inbound rate numbers, but `service-operations.md` sets default service
 ceilings (text 20 a minute per principal, among others; RES38) that replace the earlier claim that the
 rate numbers are unset. The seat rates above stay as the per-seat abuse control inside those ceilings,
 and the text ceiling is the tighter bound on free-text lines that call a model (question 58).
@@ -1677,9 +1682,14 @@ movement and one narration.
 projection older than the seat's last change to its legal choices is re-checked against current
 state and declined with the reason if it is no longer legal. Machines declare
 `accepts(seat, input, state)`, so a combat input out of turn is declined and never queued. The owner
-serves three capped lanes (player input round-robin by seat; engine inputs, meaning proposals and
-hand-offs; timers and resource results), engine lanes before the player lane, and the serve order is
-the single total order recorded as `turn.seq`. Lane caps are measured when the owner queue first runs over real adapters (O.9 step 9, host H0 to H3); no O.9 step owns that measurement yet, so the caps stay candidates until one does. Test: send one operation id 50 times concurrently and assert one effect.
+serves four capped lanes in this order: seat controls (`SafetyCard` and `PendingAnswer`, round-robin
+by seat), engine inputs (proposals and hand-offs), timers and resource results, then player input
+(round-robin by seat). The serve order is the single total order recorded as `turn.seq`. The controls
+lane has a per-seat bound and a table-wide bound, both large named constants until measured, and
+overflow is a stall; the per-seat pending bound and the token bucket apply to the player lane only.
+Operation ids are per sender and per membership: a duplicate is a retry from the same sender, a seat
+that leaves and rejoins starts with no remembered ids, and an input abandoned by the owner's lease
+keeps its id (a late outcome is recorded once, and the commit checks the status before APPLY). Lane caps are measured when the owner queue first runs over real adapters (O.9 step 9, host H0 to H3); no O.9 step owns that measurement yet, so the caps stay candidates until one does. Test: send one operation id 50 times concurrently and assert one effect.
 
 **H.3 Dice (N3).** Dice come from the explicit draws `df-session` supplies, used only in DECIDE and
 passed into `step` as input fields, so `step` is a pure function of (state, input, clock). Each draw
@@ -2040,8 +2050,12 @@ and section L is the comparison of the current and the next implementation that 
   or not_your_turn}` with the current alternatives and keeps its draft. No code on the owner thread
   awaits a model or media call; the pattern is judge off the owner, commit on the owner with a basis
   check, as `submit_line` in `dialogue.rs` already does. The bound of 3 (J.4) counts a seat's inputs admitted and not yet committed, including one in
-  INTERPRET, and applies to player input only; the owner serves three capped lanes (H.2), and a
-  lane overflow other than the player lane is a stall, not a decline. The queue is served round-robin by seat.
+  INTERPRET, and applies, with the token bucket, to the player lane only (taps, free text, private
+  messages): `SafetyCard` and `PendingAnswer` run in the seat controls lane, are never `table_busy`
+  or `rate_limited`, and have their own bounds. The owner serves four capped lanes (H.2), and a
+  lane overflow other than the player lane is a stall, not a decline. The player and controls lanes
+  are served round-robin by seat. One free-text line per seat is in INTERPRET at a time; the queue
+  owns that rule, and a tap or later line behind a held free-text line waits for it.
 - **RES23. Agency tags replace RES12's rule on other players' characters (W4, W29).** The rules
   owner tags each outcome with `agency_impact: none | beneficial | cosmetic | resource | control |
   harm`. `none` and `beneficial` apply at once with a notice on the target's phone. `cosmetic`
@@ -2240,7 +2254,13 @@ read that. Pick one:").
   public facts only, appears as text in plate prompts until a portrait exists, and enters at the
   next beat boundary or the next round.
 - **Input kinds without a path (K35).** `PrivateMessage` and `SafetyCard` skip INTERPRET and CHECK,
-  commit, and PROJECT, ending `applied`. A whisper to an NPC is an action or social input with
+  commit, and PROJECT, ending `applied`. `SafetyCard` and `PendingAnswer` run in the seat controls
+  lane: neither takes the free-text slot, neither is held behind a free-text line in INTERPRET,
+  neither counts against the per-seat pending bound or the token bucket, and each takes its own
+  `turn_seq`. The controls lane is served before the engine lanes, so a `PendingAnswer` sent just
+  after a window timer fired, with the timer still queued, is served first and wins over the
+  timeout; this is intended, because an answer already sent is not overridden by a timer that has
+  not yet run. A whisper to an NPC is an action or social input with
   `audience = [seat, npc]`; its outcome and speech project only to that audience, the NPC gets the
   witness record, and the TV shows a marker with no content.
 - **Decline codes added.** `pending_open`, `resource_spent`, `pvp_off`, `consent_declined`,
@@ -2265,7 +2285,8 @@ read that. Pick one:").
 | `reading_pace` | normal | scales dwell |
 | `reduced_effects` | off; a per-seat preference through `SetPreferences`, and the shared screen has its own value in the host's launcher Settings (RES50, O.13, O.14) | none |
 | `focus_hold_s` | 8, host launcher Settings (O.14) | none |
-| per-seat pending | 3 | bounds model calls |
+| per-seat pending | 3, player lane only (with the rate limit below) | bounds model calls |
+| controls bounds (`seat_controls_pending`, `controls_lane_length`) | 1,000,000 each until measured: named constants of the queue, to be scoped down by the owner; per seat and for the table in all, they bound how long the other lanes can wait behind a flood of pauses | none |
 | `solo_beat_max_exchanges` | 6 | none |
 | `evening_minutes` | host-set, waits on the owner (RES49) | none |
 | first-scene hold | 20 s | none |
@@ -2939,7 +2960,7 @@ fire, a task's duration with no authored cost, and improvised damage.
 **M.3 Consistency fixes (K), applied in place.** The audit's blockers were mine: RES22's "16" was the
 plate queue's capacity and is now the per-seat bound of 3; a machine waiting on a pending is
 `Waiting{pending_id}` everywhere (C.4, F.1 and G.1 corrected); `pending` kinds include `roll` in RES16;
-the owner serves three capped lanes (H.2); machine scope is stated for every machine (RES2, RES28,
+the owner serves four capped lanes (H.2); machine scope is stated for every machine (RES2, RES28,
 H.17); section F's opening uses the RES28 list; DECIDE and `step` each add effects and APPLY commits
 the union (C.0, RES21); a spell-target tap is a proposal the engine converts and the rules owner
 validates (RES1, row R10); a scene is playable only when its description, cast, set and layout are
@@ -3088,7 +3109,7 @@ does and how it fails.
 |---|---|---|
 | `outcome` | `Outcome` (applied, needs clarification, declined, pending), `Decline` (its `Debug` shows the code and length classes only), `DeclineCode`, `PendingKind`, `OutcomeKind`, and the three exhaustive tables of a code: key, reason text, public class (built at C0) | RES16, RES26, C.6, RES40 |
 | `envelope` | `InputEnvelope`, `InputKind` (tap, submit text, say, private message, safety card, engine proposal, timer, resource result, pending answer), seat and utterance ids, `ViewStamp` | C.1, RES21 |
-| `owner_queue` | the three capped lanes, per-seat round-robin, per-seat bounds, a token bucket, duplicate detection, the serve order and `turn_seq` | RES22, H.2, C.1 |
+| `owner_queue` | the four capped lanes (seat controls, engine, timers and results, player), round-robin by seat in the controls and player lanes, the per-seat bound and token bucket on the player lane, the one free-text line in INTERPRET, duplicate detection per sender and membership, the lease for a served input that never finishes, queue position, the serve order and `turn_seq` | RES22, H.2, C.1, K.6 |
 | `machine` | `MachineId`, `Scope`, `MachineSpec`, `StepResult`, `HandOff`, the `Machine` trait | RES27, RES28, RES20 |
 | `registry` | registration, startup validation (unique ids, known hand-off targets, scope rules, required capabilities), enable flags | D24, RES28, Q46 |
 | `pipeline` | the seven stages as pure functions over ports; the four outcomes; the failure fallbacks | C, RES15, C.7 |
@@ -3242,8 +3263,10 @@ presentation tracks.
    the exhaustive-mapping test, and an event round-trip test.
 2. **C1 Owner queue.** `envelope` and `owner_queue`: lanes, round-robin, bounds, token bucket,
    duplicates, serve order. Acceptance: property tests for fairness (no seat starves another), bounds
-   (nothing exceeds a cap), duplicates (one operation id runs once) and determinism (same inputs,
-   same serve order).
+   (nothing exceeds a cap), duplicates (one operation id runs once per sender) and determinism (same
+   inputs, same serve order); a seat at its bound can still pause; a pause is served before queued
+   player and engine input; a controls flood is bounded; one free-text line per seat is in INTERPRET;
+   a leaked input is found by age and reaped; serving is linear in the inputs served.
 3. **C2 Machines and registry.** `machine`, `registry`, `effects` skeleton and the conformance suite
    with two real machines (lobby and a minimal explore) so the trait has two implementations.
    Acceptance: a deliberately broken machine fails each conformance check.
@@ -3510,11 +3533,11 @@ transforms are added the same way and none of them weakens the rules the table r
   | Slide | from and to 0 to 100% of the width, 1 to 60000 ms, easing | TV card; then backdrop pan, phone picture | CSS animation, serial | built for the card; T2 for the rest |
   | Travel | target in canvas units, speed 0.1 to 400 units/s | canvas element | ECS `Motion`, host clock | built (truth) |
   | Glide | 90 ms linear between host samples | figures | CSS transition | built |
-  | Scene change | cut, fade, wipe, 0 to 5000 ms | whole scene | leaving copy plus animation | built; T3 adds dissolve, iris, flash-to-white, fade-to-black |
+  | Scene change (stage transition) | cut, fade, wipe (built); push, dissolve, iris, flash-to-white, fade-through-black, camera-travel (O.17); any duration (no small cap) | whole scene | leaving copy plus animation | built for cut, fade and wipe; the rest in O.17 (A1) |
   | Scale or zoom | factor 0.1 to 4.0 about the pivot | element, card, backdrop | CSS `scale` | T1 |
   | Flip | horizontal, vertical | element, picture | `scaleX(-1)`, `scaleY(-1)` | T1 |
   | Opacity or fade | 0 to 100%; fade in or out over ms | any | `opacity` | T1 |
-  | Layer | bring to front, send back; layers 0 to 9 | element, picture | `z-index` | T1 |
+  | Layer (z order) | an explicit integer `layer` (any whole number, default 0), `front`, `back`, `raise`, `lower`, `above ID`, `below ID`; the drawing order is the key (layer, depth by y, spawn order) | element, picture slot (backdrop, card), and the stage's own layers by the contract in rule 12 | a computed `z` index per element, set as `z-index` | T1 (first, since every other transform needs a settled order) |
   | Tween, generic | any numeric property above, `from` a value or `current`, `to`, ms, easing, repeat | any | CSS animation or Web Animations, serial | T2 |
   | Easing | linear, ease-in, ease-out, ease-in-out, spring (a fixed `linear()` curve), steps(n) | every tween | `animation-timing-function` | T2 |
   | Repeat | count 1 to 100, yoyo; infinite only for decoration | tweens | iteration count, direction | T2 |
@@ -3555,6 +3578,25 @@ transforms are added the same way and none of them weakens the rules the table r
      infinite decoration on at most 8 elements. Beyond that the effect is refused with the limit named.
   5. *Compose order.* Position, then rotate, then scale, then flip, about the pivot; fixed, so two pages
      draw the same picture.
+  12. *Z order is explicit, total and the same everywhere.* The owner's request (2026-11-02): respect
+      z order and be able to change it. Each element has an integer `layer` (any whole number, default 0;
+      no small cap). The drawing order is the key `(layer, depth, spawn order)`: a higher layer draws in
+      front; within a layer a creature lower on the stage (larger y) draws in front of one higher up, as
+      the playground does now; ties break by spawn order, so two pages never disagree. The host (and
+      in the engine the projection) computes the order once and sends each element's rank as `z`, so no
+      client re-derives it, and a change of layer or depth is one change of that rank. The stage's own
+      layers have a fixed contract below elements' reach: backdrop, grid, figures (all elements, by the
+      key above), then the picture card, then the place name, status, caption and party strip, then a
+      leaving scene copy; an element can never be drawn over the caption, status or party strip (O.14
+      rule 2), whatever its layer. Rotation, scale, camera moves and tweens never change the order.
+      Verbs: `layer ID N`, `layer ID front|back`, `layer ID raise|lower` (one step among its neighbours),
+      `layer ID above|below OTHER`; the answer names the new rank, and the audit line is
+      `CANVAS transform element=ID kind=layer layer=N z=R revision=R2`. Spatial queries, reach and hit tests
+      read positions and never the layer (O.13 rule on placement), except that a tap on overlapping
+      figures goes to the one drawn in front. Tests: higher layer in front whatever the depth; equal
+      layers order by y then spawn; raise and lower swap with exactly one neighbour; front and back reach
+      past every other layer; a despawn closes the gap; a frame from an older host without `z` falls back
+      to depth order; the card and caption stay above every figure at any layer.
   6. *Text stays upright and readable.* Transforms apply to pictures, figures, the backdrop and the
      camera, never to a caption, a choice button or a status line.
   7. *Never gates input or a machine.* Input opens at once (RES45); a tween never delays a beat, and the
@@ -3614,7 +3656,7 @@ transforms are added the same way and none of them weakens the rules the table r
   Performance: 200 elements each with one running tween keep the 95th percentile frame gap under
   16.7 ms on the reference machine, measured as the travel test was.
 - **Build order.** *T0* rotation for canvas elements (ECS component, view, page, `rotate`).
-  *T1* scale, flip, opacity, layer. *T2* the generic tween (easing, repeat, replace, `elapsed_ms`,
+  *T1* layer (z order, rule 12) first, then scale, flip and opacity. *T2* the generic tween (easing, repeat, replace, `elapsed_ms`,
   compositor-only slide, shake, pulse, spin). *T3* filters, tint, masks, skew and the extra scene
   changes. *T4* the rest of the camera (pan to a point, frame several, drift; focus on an element is
   built, O.14), path and attach. *T5* timelines and stagger. *T6* the derived condition
@@ -4005,6 +4047,9 @@ and where it is accepted. It was written from a review of the plan against the c
   | V0, V1 | Video in the library and on the page (O.15) | none | everything | O.15 acceptance and a browser measurement |
   | V2, V3 | Item sound from an element, kind sounds, loops, footsteps (O.15) | none for the playground; V4 needs G1 | everything | O.15 acceptance |
   | V4, V5 | Director cues and the projection rules; provider video, preload at a K.3 swap window | G1, SB | machines | O.15 acceptance and the measured start times |
+  | A0 | State animations (O.17): the animation registry in data, the `animate` and `state` dev verbs, element state changes drawn as presets (a door opening, a hit, a condition chip, a turn highlight, a death), retarget and coalesce rules, reduced-effects end states | T1 (layer), T2 (the tween model and easing) | machines | O.17 acceptance and a browser measurement |
+  | A1 | Stage transitions (O.17): push, dissolve, iris, flash, fade-through-black and camera-travel, per-scene `enter` and `leave` choreography, staggered figure entrances, always inside a K.3 swap window | A0, T2; G1 for camera-travel | SB | O.17 acceptance, the K.3 timings from the logs |
+  | A2 | The Director's choice of state and stage animations by reason (O.14 style) and the projection rules for them | A0, A1, G1, C5 | machines | O.17 acceptance (audience, hidden, reduced effects) |
   | T3 to T6 | Filters, camera pan and drift, path, timelines, derived condition transforms | T2; T6 needs C5 and G1 | machines | O.13 acceptance; T6 behind the audience rules |
   | M | The machines after H3, each behind a rules-readiness gate, in this order: creation (Fighter 1 and Soldier only), combat for the Fighter subset, rest and advancement, inventory (after `Coins`), shop, item inspector (after S2 and SB), travel last (needs new rules code first) | H3, RR | G and V steps | the conformance suite, a golden session and RES44 per machine |
 
@@ -4108,6 +4153,117 @@ and where it is accepted. It was written from a review of the plan against the c
 - **Review.** The order is reviewed like any other part of the plan: a critic checks that every
   dependency above exists in the section it cites, that no step shows engine state before K0 and W1, and
   that the acceptance column names a real surface. A step added later must name its row here.
+
+**O.17 Animating state and stage transitions (planned; extends O.13, O.14 and O.16).** The owner's
+request (2026-11-02): "we also should be able to animate state and stage transitions". Two things are
+animated: a *state transition* (something on the stage changes state: a door opens, a creature is hit,
+a condition starts, a turn begins, a figure dies) and a *stage transition* (the whole scene changes).
+Cut, fade and wipe between scenes are built (O.12). Everything here is presentation (O.13): the
+authoritative state changes at once and the animation only draws the change over time, never delays an
+input (RES45) and never changes what a rule reads.
+
+- **State transitions: the idea.** A change of state is already an event (`ElementTransformed`, a field
+  `set`, a condition added, a turn started). A *state animation* is a named preset in data, chosen by
+  what changed, played by the page on the elements concerned. The mapping lives in a table, not in code:
+  an *animation registry* (loaded like the kind files, reloadable, checked at load) whose entries are
+  `(match, preset)`: the match is a kind, a field or condition and the change (`door.state closed to
+  open`, `hit_points decreased`, `condition added frightened`, `turn started`, `despawned`), and the preset
+  is a short sequence of O.13 tweens, an optional sound cue (O.15), a duration and a reduced-effects end
+  state. A kind file may carry its own entries (a `door` kind opens by rotating about its hinge; a
+  `character` kind flashes and shakes on a hit), and the registry has defaults for the common cases.
+- **State transitions: the presets** (first set; all are data and tunable): *open* and *close* (rotate
+  about a pivot, or slide), *hit* (a brief red flash and a shake scaled by the share of hit points lost),
+  *heal* (a green pulse), *condition on* and *condition off* (the chip pops in or fades out; Prone
+  turns a quarter turn about the feet; Unconscious fades toward grey), *turn start* (a pulse ring and a
+  raise to the top layer for the turn), *appear* (fade in and scale up) and *vanish* (fade out, or a
+  puff), *die* (fade and sink), *move* (travel is already a tween: footsteps are O.15), *select* and
+  *hover* for the phone. A preset names only O.13 properties, so a new look needs a new row, not new
+  code.
+- **State transitions: rules.**
+  1. *Truth first.* The committed state is the truth from the instant it commits. The animation is the
+     path to it, and a page that joins late, redraws or has reduced effects shows the end state at once.
+  2. *Continuity key.* Each animation has a host-assigned serial (O.13 rule 1), so a redraw continues it;
+     a later change to the same property on the same element retargets the running one from its current
+     value (O.13 rule 2), never restarts from the old start.
+  3. *Coalesce.* Several changes inside one animation window (a creature hit three times in a round)
+     collapse into one preset with the combined effect, ranked by the order of O.14 reasons; a burst never
+     stacks 20 shakes.
+  4. *Never a gate.* An animation never delays a beat, a line, a result card or an input. A K.12 dwell
+     and a result card's minimum time stand whatever plays.
+  5. *Audience safety.* An animation is built from the audience's projection: a hidden creature's hit
+     flash is not sent to the table (R06, M2-D17); a seat-private state animates only on that seat's phone.
+     A derived condition look (O.13) is the same preset, chosen by the projection, so a client cannot set
+     or clear it.
+  6. *Flash and motion safety.* The O.13 flash limits (3 a second, a quarter of the screen) and the
+     reduced-effects rules apply to every preset; a preset that breaks them is refused at load.
+  7. *Order with the stage.* State animations on a scene wait for its stage transition to finish unless
+     the entry choreography below says otherwise (rule 11 of O.13: swap windows and the reveal hold).
+  8. *Layer.* A preset that raises an element (a turn start) changes its `layer` for the length of the
+     animation and restores it (O.13 rule 12); the stage's fixed layers are never crossed.
+- **Stage transitions: the set.** All run on the leaving-copy mechanism already built, so the new scene
+  is in place underneath, and all are decided by `transition=NAME`, a duration (any length, no small
+  cap), a direction where it has one and an easing (O.13). *cut*, *fade* and *wipe* are built. New:
+  *push* (the old scene slides out one way as the new slides in; four directions), *dissolve* (a
+  crossfade of both, held at least 1.5 s per O.13 rule 11), *iris* (a circle closes on a point, often
+  the focused element, then opens on the new scene), *flash* (white, a single brief flash within the
+  flash limit, for lightning or a spell), *fade-through-black* (out to black, hold, in), and
+  *camera-travel* (the camera of the old scene pulls out or pans toward the destination while the new
+  scene's camera settles, so a journey reads as one move; needs the Director's camera, O.14).
+- **Stage transitions: entry and exit choreography.** A scene file may declare `enter` and `leave`
+  for the scene and for any element: a figure *slides in from an edge*, *fades up*, *drops in* or *rises*,
+  staggered by a gap in milliseconds in a stated order (left to right, by layer, party first), and leaves
+  the same way. The choreography is a short timeline (O.13 T5) with one serial; it runs after the stage
+  transition has revealed the scene unless it is marked to overlap. A scene with no declaration uses the
+  table default (`transition_style`, `transition_ms`) and no choreography.
+- **Stage transitions: rules.**
+  1. *Only in a swap window.* Per K.3 and O.13 rule 11 a stage transition starts at a swap window (a line
+     boundary), the new scene is Ready first (look-ahead, SB-LA, makes this the usual case), and a late
+     scene uses the establishing card and no transition.
+  2. *Always has a fallback.* If the page cannot run a transition (reduced effects, a slow device, a
+     failed animation) the scene is simply cut in place with the audio following at once; a transition
+     never leaves two scenes half shown.
+  3. *No double scenes.* A leaving copy is not interactive, plays no video and no sound, and its pictures do
+     not count as shown (built); a second change during a transition finishes or skips the first, never stacks.
+  4. *Audience.* A transition plays on the shared screen for the table; a phone has its own short
+     view change (the choice list and the story picture swap), never the shared screen's transition. A
+     seat-private scene change is that seat's phone alone.
+  5. *Measured.* A transition's start, end and the reason it started go in the log (`SCENE transition
+     style=push ms=900 reason=travel serial=12`), as the K.3 timings are read from the logs.
+- **Data and wire.** The registry entries and the per-scene `enter`/`leave` are data files (`assets/`),
+  parsed with a strict reader that names the line of a mistake (as fixtures are). The shared-screen
+  projection gains `animations: Vec<Animation{serial, element, preset, from, to, started_ms}>` and
+  `transition: Option<Transition{serial, style, ms, direction, easing, reason}>`, produced by the Director
+  (O.14) from committed events and never by the model; the page keys what it has seen by (boot id, serial)
+  as built for slide and camera. A frame from an older host has neither field and shows end states.
+- **Dev CLI.** `animate ID PRESET [over=MS] [ease=NAME]` plays a preset on an element (a dev override
+  marked `driven=true`); `state ID FIELD VALUE` changes a field and lets the registry animate it;
+  `animations` lists the registry and the animations playing; `playground go NAME transition=push
+  direction=left ms=900 ease=ease-in-out`; `transition play NAME [ms=] [dir=]` previews a stage transition
+  on the current scene; `scene enter|leave ID PRESET [stagger=MS]`; `registry reload`.
+- **Acceptance cases.** *State:* a door's `state` set to open turns it through 90 degrees about its
+  hinge and the truth is `open` from the first frame (a hit test at 0 ms already sees it open); a hit of 30
+  percent of maximum shakes less than one of 80 percent; three hits in one window play one animation; a
+  later change retargets from the current value; a redraw 40 percent in continues within 250 ms; a late
+  joiner shows the end state; reduced effects shows the end state with no motion; a hidden creature's hit
+  is absent from the table's frame and present on its owner's phone; a preset that breaks the flash limit
+  is refused at load with its line. *Stage:* each style runs for its duration and ends with the new
+  scene in place and the old copy removed; push in four directions; iris centres on its target; flash
+  stays within the limit; a transition never starts outside a swap window or without a Ready scene; a
+  second change during one skips it cleanly; no two scenes are ever left half shown; the leaving copy plays
+  no video and no sound. *Measured:* each transition's frame gap stays under 16.7 ms at p95 on the
+  reference machine with 200 figures, as the travel and camera numbers were taken.
+- **Build order.** *A0* the registry, the loader with its strict errors, the `animate`, `state` and
+  `animations` verbs, and the first presets (open, close, hit, heal, condition, appear, vanish, die), on
+  the T1 layer and T2 tween model. *A1* the new stage transitions and the entry and exit choreography, in
+  the playground on the existing leaving copy, then the swap-window rule once SB and the Director exist.
+  *A2* the Director's choice by reason, the projection fields and the audience rules (needs C5, G1).
+  *A3* tune presets from a browser play-test at human pace, judging readability, with the timings from
+  the logs (AGENTS timing rule).
+- **Decisions taken (change on request).** The registry is data, loaded like the kind files, with
+  defaults in the repository and per-kind overrides. State animations are chosen by what changed and not
+  by the machine that changed it. The first presets are the eight above. Stage transitions have no small
+  duration cap; a K.3 swap window and the 1.5 s dissolve minimum are the only floors. A phone gets view
+  swaps and element presets, not the shared screen's stage transitions.
 
 ### P. Round log
 
