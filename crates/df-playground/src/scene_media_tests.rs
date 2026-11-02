@@ -31,6 +31,7 @@ fn image(media: &str) -> ImageRef {
         media: media.to_owned(),
         caption: None,
         rotation_degrees: 0,
+        slide: None,
     }
 }
 
@@ -50,7 +51,8 @@ fn a_fixture_may_carry_pictures_and_refuses_unknown_picture_keys() {
         Some(ImageRef {
             media: "tavern.png".into(),
             caption: Some("The Gilded Flagon".into()),
-            rotation_degrees: 0
+            rotation_degrees: 0,
+            slide: None,
         })
     );
     assert_eq!((fixture.tv.card, fixture.phone.image), (None, None));
@@ -73,6 +75,7 @@ fn a_picture_is_set_in_its_slot_and_replaces_what_the_fixture_has() {
                     media: media.into(),
                     caption: None,
                     rotation_degrees: 0,
+                    slide: None,
                 },
                 &base(),
             )
@@ -108,6 +111,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
         media: String::new(),
         caption: None,
         rotation_degrees: 0,
+        slide: None,
     };
     assert_eq!(
         overlay.apply(empty, &base()),
@@ -118,6 +122,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
         media: "a.png".into(),
         caption: Some("x".repeat(200)),
         rotation_degrees: 0,
+        slide: None,
     };
     assert!(matches!(
         overlay.apply(long, &base()),
@@ -239,6 +244,7 @@ fn a_reset_drops_the_changes_and_the_old_cues_but_the_count_keeps_rising() {
                 media: "x.png".into(),
                 caption: None,
                 rotation_degrees: 0,
+                slide: None,
             },
             &base(),
         )
@@ -319,6 +325,7 @@ fn a_picture_can_be_turned_and_a_turn_over_359_degrees_is_refused() {
                 media: "finn-alder.webp".into(),
                 caption: None,
                 rotation_degrees: 180,
+                slide: None,
             },
             &base(),
         )
@@ -334,6 +341,7 @@ fn a_picture_can_be_turned_and_a_turn_over_359_degrees_is_refused() {
                 media: "finn-alder.webp".into(),
                 caption: None,
                 rotation_degrees: 360,
+                slide: None,
             },
             &base(),
         )
@@ -363,6 +371,7 @@ fn a_fixture_picture_may_name_its_rotation_and_leaves_it_at_zero_otherwise() {
         serde_json::from_str::<SceneChange>(change),
         Ok(SceneChange::Image {
             rotation_degrees: 0,
+            slide: None,
             ..
         })
     ));

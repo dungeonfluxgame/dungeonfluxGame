@@ -69,7 +69,8 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
             slot: ImageSlot::TvBackdrop,
             media: "tavern.png".into(),
             caption: Some("The Flagon".into()),
-            rotation_degrees: 0
+            rotation_degrees: 0,
+            slide: None,
         })
     );
     assert_eq!(
@@ -78,7 +79,8 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
             slot: ImageSlot::PhoneImage,
             media: "map.png".into(),
             caption: None,
-            rotation_degrees: 0
+            rotation_degrees: 0,
+            slide: None,
         })
     );
     assert_eq!(
@@ -626,7 +628,8 @@ fn an_image_can_be_turned_with_rotate_and_a_bad_turn_is_refused() {
             slot: ImageSlot::TvCard,
             media: "finn-alder.webp".into(),
             caption: None,
-            rotation_degrees: 180
+            rotation_degrees: 180,
+            slide: None,
         })
     );
     for bad in ["rotate=360", "rotate=-90", "rotate=upside", "rotate=1.5"] {
@@ -639,4 +642,63 @@ fn an_image_can_be_turned_with_rotate_and_a_bad_turn_is_refused() {
         );
     }
     assert!(usage_text().contains("rotate=0-359"));
+}
+
+#[test]
+fn slide_sends_the_card_across_the_screen_with_defaults_from_left_to_right_over_five_seconds() {
+    use crate::command::DEFAULT_SLIDE;
+    assert_eq!(DEFAULT_SLIDE.from_percent, 15);
+    assert_eq!(DEFAULT_SLIDE.to_percent, 85);
+    assert_eq!(DEFAULT_SLIDE.duration_ms, 5_000);
+    assert_eq!(
+        scene("scene slide tv-card finn-alder.webp rotate=180"),
+        Ok(SceneChange::Image {
+            slot: ImageSlot::TvCard,
+            media: "finn-alder.webp".into(),
+            caption: None,
+            rotation_degrees: 180,
+            slide: Some(DEFAULT_SLIDE),
+        })
+    );
+}
+
+#[test]
+fn slide_reads_where_it_starts_ends_and_how_long_it_takes() {
+    let Ok(SceneChange::Image {
+        slide: Some(moving),
+        caption,
+        ..
+    }) = scene(r#"scene slide tv-card a.png from=5 to=95 over=2500 caption="Finn""#)
+    else {
+        panic!("expected a slide");
+    };
+    assert_eq!(
+        (moving.from_percent, moving.to_percent, moving.duration_ms),
+        (5, 95, 2_500)
+    );
+    assert_eq!(caption.as_deref(), Some("Finn"));
+}
+
+#[test]
+fn slide_refuses_a_bad_share_a_bad_length_an_unknown_key_and_a_missing_name() {
+    for line in [
+        "scene slide tv-card a.png from=101",
+        "scene slide tv-card a.png to=-1",
+        "scene slide tv-card a.png over=0",
+        "scene slide tv-card a.png over=60001",
+        "scene slide tv-card a.png over=slowly",
+        "scene slide tv-card a.png rotate=360",
+        "scene slide tv-card a.png speed=3",
+        "scene slide wall a.png",
+    ] {
+        assert!(
+            matches!(scene(line), Err(CommandError::BadChoice { .. })),
+            "{line}"
+        );
+    }
+    assert!(matches!(
+        scene("scene slide tv-card"),
+        Err(CommandError::Usage(_))
+    ));
+    assert!(usage_text().contains("scene slide tv-card"));
 }

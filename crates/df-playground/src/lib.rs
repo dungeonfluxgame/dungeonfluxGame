@@ -50,6 +50,8 @@ mod scene_tests;
 #[cfg(test)]
 mod shipped_fixtures_tests;
 #[cfg(test)]
+mod slide_tests;
+#[cfg(test)]
 mod style_tests;
 
 /// Starts the playground when the page loads.

@@ -82,6 +82,21 @@ pub struct PartyMember {
 }
 
 /// What the shared screen shows.
+/// A picture that slides sideways across the shared screen: it starts at `from_percent` of the
+/// screen's width and ends at `to_percent`, taking `duration_ms`, at an even pace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Slide {
+    pub from_percent: u8,
+    pub to_percent: u8,
+    pub duration_ms: u32,
+    /// Counts the slides of a session, so a page can tell a new slide from one it has already
+    /// begun and carry on from where it was after a redraw. The host sets it; leave it out of a
+    /// scene file.
+    #[serde(default)]
+    pub serial: u64,
+}
+
 /// A picture from the media library, by file name, with an optional line under it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,6 +106,9 @@ pub struct ImageRef {
     /// Clockwise turn in degrees, 0 to 359 (180 shows it upside down). Defaults to 0.
     #[serde(default)]
     pub rotation_degrees: u16,
+    /// A slide across the shared screen, for a card.
+    #[serde(default)]
+    pub slide: Option<Slide>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

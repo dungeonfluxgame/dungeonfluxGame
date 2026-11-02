@@ -3,7 +3,9 @@
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
-use crate::fixture::ImageRef;
+use std::cell::RefCell;
+
+use crate::fixture::{ImageRef, Slide};
 use crate::media::{MediaKind, media_kind};
 
 pub fn document() -> Result<Document, JsValue> {
@@ -52,12 +54,61 @@ pub fn clear(element: &Element) {
     element.set_text_content(None);
 }
 
+/// Slides this page has begun, each with the time it began, in milliseconds since the epoch. A
+/// redraw in the middle of a slide finds its slide here and carries on from where it was instead of
+/// starting again.
+const MAXIMUM_REMEMBERED_SLIDES: usize = 16;
+
+thread_local! {
+    static SLIDES: RefCell<Vec<(Slide, f64)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// How long ago this slide began, noting now as its start the first time it is asked about.
+fn slide_elapsed_ms(slide: &Slide) -> f64 {
+    let now = js_sys::Date::now();
+    SLIDES.with(|slides| {
+        let mut slides = slides.borrow_mut();
+        if let Some((_, began)) = slides.iter().find(|(known, _)| known == slide) {
+            return now - began;
+        }
+        if slides.len() >= MAXIMUM_REMEMBERED_SLIDES {
+            slides.remove(0);
+        }
+        slides.push((*slide, now));
+        0.0
+    })
+}
+
+/// Forgets every slide, so the next scene's slides begin from their start.
+pub fn forget_slides() {
+    SLIDES.with(|slides| slides.borrow_mut().clear());
+}
+
+/// The inline style that makes a card slide: its place at the end, and an animation that starts
+/// part-way through when the slide is already under way.
+fn slide_style(slide: &Slide) -> String {
+    let elapsed = slide_elapsed_ms(slide);
+    if elapsed >= f64::from(slide.duration_ms) {
+        return format!("left: {}%;", slide.to_percent);
+    }
+    format!(
+        "left: {to}%; --slide-from: {from}%; --slide-to: {to}%; animation: card-slide {duration}ms linear forwards; animation-delay: -{elapsed:.0}ms;",
+        to = slide.to_percent,
+        from = slide.from_percent,
+        duration = slide.duration_ms,
+    )
+}
+
 /// A picture from the media library, with its caption under it, in an element of class `class`.
 /// A name that is not a picture of a known type is shown as a note instead of a broken image, so
 /// the mistake is visible. The image says which media file it is, so the page can report which
 /// pictures loaded.
 pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Element, JsValue> {
     let frame = element(document, "div", class)?;
+    if let Some(slide) = &image.slide {
+        // Numbers only, so a scene file cannot put text into a style.
+        frame.set_attribute("style", &slide_style(slide))?;
+    }
     if media_kind(&image.media) != Some(MediaKind::Image) {
         append(
             &frame,

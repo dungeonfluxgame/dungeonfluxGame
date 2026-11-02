@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::controls::Device;
 use crate::fixture::{
-    Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, UnavailableChoice,
+    Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide, UnavailableChoice,
 };
 
 /// Most characters in a caption line.
@@ -27,6 +27,8 @@ pub const MAXIMUM_CHOICES_PER_LIST: usize = 24;
 
 /// Most sound cues kept for pages to collect; a page that was away longer misses the older ones.
 pub const MAXIMUM_CUES_KEPT: usize = 16;
+/// Longest a slide may take, in milliseconds.
+pub const MAXIMUM_SLIDE_MS: u32 = 60_000;
 /// Largest rotation of a picture, in degrees (a full turn is 360, which is the same as 0).
 pub const MAXIMUM_ROTATION_DEGREES: u16 = 359;
 /// Loudest volume, in percent.
@@ -130,6 +132,9 @@ pub struct SceneOverlay {
     /// has played even after a reset.
     #[serde(default)]
     pub cue_count: u64,
+    /// How many slides there have ever been; it only rises, like `cue_count`.
+    #[serde(default)]
+    pub slide_count: u64,
     /// The newest cues, oldest first.
     #[serde(default)]
     pub cues: Vec<Cue>,
@@ -181,6 +186,9 @@ pub enum SceneChange {
         /// Clockwise turn in degrees, 0 to 359.
         #[serde(default)]
         rotation_degrees: u16,
+        /// Slides the card across the shared screen. Only a `tv_card` may slide.
+        #[serde(default)]
+        slide: Option<Slide>,
     },
     ClearImage {
         slot: ImageSlot,
@@ -215,6 +223,8 @@ pub enum SceneError {
     BadMaximum,
     BadVolume(u8),
     BadRotation(u16),
+    BadSlide,
+    SlideNeedsTheCard,
 }
 
 impl fmt::Display for SceneError {
@@ -234,6 +244,13 @@ impl fmt::Display for SceneError {
                 write!(formatter, "a list holds at most {limit} choices")
             }
             Self::BadMaximum => formatter.write_str("maximum hit points must be at least 1"),
+            Self::BadSlide => write!(
+                formatter,
+                "a slide goes from and to a share of the screen from 0 to 100 percent and takes 1 to {MAXIMUM_SLIDE_MS} ms"
+            ),
+            Self::SlideNeedsTheCard => {
+                formatter.write_str("only the card on the shared screen can slide")
+            }
             Self::BadRotation(degrees) => write!(
                 formatter,
                 "a rotation is from 0 to {MAXIMUM_ROTATION_DEGREES} degrees, not {degrees}"
@@ -412,6 +429,7 @@ impl SceneOverlay {
                 media,
                 caption,
                 rotation_degrees,
+                slide,
             } => {
                 labelled("a media name", &media)?;
                 if rotation_degrees > MAXIMUM_ROTATION_DEGREES {
@@ -420,10 +438,28 @@ impl SceneOverlay {
                 if let Some(caption) = &caption {
                     labelled("a picture caption", caption)?;
                 }
+                let slide = match slide {
+                    None => None,
+                    Some(mut slide) => {
+                        if slot != ImageSlot::TvCard {
+                            return Err(SceneError::SlideNeedsTheCard);
+                        }
+                        if slide.from_percent > 100
+                            || slide.to_percent > 100
+                            || !(1..=MAXIMUM_SLIDE_MS).contains(&slide.duration_ms)
+                        {
+                            return Err(SceneError::BadSlide);
+                        }
+                        self.slide_count += 1;
+                        slide.serial = self.slide_count;
+                        Some(slide)
+                    }
+                };
                 *self.image_slot_mut(slot) = Some(Override::Set(ImageRef {
                     media,
                     caption,
                     rotation_degrees,
+                    slide,
                 }));
             }
             SceneChange::ClearImage { slot } => *self.image_slot_mut(slot) = Some(Override::Clear),
@@ -479,6 +515,7 @@ impl SceneOverlay {
     pub fn cleared(&self) -> Self {
         Self {
             cue_count: self.cue_count,
+            slide_count: self.slide_count,
             ..Self::default()
         }
     }
@@ -487,6 +524,7 @@ impl SceneOverlay {
     pub fn is_empty(&self) -> bool {
         Self {
             cue_count: 0,
+            slide_count: 0,
             cues: Vec::new(),
             ..self.clone()
         } == Self::default()

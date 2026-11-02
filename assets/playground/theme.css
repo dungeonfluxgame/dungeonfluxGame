@@ -174,3 +174,7 @@ body {
 @keyframes scene-wipe-out { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
 .scene-leaving .figure { transition: none; }
 @media (prefers-reduced-motion: reduce) { .scene-leaving { display: none; } }
+
+/* A card that slides across the shared screen; its start and end come from custom properties */
+@keyframes card-slide { from { left: var(--slide-from); } to { left: var(--slide-to); } }
+@media (prefers-reduced-motion: reduce) { .tv-card { animation: none !important; } }

@@ -10,9 +10,10 @@ use std::path::PathBuf;
 
 use df_playground::controls::{ControlsChange, Device, MAXIMUM_TRANSITION_MS, TransitionStyle};
 use df_playground::copy::ReadingPace;
+use df_playground::fixture::Slide;
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
 use df_playground::scene::{
-    ImageSlot, MAXIMUM_ROTATION_DEGREES, MAXIMUM_VOLUME, SceneChange, Target,
+    ImageSlot, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME, SceneChange, Target,
 };
 
 use crate::wire::{EffectRequest, ValueForm};
@@ -40,6 +41,8 @@ const SCENE_USAGE: &str = "scene caption <text> [speaker=NAME] | caption-clear |
 const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
 const PARTY_USAGE: &str = "scene party add <name> hp=N [max=N] [color=#rrggbb] [conditions=a,b] | set <name> [hp=N] [max=N] [conditions=a,b] | remove <name> | clear";
 const IMAGE_USAGE: &str = "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] [rotate=0-359] | scene image-clear <slot>";
+const SLIDE_USAGE: &str =
+    "scene slide tv-card <name> [from=15] [to=85] [over=5000] [caption=TEXT] [rotate=0-359]";
 const MUSIC_USAGE: &str =
     "scene music <name> [on=both|tv|phone] [volume=0-100] [loop=true|false] | scene music-stop";
 const SOUND_USAGE: &str = "scene sound <name> [on=both|tv|phone] [volume=0-100]";
@@ -186,6 +189,7 @@ pub fn usage_text() -> String {
          \n  {PLAYGROUND_USAGE}\n      show or change what the playground page shows; keys: {PLAYGROUND_KEYS}\n\
          \n  {SCENE_USAGE}\n      change the playground's caption, party strip or phone choices live;\n      {PARTY_USAGE}\n      {CHOICES_USAGE}\n      a fixture is not changed; scene reset or another fixture goes back to the file\n\
          \n  {IMAGE_USAGE}\n      put a picture from the media library on the shared screen (tv-backdrop behind the\n      figures, tv-card in the middle) or at the top of a phone's story\n\
+         \n  {SLIDE_USAGE}\n      slide the card across the shared screen (defaults: from 15 to 85 percent of its width, over\n      5 seconds); a redraw part-way carries on from where it was\n\
          \n  {MUSIC_USAGE}\n      play music until it is stopped or replaced\n\
          \n  {SOUND_USAGE}\n      play a sound once\n\
          \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove pictures and sounds\n\
@@ -555,6 +559,81 @@ fn image(words: &[String]) -> Result<Command, CommandError> {
         media: media.clone(),
         caption,
         rotation_degrees,
+        slide: None,
+    }))
+}
+
+/// Where a slide starts and ends, and how long it takes, when none is given: the left of the
+/// screen to the right, in five seconds.
+pub const DEFAULT_SLIDE: Slide = Slide {
+    from_percent: 15,
+    to_percent: 85,
+    duration_ms: 5_000,
+    serial: 0,
+};
+
+fn percent(key: &str, value: &str) -> Result<u8, CommandError> {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|share| *share <= 100)
+        .ok_or_else(|| CommandError::BadChoice {
+            key: key.to_owned(),
+            text: value.to_owned(),
+            allowed: "a whole number from 0 to 100 (a share of the screen's width)",
+        })
+}
+
+fn slide(words: &[String]) -> Result<Command, CommandError> {
+    let [slot, media, rest @ ..] = words else {
+        return Err(CommandError::Usage(SLIDE_USAGE));
+    };
+    let slot = ImageSlot::from_key(slot).ok_or_else(|| CommandError::BadChoice {
+        key: "the picture slot".to_owned(),
+        text: slot.clone(),
+        allowed: "tv-card (only the card can slide)",
+    })?;
+    let mut moving = DEFAULT_SLIDE;
+    let (mut caption, mut rotation_degrees) = (None, 0_u16);
+    for (key, value) in keyed(
+        rest,
+        "from=N, to=N, over=MS, caption=TEXT, rotate=0-359",
+        &["from", "to", "over", "caption", "rotate"],
+    )? {
+        match key {
+            "from" => moving.from_percent = percent(key, value)?,
+            "to" => moving.to_percent = percent(key, value)?,
+            "over" => {
+                moving.duration_ms = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|ms| (1..=MAXIMUM_SLIDE_MS).contains(ms))
+                    .ok_or_else(|| CommandError::BadChoice {
+                        key: key.to_owned(),
+                        text: value.to_owned(),
+                        allowed: "a whole number of milliseconds from 1 to 60000",
+                    })?;
+            }
+            "rotate" => {
+                rotation_degrees = value
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|degrees| *degrees <= MAXIMUM_ROTATION_DEGREES)
+                    .ok_or_else(|| CommandError::BadChoice {
+                        key: key.to_owned(),
+                        text: value.to_owned(),
+                        allowed: "a whole number of degrees from 0 to 359",
+                    })?;
+            }
+            _ => caption = Some(value.to_owned()),
+        }
+    }
+    Ok(Command::Scene(SceneChange::Image {
+        slot,
+        media: media.clone(),
+        caption,
+        rotation_degrees,
+        slide: Some(moving),
     }))
 }
 
@@ -623,6 +702,7 @@ fn scene(words: &[String]) -> Result<Command, CommandError> {
         Some((verb, rest)) if verb == "party" => party(rest),
         Some((verb, rest)) if verb == "choices" => choices(rest),
         Some((verb, rest)) if verb == "image" => image(rest),
+        Some((verb, rest)) if verb == "slide" => slide(rest),
         Some((verb, rest)) if verb == "image-clear" => match rest {
             [slot] => ImageSlot::from_key(slot)
                 .map(|slot| Command::Scene(SceneChange::ClearImage { slot }))

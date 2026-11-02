@@ -235,6 +235,9 @@ async fn load_selected_fixture() {
             .as_deref()
             .is_some_and(|previous| previous != name);
         let transition = app.controls.transition;
+        if scene_changed {
+            crate::dom::forget_slides();
+        }
         if scene_changed && transition.style != TransitionStyle::Cut && transition.duration_ms > 0 {
             app.pending_transition = Some(transition);
         }
