@@ -1578,7 +1578,9 @@ sessions in section H.
 3. **"I use fire bolt to light the candle."** `Magic` carries the spell and the purpose. The spell's
    documented uses (R11 fixture) cover igniting an unworn, uncarried flammable object, so the rules
    owner resolves it as Fire Bolt's ranged spell attack against the object's AC (SRD p.132): no
-   slot, because it is a cantrip, but an attack roll, and a hit starts the object burning. A use
+   slot, because it is a cantrip, but an attack roll, and a hit starts the object burning: it takes
+   the Burning hazard's 1d4 Fire damage at the start of each of its turns until it is doused, submerged
+   or destroyed (SRD p.178; M2-D41 carries the burning object's per-round step and the light it gives). A use
    the spell does not document goes to the ruling flow (RES52).
 4. **"I attack" next to the innkeeper and a goblin.** More than one legal target and a harmful
    reading: INTERPRET returns `Clarify`, the phone shows the two targets as buttons, and choosing the
@@ -1750,7 +1752,8 @@ text, and a `text-only` seat mode renders without images (N22).
 `projection show <seat or tv>`. This is the minimum set: section E and M2-D33 to M2-D52 also rely on
 the read verbs `combat choices <actor>`, `combat anchors show`, `spatial query`, `effects list <creature>`,
 `check show`, `pending show <id>` and `rulings show`, and on the family verbs `sheet build`,
-`sheet validate`, `advancement pending` and `character award`, which are additions to it. The travel
+`sheet validate`, `advancement pending` and `character award`, and on the stage-direction verbs `camera
+focus|wide|frame|follow`, `director show|pause|resume|auto` and `scene state` (O.14), which are additions to it. The travel
 leg is read with `dump --json` and the `travel.leg` event, and there is no `travel leg show` (F.3a).
 All go through the normal entry points. Fault, fixture and force
 commands need operator permission and are disabled in hosted builds, and who may read hidden
@@ -2196,6 +2199,8 @@ read that. Pick one:").
 | `ruling_nudge_s` | 20 | none |
 | `focus_min_dwell_s` | 45 | none |
 | `reading_pace` | normal | scales dwell |
+| `reduced_effects` | off; a per-seat preference through `SetPreferences`, and the shared screen has its own value in the host's launcher Settings (RES50, O.13, O.14) | none |
+| `focus_hold_s` | 8, host launcher Settings (O.14) | none |
 | per-seat pending | 3 | bounds model calls |
 | `solo_beat_max_exchanges` | 6 | none |
 | `evening_minutes` | host-set, waits on the owner (RES49) | none |
@@ -2829,7 +2834,7 @@ in D.6a, F.3a and J.3, and M.5 lists which rules areas have an owner and which a
 | D19 kit and proficiency | A missing tool or language declines; missing proficiency proceeds without the bonus | requirements | No forgery kit: declined; a kit without proficiency: allowed, no bonus |
 | D20 recall DC | Authored facts carry a DC; a generated fact is plainly known or has no recall DC; the retry key is `(actor, affordance id, method)` and reopens on any committed change to the scene, the affordance or the equipment | content admission | A failed desk search then a bookshelf search is a new task |
 | D21 Help and group checks | Outside combat a Help (an ability check) needs the helper to have the named skill or tool proficiency, is consumed by the named task's next check, and lapses at the start of the helper's next turn if unused, with the GM deciding whether the assistance is possible (SRD p.182-183); a group check is called by the DM or a scene trigger and resolves in one commit with half rounded up (custom: SRD 5.2.1 has no group-check rule) | rules owner | Three heroes, two succeed: success; four heroes, two suffice. A helper without the proficiency cannot Help that check; an unused Help lapses at the helper's next turn |
-| D23 light | `obscured` is derived from `light` and effects; visibility is computed per observer; the plate defaults to shared vision | layout | A dwarf and a human in a dark cave see different things on their own seats |
+| D23 light | `obscured` is derived from `light` and effects; visibility is computed per observer; the plate defaults to shared vision | layout | A dwarf and a human in a dark cave see different things on their own seats. Mixed vision for the shared view (RES24, question 74): a human carrying a lit Torch and a dwarf with Darkvision 120 feet (SRD p.84, p.180) stand in an unlit cave, and a statue stands 45 feet away, which is Darkness for the human and Dim Light for the dwarf (M2-D41). By default (union) the statue is in the shared view, so the plate is drawn with it lit as the dwarf sees it, the TV shows its hotspot and the plate prompt names it, and the human's phone lists it as public. With the host's option set to the lowest-vision member (intersection) the plate is drawn as the human sees it, the statue is not on the TV or in the plate prompt, and only the dwarf's phone shows it, as a seat-private overlay with "tell the party"; tapping that writes a party-scope grant in the same commit and the next plate shows it. In both settings no seat-private fact reaches the TV, and switching the option mid-scene changes only what the next plate and the TV hotspots show |
 | D24 falling | The fall rule joins the rules-owner layout change | rules owner | A Shove off a 20-foot ledge deals 2d6 and lands prone |
 | D26 action mapping | Intents map by rules entry id (Shove and Grapple are Unarmed Strike options inside Attack; Jump is movement) | action registry | "I grab him" resolves as a grapple; Extra Attack can replace one attack |
 | D27 spell procedures | `casting_restricted` decline: on a turn a creature can expend only one spell slot to cast a spell (SRD p.105), so a cantrip never triggers it; ritual time routes through the time effect | rules owner | "Healing Word then Fireball" declines the second step. A bonus-action cantrip then a slotted action spell is allowed |
@@ -3329,7 +3334,9 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   the copy stop counting as shown, and the audio follows the new scene at once. A reduced-motion
   setting skips the animation. Measured with two scenes (quay in the rain, the Flagon): each change
   produced one leaving copy that lasted the set 900 ms and was then removed, and the soundtrack
-  reported by the page followed the scene.
+  reported by the page followed the scene. These `go` transitions are the workbench's: a real table
+  starts a scene or plate change only in a K.3 swap window and never shorter than the 1.5 s dissolve
+  (O.13 rule 11).
 - **Turning and sliding a picture.** `scene image tv-card NAME rotate=0-359` draws a picture turned
   clockwise (180 is upside down; 360 or more is refused with the range), and `scene slide tv-card NAME
   [from=15] [to=85] [over=5000] [rotate=..]` moves the card across the shared screen at an even pace
@@ -3345,7 +3352,8 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   is numbered by the host and starts from where the camera had got to, so two moves back to back pan
   between faces without pulling out, and a redraw part-way carries on. The host refuses a target that
   is not on the stage (naming the ones that are) and a zoom or time out of range. A new `avatar` kind
-  draws a portrait (`portrait` names a picture in the media library) in its figure; the
+  draws a portrait (`portrait` names a picture in the media library) in its figure; it is a workbench
+  kind, and in play there are no cut-out avatars (RES13, D14; O.14); the
   `camera_demo` scene and `development/playground-scripts/camera-tour.txt` spawn Finn and Sigrun and
   zoom into each, then out. Measured: Finn centred exactly at 2.5 times, a 1.5 s pan to Sigrun at an
   even 6.6 points per 150 ms, and a redraw forced 3.2 s into an 8 s move made no jump (largest step
@@ -3372,21 +3380,34 @@ transforms are added the same way and none of them weakens the rules the table r
     Measured: 15% at the start and 84.9% after 5 s at 14 points a second; a redraw forced 2.2 s in made
     no jump. Known limits of what is built: a page that opens mid-slide starts it from the beginning
     (the host does not yet say how long ago it began), and it animates `left`, a layout property.
-  - *Travel* (`travel ID X Y [speed=N]`) is the one transform that changes **truth**: the canvas
-    position is authoritative, so the host's clock moves it (30 Hz, a tick cut to 0.25 s) and a page only
-    glides between samples (a 90 ms linear transition). Measured: 32 updates a second, 2.4 to 2.7 px
+  - *Travel* (`travel ID X Y [speed=N]`) is the one transform that changes **truth** in the workbench:
+    the canvas position is authoritative there, so the host's clock moves it (30 Hz, a tick cut to 0.25 s)
+    and a page only glides between samples (a 90 ms linear transition). The canvas ECS is the
+    playground's host-side world. In the engine the rules owner's committed position is the only truth
+    that feeds Travel (O.14 G2, RES1), and Travel only moves the picture between committed positions. Measured: 32 updates a second, 2.4 to 2.7 px
     steps at about 120 rendered frames a second, 200 travellers at about 3 ms a frame on the host.
   - *Scene transitions* (`playground go ... transition=cut|fade|wipe ms=0-5000`) lay a copy of the old
     scene over the new one and let a CSS animation take it away; the new scene is already in place.
 - **Two kinds, and they never mix.** *Placement* (position, size in canvas units, which audience sees
-  an element, any state a rule reads) is truth: it lives in the ECS world and the projection, is changed
-  by an effect, and is the only thing hit tests, distances, areas and `spatial query` read.
+  an element, any state a rule reads) is truth in the workbench: it lives in the ECS world, which is the
+  playground's host-side world in canvas units (a 100 by 56.25 canvas, not feet or cells), and in the
+  projection, is changed by an effect, and is the only thing the workbench's hit tests, distances, areas
+  and `spatial query` read. In the engine the rules owner's five-foot-cell state is the only truth for
+  position, reach, range, cover and areas (RES1, RES34), and `spatial query` is a `RulesOwner` port
+  answer (O.4, M2-D33): the ECS placement components are then a presentation mirror written from the
+  committed state through one declared cells-to-canvas conversion (declared in G2, O.14), and no rule,
+  hit test or `spatial query` reads the mirror.
   *Appearance* (rotation, scale, flip, opacity, tint, filters, shake, pulse, camera) is presentation: it
   is drawn by the page, never read by a rule, and never changes what is legal. An appearance transform
   that **conveys a rule state** (Prone as a quarter turn, Unconscious as grey and dimmed, dead as faded,
   Invisible as 40% for its owner and, for the rest of the party, drawn with the hidden chip because every hero stays visible to the party (M2-D17, K.13, RES45), while a creature hidden from the party is left out of the public view (R06)) is **derived by the
   projection from the condition and the audience** (M2-D17, K.13), so a client, a script or the DM's
-  text can neither set nor clear it. The dev CLI may override it in a local build, marked `driven=true`
+  text can neither set nor clear it. **What it is applied to.** In the workbench it turns the canvas
+  element or figure. In play there are no cut-out figures (RES13, D14) and a creature is drawn inside
+  one generated plate that a transform cannot turn, grey or fade, so a derived transform is applied
+  only to what the plan draws separately: the hero's portrait in the party strip (K.13) and on its own
+  phone, and the badge, turn marker and condition chips anchored to the creature (RES13, RES1, F.1
+  overlays). The plate figure is never transformed. The dev CLI may override it in a local build, marked `driven=true`
   (H.3). Cinematic effects (a flash, a shake, a fade) are decoration and may come from the DM, but only
   as **named effects from a closed list** that the host expands into checked numbers; the model never
   supplies a number or a style.
@@ -3447,15 +3468,32 @@ transforms are added the same way and none of them weakens the rules the table r
      camera, never to a caption, a choice button or a status line.
   7. *Never gates input or a machine.* Input opens at once (RES45); a tween never delays a beat, and the
      dwell rules of K (not tweens) decide how long a line stays up.
-  8. *Reduced motion and safety.* A reduced-motion setting, or the per-seat `reduced_effects` setting,
-     shows the final state with no shake, spin, flash or camera drift. A flash is at most 3 a second and
-     never covers more than a quarter of the screen (the WCAG 2.3.1 general-flash limit).
+  8. *Reduced motion and safety.* A reduced-motion setting, or the per-seat `reduced_effects` setting
+     (J.4), shows the final state with no shake, spin, flash or camera drift. A flash is at most 3 a
+     second, and a repeated flash (lightning, a damage flash) never covers more than a quarter of the
+     screen (the WCAG 2.3.1 general-flash limit). The T3 scene-change flash-to-white covers the whole
+     screen, so it is allowed only as one single transition: it rises and falls over at least 300 ms, is
+     never repeated, and has no other flash within the same second. Under `reduced_effects` it is a plain
+     fade, and both limits are checked at the edge like every other number.
   9. *Audience safety.* A tween travels in the projection for one audience; a seat-private effect (a
      hero's private note trembling) reaches only that seat, never the shared screen.
   10. *Compositor first.* Prefer `transform`, `opacity` and `filter` to `left`, `top`, `width`; the slide
       moves to a translate in T2. Blur is expensive: at most 3 elements above 8 px.
-- **Where a table uses them.** Prone, Unconscious, dead, Invisible and Hidden (derived, above);
-  Frightened as a slow tremble and Concentrating as a faint pulse ring on the caster (derived);
+  11. *Swap windows and the reveal hold.* On a real table a scene change, a plate dissolve, a
+      flash-to-white and a fade-to-black are requested through the playout buffer and start only in a K.3
+      swap window: between lines, never during a dice or result card, never during a reveal beat (K.7),
+      waiting at most `plate_swap_wait_s`, and lasting at least the 1.5 s plate dissolve minimum (J.4), so
+      a `cut` or a shorter fade is refused for a plate or scene change. A tween or camera move that is not
+      part of the swap (a shake, a pulse, a card slide, a camera focus) never starts during a reveal beat
+      unless it belongs to that reveal, and during a dice or result card only if it belongs to that card
+      (O.14 camera rule 5). The workbench's free `go`, `playground set transition` and tweens are dev
+      tools that ignore these windows and are absent from a hosted build's table (O.12, O.14).
+- **Where a table uses them.** In play each item below that names a figure or a set piece (a fade-out
+  on death, a door that swings, a drawbridge, a familiar that orbits, a banner or held light attached to
+  its bearer, a damage shake on a creature) is drawn only as an overlay, badge or inset the plan draws
+  separately, or in the workbench; a creature or set piece inside the plate is never turned, faded or
+  moved by a transform (RES13, D14). Prone, Unconscious, dead, Invisible and Hidden (derived, above, on
+  the party-strip portrait, the owner's phone portrait and the anchored badge); Frightened as a slow tremble and Concentrating as a faint pulse ring on the caster (derived);
   a damage flash and shake on a hit; a fade-out on death; a die that spins and slows and a coin that
   flips (spin and flip); a door that swings open about its hinge (rotate with a pivot); a drawbridge;
   a projectile or a ray along a path; an initiative marker that slides along the strip to the next
@@ -3475,9 +3513,13 @@ transforms are added the same way and none of them weakens the rules the table r
   Slide: start, end, a redraw mid-slide with no jump, a new command restarts, a scene change forgets,
   a late joiner continues from `elapsed_ms` (T2). Replace: a second tween on the same property starts
   from the current value. Limits: the 9th tween on an element and the 65th on a page are refused.
-  Reduced motion: every transform shows its final state. Derived: Prone shows a quarter turn on the TV
-  and the owner's phone; an Invisible hero is 40% on its owner's phone and carries the hidden chip on the TV, while an Invisible enemy is left out of the TV view; a client cannot
+  Reduced motion: every transform shows its final state. Derived: Prone shows a quarter turn on the hero's
+  party-strip portrait on the TV and on the owner's phone portrait, and the plate figure is not touched; an Invisible hero's phone portrait is 40% on its owner's phone and the TV's party strip carries the hidden chip, while an Invisible enemy is left out of the TV view; a client cannot
   clear either. Projection: a seat-private tween never appears in another audience's frame.
+  Windows: a scene change asked for during a result card or a reveal beat starts only after it, within
+  `plate_swap_wait_s`, and a `cut` or a 100 ms fade for a plate or scene change is refused on a real
+  table. Flash: a scene-change flash-to-white is one transition of at least 300 ms with no other flash in
+  the same second, and a plain fade under `reduced_effects`.
   Performance: 200 elements each with one running tween keep the 95th percentile frame gap under
   16.7 ms on the reference machine, measured as the travel test was.
 - **Build order.** *T0* rotation for canvas elements (ECS component, view, page, `rotate`).
@@ -3485,12 +3527,14 @@ transforms are added the same way and none of them weakens the rules the table r
   compositor-only slide, shake, pulse, spin). *T3* filters, tint, masks, skew and the extra scene
   changes. *T4* the rest of the camera (pan to a point, frame several, drift; focus on an element is
   built, O.14), path and attach. *T5* timelines and stagger. *T6* the derived condition
-  transforms in the projection, behind the audience rules. Each step ends with its acceptance cases
+  transforms in the projection, behind the audience rules, applied to the party-strip and phone
+  portraits and the anchored badges. Each step ends with its acceptance cases
   above and a browser measurement.
 - **Decisions taken (change on request).** Appearance tweens are drawn by the page and only position
   is host-driven; revisit if recording or replay needs the host to sample frames. Condition-derived
   transforms are on by default, and `reduced_effects` removes only their motion (the tremble and the pulse) and keeps their static pose, tint and chip, so a seat can never hide a rule state. The model chooses a named
-  effect from a closed list, never a number. The flash limit is 3 a second.
+  effect from a closed list, never a number. The flash limit is 3 a second, with the quarter-screen
+  limit applying to repeated flashes and the single scene-change flash-to-white bounded by rule 8.
 
 **O.14 Table controls for later gameplay (back-filled from the camera, slide, rotate, travel, scene
 and sound controls).** The playground built a set of controls that act on what the table sees and
@@ -3508,33 +3552,56 @@ stays where D.6, K.13, M2-D17 and R06 put it.
   | Picture turn | `scene image SLOT NAME rotate=0-359` | draws a picture turned | a handout or sign shown the wrong way up; a prone portrait | built for pictures |
   | Card slide | `scene slide tv-card NAME [from] [to] [over]` | slides a card across the screen at an even pace | a speaker's portrait arriving or leaving; the next creature in the turn bar | built |
   | Travel | `travel ID X Y [speed]` | the host moves an element a little each tick | movement in combat and exploration (truth: the rules owner's committed position) | built as a canvas feature; engine wiring G2 |
-  | Scene change | `playground go NAME transition=cut\|fade\|wipe ms=` | puts a new scene in place under a leaving copy of the old | a new location, a flashback, a cut to the next day | built |
+  | Scene change | `playground go NAME transition=cut\|fade\|wipe ms=` | puts a new scene in place under a leaving copy of the old | a new location, a flashback, a cut to the next day, only in a K.3 swap window and never shorter than the 1.5 s dissolve (O.13 rule 11) | built (the dev verb ignores the windows) |
   | Music and sound cues | `scene music`, `scene sound` | a track per scene, one-shot cues by id | scene mood; a hit, a door, a bell | built |
+  | Looping video | none yet (O.15) | a muted video drawn in a picture slot or a figure, looping | a burning hearth, rain on the quay, a portal, a moving map | planned (O.15, V0 to V1) |
+  | Per-item sound | none yet (O.15) | a sound that comes from one element, placed and levelled by where it stands | a campfire's crackle, a footstep while a creature travels, a door | planned (O.15, V2 to V4) |
   | Caption | `scene caption`, `caption-clear` | the line on the shared screen | the narrator and NPC speech (K.12 dwell applies) | built |
   | Party strip, choices | `scene party`, `scene choices` | the party bar and one phone's choice list | the engine's view of the party and of what a seat may do | built as fixtures; the engine's projections are the real source |
-  | Pace, grid, transition style | `playground set pace= grid= transition= ms=` | table settings | the table's own settings, never the model | built |
+  | Pace, grid, transition style | `playground set pace= grid= transition= ms=` | table settings | the table's own settings, never the model; a transition style on a real table is bounded by O.13 rule 11 | built |
 
 - **Who may drive a control.** There are four drivers and they are ranked. The **dev CLI** may drive
   any control with any legal value in a local build and marks the result `driven=true` in the audit
-  line; it is absent from a hosted build's table. The **Director** (a pure stage in `df-session`, never
-  the model) drives the camera, slides, transitions and cues from engine events, using the reasons
-  below. The **DM text model** may only *suggest* one of a closed list of named directions (`focus
-  speaker`, `wide`, `reveal object`) inside the narration brief; the Director accepts, delays or drops
-  it, and the model never supplies a number, an element id the audience cannot see, a style or a path.
+  line; it is absent from a hosted build's table. The **Director** (a pure stage of `df-presentation`,
+  whose `PresentationDirector` already owns the audience-safe audiovisual plans in
+  `subsystem-architecture.md`; `df-engine` composes it and `df-session` supplies the injected clock and
+  the timers; never the model) drives the camera, slides, transitions and cues from engine events,
+  using the reasons below. The **DM text model** may only *suggest* one of a closed list of named
+  directions (`focus speaker`, `wide`, `reveal object`) in its structured narration output, a closed
+  value on a clause that the qualification of K.7 and RES46 checks (the narration brief is pure-code
+  input and carries none); the Director accepts, delays or drops it, and the model never supplies a
+  number, a style or a path, and names an element only by a set-piece or cast id from the brief's
+  public scene, which the Director then checks against the audience-safe view (rule 1).
   A **seat** may set its own phone's settings (reading pace, reduced effects, auto-focus off for its own
   screen, never for the shared one) and may press "look at me" on its phone to ask the Director to focus
-  its hero, which the Director treats as a suggestion with the lowest rank. A client can never drive the
-  shared camera directly.
+  its hero, which the Director treats as the `requested` reason, the lowest rank below. A client can
+  never drive the shared camera directly.
+- **What the camera acts on in play.** The workbench camera moves a world layer of avatar and figure
+  canvas elements (O.12). In play there are no cut-out avatars or figures (RES13, D14): the world layer
+  is the one generated plate, and a focus target is a **screen anchor** of RES1 (a character's head
+  point or an item's point, from SAM Locate on that plate id), never a rules position. The reasons below
+  name a creature, and the Director resolves it to its anchor on the plate now showing. The overlays
+  anchored to those anchors (badge, turn marker, hit marks, damage numbers and condition chips on the
+  plate; RES13) belong to the world layer: they move and scale with it, stay on their creature and keep
+  one constant on-screen size. While the establishing card or a place card shows (K.2) there is no
+  plate and no anchor, so every focus is declined `no_target` and the camera stays wide. A swap inside a
+  scene brings a plate with its own anchors (K.3): the Director re-aims at the same creature's anchor on
+  the new plate within the same dissolve, or goes wide if it has none, and never stays zoomed on the old
+  plate's position. A `reveal` whose object appears only in a plate that is still queued starts after
+  that plate's swap, because a reveal beat holds plate swaps (K.3, K.7).
 - **Camera rules, from what was built and measured.**
   1. *Targets come from the audience's projection.* The Director resolves a focus target from the
      audience-safe view of the shared screen, so the camera can only zoom to something the whole table
      may see. An element hidden from the party (R06) or a hidden creature is not targetable, and a
      target that stops being visible makes the camera pull back at once (no zoom onto an empty place
-     that would give the hiding spot away). Every hero is always visible (K.13), so a hero may always be
+     that would give the hiding spot away); that pull-back is a `wide` that outranks every reason,
+     ignores the 800 ms spacing and the result-card rule of rule 5, and starts within one host tick.
+     Every hero is always visible (K.13), so a hero may always be
      focused.
   2. *Presentation only.* The camera moves one layer (backdrop, grid, figures). The turn bar, the party
-     strip, HP chips and conditions, the caption, status and the pending-choice banner never move or
-     scale, so nothing a person must read or act on can be pushed off the screen by a zoom.
+     strip with its HP and condition chips, the caption, status and the pending-choice banner are
+     screen-fixed and never move or scale (the overlays anchored on the plate ride with the layer, as
+     above), so nothing a person must read or act on can be pushed off the screen by a zoom.
   3. *Framing keeps the picture full.* The slide is held so the world always covers the screen; a target
      near an edge is as near the middle as the edge allows. A zoom is at most 4 times and the default for
      play is 2 times (the playground's default); a faster or deeper move is refused, not clamped silently.
@@ -3542,9 +3609,16 @@ stays where D.6, K.13, M2-D17 and R06 put it.
      camera had got to, so a move interrupted by another pans on to the new target without pulling out;
      a redraw part-way carries on (measured: no jump); a scene change forgets the camera and starts wide.
   5. *Pace a person can follow.* One move at a time, at an even pace, 600 to 2500 ms for a focus and at
-     most one new move in any 800 ms; the Director coalesces a burst into the last target. A line stays
-     up for its K.12 dwell whatever the camera does, and the camera never moves during a result card's
-     minimum 3000 ms unless the card is about the target.
+     most one new move in any 800 ms, except that a higher-priority reason (the order below) may start at
+     once and the pull-back of rule 1 always does. The Director coalesces a burst inside 800 ms into the
+     highest-priority direction and, among equals, the latest; a burst for one result that names several
+     heroes (an area) leaves the camera wide until T4 can frame them. A line stays up for its K.12 dwell
+     whatever the camera does, and the camera never moves during a result card's minimum 3000 ms unless
+     the card is about the target (the pull-back of rule 1 excepted). Every move also obeys the swap
+     windows and the reveal hold (O.13 rule 11), never gates input (RES45: a hero's input opens at once,
+     and the Director's holds run on the server's timers from the conductor's anchors, never on a client
+     acknowledgement), and stays wide through a collapsed beat of K.12 (consecutive turns of creatures on
+     one side that did not target a party member), where `active_creature` does not fire.
   6. *Always returns.* A focus holds for at most `focus_hold_s` (default 8) after its reason ends, then
      the camera pulls back to the whole stage; combat starts and every new scene start wide; a hold longer
      than that needs a fresh reason. A stuck zoom is a defect.
@@ -3560,24 +3634,27 @@ stays where D.6, K.13, M2-D17 and R06 put it.
 
   | Reason | When | Target | Default | Returns |
   |---|---|---|---|---|
-  | `speaker` | an NPC or the narrator names a speaker with a portrait on stage | that avatar | 200%, 1200 ms | when the line's dwell ends |
+  | `speaker` | an NPC speaks and has an anchor on the plate now showing (a narrator line has none and leaves the camera as it is) | that anchor (in the workbench, the avatar) | 200%, 1200 ms | when the line's dwell ends |
   | `active_creature` | a turn starts in a scene with more than 4 figures | the creature taking its turn | 160%, 900 ms | when the turn ends |
   | `hit` | an attack or spell lands on a hero | the target, then wide | 220%, 700 ms | after the result card |
   | `reveal` | a hidden object, trap or clue is found | the object (now visible to the party) | 250%, 1500 ms | `focus_hold_s` |
-  | `roll` | a roll the table should watch (a death save, a contested check) | the roller | 200%, 900 ms | when the result card ends |
+  | `roll` | a death save or a contested check (the list of roll kinds is data) | the roller | 200%, 900 ms | when the result card ends |
   | `arrival` | a figure enters or leaves | that figure | 180%, 1200 ms | `focus_hold_s` |
   | `spotlight` | the K.13 spotlight offer picks a quiet hero | that hero | 180%, 1500 ms | `focus_hold_s` |
+  | `requested` | a seat taps "look at me" | that seat's hero | 180%, 1200 ms | `focus_hold_s` |
   | `wide` | combat starts, a scene starts, a target becomes hidden, a hold ends | none | 100%, 1200 ms | n/a |
 
   A lower-priority reason never interrupts a higher one inside its hold; the order is `hit`, `roll`,
-  `reveal`, `active_creature`, `speaker`, `arrival`, `spotlight`.
+  `reveal`, `active_creature`, `speaker`, `arrival`, `spotlight`, `requested`. `wide` is not a focus
+  and has no place in that order: a `wide` for a target that became hidden outranks every reason (rule
+  1), and the others (a start, a hold ending) never interrupt a hold.
 - **Data model and wire.**
   - `TvScene` carries `camera: Option<Camera>` (target element or none, zoom percent, duration ms,
     host serial); the engine's shared-screen projection gains the same field, produced only by the
     Director, so every audience's TV frame (one shared screen, so one value) matches and a phone never
     receives one.
   - The Director's output is a `StageDirection` (`Focus{element, reason}`, `Wide{reason}`,
-    `Slide{...}`, `Cue{...}`), pure data from `df-session`; the host applies it with the same checked
+    `Slide{...}`, `Cue{...}`), pure data from `df-presentation`; the host applies it with the same checked
     numbers the dev verbs use (`SceneChange` in the playground is the model for it), so a dev verb and
     the engine take one code path and there is nothing separate to keep in step.
   - Portraits ride on the element (the `avatar` kind's `portrait` field); a figure without one draws as
@@ -3591,20 +3668,33 @@ stays where D.6, K.13, M2-D17 and R06 put it.
   (hold every automatic direction while a dev drives by hand), `director auto camera|slide|cue on|off`
   (each class on its own), and `scene state` (everything on the shared screen as the Director sees it).
   Tour scripts (`development/playground-scripts/`) stay the way to rehearse a sequence, and a tour can
-  assert state between steps (`expect camera element=sigrun`).
+  assert state between steps (`expect camera element=sigrun`). In H.16's terms these are family verbs,
+  additions to its minimum set like `sheet build` (H.16 lists them): `camera focus|wide|frame|follow`,
+  `director pause|resume|auto` and the workbench `scene camera` drive the table, so they are
+  operator-only, absent from hosted builds and marked `driven=true`. `director show` and `scene state`
+  read the audience-safe view only: a direction dropped because its target is hidden is listed as
+  `dropped reason=target_hidden` with no element id, and so is its audit line (H.3, RES43); only an
+  operator build may show the id.
 - **Acceptance cases.** Focus: Finn then Sigrun back to back pans without pulling out and ends centred
   (built, measured in the playground). Hidden: a hidden creature is refused as a focus target and a focus
-  on a creature that becomes hidden pulls back within one move; a hero is always focusable. Priority: a
+  on a creature that becomes hidden starts pulling back within one host tick, even inside a result
+  card's minimum time or the 800 ms spacing; a hero is always focusable. Priority: a
   `hit` interrupts a `speaker` focus and not the reverse, and a burst of three directions inside 800 ms
-  leaves one move to the last target. Return: every focus ends wide within `focus_hold_s` after its
+  leaves one move, to the highest-priority one and among equals the latest; three heroes hit by one
+  area leave the camera wide. Requested: "look at me" during a `speaker` focus is dropped and logged as
+  lower priority, and on a quiet stage it focuses the seat's hero. Plate: while the establishing card
+  shows every focus is declined `no_target`; a swap inside a scene re-aims at the same creature's anchor
+  on the new plate or goes wide; anchored overlays stay on their creature at every zoom. Collapsed
+  beat: a K.12 collapsed beat keeps the camera wide, and an `active_creature` focus never delays a
+  hero's input. Return: every focus ends wide within `focus_hold_s` after its
   reason; a new scene and combat start wide. Legibility: with the camera at 400% the turn bar, party
   strip, chips and caption keep their on-screen size and place. Dwell: a caption stays up for K.12 and the
   camera never moves during the minimum result-card time except onto its subject. Reduced motion: a cut.
   Projection: no phone frame carries a camera, and a TV frame for the table carries only a visible
-  target. Log: every move and return has a line with a reason, and `director show` matches the log.
+  target. Log: every move and return has a line with a reason, `director show` matches the log, and in a hosted build a direction dropped for a hidden target has no element id in the log, in `director show` or in `scene state`.
   Follow: a travelling element stays centred within one tick (to measure).
 - **Build order.** *G0* (built) the playground controls above. *G1* the Director's camera stage in
-  `df-session` (reasons, priority, hold, coalescing) driving the same `SceneChange` numbers, with
+  `df-presentation` (reasons, priority, hold, coalescing, with an injected clock) driving the same `SceneChange` numbers, with
   `director show` and the audit lines, tested with a controlled clock. *G2* engine wiring: positions
   and speakers from the machines, the projection field, and `travel` fed by committed moves. *G3*
   `reveal`, `hit`, `roll` and `spotlight` reasons, with the hidden and visibility cases. *G4* pan to a
@@ -3616,6 +3706,133 @@ stays where D.6, K.13, M2-D17 and R06 put it.
   and `focus_hold_s` 8. The DM model suggests named directions only. The camera starts wide in combat so
   the whole fight is legible, and focuses on the active creature only when more than four figures are
   on the stage. Pace is linear in the playground; easing is a T2 option and is not needed for gameplay.
+
+**O.15 Looping video and per-item sound (planned; extends O.12 pictures and sound).** Pictures and
+scene-wide sound are built. Two things are not: a video that plays in a loop in a picture slot or a
+figure, and sound that comes from one element. Both are presentation (O.13), driven by the same four
+drivers as the other controls (O.14), and neither may carry anything a rule depends on.
+
+- **What exists and what is missing.** The media library takes png, jpg, jpeg, webp and gif pictures
+  and mp3, ogg, wav, m4a and opus sounds, at most 16 MiB a file and 128 files, served with an ETag and
+  `304`. An animated GIF already loops as a picture. Sound is scene-wide: `scene sound` plays one cue
+  by id for `both`, `tv` or `phone`, `scene music` sets one track per scene, and the page's audio
+  engine reports whether sound is locked until someone clicks. Missing: a video type, any placement of
+  one, range requests, any link between a sound and an element, and any position in a sound.
+- **Video: the file.** The library accepts `mp4` (H.264 with AAC) and `webm` (VP9 with Opus). The type
+  is read from the first bytes (the `ftyp` box or the EBML header), never trusted from the extension,
+  so a renamed text file or an SVG is refused with the reason. A video is at most 64 MiB and 60 s, and
+  a library may hold 16 of them (they count against the 128 files). The host serves video with `Range`
+  requests and `206` answers, because browsers need them to start and to seek, and keeps the ETag and
+  `304`. A video may name a `poster`, a picture from the library shown while it loads, if it fails,
+  and under reduced effects.
+- **Video: placement and play.** A picture slot may hold a video wherever it holds a picture: the
+  shared screen's backdrop and card, a phone's image, and an element (an `avatar` or a `set_piece`
+  kind's `video` field, drawn in its figure the way `portrait` is). `scene video SLOT NAME [loop=true]
+  [rate=1] [poster=NAME] [sound=false]` places one and `scene video-clear SLOT` takes it away. It plays
+  `muted`, `playsinline` and `loop` with autoplay, which browsers allow without a click; its own audio
+  track is ignored unless `sound=true`, and then it plays only after the audio engine's unlock and at
+  that scene's music volume. `rate` is 0.25 to 2.
+- **Video: continuity.** A video placement has a host-assigned serial like a slide (O.13 rule 1). A page
+  notes when it first saw the serial and, after a redraw, seeks to `elapsed mod duration` so the loop
+  carries on from where it was instead of restarting, to within 250 ms; a new placement restarts it; a
+  scene change forgets it. The camera zooms a video backdrop like any picture, a leaving copy of the old
+  scene pauses its video so two are never playing at once, a hidden tab pauses it, and at most 2 videos
+  play on the shared screen and 1 on a phone. The next scene's video is preloaded (metadata and the
+  first segment) while the current scene is shown, so a transition never reveals a black frame.
+- **Video rules.**
+  1. *Never the only carrier.* A video shows mood and place; every fact it suggests is also in the
+     caption, a chip or a figure, as with a plate (K.2: art is never a gate, and the scene is playable
+     without it).
+  2. *Failure is a still.* A video that is missing, slow or refused shows its poster or, without one, the
+     still plate; a bad name shows a plain note as a bad picture does. A provider-generated video (the
+     asset engine) is cosmetic: it never withholds a reward or changes timing, and a late one swaps in
+     only at a K.3 swap window.
+  3. *Reduced effects and safety.* Reduced motion, a seat's `reduced_effects` or a data-saving setting
+     shows the poster and does not play. A video must declare `flashing: false` in its library record,
+     set when it enters the library by the asset pipeline's flash check (3 a second and a quarter of the
+     screen, as O.13 rule 8), and one that does not declare it is shown as its poster on a shared screen.
+  4. *Audience.* A video is served only to the audience whose projection names it; a seat-private video
+     goes to that phone alone, and a video that would show a hidden thing is never placed.
+  5. *Budget.* A page records bytes fetched and frames dropped; a scene that cannot hold 24 frames a
+     second on the reference phone falls back to its poster and says so in `clients`.
+- **Per-item sound: sources.** A sound is attached to an element in four ways, all data, all checked
+  against the library when a kind loads (a missing file is a warning on `kinds`, never a crash):
+  1. *Kind sounds.* A kind file may carry `sounds`, a map from an event to a library sound: `loop` (while
+     it exists), `spawn`, `despawn`, `move` (while it travels, as footsteps), `stop`, `hit`, `use`.
+  2. *An element override.* An element's `sound_loop` field replaces the kind's loop for that element (a
+     lit lantern against an unlit one).
+  3. *A one-shot from an element.* `scene sound NAME from=ELEMENT [volume=] [pan=auto|-1..1]`.
+  4. *A Director cue.* The Director's `StageDirection::Cue{element, sound, reason}` (O.14) for a hit, a
+     door, a spell, from the committed event, never typed by the model.
+- **Per-item sound: place and level.** A voice is panned and levelled from where its element stands
+  and from where the camera looks, by pure functions with their own tests. Pan is `(x - 50) / 50 * 0.8`
+  of the stage, so the far edge is at most 0.8 to a side. Gain is 1 at the camera's focus (or the middle
+  with no focus) falling evenly to a floor of 0.35 at the far edge, and the element the camera focuses
+  gets up to 1.25 times, never past full scale after the master limiter. A phone has no stage, so its
+  voices are mono at the element's gain. `on=tv|phone|both` still picks the screens, and an element's
+  default is `tv`. The master volume and the music volume stay separate.
+- **Per-item sound: voices.** The page keeps at most 12 voices and 6 loops, one loop per element, each
+  with a 150 ms fade in and out so nothing clicks. When full, a one-shot ranks above a loop and a newer
+  one above an older one; the lowest-ranked loop ducks to silent before any one-shot is dropped. A
+  despawned element's loop fades out; a travelling element's `move` loop starts with its motion and
+  stops when it stops. One-shots that arrive before the browser's unlock are dropped after 2 s, as scene
+  cues are now; loops start when the unlock arrives. The cue id and count rule is kept so a reset never
+  replays an old cue.
+- **Per-item sound: audience, access and loudness.**
+  - *Audience.* A sound from an element the audience may not see is omitted from that audience's
+    projection, never muted in the client (R06, M2-D17); a hero is always visible (K.13), so a hero's
+    sound is always allowed; a private sound targets one seat's phone.
+  - *Never the only signal.* Every sound that carries information (a door, an alarm) has a visual
+    equivalent, and a seat's `sound_captions` setting shows a short label for it (K.19); a seat can turn
+    sound from items off without turning off music or voice. Reduced effects does not mute.
+  - *Loudness.* Library sounds are normalised at ingest to a common loudness with a true-peak ceiling
+    so no item is louder than the narration; the engine never raises a sound above full scale.
+- **Data and wire.**
+  - `MediaKind` gains `Video`; an `ImageRef` becomes a `Visual` (a picture or a video, with `poster`,
+    `loop`, `rate`, `sound` and the serial).
+  - A kind file gains `sounds`; an element gains `video` and `sound_loop` fields; the scene overlay's
+    cues and voices gain `element: Option<String>`; the page's audio engine gains `play_from` taking the
+    element's stage position and returning a voice it can fade.
+  - The client report adds videos playing, failed and on poster, and active voices by element, and the
+    host's `clients` verb shows them.
+- **Dev CLI and logging.** `media add` accepts video (checked as above); `scene video SLOT NAME ...` and
+  `scene video-clear SLOT`; `scene sound NAME from=ELEMENT`; `sound loop ELEMENT NAME|off [volume=]`;
+  `kinds` lists a kind's `sounds`; `voices` lists active voices with element, gain, pan and loop;
+  `clients` shows videos and voices. Audit lines: `MEDIA video slot=tv-backdrop name=hearth.webm
+  serial=3`, `AUDIO voice element=fire loop=true gain=0.82 pan=-0.40`, `AUDIO voice_dropped
+  element=goblin_3 reason=voice_cap`, each with the driver's reason.
+- **Acceptance cases.**
+  - *Ingest.* Accepts a real mp4 and a real webm; refuses a text file renamed `.mp4`, an SVG, a video
+    over 64 MiB or 60 s, and a 17th video; a `Range` request returns `206` with the right bytes and a
+    request past the end returns `416`.
+  - *Loop.* A video loops with no `ended` event and no black frame at the seam in a browser check; a
+    redraw 2.2 s into a 3 s loop resumes within 250 ms of where it was; a new placement restarts it; a
+    scene change forgets it; a leaving copy does not play a second video.
+  - *Fallback.* A missing video, reduced effects and a data-saving setting each show the poster; a
+    video without `flashing: false` shows its poster on the shared screen.
+  - *Per-item sound.* The pan and gain functions are monotone and bounded (pan within -0.8 to 0.8, gain
+    within 0.35 to 1.25 before the limiter); the 13th voice and the 7th loop are handled in the stated
+    order; a despawn fades the loop out; a travel starts and stops the footstep loop with the motion
+    events; a one-shot before unlock is dropped after 2 s and a loop starts at unlock.
+  - *Audience.* A hidden creature's sound is absent from the table's projection and a hero's is present;
+    a private sound reaches only its seat; no phone frame carries a camera-based gain.
+  - *Access.* With `sound_captions` on, each informative sound has its label; with item sound off, music
+    and voice still play.
+  - *Measured.* Video start under 1 s on the reference machine from a warm scene, voice start under 100
+    ms from the command, and no more than 1 dropped frame in a minute of a 1080p loop, taken as the
+    travel and camera numbers were.
+- **Build order.** *V0* video in the library (type check by bytes, size and duration limits, `Range`
+  answers) and the dev `media` verbs. *V1* the page: a video in the backdrop, card, phone image and a
+  figure, loop continuity by serial, poster, reduced effects, pause on a hidden tab and the two-video
+  limit. *V2* `scene sound ... from=ELEMENT` with the pan and gain functions (pure, tested natively)
+  and the voice cap. *V3* kind `sounds`, element `sound_loop`, spawn, despawn and travel footsteps.
+  *V4* Director cues and the projection rules (O.14 G1 and G3). *V5* provider video from the asset engine
+  with its deadline and still fallback, preload at a K.3 swap window, and the browser measurements.
+- **Decisions taken (change on request).** Video is muted by default, and sound from a video is opt-in
+  and follows the unlock. Both mp4 and webm are accepted so every browser has one. Per-item sound is
+  spatial only on the shared screen; a phone gets mono. The pan limit is 0.8, the gain floor 0.35 and
+  the voice limits 12 and 6. Reduced effects shows a poster but does not mute sound; a separate
+  per-seat switch turns item sound off.
 
 ### P. Round log
 
