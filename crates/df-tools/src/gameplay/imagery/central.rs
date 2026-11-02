@@ -892,7 +892,7 @@ impl CentralImages {
         demand: &DemandConfiguration,
         request: &df_imagery::ImageRequest,
     ) -> Result<(ReferenceImage, ImageKey), ImageFailure> {
-        let principal = self.references.authorize(request).await?;
+        let principal = self.authorize_logged(request).await?;
         let mut view = match retry_unknown(|| demand.service.request(&principal, request))
             .await
             .map_err(failure)?
@@ -950,7 +950,7 @@ impl CentralImages {
                 return Err(ImageFailure::DeadlineExceeded);
             }
             tokio::time::sleep(self.settings.poll_interval).await;
-            let principal = self.references.authorize(request).await?;
+            let principal = self.authorize_logged(request).await?;
             match retry_unknown(|| {
                 demand
                     .service
@@ -961,6 +961,24 @@ impl CentralImages {
             {
                 WatchObservation::Changed(changed) => view = *changed,
                 WatchObservation::Unchanged { .. } => {}
+            }
+        }
+    }
+
+    /// Authorizes a request, naming the reason in the audit log when it is refused. A request that
+    /// fails before the service sees it leaves no other trace, and the picture simply never comes.
+    async fn authorize_logged(
+        &self,
+        request: &df_imagery::ImageRequest,
+    ) -> Result<ImageryPrincipal, ImageFailure> {
+        match self.references.authorize(request).await {
+            Ok(principal) => Ok(principal),
+            Err(failure) => {
+                df_observe::record_audit_line(
+                    "IMAGERY",
+                    format!("IMAGERY authorize_failed failure={failure:?}"),
+                );
+                Err(failure)
             }
         }
     }
@@ -1190,6 +1208,64 @@ mod regression_tests {
     use super::*;
     use bytes::Bytes;
     use image::ImageEncoder;
+
+    fn unknown() -> ImageServiceError {
+        ImageServiceError::Unknown {
+            handle: df_imagery::OperationHandle {
+                owner: ImageOwner::Draft {
+                    account: df_types::AccountId::from_bytes(&[3; 16]).unwrap(),
+                },
+                operation: OperationId::from_bytes(&[4; 16]).unwrap(),
+            },
+        }
+    }
+
+    /// Runs `retry_unknown` over a call that answers from `script`, counting its calls.
+    async fn run_script(
+        script: Vec<Result<u32, ImageServiceError>>,
+    ) -> (Result<u32, ImageServiceError>, usize) {
+        let calls = std::sync::Mutex::new(0usize);
+        let script = std::sync::Mutex::new(script.into_iter());
+        let result = retry_unknown(|| {
+            *calls.lock().unwrap() += 1;
+            let next = script.lock().unwrap().next().unwrap_or(Err(unknown()));
+            async move { next }
+        })
+        .await;
+        let calls = *calls.lock().unwrap();
+        (result, calls)
+    }
+
+    #[tokio::test]
+    async fn retry_unknown_asks_again_until_the_stored_state_is_read() {
+        let (result, calls) = run_script(vec![Err(unknown()), Err(unknown()), Ok(7)]).await;
+        assert_eq!(result.unwrap(), 7);
+        assert_eq!(calls, 3, "two misses, then the stored state");
+    }
+
+    #[tokio::test]
+    async fn retry_unknown_gives_up_after_its_bound_and_reports_unknown() {
+        let (result, calls) = run_script(vec![]).await;
+        assert!(matches!(result, Err(ImageServiceError::Unknown { .. })));
+        assert_eq!(
+            calls,
+            1 + UNKNOWN_RETRIES as usize,
+            "the first ask plus each retry, never a loop"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_unknown_never_repeats_an_answer_that_is_not_unknown() {
+        for answer in [
+            Err(ImageServiceError::Unavailable),
+            Err(ImageServiceError::Conflict),
+            Err(ImageServiceError::NotAuthorizedOrNotFound),
+            Ok(1),
+        ] {
+            let (_, calls) = run_script(vec![answer]).await;
+            assert_eq!(calls, 1, "only an Unknown read is asked again");
+        }
+    }
 
     #[test]
     fn artifact_alias_restores_only_its_asset_domain_and_never_an_operation_receipt() {

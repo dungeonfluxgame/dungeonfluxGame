@@ -235,7 +235,9 @@ fn choices(controls: &[(rpc::JourneyGroup, HtmlSelectElement)]) -> Vec<rpc::Jour
 }
 
 /// A signed portrait address is the path, a 64-character key and a hex grant token (about 350
-/// bytes); the bound only keeps a malformed server answer from becoming an image source.
+/// bytes); the bound only keeps a malformed server answer from becoming an image source. The
+/// server-side test `a_signed_creator_portrait_address_fits_the_phone_client_limit`
+/// (gameplay/media_grant.rs) fails if a signed address ever outgrows this.
 const MAXIMUM_PORTRAIT_URI_BYTES: usize = 512;
 const NAME_HELP: &str =
     "One name or several, up to 32 letters. Spaces, apostrophes and hyphens are welcome.";

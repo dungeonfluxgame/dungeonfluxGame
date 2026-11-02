@@ -523,6 +523,17 @@ fn lobby_model(input: &SceneInput<'_>, client: &Client) -> Result<LobbyModel, Js
     })
 }
 
+/// The exploration screen refuses empty text, so an empty field is replaced with `fallback` and
+/// the replacement is named on the console: a silent stand-in would hide a server fault.
+fn non_empty_or(field: &str, text: &str, fallback: &str) -> String {
+    if text.trim().is_empty() {
+        web_sys::console::warn_1(&JsValue::from_str(&format!(
+            "exploration screen: {field} was empty; showing a stand-in"
+        )));
+    }
+    df_ui::text_or(text, fallback)
+}
+
 fn exploration_model(
     input: &SceneInput<'_>,
     client: &Client,
@@ -566,7 +577,16 @@ fn exploration_model(
         }
         .to_owned()
     } else {
-        input.clue.to_owned()
+        // A private clue the server left empty would otherwise leave the screen undrawable.
+        non_empty_or(
+            "private clue",
+            input.clue,
+            if has_offers {
+                CHOOSE_TEXT
+            } else {
+                WAITING_TEXT
+            },
+        )
     };
     let art_scene = match input.phase {
         rpc::JourneyPhase::Opening => ConceptScene::WharfArrival,
@@ -608,10 +628,23 @@ fn exploration_model(
                 input.journey.adventure_title.clone()
             }
         } else {
-            input.scene.title.clone()
+            non_empty_or(
+                "scene title",
+                input.scene.title.as_str(),
+                "The story continues.",
+            )
         },
         description: if ended {
             "The adventure is over. Thank you for playing.".to_owned()
+        } else if input.narration.trim().is_empty() {
+            // The play screen refuses an empty description, and a view that cannot be drawn
+            // leaves the phone on its loading screen. The scene title stands in until the
+            // server sends narration again.
+            non_empty_or(
+                "narration",
+                input.scene.title.as_str(),
+                "The story continues.",
+            )
         } else {
             input.narration.to_owned()
         },

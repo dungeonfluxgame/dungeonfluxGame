@@ -12,6 +12,27 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+/// The size a generated candidate is checked against.
+///
+/// Most backends honour the requested size, so a different picture is refused. The Codex image
+/// tool chooses its own size and the later local transform resizes the picture to the delivered
+/// profile, so its candidate keeps the size it really has. An unreadable header falls back to the
+/// requested size, which the proof then refuses as the corrupt picture it is.
+fn candidate_dimensions(
+    backend_chooses_size: bool,
+    bytes: &[u8],
+    requested: (u32, u32),
+) -> (u32, u32) {
+    if !backend_chooses_size {
+        return requested;
+    }
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok())
+        .unwrap_or(requested)
+}
+
 impl<J, E, S, P, F, C, I, K, B, T, Q, U> NativeImageRuntime<J, E, S, P, F, C, I, K, B, T, Q, U>
 where
     J: ImageJournal,
@@ -46,17 +67,11 @@ where
             .output
             .generated()
             .ok_or(RuntimeError::InvalidRecord)?;
-        let (width_px, height_px) = if dispatch::backend(config, intent) == BackendId::CodexCli {
-            // The Codex image tool chooses its own picture size and the later local transform
-            // resizes it to the delivered profile, so the candidate keeps its real dimensions.
-            image::ImageReader::new(std::io::Cursor::new(&bytes))
-                .with_guessed_format()
-                .ok()
-                .and_then(|reader| reader.into_dimensions().ok())
-                .unwrap_or((size.width_px(), size.height_px()))
-        } else {
-            (size.width_px(), size.height_px())
-        };
+        let (width_px, height_px) = candidate_dimensions(
+            dispatch::backend(config, intent) == BackendId::CodexCli,
+            &bytes,
+            (size.width_px(), size.height_px()),
+        );
         let image_intent =
             ImageIntent::new(mime, width_px, height_px, ImageAlphaRequirement::Preserve)
                 .map_err(|_| RuntimeError::InvalidRecord)?;
@@ -798,4 +813,46 @@ fn candidate_value(candidate: &CandidateReceipt) -> serde_json::Value {
         "alpha":match candidate.descriptor.alpha {CheckpointAlpha::Opaque=>"opaque",CheckpointAlpha::Transparent=>"transparent"},
         "byte_len":candidate.descriptor.byte_len,"sha256":candidate.descriptor.sha256,
         "validator_revision":candidate.descriptor.validator_revision})
+}
+
+#[cfg(test)]
+mod candidate_dimension_tests {
+    use super::candidate_dimensions;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::DynamicImage::new_rgb8(width, height)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn a_backend_that_chooses_its_size_keeps_the_picture_it_really_made() {
+        // The Codex image tool made 1672x941 for a 2560x1440 plate.
+        assert_eq!(
+            candidate_dimensions(true, &png(1672, 941), (2560, 1440)),
+            (1672, 941)
+        );
+    }
+
+    #[test]
+    fn a_backend_that_honours_the_request_is_still_held_to_the_requested_size() {
+        assert_eq!(
+            candidate_dimensions(false, &png(1672, 941), (2560, 1440)),
+            (2560, 1440)
+        );
+    }
+
+    #[test]
+    fn an_unreadable_header_falls_back_to_the_requested_size() {
+        assert_eq!(
+            candidate_dimensions(true, b"not a picture", (2560, 1440)),
+            (2560, 1440)
+        );
+        assert_eq!(candidate_dimensions(true, &[], (64, 64)), (64, 64));
+    }
 }

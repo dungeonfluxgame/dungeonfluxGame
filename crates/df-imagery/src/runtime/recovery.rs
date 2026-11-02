@@ -7,6 +7,58 @@ use crate::publication::PublishedImage;
 use crate::{ImageJournal, ImageOperation, ServiceClock};
 use std::time::Duration;
 
+/// Whether the recovery loop carries on after reconciling a stage ended in `error`.
+///
+/// `finish_recovery` has already deferred such a stage, and one stage disagreeing with its stored
+/// state (`OperationConflict`, `Stale`) must not stop the runtime for every other stage. Faults in
+/// the runtime itself still stop it.
+fn recovery_outcome_is_survivable(error: &RuntimeError) -> bool {
+    matches!(
+        error,
+        RuntimeError::ProviderUnknown
+            | RuntimeError::SourceDenied
+            | RuntimeError::Disabled
+            | RuntimeError::Expired
+            | RuntimeError::Cancelled
+            | RuntimeError::CostProjectionPending
+            | RuntimeError::Execution(
+                ExecutionError::LostClaim
+                    | ExecutionError::Superseded
+                    | ExecutionError::CapacityFull
+                    | ExecutionError::OutputSealed
+                    | ExecutionError::OperationConflict
+                    | ExecutionError::Stale { .. }
+            )
+    )
+}
+
+/// Records how a recovery claim ended and returns the disposition that was stored.
+///
+/// `Completed` needs the exact terminal receipts, and a stage whose stored state does not yet
+/// prove it (for example its dispatch is still `sent`) is refused with `OperationConflict`. That
+/// disagreement belongs to one stage: it is deferred to `deferred` and polled again, instead of
+/// ending the runtime for every other stage. Any other refusal is returned unchanged.
+async fn finish_or_defer<Call, Pending>(
+    mut finish: Call,
+    disposition: RecoveryDisposition,
+    deferred: RecoveryDisposition,
+) -> Result<RecoveryDisposition, ExecutionError>
+where
+    Call: FnMut(RecoveryDisposition) -> Pending,
+    Pending: std::future::Future<Output = Result<(), ExecutionError>>,
+{
+    match finish(disposition).await {
+        Ok(()) => Ok(disposition),
+        Err(ExecutionError::OperationConflict)
+            if matches!(disposition, RecoveryDisposition::Completed) =>
+        {
+            finish(deferred).await?;
+            Ok(deferred)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 impl<J, E, S, P, F, C, I, K, B, T, Q, U> NativeImageRuntime<J, E, S, P, F, C, I, K, B, T, Q, U>
 where
     J: ImageJournal,
@@ -99,7 +151,6 @@ where
                     .ok_or(RuntimeError::InvalidConfiguration)?,
             }
         };
-        let mut recovery_completed = matches!(disposition, RecoveryDisposition::Completed);
         let finish = |disposition| FinishRecoveryCommand {
             owner: entry.owner.clone(),
             job: entry.job,
@@ -119,19 +170,18 @@ where
                     .ok_or(RuntimeError::InvalidConfiguration)?,
             })
         };
-        match self.execution.finish_recovery(&finish(disposition)).await {
-            Ok(()) => {}
-            // The stored receipts do not yet prove the stage complete (for example a dispatch
-            // still `sent`). Defer this stage rather than stopping the runtime for all stages.
-            Err(ExecutionError::OperationConflict) if recovery_completed => {
-                recovery_completed = false;
-                self.execution
-                    .finish_recovery(&finish(retry_later()?))
-                    .await
-                    .map_err(RuntimeError::Execution)?;
-            }
-            Err(error) => return Err(RuntimeError::Execution(error)),
-        }
+        let command = &finish;
+        let recorded = finish_or_defer(
+            |disposition| async move {
+                let command = command(disposition);
+                self.execution.finish_recovery(&command).await
+            },
+            disposition,
+            retry_later()?,
+        )
+        .await
+        .map_err(RuntimeError::Execution)?;
+        let recovery_completed = matches!(recorded, RecoveryDisposition::Completed);
         if let Some(context) = recovery_context {
             let kind = match &result {
                 Ok(_) if recovery_completed => crate::telemetry::EventKind::RecoveryCompleted,
@@ -148,24 +198,7 @@ where
         }
         match result {
             Ok(result) => Ok(result),
-            Err(
-                RuntimeError::ProviderUnknown
-                | RuntimeError::SourceDenied
-                | RuntimeError::Disabled
-                | RuntimeError::Expired
-                | RuntimeError::Cancelled
-                | RuntimeError::CostProjectionPending
-                | RuntimeError::Execution(
-                    ExecutionError::LostClaim
-                    | ExecutionError::Superseded
-                    | ExecutionError::CapacityFull
-                    | ExecutionError::OutputSealed
-                    // `finish_recovery` has already deferred this stage; one stage disagreeing
-                    // with its stored state must not stop the runtime for every other stage.
-                    | ExecutionError::OperationConflict
-                    | ExecutionError::Stale { .. },
-                ),
-            ) => Ok(None),
+            Err(error) if recovery_outcome_is_survivable(&error) => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -522,5 +555,110 @@ where
             .await?;
         self.completed(&context, &result).await;
         Ok(Some(result))
+    }
+}
+
+#[cfg(test)]
+mod finish_or_defer_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    const RETRY: RecoveryDisposition = RecoveryDisposition::RetryAt { next_at_ms: 9 };
+
+    async fn run(
+        disposition: RecoveryDisposition,
+        answers: Vec<Result<(), ExecutionError>>,
+    ) -> (
+        Result<RecoveryDisposition, ExecutionError>,
+        Vec<RecoveryDisposition>,
+    ) {
+        let seen = Mutex::new(Vec::new());
+        let answers = Mutex::new(answers.into_iter());
+        let result = finish_or_defer(
+            |asked| {
+                seen.lock().unwrap().push(asked);
+                let next = answers.lock().unwrap().next().expect("an unexpected call");
+                async move { next }
+            },
+            disposition,
+            RETRY,
+        )
+        .await;
+        (result, seen.into_inner().unwrap())
+    }
+
+    #[tokio::test]
+    async fn a_completion_the_receipts_support_is_recorded_as_completed() {
+        let (result, asked) = run(RecoveryDisposition::Completed, vec![Ok(())]).await;
+        assert_eq!(result, Ok(RecoveryDisposition::Completed));
+        assert_eq!(asked, vec![RecoveryDisposition::Completed]);
+    }
+
+    #[tokio::test]
+    async fn a_completion_the_stored_state_does_not_prove_is_deferred_not_fatal() {
+        let (result, asked) = run(
+            RecoveryDisposition::Completed,
+            vec![Err(ExecutionError::OperationConflict), Ok(())],
+        )
+        .await;
+        assert_eq!(result, Ok(RETRY), "the stage is polled again later");
+        assert_eq!(asked, vec![RecoveryDisposition::Completed, RETRY]);
+    }
+
+    #[tokio::test]
+    async fn a_conflict_while_recording_the_deferral_is_still_reported() {
+        let (result, _) = run(
+            RecoveryDisposition::Completed,
+            vec![
+                Err(ExecutionError::OperationConflict),
+                Err(ExecutionError::OperationConflict),
+            ],
+        )
+        .await;
+        assert_eq!(result, Err(ExecutionError::OperationConflict));
+    }
+
+    #[tokio::test]
+    async fn only_a_completion_is_deferred_and_other_errors_pass_through() {
+        let (result, asked) = run(RETRY, vec![Err(ExecutionError::OperationConflict)]).await;
+        assert_eq!(result, Err(ExecutionError::OperationConflict));
+        assert_eq!(asked, vec![RETRY], "a retry is never retried as a retry");
+        let (result, asked) = run(
+            RecoveryDisposition::Completed,
+            vec![Err(ExecutionError::LostClaim)],
+        )
+        .await;
+        assert_eq!(result, Err(ExecutionError::LostClaim));
+        assert_eq!(asked.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod recovery_survivable_tests {
+    use super::*;
+
+    #[test]
+    fn a_stage_that_disagrees_with_its_stored_state_does_not_stop_recovery() {
+        for error in [
+            RuntimeError::Execution(ExecutionError::OperationConflict),
+            RuntimeError::Execution(ExecutionError::LostClaim),
+            RuntimeError::Execution(ExecutionError::Superseded),
+            RuntimeError::ProviderUnknown,
+            RuntimeError::CostProjectionPending,
+        ] {
+            assert!(recovery_outcome_is_survivable(&error), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn a_fault_in_the_runtime_itself_still_stops_recovery() {
+        for error in [
+            RuntimeError::InvalidRecord,
+            RuntimeError::StorageUnavailable,
+            RuntimeError::WorkerFailed,
+            RuntimeError::Execution(ExecutionError::InvalidRecord),
+        ] {
+            assert!(!recovery_outcome_is_survivable(&error), "{error:?}");
+        }
     }
 }

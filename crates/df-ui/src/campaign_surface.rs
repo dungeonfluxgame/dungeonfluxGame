@@ -109,6 +109,20 @@ impl fmt::Display for CampaignValidationError {
 }
 impl std::error::Error for CampaignValidationError {}
 
+/// `text` when it has content, otherwise `fallback`.
+///
+/// A campaign view refuses any empty text (see [`CampaignView::validate`]), and a view that is
+/// refused is not drawn at all: the phone stays on its loading screen. A field the server left
+/// empty for a moment must therefore be replaced with a plain stand-in rather than blank the
+/// whole screen.
+pub fn text_or(text: &str, fallback: &str) -> String {
+    if text.trim().is_empty() {
+        fallback.to_owned()
+    } else {
+        text.to_owned()
+    }
+}
+
 impl CampaignView<'_> {
     pub fn validate(&self, limits: CampaignLimits) -> Result<(), CampaignValidationError> {
         if self.members.len() > limits.max_members || self.objectives.len() > limits.max_objectives
@@ -864,6 +878,22 @@ mod tests {
             }),
             Err(CampaignValidationError::ResourceLimit)
         );
+    }
+    #[test]
+    fn text_or_replaces_only_empty_or_blank_text() {
+        assert_eq!(text_or("Narration", "stand-in"), "Narration");
+        assert_eq!(text_or("", "stand-in"), "stand-in");
+        assert_eq!(text_or("  \n\t ", "stand-in"), "stand-in");
+        // The stand-in itself must be valid campaign text.
+        let limits = CampaignLimits {
+            max_members: 10,
+            max_objectives: 10,
+            max_text_bytes: 100,
+        };
+        let mut data = view(&[]);
+        let replaced = text_or(" ", "The story continues.");
+        data.narration = &replaced;
+        assert_eq!(data.validate(limits), Ok(()));
     }
     #[test]
     fn empty_or_overlong_text_is_rejected_before_dom_publication() {

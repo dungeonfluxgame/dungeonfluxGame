@@ -715,6 +715,31 @@ mod tests {
         )
     }
 
+    /// The phone's creator accepts a portrait address only up to
+    /// `MAXIMUM_PORTRAIT_URI_BYTES` (gameplay_browser/hero_creator.rs). A signed address longer
+    /// than that is dropped and the finished portrait never shows, so the two must stay in step.
+    #[test]
+    fn a_signed_creator_portrait_address_fits_the_phone_client_limit() {
+        const PHONE_CLIENT_LIMIT: usize = 512;
+        let grant_key = "f".repeat(64);
+        let mut address = format!("/gameplay/creator-portrait/{grant_key}");
+        sign_gameplay_url(
+            &mut address,
+            "/gameplay/creator-portrait/",
+            PrincipalAudience::Seat,
+            &[9; KEY_BYTES],
+        );
+        assert!(
+            address.starts_with("/gameplay/creator-portrait/") && address.contains("?g="),
+            "the address was signed: {address}"
+        );
+        assert!(
+            address.len() <= PHONE_CLIENT_LIMIT,
+            "a {}-byte signed address would be dropped by the phone client",
+            address.len()
+        );
+    }
+
     #[test]
     fn a_signed_grant_is_bound_to_its_route_audience_key_principal_and_expiry() {
         let principal = [9; KEY_BYTES];

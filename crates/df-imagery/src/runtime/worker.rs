@@ -61,6 +61,24 @@ impl RuntimeHandle {
     }
 }
 
+/// Whether the worker loop keeps running after a stage ended with `error`.
+///
+/// These outcomes already completed their durable attempt and emitted telemetry, or belong to
+/// another worker that holds or has finished the stage. Everything else means the runtime itself
+/// is unsound and the loop must stop, so this list is deliberately short and pinned by tests.
+fn stage_outcome_is_survivable(error: &RuntimeError) -> bool {
+    matches!(
+        error,
+        RuntimeError::ProviderRefused
+            | RuntimeError::ProviderUnknown
+            | RuntimeError::SupplierQuotaExhausted
+            | RuntimeError::SupplierRateLimited
+            | RuntimeError::SupplierFailure(_)
+            | RuntimeError::CostProjectionPending
+            | RuntimeError::Execution(ExecutionError::LostClaim | ExecutionError::Superseded)
+    )
+}
+
 impl<J, E, S, P, F, C, I, K, B, T, Q, U> NativeImageRuntime<J, E, S, P, F, C, I, K, B, T, Q, U>
 where
     J: ImageJournal,
@@ -104,19 +122,7 @@ where
                     .await
                     {
                         Ok(_) => {}
-                        // These outcomes already completed their durable attempt and emitted telemetry.
-                        Err(
-                            RuntimeError::ProviderRefused
-                            | RuntimeError::ProviderUnknown
-                            | RuntimeError::SupplierQuotaExhausted
-                            | RuntimeError::SupplierRateLimited
-                            | RuntimeError::SupplierFailure(_)
-                            | RuntimeError::CostProjectionPending
-                            // Another worker holds or has finished this stage.
-                            | RuntimeError::Execution(
-                                ExecutionError::LostClaim | ExecutionError::Superseded,
-                            ),
-                        ) => {}
+                        Err(error) if stage_outcome_is_survivable(&error) => {}
                         Err(error) => return Err(error),
                     }
                 }
@@ -1648,6 +1654,39 @@ where
             .map_err(RuntimeError::Journal)?;
         match frozen {
             FreezeOutcome::Frozen { job } | FreezeOutcome::AlreadyFrozen { job } => Ok(job),
+        }
+    }
+}
+
+#[cfg(test)]
+mod survivable_outcome_tests {
+    use super::*;
+
+    #[test]
+    fn a_stage_another_worker_holds_or_finished_does_not_stop_the_loop() {
+        for error in [
+            RuntimeError::Execution(ExecutionError::LostClaim),
+            RuntimeError::Execution(ExecutionError::Superseded),
+            RuntimeError::ProviderRefused,
+            RuntimeError::ProviderUnknown,
+            RuntimeError::SupplierRateLimited,
+            RuntimeError::CostProjectionPending,
+        ] {
+            assert!(stage_outcome_is_survivable(&error), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn a_fault_in_the_runtime_itself_stops_the_loop() {
+        for error in [
+            RuntimeError::InvalidRecord,
+            RuntimeError::InvalidConfiguration,
+            RuntimeError::StorageUnavailable,
+            RuntimeError::WorkerFailed,
+            RuntimeError::TelemetryUnavailable,
+            RuntimeError::Execution(ExecutionError::InvalidRecord),
+        ] {
+            assert!(!stage_outcome_is_survivable(&error), "{error:?}");
         }
     }
 }

@@ -20,7 +20,7 @@ mod theme;
 pub use campaign_surface::{CampaignError, CampaignIllustration, CampaignSurface};
 pub use campaign_surface::{
     CampaignLimits, CampaignMember, CampaignObjective, CampaignValidationError, CampaignView,
-    ConceptScene, ObjectiveState,
+    ConceptScene, ObjectiveState, text_or,
 };
 
 #[cfg(target_arch = "wasm32")]

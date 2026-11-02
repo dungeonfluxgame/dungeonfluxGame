@@ -306,6 +306,34 @@ Wait about 12 seconds before relaunching so the owned PostgreSQL stops. Every la
     `df-tools` imagery groups without the scratch flag. Parallel runs while the game is
     building time out on a cluster-wide lock; use `-- --test-threads=4` or fewer.
 
+26. **The web client cannot be hot-swapped.** The server reads `play-web/df_tools_bg.wasm` into
+    memory at startup, so copying a new bundle over it changes nothing until the game restarts.
+    Rebuild with `artifacts/tmp/rebuild-web-and-launch.sh <log>` and expect a fresh game.
+27. **The phone stays on "Setting the table…" with `campaign presentation text is empty` in the
+    console.** The play screen refuses any empty text and draws nothing at all when one field is
+    empty; the server had published an empty `narration` right after "the road to the market
+    opens". The exploration screen now substitutes a plain stand-in and logs
+    `exploration screen: <field> was empty; showing a stand-in` on the console, so the fault is
+    visible instead of a blank screen. Read the real value with `dev view --as "<hero>"`.
+28. **Travelling to a new place takes minutes.** The storyteller writes the place and every
+    person in it through Codex (`purpose=place_creation`, `purpose=person_persona`), and the
+    phone shows "Sending…" with Send disabled until it lands. About 7 minutes was seen.
+29. **The new place keeps the old plate and no market picture arrives.** The room reference
+    for the new place failed at once as `interrupted` (`ART failed subject=place:...`,
+    `PLATE refresh ... reason=canonical_reference_failed`) and the TV kept the wharf plate under
+    the new title. A request that fails before the image service is called now logs
+    `IMAGERY authorize_failed failure=...`; read that line first.
+30. **Observation findings never arrive.** The text call behind "Study ..." has an 8 second
+    deadline and Codex takes 15 to 45 seconds, so the narrator always falls back to "can't make
+    it out clearly enough".
+31. **A typed attack is read as a threat.** "I draw my greatsword and attack" became an
+    Intimidation check and no fight started ("Nothing like that is here to act on" for a
+    plain strike). The only ways past the enforcer were Persuasion or Intimidation rolls
+    (DC 15, disadvantage while he is hostile); expect several failures before one succeeds.
+32. **Reply labelled with the wrong speaker.** When the enforcer answered, the phone showed his
+    words under the courier's name, and once the composer stayed disabled ("Waiting for the game
+    server…") until the page was reloaded and the seat resumed.
+
 ## After the test
 
 Stop the game with `dev shutdown`. The scratch folders under `AppData\Local\Temp` and the
