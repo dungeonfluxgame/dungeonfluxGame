@@ -1,7 +1,9 @@
 //! The blank canvas: elements spawned at run time from data-defined kinds.
 //!
-//! It owns the element set, the checks that keep every element valid for its kind, and the
-//! revision that moves on every change. Every effect either changes the canvas and records the
+//! It owns the checks that keep every element valid for its kind and the revision that moves on
+//! every change. The elements themselves live in the entity-component world (`world.rs`) and
+//! travel is a system over it (`motion.rs`); this module turns an effect into a change of the
+//! world and a typed event. Every effect either changes the canvas and records the
 //! change, or is rejected and records the rejection, so nothing happens silently inside the
 //! canvas. It never reads files, draws anything or waits: the host loads kinds, renders and
 //! serves, and records the rejections that happen before a request becomes an effect.
@@ -16,7 +18,9 @@ use crate::element::{
 use crate::event::{EffectKind, RejectionCause, TableEvent};
 use crate::field_type::{FieldType, ValueError};
 use crate::kind::KindRegistry;
+use crate::motion::{Motion, Speed, SpeedError};
 use crate::ports::EventSink;
+use crate::world::World;
 
 /// Most elements the canvas holds at once.
 pub const MAXIMUM_ELEMENTS: usize = 512;
@@ -38,9 +42,20 @@ pub enum CanvasEffect {
         field: FieldName,
         value: FieldValue,
     },
+    /// Puts the element at the position at once, ending any travel.
     Move {
         id: ElementId,
         position: Position,
+    },
+    /// Sets the element travelling toward the position; each tick moves it closer.
+    Travel {
+        id: ElementId,
+        to: Position,
+        speed: Speed,
+    },
+    /// Ends the element's travel where it stands.
+    Stop {
+        id: ElementId,
     },
     Clear,
 }
@@ -52,6 +67,8 @@ impl CanvasEffect {
             Self::Despawn { .. } => EffectKind::Despawn,
             Self::Set { .. } => EffectKind::Set,
             Self::Move { .. } => EffectKind::Move,
+            Self::Travel { .. } => EffectKind::Travel,
+            Self::Stop { .. } => EffectKind::Stop,
             Self::Clear => EffectKind::Clear,
         }
     }
@@ -62,7 +79,9 @@ impl CanvasEffect {
             Self::Spawn { id, .. }
             | Self::Despawn { id }
             | Self::Set { id, .. }
-            | Self::Move { id, .. } => Some(id),
+            | Self::Move { id, .. }
+            | Self::Travel { id, .. }
+            | Self::Stop { id } => Some(id),
             Self::Clear => None,
         }
     }
@@ -89,6 +108,7 @@ pub enum CanvasError {
     RequiredFieldAbsent(FieldName),
     TooManyElements,
     OutOfBounds,
+    InvalidSpeed(SpeedError),
 }
 
 impl CanvasError {
@@ -104,6 +124,7 @@ impl CanvasError {
             }
             Self::TooManyElements => RejectionCause::TooManyElements,
             Self::OutOfBounds => RejectionCause::OutOfBounds,
+            Self::InvalidSpeed(_) => RejectionCause::InvalidSpeed,
         }
     }
 }
@@ -133,6 +154,7 @@ impl fmt::Display for CanvasError {
                 formatter,
                 "x is from 0 to {CANVAS_WIDTH_UNITS} and y is from 0 to {CANVAS_HEIGHT_UNITS}"
             ),
+            Self::InvalidSpeed(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -195,11 +217,20 @@ fn check_element(registry: &KindRegistry, element: &Element) -> Result<(), Canva
     Ok(())
 }
 
-/// The set of elements on the blank canvas.
+/// What a tick of travel did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TickReport {
+    /// Elements whose position changed.
+    pub moved: usize,
+    /// Elements that reached their target.
+    pub arrived: Vec<ElementId>,
+}
+
+/// The blank canvas: a world of elements, the kinds they must fit, and the revision.
 #[derive(Debug, Clone)]
 pub struct Canvas {
     registry: KindRegistry,
-    elements: BTreeMap<ElementId, Element>,
+    world: World,
     revision: u64,
 }
 
@@ -207,12 +238,13 @@ impl Canvas {
     pub fn new(registry: KindRegistry) -> Self {
         Self {
             registry,
-            elements: BTreeMap::new(),
+            world: World::default(),
             revision: 0,
         }
     }
 
-    /// Moves on with every change, so a viewer can tell whether it is current.
+    /// Moves on with every change, so a viewer can tell whether it is current. A tick that moves
+    /// something counts as one change.
     pub fn revision(&self) -> u64 {
         self.revision
     }
@@ -221,20 +253,26 @@ impl Canvas {
         &self.registry
     }
 
-    pub fn elements(&self) -> impl Iterator<Item = &Element> {
-        self.elements.values()
+    /// Every element as a snapshot, in name order.
+    pub fn elements(&self) -> impl Iterator<Item = Element> + '_ {
+        self.world.elements()
     }
 
-    pub fn element(&self, id: &ElementId) -> Option<&Element> {
-        self.elements.get(id)
+    pub fn element(&self, id: &ElementId) -> Option<Element> {
+        self.world.element(id)
     }
 
     pub fn len(&self) -> usize {
-        self.elements.len()
+        self.world.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.elements.is_empty()
+        self.world.is_empty()
+    }
+
+    /// Whether any element is travelling, so a host can skip ticking an idle canvas.
+    pub fn is_moving(&self) -> bool {
+        self.world.is_moving()
     }
 
     /// The type of a field of a kind, for reading a value that arrives as text or JSON.
@@ -248,10 +286,10 @@ impl Canvas {
 
     /// Elements that no longer fit their kind, for a viewer to flag.
     pub fn problems(&self) -> Vec<ElementProblem> {
-        self.elements
-            .values()
+        self.world
+            .elements()
             .filter_map(|element| {
-                check_element(&self.registry, element)
+                check_element(&self.registry, &element)
                     .err()
                     .map(|problem| ElementProblem {
                         element: element.id.clone(),
@@ -283,6 +321,30 @@ impl Canvas {
         }
     }
 
+    /// Advances every travelling element by `seconds` and records each arrival. Nothing moving
+    /// means nothing changes and the revision stays. Call it from the host's clock; the canvas
+    /// never reads time itself.
+    pub fn tick(&mut self, seconds: f32, sink: &dyn EventSink) -> TickReport {
+        if !self.world.is_moving() {
+            return TickReport::default();
+        }
+        let travelled = self.world.advance_motion(seconds);
+        if travelled.moved == 0 && travelled.arrived.is_empty() {
+            return TickReport::default();
+        }
+        let revision = self.advance();
+        for element in &travelled.arrived {
+            sink.record(&TableEvent::ElementArrived {
+                element: element.clone(),
+                revision,
+            });
+        }
+        TickReport {
+            moved: travelled.moved,
+            arrived: travelled.arrived,
+        }
+    }
+
     fn change(&mut self, effect: CanvasEffect) -> Result<TableEvent, CanvasError> {
         match effect {
             CanvasEffect::Spawn {
@@ -294,9 +356,10 @@ impl Canvas {
             CanvasEffect::Despawn { id } => self.despawn(id),
             CanvasEffect::Set { id, field, value } => self.set(id, field, value),
             CanvasEffect::Move { id, position } => self.move_element(id, position),
+            CanvasEffect::Travel { id, to, speed } => self.travel(id, to, speed),
+            CanvasEffect::Stop { id } => self.stop(id),
             CanvasEffect::Clear => {
-                let removed = self.elements.len();
-                self.elements.clear();
+                let removed = self.world.clear();
                 let revision = self.advance();
                 Ok(TableEvent::CanvasCleared { removed, revision })
             }
@@ -314,10 +377,10 @@ impl Canvas {
             .registry
             .get(&kind)
             .ok_or_else(|| CanvasError::UnknownKind(kind.clone()))?;
-        if self.elements.len() >= MAXIMUM_ELEMENTS {
+        if self.world.len() >= MAXIMUM_ELEMENTS {
             return Err(CanvasError::TooManyElements);
         }
-        if self.elements.contains_key(&id) {
+        if self.world.contains(&id) {
             return Err(CanvasError::DuplicateElement(id));
         }
         if !position.is_on_canvas() {
@@ -340,9 +403,11 @@ impl Canvas {
             kind: kind.clone(),
             position,
             fields,
+            motion: None,
         };
         check_element(&self.registry, &element)?;
-        self.elements.insert(id.clone(), element);
+        self.world
+            .spawn(id.clone(), kind.clone(), position, element.fields);
         let revision = self.advance();
         Ok(TableEvent::ElementSpawned {
             element: id,
@@ -352,9 +417,9 @@ impl Canvas {
     }
 
     fn despawn(&mut self, id: ElementId) -> Result<TableEvent, CanvasError> {
-        self.elements
-            .remove(&id)
-            .ok_or_else(|| CanvasError::UnknownElement(id.clone()))?;
+        if !self.world.despawn(&id) {
+            return Err(CanvasError::UnknownElement(id));
+        }
         let revision = self.advance();
         Ok(TableEvent::ElementDespawned {
             element: id,
@@ -368,20 +433,21 @@ impl Canvas {
         field: FieldName,
         value: FieldValue,
     ) -> Result<TableEvent, CanvasError> {
-        // Borrow the registry and the elements separately so the element is looked up once.
-        let Self {
-            registry, elements, ..
-        } = self;
-        let element = elements
-            .get_mut(&id)
+        let kind = self
+            .world
+            .kind(&id)
             .ok_or_else(|| CanvasError::UnknownElement(id.clone()))?;
-        field_type_of(registry, &element.kind, &field)?
+        field_type_of(&self.registry, kind, &field)?
             .check(&value)
             .map_err(|error| CanvasError::InvalidValue {
                 field: field.clone(),
                 error,
             })?;
-        element.fields.insert(field.clone(), value);
+        let fields = self
+            .world
+            .fields_mut(&id)
+            .ok_or_else(|| CanvasError::UnknownElement(id.clone()))?;
+        fields.insert(field.clone(), value);
         let revision = self.advance();
         Ok(TableEvent::ElementChanged {
             element: id,
@@ -395,16 +461,46 @@ impl Canvas {
         id: ElementId,
         position: Position,
     ) -> Result<TableEvent, CanvasError> {
-        let element = self
-            .elements
-            .get_mut(&id)
-            .ok_or_else(|| CanvasError::UnknownElement(id.clone()))?;
+        if !self.world.contains(&id) {
+            return Err(CanvasError::UnknownElement(id));
+        }
         if !position.is_on_canvas() {
             return Err(CanvasError::OutOfBounds);
         }
-        element.position = position;
+        self.world.place(&id, position);
         let revision = self.advance();
         Ok(TableEvent::ElementMoved {
+            element: id,
+            revision,
+        })
+    }
+
+    fn travel(
+        &mut self,
+        id: ElementId,
+        to: Position,
+        speed: Speed,
+    ) -> Result<TableEvent, CanvasError> {
+        if !self.world.contains(&id) {
+            return Err(CanvasError::UnknownElement(id));
+        }
+        if !to.is_on_canvas() {
+            return Err(CanvasError::OutOfBounds);
+        }
+        self.world.start_travel(&id, Motion { target: to, speed });
+        let revision = self.advance();
+        Ok(TableEvent::ElementTravelling {
+            element: id,
+            revision,
+        })
+    }
+
+    fn stop(&mut self, id: ElementId) -> Result<TableEvent, CanvasError> {
+        self.world
+            .stop_travel(&id)
+            .ok_or_else(|| CanvasError::UnknownElement(id.clone()))?;
+        let revision = self.advance();
+        Ok(TableEvent::ElementStopped {
             element: id,
             revision,
         })

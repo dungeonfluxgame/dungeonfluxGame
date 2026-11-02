@@ -10,6 +10,7 @@ use df_table::event::RejectionCause;
 use serde::{Deserialize, Serialize};
 
 use crate::event_log::LoggedLine;
+use crate::view::CanvasView;
 
 /// The addresses of the API. `CANVAS` and `EVENTS` answer GET; `EFFECT` and `RELOAD` answer POST
 /// with JSON.
@@ -28,6 +29,9 @@ pub mod route {
     pub const PLAYGROUND_FIXTURE_LIST: &str = "/playground/fixtures.json";
     pub const PLAYGROUND_FIXTURE: &str = "/playground/fixtures/{name}";
     pub const PLAYGROUND_PACKAGE_FILE: &str = "/playground/pkg/{name}";
+    /// A long poll for the next frame (GET with `?after=N`): answers at once when the host has
+    /// changed since frame N, otherwise holds the request until it does or a wait runs out.
+    pub const PLAYGROUND_FRAME: &str = "/playground/frame";
     /// What the playground page is showing (GET), so the page and the dev CLI agree.
     pub const PLAYGROUND_CONTROLS: &str = "/playground/controls.json";
     /// Changes what the playground shows (POST a `ControlsChange`).
@@ -40,6 +44,8 @@ pub mod route {
     pub const DEV_FIXTURE_REMOVE: &str = "/dev/playground/fixture/remove";
 }
 
+/// The query parameter of `route::PLAYGROUND_FRAME` that names the last frame already seen.
+pub const FRAME_AFTER_PARAMETER: &str = "after";
 /// The query parameter of `route::EVENTS` that names the last sequence already seen.
 pub const EVENTS_AFTER_PARAMETER: &str = "after";
 /// Most notices or problems one answer carries; more are summarized as "and N more".
@@ -89,6 +95,18 @@ pub enum EffectRequest {
         x: f32,
         y: f32,
     },
+    /// Sends the element toward a point at a speed in canvas units per second; the host's clock
+    /// moves it a little each tick.
+    Travel {
+        id: String,
+        x: f32,
+        y: f32,
+        speed: f32,
+    },
+    /// Ends the element's travel where it stands.
+    Stop {
+        id: String,
+    },
     Clear {},
 }
 
@@ -121,6 +139,16 @@ pub struct FixtureWrite {
 #[serde(deny_unknown_fields)]
 pub struct FixtureRemove {
     pub name: String,
+}
+
+/// Everything the playground page draws, taken at one moment: the canvas and what the
+/// playground is showing. `frame` counts the host's changes, so a page that has frame N asks for
+/// the next one with `after=N` and is answered when there is one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Frame {
+    pub frame: u64,
+    pub canvas: CanvasView,
+    pub controls: ControlsReply,
 }
 
 /// The answer to a request for events.

@@ -241,8 +241,8 @@ fn setting_a_field_checks_its_type_and_range_and_records_the_change() {
     assert_eq!(
         canvas
             .element(&id("pip"))
-            .and_then(|element| element.fields.get(&field("hit_points"))),
-        Some(&FieldValue::Number(7.0))
+            .and_then(|element| element.fields.get(&field("hit_points")).cloned()),
+        Some(FieldValue::Number(7.0))
     );
     assert!(sink.events().contains(&TableEvent::ElementChanged {
         element: id("pip"),

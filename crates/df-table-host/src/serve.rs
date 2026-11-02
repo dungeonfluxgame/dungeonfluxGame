@@ -26,6 +26,15 @@ use crate::state::AppState;
 /// How long open connections get to finish after an interrupt.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
+/// Stops a background task when serving ends by any route, including an early return.
+struct StopWhenDropped(tokio::task::JoinHandle<()>);
+
+impl Drop for StopWhenDropped {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Why serving stopped with a failure.
 #[derive(Debug)]
 pub enum ServeError {
@@ -101,6 +110,7 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
 
     let stop = Arc::new(Notify::new());
     let stopped = Arc::clone(&stop);
+    let _clock = StopWhenDropped(server::spawn_clock(Arc::clone(&state)));
     let serving = server::serve_listener(listener, state, async move {
         stopped.notified().await;
     });

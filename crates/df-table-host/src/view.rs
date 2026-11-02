@@ -46,6 +46,14 @@ pub struct KindView {
     pub fields: Vec<FieldView>,
 }
 
+/// Where an element is heading and how fast, while it travels.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TravelView {
+    pub x: f32,
+    pub y: f32,
+    pub speed: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ElementView {
     pub id: String,
@@ -60,6 +68,9 @@ pub struct ElementView {
     pub fields: serde_json::Map<String, serde_json::Value>,
     /// Why the element no longer fits its kind, when it does not.
     pub problem: Option<String>,
+    /// Where the element is heading, while it travels.
+    #[serde(default)]
+    pub travelling: Option<TravelView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -134,9 +145,9 @@ impl CanvasView {
                     x: element.position.x,
                     y: element.position.y,
                     label: definition
-                        .map_or_else(|| element.id.to_string(), |kind| kind.label(element)),
+                        .map_or_else(|| element.id.to_string(), |kind| kind.label(&element)),
                     color: definition
-                        .and_then(|kind| kind.color(element))
+                        .and_then(|kind| kind.color(&element))
                         .map(Color::to_hex),
                     shape: definition.map_or(FALLBACK_SHAPE, |kind| kind.shape),
                     width_units: definition.map_or(FALLBACK_SIZE_UNITS, |kind| kind.width_units),
@@ -150,6 +161,11 @@ impl CanvasView {
                         .iter()
                         .find(|problem| problem.element == element.id)
                         .map(|problem| problem.problem.to_string()),
+                    travelling: element.motion.map(|motion| TravelView {
+                        x: motion.target.x,
+                        y: motion.target.y,
+                        speed: motion.speed.units_per_second(),
+                    }),
                 }
             })
             .collect();

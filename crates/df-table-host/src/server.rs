@@ -7,11 +7,12 @@
 //! the ones that happen before a request becomes an effect, is recorded as an event.
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{DefaultBodyLimit, Query, Request, State};
-use axum::http::StatusCode;
+use axum::http::{Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -28,10 +29,14 @@ use crate::render;
 use crate::request::RequestError;
 use crate::state::AppState;
 use crate::view::CanvasView;
-use crate::wire::{EffectRequest, EventsReply, Reply, capped, route};
+use crate::wire::{EffectRequest, EventsReply, Frame, Reply, capped, route};
 
 /// Most event lines the viewer shows and one events answer carries.
 pub const MAXIMUM_EVENTS_PER_ANSWER: usize = 60;
+/// How often the host's clock moves travelling elements (about 30 times a second).
+pub const TICK_INTERVAL: Duration = Duration::from_millis(33);
+/// Longest a frame request is held waiting for a change before it is answered anyway.
+pub const FRAME_WAIT: Duration = Duration::from_secs(25);
 /// Largest request body accepted, in bytes.
 pub const MAXIMUM_REQUEST_BYTES: usize = 64 * 1024;
 
@@ -68,6 +73,22 @@ async fn guard_requests(
     next.run(request).await
 }
 
+/// Tells readers waiting for news that a change was made. Every POST is a change attempt, so
+/// the announcement is made after the answer is built, whether the change was accepted or not:
+/// a reader that looks again and finds nothing new costs one request.
+async fn announce_changes(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let is_change = request.method() == Method::POST;
+    let response = next.run(request).await;
+    if is_change {
+        state.announce_change();
+    }
+    response
+}
+
 async fn index(State(state): State<Arc<AppState>>) -> Html<String> {
     let view = CanvasView::from_canvas(&state.canvas());
     Html(render::page(
@@ -78,6 +99,37 @@ async fn index(State(state): State<Arc<AppState>>) -> Html<String> {
 
 async fn canvas_json(State(state): State<Arc<AppState>>) -> Json<CanvasView> {
     Json(CanvasView::from_canvas(&state.canvas()))
+}
+
+/// The query of `route::PLAYGROUND_FRAME`; the field is named like `wire::FRAME_AFTER_PARAMETER`.
+#[derive(Debug, Deserialize)]
+struct FrameQuery {
+    after: Option<u64>,
+}
+
+fn build_frame(state: &AppState) -> Frame {
+    let frame = state.change_count();
+    let canvas = CanvasView::from_canvas(&state.canvas());
+    Frame {
+        frame,
+        canvas,
+        controls: state.playground().snapshot(),
+    }
+}
+
+/// The current frame. With `after=N`, a request made while the host is still at frame N is held
+/// until the next change (or `FRAME_WAIT`), so a page learns of a change as it happens instead of
+/// by asking again and again. A different count, such as after a host restart, answers at once.
+async fn frame_json(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FrameQuery>,
+) -> Json<Frame> {
+    if let Some(after) = query.after {
+        let mut changes = state.watch_changes();
+        // A timeout is not an error: the page asks again with the same count.
+        let _ = tokio::time::timeout(FRAME_WAIT, changes.wait_for(|count| *count != after)).await;
+    }
+    Json(build_frame(&state))
 }
 
 /// The query of `route::EVENTS`; the field is named like `wire::EVENTS_AFTER_PARAMETER`.
@@ -214,12 +266,35 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/", get(index))
         .route(route::CANVAS, get(canvas_json))
         .route(route::EVENTS, get(events_json))
+        .route(route::PLAYGROUND_FRAME, get(frame_json))
         .route(route::EFFECT, post(apply_effect))
         .route(route::RELOAD, post(reload))
         .with_state(state.clone());
     api.merge(playground::router(state.clone()))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            announce_changes,
+        ))
         .layer(middleware::from_fn_with_state(state, guard_requests))
+}
+
+/// Starts the host's clock: every `TICK_INTERVAL` it advances travelling elements by the time
+/// that really passed, which the canvas cuts to a sane length if the host stalled. Abort the
+/// handle to stop it.
+pub fn spawn_clock(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(TICK_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last = Instant::now();
+        loop {
+            interval.tick().await;
+            let now = Instant::now();
+            let seconds = now.duration_since(last).as_secs_f32();
+            last = now;
+            state.tick(seconds);
+        }
+    })
 }
 
 /// Binds the loopback address only (port zero picks a free port), so the caller can report the

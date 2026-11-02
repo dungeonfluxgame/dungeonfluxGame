@@ -25,6 +25,9 @@ pub const STARTER_FILES: [(&str, &str); 2] = [
 /// A canvas being served, stopped when this value is dropped.
 pub struct Running {
     pub port: u16,
+    /// The host's state, so a test can tick the canvas itself instead of waiting for the clock.
+    pub state: Arc<AppState>,
+    clock: Option<tokio::task::JoinHandle<()>>,
     directory: TempDir,
     playground: TempDir,
     stop: Option<oneshot::Sender<()>>,
@@ -32,6 +35,13 @@ pub struct Running {
 }
 
 impl Running {
+    /// Starts the host's real clock, for a test of travel that runs on its own.
+    pub fn start_clock(&mut self) {
+        if self.clock.is_none() {
+            self.clock = Some(crate::server::spawn_clock(Arc::clone(&self.state)));
+        }
+    }
+
     pub fn kind_directory(&self) -> &Path {
         self.directory.path()
     }
@@ -66,6 +76,9 @@ impl Drop for Running {
             let _ = stop.send(());
         }
         self.server.abort();
+        if let Some(clock) = self.clock.take() {
+            clock.abort();
+        }
     }
 }
 
@@ -94,14 +107,17 @@ pub async fn start(files: &[(&str, &str)]) -> Running {
     let listener = server::bind(0).await.expect("binds an ephemeral port");
     let port = listener.local_addr().expect("has an address").port();
     let (stop, stopped) = oneshot::channel();
+    let served_state = Arc::clone(&state);
     let server = tokio::spawn(async move {
-        let _ = server::serve_listener(listener, state, async {
+        let _ = server::serve_listener(listener, served_state, async {
             let _ = stopped.await;
         })
         .await;
     });
     Running {
         port,
+        state,
+        clock: None,
         directory,
         playground,
         stop: Some(stop),

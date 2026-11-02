@@ -27,6 +27,7 @@ pub mod kind_files;
 pub mod options;
 pub mod playground;
 pub mod render;
+pub mod repl;
 pub mod report;
 pub mod request;
 pub mod serve;
@@ -51,6 +52,8 @@ mod guard_tests;
 #[cfg(test)]
 mod kind_files_tests;
 #[cfg(test)]
+mod motion_command_tests;
+#[cfg(test)]
 mod options_tests;
 #[cfg(test)]
 mod playground_control_tests;
@@ -58,6 +61,8 @@ mod playground_control_tests;
 mod playground_tests;
 #[cfg(test)]
 mod render_tests;
+#[cfg(test)]
+mod repl_tests;
 #[cfg(test)]
 mod report_tests;
 #[cfg(test)]

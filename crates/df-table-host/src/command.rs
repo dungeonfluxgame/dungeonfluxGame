@@ -18,6 +18,10 @@ use crate::wire::{EffectRequest, ValueForm};
 const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
 const SET_USAGE: &str = "set <id> <field>=<value> [<field>=<value> ...]";
 const MOVE_USAGE: &str = "move <id> <x> <y>";
+const TRAVEL_USAGE: &str = "travel <id> <x> <y> [speed=N]";
+const STOP_USAGE: &str = "stop <id> [<id> ...]";
+/// Canvas units per second when `travel` is given no speed: the canvas in about five seconds.
+pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
 const DESPAWN_USAGE: &str = "despawn <id> [<id> ...]";
 const EVENTS_USAGE: &str = "events [after]";
 const SCRIPT_USAGE: &str = "script <file>";
@@ -44,6 +48,9 @@ pub enum Command {
         after: Option<u64>,
     },
     Reload,
+    /// Read commands from standard input until it ends, one per line, keeping the connection
+    /// to the host. Only the command line starts it.
+    Repl,
     /// Print what the playground is showing and the fixtures it can show.
     Playground,
     /// Change what the playground shows, in order.
@@ -129,7 +136,10 @@ pub fn usage_text() -> String {
         "df-table dev [--port N] <command>\n\
          \n  {SPAWN_USAGE}\n      put an element on the canvas (x and y are its position; a field\n      called x or y can be changed with set)\n\
          \n  {SET_USAGE}\n      change fields of an element\n\
-         \n  {MOVE_USAGE}\n      move an element (x 0 to 100, y 0 to 56.25)\n\
+         \n  {MOVE_USAGE}\n      move an element at once (x 0 to 100, y 0 to 56.25)\n\
+         \n  {TRAVEL_USAGE}\n      send an element toward a point; the host moves it a little every tick, so it\n      glides there on its own (speed in canvas units per second, default 20)\n\
+         \n  {STOP_USAGE}\n      end travel where the element stands\n\
+         \n  repl\n      read commands from standard input, one per line, until quit; a command costs\n      about a millisecond instead of a process start\n\
          \n  {DESPAWN_USAGE}\n      remove elements\n\
          \n  clear\n      remove every element\n\
          \n  canvas\n      print the canvas as JSON\n\
@@ -258,6 +268,22 @@ fn move_element(words: &[String]) -> Result<Command, CommandError> {
         id: id.clone(),
         x: number("x", x)?,
         y: number("y", y)?,
+    }]))
+}
+
+fn travel(words: &[String]) -> Result<Command, CommandError> {
+    let [id, x, y, rest @ ..] = words else {
+        return Err(CommandError::Usage(TRAVEL_USAGE));
+    };
+    let mut speed = DEFAULT_TRAVEL_SPEED;
+    for (_, value) in keyed(rest, "speed=N", &["speed"])? {
+        speed = number("speed", value)?;
+    }
+    Ok(Command::Effects(vec![EffectRequest::Travel {
+        id: id.clone(),
+        x: number("x", x)?,
+        y: number("y", y)?,
+        speed,
     }]))
 }
 
@@ -529,6 +555,18 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "spawn" => spawn(rest),
         "set" => set(rest),
         "move" => move_element(rest),
+        "travel" => travel(rest),
+        "stop" => {
+            if rest.is_empty() {
+                return Err(CommandError::Usage(STOP_USAGE));
+            }
+            Ok(Command::Effects(
+                rest.iter()
+                    .map(|id| EffectRequest::Stop { id: id.clone() })
+                    .collect(),
+            ))
+        }
+        "repl" if rest.is_empty() => Ok(Command::Repl),
         "despawn" => {
             if rest.is_empty() {
                 return Err(CommandError::Usage(DESPAWN_USAGE));
@@ -569,6 +607,7 @@ pub fn parse_script_line(words: &[String]) -> Result<Command, CommandError> {
     match parse(words)? {
         Command::Script(_) => Err(CommandError::NotAllowedInScript("script")),
         Command::Help => Err(CommandError::NotAllowedInScript("help")),
+        Command::Repl => Err(CommandError::NotAllowedInScript("repl")),
         command => Ok(command),
     }
 }

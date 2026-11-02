@@ -26,6 +26,8 @@ pub enum EffectKind {
     Despawn,
     Set,
     Move,
+    Travel,
+    Stop,
     Clear,
 }
 
@@ -37,6 +39,8 @@ impl EffectKind {
             Self::Despawn => "despawn",
             Self::Set => "set",
             Self::Move => "move",
+            Self::Travel => "travel",
+            Self::Stop => "stop",
             Self::Clear => "clear",
         }
     }
@@ -55,6 +59,7 @@ pub enum RejectionCause {
     MissingRequiredField,
     TooManyElements,
     OutOfBounds,
+    InvalidSpeed,
     /// A request that could not be read as an effect at all.
     MalformedRequest,
     /// A request that did not come from the local machine, or not as JSON.
@@ -74,6 +79,7 @@ impl RejectionCause {
             Self::MissingRequiredField => "missing_required_field",
             Self::TooManyElements => "too_many_elements",
             Self::OutOfBounds => "out_of_bounds",
+            Self::InvalidSpeed => "invalid_speed",
             Self::MalformedRequest => "malformed_request",
             Self::ForbiddenRequest => "forbidden_request",
         }
@@ -98,6 +104,21 @@ pub enum TableEvent {
         revision: u64,
     },
     ElementMoved {
+        element: ElementId,
+        revision: u64,
+    },
+    /// An element started travelling toward a point.
+    ElementTravelling {
+        element: ElementId,
+        revision: u64,
+    },
+    /// An element reached the point it was travelling to.
+    ElementArrived {
+        element: ElementId,
+        revision: u64,
+    },
+    /// An element's travel was ended where it stood.
+    ElementStopped {
         element: ElementId,
         revision: u64,
     },
@@ -142,6 +163,9 @@ impl TableEvent {
             Self::ElementSpawned { .. }
             | Self::ElementDespawned { .. }
             | Self::ElementChanged { .. }
+            | Self::ElementTravelling { .. }
+            | Self::ElementArrived { .. }
+            | Self::ElementStopped { .. }
             | Self::CanvasCleared { .. }
             | Self::EffectRejected { .. }
             | Self::KindsReloaded { .. }
@@ -157,6 +181,9 @@ impl TableEvent {
             | Self::ElementDespawned { .. }
             | Self::ElementChanged { .. }
             | Self::ElementMoved { .. }
+            | Self::ElementTravelling { .. }
+            | Self::ElementArrived { .. }
+            | Self::ElementStopped { .. }
             | Self::CanvasCleared { .. }
             | Self::EffectRejected { .. }
             | Self::KindsReloaded { .. }
@@ -181,6 +208,15 @@ impl TableEvent {
             } => format!("set element={element} field={field} revision={revision}"),
             Self::ElementMoved { element, revision } => {
                 format!("move element={element} revision={revision}")
+            }
+            Self::ElementTravelling { element, revision } => {
+                format!("travel element={element} revision={revision}")
+            }
+            Self::ElementArrived { element, revision } => {
+                format!("arrive element={element} revision={revision}")
+            }
+            Self::ElementStopped { element, revision } => {
+                format!("stop element={element} revision={revision}")
             }
             Self::CanvasCleared { removed, revision } => {
                 format!("clear removed={removed} revision={revision}")

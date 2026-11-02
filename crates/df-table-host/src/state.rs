@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use tokio::sync::watch;
+
 use df_table::canvas::Canvas;
 use df_table::element::ElementId;
 use df_table::event::{EffectKind, RejectionCause, TableEvent};
@@ -24,6 +26,8 @@ pub struct AppState {
     echo: Option<LineEcho>,
     kind_directory: PathBuf,
     playground: PlaygroundState,
+    /// Counts the host's changes. A reader waiting for news waits on this.
+    changes: watch::Sender<u64>,
 }
 
 impl AppState {
@@ -41,6 +45,40 @@ impl AppState {
             echo,
             kind_directory,
             playground: PlaygroundState::new(playground_files),
+            changes: watch::channel(0).0,
+        }
+    }
+
+    /// Says that something a reader could see has changed. A reader waiting on `changes` wakes.
+    pub(crate) fn announce_change(&self) {
+        self.changes.send_modify(|count| *count += 1);
+    }
+
+    /// The count of changes so far.
+    pub(crate) fn change_count(&self) -> u64 {
+        *self.changes.borrow()
+    }
+
+    /// A receiver that sees every later announcement.
+    pub(crate) fn watch_changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    /// Advances every travelling element by `seconds` of the host's clock. Idle, it takes the lock
+    /// and returns. A tick that moved something is announced, and an arrival is echoed.
+    pub fn tick(&self, seconds: f32) {
+        let report = {
+            let mut canvas = self.canvas();
+            if !canvas.is_moving() {
+                return;
+            }
+            canvas.tick(seconds, &self.sink)
+        };
+        if report.moved > 0 || !report.arrived.is_empty() {
+            self.announce_change();
+        }
+        if !report.arrived.is_empty() {
+            self.echo_new_lines();
         }
     }
 

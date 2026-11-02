@@ -6,6 +6,7 @@ use df_table_host::dev::run_dev;
 use df_table_host::options::{
     PORT_ENVIRONMENT_VARIABLE, SERVE_USAGE, parse_dev_arguments, parse_serve_options,
 };
+use df_table_host::repl::run_repl;
 use df_table_host::serve::{run_serve, write_terminal_line};
 
 fn fail(text: &str) -> ExitCode {
@@ -34,6 +35,12 @@ async fn main() -> ExitCode {
                 Ok(parsed) => parsed,
                 Err(error) => return fail(&error.to_string()),
             };
+            if words == ["repl"] {
+                return match run_repl(port, std::io::BufReader::new(std::io::stdin())).await {
+                    0 => ExitCode::SUCCESS,
+                    _ => ExitCode::FAILURE,
+                };
+            }
             match run_dev(port, &words).await {
                 Ok(text) => {
                     write_terminal_line(&text);

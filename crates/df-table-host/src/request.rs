@@ -11,6 +11,7 @@ use df_table::canvas::{Canvas, CanvasEffect, CanvasError};
 use df_table::element::{Color, ElementId, FieldName, FieldValue, KindName, NameError, Position};
 use df_table::event::{EffectKind, RejectionCause};
 use df_table::field_type::{FieldType, ValueError};
+use df_table::motion::{Speed, SpeedError};
 
 use crate::wire::{EffectRequest, ValueForm};
 
@@ -43,6 +44,7 @@ pub enum RequestError {
         field: String,
         error: ValueError,
     },
+    Speed(SpeedError),
     Canvas(CanvasError),
 }
 
@@ -51,6 +53,7 @@ impl RequestError {
         match self {
             Self::Name { .. } => RejectionCause::InvalidName,
             Self::Value { .. } => RejectionCause::InvalidValue,
+            Self::Speed(_) => RejectionCause::InvalidSpeed,
             Self::Canvas(error) => error.cause(),
         }
     }
@@ -61,6 +64,7 @@ impl fmt::Display for RequestError {
         match self {
             Self::Name { name_kind, error } => write!(formatter, "{name_kind}: {error}"),
             Self::Value { field, error } => write!(formatter, "field '{field}': {error}"),
+            Self::Speed(error) => write!(formatter, "{error}"),
             Self::Canvas(error) => write!(formatter, "{error}"),
         }
     }
@@ -140,6 +144,8 @@ impl EffectRequest {
             Self::Despawn { .. } => EffectKind::Despawn,
             Self::Set { .. } => EffectKind::Set,
             Self::Move { .. } => EffectKind::Move,
+            Self::Travel { .. } => EffectKind::Travel,
+            Self::Stop { .. } => EffectKind::Stop,
             Self::Clear {} => EffectKind::Clear,
         }
     }
@@ -150,7 +156,9 @@ impl EffectRequest {
             Self::Spawn { id, .. }
             | Self::Despawn { id }
             | Self::Set { id, .. }
-            | Self::Move { id, .. } => ElementId::new(id).ok(),
+            | Self::Move { id, .. }
+            | Self::Travel { id, .. }
+            | Self::Stop { id } => ElementId::new(id).ok(),
             Self::Clear {} => None,
         }
     }
@@ -206,6 +214,14 @@ impl EffectRequest {
             Self::Move { id, x, y } => Ok(CanvasEffect::Move {
                 id: element_id(&id)?,
                 position: Position::new(x, y),
+            }),
+            Self::Travel { id, x, y, speed } => Ok(CanvasEffect::Travel {
+                id: element_id(&id)?,
+                to: Position::new(x, y),
+                speed: Speed::new(speed).map_err(RequestError::Speed)?,
+            }),
+            Self::Stop { id } => Ok(CanvasEffect::Stop {
+                id: element_id(&id)?,
             }),
             Self::Clear {} => Ok(CanvasEffect::Clear),
         }

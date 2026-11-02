@@ -298,6 +298,7 @@ fn element_with(field: &str, value: Option<&str>) -> Element {
         kind: KindName::new("character").expect("valid"),
         position: Position::CENTER,
         fields,
+        motion: None,
     }
 }
 

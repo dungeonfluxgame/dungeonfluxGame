@@ -19,23 +19,37 @@
 //! - The vocabulary says "canvas" where the plan says "table": a canvas is the dev workbench's
 //!   table. The names converge when the first machine is built.
 //!
+//! Elements are entities in a small entity-component world: `ecs` is the generic machinery
+//! (generational handles, dense component stores), `world` chooses the components (name, kind,
+//! position, fields, and a motion while travelling) and keeps them consistent, and `motion` is
+//! the system that moves travelling entities each tick. `canvas` turns an effect into a change of
+//! the world and a typed event; a read leaves the world as an `Element` snapshot.
+//!
 //! Map of the crate, in reading order: `element` (names, positions, values), `field_type` (the
 //! rule for a valid value), `kind_file` (the file format and its checking), `kind` (checked
-//! definitions and the registry), `canvas` (the element set and its effects), `event` and
-//! `ports` (what is recorded and where it goes), `testkit` (fakes and sample data).
+//! definitions and the registry), `ecs`, `world` and `motion` (the entities and their travel),
+//! `canvas` (effects, ticks and the revision), `event` and `ports` (what is recorded and where it
+//! goes), `testkit` (fakes and sample data).
 
 pub mod canvas;
+pub mod ecs;
 pub mod element;
 pub mod event;
 pub mod field_type;
 pub mod kind;
 pub mod kind_file;
+pub mod motion;
 pub mod ports;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
+pub mod world;
 
 #[cfg(test)]
 mod canvas_tests;
+#[cfg(test)]
+mod canvas_travel_tests;
+#[cfg(test)]
+mod ecs_tests;
 #[cfg(test)]
 mod element_tests;
 #[cfg(test)]
@@ -44,3 +58,7 @@ mod event_tests;
 mod field_type_tests;
 #[cfg(test)]
 mod kind_tests;
+#[cfg(test)]
+mod motion_tests;
+#[cfg(test)]
+mod world_tests;

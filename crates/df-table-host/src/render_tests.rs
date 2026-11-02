@@ -121,6 +121,7 @@ fn hostile_element() -> ElementView {
         height_units: 4.0,
         fields: serde_json::Map::from_iter([("note".to_owned(), json!("<i>"))]),
         problem: Some("<problem>".into()),
+        travelling: None,
     }
 }
 

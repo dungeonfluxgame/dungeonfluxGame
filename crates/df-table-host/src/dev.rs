@@ -284,6 +284,9 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             read_reply(&response)?.map_err(DevError::Rejected)
         }
         Command::Help => Ok(usage_text()),
+        Command::Repl => Err(DevError::Rejected(
+            "repl is started from the command line: df-table dev repl".to_owned(),
+        )),
         Command::Script(path) => run_script(port, &path).await,
     }
 }
@@ -326,6 +329,11 @@ async fn run_script(port: u16, path: &Path) -> Result<String, DevError> {
     }
     output.push(format!("ran {} commands, all ok", commands.len()));
     Ok(output.join("\n"))
+}
+
+/// Runs one parsed command against the host on `port` and returns the text to print.
+pub async fn run_dev_command(port: u16, command: Command) -> Result<String, DevError> {
+    execute(port, command).await
 }
 
 /// Runs one `dev` command line against the canvas on `port` and returns the text to print.

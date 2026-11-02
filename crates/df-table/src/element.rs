@@ -5,6 +5,8 @@
 //! JSON: the wire form belongs to the host.
 
 use std::collections::BTreeMap;
+
+use crate::motion::Motion;
 use std::fmt;
 
 /// Longest identifier accepted for an element, a kind or a field.
@@ -170,7 +172,8 @@ impl FieldValue {
     }
 }
 
-/// One thing on the canvas. Its fields are checked against its kind when it is made and changed.
+/// One thing on the canvas, as a snapshot of its components (`world.rs`). Its fields are checked
+/// against its kind when it is made and changed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Element {
     pub id: ElementId,
@@ -178,4 +181,6 @@ pub struct Element {
     /// Centre of the element.
     pub position: Position,
     pub fields: BTreeMap<FieldName, FieldValue>,
+    /// Where the element is heading, while it travels.
+    pub motion: Option<Motion>,
 }

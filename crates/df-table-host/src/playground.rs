@@ -90,6 +90,11 @@ impl PlaygroundState {
         self.lock().revision
     }
 
+    /// What is shown now, as it is, without looking at the fixture files.
+    pub fn snapshot(&self) -> ControlsReply {
+        self.lock().clone()
+    }
+
     /// The name of the fixture being shown, if one is.
     pub fn current_fixture(&self) -> Option<String> {
         self.lock().controls.fixture.clone()
