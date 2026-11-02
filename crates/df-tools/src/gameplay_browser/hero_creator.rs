@@ -202,6 +202,9 @@ struct Controls {
     portrait_version: Rc<Cell<Option<u64>>>,
     portrait_pending: Rc<Cell<bool>>,
     portrait_operation: Rc<Cell<u64>>,
+    /// Object URLs of downloaded portraits, newest last. The signed address expires, so the
+    /// picture is downloaded once and the stage and the full-screen review share that copy.
+    portrait_object_urls: Rc<RefCell<Vec<String>>>,
     look_signature: Rc<RefCell<String>>,
     look_version: Rc<Cell<u64>>,
     custom_summary: Element,
@@ -314,6 +317,16 @@ impl Controls {
             let _ = self.stage_preview.borrow().set_attribute("hidden", "");
             let _ = self.portrait_open.set_attribute("hidden", "");
             let _ = self.portrait_hint.set_attribute("hidden", "");
+        }
+    }
+
+    fn keep_object_url(&self, url: &str) {
+        let mut urls = self.portrait_object_urls.borrow_mut();
+        urls.push(url.to_owned());
+        // Older copies are no longer on screen; keep the newest few so a slow image decode never
+        // loses its source.
+        while urls.len() > 4 {
+            let _ = web_sys::Url::revoke_object_url(&urls.remove(0));
         }
     }
 
@@ -1508,6 +1521,7 @@ impl HeroCreator {
             portrait_version: Rc::new(Cell::new(None)),
             portrait_pending: Rc::new(Cell::new(false)),
             portrait_operation: Rc::new(Cell::new(0)),
+            portrait_object_urls: Rc::new(RefCell::new(Vec::new())),
             look_signature: Rc::new(RefCell::new(String::new())),
             look_version: Rc::new(Cell::new(0)),
             custom_summary,
@@ -2163,7 +2177,21 @@ impl HeroCreator {
                 callback,
             });
         }
-        image.set_attribute("src", uri)?;
+        // The signed address lives 15 minutes, and the review would fetch it a second time long
+        // after that. Download once and show that copy everywhere; a refused download falls back
+        // to the address itself so the ordinary load error path still reports it.
+        let controls = self.controls.clone();
+        let address = uri.to_owned();
+        wasm_bindgen_futures::spawn_local(async move {
+            let source = match portrait_object_url(&address).await {
+                Ok(url) => {
+                    controls.keep_object_url(&url);
+                    url
+                }
+                Err(_) => address,
+            };
+            let _ = image.set_attribute("src", &source);
+        });
         Ok(())
     }
 
@@ -2791,7 +2819,26 @@ impl Drop for HeroCreator {
                 .remove_event_listener_with_callback("pagehide", callback.as_ref().unchecked_ref());
         }
         let _ = web_sys::Url::revoke_object_url(&self.placeholder_url);
+        for url in self.controls.portrait_object_urls.borrow().iter() {
+            let _ = web_sys::Url::revoke_object_url(url);
+        }
     }
+}
+
+/// Downloads a portrait once and returns an object URL for it.
+async fn portrait_object_url(address: &str) -> Result<String, JsValue> {
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("window unavailable"))?;
+    let response: web_sys::Response =
+        wasm_bindgen_futures::JsFuture::from(window.fetch_with_str(address))
+            .await?
+            .dyn_into()?;
+    if !response.ok() {
+        return Err(JsValue::from_str("portrait download refused"));
+    }
+    let blob: web_sys::Blob = wasm_bindgen_futures::JsFuture::from(response.blob()?)
+        .await?
+        .dyn_into()?;
+    web_sys::Url::create_object_url_with_blob(&blob)
 }
 
 fn library_key(create: bool) -> Result<Option<Vec<u8>>, JsValue> {
