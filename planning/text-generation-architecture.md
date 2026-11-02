@@ -1,7 +1,7 @@
 # Unified text-generation architecture
 
 Date: 2026-10-28
-Status: Source-backed proposal; no application implementation or provider qualification
+Status: Contract frozen and partly implemented; see "Frozen contract and implementation status". Consumer migration is in progress.
 Task: TEXT-SURFACE-PLAN-20261028-A1-SOL
 Source: Desktop `dungeonfluxGame`, HEAD `6d0ce07e1d775d8bff9f569b23826a0503e13035`,
 with concurrent uncommitted imagery work. See [surface map](text-generation-surface-map.md).
@@ -452,6 +452,94 @@ T5 can split by feature after T0 only. Storyteller, ApproachModel, imagery compo
 shared schemas/manifests remain explicit edit conflicts. Re-scan current source before each cut
 because concurrent imagery work may move call sites. Do not claim hosted gameplay wiring from
 composition-registry strings or a tested helper without a caller.
+
+## Frozen contract and implementation status
+
+Updated 2026-11-01. This replaces the first-slice notes. It records what exists, so later phases
+build on it rather than on the proposal text above. Proposal text that differs is superseded here.
+
+### Contract (T0, frozen for text)
+
+All in `df-ai`, platform-neutral, with no provider, credential or process dependency.
+
+- `TextRequest { purpose, profile, instructions, facts, output_name, output_schema, deadline }`.
+  `TextPurpose` is a closed enum (`Storyteller`, `DevProbe`; features add variants when they
+  adopt the service). `TextProfile` is an operator-defined label for backend, model and mode; it
+  is part of the request fingerprint, so one operation under two profiles conflicts rather than
+  replaying another model's answer. Typed image and audio parts are not in the contract yet; they
+  arrive with T4 for a real consumer.
+- `TextBackend::complete(&TextRequest) -> TextReceipt { outcome, usage }`.
+  `TextOutcome` is `Answered | Unavailable(reason) | Deadline | Invalid | Stale | Unknown`.
+  `Unknown` means the request may have reached the supplier and no result is known; it is never
+  settled as a failure and never resent. `Stale` is produced by the service, never by a backend.
+- `TextUsage { total_tokens, input/output/cached_input/cache_write/reasoning_output: Option }`.
+  Unreported categories stay unknown, never zero. Provider counts convert with `try_from`; an
+  overflow drops the usage instead of clamping it.
+- `OperationKey { scope, operation }`: scoped labels, so equal operation ids in different scopes
+  never share an attempt.
+- `DurableTextService<B, S, A, O>` is the only path to a backend (`TextService` alone cannot run a
+  request). `submit`, `qualify(key, request, Verdict)`, `invalidate`, `cancel`.
+  - `Submission`: `Settled` (reusable: a qualified answer or a non-answer outcome), `Candidate`
+    (a structurally valid answer that is **not** a cache hit until the feature qualifies it),
+    `Rejected`, `InFlight`, `Unknown`, `Cancelled`.
+  - Attempt phases: accepted, dispatched, candidate, settled, rejected, unknown, cancelled. Each
+    transition is one compare-and-set on the stored phase. A rejected answer is never regenerated
+    under its key. A verdict whose basis moved after dispatch records `Stale` in the same step.
+- `TextAuthority::current_basis(key)` is the owner fence. The service asks before it touches the
+  store, immediately before dispatch, after the backend answers, and when a verdict arrives.
+- `TextAttemptStore` is the persistence port: PostgreSQL (`df-persistence::text_attempts`, schema
+  `df_text.text_attempt`, loopback only) and an in-memory fixture store. Store errors are typed
+  (`Unreachable`, `TimedOut`, `Rejected`, `Invalid`) and carry their cause label into the log.
+- Debug output of answers and candidates is withheld.
+
+### Composition (gameplay process)
+
+- `text_runtime.rs` owns the shared store, a local authority (one basis per run, released at
+  shutdown), the observer and the owner token. Callers supply only a backend and request;
+  `TextRuntime::service(backend)` builds the durable service. Without a reachable database the
+  store is in memory (still one send per operation per process, not across a restart) and the
+  `TEXT` start-up line says so.
+- Backends are private composition adapters: `CodexTextBackend` (`codex_cli.rs`),
+  `ResponsesTextBackend` (`responses_text.rs`) and `SystemOneTextBackend` (`systemone_text.rs`).
+  The static guard (`development/check-text-boundary.py`) restricts raw egress to them.
+- Cost: callers keep their existing bookings at each cut and feed them from `TextUsage`; the
+  service books nothing, so there is exactly one booking owner per migrated call.
+
+### Logging
+
+`text_telemetry.rs` emits one record per call to the shared diagnostic sink, shaped by
+[generation logging](generation-logging.md): schema `df.generation/1`, `generation.*` event names
+(`request`, `cache`, `coalesced`, `provider_result`, `recovery`, `text_qualification`, `cancel`,
+`stale`), closed outcome, reason and send-state labels, operation and scope references, duration
+with clock domain. Prompts, answers, credentials and content hashes never appear. Not yet carried:
+attempt and parent ids, record ids and config revisions (they need the typed producer path).
+
+### Development control
+
+`dev text`: `list`, `attempt` (sizes and usage, never the answer), `config`, `cancel` (pre-dispatch
+only), `prune --days` (finished attempts only; unknown sends are liability history and stay),
+`probe`, `qualify`, `invalidate`. A probe runs one scripted fixture request through the real
+service under its own purpose and profile, so rows and log records can be checked without a
+provider; a run without the telemetry sink refuses to probe.
+
+### Status by phase
+
+| Phase | State |
+| --- | --- |
+| T0 | Text contract, logging vocabulary, authority and qualification semantics frozen as above. Config layering, purpose registry beyond two purposes and typed media parts are open. |
+| T1 | Durable attempts, replay, Unknown recovery, cancel, retention, dev control and logging are built and tested (PostgreSQL scratch server). Open: cost adapter, bounded pool, multi-instance owner leases (a second live instance can mark a live dispatch Unknown, which is conservative), output size bound on stored answers, layered configuration. |
+| T2 | Responses and Codex backends exist. Storyteller dispatch migration in progress; its disk cache and flights move into the service in a later cut. |
+| T3 | SystemOne backend and ApproachModel seam in progress. Support (df-hosted) batched questions not started. |
+| T4 | Multimodal Chat backend, plate/head adapters, photo-check: not started (needs typed image parts). |
+| T5, T6 | Remaining surface groups, root wiring, removal of legacy wrappers: not started. |
+
+### Known deviations still open
+
+No tenant-scoped authority beyond the local run; no financial admission port; no queue or lifecycle
+event stream; retry and correction policy still lives in features; the request deadline is enforced around every
+backend by `DeadlineBackend` in the gameplay composition (`df-ai` has no timer), not inside `df-ai`; `clippy -D warnings` cannot run on
+`df-persistence` and `df-tools` while `df-imagery` has unrelated warnings. `df-ai` builds for
+`wasm32-unknown-unknown`.
 
 ## Boundary guard and acceptance
 

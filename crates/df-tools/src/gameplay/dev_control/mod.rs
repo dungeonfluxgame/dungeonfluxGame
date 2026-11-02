@@ -64,6 +64,7 @@ mod roleplay;
 mod screen_preview;
 mod social_view;
 mod tempo;
+pub(super) mod text;
 pub(super) mod timeline;
 
 /// The development history bundle, wired only when the surface is on: the
@@ -299,6 +300,14 @@ pub(super) fn setup(
             post(memory::delete_run_index),
         )
         .route("/dev/memory/erase", post(memory::erase))
+        .route("/dev/text", get(text::list))
+        .route("/dev/text/attempt", get(text::one))
+        .route("/dev/text/cancel", post(text::cancel))
+        .route("/dev/text/probe", post(text::probe))
+        .route("/dev/text/qualify", post(text::qualify))
+        .route("/dev/text/invalidate", post(text::invalidate))
+        .route("/dev/text/prune", post(text::prune))
+        .route("/dev/text/config", get(text::config))
         .route("/dev/layout", get(layout::list))
         .route(
             "/dev/layout/transform",

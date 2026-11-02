@@ -262,6 +262,14 @@ fn print_help() {
          memory reindex               write the rebuildable sources again and fill in vectors\n\
          memory delete-run-index [all]  drop rebuildable events (all: every event and recall record)\n\
          memory erase <hero>          erase one hero's own words and what was derived from them\n\
+         text [list] [--scope <s>] [--phase <p>] [--limit <n>]  durable text attempts, newest first (limit 1 to 100, default 20; phases accepted|dispatched|candidate|settled|rejected|unknown|cancelled)\n\
+         text attempt <key> [--scope <s>]  one text attempt (sizes and usage only, never the answer); scope defaults to dev\n\
+         text config                  what the text service runs with: store, logging, limits, purposes, retention\n\
+         text cancel <key>            cancel a text attempt that has not dispatched (nothing changes otherwise)\n\
+         text probe <key> [--outcome answer|refuse|deadline|lost]  one scripted fixture request through the durable service, logged; never calls a provider\n\
+         text qualify <key> accept|reject  the verdict on a probe candidate (an answer is reusable only after accept)\n\
+         text invalidate <key>        withdraw a qualified probe answer so it is never reused\n\
+         text prune --days <n>        delete settled, rejected and cancelled attempts untouched for n days (unknown sends stay)\n\
          log [--since <seq>]          the table log and the override log\n\
          wait --until <condition>     turn <hero> | fight-end | phase <phase>\n\
          script <file>                run one dev command per line, stop at first failure\n\
@@ -598,6 +606,7 @@ async fn dispatch(
             get(client, &format!("/dev/tempo?last={}", url_escape(&last))).await
         }
         "memory" => memory(client, positional, options).await,
+        "text" => text(client, positional, options).await,
         "cost" => cost(client, options).await,
         "scene-changes" => {
             let last = flag("--last")
@@ -1028,6 +1037,95 @@ async fn memory(
         Some(_) => client.print_error(
             "memory takes status, search, entity, event, supersede, reindex, delete-run-index or erase",
         ),
+    }
+}
+
+/// `dev text ...`: the durable text service of the run. Reads: list, attempt, config. Writes:
+/// cancel (pre-dispatch only), prune (old finished attempts), and probe, qualify and invalidate,
+/// which drive one scripted fixture request through the real service and log it.
+async fn text(
+    client: &Client,
+    positional: &[String],
+    options: &[(String, String)],
+) -> CommandResult {
+    match text_call(positional, options) {
+        Ok(TextCall::Get(path)) => get(client, &path).await,
+        Ok(TextCall::Post(path, body)) => post(client, path, &body).await,
+        Err(message) => client.print_error(message),
+    }
+}
+
+/// One request a `dev text` command makes.
+#[derive(Debug, PartialEq)]
+enum TextCall {
+    Get(String),
+    Post(&'static str, Value),
+}
+
+const TEXT_USAGE: &str = "text takes list [--scope <s>] [--phase <p>] [--limit <n>], attempt <key> \
+    [--scope <s>], config, cancel <key>, probe <key> [--outcome answer|refuse|deadline|lost], \
+    qualify <key> accept|reject, invalidate <key>, or prune --days <n>";
+
+/// The request one `dev text` command stands for, or why the words do not make one.
+fn text_call(positional: &[String], options: &[(String, String)]) -> Result<TextCall, String> {
+    let scope = option_value(options, "--scope");
+    let keyed = |path: &'static str, extra: Option<(&str, Value)>| -> Result<TextCall, String> {
+        let key = positional
+            .get(2)
+            .ok_or_else(|| "this text command needs an operation key".to_owned())?;
+        let mut body = json!({"key": key});
+        if let Some(scope) = &scope {
+            body["scope"] = json!(scope);
+        }
+        if let Some((name, value)) = extra {
+            body[name] = value;
+        }
+        Ok(TextCall::Post(path, body))
+    };
+    match positional.get(1).map(String::as_str) {
+        None | Some("list") => {
+            let mut query = Vec::new();
+            for (flag, name) in [("--scope", "scope"), ("--phase", "phase"), ("--limit", "limit")] {
+                if let Some(value) = option_value(options, flag) {
+                    query.push(format!("{name}={}", url_escape(&value)));
+                }
+            }
+            Ok(TextCall::Get(if query.is_empty() {
+                "/dev/text".to_owned()
+            } else {
+                format!("/dev/text?{}", query.join("&"))
+            }))
+        }
+        Some("attempt") => {
+            let key = positional
+                .get(2)
+                .ok_or_else(|| "text attempt needs an operation key".to_owned())?;
+            let mut path = format!("/dev/text/attempt?key={}", url_escape(key));
+            if let Some(scope) = &scope {
+                path.push_str(&format!("&scope={}", url_escape(scope)));
+            }
+            Ok(TextCall::Get(path))
+        }
+        Some("config") => Ok(TextCall::Get("/dev/text/config".to_owned())),
+        Some("cancel") => keyed("/dev/text/cancel", None),
+        Some("invalidate") => keyed("/dev/text/invalidate", None),
+        Some("probe") => {
+            let outcome = option_value(options, "--outcome").unwrap_or_else(|| "answer".to_owned());
+            keyed("/dev/text/probe", Some(("outcome", json!(outcome))))
+        }
+        Some("qualify") => match positional.get(3).map(String::as_str) {
+            Some(verdict @ ("accept" | "reject")) => {
+                keyed("/dev/text/qualify", Some(("verdict", json!(verdict))))
+            }
+            _ => Err("text qualify needs accept or reject after the key".to_owned()),
+        },
+        Some("prune") => {
+            let days = option_value(options, "--days")
+                .and_then(|days| days.trim().parse::<u32>().ok())
+                .ok_or_else(|| "text prune needs --days <n>".to_owned())?;
+            Ok(TextCall::Post("/dev/text/prune", json!({"days": days})))
+        }
+        Some(_) => Err(TEXT_USAGE.to_owned()),
     }
 }
 
@@ -1708,6 +1806,75 @@ mod tests {
             vec!["heroes", "unknown", "1"],
         ] {
             assert!(heroes_path(&words(&args)).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn text_commands_become_the_requests_they_stand_for_and_refuse_incomplete_ones() {
+        let words = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+        let options = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect::<Vec<_>>()
+        };
+        let call = |args: &[&str], pairs: &[(&str, &str)]| text_call(&words(args), &options(pairs));
+        assert_eq!(
+            call(&["text"], &[]),
+            Ok(TextCall::Get("/dev/text".to_owned()))
+        );
+        assert_eq!(
+            call(
+                &["text", "list"],
+                &[("--scope", "run 1"), ("--phase", "candidate"), ("--limit", "5")]
+            ),
+            Ok(TextCall::Get(
+                "/dev/text?scope=run%201&phase=candidate&limit=5".to_owned()
+            ))
+        );
+        assert_eq!(
+            call(&["text", "attempt", "a b"], &[("--scope", "x")]),
+            Ok(TextCall::Get("/dev/text/attempt?key=a%20b&scope=x".to_owned()))
+        );
+        assert_eq!(
+            call(&["text", "config"], &[]),
+            Ok(TextCall::Get("/dev/text/config".to_owned()))
+        );
+        assert_eq!(
+            call(&["text", "cancel", "k"], &[("--scope", "x")]),
+            Ok(TextCall::Post(
+                "/dev/text/cancel",
+                json!({"key": "k", "scope": "x"})
+            ))
+        );
+        assert_eq!(
+            call(&["text", "probe", "k"], &[("--outcome", "lost")]),
+            Ok(TextCall::Post(
+                "/dev/text/probe",
+                json!({"key": "k", "outcome": "lost"})
+            ))
+        );
+        assert_eq!(
+            call(&["text", "qualify", "k", "reject"], &[]),
+            Ok(TextCall::Post(
+                "/dev/text/qualify",
+                json!({"key": "k", "verdict": "reject"})
+            ))
+        );
+        assert_eq!(
+            call(&["text", "prune"], &[("--days", "30")]),
+            Ok(TextCall::Post("/dev/text/prune", json!({"days": 30})))
+        );
+        for incomplete in [
+            call(&["text", "attempt"], &[]),
+            call(&["text", "cancel"], &[]),
+            call(&["text", "qualify", "k"], &[]),
+            call(&["text", "qualify", "k", "maybe"], &[]),
+            call(&["text", "prune"], &[]),
+            call(&["text", "prune"], &[("--days", "many")]),
+            call(&["text", "write"], &[]),
+        ] {
+            assert!(incomplete.is_err());
         }
     }
 

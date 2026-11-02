@@ -53,6 +53,13 @@ pub(super) struct ImageHealth {
 }
 
 impl StartedImages {
+    /// The shared diagnostic sink of the image telemetry, when it is running.
+    pub(super) fn telemetry_sink(&self) -> Option<Arc<dyn df_observe::DiagnosticSink>> {
+        self.live
+            .as_ref()
+            .map(|live| live.telemetry.diagnostics().diagnostic_sink())
+    }
+
     pub(super) fn diagnostics(&self) -> Option<ImageDiagnostics> {
         self.live.as_ref().map(|live| ImageDiagnostics {
             control: live.host.control().clone(),

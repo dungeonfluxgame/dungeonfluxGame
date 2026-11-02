@@ -119,6 +119,10 @@ impl TelemetryDiagnostics {
     pub(super) fn recent(&self, limit: usize) -> Vec<df_imagery::telemetry::RecentImageEvent> {
         self.observer.recent(limit)
     }
+    /// The shared diagnostic sink the image events go to; other producers may log through it.
+    pub(super) fn diagnostic_sink(&self) -> Arc<dyn DiagnosticSink> {
+        self.sink.clone()
+    }
     pub(super) fn health(
         &self,
     ) -> Result<

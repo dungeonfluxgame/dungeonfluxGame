@@ -135,6 +135,11 @@ mod table_log;
 mod table_settings;
 #[cfg(test)]
 mod tempo_clock;
+mod text_deadline;
+mod text_inspection;
+mod text_runtime;
+mod responses_text;
+mod text_telemetry;
 mod timing;
 mod voice;
 #[cfg(test)]
@@ -2529,6 +2534,13 @@ async fn serve_run(
     home_video::attach_kit(&resource_kit)?;
     // The story memory: what the Dungeon Master remembers of this run, so the story stays
     // consistent (planning/story-memory.md). It is a help, never a gate: any failure turns it off.
+    // The durable text attempts: the store the read-only `dev text` surface reads. A read aid,
+    // never a gate: any failure turns it off with the reason in the line.
+    let text_line = if interactive {
+        Some(text_inspection::start(&database, image_runtime.telemetry_sink()).await)
+    } else {
+        None
+    };
     startup.step("memory");
     let memory_line = if interactive {
         // Keyed by the game's own database, which is unique per game and kept when it resumes;
@@ -3016,6 +3028,9 @@ async fn serve_run(
         if let Some(line) = &memory_line {
             println!("{line}");
         }
+        if let Some(line) = &text_line {
+            println!("{line}");
+        }
         if let Some(line) = &music_line {
             println!("{line}");
         }
@@ -3256,6 +3271,7 @@ async fn serve_run(
     );
     shutdown.step("imagery");
     let image_shutdown = image_runtime.shutdown().await;
+    text_runtime::release();
     shutdown.step("actor-join");
     sender
         .stop()

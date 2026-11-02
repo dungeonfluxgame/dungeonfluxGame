@@ -17,6 +17,7 @@ df-session = { path = "../df-session" }
 df-auth = { path = "../df-auth" }
 df-observe = { path = "../df-observe" }
 df-customer = { path = "../df-customer" }
+df-ai = { path = "../df-ai" }
 df-assets = { path = "../df-assets" }
 async-trait = "=0.1.92"
 df-support = { path = "../df-support" }

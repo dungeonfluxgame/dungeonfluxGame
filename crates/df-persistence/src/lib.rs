@@ -43,6 +43,9 @@ pub mod save_store;
 mod sql;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod story_memory;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod text_attempts;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod support_store;
 

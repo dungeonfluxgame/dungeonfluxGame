@@ -240,6 +240,10 @@ async fn preflight(executable: &Path, directory: &Path) -> Result<(), CodexError
     dedicated_home()?;
     windows_process::system_config_empty()?;
     let version = [OsString::from("--version")];
+    // The pinned executable digest already fixes the binary; the version string is a second,
+    // operator-visible check, configurable for a deliberate CLI upgrade.
+    let expected = std::env::var("DF_GAMEPLAY_CODEX_VERSION")
+        .unwrap_or_else(|_| "codex-cli 0.150.1".to_owned());
     let result = tokio::time::timeout(
         Duration::from_secs(5),
         windows_process::run(executable, &version, directory, &[], "version", 4096),
@@ -247,7 +251,7 @@ async fn preflight(executable: &Path, directory: &Path) -> Result<(), CodexError
     .await
     .map_err(|_| CodexError::Deadline)??;
     if result.code != 0
-        || std::str::from_utf8(&result.stdout).ok().map(str::trim) != Some("codex-cli 0.150.1")
+        || std::str::from_utf8(&result.stdout).ok().map(str::trim) != Some(expected.trim())
     {
         return Err(CodexError::Configuration);
     }
@@ -477,6 +481,77 @@ pub(super) async fn text(
     .map_err(|_| CodexError::Deadline)?
 }
 
+/// Codex CLI as the df-ai text backend: the same schema-checked `codex exec` path, with the
+/// composition root supplying the executable, digest and gates through the environment.
+pub(super) struct CodexTextBackend;
+
+impl df_ai::text::TextBackend for CodexTextBackend {
+    fn complete(
+        &self,
+        request: &df_ai::text::TextRequest,
+    ) -> impl std::future::Future<Output = df_ai::text::TextReceipt> + Send {
+        async move { codex_receipt(request).await }
+    }
+}
+
+async fn codex_receipt(request: &df_ai::text::TextRequest) -> df_ai::text::TextReceipt {
+    use df_ai::text::{TextOutcome, TextReceipt, TextUsage};
+    use df_providers::TextSchemaLimits;
+    let Ok(schema_bytes) = serde_json::to_vec(&request.output_schema) else {
+        return TextOutcome::Invalid.into();
+    };
+    let limits = TextSchemaLimits {
+        maximum_schema_bytes: 65_536,
+        maximum_depth: 16,
+        maximum_nodes: 1024,
+    };
+    let Ok(schema) = TextOutputSchema::new(&request.output_name, &schema_bytes, limits) else {
+        return TextOutcome::Invalid.into();
+    };
+    match text(
+        &request.instructions,
+        &request.facts,
+        &schema,
+        request.deadline,
+    )
+    .await
+    {
+        // The CLI reports a total and an output count only; the rest stays unknown.
+        Ok(answer) => {
+            let usage = (answer.tokens > 0).then_some(TextUsage {
+                total_tokens: answer.tokens,
+                input_tokens: None,
+                output_tokens: Some(answer.output_tokens),
+                cached_input_tokens: None,
+                cache_write_tokens: None,
+                reasoning_output_tokens: None,
+            });
+            let outcome = match answer.value {
+                Some(value) => TextOutcome::Answered(value),
+                None => TextOutcome::Invalid,
+            };
+            TextReceipt { outcome, usage }
+        }
+        Err(CodexError::Output) => TextOutcome::Invalid.into(),
+        Err(CodexError::Deadline) => TextOutcome::Deadline.into(),
+        // The process may have been started before it was interrupted, so the send is unknown.
+        Err(CodexError::Interrupted) => TextOutcome::Unknown.into(),
+        Err(error) => TextOutcome::Unavailable(unavailable_reason(error)).into(),
+    }
+}
+
+fn unavailable_reason(error: CodexError) -> df_ai::text::UnavailableReason {
+    use df_ai::text::UnavailableReason;
+    match error {
+        CodexError::Authentication => UnavailableReason::Authentication,
+        CodexError::UnsafeTools => UnavailableReason::UnsafeTools,
+        CodexError::Configuration | CodexError::Output | CodexError::Deadline => {
+            UnavailableReason::Configuration
+        }
+        CodexError::Interrupted => UnavailableReason::Interrupted,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,5 +622,98 @@ mod tests {
                 Err(CodexError::UnsafeTools)
             ));
         }
+    }
+
+    /// One real Codex CLI text turn through the durable df-ai service, with an in-memory store and
+    /// a scripted owner. Runs only with `DF_LIVE_CODEX=1` and the gameplay Codex variables
+    /// (`DF_GAMEPLAY_CODEX_MODE`, `DF_GAMEPLAY_CODEX_EXECUTABLE`, `DF_GAMEPLAY_CODEX_SHA256`,
+    /// `DF_GAMEPLAY_DISABLE_OPENAI_API`); it spends Codex quota.
+    #[tokio::test]
+    async fn live_codex_text_answers_through_the_text_service() {
+        use df_ai::text_attempts::{
+            AttemptOwner, AttemptScope, DurableTextService, OperationKey, Qualification,
+            Submission, Verdict,
+        };
+        use df_ai::text_fixture::{FixedAuthority, MemoryAttemptStore};
+        if std::env::var("DF_LIVE_CODEX").as_deref() != Ok("1") {
+            eprintln!("skipped: set DF_LIVE_CODEX=1 and the gameplay Codex variables");
+            return;
+        }
+        /// Keeps the diagnostic records the telemetry observer emits, as the shared sink would.
+        #[derive(Default)]
+        struct Records(std::sync::Mutex<Vec<df_observe::DiagnosticRecord>>);
+        impl df_observe::DiagnosticSink for Records {
+            fn emit(
+                &self,
+                record: df_observe::DiagnosticRecord,
+            ) -> Result<(), df_observe::TelemetryError> {
+                self.0.lock().unwrap().push(record);
+                Ok(())
+            }
+        }
+        let records = std::sync::Arc::new(Records::default());
+        let text =
+            super::super::text_telemetry::text_service(super::CodexTextBackend, records.clone());
+        let owner = AttemptOwner::new([1; 16]).unwrap();
+        let service = DurableTextService::new(
+            text,
+            MemoryAttemptStore::default(),
+            FixedAuthority::holding([7; 32]),
+            owner,
+        );
+        let key =
+            OperationKey::new(&AttemptScope::new("live-test").unwrap(), "narration-1").unwrap();
+        let request = df_ai::text::TextRequest {
+            purpose: df_ai::text::TextPurpose::Storyteller,
+            profile: df_ai::text::TextProfile::new("codex-live").unwrap(),
+            instructions: "Write one short line of narration for a harbor at dawn.".to_owned(),
+            facts: serde_json::json!({"place": "harbor", "time": "dawn"}),
+            output_name: "narration".to_owned(),
+            output_schema: serde_json::json!({
+                "type": "object",
+                "properties": {"line": {"type": "string"}},
+                "required": ["line"],
+                "additionalProperties": false
+            }),
+            deadline: Duration::from_secs(300),
+        };
+        match service.submit(&key, &request).await.unwrap() {
+            Submission::Candidate { answer, usage, .. } => {
+                let line = answer
+                    .get("line")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                eprintln!("LIVE TEXT OK: {line} usage={usage:?}");
+                assert!(!line.trim().is_empty());
+            }
+            other => panic!("live Codex text did not answer: {other:?}"),
+        }
+        assert_eq!(
+            service.qualify(&key, &request, Verdict::Accepted).await,
+            Ok(Qualification::Qualified)
+        );
+        let records = records.0.lock().unwrap();
+        for record in records.iter() {
+            let attributes: Vec<String> = record
+                .input
+                .attributes
+                .iter()
+                .map(|(name, value)| format!("{name}={value:?}"))
+                .collect();
+            eprintln!(
+                "LOG {} {:?} {}",
+                record.event_name,
+                record.input.severity,
+                attributes.join(" ")
+            );
+        }
+        let names: Vec<&str> = records.iter().map(|record| record.event_name).collect();
+        assert_eq!(
+            names,
+            vec![
+                "generation.provider_result",
+                "generation.text_qualification"
+            ]
+        );
     }
 }
