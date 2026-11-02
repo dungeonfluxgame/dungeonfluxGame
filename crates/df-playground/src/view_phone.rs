@@ -12,7 +12,9 @@ use crate::choices::{ChoiceListView, build};
 use crate::controls::Controls;
 use crate::copy::{status_blocks_input, status_copy};
 use crate::dom::{append, element, picture, text_element};
+use crate::draw_plan::Part;
 use crate::fixture::{Choice, PhoneScene, Status};
+use crate::view_tv::slot;
 
 fn choice_button(document: &Document, choice: &Choice) -> Result<Element, JsValue> {
     let button = element(document, "button", "choice")?;
@@ -116,18 +118,50 @@ fn composer(document: &Document, blocked: bool) -> Result<Element, JsValue> {
     Ok(bar)
 }
 
-/// Draws one phone. Returns the element and the warnings the choice rule found.
-pub fn render(
-    document: &Document,
-    scene: &PhoneScene,
-    status: &Status,
-    controls: &Controls,
-) -> Result<(Element, Vec<String>), JsValue> {
-    let view = build(scene, controls.show_unavailable);
-    let frame = element(document, "section", "device device-phone")?;
-    frame.set_attribute("aria-label", "A player's phone")?;
-    let screen = element(document, "div", "phone-screen")?;
+/// The parts of a phone, in the order they are drawn.
+pub const PARTS: [Part; 7] = [
+    Part::PhoneHead,
+    Part::PhoneStatus,
+    Part::PhoneImage,
+    Part::PhoneNarration,
+    Part::PhoneNote,
+    Part::PhoneChoices,
+    Part::PhoneComposer,
+];
 
+/// A phone with its slots empty.
+pub struct PhoneShell {
+    pub section: Element,
+    pub slots: Vec<(Part, Element)>,
+}
+
+/// Builds one phone's shell: the screen with a slot for each piece. The story is one scrolling
+/// column that holds the picture and the narration, so a redraw of one keeps the other.
+pub fn shell(document: &Document) -> Result<PhoneShell, JsValue> {
+    let section = element(document, "section", "device device-phone")?;
+    section.set_attribute("aria-label", "A player's phone")?;
+    let screen = element(document, "div", "phone-screen")?;
+    let story = element(document, "div", "phone-story")?;
+    let mut slots = Vec::new();
+    for part in PARTS {
+        let holder = slot(document, part)?;
+        match part {
+            Part::PhoneImage | Part::PhoneNarration => append(&story, &holder)?,
+            _ => {
+                // The story sits between the status and the note.
+                if part == Part::PhoneNote {
+                    append(&screen, &story)?;
+                }
+                append(&screen, &holder)?;
+            }
+        }
+        slots.push((part, holder));
+    }
+    append(&section, &screen)?;
+    Ok(PhoneShell { section, slots })
+}
+
+fn head(document: &Document, scene: &PhoneScene) -> Result<Element, JsValue> {
     let head = element(document, "header", "phone-head")?;
     append(
         &head,
@@ -136,34 +170,63 @@ pub fn render(
     if let Some(goal) = &scene.goal {
         append(&head, &text_element(document, "div", "phone-goal", goal)?)?;
     }
-    append(&screen, &head)?;
-    if let Some(chip) = status_chip(document, status)? {
-        append(&screen, &chip)?;
-    }
+    Ok(head)
+}
 
-    let story = element(document, "div", "phone-story")?;
-    if let Some(image) = &scene.image {
-        append(&story, &picture(document, "phone-picture", image)?)?;
+fn narration(document: &Document, scene: &PhoneScene) -> Result<Option<Element>, JsValue> {
+    if scene.narration.is_empty() {
+        return Ok(None);
     }
+    let lines = element(document, "div", "phone-lines")?;
     for line in &scene.narration {
-        append(&story, &text_element(document, "p", "phone-line", line)?)?;
+        append(&lines, &text_element(document, "p", "phone-line", line)?)?;
     }
-    append(&screen, &story)?;
-    if let Some(note) = &scene.note {
-        let card = element(document, "div", "note-card")?;
-        append(
-            &card,
-            &text_element(document, "div", "note-title", "A note only you can see")?,
-        )?;
-        append(
-            &card,
-            &text_element(document, "div", "note-text", &note.text)?,
-        )?;
-        append(&screen, &card)?;
+    Ok(Some(lines))
+}
+
+fn note(document: &Document, scene: &PhoneScene) -> Result<Option<Element>, JsValue> {
+    let Some(note) = &scene.note else {
+        return Ok(None);
+    };
+    let card = element(document, "div", "note-card")?;
+    append(
+        &card,
+        &text_element(document, "div", "note-title", "A note only you can see")?,
+    )?;
+    append(
+        &card,
+        &text_element(document, "div", "note-text", &note.text)?,
+    )?;
+    Ok(Some(card))
+}
+
+/// What goes in the slot of `part`, or `None` when the piece is empty. A part that is not of a
+/// phone is an error: the caller asked the wrong view.
+pub fn build_part(
+    document: &Document,
+    part: Part,
+    scene: &PhoneScene,
+    controls: &Controls,
+) -> Result<Option<Element>, JsValue> {
+    let status = controls.status_for(&scene.status);
+    match part {
+        Part::PhoneHead => head(document, scene).map(Some),
+        Part::PhoneStatus => status_chip(document, &status),
+        Part::PhoneImage => scene
+            .image
+            .as_ref()
+            .map(|image| picture(document, "phone-picture", image))
+            .transpose(),
+        Part::PhoneNarration => narration(document, scene),
+        Part::PhoneNote => note(document, scene),
+        Part::PhoneChoices => {
+            let view = build(scene, controls.show_unavailable);
+            choice_list(document, &view).map(Some)
+        }
+        Part::PhoneComposer => composer(document, status_blocks_input(&status)).map(Some),
+        other => Err(JsValue::from_str(&format!(
+            "{} is not a piece of a phone",
+            other.key()
+        ))),
     }
-    append(&screen, &choice_list(document, &view)?)?;
-    append(&screen, &composer(document, status_blocks_input(status))?)?;
-    append(&frame, &screen)?;
-    let warnings = view.warnings.iter().map(ToString::to_string).collect();
-    Ok((frame, warnings))
 }

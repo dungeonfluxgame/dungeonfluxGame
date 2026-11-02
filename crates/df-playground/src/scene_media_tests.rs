@@ -3,8 +3,8 @@
 use crate::controls::Device;
 use crate::fixture::{Fixture, ImageRef};
 use crate::scene::{
-    Cue, ImageSlot, MAXIMUM_CUES_KEPT, Override, SceneChange, SceneError, SceneOverlay, Target,
-    Track,
+    Cue, ImageSlot, MAXIMUM_CUES_KEPT, MAXIMUM_NAME_CHARACTERS, Override, SceneChange, SceneError,
+    SceneOverlay, Target, Track,
 };
 
 const FIXTURE: &str = r#"{
@@ -120,7 +120,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
     let long = SceneChange::Image {
         slot: ImageSlot::TvCard,
         media: "a.png".into(),
-        caption: Some("x".repeat(200)),
+        caption: Some("x".repeat(MAXIMUM_NAME_CHARACTERS + 1)),
         rotation_degrees: 0,
         slide: None,
     };

@@ -173,7 +173,11 @@ fn a_transition_may_be_instant_or_as_long_as_the_limit_and_no_longer() {
         error,
         ControlsError::TransitionTooLong(MAXIMUM_TRANSITION_MS + 1)
     );
-    assert!(error.to_string().contains("5000"));
+    assert!(
+        error
+            .to_string()
+            .contains(&MAXIMUM_TRANSITION_MS.to_string())
+    );
     assert_eq!(controls, before);
 }
 

@@ -12,8 +12,8 @@ use crate::copy::{ReadingPace, status_from_key};
 use crate::fixture::Status;
 use crate::scene::SceneOverlay;
 
-/// Longest a transition between scenes may take, in milliseconds.
-pub const MAXIMUM_TRANSITION_MS: u32 = 5_000;
+use crate::limits::DEFAULT_TRANSITION_MS;
+pub use crate::limits::MAXIMUM_TRANSITION_MS;
 
 /// The key of the menu entry that keeps the fixture's own status.
 pub const FIXTURE_STATUS_KEY: &str = "fixture";
@@ -97,7 +97,7 @@ impl Default for Transition {
     fn default() -> Self {
         Self {
             style: TransitionStyle::Fade,
-            duration_ms: 700,
+            duration_ms: DEFAULT_TRANSITION_MS,
         }
     }
 }
@@ -137,10 +137,26 @@ impl Default for Controls {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControlsReply {
     pub revision: u64,
+    /// Names this run of the host. Every counter (revision, cue, slide and camera serials) starts
+    /// again when the host does, so a page keys what it remembers by this too and drops it all
+    /// when it changes. Empty from a host that does not say.
+    #[serde(default)]
+    pub boot_id: String,
     pub controls: Controls,
     /// Live changes to the scene, drawn on top of the fixture.
     #[serde(default)]
     pub scene: SceneOverlay,
+}
+
+impl ControlsReply {
+    /// The reply as a reader should see it `now_ms` after the host started: the moves in the
+    /// scene say how long ago they began.
+    pub fn at(&self, now_ms: u64) -> Self {
+        Self {
+            scene: self.scene.at(now_ms),
+            ..self.clone()
+        }
+    }
 }
 
 /// One change to the controls, as the page and the dev CLI both send it.

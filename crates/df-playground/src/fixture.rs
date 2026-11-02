@@ -133,6 +133,15 @@ pub struct Slide {
     /// scene file.
     #[serde(default)]
     pub serial: u64,
+    /// The host's clock, in milliseconds since it started, when this slide began. The host sets
+    /// it; leave it out of a scene file.
+    #[serde(default)]
+    pub began_ms: u64,
+    /// How long ago the slide began, as the host's clock read when it built the answer, so a page
+    /// that opens in the middle of the slide carries on from there instead of starting again. The
+    /// host sets it; leave it out of a scene file.
+    #[serde(default)]
+    pub elapsed_ms: u64,
 }
 
 /// Where the shared screen's camera looks: in on one element, or out to the whole stage.
@@ -153,6 +162,15 @@ pub struct Camera {
     /// of a scene file.
     #[serde(default)]
     pub serial: u64,
+    /// The host's clock, in milliseconds since it started, when this move began. The host sets
+    /// it; leave it out of a scene file.
+    #[serde(default)]
+    pub began_ms: u64,
+    /// How long ago the move began, as the host's clock read when it built the answer, so a page
+    /// that opens in the middle of the move carries on from there instead of starting again. The
+    /// host sets it; leave it out of a scene file.
+    #[serde(default)]
+    pub elapsed_ms: u64,
 }
 
 /// A picture from the media library, by file name, with an optional line under it.
@@ -251,13 +269,16 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    /// Reads a fixture, naming the line and column of the first mistake.
+    /// Reads a fixture, naming the line and column of the first mistake. A value outside the range
+    /// the overlay and the command line enforce is a mistake too: all or nothing, checked at the
+    /// edge.
     pub fn parse(text: &str) -> Result<Self, FixtureError> {
-        serde_json::from_str(text).map_err(|error| FixtureError {
-            line: error.line(),
-            column: error.column(),
-            message: error.to_string(),
-        })
+        let fixture: Self = serde_json::from_str(text)
+            .map_err(|error| crate::fixture_checks::serde_error(text, &error))?;
+        match crate::fixture_checks::first_problem(&fixture, text) {
+            None => Ok(fixture),
+            Some(error) => Err(error),
+        }
     }
 }
 

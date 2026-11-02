@@ -6,12 +6,12 @@
 
 use crate::fixture::{ElementShape, StageElement};
 use crate::layout::{stage_percent, stage_size_percent};
+use crate::limits::MAXIMUM_PIVOT_PERCENT;
 use crate::style::css_color;
 
 /// A full turn is the same picture as none.
 const FULL_TURN_DEGREES: i64 = 360;
 const HALF_TURN_DEGREES: i64 = 180;
-const MAXIMUM_PIVOT_PERCENT: u8 = 100;
 
 /// The turn to draw for a figure that is new to the page, with no earlier turn to glide from.
 pub fn first_turn(item: &StageElement) -> i64 {
@@ -57,8 +57,60 @@ pub fn figure_style(item: &StageElement, turn_degrees: i64) -> String {
     )
 }
 
-/// The inline style of a figure's label: turned back by the figure's turn, so the text stays
-/// upright and readable whatever the figure does (O.13 rule 6).
+/// The turn of a figure's label for a figure turned `figure_turn` degrees: the same turn the other
+/// way, so the two cancel and the text stays upright and readable whatever the figure does (O.13
+/// rule 6). They cancel while they move together, so the label and the figure carry the same
+/// glide in the theme (a test pins that).
+pub fn label_turn(figure_turn: i64) -> i64 {
+    -figure_turn
+}
+
+/// The inline style of a figure's label, turned back by the figure's turn.
 pub fn label_style(turn_degrees: i64) -> String {
-    format!("transform:translateX(-50%) rotate({}deg);", -turn_degrees)
+    format!(
+        "transform:translateX(-50%) rotate({}deg);",
+        label_turn(turn_degrees)
+    )
+}
+
+/// What a figure's inline style was made from, so a frame in which nothing it depends on changed
+/// writes nothing: every write of a style makes the browser work out styles again, and a moving
+/// scene has a frame every 30 ms.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FigureLook {
+    x_bits: u32,
+    y_bits: u32,
+    width_bits: u32,
+    height_bits: u32,
+    shape: ElementShape,
+    color: Option<String>,
+    pivot: (u8, u8),
+    turn: i64,
+}
+
+impl FigureLook {
+    pub fn of(item: &StageElement, turn: i64) -> Self {
+        Self {
+            x_bits: item.x.to_bits(),
+            y_bits: item.y.to_bits(),
+            width_bits: item.width_units.to_bits(),
+            height_bits: item.height_units.to_bits(),
+            shape: item.shape,
+            color: item.color.clone(),
+            pivot: (item.pivot.x_percent, item.pivot.y_percent),
+            turn,
+        }
+    }
+
+    /// Whether `figure_style(item, turn)` would be the style this look was made for.
+    pub fn matches(&self, item: &StageElement, turn: i64) -> bool {
+        self.turn == turn
+            && self.x_bits == item.x.to_bits()
+            && self.y_bits == item.y.to_bits()
+            && self.width_bits == item.width_units.to_bits()
+            && self.height_bits == item.height_units.to_bits()
+            && self.shape == item.shape
+            && self.color == item.color
+            && self.pivot == (item.pivot.x_percent, item.pivot.y_percent)
+    }
 }

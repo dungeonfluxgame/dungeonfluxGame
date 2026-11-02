@@ -4,10 +4,7 @@
 //! ten seconds instead of one every second, and a host that comes back is found again within that
 //! time. It never reads a clock and never touches the page.
 
-/// The first wait after a failure, in milliseconds.
-pub const FIRST_RETRY_MS: u32 = 1_000;
-/// The longest wait, in milliseconds.
-pub const LONGEST_RETRY_MS: u32 = 10_000;
+pub use crate::limits::{FIRST_RETRY_MS, LONGEST_RETRY_MS};
 
 /// The wait after `failures` failures in a row (1 is the first failure). Zero failures wait the
 /// normal, shortest time.

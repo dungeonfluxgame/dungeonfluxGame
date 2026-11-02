@@ -26,6 +26,8 @@ fn camera(target: Option<&str>, zoom_percent: u16) -> Camera {
         zoom_percent,
         duration_ms: 1_000,
         serial: 1,
+        began_ms: 0,
+        elapsed_ms: 0,
     }
 }
 
@@ -122,7 +124,10 @@ fn progress_runs_from_nothing_to_all_and_a_move_of_no_length_is_done() {
 
 mod overlay {
     use crate::fixture::{Camera, Fixture, StageElement};
-    use crate::scene::{MAXIMUM_CAMERA_MS, SceneChange, SceneError, SceneOverlay};
+    use crate::scene::{
+        MAXIMUM_CAMERA_MS, MAXIMUM_NAME_CHARACTERS, MAXIMUM_ZOOM_PERCENT, SceneChange, SceneError,
+        SceneOverlay,
+    };
 
     const FIXTURE: &str = r#"{
         "name": "Base",
@@ -191,7 +196,7 @@ mod overlay {
     fn a_zoom_or_time_outside_the_limits_is_refused_and_changes_nothing() {
         for (zoom, ms) in [
             (99, 100),
-            (401, 100),
+            (MAXIMUM_ZOOM_PERCENT + 1, 100),
             (0, 100),
             (200, MAXIMUM_CAMERA_MS + 1),
         ] {
@@ -206,11 +211,15 @@ mod overlay {
             );
             assert!(overlay.is_empty() && overlay.camera_count == 0);
         }
-        assert!(SceneError::BadZoom(500).to_string().contains("100 to 400"));
+        assert!(
+            SceneError::BadZoom(MAXIMUM_ZOOM_PERCENT + 1)
+                .to_string()
+                .contains(&format!("100 to {MAXIMUM_ZOOM_PERCENT}"))
+        );
         assert!(
             SceneError::BadCameraTime(1)
                 .to_string()
-                .contains("0 to 30000")
+                .contains(&format!("0 to {MAXIMUM_CAMERA_MS}"))
         );
     }
 
@@ -220,7 +229,10 @@ mod overlay {
         assert!(overlay.apply(look(Some("a"), 100, 0), &base()).is_ok());
         assert!(
             overlay
-                .apply(look(Some("a"), 400, MAXIMUM_CAMERA_MS), &base())
+                .apply(
+                    look(Some("a"), MAXIMUM_ZOOM_PERCENT, MAXIMUM_CAMERA_MS),
+                    &base()
+                )
                 .is_ok()
         );
     }
@@ -232,7 +244,7 @@ mod overlay {
             overlay.apply(look(Some(" "), 200, 0), &base()),
             Err(SceneError::Empty("a camera target"))
         );
-        let long = "x".repeat(81);
+        let long = "x".repeat(MAXIMUM_NAME_CHARACTERS + 1);
         assert!(matches!(
             overlay.apply(look(Some(&long), 200, 0), &base()),
             Err(SceneError::TooLong { .. })

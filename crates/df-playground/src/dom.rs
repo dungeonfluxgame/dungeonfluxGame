@@ -1,18 +1,39 @@
-//! Small helpers for building page elements. They hold no state.
+//! Small helpers for building page elements, and the page's memory of what it has begun. The memory
+//! is `continuity`; this module only reads the browser's clock for it.
+
+use std::cell::RefCell;
 
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
-use std::cell::RefCell;
-
-use crate::camera::{Framing, progress};
-use crate::fixture::{Camera, ImageRef, Slide};
+use crate::continuity::Continuity;
+use crate::fixture::{ImageRef, Slide};
 use crate::media::{MediaKind, media_kind};
+use crate::motion_style::slide_style;
 
 pub fn document() -> Result<Document, JsValue> {
     web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| JsValue::from_str("the page has no document"))
+}
+
+/// The reading of the browser's steady clock, in milliseconds. It never goes backwards, unlike the
+/// wall clock, so an elapsed time made from it is never negative.
+pub fn now_ms() -> f64 {
+    web_sys::window()
+        .and_then(|window| window.performance())
+        .map_or(0.0, |performance| performance.now())
+}
+
+/// What a thrown value says, for a message that names the cause.
+pub fn js_message(error: &JsValue) -> String {
+    if let Some(text) = error.as_string() {
+        return text;
+    }
+    js_sys::Reflect::get(error, &JsValue::from_str("message"))
+        .ok()
+        .and_then(|message| message.as_string())
+        .unwrap_or_else(|| format!("{error:?}"))
 }
 
 /// A new element with a class list (space separated, may be empty).
@@ -55,137 +76,13 @@ pub fn clear(element: &Element) {
     element.set_text_content(None);
 }
 
-/// Slides this page has begun, each with the time it began, in milliseconds since the epoch. A
-/// redraw in the middle of a slide finds its slide here and carries on from where it was instead of
-/// starting again.
-const MAXIMUM_REMEMBERED_SLIDES: usize = 16;
-
 thread_local! {
-    static SLIDES: RefCell<Vec<(Slide, f64)>> = const { RefCell::new(Vec::new()) };
+    static CONTINUITY: RefCell<Continuity> = RefCell::new(Continuity::default());
 }
 
-/// How long ago this slide began, noting now as its start the first time it is asked about.
-fn slide_elapsed_ms(slide: &Slide) -> f64 {
-    let now = js_sys::Date::now();
-    SLIDES.with(|slides| {
-        let mut slides = slides.borrow_mut();
-        if let Some((_, began)) = slides.iter().find(|(known, _)| known == slide) {
-            return now - began;
-        }
-        if slides.len() >= MAXIMUM_REMEMBERED_SLIDES {
-            slides.remove(0);
-        }
-        slides.push((*slide, now));
-        0.0
-    })
-}
-
-/// Forgets every slide, so the next scene's slides begin from their start.
-pub fn forget_slides() {
-    SLIDES.with(|slides| slides.borrow_mut().clear());
-}
-
-/// The inline style that makes a card slide: its place at the end, and an animation that starts
-/// part-way through when the slide is already under way.
-fn slide_style(slide: &Slide) -> String {
-    let elapsed = slide_elapsed_ms(slide);
-    if elapsed >= f64::from(slide.duration_ms) {
-        return format!("left: {}%;", slide.to_percent);
-    }
-    format!(
-        "left: {to}%; --slide-from: {from}%; --slide-to: {to}%; animation: card-slide {duration}ms linear forwards; animation-delay: -{elapsed:.0}ms;",
-        to = slide.to_percent,
-        from = slide.from_percent,
-        duration = slide.duration_ms,
-    )
-}
-
-/// The camera move this page is part-way through, so a redraw carries on from where the picture
-/// was instead of jumping, and a new move starts from where the last one had got to.
-struct CameraRun {
-    serial: u64,
-    began: f64,
-    duration_ms: u32,
-    from: Framing,
-    to: Framing,
-}
-
-thread_local! {
-    static CAMERA: RefCell<Option<CameraRun>> = const { RefCell::new(None) };
-}
-
-/// Forgets the camera, so the next scene starts on the whole stage.
-pub fn forget_camera() {
-    CAMERA.with(|run| *run.borrow_mut() = None);
-}
-
-/// The style that frames the world layer, and what a later frame of the same move needs to know.
-pub struct CameraStyle {
-    /// The whole inline style.
-    pub full: String,
-    /// The transform the move ends on.
-    pub transform: String,
-    /// Whether the move is still under way.
-    pub moving: bool,
-    /// Which move this is.
-    pub serial: u64,
-}
-
-/// The style for a camera looking for `to`. A move that is already under way keeps its start and
-/// its clock; a new one starts from where the last had got to. Numbers only.
-pub fn camera_style(camera: Option<&Camera>, to: Framing) -> CameraStyle {
-    let settled = |to: Framing, serial: u64| CameraStyle {
-        full: format!(
-            "transform: {}; transition: transform 90ms linear;",
-            to.transform()
-        ),
-        transform: to.transform(),
-        moving: false,
-        serial,
-    };
-    let Some(camera) = camera else {
-        forget_camera();
-        return settled(Framing::WHOLE_STAGE, 0);
-    };
-    let now = js_sys::Date::now();
-    let (from, began) = CAMERA.with(|run| {
-        let mut run = run.borrow_mut();
-        match run.as_mut() {
-            Some(known) if known.serial == camera.serial => {
-                known.to = to;
-                (known.from, known.began)
-            }
-            previous => {
-                let from = previous.map_or(Framing::WHOLE_STAGE, |known| {
-                    let done = progress(now - known.began, known.duration_ms);
-                    known.from.blend(&known.to, done)
-                });
-                *run = Some(CameraRun {
-                    serial: camera.serial,
-                    began: now,
-                    duration_ms: camera.duration_ms,
-                    from,
-                    to,
-                });
-                (from, now)
-            }
-        }
-    });
-    let elapsed = now - began;
-    if progress(elapsed, camera.duration_ms) >= 1.0 {
-        return settled(to, camera.serial);
-    }
-    CameraStyle {
-        full: format!(
-            "transform: {to_transform}; --cam-from: {}; --cam-to: {to_transform}; animation: camera-move {}ms linear forwards; animation-delay: -{elapsed:.0}ms;",
-            from.transform(),
-            camera.duration_ms,
-            to_transform = to.transform(),
-        ),
-        transform: to.transform(),
-        moving: true,
-        serial: camera.serial,
-    }
+/// Reads or changes what the page remembers of the slides and camera moves it has begun.
+pub fn with_continuity<R>(change: impl FnOnce(&mut Continuity) -> R) -> R {
+    CONTINUITY.with(|continuity| change(&mut continuity.borrow_mut()))
 }
 
 /// A picture from the media library, with its caption under it, in an element of class `class`.
@@ -196,7 +93,7 @@ pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Ele
     let frame = element(document, "div", class)?;
     if let Some(slide) = &image.slide {
         // Numbers only, so a scene file cannot put text into a style.
-        frame.set_attribute("style", &slide_style(slide))?;
+        frame.set_attribute("style", &slide_for_page(slide))?;
     }
     if media_kind(&image.media) != Some(MediaKind::Image) {
         append(
@@ -214,11 +111,12 @@ pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Ele
     picture.set_attribute("src", &format!("/playground/media/{}", image.media))?;
     picture.set_attribute("data-media", &image.media)?;
     picture.set_attribute("alt", image.caption.as_deref().unwrap_or(&image.media))?;
-    if !image.rotation_degrees.is_multiple_of(360) {
-        // A number, never text from a fixture, so it cannot carry style.
+    if image.rotation_degrees != 0 {
+        // A number, never text from a fixture, so it cannot carry style. A turn of 360 or more is
+        // refused when a scene is read or changed, so it does not get here.
         picture.set_attribute(
             "style",
-            &format!("transform: rotate({}deg);", image.rotation_degrees % 360),
+            &format!("transform: rotate({}deg);", image.rotation_degrees),
         )?;
     }
     append(&frame, &picture)?;
@@ -229,4 +127,9 @@ pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Ele
         )?;
     }
     Ok(frame)
+}
+
+fn slide_for_page(slide: &Slide) -> String {
+    let elapsed = with_continuity(|continuity| continuity.slide_elapsed(now_ms(), slide));
+    slide_style(slide, elapsed)
 }

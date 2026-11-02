@@ -8,8 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Longest media file name accepted.
-pub const MAXIMUM_NAME_LENGTH: usize = 64;
+pub use crate::limits::{
+    MAXIMUM_MEDIA_NAME_LENGTH as MAXIMUM_NAME_LENGTH, MAXIMUM_REPORTED_ERRORS,
+};
+
 /// Image file types a page can show. SVG is left out on purpose: opened on its own it can run
 /// script from the host's origin.
 pub const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
@@ -17,8 +19,6 @@ pub const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 pub const AUDIO_EXTENSIONS: [&str; 5] = ["mp3", "ogg", "wav", "m4a", "opus"];
 /// Video file types the library accepts: mp4 (H.264 with AAC) and webm (VP9 with Opus).
 pub const VIDEO_EXTENSIONS: [&str; 2] = ["mp4", "webm"];
-/// Most errors a client report carries; older ones are dropped.
-pub const MAXIMUM_REPORTED_ERRORS: usize = 8;
 
 /// True for a name that cannot leave its directory: letters, digits, `_`, `-` and `.`, no leading
 /// dot and no `..`.

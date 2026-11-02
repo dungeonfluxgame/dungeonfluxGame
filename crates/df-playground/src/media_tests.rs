@@ -1,6 +1,6 @@
 use crate::media::{
-    AudioState, ClientReport, MAXIMUM_REPORTED_ERRORS, MediaKind, content_type, is_plain_file_name,
-    media_kind,
+    AudioState, ClientReport, MAXIMUM_NAME_LENGTH, MAXIMUM_REPORTED_ERRORS, MediaKind,
+    content_type, is_plain_file_name, media_kind,
 };
 
 #[test]
@@ -16,7 +16,7 @@ fn only_plain_names_pass() {
         "a/b.png",
         "a\\b.png",
         "a b.png",
-        &"a".repeat(65),
+        &"a".repeat(MAXIMUM_NAME_LENGTH + 1),
     ] {
         assert!(!is_plain_file_name(bad), "{bad:?}");
     }
@@ -80,7 +80,10 @@ fn a_report_keeps_only_the_newest_errors() {
     let bounded = report(MAXIMUM_REPORTED_ERRORS + 3).bounded();
     assert_eq!(bounded.errors.len(), MAXIMUM_REPORTED_ERRORS);
     assert_eq!(bounded.errors[0], "error 3");
-    assert_eq!(bounded.errors.last().map(String::as_str), Some("error 10"));
+    assert_eq!(
+        bounded.errors.last().map(String::as_str),
+        Some(format!("error {}", MAXIMUM_REPORTED_ERRORS + 2).as_str())
+    );
     assert_eq!(report(2).bounded().errors.len(), 2);
 }
 

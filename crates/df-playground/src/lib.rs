@@ -8,14 +8,22 @@
 
 pub mod backoff;
 pub mod camera;
+pub mod checks;
 pub mod choices;
+pub mod continuity;
 pub mod controls;
 pub mod copy;
+pub mod draw_plan;
 pub mod figure;
 pub mod fixture;
+pub mod fixture_checks;
 pub mod layout;
+pub mod limits;
 pub mod media;
+pub mod motion_style;
 pub mod scene;
+mod scene_apply;
+pub mod sound_plan;
 pub mod style;
 
 #[cfg(target_arch = "wasm32")]
@@ -38,17 +46,29 @@ mod camera_tests;
 #[cfg(test)]
 mod choices_tests;
 #[cfg(test)]
+mod continuity_tests;
+#[cfg(test)]
 mod controls_tests;
 #[cfg(test)]
 mod copy_tests;
 #[cfg(test)]
+mod css_tests;
+#[cfg(test)]
+mod draw_plan_tests;
+#[cfg(test)]
 mod figure_tests;
+#[cfg(test)]
+mod fixture_checks_tests;
 #[cfg(test)]
 mod fixture_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]
+mod limits_tests;
+#[cfg(test)]
 mod media_tests;
+#[cfg(test)]
+mod motion_style_tests;
 #[cfg(test)]
 mod scene_media_tests;
 #[cfg(test)]
@@ -57,6 +77,8 @@ mod scene_tests;
 mod shipped_fixtures_tests;
 #[cfg(test)]
 mod slide_tests;
+#[cfg(test)]
+mod sound_plan_tests;
 #[cfg(test)]
 mod style_tests;
 

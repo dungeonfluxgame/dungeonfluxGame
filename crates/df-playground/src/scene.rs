@@ -3,9 +3,10 @@
 //!
 //! A fixture is a file; a change here is not saved to it. The changes are kept as an overlay that
 //! is drawn on top of the fixture, so `scene reset` (or choosing another fixture) returns to the
-//! file. This module is the one place that decides what a change means and what is too large to
-//! accept. It does not enforce the table-experience contract: a label of six words is accepted so
-//! the playground can show the break, exactly as a fixture that breaks it is.
+//! file. This module holds the overlay's shape and how it is drawn; `scene_apply` decides what a
+//! change means and `checks` what is too large to accept. It does not enforce the
+//! table-experience contract: a label of six words is accepted so the playground can show the
+//! break, exactly as a fixture that breaks it is.
 
 use std::fmt;
 
@@ -15,29 +16,13 @@ use crate::controls::Device;
 use crate::fixture::{
     Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide, UnavailableChoice,
 };
+use crate::limits::MAXIMUM_PIVOT_PERCENT;
 
-/// Most characters in a caption line.
-pub const MAXIMUM_CAPTION_CHARACTERS: usize = 600;
-/// Most characters in a name, a speaker or a label.
-pub const MAXIMUM_NAME_CHARACTERS: usize = 80;
-/// Most members in the party strip.
-pub const MAXIMUM_PARTY_MEMBERS: usize = 8;
-/// Most choices in one list (suggested, a group or unavailable).
-pub const MAXIMUM_CHOICES_PER_LIST: usize = 24;
-
-/// Most sound cues kept for pages to collect; a page that was away longer misses the older ones.
-pub const MAXIMUM_CUES_KEPT: usize = 16;
-/// Longest a slide may take, in milliseconds.
-pub const MAXIMUM_SLIDE_MS: u32 = 60_000;
-/// Largest rotation of a picture, in degrees (a full turn is 360, which is the same as 0).
-pub const MAXIMUM_ROTATION_DEGREES: u16 = 359;
-/// Longest a camera move may take, in milliseconds.
-pub const MAXIMUM_CAMERA_MS: u32 = 30_000;
-/// Least and most the camera may zoom in, in percent (100 is the whole stage).
-pub const MINIMUM_ZOOM_PERCENT: u16 = 100;
-pub const MAXIMUM_ZOOM_PERCENT: u16 = 400;
-/// Loudest volume, in percent.
-pub const MAXIMUM_VOLUME: u8 = 100;
+pub use crate::limits::{
+    MAXIMUM_CAMERA_MS, MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CHOICES_PER_LIST, MAXIMUM_CUES_KEPT,
+    MAXIMUM_NAME_CHARACTERS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS,
+    MAXIMUM_VOLUME, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
+};
 
 /// What the overlay does to one part of the scene: put something there, or take what is there away.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -230,11 +215,16 @@ pub enum SceneChange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SceneError {
     Empty(&'static str),
-    TooLong { what: &'static str, limit: usize },
+    TooLong {
+        what: &'static str,
+        limit: usize,
+    },
     DuplicateMember(String),
     UnknownMember(String),
     TooManyMembers,
-    TooManyChoices { limit: usize },
+    TooManyChoices {
+        limit: usize,
+    },
     BadMaximum,
     BadVolume(u8),
     BadRotation(u16),
@@ -242,6 +232,12 @@ pub enum SceneError {
     SlideNeedsTheCard,
     BadZoom(u16),
     BadCameraTime(u32),
+    /// A scenario file's camera looks at an element its own stage does not have.
+    UnknownCameraTarget(String),
+    /// A scenario file's figure turns about a point outside its own size.
+    BadPivot(u8),
+    /// A scenario file sets a number only the host sets.
+    HostOwned(&'static str),
 }
 
 impl fmt::Display for SceneError {
@@ -276,6 +272,20 @@ impl fmt::Display for SceneError {
                 formatter,
                 "a camera move takes 0 to {MAXIMUM_CAMERA_MS} ms, not {ms}"
             ),
+            Self::UnknownCameraTarget(target) => {
+                write!(
+                    formatter,
+                    "the camera looks at '{target}', which is not on the stage"
+                )
+            }
+            Self::HostOwned(field) => write!(
+                formatter,
+                "'{field}' is set by the host; leave it out of a scene file"
+            ),
+            Self::BadPivot(percent) => write!(
+                formatter,
+                "a pivot is from 0 to {MAXIMUM_PIVOT_PERCENT} percent of the figure, not {percent}"
+            ),
             Self::BadRotation(degrees) => write!(
                 formatter,
                 "a rotation is from 0 to {MAXIMUM_ROTATION_DEGREES} degrees, not {degrees}"
@@ -290,275 +300,9 @@ impl fmt::Display for SceneError {
     }
 }
 
-fn text(what: &'static str, value: &str, limit: usize) -> Result<(), SceneError> {
-    if value.trim().is_empty() {
-        Err(SceneError::Empty(what))
-    } else if value.chars().count() > limit {
-        Err(SceneError::TooLong { what, limit })
-    } else {
-        Ok(())
-    }
-}
-
-fn labelled(what: &'static str, value: &str) -> Result<(), SceneError> {
-    text(what, value, MAXIMUM_NAME_CHARACTERS)
-}
-
-fn check_volume(volume: u8) -> Result<(), SceneError> {
-    if volume > MAXIMUM_VOLUME {
-        Err(SceneError::BadVolume(volume))
-    } else {
-        Ok(())
-    }
-}
-
-fn check_count(count: usize) -> Result<(), SceneError> {
-    if count > MAXIMUM_CHOICES_PER_LIST {
-        Err(SceneError::TooManyChoices {
-            limit: MAXIMUM_CHOICES_PER_LIST,
-        })
-    } else {
-        Ok(())
-    }
-}
-
-fn check_choice(choice: &Choice) -> Result<(), SceneError> {
-    labelled("a choice label", &choice.label)?;
-    if let Some(explain) = &choice.explain {
-        labelled("a choice explanation", explain)?;
-    }
-    Ok(())
-}
-
-fn check_member(member: &PartyMember) -> Result<(), SceneError> {
-    labelled("a party member's name", &member.name)?;
-    if member.maximum_hit_points == 0 {
-        return Err(SceneError::BadMaximum);
-    }
-    for condition in &member.conditions {
-        labelled("a condition", condition)?;
-    }
-    Ok(())
-}
-
 impl SceneOverlay {
-    /// The party as drawn: the overlay's, or the fixture's.
-    fn party_or<'a>(&'a self, base: &'a Fixture) -> &'a [PartyMember] {
-        self.party.as_deref().unwrap_or(&base.tv.party)
-    }
-
-    /// Makes one change. `base` is the fixture the overlay sits on, so a change to one member or
-    /// one group starts from what is drawn now. A refused change leaves the overlay as it was.
-    pub fn apply(&mut self, change: SceneChange, base: &Fixture) -> Result<(), SceneError> {
-        let mut next = self.clone();
-        next.apply_unchecked(change, base)?;
-        *self = next;
-        Ok(())
-    }
-
-    fn apply_unchecked(&mut self, change: SceneChange, base: &Fixture) -> Result<(), SceneError> {
-        match change {
-            SceneChange::Caption {
-                speaker,
-                text: line,
-            } => {
-                text("the caption", &line, MAXIMUM_CAPTION_CHARACTERS)?;
-                if let Some(speaker) = &speaker {
-                    labelled("the speaker", speaker)?;
-                }
-                self.caption = Some(CaptionOverride::Set(Caption {
-                    speaker,
-                    text: line,
-                }));
-            }
-            SceneChange::ClearCaption {} => self.caption = Some(CaptionOverride::Clear),
-            SceneChange::PartyAdd { member } => {
-                check_member(&member)?;
-                let mut party = self.party_or(base).to_vec();
-                if party.iter().any(|existing| existing.name == member.name) {
-                    return Err(SceneError::DuplicateMember(member.name));
-                }
-                if party.len() >= MAXIMUM_PARTY_MEMBERS {
-                    return Err(SceneError::TooManyMembers);
-                }
-                party.push(member);
-                self.party = Some(party);
-            }
-            SceneChange::PartySet {
-                name,
-                hit_points,
-                maximum_hit_points,
-                conditions,
-            } => {
-                let mut party = self.party_or(base).to_vec();
-                let member = party
-                    .iter_mut()
-                    .find(|member| member.name == name)
-                    .ok_or(SceneError::UnknownMember(name))?;
-                if let Some(hit_points) = hit_points {
-                    member.hit_points = hit_points;
-                }
-                if let Some(maximum) = maximum_hit_points {
-                    member.maximum_hit_points = maximum;
-                }
-                if let Some(conditions) = conditions {
-                    member.conditions = conditions;
-                }
-                check_member(member)?;
-                self.party = Some(party);
-            }
-            SceneChange::PartyRemove { name } => {
-                let mut party = self.party_or(base).to_vec();
-                let before = party.len();
-                party.retain(|member| member.name != name);
-                if party.len() == before {
-                    return Err(SceneError::UnknownMember(name));
-                }
-                self.party = Some(party);
-            }
-            SceneChange::PartyClear {} => self.party = Some(Vec::new()),
-            SceneChange::Suggested { choices } => {
-                check_count(choices.len())?;
-                choices.iter().try_for_each(check_choice)?;
-                self.suggested = Some(choices);
-            }
-            SceneChange::Group { name, choices } => {
-                labelled("a group name", &name)?;
-                check_count(choices.len())?;
-                choices.iter().try_for_each(check_choice)?;
-                let mut groups = self
-                    .groups
-                    .clone()
-                    .unwrap_or_else(|| base.phone.groups.clone());
-                groups.retain(|group| group.name != name);
-                if !choices.is_empty() {
-                    groups.push(ChoiceGroup { name, choices });
-                }
-                self.groups = Some(groups);
-            }
-            SceneChange::Unavailable { choices } => {
-                check_count(choices.len())?;
-                for choice in &choices {
-                    labelled("a choice label", &choice.label)?;
-                    labelled("a reason", &choice.reason)?;
-                }
-                self.unavailable = Some(choices);
-            }
-            SceneChange::ClearChoices {} => {
-                self.suggested = Some(Vec::new());
-                self.groups = Some(Vec::new());
-                self.unavailable = Some(Vec::new());
-            }
-            SceneChange::Image {
-                slot,
-                media,
-                caption,
-                rotation_degrees,
-                slide,
-            } => {
-                labelled("a media name", &media)?;
-                if rotation_degrees > MAXIMUM_ROTATION_DEGREES {
-                    return Err(SceneError::BadRotation(rotation_degrees));
-                }
-                if let Some(caption) = &caption {
-                    labelled("a picture caption", caption)?;
-                }
-                let slide = match slide {
-                    None => None,
-                    Some(mut slide) => {
-                        if slot != ImageSlot::TvCard {
-                            return Err(SceneError::SlideNeedsTheCard);
-                        }
-                        if slide.from_percent > 100
-                            || slide.to_percent > 100
-                            || !(1..=MAXIMUM_SLIDE_MS).contains(&slide.duration_ms)
-                        {
-                            return Err(SceneError::BadSlide);
-                        }
-                        self.slide_count += 1;
-                        slide.serial = self.slide_count;
-                        Some(slide)
-                    }
-                };
-                *self.image_slot_mut(slot) = Some(Override::Set(ImageRef {
-                    media,
-                    caption,
-                    rotation_degrees,
-                    slide,
-                }));
-            }
-            SceneChange::ClearImage { slot } => *self.image_slot_mut(slot) = Some(Override::Clear),
-            SceneChange::Music {
-                media,
-                target,
-                volume,
-                looping,
-            } => {
-                labelled("a media name", &media)?;
-                check_volume(volume)?;
-                self.music = Some(Override::Set(Track {
-                    media,
-                    target,
-                    volume,
-                    looping,
-                }));
-            }
-            SceneChange::StopMusic {} => self.music = Some(Override::Clear),
-            SceneChange::Sound {
-                media,
-                target,
-                volume,
-            } => {
-                labelled("a media name", &media)?;
-                check_volume(volume)?;
-                self.cue_count += 1;
-                self.cues.push(Cue {
-                    id: self.cue_count,
-                    target,
-                    media,
-                    volume,
-                });
-                if self.cues.len() > MAXIMUM_CUES_KEPT {
-                    self.cues.remove(0);
-                }
-            }
-            SceneChange::Camera {
-                target,
-                zoom_percent,
-                duration_ms,
-            } => {
-                if let Some(target) = &target {
-                    labelled("a camera target", target)?;
-                }
-                if !(MINIMUM_ZOOM_PERCENT..=MAXIMUM_ZOOM_PERCENT).contains(&zoom_percent) {
-                    return Err(SceneError::BadZoom(zoom_percent));
-                }
-                if duration_ms > MAXIMUM_CAMERA_MS {
-                    return Err(SceneError::BadCameraTime(duration_ms));
-                }
-                self.camera_count += 1;
-                self.camera = Some(Camera {
-                    target,
-                    zoom_percent,
-                    duration_ms,
-                    serial: self.camera_count,
-                });
-            }
-            SceneChange::Reset {} => *self = self.cleared(),
-        }
-        Ok(())
-    }
-
-    fn image_slot_mut(&mut self, slot: ImageSlot) -> &mut Option<Override<ImageRef>> {
-        match slot {
-            ImageSlot::TvBackdrop => &mut self.backdrop,
-            ImageSlot::TvCard => &mut self.card,
-            ImageSlot::PhoneImage => &mut self.phone_image,
-        }
-    }
-
-    /// The overlay with every change dropped but the count of cues, which only rises. Used when a
-    /// scene is reset or another fixture is chosen, so a page never mistakes a new cue for an old one.
+    /// The overlay with every change dropped but the counts, which only rise. Used when a scene is
+    /// reset or another fixture is chosen, so a page never mistakes a new cue for an old one.
     pub fn cleared(&self) -> Self {
         Self {
             cue_count: self.cue_count,
@@ -577,6 +321,27 @@ impl SceneOverlay {
             cues: Vec::new(),
             ..self.clone()
         } == Self::default()
+    }
+
+    /// This overlay as a reader should see it `now_ms` after the host started: each move that is
+    /// part of it says how long ago it began, so a page that opens mid-move carries on from there.
+    pub fn at(&self, now_ms: u64) -> Self {
+        let mut stamped = self.clone();
+        if let Some(camera) = &mut stamped.camera {
+            camera.elapsed_ms = now_ms.saturating_sub(camera.began_ms);
+        }
+        for slot in [
+            &mut stamped.backdrop,
+            &mut stamped.card,
+            &mut stamped.phone_image,
+        ] {
+            if let Some(Override::Set(image)) = slot
+                && let Some(slide) = &mut image.slide
+            {
+                slide.elapsed_ms = now_ms.saturating_sub(slide.began_ms);
+            }
+        }
+        stamped
     }
 
     /// Draws the overlay onto a copy of the fixture.

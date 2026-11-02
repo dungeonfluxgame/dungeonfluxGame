@@ -19,6 +19,8 @@ fn slide(from: u8, to: u8, ms: u32) -> Slide {
         to_percent: to,
         duration_ms: ms,
         serial: 0,
+        began_ms: 0,
+        elapsed_ms: 0,
     }
 }
 
@@ -108,7 +110,11 @@ fn a_slide_off_the_screen_or_of_no_length_or_too_long_is_refused_and_changes_not
         );
         assert!(overlay.is_empty() && overlay.slide_count == 0);
     }
-    assert!(SceneError::BadSlide.to_string().contains("1 to 60000"));
+    assert!(
+        SceneError::BadSlide
+            .to_string()
+            .contains(&format!("1 to {MAXIMUM_SLIDE_MS}"))
+    );
 }
 
 #[test]

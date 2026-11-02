@@ -44,6 +44,9 @@ body {
 .segment .toggle:last-child { border-radius: 0 5px 5px 0; }
 .segment .toggle.on { position: relative; z-index: 1; }
 
+/* A piece of a device is drawn into a slot that takes no box of its own, so the page can redraw one piece alone */
+.part { display: contents; }
+
 /* Layout of the page */
 .body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; padding: 20px; align-items: start; }
 .devices { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; min-width: 0; }

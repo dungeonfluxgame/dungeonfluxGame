@@ -2,135 +2,307 @@
 //! and the party strip.
 //!
 //! It turns a `TvScene` and the chosen controls into page elements, and nothing else: all the
-//! wording and timing come from `copy`, all the geometry from `layout`, and every colour passes
-//! `style::css_color` before it reaches a style.
+//! wording and timing come from `copy`, all the geometry from `layout`, every colour passes
+//! `style::css_color` before it reaches a style and every style of a figure or the camera is made
+//! from numbers by `figure` and `motion_style`. The screen is built once as a shell of named
+//! pieces (`Part`); a piece is drawn into its slot and drawn again alone when only it changed. The
+//! figures and the camera are not pieces: they move in place, frame by frame, and this module keeps
+//! what it needs to touch only what changed.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::HashMap;
 
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlElement};
 
-use crate::camera::framing;
+use crate::continuity::CameraPlan;
 use crate::controls::Controls;
 use crate::copy::{caption_dwell_ms, status_blocks_input, status_copy, word_count};
-use crate::dom::{append, camera_style, element, picture, set_style, text_element};
-use crate::figure::{figure_style, first_turn, label_style, next_turn};
+use crate::dom::{
+    append, element, js_message, now_ms, picture, set_style, text_element, with_continuity,
+};
+use crate::draw_plan::Part;
+use crate::figure::{FigureLook, figure_style, first_turn, label_style, next_turn};
 use crate::fixture::{Camera, ElementShape, PartyMember, StageElement, Status, TvScene};
 use crate::layout::hit_point_permille;
 use crate::media::{MediaKind, media_kind};
+use crate::motion_style::{CameraAction, CameraDrawn, camera_action, camera_style};
 use crate::style::css_color;
 
-/// The class of the layer that holds the figures. The page finds it again to move figures in place.
-pub const FIGURE_LAYER_CLASS: &str = "tv-figures";
+/// The parts of the shared screen, in the order they are drawn.
+pub const PARTS: [Part; 7] = [
+    Part::TvBackdrop,
+    Part::TvGrid,
+    Part::TvPlace,
+    Part::TvCard,
+    Part::TvStatus,
+    Part::TvCaption,
+    Part::TvParty,
+];
 
-/// The class of the layer the camera moves: the backdrop, the grid and the figures.
-pub const WORLD_CLASS: &str = "tv-world";
-
-fn figure_class(item: &StageElement) -> &'static str {
-    match item.shape {
+fn figure_class(shape: ElementShape) -> &'static str {
+    match shape {
         ElementShape::Circle => "figure figure-circle",
         ElementShape::Rect => "figure figure-rect",
     }
 }
 
-/// The attribute that remembers the turn a figure is drawn at, so the next frame can go the short
-/// way round to a new rotation.
-const TURN_ATTRIBUTE: &str = "data-turn";
+fn media_address(name: &str) -> String {
+    format!("/playground/media/{name}")
+}
 
-fn figure(document: &Document, item: &StageElement) -> Result<Element, JsValue> {
-    let node = element(document, "div", figure_class(item))?;
-    node.set_attribute("data-id", &item.id)?;
+/// A figure on the page and what was last written to it, so a frame in which nothing it depends on
+/// changed writes nothing.
+struct FigureNode {
+    element: Element,
+    label: Element,
+    look: FigureLook,
+    turn: i64,
+    shape: ElementShape,
+    kind: String,
+    label_text: String,
+    /// The portrait picture, when the figure has one, and the media name it shows.
+    portrait: Option<(Element, String)>,
+    /// The frame this figure was last found in, so figures that are gone can be told.
+    frame: u64,
+}
+
+/// The figures on one stage, found by the id of the element each one draws.
+#[derive(Default)]
+struct Figures {
+    nodes: HashMap<String, FigureNode>,
+    frame: u64,
+}
+
+impl Figures {
+    /// Makes the figures in `layer` match `items`: new ones are added, gone ones are removed, and
+    /// the rest are updated in place, only where something changed. No id is copied for a figure
+    /// that is already there.
+    fn sync(
+        &mut self,
+        document: &Document,
+        layer: &Element,
+        items: &[StageElement],
+    ) -> Result<(), JsValue> {
+        self.frame += 1;
+        for item in items {
+            match self.nodes.get_mut(item.id.as_str()) {
+                Some(node) => update_figure(document, node, item, self.frame)?,
+                None => {
+                    let node = new_figure(document, item, self.frame)?;
+                    append(layer, &node.element)?;
+                    self.nodes.insert(item.id.clone(), node);
+                }
+            }
+        }
+        let frame = self.frame;
+        self.nodes.retain(|_, node| {
+            let kept = node.frame == frame;
+            if !kept {
+                node.element.remove();
+            }
+            kept
+        });
+        Ok(())
+    }
+}
+
+fn new_figure(document: &Document, item: &StageElement, frame: u64) -> Result<FigureNode, JsValue> {
+    let element = element(document, "div", figure_class(item.shape))?;
+    element.set_attribute("data-id", &item.id)?;
     let turn = first_turn(item);
-    node.set_attribute(TURN_ATTRIBUTE, &turn.to_string())?;
-    set_style(&node, &figure_style(item, turn))?;
-    node.set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
+    set_style(&element, &figure_style(item, turn))?;
+    element.set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
     let label = text_element(document, "span", "figure-label", &item.label)?;
     set_style(&label, &label_style(turn))?;
-    append(&node, &label)?;
-    sync_portrait(document, &node, item)?;
+    append(&element, &label)?;
+    let mut node = FigureNode {
+        element,
+        label,
+        look: FigureLook::of(item, turn),
+        turn,
+        shape: item.shape,
+        kind: item.kind.clone(),
+        label_text: item.label.clone(),
+        portrait: None,
+        frame,
+    };
+    sync_portrait(document, &mut node, item)?;
     Ok(node)
 }
 
 /// Draws the figure's portrait, when it has one, as a picture filling the figure. A portrait that
-/// is not a picture of a known type is left out, so a figure never shows a broken image.
-fn sync_portrait(document: &Document, node: &Element, item: &StageElement) -> Result<(), JsValue> {
+/// is not a picture of a known type is left out, so a figure never shows a broken image. The
+/// picture is kept as a known child, so no query finds it again.
+fn sync_portrait(
+    document: &Document,
+    node: &mut FigureNode,
+    item: &StageElement,
+) -> Result<(), JsValue> {
     let wanted = item
         .portrait()
         .filter(|name| media_kind(name) == Some(MediaKind::Image));
-    let shown = node.query_selector("img.figure-portrait")?;
-    match (wanted, shown) {
-        (Some(name), Some(image)) => {
-            if image.get_attribute("data-media").as_deref() != Some(name) {
-                image.set_attribute("src", &format!("/playground/media/{name}"))?;
+    match (wanted, &mut node.portrait) {
+        (Some(name), Some((image, shown))) => {
+            if shown != name {
+                image.set_attribute("src", &media_address(name))?;
                 image.set_attribute("data-media", name)?;
+                name.clone_into(shown);
             }
         }
         (Some(name), None) => {
             let image = element(document, "img", "figure-portrait")?;
-            image.set_attribute("src", &format!("/playground/media/{name}"))?;
+            image.set_attribute("src", &media_address(name))?;
             image.set_attribute("data-media", name)?;
             image.set_attribute("alt", &item.label)?;
-            append(node, &image)?;
+            append(&node.element, &image)?;
+            node.portrait = Some((image, name.to_owned()));
         }
-        (None, Some(image)) => image.remove(),
+        (None, Some(_)) => {
+            if let Some((image, _)) = node.portrait.take() {
+                image.remove();
+            }
+        }
         (None, None) => {}
     }
     Ok(())
 }
 
 /// Brings an existing figure up to date without replacing it, so the browser can glide it from
-/// where it was to where it is now.
-fn update_figure(document: &Document, node: &Element, item: &StageElement) -> Result<(), JsValue> {
-    let turn = match node
-        .get_attribute(TURN_ATTRIBUTE)
-        .and_then(|drawn| drawn.parse::<i64>().ok())
-    {
-        Some(drawn) => next_turn(drawn, item.rotation_degrees),
-        None => first_turn(item),
-    };
-    node.set_attribute(TURN_ATTRIBUTE, &turn.to_string())?;
-    set_style(node, &figure_style(item, turn))?;
-    node.set_attribute("class", figure_class(item))?;
-    node.set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
-    if let Some(label) = node.first_element_child() {
-        set_style(&label, &label_style(turn))?;
-        if label.text_content().as_deref() != Some(item.label.as_str()) {
-            label.set_text_content(Some(&item.label));
+/// where it was to where it is now. Only what differs is written.
+fn update_figure(
+    document: &Document,
+    node: &mut FigureNode,
+    item: &StageElement,
+    frame: u64,
+) -> Result<(), JsValue> {
+    node.frame = frame;
+    let turn = next_turn(node.turn, item.rotation_degrees);
+    if !node.look.matches(item, turn) {
+        set_style(&node.element, &figure_style(item, turn))?;
+        if node.turn != turn {
+            set_style(&node.label, &label_style(turn))?;
         }
+        node.look = FigureLook::of(item, turn);
+        node.turn = turn;
+    }
+    if node.shape != item.shape {
+        node.element
+            .set_attribute("class", figure_class(item.shape))?;
+        node.shape = item.shape;
+    }
+    if node.kind != item.kind {
+        node.element
+            .set_attribute("title", &format!("{} ({})", item.id, item.kind))?;
+        node.kind.clone_from(&item.kind);
+    }
+    if node.label_text != item.label {
+        node.label.set_text_content(Some(&item.label));
+        node.label_text.clone_from(&item.label);
     }
     sync_portrait(document, node, item)
 }
 
-/// Makes the figures in `layer` match `items`: new ones are added, gone ones are removed, and the
-/// rest are updated in place. The page calls it for every frame of a moving scene, so it touches
-/// only what changed and never rebuilds the layer.
-pub fn sync_figures(
-    document: &Document,
-    layer: &Element,
-    items: &[StageElement],
-) -> Result<(), JsValue> {
-    let mut existing: BTreeMap<String, Element> = BTreeMap::new();
-    let children = layer.children();
-    for index in 0..children.length() {
-        if let Some(child) = children.item(index)
-            && let Some(id) = child.get_attribute("data-id")
-        {
-            existing.insert(id, child);
+/// What the page keeps of the shared screen between draws.
+pub struct TvHandles {
+    /// The layer the camera moves.
+    world: Element,
+    /// The layer the figures are in.
+    layer: Element,
+    figures: Figures,
+    /// What was last written to the world's style.
+    camera_drawn: Option<CameraDrawn>,
+}
+
+impl TvHandles {
+    /// Makes the figures match `elements` and frames the world for `camera`. `elements` is `None`
+    /// while the page does not know the stage yet; the figures are left as they are and the whole
+    /// stage shows.
+    pub fn sync(
+        &mut self,
+        document: &Document,
+        elements: Option<&[StageElement]>,
+        camera: Option<&Camera>,
+    ) -> Result<(), JsValue> {
+        if let Some(elements) = elements {
+            self.figures.sync(document, &self.layer, elements)?;
         }
+        let plan = with_continuity(|continuity| continuity.camera_plan(now_ms(), camera, elements));
+        self.frame_camera(&plan)
     }
-    let wanted: BTreeSet<&str> = items.iter().map(|item| item.id.as_str()).collect();
-    for (id, node) in &existing {
-        if !wanted.contains(id.as_str()) {
-            node.remove();
+
+    /// Writes the camera's style when it differs from what is there. A move that is under way is
+    /// only aimed at its new end, so a target that is travelling is followed without restarting
+    /// the move.
+    fn frame_camera(&mut self, plan: &CameraPlan) -> Result<(), JsValue> {
+        match camera_action(self.camera_drawn.as_ref(), plan) {
+            CameraAction::Unchanged => {}
+            CameraAction::Retarget => {
+                let transform = plan.to.transform();
+                let html = self
+                    .world
+                    .dyn_ref::<HtmlElement>()
+                    .ok_or_else(|| JsValue::from_str("the world layer is not an html element"))?;
+                let declarations = html.style();
+                declarations.set_property("--cam-to", &transform)?;
+                declarations.set_property("transform", &transform)?;
+            }
+            CameraAction::Restyle => set_style(&self.world, &camera_style(plan))?,
         }
+        self.camera_drawn = Some(CameraDrawn::of(plan));
+        Ok(())
     }
-    for item in items {
-        match existing.get(&item.id) {
-            Some(node) => update_figure(document, node, item)?,
-            None => append(layer, &figure(document, item)?)?,
+}
+
+/// An empty slot for a piece: it takes no box of its own, so its content lies in the screen as if
+/// the slot were not there.
+pub fn slot(document: &Document, part: Part) -> Result<Element, JsValue> {
+    let slot = element(document, "div", "part")?;
+    slot.set_attribute("data-part", part.key())?;
+    Ok(slot)
+}
+
+/// The shared screen with its slots empty.
+pub struct TvShell {
+    pub section: Element,
+    pub handles: TvHandles,
+    pub slots: Vec<(Part, Element)>,
+}
+
+/// Builds the shared screen's shell: the stage, the world layer with its slots and figure layer,
+/// and a slot for each of the other pieces.
+pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
+    let section = element(document, "section", "device device-tv")?;
+    section.set_attribute("aria-label", "The shared screen")?;
+    let stage = element(document, "div", "tv-stage")?;
+    // The camera moves this layer; the place, card, status, caption and party stay on the screen.
+    let world = element(document, "div", "tv-world")?;
+    let layer = element(document, "div", "tv-figures")?;
+    let mut slots = Vec::new();
+    for part in PARTS {
+        let holder = slot(document, part)?;
+        let parent = match part {
+            Part::TvBackdrop | Part::TvGrid => &world,
+            _ => &stage,
+        };
+        // The figures come after the backdrop and the grid, and before everything on the screen.
+        if part == Part::TvPlace {
+            append(&world, &layer)?;
+            append(&stage, &world)?;
         }
+        append(parent, &holder)?;
+        slots.push((part, holder));
     }
-    Ok(())
+    append(&section, &stage)?;
+    Ok(TvShell {
+        section,
+        handles: TvHandles {
+            world,
+            layer,
+            figures: Figures::default(),
+            camera_drawn: None,
+        },
+        slots,
+    })
 }
 
 fn grid(document: &Document) -> Result<Element, JsValue> {
@@ -216,76 +388,52 @@ fn party_card(document: &Document, member: &PartyMember) -> Result<Element, JsVa
     Ok(card)
 }
 
-/// Draws the shared screen.
-pub fn render(
-    document: &Document,
-    scene: &TvScene,
-    elements: &[StageElement],
-    status: &Status,
-    controls: &Controls,
-) -> Result<Element, JsValue> {
-    let frame = element(document, "section", "device device-tv")?;
-    frame.set_attribute("aria-label", "The shared screen")?;
-    let stage = element(document, "div", "tv-stage")?;
-    // The camera moves this layer; the place, card, status, caption and party stay on the screen.
-    let world = element(document, "div", WORLD_CLASS)?;
-    if let Some(backdrop) = &scene.backdrop {
-        append(&world, &picture(document, "tv-backdrop", backdrop)?)?;
+fn party(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
+    if scene.party.is_empty() {
+        return Ok(None);
     }
-    if controls.show_grid {
-        append(&world, &grid(document)?)?;
+    let strip = element(document, "div", "tv-party")?;
+    for member in &scene.party {
+        append(&strip, &party_card(document, member)?)?;
     }
-    let layer = element(document, "div", FIGURE_LAYER_CLASS)?;
-    sync_figures(document, &layer, elements)?;
-    append(&world, &layer)?;
-    sync_camera(&world, scene.camera.as_ref(), elements)?;
-    append(&stage, &world)?;
-    append(
-        &stage,
-        &text_element(document, "div", "tv-place", &scene.place)?,
-    )?;
-    if let Some(card) = &scene.card {
-        append(&stage, &picture(document, "tv-card", card)?)?;
-    }
-    if let Some(banner) = status_banner(document, status)? {
-        append(&stage, &banner)?;
-    }
-    if let Some(caption) = caption(document, scene, controls)? {
-        append(&stage, &caption)?;
-    }
-    if !scene.party.is_empty() {
-        let strip = element(document, "div", "tv-party")?;
-        for member in &scene.party {
-            append(&strip, &party_card(document, member)?)?;
-        }
-        append(&stage, &strip)?;
-    }
-    append(&frame, &stage)?;
-    Ok(frame)
+    Ok(Some(strip))
 }
 
-/// Frames the world layer for the camera and the elements now on the stage. A move that is still
-/// under way gets only its end updated, so a target that is travelling is followed without
-/// restarting the move.
-pub fn sync_camera(
-    world: &Element,
-    camera: Option<&Camera>,
-    elements: &[StageElement],
-) -> Result<(), JsValue> {
-    let style = camera_style(camera, framing(camera, elements));
-    let serial = style.serial.to_string();
-    let same_move = world.get_attribute("data-camera").as_deref() == Some(serial.as_str())
-        && world.get_attribute("data-moving").as_deref() == Some("1");
-    if style.moving
-        && same_move
-        && let Some(html) = world.dyn_ref::<HtmlElement>()
-    {
-        let declarations = html.style();
-        declarations.set_property("--cam-to", &style.transform)?;
-        declarations.set_property("transform", &style.transform)?;
-    } else {
-        set_style(world, &style.full)?;
+/// What goes in the slot of `part`, or `None` when the piece is empty. A part that is not of the
+/// shared screen is an error: the caller asked the wrong view.
+pub fn build_part(
+    document: &Document,
+    part: Part,
+    scene: &TvScene,
+    controls: &Controls,
+) -> Result<Option<Element>, JsValue> {
+    match part {
+        Part::TvBackdrop => scene
+            .backdrop
+            .as_ref()
+            .map(|image| picture(document, "tv-backdrop", image))
+            .transpose(),
+        Part::TvGrid => controls.show_grid.then(|| grid(document)).transpose(),
+        Part::TvPlace => text_element(document, "div", "tv-place", &scene.place).map(Some),
+        Part::TvCard => scene
+            .card
+            .as_ref()
+            .map(|image| picture(document, "tv-card", image))
+            .transpose(),
+        Part::TvStatus => status_banner(document, &controls.status_for(&scene.status)),
+        Part::TvCaption => caption(document, scene, controls),
+        Part::TvParty => party(document, scene),
+        other => Err(JsValue::from_str(&format!(
+            "{} is not a piece of the shared screen",
+            other.key()
+        ))),
     }
-    world.set_attribute("data-camera", &serial)?;
-    world.set_attribute("data-moving", if style.moving { "1" } else { "0" })
+}
+
+/// Logs a failure to move the figures; a draw that cannot finish is shown in the console, not hidden.
+pub fn log_sync_failure(error: &JsValue) {
+    web_sys::console::error_1(&JsValue::from_str(&format!(
+        "could not move the figures: {}",
+        js_message(error)
+    )));
 }
