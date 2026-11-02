@@ -39,6 +39,8 @@ pub mod view;
 pub mod wire;
 
 #[cfg(test)]
+mod camera_tests;
+#[cfg(test)]
 mod client_tests;
 #[cfg(test)]
 mod command_tests;

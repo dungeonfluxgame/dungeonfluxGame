@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::controls::Device;
 use crate::fixture::{
-    Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide, UnavailableChoice,
+    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide, UnavailableChoice,
 };
 
 /// Most characters in a caption line.
@@ -31,6 +31,11 @@ pub const MAXIMUM_CUES_KEPT: usize = 16;
 pub const MAXIMUM_SLIDE_MS: u32 = 60_000;
 /// Largest rotation of a picture, in degrees (a full turn is 360, which is the same as 0).
 pub const MAXIMUM_ROTATION_DEGREES: u16 = 359;
+/// Longest a camera move may take, in milliseconds.
+pub const MAXIMUM_CAMERA_MS: u32 = 30_000;
+/// Least and most the camera may zoom in, in percent (100 is the whole stage).
+pub const MINIMUM_ZOOM_PERCENT: u16 = 100;
+pub const MAXIMUM_ZOOM_PERCENT: u16 = 400;
 /// Loudest volume, in percent.
 pub const MAXIMUM_VOLUME: u8 = 100;
 
@@ -128,6 +133,7 @@ pub struct SceneOverlay {
     pub card: Option<Override<ImageRef>>,
     pub phone_image: Option<Override<ImageRef>>,
     pub music: Option<Override<Track>>,
+    pub camera: Option<Camera>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
     #[serde(default)]
@@ -135,6 +141,9 @@ pub struct SceneOverlay {
     /// How many slides there have ever been; it only rises, like `cue_count`.
     #[serde(default)]
     pub slide_count: u64,
+    /// How many camera moves there have ever been; it only rises, like `slide_count`.
+    #[serde(default)]
+    pub camera_count: u64,
     /// The newest cues, oldest first.
     #[serde(default)]
     pub cues: Vec<Cue>,
@@ -207,6 +216,12 @@ pub enum SceneChange {
         target: Target,
         volume: u8,
     },
+    /// Moves the camera in on an element, or out to the whole stage when `target` is `None`.
+    Camera {
+        target: Option<String>,
+        zoom_percent: u16,
+        duration_ms: u32,
+    },
     /// Drops every change and returns to the fixture. Cues already made stay counted.
     Reset {},
 }
@@ -225,6 +240,8 @@ pub enum SceneError {
     BadRotation(u16),
     BadSlide,
     SlideNeedsTheCard,
+    BadZoom(u16),
+    BadCameraTime(u32),
 }
 
 impl fmt::Display for SceneError {
@@ -251,6 +268,14 @@ impl fmt::Display for SceneError {
             Self::SlideNeedsTheCard => {
                 formatter.write_str("only the card on the shared screen can slide")
             }
+            Self::BadZoom(percent) => write!(
+                formatter,
+                "a zoom is from {MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT} percent, not {percent}"
+            ),
+            Self::BadCameraTime(ms) => write!(
+                formatter,
+                "a camera move takes 0 to {MAXIMUM_CAMERA_MS} ms, not {ms}"
+            ),
             Self::BadRotation(degrees) => write!(
                 formatter,
                 "a rotation is from 0 to {MAXIMUM_ROTATION_DEGREES} degrees, not {degrees}"
@@ -497,6 +522,28 @@ impl SceneOverlay {
                     self.cues.remove(0);
                 }
             }
+            SceneChange::Camera {
+                target,
+                zoom_percent,
+                duration_ms,
+            } => {
+                if let Some(target) = &target {
+                    labelled("a camera target", target)?;
+                }
+                if !(MINIMUM_ZOOM_PERCENT..=MAXIMUM_ZOOM_PERCENT).contains(&zoom_percent) {
+                    return Err(SceneError::BadZoom(zoom_percent));
+                }
+                if duration_ms > MAXIMUM_CAMERA_MS {
+                    return Err(SceneError::BadCameraTime(duration_ms));
+                }
+                self.camera_count += 1;
+                self.camera = Some(Camera {
+                    target,
+                    zoom_percent,
+                    duration_ms,
+                    serial: self.camera_count,
+                });
+            }
             SceneChange::Reset {} => *self = self.cleared(),
         }
         Ok(())
@@ -516,6 +563,7 @@ impl SceneOverlay {
         Self {
             cue_count: self.cue_count,
             slide_count: self.slide_count,
+            camera_count: self.camera_count,
             ..Self::default()
         }
     }
@@ -525,6 +573,7 @@ impl SceneOverlay {
         Self {
             cue_count: 0,
             slide_count: 0,
+            camera_count: 0,
             cues: Vec::new(),
             ..self.clone()
         } == Self::default()
@@ -553,6 +602,9 @@ impl SceneOverlay {
             Some(Override::Set(track)) => fixture.music = Some(track.clone()),
             Some(Override::Clear) => fixture.music = None,
             None => {}
+        }
+        if let Some(camera) = &self.camera {
+            fixture.tv.camera = Some(camera.clone());
         }
         apply_image(&self.backdrop, &mut fixture.tv.backdrop);
         apply_image(&self.card, &mut fixture.tv.card);

@@ -1,0 +1,21 @@
+{
+  "name": "Camera: two avatars",
+  "description": "The stage shows the running canvas over the rainy quay. Run development/playground-scripts/camera-tour.txt (dev script) to spawn two avatars and zoom into each, back to back. The camera moves only the picture: the caption and the party strip stay put.",
+  "tv": {
+    "place": "Salt Quay, in the rain",
+    "status": { "kind": "ok" },
+    "caption": { "speaker": "Narrator", "text": "The camera looks at one face at a time." },
+    "backdrop": { "media": "quay-in-the-rain.webp" },
+    "party": [
+      { "name": "Finn", "hit_points": 9, "maximum_hit_points": 9, "color": "#d9a441" },
+      { "name": "Sigrun", "hit_points": 13, "maximum_hit_points": 13, "color": "#7da35b" }
+    ],
+    "elements": "live"
+  },
+  "phone": {
+    "hero": "Finn",
+    "status": { "kind": "ok" },
+    "narration": ["The phone is a fixture; the shared screen follows the canvas and the camera."],
+    "groups": [{ "name": "Look", "choices": [{ "label": "Look at Sigrun" }] }]
+  }
+}

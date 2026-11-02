@@ -13,7 +13,8 @@ use df_playground::copy::ReadingPace;
 use df_playground::fixture::Slide;
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
 use df_playground::scene::{
-    ImageSlot, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME, SceneChange, Target,
+    ImageSlot, MAXIMUM_CAMERA_MS, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME,
+    MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT, SceneChange, Target,
 };
 
 use crate::wire::{EffectRequest, ValueForm};
@@ -37,12 +38,14 @@ pub const MAXIMUM_CYCLES: u32 = 100;
 /// Rounds of a `cycle` and the pause between scenes when none are given.
 pub const DEFAULT_CYCLES: u32 = 2;
 pub const DEFAULT_HOLD_MS: u64 = 2_000;
-const SCENE_USAGE: &str = "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | image ... | music ... | sound ... | reset";
+const SCENE_USAGE: &str = "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | image ... | camera ... | music ... | sound ... | reset";
 const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
 const PARTY_USAGE: &str = "scene party add <name> hp=N [max=N] [color=#rrggbb] [conditions=a,b] | set <name> [hp=N] [max=N] [conditions=a,b] | remove <name> | clear";
 const IMAGE_USAGE: &str = "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] [rotate=0-359] | scene image-clear <slot>";
 const SLIDE_USAGE: &str =
     "scene slide tv-card <name> [from=15] [to=85] [over=5000] [caption=TEXT] [rotate=0-359]";
+const CAMERA_USAGE: &str =
+    "scene camera <element> [zoom=200] [over=1200] | scene camera-reset [over=1200]";
 const MUSIC_USAGE: &str =
     "scene music <name> [on=both|tv|phone] [volume=0-100] [loop=true|false] | scene music-stop";
 const SOUND_USAGE: &str = "scene sound <name> [on=both|tv|phone] [volume=0-100]";
@@ -190,6 +193,7 @@ pub fn usage_text() -> String {
          \n  {SCENE_USAGE}\n      change the playground's caption, party strip or phone choices live;\n      {PARTY_USAGE}\n      {CHOICES_USAGE}\n      a fixture is not changed; scene reset or another fixture goes back to the file\n\
          \n  {IMAGE_USAGE}\n      put a picture from the media library on the shared screen (tv-backdrop behind the\n      figures, tv-card in the middle) or at the top of a phone's story\n\
          \n  {SLIDE_USAGE}\n      slide the card across the shared screen (defaults: from 15 to 85 percent of its width, over\n      5 seconds); a redraw part-way carries on from where it was\n\
+         \n  {CAMERA_USAGE}\n      move the shared screen's camera in on an element and keep it in the middle (zoom is\n      100 to 400 percent, over is 0 to 30000 ms; defaults 200 and 1200), or back out to the whole\n      stage; the caption, card and party strip stay put\n\
          \n  {MUSIC_USAGE}\n      play music until it is stopped or replaced\n\
          \n  {SOUND_USAGE}\n      play a sound once\n\
          \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove pictures and sounds\n\
@@ -637,6 +641,52 @@ fn slide(words: &[String]) -> Result<Command, CommandError> {
     }))
 }
 
+/// Zoom of a camera move and how long it takes when none are given.
+pub const DEFAULT_ZOOM_PERCENT: u16 = 200;
+pub const DEFAULT_CAMERA_MS: u32 = 1_200;
+
+fn camera(words: &[String], looking_at: Option<&String>) -> Result<Command, CommandError> {
+    let mut zoom_percent = if looking_at.is_some() {
+        DEFAULT_ZOOM_PERCENT
+    } else {
+        MINIMUM_ZOOM_PERCENT
+    };
+    let mut duration_ms = DEFAULT_CAMERA_MS;
+    let (keys, allowed) = if looking_at.is_some() {
+        (&["zoom", "over"][..], "zoom=N, over=MS")
+    } else {
+        (&["over"][..], "over=MS")
+    };
+    for (key, value) in keyed(words, allowed, keys)? {
+        if key == "zoom" {
+            zoom_percent = value
+                .parse::<u16>()
+                .ok()
+                .filter(|percent| (MINIMUM_ZOOM_PERCENT..=MAXIMUM_ZOOM_PERCENT).contains(percent))
+                .ok_or_else(|| CommandError::BadChoice {
+                    key: key.to_owned(),
+                    text: value.to_owned(),
+                    allowed: "a whole number of percent from 100 to 400 (200 is twice as large)",
+                })?;
+        } else {
+            duration_ms = value
+                .parse::<u32>()
+                .ok()
+                .filter(|ms| *ms <= MAXIMUM_CAMERA_MS)
+                .ok_or_else(|| CommandError::BadChoice {
+                    key: key.to_owned(),
+                    text: value.to_owned(),
+                    allowed: "a whole number of milliseconds from 0 to 30000",
+                })?;
+        }
+    }
+    Ok(Command::Scene(SceneChange::Camera {
+        target: looking_at.cloned(),
+        zoom_percent,
+        duration_ms,
+    }))
+}
+
 fn music(words: &[String]) -> Result<Command, CommandError> {
     let [media, rest @ ..] = words else {
         return Err(CommandError::Usage(MUSIC_USAGE));
@@ -703,6 +753,11 @@ fn scene(words: &[String]) -> Result<Command, CommandError> {
         Some((verb, rest)) if verb == "choices" => choices(rest),
         Some((verb, rest)) if verb == "image" => image(rest),
         Some((verb, rest)) if verb == "slide" => slide(rest),
+        Some((verb, rest)) if verb == "camera" => match rest.split_first() {
+            Some((target, rest)) => camera(rest, Some(target)),
+            None => Err(CommandError::Usage(CAMERA_USAGE)),
+        },
+        Some((verb, rest)) if verb == "camera-reset" => camera(rest, None),
         Some((verb, rest)) if verb == "image-clear" => match rest {
             [slot] => ImageSlot::from_key(slot)
                 .map(|slot| Command::Scene(SceneChange::ClearImage { slot }))

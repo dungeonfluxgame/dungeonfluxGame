@@ -5,7 +5,8 @@ use web_sys::{Document, Element};
 
 use std::cell::RefCell;
 
-use crate::fixture::{ImageRef, Slide};
+use crate::camera::{Framing, progress};
+use crate::fixture::{Camera, ImageRef, Slide};
 use crate::media::{MediaKind, media_kind};
 
 pub fn document() -> Result<Document, JsValue> {
@@ -97,6 +98,94 @@ fn slide_style(slide: &Slide) -> String {
         from = slide.from_percent,
         duration = slide.duration_ms,
     )
+}
+
+/// The camera move this page is part-way through, so a redraw carries on from where the picture
+/// was instead of jumping, and a new move starts from where the last one had got to.
+struct CameraRun {
+    serial: u64,
+    began: f64,
+    duration_ms: u32,
+    from: Framing,
+    to: Framing,
+}
+
+thread_local! {
+    static CAMERA: RefCell<Option<CameraRun>> = const { RefCell::new(None) };
+}
+
+/// Forgets the camera, so the next scene starts on the whole stage.
+pub fn forget_camera() {
+    CAMERA.with(|run| *run.borrow_mut() = None);
+}
+
+/// The style that frames the world layer, and what a later frame of the same move needs to know.
+pub struct CameraStyle {
+    /// The whole inline style.
+    pub full: String,
+    /// The transform the move ends on.
+    pub transform: String,
+    /// Whether the move is still under way.
+    pub moving: bool,
+    /// Which move this is.
+    pub serial: u64,
+}
+
+/// The style for a camera looking for `to`. A move that is already under way keeps its start and
+/// its clock; a new one starts from where the last had got to. Numbers only.
+pub fn camera_style(camera: Option<&Camera>, to: Framing) -> CameraStyle {
+    let settled = |to: Framing, serial: u64| CameraStyle {
+        full: format!(
+            "transform: {}; transition: transform 90ms linear;",
+            to.transform()
+        ),
+        transform: to.transform(),
+        moving: false,
+        serial,
+    };
+    let Some(camera) = camera else {
+        forget_camera();
+        return settled(Framing::WHOLE_STAGE, 0);
+    };
+    let now = js_sys::Date::now();
+    let (from, began) = CAMERA.with(|run| {
+        let mut run = run.borrow_mut();
+        match run.as_mut() {
+            Some(known) if known.serial == camera.serial => {
+                known.to = to;
+                (known.from, known.began)
+            }
+            previous => {
+                let from = previous.map_or(Framing::WHOLE_STAGE, |known| {
+                    let done = progress(now - known.began, known.duration_ms);
+                    known.from.blend(&known.to, done)
+                });
+                *run = Some(CameraRun {
+                    serial: camera.serial,
+                    began: now,
+                    duration_ms: camera.duration_ms,
+                    from,
+                    to,
+                });
+                (from, now)
+            }
+        }
+    });
+    let elapsed = now - began;
+    if progress(elapsed, camera.duration_ms) >= 1.0 {
+        return settled(to, camera.serial);
+    }
+    CameraStyle {
+        full: format!(
+            "transform: {to_transform}; --cam-from: {}; --cam-to: {to_transform}; animation: camera-move {}ms linear forwards; animation-delay: -{elapsed:.0}ms;",
+            from.transform(),
+            camera.duration_ms,
+            to_transform = to.transform(),
+        ),
+        transform: to.transform(),
+        moving: true,
+        serial: camera.serial,
+    }
 }
 
 /// A picture from the media library, with its caption under it, in an element of class `class`.

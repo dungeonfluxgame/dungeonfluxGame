@@ -1,0 +1,14 @@
+# Two avatars on the canvas, and the shared screen's camera zooming into each, back to back.
+# Needs the playground host running (df-table serve) and the avatar kind (assets/canvas/kinds).
+playground go camera_demo
+scene reset
+clear
+spawn avatar finn x=30 y=30 name=Finn color=#d9a441 portrait=finn-alder.webp
+spawn avatar sigrun x=70 y=26 name=Sigrun color=#7da35b portrait=sigrun.webp
+wait 1500
+scene camera finn zoom=250 over=1500
+wait 3000
+scene camera sigrun zoom=250 over=1500
+wait 3000
+scene camera-reset over=1500
+wait 2000

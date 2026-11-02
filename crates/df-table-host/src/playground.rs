@@ -20,7 +20,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use df_playground::controls::{Controls, ControlsChange};
-use df_playground::fixture::Fixture;
+use df_playground::fixture::{ElementSource, Fixture};
 use df_playground::media::{ClientReport, ClientReportPost};
 use df_playground::scene::{SceneChange, SceneOverlay};
 use df_table::event::RejectionCause;
@@ -598,6 +598,22 @@ async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
         state.echo_new_lines();
         return refused(StatusCode::BAD_REQUEST, message);
     }
+    let stage_ids: Vec<String> = match &base.tv.elements {
+        ElementSource::Inline(items) => items.iter().map(|item| item.id.clone()).collect(),
+        ElementSource::Live(_) => state
+            .canvas()
+            .elements()
+            .map(|element| element.id.to_string())
+            .collect(),
+    };
+    if let Some(message) = camera_problem(&change, &stage_ids) {
+        state.record_line(playground_line(
+            "reject",
+            &[("cause", RejectionCause::InvalidValue.key().to_owned())],
+        ));
+        state.echo_new_lines();
+        return refused(StatusCode::BAD_REQUEST, message);
+    }
     let verb = scene_change_name(&change);
     let response = match state.playground().change_scene(change, &base) {
         Ok(reply) => {
@@ -617,6 +633,29 @@ async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
     };
     state.echo_new_lines();
     response
+}
+
+/// Why a camera move cannot be made with the elements on the stage, or `None` when it can: the
+/// camera looks at an element that is there, and the message names the ones that are.
+pub fn camera_problem(change: &SceneChange, stage_ids: &[String]) -> Option<String> {
+    let SceneChange::Camera {
+        target: Some(target),
+        ..
+    } = change
+    else {
+        return None;
+    };
+    if stage_ids.contains(target) {
+        return None;
+    }
+    Some(if stage_ids.is_empty() {
+        format!("there is no element '{target}' on the stage: the stage is empty")
+    } else {
+        format!(
+            "there is no element '{target}' on the stage; the elements are: {}",
+            stage_ids.join(", ")
+        )
+    })
 }
 
 /// The name of a scene change, for the log.

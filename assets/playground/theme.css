@@ -178,3 +178,12 @@ body {
 /* A card that slides across the shared screen; its start and end come from custom properties */
 @keyframes card-slide { from { left: var(--slide-from); } to { left: var(--slide-to); } }
 @media (prefers-reduced-motion: reduce) { .tv-card { animation: none !important; } }
+
+/* The camera: it moves the backdrop, grid and figures together; the card, caption, status and party
+   stay on the screen. A move runs from --cam-from to --cam-to at an even pace. */
+.tv-world { position: absolute; inset: 0; transform-origin: 0 0; }
+@keyframes camera-move { from { transform: var(--cam-from); } to { transform: var(--cam-to); } }
+@media (prefers-reduced-motion: reduce) { .tv-world { animation: none !important; transition: none !important; } }
+
+/* A figure with a portrait shows the picture in its outline */
+.figure-portrait { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }

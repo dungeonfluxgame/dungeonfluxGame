@@ -237,6 +237,7 @@ async fn load_selected_fixture() {
         let transition = app.controls.transition;
         if scene_changed {
             crate::dom::forget_slides();
+            crate::dom::forget_camera();
         }
         if scene_changed && transition.style != TransitionStyle::Cut && transition.duration_ms > 0 {
             app.pending_transition = Some(transition);
@@ -270,7 +271,21 @@ fn render_stage() {
             return Ok(());
         };
         with_app(|app| match &app.live {
-            Some(live) => view_tv::sync_figures(&document, &layer, &live.elements),
+            Some(live) => {
+                view_tv::sync_figures(&document, &layer, &live.elements)?;
+                // A camera that follows a travelling element is framed again with each frame.
+                let world = document
+                    .query_selector(&format!(".{}", view_tv::WORLD_CLASS))?
+                    .filter(|_| app.fixture.is_some());
+                let camera = match &app.fixture {
+                    Some(Ok(fixture)) => fixture.tv.camera.as_ref(),
+                    _ => None,
+                };
+                match world {
+                    Some(world) => view_tv::sync_camera(&world, camera, &live.elements),
+                    None => Ok(()),
+                }
+            }
             None => Ok(()),
         })
     });

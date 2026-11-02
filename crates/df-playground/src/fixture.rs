@@ -46,6 +46,20 @@ pub struct StageElement {
     pub shape: ElementShape,
     pub width_units: f32,
     pub height_units: f32,
+    /// The element's fields, as the host serves them. A `portrait` field naming a picture in the
+    /// media library draws that picture in the figure.
+    #[serde(default)]
+    pub fields: serde_json::Map<String, serde_json::Value>,
+}
+
+impl StageElement {
+    /// The media file of the element's portrait, when it has one.
+    pub fn portrait(&self) -> Option<&str> {
+        self.fields
+            .get("portrait")
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| !name.is_empty())
+    }
 }
 
 /// What the table is waiting for or showing. Each value has fixed plain-language copy (`copy`).
@@ -97,6 +111,26 @@ pub struct Slide {
     pub serial: u64,
 }
 
+/// Where the shared screen's camera looks: in on one element, or out to the whole stage.
+///
+/// The camera moves from wherever it was to this framing in `duration_ms`, at an even pace. Only
+/// the picture moves: the caption, the party strip and the status stay where they are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Camera {
+    /// The element to keep in the middle of the screen, or `None` for the whole stage.
+    pub target: Option<String>,
+    /// How far in, in percent: 100 shows the whole stage, 200 shows it twice as large.
+    pub zoom_percent: u16,
+    /// How long the move takes, in milliseconds. Zero cuts straight to the framing.
+    pub duration_ms: u32,
+    /// Counts the camera moves of a session, so a page can tell a new move from one it has
+    /// already begun and carry on from where it was after a redraw. The host sets it; leave it out
+    /// of a scene file.
+    #[serde(default)]
+    pub serial: u64,
+}
+
 /// A picture from the media library, by file name, with an optional line under it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -121,6 +155,9 @@ pub struct TvScene {
     pub backdrop: Option<ImageRef>,
     /// A picture shown in the middle of the screen, such as a handout or a portrait.
     pub card: Option<ImageRef>,
+    /// Where the camera looks; without one the whole stage shows.
+    #[serde(default)]
+    pub camera: Option<Camera>,
     #[serde(default)]
     pub party: Vec<PartyMember>,
     pub elements: ElementSource,

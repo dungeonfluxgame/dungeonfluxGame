@@ -1,0 +1,14 @@
+{
+  "name": "avatar",
+  "description": "A person drawn as a portrait on the shared screen, large enough for the camera to focus on.",
+  "shape": "circle",
+  "width": 10,
+  "height": 10,
+  "label_field": "name",
+  "color_field": "color",
+  "fields": [
+    { "name": "name", "type": "text", "maximum_length": 24, "required": true },
+    { "name": "color", "type": "color", "default": "#d9a441" },
+    { "name": "portrait", "type": "text", "maximum_length": 80 }
+  ]
+}

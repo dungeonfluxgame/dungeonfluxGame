@@ -17,4 +17,4 @@ wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
 js-sys = "=0.3.106"
 gloo-timers = { version = "0.3", features = ["futures"] }
-web-sys = { workspace = true, features = ["Window", "Location", "Document", "Element", "HtmlElement", "HtmlSelectElement", "Node", "NodeList", "HtmlCollection", "HtmlAudioElement", "HtmlMediaElement", "HtmlImageElement", "Navigator", "UserActivation", "Event", "EventTarget", "Response", "RequestInit", "Headers", "console"] }
+web-sys = { workspace = true, features = ["Window", "Location", "Document", "Element", "HtmlElement", "CssStyleDeclaration","HtmlSelectElement", "Node", "NodeList", "HtmlCollection", "HtmlAudioElement", "HtmlMediaElement", "HtmlImageElement", "Navigator", "UserActivation", "Event", "EventTarget", "Response", "RequestInit", "Headers", "console"] }
