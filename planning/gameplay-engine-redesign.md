@@ -963,6 +963,18 @@ questions 56 onward are new.
     toggleable minimap of the rules diagram count as that grid? Draft default: it is allowed on
     phones and off the TV until the owner decides.
 
+87. **The new crate edge and the host crate (O.2, O.8).** Approve `df-table` as a new pure crate
+    (depending on `df-types` and `df-model`) and `df-table-host` as its async host, with the new
+    edges recorded in `subsystem-architecture.md`. Draft default: yes.
+88. **The port set (O.4).** Are the eight ports (rules owner, interpreter, narrator, broker, clock,
+    dice, knowledge view, event sink) the right minimum for C0? Draft default: yes; split a port if
+    it proves too coarse, never remove one.
+89. **A stable event contract (O.6).** Which fields of a class A event may never change once
+    operators read them? Draft default: table, scene, machine, operation id, `turn_seq`, cause and
+    `ms`, additive changes only.
+90. **The first machines (O.9, C2).** Which two machines prove the `Machine` trait? Draft default:
+    lobby and a minimal explore.
+
 ## Ideas to come
 
 Add further ideas below as they are shared, in the owner's words with a restatement.
@@ -2336,6 +2348,15 @@ critic and a round 3 fact-check that corrected the first version of this section
 Claims the fact-check did not reach are marked unverified, and no effort or time is estimated here:
 slice 0 produces the numbers.
 
+**Update after the removal (branch `gameplay-engine-v2`, commit `14a2f715`).** The old gameplay
+code described in this section was deleted from the working tree on 2026-11-02, so section L
+records the implementation as it stood at commit `2b5bc721`, for reference. The things L.4 lists as
+staying inside `df-tools` (the `Hub`, the cost book, the timing ledger, the plate director, the
+stage conductor, the dice draw point, the table settings store) went with it and are reread from
+history and rebuilt on purpose; the library crates (`df-rules`, `df-model`, `df-session`,
+`df-persistence`, `df-imagery` and the rest) stay. The strangler order of L.6 is void and section
+O.9 replaces it.
+
 **L.1 The shape of what exists.**
 
 - `df-tools` is 506 Rust files and about 474k lines: the native game server `gameplay/` (about 368k
@@ -2419,7 +2440,7 @@ keep, view-time commits and file writes, the 5-second recompute and deep memo eq
 owner-thread model wait, the single-slot intent lookup, hand-registered CLI routes for machines, and
 the free-text audit lines at each migrated site.
 
-**L.6 Delivery order (corrected).** Each slice leaves a playable game. Free runs use
+**L.6 Delivery order (corrected; void since the removal, see O.9).** Each slice leaves a playable game. Free runs use
 `DF_FAKE_PROVIDERS=on`, but that profile switches off the storyteller, imagery, plates, Jev, memory,
 voice and music and forces the fixed harbour adventure (`fake_profile.rs`). Free runs therefore cover
 slices 0, 1, 4 and 6 and the non-model parts of 3. Slices 2, 5 and the three-bad-lines acceptance of
@@ -2753,7 +2774,230 @@ Facts I could not find in the code and that this document uses as names only: `A
 | K11 to K35 | M.3 and I.2 |
 | F1 to F28 | section L rewritten; F7 in RES30 and L.6 slice 1; F9 in L.6 slice 0b; F5 in L.2 and RES26 |
 
-### N. Round log
+### O. The `df-table` crate plan
+
+This is the plan for the first crate of the from-scratch engine, written after the old gameplay code
+was removed from `df-tools` on branch `gameplay-engine-v2` (commit `14a2f715`). It turns the design
+above into modules, types, seams and tests. Its two drivers, from the owner, are **flexibility**
+(a refinement or a new machine, action, setting or resource should be a data entry or one module,
+and the compiler or the conformance suite should say what was forgotten) and **observability**
+(every decision is a typed event that explains itself, nothing private can reach a log by accident,
+and every piece of state can be inspected). Nothing here is built yet.
+
+**O.1 State of the branch, and what the removal changes in this document.**
+
+- The old server (`df-tools/src/gameplay`), the old wasm client, the `dev` CLI, the old client
+  modules and the fake profile are gone from the tree. `df-tools` is the S00 transport fixture
+  only. Git history keeps the old code, and the plan reads it as reference, not as a base.
+- Section L describes the old implementation as of commit `2b5bc721`. Its "what stays" (L.4) now
+  means "what to read from history": the `Hub` (`resources.rs`), the cost book, the timing ledger,
+  the plate director (`plates.rs`), the stage conductor, the dice draw point and the table
+  settings store were all inside the deleted tree, so each is rebuilt on purpose, informed by the
+  old code and the corrected facts of L.2, and none is an inherited dependency. The strangler
+  delivery order of L.6 no longer applies; O.9 replaces it.
+- The libraries remain: `df-model`, `df-rules`, `df-session`, `df-persistence`, `df-imagery`,
+  `df-ai`, `df-media`, `df-knowledge`, `df-interaction`, `df-narrative`, `df-encounter`,
+  `df-combat`, `df-world`, `df-engine`, `df-api`, `df-protocol`, `df-observe`, `df-player`,
+  `df-display`, `df-web`, `df-ui`, `df-render` and the rest, in the sizes measured on
+  2026-11-02 (for example `df-engine` 7.2k lines, `df-session` 4.8k, `df-api` 0.8k, `df-web` 1.4k).
+  They are skeletons more often than products, and the plan treats each as an owner to extend.
+
+**O.2 Where the crate sits.**
+
+- **Name and kind.** `df-table`, a native-only, pure, synchronous library. It does no I/O, spawns
+  nothing, reads no clock and draws no dice. A table is the shared state of one running game (D5), and
+  the crate holds the rules of routing input through it.
+- **Why a new crate and not `df-engine`.** `df-engine` stages candidate checkpoints from directors
+  and rules (`decide`, `apply`, `read_model`) and is consumed by `df-session`. The table layer is a
+  new subsystem boundary (machines, the DM pipeline, the owner queue, projection and declines), and
+  keeping it apart lets it be built and tested without touching the staging code. The cost is a new
+  edge in `subsystem-architecture.md`, which the owner approves in question 87.
+- **Dependencies it may have.** `df-types` (ids, `SessionRevision`), `df-model` (the checkpoint,
+  `PendingResolution`, `KnowledgeGrant`, `IntentDisposition`), and `df-observe` types only if the
+  event sink needs them. It does **not** depend on `df-protocol` (wire types are mapped at the
+  boundary), on `df-persistence`, on any provider crate, or on a browser crate. `df-rules` and the
+  other owners reach it through ports (O.4), not imports, so the crate can be tested with fakes and
+  the owners can change independently.
+- **What depends on it.** A native async host crate (O.8) that runs the owner actor, and `df-api`
+  for projection types. The browser crates never depend on it.
+- **An architecture test** in the crate reads `Cargo.toml` and the `use` lines and fails on a
+  forbidden dependency, a `println!`, a wall-clock read (`Instant::now`, `SystemTime::now`), a
+  `tokio::spawn`, a `std::fs` call or an unbounded channel.
+
+**O.3 Module map.** One responsibility per module, files aimed under 800 lines of non-test code,
+tests in `<module>_tests.rs`, and each module has a `//!` doc that says what it owns, what it never
+does and how it fails.
+
+| Module | Owns | Implements |
+|---|---|---|
+| `outcome` | `Outcome` (applied, needs clarification, declined, pending), `Decline`, `DeclineCode`, `PendingKind`, the mapping from a decline to a public class | RES16, RES26, C.6, RES40 |
+| `envelope` | `InputEnvelope`, `InputKind` (tap, submit text, say, private message, safety card, engine proposal, timer, resource result, pending answer), seat and utterance ids, `ViewStamp` | C.1, RES21 |
+| `owner_queue` | the three capped lanes, per-seat round-robin, per-seat bounds, a token bucket, duplicate detection, the serve order and `turn_seq` | RES22, H.2, C.1 |
+| `machine` | `MachineId`, `Scope`, `MachineSpec`, `StepResult`, `HandOff`, the `Machine` trait | RES27, RES28, RES20 |
+| `registry` | registration, startup validation (unique ids, known hand-off targets, scope rules, required capabilities), enable flags | D24, RES28, Q46 |
+| `pipeline` | the seven stages as pure functions over ports; the four outcomes; the failure fallbacks | C, RES15, C.7 |
+| `pending` | pending resolutions held in table state, two-phase apply, windows, answers | RES26, C.4, D5 to D7 of M.2 |
+| `effects` | `TableEffect` (a versioned closed enum), the applier over table state, the `carry` list | RES18, RES32, RES3 |
+| `table_state` | the composition view of the owners' state (checkpoint, world time, scenes, seats, cast), `scenes[]`, `scene_epoch` | D.1 to D.7, RES25 |
+| `projection` | audience projections, `ProjectionStatus`, the never-empty types, the structured readout, public-versus-private filtering | RES30, H.15, K.5 |
+| `ports` | the seams: rules owner, interpreter, narrator, broker, clock, dice, knowledge view, event sink | O.4 |
+| `event` | `TableEvent`, event classes, the private-data types, the audit-line rendering | O.6 |
+| `inspect` | `Inspect` reports and the verb set behind the CLI | H.16, O.6 |
+| `config` | typed settings with defaults, ranges and owners | RES50, J.4 |
+| `testkit` (feature) | `ManualClock`, `ScriptedBroker`, `RecordingSink`, scripted interpreter and rules owner, the golden-session runner, the conformance suite | H.17 |
+
+**O.4 The seams.** Every outward dependency is a port owned by this crate and has two real
+implementations, a production adapter and a scripted fake (which satisfies the style rule on
+traits). The pipeline and the machines see only the ports.
+
+| Port | Question it answers | Production adapter (outside the crate) | Fake in `testkit` |
+|---|---|---|---|
+| `RulesOwner` | legal choices for an actor, `prepare` and `resolve` with explicit draws, spatial query, rest and time costs | an adapter over `df-rules`, `df-world`, `df-combat` | scripted table of answers |
+| `Interpreter` | free text to an `IntentDisposition` and an `ActionPlan` (closed schema) | a Jev call behind the broker | scripted lines |
+| `Narrator` | a committed outcome to a speech envelope (qualified) | the storyteller behind the broker | scripted, and a failing one |
+| `Broker` | request a resource, learn its readiness, never wait | the rebuilt `Hub` | scripted readiness and failures |
+| `Clock` | monotonic now, in milliseconds | system clock | `ManualClock` |
+| `Dice` | the explicit draws for a decision | `df-session` supplies them | queued draws |
+| `KnowledgeView` | what an audience may know | `df-knowledge` | fixed sets with sentinel secrets |
+| `EventSink` | record a `TableEvent` | the audit line plus OTEL sink in the host | `RecordingSink` |
+
+**O.5 Flexibility: how each kind of change is made.** The rule is closed inside, open across
+(`Principles`, D24): a closed enum inside one machine so the compiler proves every case, and a
+registry across machines so adding one edits nothing else.
+
+| To add or change | You edit | What tells you what you forgot |
+|---|---|---|
+| a machine | one module implementing `Machine` and one `registry` line | startup validation and the conformance suite: hand-off targets, a projection that is never empty, events for every transition and failure, an inspect report, a saved-state schema, an entry and an exit that return the table intact |
+| an action the player can take | one entry in the action registry, keyed to a rules entry id, with its requirements and decline text | the registry test: every action has a rules id, a label key and a decline path; an action without rules is `not_supported_yet` automatically |
+| a decline code | one `DeclineCode` variant | an exhaustive `match` in the public-class mapping, the key list and the reason-text table, so it cannot compile half-added |
+| a table effect | a new versioned `TableEffect` variant and its applier arm | the applier is an exhaustive match, and a golden session fails until the new effect has a fixture; effects are added and never changed (Q44) |
+| a setting | one `SettingSpec` (name, owner, default, range, unit, cost effect) | load-time validation falls back to the default and records an event; the settings table in J.4 is generated from the specs so it cannot drift |
+| a resource kind or purpose | one `PurposeSpec` (deadline, size rule, retry policy, priority class, price) | the broker conformance test: every purpose has a deadline, a class and a fallback |
+| a new owner (a better rules engine, a different narrator) | a new adapter for the port | the same contract tests run against the adapter and the fake |
+| per-table behaviour | a `MachineFlags` entry and the settings | the registry reports which machines are enabled and why |
+| saved state | a schema version bump plus one migration step | refusal to load an unmigratable record with `load.refused`, never a silent best effort |
+
+Flexibility rules that the tests enforce: no machine imports another machine; shared facts go
+through `TableEffect`s; a machine never reads the clock, dice or the network; a feature that is
+half built declines `not_supported_yet` rather than failing; and every tunable number is a named
+setting with its default stated once.
+
+**O.6 Observability: how the crate explains itself.**
+
+- **Typed events, one shape.** `TableEvent` is a closed enum, and each variant carries only typed
+  fields: ids, enums, counts, millisecond durations and hashes. A `TableEvent` has a class
+  (A: always on and never sampled; B: verbose detail), the table and scene, the machine and state, the
+  `OperationId`, the `turn_seq`, the `SessionRevision`, a `cause` for a failure and `ms` timings.
+  Adding an event is adding a variant, and the exhaustive rendering functions force its audit-line
+  form and its OTEL attributes at compile time.
+- **Two renderings from one record.** Each event renders as one `AREA verb key=value` line (the
+  coding-style form) and as OTEL span or log attributes through the host's sink, from the same
+  record id, so the two never disagree. The amendment of the coding-style document that RES41
+  asks for is a prerequisite for the first host slice.
+- **Privacy by type.** Player text, narration text, secrets and prompts have their own types
+  (`PlayerText`, `Narration`, `Secret<T>`) that do not implement `Display`, whose `Debug` prints
+  only a length class, and that cannot be put into a `TableEvent` field. Events hold an opaque scoped
+  evidence reference instead (RES36). A test tries to format each such type into an event and fails
+  if it compiles.
+- **Every stage is measured.** Each pipeline stage emits `step.finished{step, machine, ms}` and its
+  outcome, and a stage that fails emits a failure once, at the boundary that handles it, with a
+  closed cause. Progress checkpoints (`input.received`, `turn.applied`, `projection.delivered`,
+  `client.presented`) are events too, so the watchdog and the preflight (H.18) read the same record.
+- **Correlation by construction.** The `OperationId`, `turn_seq` and `SessionRevision` travel in a
+  `Correlation` value that every port call receives, so a broker request, a narration job and a
+  projection can be joined back to the input that caused them (H.10).
+- **Inspect reports.** Every module with state implements `Inspect`, returning a typed report with
+  an audience (operator, host, seat), so hidden content is redacted by the report itself and not by
+  the caller. The reports are the data behind the nine CLI verbs (RES33): `list`, `show`, `history`,
+  `config`, `dump`, `force`, `input`, `viable`, `describe`. The host serves them; the crate defines
+  them, so a machine without a report fails the conformance suite.
+- **Replay and golden sessions.** A `TurnRecord` (input, draws, outcome, effects, state hash) is
+  produced for every committed input. The golden-session runner replays a script of inputs against
+  scripted ports and compares records and state hashes, which is how the section G traces and the M.2
+  register become tests. Replay is a diagnostic and test tool, not the recovery path (RES19).
+- **Metrics.** Counters and histograms are declared in one table (`step.ms`, queue depth and oldest
+  age per lane, declines by code, window answer latency, ruling wait, plate lateness) and exposed
+  through the `EventSink`, so the first playable slice can measure what H.5 only proposes.
+
+**O.7 Typing and invariants worth stating up front.**
+
+- `Outcome` has exactly four shapes, and `Pending` carries a `PendingKind` of choice, roll, reaction or
+  ruling. `Decline` carries a code, a reason, the missing piece if any, and alternatives, and a
+  decline can only be built with a reason (the constructor requires non-empty text).
+- `NonEmptyText` is the only type a projection's narration slot accepts, and
+  `Narration::or_readout(model, readout)` returns the readout when the model text is blank, so the
+  never-empty rule of H.15 is unrepresentable to break.
+- Counts that grow with play are bounded and name their eviction order: remembered operation ids
+  (`MAXIMUM_REMEMBERED_OPERATIONS`), seats, lane lengths, hand-off stack depth (3), scenes. An unbounded
+  collection is a review failure (`coding-style.md` §7).
+- Time is an input everywhere (`now_ms` or a `Clock`), and nothing in the crate calls the system
+  clock. Durations are named in `_ms` or `_s`.
+- Every `unwrap`, `expect` and index on runtime data is absent from production paths. Errors are one typed
+  enum per module with variants a caller can branch on.
+
+**O.8 What lives outside the crate.**
+
+- **The async host** (a new crate, `df-table-host`, question 87): the owner actor that drives
+  `owner_queue` and `pipeline`, the broker (the rebuilt `Hub` with text and image kinds, queue
+  classes, leases and epochs), the plate scheduler and playout buffer, durable intents through
+  `df-session`, the dev-control server that exposes the Inspect verbs, and the event sink adapter to
+  `df-observe`. It owns every `.await`; `df-table` owns none.
+- **Wire and projection types:** `df-api` and `df-protocol` get `MachineView` and `MachineIntent`
+  under the field ledger (RES33, RES40), mapped from `df-table` projections at the boundary.
+- **Client:** `df-web`, `df-player`, `df-display`, `df-ui` render `MachineView`; they never import
+  `df-table`.
+- **Composition:** `df-server` wires the host, the stores and the providers. A local game start is
+  a `df-server` mode, and the old launch scripts under `development/` are replaced when it exists.
+
+**O.9 Build order for the crate, then the host.** Each step is small enough to review, ends with
+tests that fail before and pass after, and is accepted under RES44 when it reaches a user-visible
+surface. The old L.6 slices are void because the old code is gone.
+
+1. **C0 Foundations.** `outcome` (with the exhaustive decline mapping), `event` (variants, classes,
+   the private types, audit-line rendering), `ports` (traits only, with the `testkit` fakes),
+   `config` (the setting specs), and the architecture test. Acceptance: the privacy-by-type test,
+   the exhaustive-mapping test, and an event round-trip test.
+2. **C1 Owner queue.** `envelope` and `owner_queue`: lanes, round-robin, bounds, token bucket,
+   duplicates, serve order. Acceptance: property tests for fairness (no seat starves another), bounds
+   (nothing exceeds a cap), duplicates (one operation id runs once) and determinism (same inputs,
+   same serve order).
+3. **C2 Machines and registry.** `machine`, `registry`, `effects` skeleton and the conformance suite
+   with two real machines (lobby and a minimal explore) so the trait has two implementations.
+   Acceptance: a deliberately broken machine fails each conformance check.
+4. **C3 Pipeline.** The seven stages over scripted ports, four outcomes, the model-failure fallbacks,
+   the structured readout, clarification and confirmation, engine inputs. Acceptance: the section G
+   traces 1, 2 and 4 as golden sessions, plus the three known-bad lines.
+5. **C4 Pending and windows.** `pending` with two-phase apply, held turns, answers by pending id,
+   rulings with keyed reuse. Acceptance: the M.2 register rows D4 to D7 as fixtures, and a restart
+   test that replays a committed pending without re-drawing.
+6. **C5 Projection.** Audience projections, status, never-empty, sentinel-secret and paired-state
+   tests. Acceptance: a seat never sees another seat's private fact in any projection.
+7. **C6 Table state and scenes.** `table_state`, scene epochs, seats and presence, the hand-off stack.
+   Acceptance: the split-party decline, the stale-result rejection, and idle and pause rules.
+8. **C7 Inspect and replay.** Reports for every module, the verb set, `TurnRecord` and the replay
+   runner. Acceptance: every machine and port has a report, and a recorded session replays to the same
+   state hash.
+9. **Host H0 to H3** (outside this crate): the owner actor with the queue and pipeline over real
+   adapters; the broker; the event sink and CLI; the first playable path (lobby, one story scene, one
+   conversation). Then the wire, the client, and the remaining machines (travel, shop, rest, combat,
+   advancement) in the order the owner chooses.
+
+**O.10 Risks the plan accepts, and what would change it.**
+
+- A pure crate with ports may feel heavy for the first slice. The cost is paid back by testing every
+  machine against scripted ports with no provider, no browser and no database, which the old
+  engine could not do. If the ports turn out too coarse, they are split, not removed.
+- `df-rules` does not yet offer legal choices, spells or most exploration. The `RulesOwner` fake lets
+  the crate be built and tested first, and the adapter declines `not_supported_yet` for what is
+  missing (RES31).
+- The host is where timing and the owner thread live, so the riskiest assumption of L.7 (projection
+  and commit within one owner thread) is tested in the host steps and not in this crate. The crate's
+  contribution is that projection and the stages are cheap, bounded and synchronous.
+
+**O.11 Questions for the owner.** 87 (new crate edge and host crate), 88 (which port set is the
+minimum for C0), 89 (event class A fields that must never change), 90 (first machines for C2).
+
+### P. Round log
 
 - **Round 1.** 91 findings merged, 19 contradictions settled (RES1 to RES19), the machine list
   extended, and questions 56 to 70 added. The first-pass proposals withdrawn as conflicting with the
@@ -2777,6 +3021,12 @@ Facts I could not find in the code and that this document uses as names only: `A
   or time and aftermath. RES35 to RES52 and the register in M.2 answer them. The fact-check found that
   section L misstated the owner-thread waits, which reaction objects are live and which projection
   is in production, and section L was rewritten.
+- **Branch work, 2026-11-02.** Branch `gameplay-engine-v2` was cut from `main`; the plan was committed
+  there (`b5b1b6ea`, `2b5bc721`); the old gameplay server, client, `dev` CLI and their client
+  modules were removed from `df-tools` (`14a2f715`, 562 files, about 475k lines) with
+  `df-tools` native and wasm checks, the workspace check and `df-tools` lib tests passing, and the
+  `df-portal` test compile error and two `df-server` environment-read tests failing as before. The
+  crate plan of section O followed, at the owner's request.
 - **Round 4 (next).** A small round: re-test the M.2 register against the pinned source and check
   the new text for contradictions.
 
