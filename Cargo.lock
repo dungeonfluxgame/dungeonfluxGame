@@ -1009,6 +1009,7 @@ dependencies = [
  "base64 0.22.1",
  "df-playground",
  "df-table",
+ "futures-util",
  "serde",
  "serde_json",
  "tempfile",

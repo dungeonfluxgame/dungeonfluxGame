@@ -19,7 +19,7 @@ use crate::report::{
 use crate::view::CanvasView;
 use crate::wire::{
     ClientView, ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove, FixtureWrite,
-    MediaAdd, MediaRemove, Reply, route,
+    MediaRemove, Reply, route,
 };
 
 /// Most characters of an unexpected answer echoed in an error.
@@ -191,26 +191,119 @@ async fn fetch_media(port: u16) -> Result<Vec<df_playground::media::MediaEntry>,
     read_json(&response)
 }
 
-/// Reads a local file's bytes, refusing one over the library's limit without reading it.
-async fn read_binary_file(path: &Path) -> Result<Vec<u8>, DevError> {
-    let owned = path.to_path_buf();
+/// Bytes of a local file read, encoded and sent at a time: a multiple of three, so every piece but
+/// the last encodes to base64 without padding.
+const UPLOAD_PIECE_BYTES: usize = 3 * 64 * 1024;
+
+/// The size of a local file, refusing one over `maximum_bytes` before any of it is read.
+pub(crate) fn checked_file_size(size: u64, maximum_bytes: u64) -> Result<u64, String> {
+    if size > maximum_bytes {
+        return Err(format!("the file is larger than {maximum_bytes} bytes"));
+    }
+    Ok(size)
+}
+
+/// The length of the add request for a file of `file_bytes`: the envelope around the file's
+/// base64, or `None` when it does not fit a length.
+fn upload_body_length(envelope_bytes: usize, file_bytes: u64) -> Option<u64> {
+    file_bytes
+        .div_ceil(3)
+        .checked_mul(4)?
+        .checked_add(u64::try_from(envelope_bytes).ok()?)
+}
+
+/// The next piece of `file`, up to `UPLOAD_PIECE_BYTES`, read on a blocking thread.
+async fn read_piece(file: std::fs::File) -> std::io::Result<(std::fs::File, Vec<u8>)> {
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let mut file = file;
+        let mut piece = Vec::new();
+        (&mut file)
+            .take(u64::try_from(UPLOAD_PIECE_BYTES).unwrap_or(u64::MAX))
+            .read_to_end(&mut piece)?;
+        Ok((file, piece))
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+/// Sends a local file to the library without holding it: the file is read, encoded and written to
+/// the socket a piece at a time, and the host decodes it as it arrives.
+async fn upload_media(port: u16, name: String, path: &Path) -> Result<String, DevError> {
     let unreadable = |message: String| DevError::UnreadableFile {
         path: path.to_path_buf(),
         message,
     };
-    tokio::task::spawn_blocking(move || {
-        let size = std::fs::metadata(&owned)?.len();
-        if size > crate::media_library::MAXIMUM_MEDIA_BYTES as u64 {
-            return Err(std::io::Error::other(format!(
-                "the file is larger than {} bytes",
-                crate::media_library::MAXIMUM_MEDIA_BYTES
-            )));
-        }
-        std::fs::read(&owned)
+    let owned = path.to_path_buf();
+    let (file, size) = tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(owned)?;
+        let size = file.metadata()?.len();
+        Ok::<_, std::io::Error>((file, size))
     })
     .await
     .map_err(|error| unreadable(error.to_string()))?
-    .map_err(|error| unreadable(error.to_string()))
+    .map_err(|error| unreadable(error.to_string()))?;
+    let size =
+        checked_file_size(size, crate::media_library::MAXIMUM_MEDIA_BYTES).map_err(&unreadable)?;
+    let quoted_name = serde_json::to_string(&name)
+        .map_err(|_| DevError::Rejected("could not write the request".to_owned()))?;
+    let prefix = format!("{{\"name\":{quoted_name},\"data_base64\":\"");
+    let suffix = "\"}";
+    let length = upload_body_length(prefix.len() + suffix.len(), size)
+        .ok_or_else(|| unreadable("the file is too large to send".to_owned()))?;
+    let mut post = client::StreamedPost::begin(port, route::DEV_MEDIA_ADD, length)
+        .await
+        .map_err(DevError::Client)?;
+    let sent = send_upload(&mut post, &prefix, suffix, file, size).await;
+    // The host may have answered before the end (a refusal); its answer says why, so it is read
+    // even when sending stopped.
+    let response = match post.finish().await {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(match sent {
+                Err(UploadStop::File(message)) => unreadable(message),
+                _ => DevError::Client(error),
+            });
+        }
+    };
+    match read_reply(&response)? {
+        Ok(text) => Ok(text),
+        Err(text) => Err(DevError::Rejected(text)),
+    }
+}
+
+/// Why sending a file stopped before its end.
+enum UploadStop {
+    File(String),
+    Host,
+}
+
+async fn send_upload(
+    post: &mut client::StreamedPost,
+    prefix: &str,
+    suffix: &str,
+    mut file: std::fs::File,
+    size: u64,
+) -> Result<(), UploadStop> {
+    let to_host = |_: ClientError| UploadStop::Host;
+    post.send(prefix.as_bytes()).await.map_err(to_host)?;
+    let mut remaining = size;
+    while remaining > 0 {
+        let (next, piece) = read_piece(file)
+            .await
+            .map_err(|error| UploadStop::File(error.to_string()))?;
+        file = next;
+        let read = u64::try_from(piece.len()).unwrap_or(u64::MAX);
+        if read == 0 || read > remaining {
+            return Err(UploadStop::File(
+                "the file changed while it was read".to_owned(),
+            ));
+        }
+        remaining -= read;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&piece);
+        post.send(encoded.as_bytes()).await.map_err(to_host)?;
+    }
+    post.send(suffix.as_bytes()).await.map_err(to_host)
 }
 
 /// Goes to each of two scenes in turn, `times` rounds, pausing `hold_ms` after each. A scene that
@@ -349,10 +442,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
                         DevError::Rejected(format!("{} has no file name", path.display()))
                     })?,
             };
-            let bytes = read_binary_file(&path).await?;
-            let data_base64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-            let body = to_body(&MediaAdd { name, data_base64 })?;
-            send_each(port, route::DEV_MEDIA_ADD, "media", &[body], read_reply).await
+            upload_media(port, name, &path).await
         }
         Command::MediaRemove(name) => {
             let body = to_body(&MediaRemove { name })?;

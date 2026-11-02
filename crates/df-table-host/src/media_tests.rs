@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use crate::client::{get, post_json};
 use crate::command::{Command, CommandError, DEFAULT_VOLUME, parse, split_words, usage_text};
 use crate::dev::{DevError, run_dev};
-use crate::media_library::{MAXIMUM_MEDIA_FILES, media_entries, media_problem};
+use crate::media_library::media_problem;
 use crate::test_support::{Running, STARTER_FILES, raw_exchange, start};
 use crate::wire::{ClientView, ControlsReply};
 
@@ -299,25 +299,6 @@ async fn an_empty_file_and_data_that_is_not_base64_are_refused() {
         .expect("answers");
     assert_eq!(response.status, 400);
     assert!(response.body.contains("base64"));
-}
-
-#[tokio::test]
-async fn the_library_has_a_file_count_limit_but_a_replacement_is_always_allowed() {
-    let running = start(&STARTER_FILES).await;
-    let directory = running.playground_path("assets/media");
-    std::fs::create_dir_all(&directory).expect("makes the directory");
-    for index in 0..MAXIMUM_MEDIA_FILES {
-        std::fs::write(directory.join(format!("f{index}.png")), PNG).expect("writes");
-    }
-    assert_eq!(add(&running, "one-too-many.png", PNG).await.0, 400);
-    assert_eq!(
-        add(&running, "f0.png", b"a replacement picture").await.0,
-        200
-    );
-    assert_eq!(
-        media_entries(&directory).expect("lists").len(),
-        MAXIMUM_MEDIA_FILES
-    );
 }
 
 #[tokio::test]

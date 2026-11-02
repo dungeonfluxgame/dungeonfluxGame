@@ -24,7 +24,11 @@ pub mod dev;
 pub mod event_log;
 pub mod guard;
 pub mod kind_files;
+mod media_ingest;
 pub mod media_library;
+mod media_range;
+mod media_store;
+mod media_upload;
 pub mod options;
 pub mod playground;
 pub mod render;
@@ -35,6 +39,7 @@ pub mod serve;
 pub mod server;
 pub mod sink;
 pub mod state;
+mod video_container;
 pub mod view;
 pub mod wire;
 
@@ -55,7 +60,13 @@ mod guard_tests;
 #[cfg(test)]
 mod kind_files_tests;
 #[cfg(test)]
+mod media_range_tests;
+#[cfg(test)]
+mod media_store_tests;
+#[cfg(test)]
 mod media_tests;
+#[cfg(test)]
+mod media_upload_tests;
 #[cfg(test)]
 mod motion_command_tests;
 #[cfg(test)]
@@ -84,5 +95,11 @@ mod sink_tests;
 mod starter_kinds_tests;
 #[cfg(test)]
 mod test_support;
+#[cfg(test)]
+mod video_container_tests;
+#[cfg(test)]
+mod video_fixtures;
+#[cfg(test)]
+mod video_library_tests;
 #[cfg(test)]
 mod wire_tests;

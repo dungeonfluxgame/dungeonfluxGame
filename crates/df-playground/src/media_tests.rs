@@ -31,6 +31,16 @@ fn a_name_is_an_image_or_a_sound_by_its_extension_without_regard_to_case() {
 }
 
 #[test]
+fn a_video_name_is_a_video_and_is_served_with_its_media_type() {
+    assert_eq!(media_kind("hearth.mp4"), Some(MediaKind::Video));
+    assert_eq!(media_kind("Rain.WEBM"), Some(MediaKind::Video));
+    assert_eq!(content_type("a.mp4"), "video/mp4");
+    assert_eq!(content_type("a.WEBM"), "video/webm");
+    assert_eq!(MediaKind::Video.key(), "video");
+    assert_eq!(media_kind("movie.mov"), None);
+}
+
+#[test]
 fn svg_scripts_executables_and_names_without_an_extension_are_not_media() {
     for name in [
         "logo.svg",

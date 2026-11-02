@@ -13,6 +13,8 @@ use tokio::net::TcpStream;
 
 /// Deadline for connecting, sending and reading one answer.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// Deadline for each step of a streamed request: connecting, sending one piece, reading the answer.
+const STREAM_STEP_TIMEOUT: Duration = Duration::from_secs(60);
 /// Largest answer accepted, in bytes.
 pub const MAXIMUM_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
@@ -154,4 +156,62 @@ pub(crate) async fn get_with_limit(
     limit: usize,
 ) -> Result<Response, ClientError> {
     request(port, "GET", path, "", limit).await
+}
+
+/// A POST whose body is sent in pieces, for a body too large to hold: the caller says the length
+/// up front, sends exactly that many bytes, then reads the answer. Each step has its own deadline,
+/// so a long upload is not cut off while it keeps moving.
+pub struct StreamedPost {
+    stream: TcpStream,
+}
+
+impl StreamedPost {
+    /// Connects and sends the request head for a JSON body of `content_length` bytes.
+    pub async fn begin(port: u16, path: &str, content_length: u64) -> Result<Self, ClientError> {
+        let mut stream =
+            tokio::time::timeout(STREAM_STEP_TIMEOUT, TcpStream::connect(("127.0.0.1", port)))
+                .await
+                .map_err(|_| ClientError::TimedOut)?
+                .map_err(|error| match error.kind() {
+                    ErrorKind::ConnectionRefused => ClientError::NotServing { port },
+                    _ => ClientError::Connection(error.to_string()),
+                })?;
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n\
+             Content-Length: {content_length}\r\nConnection: close\r\n\r\n"
+        );
+        send_piece(&mut stream, head.as_bytes()).await?;
+        Ok(Self { stream })
+    }
+
+    /// Sends the next piece of the body.
+    pub async fn send(&mut self, bytes: &[u8]) -> Result<(), ClientError> {
+        send_piece(&mut self.stream, bytes).await
+    }
+
+    /// Reads the answer once the whole body is sent (or the host stopped listening).
+    pub async fn finish(mut self) -> Result<Response, ClientError> {
+        let mut answer = Vec::new();
+        let cap = u64::try_from(MAXIMUM_RESPONSE_BYTES)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        tokio::time::timeout(
+            STREAM_STEP_TIMEOUT,
+            (&mut self.stream).take(cap).read_to_end(&mut answer),
+        )
+        .await
+        .map_err(|_| ClientError::TimedOut)?
+        .map_err(|error| ClientError::Connection(error.to_string()))?;
+        if answer.len() > MAXIMUM_RESPONSE_BYTES {
+            return Err(ClientError::TooLarge);
+        }
+        parse_response(&answer)
+    }
+}
+
+async fn send_piece(stream: &mut TcpStream, bytes: &[u8]) -> Result<(), ClientError> {
+    tokio::time::timeout(STREAM_STEP_TIMEOUT, stream.write_all(bytes))
+        .await
+        .map_err(|_| ClientError::TimedOut)?
+        .map_err(|error| ClientError::Connection(error.to_string()))
 }

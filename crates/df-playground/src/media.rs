@@ -1,5 +1,5 @@
-//! What the playground knows about media files: which names are acceptable, which are images and
-//! which are sound, and how a page reports back what it displayed and played.
+//! What the playground knows about media files: which names are acceptable, which are images,
+//! which are sound and which are video, and how a page reports back what it displayed and played.
 //!
 //! The host serves the files and the page shows and plays them; this module is the shared
 //! vocabulary, so both agree on what a name may look like and a person or an agent driving the dev
@@ -15,6 +15,8 @@ pub const MAXIMUM_NAME_LENGTH: usize = 64;
 pub const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 /// Sound file types a page can play.
 pub const AUDIO_EXTENSIONS: [&str; 5] = ["mp3", "ogg", "wav", "m4a", "opus"];
+/// Video file types the library accepts: mp4 (H.264 with AAC) and webm (VP9 with Opus).
+pub const VIDEO_EXTENSIONS: [&str; 2] = ["mp4", "webm"];
 /// Most errors a client report carries; older ones are dropped.
 pub const MAXIMUM_REPORTED_ERRORS: usize = 8;
 
@@ -35,6 +37,7 @@ pub fn is_plain_file_name(name: &str) -> bool {
 pub enum MediaKind {
     Image,
     Audio,
+    Video,
 }
 
 impl MediaKind {
@@ -42,6 +45,7 @@ impl MediaKind {
         match self {
             Self::Image => "image",
             Self::Audio => "audio",
+            Self::Video => "video",
         }
     }
 }
@@ -57,6 +61,8 @@ pub fn media_kind(name: &str) -> Option<MediaKind> {
         Some(MediaKind::Image)
     } else if AUDIO_EXTENSIONS.contains(&extension.as_str()) {
         Some(MediaKind::Audio)
+    } else if VIDEO_EXTENSIONS.contains(&extension.as_str()) {
+        Some(MediaKind::Video)
     } else {
         None
     }
@@ -78,6 +84,8 @@ pub fn content_type(name: &str) -> &'static str {
         "wav" => "audio/wav",
         "m4a" => "audio/mp4",
         "opus" => "audio/ogg; codecs=opus",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
         _ => "application/octet-stream",
     }
 }

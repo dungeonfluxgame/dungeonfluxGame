@@ -175,6 +175,7 @@ impl fmt::Display for CommandError {
 
 /// The text printed by `help`.
 pub fn usage_text() -> String {
+    let video_limits = crate::media_library::video_limits_text();
     format!(
         "df-table dev [--port N] <command>\n\
          \n  {SPAWN_USAGE}\n      put an element on the canvas (x and y are its position; a field\n      called x or y can be changed with set)\n\
@@ -196,7 +197,7 @@ pub fn usage_text() -> String {
          \n  {CAMERA_USAGE}\n      move the shared screen's camera in on an element and keep it in the middle (zoom is\n      100 to 400 percent, over is 0 to 30000 ms; defaults 200 and 1200), or back out to the whole\n      stage; the caption, card and party strip stay put\n\
          \n  {MUSIC_USAGE}\n      play music until it is stopped or replaced\n\
          \n  {SOUND_USAGE}\n      play a sound once\n\
-         \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove pictures and sounds\n\
+         \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove pictures, sounds and videos;\n      {video_limits}; a video's size is in the listing; videos are not placed on a screen yet\n\
          \n  clients\n      what each open page says it is showing and playing, and whether its sound is\n      locked (a browser plays sound only after someone clicks the page)\n\
          \n  {WAIT_USAGE}\n      pause here; stage scenes over time in a script or a session\n\
          \n  fixtures\n      list the playground's fixture files\n\
