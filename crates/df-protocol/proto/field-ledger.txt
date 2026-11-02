@@ -1,14 +1,50 @@
 # Frozen allocations from actual protoc descriptors; retirement retains reserved names/numbers.
+# Sorted. df-tools tests/schema_ledger.rs checks this file against the real descriptor in both directions;
+# `cargo test -p df-tools --test schema_ledger -- --ignored --nocapture print_ledger_drift` lists the difference.
+# History of additions, oldest first (the body below is sorted, so order does not matter):
+# PLAY-V09: scene plate (GameplayScene 20 live_plate, 21 plate_layout, 22 plate_state)
+# Canonical scene lookup identity (GameplayScene 29 source_scene_key)
+# PLAY-V09 follow-up: heroes' heads in the plate layout (PlateLayout 6 heroes)
+# PLAY-U02: table settings (SET_TABLE_SETTING) and the choice-hint toggle on JourneyView
+# SHOP-ASSAULT: a hero's attack on a scene person (Marek, Corin, Jessa); DEFEND_COURIER stays the courier's own action.
+# PLAY-V12: the adventure name on every story view (the establishing shot title card)
+# PLAY-R01: outcome audit and public death-save state
+# FIGHT-001: one spoken moment of a fight staged with its blow (CombatOutcome.lines = 33)
+# or with the fight's ending (CombatView.closing_lines = 19).
+# SES-04: additive room-code-only away-seat discovery and credential replacement.
+# RUL-13: additive hero stabilization actions and their typed combat result.
+# CRE-IDENTITY: additive optional hero identity; absent remains distinct from a selected identity.
+# Machine surface (plan O.16 W0, RES33, RES40): MachineView, MachineIntent and their request, receipt and status messages; MachineView 7 (offers) is reserved, the offers moved to MachineSeatView 6.
+# Everything not named above was allocated before the ledger was refreshed on 2026-11-02 (battle techniques, session spend and combat display metadata among them).
 enum dungeonflux.experimental.contract.v1.CapabilityKind
 enum dungeonflux.experimental.transport.v1.Sample.Behavior
+enum dungeonflux.public.v1.BattleTechniqueKind
+enum dungeonflux.public.v1.CombatAttackType
+enum dungeonflux.public.v1.ComposeKind
+enum dungeonflux.public.v1.CreatureSize
+enum dungeonflux.public.v1.DeathSaveResult
 enum dungeonflux.public.v1.DialogueContext
 enum dungeonflux.public.v1.DialogueDisposition
 enum dungeonflux.public.v1.DialogueFinality
+enum dungeonflux.public.v1.DisplaySceneCamera
+enum dungeonflux.public.v1.ExpensiveWorkQuote.PayerScope
 enum dungeonflux.public.v1.GameplayActionKind
 enum dungeonflux.public.v1.HarborDestination
+enum dungeonflux.public.v1.HomeVideoState
 enum dungeonflux.public.v1.JourneyPhase
+enum dungeonflux.public.v1.MachineStatusKind
+enum dungeonflux.public.v1.NotebookKind
+enum dungeonflux.public.v1.OutcomeKind
+enum dungeonflux.public.v1.PlaceMusicState
+enum dungeonflux.public.v1.PlateSide
+enum dungeonflux.public.v1.PlateState
 enum dungeonflux.public.v1.RejectionCode
+enum dungeonflux.public.v1.RollAgainst
+enum dungeonflux.public.v1.RollKind
 enum dungeonflux.public.v1.SceneRole
+enum dungeonflux.public.v1.SeatReclaimRefusal
+enum dungeonflux.public.v1.SessionSpendStatus
+enum dungeonflux.public.v1.StabilizationMethod
 enum dungeonflux.public.v1.TableKind
 enum dungeonflux.public.v1.TableRole
 enum dungeonflux.public.v1.TempoPhase
@@ -18,6 +54,33 @@ enum-value dungeonflux.experimental.transport.v1.Sample.Behavior 0 BEHAVIOR_UNSP
 enum-value dungeonflux.experimental.transport.v1.Sample.Behavior 1 ECHO
 enum-value dungeonflux.experimental.transport.v1.Sample.Behavior 2 REJECT
 enum-value dungeonflux.experimental.transport.v1.Sample.Behavior 3 WAIT
+enum-value dungeonflux.public.v1.BattleTechniqueKind 0 BATTLE_TECHNIQUE_UNSPECIFIED
+enum-value dungeonflux.public.v1.BattleTechniqueKind 1 BATTLE_TECHNIQUE_FIRE_BOLT
+enum-value dungeonflux.public.v1.BattleTechniqueKind 2 BATTLE_TECHNIQUE_MAGIC_MISSILE
+enum-value dungeonflux.public.v1.BattleTechniqueKind 3 BATTLE_TECHNIQUE_FIREBALL
+enum-value dungeonflux.public.v1.BattleTechniqueKind 4 BATTLE_TECHNIQUE_SHIELD
+enum-value dungeonflux.public.v1.BattleTechniqueKind 5 BATTLE_TECHNIQUE_FLURRY
+enum-value dungeonflux.public.v1.CombatAttackType 0 COMBAT_ATTACK_TYPE_UNSPECIFIED
+enum-value dungeonflux.public.v1.CombatAttackType 1 COMBAT_ATTACK_TYPE_MELEE
+enum-value dungeonflux.public.v1.CombatAttackType 2 COMBAT_ATTACK_TYPE_RANGED
+enum-value dungeonflux.public.v1.CombatAttackType 3 COMBAT_ATTACK_TYPE_THROWN
+enum-value dungeonflux.public.v1.ComposeKind 0 COMPOSE_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.ComposeKind 1 COMPOSE_KIND_TYPING
+enum-value dungeonflux.public.v1.ComposeKind 2 COMPOSE_KIND_SPEAKING
+enum-value dungeonflux.public.v1.ComposeKind 3 COMPOSE_KIND_SUBMITTED
+enum-value dungeonflux.public.v1.ComposeKind 4 COMPOSE_KIND_STOPPED
+enum-value dungeonflux.public.v1.CreatureSize 0 CREATURE_SIZE_UNSPECIFIED
+enum-value dungeonflux.public.v1.CreatureSize 1 SMALL
+enum-value dungeonflux.public.v1.CreatureSize 2 MEDIUM
+enum-value dungeonflux.public.v1.CreatureSize 3 LARGE
+enum-value dungeonflux.public.v1.CreatureSize 4 HUGE
+enum-value dungeonflux.public.v1.DeathSaveResult 0 DEATH_SAVE_RESULT_UNSPECIFIED
+enum-value dungeonflux.public.v1.DeathSaveResult 1 DEATH_SAVE_RESULT_SUCCESS
+enum-value dungeonflux.public.v1.DeathSaveResult 2 DEATH_SAVE_RESULT_FAILURE
+enum-value dungeonflux.public.v1.DeathSaveResult 3 DEATH_SAVE_RESULT_CRITICAL_FAILURE
+enum-value dungeonflux.public.v1.DeathSaveResult 4 DEATH_SAVE_RESULT_STABILISED
+enum-value dungeonflux.public.v1.DeathSaveResult 5 DEATH_SAVE_RESULT_DIED
+enum-value dungeonflux.public.v1.DeathSaveResult 6 DEATH_SAVE_RESULT_REVIVED
 enum-value dungeonflux.public.v1.DialogueContext 0 DIALOGUE_CONTEXT_UNSPECIFIED
 enum-value dungeonflux.public.v1.DialogueContext 1 DIALOGUE_CONTEXT_QUESTION
 enum-value dungeonflux.public.v1.DialogueContext 2 DIALOGUE_CONTEXT_SOCIAL
@@ -37,6 +100,13 @@ enum-value dungeonflux.public.v1.DialogueDisposition 8 DIALOGUE_DISPOSITION_REJE
 enum-value dungeonflux.public.v1.DialogueFinality 0 DIALOGUE_FINALITY_UNSPECIFIED
 enum-value dungeonflux.public.v1.DialogueFinality 1 DIALOGUE_FINALITY_PARTIAL
 enum-value dungeonflux.public.v1.DialogueFinality 2 DIALOGUE_FINALITY_FINAL
+enum-value dungeonflux.public.v1.DisplaySceneCamera 0 DISPLAY_SCENE_CAMERA_UNSPECIFIED
+enum-value dungeonflux.public.v1.DisplaySceneCamera 1 DISPLAY_SCENE_CAMERA_WIDE
+enum-value dungeonflux.public.v1.DisplaySceneCamera 2 DISPLAY_SCENE_CAMERA_TWO_SHOT
+enum-value dungeonflux.public.v1.DisplaySceneCamera 3 DISPLAY_SCENE_CAMERA_SPEAKER
+enum-value dungeonflux.public.v1.ExpensiveWorkQuote.PayerScope 0 PAYER_SCOPE_UNSPECIFIED
+enum-value dungeonflux.public.v1.ExpensiveWorkQuote.PayerScope 1 HOST_ONLY
+enum-value dungeonflux.public.v1.ExpensiveWorkQuote.PayerScope 2 CONSENTED_CONTRIBUTORS
 enum-value dungeonflux.public.v1.GameplayActionKind 0 GAMEPLAY_ACTION_KIND_UNSPECIFIED
 enum-value dungeonflux.public.v1.GameplayActionKind 1 EXAMINE_HARBOR_SEAL
 enum-value dungeonflux.public.v1.GameplayActionKind 10 END_TURN
@@ -49,10 +119,18 @@ enum-value dungeonflux.public.v1.GameplayActionKind 16 OPPORTUNITY_ATTACK
 enum-value dungeonflux.public.v1.GameplayActionKind 17 DECLINE_REACTION
 enum-value dungeonflux.public.v1.GameplayActionKind 18 STAND
 enum-value dungeonflux.public.v1.GameplayActionKind 19 PICK_UP_WEAPON
-enum-value dungeonflux.public.v1.GameplayActionKind 20 RESOLVE_ERRAND
 enum-value dungeonflux.public.v1.GameplayActionKind 2 CHOOSE_HARBOR_SCENE
+enum-value dungeonflux.public.v1.GameplayActionKind 20 RESOLVE_ERRAND
+enum-value dungeonflux.public.v1.GameplayActionKind 21 START_NEW_ADVENTURE
+enum-value dungeonflux.public.v1.GameplayActionKind 22 STABILISE_WITH_HEALERS_KIT
+enum-value dungeonflux.public.v1.GameplayActionKind 23 STABILISE_MEDICINE
+enum-value dungeonflux.public.v1.GameplayActionKind 24 HELP_ATTACK
 enum-value dungeonflux.public.v1.GameplayActionKind 3 CREATE_CHARACTER
 enum-value dungeonflux.public.v1.GameplayActionKind 4 BEGIN_STORY
+enum-value dungeonflux.public.v1.GameplayActionKind 40 SET_TABLE_SETTING
+enum-value dungeonflux.public.v1.GameplayActionKind 41 SCENE_ASSAULT
+enum-value dungeonflux.public.v1.GameplayActionKind 42 ACTION_SURGE
+enum-value dungeonflux.public.v1.GameplayActionKind 43 TRAVEL
 enum-value dungeonflux.public.v1.GameplayActionKind 5 ASK_COURIER
 enum-value dungeonflux.public.v1.GameplayActionKind 6 ESCORT_COURIER
 enum-value dungeonflux.public.v1.GameplayActionKind 7 DEFEND_COURIER
@@ -62,6 +140,11 @@ enum-value dungeonflux.public.v1.HarborDestination 0 HARBOR_DESTINATION_UNSPECIF
 enum-value dungeonflux.public.v1.HarborDestination 1 LOADING_PIER
 enum-value dungeonflux.public.v1.HarborDestination 2 LANTERN_WHARF
 enum-value dungeonflux.public.v1.HarborDestination 3 HARBOR_INN
+enum-value dungeonflux.public.v1.HomeVideoState 0 HOME_VIDEO_STATE_UNSPECIFIED
+enum-value dungeonflux.public.v1.HomeVideoState 1 HOME_VIDEO_STATE_NONE
+enum-value dungeonflux.public.v1.HomeVideoState 2 HOME_VIDEO_STATE_PENDING
+enum-value dungeonflux.public.v1.HomeVideoState 3 HOME_VIDEO_STATE_READY
+enum-value dungeonflux.public.v1.HomeVideoState 4 HOME_VIDEO_STATE_FAILED
 enum-value dungeonflux.public.v1.JourneyPhase 0 JOURNEY_PHASE_UNSPECIFIED
 enum-value dungeonflux.public.v1.JourneyPhase 1 ROOM
 enum-value dungeonflux.public.v1.JourneyPhase 2 CHARACTER_CREATION
@@ -69,6 +152,40 @@ enum-value dungeonflux.public.v1.JourneyPhase 3 OPENING
 enum-value dungeonflux.public.v1.JourneyPhase 4 DIALOGUE
 enum-value dungeonflux.public.v1.JourneyPhase 5 COMBAT
 enum-value dungeonflux.public.v1.JourneyPhase 6 COMPLETE
+enum-value dungeonflux.public.v1.MachineStatusKind 0 MACHINE_STATUS_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.MachineStatusKind 1 MACHINE_STATUS_KIND_OK
+enum-value dungeonflux.public.v1.MachineStatusKind 2 MACHINE_STATUS_KIND_READING
+enum-value dungeonflux.public.v1.MachineStatusKind 3 MACHINE_STATUS_KIND_ROLLING
+enum-value dungeonflux.public.v1.MachineStatusKind 4 MACHINE_STATUS_KIND_TELLING
+enum-value dungeonflux.public.v1.MachineStatusKind 5 MACHINE_STATUS_KIND_ART_DELAYED
+enum-value dungeonflux.public.v1.MachineStatusKind 6 MACHINE_STATUS_KIND_DEGRADED
+enum-value dungeonflux.public.v1.MachineStatusKind 7 MACHINE_STATUS_KIND_READ_ONLY
+enum-value dungeonflux.public.v1.MachineStatusKind 8 MACHINE_STATUS_KIND_RECONNECTING
+enum-value dungeonflux.public.v1.MachineStatusKind 9 MACHINE_STATUS_KIND_WAITING_FOR
+enum-value dungeonflux.public.v1.NotebookKind 0 NOTEBOOK_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.NotebookKind 1 NOTEBOOK_KIND_PERSON
+enum-value dungeonflux.public.v1.NotebookKind 2 NOTEBOOK_KIND_PLACE
+enum-value dungeonflux.public.v1.NotebookKind 3 NOTEBOOK_KIND_TASK
+enum-value dungeonflux.public.v1.NotebookKind 4 NOTEBOOK_KIND_CLUE
+enum-value dungeonflux.public.v1.NotebookKind 5 NOTEBOOK_KIND_NOTE
+enum-value dungeonflux.public.v1.OutcomeKind 0 OUTCOME_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.OutcomeKind 1 OUTCOME_KIND_ATTACK
+enum-value dungeonflux.public.v1.OutcomeKind 2 OUTCOME_KIND_OPPORTUNITY_ATTACK
+enum-value dungeonflux.public.v1.OutcomeKind 3 OUTCOME_KIND_MOVE
+enum-value dungeonflux.public.v1.OutcomeKind 4 OUTCOME_KIND_DEATH_SAVE
+enum-value dungeonflux.public.v1.OutcomeKind 5 OUTCOME_KIND_RECOVERY
+enum-value dungeonflux.public.v1.OutcomeKind 6 OUTCOME_KIND_STABILISATION
+enum-value dungeonflux.public.v1.PlaceMusicState 0 PLACE_MUSIC_STATE_UNSPECIFIED
+enum-value dungeonflux.public.v1.PlaceMusicState 1 PLACE_MUSIC_STATE_FALLBACK
+enum-value dungeonflux.public.v1.PlaceMusicState 2 PLACE_MUSIC_STATE_READY
+enum-value dungeonflux.public.v1.PlateSide 0 PLATE_SIDE_UNSPECIFIED
+enum-value dungeonflux.public.v1.PlateSide 1 PLATE_SIDE_LEFT
+enum-value dungeonflux.public.v1.PlateSide 2 PLATE_SIDE_RIGHT
+enum-value dungeonflux.public.v1.PlateState 0 PLATE_STATE_UNSPECIFIED
+enum-value dungeonflux.public.v1.PlateState 1 PLATE_STATE_PENDING
+enum-value dungeonflux.public.v1.PlateState 2 PLATE_STATE_READY
+enum-value dungeonflux.public.v1.PlateState 3 PLATE_STATE_FAILED
+enum-value dungeonflux.public.v1.PlateState 4 PLATE_STATE_UNAVAILABLE
 enum-value dungeonflux.public.v1.RejectionCode 0 REJECTION_CODE_UNSPECIFIED
 enum-value dungeonflux.public.v1.RejectionCode 1 STALE_OFFER
 enum-value dungeonflux.public.v1.RejectionCode 10 OPERATION_EXPIRED
@@ -80,11 +197,35 @@ enum-value dungeonflux.public.v1.RejectionCode 6 CAPABILITY_UNAVAILABLE
 enum-value dungeonflux.public.v1.RejectionCode 7 RECOVERY_REQUIRED
 enum-value dungeonflux.public.v1.RejectionCode 8 REVISION_CONFLICT
 enum-value dungeonflux.public.v1.RejectionCode 9 OPERATION_CONFLICT
+enum-value dungeonflux.public.v1.RollAgainst 0 ROLL_AGAINST_UNSPECIFIED
+enum-value dungeonflux.public.v1.RollAgainst 1 ROLL_AGAINST_DC
+enum-value dungeonflux.public.v1.RollAgainst 2 ROLL_AGAINST_AC
+enum-value dungeonflux.public.v1.RollKind 0 ROLL_KIND_UNSPECIFIED
+enum-value dungeonflux.public.v1.RollKind 1 ROLL_KIND_CHECK
+enum-value dungeonflux.public.v1.RollKind 2 ROLL_KIND_SAVE
+enum-value dungeonflux.public.v1.RollKind 3 ROLL_KIND_ATTACK
+enum-value dungeonflux.public.v1.RollKind 4 ROLL_KIND_DEATH_SAVE
+enum-value dungeonflux.public.v1.RollKind 5 ROLL_KIND_STABILIZE
+enum-value dungeonflux.public.v1.RollKind 6 ROLL_KIND_INITIATIVE
 enum-value dungeonflux.public.v1.SceneRole 0 SCENE_ROLE_UNSPECIFIED
 enum-value dungeonflux.public.v1.SceneRole 1 PATRON
 enum-value dungeonflux.public.v1.SceneRole 2 ANTAGONIST
 enum-value dungeonflux.public.v1.SceneRole 3 CONTACT
 enum-value dungeonflux.public.v1.SceneRole 4 BYSTANDER
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 0 SEAT_RECLAIM_REFUSAL_UNSPECIFIED
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 1 SEAT_NOT_AWAY
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 2 SEAT_TOKEN_UNKNOWN
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 3 SEAT_ROOM_CODE_WRONG
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 4 SEAT_OPERATION_CONFLICT
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 5 SEAT_REJOIN_PENDING
+enum-value dungeonflux.public.v1.SeatReclaimRefusal 6 SEAT_REJOIN_DECLINED
+enum-value dungeonflux.public.v1.SessionSpendStatus 0 SESSION_SPEND_STATUS_UNSPECIFIED
+enum-value dungeonflux.public.v1.SessionSpendStatus 1 FUNDED
+enum-value dungeonflux.public.v1.SessionSpendStatus 2 LOW_BALANCE
+enum-value dungeonflux.public.v1.SessionSpendStatus 3 EXHAUSTED
+enum-value dungeonflux.public.v1.StabilizationMethod 0 STABILIZATION_METHOD_UNSPECIFIED
+enum-value dungeonflux.public.v1.StabilizationMethod 1 STABILIZATION_METHOD_HEALERS_KIT
+enum-value dungeonflux.public.v1.StabilizationMethod 2 STABILIZATION_METHOD_MEDICINE
 enum-value dungeonflux.public.v1.TableKind 0 TABLE_KIND_UNSPECIFIED
 enum-value dungeonflux.public.v1.TableKind 1 ACTION
 enum-value dungeonflux.public.v1.TableKind 2 SPEECH
@@ -121,11 +262,47 @@ field dungeonflux.public.v1.AbilityCheckResult 4 total type=17 label=1 presence=
 field dungeonflux.public.v1.AbilityCheckResult 5 difficulty_class type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.AbilityCheckResult 6 succeeded type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.AbilityCheckResult 7 source_revision type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.AbilityCheckResult 8 faces type=13 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.AbilityCheckResult 9 roll_mode type=17 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.AcceptedAction 1 check type=11 label=1 presence=false target=.dungeonflux.public.v1.AbilityCheckResult oneof=-
 field dungeonflux.public.v1.AcceptedAction 2 scene type=11 label=1 presence=false target=.dungeonflux.public.v1.GameplayScene oneof=-
 field dungeonflux.public.v1.AcceptedAction 3 character type=11 label=1 presence=false target=.dungeonflux.public.v1.CharacterSheet oneof=-
 field dungeonflux.public.v1.AcceptedAction 4 combat type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
 field dungeonflux.public.v1.AcceptedAction 5 phase type=14 label=1 presence=false target=.dungeonflux.public.v1.JourneyPhase oneof=-
+field dungeonflux.public.v1.AwayHero 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.AwayHero 2 seat_token type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleCameraHome 1 pitch_deg type=2 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleCameraHome 2 yaw_deg type=2 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleCameraHome 3 distance type=2 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleCameraHome 4 fov_deg type=2 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleCameraOverride 1 revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleCameraOverride 2 home type=11 label=1 presence=false target=.dungeonflux.public.v1.BattleCameraHome oneof=-
+field dungeonflux.public.v1.BattleCameraOverride 3 shot type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechnique 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.BattleTechniqueKind oneof=-
+field dungeonflux.public.v1.BattleTechnique 2 strikes type=11 label=3 presence=false target=.dungeonflux.public.v1.BattleTechniqueStrike oneof=-
+field dungeonflux.public.v1.BattleTechnique 3 centre type=11 label=1 presence=true target=.dungeonflux.public.v1.GridCell oneof=_centre
+field dungeonflux.public.v1.BattleTechnique 4 radius_m type=2 label=1 presence=true target=- oneof=_radius_m
+field dungeonflux.public.v1.BattleTechnique 5 action_surge_at type=13 label=1 presence=true target=- oneof=_action_surge_at
+field dungeonflux.public.v1.BattleTechniqueCard 1 value type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueCard 2 label type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueCard 3 explanation type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueCard 4 verdict type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueCard 5 tone type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueRoll 1 d20 type=13 label=1 presence=true target=- oneof=_d20
+field dungeonflux.public.v1.BattleTechniqueRoll 2 damage_faces type=13 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueRoll 3 attack_card type=11 label=1 presence=true target=.dungeonflux.public.v1.BattleTechniqueCard oneof=_attack_card
+field dungeonflux.public.v1.BattleTechniqueStrike 1 target_id type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueStrike 2 hit type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueStrike 3 damage type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueStrike 4 critical type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueStrike 5 downed type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleTechniqueStrike 6 hit_points_after type=13 label=1 presence=true target=- oneof=_hit_points_after
+field dungeonflux.public.v1.BattleTechniqueStrike 7 card type=11 label=1 presence=true target=.dungeonflux.public.v1.BattleTechniqueCard oneof=_card
+field dungeonflux.public.v1.BattleTechniqueStrike 8 roll type=11 label=1 presence=true target=.dungeonflux.public.v1.BattleTechniqueRoll oneof=_roll
+field dungeonflux.public.v1.BattleWorld 1 ply_url type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleWorld 2 collider_url type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleWorld 3 metric_scale_factor type=1 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.BattleWorld 4 ground_plane_offset type=1 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.BuildIdentity 1 source_revision type=9 label=1 presence=true target=- oneof=_source_revision
 field dungeonflux.public.v1.BuildIdentity 2 native_revision type=9 label=1 presence=true target=- oneof=_native_revision
 field dungeonflux.public.v1.BuildIdentity 3 wasm_revision type=9 label=1 presence=true target=- oneof=_wasm_revision
@@ -136,17 +313,34 @@ field dungeonflux.public.v1.CancelDialogueRequest 2 confirmation_token type=12 l
 field dungeonflux.public.v1.CharacterCreationOffer 1 description type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterCreationOffer 2 groups type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyGroup oneof=-
 field dungeonflux.public.v1.CharacterCreationOffer 3 source_revision type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 4 identity_groups type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyGroup oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 5 default_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 6 supported_designs type=11 label=3 presence=false target=.dungeonflux.public.v1.SupportedCharacterDesign oneof=-
+field dungeonflux.public.v1.CharacterCreationOffer 7 portrait_scenery_options type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyOption oneof=-
 field dungeonflux.public.v1.CharacterSelection 1 name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterSelection 2 choices type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyChoice oneof=-
+field dungeonflux.public.v1.CharacterSelection 3 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.CharacterSelection 4 portrait_scenery type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterSheet 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CharacterSheet 10 portrait_draft_revision type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterSheet 2 facts type=11 label=3 presence=false target=.dungeonflux.public.v1.SheetFact oneof=-
 field dungeonflux.public.v1.CharacterSheet 3 hit_points type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterSheet 4 maximum_hit_points type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterSheet 5 armor_class type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CharacterSheet 6 source_revision type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CharacterSheet 7 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.CharacterSheet 8 owned_items type=11 label=3 presence=false target=.dungeonflux.public.v1.SceneItemCard oneof=-
+field dungeonflux.public.v1.CharacterSheet 9 portrait_uri type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.ClientBindingId 1 value type=12 label=1 presence=true target=- oneof=_value
 field dungeonflux.public.v1.CombatAmmunition 1 arrows type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatAmmunition 2 bolts type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatDisplayMetadata 1 ability_name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatDisplayMetadata 2 icon type=9 label=1 presence=true target=- oneof=_icon
+field dungeonflux.public.v1.CombatDisplayMetadata 3 attack_type type=14 label=1 presence=false target=.dungeonflux.public.v1.CombatAttackType oneof=-
+field dungeonflux.public.v1.CombatDisplayMetadata 4 ability_modifier type=17 label=1 presence=true target=- oneof=_ability_modifier
+field dungeonflux.public.v1.CombatDisplayMetadata 5 proficiency_modifier type=17 label=1 presence=true target=- oneof=_proficiency_modifier
+field dungeonflux.public.v1.CombatDisplayMetadata 6 other_modifier type=17 label=1 presence=true target=- oneof=_other_modifier
+field dungeonflux.public.v1.CombatDisplayMetadata 7 mastery type=9 label=1 presence=true target=- oneof=_mastery
 field dungeonflux.public.v1.CombatOutcome 1 actor_name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 10 damage type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 11 target_hit_points type=13 label=1 presence=false target=- oneof=-
@@ -159,7 +353,27 @@ field dungeonflux.public.v1.CombatOutcome 17 weapon type=9 label=1 presence=fals
 field dungeonflux.public.v1.CombatOutcome 18 attack_style type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 19 damage_type type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 2 target_name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 20 distance_ft type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 21 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.OutcomeKind oneof=-
+field dungeonflux.public.v1.CombatOutcome 22 path type=11 label=3 presence=false target=.dungeonflux.public.v1.GridCell oneof=-
+field dungeonflux.public.v1.CombatOutcome 23 cost_ft type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 24 remaining_ft type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 25 roll_mode type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 26 faces type=13 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 27 reasons type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 28 cover type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 29 death_save_result type=14 label=1 presence=false target=.dungeonflux.public.v1.DeathSaveResult oneof=-
 field dungeonflux.public.v1.CombatOutcome 3 attack_die type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 30 death_successes type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 31 death_failures type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 32 recovery_hours type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 33 lines type=11 label=3 presence=false target=.dungeonflux.public.v1.FightLine oneof=-
+field dungeonflux.public.v1.CombatOutcome 34 sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 35 stabilization type=11 label=1 presence=false target=.dungeonflux.public.v1.StabilizationResult oneof=-
+field dungeonflux.public.v1.CombatOutcome 36 damage_rolls type=11 label=3 presence=false target=.dungeonflux.public.v1.DamageRoll oneof=-
+field dungeonflux.public.v1.CombatOutcome 37 damage_modifier type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatOutcome 38 presentation type=11 label=1 presence=true target=.dungeonflux.public.v1.BattleTechnique oneof=_presentation
+field dungeonflux.public.v1.CombatOutcome 39 display_metadata type=11 label=1 presence=true target=.dungeonflux.public.v1.CombatDisplayMetadata oneof=_display_metadata
 field dungeonflux.public.v1.CombatOutcome 4 attack_modifier type=17 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 5 attack_total type=17 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatOutcome 6 target_armor_class type=13 label=1 presence=false target=- oneof=-
@@ -173,7 +387,15 @@ field dungeonflux.public.v1.CombatView 12 own_budget type=11 label=1 presence=fa
 field dungeonflux.public.v1.CombatView 13 own_ammunition type=11 label=1 presence=false target=.dungeonflux.public.v1.CombatAmmunition oneof=-
 field dungeonflux.public.v1.CombatView 14 reaction_participant_id type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatView 15 location_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatView 16 death_saves type=11 label=3 presence=false target=.dungeonflux.public.v1.DeathSaveState oneof=-
+field dungeonflux.public.v1.CombatView 17 move_outcomes type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
+field dungeonflux.public.v1.CombatView 18 death_save_outcomes type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
+field dungeonflux.public.v1.CombatView 19 closing_lines type=11 label=3 presence=false target=.dungeonflux.public.v1.FightLine oneof=-
 field dungeonflux.public.v1.CombatView 2 active_actor type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatView 20 latest_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatView 21 released_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatView 22 reaction_seconds_remaining type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CombatView 23 battle_world type=11 label=1 presence=false target=.dungeonflux.public.v1.BattleWorld oneof=-
 field dungeonflux.public.v1.CombatView 3 round type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatView 4 outcomes type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
 field dungeonflux.public.v1.CombatView 5 finished type=8 label=1 presence=false target=- oneof=-
@@ -181,9 +403,23 @@ field dungeonflux.public.v1.CombatView 6 source_revision type=9 label=1 presence
 field dungeonflux.public.v1.CombatView 7 active_participant_id type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.CombatView 8 initiative type=11 label=3 presence=false target=.dungeonflux.public.v1.InitiativeRoll oneof=-
 field dungeonflux.public.v1.CombatView 9 layout_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ComposeRequest 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.ComposeKind oneof=-
+field dungeonflux.public.v1.ComposingHero 1 hero_index type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ComposingHero 2 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.ComposeKind oneof=-
 field dungeonflux.public.v1.ConfirmDialogueRequest 1 input_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
 field dungeonflux.public.v1.ConfirmDialogueRequest 2 confirmation_token type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.ConfirmDialogueRequest 3 action type=11 label=1 presence=false target=.dungeonflux.public.v1.SubmitActionRequest oneof=-
+field dungeonflux.public.v1.CurrentAdventureResponse 1 room_code type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CurrentAdventureResponse 2 run_identity type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.CurrentAdventureResponse 3 preparing type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DamageRoll 1 dice type=13 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.DamageRoll 2 kept type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 1 participant_id type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 2 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 3 successes type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 4 failures type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 5 stable type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeathSaveState 6 dead type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DecisionReceipt 1 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
 field dungeonflux.public.v1.DecisionReceipt 2 revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
 field dungeonflux.public.v1.DecisionReceipt 3 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
@@ -191,16 +427,72 @@ field dungeonflux.public.v1.DecisionReceipt 4 run_id type=11 label=1 presence=fa
 field dungeonflux.public.v1.DecisionReceipt 5 replayed type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DecisionReceipt 6 accepted type=11 label=1 presence=false target=.dungeonflux.public.v1.AcceptedAction oneof=outcome
 field dungeonflux.public.v1.DecisionReceipt 7 rejected type=11 label=1 presence=false target=.dungeonflux.public.v1.Rejection oneof=outcome
+field dungeonflux.public.v1.DeleteHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeleteHeroRequest 2 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DeleteHeroResponse 1 removed type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DialogueResponse 1 input_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
 field dungeonflux.public.v1.DialogueResponse 2 disposition type=14 label=1 presence=false target=.dungeonflux.public.v1.DialogueDisposition oneof=-
 field dungeonflux.public.v1.DialogueResponse 3 confirmation_token type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DialogueResponse 4 revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
 field dungeonflux.public.v1.DialogueResponse 5 confirmation_required type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DialogueResponse 6 npc_reply type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DialogueResponse 7 npc_actor_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DialogueResponse 8 npc_speaker type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DisplayGameplayView 1 narration type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 10 layout_revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 11 place_music type=11 label=1 presence=false target=.dungeonflux.public.v1.PlaceMusicPlan oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 12 effects_off type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 13 camera_override type=11 label=1 presence=false target=.dungeonflux.public.v1.BattleCameraOverride oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 14 spend type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionSpendView oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 15 operational_notice type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DisplayGameplayView 2 scene_asset type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.DisplayGameplayView 3 scene type=11 label=1 presence=false target=.dungeonflux.public.v1.GameplayScene oneof=-
 field dungeonflux.public.v1.DisplayGameplayView 4 journey type=11 label=1 presence=false target=.dungeonflux.public.v1.JourneyView oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 5 scene_graph type=11 label=1 presence=false target=.dungeonflux.public.v1.DisplaySceneGraph oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 6 live_plate_graph_revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 7 check type=11 label=1 presence=false target=.dungeonflux.public.v1.AbilityCheckResult oneof=-
+field dungeonflux.public.v1.DisplayGameplayView 8 encounter_xp type=13 label=1 presence=true target=- oneof=_encounter_xp
+field dungeonflux.public.v1.DisplayGameplayView 9 layout_json type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 1 id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 10 expression type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 11 look_at type=9 label=1 presence=true target=- oneof=_look_at
+field dungeonflux.public.v1.DisplaySceneActor 12 speaking type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 2 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 3 art type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 4 fallback_art type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 5 spot type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 6 anchor_x_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 7 anchor_y_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 8 depth_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneActor 9 pose type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneGraph 1 revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneGraph 2 scene_key type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneGraph 3 set type=11 label=1 presence=false target=.dungeonflux.public.v1.DisplaySceneSet oneof=-
+field dungeonflux.public.v1.DisplaySceneGraph 4 camera type=14 label=1 presence=false target=.dungeonflux.public.v1.DisplaySceneCamera oneof=-
+field dungeonflux.public.v1.DisplaySceneGraph 5 actors type=11 label=3 presence=false target=.dungeonflux.public.v1.DisplaySceneActor oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 1 place_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 2 place_name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 3 asset type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 4 fallback_asset type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 5 exterior type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 6 time_of_day type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 7 weather type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySceneSet 8 lights type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.DisplaySpendView 1 status type=14 label=1 presence=false target=.dungeonflux.public.v1.SessionSpendStatus oneof=-
+field dungeonflux.public.v1.DisplaySpendView 2 paid_work_stopped type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ExpensiveWorkQuote 1 output_description type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ExpensiveWorkQuote 2 quoted_cost_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ExpensiveWorkQuote 3 maximum_cost_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ExpensiveWorkQuote 4 payer_scope type=14 label=1 presence=false target=.dungeonflux.public.v1.ExpensiveWorkQuote.PayerScope oneof=-
+field dungeonflux.public.v1.ExpensiveWorkQuote 5 expires_at_unix_millis type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ExpensiveWorkQuote 6 host_confirmation_required type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ExpensiveWorkQuote 7 payer_approval_required type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.FightLine 1 role type=14 label=1 presence=false target=.dungeonflux.public.v1.TableRole oneof=-
+field dungeonflux.public.v1.FightLine 2 hero_index type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.FightLine 3 speaker type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.FightLine 4 text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.FightLine 5 audio_url type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.FightLine 6 audio_part_urls type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayActionOffer 1 offer_id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayActionOffer 2 action_kind type=14 label=1 presence=false target=.dungeonflux.public.v1.GameplayActionKind oneof=-
 field dungeonflux.public.v1.GameplayActionOffer 3 label type=9 label=1 presence=false target=- oneof=-
@@ -208,17 +500,86 @@ field dungeonflux.public.v1.GameplayActionOffer 4 destinations type=11 label=3 p
 field dungeonflux.public.v1.GameplayActionOffer 5 input_groups type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyGroup oneof=-
 field dungeonflux.public.v1.GameplayScene 1 destination type=14 label=1 presence=false target=.dungeonflux.public.v1.HarborDestination oneof=-
 field dungeonflux.public.v1.GameplayScene 2 title type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 20 live_plate type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 21 plate_layout type=11 label=1 presence=false target=.dungeonflux.public.v1.PlateLayout oneof=-
+field dungeonflux.public.v1.GameplayScene 22 plate_state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateState oneof=-
+field dungeonflux.public.v1.GameplayScene 23 scene_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
+field dungeonflux.public.v1.GameplayScene 24 scene_video_path type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 25 scene_contents_json type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 26 item type=11 label=1 presence=false target=.dungeonflux.public.v1.SceneItemCard oneof=-
+field dungeonflux.public.v1.GameplayScene 27 plate_update_pending type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 28 hand_items type=11 label=3 presence=false target=.dungeonflux.public.v1.SceneItemCard oneof=-
+field dungeonflux.public.v1.GameplayScene 29 source_scene_key type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 3 scene_asset type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 30 source_scene_variant type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 31 interior type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 32 floor type=11 label=1 presence=false target=.dungeonflux.public.v1.StageFloor oneof=-
+field dungeonflux.public.v1.GameplayScene 33 room_image_pending type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 4 speaker_portrait type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 5 cast type=11 label=3 presence=false target=.dungeonflux.public.v1.SceneActor oneof=-
-field dungeonflux.public.v1.GameplayScene 9 live_backdrop type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 6 rules_note type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 7 place type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GameplayScene 8 location_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.GameplayScene 9 live_backdrop type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GridCell 1 col type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.GridCell 2 row type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.HarborSceneOption 1 destination type=14 label=1 presence=false target=.dungeonflux.public.v1.HarborDestination oneof=-
 field dungeonflux.public.v1.HarborSceneOption 2 label type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 1 presentation type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 10 attire type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 11 public_description type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 2 pronouns type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 3 age type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 4 build type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 5 skin type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 6 hair type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 7 hair_color type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 8 eyes type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroAppearance 9 mark type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 1 appearance type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroAppearance oneof=-
+field dungeonflux.public.v1.HeroIdentity 2 origin type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 3 occupation type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 4 motivation type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 5 backstory type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroIdentity 6 facts type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 10 background type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 11 scenery type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 3 client_binding_id type=11 label=1 presence=false target=.dungeonflux.public.v1.ClientBindingId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 4 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 5 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 6 draft_revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 7 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 8 species type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitRequest 9 character_class type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 1 draft_revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 2 state type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 3 image_uri type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HeroPortraitResponse 4 message type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeMood 1 accent type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeMood 2 tint type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeMood 3 vignette_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeMood 4 brightness_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeMood 5 contrast_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeMood 6 saturation_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeTheme 1 location_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeTheme 6 mood type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeMood oneof=-
+field dungeonflux.public.v1.HomeTheme 7 atmosphere type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.HomeTheme 8 fallback type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 1 ceiling_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 10 may_change_pace type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 11 may_stop_session type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 12 paid_work_stopped type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 13 quote type=11 label=1 presence=false target=.dungeonflux.public.v1.ExpensiveWorkQuote oneof=-
+field dungeonflux.public.v1.HostSpendView 2 held_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 3 spent_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 4 remaining_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 5 pace_micro_dollars_per_hour type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 6 consented_minimum_pace_micro_dollars_per_hour type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 7 consented_maximum_pace_micro_dollars_per_hour type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.HostSpendView 8 status type=14 label=1 presence=false target=.dungeonflux.public.v1.SessionSpendStatus oneof=-
+field dungeonflux.public.v1.HostSpendView 9 may_pause_expensive_media type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.InitiativeRoll 1 participant_id type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.InitiativeRoll 2 name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.InitiativeRoll 3 die type=13 label=1 presence=false target=- oneof=-
@@ -251,14 +612,37 @@ field dungeonflux.public.v1.JourneyView 10 table_log type=11 label=3 presence=fa
 field dungeonflux.public.v1.JourneyView 11 tempo type=11 label=1 presence=false target=.dungeonflux.public.v1.TempoCue oneof=-
 field dungeonflux.public.v1.JourneyView 12 table_choices type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 13 standing type=11 label=3 presence=false target=.dungeonflux.public.v1.NpcStanding oneof=-
+field dungeonflux.public.v1.JourneyView 14 live_faces type=11 label=3 presence=false target=.dungeonflux.public.v1.LiveFace oneof=-
+field dungeonflux.public.v1.JourneyView 15 presentation_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 16 reply_speaker type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 17 composing type=11 label=3 presence=false target=.dungeonflux.public.v1.ComposingHero oneof=-
 field dungeonflux.public.v1.JourneyView 2 room_code type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 3 join_path type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 30 home type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeTheme oneof=-
+field dungeonflux.public.v1.JourneyView 31 home_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
+field dungeonflux.public.v1.JourneyView 32 home_video_path type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 4 party type=11 label=3 presence=false target=.dungeonflux.public.v1.PartyMemberView oneof=-
+field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 5 creation type=11 label=1 presence=false target=.dungeonflux.public.v1.CharacterCreationOffer oneof=-
+field dungeonflux.public.v1.JourneyView 50 adventure_ended type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 51 adventure_title type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 6 own_character type=11 label=1 presence=false target=.dungeonflux.public.v1.CharacterSheet oneof=-
 field dungeonflux.public.v1.JourneyView 7 combat type=11 label=1 presence=false target=.dungeonflux.public.v1.CombatView oneof=-
+field dungeonflux.public.v1.JourneyView 70 choice_hints_hidden type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 75 adventure_name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 76 preparing_adventure type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.JourneyView 77 notebook type=11 label=3 presence=false target=.dungeonflux.public.v1.NotebookEntry oneof=-
+field dungeonflux.public.v1.JourneyView 78 kill_shot type=11 label=1 presence=false target=.dungeonflux.public.v1.KillShot oneof=-
 field dungeonflux.public.v1.JourneyView 8 speaker type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.JourneyView 9 dialogue type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.KillShot 1 clip_path type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.KillShot 2 still_path type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.KillShot 3 killer type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.KillShot 4 victim type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.KillShot 5 state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
+field dungeonflux.public.v1.KillShot 6 id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.KillShot 7 sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.KillShot 8 epoch type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.LegalCombatTarget 1 participant_id type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.LegalCombatTarget 2 weapon type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.LegalCombatTarget 3 cover type=9 label=1 presence=false target=- oneof=-
@@ -266,10 +650,109 @@ field dungeonflux.public.v1.LegalCombatTarget 4 range_reason type=9 label=1 pres
 field dungeonflux.public.v1.LegalCombatTarget 5 disadvantage type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.LegalCombatTarget 6 reasons type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.LegalCombatTarget 7 option_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 2 design type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyChoice oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 3 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 4 portrait_scenery type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 5 private_backstory type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroIdentity 6 sealed_backstory type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroReference 1 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroReference 2 revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 1 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 2 revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 3 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 4 species type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 5 character_class type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 6 portrait type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 7 portrait_media_type type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LibraryHeroSummary 8 portrait_key type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ListMyHeroesRequest 1 key type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ListMyHeroesRequest 2 after_hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ListMyHeroesResponse 1 heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.LibraryHeroSummary oneof=-
+field dungeonflux.public.v1.ListMyHeroesResponse 2 next_cursor type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LiveFace 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LiveFace 2 sprite type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LiveFace 3 battle_sprite type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LoadHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LoadHeroRequest 2 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LoadHeroRequest 3 new_hero type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.LoadHeroResponse 1 hero type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroIdentity oneof=-
+field dungeonflux.public.v1.LoadHeroResponse 2 summary type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroSummary oneof=-
+field dungeonflux.public.v1.MachineCaption 1 speaker type=9 label=1 presence=true target=- oneof=_speaker
+field dungeonflux.public.v1.MachineCaption 2 text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineClarification 1 question type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineClarification 2 options type=11 label=3 presence=false target=.dungeonflux.public.v1.MachineOffer oneof=-
+field dungeonflux.public.v1.MachineDecline 1 code type=14 label=1 presence=false target=.dungeonflux.public.v1.RejectionCode oneof=-
+field dungeonflux.public.v1.MachineDecline 2 reason type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineDecline 3 missing type=9 label=1 presence=true target=- oneof=_missing
+field dungeonflux.public.v1.MachineDecline 4 alternatives type=11 label=3 presence=false target=.dungeonflux.public.v1.MachineOffer oneof=-
+field dungeonflux.public.v1.MachineImage 1 media type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineImage 2 caption type=9 label=1 presence=true target=- oneof=_caption
+field dungeonflux.public.v1.MachineIntent 1 machine_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineIntent 2 offer_id type=9 label=1 presence=true target=- oneof=_offer_id
+field dungeonflux.public.v1.MachineIntent 3 tap type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineTap oneof=payload
+field dungeonflux.public.v1.MachineIntent 4 submit_text type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineText oneof=payload
+field dungeonflux.public.v1.MachineIntent 5 say type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineText oneof=payload
+field dungeonflux.public.v1.MachineIntent 6 pending_answer type=11 label=1 presence=false target=.dungeonflux.public.v1.MachinePendingAnswer oneof=payload
+field dungeonflux.public.v1.MachineIntent 7 safety_card type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineSafetyCard oneof=payload
+field dungeonflux.public.v1.MachineNote 1 text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineOffer 1 offer_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineOffer 2 label type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineOffer 3 explain type=9 label=1 presence=true target=- oneof=_explain
+field dungeonflux.public.v1.MachineOffer 4 unavailable_reason type=9 label=1 presence=true target=- oneof=_unavailable_reason
+field dungeonflux.public.v1.MachineOffer 5 group type=9 label=1 presence=true target=- oneof=_group
+field dungeonflux.public.v1.MachinePartyMember 1 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachinePartyMember 2 hit_points type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachinePartyMember 3 maximum_hit_points type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachinePartyMember 4 conditions type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachinePending 1 pending_id type=4 label=1 presence=true target=- oneof=_pending_id
+field dungeonflux.public.v1.MachinePendingAnswer 1 pending_id type=4 label=1 presence=true target=- oneof=_pending_id
+field dungeonflux.public.v1.MachineReceipt 1 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
+field dungeonflux.public.v1.MachineReceipt 2 revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
+field dungeonflux.public.v1.MachineReceipt 3 replayed type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineReceipt 4 utterance_id type=4 label=1 presence=true target=- oneof=_utterance_id
+field dungeonflux.public.v1.MachineReceipt 5 applied type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineApplied oneof=result
+field dungeonflux.public.v1.MachineReceipt 6 needs_clarification type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineClarification oneof=result
+field dungeonflux.public.v1.MachineReceipt 7 declined type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineDecline oneof=result
+field dungeonflux.public.v1.MachineReceipt 8 pending type=11 label=1 presence=false target=.dungeonflux.public.v1.MachinePending oneof=result
+field dungeonflux.public.v1.MachineSeatView 1 hero type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineSeatView 2 goal type=9 label=1 presence=true target=- oneof=_goal
+field dungeonflux.public.v1.MachineSeatView 3 narration type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineSeatView 4 note type=11 label=1 presence=true target=.dungeonflux.public.v1.MachineNote oneof=_note
+field dungeonflux.public.v1.MachineSeatView 5 image type=11 label=1 presence=true target=.dungeonflux.public.v1.MachineImage oneof=_image
+field dungeonflux.public.v1.MachineSeatView 6 offers type=11 label=3 presence=false target=.dungeonflux.public.v1.MachineOffer oneof=-
+field dungeonflux.public.v1.MachineSharedScreen 1 place type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineSharedScreen 2 caption type=11 label=1 presence=true target=.dungeonflux.public.v1.MachineCaption oneof=_caption
+field dungeonflux.public.v1.MachineSharedScreen 3 backdrop type=11 label=1 presence=true target=.dungeonflux.public.v1.MachineImage oneof=_backdrop
+field dungeonflux.public.v1.MachineSharedScreen 4 card type=11 label=1 presence=true target=.dungeonflux.public.v1.MachineImage oneof=_card
+field dungeonflux.public.v1.MachineSharedScreen 5 party type=11 label=3 presence=false target=.dungeonflux.public.v1.MachinePartyMember oneof=-
+field dungeonflux.public.v1.MachineStatus 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.MachineStatusKind oneof=-
+field dungeonflux.public.v1.MachineStatus 2 waiting_who type=9 label=1 presence=true target=- oneof=_waiting_who
+field dungeonflux.public.v1.MachineStatus 3 waiting_what type=9 label=1 presence=true target=- oneof=_waiting_what
+field dungeonflux.public.v1.MachineText 1 utterance_id type=4 label=1 presence=true target=- oneof=_utterance_id
+field dungeonflux.public.v1.MachineText 2 text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineView 1 revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
+field dungeonflux.public.v1.MachineView 2 machine_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineView 3 state_label type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineView 4 status type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineStatus oneof=-
+field dungeonflux.public.v1.MachineView 5 reason type=9 label=1 presence=true target=- oneof=_reason
+field dungeonflux.public.v1.MachineView 6 readout type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.MachineView 8 shared_screen type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineSharedScreen oneof=audience
+field dungeonflux.public.v1.MachineView 9 seat type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineSeatView oneof=audience
 field dungeonflux.public.v1.MemberId 1 value type=12 label=1 presence=true target=- oneof=_value
+field dungeonflux.public.v1.NonPayingSpendView 1 status type=14 label=1 presence=false target=.dungeonflux.public.v1.SessionSpendStatus oneof=-
+field dungeonflux.public.v1.NotebookEntry 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.NotebookKind oneof=-
+field dungeonflux.public.v1.NotebookEntry 2 title type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 3 text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 4 scene type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 5 order type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NotebookEntry 6 owner type=9 label=1 presence=true target=- oneof=_owner
+field dungeonflux.public.v1.NotebookEntry 7 author type=9 label=1 presence=true target=- oneof=_author
+field dungeonflux.public.v1.NotebookEntry 8 attitude type=9 label=1 presence=true target=- oneof=_attitude
 field dungeonflux.public.v1.NpcStanding 1 npc_id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.NpcStanding 2 name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.NpcStanding 3 attitude type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.NpcStanding 4 perceived_reaction type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.OperationId 1 value type=12 label=1 presence=true target=- oneof=_value
 field dungeonflux.public.v1.OperationObservation 1 code type=14 label=1 presence=false target=.dungeonflux.public.v1.RejectionCode oneof=-
 field dungeonflux.public.v1.PartyMemberView 1 name type=9 label=1 presence=false target=- oneof=-
@@ -277,6 +760,8 @@ field dungeonflux.public.v1.PartyMemberView 10 conditions type=9 label=3 presenc
 field dungeonflux.public.v1.PartyMemberView 11 attack_style type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PartyMemberView 12 voice_set type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PartyMemberView 13 portrait type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PartyMemberView 14 creature_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PartyMemberView 15 size type=14 label=1 presence=false target=.dungeonflux.public.v1.CreatureSize oneof=-
 field dungeonflux.public.v1.PartyMemberView 2 character_ready type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PartyMemberView 3 hit_points type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PartyMemberView 4 maximum_hit_points type=13 label=1 presence=false target=- oneof=-
@@ -285,7 +770,55 @@ field dungeonflux.public.v1.PartyMemberView 6 unconscious type=8 label=1 presenc
 field dungeonflux.public.v1.PartyMemberView 7 participant_id type=12 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PartyMemberView 8 cell type=11 label=1 presence=false target=.dungeonflux.public.v1.GridCell oneof=-
 field dungeonflux.public.v1.PartyMemberView 9 side type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PayerSpendView 1 own_remaining_authorization_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PayerSpendView 2 own_share_micro_dollars type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PayerSpendView 3 status type=14 label=1 presence=false target=.dungeonflux.public.v1.SessionSpendStatus oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 1 spec_label type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 10 sample_rate type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 2 setting_family type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 3 state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlaceMusicState oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 4 spec_key type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 5 layer_paths type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 6 ambience_path type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 7 fallback_note type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 8 bpm type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlaceMusicPlan 9 loop_samples type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateActorHead 1 actor_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateActorHead 2 bubble_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
+field dungeonflux.public.v1.PlateActorHead 3 head_x_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateActorHead 4 head_y_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateActorHead 5 head_width_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateActorHead 6 head_height_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 1 hero_index type=13 label=1 presence=false target=- oneof=person
+field dungeonflux.public.v1.PlateFigureMask 10 head_top_y_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 11 free_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
+field dungeonflux.public.v1.PlateFigureMask 12 inferred type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 13 mask_index type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 14 mask_url type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 2 actor_id type=9 label=1 presence=false target=- oneof=person
+field dungeonflux.public.v1.PlateFigureMask 3 source_width type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 4 source_height type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 5 left type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 6 top type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 7 right type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 8 bottom type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateFigureMask 9 head_top_x_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 1 hero_index type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 2 bubble_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
+field dungeonflux.public.v1.PlateHead 3 head_x_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 4 head_y_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 5 head_width_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateHead 6 head_height_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 1 bubble_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
+field dungeonflux.public.v1.PlateLayout 2 head_x_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 3 head_y_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 4 head_width_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 5 head_height_permille type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlateLayout 6 heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.PlateHead oneof=-
+field dungeonflux.public.v1.PlateLayout 7 actors type=11 label=3 presence=false target=.dungeonflux.public.v1.PlateActorHead oneof=-
+field dungeonflux.public.v1.PlateLayout 8 figure_masks type=11 label=3 presence=false target=.dungeonflux.public.v1.PlateFigureMask oneof=-
 field dungeonflux.public.v1.PlayerGameplayView 1 offer_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PlayerGameplayView 10 operational_notice type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PlayerGameplayView 2 narration type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.PlayerGameplayView 3 check type=11 label=1 presence=false target=.dungeonflux.public.v1.AbilityCheckResult oneof=-
 field dungeonflux.public.v1.PlayerGameplayView 4 private_clue type=9 label=1 presence=false target=- oneof=-
@@ -293,6 +826,29 @@ field dungeonflux.public.v1.PlayerGameplayView 5 action_available type=8 label=1
 field dungeonflux.public.v1.PlayerGameplayView 6 offers type=11 label=3 presence=false target=.dungeonflux.public.v1.GameplayActionOffer oneof=-
 field dungeonflux.public.v1.PlayerGameplayView 7 scene type=11 label=1 presence=false target=.dungeonflux.public.v1.GameplayScene oneof=-
 field dungeonflux.public.v1.PlayerGameplayView 8 journey type=11 label=1 presence=false target=.dungeonflux.public.v1.JourneyView oneof=-
+field dungeonflux.public.v1.PlayerGameplayView 9 spend type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionSpendView oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 1 scope type=11 label=1 presence=false target=.dungeonflux.public.v1.WatchViewRequest oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 2 producer_id type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 3 batch_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 4 otlp_logs type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryRequest 5 dropped_records type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryResponse 1 batch_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryResponse 2 accepted_records type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentationTelemetryResponse 3 replayed type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentedRequest 1 sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentedRequest 2 display_instance type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentedRequest 3 layout_readback_json type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PresentedResponse 1 released_sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 4 appearance_text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 5 backstory_text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 6 current_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityRequest 7 client_binding_id type=11 label=1 presence=false target=.dungeonflux.public.v1.ClientBindingId oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityResponse 1 proposed_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityResponse 2 warnings type=9 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.PreviewHeroIdentityResponse 3 source type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
@@ -301,9 +857,20 @@ field dungeonflux.public.v1.RawDialogueRequest 5 text type=9 label=1 presence=fa
 field dungeonflux.public.v1.RawDialogueRequest 6 context type=14 label=1 presence=false target=.dungeonflux.public.v1.DialogueContext oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 7 finality type=14 label=1 presence=false target=.dungeonflux.public.v1.DialogueFinality oneof=-
 field dungeonflux.public.v1.RawDialogueRequest 8 offer_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ReclaimRoomRequest 1 room_code type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ReclaimRoomRequest 2 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
+field dungeonflux.public.v1.ReclaimRoomRequest 3 seat_token type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.ReclaimRoomResponse 1 joined type=11 label=1 presence=false target=.dungeonflux.public.v1.JoinedRoom oneof=outcome
+field dungeonflux.public.v1.ReclaimRoomResponse 2 refused type=14 label=1 presence=false target=.dungeonflux.public.v1.SeatReclaimRefusal oneof=outcome
+field dungeonflux.public.v1.ReclaimRoomResponse 3 away_heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.AwayHero oneof=-
 field dungeonflux.public.v1.RecoveryEpoch 1 value type=4 label=1 presence=true target=- oneof=_value
 field dungeonflux.public.v1.Rejection 1 code type=14 label=1 presence=false target=.dungeonflux.public.v1.RejectionCode oneof=-
 field dungeonflux.public.v1.RunId 1 value type=12 label=1 presence=true target=- oneof=_value
+field dungeonflux.public.v1.SaveMySeatHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SaveMySeatHeroRequest 2 scope type=11 label=1 presence=false target=.dungeonflux.public.v1.WatchViewRequest oneof=-
+field dungeonflux.public.v1.SaveMySeatHeroRequest 3 loaded_hero type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroReference oneof=-
+field dungeonflux.public.v1.SaveMySeatHeroResponse 1 hero_id type=3 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SaveMySeatHeroResponse 2 revision type=4 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneActor 1 id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneActor 2 name type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneActor 3 role type=14 label=1 presence=false target=.dungeonflux.public.v1.SceneRole oneof=-
@@ -311,14 +878,40 @@ field dungeonflux.public.v1.SceneActor 4 sprite type=9 label=1 presence=false ta
 field dungeonflux.public.v1.SceneActor 5 portrait type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneActor 6 speaking type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SceneActor 7 live_sprite type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 1 thing_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 10 holder_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 11 picture_description type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 2 name type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 3 detail type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 4 image_path type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 5 image_state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateState oneof=-
+field dungeonflux.public.v1.SceneItemCard 6 state_revision type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 7 observation_only type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 8 holder type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SceneItemCard 9 owner_id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SessionId 1 value type=12 label=1 presence=true target=- oneof=_value
 field dungeonflux.public.v1.SessionRevision 1 epoch type=11 label=1 presence=false target=.dungeonflux.public.v1.RecoveryEpoch oneof=-
 field dungeonflux.public.v1.SessionRevision 2 sequence type=4 label=1 presence=true target=- oneof=_sequence
+field dungeonflux.public.v1.SessionSpendView 1 host type=11 label=1 presence=false target=.dungeonflux.public.v1.HostSpendView oneof=role
+field dungeonflux.public.v1.SessionSpendView 2 payer type=11 label=1 presence=false target=.dungeonflux.public.v1.PayerSpendView oneof=role
+field dungeonflux.public.v1.SessionSpendView 3 non_paying_player type=11 label=1 presence=false target=.dungeonflux.public.v1.NonPayingSpendView oneof=role
+field dungeonflux.public.v1.SessionSpendView 4 display type=11 label=1 presence=false target=.dungeonflux.public.v1.DisplaySpendView oneof=role
 field dungeonflux.public.v1.SheetFact 1 label type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SheetFact 2 value type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 1 method type=14 label=1 presence=false target=.dungeonflux.public.v1.StabilizationMethod oneof=-
+field dungeonflux.public.v1.StabilizationResult 2 die type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 3 wisdom_modifier type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 4 dc type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 5 succeeded type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StabilizationResult 6 uses_left type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StageFloor 1 feet_mid type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StageFloor 2 feet_far type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StageFloor 3 key_from_left type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.StageFloor 4 wet type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SubmitActionRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
 field dungeonflux.public.v1.SubmitActionRequest 10 graze type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SubmitActionRequest 11 action_choices type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyChoice oneof=-
+field dungeonflux.public.v1.SubmitActionRequest 12 table_setting type=11 label=1 presence=false target=.dungeonflux.public.v1.TableSettingChange oneof=-
 field dungeonflux.public.v1.SubmitActionRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
 field dungeonflux.public.v1.SubmitActionRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
 field dungeonflux.public.v1.SubmitActionRequest 4 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
@@ -329,12 +922,37 @@ field dungeonflux.public.v1.SubmitActionRequest 8 character type=11 label=1 pres
 field dungeonflux.public.v1.SubmitActionRequest 9 savage_attacker type=8 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.SubmitActionResponse 1 committed_decision type=11 label=1 presence=false target=.dungeonflux.public.v1.DecisionReceipt oneof=outcome
 field dungeonflux.public.v1.SubmitActionResponse 2 operation_observation type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationObservation oneof=outcome
+field dungeonflux.public.v1.SubmitMachineIntentRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
+field dungeonflux.public.v1.SubmitMachineIntentRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
+field dungeonflux.public.v1.SubmitMachineIntentRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
+field dungeonflux.public.v1.SubmitMachineIntentRequest 4 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
+field dungeonflux.public.v1.SubmitMachineIntentRequest 5 intent type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineIntent oneof=-
+field dungeonflux.public.v1.SubmitMachineIntentResponse 1 receipt type=11 label=1 presence=false target=.dungeonflux.public.v1.MachineReceipt oneof=outcome
+field dungeonflux.public.v1.SubmitMachineIntentResponse 2 operation_observation type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationObservation oneof=outcome
+field dungeonflux.public.v1.SupportedCharacterDesign 1 species_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SupportedCharacterDesign 2 class_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.SupportedCharacterDesign 3 background_id type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.TableLine 1 sequence type=4 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableLine 10 audio_part_urls type=9 label=3 presence=false target=- oneof=-
 field dungeonflux.public.v1.TableLine 2 speaker type=9 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.TableLine 3 role type=14 label=1 presence=false target=.dungeonflux.public.v1.TableRole oneof=-
 field dungeonflux.public.v1.TableLine 4 hero_index type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.TableLine 5 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.TableKind oneof=-
 field dungeonflux.public.v1.TableLine 6 text type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableLine 7 actor_id type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableLine 8 roll type=11 label=1 presence=false target=.dungeonflux.public.v1.TableRoll oneof=-
+field dungeonflux.public.v1.TableLine 9 audio_url type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 1 faces type=13 label=3 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 10 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.RollKind oneof=-
+field dungeonflux.public.v1.TableRoll 2 kept type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 3 roll_mode type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 4 modifier type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 5 total type=17 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 6 against type=14 label=1 presence=false target=.dungeonflux.public.v1.RollAgainst oneof=-
+field dungeonflux.public.v1.TableRoll 7 target_number type=13 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 8 succeeded type=8 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableRoll 9 label type=9 label=1 presence=false target=- oneof=-
+field dungeonflux.public.v1.TableSettingChange 1 choice_hints_hidden type=8 label=1 presence=false target=- oneof=value
 field dungeonflux.public.v1.TempoCue 1 intensity_permille type=13 label=1 presence=false target=- oneof=-
 field dungeonflux.public.v1.TempoCue 2 phase type=14 label=1 presence=false target=.dungeonflux.public.v1.TempoPhase oneof=-
 field dungeonflux.public.v1.TempoCue 3 sequence type=4 label=1 presence=false target=- oneof=-
@@ -360,6 +978,14 @@ message dungeonflux.experimental.contract.v1.Identities
 message dungeonflux.experimental.transport.v1.Sample
 message dungeonflux.public.v1.AbilityCheckResult
 message dungeonflux.public.v1.AcceptedAction
+message dungeonflux.public.v1.AwayHero
+message dungeonflux.public.v1.BattleCameraHome
+message dungeonflux.public.v1.BattleCameraOverride
+message dungeonflux.public.v1.BattleTechnique
+message dungeonflux.public.v1.BattleTechniqueCard
+message dungeonflux.public.v1.BattleTechniqueRoll
+message dungeonflux.public.v1.BattleTechniqueStrike
+message dungeonflux.public.v1.BattleWorld
 message dungeonflux.public.v1.BuildIdentity
 message dungeonflux.public.v1.CancelDialogueRequest
 message dungeonflux.public.v1.CharacterCreationOffer
@@ -367,19 +993,39 @@ message dungeonflux.public.v1.CharacterSelection
 message dungeonflux.public.v1.CharacterSheet
 message dungeonflux.public.v1.ClientBindingId
 message dungeonflux.public.v1.CombatAmmunition
+message dungeonflux.public.v1.CombatDisplayMetadata
 message dungeonflux.public.v1.CombatOutcome
 message dungeonflux.public.v1.CombatView
+message dungeonflux.public.v1.ComposeRequest
+message dungeonflux.public.v1.ComposeResponse
+message dungeonflux.public.v1.ComposingHero
 message dungeonflux.public.v1.ConfirmDialogueRequest
+message dungeonflux.public.v1.CurrentAdventureRequest
+message dungeonflux.public.v1.CurrentAdventureResponse
+message dungeonflux.public.v1.DamageRoll
+message dungeonflux.public.v1.DeathSaveState
 message dungeonflux.public.v1.DecisionReceipt
+message dungeonflux.public.v1.DeleteHeroRequest
+message dungeonflux.public.v1.DeleteHeroResponse
 message dungeonflux.public.v1.DialogueResponse
 message dungeonflux.public.v1.DisplayGameplayView
 message dungeonflux.public.v1.DisplaySceneActor
 message dungeonflux.public.v1.DisplaySceneGraph
 message dungeonflux.public.v1.DisplaySceneSet
+message dungeonflux.public.v1.DisplaySpendView
+message dungeonflux.public.v1.ExpensiveWorkQuote
+message dungeonflux.public.v1.FightLine
 message dungeonflux.public.v1.GameplayActionOffer
 message dungeonflux.public.v1.GameplayScene
 message dungeonflux.public.v1.GridCell
 message dungeonflux.public.v1.HarborSceneOption
+message dungeonflux.public.v1.HeroAppearance
+message dungeonflux.public.v1.HeroIdentity
+message dungeonflux.public.v1.HeroPortraitRequest
+message dungeonflux.public.v1.HeroPortraitResponse
+message dungeonflux.public.v1.HomeMood
+message dungeonflux.public.v1.HomeTheme
+message dungeonflux.public.v1.HostSpendView
 message dungeonflux.public.v1.InitiativeRoll
 message dungeonflux.public.v1.JoinRefusal
 message dungeonflux.public.v1.JoinRoomRequest
@@ -389,24 +1035,79 @@ message dungeonflux.public.v1.JourneyChoice
 message dungeonflux.public.v1.JourneyGroup
 message dungeonflux.public.v1.JourneyOption
 message dungeonflux.public.v1.JourneyView
+message dungeonflux.public.v1.KillShot
 message dungeonflux.public.v1.LegalCombatTarget
+message dungeonflux.public.v1.LibraryHeroIdentity
+message dungeonflux.public.v1.LibraryHeroReference
+message dungeonflux.public.v1.LibraryHeroSummary
+message dungeonflux.public.v1.ListMyHeroesRequest
+message dungeonflux.public.v1.ListMyHeroesResponse
+message dungeonflux.public.v1.LiveFace
+message dungeonflux.public.v1.LoadHeroRequest
+message dungeonflux.public.v1.LoadHeroResponse
+message dungeonflux.public.v1.MachineApplied
+message dungeonflux.public.v1.MachineCaption
+message dungeonflux.public.v1.MachineClarification
+message dungeonflux.public.v1.MachineDecline
+message dungeonflux.public.v1.MachineImage
+message dungeonflux.public.v1.MachineIntent
+message dungeonflux.public.v1.MachineNote
+message dungeonflux.public.v1.MachineOffer
+message dungeonflux.public.v1.MachinePartyMember
+message dungeonflux.public.v1.MachinePending
+message dungeonflux.public.v1.MachinePendingAnswer
+message dungeonflux.public.v1.MachineReceipt
+message dungeonflux.public.v1.MachineSafetyCard
+message dungeonflux.public.v1.MachineSeatView
+message dungeonflux.public.v1.MachineSharedScreen
+message dungeonflux.public.v1.MachineStatus
+message dungeonflux.public.v1.MachineTap
+message dungeonflux.public.v1.MachineText
+message dungeonflux.public.v1.MachineView
 message dungeonflux.public.v1.MemberId
+message dungeonflux.public.v1.NonPayingSpendView
+message dungeonflux.public.v1.NotebookEntry
 message dungeonflux.public.v1.NpcStanding
 message dungeonflux.public.v1.OperationId
 message dungeonflux.public.v1.OperationObservation
 message dungeonflux.public.v1.PartyMemberView
+message dungeonflux.public.v1.PayerSpendView
+message dungeonflux.public.v1.PlaceMusicPlan
+message dungeonflux.public.v1.PlateActorHead
+message dungeonflux.public.v1.PlateFigureMask
+message dungeonflux.public.v1.PlateHead
+message dungeonflux.public.v1.PlateLayout
 message dungeonflux.public.v1.PlayerGameplayView
+message dungeonflux.public.v1.PresentationTelemetryRequest
+message dungeonflux.public.v1.PresentationTelemetryResponse
+message dungeonflux.public.v1.PresentedRequest
+message dungeonflux.public.v1.PresentedResponse
+message dungeonflux.public.v1.PreviewHeroIdentityRequest
+message dungeonflux.public.v1.PreviewHeroIdentityResponse
 message dungeonflux.public.v1.RawDialogueRequest
+message dungeonflux.public.v1.ReclaimRoomRequest
+message dungeonflux.public.v1.ReclaimRoomResponse
 message dungeonflux.public.v1.RecoveryEpoch
 message dungeonflux.public.v1.Rejection
 message dungeonflux.public.v1.RunId
+message dungeonflux.public.v1.SaveMySeatHeroRequest
+message dungeonflux.public.v1.SaveMySeatHeroResponse
 message dungeonflux.public.v1.SceneActor
+message dungeonflux.public.v1.SceneItemCard
 message dungeonflux.public.v1.SessionId
 message dungeonflux.public.v1.SessionRevision
+message dungeonflux.public.v1.SessionSpendView
 message dungeonflux.public.v1.SheetFact
+message dungeonflux.public.v1.StabilizationResult
+message dungeonflux.public.v1.StageFloor
 message dungeonflux.public.v1.SubmitActionRequest
 message dungeonflux.public.v1.SubmitActionResponse
+message dungeonflux.public.v1.SubmitMachineIntentRequest
+message dungeonflux.public.v1.SubmitMachineIntentResponse
+message dungeonflux.public.v1.SupportedCharacterDesign
 message dungeonflux.public.v1.TableLine
+message dungeonflux.public.v1.TableRoll
+message dungeonflux.public.v1.TableSettingChange
 message dungeonflux.public.v1.TempoCue
 message dungeonflux.public.v1.TurnBudget
 message dungeonflux.public.v1.ViewMessage
@@ -415,599 +1116,105 @@ method dungeonflux.experimental.transport.v1.TransportFixture Bidi .dungeonflux.
 method dungeonflux.experimental.transport.v1.TransportFixture ClientStream .dungeonflux.experimental.transport.v1.Sample .dungeonflux.experimental.transport.v1.Sample client-stream=true server-stream=false
 method dungeonflux.experimental.transport.v1.TransportFixture ServerStream .dungeonflux.experimental.transport.v1.Sample .dungeonflux.experimental.transport.v1.Sample client-stream=false server-stream=true
 method dungeonflux.experimental.transport.v1.TransportFixture Unary .dungeonflux.experimental.transport.v1.Sample .dungeonflux.experimental.transport.v1.Sample client-stream=false server-stream=false
+method dungeonflux.public.v1.ActionService GetHeroPortrait .dungeonflux.public.v1.HeroPortraitRequest .dungeonflux.public.v1.HeroPortraitResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.ActionService PreviewHeroIdentity .dungeonflux.public.v1.PreviewHeroIdentityRequest .dungeonflux.public.v1.PreviewHeroIdentityResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.ActionService RequestHeroPortrait .dungeonflux.public.v1.HeroPortraitRequest .dungeonflux.public.v1.HeroPortraitResponse client-stream=false server-stream=false
 method dungeonflux.public.v1.ActionService Submit .dungeonflux.public.v1.SubmitActionRequest .dungeonflux.public.v1.SubmitActionResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.ActionService SubmitMachineIntent .dungeonflux.public.v1.SubmitMachineIntentRequest .dungeonflux.public.v1.SubmitMachineIntentResponse client-stream=false server-stream=false
 method dungeonflux.public.v1.DialogueService Cancel .dungeonflux.public.v1.CancelDialogueRequest .dungeonflux.public.v1.DialogueResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.DialogueService Compose .dungeonflux.public.v1.ComposeRequest .dungeonflux.public.v1.ComposeResponse client-stream=false server-stream=false
 method dungeonflux.public.v1.DialogueService Confirm .dungeonflux.public.v1.ConfirmDialogueRequest .dungeonflux.public.v1.SubmitActionResponse client-stream=false server-stream=false
 method dungeonflux.public.v1.DialogueService Submit .dungeonflux.public.v1.RawDialogueRequest .dungeonflux.public.v1.DialogueResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.HeroLibraryService DeleteHero .dungeonflux.public.v1.DeleteHeroRequest .dungeonflux.public.v1.DeleteHeroResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.HeroLibraryService ListMyHeroes .dungeonflux.public.v1.ListMyHeroesRequest .dungeonflux.public.v1.ListMyHeroesResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.HeroLibraryService LoadHero .dungeonflux.public.v1.LoadHeroRequest .dungeonflux.public.v1.LoadHeroResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.HeroLibraryService SaveMySeatHero .dungeonflux.public.v1.SaveMySeatHeroRequest .dungeonflux.public.v1.SaveMySeatHeroResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.PresentationTelemetryService Upload .dungeonflux.public.v1.PresentationTelemetryRequest .dungeonflux.public.v1.PresentationTelemetryResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.RoomService CurrentAdventure .dungeonflux.public.v1.CurrentAdventureRequest .dungeonflux.public.v1.CurrentAdventureResponse client-stream=false server-stream=false
 method dungeonflux.public.v1.RoomService Join .dungeonflux.public.v1.JoinRoomRequest .dungeonflux.public.v1.JoinRoomResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.RoomService Reclaim .dungeonflux.public.v1.ReclaimRoomRequest .dungeonflux.public.v1.ReclaimRoomResponse client-stream=false server-stream=false
+method dungeonflux.public.v1.SessionService ReportPresented .dungeonflux.public.v1.PresentedRequest .dungeonflux.public.v1.PresentedResponse client-stream=false server-stream=false
 method dungeonflux.public.v1.SessionService Watch .dungeonflux.public.v1.WatchViewRequest .dungeonflux.public.v1.ViewMessage client-stream=false server-stream=true
+method dungeonflux.public.v1.SessionService WatchMachine .dungeonflux.public.v1.WatchViewRequest .dungeonflux.public.v1.MachineView client-stream=false server-stream=true
 oneof dungeonflux.experimental.contract.v1.Capability _kind
 oneof dungeonflux.experimental.contract.v1.Capability _required
 oneof dungeonflux.experimental.contract.v1.CompatibilityFixture _protocol_revision
 oneof dungeonflux.experimental.contract.v1.CompatibilityFixture payload
+oneof dungeonflux.public.v1.BattleTechnique _action_surge_at
+oneof dungeonflux.public.v1.BattleTechnique _centre
+oneof dungeonflux.public.v1.BattleTechnique _radius_m
+oneof dungeonflux.public.v1.BattleTechniqueRoll _attack_card
+oneof dungeonflux.public.v1.BattleTechniqueRoll _d20
+oneof dungeonflux.public.v1.BattleTechniqueStrike _card
+oneof dungeonflux.public.v1.BattleTechniqueStrike _hit_points_after
+oneof dungeonflux.public.v1.BattleTechniqueStrike _roll
 oneof dungeonflux.public.v1.BuildIdentity _configuration_revision
 oneof dungeonflux.public.v1.BuildIdentity _content_revision
 oneof dungeonflux.public.v1.BuildIdentity _native_revision
 oneof dungeonflux.public.v1.BuildIdentity _source_revision
 oneof dungeonflux.public.v1.BuildIdentity _wasm_revision
 oneof dungeonflux.public.v1.ClientBindingId _value
+oneof dungeonflux.public.v1.CombatDisplayMetadata _ability_modifier
+oneof dungeonflux.public.v1.CombatDisplayMetadata _icon
+oneof dungeonflux.public.v1.CombatDisplayMetadata _mastery
+oneof dungeonflux.public.v1.CombatDisplayMetadata _other_modifier
+oneof dungeonflux.public.v1.CombatDisplayMetadata _proficiency_modifier
+oneof dungeonflux.public.v1.CombatOutcome _display_metadata
+oneof dungeonflux.public.v1.CombatOutcome _presentation
 oneof dungeonflux.public.v1.DecisionReceipt outcome
+oneof dungeonflux.public.v1.DisplayGameplayView _encounter_xp
+oneof dungeonflux.public.v1.DisplaySceneActor _look_at
 oneof dungeonflux.public.v1.JoinRoomResponse outcome
+oneof dungeonflux.public.v1.MachineCaption _speaker
+oneof dungeonflux.public.v1.MachineDecline _missing
+oneof dungeonflux.public.v1.MachineImage _caption
+oneof dungeonflux.public.v1.MachineIntent _offer_id
+oneof dungeonflux.public.v1.MachineIntent payload
+oneof dungeonflux.public.v1.MachineOffer _explain
+oneof dungeonflux.public.v1.MachineOffer _group
+oneof dungeonflux.public.v1.MachineOffer _unavailable_reason
+oneof dungeonflux.public.v1.MachinePending _pending_id
+oneof dungeonflux.public.v1.MachinePendingAnswer _pending_id
+oneof dungeonflux.public.v1.MachineReceipt _utterance_id
+oneof dungeonflux.public.v1.MachineReceipt result
+oneof dungeonflux.public.v1.MachineSeatView _goal
+oneof dungeonflux.public.v1.MachineSeatView _image
+oneof dungeonflux.public.v1.MachineSeatView _note
+oneof dungeonflux.public.v1.MachineSharedScreen _backdrop
+oneof dungeonflux.public.v1.MachineSharedScreen _caption
+oneof dungeonflux.public.v1.MachineSharedScreen _card
+oneof dungeonflux.public.v1.MachineStatus _waiting_what
+oneof dungeonflux.public.v1.MachineStatus _waiting_who
+oneof dungeonflux.public.v1.MachineText _utterance_id
+oneof dungeonflux.public.v1.MachineView _reason
+oneof dungeonflux.public.v1.MachineView audience
 oneof dungeonflux.public.v1.MemberId _value
+oneof dungeonflux.public.v1.NotebookEntry _attitude
+oneof dungeonflux.public.v1.NotebookEntry _author
+oneof dungeonflux.public.v1.NotebookEntry _owner
 oneof dungeonflux.public.v1.OperationId _value
+oneof dungeonflux.public.v1.PlateFigureMask person
+oneof dungeonflux.public.v1.ReclaimRoomResponse outcome
 oneof dungeonflux.public.v1.RecoveryEpoch _value
 oneof dungeonflux.public.v1.RunId _value
 oneof dungeonflux.public.v1.SessionId _value
 oneof dungeonflux.public.v1.SessionRevision _sequence
+oneof dungeonflux.public.v1.SessionSpendView role
 oneof dungeonflux.public.v1.SubmitActionResponse outcome
+oneof dungeonflux.public.v1.SubmitMachineIntentResponse outcome
+oneof dungeonflux.public.v1.TableSettingChange value
 oneof dungeonflux.public.v1.ViewMessage audience
+reserved-name dungeonflux.public.v1.HomeTheme arrangement
+reserved-name dungeonflux.public.v1.HomeTheme code
+reserved-name dungeonflux.public.v1.HomeTheme party
+reserved-name dungeonflux.public.v1.HomeTheme title
+reserved-name dungeonflux.public.v1.MachineView offers
+reserved-range dungeonflux.public.v1.HomeTheme Some(2) Some(6)
+reserved-range dungeonflux.public.v1.MachineView Some(7) Some(8)
 service dungeonflux.experimental.transport.v1.TransportFixture
 service dungeonflux.public.v1.ActionService
 service dungeonflux.public.v1.DialogueService
+service dungeonflux.public.v1.HeroLibraryService
+service dungeonflux.public.v1.PresentationTelemetryService
 service dungeonflux.public.v1.RoomService
 service dungeonflux.public.v1.SessionService
-enum dungeonflux.public.v1.DialogueContext
-enum dungeonflux.public.v1.DialogueDisposition
-enum dungeonflux.public.v1.DialogueFinality
-enum dungeonflux.public.v1.SceneRole
-enum dungeonflux.public.v1.TableKind
-enum dungeonflux.public.v1.TableRole
-enum-value dungeonflux.public.v1.DialogueContext 0 DIALOGUE_CONTEXT_UNSPECIFIED
-enum-value dungeonflux.public.v1.DialogueContext 1 DIALOGUE_CONTEXT_QUESTION
-enum-value dungeonflux.public.v1.DialogueContext 2 DIALOGUE_CONTEXT_SOCIAL
-enum-value dungeonflux.public.v1.DialogueContext 3 DIALOGUE_CONTEXT_PLAN_ONLY
-enum-value dungeonflux.public.v1.DialogueContext 4 DIALOGUE_CONTEXT_META
-enum-value dungeonflux.public.v1.DialogueContext 5 DIALOGUE_CONTEXT_JOKE
-enum-value dungeonflux.public.v1.DialogueContext 6 DIALOGUE_CONTEXT_CLARIFY
-enum-value dungeonflux.public.v1.DialogueDisposition 0 DIALOGUE_DISPOSITION_UNSPECIFIED
-enum-value dungeonflux.public.v1.DialogueDisposition 1 DIALOGUE_DISPOSITION_ACTION
-enum-value dungeonflux.public.v1.DialogueDisposition 2 DIALOGUE_DISPOSITION_QUESTION
-enum-value dungeonflux.public.v1.DialogueDisposition 3 DIALOGUE_DISPOSITION_SOCIAL
-enum-value dungeonflux.public.v1.DialogueDisposition 4 DIALOGUE_DISPOSITION_PLAN_ONLY
-enum-value dungeonflux.public.v1.DialogueDisposition 5 DIALOGUE_DISPOSITION_META
-enum-value dungeonflux.public.v1.DialogueDisposition 6 DIALOGUE_DISPOSITION_JOKE
-enum-value dungeonflux.public.v1.DialogueDisposition 7 DIALOGUE_DISPOSITION_CLARIFY
-enum-value dungeonflux.public.v1.DialogueDisposition 8 DIALOGUE_DISPOSITION_REJECTED
-enum-value dungeonflux.public.v1.DialogueFinality 0 DIALOGUE_FINALITY_UNSPECIFIED
-enum-value dungeonflux.public.v1.DialogueFinality 1 DIALOGUE_FINALITY_PARTIAL
-enum-value dungeonflux.public.v1.DialogueFinality 2 DIALOGUE_FINALITY_FINAL
-enum-value dungeonflux.public.v1.SceneRole 0 SCENE_ROLE_UNSPECIFIED
-enum-value dungeonflux.public.v1.SceneRole 1 PATRON
-enum-value dungeonflux.public.v1.SceneRole 2 ANTAGONIST
-enum-value dungeonflux.public.v1.SceneRole 3 CONTACT
-enum-value dungeonflux.public.v1.SceneRole 4 BYSTANDER
-enum-value dungeonflux.public.v1.TableKind 0 TABLE_KIND_UNSPECIFIED
-enum-value dungeonflux.public.v1.TableKind 1 ACTION
-enum-value dungeonflux.public.v1.TableKind 2 SPEECH
-enum-value dungeonflux.public.v1.TableRole 0 TABLE_ROLE_UNSPECIFIED
-enum-value dungeonflux.public.v1.TableRole 1 HERO
-enum-value dungeonflux.public.v1.TableRole 2 NPC
-enum-value dungeonflux.public.v1.TableRole 3 NARRATOR
-field dungeonflux.public.v1.CancelDialogueRequest 1 input_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
-field dungeonflux.public.v1.CancelDialogueRequest 2 confirmation_token type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.ConfirmDialogueRequest 1 input_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
-field dungeonflux.public.v1.ConfirmDialogueRequest 2 confirmation_token type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.ConfirmDialogueRequest 3 action type=11 label=1 presence=false target=.dungeonflux.public.v1.SubmitActionRequest oneof=-
-field dungeonflux.public.v1.DialogueResponse 1 input_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
-field dungeonflux.public.v1.DialogueResponse 2 disposition type=14 label=1 presence=false target=.dungeonflux.public.v1.DialogueDisposition oneof=-
-field dungeonflux.public.v1.DialogueResponse 3 confirmation_token type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DialogueResponse 4 revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
-field dungeonflux.public.v1.DialogueResponse 5 confirmation_required type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DialogueResponse 6 npc_reply type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 4 input_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 5 text type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 6 context type=14 label=1 presence=false target=.dungeonflux.public.v1.DialogueContext oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 7 finality type=14 label=1 presence=false target=.dungeonflux.public.v1.DialogueFinality oneof=-
-field dungeonflux.public.v1.RawDialogueRequest 8 offer_id type=9 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.CancelDialogueRequest
-message dungeonflux.public.v1.ConfirmDialogueRequest
-message dungeonflux.public.v1.DialogueResponse
-message dungeonflux.public.v1.RawDialogueRequest
-method dungeonflux.public.v1.DialogueService Cancel .dungeonflux.public.v1.CancelDialogueRequest .dungeonflux.public.v1.DialogueResponse client-stream=false server-stream=false
-method dungeonflux.public.v1.DialogueService Confirm .dungeonflux.public.v1.ConfirmDialogueRequest .dungeonflux.public.v1.SubmitActionResponse client-stream=false server-stream=false
-method dungeonflux.public.v1.DialogueService Submit .dungeonflux.public.v1.RawDialogueRequest .dungeonflux.public.v1.DialogueResponse client-stream=false server-stream=false
-service dungeonflux.public.v1.DialogueService
-enum dungeonflux.public.v1.TempoPhase
-enum-value dungeonflux.public.v1.TempoPhase 0 TEMPO_PHASE_UNSPECIFIED
-enum-value dungeonflux.public.v1.TempoPhase 1 TEMPO_PHASE_CALM
-enum-value dungeonflux.public.v1.TempoPhase 2 TEMPO_PHASE_BUILD
-enum-value dungeonflux.public.v1.TempoPhase 3 TEMPO_PHASE_ANTICIPATION
-enum-value dungeonflux.public.v1.TempoPhase 4 TEMPO_PHASE_PEAK
-enum-value dungeonflux.public.v1.TempoPhase 5 TEMPO_PHASE_RELEASE
-message dungeonflux.public.v1.TempoCue
-field dungeonflux.public.v1.TempoCue 1 intensity_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TempoCue 2 phase type=14 label=1 presence=false target=.dungeonflux.public.v1.TempoPhase oneof=-
-field dungeonflux.public.v1.TempoCue 3 sequence type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TempoCue 4 hold_millis type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 11 tempo type=11 label=1 presence=false target=.dungeonflux.public.v1.TempoCue oneof=-
-field dungeonflux.public.v1.GameplayScene 4 speaker_portrait type=9 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.NpcStanding
-field dungeonflux.public.v1.NpcStanding 1 npc_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.NpcStanding 2 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.NpcStanding 3 attitude type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 13 standing type=11 label=3 presence=false target=.dungeonflux.public.v1.NpcStanding oneof=-
-field dungeonflux.public.v1.GameplayScene 6 rules_note type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.GameplayScene 7 place type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 12 table_choices type=9 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.GameplayScene 8 location_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatView 8 initiative type=11 label=3 presence=false target=.dungeonflux.public.v1.InitiativeRoll oneof=-
-message dungeonflux.public.v1.InitiativeRoll
-field dungeonflux.public.v1.InitiativeRoll 1 participant_id type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.InitiativeRoll 2 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.InitiativeRoll 3 die type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.InitiativeRoll 4 modifier type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.InitiativeRoll 5 total type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.InitiativeRoll 6 order type=13 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.LiveFace
-field dungeonflux.public.v1.LiveFace 1 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LiveFace 2 sprite type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LiveFace 3 battle_sprite type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 14 live_faces type=11 label=3 presence=false target=.dungeonflux.public.v1.LiveFace oneof=-
-field dungeonflux.public.v1.JourneyView 15 presentation_sequence type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 16 reply_speaker type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 30 home type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeTheme oneof=-
-message dungeonflux.public.v1.HomeMood
-field dungeonflux.public.v1.HomeMood 1 accent type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeMood 2 tint type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeMood 3 vignette_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeMood 4 brightness_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeMood 5 contrast_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeMood 6 saturation_permille type=13 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.HomeTheme
-field dungeonflux.public.v1.HomeTheme 1 location_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeTheme 6 mood type=11 label=1 presence=false target=.dungeonflux.public.v1.HomeMood oneof=-
-field dungeonflux.public.v1.HomeTheme 7 atmosphere type=9 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.HomeTheme 8 fallback type=8 label=1 presence=false target=- oneof=-
-reserved-range dungeonflux.public.v1.HomeTheme Some(2) Some(6)
-reserved-name dungeonflux.public.v1.HomeTheme arrangement
-reserved-name dungeonflux.public.v1.HomeTheme title
-reserved-name dungeonflux.public.v1.HomeTheme code
-reserved-name dungeonflux.public.v1.HomeTheme party
-# PLAY-V09: scene plate (GameplayScene 20 live_plate, 21 plate_layout, 22 plate_state)
-# Canonical scene lookup identity (GameplayScene 29 source_scene_key)
-enum dungeonflux.public.v1.PlateSide
-enum dungeonflux.public.v1.PlateState
-enum dungeonflux.public.v1.DisplaySceneCamera
-enum-value dungeonflux.public.v1.DisplaySceneCamera 0 DISPLAY_SCENE_CAMERA_UNSPECIFIED
-enum-value dungeonflux.public.v1.DisplaySceneCamera 1 DISPLAY_SCENE_CAMERA_WIDE
-enum-value dungeonflux.public.v1.DisplaySceneCamera 2 DISPLAY_SCENE_CAMERA_TWO_SHOT
-enum-value dungeonflux.public.v1.DisplaySceneCamera 3 DISPLAY_SCENE_CAMERA_SPEAKER
-enum-value dungeonflux.public.v1.PlateSide 0 PLATE_SIDE_UNSPECIFIED
-enum-value dungeonflux.public.v1.PlateSide 1 PLATE_SIDE_LEFT
-enum-value dungeonflux.public.v1.PlateSide 2 PLATE_SIDE_RIGHT
-enum-value dungeonflux.public.v1.PlateState 0 PLATE_STATE_UNSPECIFIED
-enum-value dungeonflux.public.v1.PlateState 1 PLATE_STATE_PENDING
-enum-value dungeonflux.public.v1.PlateState 2 PLATE_STATE_READY
-enum-value dungeonflux.public.v1.PlateState 3 PLATE_STATE_FAILED
-enum-value dungeonflux.public.v1.PlateState 4 PLATE_STATE_UNAVAILABLE
-field dungeonflux.public.v1.GameplayScene 20 live_plate type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.GameplayScene 21 plate_layout type=11 label=1 presence=false target=.dungeonflux.public.v1.PlateLayout oneof=-
-field dungeonflux.public.v1.GameplayScene 22 plate_state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateState oneof=-
-field dungeonflux.public.v1.GameplayScene 23 scene_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
-field dungeonflux.public.v1.GameplayScene 24 scene_video_path type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplayGameplayView 5 scene_graph type=11 label=1 presence=false target=.dungeonflux.public.v1.DisplaySceneGraph oneof=-
-field dungeonflux.public.v1.DisplayGameplayView 6 live_plate_graph_revision type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneGraph 1 revision type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneGraph 2 scene_key type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneGraph 3 set type=11 label=1 presence=false target=.dungeonflux.public.v1.DisplaySceneSet oneof=-
-field dungeonflux.public.v1.DisplaySceneGraph 4 camera type=14 label=1 presence=false target=.dungeonflux.public.v1.DisplaySceneCamera oneof=-
-field dungeonflux.public.v1.DisplaySceneGraph 5 actors type=11 label=3 presence=false target=.dungeonflux.public.v1.DisplaySceneActor oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 1 place_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 2 place_name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 3 asset type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 4 fallback_asset type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 5 exterior type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 6 time_of_day type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 7 weather type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneSet 8 lights type=9 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 1 id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 2 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 3 art type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 4 fallback_art type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 5 spot type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 6 anchor_x_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 7 anchor_y_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 8 depth_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 9 pose type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 10 expression type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplaySceneActor 11 look_at type=9 label=1 presence=true target=- oneof=_look_at
-field dungeonflux.public.v1.DisplaySceneActor 12 speaking type=8 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.PlateLayout
-field dungeonflux.public.v1.PlateLayout 1 bubble_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
-field dungeonflux.public.v1.PlateLayout 2 head_x_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlateLayout 3 head_y_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlateLayout 4 head_width_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlateLayout 5 head_height_permille type=13 label=1 presence=false target=- oneof=-
-enum dungeonflux.public.v1.ComposeKind
-enum-value dungeonflux.public.v1.ComposeKind 0 COMPOSE_KIND_UNSPECIFIED
-enum-value dungeonflux.public.v1.ComposeKind 1 COMPOSE_KIND_TYPING
-enum-value dungeonflux.public.v1.ComposeKind 2 COMPOSE_KIND_SPEAKING
-enum-value dungeonflux.public.v1.ComposeKind 3 COMPOSE_KIND_SUBMITTED
-enum-value dungeonflux.public.v1.ComposeKind 4 COMPOSE_KIND_STOPPED
-field dungeonflux.public.v1.ComposeRequest 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.ComposeKind oneof=-
-field dungeonflux.public.v1.ComposingHero 1 hero_index type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.ComposingHero 2 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.ComposeKind oneof=-
-field dungeonflux.public.v1.JourneyView 17 composing type=11 label=3 presence=false target=.dungeonflux.public.v1.ComposingHero oneof=-
-message dungeonflux.public.v1.ComposeRequest
-message dungeonflux.public.v1.ComposeResponse
-message dungeonflux.public.v1.ComposingHero
-method dungeonflux.public.v1.DialogueService Compose .dungeonflux.public.v1.ComposeRequest .dungeonflux.public.v1.ComposeResponse client-stream=false server-stream=false
-field dungeonflux.public.v1.JourneyView 45 join_url type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 50 adventure_ended type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 51 adventure_title type=9 label=1 presence=false target=- oneof=-
-# PLAY-V09 follow-up: heroes' heads in the plate layout (PlateLayout 6 heroes)
-message dungeonflux.public.v1.PlateHead
-field dungeonflux.public.v1.PlateLayout 6 heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.PlateHead oneof=-
-field dungeonflux.public.v1.PlateHead 1 hero_index type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlateHead 2 bubble_side type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateSide oneof=-
-field dungeonflux.public.v1.PlateHead 3 head_x_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlateHead 4 head_y_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlateHead 5 head_width_permille type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlateHead 6 head_height_permille type=13 label=1 presence=false target=- oneof=-
-enum dungeonflux.public.v1.HomeVideoState
-enum-value dungeonflux.public.v1.HomeVideoState 0 HOME_VIDEO_STATE_UNSPECIFIED
-enum-value dungeonflux.public.v1.HomeVideoState 1 HOME_VIDEO_STATE_NONE
-enum-value dungeonflux.public.v1.HomeVideoState 2 HOME_VIDEO_STATE_PENDING
-enum-value dungeonflux.public.v1.HomeVideoState 3 HOME_VIDEO_STATE_READY
-enum-value dungeonflux.public.v1.HomeVideoState 4 HOME_VIDEO_STATE_FAILED
-field dungeonflux.public.v1.JourneyView 31 home_video_state type=14 label=1 presence=false target=.dungeonflux.public.v1.HomeVideoState oneof=-
-field dungeonflux.public.v1.JourneyView 32 home_video_path type=9 label=1 presence=false target=- oneof=-
-# PLAY-U02: table settings (SET_TABLE_SETTING) and the choice-hint toggle on JourneyView
-enum-value dungeonflux.public.v1.GameplayActionKind 40 SET_TABLE_SETTING
-# SHOP-ASSAULT: a hero's attack on a scene person (Marek, Corin, Jessa); DEFEND_COURIER stays the courier's own action.
-enum-value dungeonflux.public.v1.GameplayActionKind 41 SCENE_ASSAULT
-field dungeonflux.public.v1.SubmitActionRequest 12 table_setting type=11 label=1 presence=false target=.dungeonflux.public.v1.TableSettingChange oneof=-
-message dungeonflux.public.v1.TableSettingChange
-field dungeonflux.public.v1.TableSettingChange 1 choice_hints_hidden type=8 label=1 presence=false target=- oneof=value
-oneof dungeonflux.public.v1.TableSettingChange value
-field dungeonflux.public.v1.JourneyView 70 choice_hints_hidden type=8 label=1 presence=false target=- oneof=-
-# PLAY-V12: the adventure name on every story view (the establishing shot title card)
-field dungeonflux.public.v1.JourneyView 75 adventure_name type=9 label=1 presence=false target=- oneof=-
-# PLAY-R01: outcome audit and public death-save state (appended; order is irrelevant to the check)
-field dungeonflux.public.v1.CombatOutcome 20 distance_ft type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 21 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.OutcomeKind oneof=-
-field dungeonflux.public.v1.CombatOutcome 22 path type=11 label=3 presence=false target=.dungeonflux.public.v1.GridCell oneof=-
-field dungeonflux.public.v1.CombatOutcome 23 cost_ft type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 24 remaining_ft type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 25 roll_mode type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 26 faces type=13 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 27 reasons type=9 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 28 cover type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 29 death_save_result type=14 label=1 presence=false target=.dungeonflux.public.v1.DeathSaveResult oneof=-
-field dungeonflux.public.v1.CombatOutcome 30 death_successes type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 31 death_failures type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatView 16 death_saves type=11 label=3 presence=false target=.dungeonflux.public.v1.DeathSaveState oneof=-
-field dungeonflux.public.v1.DeathSaveState 1 participant_id type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DeathSaveState 2 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DeathSaveState 3 successes type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DeathSaveState 4 failures type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DeathSaveState 5 stable type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DeathSaveState 6 dead type=8 label=1 presence=false target=- oneof=-
-enum dungeonflux.public.v1.OutcomeKind
-enum dungeonflux.public.v1.DeathSaveResult
-enum-value dungeonflux.public.v1.OutcomeKind 0 OUTCOME_KIND_UNSPECIFIED
-enum-value dungeonflux.public.v1.OutcomeKind 1 OUTCOME_KIND_ATTACK
-enum-value dungeonflux.public.v1.OutcomeKind 2 OUTCOME_KIND_OPPORTUNITY_ATTACK
-enum-value dungeonflux.public.v1.OutcomeKind 3 OUTCOME_KIND_MOVE
-enum-value dungeonflux.public.v1.OutcomeKind 4 OUTCOME_KIND_DEATH_SAVE
-enum-value dungeonflux.public.v1.DeathSaveResult 0 DEATH_SAVE_RESULT_UNSPECIFIED
-enum-value dungeonflux.public.v1.DeathSaveResult 1 DEATH_SAVE_RESULT_SUCCESS
-enum-value dungeonflux.public.v1.DeathSaveResult 2 DEATH_SAVE_RESULT_FAILURE
-enum-value dungeonflux.public.v1.DeathSaveResult 3 DEATH_SAVE_RESULT_CRITICAL_FAILURE
-enum-value dungeonflux.public.v1.DeathSaveResult 4 DEATH_SAVE_RESULT_STABILISED
-enum-value dungeonflux.public.v1.DeathSaveResult 5 DEATH_SAVE_RESULT_DIED
-enum-value dungeonflux.public.v1.DeathSaveResult 6 DEATH_SAVE_RESULT_REVIVED
-message dungeonflux.public.v1.DeathSaveState
-field dungeonflux.public.v1.CombatView 17 move_outcomes type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
-field dungeonflux.public.v1.CombatView 18 death_save_outcomes type=11 label=3 presence=false target=.dungeonflux.public.v1.CombatOutcome oneof=-
-field dungeonflux.public.v1.CombatOutcome 32 recovery_hours type=13 label=1 presence=false target=- oneof=-
-enum-value dungeonflux.public.v1.OutcomeKind 5 OUTCOME_KIND_RECOVERY
-# FIGHT-001: one spoken moment of a fight staged with its blow (CombatOutcome.lines = 33)
-# or with the fight's ending (CombatView.closing_lines = 19).
-enum dungeonflux.public.v1.TableRole
-enum-value dungeonflux.public.v1.TableRole 0 TABLE_ROLE_UNSPECIFIED
-enum-value dungeonflux.public.v1.TableRole 1 HERO
-enum-value dungeonflux.public.v1.TableRole 2 NPC
-enum-value dungeonflux.public.v1.TableRole 3 NARRATOR
-message dungeonflux.public.v1.FightLine
-field dungeonflux.public.v1.FightLine 1 role type=14 label=1 presence=false target=.dungeonflux.public.v1.TableRole oneof=-
-field dungeonflux.public.v1.FightLine 2 hero_index type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.FightLine 3 speaker type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.FightLine 4 text type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 33 lines type=11 label=3 presence=false target=.dungeonflux.public.v1.FightLine oneof=-
-field dungeonflux.public.v1.CombatView 19 closing_lines type=11 label=3 presence=false target=.dungeonflux.public.v1.FightLine oneof=-
-field dungeonflux.public.v1.CombatOutcome 34 sequence type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatView 20 latest_sequence type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatView 21 released_sequence type=4 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.PresentedRequest
-message dungeonflux.public.v1.PresentedResponse
-field dungeonflux.public.v1.PresentedRequest 1 sequence type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentedRequest 2 display_instance type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentedRequest 3 layout_readback_json type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentedResponse 1 released_sequence type=4 label=1 presence=false target=- oneof=-
-method dungeonflux.public.v1.SessionService ReportPresented .dungeonflux.public.v1.PresentedRequest .dungeonflux.public.v1.PresentedResponse client-stream=false server-stream=false
-# SES-04: additive room-code-only away-seat discovery and credential replacement.
-message dungeonflux.public.v1.ReclaimRoomRequest
-field dungeonflux.public.v1.ReclaimRoomRequest 1 room_code type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.ReclaimRoomRequest 3 seat_token type=12 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.AwayHero
-field dungeonflux.public.v1.AwayHero 1 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.AwayHero 2 seat_token type=12 label=1 presence=false target=- oneof=-
-enum dungeonflux.public.v1.SeatReclaimRefusal
-enum-value dungeonflux.public.v1.SeatReclaimRefusal 0 SEAT_RECLAIM_REFUSAL_UNSPECIFIED
-enum-value dungeonflux.public.v1.SeatReclaimRefusal 1 SEAT_NOT_AWAY
-enum-value dungeonflux.public.v1.SeatReclaimRefusal 2 SEAT_TOKEN_UNKNOWN
-enum-value dungeonflux.public.v1.SeatReclaimRefusal 3 SEAT_ROOM_CODE_WRONG
-enum-value dungeonflux.public.v1.SeatReclaimRefusal 4 SEAT_OPERATION_CONFLICT
-enum-value dungeonflux.public.v1.SeatReclaimRefusal 5 SEAT_REJOIN_PENDING
-enum-value dungeonflux.public.v1.SeatReclaimRefusal 6 SEAT_REJOIN_DECLINED
-message dungeonflux.public.v1.ReclaimRoomResponse
-field dungeonflux.public.v1.ReclaimRoomResponse 3 away_heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.AwayHero oneof=-
-method dungeonflux.public.v1.RoomService Reclaim .dungeonflux.public.v1.ReclaimRoomRequest .dungeonflux.public.v1.ReclaimRoomResponse client-stream=false server-stream=false
-# RUL-13: additive hero stabilization actions and their typed combat result.
-enum dungeonflux.public.v1.StabilizationMethod
-enum-value dungeonflux.public.v1.StabilizationMethod 0 STABILIZATION_METHOD_UNSPECIFIED
-enum-value dungeonflux.public.v1.StabilizationMethod 1 STABILIZATION_METHOD_HEALERS_KIT
-enum-value dungeonflux.public.v1.StabilizationMethod 2 STABILIZATION_METHOD_MEDICINE
-enum-value dungeonflux.public.v1.GameplayActionKind 22 STABILISE_WITH_HEALERS_KIT
-enum-value dungeonflux.public.v1.GameplayActionKind 23 STABILISE_MEDICINE
-enum-value dungeonflux.public.v1.OutcomeKind 6 OUTCOME_KIND_STABILISATION
-message dungeonflux.public.v1.StabilizationResult
-field dungeonflux.public.v1.StabilizationResult 1 method type=14 label=1 presence=false target=.dungeonflux.public.v1.StabilizationMethod oneof=-
-field dungeonflux.public.v1.StabilizationResult 2 die type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.StabilizationResult 3 wisdom_modifier type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.StabilizationResult 4 dc type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.StabilizationResult 5 succeeded type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.StabilizationResult 6 uses_left type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CombatOutcome 35 stabilization type=11 label=1 presence=false target=.dungeonflux.public.v1.StabilizationResult oneof=-
-field dungeonflux.public.v1.CombatOutcome 36 damage_rolls type=11 label=3 presence=false target=.dungeonflux.public.v1.DamageRoll oneof=-
-field dungeonflux.public.v1.CombatOutcome 37 damage_modifier type=17 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.NotebookEntry
-field dungeonflux.public.v1.NotebookEntry 1 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.NotebookKind oneof=-
-field dungeonflux.public.v1.NotebookEntry 2 title type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.NotebookEntry 3 text type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.NotebookEntry 4 scene type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.NotebookEntry 5 order type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 77 notebook type=11 label=3 presence=false target=.dungeonflux.public.v1.NotebookEntry oneof=-
-enum dungeonflux.public.v1.NotebookKind
-enum-value dungeonflux.public.v1.NotebookKind 0 NOTEBOOK_KIND_UNSPECIFIED
-enum-value dungeonflux.public.v1.NotebookKind 1 NOTEBOOK_KIND_PERSON
-enum-value dungeonflux.public.v1.NotebookKind 2 NOTEBOOK_KIND_PLACE
-enum-value dungeonflux.public.v1.NotebookKind 3 NOTEBOOK_KIND_TASK
-enum-value dungeonflux.public.v1.NotebookKind 4 NOTEBOOK_KIND_CLUE
-enum-value dungeonflux.public.v1.NotebookKind 5 NOTEBOOK_KIND_NOTE
-message dungeonflux.public.v1.DamageRoll
-field dungeonflux.public.v1.DamageRoll 1 dice type=13 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.DamageRoll 2 kept type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.AbilityCheckResult 8 faces type=13 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.AbilityCheckResult 9 roll_mode type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplayGameplayView 7 check type=11 label=1 presence=false target=.dungeonflux.public.v1.AbilityCheckResult oneof=-
-field dungeonflux.public.v1.GameplayScene 25 scene_contents_json type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.GameplayScene 26 item type=11 label=1 presence=false target=.dungeonflux.public.v1.SceneItemCard oneof=-
-field dungeonflux.public.v1.GameplayScene 27 plate_update_pending type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.GameplayScene 28 hand_items type=11 label=3 presence=false target=.dungeonflux.public.v1.SceneItemCard oneof=-
-field dungeonflux.public.v1.GameplayScene 29 source_scene_key type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.NpcStanding 4 perceived_reaction type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SceneItemCard 1 thing_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SceneItemCard 2 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SceneItemCard 3 detail type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SceneItemCard 4 image_path type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SceneItemCard 5 image_state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlateState oneof=-
-field dungeonflux.public.v1.SceneItemCard 6 state_revision type=4 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.SceneItemCard
-enum-value dungeonflux.public.v1.GameplayActionKind 21 START_NEW_ADVENTURE
-field dungeonflux.public.v1.CurrentAdventureResponse 1 room_code type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CurrentAdventureResponse 2 run_identity type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CurrentAdventureResponse 3 preparing type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.JourneyView 76 preparing_adventure type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.NotebookEntry 6 owner type=9 label=1 presence=true target=- oneof=_owner
-field dungeonflux.public.v1.NotebookEntry 7 author type=9 label=1 presence=true target=- oneof=_author
-field dungeonflux.public.v1.NotebookEntry 8 attitude type=9 label=1 presence=true target=- oneof=_attitude
-field dungeonflux.public.v1.ReclaimRoomRequest 2 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
-field dungeonflux.public.v1.ReclaimRoomResponse 1 joined type=11 label=1 presence=false target=.dungeonflux.public.v1.JoinedRoom oneof=outcome
-field dungeonflux.public.v1.ReclaimRoomResponse 2 refused type=14 label=1 presence=false target=.dungeonflux.public.v1.SeatReclaimRefusal oneof=outcome
-message dungeonflux.public.v1.CurrentAdventureRequest
-message dungeonflux.public.v1.CurrentAdventureResponse
-method dungeonflux.public.v1.RoomService CurrentAdventure .dungeonflux.public.v1.CurrentAdventureRequest .dungeonflux.public.v1.CurrentAdventureResponse client-stream=false server-stream=false
-oneof dungeonflux.public.v1.DisplaySceneActor _look_at
-oneof dungeonflux.public.v1.NotebookEntry _attitude
-oneof dungeonflux.public.v1.NotebookEntry _author
-oneof dungeonflux.public.v1.NotebookEntry _owner
-oneof dungeonflux.public.v1.ReclaimRoomResponse outcome
-# CRE-IDENTITY: additive optional hero identity; absent remains distinct from a selected identity.
-field dungeonflux.public.v1.CharacterSelection 3 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
-field dungeonflux.public.v1.CharacterSheet 7 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
-field dungeonflux.public.v1.CharacterCreationOffer 4 identity_groups type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyGroup oneof=-
-field dungeonflux.public.v1.CharacterCreationOffer 5 default_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
-method dungeonflux.public.v1.ActionService PreviewHeroIdentity .dungeonflux.public.v1.PreviewHeroIdentityRequest .dungeonflux.public.v1.PreviewHeroIdentityResponse client-stream=false server-stream=false
-message dungeonflux.public.v1.HeroAppearance
-field dungeonflux.public.v1.HeroAppearance 1 presentation type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 2 pronouns type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 3 age type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 4 build type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 5 skin type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 6 hair type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 7 hair_color type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 8 eyes type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 9 mark type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroAppearance 10 attire type=9 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.HeroIdentity
-field dungeonflux.public.v1.HeroIdentity 1 appearance type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroAppearance oneof=-
-field dungeonflux.public.v1.HeroIdentity 2 origin type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroIdentity 3 occupation type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroIdentity 4 motivation type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroIdentity 5 backstory type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroIdentity 6 facts type=9 label=3 presence=false target=- oneof=-
-message dungeonflux.public.v1.PreviewHeroIdentityRequest
-field dungeonflux.public.v1.PreviewHeroIdentityRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityRequest 3 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityRequest 4 appearance_text type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityRequest 5 backstory_text type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityRequest 6 current_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
-message dungeonflux.public.v1.PreviewHeroIdentityResponse
-field dungeonflux.public.v1.PreviewHeroIdentityResponse 1 proposed_identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityResponse 2 warnings type=9 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityResponse 3 source type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PreviewHeroIdentityRequest 7 client_binding_id type=11 label=1 presence=false target=.dungeonflux.public.v1.ClientBindingId oneof=-
-message dungeonflux.public.v1.PresentationTelemetryRequest
-field dungeonflux.public.v1.PresentationTelemetryRequest 1 scope type=11 label=1 presence=false target=.dungeonflux.public.v1.WatchViewRequest oneof=-
-field dungeonflux.public.v1.PresentationTelemetryRequest 2 producer_id type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentationTelemetryRequest 3 batch_sequence type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentationTelemetryRequest 4 otlp_logs type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentationTelemetryRequest 5 dropped_records type=4 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.PresentationTelemetryResponse
-field dungeonflux.public.v1.PresentationTelemetryResponse 1 batch_sequence type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentationTelemetryResponse 2 accepted_records type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PresentationTelemetryResponse 3 replayed type=8 label=1 presence=false target=- oneof=-
-service dungeonflux.public.v1.PresentationTelemetryService
-method dungeonflux.public.v1.PresentationTelemetryService Upload .dungeonflux.public.v1.PresentationTelemetryRequest .dungeonflux.public.v1.PresentationTelemetryResponse client-stream=false server-stream=false
-enum-value dungeonflux.public.v1.GameplayActionKind 24 HELP_ATTACK
-field dungeonflux.public.v1.CombatView 22 reaction_seconds_remaining type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplayGameplayView 8 encounter_xp type=13 label=1 presence=true target=- oneof=_encounter_xp
-field dungeonflux.public.v1.DisplayGameplayView 9 layout_json type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DisplayGameplayView 10 layout_revision type=4 label=1 presence=false target=- oneof=-
-oneof dungeonflux.public.v1.DisplayGameplayView _encounter_xp
-field dungeonflux.public.v1.DisplayGameplayView 11 place_music type=11 label=1 presence=false target=.dungeonflux.public.v1.PlaceMusicPlan oneof=-
-field dungeonflux.public.v1.DisplayGameplayView 12 effects_off type=9 label=3 presence=false target=- oneof=-
-enum dungeonflux.public.v1.PlaceMusicState
-enum-value dungeonflux.public.v1.PlaceMusicState 0 PLACE_MUSIC_STATE_UNSPECIFIED
-enum-value dungeonflux.public.v1.PlaceMusicState 1 PLACE_MUSIC_STATE_FALLBACK
-enum-value dungeonflux.public.v1.PlaceMusicState 2 PLACE_MUSIC_STATE_READY
-message dungeonflux.public.v1.PlaceMusicPlan
-field dungeonflux.public.v1.PlaceMusicPlan 1 spec_label type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 2 setting_family type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 3 state type=14 label=1 presence=false target=.dungeonflux.public.v1.PlaceMusicState oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 4 spec_key type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 5 layer_paths type=9 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 6 ambience_path type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 7 fallback_note type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 8 bpm type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 9 loop_samples type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PlaceMusicPlan 10 sample_rate type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.GameplayScene 31 interior type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.GameplayScene 32 floor type=11 label=1 presence=false target=.dungeonflux.public.v1.StageFloor oneof=-
-message dungeonflux.public.v1.StageFloor
-field dungeonflux.public.v1.StageFloor 1 feet_mid type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.StageFloor 2 feet_far type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.StageFloor 3 key_from_left type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.StageFloor 4 wet type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PartyMemberView 14 creature_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.PartyMemberView 15 size type=14 label=1 presence=false target=.dungeonflux.public.v1.CreatureSize oneof=-
-enum dungeonflux.public.v1.CreatureSize
-enum-value dungeonflux.public.v1.CreatureSize 0 CREATURE_SIZE_UNSPECIFIED
-enum-value dungeonflux.public.v1.CreatureSize 1 SMALL
-enum-value dungeonflux.public.v1.CreatureSize 2 MEDIUM
-enum-value dungeonflux.public.v1.CreatureSize 3 LARGE
-field dungeonflux.public.v1.TableLine 8 roll type=11 label=1 presence=false target=.dungeonflux.public.v1.TableRoll oneof=-
-message dungeonflux.public.v1.TableRoll
-field dungeonflux.public.v1.TableRoll 1 faces type=13 label=3 presence=false target=- oneof=-
-field dungeonflux.public.v1.TableRoll 2 kept type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TableRoll 3 roll_mode type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TableRoll 4 modifier type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TableRoll 5 total type=17 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TableRoll 6 against type=14 label=1 presence=false target=.dungeonflux.public.v1.RollAgainst oneof=-
-field dungeonflux.public.v1.TableRoll 7 target_number type=13 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TableRoll 8 succeeded type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.TableRoll 9 label type=9 label=1 presence=false target=- oneof=-
-enum dungeonflux.public.v1.RollAgainst
-enum-value dungeonflux.public.v1.RollAgainst 0 ROLL_AGAINST_UNSPECIFIED
-enum-value dungeonflux.public.v1.RollAgainst 1 ROLL_AGAINST_DC
-enum-value dungeonflux.public.v1.RollAgainst 2 ROLL_AGAINST_AC
-field dungeonflux.public.v1.TableRoll 10 kind type=14 label=1 presence=false target=.dungeonflux.public.v1.RollKind oneof=-
-enum dungeonflux.public.v1.RollKind
-enum-value dungeonflux.public.v1.RollKind 0 ROLL_KIND_UNSPECIFIED
-enum-value dungeonflux.public.v1.RollKind 1 ROLL_KIND_CHECK
-enum-value dungeonflux.public.v1.RollKind 2 ROLL_KIND_SAVE
-enum-value dungeonflux.public.v1.RollKind 3 ROLL_KIND_ATTACK
-enum-value dungeonflux.public.v1.RollKind 4 ROLL_KIND_DEATH_SAVE
-enum-value dungeonflux.public.v1.RollKind 5 ROLL_KIND_STABILIZE
-enum-value dungeonflux.public.v1.RollKind 6 ROLL_KIND_INITIATIVE
-field dungeonflux.public.v1.HeroAppearance 11 public_description type=9 label=1 presence=false target=- oneof=-
-
-message dungeonflux.public.v1.HeroPortraitRequest
-message dungeonflux.public.v1.HeroPortraitResponse
-method dungeonflux.public.v1.ActionService RequestHeroPortrait .dungeonflux.public.v1.HeroPortraitRequest .dungeonflux.public.v1.HeroPortraitResponse client-stream=false server-stream=false
-method dungeonflux.public.v1.ActionService GetHeroPortrait .dungeonflux.public.v1.HeroPortraitRequest .dungeonflux.public.v1.HeroPortraitResponse client-stream=false server-stream=false
-field dungeonflux.public.v1.HeroPortraitRequest 1 session_id type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionId oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 2 run_id type=11 label=1 presence=false target=.dungeonflux.public.v1.RunId oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 3 client_binding_id type=11 label=1 presence=false target=.dungeonflux.public.v1.ClientBindingId oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 4 observed_revision type=11 label=1 presence=false target=.dungeonflux.public.v1.SessionRevision oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 5 operation_id type=11 label=1 presence=false target=.dungeonflux.public.v1.OperationId oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 6 draft_revision type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 7 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 8 species type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroPortraitResponse 1 draft_revision type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroPortraitResponse 2 state type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroPortraitResponse 3 image_uri type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroPortraitResponse 4 message type=9 label=1 presence=false target=- oneof=-
-
-field dungeonflux.public.v1.CharacterSheet 9 portrait_uri type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CharacterSheet 10 portrait_draft_revision type=4 label=1 presence=false target=- oneof=-
-
-message dungeonflux.public.v1.SupportedCharacterDesign
-field dungeonflux.public.v1.SupportedCharacterDesign 1 species_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SupportedCharacterDesign 2 class_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SupportedCharacterDesign 3 background_id type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CharacterCreationOffer 6 supported_designs type=11 label=3 presence=false target=.dungeonflux.public.v1.SupportedCharacterDesign oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 9 character_class type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.HeroPortraitRequest 10 background type=9 label=1 presence=false target=- oneof=-
-
-field dungeonflux.public.v1.HeroPortraitRequest 11 scenery type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CharacterSelection 4 portrait_scenery type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.CharacterCreationOffer 7 portrait_scenery_options type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyOption oneof=-
-
-service dungeonflux.public.v1.HeroLibraryService
-method dungeonflux.public.v1.HeroLibraryService ListMyHeroes .dungeonflux.public.v1.ListMyHeroesRequest .dungeonflux.public.v1.ListMyHeroesResponse client-stream=false server-stream=false
-method dungeonflux.public.v1.HeroLibraryService LoadHero .dungeonflux.public.v1.LoadHeroRequest .dungeonflux.public.v1.LoadHeroResponse client-stream=false server-stream=false
-method dungeonflux.public.v1.HeroLibraryService SaveMySeatHero .dungeonflux.public.v1.SaveMySeatHeroRequest .dungeonflux.public.v1.SaveMySeatHeroResponse client-stream=false server-stream=false
-message dungeonflux.public.v1.ListMyHeroesRequest
-field dungeonflux.public.v1.ListMyHeroesRequest 1 key type=12 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.ListMyHeroesResponse
-field dungeonflux.public.v1.ListMyHeroesResponse 1 heroes type=11 label=3 presence=false target=.dungeonflux.public.v1.LibraryHeroSummary oneof=-
-message dungeonflux.public.v1.LibraryHeroSummary
-field dungeonflux.public.v1.LibraryHeroSummary 1 hero_id type=3 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroSummary 2 revision type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroSummary 3 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroSummary 4 species type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroSummary 5 character_class type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroSummary 6 portrait type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroSummary 7 portrait_media_type type=9 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.LoadHeroRequest
-field dungeonflux.public.v1.LoadHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LoadHeroRequest 2 hero_id type=3 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.LibraryHeroIdentity
-field dungeonflux.public.v1.LibraryHeroIdentity 1 name type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroIdentity 2 design type=11 label=3 presence=false target=.dungeonflux.public.v1.JourneyChoice oneof=-
-field dungeonflux.public.v1.LibraryHeroIdentity 3 identity type=11 label=1 presence=false target=.dungeonflux.public.v1.HeroIdentity oneof=-
-field dungeonflux.public.v1.LibraryHeroIdentity 4 portrait_scenery type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroIdentity 5 private_backstory type=9 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroIdentity 6 sealed_backstory type=9 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.LoadHeroResponse
-field dungeonflux.public.v1.LoadHeroResponse 1 hero type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroIdentity oneof=-
-field dungeonflux.public.v1.LoadHeroResponse 2 summary type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroSummary oneof=-
-message dungeonflux.public.v1.SaveMySeatHeroRequest
-field dungeonflux.public.v1.SaveMySeatHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SaveMySeatHeroRequest 2 scope type=11 label=1 presence=false target=.dungeonflux.public.v1.WatchViewRequest oneof=-
-field dungeonflux.public.v1.SaveMySeatHeroRequest 3 loaded_hero type=11 label=1 presence=false target=.dungeonflux.public.v1.LibraryHeroReference oneof=-
-message dungeonflux.public.v1.LibraryHeroReference
-field dungeonflux.public.v1.LibraryHeroReference 1 hero_id type=3 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroReference 2 revision type=4 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.SaveMySeatHeroResponse
-field dungeonflux.public.v1.SaveMySeatHeroResponse 1 hero_id type=3 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.SaveMySeatHeroResponse 2 revision type=4 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LoadHeroRequest 3 new_hero type=8 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.ListMyHeroesRequest 2 after_hero_id type=3 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.ListMyHeroesResponse 2 next_cursor type=3 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.LibraryHeroSummary 8 portrait_key type=9 label=1 presence=false target=- oneof=-
-enum-value dungeonflux.public.v1.GameplayActionKind 43 TRAVEL
-field dungeonflux.public.v1.DeleteHeroRequest 1 key type=12 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DeleteHeroRequest 2 hero_id type=3 label=1 presence=false target=- oneof=-
-field dungeonflux.public.v1.DeleteHeroResponse 1 removed type=8 label=1 presence=false target=- oneof=-
-message dungeonflux.public.v1.DeleteHeroRequest
-message dungeonflux.public.v1.DeleteHeroResponse
-method dungeonflux.public.v1.HeroLibraryService DeleteHero .dungeonflux.public.v1.DeleteHeroRequest .dungeonflux.public.v1.DeleteHeroResponse client-stream=false server-stream=false
-field dungeonflux.public.v1.GameplayScene 33 room_image_pending type=8 label=1 presence=false target=- oneof=-

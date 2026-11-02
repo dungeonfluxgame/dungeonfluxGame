@@ -34,3 +34,18 @@ tonic = { workspace = true, features = ["transport"] }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio-tungstenite = "0.29"
 tokio = { workspace = true, features = ["macros", "net", "rt", "time"] }
+tonic = { workspace = true, features = ["transport", "router"] }
+
+# The machine surface of the plan (W0 and W1): the generated contract and its hand-built samples
+# drive the native round-trip test and the browser example.
+[dev-dependencies]
+df-api = { path = "../df-api" }
+df-protocol = { path = "../df-protocol" }
+prost.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "Location"] }
+
+[[example]]
+name = "machine_browser"
+crate-type = ["cdylib"]

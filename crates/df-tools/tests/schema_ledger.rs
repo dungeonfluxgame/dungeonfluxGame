@@ -251,3 +251,19 @@ fn retired_number_and_name_remain_reserved_and_cannot_be_reallocated() {
         Err(LedgerError::ContractChanged)
     );
 }
+
+/// Maintenance, not a check. `cargo test -p df-tools --test schema_ledger -- --ignored --nocapture
+/// print_ledger_drift` lists what the descriptor has that the ledger lacks (`+`) and what the ledger
+/// has that the descriptor no longer does (`-`, a removal that needs a `reserved` entry).
+#[test]
+#[ignore = "prints the drift between the descriptor and the ledger"]
+fn print_ledger_drift() {
+    let actual = descriptor_records(df_protocol::FILE_DESCRIPTOR_SET).unwrap();
+    let ledger = ledger();
+    for line in actual.difference(&ledger) {
+        println!("+ {line}");
+    }
+    for line in ledger.difference(&actual) {
+        println!("- {line}");
+    }
+}

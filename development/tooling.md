@@ -59,6 +59,24 @@ to establish one before adding the config. After approval, install the reviewed
 the command itself never installs tools. Workspace-wide lint/profile policy also
 needs a scoped root-manifest change by its owner.
 
+## Commit gate and artifact pruning
+
+`development/gate.sh [crate ...]` runs the commit gate in one command: `cargo fmt`
+check, Clippy with warnings denied, the wasm Clippy check when `df-playground` is
+included, and `cargo test --lib`. It defaults to `df-table`, `df-table-host` and
+`df-playground`, uses `artifacts/build/start-s00` unless `CARGO_TARGET_DIR` is set,
+and stops at the first failing stage. `--quick` skips tests, and `GATE_TEST_ARGS`
+passes extra arguments to the test harness. Stage logs go to `artifacts/tmp/gate/`.
+
+`development/prune-artifacts.sh [--dry-run] [--hours N] [--force]` removes stale
+output from the shared target: `df_*` and `df-*` files in the native and wasm
+`debug/deps` directories, workspace `.exe` and `.pdb` test binaries (default: older
+than 2 hours), and `*-target` or `*_target` directories in `artifacts/tmp` untouched
+for 24 hours. It never touches third-party crate files, `artifacts/cache`,
+`artifacts/playground`, the PostgreSQL or imagery build roots, or `development/`. It
+refuses to delete while `cargo` or `rustc` is running unless `--force` is given. Run
+`--dry-run` first to see counts and sizes.
+
 ## Handoff and release notes
 
 Lane workers hand off exact changed paths, checks and retained evidence to the

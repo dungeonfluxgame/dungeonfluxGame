@@ -1,8 +1,14 @@
 //! Common generated wire fields and closed structural game-command admission.
 //! No production action request or service is declared in the current protocol schema.
 //! These functions do not authenticate, bind a client, decide rules, or commit a receipt.
+//! The `machine` module guards the generic machine view and intent of the table engine.
 #[cfg(test)]
 mod customer;
+pub mod machine;
+#[cfg(test)]
+mod machine_receipt_tests;
+#[cfg(test)]
+mod machine_tests;
 mod request;
 mod wire_decode;
 

@@ -1,8 +1,8 @@
 syntax = "proto3";
 package dungeonflux.public.v1;
 import "common.proto";
-service ActionService { rpc Submit(SubmitActionRequest) returns (SubmitActionResponse); rpc PreviewHeroIdentity(PreviewHeroIdentityRequest) returns (PreviewHeroIdentityResponse); rpc RequestHeroPortrait(HeroPortraitRequest) returns (HeroPortraitResponse); rpc GetHeroPortrait(HeroPortraitRequest) returns (HeroPortraitResponse); }
-service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage); rpc ReportPresented(PresentedRequest) returns (PresentedResponse); }
+service ActionService { rpc Submit(SubmitActionRequest) returns (SubmitActionResponse); rpc PreviewHeroIdentity(PreviewHeroIdentityRequest) returns (PreviewHeroIdentityResponse); rpc RequestHeroPortrait(HeroPortraitRequest) returns (HeroPortraitResponse); rpc GetHeroPortrait(HeroPortraitRequest) returns (HeroPortraitResponse); rpc SubmitMachineIntent(SubmitMachineIntentRequest) returns (SubmitMachineIntentResponse); }
+service SessionService { rpc Watch(WatchViewRequest) returns (stream ViewMessage); rpc ReportPresented(PresentedRequest) returns (PresentedResponse); rpc WatchMachine(WatchViewRequest) returns (stream MachineView); }
 // The shared display's presentation report: the last combat beat sequence it has finished
 // presenting (CombatOutcome.sequence). Sequence only; the server accepts it solely from the
 // room's display credential and lets it do nothing but advance the released sequence.
@@ -349,3 +349,77 @@ message SaveMySeatHeroResponse { int64 hero_id = 1; uint64 revision = 2; }
 // Deletion is scoped to the authenticated phone key; absent and foreign ids both return false.
 message DeleteHeroRequest { bytes key = 1; int64 hero_id = 2; }
 message DeleteHeroResponse { bool removed = 1; }
+
+// ---------------------------------------------------------------------------------------------
+// Machine surface: the generic view and intent of one table machine (plan O.16 steps W0 and W1,
+// RES33 and RES40 of planning/gameplay-engine-redesign.md). New machines use these messages;
+// JourneyView and SubmitActionRequest stay until combat migrates.
+//
+// Field ledger rules for everything below:
+// - Additive only. A new field takes the next free number of its message; a retired field is
+//   reserved by number and name. Nothing here is ever renumbered or retyped.
+// - A client renders these messages and never decides anything from them: no field holds a value
+//   the client would have to hide. Private facts reach a seat only inside that seat's own view.
+// - Player text never comes back. A reply that concerns a line the player typed names it by
+//   utterance_id (an evidence reference), not by its words.
+// - Declines use the closed RejectionCode of this package (RES40), never a string key. A decline
+//   whose internal code has no public class carries RejectionCode UNSPECIFIED and its reason text.
+//   table_busy and rate_limited are RESOURCE_EXHAUSTED call failures and never reach this schema.
+// - A MachineView is never empty: readout is always plain text a person can read, and status says
+//   why the table is not simply showing the story.
+// Still to come, each as an additive field: InputSpec on MachineOffer, entity, destination and
+// number payloads on MachineIntent (RES40), SnapshotStamp on MachineView, the stage elements and
+// camera of the shared screen, a PrivateMessage payload.
+// ---------------------------------------------------------------------------------------------
+
+// The nine keys of H.15 (STATUS_KEYS in df-playground). WAITING_FOR names who and what.
+enum MachineStatusKind { MACHINE_STATUS_KIND_UNSPECIFIED = 0; MACHINE_STATUS_KIND_OK = 1; MACHINE_STATUS_KIND_READING = 2; MACHINE_STATUS_KIND_ROLLING = 3; MACHINE_STATUS_KIND_TELLING = 4; MACHINE_STATUS_KIND_ART_DELAYED = 5; MACHINE_STATUS_KIND_DEGRADED = 6; MACHINE_STATUS_KIND_READ_ONLY = 7; MACHINE_STATUS_KIND_RECONNECTING = 8; MACHINE_STATUS_KIND_WAITING_FOR = 9; }
+// waiting_who and waiting_what are present exactly when kind is MACHINE_STATUS_KIND_WAITING_FOR.
+message MachineStatus { MachineStatusKind kind = 1; optional string waiting_who = 2; optional string waiting_what = 3; }
+message MachineCaption { optional string speaker = 1; string text = 2; }
+// A picture from the media library, by file name, with an optional line under it.
+message MachineImage { string media = 1; optional string caption = 2; }
+message MachinePartyMember { string name = 1; uint32 hit_points = 2; uint32 maximum_hit_points = 3; repeated string conditions = 4; }
+// What the shared screen shows: the place, what is being said, the party, and the pictures.
+message MachineSharedScreen { string place = 1; optional MachineCaption caption = 2; optional MachineImage backdrop = 3; optional MachineImage card = 4; repeated MachinePartyMember party = 5; }
+// A private note for the one seat whose view carries it.
+message MachineNote { string text = 1; }
+// What one seat's phone shows. narration holds the latest lines, oldest first. offers are what this
+// seat may do now: they live here and not on MachineView, so the shared screen cannot carry a choice
+// or the reason one is unavailable.
+message MachineSeatView { string hero = 1; optional string goal = 2; repeated string narration = 3; optional MachineNote note = 4; optional MachineImage image = 5; repeated MachineOffer offers = 6; }
+// One thing a seat may do now (RES33 ActionOffer). offer_id is the id a tap sends back. A present
+// unavailable_reason means the offer is drawn disabled with that plain reason. A present group
+// lists the offer under that named choice group; absent means a suggested choice.
+message MachineOffer { string offer_id = 1; string label = 2; optional string explain = 3; optional string unavailable_reason = 4; optional string group = 5; }
+// revision is the view revision an intent sent from this view names as observed_revision. reason is
+// present exactly when status is not MACHINE_STATUS_KIND_OK: the plain words of why. readout is the
+// structured plain-text summary that replaces blank narration and is what a text-only seat reads; on
+// the shared screen it is built from public facts only. Field 7 held offers, which moved into
+// MachineSeatView before any release, and stays reserved.
+message MachineView { SessionRevision revision = 1; string machine_id = 2; string state_label = 3; MachineStatus status = 4; optional string reason = 5; string readout = 6; reserved 7; reserved "offers"; oneof audience { MachineSharedScreen shared_screen = 8; MachineSeatView seat = 9; } }
+
+// A tap on an offer carries no value: the offer_id names it.
+message MachineTap {}
+// The seat's pause control (F.7). It names no offer and carries no value.
+message MachineSafetyCard {}
+// A line of free text (submit_text) or a line the hero speaks (say). The utterance id is chosen by
+// the client and names the line in the receipt.
+message MachineText { optional uint64 utterance_id = 1; string text = 2; }
+// The answer to an open pending resolution; the chosen offer is MachineIntent.offer_id.
+message MachinePendingAnswer { optional uint64 pending_id = 1; }
+// machine_id names the machine whose view the intent was drawn from. offer_id is present for a tap
+// and a pending answer and absent for text. The seat comes from the call's credentials, never from
+// a field. Exactly one payload is set. safety_card, like the text kinds, names no offer.
+message MachineIntent { string machine_id = 1; optional string offer_id = 2; oneof payload { MachineTap tap = 3; MachineText submit_text = 4; MachineText say = 5; MachinePendingAnswer pending_answer = 6; MachineSafetyCard safety_card = 7; } }
+// Same leading fields as SubmitActionRequest (session, run, observed revision, operation id).
+message SubmitMachineIntentRequest { SessionId session_id = 1; RunId run_id = 2; SessionRevision observed_revision = 3; OperationId operation_id = 4; MachineIntent intent = 5; }
+
+message MachineApplied {}
+message MachineClarification { string question = 1; repeated MachineOffer options = 2; }
+message MachineDecline { RejectionCode code = 1; string reason = 2; optional string missing = 3; repeated MachineOffer alternatives = 4; }
+message MachinePending { optional uint64 pending_id = 1; }
+// The four outcomes of one input (RES16). utterance_id is present when the intent was a typed or
+// spoken line, so a client can match a decline to its line without the server echoing the words.
+message MachineReceipt { OperationId operation_id = 1; SessionRevision revision = 2; bool replayed = 3; optional uint64 utterance_id = 4; oneof result { MachineApplied applied = 5; MachineClarification needs_clarification = 6; MachineDecline declined = 7; MachinePending pending = 8; } }
+message SubmitMachineIntentResponse { oneof outcome { MachineReceipt receipt = 1; OperationObservation operation_observation = 2; } }

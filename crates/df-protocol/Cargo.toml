@@ -12,3 +12,6 @@ tonic-prost.workspace = true
 [build-dependencies]
 tonic-prost-build = "0.14.6"
 protoc-bin-vendored = "3.2"
+
+[dev-dependencies]
+prost-types = "0.14"

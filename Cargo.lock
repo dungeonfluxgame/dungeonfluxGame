@@ -857,6 +857,7 @@ name = "df-protocol"
 version = "0.1.0"
 dependencies = [
  "prost",
+ "prost-types",
  "protoc-bin-vendored",
  "tonic",
  "tonic-prost",
@@ -913,7 +914,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
+ "df-api",
  "df-observe",
+ "df-protocol",
  "futures",
  "gloo-timers",
  "h2",
@@ -921,6 +924,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "js-sys",
+ "prost",
  "tokio",
  "tokio-tungstenite",
  "tonic",
@@ -1007,9 +1011,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "df-api",
  "df-playground",
+ "df-protocol",
  "df-table",
  "futures-util",
+ "prost",
  "serde",
  "serde_json",
  "tempfile",

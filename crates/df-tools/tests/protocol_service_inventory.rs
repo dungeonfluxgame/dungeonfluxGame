@@ -859,6 +859,8 @@ fn expected_current_service_keys() -> BTreeSet<String> {
         "dungeonflux.public.v1.RoomService",
         "dungeonflux.experimental.transport.v1.TransportFixture",
         "dungeonflux.public.v1.DialogueService",
+        "dungeonflux.public.v1.PresentationTelemetryService",
+        "dungeonflux.public.v1.HeroLibraryService",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -903,9 +905,44 @@ fn expected_current_descriptor() -> Vec<DescriptorMethod> {
     vec![
         actual(
             "dungeonflux.public.v1.ActionService",
+            "GetHeroPortrait",
+            ".dungeonflux.public.v1.HeroPortraitRequest",
+            ".dungeonflux.public.v1.HeroPortraitResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.ActionService",
+            "PreviewHeroIdentity",
+            ".dungeonflux.public.v1.PreviewHeroIdentityRequest",
+            ".dungeonflux.public.v1.PreviewHeroIdentityResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.ActionService",
+            "RequestHeroPortrait",
+            ".dungeonflux.public.v1.HeroPortraitRequest",
+            ".dungeonflux.public.v1.HeroPortraitResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.ActionService",
             "Submit",
             ".dungeonflux.public.v1.SubmitActionRequest",
             ".dungeonflux.public.v1.SubmitActionResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.ActionService",
+            "SubmitMachineIntent",
+            ".dungeonflux.public.v1.SubmitMachineIntentRequest",
+            ".dungeonflux.public.v1.SubmitMachineIntentResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.SessionService",
+            "ReportPresented",
+            ".dungeonflux.public.v1.PresentedRequest",
+            ".dungeonflux.public.v1.PresentedResponse",
             RpcMode::Unary,
         ),
         actual(
@@ -916,6 +953,20 @@ fn expected_current_descriptor() -> Vec<DescriptorMethod> {
             RpcMode::ServerStreaming,
         ),
         actual(
+            "dungeonflux.public.v1.SessionService",
+            "WatchMachine",
+            ".dungeonflux.public.v1.WatchViewRequest",
+            ".dungeonflux.public.v1.MachineView",
+            RpcMode::ServerStreaming,
+        ),
+        actual(
+            "dungeonflux.public.v1.RoomService",
+            "CurrentAdventure",
+            ".dungeonflux.public.v1.CurrentAdventureRequest",
+            ".dungeonflux.public.v1.CurrentAdventureResponse",
+            RpcMode::Unary,
+        ),
+        actual(
             "dungeonflux.public.v1.RoomService",
             "Join",
             ".dungeonflux.public.v1.JoinRoomRequest",
@@ -923,18 +974,18 @@ fn expected_current_descriptor() -> Vec<DescriptorMethod> {
             RpcMode::Unary,
         ),
         actual(
-            "dungeonflux.experimental.transport.v1.TransportFixture",
-            "Unary",
-            ".dungeonflux.experimental.transport.v1.Sample",
-            ".dungeonflux.experimental.transport.v1.Sample",
+            "dungeonflux.public.v1.RoomService",
+            "Reclaim",
+            ".dungeonflux.public.v1.ReclaimRoomRequest",
+            ".dungeonflux.public.v1.ReclaimRoomResponse",
             RpcMode::Unary,
         ),
         actual(
             "dungeonflux.experimental.transport.v1.TransportFixture",
-            "ServerStream",
+            "Bidi",
             ".dungeonflux.experimental.transport.v1.Sample",
             ".dungeonflux.experimental.transport.v1.Sample",
-            RpcMode::ServerStreaming,
+            RpcMode::BidirectionalStreaming,
         ),
         actual(
             "dungeonflux.experimental.transport.v1.TransportFixture",
@@ -945,23 +996,16 @@ fn expected_current_descriptor() -> Vec<DescriptorMethod> {
         ),
         actual(
             "dungeonflux.experimental.transport.v1.TransportFixture",
-            "Bidi",
+            "ServerStream",
             ".dungeonflux.experimental.transport.v1.Sample",
             ".dungeonflux.experimental.transport.v1.Sample",
-            RpcMode::BidirectionalStreaming,
+            RpcMode::ServerStreaming,
         ),
         actual(
-            "dungeonflux.public.v1.DialogueService",
-            "Submit",
-            ".dungeonflux.public.v1.RawDialogueRequest",
-            ".dungeonflux.public.v1.DialogueResponse",
-            RpcMode::Unary,
-        ),
-        actual(
-            "dungeonflux.public.v1.DialogueService",
-            "Confirm",
-            ".dungeonflux.public.v1.ConfirmDialogueRequest",
-            ".dungeonflux.public.v1.SubmitActionResponse",
+            "dungeonflux.experimental.transport.v1.TransportFixture",
+            "Unary",
+            ".dungeonflux.experimental.transport.v1.Sample",
+            ".dungeonflux.experimental.transport.v1.Sample",
             RpcMode::Unary,
         ),
         actual(
@@ -976,6 +1020,55 @@ fn expected_current_descriptor() -> Vec<DescriptorMethod> {
             "Compose",
             ".dungeonflux.public.v1.ComposeRequest",
             ".dungeonflux.public.v1.ComposeResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.DialogueService",
+            "Confirm",
+            ".dungeonflux.public.v1.ConfirmDialogueRequest",
+            ".dungeonflux.public.v1.SubmitActionResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.DialogueService",
+            "Submit",
+            ".dungeonflux.public.v1.RawDialogueRequest",
+            ".dungeonflux.public.v1.DialogueResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.PresentationTelemetryService",
+            "Upload",
+            ".dungeonflux.public.v1.PresentationTelemetryRequest",
+            ".dungeonflux.public.v1.PresentationTelemetryResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.HeroLibraryService",
+            "DeleteHero",
+            ".dungeonflux.public.v1.DeleteHeroRequest",
+            ".dungeonflux.public.v1.DeleteHeroResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.HeroLibraryService",
+            "ListMyHeroes",
+            ".dungeonflux.public.v1.ListMyHeroesRequest",
+            ".dungeonflux.public.v1.ListMyHeroesResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.HeroLibraryService",
+            "LoadHero",
+            ".dungeonflux.public.v1.LoadHeroRequest",
+            ".dungeonflux.public.v1.LoadHeroResponse",
+            RpcMode::Unary,
+        ),
+        actual(
+            "dungeonflux.public.v1.HeroLibraryService",
+            "SaveMySeatHero",
+            ".dungeonflux.public.v1.SaveMySeatHeroRequest",
+            ".dungeonflux.public.v1.SaveMySeatHeroResponse",
             RpcMode::Unary,
         ),
     ]
@@ -1033,7 +1126,9 @@ fn generated_descriptor_accounts_for_every_current_method_and_known_divergence()
 
     let action = methods
         .iter()
-        .find(|method| method.service == "dungeonflux.public.v1.ActionService")
+        .find(|method| {
+            method.service == "dungeonflux.public.v1.ActionService" && method.method == "Submit"
+        })
         .expect("the current ActionService Submit descriptor is explicitly inventoried");
     assert_eq!(action.method, "Submit");
     assert_eq!(
@@ -1044,7 +1139,9 @@ fn generated_descriptor_accounts_for_every_current_method_and_known_divergence()
 
     let room_join = methods
         .iter()
-        .find(|method| method.service == "dungeonflux.public.v1.RoomService")
+        .find(|method| {
+            method.service == "dungeonflux.public.v1.RoomService" && method.method == "Join"
+        })
         .expect("RoomService.Join remains an explicit current divergence");
     assert_eq!(room_join.method, "Join");
     assert_eq!(room_join.request, ".dungeonflux.public.v1.JoinRoomRequest");
@@ -1060,7 +1157,9 @@ fn generated_descriptor_accounts_for_every_current_method_and_known_divergence()
 
     let session_watch = methods
         .iter()
-        .find(|method| method.service == "dungeonflux.public.v1.SessionService")
+        .find(|method| {
+            method.service == "dungeonflux.public.v1.SessionService" && method.method == "Watch"
+        })
         .expect("the present SessionService.Watch tuple is inventoried");
     assert_eq!(session_watch.method, "Watch");
     assert_eq!(session_watch.mode, RpcMode::ServerStreaming);
@@ -1082,6 +1181,22 @@ fn generated_descriptor_accounts_for_every_current_method_and_known_divergence()
         .filter(|method| method.service == "dungeonflux.experimental.transport.v1.TransportFixture")
         .count();
     assert_eq!(fixture_methods, 4);
+
+    // The machine surface: one unary call and one server stream on existing services.
+    let machine = |service: &str, method: &str| {
+        methods
+            .iter()
+            .find(|candidate| candidate.service == service && candidate.method == method)
+            .map(|candidate| candidate.mode)
+    };
+    assert_eq!(
+        machine("dungeonflux.public.v1.ActionService", "SubmitMachineIntent"),
+        Some(RpcMode::Unary)
+    );
+    assert_eq!(
+        machine("dungeonflux.public.v1.SessionService", "WatchMachine"),
+        Some(RpcMode::ServerStreaming)
+    );
 }
 
 #[test]
