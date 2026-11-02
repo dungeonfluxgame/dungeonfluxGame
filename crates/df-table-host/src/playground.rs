@@ -518,6 +518,13 @@ async fn change_controls(State(state): State<Arc<AppState>>, body: Bytes) -> Res
         Ok(change) => change,
         Err(error) => return reject_malformed(&state, &error),
     };
+    let change = match change {
+        ControlsChange::Fixture(name) => match fixture_file_name(&name) {
+            Ok(file_name) => ControlsChange::Fixture(file_name),
+            Err(message) => return refused(StatusCode::BAD_REQUEST, message),
+        },
+        other => other,
+    };
     let names = match current_fixture_names(state.playground().files().clone()).await {
         Ok(names) => names,
         Err(problem) => return refused(problem.status(), problem.message()),

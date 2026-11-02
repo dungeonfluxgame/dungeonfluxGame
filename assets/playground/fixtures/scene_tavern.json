@@ -1,0 +1,42 @@
+{
+  "name": "Scene two: inside the Gilded Flagon",
+  "description": "The second of two scenes to move between (try: playground cycle scene_quay scene_tavern). The warm common room, the packet on the table, and Finn's line from the game's text service. The party is the same, so a transition shows who moved where.",
+  "tv": {
+    "place": "The Gilded Flagon, by the hearth",
+    "status": { "kind": "ok" },
+    "caption": {
+      "speaker": "Finn Alder",
+      "text": "Take the packet and help me shake whoever followed me. Once we're clear, I'll tell you where it needs to go."
+    },
+    "backdrop": { "media": "tavern.png", "caption": "The common room, late" },
+    "card": { "media": "letter.png", "caption": "The packet, unopened" },
+    "party": [
+      { "name": "Brakka", "hit_points": 13, "maximum_hit_points": 13, "color": "#c6a36b" },
+      { "name": "Sigrun", "hit_points": 13, "maximum_hit_points": 13, "color": "#7da35b" }
+    ],
+    "elements": [
+      { "id": "finn", "kind": "character", "label": "Finn", "x": 18, "y": 40, "color": "#d9a441", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "brakka", "kind": "character", "label": "Brakka", "x": 56, "y": 42, "color": "#c6a36b", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "sigrun", "kind": "character", "label": "Sigrun", "x": 74, "y": 36, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 }
+    ]
+  },
+  "music": { "media": "ambience.wav", "target": "both", "volume": 30, "looping": true },
+  "phone": {
+    "hero": "Sigrun",
+    "goal": "Keep the packet safe",
+    "status": { "kind": "ok" },
+    "image": { "media": "sigrun.webp", "caption": "Sigrun" },
+    "narration": [
+      "The fire is low and the room is quiet. Finn pushes the packet across the table without letting go of it."
+    ],
+    "suggested": [
+      { "label": "Take the packet" },
+      { "label": "Watch the door" },
+      { "label": "Ask who is hunting" }
+    ],
+    "groups": [
+      { "name": "Talk", "choices": [{ "label": "Ask where it goes" }] },
+      { "name": "Look", "choices": [{ "label": "Study the packet" }, { "label": "Study the room" }] }
+    ]
+  }
+}

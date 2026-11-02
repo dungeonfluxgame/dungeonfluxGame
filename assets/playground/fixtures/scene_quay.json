@@ -1,0 +1,42 @@
+{
+  "name": "Scene one: the quay in the rain",
+  "description": "The first of two scenes to move between (try: playground cycle scene_quay scene_tavern). A generated rainy quay behind the stage, Finn's portrait, his line from the game's storyteller, and the sound of rain. The picture, portrait and line were made by the project's image and text services.",
+  "tv": {
+    "place": "Salt Quay, in the rain",
+    "status": { "kind": "ok" },
+    "caption": {
+      "speaker": "Finn Alder",
+      "text": "The harbour stays busy even in the rain. At dusk the quay turns slick under the lanterns, while merchants drift up toward the market road."
+    },
+    "backdrop": { "media": "quay-in-the-rain.webp", "caption": "The quay in the rain" },
+    "card": { "media": "finn-alder.webp", "caption": "Finn Alder, courier" },
+    "party": [
+      { "name": "Brakka", "hit_points": 13, "maximum_hit_points": 13, "color": "#c6a36b" },
+      { "name": "Sigrun", "hit_points": 13, "maximum_hit_points": 13, "color": "#7da35b" }
+    ],
+    "elements": [
+      { "id": "finn", "kind": "character", "label": "Finn", "x": 52, "y": 34, "color": "#d9a441", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "brakka", "kind": "character", "label": "Brakka", "x": 22, "y": 36, "color": "#c6a36b", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "sigrun", "kind": "character", "label": "Sigrun", "x": 32, "y": 44, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 }
+    ]
+  },
+  "music": { "media": "rain.wav", "target": "both", "volume": 35, "looping": true },
+  "phone": {
+    "hero": "Brakka",
+    "goal": "Get the courier out of the rain",
+    "status": { "kind": "ok" },
+    "image": { "media": "brakka.webp", "caption": "Brakka" },
+    "narration": [
+      "Rain drums on the boards. Finn keeps the packet tight against his coat and glances at every shadow on the quay."
+    ],
+    "suggested": [
+      { "label": "Follow Finn inside" },
+      { "label": "Watch the quay" },
+      { "label": "Ask about the packet" }
+    ],
+    "groups": [
+      { "name": "Move", "choices": [{ "label": "Head for the Flagon" }] },
+      { "name": "Look", "choices": [{ "label": "Study the harbour" }] }
+    ]
+  }
+}

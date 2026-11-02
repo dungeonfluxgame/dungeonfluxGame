@@ -96,10 +96,16 @@ pace: {pace}
 status: {}
 unavailable: {}
 grid: {}
+transition: {} {} ms
 scene: {scene}
 revision: {}
 fixtures: {listed}",
-        controls.status_key, controls.show_unavailable, controls.show_grid, reply.revision
+        controls.status_key,
+        controls.show_unavailable,
+        controls.show_grid,
+        controls.transition.style.key(),
+        controls.transition.duration_ms,
+        reply.revision
     )
 }
 

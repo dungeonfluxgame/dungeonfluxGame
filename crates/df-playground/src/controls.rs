@@ -12,6 +12,9 @@ use crate::copy::{ReadingPace, status_from_key};
 use crate::fixture::Status;
 use crate::scene::SceneOverlay;
 
+/// Longest a transition between scenes may take, in milliseconds.
+pub const MAXIMUM_TRANSITION_MS: u32 = 5_000;
+
 /// The key of the menu entry that keeps the fixture's own status.
 pub const FIXTURE_STATUS_KEY: &str = "fixture";
 
@@ -51,6 +54,54 @@ impl Device {
     }
 }
 
+/// How the shared screen and the phone leave one scene for the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionStyle {
+    /// The new scene replaces the old at once.
+    Cut,
+    /// The old scene fades away over the new one.
+    Fade,
+    /// The old scene is wiped off to the left, uncovering the new one.
+    Wipe,
+}
+
+impl TransitionStyle {
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "cut" => Some(Self::Cut),
+            "fade" => Some(Self::Fade),
+            "wipe" => Some(Self::Wipe),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Cut => "cut",
+            Self::Fade => "fade",
+            Self::Wipe => "wipe",
+        }
+    }
+}
+
+/// The style and length of the transition used the next time the scene changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Transition {
+    pub style: TransitionStyle,
+    pub duration_ms: u32,
+}
+
+impl Default for Transition {
+    fn default() -> Self {
+        Self {
+            style: TransitionStyle::Fade,
+            duration_ms: 700,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Controls {
@@ -62,6 +113,9 @@ pub struct Controls {
     pub status_key: String,
     pub show_unavailable: bool,
     pub show_grid: bool,
+    /// How the next change of scene is drawn.
+    #[serde(default)]
+    pub transition: Transition,
 }
 
 impl Default for Controls {
@@ -73,6 +127,7 @@ impl Default for Controls {
             status_key: FIXTURE_STATUS_KEY.to_owned(),
             show_unavailable: false,
             show_grid: false,
+            transition: Transition::default(),
         }
     }
 }
@@ -99,6 +154,10 @@ pub enum ControlsChange {
     Status(String),
     ShowUnavailable(bool),
     ShowGrid(bool),
+    /// Sets how the next change of scene is drawn; the scene itself is not changed.
+    TransitionStyle(TransitionStyle),
+    /// Sets how long the next change of scene takes, up to `MAXIMUM_TRANSITION_MS`.
+    TransitionMs(u32),
 }
 
 /// Why a change was refused.
@@ -106,6 +165,7 @@ pub enum ControlsChange {
 pub enum ControlsError {
     UnknownStatus(String),
     EmptyFixtureName,
+    TransitionTooLong(u32),
 }
 
 impl fmt::Display for ControlsError {
@@ -117,6 +177,10 @@ impl fmt::Display for ControlsError {
                 crate::copy::STATUS_KEYS.join(", ")
             ),
             Self::EmptyFixtureName => formatter.write_str("a fixture name cannot be empty"),
+            Self::TransitionTooLong(ms) => write!(
+                formatter,
+                "a transition is at most {MAXIMUM_TRANSITION_MS} ms, not {ms}"
+            ),
         }
     }
 }
@@ -146,6 +210,13 @@ impl Controls {
             }
             ControlsChange::ShowUnavailable(shown) => self.show_unavailable = shown,
             ControlsChange::ShowGrid(shown) => self.show_grid = shown,
+            ControlsChange::TransitionStyle(style) => self.transition.style = style,
+            ControlsChange::TransitionMs(ms) => {
+                if ms > MAXIMUM_TRANSITION_MS {
+                    return Err(ControlsError::TransitionTooLong(ms));
+                }
+                self.transition.duration_ms = ms;
+            }
         }
         Ok(())
     }

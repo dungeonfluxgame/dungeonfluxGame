@@ -160,3 +160,17 @@ body {
 .phone-picture-image { display: block; width: 100%; max-height: 220px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); }
 .phone-picture-caption { margin-top: 4px; color: var(--muted); font: italic 13px/1.3 var(--serif); }
 .media-missing { padding: 6px 10px; border-left: 2px solid var(--alarm); background: #3a1f22; color: var(--ivory); font-size: 12px; }
+
+/* Changing scene: a copy of the old scene lies over the new one and leaves, so the new one is revealed */
+.stage-wrap { position: relative; min-width: 0; }
+.scene-leaving {
+  position: absolute; inset: 0; z-index: 20; pointer-events: none;
+  background: var(--ink);
+  animation-duration: var(--transition-ms, 700ms); animation-timing-function: ease-in-out; animation-fill-mode: forwards;
+}
+.scene-leaving-fade { animation-name: scene-fade-out; }
+.scene-leaving-wipe { animation-name: scene-wipe-out; }
+@keyframes scene-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes scene-wipe-out { from { clip-path: inset(0 0 0 0); } to { clip-path: inset(0 0 0 100%); } }
+.scene-leaving .figure { transition: none; }
+@media (prefers-reduced-motion: reduce) { .scene-leaving { display: none; } }

@@ -98,3 +98,39 @@ fn the_shipped_media_are_plain_names_of_known_types_within_the_size_limit() {
     }
     assert!(count >= 5);
 }
+
+#[test]
+fn every_music_a_shipped_fixture_plays_is_a_sound_in_the_media_library() {
+    use crate::media::{MediaKind, media_kind};
+    let media = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/playground/media");
+    let mut with_music = 0;
+    for (name, fixture) in fixtures() {
+        if let Some(track) = &fixture.music {
+            with_music += 1;
+            assert_eq!(media_kind(&track.media), Some(MediaKind::Audio), "{name}");
+            assert!(
+                media.join(&track.media).is_file(),
+                "{name} plays {}",
+                track.media
+            );
+            assert!(track.volume <= 100, "{name}");
+        }
+    }
+    assert!(with_music >= 2, "the two scenes each bring their own music");
+}
+
+#[test]
+fn the_two_scenes_to_move_between_exist_and_differ_in_picture_music_and_place() {
+    let all = fixtures();
+    let find = |wanted: &str| {
+        all.iter()
+            .find(|(name, _)| name == wanted)
+            .map(|(_, fixture)| fixture.clone())
+            .unwrap_or_else(|| panic!("{wanted} is missing"))
+    };
+    let (quay, tavern) = (find("scene_quay.json"), find("scene_tavern.json"));
+    assert_ne!(quay.tv.place, tavern.tv.place);
+    assert_ne!(quay.tv.backdrop, tavern.tv.backdrop);
+    assert_ne!(quay.music, tavern.music);
+    assert_ne!(quay.phone.hero, tavern.phone.hero);
+}

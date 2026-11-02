@@ -493,6 +493,11 @@ impl SceneOverlay {
         if let Some(unavailable) = &self.unavailable {
             fixture.phone.unavailable.clone_from(unavailable);
         }
+        match &self.music {
+            Some(Override::Set(track)) => fixture.music = Some(track.clone()),
+            Some(Override::Clear) => fixture.music = None,
+            None => {}
+        }
         apply_image(&self.backdrop, &mut fixture.tv.backdrop);
         apply_image(&self.card, &mut fixture.tv.card);
         apply_image(&self.phone_image, &mut fixture.phone.image);

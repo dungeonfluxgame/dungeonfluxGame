@@ -16,13 +16,16 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{Document, Element, Event, HtmlImageElement, HtmlSelectElement};
 
 use crate::audio;
-use crate::controls::{Controls, ControlsChange, ControlsReply, Device, FIXTURE_STATUS_KEY};
+use crate::controls::{
+    Controls, ControlsChange, ControlsReply, Device, FIXTURE_STATUS_KEY, Transition,
+    TransitionStyle,
+};
 use crate::copy::{ReadingPace, STATUS_KEYS};
 use crate::dom::{append, clear, document, element, set_action, text_element};
 use crate::fixture::{ElementSource, Fixture, StageElement};
 use crate::media::{AudioState, ClientReport, ClientReportPost};
 use crate::net::{fetch_text, post_json};
-use crate::scene::{Override, SceneOverlay};
+use crate::scene::SceneOverlay;
 use crate::{view_phone, view_tv};
 
 /// Milliseconds between looks at the server for changed files, a rebuilt package and a changed
@@ -64,6 +67,9 @@ struct App {
     fixture_names: Vec<String>,
     /// The name of the fixture in `fixture`, so a change of choice is noticed.
     loaded_name: Option<String>,
+    /// Set when the scene has just changed and the next draw should leave the old one with a
+    /// transition.
+    pending_transition: Option<Transition>,
     /// The loaded fixture, or the words that say why it could not be read.
     fixture: Option<Result<Fixture, String>>,
     live: Option<LiveCanvas>,
@@ -223,9 +229,19 @@ async fn load_selected_fixture() {
         Err(message) => Err(message),
     };
     with_app_mut(|app| {
+        let scene_changed = app
+            .loaded_name
+            .as_deref()
+            .is_some_and(|previous| previous != name);
+        let transition = app.controls.transition;
+        if scene_changed && transition.style != TransitionStyle::Cut && transition.duration_ms > 0 {
+            app.pending_transition = Some(transition);
+        }
         app.fixture = Some(loaded);
         app.loaded_name = Some(name);
     });
+    // A scene brings its own music, so the soundtrack changes with it.
+    sync_audio();
 }
 
 /// Whether the loaded fixture draws the running canvas on its stage.
@@ -445,10 +461,9 @@ fn schedule_report() {
 /// new sound cue is played once.
 fn sync_audio() {
     let (music, cues, count, device) = with_app(|app| {
-        let music = match &app.scene.music {
-            Some(Override::Set(track)) => Some(track.clone()),
-            Some(Override::Clear) | None => None,
-        };
+        let music = shown_fixture(app)
+            .and_then(Result::ok)
+            .and_then(|fixture| fixture.music);
         (
             music,
             app.scene.cues.clone(),
@@ -725,10 +740,66 @@ fn build_page(document: &Document, app: &App) -> Result<Element, JsValue> {
     let shown = shown_fixture(app);
     let (stage, warnings) = devices(document, app, &shown)?;
     let body = element(document, "div", "body")?;
-    append(&body, &stage)?;
+    let wrap = element(document, "div", "stage-wrap")?;
+    append(&wrap, &stage)?;
+    append(&body, &wrap)?;
     append(&body, &notes(document, app, &shown, &warnings)?)?;
     append(&shell, &body)?;
     Ok(shell)
+}
+
+/// A copy of the scene on screen, dressed to leave: it lies over the new scene and a CSS animation
+/// takes it away, so the new scene is revealed underneath. Its pictures stop counting as shown,
+/// and its figures stop being found by the figure sync.
+fn leaving_copy(root: &Element, transition: Transition) -> Option<Element> {
+    let old = root.query_selector(".devices").ok().flatten()?;
+    let copy = old
+        .clone_node_with_deep(true)
+        .ok()?
+        .dyn_into::<Element>()
+        .ok()?;
+    let style = match transition.style {
+        TransitionStyle::Wipe => "scene-leaving-wipe",
+        TransitionStyle::Fade | TransitionStyle::Cut => "scene-leaving-fade",
+    };
+    copy.set_attribute("class", &format!("devices scene-leaving {style}"))
+        .ok()?;
+    copy.set_attribute(
+        "style",
+        &format!("--transition-ms: {}ms;", transition.duration_ms),
+    )
+    .ok()?;
+    copy.set_attribute("aria-hidden", "true").ok()?;
+    if let Ok(pictures) = copy.query_selector_all("img[data-media]") {
+        for index in 0..pictures.length() {
+            if let Some(Ok(picture)) = pictures.item(index).map(|node| node.dyn_into::<Element>()) {
+                let _ = picture.remove_attribute("data-media");
+            }
+        }
+    }
+    if let Ok(layers) = copy.query_selector_all(&format!(".{}", view_tv::FIGURE_LAYER_CLASS)) {
+        for index in 0..layers.length() {
+            if let Some(Ok(layer)) = layers.item(index).map(|node| node.dyn_into::<Element>()) {
+                let _ = layer.set_attribute("class", "tv-figures-leaving");
+            }
+        }
+    }
+    Some(copy)
+}
+
+fn on_animation_end(event: &Event) {
+    let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+    else {
+        return;
+    };
+    if target
+        .get_attribute("class")
+        .is_some_and(|class| class.contains("scene-leaving"))
+    {
+        target.remove();
+    }
 }
 
 fn render() {
@@ -737,8 +808,16 @@ fn render() {
             .get_element_by_id(ROOT_ID)
             .ok_or_else(|| JsValue::from_str("the playground root is missing"))?;
         let page = with_app(|app| build_page(&document, app))?;
+        let leaving = with_app_mut(|app| app.pending_transition.take())
+            .and_then(|transition| leaving_copy(&root, transition));
         clear(&root);
-        append(&root, &page)
+        append(&root, &page)?;
+        if let Some(copy) = leaving
+            && let Some(wrap) = root.query_selector(".stage-wrap")?
+        {
+            append(&wrap, &copy)?;
+        }
+        Ok(())
     });
     if let Err(error) = drawn {
         log_error(&format!("could not draw the playground: {error:?}"));
@@ -845,6 +924,9 @@ pub fn start() -> Result<(), JsValue> {
     let key = Closure::<dyn FnMut(Event)>::new(|_: Event| note_gesture());
     body.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref())?;
     key.forget();
+    let finished = Closure::<dyn FnMut(Event)>::new(|event: Event| on_animation_end(&event));
+    root.add_event_listener_with_callback("animationend", finished.as_ref().unchecked_ref())?;
+    finished.forget();
     let loaded = Closure::<dyn FnMut(Event)>::new(|event: Event| on_media_event(&event, false));
     root.add_event_listener_with_callback_and_bool("load", loaded.as_ref().unchecked_ref(), true)?;
     loaded.forget();

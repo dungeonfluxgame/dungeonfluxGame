@@ -125,7 +125,7 @@ fn the_playground_is_printed_one_setting_per_line_with_the_fixtures() {
         crate::report::format_playground(&reply, &["a.json".to_owned(), "b.json".to_owned()]);
     assert_eq!(
         text,
-        "fixture: a.json\ndevice: both\npace: normal\nstatus: fixture\nunavailable: false\ngrid: false\nscene: as the fixture has it\nrevision: 3\nfixtures: a.json, b.json"
+        "fixture: a.json\ndevice: both\npace: normal\nstatus: fixture\nunavailable: false\ngrid: false\ntransition: fade 700 ms\nscene: as the fixture has it\nrevision: 3\nfixtures: a.json, b.json"
     );
     let empty = crate::report::format_playground(
         &crate::wire::ControlsReply {

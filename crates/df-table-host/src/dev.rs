@@ -213,6 +213,56 @@ async fn read_binary_file(path: &Path) -> Result<Vec<u8>, DevError> {
     .map_err(|error| unreadable(error.to_string()))
 }
 
+/// Goes to each of two scenes in turn, `times` rounds, pausing `hold_ms` after each. A scene that
+/// cannot be reached stops the cycle there and says which step it was.
+async fn cycle(
+    port: u16,
+    scenes: [String; 2],
+    times: u32,
+    hold_ms: u64,
+    transition: &[df_playground::controls::ControlsChange],
+) -> Result<String, DevError> {
+    let mut lines = Vec::new();
+    let mut step = 0_u32;
+    for _ in 0..times {
+        for scene in &scenes {
+            step += 1;
+            let mut bodies = transition
+                .iter()
+                .map(to_body)
+                .collect::<Result<Vec<_>, _>>()?;
+            bodies.push(to_body(&df_playground::controls::ControlsChange::Fixture(
+                scene.clone(),
+            ))?);
+            let answer = send_each(
+                port,
+                route::DEV_PLAYGROUND_CONTROLS,
+                "change",
+                &bodies,
+                read_controls_reply,
+            )
+            .await;
+            match answer {
+                Ok(text) => lines.push(format!("{step}: {scene} {}", last_line(&text))),
+                Err(error) => {
+                    lines.push(format!("{step}: {scene} failed: {error}"));
+                    return Err(DevError::Rejected(lines.join("\n")));
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(hold_ms)).await;
+        }
+    }
+    lines.push(format!(
+        "cycled {times} rounds between {} and {}",
+        scenes[0], scenes[1]
+    ));
+    Ok(lines.join("\n"))
+}
+
+fn last_line(text: &str) -> &str {
+    text.lines().last().unwrap_or(text)
+}
+
 async fn show_fixture(port: u16, name: &str) -> Result<String, DevError> {
     let file_name = fixture_file_name(name).map_err(DevError::Rejected)?;
     let path = route::PLAYGROUND_FIXTURE.replace("{name}", &file_name);
@@ -277,6 +327,17 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             )
             .await
         }
+        Command::Wait(ms) => {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            Ok(format!("waited {ms} ms"))
+        }
+        Command::PlaygroundCycle {
+            first,
+            second,
+            times,
+            hold_ms,
+            transition,
+        } => cycle(port, [first, second], times, hold_ms, &transition).await,
         Command::Media => Ok(format_media(&fetch_media(port).await?)),
         Command::MediaAdd { path, name } => {
             let name = match name {

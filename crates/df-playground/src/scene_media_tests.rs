@@ -122,7 +122,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
 }
 
 #[test]
-fn music_is_set_replaced_and_stopped_and_never_changes_the_fixture() {
+fn music_is_set_replaced_and_stopped_and_replaces_the_scenes_own() {
     let mut overlay = SceneOverlay::default();
     let music = |media: &str| SceneChange::Music {
         media: media.into(),
@@ -141,11 +141,40 @@ fn music_is_set_replaced_and_stopped_and_never_changes_the_fixture() {
             looping: true
         }))
     );
-    assert_eq!(drawn(&overlay), base());
+    assert_eq!(
+        drawn(&overlay).music.map(|track| track.media),
+        Some("b.wav".to_owned())
+    );
     overlay
         .apply(SceneChange::StopMusic {}, &base())
         .expect("stops");
     assert_eq!(overlay.music, Some(Override::Clear));
+    assert_eq!(drawn(&overlay).music, None);
+}
+
+#[test]
+fn a_scene_with_its_own_music_keeps_it_until_the_overlay_replaces_or_stops_it() {
+    let mut fixture = base();
+    fixture.music = Some(Track {
+        media: "scene.wav".into(),
+        target: Target::Both,
+        volume: 30,
+        looping: true,
+    });
+    let overlay = SceneOverlay::default();
+    let mut shown = fixture.clone();
+    overlay.apply_to(&mut shown);
+    assert_eq!(
+        shown.music, fixture.music,
+        "no overlay change leaves the scene's music"
+    );
+    let mut stopped = SceneOverlay::default();
+    stopped
+        .apply(SceneChange::StopMusic {}, &fixture)
+        .expect("stops");
+    let mut shown = fixture.clone();
+    stopped.apply_to(&mut shown);
+    assert_eq!(shown.music, None);
 }
 
 #[test]

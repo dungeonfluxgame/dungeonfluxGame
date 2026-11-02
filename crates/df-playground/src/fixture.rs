@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::scene::Track;
+
 /// Where the stage gets its elements from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -161,6 +163,9 @@ pub struct Fixture {
     pub description: String,
     pub tv: TvScene,
     pub phone: PhoneScene,
+    /// Music that plays while this scene is shown, from the media library.
+    #[serde(default)]
+    pub music: Option<Track>,
 }
 
 impl Fixture {
