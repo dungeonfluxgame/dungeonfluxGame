@@ -7,14 +7,11 @@
 
 use std::collections::BTreeMap;
 
+use crate::limits::MAXIMUM_NAME_LENGTH;
 use crate::motion::Motion;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Longest identifier accepted for an element, a kind or a field.
-pub const MAXIMUM_NAME_LENGTH: usize = 48;
-/// Longest text value accepted for a field, in characters.
-pub const MAXIMUM_TEXT_LENGTH: usize = 200;
 /// Width of the canvas in canvas units.
 pub const CANVAS_WIDTH_UNITS: f32 = 100.0;
 /// Height of the canvas in canvas units (a 16 by 9 screen).
@@ -251,6 +248,12 @@ impl TryFrom<i64> for Percent {
 
     fn try_from(percent: i64) -> Result<Self, PercentError> {
         Self::new(percent)
+    }
+}
+
+impl fmt::Display for Percent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
     }
 }
 

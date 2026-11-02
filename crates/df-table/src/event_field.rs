@@ -11,9 +11,12 @@
 use std::fmt;
 
 use crate::config::{SettingFault, SettingName};
-use crate::element::{Degrees, ElementId, FieldName, KindName};
+use crate::effects::{EffectRefusal, TableEffectKind};
+use crate::element::{Degrees, ElementId, FieldName, KindName, Percent};
 use crate::event::{EffectKind, FailureCause, PipelineStep, RejectionCause, TransformKind};
 use crate::identity::{EvidenceRef, MachineId, OperationId, SceneId, TableId, TurnSeq};
+use crate::machine::{MachineFailureCause, StateName};
+use crate::machine_slot::LoadFault;
 use crate::outcome::{DeclineCode, OutcomeKind};
 use crate::owner_queue::{Lane, NotDeclinedCause};
 use crate::ports::PortName;
@@ -60,6 +63,7 @@ event_field_by_display!(
     u64,
     usize,
     Degrees,
+    Percent,
     ElementId,
     KindName,
     FieldName,
@@ -70,6 +74,7 @@ event_field_by_display!(
     TurnSeq,
     OperationId,
     EvidenceRef,
+    StateName,
 );
 
 event_field_by_key!(
@@ -85,6 +90,10 @@ event_field_by_key!(
     TransformKind,
     Lane,
     NotDeclinedCause,
+    TableEffectKind,
+    EffectRefusal,
+    MachineFailureCause,
+    LoadFault,
 );
 
 /// Writes one audit line piece by piece: the verb, then ` key=value` pairs.

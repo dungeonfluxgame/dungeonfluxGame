@@ -19,7 +19,7 @@ use super::{Lane, NotDeclinedCause, OperationStatus};
 pub enum AdmitError {
     /// The seat is not at this table; the host's session and the table disagree.
     UnknownSeat { seat: SeatId },
-    /// The same operation id was admitted before; nothing runs twice.
+    /// The same sender sent this operation id before; nothing runs twice.
     Duplicate { first: OperationStatus },
     /// The seat already has `limit` inputs admitted and not finished (K.6, `table_busy`).
     SeatBusy { pending: usize, limit: usize },

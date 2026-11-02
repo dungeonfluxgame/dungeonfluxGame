@@ -19,19 +19,30 @@ use std::fmt::{self, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{SettingFault, SettingName};
-use crate::element::{Degrees, ElementId, FieldName, KindName};
+use crate::effects::{EffectRefusal, TableEffectKind};
+use crate::element::{Degrees, ElementId, FieldName, KindName, Percent};
 use crate::event_field::LineWriter;
-use crate::identity::{Correlation, EvidenceRef, TableScope};
+use crate::identity::{Correlation, EvidenceRef, MachineId, TableScope};
+use crate::limits::MAXIMUM_NAME_LENGTH;
 use crate::listed::listed_enum;
+use crate::machine::{MachineFailureCause, StateName};
+use crate::machine_slot::LoadFault;
 use crate::outcome::{DeclineCode, OutcomeKind};
 use crate::owner_queue::{Lane, NotDeclinedCause};
 use crate::ports::PortName;
 use crate::private_data::LengthClass;
 
-/// The room reserved for an audit line. The widest possible line (every id at its maximum length,
-/// 20-digit numbers and a 48-character machine name) is under 400 bytes, which a test proves, so
-/// rendering allocates exactly once.
-pub(crate) const AUDIT_LINE_CAPACITY_BYTES: usize = 400;
+/// Everything in the widest audit line that is not a name: the area and verb, every key, 20-digit
+/// numbers and 32-digit ids. The widest line has about 270 such bytes; this leaves room.
+const AUDIT_LINE_FIXED_BYTES: usize = 352;
+/// Most names one line carries, each up to `MAXIMUM_NAME_LENGTH`: a machine and the two states of
+/// a transition.
+const AUDIT_LINE_MOST_NAMES: usize = 3;
+/// The room reserved for an audit line, derived from the longest a name may be. The widest
+/// possible line (every id at its maximum length, 20-digit numbers and the most names at the
+/// maximum name length) is under this, which a test proves, so rendering allocates exactly once.
+pub(crate) const AUDIT_LINE_CAPACITY_BYTES: usize =
+    AUDIT_LINE_FIXED_BYTES + AUDIT_LINE_MOST_NAMES * MAXIMUM_NAME_LENGTH;
 
 /// How often an event is wanted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,12 +313,15 @@ pub enum TableEvent {
     SettingKeysIgnored {
         count: usize,
     },
-    /// An element's appearance changed (`transform`). `kind` says which appearance, and `degrees`
-    /// is the rotation it now has.
+    /// An element's appearance changed (`transform`). `kind` says which appearance, `degrees` is
+    /// the rotation it now has and the pivot fields are the pivot now in force, so a change of
+    /// pivot alone is visible in the log.
     ElementTransformed {
         element: ElementId,
         kind: TransformKind,
         degrees: Degrees,
+        pivot_x_percent: Percent,
+        pivot_y_percent: Percent,
         revision: u64,
     },
     /// An input was refused without a decline code (a duplicate, a seat that is not at the table,
@@ -323,6 +337,68 @@ pub enum TableEvent {
         correlation: Correlation,
         lane: Lane,
         ms: u64,
+    },
+    /// The owner gave up on a served input that never finished (`cause` says why, `ms` is how long
+    /// it had been in progress).
+    InputAbandoned {
+        scope: TableScope,
+        correlation: Correlation,
+        cause: FailureCause,
+        ms: u64,
+    },
+    /// The outcome of an input arrived after the owner had abandoned it; the outcome is now
+    /// recorded as the operation's result.
+    InputFinishedLate {
+        scope: TableScope,
+        correlation: Correlation,
+        outcome: OutcomeKind,
+    },
+    /// A machine started for the table; `state` is the state it began in.
+    MachineEntered {
+        scope: TableScope,
+        correlation: Correlation,
+        state: StateName,
+    },
+    /// A machine moved from one of its states to another.
+    MachineTransitioned {
+        scope: TableScope,
+        correlation: Correlation,
+        from: StateName,
+        to: StateName,
+    },
+    /// A machine left the table to `target`, handing over `carried` items.
+    MachineExited {
+        scope: TableScope,
+        correlation: Correlation,
+        target: MachineId,
+        carried: usize,
+    },
+    /// A machine call failed; recorded once, by the code that handles it.
+    MachineFailed {
+        scope: TableScope,
+        correlation: Correlation,
+        cause: MachineFailureCause,
+    },
+    /// One table effect was applied.
+    EffectApplied {
+        scope: TableScope,
+        correlation: Correlation,
+        effect: TableEffectKind,
+    },
+    /// A commit's effect was refused, so none of the commit was applied.
+    EffectRefused {
+        scope: TableScope,
+        correlation: Correlation,
+        effect: TableEffectKind,
+        cause: EffectRefusal,
+    },
+    /// A saved machine record could not be used (`load.refused`, H.12): `version` is the one it
+    /// carries and `expected` the one the machine reads.
+    LoadRefused {
+        machine: MachineId,
+        version: u64,
+        expected: u64,
+        cause: LoadFault,
     },
 }
 
@@ -348,7 +424,16 @@ impl TableEvent {
             | Self::SettingKeysIgnored { .. }
             | Self::ElementTransformed { .. }
             | Self::InputRefused { .. }
-            | Self::InputServed { .. } => EventClass::Always,
+            | Self::InputServed { .. }
+            | Self::InputAbandoned { .. }
+            | Self::InputFinishedLate { .. }
+            | Self::MachineEntered { .. }
+            | Self::MachineTransitioned { .. }
+            | Self::MachineExited { .. }
+            | Self::MachineFailed { .. }
+            | Self::EffectApplied { .. }
+            | Self::EffectRefused { .. }
+            | Self::LoadRefused { .. } => EventClass::Always,
         }
     }
 
@@ -371,11 +456,19 @@ impl TableEvent {
             Self::InputReceived { .. }
             | Self::InputDeclined { .. }
             | Self::InputRefused { .. }
-            | Self::InputServed { .. } => "INPUT",
+            | Self::InputServed { .. }
+            | Self::InputAbandoned { .. }
+            | Self::InputFinishedLate { .. } => "INPUT",
             Self::StepFinished { .. } => "STEP",
             Self::TurnApplied { .. } => "TURN",
             Self::BoundaryFailed { .. } => "BOUNDARY",
             Self::SettingRejected { .. } | Self::SettingKeysIgnored { .. } => "SETTING",
+            Self::MachineEntered { .. }
+            | Self::MachineTransitioned { .. }
+            | Self::MachineExited { .. }
+            | Self::MachineFailed { .. } => "MACHINE",
+            Self::EffectApplied { .. } | Self::EffectRefused { .. } => "EFFECT",
+            Self::LoadRefused { .. } => "LOAD",
         }
     }
 
@@ -529,12 +622,16 @@ impl TableEvent {
                 element,
                 kind,
                 degrees,
+                pivot_x_percent,
+                pivot_y_percent,
                 revision,
             } => {
                 let mut line = LineWriter::start(out, "transform")?;
                 line.field("element", element)?;
                 line.field("kind", kind)?;
                 line.field("degrees", degrees)?;
+                line.field("pivot_x_percent", pivot_x_percent)?;
+                line.field("pivot_y_percent", pivot_y_percent)?;
                 line.field("revision", revision)
             }
             Self::InputRefused {
@@ -546,6 +643,26 @@ impl TableEvent {
                 write_context(&mut line, scope, correlation)?;
                 line.field("cause", cause)
             }
+            Self::InputFinishedLate {
+                scope,
+                correlation,
+                outcome,
+            } => {
+                let mut line = LineWriter::start(out, "finished_late")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("outcome", outcome)
+            }
+            Self::InputAbandoned {
+                scope,
+                correlation,
+                cause,
+                ms,
+            } => {
+                let mut line = LineWriter::start(out, "abandoned")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("cause", cause)?;
+                line.field("ms", ms)
+            }
             Self::InputServed {
                 scope,
                 correlation,
@@ -556,6 +673,78 @@ impl TableEvent {
                 write_context(&mut line, scope, correlation)?;
                 line.field("lane", lane)?;
                 line.field("ms", ms)
+            }
+            Self::MachineEntered {
+                scope,
+                correlation,
+                state,
+            } => {
+                let mut line = LineWriter::start(out, "entered")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("state", state)
+            }
+            Self::MachineTransitioned {
+                scope,
+                correlation,
+                from,
+                to,
+            } => {
+                let mut line = LineWriter::start(out, "transitioned")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("from", from)?;
+                line.field("to", to)
+            }
+            Self::MachineExited {
+                scope,
+                correlation,
+                target,
+                carried,
+            } => {
+                let mut line = LineWriter::start(out, "exited")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("target", target)?;
+                line.field("carried", carried)
+            }
+            Self::MachineFailed {
+                scope,
+                correlation,
+                cause,
+            } => {
+                let mut line = LineWriter::start(out, "failed")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("cause", cause)
+            }
+            Self::EffectApplied {
+                scope,
+                correlation,
+                effect,
+            } => {
+                let mut line = LineWriter::start(out, "applied")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("effect", effect)
+            }
+            Self::EffectRefused {
+                scope,
+                correlation,
+                effect,
+                cause,
+            } => {
+                let mut line = LineWriter::start(out, "refused")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("effect", effect)?;
+                line.field("cause", cause)
+            }
+            Self::LoadRefused {
+                machine,
+                version,
+                expected,
+                cause,
+            } => {
+                let mut line = LineWriter::start(out, "refused")?;
+                line.field("machine", machine)?;
+                line.field("version", version)?;
+                line.field("expected", expected)?;
+                line.field("cause", cause)
             }
         }
     }

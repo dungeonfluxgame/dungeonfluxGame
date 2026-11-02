@@ -4,9 +4,9 @@ use crate::element::{Appearance, Element, ElementId, FieldName, FieldValue, Kind
 use crate::field_type::ValueError;
 use crate::kind::KindRegistry;
 use crate::kind_file::{
-    ChoiceProblem, FieldProblem, KindError, KindFile, KindProblem, MAXIMUM_CHOICES,
-    MAXIMUM_FIELDS_PER_KIND, UnusedOption,
+    ChoiceProblem, FieldProblem, KindError, KindFile, KindProblem, UnusedOption,
 };
+use crate::limits::{MAXIMUM_CHOICES, MAXIMUM_FIELDS_PER_KIND, MAXIMUM_TEXT_LENGTH};
 use crate::testkit::{CHARACTER_KIND, registry_from};
 
 fn file(json: &str) -> KindFile {
@@ -121,9 +121,10 @@ fn text_and_number_limits_must_make_sense() {
         FieldProblem::TextLimit
     );
     assert_eq!(
-        field_problem(&field_json(
-            r#"{"name": "a", "type": "text", "maximum_length": 201}"#
-        )),
+        field_problem(&field_json(&format!(
+            r#"{{"name": "a", "type": "text", "maximum_length": {}}}"#,
+            MAXIMUM_TEXT_LENGTH + 1
+        ))),
         FieldProblem::TextLimit
     );
     assert!(matches!(

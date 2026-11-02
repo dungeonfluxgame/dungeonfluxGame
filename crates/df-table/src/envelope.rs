@@ -208,6 +208,15 @@ pub enum InputOrigin {
     Engine(EngineInput),
 }
 
+/// Who sent an input: a seat, or the engine. Operation ids are minted by their sender (a phone
+/// client numbers its own, the engine numbers its own), so an id means something only together
+/// with its sender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Sender {
+    Engine,
+    Seat(SeatId),
+}
+
 /// One input on its way to the owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputEnvelope {
@@ -266,6 +275,13 @@ impl InputEnvelope {
         match &self.origin {
             InputOrigin::Player { input, .. } => input.kind(),
             InputOrigin::Engine(input) => input.kind(),
+        }
+    }
+
+    pub fn sender(&self) -> Sender {
+        match &self.origin {
+            InputOrigin::Player { seat, .. } => Sender::Seat(*seat),
+            InputOrigin::Engine(_) => Sender::Engine,
         }
     }
 

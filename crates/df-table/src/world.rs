@@ -92,11 +92,11 @@ impl World {
         true
     }
 
-    /// Removes everything and returns how many elements there were.
+    /// Removes everything and returns how many elements there were. Each entity is despawned, so
+    /// the generation of every slot goes up and a handle taken before the clear stays stale.
     pub fn clear(&mut self) -> usize {
-        let removed = self.len();
-        *self = Self::default();
-        removed
+        let ids: Vec<ElementId> = self.by_name.keys().cloned().collect();
+        ids.iter().filter(|id| self.despawn(id)).count()
     }
 
     pub fn kind(&self, id: &ElementId) -> Option<&KindName> {

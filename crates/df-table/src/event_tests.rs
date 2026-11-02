@@ -1,5 +1,5 @@
 use crate::config::{SettingFault, SettingName};
-use crate::element::{Degrees, ElementId, FieldName, KindName};
+use crate::element::{Degrees, ElementId, FieldName, KindName, Percent};
 use crate::event::{
     AUDIT_LINE_CAPACITY_BYTES, EffectKind, EventClass, FailureCause, PipelineStep, RejectionCause,
     TableEvent, TransformKind,
@@ -69,11 +69,13 @@ fn a_transform_line_names_the_element_the_kind_the_degrees_and_the_revision() {
         element: id("pip"),
         kind: TransformKind::Rotate,
         degrees: Degrees::new(90).expect("valid degrees"),
+        pivot_x_percent: Percent::new(0).expect("valid percent"),
+        pivot_y_percent: Percent::new(50).expect("valid percent"),
         revision: 7,
     };
     assert_eq!(
         line(&turned),
-        "CANVAS transform element=pip kind=rotate degrees=90 revision=7"
+        "CANVAS transform element=pip kind=rotate degrees=90 pivot_x_percent=0 pivot_y_percent=50 revision=7"
     );
     assert_eq!(turned.class(), EventClass::Always);
     assert_eq!(turned.area(), "CANVAS");
@@ -277,6 +279,8 @@ fn canvas_events() -> Vec<TableEvent> {
             element: id("pip"),
             kind: TransformKind::Rotate,
             degrees: Degrees::new(359).expect("valid degrees"),
+            pivot_x_percent: Percent::new(50).expect("valid percent"),
+            pivot_y_percent: Percent::new(50).expect("valid percent"),
             revision: 12,
         },
     ]
@@ -474,7 +478,7 @@ fn an_input_received_line_carries_a_length_class_and_no_text() {
 }
 
 fn widest_ids() -> (TableScope, Correlation) {
-    let machine = MachineId::new(&"m".repeat(crate::element::MAXIMUM_NAME_LENGTH))
+    let machine = MachineId::new(&"m".repeat(crate::limits::MAXIMUM_NAME_LENGTH))
         .expect("a name of the maximum length is valid");
     let scope = TableScope::of_table(TableId::new(u64::MAX))
         .in_scene(SceneId::new(u64::MAX))
@@ -491,9 +495,25 @@ fn widest_ids() -> (TableScope, Correlation) {
 #[test]
 fn the_widest_possible_line_of_every_event_fits_the_reserved_capacity() {
     let (scope, correlation) = widest_ids();
-    let longest_name = SettingName::new(&"s".repeat(crate::element::MAXIMUM_NAME_LENGTH))
+    let longest_name = SettingName::new(&"s".repeat(crate::limits::MAXIMUM_NAME_LENGTH))
         .expect("a name of the maximum length is valid");
+    let long = |letter: &str| letter.repeat(crate::limits::MAXIMUM_NAME_LENGTH);
+    let from = crate::machine::StateName::new(&long("f")).expect("a maximum-length state name");
+    let to = crate::machine::StateName::new(&long("t")).expect("a maximum-length state name");
+    let target = crate::identity::MachineId::new(&long("x")).expect("a maximum-length machine");
     let widest = [
+        TableEvent::MachineTransitioned {
+            scope: scope.clone(),
+            correlation,
+            from,
+            to,
+        },
+        TableEvent::MachineExited {
+            scope: scope.clone(),
+            correlation,
+            target,
+            carried: usize::MAX,
+        },
         TableEvent::InputReceived {
             scope: scope.clone(),
             correlation,
@@ -546,5 +566,94 @@ fn rendering_reserves_the_capacity_once_and_the_line_never_regrows_it() {
         assert!(rendered.len() <= AUDIT_LINE_CAPACITY_BYTES);
         assert!(rendered.capacity() >= AUDIT_LINE_CAPACITY_BYTES);
         assert!(rendered.capacity() < 2 * AUDIT_LINE_CAPACITY_BYTES);
+    }
+}
+
+fn owner_queue_events() -> Vec<TableEvent> {
+    let scope = TableScope::of_table(TableId::new(1));
+    vec![
+        TableEvent::InputRefused {
+            scope: scope.clone(),
+            correlation: correlation(),
+            cause: crate::owner_queue::NotDeclinedCause::Duplicate,
+        },
+        TableEvent::InputServed {
+            scope: scope.clone(),
+            correlation: correlation(),
+            lane: crate::owner_queue::Lane::SeatControls,
+            ms: 12,
+        },
+        TableEvent::InputAbandoned {
+            scope: scope.clone(),
+            correlation: correlation(),
+            cause: FailureCause::TimedOut,
+            ms: 3_600_000,
+        },
+        TableEvent::InputFinishedLate {
+            scope,
+            correlation: correlation(),
+            outcome: OutcomeKind::Applied,
+        },
+    ]
+}
+
+/// Catches an owner-queue event whose line drops or reorders one of the pinned context keys, or
+/// whose own keys change (question 89: class A fields only grow).
+#[test]
+fn the_owner_queue_events_render_the_pinned_context_then_their_own_keys() {
+    let context =
+        "table=1 operation_id=0000000000000000000000000000feed turn_seq=7 epoch=1 revision=9";
+    let expected = [
+        format!("INPUT refused {context} cause=duplicate"),
+        format!("INPUT served {context} lane=seat_controls ms=12"),
+        format!("INPUT abandoned {context} cause=timed_out ms=3600000"),
+        format!("INPUT finished_late {context} outcome=applied"),
+    ];
+    let rendered: Vec<String> = owner_queue_events().iter().map(line).collect();
+    assert_eq!(rendered, expected);
+}
+
+/// Catches a class change: a refusal, a serve, an abandon and a late finish are all state an
+/// operator reads, so none may be sampled away.
+#[test]
+fn the_owner_queue_events_are_class_a_in_the_input_area_and_round_trip_through_serde() {
+    for event in owner_queue_events() {
+        assert_eq!(event.class(), EventClass::Always);
+        assert_eq!(event.area(), "INPUT");
+        let json = serde_json::to_string(&event).expect("serializes");
+        let back: TableEvent = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(back, event);
+    }
+}
+
+/// Catches a field wide enough to push an owner-queue line past the reserved capacity.
+#[test]
+fn the_widest_owner_queue_event_lines_fit_the_reserved_capacity() {
+    let correlation = Correlation {
+        operation_id: OperationId::from_bytes(&[0xff; 16]).expect("valid id"),
+        turn_seq: TurnSeq::new(u64::MAX),
+        revision: SessionRevision::new(RecoveryEpoch::new(u64::MAX).expect("valid"), u64::MAX),
+    };
+    let scope = TableScope::of_table(TableId::new(u64::MAX));
+    let widest = [
+        TableEvent::InputAbandoned {
+            scope: scope.clone(),
+            correlation,
+            cause: FailureCause::InvalidAnswer,
+            ms: u64::MAX,
+        },
+        TableEvent::InputFinishedLate {
+            scope,
+            correlation,
+            outcome: OutcomeKind::NeedsClarification,
+        },
+    ];
+    for event in widest {
+        let rendered = event.render_audit_line();
+        assert!(
+            rendered.len() <= AUDIT_LINE_CAPACITY_BYTES,
+            "{} bytes: {rendered}",
+            rendered.len()
+        );
     }
 }

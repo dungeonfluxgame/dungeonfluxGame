@@ -18,12 +18,10 @@ use crate::element::{
 use crate::event::{EffectKind, RejectionCause, TableEvent, TransformKind};
 use crate::field_type::{FieldType, ValueError};
 use crate::kind::KindRegistry;
+use crate::limits::MAXIMUM_ELEMENTS;
 use crate::motion::{Motion, Speed, SpeedError};
 use crate::ports::EventSink;
 use crate::world::World;
-
-/// Most elements the canvas holds at once.
-pub const MAXIMUM_ELEMENTS: usize = 512;
 
 /// One change to the canvas.
 #[derive(Debug, Clone, PartialEq)]
@@ -58,7 +56,8 @@ pub enum CanvasEffect {
         id: ElementId,
     },
     /// Turns the element to `rotation` about `pivot`, or about the pivot it already has when none
-    /// is given. It draws differently and moves nothing, so travel goes on.
+    /// is given. It draws differently and moves nothing, so travel goes on. A new pivot is refused
+    /// while the element is turned (see `CanvasError::PivotChangeWhileTurned`).
     Transform {
         id: ElementId,
         rotation: Degrees,
@@ -118,6 +117,12 @@ pub enum CanvasError {
     TooManyElements,
     OutOfBounds,
     InvalidSpeed(SpeedError),
+    /// A new pivot for an element that is already turned. The figure is drawn turned about its
+    /// pivot, so moving the pivot of a turned figure would make it jump; turn it back to 0 first.
+    PivotChangeWhileTurned {
+        element: ElementId,
+        rotation: Degrees,
+    },
 }
 
 impl CanvasError {
@@ -134,6 +139,7 @@ impl CanvasError {
             Self::TooManyElements => RejectionCause::TooManyElements,
             Self::OutOfBounds => RejectionCause::OutOfBounds,
             Self::InvalidSpeed(_) => RejectionCause::InvalidSpeed,
+            Self::PivotChangeWhileTurned { .. } => RejectionCause::InvalidTransform,
         }
     }
 }
@@ -164,6 +170,10 @@ impl fmt::Display for CanvasError {
                 "x is from 0 to {CANVAS_WIDTH_UNITS} and y is from 0 to {CANVAS_HEIGHT_UNITS}"
             ),
             Self::InvalidSpeed(error) => write!(formatter, "{error}"),
+            Self::PivotChangeWhileTurned { element, rotation } => write!(
+                formatter,
+                "'{element}' is turned {rotation} degrees, so its pivot cannot change without a jump: turn it back to 0 first (rotate {element} 0), then give the new pivot"
+            ),
         }
     }
 }
@@ -291,6 +301,12 @@ impl Canvas {
         field: &FieldName,
     ) -> Result<&FieldType, CanvasError> {
         field_type_of(&self.registry, kind, field)
+    }
+
+    /// Why one element no longer fits its kind, or `None` when it does. A viewer that copies every
+    /// element asks this of each one as it goes, instead of searching `problems()`.
+    pub fn problem_of(&self, element: &Element) -> Option<CanvasError> {
+        check_element(&self.registry, element).err()
     }
 
     /// Elements that no longer fit their kind, for a viewer to flag.
@@ -527,6 +543,20 @@ impl Canvas {
         rotation: Degrees,
         pivot: Option<Pivot>,
     ) -> Result<TableEvent, CanvasError> {
+        let Some(current) = self.world.element(&id) else {
+            return Err(CanvasError::UnknownElement(id));
+        };
+        let turned = current.appearance.rotation;
+        if let Some(new_pivot) = pivot
+            && new_pivot != current.appearance.pivot
+            && turned != Degrees::default()
+        {
+            return Err(CanvasError::PivotChangeWhileTurned {
+                element: id,
+                rotation: turned,
+            });
+        }
+        let pivot_in_force = pivot.unwrap_or(current.appearance.pivot);
         if !self.world.rotate(&id, rotation, pivot) {
             return Err(CanvasError::UnknownElement(id));
         }
@@ -535,6 +565,8 @@ impl Canvas {
             element: id,
             kind: TransformKind::Rotate,
             degrees: rotation,
+            pivot_x_percent: pivot_in_force.x,
+            pivot_y_percent: pivot_in_force.y,
             revision,
         })
     }

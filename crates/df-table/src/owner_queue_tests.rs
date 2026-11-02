@@ -2,15 +2,13 @@ use std::num::{NonZeroU32, NonZeroU128};
 use std::sync::Arc;
 
 use crate::config::Settings;
-use crate::element::MAXIMUM_NAME_LENGTH;
 use crate::envelope::{
-    EngineInput, InputEnvelope, PendingId, PlayerInput, ProposalOrigin, ProposerRef, TimerName,
-    UtteranceId, ViewStamp,
+    EngineInput, InputEnvelope, PendingId, PlayerInput, ProposalOrigin, ProposerRef, Sender,
+    TimerName, UtteranceId, ViewStamp,
 };
 use crate::event::{AUDIT_LINE_CAPACITY_BYTES, EventClass, TableEvent};
 use crate::identity::{
-    Correlation, MachineId, OperationId, RecoveryEpoch, SeatId, SessionRevision, TableId,
-    TableScope, TurnSeq,
+    Correlation, OperationId, RecoveryEpoch, SeatId, SessionRevision, TableId, TableScope, TurnSeq,
 };
 use crate::outcome::{DeclineCode, OutcomeKind};
 use crate::owner_queue::{
@@ -54,6 +52,42 @@ pub(crate) fn tap(operation_number: u64, seat: u64) -> InputEnvelope {
         view(),
         PlayerInput::Tap {
             action: ActionId::new("look").expect("valid action"),
+        },
+    )
+}
+
+pub(crate) const SEAT_ONE: Sender = Sender::Seat(SeatId::new(1));
+
+pub(crate) fn safety_card(operation_number: u64, seat: u64) -> InputEnvelope {
+    InputEnvelope::from_player(
+        operation(operation_number),
+        SeatId::new(seat),
+        view(),
+        PlayerInput::SafetyCard,
+    )
+}
+
+pub(crate) fn pending_answer(operation_number: u64, seat: u64) -> InputEnvelope {
+    InputEnvelope::from_player(
+        operation(operation_number),
+        SeatId::new(seat),
+        view(),
+        PlayerInput::PendingAnswer {
+            pending: PendingId::new(1),
+            choice: ActionId::new("accept").expect("valid action"),
+        },
+    )
+}
+
+/// A free-text line, the kind that goes to INTERPRET.
+pub(crate) fn text_line(operation_number: u64, seat: u64) -> InputEnvelope {
+    InputEnvelope::from_player(
+        operation(operation_number),
+        SeatId::new(seat),
+        view(),
+        PlayerInput::SubmitText {
+            utterance: UtteranceId::new(operation_number),
+            text: PlayerText::new("I look around"),
         },
     )
 }
@@ -218,7 +252,7 @@ fn a_refused_input_is_not_remembered_so_the_same_id_can_be_sent_again() {
         queue.admit(tap(2, 1), 0),
         Err(AdmitError::RateLimited { .. })
     ));
-    assert_eq!(queue.status(&operation(2)), None);
+    assert_eq!(queue.status(SEAT_ONE, operation(2)), None);
     assert!(queue.admit(tap(2, 1), 1_000).is_ok());
 }
 
@@ -265,7 +299,11 @@ fn an_input_in_progress_still_counts_against_its_seat_until_it_finishes() {
         Err(AdmitError::SeatBusy { .. })
     ));
     queue
-        .finish(served.envelope.operation_id(), OutcomeKind::Applied)
+        .finish(
+            served.envelope.sender(),
+            served.envelope.operation_id(),
+            OutcomeKind::Applied,
+        )
         .expect("finishes");
     assert_eq!(queue.seat_pending(SeatId::new(1)), Some(1));
     assert!(queue.admit(tap(3, 1), 0).is_ok());
@@ -350,13 +388,13 @@ fn leaving_returns_the_waiting_inputs_and_lets_their_ids_be_sent_again() {
     queue.admit(tap(2, 1), 0).expect("admitted");
     queue.admit(tap(3, 2), 0).expect("admitted");
     assert_eq!(
-        queue.leave_seat(SeatId::new(1)),
+        queue.leave_seat(SeatId::new(1), 0),
         Ok(vec![operation(1), operation(2)])
     );
     assert_eq!(queue.depth(Lane::Player), 1);
-    assert_eq!(queue.status(&operation(1)), None);
+    assert_eq!(queue.status(SEAT_ONE, operation(1)), None);
     assert_eq!(
-        queue.leave_seat(SeatId::new(1)),
+        queue.leave_seat(SeatId::new(1), 0),
         Err(SeatError::UnknownSeat {
             seat: SeatId::new(1)
         })
@@ -366,21 +404,24 @@ fn leaving_returns_the_waiting_inputs_and_lets_their_ids_be_sent_again() {
 }
 
 #[test]
-fn an_input_finishing_after_its_seat_left_and_came_back_does_not_change_the_new_seat() {
+fn a_finish_for_an_input_of_a_membership_that_left_is_unknown_and_changes_nothing_for_the_new_one()
+{
     let mut queue = quiet_queue(1, &settings(2, 5, 1));
     queue.admit(tap(1, 1), 0).expect("admitted");
-    queue.serve_next(0).expect("serves").expect("one waits");
-    queue.leave_seat(SeatId::new(1)).expect("leaves");
+    let _in_progress = queue.serve_next(0).expect("serves").expect("one waits");
+    queue.leave_seat(SeatId::new(1), 0).expect("leaves");
     queue.join_seat(SeatId::new(1), 0).expect("joins again");
     queue.admit(tap(2, 1), 0).expect("admitted");
-    queue.serve_next(0).expect("serves").expect("one waits");
+    let _in_progress = queue.serve_next(0).expect("serves").expect("one waits");
+    assert_eq!(queue.seat_pending(SeatId::new(1)), Some(1));
+    assert_eq!(
+        queue.finish(SEAT_ONE, operation(1), OutcomeKind::Applied),
+        Err(FinishError::UnknownOperation),
+        "the old membership's input was abandoned when its seat left"
+    );
     assert_eq!(queue.seat_pending(SeatId::new(1)), Some(1));
     queue
-        .finish(operation(1), OutcomeKind::Applied)
-        .expect("finishes");
-    assert_eq!(queue.seat_pending(SeatId::new(1)), Some(1));
-    queue
-        .finish(operation(2), OutcomeKind::Applied)
+        .finish(SEAT_ONE, operation(2), OutcomeKind::Applied)
         .expect("finishes");
     assert_eq!(queue.seat_pending(SeatId::new(1)), Some(0));
 }
@@ -461,7 +502,7 @@ fn every_kind_of_input_goes_to_the_lane_the_plan_names() {
             ),
             Lane::Player,
         ),
-        (player(5, PlayerInput::SafetyCard), Lane::Player),
+        (player(5, PlayerInput::SafetyCard), Lane::SeatControls),
         (
             player(
                 6,
@@ -470,7 +511,7 @@ fn every_kind_of_input_goes_to_the_lane_the_plan_names() {
                     choice: ActionId::new("accept").expect("valid action"),
                 },
             ),
-            Lane::Player,
+            Lane::SeatControls,
         ),
         (proposal(7), Lane::Engine),
         (timer(8), Lane::TimersAndResults),
@@ -542,7 +583,7 @@ fn a_duplicate_is_refused_with_where_the_first_one_stands() {
         Err(AdmitError::Duplicate { first: in_progress })
     );
     queue
-        .finish(operation(1), OutcomeKind::Declined)
+        .finish(SEAT_ONE, operation(1), OutcomeKind::Declined)
         .expect("finishes");
     let finished = OperationStatus::Finished {
         turn_seq: served.turn_seq,
@@ -552,7 +593,7 @@ fn a_duplicate_is_refused_with_where_the_first_one_stands() {
         queue.admit(tap(1, 1), 0),
         Err(AdmitError::Duplicate { first: finished })
     );
-    assert_eq!(queue.status(&operation(1)), Some(finished));
+    assert_eq!(queue.status(SEAT_ONE, operation(1)), Some(finished));
     assert_eq!(queue.depth(Lane::Player), 0, "the duplicate never queued");
 }
 
@@ -569,7 +610,11 @@ fn a_duplicate_costs_the_seat_neither_a_token_nor_a_pending_slot() {
     assert_eq!(queue.seat_pending(SeatId::new(1)), Some(1));
     let served = queue.serve_next(0).expect("serves").expect("one waits");
     queue
-        .finish(served.envelope.operation_id(), OutcomeKind::Applied)
+        .finish(
+            served.envelope.sender(),
+            served.envelope.operation_id(),
+            OutcomeKind::Applied,
+        )
         .expect("finishes");
     assert!(
         queue.admit(tap(2, 1), 1_000).is_ok(),
@@ -595,22 +640,22 @@ fn engine_inputs_are_deduplicated_by_operation_id_too() {
 fn finishing_an_unknown_queued_or_finished_operation_is_a_typed_refusal() {
     let mut queue = quiet_queue(1, &settings(9, 9, 1));
     assert_eq!(
-        queue.finish(operation(1), OutcomeKind::Applied),
+        queue.finish(SEAT_ONE, operation(1), OutcomeKind::Applied),
         Err(FinishError::UnknownOperation)
     );
     queue.admit(tap(1, 1), 0).expect("admitted");
     assert_eq!(
-        queue.finish(operation(1), OutcomeKind::Applied),
+        queue.finish(SEAT_ONE, operation(1), OutcomeKind::Applied),
         Err(FinishError::NotInProgress {
             status: OperationStatus::Queued { lane: Lane::Player }
         })
     );
     let served = queue.serve_next(0).expect("serves").expect("one waits");
     queue
-        .finish(operation(1), OutcomeKind::Applied)
+        .finish(SEAT_ONE, operation(1), OutcomeKind::Applied)
         .expect("finishes");
     assert_eq!(
-        queue.finish(operation(1), OutcomeKind::Pending),
+        queue.finish(SEAT_ONE, operation(1), OutcomeKind::Pending),
         Err(FinishError::NotInProgress {
             status: OperationStatus::Finished {
                 turn_seq: served.turn_seq,
@@ -634,13 +679,17 @@ fn the_oldest_finished_operations_are_forgotten_first_and_then_their_ids_are_new
         queue.admit(tap(number, 1), 0).expect("admitted");
         let served = queue.serve_next(0).expect("serves").expect("one waits");
         queue
-            .finish(served.envelope.operation_id(), OutcomeKind::Applied)
+            .finish(
+                served.envelope.sender(),
+                served.envelope.operation_id(),
+                OutcomeKind::Applied,
+            )
             .expect("finishes");
     }
     assert_eq!(queue.remembered_operations(), 2);
-    assert_eq!(queue.status(&operation(1)), None);
-    assert!(queue.status(&operation(2)).is_some());
-    assert!(queue.status(&operation(3)).is_some());
+    assert_eq!(queue.status(SEAT_ONE, operation(1)), None);
+    assert!(queue.status(SEAT_ONE, operation(2)).is_some());
+    assert!(queue.status(SEAT_ONE, operation(3)).is_some());
     assert!(
         queue.admit(tap(1, 1), 0).is_ok(),
         "a forgotten id is admitted as new"
@@ -690,7 +739,7 @@ fn an_exhausted_turn_sequence_refuses_to_serve_and_keeps_the_input_queued() {
     assert_eq!(queue.serve_next(0), Err(ServeError::TurnSequenceExhausted));
     assert_eq!(queue.depth(Lane::Player), 1);
     assert_eq!(
-        queue.status(&operation(1)),
+        queue.status(SEAT_ONE, operation(1)),
         Some(OperationStatus::Queued { lane: Lane::Player })
     );
 }
@@ -716,7 +765,7 @@ fn an_admitted_input_is_recorded_received_and_later_served_with_its_lane_and_wai
     let sink = Arc::new(RecordingSink::default());
     let mut queue = seated_queue(1, &settings(9, 9, 1), sink.clone());
     queue.admit(tap(1, 1), 100).expect("admitted");
-    queue.serve_next(350).expect("serves").expect("one waits");
+    let _in_progress = queue.serve_next(350).expect("serves").expect("one waits");
     let id = operation(1);
     assert_eq!(
         lines(&sink),
@@ -798,7 +847,7 @@ fn typed_text_reaches_an_event_only_as_a_length_class() {
         },
     );
     queue.admit(line, 0).expect("admitted");
-    queue.serve_next(0).expect("serves").expect("one waits");
+    let _in_progress = queue.serve_next(0).expect("serves").expect("one waits");
     let everything = format!("{:?}{:?}", sink.events(), lines(&sink));
     assert!(!everything.contains(SENTINEL), "{everything}");
     assert!(lines(&sink)[0].ends_with("length=short"));
@@ -810,7 +859,7 @@ fn the_new_events_are_class_a_and_round_trip_through_serde() {
     let mut queue = seated_queue(1, &settings(1, 9, 1), sink.clone());
     queue.admit(tap(1, 1), 0).expect("admitted");
     queue.admit(tap(1, 1), 0).expect_err("a duplicate");
-    queue.serve_next(0).expect("serves").expect("one waits");
+    let _in_progress = queue.serve_next(0).expect("serves").expect("one waits");
     for event in sink.events() {
         assert_eq!(event.class(), EventClass::Always);
         let json = serde_json::to_string(&event).expect("serializes");
@@ -821,10 +870,8 @@ fn the_new_events_are_class_a_and_round_trip_through_serde() {
 
 #[test]
 fn the_widest_possible_queue_event_lines_fit_the_reserved_capacity() {
-    let machine = MachineId::new(&"m".repeat(MAXIMUM_NAME_LENGTH)).expect("valid machine");
-    let scope = TableScope::of_table(TableId::new(u64::MAX))
-        .in_scene(crate::identity::SceneId::new(u64::MAX))
-        .in_machine(machine);
+    // The queue records the table only: an input is not yet in a scene or a machine.
+    let scope = TableScope::of_table(TableId::new(u64::MAX));
     let correlation = Correlation {
         operation_id: OperationId::from_bytes(&[0xff; 16]).expect("valid id"),
         turn_seq: TurnSeq::new(u64::MAX),
@@ -854,9 +901,12 @@ fn the_widest_possible_queue_event_lines_fit_the_reserved_capacity() {
 }
 
 #[test]
-fn the_three_lane_keys_and_the_three_causes_are_distinct_and_listed() {
+fn the_four_lane_keys_and_the_three_causes_are_distinct_and_listed() {
     let lanes: Vec<&str> = Lane::ALL.iter().map(|lane| lane.key()).collect();
-    assert_eq!(lanes, ["engine", "timers_and_results", "player"]);
+    assert_eq!(
+        lanes,
+        ["seat_controls", "engine", "timers_and_results", "player"]
+    );
     let causes: Vec<&str> = NotDeclinedCause::ALL
         .iter()
         .map(|cause| cause.key())
@@ -864,14 +914,108 @@ fn the_three_lane_keys_and_the_three_causes_are_distinct_and_listed() {
     assert_eq!(causes, ["unknown_seat", "duplicate", "lane_stalled"]);
 }
 
+/// Admits `inputs` mixed inputs (taps, pause cards, timers) over twelve seats and serves them all
+/// with the queue remembering only 1_000 ended operations, so eviction runs all the way through.
+/// A seat leaves and comes back now and then, every 1_500th served input is left unfinished and
+/// the watchdog reaps the leaked ones. Returns how many entries the queue touched in all.
+fn touched_serving(inputs: u64) -> u64 {
+    const SEATS: u64 = 12;
+    let limits = QueueLimits {
+        remembered_operations: 1_000,
+        in_progress_lease_ms: 50,
+        ..QueueLimits::default()
+    };
+    let mut queue = OwnerQueue::new(
+        TableId::new(1),
+        &settings(1_000_000, 1_000_000, 1),
+        Arc::new(NullSink),
+    )
+    .expect("builds")
+    .with_limits(limits);
+    for seat in 1..=SEATS {
+        queue.join_seat(SeatId::new(seat), 0).expect("joins");
+    }
+    crate::owner_queue::reset_touched_entries();
+    for number in 1..=inputs {
+        let seat = 1 + number % SEATS;
+        let envelope = if number % 7 == 0 {
+            safety_card(number, seat)
+        } else if number % 11 == 0 {
+            timer(number)
+        } else {
+            tap(number, seat)
+        };
+        queue.admit(envelope, 0).expect("admitted");
+    }
+    let mut served = 0_u64;
+    let mut discarded = 0_u64;
+    let mut reaped = 0_u64;
+    let mut leaked = 0_u64;
+    while let Some(input) = queue.serve_next(served).expect("serves") {
+        served += 1;
+        assert_eq!(input.turn_seq.get(), served);
+        if served.is_multiple_of(1_500) {
+            leaked += 1;
+        } else {
+            queue
+                .finish(
+                    input.envelope.sender(),
+                    input.envelope.operation_id(),
+                    OutcomeKind::Applied,
+                )
+                .expect("finishes");
+        }
+        if served.is_multiple_of(997) {
+            let churned = SeatId::new(1 + served % SEATS);
+            discarded += queue.leave_seat(churned, served).expect("leaves").len() as u64;
+            queue.join_seat(churned, served).expect("joins again");
+        }
+        if served.is_multiple_of(1_000) {
+            reaped += queue.reap_expired(served).len() as u64;
+        }
+    }
+    reaped += queue.reap_expired(served + 1_000).len() as u64;
+    assert_eq!(served + discarded, inputs);
+    assert!(
+        reaped <= leaked && reaped > 0,
+        "the watchdog reaped {reaped} of {leaked} leaked inputs; a seat leaving abandons the rest"
+    );
+    assert!(queue.in_progress(served + 1_000).is_empty());
+    assert!(
+        queue.remembered_operations() <= 1_000,
+        "ended operations were evicted down to the limit"
+    );
+    crate::owner_queue::touched_entries()
+}
+
+/// Catches the mutations that make serving cost more than a constant per input: an eviction that
+/// scans the remembered operations, a `reap_expired` that rescans on every serve, or a serve that
+/// walks every seat. The bound is about twice the cost measured when it was written.
 #[test]
-fn serving_a_hundred_thousand_inputs_over_twelve_seats_is_linear_and_balanced() {
+fn the_work_of_serving_grows_in_step_with_the_inputs_served() {
+    let small = touched_serving(20_000);
+    let large = touched_serving(80_000);
+    assert!(
+        large <= small * 45 / 10,
+        "four times the input touched {large} entries against {small}"
+    );
+    assert!(
+        large <= MEASURED_TOUCHES_PER_INPUT * 80_000,
+        "{large} entries touched for 80_000 inputs"
+    );
+}
+
+const MEASURED_TOUCHES_PER_INPUT: u64 = 25;
+
+#[test]
+fn a_hundred_thousand_inputs_over_twelve_seats_are_served_balanced() {
     const SEATS: u64 = 12;
     const INPUTS: u64 = 100_000;
     let mut queue = quiet_queue(SEATS, &settings(1_000_000, 1_000_000, 1));
     for number in 1..=INPUTS {
-        let seat = 1 + number % SEATS;
-        queue.admit(tap(number, seat), 0).expect("admitted");
+        queue
+            .admit(tap(number, 1 + number % SEATS), 0)
+            .expect("admitted");
     }
     assert_eq!(queue.depth(Lane::Player), 100_000);
     let mut served_per_seat = [0_u64; SEATS as usize];
@@ -885,14 +1029,13 @@ fn serving_a_hundred_thousand_inputs_over_twelve_seats_is_linear_and_balanced() 
         let least = served_per_seat.iter().min().copied().unwrap_or(0);
         assert!(most - least <= 1, "seats drifted apart at serve {served}");
         queue
-            .finish(input.envelope.operation_id(), OutcomeKind::Applied)
+            .finish(
+                input.envelope.sender(),
+                input.envelope.operation_id(),
+                OutcomeKind::Applied,
+            )
             .expect("finishes");
     }
     assert_eq!(served, INPUTS);
-    assert!(
-        queue.probes() <= 4 * INPUTS,
-        "{} probes for {INPUTS} serves is not linear",
-        queue.probes()
-    );
     assert_eq!(queue.depth(Lane::Player), 0);
 }

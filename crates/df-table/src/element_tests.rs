@@ -1,7 +1,8 @@
 use crate::element::{
     CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, Color, Degrees, DegreesError, ElementId, FieldValue,
-    MAXIMUM_NAME_LENGTH, NameError, Percent, PercentError, Pivot, Position,
+    NameError, Percent, PercentError, Pivot, Position,
 };
+use crate::limits::MAXIMUM_NAME_LENGTH;
 
 #[test]
 fn a_name_is_lowercase_letters_digits_underscore_and_hyphen_starting_with_a_letter() {

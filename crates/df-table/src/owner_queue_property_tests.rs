@@ -1,30 +1,36 @@
-//! Property-style tests of the owner queue: a small deterministic generator, many seeds, and a
-//! reference model that says what must be true after every step.
+//! Property-style tests of the owner queue: a small deterministic generator, many seeds, and
+//! reference models that say what must be true after every step. Bounds are small and seats come
+//! and go, so the cases a huge bound hides (a seat refused `table_busy` mid-round, a seat leaving
+//! with the cursor past it) are the cases that run.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use crate::envelope::InputEnvelope;
+use crate::config::Settings;
+use crate::envelope::{InputEnvelope, Sender};
 use crate::identity::{OperationId, SeatId, TableId};
 use crate::outcome::OutcomeKind;
-use crate::owner_queue::{AdmitError, Lane, OperationStatus, OwnerQueue, QueueLimits, TokenBucket};
+use crate::owner_queue::{
+    AdmitError, Lane, OperationStatus, OwnerQueue, QueueLimits, ServedInput, TokenBucket,
+};
 use crate::owner_queue_tests::{
-    NullSink, operation, proposal, resource_result, seated_queue, settings, tap, timer,
+    NullSink, operation, pending_answer, proposal, resource_result, safety_card, seated_queue,
+    settings, tap, timer,
 };
 
 const SEEDS: u64 = 300;
 const HUGE: u32 = 1_000_000;
 
 /// A xorshift64 generator: the same seed always gives the same numbers.
-struct XorShift(u64);
+pub(crate) struct XorShift(u64);
 
 impl XorShift {
-    fn seeded(seed: u64) -> Self {
+    pub(crate) fn seeded(seed: u64) -> Self {
         Self(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1)
     }
 
-    fn next_number(&mut self) -> u64 {
+    pub(crate) fn next_number(&mut self) -> u64 {
         let mut state = self.0;
         state ^= state << 13;
         state ^= state >> 7;
@@ -33,21 +39,40 @@ impl XorShift {
         state
     }
 
-    fn below(&mut self, bound: u64) -> u64 {
+    pub(crate) fn below(&mut self, bound: u64) -> u64 {
         self.next_number() % bound
     }
 
-    fn chance(&mut self, percent: u64) -> bool {
+    pub(crate) fn chance(&mut self, percent: u64) -> bool {
         self.below(100) < percent
     }
 }
 
-fn seat_of(served_envelope: &InputEnvelope) -> u64 {
-    served_envelope.seat().expect("a player input").get()
+/// The number a test gave an operation: `operation(n)` is the id of the number n.
+fn number_of(operation_id: OperationId) -> u64 {
+    (u128::from_be_bytes(*operation_id.as_bytes()) - 1) as u64
 }
 
-/// The per-seat first-in first-out order, and how many serves went to other seats since each
-/// seat last had to wait for its turn.
+fn seat_of(served: &ServedInput) -> u64 {
+    served.envelope.seat().expect("a player input").get()
+}
+
+fn serve(queue: &mut OwnerQueue, now_ms: u64) -> Option<ServedInput> {
+    queue.serve_next(now_ms).expect("serves")
+}
+
+fn end(queue: &mut OwnerQueue, served: &ServedInput) {
+    queue
+        .finish(
+            served.envelope.sender(),
+            served.envelope.operation_id(),
+            OutcomeKind::Applied,
+        )
+        .expect("finishes");
+}
+
+/// The per-seat first-in first-out order, and how many serves went to other seats since each seat
+/// last had to wait for its turn.
 #[derive(Default)]
 struct FairnessModel {
     waiting: BTreeMap<u64, VecDeque<OperationId>>,
@@ -63,8 +88,8 @@ impl FairnessModel {
         line.push_back(operation_id);
     }
 
-    /// Checks one serve against the model: the seat's own order, and that no other seat with input
-    /// waiting has been passed over more than once for each other seat.
+    /// Checks one serve against the model: the seat's own order, and that no seat with input
+    /// waiting has been passed over by more distinct seats than the table has.
     fn served(&mut self, seat: u64, operation_id: OperationId, seats: u64) {
         let next = self.waiting.get_mut(&seat).and_then(VecDeque::pop_front);
         assert_eq!(
@@ -86,41 +111,76 @@ impl FairnessModel {
     }
 }
 
-fn serve_checked(queue: &mut OwnerQueue, model: &mut FairnessModel, seats: u64) -> bool {
-    let Some(served) = queue.serve_next(0).expect("serves") else {
-        return false;
-    };
-    let operation_id = served.envelope.operation_id();
-    model.served(seat_of(&served.envelope), operation_id, seats);
-    queue
-        .finish(operation_id, OutcomeKind::Applied)
-        .expect("finishes");
-    true
+fn random_settings(random: &mut XorShift) -> Settings {
+    match random.below(3) {
+        0 => settings(HUGE, HUGE, 1),
+        1 => settings(3, 3, 1),
+        _ => settings(
+            1 + random.below(4) as u32,
+            1 + random.below(4) as u32,
+            1 + random.below(3) as u32,
+        ),
+    }
 }
 
 #[test]
-fn no_seat_waits_more_than_one_round_whatever_the_arrival_pattern() {
+fn no_seat_waits_more_than_one_round_at_any_bound_and_a_refusal_never_costs_a_place() {
     for seed in 0..SEEDS {
         let mut random = XorShift::seeded(seed);
         let seats = 2 + random.below(11);
-        let mut queue = seated_queue(seats, &settings(HUGE, HUGE, 1), Arc::new(NullSink));
+        let mut queue = seated_queue(seats, &random_settings(&mut random), Arc::new(NullSink));
         let mut model = FairnessModel::default();
+        let mut in_flight: Vec<ServedInput> = Vec::new();
         let mut next_operation = 0;
+        let mut now_ms = 0_u64;
         for _ in 0..600 {
-            if random.chance(60) {
-                let seat = if random.chance(70) {
-                    1
-                } else {
-                    1 + random.below(seats)
-                };
-                next_operation += 1;
-                queue.admit(tap(next_operation, seat), 0).expect("admitted");
-                model.admitted(seat, operation(next_operation));
-            } else {
-                serve_checked(&mut queue, &mut model, seats);
+            now_ms += random.below(1_500);
+            match random.below(10) {
+                0..=5 => {
+                    let seat = if random.chance(70) {
+                        1
+                    } else {
+                        1 + random.below(seats)
+                    };
+                    next_operation += 1;
+                    let before = queue.seat_pending(SeatId::new(seat));
+                    match queue.admit(tap(next_operation, seat), now_ms) {
+                        Ok(_) => model.admitted(seat, operation(next_operation)),
+                        Err(AdmitError::SeatBusy { .. } | AdmitError::RateLimited { .. }) => {
+                            assert_eq!(queue.seat_pending(SeatId::new(seat)), before);
+                            assert_eq!(
+                                queue.status(
+                                    Sender::Seat(SeatId::new(seat)),
+                                    operation(next_operation)
+                                ),
+                                None
+                            );
+                        }
+                        Err(other) => panic!("seed {seed}: unexpected refusal {other:?}"),
+                    }
+                }
+                6..=8 => {
+                    if let Some(served) = serve(&mut queue, now_ms) {
+                        model.served(seat_of(&served), served.envelope.operation_id(), seats);
+                        in_flight.push(served);
+                    }
+                }
+                _ => {
+                    if !in_flight.is_empty() {
+                        let index = random.below(in_flight.len() as u64) as usize;
+                        let served = in_flight.swap_remove(index);
+                        end(&mut queue, &served);
+                    }
+                }
             }
         }
-        while serve_checked(&mut queue, &mut model, seats) {}
+        for served in in_flight.drain(..) {
+            end(&mut queue, &served);
+        }
+        while let Some(served) = serve(&mut queue, now_ms) {
+            model.served(seat_of(&served), served.envelope.operation_id(), seats);
+            end(&mut queue, &served);
+        }
         assert_eq!(queue.depth(Lane::Player), 0, "seed {seed}: a seat starved");
         assert!(
             model.waiting.values().all(VecDeque::is_empty),
@@ -134,32 +194,35 @@ fn a_flooding_seat_cannot_delay_a_quiet_seat_beyond_one_round() {
     for seed in 0..SEEDS {
         let mut random = XorShift::seeded(seed);
         let seats = 2 + random.below(11);
-        let mut queue = seated_queue(seats, &settings(HUGE, HUGE, 1), Arc::new(NullSink));
+        let mut queue = seated_queue(seats, &random_settings(&mut random), Arc::new(NullSink));
         let mut next_operation = 0;
         let mut flood = |queue: &mut OwnerQueue, count: u64| {
             for _ in 0..count {
                 next_operation += 1;
-                queue.admit(tap(next_operation, 1), 0).expect("admitted");
+                // A refusal here is the bound doing its job; the flood only has to try.
+                queue.admit(tap(next_operation, 1), 0).ok();
             }
         };
         flood(&mut queue, 200 + random.below(800));
         for _ in 0..random.below(60) {
-            queue
-                .serve_next(0)
-                .expect("serves")
-                .expect("the flood waits");
+            let Some(served) = serve(&mut queue, 0) else {
+                break;
+            };
+            end(&mut queue, &served);
         }
         let quiet_seat = 2 + random.below(seats - 1);
         let quiet_operation = 1_000_000 + seed;
-        queue
-            .admit(tap(quiet_operation, quiet_seat), 0)
-            .expect("admitted");
+        if queue.admit(tap(quiet_operation, quiet_seat), 0).is_err() {
+            continue;
+        }
         let mut served_before_it = 0;
         loop {
-            let served = queue.serve_next(0).expect("serves").expect("input waits");
+            let served = serve(&mut queue, 0).expect("input waits");
             if served.envelope.operation_id() == operation(quiet_operation) {
+                end(&mut queue, &served);
                 break;
             }
+            end(&mut queue, &served);
             served_before_it += 1;
             flood(&mut queue, 1);
         }
@@ -168,11 +231,6 @@ fn a_flooding_seat_cannot_delay_a_quiet_seat_beyond_one_round() {
             "seed {seed}: {served_before_it} other inputs were served first with {seats} seats"
         );
     }
-}
-
-/// The number a test gave an operation: `operation(n)` is the id of the number n.
-fn number_of(operation_id: OperationId) -> u64 {
-    (u128::from_be_bytes(*operation_id.as_bytes()) - 1) as u64
 }
 
 #[test]
@@ -185,11 +243,14 @@ fn nothing_exceeds_its_bound_and_every_refusal_is_typed_and_expected() {
             seats: 4,
             engine_lane_length: 1 + random.below(4) as usize,
             timers_and_results_lane_length: 1 + random.below(4) as usize,
+            seat_controls_pending: 1 + random.below(4) as usize,
+            controls_lane_length: 1 + random.below(6) as usize,
             remembered_operations: random.below(5) as usize,
+            ..QueueLimits::default()
         };
         let mut queue = OwnerQueue::new(
             TableId::new(1),
-            &settings(pending_limit as u32, HUGE, 1),
+            &settings(pending_limit as u32, 6, 1),
             Arc::new(NullSink),
         )
         .expect("builds")
@@ -198,27 +259,71 @@ fn nothing_exceeds_its_bound_and_every_refusal_is_typed_and_expected() {
             queue.join_seat(SeatId::new(seat), 0).expect("joins");
         }
         let mut pending: BTreeMap<u64, u64> = (1..=seats).map(|seat| (seat, 0)).collect();
-        let mut in_flight: Vec<(OperationId, Option<u64>)> = Vec::new();
+        let mut controls: BTreeMap<u64, usize> = (1..=seats).map(|seat| (seat, 0)).collect();
+        let mut in_flight: Vec<ServedInput> = Vec::new();
         let mut next_operation = 0;
         for _ in 0..400 {
-            match random.below(10) {
-                0..=3 => {
+            match random.below(11) {
+                0..=2 => {
                     let seat = 1 + random.below(seats);
                     next_operation += 1;
+                    // The clock never moves, so a seat's bucket runs dry after its burst and a line
+                    // that passes the pending bound may still be rate limited.
                     let result = queue.admit(tap(next_operation, seat), 0);
                     let held = pending[&seat];
+                    match result {
+                        Err(AdmitError::SeatBusy { pending, limit }) => {
+                            assert_eq!(held as usize, pending);
+                            assert_eq!(pending_limit as usize, limit);
+                        }
+                        Err(AdmitError::RateLimited { .. }) => {
+                            assert!(held < pending_limit, "seed {seed}: checked after the bound");
+                        }
+                        Ok(_) => {
+                            assert!(held < pending_limit, "seed {seed}");
+                            pending.insert(seat, held + 1);
+                        }
+                        Err(other) => panic!("seed {seed}: {other:?}"),
+                    }
                     if held >= pending_limit {
-                        let expected = AdmitError::SeatBusy {
-                            pending: held as usize,
-                            limit: pending_limit as usize,
+                        assert!(
+                            matches!(result, Err(AdmitError::SeatBusy { .. })),
+                            "seed {seed}"
+                        );
+                    }
+                }
+                3..=4 => {
+                    let seat = 1 + random.below(seats);
+                    next_operation += 1;
+                    let envelope = if random.chance(50) {
+                        safety_card(next_operation, seat)
+                    } else {
+                        pending_answer(next_operation, seat)
+                    };
+                    let result = queue.admit(envelope, 0);
+                    let held = controls[&seat];
+                    let table_wide: usize = controls.values().sum();
+                    if held >= limits.seat_controls_pending {
+                        let expected = AdmitError::LaneStalled {
+                            lane: Lane::SeatControls,
+                            limit: limits.seat_controls_pending,
+                        };
+                        assert_eq!(result, Err(expected), "seed {seed}");
+                    } else if table_wide >= limits.controls_lane_length {
+                        let expected = AdmitError::LaneStalled {
+                            lane: Lane::SeatControls,
+                            limit: limits.controls_lane_length,
                         };
                         assert_eq!(result, Err(expected), "seed {seed}");
                     } else {
-                        assert!(result.is_ok(), "seed {seed}: {result:?}");
-                        pending.insert(seat, held + 1);
+                        assert!(
+                            result.is_ok(),
+                            "seed {seed}: a control was refused {result:?}"
+                        );
+                        controls.insert(seat, held + 1);
                     }
                 }
-                4..=5 => {
+                5 => {
                     next_operation += 1;
                     let (envelope, lane, cap) = match random.below(3) {
                         0 => (
@@ -246,19 +351,21 @@ fn nothing_exceeds_its_bound_and_every_refusal_is_typed_and_expected() {
                     }
                 }
                 6..=7 => {
-                    if let Some(served) = queue.serve_next(0).expect("serves") {
-                        let seat = served.envelope.seat().map(SeatId::get);
-                        in_flight.push((served.envelope.operation_id(), seat));
+                    if let Some(served) = serve(&mut queue, 0) {
+                        if served.lane == Lane::SeatControls {
+                            let seat = seat_of(&served);
+                            controls.insert(seat, controls[&seat] - 1);
+                        }
+                        in_flight.push(served);
                     }
                 }
                 _ => {
                     if !in_flight.is_empty() {
                         let index = random.below(in_flight.len() as u64) as usize;
-                        let (operation_id, seat) = in_flight.swap_remove(index);
-                        queue
-                            .finish(operation_id, OutcomeKind::Applied)
-                            .expect("finishes");
-                        if let Some(seat) = seat {
+                        let served = in_flight.swap_remove(index);
+                        end(&mut queue, &served);
+                        if served.lane == Lane::Player {
+                            let seat = seat_of(&served);
                             pending.insert(seat, pending[&seat] - 1);
                         }
                     }
@@ -270,7 +377,14 @@ fn nothing_exceeds_its_bound_and_every_refusal_is_typed_and_expected() {
             }
             assert!(queue.depth(Lane::Engine) <= limits.engine_lane_length);
             assert!(queue.depth(Lane::TimersAndResults) <= limits.timers_and_results_lane_length);
-            let live = queue.depth(Lane::Engine)
+            assert!(
+                controls
+                    .values()
+                    .all(|held| *held <= limits.seat_controls_pending)
+            );
+            assert!(controls.values().sum::<usize>() <= limits.controls_lane_length);
+            let live = queue.depth(Lane::SeatControls)
+                + queue.depth(Lane::Engine)
                 + queue.depth(Lane::TimersAndResults)
                 + queue.depth(Lane::Player)
                 + in_flight.len();
@@ -284,44 +398,46 @@ fn nothing_exceeds_its_bound_and_every_refusal_is_typed_and_expected() {
 }
 
 fn envelope_of_random_kind(random: &mut XorShift, number: u64, seats: u64) -> InputEnvelope {
-    match random.below(4) {
+    match random.below(6) {
         0 => proposal(number),
         1 => timer(number),
         2 => resource_result(number),
+        3 => safety_card(number, 1 + random.below(seats)),
         _ => tap(number, 1 + random.below(seats)),
     }
 }
 
 #[test]
-fn one_operation_id_runs_once_however_often_it_is_sent_and_whenever_the_drain_stops() {
+fn one_operation_id_runs_once_per_sender_however_often_it_is_sent_and_whenever_the_drain_stops() {
     for seed in 0..SEEDS {
         let mut random = XorShift::seeded(seed);
         let seats = 1 + random.below(5);
         let mut queue = seated_queue(seats, &settings(HUGE, HUGE, 1), Arc::new(NullSink));
-        let mut known: BTreeMap<u64, OperationStatus> = BTreeMap::new();
-        let mut times_served: BTreeMap<u64, u32> = BTreeMap::new();
-        let mut in_flight: Vec<u64> = Vec::new();
+        let mut known: BTreeMap<(Sender, u64), OperationStatus> = BTreeMap::new();
+        let mut times_served: BTreeMap<(Sender, u64), u32> = BTreeMap::new();
+        let mut in_flight: Vec<(Sender, u64)> = Vec::new();
         let mut fresh = 0;
         for _ in 0..500 {
             match random.below(10) {
                 0..=4 => {
-                    let resend = !known.is_empty() && random.chance(40);
+                    let resend = fresh > 0 && random.chance(50);
                     let number = if resend {
                         1 + random.below(fresh)
                     } else {
                         fresh += 1;
                         fresh
                     };
-                    let result =
-                        queue.admit(envelope_of_random_kind(&mut random, number, seats), 0);
-                    match known.get(&number) {
+                    let envelope = envelope_of_random_kind(&mut random, number, seats);
+                    let key = (envelope.sender(), number);
+                    let result = queue.admit(envelope, 0);
+                    match known.get(&key) {
                         Some(first) => {
                             assert_eq!(result, Err(AdmitError::Duplicate { first: *first }));
                         }
                         None => {
-                            let admitted = result.expect("a new id is admitted");
+                            let admitted = result.expect("a new id of this sender is admitted");
                             known.insert(
-                                number,
+                                key,
                                 OperationStatus::Queued {
                                     lane: admitted.lane,
                                 },
@@ -330,32 +446,36 @@ fn one_operation_id_runs_once_however_often_it_is_sent_and_whenever_the_drain_st
                     }
                 }
                 5..=7 => {
-                    let drain_for = random.below(4);
-                    for _ in 0..drain_for {
-                        let Some(served) = queue.serve_next(0).expect("serves") else {
+                    for _ in 0..random.below(4) {
+                        let Some(served) = serve(&mut queue, 0) else {
                             break;
                         };
-                        let number = number_of(served.envelope.operation_id());
-                        *times_served.entry(number).or_default() += 1;
+                        let key = (
+                            served.envelope.sender(),
+                            number_of(served.envelope.operation_id()),
+                        );
+                        *times_served.entry(key).or_default() += 1;
                         known.insert(
-                            number,
+                            key,
                             OperationStatus::InProgress {
                                 turn_seq: served.turn_seq,
                             },
                         );
-                        in_flight.push(number);
+                        in_flight.push(key);
                     }
                 }
                 _ => {
                     if !in_flight.is_empty() {
                         let index = random.below(in_flight.len() as u64) as usize;
-                        let number = in_flight.swap_remove(index);
+                        let (sender, number) = in_flight.swap_remove(index);
                         queue
-                            .finish(operation(number), OutcomeKind::Pending)
+                            .finish(sender, operation(number), OutcomeKind::Pending)
                             .expect("finishes");
-                        if let Some(OperationStatus::InProgress { turn_seq }) = known.get(&number) {
+                        if let Some(OperationStatus::InProgress { turn_seq }) =
+                            known.get(&(sender, number))
+                        {
                             known.insert(
-                                number,
+                                (sender, number),
                                 OperationStatus::Finished {
                                     turn_seq: *turn_seq,
                                     outcome: OutcomeKind::Pending,
@@ -366,17 +486,20 @@ fn one_operation_id_runs_once_however_often_it_is_sent_and_whenever_the_drain_st
                 }
             }
         }
-        while let Some(served) = queue.serve_next(0).expect("serves") {
-            let number = number_of(served.envelope.operation_id());
-            *times_served.entry(number).or_default() += 1;
+        while let Some(served) = serve(&mut queue, 0) {
+            let key = (
+                served.envelope.sender(),
+                number_of(served.envelope.operation_id()),
+            );
+            *times_served.entry(key).or_default() += 1;
         }
         assert!(
             times_served.values().all(|times| *times == 1),
             "seed {seed}: {times_served:?}"
         );
         assert_eq!(
-            times_served.len() as u64,
-            fresh,
+            times_served.len(),
+            known.len(),
             "seed {seed}: an admitted id never ran"
         );
     }
@@ -399,7 +522,7 @@ fn scenario_trace(seed: u64) -> Vec<String> {
                 "admit {fresh} at {now_ms}: {:?}",
                 queue.admit(envelope, now_ms)
             ));
-        } else if let Some(served) = queue.serve_next(now_ms).expect("serves") {
+        } else if let Some(served) = serve(&mut queue, now_ms) {
             trace.push(format!(
                 "serve {} turn {} lane {:?} waited {}",
                 served.envelope.operation_id(),
@@ -407,9 +530,7 @@ fn scenario_trace(seed: u64) -> Vec<String> {
                 served.lane,
                 served.waited_ms
             ));
-            queue
-                .finish(served.envelope.operation_id(), OutcomeKind::Applied)
-                .expect("finishes");
+            end(&mut queue, &served);
         }
     }
     trace
@@ -462,6 +583,7 @@ fn the_highest_lane_with_input_is_always_served_first_and_engine_lanes_keep_thei
         let mut random = XorShift::seeded(seed);
         let seats = 1 + random.below(4);
         let mut queue = seated_queue(seats, &settings(HUGE, HUGE, 1), Arc::new(NullSink));
+        let mut controls = 0_u64;
         let mut engine: VecDeque<OperationId> = VecDeque::new();
         let mut timers: VecDeque<OperationId> = VecDeque::new();
         let mut players = 0_u64;
@@ -469,7 +591,7 @@ fn the_highest_lane_with_input_is_always_served_first_and_engine_lanes_keep_thei
         for _ in 0..500 {
             if random.chance(55) {
                 fresh += 1;
-                match random.below(3) {
+                match random.below(4) {
                     0 => {
                         queue.admit(proposal(fresh), 0).expect("admitted");
                         engine.push_back(operation(fresh));
@@ -483,6 +605,12 @@ fn the_highest_lane_with_input_is_always_served_first_and_engine_lanes_keep_thei
                         queue.admit(envelope, 0).expect("admitted");
                         timers.push_back(operation(fresh));
                     }
+                    2 => {
+                        queue
+                            .admit(safety_card(fresh, 1 + random.below(seats)), 0)
+                            .expect("admitted");
+                        controls += 1;
+                    }
                     _ => {
                         queue
                             .admit(tap(fresh, 1 + random.below(seats)), 0)
@@ -490,9 +618,12 @@ fn the_highest_lane_with_input_is_always_served_first_and_engine_lanes_keep_thei
                         players += 1;
                     }
                 }
-            } else if let Some(served) = queue.serve_next(0).expect("serves") {
+            } else if let Some(served) = serve(&mut queue, 0) {
                 let served_id = served.envelope.operation_id();
-                if let Some(expected) = engine.pop_front() {
+                if controls > 0 {
+                    assert_eq!(served.lane, Lane::SeatControls, "seed {seed}");
+                    controls -= 1;
+                } else if let Some(expected) = engine.pop_front() {
                     assert_eq!(
                         (served.lane, served_id),
                         (Lane::Engine, expected),
@@ -508,16 +639,56 @@ fn the_highest_lane_with_input_is_always_served_first_and_engine_lanes_keep_thei
                     assert_eq!(served.lane, Lane::Player, "seed {seed}");
                     players -= 1;
                 }
-                queue
-                    .finish(served_id, OutcomeKind::Applied)
-                    .expect("finishes");
+                end(&mut queue, &served);
             } else {
                 assert!(
-                    engine.is_empty() && timers.is_empty() && players == 0,
+                    controls == 0 && engine.is_empty() && timers.is_empty() && players == 0,
                     "seed {seed}"
                 );
             }
         }
+    }
+}
+
+#[test]
+fn a_waiting_inputs_position_is_exactly_how_many_are_served_before_it() {
+    for seed in 0..SEEDS {
+        let mut random = XorShift::seeded(seed);
+        let seats = 1 + random.below(6);
+        let mut queue = seated_queue(seats, &settings(HUGE, HUGE, 1), Arc::new(NullSink));
+        let mut waiting: Vec<(Sender, OperationId)> = Vec::new();
+        for number in 1..=(5 + random.below(60)) {
+            let envelope = match random.below(8) {
+                0 => proposal(number),
+                1 => timer(number),
+                2 => pending_answer(number, 1 + random.below(seats)),
+                _ => tap(number, 1 + random.below(seats)),
+            };
+            let key = (envelope.sender(), envelope.operation_id());
+            queue.admit(envelope, 0).expect("admitted");
+            waiting.push(key);
+            if random.chance(25) {
+                let served = serve(&mut queue, 0).expect("input waits");
+                waiting.retain(|key| key.1 != served.envelope.operation_id());
+                end(&mut queue, &served);
+            }
+        }
+        let promised: BTreeMap<OperationId, usize> = waiting
+            .iter()
+            .map(|(sender, operation_id)| {
+                let position = queue.position(*sender, *operation_id).expect("it waits");
+                assert!(!position.held_behind_own_text);
+                (*operation_id, position.ahead)
+            })
+            .collect();
+        let mut index = 0;
+        while let Some(served) = serve(&mut queue, 0) {
+            let id = served.envelope.operation_id();
+            assert_eq!(promised.get(&id), Some(&index), "seed {seed}");
+            index += 1;
+            end(&mut queue, &served);
+        }
+        assert_eq!(index, promised.len(), "seed {seed}");
     }
 }
 

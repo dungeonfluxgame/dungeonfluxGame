@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use crate::canvas::{Canvas, CanvasEffect, CanvasError, ElementProblem, MAXIMUM_ELEMENTS};
+use crate::canvas::{Canvas, CanvasEffect, CanvasError, ElementProblem};
 use crate::element::{
     Appearance, CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, Degrees, ElementId, FieldName, FieldValue,
     KindName, Percent, Pivot, Position,
 };
 use crate::event::{EffectKind, RejectionCause, TableEvent, TransformKind};
 use crate::field_type::ValueError;
+use crate::limits::MAXIMUM_ELEMENTS;
 use crate::motion::Speed;
 use crate::testkit::{CHARACTER_KIND, MARKER_KIND, RecordingSink, registry_from};
 
@@ -559,6 +560,8 @@ fn turning_an_element_changes_its_appearance_and_records_one_event() {
             element: id("pip"),
             kind: TransformKind::Rotate,
             degrees: Degrees::new(90).expect("valid degrees"),
+            pivot_x_percent: hinge().x,
+            pivot_y_percent: hinge().y,
             revision: 2,
         }]
     );
@@ -648,4 +651,93 @@ fn a_turned_element_that_is_removed_leaves_no_rotation_for_the_next_one_of_that_
         canvas.element(&id("pip")).expect("exists").appearance,
         Appearance::default()
     );
+}
+
+#[test]
+fn a_new_pivot_on_a_turned_element_is_refused_and_changes_nothing() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    turn(&mut canvas, &sink, "pip", 90, None).expect("turns about the centre");
+    let before = canvas.element(&id("pip")).expect("exists");
+    let revision = canvas.revision();
+    let events_before = sink.events().len();
+    let refusal = turn(&mut canvas, &sink, "pip", 90, Some(hinge()));
+    assert_eq!(
+        refusal,
+        Err(CanvasError::PivotChangeWhileTurned {
+            element: id("pip"),
+            rotation: Degrees::new(90).expect("valid degrees"),
+        })
+    );
+    assert_eq!(canvas.element(&id("pip")).expect("exists"), before);
+    assert_eq!(canvas.revision(), revision);
+    let events = sink.events();
+    assert_eq!(events.len(), events_before + 1, "exactly one reject line");
+    assert_eq!(
+        events.last(),
+        Some(&TableEvent::EffectRejected {
+            effect: Some(EffectKind::Transform),
+            element: Some(id("pip")),
+            cause: RejectionCause::InvalidTransform,
+        })
+    );
+    let message = refusal.expect_err("refused").to_string();
+    assert!(message.contains("rotate pip 0"), "{message}");
+}
+
+#[test]
+fn turning_back_with_a_different_pivot_is_refused_too_because_it_would_jump_first() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    turn(&mut canvas, &sink, "pip", 90, None).expect("turns");
+    assert!(matches!(
+        turn(&mut canvas, &sink, "pip", 0, Some(hinge())),
+        Err(CanvasError::PivotChangeWhileTurned { .. })
+    ));
+}
+
+#[test]
+fn a_new_pivot_is_accepted_at_rotation_zero_and_the_same_pivot_again_while_turned() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    turn(&mut canvas, &sink, "pip", 0, Some(hinge())).expect("a pivot at rotation 0 does not jump");
+    turn(&mut canvas, &sink, "pip", 90, Some(hinge())).expect("turning about the same pivot");
+    turn(&mut canvas, &sink, "pip", 180, Some(hinge())).expect("and again");
+    turn(&mut canvas, &sink, "pip", 270, None).expect("without a pivot keeps it");
+    turn(&mut canvas, &sink, "pip", 0, None).expect("turning back");
+    turn(&mut canvas, &sink, "pip", 0, Some(Pivot::CENTER)).expect("now a new pivot is fine");
+    assert_eq!(
+        canvas.element(&id("pip")).expect("exists").appearance.pivot,
+        Pivot::CENTER
+    );
+}
+
+#[test]
+fn the_transform_line_shows_the_pivot_in_force_so_a_pivot_only_change_is_visible() {
+    let mut canvas = canvas();
+    let sink = RecordingSink::default();
+    spawn_character(&mut canvas, &sink, "pip").expect("spawns");
+    turn(&mut canvas, &sink, "pip", 0, Some(hinge())).expect("pivot only");
+    turn(&mut canvas, &sink, "pip", 0, Some(Pivot::CENTER)).expect("pivot only again");
+    let lines: Vec<String> = sink
+        .events()
+        .iter()
+        .filter(|event| matches!(event, TableEvent::ElementTransformed { .. }))
+        .map(TableEvent::render_audit_line)
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert!(
+        lines[0].contains("pivot_x_percent=0 pivot_y_percent=50"),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[1].contains("pivot_x_percent=50 pivot_y_percent=50"),
+        "{}",
+        lines[1]
+    );
+    assert_ne!(lines[0], lines[1]);
 }

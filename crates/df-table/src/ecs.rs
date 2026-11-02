@@ -49,7 +49,11 @@ impl Entities {
                 generation: self.generations[slot],
             };
         }
-        let index = u32::try_from(self.generations.len()).expect("fewer than 2^32 entities");
+        // A slot is added only when none is free, so there are never more slots than the most
+        // entities alive at once, and the canvas holds at most `MAXIMUM_ELEMENTS` (far below
+        // 2^32). The caller checks that bound before it spawns.
+        let index = u32::try_from(self.generations.len())
+            .expect("the canvas bounds live entities far below 2^32");
         self.generations.push(0);
         self.alive.push(true);
         Entity {
@@ -119,7 +123,10 @@ impl<T> Store<T> {
         if self.sparse.len() <= entity.slot() {
             self.sparse.resize(entity.slot() + 1, None);
         }
-        let dense = u32::try_from(self.items.len()).expect("fewer than 2^32 components");
+        // A store holds at most one component per entity, so it is as long as the live entities
+        // that have it: below the bound of the line above.
+        let dense = u32::try_from(self.items.len())
+            .expect("a store holds at most one component per live entity, far below 2^32");
         self.sparse[entity.slot()] = Some(dense);
         self.entities.push(entity);
         self.items.push(item);
@@ -150,7 +157,10 @@ impl<T> Store<T> {
         self.sparse[entity.slot()] = None;
         if dense != last {
             let moved = self.entities[dense];
-            self.sparse[moved.slot()] = Some(u32::try_from(dense).expect("fits"));
+            // `dense` is an index into the store, which is shorter than the bound above.
+            self.sparse[moved.slot()] = Some(
+                u32::try_from(dense).expect("a dense index is below the store length, below 2^32"),
+            );
         }
         item
     }

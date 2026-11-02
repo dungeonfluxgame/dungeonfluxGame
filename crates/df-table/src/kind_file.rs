@@ -25,17 +25,13 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::element::{
-    CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, FieldName, KindName, MAXIMUM_NAME_LENGTH,
-    MAXIMUM_TEXT_LENGTH, NameError,
-};
+use crate::element::{CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS, FieldName, KindName, NameError};
 use crate::field_type::{FieldType, ValueError};
 use crate::kind::{FieldDefinition, KindDefinition, Shape};
+use crate::limits::{
+    MAXIMUM_CHOICES, MAXIMUM_FIELDS_PER_KIND, MAXIMUM_NAME_LENGTH, MAXIMUM_TEXT_LENGTH,
+};
 
-/// Most fields one kind may declare.
-pub const MAXIMUM_FIELDS_PER_KIND: usize = 32;
-/// Most options one choice field may list.
-pub const MAXIMUM_CHOICES: usize = 32;
 /// Smallest width or height of a kind, in canvas units.
 pub const MINIMUM_SIZE_UNITS: f32 = 1.0;
 const DEFAULT_NUMBER_LIMIT: f64 = 1_000_000.0;
@@ -145,11 +141,15 @@ pub struct KindError {
     pub problem: KindProblem,
 }
 
+/// Most characters of a name from a file echoed in an error. It is how much of a name is shown,
+/// not how long a name may be (`MAXIMUM_NAME_LENGTH`).
+const ECHOED_NAME_CHARACTERS: usize = 48;
+
 /// Shortens text from a file before it is echoed, so a hostile or accidental long name cannot
 /// flood a terminal.
 fn shown(text: &str) -> String {
     let mut characters = text.chars();
-    let head: String = characters.by_ref().take(MAXIMUM_NAME_LENGTH).collect();
+    let head: String = characters.by_ref().take(ECHOED_NAME_CHARACTERS).collect();
     if characters.next().is_some() {
         format!("{head}...")
     } else {
