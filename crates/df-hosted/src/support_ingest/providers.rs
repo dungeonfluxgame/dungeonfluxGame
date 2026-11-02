@@ -1,57 +1,30 @@
 //! Bounded native HTTPS adapters. No redirects, retries, credential formatting or reply transport.
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use df_support::{
-    classification::ModelTransport,
     gmail::{GmailCredentials, GmailMailSource, GmailTransport},
-    ingest::{JudgeError, MailSourceError},
+    ingest::MailSourceError,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{IngestConfig, State, SupportIngest};
 
-pub(crate) type ProductionIngest = SupportIngest<
-    GmailMailSource<ReqwestGmailTransport>,
-    df_support::classification::JevJudge<ReqwestModelTransport>,
->;
+// The model code lives in its own private module so the raw text egress has one exact home.
+#[path = "support_text.rs"]
+mod support_text;
+
+use support_text::{
+    Parts, ProductionJudge, SupportAttemptStore, SupportDraftBackend, SupportJudge,
+    SupportJudgeBackend, SupportTextTransport, route,
+};
+
+pub(crate) type ProductionIngest =
+    SupportIngest<GmailMailSource<ReqwestGmailTransport>, ProductionJudge>;
+
+const MAILBOX_ID: &str = "mailbox-support";
 
 pub(crate) struct ReqwestGmailTransport {
     client: reqwest::Client,
-}
-
-pub(crate) struct ReqwestModelTransport {
-    client: reqwest::Client,
-    judge: Option<ModelRoute>,
-    draft: Option<ModelRoute>,
-}
-
-struct ModelRoute {
-    endpoint: String,
-    key: String,
-    model: String,
-}
-
-fn route(get: &impl Fn(&str) -> Option<String>, prefix: &str) -> Option<ModelRoute> {
-    let key = get(&format!("{prefix}_API_KEY"))?;
-    let base = get(&format!("{prefix}_BASE_URL"))?;
-    let model = get(&format!("{prefix}_MODEL"))?;
-    let url = reqwest::Url::parse(&base).ok()?;
-    if key.is_empty()
-        || model.is_empty()
-        || url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return None;
-    }
-    Some(ModelRoute {
-        endpoint: base.trim_end_matches('/').to_owned(),
-        key,
-        model,
-    })
 }
 
 pub(crate) fn from_env(
@@ -80,6 +53,34 @@ pub(crate) fn from_env(
     };
     let address = credentials.mailbox_address.clone();
     let config = crate::config::Config::from_env().ok()?;
+    let attempts = Arc::new(SupportAttemptStore::choose(
+        &config.database,
+        &config.transport,
+    ));
+    announce_attempt_store(&attempts);
+    let (judge_model, draft_model) = (
+        judge.as_ref().map(|route| route.model.clone()),
+        draft.as_ref().map(|route| route.model.clone()),
+    );
+    let text = SupportTextTransport::new(Parts {
+        mailbox: MAILBOX_ID.to_owned(),
+        judge: SupportJudgeBackend::new(client.clone(), judge),
+        draft: SupportDraftBackend::new(client.clone(), draft),
+        store: attempts,
+        observer: Arc::new(
+            crate::telemetry::diagnostic_sink()
+                .map(|sink| Arc::new(df_ai::text_telemetry::TextTelemetry::new(sink))),
+        ),
+        judge_model,
+        draft_model,
+    });
+    let Ok(text) = text else {
+        df_observe::record_audit_line(
+            "hosted.support_text_setup_failed",
+            "HOSTED support_text setup_failed".to_owned(),
+        );
+        return None;
+    };
     let state = State::Connect(Box::new(crate::database::Connector {
         config: config.database,
         transport: config.transport,
@@ -91,17 +92,31 @@ pub(crate) fn from_env(
                 client: client.clone(),
             },
         ),
-        df_support::classification::JevJudge::new(ReqwestModelTransport {
-            client,
-            judge,
-            draft,
-        }),
+        SupportJudge::new(text),
         store,
-        "mailbox-support".into(),
+        MAILBOX_ID.into(),
         address,
         IngestConfig::default(),
         state,
     ))
+}
+
+/// Says which attempt store this run has. The event name carries the answer because hosted audit
+/// payloads are redacted; no connection string is ever printed.
+fn announce_attempt_store(store: &SupportAttemptStore) {
+    match store.fallback_reason() {
+        None => df_observe::record_audit_line(
+            "hosted.support_text_postgres",
+            format!("HOSTED support_text store={} observer=none", store.label()),
+        ),
+        Some(reason) => df_observe::record_audit_line(
+            "hosted.support_text_memory",
+            format!(
+                "HOSTED support_text store={} reason={reason} observer=none",
+                store.label()
+            ),
+        ),
+    }
 }
 
 async fn read_json(mut response: reqwest::Response, maximum_bytes: usize) -> Result<Value, ()> {
@@ -184,71 +199,5 @@ impl GmailTransport for ReqwestGmailTransport {
         read_json(response, 35 * 1024 * 1024)
             .await
             .map_err(|_| MailSourceError::Malformed)
-    }
-}
-
-#[async_trait::async_trait]
-impl ModelTransport for ReqwestModelTransport {
-    fn model_name(&self, is_draft: bool) -> &str {
-        let route = if is_draft { &self.draft } else { &self.judge };
-        route
-            .as_ref()
-            .map(|route| route.model.as_str())
-            .unwrap_or("unconfigured")
-    }
-    async fn judge(&self, mut request: Value) -> Result<Value, JudgeError> {
-        let route = self.judge.as_ref().ok_or(JudgeError::Unavailable)?;
-        request["model"] = json!(route.model);
-        let response = self
-            .client
-            .post(format!("{}/v1/systemone", route.endpoint))
-            .timeout(Duration::from_secs(4))
-            .bearer_auth(&route.key)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|_| JudgeError::Unavailable)?;
-        if !response.status().is_success() {
-            return Err(JudgeError::Unavailable);
-        }
-        read_json(response, 64 * 1024)
-            .await
-            .map_err(|_| JudgeError::Unusable)
-    }
-
-    async fn draft(&self, request: Value) -> Result<Value, JudgeError> {
-        let route = self.draft.as_ref().ok_or(JudgeError::Unavailable)?;
-        let response = self.client.post(format!("{}/v1/responses",route.endpoint))
-            .bearer_auth(&route.key).json(&json!({"model":route.model,"store":false,
-                "instructions":request["instructions"],"input":json!({"state":request["state"],"classification":request["classification"],
-                    "concerns":request["concerns"]}).to_string(),
-                "max_output_tokens":4096,"text":{"format":{"type":"json_schema",
-                    "name":"support_action_draft","strict":true,"schema":request["schema"]}}}))
-            .send().await.map_err(|_| JudgeError::Unavailable)?;
-        if !response.status().is_success() {
-            return Err(JudgeError::Unavailable);
-        }
-        let response = read_json(response, 64 * 1024)
-            .await
-            .map_err(|_| JudgeError::Unusable)?;
-        if response.get("status").and_then(Value::as_str) != Some("completed") {
-            return Err(JudgeError::Unusable);
-        }
-        let output = response
-            .get("output")
-            .and_then(Value::as_array)
-            .ok_or(JudgeError::Unusable)?;
-        let texts: Vec<_> = output
-            .iter()
-            .filter_map(|message| message.get("content")?.as_array())
-            .flatten()
-            .filter(|content| content.get("type").and_then(Value::as_str) == Some("output_text"))
-            .filter_map(|content| content.get("text").and_then(Value::as_str))
-            .collect();
-        let [text] = texts.as_slice() else {
-            return Err(JudgeError::Unusable);
-        };
-        let record: Value = serde_json::from_str(text).map_err(|_| JudgeError::Unusable)?;
-        Ok(json!({"record":record,"usage":response.get("usage")}))
     }
 }

@@ -1850,3 +1850,81 @@ async fn approach_model_travel_intent_uses_jev_without_matching_player_words() {
         assert_eq!(endpoint.connections(), 1);
     }
 }
+
+fn model_with_store(
+    endpoint: &FakeEndpoint,
+) -> (
+    ApproachModel,
+    std::sync::Arc<df_ai::text_fixture::MemoryAttemptStore>,
+    super::super::systemone_text::RuntimeGuard,
+) {
+    let store = std::sync::Arc::new(df_ai::text_fixture::MemoryAttemptStore::default());
+    let runtime = super::super::systemone_text::memory_runtime(store.clone());
+    assert!(runtime.is_some());
+    let guard = super::super::systemone_text::use_runtime(runtime);
+    (model(endpoint), store, guard)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn every_choice_is_its_own_recorded_attempt_even_for_an_identical_question() {
+    let endpoint = FakeEndpoint::start(vec![answer("o1"), answer("o2"), answer("o1")]);
+    let (model, store, _runtime) = model_with_store(&endpoint);
+    let criteria = ["First".to_owned(), "Second".to_owned()];
+
+    let chosen = [
+        model
+            .choose_option(&json!({}), "Pick one.", &criteria)
+            .await,
+        model
+            .choose_option(&json!({}), "Pick one.", &criteria)
+            .await,
+        model
+            .choose_option(&json!({}), "Pick one.", &criteria)
+            .await,
+    ];
+
+    assert_eq!(chosen, [Ok(0), Ok(1), Ok(0)]);
+    assert_eq!(store.len(), 3);
+    assert_eq!(endpoint.connections(), 3);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_listed_answer_is_qualified_and_an_unlisted_one_is_rejected_without_a_guess() {
+    let endpoint = FakeEndpoint::start(vec![answer("o1"), answer("o9")]);
+    let (model, store, _runtime) = model_with_store(&endpoint);
+    let criteria = ["First".to_owned(), "Second".to_owned()];
+
+    let listed = model
+        .choose_option(&json!({}), "Pick one.", &criteria)
+        .await;
+    let unlisted = model
+        .choose_option(&json!({}), "Pick two.", &criteria)
+        .await;
+
+    assert_eq!(listed, Ok(0));
+    assert_eq!(unlisted, Err(JevUnavailable::UnknownChoice));
+    assert_eq!(store.len(), 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn without_a_text_runtime_a_configured_model_is_neutral_and_sends_nothing() {
+    let endpoint = FakeEndpoint::start(vec![answer("o1")]);
+    let model = model(&endpoint);
+    let _no_runtime = super::super::systemone_text::use_runtime(None);
+
+    let chosen = model
+        .choose_option(
+            &json!({}),
+            "Pick one.",
+            &["First".to_owned(), "Second".to_owned()],
+        )
+        .await;
+    let reading = model
+        .classify_input("I say hello.", "A guardhouse.", &[])
+        .await;
+
+    assert_eq!(chosen, Err(JevUnavailable::ProviderUnavailable));
+    assert_eq!(reading.source, "unavailable");
+    assert_eq!(reading.intent, LineIntent::CharacterSpeech);
+    assert_eq!(endpoint.connections(), 0);
+}

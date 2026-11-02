@@ -401,6 +401,7 @@ version = "0.1.0"
 dependencies = [
  "df-interaction",
  "df-model",
+ "df-observe",
  "df-provider-api",
  "df-types",
  "serde_json",

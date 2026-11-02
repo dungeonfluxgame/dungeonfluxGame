@@ -444,7 +444,7 @@ fn parse_events(bytes: &[u8], schema: &TextOutputSchema) -> Result<TextAnswer, C
 }
 
 /// Runs one isolated text-only turn without API-key authentication or agent tools.
-pub(super) async fn text(
+async fn text(
     prompt: &str,
     facts: &Value,
     schema: &TextOutputSchema,

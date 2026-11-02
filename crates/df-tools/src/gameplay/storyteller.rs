@@ -28,6 +28,10 @@
 //! There is no token cap: the ledger counts and the audit lines say what was spent, and nothing is
 //! refused.
 //!
+//! Every model call goes through the run's durable text service (`dispatch`): the storyteller
+//! validates the candidate answer, then accepts or rejects it there. The disk cache, the flights
+//! and the single validation correction stay here until the service owns them.
+//!
 //! # The text resource
 //!
 //! Generated text is the `text` resource kind: one [`TextSpec`] per request, whose variant is the
@@ -44,6 +48,7 @@ use std::{
     collections::BTreeMap,
     fmt, io,
     path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -53,21 +58,9 @@ use std::{
     sync::{Mutex, PoisonError},
 };
 
-use df_model::checkpoint::{Basis, ContentDigest, ExecutionMode, JobId};
+use df_ai::text_attempts::Verdict;
 use df_observe::OperationContext;
-use df_provider_api::{
-    RequestBasis, RequestBinding, RequestIdentity, RequestLimits, RequestModality,
-    RequestOwnerState, RequestUsage, TextEventKind, TextRequest, TextSemantics,
-};
-use df_providers::{
-    CandidateRouteId, NativeHttpRefusal, NativeTextProvider, ProviderFailureClass, ProviderLimits,
-    ReasoningEffort, TextOutputSchema, TextProviderConfig, TextResponseContract, TextResponseError,
-    TextSchemaLimits, registered_text_provider,
-};
-use df_types::{
-    LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
-    UsageUnit,
-};
+use df_providers::{ProviderFailureClass, ReasoningEffort, TextOutputSchema, TextSchemaLimits};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -76,10 +69,17 @@ use super::{
     resources::Unit,
     speech_text::SpokenRule,
     startup_configuration::{ContentRating, StorytellerMode, StorytellerSettings},
+    text_runtime::{self, TextRuntime},
 };
+
+mod dispatch;
+
+use dispatch::{Acceptances, Pending};
 
 /// Changing the fixed instruction or the schema shape invalidates every cached result.
 const PROMPT_VERSION: &str = "storyteller-5";
+/// The schema name every storyteller answer is requested under.
+const OUTPUT_NAME: &str = "storyteller_expression";
 const MAXIMUM_SLOTS: usize = 32;
 const MAXIMUM_SLOT_CHARACTERS: usize = 8000;
 const MAXIMUM_MUST_MENTION: usize = 8;
@@ -468,6 +468,10 @@ struct Online {
     flights: Flights<Result<BTreeMap<String, String>, StorytellerError>>,
     /// The same for batched expressions, whose answer carries per-slot outcomes.
     partial_flights: Flights<Result<PartialExpression, StorytellerError>>,
+    /// The text runtime every model call goes through; see `Online::runtime`.
+    runtime: OnceLock<Arc<TextRuntime>>,
+    /// The accepted attempts `forget` withdraws from the text service.
+    accepted: Acceptances,
     /// Supplier-reported counters of every answered attempt, for live transcript costing.
     #[cfg(test)]
     usage_log: Mutex<Vec<df_providers::TextTokenUsage>>,
@@ -501,8 +505,9 @@ impl fmt::Debug for Storyteller {
 
 /// What one model attempt produced, before text validation.
 enum Attempt {
-    /// The answer's string fields and the supplier-reported tokens it cost.
-    Text(BTreeMap<String, String>, u64),
+    /// The answer's string fields, the supplier-reported tokens it cost, and its candidate: the
+    /// answer is not accepted or refused until the caller gives the verdict.
+    Text(BTreeMap<String, String>, u64, Box<Pending>),
     /// The model answered, but not in the requested shape; one retry is allowed.
     BadShape,
 }
@@ -531,6 +536,8 @@ impl Storyteller {
                 kit: KitSlot::private(),
                 flights: Flights::default(),
                 partial_flights: Flights::default(),
+                runtime: text_runtime::current().map_or_else(OnceLock::new, OnceLock::from),
+                accepted: Acceptances::default(),
                 #[cfg(test)]
                 usage_log: Mutex::new(Vec::new()),
                 #[cfg(test)]
@@ -665,7 +672,13 @@ impl Storyteller {
             .attempt(request, &key, 1, &prompt, reserved, Instant::now(), None)
             .await?
         {
-            Attempt::Text(values, _) => Ok(Some(values)),
+            Attempt::Text(values, _, pending) => {
+                // The raw answer is unvalidated, so it must never become reusable.
+                online
+                    .conclude(pending, Verdict::Rejected, request, &key)
+                    .await;
+                Ok(Some(values))
+            }
             Attempt::BadShape => Ok(None),
         }
     }
@@ -745,11 +758,13 @@ impl Storyteller {
         outcome
     }
 
-    /// Drops the cached answer of `request`. A caller that refuses an answer the storyteller
-    /// accepted calls this, so the next identical request asks the model again.
+    /// Drops the cached answer of `request` and withdraws its accepted attempts from the text
+    /// service. A caller that refuses an answer the storyteller accepted calls this, so the next
+    /// identical request asks the model again.
     pub(super) async fn forget(&self, request: &Expression<'_>) {
         if let Some(online) = self.online.as_ref() {
             let key = cache_key(&online.model, request);
+            online.invalidate_accepted(request, &key).await;
             let file = online.cache_directory.join(format!("{}.json", hex(&key)));
             // A missing file is already forgotten; other failures must remain visible.
             if let Err(error) = tokio::fs::remove_file(file).await
@@ -967,7 +982,7 @@ impl Storyteller {
                 )
                 .await
             {
-                Ok(Attempt::Text(values, spent)) => {
+                Ok(Attempt::Text(values, spent, candidate)) => {
                     tokens = tokens.saturating_add(spent);
                     fresh = true;
                     let (mut now_accepted, mut now_rejected) =
@@ -979,8 +994,19 @@ impl Storyteller {
                     let mut srd_complaints = Vec::new();
                     let mut rewrite_was_still_flagged = false;
                     for (slot, text) in candidates {
-                        let (judgement, spent) =
-                            judge_srd_material(online, request, &slot, &text, started).await?;
+                        let (judgement, spent) = match judge_srd_material(
+                            online, request, &slot, &text, started,
+                        )
+                        .await
+                        {
+                            Ok(judged) => judged,
+                            Err(error) => {
+                                online
+                                    .conclude(candidate, Verdict::Rejected, request, key)
+                                    .await;
+                                return Err(error);
+                            }
+                        };
                         tokens = tokens.saturating_add(spent);
                         if let Some(flagged_span) = judgement {
                             now_accepted.remove(&slot);
@@ -999,6 +1025,14 @@ impl Storyteller {
                                 span.event("storyteller.srd_guard_rewrite", &[]);
                             }
                         }
+                    }
+                    let verdict = if now_accepted.is_empty() {
+                        Verdict::Rejected
+                    } else {
+                        Verdict::Accepted
+                    };
+                    if let Some(kept) = online.conclude(candidate, verdict, request, key).await {
+                        online.remember(key, kept);
                     }
                     accepted.extend(now_accepted);
                     rejected = now_rejected;
@@ -1153,7 +1187,7 @@ impl Storyteller {
                 )
                 .await;
             match answer {
-                Ok(Attempt::Text(values, _)) => match validate(request, &values)
+                Ok(Attempt::Text(values, _, candidate)) => match validate(request, &values)
                     .map(|()| values.clone())
                     .or_else(|failure| {
                         // Keep a mechanically repairable answer when the repair
@@ -1167,10 +1201,21 @@ impl Storyteller {
                             .map_err(|_| failure)
                     }) {
                     Ok(values) => {
-                        let (flagged, _) = judge_values(online, request, &values, started).await?;
+                        let flagged = match judge_values(online, request, &values, started).await {
+                            Ok((flagged, _)) => flagged,
+                            Err(error) => {
+                                online
+                                    .conclude(candidate, Verdict::Rejected, request, key)
+                                    .await;
+                                return Err(error);
+                            }
+                        };
                         match flagged {
                             None => {}
                             Some((slot, flagged_span)) if !srd_rewritten && attempt < 2 => {
+                                online
+                                    .conclude(candidate, Verdict::Rejected, request, key)
+                                    .await;
                                 srd_rewritten = true;
                                 complaint = Some(format!(
                                     "a content review flagged this span as published non-SRD material: {flagged_span}; rewrite it as original campaign material or use only the supplied SRD catalog"
@@ -1183,12 +1228,21 @@ impl Storyteller {
                                 continue;
                             }
                             Some((slot, _)) => {
+                                online
+                                    .conclude(candidate, Verdict::Rejected, request, key)
+                                    .await;
                                 record_srd_guard_degraded(online, request, key, started.elapsed());
                                 return Err(StorytellerError::Rejected {
                                     failure: ValidationFailure::PublishedNonSrdMaterial { slot },
                                     words: None,
                                 });
                             }
+                        }
+                        if let Some(kept) = online
+                            .conclude(candidate, Verdict::Accepted, request, key)
+                            .await
+                        {
+                            online.remember(key, kept);
                         }
                         if let Err(error) = write_cache(file, &values).await {
                             span.event(
@@ -1199,6 +1253,9 @@ impl Storyteller {
                         return Ok(values);
                     }
                     Err(failure) => {
+                        online
+                            .conclude(candidate, Verdict::Rejected, request, key)
+                            .await;
                         span.event(
                             "storyteller.rejected",
                             &[
@@ -1269,51 +1326,47 @@ async fn judge_srd_material(
     check_request(&review).map_err(|error| refuse(online, &review, &key, error))?;
     let prompt = build_prompt(&review, None);
     let reserved = online.estimate(&prompt, &review);
-    match online
+    let unreadable = || StorytellerError::Rejected {
+        failure: ValidationFailure::PublishedNonSrdMaterial {
+            slot: slot.to_owned(),
+        },
+        words: None,
+    };
+    let (values, spent, candidate) = match online
         .attempt(&review, &key, 1, &prompt, reserved, started, None)
         .await?
     {
-        Attempt::Text(values, spent)
-            if values.len() == 2
-                && values
-                    .get("flagged_span")
-                    .is_some_and(|span| span.chars().count() <= 320) =>
-        {
-            match (values.get("decision"), values.get("flagged_span")) {
-                (Some(decision), Some(span))
-                    if decision == "campaign_or_srd" && span.is_empty() =>
-                {
-                    Ok((None, spent))
-                }
-                (Some(decision), Some(span)) if decision == "published_non_srd" => Ok((
-                    Some(if span.is_empty() {
-                        "the candidate narration".to_owned()
-                    } else {
-                        span.clone()
-                    }),
-                    spent,
-                )),
-                _ => Err(StorytellerError::Rejected {
-                    failure: ValidationFailure::PublishedNonSrdMaterial {
-                        slot: slot.to_owned(),
-                    },
-                    words: None,
-                }),
+        Attempt::Text(values, spent, candidate) => (values, spent, candidate),
+        Attempt::BadShape => return Err(unreadable()),
+    };
+    let judgement = if values.len() == 2
+        && values
+            .get("flagged_span")
+            .is_some_and(|span| span.chars().count() <= 320)
+    {
+        match (values.get("decision"), values.get("flagged_span")) {
+            (Some(decision), Some(span)) if decision == "campaign_or_srd" && span.is_empty() => {
+                Ok(None)
             }
+            (Some(decision), Some(span)) if decision == "published_non_srd" => {
+                Ok(Some(if span.is_empty() {
+                    "the candidate narration".to_owned()
+                } else {
+                    span.clone()
+                }))
+            }
+            _ => Err(unreadable()),
         }
-        Attempt::Text(_, _) => Err(StorytellerError::Rejected {
-            failure: ValidationFailure::PublishedNonSrdMaterial {
-                slot: slot.to_owned(),
-            },
-            words: None,
-        }),
-        Attempt::BadShape => Err(StorytellerError::Rejected {
-            failure: ValidationFailure::PublishedNonSrdMaterial {
-                slot: slot.to_owned(),
-            },
-            words: None,
-        }),
-    }
+    } else {
+        Err(unreadable())
+    };
+    let verdict = if judgement.is_ok() {
+        Verdict::Accepted
+    } else {
+        Verdict::Rejected
+    };
+    online.conclude(candidate, verdict, &review, &key).await;
+    judgement.map(|flagged| (flagged, spent))
 }
 
 async fn judge_values(
@@ -1362,20 +1415,6 @@ fn record_srd_guard_degraded(
     );
 }
 
-fn text_request_never_sent(error: &TextResponseError) -> bool {
-    matches!(
-        error.reason(),
-        TextResponseError::UnregisteredRoute
-            | TextResponseError::InvalidConfiguration
-            | TextResponseError::InvalidCredential
-            | TextResponseError::InvalidInput
-            | TextResponseError::ModeDoesNotDispatch
-            | TextResponseError::SchemaConfigurationMismatch
-            | TextResponseError::Owner(_)
-            | TextResponseError::Transport(NativeHttpRefusal::ProviderDisabled)
-    )
-}
-
 impl Online {
     /// A conservative estimate of what the call will use, charged when it is sent and corrected
     /// when the supplier reports the real usage.
@@ -1399,317 +1438,6 @@ impl Online {
             .get()
             .adjust(Unit::TextToken, reserved.saturating_neg());
     }
-
-    async fn attempt(
-        &self,
-        request: &Expression<'_>,
-        key: &[u8; 32],
-        attempt: u64,
-        prompt: &str,
-        reserved: u64,
-        started: Instant,
-        complaint: Option<&str>,
-    ) -> Result<Attempt, StorytellerError> {
-        let remaining_time = request
-            .profile
-            .deadline
-            .unwrap_or(self.deadline)
-            .saturating_sub(started.elapsed());
-        if remaining_time.is_zero() {
-            return Err(StorytellerError::DeadlineExceeded);
-        }
-        if self.codex {
-            let schema = output_schema(request.slots).map_err(StorytellerError::InvalidRequest)?;
-            let current =
-                storyteller_binding(request, key, attempt, schema.clone(), remaining_time)
-                    .ok_or(StorytellerError::InvalidRequest("identity"))?;
-            let declared = u128::from(reserved);
-            let ceiling = declared.saturating_mul(2);
-            let request_binding = TextRequest::new(
-                storyteller_binding(request, key, attempt, schema.clone(), remaining_time)
-                    .ok_or(StorytellerError::InvalidRequest("identity"))?,
-                prompt.as_bytes(),
-                RequestUsage::new(
-                    declared,
-                    Duration::ZERO,
-                    Usage::new(declared, UsageUnit::Token),
-                ),
-                RequestLimits::new(
-                    MAXIMUM_PROMPT_BYTES + 1024,
-                    ceiling,
-                    remaining_time,
-                    Usage::new(ceiling, UsageUnit::Token),
-                )
-                .map_err(|_| StorytellerError::InvalidRequest("limits"))?,
-                RequestOwnerState {
-                    current: Some(&current),
-                    elapsed: Duration::ZERO,
-                    cancelled: false,
-                },
-            )
-            .map_err(|_| StorytellerError::InvalidRequest("provider request"))?;
-            let submitted_at = Instant::now();
-            self.kit.get().charge(Unit::TextToken, reserved);
-            let billed = self.kit.get().hub().ledger().begin_call(
-                super::cost::codex_text_call(request.purpose),
-                &[(super::cost::Category::Calls, 1)],
-            );
-            let task = build_prompt_inner(request, complaint, false);
-            let answer =
-                match super::codex_cli::text(&task, request.facts, &schema, remaining_time).await {
-                    Ok(answer) => answer,
-                    Err(error) => {
-                        if matches!(
-                            error,
-                            super::codex_cli::CodexError::Authentication
-                                | super::codex_cli::CodexError::Configuration
-                        ) {
-                            self.release(reserved);
-                            billed.not_billed();
-                        } else {
-                            drop(billed);
-                        }
-                        return Err(match error {
-                            super::codex_cli::CodexError::Deadline => {
-                                StorytellerError::DeadlineExceeded
-                            }
-                            _ => StorytellerError::Provider(ProviderFailureClass::Unavailable),
-                        });
-                    }
-                };
-            billed.settle(super::cost::subscription_usage());
-            self.reconcile(reserved, u128::from(answer.tokens));
-            request_binding
-                .checked()
-                .validate_current(RequestOwnerState {
-                    current: Some(&current),
-                    elapsed: submitted_at.elapsed(),
-                    cancelled: false,
-                })
-                .map_err(|_| StorytellerError::DeadlineExceeded)?;
-            if answer.output_tokens > u64::try_from(output_token_limit(request)).unwrap_or(u64::MAX)
-            {
-                return Err(StorytellerError::Provider(ProviderFailureClass::Contract));
-            }
-            return Ok(match answer.value.as_ref().and_then(string_fields) {
-                Some(values) => Attempt::Text(values, answer.tokens),
-                None => Attempt::BadShape,
-            });
-        }
-        let call = self.build_call(request, key, attempt, prompt, reserved, remaining_time)?;
-        // The call is about to be sent: the estimate is charged from here. It stays charged if
-        // the call outlives its deadline or its outcome is unknown, and is corrected below when
-        // the supplier reports what the call used (or refuses it outright).
-        self.kit.get().charge(Unit::TextToken, reserved);
-        let billed = self.kit.get().hub().ledger().begin_call(
-            super::cost::text_call(&self.model, request.purpose),
-            &booking_estimate(prompt, request),
-        );
-        let owner = || RequestOwnerState {
-            current: Some(&call.current),
-            elapsed: Duration::ZERO,
-            cancelled: false,
-        };
-        // The outer timeout is the owner of the deadline; the adapter's own transport
-        // timeouts are the same bound. A call that outlives either is charged, not refunded.
-        let submitted = tokio::time::timeout(
-            remaining_time + Duration::from_millis(250),
-            call.provider
-                .submit(&call.request, owner(), std::future::pending()),
-        )
-        .await;
-        let response = match submitted {
-            Err(_) => return Err(StorytellerError::DeadlineExceeded),
-            Ok(Err(error)) => return self.settle_failure(request, key, error, reserved, billed),
-            Ok(Ok(response)) => response,
-        };
-        billed.settle(super::cost::text_usage(&response.supplier_usage()));
-        let tokens = response.supplier_usage().total_tokens;
-        #[cfg(test)]
-        self.usage_log
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(response.supplier_usage());
-        self.reconcile(reserved, tokens);
-        let events = response.complete(owner()).map_err(|error| {
-            record_provider_reason(self, request, key, error.reason());
-            StorytellerError::Provider(error.failure_class())
-        })?;
-        let [candidate, _completed] = events;
-        let TextEventKind::Candidate(output) = candidate.kind else {
-            return Ok(Attempt::BadShape);
-        };
-        Ok(match string_fields(output.json()) {
-            Some(values) => Attempt::Text(values, u64::try_from(tokens).unwrap_or(u64::MAX)),
-            None => Attempt::BadShape,
-        })
-    }
-
-    /// Maps an adapter failure to the caller's error and the budget outcome. A supplier-reported
-    /// usage replaces the estimate; otherwise only a refusal the supplier reported before doing
-    /// work, or a failure before sending, is given back.
-    fn settle_failure(
-        &self,
-        request: &Expression<'_>,
-        key: &[u8; 32],
-        error: TextResponseError,
-        reserved: u64,
-        billed: super::cost::BilledCall,
-    ) -> Result<Attempt, StorytellerError> {
-        let reason = error.reason();
-        let never_sent = text_request_never_sent(&error);
-        let refused_by_supplier = matches!(
-            reason,
-            TextResponseError::Supplier(
-                ProviderFailureClass::InvalidRequest | ProviderFailureClass::Denied
-            )
-        );
-        if let Some(usage) = error.supplier_usage() {
-            self.reconcile(reserved, usage.total_tokens);
-            billed.settle(super::cost::text_usage(&usage));
-        } else if never_sent || refused_by_supplier {
-            self.release(reserved);
-            billed.not_billed();
-        } else {
-            // Unknown outcome: the call is recorded with its estimate.
-            drop(billed);
-        }
-        match reason {
-            TextResponseError::Contract {
-                reason:
-                    TextResponseContract::Json
-                    | TextResponseContract::Schema
-                    | TextResponseContract::Output,
-                ..
-            } if error.supplier_usage().is_some() => Ok(Attempt::BadShape),
-            TextResponseError::Owner(df_provider_api::RequestError::DeadlineExceeded)
-            | TextResponseError::Transport(NativeHttpRefusal::Deadline) => {
-                Err(StorytellerError::DeadlineExceeded)
-            }
-            _ => {
-                record_provider_reason(self, request, key, reason);
-                Err(StorytellerError::Provider(error.failure_class()))
-            }
-        }
-    }
-
-    fn build_call(
-        &self,
-        request: &Expression<'_>,
-        key: &[u8; 32],
-        attempt: u64,
-        prompt: &str,
-        reserved: u64,
-        remaining_time: Duration,
-    ) -> Result<PreparedCall, StorytellerError> {
-        let schema = output_schema(request.slots).map_err(StorytellerError::InvalidRequest)?;
-        let output_tokens = u32::try_from(output_token_limit(request))
-            .map_err(|_| StorytellerError::InvalidRequest("tokens"))?;
-        let mut config = TextProviderConfig::new(&self.model, schema.clone(), output_tokens)
-            .map_err(|error| StorytellerError::Provider(error.failure_class()))?;
-        if let Some(effort) = request.profile.reasoning {
-            config = config.with_reasoning_effort(effort);
-        }
-        let limits =
-            ProviderLimits::new(remaining_time, MAXIMUM_PROMPT_BYTES + 2048, 256 * 1024).build();
-        #[allow(
-            unused_mut,
-            reason = "only the loopback test fixture rebinds the provider"
-        )]
-        let mut provider = registered_text_provider(
-            CandidateRouteId::OpenAiResponsesText,
-            config,
-            &self.credential,
-            limits,
-        )
-        .map_err(|error| StorytellerError::Provider(error.failure_class()))?;
-        #[cfg(test)]
-        if let Some(address) = self.loopback {
-            provider = provider
-                .for_loopback_fixture(address)
-                .map_err(|error| StorytellerError::Provider(error.failure_class()))?;
-        }
-        let binding = || {
-            storyteller_binding(request, key, attempt, schema.clone(), remaining_time)
-                .ok_or(StorytellerError::InvalidRequest("identity"))
-        };
-        let current = binding()?;
-        let declared = u128::from(reserved);
-        let ceiling = declared.saturating_mul(2);
-        let text_request = TextRequest::new(
-            binding()?,
-            prompt.as_bytes(),
-            RequestUsage::new(
-                declared,
-                Duration::ZERO,
-                Usage::new(declared, UsageUnit::Token),
-            ),
-            RequestLimits::new(
-                MAXIMUM_PROMPT_BYTES + 1024,
-                ceiling,
-                remaining_time,
-                Usage::new(ceiling, UsageUnit::Token),
-            )
-            .map_err(|_| StorytellerError::InvalidRequest("limits"))?,
-            RequestOwnerState {
-                current: Some(&current),
-                elapsed: Duration::ZERO,
-                cancelled: false,
-            },
-        )
-        .map_err(|_| StorytellerError::InvalidRequest("provider request"))?;
-        Ok(PreparedCall {
-            provider,
-            request: text_request,
-            current,
-        })
-    }
-}
-
-type StorytellerBinding = RequestBinding<RequestBasis<TextSemantics<String, TextOutputSchema>>>;
-
-/// One attempt's provider, request and the owner's current binding for it.
-struct PreparedCall {
-    provider: NativeTextProvider,
-    request: TextRequest<String, TextOutputSchema>,
-    current: StorytellerBinding,
-}
-
-fn storyteller_binding(
-    request: &Expression<'_>,
-    key: &[u8; 32],
-    attempt: u64,
-    schema: TextOutputSchema,
-    deadline: Duration,
-) -> Option<StorytellerBinding> {
-    // The identities label this side channel only; they are not canonical game identities.
-    let operation: [u8; 16] = key[..16].try_into().ok()?;
-    let job: [u8; 16] = key[16..].try_into().ok()?;
-    Some(RequestBinding {
-        identity: RequestIdentity {
-            basis: Basis {
-                session: SessionId::from_bytes(&[0x53; 16]).ok()?,
-                run: RunId::from_bytes(&[0x52; 16]).ok()?,
-                revision: SessionRevision::new(RecoveryEpoch::new(1).ok()?, 1),
-            },
-            job: JobId::from_bytes(&job).ok()?,
-            operation: OperationId::from_bytes(&operation).ok()?,
-            generation: attempt,
-        },
-        semantic_basis: RequestBasis {
-            modality: RequestModality::Text,
-            source: ContentDigest(*key),
-            rights_revision: RevisionLabel::new(Some("storyteller-local")).ok()?,
-            output_format_revision: RevisionLabel::new(Some(PROMPT_VERSION)).ok()?,
-            semantic: TextSemantics {
-                locale: LocaleTag::parse("en-US").ok()?,
-                context: request.purpose.to_owned(),
-                output_schema: schema,
-            },
-        },
-        mode: ExecutionMode::Live,
-        deadline,
-    })
 }
 
 fn output_schema(slots: &[Slot]) -> Result<TextOutputSchema, &'static str> {
@@ -1731,7 +1459,7 @@ fn output_schema(slots: &[Slot]) -> Result<TextOutputSchema, &'static str> {
     });
     let bytes = serde_json::to_vec(&schema).map_err(|_| "schema")?;
     TextOutputSchema::new(
-        "storyteller_expression",
+        OUTPUT_NAME,
         &bytes,
         TextSchemaLimits {
             // These also bound the parse of the supplier's whole response, which echoes the
@@ -2131,63 +1859,6 @@ fn record_text_attempt(
         fields,
         &attributes,
     );
-}
-
-/// The `TEXT_MODEL provider_error` line: which part of the provider contract failed the call. It
-/// carries a fixed label only, never prompt, output, credential or supplier text.
-fn record_provider_reason(
-    online: &Online,
-    request: &Expression<'_>,
-    key: &[u8; 32],
-    reason: &TextResponseError,
-) {
-    record_text_resource(
-        "gameplay.storyteller.provider_error",
-        online,
-        request,
-        key,
-        TextResourceStatus {
-            stage: "provider_error",
-            status: "provider_error",
-            failure_category: Some(provider_reason_label(reason)),
-            elapsed_ms: None,
-            slot_counts: None,
-        },
-    );
-}
-
-fn provider_reason_label(reason: &TextResponseError) -> &'static str {
-    match reason {
-        TextResponseError::UnregisteredRoute => "unregistered_route",
-        TextResponseError::InvalidConfiguration => "invalid_configuration",
-        TextResponseError::InvalidCredential => "invalid_credential",
-        TextResponseError::InvalidInput => "invalid_input",
-        TextResponseError::ModeDoesNotDispatch => "mode_does_not_dispatch",
-        TextResponseError::SchemaConfigurationMismatch => "schema_configuration_mismatch",
-        TextResponseError::Owner(_) => "owner",
-        TextResponseError::Transport(_) => "transport",
-        TextResponseError::Supplier(class) => match class {
-            ProviderFailureClass::InvalidRequest => "supplier_invalid_request",
-            ProviderFailureClass::Denied => "supplier_denied",
-            ProviderFailureClass::Capacity => "supplier_capacity",
-            ProviderFailureClass::Unavailable => "supplier_unavailable",
-            ProviderFailureClass::Contract => "supplier_contract",
-            ProviderFailureClass::Cancelled => "supplier_cancelled",
-            ProviderFailureClass::Deadline => "supplier_deadline",
-            ProviderFailureClass::Unknown => "supplier_unknown",
-        },
-        TextResponseError::Contract { reason, .. } => match reason {
-            TextResponseContract::Json => "contract_json",
-            TextResponseContract::Usage => "contract_usage",
-            TextResponseContract::Identity => "contract_identity",
-            TextResponseContract::Status => "contract_status",
-            TextResponseContract::Schema => "contract_schema",
-            TextResponseContract::Output => "contract_output",
-            TextResponseContract::Refusal => "contract_refusal",
-        },
-        TextResponseError::UsageExceeded(_) => "usage_exceeded",
-        TextResponseError::Observed { .. } => "observed",
-    }
 }
 
 pub(super) fn build_prompt(request: &Expression<'_>, complaint: Option<&str>) -> String {

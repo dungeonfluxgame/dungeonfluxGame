@@ -27,6 +27,7 @@ df-observe = { path = "../df-observe" }
 df-telemetry = { path = "../df-telemetry" }
 opentelemetry = { version = "=0.31.0", default-features = false, features = ["trace"] }
 df-support = { path = "../df-support" }
+df-ai = { path = "../df-ai" }
 async-trait = "=0.1.92"
 axum = { version = "=0.8.9", default-features = false, features = ["json", "form", "http1", "tokio"] }
 serde_json = "=1.0.151"

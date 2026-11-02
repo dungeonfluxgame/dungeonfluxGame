@@ -17,6 +17,7 @@ Commands:
   run ARGS...    Forward to development/run-gameplay.sh
   test-tools     Run the df-tools shard matrix with --strict-known
   python-check   Compile development Python tools without writing source caches
+  boundary       Check that text and image generation reach a provider only through their services
   deny           Run cargo-deny when both the tool and reviewed config exist
 USAGE
 }
@@ -65,6 +66,18 @@ case "$command" in
       echo "python-check needs the Python launcher (Windows) or python3 (Linux)" >&2
       exit 2
     fi
+    ;;
+  boundary)
+    if command -v py >/dev/null 2>&1; then
+      python=(py -3 -I)
+    elif command -v python3 >/dev/null 2>&1; then
+      python=(python3 -I)
+    else
+      echo "boundary needs the Python launcher (Windows) or python3 (Linux)" >&2
+      exit 2
+    fi
+    "${python[@]}" "$ROOT/development/check-text-boundary.py"
+    "${python[@]}" "$ROOT/development/check-imagery-boundary.py" --strict
     ;;
   deny)
     if ! command -v cargo-deny >/dev/null 2>&1; then

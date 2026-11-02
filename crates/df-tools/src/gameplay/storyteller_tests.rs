@@ -9,25 +9,18 @@ use std::{
     time::Duration,
 };
 
+use df_ai::{
+    text::{TextOutcome, TextUsage, UnavailableReason},
+    text_fixture::MemoryAttemptStore,
+};
+use df_observe::{AnyValue, DiagnosticRecord, DiagnosticSink, TelemetryError};
 use serde_json::{Value, json};
 
-use super::*;
-
-#[test]
-fn blocked_text_request_is_never_sent_even_when_observed() {
-    let blocked = TextResponseError::Observed {
-        failure: Box::new(TextResponseError::Transport(
-            NativeHttpRefusal::ProviderDisabled,
-        )),
-        provider_request_id: None,
-        transport_request_id: None,
-        usage: None,
-    };
-    assert!(text_request_never_sent(&blocked));
-    assert!(!text_request_never_sent(&TextResponseError::Transport(
-        NativeHttpRefusal::Deadline
-    )));
-}
+use super::{
+    dispatch::{outcome_label, token_usage},
+    text_runtime::RuntimeStore,
+    *,
+};
 
 const CREDENTIAL: &str = "credential-private-sentinel";
 type ResponseComputer = dyn Fn(&Value) -> (u16, Value) + Send + Sync;
@@ -272,22 +265,74 @@ pub(in crate::gameplay) fn cache_directory(name: &str) -> PathBuf {
     directory
 }
 
-/// A storyteller over a loopback endpoint. `_budget` is ignored: there is no token cap, and the
-/// parameter stays so the many tests that pass one need no change.
+/// Serialises the tests that install or remove the process-wide text runtime, so a storyteller
+/// always finds the runtime its own test installed.
+static RUNTIME_GUARD: Mutex<()> = Mutex::new(());
+
+fn settings(deadline: Duration, cache: &Path) -> StorytellerSettings {
+    StorytellerSettings {
+        credential: CREDENTIAL.to_owned(),
+        codex: false,
+        model: "gpt-test-model".to_owned(),
+        cache_directory: cache.to_owned(),
+        deadline,
+    }
+}
+
+/// A storyteller over a loopback endpoint and its own in-memory text runtime. `_budget` is
+/// ignored: there is no token cap, and the parameter stays so the many tests that pass one need no
+/// change.
 pub(in crate::gameplay) fn teller(
     address: SocketAddr,
     _budget: u64,
     deadline: Duration,
     cache: &Path,
 ) -> Storyteller {
-    Storyteller::new(StorytellerSettings {
-        credential: CREDENTIAL.to_owned(),
-        codex: false,
-        model: "gpt-test-model".to_owned(),
-        cache_directory: cache.to_owned(),
-        deadline,
-    })
-    .with_loopback(address)
+    logged_teller(address, deadline, cache, None)
+}
+
+fn logged_teller(
+    address: SocketAddr,
+    deadline: Duration,
+    cache: &Path,
+    sink: Option<Arc<dyn DiagnosticSink>>,
+) -> Storyteller {
+    let _guard = RUNTIME_GUARD.lock().unwrap_or_else(PoisonError::into_inner);
+    assert!(text_runtime::install(
+        RuntimeStore::Memory(Arc::new(MemoryAttemptStore::default())),
+        sink,
+        "test-run",
+    ));
+    let storyteller = Storyteller::new(settings(deadline, cache)).with_loopback(address);
+    // The storyteller keeps the runtime it found. Removing the global one stops a storyteller built
+    // by another test from running on this test's runtime and writing into its sink.
+    text_runtime::uninstall();
+    storyteller
+}
+
+/// The label of every text service event, in order.
+#[derive(Default)]
+struct Events(Mutex<Vec<String>>);
+
+impl Events {
+    fn labels(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl DiagnosticSink for Events {
+    fn emit(&self, record: DiagnosticRecord) -> Result<(), TelemetryError> {
+        if let AnyValue::String(label) = record.input.body {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(label.as_str().to_owned());
+        }
+        Ok(())
+    }
 }
 
 fn slots() -> Vec<Slot> {
@@ -1555,27 +1600,54 @@ async fn a_cached_text_with_a_withheld_term_is_not_served() {
 }
 
 #[test]
-fn a_provider_contract_failure_is_labelled_by_the_part_of_the_contract_that_failed() {
-    let contract = |reason| TextResponseError::Contract {
-        reason,
-        usage: None,
+fn a_failed_call_is_labelled_by_the_outcome_the_service_reported() {
+    assert_eq!(
+        outcome_label(&TextOutcome::Unavailable(UnavailableReason::Authentication)),
+        "unavailable_authentication"
+    );
+    assert_eq!(
+        outcome_label(&TextOutcome::Unavailable(UnavailableReason::Configuration)),
+        "unavailable_configuration"
+    );
+    assert_eq!(outcome_label(&TextOutcome::Invalid), "invalid");
+    assert_eq!(outcome_label(&TextOutcome::Unknown), "unknown");
+    assert_eq!(outcome_label(&TextOutcome::Deadline), "deadline");
+}
+
+#[test]
+fn a_usage_with_an_unreported_category_is_unknown_not_zero() {
+    let reported = TextUsage {
+        total_tokens: 140,
+        input_tokens: Some(100),
+        output_tokens: Some(40),
+        cached_input_tokens: Some(7),
+        cache_write_tokens: None,
+        reasoning_output_tokens: Some(11),
     };
-    assert_eq!(
-        provider_reason_label(&contract(TextResponseContract::Status)),
-        "contract_status"
-    );
-    assert_eq!(
-        provider_reason_label(&contract(TextResponseContract::Json)),
-        "contract_json"
-    );
-    assert_eq!(
-        provider_reason_label(&TextResponseError::Supplier(ProviderFailureClass::Capacity)),
-        "supplier_capacity"
-    );
-    assert_eq!(
-        provider_reason_label(&TextResponseError::Supplier(ProviderFailureClass::Denied)),
-        "supplier_denied"
-    );
+    let counters = token_usage(&reported).unwrap();
+    assert_eq!(counters.total_tokens, 140);
+    assert_eq!(counters.cached_input_tokens, 7);
+    assert_eq!(counters.cache_write_tokens, None);
+    for unreported in [
+        TextUsage {
+            input_tokens: None,
+            ..reported
+        },
+        TextUsage {
+            output_tokens: None,
+            ..reported
+        },
+        TextUsage {
+            cached_input_tokens: None,
+            ..reported
+        },
+        TextUsage {
+            reasoning_output_tokens: None,
+            ..reported
+        },
+    ] {
+        assert!(token_usage(&unreported).is_none());
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1621,4 +1693,171 @@ async fn hs54_valid_multibyte_answers_larger_than_64k_round_trip_the_cache() {
     assert_eq!(storyteller.express(&request).await.unwrap(), first);
     assert_eq!(endpoint.connections(), 1);
     std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn an_accepted_answer_and_its_judgement_are_both_qualified_in_the_text_service() {
+    let events = Arc::new(Events::default());
+    let endpoint = FakeEndpoint::start(vec![reply("Fine, friend.")]);
+    let cache = cache_directory("verdict-accepted");
+    let storyteller = logged_teller(
+        endpoint.address,
+        Duration::from_secs(5),
+        &cache,
+        Some(events.clone()),
+    );
+    let (facts, slots) = (facts(), slots());
+
+    storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        events.labels(),
+        ["answered", "answered", "qualified", "qualified"],
+        "the generation and the judgement each answer, then each is qualified"
+    );
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn each_answer_the_storyteller_refuses_is_rejected_in_the_text_service() {
+    let events = Arc::new(Events::default());
+    let endpoint = FakeEndpoint::start(vec![reply(LONG_TEXT), reply(LONG_TEXT)]);
+    let cache = cache_directory("verdict-rejected");
+    let storyteller = logged_teller(
+        endpoint.address,
+        Duration::from_secs(5),
+        &cache,
+        Some(events.clone()),
+    );
+    let (facts, slots) = (facts(), slots());
+
+    storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        events.labels(),
+        ["answered", "rejected", "answered", "rejected"],
+        "the correction is a new attempt, so the first answer is never resent or reused"
+    );
+    assert_eq!(endpoint.connections(), 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_caller_rejection_invalidates_the_accepted_attempt_in_the_text_service() {
+    let events = Arc::new(Events::default());
+    let endpoint = FakeEndpoint::start(vec![reply("First answer.")]);
+    let cache = cache_directory("verdict-forget");
+    let storyteller = logged_teller(
+        endpoint.address,
+        Duration::from_secs(5),
+        &cache,
+        Some(events.clone()),
+    );
+    let (facts, slots) = (facts(), slots());
+    let request = expression(&facts, &slots);
+    storyteller.express(&request).await.unwrap();
+
+    storyteller.forget(&request).await;
+    storyteller.forget(&request).await;
+
+    let labels = events.labels();
+    assert_eq!(
+        labels
+            .iter()
+            .filter(|label| *label == "invalidated")
+            .count(),
+        1,
+        "a second rejection finds nothing left to withdraw"
+    );
+    std::fs::remove_dir_all(cache).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_call_of_unknown_outcome_is_recorded_unknown_and_never_resent() {
+    let events = Arc::new(Events::default());
+    let endpoint = FakeEndpoint::start(vec![
+        Reply::Status(500, json!({"error": {}})),
+        reply("never used"),
+    ]);
+    let cache = cache_directory("unknown-never-resent");
+    let storyteller = logged_teller(
+        endpoint.address,
+        Duration::from_secs(5),
+        &cache,
+        Some(events.clone()),
+    );
+    let (facts, slots) = (facts(), slots());
+
+    let error = storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error,
+        StorytellerError::Provider(ProviderFailureClass::Unknown)
+    );
+    assert_eq!(endpoint.connections(), 1);
+    assert_eq!(events.labels(), ["unknown"]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn without_a_text_runtime_a_request_is_unavailable_and_nothing_is_sent() {
+    let endpoint = FakeEndpoint::start(vec![reply("never used")]);
+    let cache = cache_directory("no-runtime");
+    let (facts, slots) = (facts(), slots());
+    let outcome;
+    let charged;
+    {
+        let _guard = RUNTIME_GUARD.lock().unwrap_or_else(PoisonError::into_inner);
+        text_runtime::uninstall();
+        let storyteller = Storyteller::new(settings(Duration::from_secs(5), &cache))
+            .with_loopback(endpoint.address);
+        let request = expression(&facts, &slots);
+        let online = storyteller.online.as_ref().unwrap();
+        let key = cache_key(&online.model, &request);
+        let prompt = build_prompt(&request, None);
+        let reserved = online.estimate(&prompt, &request);
+        outcome = online
+            .attempt(&request, &key, 1, &prompt, reserved, Instant::now(), None)
+            .await;
+        charged = storyteller.tokens_charged();
+    }
+
+    assert!(matches!(
+        outcome,
+        Err(StorytellerError::Provider(
+            ProviderFailureClass::Unavailable
+        ))
+    ));
+    assert_eq!(endpoint.connections(), 0);
+    assert_eq!(charged, Some(0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_prompt_over_the_bound_is_refused_before_any_call() {
+    let endpoint = FakeEndpoint::start(vec![reply("never used")]);
+    let cache = cache_directory("oversized-prompt");
+    let storyteller = teller(endpoint.address, 0, Duration::from_secs(5), &cache);
+    let facts = json!({"filler": "x".repeat(MAXIMUM_FACTS_BYTES - 64)});
+    let terms: Vec<String> = (0..MAXIMUM_SLOT_FORBIDDEN)
+        .map(|index| format!("{index:0>width$}", width = MAXIMUM_TERM_CHARACTERS))
+        .collect();
+    let slots: Vec<Slot> = (0..MAXIMUM_SLOTS)
+        .map(|index| Slot::new(&format!("slot_{index}"), 80).forbidding(terms.clone()))
+        .collect();
+
+    let error = storyteller
+        .express(&expression(&facts, &slots))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error, StorytellerError::InvalidRequest("prompt"));
+    assert_eq!(endpoint.connections(), 0);
+    assert_eq!(storyteller.tokens_charged(), Some(0));
 }

@@ -562,6 +562,25 @@ fn forward_audit(event: &'static str, line: String) {
         }
     }
 }
+/// The hosted process's shared diagnostic sink, when its telemetry is running. Text generation
+/// logs through it with the same records every other composition emits.
+pub(crate) fn diagnostic_sink() -> Option<Arc<dyn df_observe::DiagnosticSink>> {
+    active_telemetry().map(|telemetry| telemetry as Arc<dyn df_observe::DiagnosticSink>)
+}
+
+impl df_observe::DiagnosticSink for HostedTelemetry {
+    fn emit(&self, record: df_observe::DiagnosticRecord) -> Result<(), TelemetryError> {
+        // `emit_log` owns capture failure: it counts it and writes the emergency line itself.
+        self.emit_log(
+            record.event_name,
+            record.input.severity,
+            record.input.attributes,
+            record.input.trace,
+        );
+        Ok(())
+    }
+}
+
 fn active_telemetry() -> Option<Arc<HostedTelemetry>> {
     match ACTIVE.lock() {
         Ok(active) => active.upgrade(),

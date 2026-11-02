@@ -41,6 +41,23 @@ jobs:
         shell: bash
         run: cargo fmt --manifest-path crates/df-launcher/Cargo.toml -- --check
 
+  # Text and image generation reach a provider only through their services. Both guards read the
+  # sources and call nothing; the text guard's own adversarial tests run alongside it.
+  generation-boundary:
+    name: text and image generation boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check the text generation boundary
+        shell: bash
+        run: python3 -I development/check-text-boundary.py
+      - name: Check the image generation boundary
+        shell: bash
+        run: python3 -I development/check-imagery-boundary.py --strict
+      - name: Test the text boundary guard
+        shell: bash
+        run: python3 -m unittest discover -s development/tests -p "test_check_text_boundary.py"
+
   # cargo check of every workspace member, native, including test and bench targets.
   # Windows: df-tools and df-launcher embed the Windows icon through rc.exe in build.rs,
   # and df-launcher is a Windows desktop program (WebView2, Win32), so the native check runs there.

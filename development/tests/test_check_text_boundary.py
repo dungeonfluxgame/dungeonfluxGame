@@ -570,8 +570,10 @@ class CommandLineTests(unittest.TestCase):
             path = Path(tmp) / FIXTURE_RS
             path.parent.mkdir(parents=True)
             path.write_text("fn f() -> u8 { 1 }", encoding="utf-8")
-            code, out = run_cli(["--root", tmp])
-            code_json, out_json = run_cli(["--json", "--root", tmp])
+            # An empty allowlist, so no entry is left over in a tree that has nothing to match.
+            with mock.patch.object(guard, "ALLOWLIST", {}):
+                code, out = run_cli(["--root", tmp])
+                code_json, out_json = run_cli(["--json", "--root", tmp])
         self.assertEqual(code, 0)
         self.assertIn("RESULT: PASS", out)
         self.assertEqual(code_json, 0)
@@ -587,6 +589,21 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result["violations"], [])
         self.assertEqual(result["errors"], [])
         self.assertTrue(result["ok"])
+
+    def test_the_repository_allowlist_has_no_leftover_entries(self):
+        self.assertEqual(guard.evaluate(REPO_ROOT)["stale"], [])
+
+    def test_the_allowlist_holds_only_permanent_phases_and_no_migration_placeholders(self):
+        phases = {entry["phase"] for entry in guard.ALLOWLIST.values()}
+        self.assertEqual(
+            phases, {"backend", "provider-crate", "image-route-config", "fixture"}
+        )
+        self.assertEqual(set(guard.PHASE_CEILINGS), phases)
+
+    def test_a_leftover_entry_fails_the_command_line_run(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, _ = run_cli(["--root", root])
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

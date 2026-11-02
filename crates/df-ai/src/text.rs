@@ -396,6 +396,15 @@ impl<T: TextObserver> TextObserver for std::sync::Arc<T> {
     }
 }
 
+/// A run may or may not have somewhere to log: `None` keeps nothing.
+impl<T: TextObserver> TextObserver for Option<T> {
+    fn observe(&self, event: &TextEvent) {
+        if let Some(observer) = self {
+            observer.observe(event);
+        }
+    }
+}
+
 /// The observer for callers that do not record events.
 pub struct NoTextObserver;
 

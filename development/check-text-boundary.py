@@ -93,10 +93,6 @@ TOKEN = re.compile(
     re.DOTALL,
 )
 
-PROVIDER_SRC = "provider implementation; private backend after migration"
-PROVIDER_TEST = "provider-crate test exercising the public factory until backends are private"
-TEST_FIXTURE = "endpoint fixture in test code (test-literal class)"
-BACKEND_MODULE = "private backend module: the sanctioned raw-egress owner behind the text service"
 
 
 def _allow(rows):
@@ -105,73 +101,70 @@ def _allow(rows):
 
 # (path, class, symbol) -> {"count", "phase", "reason"}. Derived from a scanner run on the
 # tree as of 2026-11-01. Exact files only; a hit above the recorded count fails.
+PHASE_REASONS = {
+    'backend': 'private backend module: the sanctioned raw-egress owner behind its service',
+    'provider-crate': "the provider crate's own implementation, wire tests and re-exports; reached only by the registered backends", 'image-route-config': 'route configuration handed to the image service, not egress code',
+    'fixture': 'endpoint fixture in test code',
+}
+
+# (path, class, symbol) -> count. Every entry is permanent and justified; none is a migration
+# placeholder. A hit above the recorded count fails, and so does an entry nothing matches.
 ALLOWLIST = _allow([
-    # T2: Storyteller facade (T2 removes dispatch, cache, flights and bookings)
-    ("crates/df-tools/src/gameplay/storyteller.rs", "import", "NativeTextProvider", 1, "T2", "storyteller facade imports the public provider"),
-    ("crates/df-tools/src/gameplay/storyteller.rs", "import", "registered_text_provider", 1, "T2", "storyteller facade imports the public factory"),
-    ("crates/df-tools/src/gameplay/storyteller.rs", "call", "registered_text_provider", 1, "T2", "storyteller facade builds the provider"),
-    ("crates/df-tools/src/gameplay/storyteller.rs", "identifier", "NativeTextProvider", 1, "T2", "storyteller facade holds the provider type"),
-    ("crates/df-tools/src/gameplay/storyteller.rs", "call", "NativeTextProvider.submit", 1, "T2", "storyteller facade submits text"),
-    ("crates/df-tools/src/gameplay/storyteller.rs", "call", "codex_cli::text", 1, "T2", "storyteller facade calls the process-spawning Codex wrapper"),
-    ("crates/df-imagery/src/backends/codex_cli/process.rs", "process", "Command::new", 1, "T2", "Codex process spawn; shared process lifecycle extraction"),
-    ("crates/df-providers/tests/text_response.rs", "call", "NativeTextProvider.submit", 22, "T2", "Responses wire tests move with the private Responses backend"),
-    # T2-T4: provider implementations (user-directed seed)
-    ("crates/df-providers/src/systemone.rs", "call", "SystemOneChoiceProvider", 2, "T2-T4", PROVIDER_SRC),
-    ("crates/df-providers/src/systemone.rs", "literal", "/v1/systemone", 1, "T2-T4", PROVIDER_SRC),
-    ("crates/df-providers/src/text_response.rs", "call", "NativeTextProvider", 3, "T2-T4", PROVIDER_SRC),
-    ("crates/df-providers/src/text_response.rs", "literal", "/v1/responses", 2, "T2-T4", PROVIDER_SRC),
-    # T3: support ingest, investigation, SystemOne consumers
-    ("crates/df-hosted/src/support_ingest/providers.rs", "literal", "/v1/responses", 1, "T3", "raw support HTTP; drafts move to the private Responses backend"),
-    ("crates/df-hosted/src/support_ingest/providers.rs", "literal", "/v1/systemone", 1, "T3", "raw support HTTP; classification moves to private SystemOne"),
-    ("crates/df-tools/src/gameplay/investigation.rs", "import", "SystemOneChoiceProvider", 1, "T3", "investigation consumer of the public SystemOne provider"),
-    ("crates/df-tools/src/gameplay/investigation.rs", "identifier", "SystemOneChoiceProvider", 1, "T3", "investigation consumer of the public SystemOne provider"),
-    ("crates/df-tools/src/gameplay/investigation_tests.rs", "call", "SystemOneChoiceProvider", 2, "T3", "investigation test constructs the public SystemOne provider"),
-    ("crates/df-providers/tests/metering.rs", "import", "SystemOneChoiceProvider", 1, "T3", PROVIDER_TEST),
-    ("crates/df-providers/tests/metering.rs", "call", "SystemOneChoiceProvider", 2, "T3", PROVIDER_TEST),
-    # T3-T4: ApproachModel and creator adapters
-    ("crates/df-tools/src/gameplay/approach_model.rs", "import", "SystemOneChoiceProvider", 1, "T3-T4", "ApproachModel consumer of the public SystemOne provider"),
-    ("crates/df-tools/src/gameplay/approach_model.rs", "identifier", "SystemOneChoiceProvider", 7, "T3-T4", "ApproachModel consumer of the public SystemOne provider"),
-    ("crates/df-tools/src/gameplay/approach_model.rs", "call", "SystemOneChoiceProvider", 2, "T3-T4", "ApproachModel constructs the public SystemOne provider"),
-    ("crates/df-tools/src/gameplay/image_configuration.rs", "literal", "/v1/systemone", 1, "T3-T4", "creator analysis route built from the configured base URL"),
-    # T4: multimodal Chat and image composition
-    ("crates/df-tools/src/gameplay/image_configuration.rs", "literal", "/v1/chat/completions", 1, "T4", "vision route to the OpenAI Chat endpoint"),
-    # T5: test-literal class only (fixtures in test code)
-    ("crates/df-imagery/src/backends/analysis/standalone/legacy_photo_tests.rs", "test-literal", "/v1/chat/completions", 1, "T5", TEST_FIXTURE),
-    ("crates/df-imagery/src/config_overlay_tests.rs", "test-literal", "/v1/responses", 2, "T5", TEST_FIXTURE),
-    ("crates/df-imagery/src/config_tests.rs", "test-literal", "/v1/responses", 1, "T5", TEST_FIXTURE),
-    ("crates/df-imagery/src/runtime/analysis/creator_legacy_tests.rs", "test-literal", "/v1/systemone", 3, "T5", TEST_FIXTURE),
-    ("crates/df-imagery/src/runtime/quota/tests.rs", "test-literal", "/v1/responses", 3, "T5", TEST_FIXTURE),
-    ("crates/df-persistence/src/imagery_runtime_admission/no_output_tests.rs", "test-literal", "/v1/chat/completions", 1, "T5", TEST_FIXTURE),
-    ("crates/df-persistence/tests/imagery_publication/intent_fixture.rs", "test-literal", "/v1/chat/completions", 1, "T5", TEST_FIXTURE),
-    ("crates/df-providers/src/native_http.rs", "test-literal", "/v1/responses", 3, "T5", TEST_FIXTURE),
-    ("crates/df-providers/src/systemone.rs", "test-literal", "/v1/systemone", 1, "T5", "doc comment naming the endpoint (test-literal class)"),
-    ("crates/df-providers/tests/text_response.rs", "test-literal", "/v1/responses", 1, "T5", TEST_FIXTURE),
-    ("crates/df-tools/src/gameplay/creator_portrait_route_tests.rs", "test-literal", "/v1/systemone", 5, "T5", TEST_FIXTURE),
-    ("crates/df-tools/src/gameplay/imagery/mural_prompt.rs", "test-literal", "/v1/chat/completions", 1, "T5", TEST_FIXTURE),
-    ("crates/df-tools/src/gameplay/imagery_tests.rs", "test-literal", "/v1/chat/completions", 3, "T5", TEST_FIXTURE),
-    ("crates/df-tools/src/gameplay/living_scenes/plates_tests.rs", "test-literal", "/v1/chat/completions", 1, "T5", TEST_FIXTURE),
-    # T6: public re-exports, factory registry and their tests retire with the public factories
-    ("crates/df-providers/src/lib.rs", "import", "NativeTextProvider", 1, "T6", "public re-export of the provider; retired at T6"),
-    ("crates/df-providers/src/lib.rs", "import", "SystemOneChoiceProvider", 1, "T6", "public re-export of the provider; retired at T6"),
-    ("crates/df-providers/src/lib.rs", "import", "registered_text_provider", 1, "T6", "public re-export of the factory; retired at T6"),
-    ("crates/df-providers/src/registry.rs", "call", "registered_text_provider", 1, "T6", "public factory; retired at T6"),
-    ("crates/df-providers/src/registry.rs", "call", "NativeTextProvider", 1, "T6", "public factory; retired at T6"),
-    ("crates/df-providers/src/registry.rs", "identifier", "NativeTextProvider", 1, "T6", "public factory; retired at T6"),
-    ("crates/df-providers/tests/native_http.rs", "import", "registered_text_provider", 1, "T6", PROVIDER_TEST),
-    ("crates/df-providers/tests/native_http.rs", "call", "registered_text_provider", 6, "T6", PROVIDER_TEST),
-    ("crates/df-providers/tests/text_response.rs", "import", "NativeTextProvider", 1, "T6", PROVIDER_TEST),
-    ("crates/df-providers/tests/text_response.rs", "import", "registered_text_provider", 1, "T6", PROVIDER_TEST),
-    ("crates/df-providers/tests/text_response.rs", "call", "NativeTextProvider", 1, "T6", PROVIDER_TEST),
-    ("crates/df-providers/tests/text_response.rs", "call", "registered_text_provider", 7, "T6", PROVIDER_TEST),
-    # Private backend modules: the sanctioned raw-egress owners behind the text service.
-    ("crates/df-tools/src/gameplay/responses_text.rs", "import", "NativeTextProvider", 1, "backend", BACKEND_MODULE),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "import", "registered_text_provider", 1, "backend", BACKEND_MODULE),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "call", "registered_text_provider", 2, "backend", BACKEND_MODULE),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "identifier", "NativeTextProvider", 1, "backend", BACKEND_MODULE),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "call", "NativeTextProvider.submit", 1, "backend", BACKEND_MODULE),
+    # backend
+    ("crates/df-hosted/src/support_ingest/support_text.rs", "literal", "/v1/responses", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-hosted/src/support_ingest/support_text.rs", "literal", "/v1/systemone", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-imagery/src/backends/codex_cli/process.rs", "process", "Command::new", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/responses_text.rs", "call", "NativeTextProvider.submit", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/responses_text.rs", "call", "registered_text_provider", 2, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/responses_text.rs", "identifier", "NativeTextProvider", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/responses_text.rs", "import", "NativeTextProvider", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/responses_text.rs", "import", "registered_text_provider", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/systemone_text.rs", "call", "SystemOneChoiceProvider", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/systemone_text.rs", "identifier", "SystemOneChoiceProvider", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-tools/src/gameplay/systemone_text.rs", "import", "SystemOneChoiceProvider", 1, "backend", PHASE_REASONS["backend"]),
+    # provider-crate
+    ("crates/df-providers/src/lib.rs", "import", "NativeTextProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/lib.rs", "import", "SystemOneChoiceProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/lib.rs", "import", "registered_text_provider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/registry.rs", "call", "NativeTextProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/registry.rs", "call", "registered_text_provider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/registry.rs", "identifier", "NativeTextProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/systemone.rs", "call", "SystemOneChoiceProvider", 2, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/systemone.rs", "literal", "/v1/systemone", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/text_response.rs", "call", "NativeTextProvider", 3, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/src/text_response.rs", "literal", "/v1/responses", 2, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/metering.rs", "call", "SystemOneChoiceProvider", 2, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/metering.rs", "import", "SystemOneChoiceProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/native_http.rs", "call", "registered_text_provider", 6, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/native_http.rs", "import", "registered_text_provider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/text_response.rs", "call", "NativeTextProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/text_response.rs", "call", "NativeTextProvider.submit", 22, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/text_response.rs", "call", "registered_text_provider", 7, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/text_response.rs", "import", "NativeTextProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/text_response.rs", "import", "registered_text_provider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
+    # image-route-config
+    ("crates/df-tools/src/gameplay/image_configuration.rs", "literal", "/v1/chat/completions", 1, "image-route-config", PHASE_REASONS["image-route-config"]),
+    ("crates/df-tools/src/gameplay/image_configuration.rs", "literal", "/v1/systemone", 1, "image-route-config", PHASE_REASONS["image-route-config"]),
+    # fixture
+    ("crates/df-hosted/src/support_ingest/support_text.rs", "test-literal", "/v1/responses", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-hosted/src/support_ingest/support_text.rs", "test-literal", "/v1/systemone", 3, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-imagery/src/backends/analysis/standalone/legacy_photo_tests.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-imagery/src/config_overlay_tests.rs", "test-literal", "/v1/responses", 2, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-imagery/src/config_tests.rs", "test-literal", "/v1/responses", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-imagery/src/runtime/analysis/creator_legacy_tests.rs", "test-literal", "/v1/systemone", 3, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-imagery/src/runtime/quota/tests.rs", "test-literal", "/v1/responses", 3, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-persistence/src/imagery_runtime_admission/no_output_tests.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-persistence/tests/imagery_publication/intent_fixture.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-providers/src/native_http.rs", "test-literal", "/v1/responses", 3, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-providers/src/systemone.rs", "test-literal", "/v1/systemone", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-providers/tests/text_response.rs", "test-literal", "/v1/responses", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-tools/src/gameplay/creator_portrait_route_tests.rs", "test-literal", "/v1/systemone", 5, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-tools/src/gameplay/imagery/mural_prompt.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-tools/src/gameplay/imagery_tests.rs", "test-literal", "/v1/chat/completions", 3, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-tools/src/gameplay/living_scenes/plates_tests.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
 ])
 # Allowlisted-hit ceiling per phase, fixed at the counts recorded when written.
-PHASE_CEILINGS = {"backend": 6, "T2": 29, "T2-T4": 8, "T3": 9, "T3-T4": 11, "T4": 1, "T5": 27, "T6": 23}
+PHASE_CEILINGS = {"backend": 12, "provider-crate": 56, "image-route-config": 2, "fixture": 31}
 
 
 def _is_ident(tok, value):
@@ -797,6 +790,8 @@ def main(argv=None):
         print(f"check-text-boundary: no such directory: {root}", file=sys.stderr)
         return 2
     result = evaluate(root)
+    # An allowlist entry that nothing matches any more is a leftover exemption, so it fails the run.
+    result["ok"] = result["ok"] and not result["stale"]
     print(json.dumps(result, indent=2, sort_keys=True) if args.json else _format(result))
     return 0 if result["ok"] else 1
 

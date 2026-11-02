@@ -104,7 +104,7 @@ impl ResponsesTextBackend {
 
     #[cfg(test)]
     #[must_use]
-    fn with_loopback(mut self, address: SocketAddr) -> Self {
+    pub(super) fn with_loopback(mut self, address: SocketAddr) -> Self {
         self.loopback = Some(address);
         self
     }

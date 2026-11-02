@@ -131,6 +131,7 @@ mod startup_configuration;
 #[cfg(test)]
 mod startup_contract;
 mod storyteller;
+mod systemone_text;
 mod table_log;
 mod table_settings;
 #[cfg(test)]

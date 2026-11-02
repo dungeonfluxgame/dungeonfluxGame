@@ -1,4 +1,5 @@
 use super::*;
+use crate::gameplay::systemone_text::SystemOneTextBackend;
 
 #[tokio::test]
 async fn hs71_item_connection_is_jev_decided_and_authored_clues_need_no_model() {
@@ -785,14 +786,14 @@ async fn jev_target_choice_uses_scene_names_and_resolves_a_description() {
         json!({"answers": {"q1": {"type": "choice", "choice": "o14", "confidence": 0.99}},
             "model": "jev-1.13.0", "usage": {"input_tokens": 10, "output_tokens": 1}}),
     )]);
-    let provider = SystemOneChoiceProvider::new(
+    let backend = SystemOneTextBackend::new(
         "jev-fixture-sentinel".into(),
         &format!("http://{}", endpoint.address),
         crate::gameplay::cost::test_meter(),
     )
     .unwrap();
-    let selected =
-        resolve_target(Some(&provider), "I watch the people at the back.", &room()).await;
+    let chooser = backend.chooser(Duration::from_secs(4)).unwrap();
+    let selected = resolve_target(Some(&chooser), "I watch the people at the back.", &room()).await;
     assert_eq!(selected.id, "men");
     let bodies = endpoint.bodies();
     let body = &bodies[0];
@@ -1422,14 +1423,15 @@ async fn jev_absent_answer_is_not_replaced_by_an_alias_match() {
         json!({"answers": {"q1": {"type": "choice", "choice": absent_choice, "confidence": 0.9}},
             "model": "jev-1.13.0", "usage": {"input_tokens": 10, "output_tokens": 1}}),
     )]);
-    let provider = SystemOneChoiceProvider::new(
+    let backend = SystemOneTextBackend::new(
         "jev-fixture-sentinel".into(),
         &format!("http://{}", endpoint.address),
         crate::gameplay::cost::test_meter(),
     )
     .unwrap();
+    let chooser = backend.chooser(Duration::from_secs(4)).unwrap();
     // "tankards" is a scene alias, so only Jev's absent answer keeps it out of the scene.
-    let selected = resolve_target(Some(&provider), "I examine the tankards.", &options).await;
+    let selected = resolve_target(Some(&chooser), "I examine the tankards.", &options).await;
     assert!(!selected.present);
     assert!(selected.id.starts_with("absent-"));
 }
