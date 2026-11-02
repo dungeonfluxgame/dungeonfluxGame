@@ -12,8 +12,9 @@
 use std::collections::HashMap;
 
 use wasm_bindgen::{JsCast, JsValue};
-use web_sys::{Document, Element, HtmlElement};
+use web_sys::{Document, Element, HtmlElement, HtmlImageElement};
 
+use crate::camera::{clamped_zoom, zoom_ceiling_percent};
 use crate::continuity::CameraPlan;
 use crate::controls::Controls;
 use crate::copy::{caption_dwell_ms, status_blocks_input, status_copy, word_count};
@@ -24,6 +25,7 @@ use crate::draw_plan::Part;
 use crate::figure::{FigureLook, figure_style, first_turn, label_style, next_turn};
 use crate::fixture::{Camera, ElementShape, PartyMember, StageElement, Status, TvScene};
 use crate::layout::hit_point_permille;
+use crate::limits::MAXIMUM_ZOOM_PERCENT;
 use crate::media::{MediaKind, media_kind};
 use crate::motion_style::{CameraAction, CameraDrawn, camera_action, camera_style};
 use crate::style::css_color;
@@ -211,6 +213,20 @@ pub struct TvHandles {
     figures: Figures,
     /// What was last written to the world's style.
     camera_drawn: Option<CameraDrawn>,
+    /// The slot of the backdrop, whose picture is the plate the camera zooms into.
+    backdrop: Element,
+    /// The zoom the plate can bear, worked out for one move and one plate width.
+    ceiling: Option<ZoomCeiling>,
+    /// The move whose cut zoom was last logged, so it is said once.
+    clamp_logged: u64,
+}
+
+/// A zoom ceiling and what it was worked out from.
+#[derive(Clone, Copy)]
+struct ZoomCeiling {
+    serial: u64,
+    plate_width_px: Option<u32>,
+    percent: u16,
 }
 
 impl TvHandles {
@@ -226,8 +242,58 @@ impl TvHandles {
         if let Some(elements) = elements {
             self.figures.sync(document, &self.layer, elements)?;
         }
-        let plan = with_continuity(|continuity| continuity.camera_plan(now_ms(), camera, elements));
+        let ceiling = match camera {
+            Some(camera) => self.zoom_ceiling(camera),
+            None => MAXIMUM_ZOOM_PERCENT,
+        };
+        let now = now_ms()?;
+        let plan =
+            with_continuity(|continuity| continuity.camera_plan(now, camera, elements, ceiling));
         self.frame_camera(&plan)
+    }
+
+    /// The pixel width of the backdrop's picture, once it has loaded.
+    fn plate_width_px(&self) -> Option<u32> {
+        self.backdrop
+            .first_element_child()
+            .and_then(|frame| frame.first_element_child())
+            .and_then(|image| image.dyn_into::<HtmlImageElement>().ok())
+            .map(|image| image.natural_width())
+            .filter(|width| *width > 0)
+    }
+
+    /// The zoom the picture can bear for this move. A request over it is drawn at the ceiling and
+    /// said once in the console, not cut silently. The stage is measured only when the move or the
+    /// plate changes, because reading its width makes the browser lay the page out.
+    fn zoom_ceiling(&mut self, camera: &Camera) -> u16 {
+        let plate = self.plate_width_px();
+        let known = self
+            .ceiling
+            .filter(|known| known.serial == camera.serial && known.plate_width_px == plate);
+        let percent = match known {
+            Some(known) => known.percent,
+            None => {
+                let ratio = web_sys::window().map_or(1.0, |window| window.device_pixel_ratio());
+                let stage_px = (f64::from(self.world.client_width()) * ratio).round() as u32;
+                let percent = zoom_ceiling_percent(plate, stage_px);
+                self.ceiling = Some(ZoomCeiling {
+                    serial: camera.serial,
+                    plate_width_px: plate,
+                    percent,
+                });
+                percent
+            }
+        };
+        if let (_, Some(allowed)) = clamped_zoom(camera.zoom_percent, percent)
+            && self.clamp_logged != camera.serial
+        {
+            self.clamp_logged = camera.serial;
+            web_sys::console::warn_1(&JsValue::from_str(&format!(
+                "CAMERA clamped requested={} allowed={allowed} serial={}",
+                camera.zoom_percent, camera.serial
+            )));
+        }
+        percent
     }
 
     /// Writes the camera's style when it differs from what is there. A move that is under way is
@@ -278,8 +344,12 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
     let world = element(document, "div", "tv-world")?;
     let layer = element(document, "div", "tv-figures")?;
     let mut slots = Vec::new();
+    let mut backdrop = None;
     for part in PARTS {
         let holder = slot(document, part)?;
+        if part == Part::TvBackdrop {
+            backdrop = Some(holder.clone());
+        }
         let parent = match part {
             Part::TvBackdrop | Part::TvGrid => &world,
             _ => &stage,
@@ -300,6 +370,10 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
             layer,
             figures: Figures::default(),
             camera_drawn: None,
+            backdrop: backdrop
+                .ok_or_else(|| JsValue::from_str("the shared screen has no backdrop slot"))?,
+            ceiling: None,
+            clamp_logged: 0,
         },
         slots,
     })

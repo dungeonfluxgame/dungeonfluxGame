@@ -103,3 +103,76 @@ fn a_report_survives_a_round_trip_and_names_the_audio_state() {
         original
     );
 }
+
+#[test]
+fn a_reports_texts_are_cut_to_their_length_and_its_pictures_to_their_count() {
+    let long = "e".repeat(crate::limits::MAXIMUM_REPORTED_ERROR_CHARACTERS + 50);
+    let report = ClientReport {
+        audio: AudioState::Locked,
+        last_cue: 0,
+        music: Some("m".repeat(MAXIMUM_NAME_LENGTH + 10)),
+        images_shown: (0..crate::limits::MAXIMUM_REPORTED_IMAGES + 5)
+            .map(|index| format!("{index}.png"))
+            .collect(),
+        errors: vec![long],
+    }
+    .bounded();
+    assert_eq!(
+        report.errors[0].chars().count(),
+        crate::limits::MAXIMUM_REPORTED_ERROR_CHARACTERS
+    );
+    assert_eq!(
+        report.music.map(|music| music.chars().count()),
+        Some(MAXIMUM_NAME_LENGTH)
+    );
+    assert_eq!(
+        report.images_shown.len(),
+        crate::limits::MAXIMUM_REPORTED_IMAGES
+    );
+}
+
+#[test]
+fn a_report_is_held_to_its_total_size_dropping_the_oldest_errors_first() {
+    let big = "x".repeat(crate::limits::MAXIMUM_REPORTED_ERROR_CHARACTERS);
+    let errors: Vec<String> = (0..crate::limits::MAXIMUM_REPORTED_ERRORS)
+        .map(|index| format!("{index:04}{big}"))
+        .collect();
+    let newest = errors.last().cloned().map(|text| text[..4].to_owned());
+    let report = ClientReport {
+        audio: AudioState::Locked,
+        last_cue: 0,
+        music: None,
+        images_shown: vec!["a.png".into()],
+        errors,
+    }
+    .bounded();
+    let held: usize = report.errors.iter().map(String::len).sum::<usize>()
+        + report.images_shown.iter().map(String::len).sum::<usize>();
+    assert!(held <= crate::limits::MAXIMUM_REPORT_BYTES, "{held}");
+    assert!(!report.errors.is_empty());
+    assert_eq!(
+        report.errors.last().map(|text| text[..4].to_owned()),
+        newest
+    );
+    assert_eq!(
+        report.images_shown,
+        ["a.png"],
+        "pictures go only when the errors are gone"
+    );
+}
+
+#[test]
+fn a_multibyte_text_is_cut_on_a_character_and_never_panics() {
+    let report = ClientReport {
+        audio: AudioState::Locked,
+        last_cue: 0,
+        music: Some("\u{e9}".repeat(MAXIMUM_NAME_LENGTH + 1)),
+        images_shown: Vec::new(),
+        errors: Vec::new(),
+    }
+    .bounded();
+    assert_eq!(
+        report.music.map(|music| music.chars().count()),
+        Some(MAXIMUM_NAME_LENGTH)
+    );
+}

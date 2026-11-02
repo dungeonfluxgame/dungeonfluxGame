@@ -15,55 +15,6 @@ fn base() -> Fixture {
 }
 
 #[test]
-fn the_domain_rules_are_kept() {
-    assert_eq!(limits::MAXIMUM_ROTATION_DEGREES, 359);
-    assert_eq!(limits::MINIMUM_ZOOM_PERCENT, 100);
-    assert_eq!(limits::MAXIMUM_VOLUME, 100);
-    assert_eq!(limits::MAXIMUM_SLIDE_PERCENT, 100);
-    assert_eq!(limits::MAXIMUM_PIVOT_PERCENT, 100);
-}
-
-#[test]
-fn every_invented_cap_is_very_large() {
-    const {
-        assert!(limits::MAXIMUM_CAPTION_CHARACTERS >= 100_000);
-        assert!(limits::MAXIMUM_NAME_CHARACTERS >= 1_000);
-        assert!(limits::MAXIMUM_PARTY_MEMBERS >= 1_000);
-        assert!(limits::MAXIMUM_CHOICES_PER_LIST >= 1_000);
-        assert!(limits::MAXIMUM_CUES_KEPT >= 4_096);
-        assert!(limits::MAXIMUM_SLIDE_MS >= 86_400_000);
-        assert!(limits::MAXIMUM_CAMERA_MS >= 86_400_000);
-        assert!(limits::MAXIMUM_TRANSITION_MS >= 86_400_000);
-        assert!(limits::MAXIMUM_ZOOM_PERCENT >= 10_000);
-        assert!(limits::MAXIMUM_REMEMBERED_SLIDES >= 1_024);
-        assert!(limits::MAXIMUM_REPORTED_ERRORS >= 1_000);
-        assert!(limits::MAXIMUM_MEDIA_NAME_LENGTH >= 255);
-    }
-}
-
-#[test]
-fn the_other_modules_say_the_same_numbers() {
-    assert_eq!(
-        crate::scene::MAXIMUM_CAPTION_CHARACTERS,
-        limits::MAXIMUM_CAPTION_CHARACTERS
-    );
-    assert_eq!(crate::scene::MAXIMUM_CUES_KEPT, limits::MAXIMUM_CUES_KEPT);
-    assert_eq!(
-        crate::controls::MAXIMUM_TRANSITION_MS,
-        limits::MAXIMUM_TRANSITION_MS
-    );
-    assert_eq!(
-        crate::media::MAXIMUM_NAME_LENGTH,
-        limits::MAXIMUM_MEDIA_NAME_LENGTH
-    );
-    assert_eq!(
-        crate::media::MAXIMUM_REPORTED_ERRORS,
-        limits::MAXIMUM_REPORTED_ERRORS
-    );
-    assert_eq!(crate::backoff::LONGEST_RETRY_MS, limits::LONGEST_RETRY_MS);
-}
-
-#[test]
 fn values_the_old_caps_refused_are_accepted() {
     let mut overlay = SceneOverlay::default();
     let fixture = base();

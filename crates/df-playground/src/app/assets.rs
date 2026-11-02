@@ -6,6 +6,7 @@ use super::state::{
     FIXTURE_DIRECTORY_ADDRESS, FIXTURE_LIST_ADDRESS, FixtureProblem, PageError, REVISION_ADDRESS,
     THEME_ADDRESS, THEME_ID, log_error, set_problem, with_app, with_app_mut,
 };
+use crate::decisions::scene_changed;
 use crate::dom::{document, js_message, with_continuity};
 use crate::draw_plan::transition_for;
 use crate::fixture::Fixture;
@@ -72,11 +73,7 @@ pub async fn load_selected_fixture() {
     };
     with_app_mut(|app| {
         let transition = transition_for(app.loaded_name.as_deref(), &name, app.controls.transition);
-        if app
-            .loaded_name
-            .as_deref()
-            .is_some_and(|previous| previous != name)
-        {
+        if scene_changed(app.loaded_name.as_deref(), &name) {
             with_continuity(|continuity| continuity.forget());
         }
         if transition.is_some() {

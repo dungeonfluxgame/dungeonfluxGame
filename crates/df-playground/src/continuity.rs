@@ -8,18 +8,91 @@
 //! Every time is a reading of a steady clock, in milliseconds, passed in: nothing here reads a
 //! clock, so native tests cover it all.
 
-use crate::camera::{Framing, framing, progress};
+use crate::camera::{Framing, framing_within, progress};
 use crate::fixture::{Camera, Slide, StageElement};
-use crate::limits::MAXIMUM_REMEMBERED_SLIDES;
+use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT};
 
-/// Whether a controls answer should replace what the page has. `current` is the boot id and
-/// revision of the answer the page last took. An answer from another run of the host always
-/// replaces it, because its counters start again; from the same run, only a newer revision does, so
-/// a slow answer that was overtaken never undoes a newer one.
-pub fn accepts(current: Option<(&str, u64)>, boot_id: &str, revision: u64) -> bool {
-    match current {
+/// How many answers in a row from one older run of the host are taken to mean that run is the real
+/// one. A host that restarts with a clock set back has an older boot id than the run the page was
+/// following, and the page must not refuse it for ever.
+const OLDER_RUN_STRIKES: u8 = 3;
+
+/// What the page does with an answer from the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admit {
+    /// Take it; `new_run` says it is from another run of the host than the one followed.
+    Take { new_run: bool },
+    /// Leave it: an older answer than one already taken.
+    Refuse { older_run: bool },
+}
+
+/// Decides which answers from the host the page takes, so a slow answer that was overtaken never
+/// undoes a newer one. A boot id starts with the time the host started in fixed-width hex, so ids
+/// are ordered: an answer from an older run than the one followed is refused, and from the same
+/// run only a newer revision is taken. Many refusals of one older run in a row mean that run is
+/// the real one (the host's clock was set back), and it is taken.
+#[derive(Debug, Default)]
+pub struct ReplyGate {
+    current: Option<(String, u64)>,
+    older: Option<(String, u8)>,
+}
+
+impl ReplyGate {
+    pub fn admit(&mut self, boot_id: &str, revision: u64) -> Admit {
+        let Some((known_boot, known_revision)) = &self.current else {
+            self.take(boot_id, revision);
+            return Admit::Take { new_run: false };
+        };
+        if boot_id == known_boot {
+            // The run being followed has spoken, so a stray answer of an older one was only that.
+            self.older = None;
+            if revision > *known_revision {
+                self.take(boot_id, revision);
+                return Admit::Take { new_run: false };
+            }
+            return Admit::Refuse { older_run: false };
+        }
+        if boot_id > known_boot.as_str() {
+            self.take(boot_id, revision);
+            return Admit::Take { new_run: true };
+        }
+        let strikes = match &self.older {
+            Some((boot, strikes)) if boot == boot_id => strikes + 1,
+            _ => 1,
+        };
+        if strikes >= OLDER_RUN_STRIKES {
+            self.take(boot_id, revision);
+            return Admit::Take { new_run: true };
+        }
+        self.older = Some((boot_id.to_owned(), strikes));
+        Admit::Refuse { older_run: true }
+    }
+
+    fn take(&mut self, boot_id: &str, revision: u64) {
+        self.current = Some((boot_id.to_owned(), revision));
+        self.older = None;
+    }
+
+    /// The run of the host being followed.
+    pub fn boot_id(&self) -> Option<&str> {
+        self.current.as_ref().map(|(boot, _)| boot.as_str())
+    }
+
+    /// Whether any answer has been taken yet.
+    pub fn is_started(&self) -> bool {
+        self.current.is_some()
+    }
+}
+
+/// Whether a canvas answer should replace the canvas the page has. `known` is the run and the
+/// revision of that canvas (`None` when there is none); one from the same run is taken only when
+/// newer, so a slow read of the canvas never undoes a frame that arrived meanwhile.
+pub fn canvas_accepts(known: Option<(&str, u64)>, boot_id: &str, revision: u64) -> bool {
+    match known {
         None => true,
-        Some((known_boot, known_revision)) => known_boot != boot_id || revision > known_revision,
+        Some((known_boot, known_revision)) => {
+            boot_id > known_boot || (boot_id == known_boot && revision > known_revision)
+        }
     }
 }
 
@@ -81,9 +154,6 @@ struct CameraRun {
     duration_ms: u32,
     from: Framing,
     to: Framing,
-    /// The target went away after the move was made: the camera is back on the whole stage and
-    /// stays there until a new move is made, even if the element comes back.
-    released: bool,
 }
 
 impl CameraRun {
@@ -133,17 +203,29 @@ impl CameraClock {
     /// `now`. `elements` is `None` while the page does not know the stage yet, which draws the
     /// whole stage and changes nothing the page remembers.
     ///
-    /// A move that is already under way keeps its start and its clock, so the page follows a
-    /// travelling target without restarting. A new move starts from where the last had got to, so
-    /// an interrupted move pans on and does not pull out first. A move the page meets for the first
-    /// time began `elapsed_ms` ago. A move whose target is not on the stage is over: the camera is
-    /// on the whole stage and a respawn of the element does not zoom again; only a new move does.
-    /// A camera from a scenario file (serial 0) follows its target whenever the target is there.
+    /// The framing is worked out from what the frame says and nothing the page saw earlier, so
+    /// every page that has the same frame draws the same picture: a target that is not on the
+    /// stage shows the whole stage, and one that is shows the zoom. A move that is already under
+    /// way keeps its start and its clock, so the page follows a travelling target without
+    /// restarting. A new move starts from where the last had got to, so an interrupted move pans
+    /// on and does not pull out first. A move the page meets for the first time began
+    /// `elapsed_ms` ago.
     pub fn plan(
         &mut self,
         now: f64,
         camera: Option<&Camera>,
         elements: Option<&[StageElement]>,
+    ) -> CameraPlan {
+        self.plan_within(now, camera, elements, MAXIMUM_ZOOM_PERCENT)
+    }
+
+    /// `plan` with the zoom, in percent, that the picture can bear as the ceiling.
+    pub fn plan_within(
+        &mut self,
+        now: f64,
+        camera: Option<&Camera>,
+        elements: Option<&[StageElement]>,
+        zoom_ceiling: u16,
     ) -> CameraPlan {
         let Some(camera) = camera else {
             self.run = None;
@@ -152,11 +234,6 @@ impl CameraClock {
         let Some(elements) = elements else {
             return CameraPlan::resting(Framing::WHOLE_STAGE, camera.serial);
         };
-        let target_there = camera
-            .target
-            .as_deref()
-            .is_none_or(|target| elements.iter().any(|element| element.id == target));
-        let gone = camera.serial != 0 && !target_there;
         let mut run = match self.run.take() {
             Some(run) if run.serial == camera.serial => run,
             previous => CameraRun {
@@ -165,17 +242,11 @@ impl CameraClock {
                 duration_ms: camera.duration_ms,
                 from: previous.map_or(Framing::WHOLE_STAGE, |known| known.at(now)),
                 to: Framing::WHOLE_STAGE,
-                released: false,
             },
         };
-        run.released |= gone;
-        run.to = if run.released {
-            Framing::WHOLE_STAGE
-        } else {
-            framing(Some(camera), elements)
-        };
+        run.to = framing_within(Some(camera), elements, zoom_ceiling);
         let elapsed_ms = (now - run.began).max(0.0);
-        let plan = if run.released || progress(elapsed_ms, run.duration_ms) >= 1.0 {
+        let plan = if progress(elapsed_ms, run.duration_ms) >= 1.0 {
             CameraPlan::resting(run.to, run.serial)
         } else {
             CameraPlan {
@@ -237,7 +308,8 @@ impl Continuity {
         now: f64,
         camera: Option<&Camera>,
         elements: Option<&[StageElement]>,
+        zoom_ceiling: u16,
     ) -> CameraPlan {
-        self.camera.plan(now, camera, elements)
+        self.camera.plan_within(now, camera, elements, zoom_ceiling)
     }
 }

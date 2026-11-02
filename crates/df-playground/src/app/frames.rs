@@ -2,8 +2,10 @@
 //! the loop that runs them.
 //!
 //! Three paths bring controls to the page (a frame, a poll and the answer to a change the page
-//! sent), and they can arrive out of order, so every one goes through `apply_controls`, which
-//! takes an answer only when it is from another run of the host or newer than the one the page has.
+//! sent), and they can arrive out of order, so every one goes through `apply_controls`, which asks
+//! the page's `ReplyGate`: an answer from an older run of the host, or an older revision of this
+//! one, is left. The canvas is ordered the same way (`canvas_accepts`). The decisions are in
+//! `continuity` and `decisions`, where native tests cover them.
 
 use gloo_timers::future::TimeoutFuture;
 use wasm_bindgen_futures::spawn_local;
@@ -13,15 +15,17 @@ use super::page::{render, update_stage};
 use super::report::send_report;
 use super::sound::sync_audio;
 use super::state::{
-    CANVAS_ADDRESS, CHANGE_ADDRESS, CONTROLS_ADDRESS, FRAME_ADDRESS, LiveCanvas, LiveFrame,
-    PageError, REVISION_ADDRESS, log_error, set_problem, with_app, with_app_mut,
+    CANVAS_ADDRESS, CHANGE_ADDRESS, CONTROLS_ADDRESS, FRAME_ADDRESS, PageError, REVISION_ADDRESS,
+    log_error, set_problem, with_app, with_app_mut,
 };
 use crate::audio;
 use crate::backoff::retry_delay_ms;
-use crate::continuity::accepts;
+use crate::continuity::{Admit, canvas_accepts};
 use crate::controls::{ControlsChange, ControlsReply};
+use crate::decisions::{controls_effect, fixture_load_needed};
 use crate::dom::{js_message, with_continuity};
 use crate::draw_plan::{frame_action, wants_live};
+use crate::frame::{FrameReply, LiveCanvas, LiveFrame, frame_address, parse_frame_reply};
 use crate::limits::{HEARTBEAT_POLLS, POLL_MS};
 use crate::net::{fetch_text, post_json};
 
@@ -32,46 +36,74 @@ pub struct ControlsUpdate {
     pub fixture_changed: bool,
     /// The answer is from another run of the host than the one the page was following.
     pub boot_changed: bool,
+    /// The answer is from an older run than the one followed, and was left.
+    pub stale_run: bool,
 }
 
-/// Takes the host's controls as the page's own when they are from another run of the host or newer
-/// than the ones it has. An older answer, such as a slow one that was overtaken, changes nothing.
+/// Takes the host's controls as the page's own when the gate lets them through: from a newer run
+/// of the host or a newer revision of this one. An older answer, such as a slow one that was
+/// overtaken, changes nothing.
 pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
     with_app_mut(|app| {
-        let current = app
-            .controls_seen
-            .as_ref()
-            .map(|(boot_id, revision)| (boot_id.as_str(), *revision));
-        if !accepts(current, &reply.boot_id, reply.revision) {
-            return ControlsUpdate::default();
-        }
+        let first = !app.gate.is_started();
+        let new_run = match app.gate.admit(&reply.boot_id, reply.revision) {
+            Admit::Refuse { older_run } => {
+                return ControlsUpdate {
+                    stale_run: older_run,
+                    ..ControlsUpdate::default()
+                };
+            }
+            Admit::Take { new_run } => new_run,
+        };
         // A new run of the host numbers everything again, so what the page remembers by number
         // (moves, cues, the canvas) is dropped.
         let boot_changed = with_continuity(|continuity| continuity.note_boot(&reply.boot_id));
+        let boot_changed = boot_changed || new_run;
         if boot_changed {
             audio::forget_cues();
             app.live = None;
             // Nothing drawn can be trusted to match the new run, so everything is drawn again.
             app.drawn = None;
         }
-        let fixture_changed = app.controls.fixture != reply.controls.fixture
-            || app.controls_seen.is_none()
-            || boot_changed;
+        let effect = controls_effect(
+            app.controls.fixture.as_deref(),
+            reply.controls.fixture.as_deref(),
+            first,
+            boot_changed,
+        );
         app.controls = reply.controls;
         app.scene = reply.scene;
-        app.controls_seen = Some((reply.boot_id, reply.revision));
         app.reshow();
         ControlsUpdate {
             changed: true,
-            fixture_changed,
+            fixture_changed: effect.fixture_changed,
             boot_changed,
+            stale_run: false,
         }
     })
 }
 
+/// Takes a canvas as the page's own when it is newer than the one it has, from the run of the
+/// host it is following.
+fn apply_canvas(boot_id: &str, canvas: LiveCanvas) -> bool {
+    with_app_mut(|app| {
+        let known = app
+            .live
+            .as_ref()
+            .map(|live| (app.live_boot.as_str(), live.revision));
+        if !canvas_accepts(known, boot_id, canvas.revision) {
+            return false;
+        }
+        app.live = Some(canvas);
+        app.live_boot = boot_id.to_owned();
+        true
+    })
+}
+
 /// Reads the canvas the host serves, for a page that has just met another run of the host and has
-/// no frame of it yet. The canvas is what the frame carries, so the next frame replaces it.
-async fn refresh_canvas() {
+/// no frame of it yet. A canvas is taken only if the page still follows that run and has nothing
+/// newer, so a slow read never undoes a frame that arrived meanwhile.
+async fn refresh_canvas(boot_id: String) {
     let canvas = match fetch_text(CANVAS_ADDRESS).await {
         Ok(text) => serde_json::from_str::<LiveCanvas>(&text).map_err(|error| PageError::NotRead {
             address: CANVAS_ADDRESS,
@@ -81,7 +113,12 @@ async fn refresh_canvas() {
         Err(error) => Err(error.into()),
     };
     match canvas {
-        Ok(canvas) => with_app_mut(|app| app.live = Some(canvas)),
+        Ok(canvas) => {
+            let following = with_app(|app| app.gate.boot_id() == Some(boot_id.as_str()));
+            if following {
+                apply_canvas(&boot_id, canvas);
+            }
+        }
         Err(error) => set_problem(error),
     }
 }
@@ -100,9 +137,10 @@ async fn refresh_controls() -> ControlsUpdate {
     };
     match reply {
         Ok(reply) => {
+            let boot_id = reply.boot_id.clone();
             let update = apply_controls(reply);
             if update.boot_changed {
-                refresh_canvas().await;
+                refresh_canvas(boot_id).await;
             }
             update
         }
@@ -134,9 +172,10 @@ pub async fn send_change(change: ControlsChange) {
         });
     match answer {
         Ok(reply) => {
+            let boot_id = reply.boot_id.clone();
             let update = apply_controls(reply);
             if update.boot_changed {
-                refresh_canvas().await;
+                refresh_canvas(boot_id).await;
             }
             if update.fixture_changed {
                 load_selected_fixture().await;
@@ -152,25 +191,25 @@ pub async fn send_change(change: ControlsChange) {
 /// Takes one frame from the host as the page's own and draws what it changed.
 async fn apply_frame(frame: LiveFrame) {
     let was_down = with_app(|app| app.connection_problem.is_some());
+    let boot_id = frame.controls.boot_id.clone();
     let update = apply_controls(frame.controls);
-    let canvas_changed = with_app_mut(|app| {
-        app.frame = Some(frame.frame);
-        let changed = app
-            .live
-            .as_ref()
-            .is_none_or(|known| known.revision != frame.canvas.revision);
-        if changed {
-            app.live = Some(frame.canvas);
-        }
-        changed
-    });
+    if update.stale_run {
+        // A frame of an older run of the host: nothing in it is newer than what the page has.
+        return;
+    }
+    let canvas_changed = apply_canvas(&boot_id, frame.canvas);
+    with_app_mut(|app| app.frame = Some(frame.frame));
     if was_down {
         with_app_mut(|app| app.connection_problem = None);
     }
     let mut reloaded = false;
-    if update.fixture_changed
-        || with_app(|app| app.fixture.is_none() && app.controls.fixture.is_some())
-    {
+    if with_app(|app| {
+        fixture_load_needed(
+            update.fixture_changed,
+            app.fixture.is_some(),
+            app.controls.fixture.is_some(),
+        )
+    }) {
         load_selected_fixture().await;
         reloaded = true;
     }
@@ -195,28 +234,36 @@ async fn apply_frame(frame: LiveFrame) {
 }
 
 /// Asks the host for the next frame, over and over. The host holds each request until something
-/// has changed, so a change reaches the page as it happens; if the host cannot be reached the
-/// page says so and tries again.
+/// has changed, so a change reaches the page as it happens; an empty answer means nothing changed
+/// in its wait, and the page asks again. If the host cannot be reached the page says so and tries
+/// again.
 async fn follow_frames() {
     loop {
-        let address = match with_app(|app| app.frame) {
-            Some(count) => format!("{FRAME_ADDRESS}?after={count}"),
-            None => FRAME_ADDRESS.to_owned(),
-        };
+        let address = with_app(|app| frame_address(FRAME_ADDRESS, app.frame, app.gate.boot_id()));
         let answer = fetch_text(&address)
             .await
             .map_err(PageError::from)
             .and_then(|text| {
-                serde_json::from_str::<LiveFrame>(&text).map_err(|error| PageError::NotRead {
+                parse_frame_reply(&text).map_err(|error| PageError::NotRead {
                     address: FRAME_ADDRESS,
                     wanted: "a frame",
                     reason: error.to_string(),
                 })
             });
         match answer {
-            Ok(frame) => {
+            Ok(FrameReply::Frame(frame)) => {
                 with_app_mut(|app| app.failures = 0);
-                apply_frame(frame).await;
+                apply_frame(*frame).await;
+            }
+            Ok(FrameReply::NoChange) => {
+                // The host is there and has nothing new; a problem shown earlier is over.
+                let was_down = with_app_mut(|app| {
+                    app.failures = 0;
+                    app.connection_problem.take().is_some()
+                });
+                if was_down {
+                    render();
+                }
             }
             Err(error) => {
                 let failures = with_app_mut(|app| {

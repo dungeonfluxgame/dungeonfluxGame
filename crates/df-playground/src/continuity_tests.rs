@@ -2,10 +2,10 @@
 //! acceptance for continuity).
 
 use crate::camera::Framing;
-use crate::continuity::{CameraClock, Continuity, SlideClock, accepts};
+use crate::continuity::{Admit, CameraClock, Continuity, ReplyGate, SlideClock, canvas_accepts};
 use crate::controls::{Controls, ControlsReply};
 use crate::fixture::{Camera, ElementShape, StageElement, StagePivot};
-use crate::limits::MAXIMUM_REMEMBERED_SLIDES;
+use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT};
 use crate::scene::{ImageSlot, Override, SceneChange, SceneOverlay};
 
 fn element(id: &str, x: f32, y: f32) -> StageElement {
@@ -52,21 +52,95 @@ fn finn() -> Vec<StageElement> {
 }
 
 #[test]
-fn an_answer_is_taken_when_newer_or_from_another_run_of_the_host_and_never_when_older() {
-    assert!(accepts(None, "a", 0), "the first answer");
-    assert!(accepts(Some(("a", 5)), "a", 6));
-    assert!(!accepts(Some(("a", 6)), "a", 6), "the same answer again");
-    assert!(
-        !accepts(Some(("a", 6)), "a", 5),
+fn an_answer_is_taken_when_newer_and_never_when_older_in_one_run() {
+    let mut gate = ReplyGate::default();
+    assert_eq!(
+        gate.admit("b1", 5),
+        Admit::Take { new_run: false },
+        "the first answer"
+    );
+    assert_eq!(gate.admit("b1", 6), Admit::Take { new_run: false });
+    assert_eq!(
+        gate.admit("b1", 6),
+        Admit::Refuse { older_run: false },
+        "the same answer again"
+    );
+    assert_eq!(
+        gate.admit("b1", 5),
+        Admit::Refuse { older_run: false },
         "a slow answer that was overtaken"
     );
-    assert!(
-        accepts(Some(("a", 6)), "b", 1),
-        "a restarted host counts from the start"
-    );
-    assert!(accepts(Some(("a", 6)), "b", 6));
+    assert_eq!(gate.boot_id(), Some("b1"));
 }
 
+#[test]
+fn a_newer_run_of_the_host_is_taken_from_the_start_and_a_late_answer_of_the_older_one_is_not() {
+    let mut gate = ReplyGate::default();
+    gate.admit("0001", 6);
+    assert_eq!(
+        gate.admit("0002", 1),
+        Admit::Take { new_run: true },
+        "a restarted host counts from the start"
+    );
+    // B then a late A: the old run's slow poll resolves after the new run's frame was taken.
+    assert_eq!(gate.admit("0001", 7), Admit::Refuse { older_run: true });
+    assert_eq!(
+        gate.admit("0002", 2),
+        Admit::Take { new_run: false },
+        "the new run goes on"
+    );
+    assert_eq!(gate.boot_id(), Some("0002"));
+}
+
+#[test]
+fn a_run_that_keeps_answering_with_an_older_id_is_the_real_one_after_three_in_a_row() {
+    let mut gate = ReplyGate::default();
+    gate.admit("0009", 4);
+    assert_eq!(gate.admit("0003", 1), Admit::Refuse { older_run: true });
+    assert_eq!(gate.admit("0003", 2), Admit::Refuse { older_run: true });
+    assert_eq!(
+        gate.admit("0003", 3),
+        Admit::Take { new_run: true },
+        "the host restarted with its clock set back"
+    );
+    assert_eq!(gate.boot_id(), Some("0003"));
+    // Strikes of different older runs do not add up, and an answer of the followed run resets them.
+    let mut gate = ReplyGate::default();
+    gate.admit("0009", 4);
+    gate.admit("0001", 1);
+    gate.admit("0002", 1);
+    assert_eq!(gate.admit("0001", 2), Admit::Refuse { older_run: true });
+    gate.admit("0001", 3);
+    gate.admit("0009", 5);
+    assert_eq!(gate.admit("0001", 9), Admit::Refuse { older_run: true });
+}
+
+#[test]
+fn a_host_that_does_not_name_its_run_is_one_run() {
+    let mut gate = ReplyGate::default();
+    assert_eq!(gate.admit("", 1), Admit::Take { new_run: false });
+    assert_eq!(gate.admit("", 2), Admit::Take { new_run: false });
+    assert_eq!(gate.admit("", 2), Admit::Refuse { older_run: false });
+}
+
+#[test]
+fn a_canvas_is_taken_only_when_newer_in_its_run_or_from_a_newer_run() {
+    assert!(canvas_accepts(None, "a", 3));
+    assert!(canvas_accepts(Some(("a", 3)), "a", 4));
+    assert!(!canvas_accepts(Some(("a", 4)), "a", 4), "the same canvas");
+    assert!(
+        !canvas_accepts(Some(("a", 9)), "a", 4),
+        "a slow read after a newer frame"
+    );
+    assert!(
+        canvas_accepts(Some(("a", 9)), "b", 1),
+        "a newer run starts again"
+    );
+    assert!(
+        !canvas_accepts(Some(("b", 1)), "a", 50),
+        "a late canvas of the older run"
+    );
+}
 #[test]
 fn the_reply_carries_the_boot_id_and_reads_without_one() {
     let reply = ControlsReply {
@@ -372,38 +446,67 @@ mod camera_moves {
     }
 
     #[test]
-    fn a_target_that_goes_away_pulls_the_camera_back_and_a_respawn_does_not_zoom_again() {
+    fn a_target_that_goes_away_shows_the_whole_stage_and_the_same_frame_always_draws_the_same_picture()
+     {
         let mut clock = CameraClock::default();
         let look = camera(Some("finn"), 3, 1_000, 0);
         let zoomed = plan(&mut clock, 0.0, &look, &finn());
         assert_ne!(zoomed.to, Framing::WHOLE_STAGE);
         let gone = plan(&mut clock, 2_000.0, &look, &[]);
         assert_eq!((gone.to, gone.moving), (Framing::WHOLE_STAGE, false));
-        let respawned = plan(&mut clock, 3_000.0, &look, &finn());
+        let back = plan(&mut clock, 3_000.0, &look, &finn());
         assert_eq!(
-            (respawned.to, respawned.moving),
-            (Framing::WHOLE_STAGE, false),
-            "no command was given, so no zoom"
+            back.to, zoomed.to,
+            "the frame names a camera on finn and finn is there, so every page draws the zoom"
         );
-        let reissued = plan(
-            &mut clock,
-            4_000.0,
-            &camera(Some("finn"), 4, 1_000, 0),
-            &finn(),
-        );
-        assert!(reissued.moving, "a new move zooms again");
-        assert_ne!(reissued.to, Framing::WHOLE_STAGE);
     }
 
     #[test]
-    fn a_target_that_was_never_on_the_stage_when_the_page_met_the_move_is_not_zoomed_on_later() {
+    fn two_pages_that_saw_different_frames_before_agree_on_the_frame_they_both_have_now() {
+        let look = camera(Some("finn"), 3, 1_000, 0);
+        let mut watched = CameraClock::default();
+        plan(&mut watched, 0.0, &look, &finn());
+        plan(&mut watched, 500.0, &look, &[]);
+        let mut late = CameraClock::default();
+        // The host stamps every frame with how long ago the move began, so both pages are told 5 s.
+        let frame_now = camera(Some("finn"), 3, 1_000, 5_000);
+        let now_watched = plan(&mut watched, 5_000.0, &frame_now, &finn());
+        let now_late = plan(&mut late, 5_000.0, &frame_now, &finn());
+        assert_eq!(
+            (now_watched.to, now_watched.moving),
+            (now_late.to, now_late.moving)
+        );
+    }
+
+    #[test]
+    fn a_target_that_is_not_on_the_stage_yet_shows_the_whole_stage_and_the_zoom_when_it_arrives() {
         let mut clock = CameraClock::default();
         let look = camera(Some("finn"), 5, 1_000, 0);
         assert_eq!(plan(&mut clock, 0.0, &look, &[]).to, Framing::WHOLE_STAGE);
-        assert_eq!(
+        assert_ne!(
             plan(&mut clock, 100.0, &look, &finn()).to,
             Framing::WHOLE_STAGE
         );
+    }
+
+    #[test]
+    fn a_zoom_over_what_the_picture_can_bear_is_drawn_at_the_ceiling() {
+        let mut clock = CameraClock::default();
+        let wide = Camera {
+            zoom_percent: 400,
+            ..camera(Some("finn"), 1, 0, 0)
+        };
+        let ceiling = |percent| {
+            let mut clock = CameraClock::default();
+            clock
+                .plan_within(0.0, Some(&wide), Some(&finn()), percent)
+                .to
+                .scale
+        };
+        assert_eq!(ceiling(400), 4.0);
+        assert_eq!(ceiling(210), 2.1);
+        assert_eq!(ceiling(100), 1.0, "never less than the whole stage");
+        assert_eq!(plan(&mut clock, 0.0, &wide, &finn()).to.scale, 4.0);
     }
 
     #[test]
@@ -442,11 +545,13 @@ mod host_runs {
             0.0,
             Some(&camera(Some("finn"), 1, 1_000, 0)),
             Some(&elements),
+            MAXIMUM_ZOOM_PERCENT,
         );
         let carried = page.camera_plan(
             900.0,
             Some(&camera(Some("finn"), 1, 1_000, 0)),
             Some(&elements),
+            MAXIMUM_ZOOM_PERCENT,
         );
         assert_eq!(carried.elapsed_ms, 900.0, "the same move in the same run");
         assert!(
@@ -457,6 +562,7 @@ mod host_runs {
             950.0,
             Some(&camera(Some("finn"), 1, 1_000, 0)),
             Some(&elements),
+            MAXIMUM_ZOOM_PERCENT,
         );
         assert!(restarted.moving, "a pan, not a glide that is already over");
         assert_eq!(restarted.elapsed_ms, 0.0);
@@ -502,6 +608,7 @@ mod host_runs {
             0.0,
             Some(&camera(Some("finn"), 1, 1_000, 0)),
             Some(&elements),
+            MAXIMUM_ZOOM_PERCENT,
         );
         page.forget();
         assert_eq!(page.slide_elapsed(2_000.0, &slide(1, 5_000, 0)), 0.0);
@@ -509,7 +616,27 @@ mod host_runs {
             2_000.0,
             Some(&camera(Some("finn"), 1, 1_000, 0)),
             Some(&elements),
+            MAXIMUM_ZOOM_PERCENT,
         );
         assert_eq!((plan.elapsed_ms, plan.from), (0.0, Framing::WHOLE_STAGE));
     }
+}
+
+#[test]
+fn strays_of_an_older_run_are_not_added_up_across_answers_of_the_run_being_followed() {
+    let mut gate = ReplyGate::default();
+    gate.admit("0009", 4);
+    for revision in 1..=6 {
+        assert_eq!(
+            gate.admit("0003", revision),
+            Admit::Refuse { older_run: true },
+            "a stray in between"
+        );
+        assert_eq!(
+            gate.admit("0009", 4),
+            Admit::Refuse { older_run: false },
+            "the followed run speaks again"
+        );
+    }
+    assert_eq!(gate.boot_id(), Some("0009"));
 }

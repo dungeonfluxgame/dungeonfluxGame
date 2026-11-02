@@ -129,47 +129,67 @@ impl DrawPlan {
         plan
     }
 
+    fn mark(&mut self, part: Part, differs: bool) {
+        if differs {
+            self.parts.insert(part);
+        }
+    }
+
     fn compare_fixtures(&mut self, old: (&Fixture, &Controls), new: (&Fixture, &Controls)) {
         let ((before, before_controls), (after, after_controls)) = (old, new);
-        let mut changed = |part: Part, differs: bool| {
-            if differs {
-                self.parts.insert(part);
-            }
-        };
-        let tv_status_before = before_controls.status_for(&before.tv.status);
-        let tv_status_after = after_controls.status_for(&after.tv.status);
-        let phone_status_before = before_controls.status_for(&before.phone.status);
-        let phone_status_after = after_controls.status_for(&after.phone.status);
-        changed(
+        self.compare_tv(old, new);
+        let choices_differ = self.compare_phone(old, new);
+        self.stage |= before.tv.elements != after.tv.elements
+            || !same_camera(&before.tv.camera, &after.tv.camera);
+        let words_differ = (&before.name, &before.description) != (&after.name, &after.description);
+        // The notes list where the scenario breaks the choice rules, so they follow the choices.
+        let warnings_differ =
+            choices_differ && warnings(before, before_controls) != warnings(after, after_controls);
+        self.notes |= words_differ || warnings_differ;
+    }
+
+    /// The pieces of the shared screen that differ.
+    fn compare_tv(&mut self, old: (&Fixture, &Controls), new: (&Fixture, &Controls)) {
+        let ((before, before_controls), (after, after_controls)) = (old, new);
+        let status_before = before_controls.status_for(&before.tv.status);
+        let status_after = after_controls.status_for(&after.tv.status);
+        self.mark(
             Part::TvBackdrop,
             !same_image(&before.tv.backdrop, &after.tv.backdrop),
         );
-        changed(
+        self.mark(
             Part::TvGrid,
             before_controls.show_grid != after_controls.show_grid,
         );
-        changed(Part::TvPlace, before.tv.place != after.tv.place);
-        changed(Part::TvCard, !same_image(&before.tv.card, &after.tv.card));
-        changed(Part::TvStatus, tv_status_before != tv_status_after);
-        changed(
+        self.mark(Part::TvPlace, before.tv.place != after.tv.place);
+        self.mark(Part::TvCard, !same_image(&before.tv.card, &after.tv.card));
+        self.mark(Part::TvStatus, status_before != status_after);
+        self.mark(
             Part::TvCaption,
             before.tv.caption != after.tv.caption || before_controls.pace != after_controls.pace,
         );
-        changed(Part::TvParty, before.tv.party != after.tv.party);
-        changed(
+        self.mark(Part::TvParty, before.tv.party != after.tv.party);
+    }
+
+    /// The pieces of a phone that differ. Returns whether the choices differ.
+    fn compare_phone(&mut self, old: (&Fixture, &Controls), new: (&Fixture, &Controls)) -> bool {
+        let ((before, before_controls), (after, after_controls)) = (old, new);
+        let status_before = before_controls.status_for(&before.phone.status);
+        let status_after = after_controls.status_for(&after.phone.status);
+        self.mark(
             Part::PhoneHead,
             (&before.phone.hero, &before.phone.goal) != (&after.phone.hero, &after.phone.goal),
         );
-        changed(Part::PhoneStatus, phone_status_before != phone_status_after);
-        changed(
+        self.mark(Part::PhoneStatus, status_before != status_after);
+        self.mark(
             Part::PhoneImage,
             !same_image(&before.phone.image, &after.phone.image),
         );
-        changed(
+        self.mark(
             Part::PhoneNarration,
             before.phone.narration != after.phone.narration,
         );
-        changed(Part::PhoneNote, before.phone.note != after.phone.note);
+        self.mark(Part::PhoneNote, before.phone.note != after.phone.note);
         let choices_differ = (
             &before.phone.suggested,
             &before.phone.groups,
@@ -181,18 +201,12 @@ impl DrawPlan {
             &after.phone.unavailable,
             after_controls.show_unavailable,
         );
-        changed(Part::PhoneChoices, choices_differ);
-        changed(
+        self.mark(Part::PhoneChoices, choices_differ);
+        self.mark(
             Part::PhoneComposer,
-            status_blocks_input(&phone_status_before) != status_blocks_input(&phone_status_after),
+            status_blocks_input(&status_before) != status_blocks_input(&status_after),
         );
-        self.stage |= before.tv.elements != after.tv.elements
-            || !same_camera(&before.tv.camera, &after.tv.camera);
-        let words_differ = (&before.name, &before.description) != (&after.name, &after.description);
-        // The notes list where the scenario breaks the choice rules, so they follow the choices.
-        let warnings_differ =
-            choices_differ && warnings(before, before_controls) != warnings(after, after_controls);
-        self.notes |= words_differ || warnings_differ;
+        choices_differ
     }
 }
 

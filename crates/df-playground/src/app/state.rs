@@ -8,13 +8,14 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-use serde::Deserialize;
 use wasm_bindgen::JsValue;
 
 use super::page::Page;
-use crate::controls::{Controls, ControlsReply, Transition};
+use crate::continuity::ReplyGate;
+use crate::controls::{Controls, Transition};
 use crate::draw_plan::Snapshot;
 use crate::fixture::{ElementSource, Fixture, FixtureError, StageElement};
+use crate::frame::LiveCanvas;
 use crate::net::NetError;
 use crate::scene::SceneOverlay;
 
@@ -29,21 +30,6 @@ pub const CHANGE_ADDRESS: &str = "/dev/playground/controls";
 pub const REPORT_ADDRESS: &str = "/dev/playground/report";
 pub const ROOT_ID: &str = "playground";
 pub const THEME_ID: &str = "playground-theme";
-
-/// The canvas the host serves, as far as the stage needs it.
-#[derive(Debug, Deserialize)]
-pub struct LiveCanvas {
-    pub revision: u64,
-    pub elements: Vec<StageElement>,
-}
-
-/// One frame from the host: the canvas and what the playground is showing, at one moment.
-#[derive(Debug, Deserialize)]
-pub struct LiveFrame {
-    pub frame: u64,
-    pub canvas: LiveCanvas,
-    pub controls: ControlsReply,
-}
 
 /// Why the page cannot show what the host says: the host cannot be reached, or it answered with
 /// something the page cannot read.
@@ -124,6 +110,8 @@ pub struct App {
     /// shared with what was drawn, so a frame does not copy a fixture.
     pub shown: Option<Rc<Result<Fixture, String>>>,
     pub live: Option<LiveCanvas>,
+    /// The run of the host `live` came from.
+    pub live_boot: String,
     /// The count of the newest frame drawn, which the next frame request names.
     pub frame: Option<u64>,
     /// This page's name for itself in reports to the host.
@@ -137,8 +125,9 @@ pub struct App {
     pub controls: Controls,
     /// Live changes to the scene, drawn on top of the loaded fixture.
     pub scene: SceneOverlay,
-    /// The host run and the count of its changes when `controls` was read.
-    pub controls_seen: Option<(String, u64)>,
+    /// Decides which answers of the host are taken: it knows the run and the count of changes of
+    /// the answer `controls` came from.
+    pub gate: ReplyGate,
     /// Set while the server cannot be reached.
     pub connection_problem: Option<PageError>,
     /// What the page is made from as drawn, to tell what a change touches.

@@ -19,10 +19,11 @@ pub fn document() -> Result<Document, JsValue> {
 
 /// The reading of the browser's steady clock, in milliseconds. It never goes backwards, unlike the
 /// wall clock, so an elapsed time made from it is never negative.
-pub fn now_ms() -> f64 {
+pub fn now_ms() -> Result<f64, JsValue> {
     web_sys::window()
         .and_then(|window| window.performance())
-        .map_or(0.0, |performance| performance.now())
+        .map(|performance| performance.now())
+        .ok_or_else(|| JsValue::from_str("the page has no performance clock"))
 }
 
 /// What a thrown value says, for a message that names the cause.
@@ -93,7 +94,7 @@ pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Ele
     let frame = element(document, "div", class)?;
     if let Some(slide) = &image.slide {
         // Numbers only, so a scene file cannot put text into a style.
-        frame.set_attribute("style", &slide_for_page(slide))?;
+        frame.set_attribute("style", &slide_for_page(slide)?)?;
     }
     if media_kind(&image.media) != Some(MediaKind::Image) {
         append(
@@ -129,7 +130,8 @@ pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Ele
     Ok(frame)
 }
 
-fn slide_for_page(slide: &Slide) -> String {
-    let elapsed = with_continuity(|continuity| continuity.slide_elapsed(now_ms(), slide));
-    slide_style(slide, elapsed)
+fn slide_for_page(slide: &Slide) -> Result<String, JsValue> {
+    let now = now_ms()?;
+    let elapsed = with_continuity(|continuity| continuity.slide_elapsed(now, slide));
+    Ok(slide_style(slide, elapsed))
 }

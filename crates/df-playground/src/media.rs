@@ -8,6 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::limits::{
+    MAXIMUM_MEDIA_NAME_LENGTH, MAXIMUM_REPORT_BYTES, MAXIMUM_REPORTED_ERROR_CHARACTERS,
+    MAXIMUM_REPORTED_IMAGES,
+};
 pub use crate::limits::{
     MAXIMUM_MEDIA_NAME_LENGTH as MAXIMUM_NAME_LENGTH, MAXIMUM_REPORTED_ERRORS,
 };
@@ -124,11 +128,43 @@ pub struct ClientReport {
 }
 
 impl ClientReport {
-    /// A report with the errors cut to the limit, keeping the newest.
+    /// The size of the report as the host would hold it, in bytes of text.
+    fn held_bytes(&self) -> usize {
+        self.errors.iter().map(String::len).sum::<usize>()
+            + self.images_shown.iter().map(String::len).sum::<usize>()
+            + self.music.as_ref().map_or(0, String::len)
+    }
+
+    /// A report held to its bounds by design, so a table of pages cannot grow without limit: each
+    /// text is cut to its length, the errors to their count keeping the newest, the pictures to
+    /// their count, and the whole to `MAXIMUM_REPORT_BYTES` by letting the oldest errors and then
+    /// the last pictures go.
     pub fn bounded(mut self) -> Self {
+        let cut = |text: &mut String, limit: usize| {
+            if let Some((index, _)) = text.char_indices().nth(limit) {
+                text.truncate(index);
+            }
+        };
         if self.errors.len() > MAXIMUM_REPORTED_ERRORS {
             let excess = self.errors.len() - MAXIMUM_REPORTED_ERRORS;
             self.errors.drain(..excess);
+        }
+        self.errors
+            .iter_mut()
+            .for_each(|error| cut(error, MAXIMUM_REPORTED_ERROR_CHARACTERS));
+        self.images_shown.truncate(MAXIMUM_REPORTED_IMAGES);
+        self.images_shown
+            .iter_mut()
+            .for_each(|name| cut(name, MAXIMUM_MEDIA_NAME_LENGTH));
+        if let Some(music) = &mut self.music {
+            cut(music, MAXIMUM_MEDIA_NAME_LENGTH);
+        }
+        while self.held_bytes() > MAXIMUM_REPORT_BYTES {
+            if !self.errors.is_empty() {
+                self.errors.remove(0);
+            } else if self.images_shown.pop().is_none() {
+                break;
+            }
         }
         self
     }

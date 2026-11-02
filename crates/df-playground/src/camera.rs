@@ -7,6 +7,7 @@
 
 use crate::fixture::{Camera, StageElement};
 use crate::layout::stage_percent;
+use crate::limits::{MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
 
 /// The position and size of the world layer for one framing.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,6 +61,39 @@ pub fn progress(elapsed_ms: f64, duration_ms: u32) -> f32 {
 /// The framing a camera asks for with the elements now on the stage. A camera without a target, a
 /// target that is not on the stage, or a zoom of 100 percent shows the whole stage.
 pub fn framing(camera: Option<&Camera>, elements: &[StageElement]) -> Framing {
+    framing_within(camera, elements, MAXIMUM_ZOOM_PERCENT)
+}
+
+/// The zoom a picture can bear, in percent: the least of the largest zoom the model allows and the
+/// plate's width in pixels over the stage's width in device pixels (a plate drawn larger than its
+/// own pixels is a blur), and never less than the whole stage. With no plate known, or a stage of
+/// no width, only the model's largest applies.
+pub fn zoom_ceiling_percent(plate_width_px: Option<u32>, stage_width_px: u32) -> u16 {
+    let (Some(plate), true) = (plate_width_px, stage_width_px > 0) else {
+        return MAXIMUM_ZOOM_PERCENT;
+    };
+    let bearable = u64::from(plate) * 100 / u64::from(stage_width_px);
+    let floor = u64::from(MINIMUM_ZOOM_PERCENT);
+    let ceiling = u64::from(MAXIMUM_ZOOM_PERCENT);
+    u16::try_from(bearable.clamp(floor, ceiling)).unwrap_or(MAXIMUM_ZOOM_PERCENT)
+}
+
+/// The zoom that is drawn when `requested` is asked for under `ceiling`, and the ceiling itself when
+/// the request was cut (so the page can say so and not cut it silently).
+pub fn clamped_zoom(requested: u16, ceiling: u16) -> (u16, Option<u16>) {
+    if requested > ceiling {
+        (ceiling, Some(ceiling))
+    } else {
+        (requested, None)
+    }
+}
+
+/// `framing` with the zoom held to `zoom_ceiling` percent.
+pub fn framing_within(
+    camera: Option<&Camera>,
+    elements: &[StageElement],
+    zoom_ceiling: u16,
+) -> Framing {
     let Some(camera) = camera else {
         return Framing::WHOLE_STAGE;
     };
@@ -69,7 +103,7 @@ pub fn framing(camera: Option<&Camera>, elements: &[StageElement]) -> Framing {
     let Some(item) = elements.iter().find(|item| item.id == target) else {
         return Framing::WHOLE_STAGE;
     };
-    let scale = f32::from(camera.zoom_percent) / 100.0;
+    let scale = f32::from(clamped_zoom(camera.zoom_percent, zoom_ceiling).0) / 100.0;
     if scale <= 1.0 {
         return Framing::WHOLE_STAGE;
     }

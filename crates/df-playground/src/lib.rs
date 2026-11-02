@@ -13,10 +13,12 @@ pub mod choices;
 pub mod continuity;
 pub mod controls;
 pub mod copy;
+pub mod decisions;
 pub mod draw_plan;
 pub mod figure;
 pub mod fixture;
 pub mod fixture_checks;
+pub mod frame;
 pub mod layout;
 pub mod limits;
 pub mod media;
@@ -54,6 +56,8 @@ mod copy_tests;
 #[cfg(test)]
 mod css_tests;
 #[cfg(test)]
+mod decisions_tests;
+#[cfg(test)]
 mod draw_plan_tests;
 #[cfg(test)]
 mod figure_tests;
@@ -61,6 +65,8 @@ mod figure_tests;
 mod fixture_checks_tests;
 #[cfg(test)]
 mod fixture_tests;
+#[cfg(test)]
+mod frame_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]

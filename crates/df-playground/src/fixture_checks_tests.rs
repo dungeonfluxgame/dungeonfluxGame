@@ -301,3 +301,195 @@ fn a_fixture_that_cannot_be_read_at_all_still_reports_where_serde_stopped() {
     let error = refused("{\n  \"name\": 5\n}");
     assert_eq!(error.line, 2);
 }
+
+#[test]
+fn the_numbers_only_the_host_sets_are_refused_in_a_file() {
+    let live_camera = |extra: &str| {
+        text(
+            &format!(
+                "\"camera\": {{\"target\": \"finn\", \"zoom_percent\": 200, \"duration_ms\": 1500{extra}}},"
+            ),
+            "",
+            "",
+            "\"live\"",
+        )
+    };
+    for field in ["serial", "began_ms", "elapsed_ms"] {
+        let source = live_camera(&format!(", \"{field}\": 3"));
+        let error = refused(&source);
+        assert_eq!(error.line, line_of(&source, field), "{field}");
+        assert_eq!(
+            error.message,
+            format!(
+                "tv.camera.{field}: '{field}' is set by the host; leave it out of a scene file"
+            )
+        );
+    }
+    Fixture::parse(&live_camera(", \"serial\": 0")).expect("zero is the same as left out");
+    let slide = card(
+        0,
+        "{\"from_percent\": 1, \"to_percent\": 2, \"duration_ms\": 5, \"elapsed_ms\": 9999}",
+    );
+    assert!(
+        refused(&slide)
+            .message
+            .starts_with("tv.card.slide.elapsed_ms: ")
+    );
+}
+
+#[test]
+fn a_caption_a_name_or_a_label_a_file_could_not_set_by_the_command_line_is_refused() {
+    let long = "x".repeat(crate::limits::MAXIMUM_CAPTION_CHARACTERS + 1);
+    let caption = text(
+        &format!("\"caption\": {{\"speaker\": null, \"text\": \"{long}\"}},"),
+        "",
+        "",
+        "[]",
+    );
+    let error = refused(&caption);
+    assert!(
+        error.message.starts_with("tv.caption.text: "),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.line, line_of(&caption, "caption"));
+    let blank = text(
+        "\"caption\": {\"speaker\": \" \", \"text\": \"hi\"},",
+        "",
+        "",
+        "[]",
+    );
+    assert!(refused(&blank).message.starts_with("tv.caption.speaker: "));
+    let nameless = text(
+        "\"party\": [{\"name\": \"\", \"hit_points\": 1, \"maximum_hit_points\": 1, \"color\": null}],",
+        "",
+        "",
+        "[]",
+    );
+    assert!(refused(&nameless).message.starts_with("tv.party[0].name: "));
+    let condition = text(
+        "\"party\": [{\"name\": \"A\", \"hit_points\": 1, \"maximum_hit_points\": 1, \"conditions\": [\"ok\", \"\"], \"color\": null}],",
+        "",
+        "",
+        "[]",
+    );
+    assert!(
+        refused(&condition)
+            .message
+            .starts_with("tv.party[0].conditions[1]: ")
+    );
+    let label = text(
+        "",
+        ", \"suggested\": [{\"label\": \"\", \"explain\": null}]",
+        "",
+        "[]",
+    );
+    assert!(
+        refused(&label)
+            .message
+            .starts_with("phone.suggested[0].label: ")
+    );
+    let group = text(
+        "",
+        ", \"groups\": [{\"name\": \" \", \"choices\": []}]",
+        "",
+        "[]",
+    );
+    assert!(
+        refused(&group)
+            .message
+            .starts_with("phone.groups[0].name: ")
+    );
+    let reason = text(
+        "",
+        ", \"unavailable\": [{\"label\": \"Door\", \"reason\": \"\"}]",
+        "",
+        "[]",
+    );
+    assert!(
+        refused(&reason)
+            .message
+            .starts_with("phone.unavailable[0].reason: ")
+    );
+    let media = text(
+        "\"card\": {\"media\": \" \", \"caption\": null},",
+        "",
+        "",
+        "[]",
+    );
+    assert!(refused(&media).message.starts_with("tv.card.media: "));
+}
+
+#[test]
+fn a_list_past_the_count_the_overlay_allows_is_refused_and_one_at_it_is_not() {
+    let choices = |count: usize| {
+        (0..count)
+            .map(|index| format!("{{\"label\": \"c{index}\", \"explain\": null}}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let at = text(
+        "",
+        &format!(
+            ", \"suggested\": [{}]",
+            choices(crate::limits::MAXIMUM_CHOICES_PER_LIST)
+        ),
+        "",
+        "[]",
+    );
+    Fixture::parse(&at).expect("at the limit");
+    let over = text(
+        "",
+        &format!(
+            ", \"suggested\": [{}]",
+            choices(crate::limits::MAXIMUM_CHOICES_PER_LIST + 1)
+        ),
+        "",
+        "[]",
+    );
+    assert_eq!(
+        refused(&over).message,
+        format!(
+            "phone.suggested: a list holds at most {} choices",
+            crate::limits::MAXIMUM_CHOICES_PER_LIST
+        )
+    );
+    let member = |index: usize| {
+        format!(
+            "{{\"name\": \"m{index}\", \"hit_points\": 1, \"maximum_hit_points\": 1, \"color\": null}}"
+        )
+    };
+    let party = (0..=crate::limits::MAXIMUM_PARTY_MEMBERS)
+        .map(member)
+        .collect::<Vec<_>>()
+        .join(",");
+    let crowded = text(&format!("\"party\": [{party}],"), "", "", "[]");
+    assert!(refused(&crowded).message.starts_with("tv.party: "));
+}
+
+#[test]
+fn a_column_counts_characters_for_both_kinds_of_mistake() {
+    // Two multi-byte characters before the value: serde counts bytes, the check counts characters.
+    let range = text(
+        "\"caption\": {\"speaker\": \"\u{e9}\u{e9}\", \"text\": \"hi\"}, \"card\": {\"media\": \"a.png\", \"caption\": null, \"rotation_degrees\": 400},",
+        "",
+        "",
+        "[]",
+    );
+    let error = refused(&range);
+    let line = range.lines().nth(error.line - 1).expect("a line");
+    let characters_before = line[..line.find("400").expect("the value")].chars().count();
+    assert_eq!(error.column, characters_before + 1);
+    let broken = "{\"name\": \"\u{e9}\u{e9}\u{e9}\", \"tv\": 5}";
+    let error = refused(broken);
+    let characters_before = broken[..broken.find('5').expect("the value")]
+        .chars()
+        .count();
+    assert_eq!(error.line, 1);
+    assert!(
+        error.column >= characters_before && error.column <= characters_before + 2,
+        "{} against {characters_before}",
+        error.column
+    );
+    assert!(!error.message.contains(" at line "), "{}", error.message);
+}

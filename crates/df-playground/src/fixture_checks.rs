@@ -194,7 +194,12 @@ fn choice_problems(found: &mut Vec<Problem>, list: &[Step], choices: &[Choice]) 
     }
     for (index, choice) in choices.iter().enumerate() {
         let at: Vec<Step> = list.iter().copied().chain([Step::Index(index)]).collect();
-        push(found, &at, "label", checks::labelled("a choice label", &choice.label));
+        push(
+            found,
+            &at,
+            "label",
+            checks::labelled("a choice label", &choice.label),
+        );
         if let Some(explain) = &choice.explain {
             push(
                 found,
@@ -215,7 +220,12 @@ fn phone_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
     );
     for (index, group) in fixture.phone.groups.iter().enumerate() {
         let at = [phone[0], Step::Key("groups"), Step::Index(index)];
-        push(found, &at, "name", checks::labelled("a group name", &group.name));
+        push(
+            found,
+            &at,
+            "name",
+            checks::labelled("a group name", &group.name),
+        );
         let list = [at[0], at[1], at[2], Step::Key("choices")];
         choice_problems(found, &list, &group.choices);
     }
@@ -225,8 +235,18 @@ fn phone_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
     }
     for (index, choice) in fixture.phone.unavailable.iter().enumerate() {
         let at = [unavailable[0], unavailable[1], Step::Index(index)];
-        push(found, &at, "label", checks::labelled("a choice label", &choice.label));
-        push(found, &at, "reason", checks::labelled("a reason", &choice.reason));
+        push(
+            found,
+            &at,
+            "label",
+            checks::labelled("a choice label", &choice.label),
+        );
+        push(
+            found,
+            &at,
+            "reason",
+            checks::labelled("a reason", &choice.reason),
+        );
     }
 }
 
@@ -241,7 +261,12 @@ fn tv_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
             checks::text("the caption", &caption.text, MAXIMUM_CAPTION_CHARACTERS),
         );
         if let Some(speaker) = &caption.speaker {
-            push(found, &at, "speaker", checks::labelled("the speaker", speaker));
+            push(
+                found,
+                &at,
+                "speaker",
+                checks::labelled("the speaker", speaker),
+            );
         }
     }
     if fixture.tv.party.len() > MAXIMUM_PARTY_MEMBERS {

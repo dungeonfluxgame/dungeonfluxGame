@@ -296,3 +296,83 @@ mod overlay {
         );
     }
 }
+
+mod ceiling {
+    use crate::camera::{clamped_zoom, framing_within, zoom_ceiling_percent};
+    use crate::fixture::{Camera, ElementShape, StageElement, StagePivot};
+    use crate::limits::{MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
+
+    #[test]
+    fn the_ceiling_is_the_plates_pixels_over_the_stages_device_pixels() {
+        assert_eq!(zoom_ceiling_percent(Some(1_920), 1_920), 100);
+        assert_eq!(zoom_ceiling_percent(Some(1_920), 960), 200);
+        assert_eq!(zoom_ceiling_percent(Some(1_920), 1_000), 192);
+        assert_eq!(zoom_ceiling_percent(Some(4_000), 1_000), 400);
+    }
+
+    #[test]
+    fn the_ceiling_is_never_below_the_whole_stage_and_never_above_the_models_largest() {
+        assert_eq!(
+            zoom_ceiling_percent(Some(100), 1_920),
+            MINIMUM_ZOOM_PERCENT,
+            "a small plate still shows the whole stage"
+        );
+        assert_eq!(
+            zoom_ceiling_percent(Some(u32::MAX), 1),
+            MAXIMUM_ZOOM_PERCENT,
+            "no overflow, and the constant is the cap"
+        );
+    }
+
+    #[test]
+    fn with_no_plate_or_no_stage_width_only_the_models_largest_applies() {
+        assert_eq!(zoom_ceiling_percent(None, 1_920), MAXIMUM_ZOOM_PERCENT);
+        assert_eq!(zoom_ceiling_percent(Some(1_920), 0), MAXIMUM_ZOOM_PERCENT);
+    }
+
+    #[test]
+    fn a_request_over_the_ceiling_is_cut_and_says_so_and_one_under_it_is_left() {
+        assert_eq!(clamped_zoom(400, 210), (210, Some(210)));
+        assert_eq!(clamped_zoom(200, 210), (200, None));
+        assert_eq!(clamped_zoom(210, 210), (210, None));
+    }
+
+    #[test]
+    fn the_framing_is_drawn_at_the_ceiling() {
+        let finn = StageElement {
+            id: "finn".to_owned(),
+            kind: "avatar".to_owned(),
+            label: "Finn".to_owned(),
+            x: 50.0,
+            y: 28.125,
+            color: None,
+            shape: ElementShape::Circle,
+            width_units: 10.0,
+            height_units: 10.0,
+            fields: serde_json::Map::new(),
+            rotation_degrees: 0,
+            pivot: StagePivot::default(),
+        };
+        let look = Camera {
+            target: Some("finn".to_owned()),
+            zoom_percent: 400,
+            duration_ms: 0,
+            serial: 1,
+            began_ms: 0,
+            elapsed_ms: 0,
+        };
+        assert_eq!(
+            framing_within(Some(&look), std::slice::from_ref(&finn), 400).scale,
+            4.0
+        );
+        assert_eq!(
+            framing_within(Some(&look), std::slice::from_ref(&finn), 210).scale,
+            2.1
+        );
+        assert_eq!(
+            framing_within(Some(&look), &[finn], 100).scale,
+            1.0,
+            "a ceiling of the whole stage shows the whole stage"
+        );
+    }
+}

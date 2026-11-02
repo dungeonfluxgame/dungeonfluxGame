@@ -16,6 +16,7 @@ use super::toolbar::toolbar;
 use crate::audio;
 use crate::choices::build;
 use crate::controls::Transition;
+use crate::decisions::is_animating;
 use crate::dom::{append, clear, document, element, js_message, text_element};
 use crate::draw_plan::{DrawPlan, Part, is_leaving, leaving_class};
 use crate::fixture::Fixture;
@@ -200,7 +201,7 @@ fn freeze(
     };
     if !from
         .get_attribute("style")
-        .is_some_and(|style| style.contains("animation"))
+        .is_some_and(|style| is_animating(&style))
     {
         return Ok(());
     }
@@ -214,7 +215,7 @@ fn freeze(
 
 /// A copy of the devices on screen, dressed to leave: it lies over the new scene and a CSS
 /// animation takes it away, so the new scene is revealed underneath. Its pictures stop counting as
-/// shown, its figures stop being found by the figure sync, and the animations of the original
+/// shown, and the animations of the original
 /// (a slide, a camera move) are frozen where they stand instead of starting again.
 fn leaving_copy(old: &Element, transition: Transition) -> Result<Element, JsValue> {
     let copy = old
@@ -234,15 +235,6 @@ fn leaving_copy(old: &Element, transition: Transition) -> Result<Element, JsValu
             .and_then(|node| node.dyn_into::<Element>().ok())
         {
             picture.remove_attribute("data-media")?;
-        }
-    }
-    let layers = copy.query_selector_all(".tv-figures")?;
-    for index in 0..layers.length() {
-        if let Some(layer) = layers
-            .item(index)
-            .and_then(|node| node.dyn_into::<Element>().ok())
-        {
-            layer.set_attribute("class", "tv-figures-leaving")?;
         }
     }
     freeze(old, &copy, ".tv-world", "transform", frozen_world_style)?;
