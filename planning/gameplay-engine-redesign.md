@@ -1371,7 +1371,7 @@ risk; AFK is a deliberate approved command, not an inactivity penalty. A player 
 at a narrated beat, and in combat through the encounter owner's admission at the next round. A seat
 maps to `characters[]` with one `active`. A dead character is held with its record (M2-D1), and the
 seat goes to the creation machine for a replacement (R01, R02) only on a host "replace" or when no
-revival is possible; until then it waits or spectates (question 69); import goes only through `validate_build`, and private
+revival is possible; until then it waits or spectates (question 69); import goes only through the creation validation (today `df_rules::local_journey::validate_character`, which returns one error and admits only Fighter 1 and Soldier; `validate_build` is a tracked `df-rules` work item that does not exist yet, E row R01), and private
 import cannot mint rights (`rules-support.md`). A party wipe returns `EncounterOutcome=defeat` and
 hands off to `AdventureEnd`, where `narrative-engine.md` allows an authored failure state.
 Events: `seat.state_changed`, `character.status_changed`.
@@ -1414,7 +1414,10 @@ calls for the GM-option DC 15 Strength (Athletics) check (SRD p.179, p.189). Own
 and D45.
 
 **D.7 Items and money (M12, M13, M14, E22).** Item and coin state is one rules-owned record in table
-state (R12, `money-arithmetic-contract.md`). The shop machine holds the offer flow and the
+state (R12). `money-arithmetic-contract.md` is billing arithmetic and does not cover in-game coin. An in-game
+`Coins` type in `df-rules` (denominations cp, sp, ep, gp and pp; checked subtract with change; price in copper
+for the SRD equipment list; an atomic item-and-coin move) is a tracked work item that no row owns yet, and it is
+a named prerequisite of the shop and inventory machines (O.16). The shop machine holds the offer flow and the
 inventory machine holds placement, and carrying a purchase across places is an acceptance case. A completed deal is one
 effect keyed by an `AwardId` that moves item and coin together or neither. Item pictures are made
 from the presented description only; true properties follow `SecretPolicy` until a rules-legal
@@ -1433,7 +1436,7 @@ critic finding it closes.
 
 | Family | Machine home | Pipeline and projection | Events and CLI |
 |---|---|---|---|
-| R01 creation (M21) | creation: list options, submit, `validate_build` | Offers on the phone; import and replacement characters only through the same validation | `build.validated`, `build.rejected{reasons}`; `sheet build`, `sheet validate` |
+| R01 creation (M21) | creation: list options, submit, validate. The real calls today are `df_rules::local_journey::validate_character` (returns the first `JourneyRuleError` only, and admits Fighter 1 and Soldier only) and the creation constants with `species::choice_groups`, so `reasons` holds one entry for now. `validate_build` (every reason) and an options-listing function are tracked `df-rules` work items that do not exist yet (O.16 RR, #1596) | Offers on the phone; import and replacement characters only through the same validation | `build.validated`, `build.rejected{reasons}`; `sheet build`, `sheet validate` |
 | R02, R16 advancement (E14, M8) | advancement, entered by an `AwardId` effect | Private level-up on the seat's phone; the TV shows only the public result; `progression: xp or milestone` is a table setting (R16 policy) | `award.applied`, `award.duplicate`, `advance.offered`, `advance.chosen`; `advancement pending`, `character award` |
 | R03 species, feats (none) | creation, advancement | As above | As above |
 | R04 checks (E12, M17) | any machine, through a `CheckRequest` that opens a `PendingResolution` | Public `RollResultView` on the TV; secret rolls (Insight, Perception, Stealth against the unknown) go to one seat, identical for failure and for no information; passive checks run on scene entry with a private result; a retry of the same task is refused unless the rules owner allows it | `check.requested`, `check.resolved`, `roll{id, audience}`; `check show` |
@@ -2052,7 +2055,9 @@ and section L is the comparison of the current and the next implementation that 
   silently: if at least 1 hour was rested before the interruption the rested hours give the benefits
   of a Short Rest, and the Long Rest can be resumed immediately and then needs 1 additional hour per
   interruption (SRD p.185). A Short Rest is interrupted only by rolling Initiative, casting a spell other than a cantrip or taking any damage, never by an hour of walking or other exertion (which interrupts a Long Rest only), and an interrupted Short Rest confers no benefits (SRD p.187; its restart from zero is M2-D46's convention).
-- **RES28. Machine scope in the rest of the list (K6).** The first machines are lobby, creation,
+- **RES28. Machine scope in the rest of the list (K6).** (This is the set of machines the registry
+  knows; the build order after H3 is O.16 row M, with travel last because it has no rules code yet.)
+  The first machines are lobby, creation,
   advancement, explore, dialogue, travel, rest, combat, shop (browse, haggle, offer, done; D.7),
   inventory (who holds what, worn, contained, moves) and item inspector (D22, D23). "Market" is a
   kind of place and not a machine. The shop machine holds a per-seat, per-vendor offer map
@@ -2094,8 +2099,12 @@ and section L is the comparison of the current and the next implementation that 
   implementation adapts today's offers and affordance sets, read-only. A family marked `No` in
   `df-rules/src/coverage.rs` (spellcasting and exploration today) declines `not_supported_yet`, and
   release 1 registers a machine over the capabilities whose rules are Yes or Partial there:
-  travel and explore register as adapters over authored beats, and `No` capabilities (spells,
-  hazards, light, searching) decline `not_supported_yet`.
+  explore registers as an adapter over an authored beat plus one check, and `No` capabilities
+  (spells, hazards, light, searching) decline `not_supported_yet`. Travel has no rules code
+  (coverage marks Exploration `rules: No`; `TravelLeg` is a data record, and M2-D43 and M2-D46 are
+  design rows), so it registers last, after new rules code (O.16). Only the `rules` column of
+  `coverage.rs` describes the current tree; its `live`, `browser` and `display` columns describe
+  the deleted `df-tools` gameplay and are not read.
 - **RES32. Storage honesty (F1, F11, F12).** Until the stabilisation gate a machine slot and a scene
   are bounded, versioned, policy-labelled journal records in the checkpoint, and `TableEffect` is a
   Rust enum applied by one `stage_effects` that calls the existing `df-engine` stagers. At the gate
@@ -2713,7 +2722,7 @@ they are recorded as RES35 to RES52 and the register in M.2.
 - **RES43. Hosted CLI and export (P12).** In hosted builds every dev verb that can read hidden or
   private content, and `table export` and `table import`, needs operator permission with a reason, an
   expiry and an audit record. Defaults are redacted. Hosted export is an `ExportGrant`. `table import`
-  is local-only, runs `validate_build` and admission, and cannot mint awards or rights. Question 70's
+  is local-only, runs the creation validation (`validate_character` today, `validate_build` once that tracked `df-rules` item exists; E row R01) and admission, and cannot mint awards or rights. Question 70's
   draft default is fixed.
 - **RES44. Acceptance (P13, P33).** Each slice is accepted only by an ADR 0005 evaluator operating TV
   and phone in a real browser at phone and TV sizes (reconnect, asset failure, audio observation),
@@ -2881,8 +2890,8 @@ the owner serves three capped lanes (H.2); machine scope is stated for every mac
 H.17); section F's opening uses the RES28 list; DECIDE and `step` each add effects and APPLY commits
 the union (C.0, RES21); a spell-target tap is a proposal the engine converts and the rules owner
 validates (RES1, row R10); a scene is playable only when its description, cast, set and layout are
-stored (K.2) and waits at most `scene_build_budget_s` (F.3); and RES31 now lets explore and travel
-register as adapters over authored beats while `No` capabilities decline. The audit's other findings
+stored (K.2) and waits at most `scene_build_budget_s` (F.3); and RES31 now lets explore register as
+an adapter over an authored beat while `No` capabilities decline (travel was reworded in round 7, #1598). The audit's other findings
 were applied as listed in the patch log of this round: the banner rule of H.15 follows K.3; the focus
 rule of D.1 follows K.10; H.5 and RES4 describe DECIDE's brokered requests; H.1 lets one narration row
 cover a batch; the settings table gained its missing entries; revision names are defined in RES34;
@@ -2890,7 +2899,9 @@ section E's rows R09 and R10 follow `rules-coverage.md`; section L's slice refer
 and a slice 10 covers section K; the code counts are corrected; and the round-2 ledger is I.2.
 Facts I could not find in the code and that this document uses as names only: `AwardId`,
 `EncounterOutcome`, `RequestTimeAdvance`, `NarrativeDirector::evaluate`, `RuleFixture`,
-`TimeAdvance`, `legal_choices`, `SpatialQuery` and `TriggerWindow`.
+`TimeAdvance`, `legal_choices`, `SpatialQuery`, `TriggerWindow`, `validate_build` and `reachable` (the last
+two are named on the `df-rules` surface in `subsystem-interfaces.md`; the tactical layer has `reachable_cells`,
+and creation has `validate_character`, which is not the same call; #1596).
 
 **M.4 Ledger for round 3.**
 
@@ -3178,8 +3189,8 @@ presentation tracks.
    state hash.
 9. **Host H0 to H3** (outside this crate): the owner actor with the queue and pipeline over real
    adapters; the broker; the event sink and CLI; the first playable path (lobby, one story scene, one
-   conversation). Then the wire, the client, and the remaining machines (travel, shop, rest, combat,
-   advancement) in the order the owner chooses.
+   conversation). Then the wire, the client, and the remaining machines (creation, combat, rest,
+   advancement, inventory, shop, item inspector, travel) in the order of O.16 row M.
 
 **O.10 Risks the plan accepts, and what would change it.**
 
@@ -3903,18 +3914,69 @@ and where it is accepted. It was written from a review of the plan against the c
   | V2, V3 | Item sound from an element, kind sounds, loops, footsteps (O.15) | none for the playground; V4 needs G1 | everything | O.15 acceptance |
   | V4, V5 | Director cues and the projection rules; provider video, preload at a K.3 swap window | G1, SB | machines | O.15 acceptance and the measured start times |
   | T3 to T6 | Filters, camera pan and drift, path, timelines, derived condition transforms | T2; T6 needs C5 and G1 | machines | O.13 acceptance; T6 behind the audience rules |
-  | M | The machines after H3, each behind a rules-readiness gate: travel, rest, shop and inventory, item inspector (needs S2 and SB), advancement, and combat last | H3, RR | G and V steps | the conformance suite, a golden session and RES44 per machine |
+  | M | The machines after H3, each behind a rules-readiness gate, in this order: creation (Fighter 1 and Soldier only), combat for the Fighter subset, rest and advancement, inventory (after `Coins`), shop, item inspector (after S2 and SB), travel last (needs new rules code first) | H3, RR | G and V steps | the conformance suite, a golden session and RES44 per machine |
 
+- **RR readiness table (2026-11-02).** Read from the public functions and tests of `df-rules`, `df-world`,
+  `df-combat`, `df-encounter` and `df-session`, not from names. *Ready* means the adapter can back the machine's
+  calls today; *partial* means some calls exist and the adapter declines the rest `not_supported_yet` (RES31);
+  *blocked* means a core call has no code. Rules calls are those of O.4: legal choices, `prepare` and `resolve` with
+  explicit draws, spatial query, rest and time costs. Draws are explicit in all rules code: `tactical::resolve`
+  reports the next missing die as `RuleError::MissingDraw{sides}`, so the adapter's `prepare` is a loop that asks
+  the `Dice` port for one die at a time. `legal_choices` and `SpatialQuery` do not exist (section A); the adapter
+  builds them from `Battle::legal_targets`, `reachable_cells`, `attack_cover`, the `resolve` probe and
+  `df_world::lookup_affordances`.
+
+  | Machine | Rules calls it needs | Exists today | Missing or partial | M.5 area, M2-D rows | Readiness | Smallest `df-rules` addition |
+  |---|---|---|---|---|---|---|
+  | lobby | none from the rules owner (seats, readiness, start gate) | `df_session::lobby::decide_start`, `readiness::decide_ready_change` (tests in both) | session-zero lines and veils (F.7) have no code; not a rules matter | none; D.4, F.7 | ready | none |
+  | creation | options list, submit, validate (E row R01) | `local_journey::validate_character`, `tactical::validate_archer`, `species::choice_groups`, `maximum_hit_points` | `validate_build` and an options-listing function are tracked work items, not code (#1596); options are constants only; `validate_character` returns the first error only, not `reasons[]`; Fighter 1 and Soldier only | Class features (thin), Species (thin); R01 to R03, M2-D50 | partial | `local_journey::creation_offers()` over the existing constants; `validate_character` returning every reason |
+  | advancement | award to level-up offers, HP average or roll, ASI, XP or milestone (R02, R16) | `Battle::experience_award` (CR to XP), `FighterProgression::new` (1 to 5) and `apply`, `LEVEL_FIVE_BUILDS` | no XP threshold table; `AwardId` is a name only; ASI and HP average are fixed in `apply`, no `pending{choice}` (D30); Fighter only | XP (thin), Class features (thin); R02, R16, M2-D30 | partial | `local_journey::level_for_xp` (SRD p.23) and `FighterProgression::offers` (HP average or roll, level-4 ASI) |
+  | explore | affordance lookup, `CheckRequest`, spatial query, time cost, passive checks, hide and search | `df_world::lookup_affordances` (caller-supplied bindings), `ability_check::resolve`, `df_world::select_due_events` and `stage_schedule_advancement` | check: no Advantage, passive, group or Help; spatial query only inside a `Battle`; no per-cell light, elevation or terrain kind (D.6); no Hide, Search, traps, falling; no action time cost | Exploration and travel (thin in code), Vision and light (thin), Traps and hazards (thin); M2-D17, D23, D32, D41, D42 | ready for the minimal explore (authored beat plus one check); partial beyond | `RollMode` and a second face in `ability_check::resolve` (reuse `influence::combine_sources`); unblocks passive and Help |
+  | dialogue | Influence resolution (RES47), `CheckRequest`, attitude and willingness | `influence::resolve` with explicit faces, `skill_for_approach`, `combine_sources`, 24 hour retry, `InfluenceResult::explanation` | willingness and attitude are caller inputs (EMO owns them); no fear or mental stress; no Help or group check outside combat | Social (thin: fear, stress); RES47, M2-D21 | ready | none for the first conversation; Help and group check (D21) later |
+  | travel | leg data, pace and terrain, time cost, hazard proposals, Exhaustion, checks (F.3, F.3a) | `df_model::TravelLeg` (a record only), `df_world::stage_schedule_advancement` for passing time, `ability_check::resolve` | no travel rules at all (pace, terrain table, vessel, forage, navigation, weather); no Exhaustion; hazards are only `df_encounter::ChallengeMode::Hazard` labels over authored sources | Exploration and travel (plan-owned, no code), Traps and hazards (thin), Exhaustion (no code); M2-D43 to D45 | blocked | `df_rules::travel::leg_outcome(terrain, pace, hours)`: miles and the forage, navigation and search DCs (SRD p.192) |
+  | rest | rest start and time cost, interruption, Hit Dice loop, recovery effects, 16 hour gap, attunement (R13) | `local_journey::short_rest_due`, `complete_no_hit_dice_short_rest` (`RestInterrupted`, `RestIncomplete`), `heal_hit_point_die`; `tactical::Action::ShortRest`, `LongRest`, `StableRecovery` | Long Rest only in a finished `Battle`; no Hit Dice pool, Short Rest spends none; interruption is a caller flag; no 16 hour gap, Exhaustion, Trance, attunement | Rests, Exhaustion (plan-owned); M2-D14, D29, D46, D48, D50 | partial | standalone `complete_long_rest` with a Hit Dice pool and the 16 hour gap as an input |
+  | combat | legal choices, `prepare` and `resolve` with draws, spatial query, initiative, reactions, enemy turns, outcome (F.1) | `tactical::begin`, `tactical::resolve` (move, attack, opportunity window, Dash, Dodge, Help, Second Wind, death save), `Battle::legal_targets`, `reachable_cells`; `df_combat::tactical::choose` | no producer of an actor's full legal action list; no spells, Ready, Hide, Search, grapple, shove, surprise, general Resistance; Fighter heroes and 17 SRD creatures only; no flee or surrender outcome | Initiative, Actions, Reactions, Movement, Cover owned; Conditions, Bonus actions, Monsters, Damage types thin; Spellcasting none; M2-D1, D8, D33 to D35, D37, D47 | partial (closest to ready) | `tactical::legal_actions(&Battle, actor)`: the actions that pass the `resolve(.., &[])` probe `df-combat` already uses |
+  | shop | price, purse arithmetic, stock, haggle, shop hours, item and coin move (D.7) | `local_journey::selling_value_cp`, `influence::resolve`, `df_world::stage_schedule_advancement` (keeper location), `df_model::InventoryItem` and `ResourceState` records | no price catalog, coin denominations or purse arithmetic (#1597); no atomic item-and-coin move; `AwardId` is a name only; the in-game `Coins` type is a `df-rules` work item that no row owns yet and is a named prerequisite of this machine | Equipment (plan-owned; encumbrance R17); M2-D19, D29, D49 | blocked | `df_rules::equipment::Coins` (denominations, checked subtract with change) and `price_cp` for the SRD equipment list |
+  | inventory | who holds what, worn, contained, moves, attunement, armor times (R12) | `df_model::InventoryItem`; `Combatant::held_weapons`, `shield_equipped`, `Action::DoffShield`, `PickUpWeapon`; `Weapon` accessors | no non-combat equip, stow or move rule; no armor catalog or AC calculation (AC is fixed by the build); no encumbrance, attunement limit or don and doff times; transfers that carry coin need the `Coins` work item (#1597), a named prerequisite of this machine | Equipment, Magic items (plan-owned); M2-D29, D48, D49 | partial; scheduled after `Coins` | `df_rules::equipment::Loadout` with `equip` and `stow` checking hands, armor and the 3 item attunement limit |
+  | item inspector | item facts, properties under `SecretPolicy`, a rules-legal identify step (D.7) | `tactical::Weapon` accessors (dice, damage type, range, mastery, properties), `SRD_521_CREATURES` cards, `df_model::SecretPolicy` record | no item catalog beyond weapons and the shield; no identify step; no magic items; also gated by S2 and SB | Magic items, Equipment (plan-owned); M2-D29, D48 | partial in rules; gated by S2 and SB | `equipment::item_card(id)` for the SRD list; identify declines `not_supported_yet` |
+
+  Reading it:
+  - M.5's "owned" means a plan row with a test case, not code. Exploration and travel, Rests, Exhaustion, Equipment
+    and Magic items are "owned" there and have little or no code, so RR and not M.5 is the readiness gate.
+  - The code implies this order after H3: creation (Fighter 1 and Soldier only), then combat for the Fighter
+    subset (the most rules code; spells decline), then rest and advancement (both reuse combat state and its XP
+    award), then inventory (after `Coins`), then shop, then the item inspector (needs S2 and SB), and travel last
+    (no rules; until `travel::leg_outcome` exists it can only be an authored place-card hop whose time passes
+    through `df_world`). The `Coins` work item is the named prerequisite of inventory and shop.
+  - Plan assumptions the code contradicted, now corrected in the plan (issues #1596, #1597, #1598): `validate_build`
+    does not exist (E row R01, D.4, RES43 name the real calls and M.3 lists it as a name only); D.7's
+    `money-arithmetic-contract.md` is billing money, not an in-game purse (D.7 names the `Coins` work item); the
+    order paragraph below once called the tactical layer the largest gap, but that layer exists (about 10,000
+    lines, 99 tests) and travel is the machine with no rules; "travel and rest exist in part (M2-D43, M2-D46)" is
+    true of rest only; the `live` columns of `coverage.rs` describe the deleted `df-tools` gameplay, so RES31
+    reads only its `rules` column.
+  - Calls the adapter declines `not_supported_yet` today: spells, Ready, Hide, Search, Study, grapple and shove,
+    travel legs, hazards, traps and falling, per-cell light, Exhaustion, identify, price and purse, level from XP,
+    flee and surrender outcomes. RR is re-read before each machine starts, and a machine's row changes when its
+    smallest addition lands.
 - **Gates.** *Gate A (spine ready)* is B0, C0 to C3 and S1 within budget: the engine accepts an input
   through the queue and pipeline over fakes and the owner thread is shown to fit its budget. *Gate B (first
   playable)* is H3 accepted under RES44. No machine beyond lobby and the minimal explore starts before
   Gate A, and no step that shows engine state to a person starts before K0 and W1. A machine starts only
   when RR shows its rules calls exist or are declined `not_supported_yet` by the adapter (RES31).
-- **Order of the machines after H3, and why.** Dialogue (in H3) and explore need the fewest rules.
-  Travel and rest need exploration and time rules that exist in part (M2-D43, M2-D46). Shop and
-  inventory need the purse and item model (D20) and no SAM. The item inspector needs S2 and SB. Advancement
-  needs the creation rules (R02, R16). Combat needs legal choices, spells and the tactical layer in
-  `df-rules`, the largest gap, so it comes last and may need its own rules work first.
+- **Order of the machines after H3, and why.** *Decision (round 7, #1598):* creation (Fighter 1 and
+  Soldier only), combat for the Fighter subset, rest and advancement, inventory (after `Coins`), shop,
+  item inspector (after S2 and SB), travel last (needs new rules code first). Dialogue (in H3) and explore
+  need the fewest rules. Creation has `validate_character`, species choice groups and constants, but only
+  the Fighter 1 and Soldier build (E row R01). The tactical layer exists (about 10,000 lines, 99 tests:
+  initiative, grid movement, cover, attacks, opportunity attacks, dying, 17 SRD creatures), so combat for
+  the Fighter subset is the machine closest to ready by rules code. Its gaps are spells, Ready, Hide, Search,
+  grapple, surprise, a resistance resolver, an actor's legal-action list and the flee and surrender outcome;
+  the adapter declines those `not_supported_yet`. Rest is partial (Long Rest only inside a finished
+  `Battle`), and advancement needs the creation rules and combat's XP award (R02, R16). Inventory and shop
+  need the in-game `Coins` type (D.7), a `df-rules` work item that no row owns yet, and the shop needs
+  no SAM. The item inspector needs S2 and SB. Travel has no rules code (M2-D43 and M2-D46 are plan rows,
+  not code), so it comes last and needs new rules code first.
 - **What runs in parallel and who works on it.** The spine (C0 to C7) is one sequence with one owner;
   the host steps follow it. The playground tracks (T, V and the part of G that needs no engine) are
   independent of the spine and can run at once in `df-playground` and `df-table-host`, one implementer per
