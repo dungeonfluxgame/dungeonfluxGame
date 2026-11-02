@@ -1,9 +1,11 @@
 # Gameplay engine redesign
 
-Status: **Collecting ideas; two refinement rounds merged.** Decisions are the owner's; the working
-plan is a draft by the assistant until the owner accepts it. The refinement loop (four critics a
-round) ran at the owner's request, and its results are in the Analysis section at the end. Round 3
-is next. Started 2026-11-02.
+Status: **Collecting ideas; four refinement rounds have been run, and the findings of rounds 1 to 4
+are merged or being applied.** Decisions are the owner's; the working plan is a draft by the assistant
+until the owner accepts it. The refinement loop (four critics a round) ran at the owner's request,
+and its results are in the Analysis section at the end. Round 4's findings were filed as GitHub
+issues #1490 to #1525 and are being applied to this document. The resolutions run from RES1 to
+RES52. Started 2026-11-02.
 
 ## How this document works
 
@@ -16,7 +18,7 @@ is next. Started 2026-11-02.
    risks, a proposed shape and an order of work.
 
 **Precedence.** Sections before the Analysis were written before the refinement loop. Where one of
-them disagrees with the Analysis (its resolutions RES1 to RES34, the pipeline in section C, the
+them disagrees with the Analysis (its resolutions RES1 to RES52, the pipeline in section C, the
 machine contract of RES27, the table experience contract in section K), the Analysis governs. The
 older text is kept as the record of what was decided and proposed at the time, and the points that
 moved are: D4 (RES2, RES20), D7 (RES17), D14 (RES13), D15 (RES1), D16 to D18 (RES5, RES9, RES10,
@@ -489,7 +491,7 @@ Everything in this section is the assistant's proposal built from D1 to D7.
 
 ### Shape
 
-Superseded where it conflicts with RES1 to RES34 and sections C, D, F, H, J and K of the Analysis;
+Superseded where it conflicts with RES1 to RES52 and sections C, D, F, H, J and K of the Analysis;
 the main conflicts are noted inline below.
 
 - **Table state.** Shared facts (party, place, time, inventory, purses), the id of the active
@@ -521,10 +523,10 @@ the main conflicts are noted inline below.
     request per prompt and returns instances, not identities (J.1).
   - The display shows a clear "setting up" state until the scene is Ready. It never shows the
     previous scene's plate under a new scene (K.2 governs: an establishing card after
-    `scene_build_budget_secs`, not an open-ended "setting up").
+    `scene_build_budget_s`, not an open-ended "setting up").
 - **Plate scheduler (draft, from D16 to D18; superseded in part by RES5, RES9, RES10, D.1 to D.3,
   K.2, K.3 and H.7).** Three parts, each separate and testable:
-  - A **clock** that ticks every `plate_interval_secs` (default 15) while a scene is active. Each
+  - A **clock** that ticks every `plate_interval_s` (default 15) while a scene is active. Each
     tick takes a snapshot of table state and turns it into a plate job (staging description, cast
     references, layout) and puts it on the plate queue. The tick does not wait for anything.
   - The **scene builder** takes jobs from the queue in order and produces plates through the
@@ -648,11 +650,11 @@ the main conflicts are noted inline below.
     like the existing boundary checks, fails the build when a boundary drops an error without an
     event.
   - **A command family per surface.** Every machine, the scheduler, the scene builder, the
-    broker and each projection registers the same small set of commands: `list`, `show`,
-    `history`, `drive` (send an input as a player or a timer would), and `config` (read and
-    change settings). A conformance test fails when a registered surface lacks one of them. H.16
-  adds a second required set for machines (`force`, `input`, `dump`, `viable` and more), and
-  `drive` here is H.16's `input`.
+    broker and each projection registers the same small set of commands. The set is the verb list
+    of H.16 (RES33 fixes "the H.16 verbs as a fixed set"); this draft's earlier list (`list`,
+    `show`, `history`, `drive`, `config`) is superseded, and `drive` here is H.16's `input`. A
+    conformance test fails when a registered surface lacks a verb it should have; H.16 names the
+    machine-required ones (`force`, `input`, `dump`).
   - **Reading is free, driving is explicit.** The CLI can always read. Driving a surface goes
     through the same entry points as a real input, so a drive command cannot reach state a player
     could not reach.
@@ -920,9 +922,10 @@ questions 56 onward are new.
 69. **Death and replacement.** Is a replacement character's level a host setting, and is a cheaper
     return than raise dead allowed? Draft default: replacement at party level, host-set, and no
     house-rule return.
-70. **Who may read hidden content from the CLI.** On a hosted table, who may see `dm_only` and seat
-    secrets through the developer commands? Draft default: nobody except the owner's operator role,
-    and never through a player-facing route.
+70. **Who may read hidden content from the CLI.** *Closed (RES43):* the draft default is fixed. On a
+    hosted table, who may see `dm_only` and seat secrets through the developer commands? Nobody
+    except the owner's operator role (with a reason, an expiry and an audit record), and never
+    through a player-facing route.
 
 71. **Skipping and dropping plates (RES9, H.7; changes D16 and D17).** May the engine skip a tick
     when nothing visible changed, and drop the oldest queued plate beyond four? Draft default: yes,
@@ -930,11 +933,12 @@ questions 56 onward are new.
 72. **Shop and item inspector in combat (RES2, RES20; changes D4).** May a table decline shopping and
     the table-wide inspector while a fight is on? Draft default: yes, with a plain reason, because
     the fight must not freeze for everyone.
-73. **Prefetch against the on-demand rule.** The `Hub` generates on demand and nothing ahead of time.
-    May the scene builder prefetch adjacent places and likely item views on the lowest queue class?
-    Draft default: yes, on the `prefetch` class, never ahead of a player-blocking job.
-74. **Shared vision and sharing finds (RES24).** Plate light follows the lowest-vision present member
-    unless the host selects shared vision, and a find becomes public when its finder says so. Should
+73. **Prefetch against the on-demand rule.** *Closed (RES52) by the look-ahead decisions REF-066 and
+    REF-067.* The `Hub` generates on demand and nothing ahead of time. May the scene builder prefetch
+    adjacent places and likely item views on the lowest queue class? The earlier draft default was
+    yes, on the `prefetch` class, never ahead of a player-blocking job; REF-066 and REF-067 govern.
+74. **Shared vision and sharing finds (RES24).** The plate defaults to shared vision (M2-D23); the host
+    may select the lowest-vision present member instead, and a find becomes public when its finder says so. Should
     objects in plain view be shared with the party automatically? Draft default: yes for what any
     present member plainly sees, no for results of a check.
 75. **A chase.** Is a chase module required or configured for the first release (R17)? Draft default:
@@ -963,9 +967,11 @@ questions 56 onward are new.
     toggleable minimap of the rules diagram count as that grid? Draft default: it is allowed on
     phones and off the TV until the owner decides.
 
-87. **The new crate edge and the host crate (O.2, O.8).** Approve `df-table` as a new pure crate
-    (depending on `df-types` and `df-model`) and `df-table-host` as its async host, with the new
-    edges recorded in `subsystem-architecture.md`. Draft default: yes.
+87. **The new crate edge and the host crate (O.2, O.8).** Still open. Approve `df-table` as a new pure
+    crate (planned to depend on `df-types` and `df-model`; today it depends on `serde` and
+    `serde_json` only) and `df-table-host` as its async host, with the new edges recorded in
+    `subsystem-architecture.md`. The crates are already workspace members as a workbench. Draft
+    default: yes.
 88. **The port set (O.4).** Are the eight ports (rules owner, interpreter, narrator, broker, clock,
     dice, knowledge view, event sink) the right minimum for C0? Draft default: yes; split a port if
     it proves too coarse, never remove one.
@@ -979,7 +985,7 @@ questions 56 onward are new.
 
 Add further ideas below as they are shared, in the owner's words with a restatement.
 
-## Analysis (refinement loop, rounds 1 and 2)
+## Analysis (refinement loop, rounds 1 to 4)
 
 This section was written after the owner asked for a refinement loop with an adversarial agent to
 fill the D&D-shaped gaps and to make the engine robust, resilient, fast, logged, performant and
@@ -1010,6 +1016,7 @@ from D1 to D25 and from the reports of four independent critics.
 | 1 | 91 (C 24, E 22, M 21, N 24) | 24 | 57 | 10 | merged (sections A to I) |
 | 2 | 118 (W 30, K 38, F 23, X 27) | 22 | 67 | 29 | merged (sections J to L) |
 | 3 | 130 (P 35, D 32, K 35, F 28) | 16 | 74 | 40 | merged (section M; section L rewritten) |
+| 4 | 36 issues, GitHub #1490 to #1525 | not tallied here | not tallied here | not tallied here | being applied as in-place corrections (no new RES numbers); see the P round log |
 
 ### A. Who owns what
 
@@ -1117,7 +1124,7 @@ any of them; the ones that change something the owner said are listed again as q
   changed, the display keeps the current plate for that slot and no plate is paid for. The
   `cost per hour` figure is stated as an upper bound.
 - **RES10. A late picture (Q25; C14, N16).** Players see a plain "picture catching up" mark when
-  the plate is more than `image_stale_limit_secs` behind (default 90, to be set from the measured
+  the plate is more than `image_stale_limit_s` behind (default 90, to be set from the measured
   latency of the lane in use; `runtime-reliability.md` requires an explainable waiting
   condition), and only while the stale plate disagrees with the table (K.3). Every state change
   that matters (a creature down, a turn change, a condition) is drawn at once as an overlay on the
@@ -1240,13 +1247,15 @@ archer", "I tell the guard I am the inspector and hand him a letter I forged" an
 to light the candle" are valid input. The route is fixed:
 
 1. Map the line to the existing mechanics first: the affordances of the set pieces present, then
-   the standard actions (Attack, Shove, Utilize, Jump, Improvised Weapon), then a spell's own
+   the 2024 actions of RES8 (Attack, Dash, Disengage, Dodge, Help, Hide, Influence, Magic, Ready,
+   Search, Study, Utilize; Shove and Grapple are Unarmed Strike options inside Attack, Jump is
+   movement, M2-D26; an improvised weapon is not an action of its own), then a spell's own
    documented uses (R11 has one fixture per spell entry). A chandelier that is not in the set is
    declined, never invented. A spell effect that is not in the catalog data is not offered.
 2. A representable case resolves through the rules owner, with its DC and modifiers from the
    source. A multi-step line is a plan: the forged letter is making it (tool, proficiency and
-   materials checked against the inventory) and presenting it, and the guard's reaction is a
-   contested or Influence check against the stored result.
+   materials checked against the inventory) and presenting it, and the guard's reaction is an
+   Influence resolution under RES47 (no Insight contest), with the stored result as an input.
 3. Where the source leaves a real choice open, DECIDE emits a `RulingRequest`. Reviewed automatic
    adjudication resolves it where the plan allows; otherwise the pending ruling shows
    `AwaitingAdjudicator` (the machine holds only `Waiting{pending_id}`, RES26), and the host's
@@ -1256,12 +1265,15 @@ to light the candle" are valid input. The route is fixed:
 4. The answer is stored as a `ScopedRuling` (`df-model`) with the normalised key and the question
    held beside it, and disclosed as a ruling, never as a standard rule (question 68 asks whether
    it binds later play automatically). A later input is matched against stored
-   rulings by normalised key and retrieval, and a hit is shown as "Ruling (earlier): ...". The only
+   rulings by the typed source-question key and scope alone (RES48): equality of the key reuses it, a
+   retrieval or similarity hit is only a suggestion with a host one-tap, and a reuse is shown as
+   "Ruling (earlier): ...". The only
    settings a host can change are the R17-selected optional modules and a custom `RulesetId`
    (`generated-content.md`); a host cannot inject arbitrary rules.
 5. A decline names the missing piece and what is possible ("the forgery needs a kit and ink; you
    have neither"). Requirements are `requires{tool, language, proficiency}` on the action, and the
-   rules owner decides whether a missing one is a decline or a disadvantage.
+   rules owner declines a missing tool or language, and a missing proficiency proceeds without the
+   bonus (M2-D19); the SRD gives no disadvantage for it.
 
 **C.4 Reactions and windows (C3, M2, C4).** When the rules owner reports that someone may
 interrupt (an attack roll a Shield could change, a creature leaving reach, a readied trigger, a
@@ -1281,7 +1293,8 @@ question 59.
 target, or whose reading changes the economy spent, never executes on a guess. A reading that is
 irreversible or harms an ally or a neutral (attacking, giving away an item, breaking a quest item)
 needs a one-tap confirmation on that player's phone. Taps and offered choices skip INTERPRET and
-confirmation. There is no undo: dice are never rerolled, and a wrong act is handled by the ruling
+confirmation. There is no undo and no reroll except one a source rule grants (Heroic Inspiration
+or Lucky, M2-D4): otherwise dice are never rerolled, and a wrong act is handled by the ruling
 flow. Narration may not state what a player character does, says, feels or decides beyond the
 committed outcome, and the qualification step rejects text that does.
 
@@ -1289,9 +1302,11 @@ committed outcome, and the qualification step rejects text that does.
 what would be possible. Decline codes: `not_viable`, `not_supported_yet`, `not_your_turn`, `not_in_combat`,
 `no_combat_profile`, `missing_requirement`, `window_closed`, `economy_spent`, `resource_spent`,
 `table_busy`, `rate_limited`, `intent_invalid`, `pending_open`, `pvp_off`, `consent_declined`,
-`time_locked`, `not_knowable`, `stock_changed`. A clarification, a confirmation and a ruling are
-not declines: they are `needs_clarification` and `pending` outcomes (RES16, RES26). A player who
-asks "why" gets the rule text.
+`time_locked`, `not_knowable`, `stock_changed`, `same_urging` (RES47) and `casting_restricted`
+(M2-D27). This is the one list: J.3 "Decline codes added" is a subset of it, and RES40 maps some of
+these to the closed wire `RejectionCode` set while the rest stay internal reason keys. A
+clarification, a confirmation and a ruling are not declines: they are `needs_clarification` and
+`pending` outcomes (RES16, RES26). A player who asks "why" gets the rule text.
 
 **C.7 When the text model fails (N5, N12).** A failed model call never produces a guess and never
 uses a keyword table. INTERPRET runs on the fast lane (question 65), and its retry uses a shorter prompt and the
@@ -1299,7 +1314,7 @@ legal-choice list only. If that fails, the DM says "I could not read that. Pick 
 legal choices as buttons, which need no model, and keeps the player's draft. NARRATE falls back to
 a structured readout of the committed outcome's typed fields ("Pip hits Dain Rusk for 7 slashing.
 Dain is at 12 of 19."), a rendering of rules output and not an interpretation. Flavour that arrives
-within `narration_late_secs` is appended after it and never replaces it. Output that is empty,
+within `narration_late_s` is appended after it and never replaces it. Output that is empty,
 over-length, the wrong shape or the wrong language is a failure with cause `text_invalid`. Player
 text, names and previously generated text are untrusted data in every prompt, delimited and marked
 as carrying no commands; INTERPRET output is parsed against a closed schema, the intent must be
@@ -1314,7 +1329,7 @@ handled as in section K.1.
 
 **D.1 Scenes (E5, M20; Q5).** Table state holds `scenes[]`. Each scene has its own cast,
 layout, active machine and `scene_epoch`. A seat belongs to one scene. The TV shows the **focus
-scene**: the host can lock one, and otherwise the K.10 rule applies, with `focus_min_dwell_secs`, and
+scene**: the host can lock one, and otherwise the K.10 rule applies, with `focus_min_dwell_s`, and
 the TV cuts only on a beat boundary. A phone always shows its own seat's scene. The plate tick runs per
 scene that has a viewer. There is one `world_time`. `Split` and `Regroup` are player intents that the pipeline routes. Because
 `narrative-engine.md` states that the party moves together because the scene is shared, the draft
@@ -1340,8 +1355,9 @@ sleeping, disconnected or voluntary AFK, as in `remote-play.md`) and a membershi
 left. A voluntary-AFK character is offstage or follows, by host setting, and never acts alone in
 risk; AFK is a deliberate approved command, not an inactivity penalty. A player who joins enters
 at a narrated beat, and in combat through the encounter owner's admission at the next round. A seat
-maps to `characters[]` with one `active`. Death sends the seat to the creation machine for a
-replacement (R01, R02), or to spectating (question 69); import goes only through `validate_build`, and private
+maps to `characters[]` with one `active`. A dead character is held with its record (M2-D1), and the
+seat goes to the creation machine for a replacement (R01, R02) only on a host "replace" or when no
+revival is possible; until then it waits or spectates (question 69); import goes only through `validate_build`, and private
 import cannot mint rights (`rules-support.md`). A party wipe returns `EncounterOutcome=defeat` and
 hands off to `AdventureEnd`, where `narrative-engine.md` allows an authored failure state.
 Events: `seat.state_changed`, `character.status_changed`.
@@ -1392,7 +1408,7 @@ critic finding it closes.
 | R03 species, feats (none) | creation, advancement | As above | As above |
 | R04 checks (E12, M17) | any machine, through a `CheckRequest` that opens a `PendingResolution` | Public `RollResultView` on the TV; secret rolls (Insight, Perception, Stealth against the unknown) go to one seat, identical for failure and for no information; passive checks run on scene entry with a private result; a retry of the same task is refused unless the rules owner allows it | `check.requested`, `check.resolved`, `roll{id, audience}`; `check show` |
 | R05 initiative, economy, reactions (C3, C7, M2) | combat (section F.1) | The phone shows remaining action, bonus action, reaction, movement and free interaction from the encounter view; windows per C.4 | `window.opened`, `window.answered`, `window.closed`; `pending list`, `pending show`, `pending drive` |
-| R06 movement, sight, cover, hiding (C1, C2, E7, C15) | explore, combat | RES1 and D.6; hidden creatures are left out of the public plate and revealed by an effect that queues a new plate; a hidden player's own phone shows its position as a private overlay; a threat the party knows of and cannot see is a marker, never the figure (question 66) | `spatial.query`, `stealth.revealed{by}`; `spatial query`, `combat anchors show` |
+| R06 movement, sight, cover, hiding (C1, C2, E7, C15) | explore, combat | RES1 and D.6; a creature hidden from the party (an enemy) is left out of the public plate and revealed by an effect that queues a new plate, but a hidden hero is still drawn, with a hidden chip, because every hero is always visible to the party (M2-D17, K.13, RES45) and hiddenness filters only the enemy view; a hidden player's own phone shows its position as a private overlay; a threat the party knows of and cannot see is a marker, never the figure (question 66) | `spatial.query`, `stealth.revealed{by}`; `spatial query`, `combat anchors show` |
 | R07 attacks, grapple, shove (C7) | combat | Combat intents from the legal-choice call | `plan.step{id, outcome}`; `combat choices <actor>` |
 | R08 damage, death (C21) | combat, rest | Status chips (dying, stable, dead) to the seat; D.4 for replacement | `character.status_changed` |
 | R09 conditions, durations (C8) | table state `active_effects`, owned by `df-rules` | Effect chips and a concentration marker from permitted views; expiry at `TurnBoundary{creature, start or end}` in combat and at `df-world` time outside it | `effect.applied`, `effect.expired{origin, boundary}`; `effects list <creature>` |
@@ -1433,8 +1449,9 @@ follows the machine contract and the new-machine checklist.
   result is an input to the machine's `EncounterOutcome`, not a machine decision.
 - **Beats.** The engine resolves and commits a `Beat{events[]}` at once. Clients show the roll and
   result views at a minimum dwell (`beat_min_dwell_ms`, config, so lines stay readable at human
-  pace), narration attaches later or is skipped, and the next turn starts after the dwell and not
-  after narration.
+  pace), narration attaches later or is skipped, and the next server-run enemy turn starts after the
+  dwell and not after narration (RES45: hero input opens immediately, and only server-run enemy
+  turns are spaced, by a server timer from anchors and never from client acknowledgements).
 - **Overlays.** HP, the turn marker, condition chips, badges and damage numbers are drawn by clients
   from state, anchored to the latest screen anchors, and never baked into plates. Mask-to-creature
   assignment is a minimum-cost match against the previous anchors, with the badge shown. A creature
@@ -1459,10 +1476,10 @@ character record holds `npc_ref` and `dossier_ref` and copies nothing.
 **F.3 Travel (E6).** The machine reads route, weather and resource proposals from `df-world` and
 hazard proposals from `df-encounter`. A leg is narrated with a reused establishing frame labelled by
 place name, never a stale plate. The destination is created in the background (`place_creation`
-purpose through the broker), and the table waits at most `scene_build_budget_secs` if it is not ready on arrival (reusing the
+purpose through the broker), and the table waits at most `scene_build_budget_s` if it is not ready on arrival (reusing the
 SCENE-01 owners `place::plan`, `place::overlay`, `place_creation::judge_exit` and
 `place_creation::create`), with the
-`place card` fallback (name, one line, cast list) if the build exceeds `scene_build_budget_secs`.
+`place card` fallback (name, one line, cast list) if the build exceeds `scene_build_budget_s`.
 A full scene is built only for an encounter or a stop. Today's seven-minute travel hang is a
 failure of this rule. Events: `travel.leg`, `travel.arrival_wait{ms}`.
 
@@ -1516,21 +1533,27 @@ sessions in section H.
    steps. Step one needs a forgery kit or proficiency and materials; without them the line is
    declined `missing_requirement` ("the forgery needs a kit and ink; you have neither"). With them,
    making the letter takes time (a `RequestTimeAdvance`) and its quality is stored as a fact on the
-   item. Step two is an Influence or deception resolution against the guard's Insight, read from the
-   stored result, and the guard's stance is decided by the rules and voiced as a `SpeechEnvelope`.
+   item. Step two is an Influence resolution under RES47 (SRD p.184), with the letter's stored quality
+   as an input and no Insight contest: a willing guard needs no check, an unwilling one refuses, and a
+   hesitant one is a check against the higher of DC 15 or the guard's Intelligence score. The guard's
+   stance is decided by the rules and voiced as a `SpeechEnvelope`.
    A promise the guard makes becomes an `Obligation` only through an approved commitment action.
 3. **"I use fire bolt to light the candle."** `Magic` carries the spell and the purpose. The spell's
-   documented uses (R11 fixture) cover igniting an unattended flammable object, so the rules owner
-   resolves it with no slot and no check. A use the spell does not document goes to the ruling flow.
+   documented uses (R11 fixture) cover igniting an unworn, uncarried flammable object, so the rules
+   owner resolves it as Fire Bolt's ranged spell attack against the object's AC (SRD p.132): no
+   slot, because it is a cantrip, but an attack roll, and a hit starts the object burning. A use
+   the spell does not document goes to the ruling flow (RES52).
 4. **"I attack" next to the innkeeper and a goblin.** More than one legal target and a harmful
    reading: INTERPRET returns `Clarify`, the phone shows the two targets as buttons, and choosing the
    innkeeper asks for a one-tap confirmation. This replaces the observed misreading of "I draw my
    greatsword and attack Dain Rusk" as an Intimidation check.
-5. **A goblin attacks the wizard, and the rogue has a reaction.** CHECK and DECIDE roll the attack
-   with the table's dice; the rules owner reports that Uncanny Dodge applies. APPLY phase one commits
-   the pending attack and the window. The rogue's phone gets the offer, the wizard's phone shows
-   "waiting for Pip", and the TV shows a plain waiting state. If the rogue's phone drops, the turn is
-   `Held`, nothing is spent, and the reconnect reacquires the window by `pending_id`.
+5. **A goblin attacks the wizard, and the wizard has a reaction.** CHECK and DECIDE roll the attack
+   with the table's dice; the rules owner reports that the wizard's own Shield can apply (RES52:
+   Uncanny Dodge is self-only, SRD p.63, so an ally rogue cannot use it for the wizard). APPLY phase
+   one commits the pending attack and the window. The wizard's phone gets the offer, the other
+   phones show "waiting for the wizard's player", and the TV shows a plain waiting state. If the
+   wizard's phone drops, the turn is `Held`, nothing is spent, and the reconnect reacquires the
+   window by `pending_id`.
 
 ### H. Quality contract: robust, resilient, fast, logged, performant, CLI-capable
 
@@ -1574,7 +1597,7 @@ compares the state hash.
 | Failure | What happens | What the table sees | Event |
 |---|---|---|---|
 | Text slow, empty or garbage | C.7: one retry, then buttons or the structured readout | "I could not read that. Pick one" or the structured line | `text.failed{cause}` |
-| Plate later than `image_stale_limit_secs` (default 90) | Hold the last plate of the same scene | "Picture catching up" mark (RES10) | `plate.late{lateness_s}` |
+| Plate later than `image_stale_limit_s` (default 90) | Hold the last plate of the same scene | "Picture catching up" mark (RES10) | `plate.late{lateness_s}` |
 | New scene background fails | The authored or last background for the place, else a place card | Playable scene without art | `scene.degraded{stage}` |
 | SAM fails | One retry, then one bounded regeneration (Q20), then the rules layout with the character `unlocated` | Hotspots as a list strip | `locate.failed` |
 | Image admission refused by the hosted entitlement or spend authority (hosted builds only; local builds never refuse for spend) | The tick stops requesting | A paused-art status, play continues | `plate.admission_refused` |
@@ -1604,9 +1627,10 @@ lane serves it is question 65.
 `interaction-engine.md`: the whole bounded response is buffered and qualified before captions or
 voice, and stable-clause streaming stays off until a model and locale are qualified for it. Only a
 complete, successful narration is stored for reuse, and a cancelled or failed stream never
-overwrites a valid entry. A leak check by fact id (the model returns which secret ids a clause
-revealed, with no keyword matching) runs inside the qualification step; a revealed secret is
-redacted or re-requested once and logged `leak.blocked{fact_id}`.
+overwrites a valid entry. The leak check is server-side and by id (RES35): every grounded clause
+carries a permitted claim id, and an id outside the listener's projection rejects the envelope, with
+no keyword matching and no model-reported "which secret ids a clause revealed" (withdrawn by RES35).
+The qualification step redacts or re-requests once and logs `leak.blocked{fact_id}`.
 
 **H.7 Queues and backpressure (N9).** Broker queues are per class, in priority order
 `player_blocking` (interpret, narrate), `scene_build`, `plate`, `prefetch` (item views,
@@ -1642,8 +1666,10 @@ units, price or `unpriced`, `cache_hit` and `attempt`. A plate tick has its own 
 `turn_id` of the snapshot it used. `trace <id>` prints the tree across tables, broker and
 projections. Test: the integrated-flow correlation check of `observability.md`, from input to phone.
 
-**H.11 Hidden information and injection (N11, N12).** Prompts are built per audience (RES6), with a
-`dm_context` block marked never-to-quote for the narration of a secret the NPC must know. Logs hold
+**H.11 Hidden information and injection (N11, N12).** Prompts are built per audience (RES6). No
+secret id or text enters any prompt: an NPC's stance toward a hidden fact reaches the model only as a
+typed `SpeechActPlan` stance with permitted claim ids (RES35 withdraws the earlier `dm_context`
+block). Logs hold
 secrets by id and player free text as a hash and length, with full text only in the local dev spool.
 The paired-state noninterference test of `runtime-directors.md` is part of the machine conformance
 suite, and a sentinel-secret test serialises every projection for every seat and the TV and fails if
@@ -1669,8 +1695,10 @@ not whole views. The cap is 40 class-A events per input, and the expected rate a
 one input per seat every ten seconds is stated and measured on the first slice.
 
 **H.15 Projection status (N16).** Every projection carries a `revision` and a `status` (`ok`,
-`thinking`, `art_delayed`, `degraded`, `read_only`, `reconnecting`) and a plain waiting reason for
-the seat. A status other than `ok` for more than 8 seconds shows a banner on the host phone and the
+`reading`, `rolling`, `telling`, `art_delayed`, `degraded`, `read_only`, `reconnecting` and
+`waiting_for{who, what}`: the nine keys of `STATUS_KEYS` in `crates/df-playground/src/copy.rs`; the
+earlier single `thinking` is replaced by the three named stages of K.5, INTERPRET, DECIDE and
+NARRATE) and a plain waiting reason for the seat. A status other than `ok` for more than 8 seconds shows a banner on the host phone and the
 TV corner, except `art_delayed`, which follows K.3 (shown only when the stale plate disagrees with
 the table, and otherwise logged and not shown). Narration is never empty: a blank model output is replaced by the structured readout.
 Projection computation does no I/O. Phones get phone-sized plate variants, hotspots also appear as a
@@ -1705,7 +1733,7 @@ run, and include restart against existing data.
 **H.18 Progress and preflight (N15).** Per input the checkpoints are `input.received`,
 `turn.applied`, `projection.delivered{seat}` and `client.presented`. A per-table watchdog raises
 `stall{kind}` when an input shows no progress for 20 seconds, the oldest job passes twice its
-deadline, a plate is later than `image_stale_limit_secs`, or a worker heartbeat is missing.
+deadline, a plate is later than `image_stale_limit_s`, or a worker heartbeat is missing.
 `preflight` runs a scripted two-seat table against the real services at the cheapest purposes and
 asserts a non-empty projection for the TV and both seats, and a canary headless table runs against
 any deployed build on an interval. This is aimed at the failures that cost hours: empty screens and
@@ -1860,7 +1888,7 @@ and section L is the comparison of the current and the next implementation that 
 - **Spend refusal is hosted only (K13).** H.4's refused admission applies to hosted builds under the
   entitlement and spend authority of `commerce-service.md`. Local and development builds never
   refuse for spend, and the ledger never blocks.
-- **The late-picture mark (K11).** The threshold of RES10 is `image_stale_limit_secs` (default 90),
+- **The late-picture mark (K11).** The threshold of RES10 is `image_stale_limit_s` (default 90),
   to be set from the measured latency of the lane in use. A Codex plate takes 90 to 240 seconds, so a
   fixed 60 would show the mark during normal play. The experience rule that the mark fires only
   when the stale picture disagrees with the table (section K) keeps it from being permanent.
@@ -1923,8 +1951,9 @@ and section L is the comparison of the current and the next implementation that 
   to the party or perceived by every present party member. A fact perceived by one seat is
   `seat_private` and appears only in that seat's private list and overlay, never in the TV plate, TV
   hotspots or plate prompts. It becomes public when the finder taps "tell the party" or says it in
-  an action or social line, which writes a party-scope grant in the same commit. Plate light follows
-  the lowest-vision present member unless the host selects shared vision (question 74). The plate
+  an action or social line, which writes a party-scope grant in the same commit. The plate
+  defaults to shared vision (M2-D23, which supersedes the earlier "lowest-vision member" default);
+  the host may instead select the lowest-vision present member (question 74). The plate
   reference, staging description and hotspot label of a cast entry come from `presented_as`, never
   from its true record; a cast entry presented as a set piece (a mimic as a chest) is drawn and
   labelled as that, its affordances are the decoy's, and both carry a shared `same_as` id so an
@@ -1937,7 +1966,7 @@ and section L is the comparison of the current and the next implementation that 
   lands. Characters at different positions in one scene are never a `Split`. Only separate places
   create separate scenes, and until that ships `Split` is declined `not_supported_yet` with "to be on
   your own, move to another area of this place, or ask the host to pause". Where a table has
-  several scenes later, the TV focus changes only after `focus_min_dwell_secs` and never mid-beat.
+  several scenes later, the TV focus changes only after `focus_min_dwell_s` and never mid-beat.
 - **RES26. Pending ownership (K3, F14).** The `PendingResolution` is held in table state and staged
   by `df-engine`. The active machine holds only `Waiting{pending_id}`. Answers carrying a pending id
   go to the pending handler and not to `accepts`. A hand-off is declined `pending_open` while any
@@ -2093,18 +2122,18 @@ read that. Pick one:").
 
 | Setting | Default | Cost effect |
 |---|---|---|
-| `plate_interval_secs` | 15 | plates per hour (upper bound) |
-| `image_stale_limit_secs` | 90, set from the measured lane | none |
-| `scene_build_budget_secs` | 8 (section K) | none |
-| `plate_swap_wait_secs` | 6 | none |
-| `narration_late_secs` | 8 until measured (H.5 budget, plus `narration_batch_secs`) | none |
-| `narration_batch_secs` | 4 | fewer narration calls |
+| `plate_interval_s` | 15 | plates per hour (upper bound) |
+| `image_stale_limit_s` | 90, set from the measured lane | none |
+| `scene_build_budget_s` | 8 (section K) | none |
+| `plate_swap_wait_s` | 6 | none |
+| `narration_late_s` | 8 until measured (H.5 budget, plus `narration_batch_s`) | none |
+| `narration_batch_s` | 4 | fewer narration calls |
 | `beat_min_dwell_ms` and `caption_min_dwell_ms` | formula in section K | none |
 | `idle_minutes` | 10; eviction at 30 | stops plate cost when idle |
 | `window_timeout` | none: windows hold (RES26) | none |
-| `held_nudge_secs` | 30 | none |
-| `ruling_nudge_secs` | 20 | none |
-| `focus_min_dwell_secs` | 45 | none |
+| `held_nudge_s` | 30 | none |
+| `ruling_nudge_s` | 20 | none |
+| `focus_min_dwell_s` | 45 | none |
 | `reading_pace` | normal | scales dwell |
 | per-seat pending | 3 | bounds model calls |
 | `solo_beat_max_exchanges` | 6 | none |
@@ -2134,14 +2163,16 @@ action are handled as follows, and none of them commits state except a recall gr
 - A perception question ("is the door locked?") is answered from the scene record and the asker's
   `KnowledgeGrant`s with no check when the answer is plainly visible.
 - A rules question (`Meta`) is answered from the rules text and never changes state.
-- A recall question ("what do I know about these runes?") is the Study action. Every knowledge fact
-  carries a recall skill and DC assigned when the fact is admitted, from authored content or by the
-  admission validator from the source's own table, never by the narration model. A fact the
+- A recall question ("what do I know about these runes?") is the Study action. An authored knowledge
+  fact carries a recall skill and DC assigned when the fact is admitted, from authored content or by
+  the admission validator from the source's own table, never by the narration model. A generated
+  fact is plainly known or has no recall DC (M2-D20, the later rule). A fact the
   character's background plainly gives needs no roll. The result is a grant to the asker, shown
   privately.
 - A question with no grounded answer returns "You don't know, and nothing here tells you. You could
-  search, ask Mara, or study the runes." It never returns an invented fact, and a subject outside the
-  asker's knowledge is declined `not_knowable` with alternatives.
+  search, ask Mara, or study the runes." It never returns an invented fact about a character or the
+  world (RES52 scopes the rule to character and world recall, and dialogue keeps its logged backfill
+  decision), and a subject outside the asker's knowledge is declined `not_knowable` with alternatives.
 - A request about an object that a place of that kind plainly has ("is there a table I can flip?")
   is a question answered from place-type defaults in content data, not a decline. Only an object that
   makes no sense for the place is declined.
@@ -2153,7 +2184,7 @@ its description, cast, set and layout (the dress step) are stored. Until the pla
 the place name, the stored description voiced as the first narrator line, the party strip, the
 place music and a small "picture on its way" tag. A background that arrives first shows as the
 backdrop with a slow dissolve, and a late plate dissolves in only at a line boundary (K.3).
-`scene_build_budget_secs` defaults to 8, after which play continues on the establishing card with no
+`scene_build_budget_s` defaults to 8, after which play continues on the establishing card with no
 blocking state. Only the first scene of a session or an authored arrival beat may hold up to 20
 seconds, with narration filling it (question 78 asks whether the first scene is built during session
 zero). Travel narration is timed to cover the build, and the narrator never says "you arrive"
@@ -2164,7 +2195,7 @@ the place card).
 **K.3 The clock requests; the buffer decides when to show (X3).** `plate_tick` decides when a plate is
 requested, never when one is shown. The playout buffer swaps a plate only between lines, never
 during a dice or result card, never during a reveal beat (K.7), and with a dissolve of at least 1.5
-seconds. A ready plate that finds the slot blocked waits at most `plate_swap_wait_secs` (default 6)
+seconds. A ready plate that finds the slot blocked waits at most `plate_swap_wait_s` (default 6)
 for a boundary. Speaker, gesture and mood changes are overlays on the current plate (speaking mark,
 portrait inset) and need no new plate, and a tick is skipped when only overlay-level state changed.
 The "picture catching up" mark fires only when the stale plate disagrees with the table (the scene
@@ -2176,7 +2207,7 @@ conductor decides the swap instant within `SCENE_ENTER_CAP_MS` and reports it th
 ruling" with the engine's suggested answer and its source basis. The host's phone gets one tap:
 accept the suggestion, change it or decline. The wait never silently ends and the table is not
 frozen: outside combat other seats act on their own turns, and in combat the turn stays held for
-the ruling. After `ruling_nudge_secs` (default 20) the host sees "Pip is waiting on a ruling" and
+the ruling. After `ruling_nudge_s` (default 20) the host sees "Pip is waiting on a ruling" and
 the requester sees the supported alternatives as buttons. A stored ruling is reused (C.3). The
 default policy is "reviewed automatic cases, otherwise the host", and `ruling.wait_ms` is logged so
 the owner can measure how often creative play stalls. Question 79 asks whether a vote of the seats
@@ -2195,7 +2226,7 @@ seconds or more are staged first so they cover narration latency. This depends o
 
 **K.6 Fairness among seats (X6).** The owner queue is served round-robin by seat, with a bound of
 three pending per seat, so `table_busy` applies to the seat over its own bound and never because of
-another seat. Outside combat, inputs from different seats arriving within `narration_batch_secs`
+another seat. Outside combat, inputs from different seats arriving within `narration_batch_s`
 (default 4) commit separately in arrival order and then share one NARRATE call over the list of
 committed outcomes. The text service only describes committed outcomes, so no meaning is merged.
 Structured lines show per seat at once, and a waiting phone shows its place in the queue.
@@ -2219,9 +2250,10 @@ other physical nouns by id mismatch, not by keyword. An atmosphere item that a p
 promoted to a set piece through the generated-content admission path within the budget of one dress
 call.
 
-**K.9 Voice (X9).** A character record gains `voice_card` (register, three verbal tics, how they
-address strangers, two example lines written and validated at admission) and `voice_id` (a fixed
-voice and pitch assigned at admission and never changed). Every prompt for that character carries
+**K.9 Voice (X9).** A character's dossier holds `voice_card` (register, three verbal tics, how they
+address strangers, two example lines written and validated at admission) and the character record
+holds a reference to it (RES52), plus `voice_id` (a fixed voice and pitch assigned at admission and
+never changed). Every prompt for that character carries
 the voice card verbatim and their last three spoken lines. `character show` prints both.
 
 **K.10 Solo beats (X10; the draft default for question 60).** A declined `Split` (RES25) offers "Pip
@@ -2236,7 +2268,9 @@ seconds, and a strip names the other scenes and who is in them.
 **K.11 Combat is legible (X11).** Every seat's phone offers a flat tactical strip drawn from the
 rules owner's grid, never from the plate: positions, the active creature's movement, and reach or
 range for the highlighted action. The TV shows the turn-order bar, HP chips anchored to creatures
-and a toggleable minimap of the same diagram. Legal targets are highlighted, and the choice list
+and, by default, no minimap: the tactical strip is on the phones only, and whether a toggleable TV
+minimap counts as the grid that `implementation-roadmap.md` removes from the TV is open (question 86,
+RES52). Legal targets are highlighted, and the choice list
 says why a target is out of reach ("12 ft away, reach is 5 ft"). The client already computes
 `reachable_from` in `df-render/src/battle/grid.rs`; moving that computation behind the machine view
 is listed as debt in section L.
@@ -2246,7 +2280,7 @@ room, at least 3000 for a result card, scaled by the table's `reading_pace`. Con
 creatures on one side that did not target a party member collapse into one beat with a summary
 line ("The goblins close in"), and turns that hit a hero keep their own beat. A seat two turns away
 sees "You're up after Mara" with its legal choices for a plan-only note, and the next seat gets a
-haptic and a chime. After `held_nudge_secs` (default 30) a held seat's host sees one line with the
+haptic and a chime. After `held_nudge_s` (default 30) a held seat's host sees one line with the
 approved commands (wait, pause, take over). The engine never acts for the seat by itself.
 
 **K.13 Every hero is always visible (X13).** A party strip runs along the bottom of the TV, always
@@ -2260,8 +2294,9 @@ recently, then affects a target present, then cheapest economy; no model), then 
 (Attack, Cast, Move, Use, Talk, Look). Cast expands by spell level with a default filter "only what
 works on something here". Illegal options are hidden by default with a "show unavailable" toggle that
 gives the reason. Labels are at most four words with a one-line explanation on tap and hold, and a
-text field is always visible. Text that matches a legal choice executes that choice's id with no
-model, and everything else goes to INTERPRET.
+text field is always visible. Typed text always goes to INTERPRET with the seat's legal choices as the
+closed enumeration; a tap on a choice is the only no-model path (RES46 withdraws matching typed text
+to a choice id).
 
 **K.15 Secret checks in a shared room (X15).** A secret check shows the TV the same neutral cue ("The
 DM passes Pip a note") for success, failure and no information, with the same shape and duration.
@@ -2273,8 +2308,8 @@ the note appears on any other seat.
 hero's line in up to three bubbles, and INTERPRET never rewrites spoken words; it only extracts
 intent and claims for the rules. (Action text keeps the 280-character cap of C.7.) Voice is
 hold-to-talk on the speaker's own phone only, so seat attribution is by device, with the transcript
-shown for two seconds with edit and cancel before it enters INTERPRET and the scene's names passed
-to the recogniser as hints. Irreversible readings still need the C.5 confirmation, and a speech is
+shown as final text only, sent on an explicit tap (RES49), with a cancel-only window of two seconds
+that scales with `reading_pace`, and the scene's names passed to the recogniser as hints. Irreversible readings still need the C.5 confirmation, and a speech is
 Influence on the audience present with the rules deciding the effect.
 
 **K.17 Terms (X17).** INTERPRET may return `ProposedTerms{give[], ask[]}` using only registered term
@@ -2310,8 +2345,8 @@ four-second hold, the hero's portrait) while the private choices stay on the pho
 prefers a chapter end (offered, never forced). The session-end screen on the TV shows what the party
 did, from committed events under the recap rules of `campaign-cinematics.md`, with its text-and-stills
 fallback; awards; one open thread as a teaser; and the pacing vote of `engagement-model.md`. A new
-session shows the recap and guarantees one callback to a prior-session choice in its first scene
-(K.7). The adventure-end machine is specified before the first release because it is where a table
+session shows the recap and offers one callback to a prior-session choice in its first scene when a
+valid candidate exists (K.7; RES52: no callback is guaranteed). The adventure-end machine is specified before the first release because it is where a table
 decides whether to return. Question 83 asks whether the default recap is a budgeted video bookend or
 a text-and-stills card.
 
@@ -2321,7 +2356,8 @@ a text-and-stills card.
   `violence_description` (implied or plain) and `narration_length`, and the broker injects them with
   lines and veils. Humour is allowed only in a clause tagged flavour, so it cannot carry an outcome.
 - **Flaws.** A "play to my flaw" tap on the sheet passes the declaration to NARRATE as stated. The
-  engine may suggest Heroic Inspiration to the host (accept or decline); the rules owner owns the
+  engine may suggest Heroic Inspiration to the host (accept or decline) for any heroic, in-character
+  or entertaining moment (SRD p.8), not only a flaw tap (D28); the rules owner owns the
   award and the model never awards it (question 84 asks whether the rules plan treats it as
   adjudicated or discretionary).
 - **Table talk.** A hero's said words appear on the TV and actions appear as a short structured line.
@@ -2329,9 +2365,9 @@ a text-and-stills card.
   the DM what we decided" as a plan-only note.
 - **Catch-up.** A "story so far" view shows the journal projection and a "what just happened?" button
   that lists the last minute's committed events with no model call.
-- **Declined asks.** An opt-in host setting stores declined free-text lines (never accepted ones) in
-  the telemetry store, and `declines top` counts them by code, so the owner can see which creative
-  asks fail.
+- **Declined asks.** `declines top` counts declines by decline code only, so the owner can see which
+  creative asks fail. No free-text store of declined lines exists: RES36 withdraws it, and private
+  player text is not archived in telemetry.
 
 **K.23 What not to change.** The experience critic named the strongest parts of the design: the four
 outcomes with declines drawn from the same legal-choice call as the phone's buttons; rules first and
@@ -2410,7 +2446,7 @@ O.9 replaces it.
 | Rulings | `ScopedRuling` and `HostCommand::ResolveRuling` in the libraries; no reuse by key; not used by `df-tools` | A keyed reuse record beside `ScopedRuling`, the ruling flow of C.3, K.4, RES48 | New record and the host phone controls |
 | Dice | One draw point (`gameplay/dice.rs`, unverified in detail) with the `dev dice next` queue | The same point, supplied to `step` as an input, logged with a draw id (H.3) | Naming and logging, not a new source |
 | Logging | Two functions named `record_audit_line`: `df-observe/src/lib.rs:99` forwarding to an installed sink and `gameplay/actor.rs:1411` which is that sink. In `df-tools` 341 call expressions in 69 files (311 under `gameplay/`, in 66 files); 503 hits in 139 files across the workspace; free text parsed by the dev timeline | Typed records through `df-observe` also rendered as one line from the same record id; new machines may not call either function; the boundary script covers both (RES33, RES41) | Old sites migrate as their code moves; `coding-style.md` §8.3 and §8.7 need the owner's amendment first |
-| Dev CLI | About 100 `.route(` calls in `dev_control/mod.rs`; each command is registered in four places (route, match arm in `dev_cli.rs`, `print_help`, `describe_commands` in `reads.rs`); `/dev/describe` exists but is hand-written; family verbs exist under other names (`state`, `view`, `checkpoint`, `act`, `say`, `override`, `dice next`, `fight offers`) | One route and command per machine verb, `describe` generated from the registry (RES33, H.16) | The nine verbs are generated, not hand-written |
+| Dev CLI | About 100 `.route(` calls in `dev_control/mod.rs`; each command is registered in four places (route, match arm in `dev_cli.rs`, `print_help`, `describe_commands` in `reads.rs`); `/dev/describe` exists but is hand-written; family verbs exist under other names (`state`, `view`, `checkpoint`, `act`, `say`, `override`, `dice next`, `fight offers`) | One route and command per machine verb, `describe` generated from the registry (RES33, H.16) | The H.16 verb set (RES33) is generated, not hand-written |
 | Tests | About 4,200 test functions (3,200 under `gameplay/`). `development/df-tools-known-failures.txt` lists 17 tolerated failures, its header records 27 more unowned baseline failures, and the tactical suite fails 20 to 25 tests in parallel runs because of process-wide state. The `Owner` type is bound to `PostgresRepository`; only `recovery_qualification` and the image suites clearly need scratch Postgres | Machine conformance, golden sessions, property tests, chaos per failure row, `RuleFixture` runs, restart against existing data (H.17) | The conformance and chaos suites need owned scratch Postgres or a new in-memory repository. Baseline failures stay separate |
 | Phone logic | `gameplay_browser/hero_creator.rs` (141 KB) holds creation logic; the client computes `reachable_from` (`df-render/src/battle/grid.rs:333`, used by `stage.rs` and `combat_feed.rs`) | Both behind server views before the creation and combat machines are accepted (RES37) | Not optional: client-side rules conflict with `AGENTS.md` |
 
@@ -2551,7 +2587,7 @@ they are recorded as RES35 to RES52 and the register in M.2.
   scoped evidence reference and a length class. A payload specimen exists only in the existing
   authorised diagnostic evidence destination, with a content class, expiry, redaction and deletion
   handling. The declined-lines store of K.22 is withdrawn: `declines top` counts decline codes only.
-- **RES37. Reach is server-side (P3, D22).** The tactical strip and the choice-list reasons render
+- **RES37. Reach is server-side (P3, M2-D22).** The tactical strip and the choice-list reasons render
   only the server's `Preview` and `TacticalView` reach sets. `reachable_from` in `df-render` is
   deleted or reduced to drawing a supplied path before the combat machine is accepted, and creation
   logic leaves `hero_creator.rs` before the creation machine is accepted. Spell and area targeting
@@ -2632,16 +2668,18 @@ they are recorded as RES35 to RES52 and the register in M.2.
   §8.1). K.8 is restated: physical things are introduced only as grounded clause entity slots with
   set-piece ids, flavour clauses are noncanonical and cannot promise affordances, and a model critic
   is supplementary.
-- **RES47. Social rules are the 2024 ones (P20, D18).** Influence follows willing, unwilling or
+- **RES47. Social rules are the 2024 ones (P20, M2-D18).** Influence follows willing, unwilling or
   hesitant. A willing request needs no check, an unwilling one is refused, and a hesitant one is a
   check against the higher of DC 15 or the creature's Intelligence score, with no Insight contest
   (the G.2 and C.3 wording is corrected). Willingness is the EMO-01 reviewed automatic case, logged,
-  with host override. A failed urging cannot be repeated for 24 hours unless something changes; the
-  decline is `same_urging`, keyed by target and request. Haggling is one hesitant check per request,
+  with host override. After a failed check the same urging cannot be repeated for 24 hours or a duration
+  the GM (host) sets (SRD p.184); the decline is `same_urging`, keyed by target and request, and it
+  reopens when something changes (custom: the SRD says only "in the same way", so reading a changed
+  request or circumstance as a different urging is this design's convention). Haggling is one hesitant check per request,
   and price movement from a check is an R17 optional module that stays off until the coordinator
   records it. A `done` NPC maps to `applied` with a structured line ("Dain turns away") and not to
   silence.
-- **RES48. Rulings are keyed, not retrieved (P21, D25).** A `RulingResponse` is limited to existing
+- **RES48. Rulings are keyed, not retrieved (P21, M2-D25).** A `RulingResponse` is limited to existing
   mechanics: a check (ability, skill, DC tier from the source table), advantage or disadvantage, an
   existing condition, and damage by severity tier where the source pins one. Automatic reuse needs
   equality of the typed source-question key and scope, with the affordance id in the key; a retrieval
@@ -2663,7 +2701,7 @@ they are recorded as RES35 to RES52 and the register in M.2.
   per-seat preference through `SetPreferences`. Each lives in the central configuration file with a
   commented default, is validated at load with a default fallback and an audit line, and is readable
   through `dungeonflux config`. Every broker request first asks `Gates`. Names use `_s` and `_ms`
-  units (`scene_build_budget_secs` is `scene_build_budget_s` in code). "Backdrop" is not used: the
+  units (RES50 renamed every `_secs` name to `_s` throughout this document; the old `scene_build_budget_secs` is `scene_build_budget_s`). "Backdrop" is not used: the
   words are plate, establishing card and place card.
 - **RES51. Crates (P24, P25).** The machine contract, registry, `step` and the staged transitions
   belong in `df-engine`; the owner queue, durable intents and timers in `df-session`; resource
@@ -2688,35 +2726,42 @@ they are recorded as RES35 to RES52 and the register in M.2.
 The rules-lawyer's main finding is that the four outcomes and the reaction-window model cover other
 seats' reactions, but not the roller's own choices, the DM's judgement points, or time and aftermath.
 This register names, for each, what the engine does and which carrier owns it. Details marked (V) were
-recalled and not confirmed, and the source gate decides them. Each row is a fixture candidate.
+recalled and not confirmed, and the source gate decides them. Each row is a fixture candidate. A detail
+checked against the pinned source (SRD 5.2.1, `development/rules-sources/srd-5.2.1-en.pdf`) carries its
+page as (SRD p.N). A rule that SRD 5.2.1 does not contain is marked (custom) with the reason: it is a
+table rule of this design, stays so until the owner accepts it, and is never presented as a 2024 rule.
+Outside this table the register's ids are written M2-Dn (M2-D5, and so on), so they cannot be read as
+the owner's decisions D1 to D25; the table itself keeps the bare numbers. M2-D18, M2-D22 and M2-D25
+have no row: their findings (social rules, reach, rulings) were resolved directly as RES47, RES37 and
+RES48, and those entries are their record.
 
 | Point | The engine does | Carrier | Test case |
 |---|---|---|---|
-| D1 death and revival | A creature at 0 HP is dying; a dead character is held with its record. The creation lane opens on a host "replace" or when no revival is possible. Defeat is all heroes dead or an authored capture state, never "all down" while saves pend | rules owner; encounter outcome | Three heroes at 0 HP with saves pending and the goblins withdraw: no `defeat`. A cleric with a slot and the component can still revive a hero 8 rounds after death (V: one minute) |
+| D1 death and revival | A character at 0 HP is Unconscious and dying (death saves), and dies outright when the damage left over after reaching 0 equals or exceeds its HP maximum (SRD p.17); whether a monster dies at 0 HP or is treated as a character is encounter data (D2), and the default is that it dies (SRD p.17); a dead character is held with its record. The creation lane opens on a host "replace" or when no revival is possible (D.4 agrees). Defeat is all heroes dead or an authored capture state, never "all down" while saves pend | rules owner; encounter outcome | Three heroes at 0 HP with saves pending and the goblins withdraw: no `defeat`. A cleric with a slot and the component can still revive a hero 8 rounds after death (V: one minute). A hero with 12 HP maximum and 6 HP takes 18: dies at once with no saves. A goblin at 0 HP is dead unless its encounter data says otherwise |
 | D2 DM decision points | A register of each point and its carrier (below) | affordance data, derived facts, encounter data, EMO-01, `pending{choice}`, `RulingRequest` | A fixture is complete only if every choice it triggers names a carrier |
 | D3 stakes and failure | Affordances carry `on_failure` chosen from existing mechanics (a condition, hazard damage, time lost, alert, no retry without change); the roll card shows the stakes first; an affordance with no DC resolves without a roll | authored affordance data | A failed climb costs time or a slip and not only "you fail" |
 | D4 the roller's own choices | An Outcome is a sequence of roll stages; after each, the rules owner lists the roller's options as `pending{choice}`; a reroll draws a new `draw_id` and keeps the old one logged; C.5 reads "no undo and no reroll except one a source rule grants" | rules owner | A miss by 1 plus Heroic Inspiration: the new die replaces the old, Inspiration is spent, a second miss offers nothing, one HP movement commits |
 | D5 Counterspell and Shield | Phase one reserves the slot and draws nothing for effects not yet reached; phase two draws and spends after the window; a countered spell releases the reservation and keeps the action spent; nesting is bounded by eligible reactors | rules owner; window handler | A countered Fireball: slot count unchanged, action spent, no damage draw consumed |
 | D6 ordering | `pending{choice: order}` to the controller of the creature whose turn it is; any engine-chosen order is a logged reviewed case | window handler | Ongoing damage plus a save-ends condition: the player chooses the order |
 | D7 Ready | The trigger binds to ids (creature, set piece, or an event kind the rules owner sees); an unbound trigger is `pending{ruling}` with a one-tap fired or not; until built it declines `not_supported_yet` | rules owner; ruling flow | A readied leveled spell whose concentration breaks before the trigger: the slot stays spent and nothing fires |
-| D8 initiative | Surprise is derived from `WitnessRecord` and gives disadvantage on the initiative roll, not a skipped turn (V); player ties are `pending{choice}`; joiners roll when they arrive and slot in at their count; Delay is an R17 convention or dropped | rules owner; encounter owner | Reinforcements arrive in round 2 and roll 12: they act this round between counts 15 and 8 |
-| D9 legendary and lair | `Interlude{creature, source}` after each turn with an engine responder; a count-20 lair entry; Legendary Resistance is an engine-responder window | combat machine | A dragon with 3 legendary actions takes one after each of three hero turns, none after a fourth, and the pool is full at its own turn (Large creatures wait on footprint support) |
+| D8 initiative | Surprise is derived from `WitnessRecord` and gives disadvantage on the initiative roll, not a skipped turn (SRD p.13); player ties are `pending{choice}`; joiners roll when they arrive and slot in at their count (custom: SRD 5.2.1 says nothing on joiners mid-combat); Delay is an R17 convention or dropped (custom: the SRD has no Delay action) | rules owner; encounter owner | Reinforcements arrive in round 2 and roll 12: they act this round between counts 15 and 8 |
+| D9 legendary and lair | `Interlude{creature, source}` after each turn with an engine responder for Legendary Actions (one at a time, only after another creature's turn, all uses regained at the start of the creature's own turn, SRD p.257); a count-20 lair entry (custom: SRD 5.2.1 has no lair-action section and no "Initiative count 20" text, only stat-block values that change "in Lair"); Legendary Resistance is an engine-responder window and is an X/Day use that returns after a Long Rest, never at the creature's turn (SRD p.257-258) | combat machine | A dragon with 3 legendary actions takes one after each of three hero turns, none after a fourth, and the pool is full at its own turn (Large creatures wait on footprint support). The same dragon spends one of 3 Legendary Resistance uses: 2 remain at its next turn and 3 after a Long Rest |
 | D10 summons and mounts | A cast entry has `initiative_rule: own or shares{owner, after}` from the effect; an uncommanded default comes from the rules owner | cast entry | An ally acts after its summoner each round and takes Dodge when not commanded |
-| D11 forms | Two kinds: `overlay` (Wild Shape keeps real HP and adds temporary HP, V) and `replace` (Polymorph replaces HP and carries excess damage back) | form effect | A polymorphed hero at 0 beast HP takes 9 excess: the original form loses 9 HP |
+| D11 forms | One kind: a form replaces game statistics but never Hit Points. The creature keeps its own HP and gains Temporary Hit Points, equal to the Beast form's HP for Polymorph (SRD p.153) and to the Druid level for Wild Shape (SRD p.43); the ordinary temporary-HP rule applies (lost first, leftover damage carries to real HP, SRD p.18). Polymorph ends early on the target when it has no Temporary Hit Points left (SRD p.153); Wild Shape has no such early end and lasts for its duration, or until the druid is Incapacitated, dies or leaves it (SRD p.42) | form effect | A polymorphed hero in a 20 HP beast form takes 25: the 20 Temporary Hit Points are gone, the form ends, and the hero's own HP loses 5. A Wild Shaped level 4 druid takes 6: 4 temporary points are lost, the druid's own HP loses 2, and the form stays |
 | D12 concentration | Save is Constitution against max(10, half the damage), capped at 30 (V), one per damage source; it ends on incapacitation or death; replacing it needs a confirm | rules owner | 20 damage taking a hero to 0 ends it with no save; 9 then 30 in one round is two saves at DC 10 and DC 15 |
-| D13 aftermath | An `Aftermath` sub-state steps in 6 seconds while any hero is dying; rest and travel are refused during it | combat exit | The last goblin falls with a hero on one failed save: explore does not begin |
-| D14 rest | Rest states: planning, resting, interrupted or complete, post-rest choices (hit dice loop, spell preparation, recovery features), done; one long-rest benefit per 24 hours, no decline | rest machine | A second long rest 10 hours after the first gives no benefit and is not declined |
+| D13 aftermath | An `Aftermath` sub-state steps in 6 seconds while any hero is dying (custom: no SRD 5.2.1 source for this cadence; the SRD has death saves only at the start of the dying creature's turn, p.17); rest and travel are refused during it | combat exit | The last goblin falls with a hero on one failed save: explore does not begin |
+| D14 rest | Rest states: planning, resting, interrupted or complete, post-rest choices (hit dice loop, spell preparation, recovery features), done; after finishing a Long Rest a character must wait at least 16 hours before starting another (SRD p.185), so a Long Rest started sooner gives no benefit and is not declined (the no-decline handling is this design's convention) | rest machine | A second long rest 10 hours after the first finished gives no benefit and is not declined; one that starts about 20 hours after the first finished gives its full benefits |
 | D15 sleepers | The watch plan passes `awake[]` to combat entry; sleepers enter unconscious and surprised; a noise-wake question is a ruling | rest and combat | Four heroes, two on watch, a night ambush: two unconscious, two active |
 | D16 combat time | Each round boundary advances `world_time` by 6 seconds through the rules owner; `time_locked` applies to other advances | rules owner | Bless cast in round 1 of a 3-round fight is expired after a 10-minute search |
-| D17 hiding | A hidden hero is drawn with a hidden chip on the party's TV; hiddenness filters only the enemy view; a passive score is a static compare | projection | A rogue hides behind a pillar and the TV still shows the rogue |
+| D17 hiding | A hidden hero is drawn with a hidden chip on the party's TV; hiddenness filters only the enemy view. Hide needs a DC 15 Dexterity (Stealth) check made while Heavily Obscured or behind Three-Quarters or Total Cover and out of every enemy's line of sight; on a success the hider has the Invisible condition while hidden, and the check total is the DC for a creature to find the hider with an active Wisdom (Perception) check (the Search action), not a compare against a static passive score (SRD p.183); a hider who is Invisible when Initiative is rolled has Advantage on the roll (SRD p.184) | projection | A rogue hides behind a pillar and the TV still shows the rogue. A hider's total of 17 is the DC for an enemy's Search: a Perception total of 16 does not find the rogue, 17 does. A hidden rogue at the start of combat rolls Initiative with Advantage |
 | D19 kit and proficiency | A missing tool or language declines; missing proficiency proceeds without the bonus | requirements | No forgery kit: declined; a kit without proficiency: allowed, no bonus |
 | D20 recall DC | Authored facts carry a DC; a generated fact is plainly known or has no recall DC; the retry key is `(actor, affordance id, method)` and reopens on any committed change to the scene, the affordance or the equipment | content admission | A failed desk search then a bookshelf search is a new task |
-| D21 Help and group checks | Outside combat a Help is consumed by the named task's next check or ends with the scene; a group check is called by the DM or a scene trigger and resolves in one commit with half rounded up | rules owner | Three heroes, two succeed: success; four heroes, two suffice |
+| D21 Help and group checks | Outside combat a Help (an ability check) needs the helper to have the named skill or tool proficiency, is consumed by the named task's next check, and lapses at the start of the helper's next turn if unused, with the GM deciding whether the assistance is possible (SRD p.182-183); a group check is called by the DM or a scene trigger and resolves in one commit with half rounded up (custom: SRD 5.2.1 has no group-check rule) | rules owner | Three heroes, two succeed: success; four heroes, two suffice. A helper without the proficiency cannot Help that check; an unused Help lapses at the helper's next turn |
 | D23 light | `obscured` is derived from `light` and effects; visibility is computed per observer; the plate defaults to shared vision | layout | A dwarf and a human in a dark cave see different things on their own seats |
 | D24 falling | The fall rule joins the rules-owner layout change | rules owner | A Shove off a 20-foot ledge deals 2d6 and lands prone |
 | D26 action mapping | Intents map by rules entry id (Shove and Grapple are Unarmed Strike options inside Attack; Jump is movement) | action registry | "I grab him" resolves as a grapple; Extra Attack can replace one attack |
-| D27 spell procedures | `casting_restricted` decline; ritual time routes through the time effect | rules owner | "Healing Word then Fireball" declines the second step |
-| D28 Heroic Inspiration | Suggested to the host for any heroic, dramatic or funny moment (not tied to flaws); held one at a time | rules owner | A hero already holding it earns another: not stacked |
+| D27 spell procedures | `casting_restricted` decline: on a turn a creature can expend only one spell slot to cast a spell (SRD p.105), so a cantrip never triggers it; ritual time routes through the time effect | rules owner | "Healing Word then Fireball" declines the second step. A bonus-action cantrip then a slotted action spell is allowed |
+| D28 Heroic Inspiration | Suggested to the host for any heroic, dramatic or funny moment (not tied to flaws); held one at a time (SRD p.8); a second one earned while holding it is lost unless it is given to a player character in the group who lacks it (SRD p.8, p.183), which the holder chooses as a `pending{choice}` | rules owner | A hero already holding it earns another: not stacked, and it passes to a seatmate who lacks it when the holder gives it, or is lost when everyone holds one or the holder declines |
 | D29 inventory | The rest machine can attune (three items); encumbrance is an R17 decision | rest machine | A fourth attunement is declined naming the three |
 | D30 level-up | Offers queue and apply one at a time; HP roll or average is `pending{choice}` | advancement | Two awards before choices apply as two ordered level-ups |
 | D31 plans across machines | A plan's lifetime outside combat is the scene generation; a hand-off inside a plan is allowed when the next step names its machine | pipeline | "Pay for a room and rest" ends with coin spent once and a rest started, or neither |
@@ -2737,7 +2782,7 @@ the owner serves three capped lanes (H.2); machine scope is stated for every mac
 H.17); section F's opening uses the RES28 list; DECIDE and `step` each add effects and APPLY commits
 the union (C.0, RES21); a spell-target tap is a proposal the engine converts and the rules owner
 validates (RES1, row R10); a scene is playable only when its description, cast, set and layout are
-stored (K.2) and waits at most `scene_build_budget_secs` (F.3); and RES31 now lets explore and travel
+stored (K.2) and waits at most `scene_build_budget_s` (F.3); and RES31 now lets explore and travel
 register as adapters over authored beats while `No` capabilities decline. The audit's other findings
 were applied as listed in the patch log of this round: the banner rule of H.15 follows K.3; the focus
 rule of D.1 follows K.10; H.5 and RES4 describe DECIDE's brokered requests; H.1 lets one narration row
@@ -2763,13 +2808,13 @@ Facts I could not find in the code and that this document uses as names only: `A
 | P13, P33 | RES44 |
 | P15, P16 | RES45 |
 | P17, P18 | RES46 |
-| P20 with D18 | RES47 |
-| P21 with D25 | RES48 |
+| P20 with M2-D18 | RES47 (no M.2 row) |
+| P21 with M2-D25 | RES48 (no M.2 row) |
 | P22, P29, P32 | RES49 |
 | P23, P35 | RES50 |
 | P24, P25 | RES51 |
 | P19, P30, P31, P34 | RES52 |
-| D1 to D32 | M.2 register |
+| M2-D1 to M2-D32, except M2-D18, M2-D22 and M2-D25 | M.2 register rows; M2-D22 (with P3) is in RES37, M2-D18 in RES47 and M2-D25 in RES48, which have no row |
 | K1 to K10 | M.3 and the inline edits it lists |
 | K11 to K35 | M.3 and I.2 |
 | F1 to F28 | section L rewritten; F7 in RES30 and L.6 slice 1; F9 in L.6 slice 0b; F5 in L.2 and RES26 |
@@ -2782,7 +2827,9 @@ above into modules, types, seams and tests. Its two drivers, from the owner, are
 (a refinement or a new machine, action, setting or resource should be a data entry or one module,
 and the compiler or the conformance suite should say what was forgotten) and **observability**
 (every decision is a typed event that explains itself, nothing private can reach a log by accident,
-and every piece of state can be inspected). Nothing here is built yet.
+and every piece of state can be inspected). Only the first host slice, a blank-canvas workbench, is
+built (O.12); the machines, pipeline, owner queue, projection and the rest of this plan are not built
+yet, and O.12 lists where the built slice departs from the plan below.
 
 **O.1 State of the branch, and what the removal changes in this document.**
 
@@ -2812,7 +2859,12 @@ and every piece of state can be inspected). Nothing here is built yet.
   new subsystem boundary (machines, the DM pipeline, the owner queue, projection and declines), and
   keeping it apart lets it be built and tested without touching the staging code. The cost is a new
   edge in `subsystem-architecture.md`, which the owner approves in question 87.
-- **Dependencies it may have.** `df-types` (ids, `SessionRevision`), `df-model` (the checkpoint,
+- **Dependencies today.** The built `crates/df-table` depends on `serde` and `serde_json` only (its
+  `Cargo.toml`; a `testkit` feature adds nothing). It has no edge to `df-types` or `df-model`, and the
+  three new crates (`df-table`, `df-table-host`, `df-playground`) are already workspace members while
+  question 87, the approval of the new crate edges, is still open.
+- **Dependencies it may have (planned, pending question 87).** `df-types` (ids, `SessionRevision`),
+  `df-model` (the checkpoint,
   `PendingResolution`, `KnowledgeGrant`, `IntentDisposition`), and `df-observe` types only if the
   event sink needs them. It does **not** depend on `df-protocol` (wire types are mapped at the
   boundary), on `df-persistence`, on any provider crate, or on a browser crate. `df-rules` and the
@@ -2836,7 +2888,7 @@ does and how it fails.
 | `machine` | `MachineId`, `Scope`, `MachineSpec`, `StepResult`, `HandOff`, the `Machine` trait | RES27, RES28, RES20 |
 | `registry` | registration, startup validation (unique ids, known hand-off targets, scope rules, required capabilities), enable flags | D24, RES28, Q46 |
 | `pipeline` | the seven stages as pure functions over ports; the four outcomes; the failure fallbacks | C, RES15, C.7 |
-| `pending` | pending resolutions held in table state, two-phase apply, windows, answers | RES26, C.4, D5 to D7 of M.2 |
+| `pending` | pending resolutions held in table state, two-phase apply, windows, answers | RES26, C.4, M2-D5 to M2-D7 of M.2 |
 | `effects` | `TableEffect` (a versioned closed enum), the applier over table state, the `carry` list | RES18, RES32, RES3 |
 | `table_state` | the composition view of the owners' state (checkpoint, world time, scenes, seats, cast), `scenes[]`, `scene_epoch` | D.1 to D.7, RES25 |
 | `projection` | audience projections, `ProjectionStatus`, the never-empty types, the structured readout, public-versus-private filtering | RES30, H.15, K.5 |
@@ -2908,9 +2960,10 @@ setting with its default stated once.
   projection can be joined back to the input that caused them (H.10).
 - **Inspect reports.** Every module with state implements `Inspect`, returning a typed report with
   an audience (operator, host, seat), so hidden content is redacted by the report itself and not by
-  the caller. The reports are the data behind the nine CLI verbs (RES33): `list`, `show`, `history`,
-  `config`, `dump`, `force`, `input`, `viable`, `describe`. The host serves them; the crate defines
-  them, so a machine without a report fails the conformance suite.
+  the caller. The reports are the data behind the CLI verb set, which is the H.16 list (RES33: "the
+  H.16 verbs as a fixed set", with `describe` generated from the registry; the earlier "nine verbs"
+  were a subset of it, and the dev CLI implements only some verbs today, see O.12). The host serves
+  them; the crate defines them, so a machine without a report fails the conformance suite.
 - **Replay and golden sessions.** A `TurnRecord` (input, draws, outcome, effects, state hash) is
   produced for every committed input. The golden-session runner replays a script of inputs against
   scripted ports and compares records and state hashes, which is how the section G traces and the M.2
@@ -2921,8 +2974,11 @@ setting with its default stated once.
 
 **O.7 Typing and invariants worth stating up front.**
 
-- `Outcome` has exactly four shapes, and `Pending` carries a `PendingKind` of choice, roll, reaction or
-  ruling. `Decline` carries a code, a reason, the missing piece if any, and alternatives, and a
+- `Outcome` has exactly four shapes (applied, needs clarification, declined, pending), and `Pending`
+  carries a `PendingKind` of choice, roll, reaction or ruling. RES27's step result has a fifth value,
+  `Waiting{pending_id}`, which is the machine's report that a pending is open and not a fifth outcome:
+  the pipeline records the input's outcome as `pending{...}`, so the four outcomes stand. `Waiting`
+  belongs to the machine's `StepResult` and is not a variant of `Outcome`. `Decline` carries a code, a reason, the missing piece if any, and alternatives, and a
   decline can only be built with a reason (the constructor requires non-empty text).
 - `NonEmptyText` is the only type a projection's narration slot accepts, and
   `Narration::or_readout(model, readout)` returns the readout when the model text is blank, so the
@@ -2968,7 +3024,7 @@ surface. The old L.6 slices are void because the old code is gone.
    the structured readout, clarification and confirmation, engine inputs. Acceptance: the section G
    traces 1, 2 and 4 as golden sessions, plus the three known-bad lines.
 5. **C4 Pending and windows.** `pending` with two-phase apply, held turns, answers by pending id,
-   rulings with keyed reuse. Acceptance: the M.2 register rows D4 to D7 as fixtures, and a restart
+   rulings with keyed reuse. Acceptance: the M.2 register rows M2-D4 to M2-D7 as fixtures, and a restart
    test that replays a committed pending without re-drawing.
 6. **C5 Projection.** Audience projections, status, never-empty, sentinel-secret and paired-state
    tests. Acceptance: a seat never sees another seat's private fact in any projection.
@@ -3002,6 +3058,16 @@ table is empty and the dev CLI spawns elements at run time, so the engine can be
 recompiling. It is built in `crates/df-table` (the pure model) and `crates/df-table-host` (the host and
 the `df-table` binary), and it is the workbench the machines and the pipeline will plug into.
 
+- **Departures from O.1 to O.9 (the `df-table` crate docs in `crates/df-table/src/lib.rs` list the
+  same).** The built slice is a workbench that exists ahead of O.9's order, which puts the host last,
+  after C0 to C7: `crates/df-table`, `crates/df-table-host` and `crates/df-playground` are already
+  workspace members. It is not C0 yet: there is no `outcome`, `envelope` or `owner_queue`. Only one of
+  the eight ports of O.4 exists (`EventSink`). The revision is a bare counter, not `SessionRevision`
+  (no recovery epoch exists yet). `EventClass` has two values (always, verbose), not the classes A and
+  B of O.6, and an event has no `Correlation` or `OperationId`. `CanvasEffect` stands in for the first
+  `TableEffect`, and the vocabulary says "canvas" where the plan says "table". Elements are entities in
+  a small entity-component world (`ecs`, `world`, `motion`), which O does not describe (see the ECS
+  bullet below). O.2's dependency list is not yet true either (see O.2).
 - **What it is.** A table that starts with nothing on it. Elements are placed on a 100 by 56.25 canvas
   and drawn by a live viewer. Every change is an effect that is checked, applied and recorded as a typed
   event, and every refusal is recorded too.
@@ -3015,7 +3081,8 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   (`--port`, `--kinds DIR`, `--moves`, `--quiet`). `df-table dev <command>` talks to it:
   `spawn <kind> <id> [x=N] [y=N] [field=value ...]`, `set <id> field=value ...`, `move`, `despawn`,
   `clear`, `canvas`, `kinds`, `events [after]`, `reload`, `script <file>` (a file of commands, one per
-  line, checked in full before anything runs) and `help`. A command that sends several effects applies
+  line; every line is parsed before anything runs, so a typo on a late line runs nothing, and then
+  running stops at the first line that fails, with the lines before it staying applied) and `help`. A command that sends several effects applies
   them in order and reports every failure. The debugging viewer is server-rendered SVG that refreshes
   itself with a meta tag and no JavaScript, as the project rules require; it reloads the page each
   second, so the live view for design work is the browser playground (`crates/df-playground`).
@@ -3033,7 +3100,14 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   breaks it shows the break: the status copy, the caption dwell, and the choice-list rule (at most four
   suggested choices, fixed groups, labels of at most four words).
 - **The dev CLI has full access (local builds only).** Hosted builds expose only the operator-safe
-  verbs of H.3 and H.16, and driven changes will carry `driven=true` once sessions exist. The host, not
+  verbs of H.3 and H.16: `force`, `fixture` and every verb that can read hidden or private content are
+  operator-only and absent from hosted builds (RES43, H.3, H.16), and driven changes will carry
+  `driven=true` once sessions exist. Question 34 (read freely, drive only for scripted tests) still
+  limits driving live tables. Verbs implemented today (the usage text of
+  `crates/df-table-host/src/command.rs`): `spawn`, `set`, `move`, `travel`, `stop`, `despawn`,
+  `clear`, `canvas`, `kinds`, `events`, `reload`, `playground`, `scene`, `fixtures`, `fixture`,
+  `script`, `repl` and `help`. These are workbench verbs; the H.16 set (`dump`, `force`, `input`,
+  `viable`, `describe` and the rest) arrives with the machines. The host, not
   the page, owns what the playground shows, so the CLI and
   the browser change the same state and see each other's changes within a poll. `df-table dev playground`
   prints it and `playground set fixture=NAME device=both|tv|phone pace=slow|normal|fast status=KEY
@@ -3105,6 +3179,9 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   `df-tools` native and wasm checks, the workspace check and `df-tools` lib tests passing, and the
   `df-portal` test compile error and two `df-server` environment-read tests failing as before. The
   crate plan of section O followed, at the owner's request.
-- **Round 4 (next).** A small round: re-test the M.2 register against the pinned source and check
-  the new text for contradictions.
+- **Round 4.** The planned small round (re-test the M.2 register against the pinned source and check
+  the new text for contradictions). Its findings were filed as GitHub issues #1490 to #1525 and are
+  being applied in place: older prose is edited to agree with RES35 to RES52 and the M.2 register,
+  the status and count lines are corrected, and section O gains an explicit list of departures from
+  its own plan (O.12). Four review rounds have been run; the RES list ends at RES52.
 
