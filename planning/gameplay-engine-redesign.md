@@ -979,15 +979,17 @@ questions 56 onward are new.
     crate (planned to depend on `df-types` and `df-model`; today it depends on `serde` and
     `serde_json` only) and `df-table-host` as its async host, with the new edges recorded in
     `subsystem-architecture.md`. The crates are already workspace members as a workbench. Draft
-    default: yes.
+    default: yes. **Decided 2026-11-02: yes (the draft default), under the O.16 goal; the edge to
+    `df-types` and `df-model` is added when C6 needs ids and the checkpoint, not before.**
 88. **The port set (O.4).** Are the eight ports (rules owner, interpreter, narrator, broker, clock,
     dice, knowledge view, event sink) the right minimum for C0? Draft default: yes; split a port if
-    it proves too coarse, never remove one.
+    it proves too coarse, never remove one. **Decided 2026-11-02: yes; C0 builds all eight
+    ports with traits and fakes.**
 89. **A stable event contract (O.6).** Which fields of a class A event may never change once
     operators read them? Draft default: table, scene, machine, operation id, `turn_seq`, cause and
-    `ms`, additive changes only.
+    `ms`, additive changes only. **Decided 2026-11-02: yes; a test pins the class A field names.**
 90. **The first machines (O.9, C2).** Which two machines prove the `Machine` trait? Draft default:
-    lobby and a minimal explore.
+    lobby and a minimal explore. **Decided 2026-11-02: yes (lobby and a minimal explore).**
 
 ## Ideas to come
 
@@ -3708,6 +3710,15 @@ stays where D.6, K.13, M2-D17 and R06 put it.
   and `focus_hold_s` 8. The DM model suggests named directions only. The camera starts wide in combat so
   the whole fight is legible, and focuses on the active creature only when more than four figures are
   on the stage. Pace is linear in the playground; easing is a T2 option and is not needed for gameplay.
+  *Decided for #1589:* a remote seat that opens the shared screen in its own tab sees the same camera
+  value as the room's TV (one shared value) and a per-seat `auto_focus` off or `reduced_effects` applies
+  only to that seat's own view of the shared screen, drawn wide or without motion, never to the room's TV
+  or to another seat; the TV host's settings govern the room's TV. A phone has no camera, so the setting
+  does not apply to it. *Decided for #1590:* the page limits the zoom to what the picture can bear:
+  the effective ceiling is the least of 400%, the plate's width in pixels over the stage's width in
+  device pixels, and the zoom the Director asked for; a library record carries the picture's pixel size,
+  the Director sees the ceiling in `director show`, and a request over it is clamped and logged
+  (`CAMERA clamped requested=400 allowed=210`), not refused, so a scene never loses its focus.
 
 **O.15 Looping video and per-item sound (planned; extends O.12 pictures and sound).** Pictures and
 scene-wide sound are built. Two things are not: a video that plays in a loop in a picture slot or a
