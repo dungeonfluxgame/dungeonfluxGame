@@ -995,6 +995,55 @@ questions 56 onward are new.
 
 Add further ideas below as they are shared, in the owner's words with a restatement.
 
+1. **A look-ahead thread (2026-11-02).** The owner's words: "add this idea to the queue a look ahead
+   thread to start building the next scene before the timing of the transition". Restated: a worker
+   per table that, while the current scene is playing, works out which scene comes next and starts
+   building it in the background, so that when the machine hands off the next scene is already Ready and
+   the transition never waits. It builds on REF-067 (adjacent places are prefetched on the lowest queue
+   class, question 73 closed for places), K.2 (art is never a gate; `scene_build_budget_s` and the
+   establishing card stay the fallback) and F.3 (the destination is created in the background), and it
+   answers the second half of question 22 ("is the next scene built ahead of time?") for every scene,
+   not only travel. Queue item: O.16 step SB-LA. Design (draft, change on request):
+   - *Where it runs.* One async task per table in `df-table-host`, never on the owner thread (L.7) and
+     never an operating-system thread per scene. The pure crate supplies `lookahead_candidates(table
+     state) -> Vec<Candidate>` (a scene to build, why it is expected, how likely, and the facts the
+     build would depend on); the host asks the broker to build each and holds the results in a small
+     book of ready scenes keyed by place and a `world_stamp`.
+   - *What it predicts.* In order of certainty: the next scene of an authored beat script (certain);
+     the destination of a travel leg as soon as the leg is committed (certain); the exits of the
+     current place (adjacent places, REF-067), ranked by what the narration has hinted and by the
+     party's stated intent; a likely encounter or stop on a route. Up to `lookahead_depth` candidates
+     are built (default 1 certain plus the 2 most likely; a setting, not a rule).
+   - *When it starts.* As soon as a candidate is certain, and otherwise `lookahead_start_s` after the
+     current scene is Ready (so it never competes with the current scene's own plate), and it pauses
+     while the current scene's plates or a live line need the lane.
+   - *Never a gate, never a leak.* It uses the lowest broker queue class, is preempted by any
+     current-scene request, can be cancelled, and has a deadline; a late or missing result changes
+     nothing: the table plays on the establishing card (K.2). A scene being built shows nothing to any
+     audience before the transition, builds only from data every audience may know or from the
+     authored record, and its assets are not sent to a client before the transition (the browser
+     preloads them at a K.3 swap window, O.15).
+   - *Stale results.* Each build records the `world_stamp` of the facts it used (cast present, time of
+     day, weather, scene state). On the transition the stamp is compared with now: unchanged is a hit;
+     a small change re-runs only the dress step and keeps the picture (a cast or time change that does
+     not alter the plate's contents) or marks the plate stale and falls back to the establishing card
+     while a rebuild runs; a result for a scene the table did not take stays in the book for reuse
+     until its stamp ages out.
+   - *Cost and measure.* Every look-ahead request is recorded with its purpose, so the cost view shows
+     how much was spent on scenes that were used and on scenes that were not (waste ratio), as the
+     owner already reads spend (record, never block). Metrics: `lookahead.hit`, `lookahead.miss`,
+     `lookahead.stale`, `lookahead.cancelled`, `lookahead.wasted_cost`, and `travel.arrival_wait{ms}`
+     (F.3), whose target is near zero for a certain next scene.
+   - *Settings.* `lookahead_enabled`, `lookahead_depth`, `lookahead_start_s` and a per-hour cost
+     ceiling with a very large default (scope down on a measured need).
+   - *Tests.* With a scripted broker: a certain next scene is Ready at the transition (hit); a slow
+     build falls back to the establishing card at `scene_build_budget_s` (miss); a changed world stamp
+     rebuilds or patches as above; a live plate request preempts a look-ahead build; closing the table
+     cancels every build; an unused scene is kept and later reused; no content from a pending build
+     reaches any projection before the transition.
+   - *Build order.* First the certain next scene's dress step and background (needs only H1 and SB),
+     then its plate and Locate stages (needs S2), then weighted candidates for exits and routes.
+
 ## Analysis (refinement loop, rounds 1 to 4)
 
 This section was written after the owner asked for a refinement loop with an adversarial agent to
@@ -3037,7 +3086,7 @@ does and how it fails.
 
 | Module | Owns | Implements |
 |---|---|---|
-| `outcome` | `Outcome` (applied, needs clarification, declined, pending), `Decline`, `DeclineCode`, `PendingKind`, the mapping from a decline to a public class | RES16, RES26, C.6, RES40 |
+| `outcome` | `Outcome` (applied, needs clarification, declined, pending), `Decline` (its `Debug` shows the code and length classes only), `DeclineCode`, `PendingKind`, `OutcomeKind`, and the three exhaustive tables of a code: key, reason text, public class (built at C0) | RES16, RES26, C.6, RES40 |
 | `envelope` | `InputEnvelope`, `InputKind` (tap, submit text, say, private message, safety card, engine proposal, timer, resource result, pending answer), seat and utterance ids, `ViewStamp` | C.1, RES21 |
 | `owner_queue` | the three capped lanes, per-seat round-robin, per-seat bounds, a token bucket, duplicate detection, the serve order and `turn_seq` | RES22, H.2, C.1 |
 | `machine` | `MachineId`, `Scope`, `MachineSpec`, `StepResult`, `HandOff`, the `Machine` trait | RES27, RES28, RES20 |
@@ -3047,11 +3096,15 @@ does and how it fails.
 | `effects` | `TableEffect` (a versioned closed enum), the applier over table state, the `carry` list | RES18, RES32, RES3 |
 | `table_state` | the composition view of the owners' state (checkpoint, world time, scenes, seats, cast), `scenes[]`, `scene_epoch` | D.1 to D.7, RES25 |
 | `projection` | audience projections, `ProjectionStatus`, the never-empty types, the structured readout, public-versus-private filtering | RES30, H.15, K.5 |
-| `ports` | the seams: rules owner, interpreter, narrator, broker, clock, dice, knowledge view, event sink | O.4 |
-| `event` | `TableEvent`, event classes, the private-data types, the audit-line rendering | O.6 |
+| `ports` | the seams: rules owner, interpreter, narrator, broker, clock, dice, knowledge view, event sink, and the small values they exchange (built at C0) | O.4 |
+| `event` | `TableEvent` (canvas and engine variants), event classes, `PipelineStep`, `FailureCause`, the exhaustive audit-line rendering through `write_audit_line`, the one renderer (built at C0) | O.6 |
+| `event_field` | the sealed `EventField` list of types an event may carry (ids, counts, closed keys, `LengthClass`, `EvidenceRef`) and the allocation-free line writer; split from `event` so the privacy rule has one home (C0) | O.6, RES36 |
+| `private_data` | `PlayerText`, `Narration`, `Secret<T>` and `LengthClass`: no `Display`, no serde, no `EventField`, `Debug` shows a length class only; split from `event` (C0) | O.6, RES36 |
+| `identity` | `TableId`, `SceneId`, `SeatId`, `TurnSeq`, `MachineId`, and the `df-types`-shaped `OperationId`, `FactId`, `EvidenceRef`, `RecoveryEpoch`, `SessionRevision`, plus `Correlation` and `TableScope`; local until the `df-types` edge at C6 (C0) | O.6, RES42, H.10 |
+| `listed` | the one macro that declares a closed enum with its generated `ALL` list, crate-private (C0) | O.5 |
 | `inspect` | `Inspect` reports and the verb set behind the CLI | H.16, O.6 |
-| `config` | typed settings with defaults, ranges and owners | RES50, J.4 |
-| `testkit` (feature) | `ManualClock`, `ScriptedBroker`, `RecordingSink`, scripted interpreter and rules owner, the golden-session runner, the conformance suite | H.17 |
+| `config` | typed settings with defaults, ranges and owners; load-time validation with fallback and a `SettingRejected` event. Built at C0 with five settings; three names (`seat_pending_limit`, `seat_rate_burst`, `seat_rate_sustained_per_s`) are working names awaiting owner review, every range maximum is the large `LARGE_SETTING_MAXIMUM`, and the one cross-setting rule is J.4's (`narration_late_s` is never below `narration_batch_s`) | RES50, J.4 |
+| `testkit` (feature) | `ManualClock`, `ScriptedBroker`, `RecordingSink` (bounded, counts what it drops), scripted interpreter and rules owner, scripted and failing narrators, queued dice, a fixed knowledge view with sentinel secrets; a call outside a script panics with the port and the question (built at C0); the golden-session runner and the conformance suite follow | H.17 |
 
 **O.4 The seams.** Every outward dependency is a port owned by this crate and has two real
 implementations, a production adapter and a scripted fake (which satisfies the style rule on
@@ -3067,6 +3120,23 @@ traits). The pipeline and the machines see only the ports.
 | `Dice` | the explicit draws for a decision | `df-session` supplies them | queued draws |
 | `KnowledgeView` | what an audience may know | `df-knowledge` | fixed sets with sentinel secrets |
 | `EventSink` | record a `TableEvent` | the audit line plus OTEL sink in the host | `RecordingSink` |
+
+Notes from C0 (decided 2026-11-02):
+
+- **Correlation.** Every port method takes the `Correlation` of the input it serves, except `Clock`
+  (time belongs to no input) and `EventSink` (an event carries its own correlation). O.6's "every
+  port call receives" means every port that does work for an input.
+- **Shared and threaded.** All eight traits are `Send + Sync` and object safe, `EventSink` included.
+- **Declines.** `RulesOwner::prepare` and `resolve` return the whole `Decline` (code, reason, missing
+  piece, alternatives), because only the rules owner knows what is missing and what would be legal
+  (RES16, O.7). The pipeline never writes rules text.
+- **Ids.** `FactId` and `OperationId` have the 128-bit `df-model` and `df-types` shape (32 lowercase
+  hex digits, never zero, may start with a digit). `ActionId` is a registry name, not an identity:
+  the action registry owns the set.
+- **Fakes.** A fake never answers outside its script: it panics naming the port and the question, so
+  a forgotten line can neither pass as an outage (which the pipeline survives, C.7) nor as a decline.
+  Faults are scripted on purpose. A broker handle answers only from its own script, and an unissued
+  or forgotten handle is `stale`.
 
 **O.5 Flexibility: how each kind of change is made.** The rule is closed inside, open across
 (`Principles`, D24): a closed enum inside one machine so the compiler proves every case, and a
@@ -3219,10 +3289,12 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
 - **Departures from O.1 to O.9 (the `df-table` crate docs in `crates/df-table/src/lib.rs` list the
   same).** The built slice is a workbench that exists ahead of O.9's order, which puts the host last,
   after C0 to C7: `crates/df-table`, `crates/df-table-host` and `crates/df-playground` are already
-  workspace members. It is not C0 yet: there is no `outcome`, `envelope` or `owner_queue`. Only one of
-  the eight ports of O.4 exists (`EventSink`). The revision is a bare counter, not `SessionRevision`
-  (no recovery epoch exists yet). `EventClass` has two values (always, verbose), not the classes A and
-  B of O.6, and an event has no `Correlation` or `OperationId`. `CanvasEffect` stands in for the first
+  workspace members. C0 is built since 2026-11-02 (`outcome`, `event` with the engine variants,
+  `identity`, `private_data`, `event_field`, `ports` with all eight traits, `config`, `testkit` and the
+  architecture test); `envelope`, `owner_queue` and the rest of C1 to C7 are not. The canvas events keep
+  their bare revision counter and carry no `Correlation`; the engine events carry `SessionRevision`
+  and `Correlation` from `identity`, local types until the `df-types` edge at C6. `EventClass::Always`
+  and `Verbose` are the classes A and B of O.6. `CanvasEffect` stands in for the first
   `TableEffect`, and the vocabulary says "canvas" where the plan says "table". Elements are entities in
   a small entity-component world (`ecs`, `world`, `motion`), which O does not describe (see the ECS
   bullet below). O.2's dependency list is not yet true either (see O.2).
@@ -3741,18 +3813,30 @@ figure, and sound that comes from one element. Both are presentation (O.13), dri
 drivers as the other controls (O.14), and neither may carry anything a rule depends on.
 
 - **What exists and what is missing.** The media library takes png, jpg, jpeg, webp and gif pictures
-  and mp3, ogg, wav, m4a and opus sounds, at most 16 MiB a file and 128 files, served with an ETag and
+  and mp3, ogg, wav, m4a and opus sounds, with large defaults in one constants block (2 GiB a file,
+  10,000 files; scope down on a measured need), served with an ETag and
   `304`. An animated GIF already loops as a picture. Sound is scene-wide: `scene sound` plays one cue
   by id for `both`, `tv` or `phone`, `scene music` sets one track per scene, and the page's audio
   engine reports whether sound is locked until someone clicks. Missing: a video type, any placement of
   one, range requests, any link between a sound and an element, and any position in a sound.
 - **Video: the file.** The library accepts `mp4` (H.264 with AAC) and `webm` (VP9 with Opus). The type
   is read from the first bytes (the `ftyp` box or the EBML header), never trusted from the extension,
-  so a renamed text file or an SVG is refused with the reason. A video is at most 64 MiB and 60 s, and
-  a library may hold 16 of them (they count against the 128 files). The host serves video with `Range`
+  so a renamed text file or an SVG is refused with the reason. The limits are large defaults in one
+  constants block (`MediaLimits::DEFAULT`, owner decision 2026-11-02: scope down on a measured need):
+  2 GiB a file of any kind, a video of at most 12 hours, 10,000 files in the library and no separate
+  count for videos. Memory safety does not come from small caps: an upload is decoded to a staged file
+  as it arrives, a file is read through its handle a few bytes at a time, and a file is streamed to
+  the page in chunks. The host serves video with `Range`
   requests and `206` answers, because browsers need them to start and to seek, and keeps the ETag and
   `304`. A video may name a `poster`, a picture from the library shown while it loads, if it fails,
   and under reduced effects.
+  A file whose duration cannot be read is refused with that reason (decision recorded 2026-11-02,
+  change on request). The common cases are a fragmented mp4 (`ftyp dash`, an `mvhd` duration of 0 with
+  the length in `mvex/mehd`) and a webm from a browser MediaRecorder or a live muxer (no `Duration`
+  element). Each is refused, and the refusal says why, because the limit on length could not otherwise
+  be checked when the file enters the library; a re-mux (`ffmpeg -i in -c copy out.mp4`) writes the
+  length. The length is the container's own claim: a file can state 1 s and play longer, so the limit
+  checks the header, not the media.
 - **Video: placement and play.** A picture slot may hold a video wherever it holds a picture: the
   shared screen's backdrop and card, a phone's image, and an element (an `avatar` or a `set_piece`
   kind's `video` field, drawn in its figure the way `portrait` is). `scene video SLOT NAME [loop=true]
@@ -3831,8 +3915,10 @@ drivers as the other controls (O.14), and neither may carry anything a rule depe
   element=goblin_3 reason=voice_cap`, each with the driver's reason.
 - **Acceptance cases.**
   - *Ingest.* Accepts a real mp4 and a real webm; refuses a text file renamed `.mp4`, an SVG, a video
-    over 64 MiB or 60 s, and a 17th video; a `Range` request returns `206` with the right bytes and a
-    request past the end returns `416`.
+    over the size limit (2 GiB) or the length limit (12 hours), or one whose length cannot be read; at
+    the boundary of each limit the answer changes (tested with sparse and synthetic files, never
+    GiB of memory); a `Range` request returns `206` with the right bytes, a request past the end
+    returns `416`, and a `HEAD` reads no bytes.
   - *Loop.* A video loops with no `ended` event and no black frame at the seam in a browser check; a
     redraw 2.2 s into a 3 s loop resumes within 250 ms of where it was; a new placement restarts it; a
     scene change forgets it; a leaving copy does not play a second video.
@@ -3860,7 +3946,8 @@ drivers as the other controls (O.14), and neither may carry anything a rule depe
   and follows the unlock. Both mp4 and webm are accepted so every browser has one. Per-item sound is
   spatial only on the shared screen; a phone gets mono. The pan limit is 0.8, the gain floor 0.35 and
   the voice limits 12 and 6. Reduced effects shows a poster but does not mute sound; a separate
-  per-seat switch turns item sound off.
+  per-seat switch turns item sound off. Media limits are large defaults in one constants block (2 GiB
+  a file, 12 hours a video, 10,000 files), scoped down on a measured need (owner, 2026-11-02).
 
 **O.16 Master build order (amends O.9; merges O.9, O.13, O.14 and O.15).** The plan has four orders
 that were written at different times: O.9 (the pure crate C0 to C7, then the host H0 to H3), O.13 (T0
@@ -3911,6 +3998,7 @@ and where it is accepted. It was written from a review of the plan against the c
   | H2 | The event sink to `df-observe` and the full CLI verb set (H.16) | H0 | H1 | the audit lines and `dump`, `viable`, `projection show` on a real run |
   | H3 | The first playable path: lobby, one story scene, one conversation, on a TV and a phone | C4 to C7, W1, K0, H1, H2 | T and V steps | RES44: an evaluator operates the TV and a phone; S1 rerun with the real projection |
   | SB | The scene builder (Describe, Background, Plate, Locate, Ready), the plate scheduler and the playout buffer | H1, S2 | G1 | RES44 plus the K.2 and K.3 timings measured from the logs |
+  | SB-LA | The look-ahead worker (idea 1 in "Ideas to come"): while a scene plays it builds the next scene through the broker on the lowest queue class, so the transition finds it Ready | SB, H1 (first version needs no plate: the dress step and background of a certain next scene; the plate and Locate stages need S2) | G1 | scripted-broker tests (hit, miss, stale, preempt, cancel), then RES44 with the K.2 and K.3 timings from the logs showing `travel.arrival_wait` near zero |
   | G1 | The Director's camera stage (O.14) driving the same checked numbers as the dev verbs, with `director show` | C6, H0 | SB | a controlled clock; the O.14 acceptance cases that need no engine events |
   | G2, G3 | Engine wiring and the reasons (positions and speakers, then `hit`, `reveal`, `roll`, `spotlight`) | G1, H3 | machines | O.14 acceptance, including the hidden and visibility cases |
   | T0 to T2 | Rotation for elements, scale, flip, opacity, layer, the generic tween (O.13) | none | everything | O.13 acceptance and a browser measurement |
@@ -3963,6 +4051,33 @@ and where it is accepted. It was written from a review of the plan against the c
     travel legs, hazards, traps and falling, per-cell light, Exhaustion, identify, price and purse, level from XP,
     flee and surrender outcomes. RR is re-read before each machine starts, and a machine's row changes when its
     smallest addition lands.
+- **S2 result (2026-11-02).** Run over 20 stored plates (concept art, launcher art and one gameplay plate; the live
+  plate cache held none) with 101 free noun phrases I wrote by eye (5 or 6 per plate, 40 of them hard: small,
+  partly hidden or generic), one call each to `fal-ai/sam-3-1/image-rle` with `max_masks` 10. Found means an
+  instance whose mask centroid lies on the named item, checked on overlays against by-eye boxes. First pass: 74
+  of 101 found (73 per cent), under the 80 per cent bar; easy items 53 of 61 (87), hard items 21 of 40 (53). A
+  second call with a plain head noun (26 calls, for example "boat" for "rowboat", "lantern" for "paper lantern",
+  "ladder" for "wooden ladder", "fire" for "fire brazier") recovered 14 of the 26 misses: 88 of 101 (87), hard
+  31 of 40 (78). Misses that remained: small, thin or dark things (warhammer, cork float, buoy, clay urn,
+  wooden staff), a part-hidden round shield, an open-lattice armillary sphere, a gothic window, rolled scrolls,
+  one chest and one fire basket in dim light, a fallen column on a top-down map. By the largest by-eye box of
+  the item, share of the plate: under 0.2 per cent 3 of 8 found, 0.2 to 1 per cent 25 of 38, 1 to 3 per cent 25
+  of 30, over 3 per cent 21 of 25; lit lanterns and candles at 0.01 to 0.1 per cent were still found, so
+  contrast matters as much as size. False positives: 141 of 295 instances fall outside my boxes, but most are
+  other real instances of the same noun (lantern, candle, barrel and post return up to the cap of 10); by eye
+  about 15 instances (5 per cent) sit on a wrong object (a "globe" prompt returned an armillary sphere, a
+  "torch" prompt a lit staff, a "barrel" prompt a sack) and about as many are doubtful. Scores do not separate
+  them (median 0.78 on the item, 0.64 off it). Relations are not understood ("map on the table" returned all
+  six maps, five on walls). Median latency 1.48 s per call (0.9 to 3.0 s, one call at a time, with a 0.3 to
+  0.5 MB upload); 127 calls, about USD 1.27 at the list price in `sam-3-1-research.md` (not read from a bill).
+  Limits: one run each, my phrases and my boxes are the only ground truth, and the art was not generated from
+  a thing list. Verdict: against the bar as written (one free phrase per item) SAM fails. Item hotspots that
+  matter (puzzle items, and any small, dark or hidden thing) get their own pictures from the start. SAM can
+  locate scenery and large or lit items if the Locate stage tries up to three phrases (full phrase, plain head
+  noun, a synonym), asks for 10 masks, keeps the instance nearest the scene fact's stated position, and falls
+  back to the item's own picture on zero instances; that reaches 87 per cent at up to two calls per item.
+  Evidence: `artifacts/tmp/sam-spike/` (scripts, `out/results.jsonl`, `out/retry.jsonl`, `out/summary.json`,
+  overlay sheets).
 - **Gates.** *Gate A (spine ready)* is B0, C0 to C3 and S1 within budget: the engine accepts an input
   through the queue and pipeline over fakes and the owner thread is shown to fit its budget. *Gate B (first
   playable)* is H3 accepted under RES44. No machine beyond lobby and the minimal explore starts before
