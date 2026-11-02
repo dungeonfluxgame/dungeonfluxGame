@@ -492,14 +492,9 @@ mod tests {
     }
 
     #[test]
-    fn the_pack_ships_every_clip_and_the_server_allowlist_names_it() {
-        let allowlist = include_str!("../../../df-tools/src/gameplay/startup_configuration.rs");
+    fn the_pack_ships_every_clip() {
         let folder = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/ui/generated/sfx");
         for clip in ALL_CLIPS {
-            assert!(
-                allowlist.contains(&format!("\"{clip}\",")),
-                "{clip} not in SFX_NAMES"
-            );
             let bytes = std::fs::metadata(format!("{folder}/{clip}.mp3"))
                 .unwrap_or_else(|error| panic!("{clip}.mp3: {error}"))
                 .len();

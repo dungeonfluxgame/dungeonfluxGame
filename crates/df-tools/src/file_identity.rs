@@ -174,12 +174,6 @@ impl FileIdentity {
             true
         }
     }
-
-    /// A directory that may hold owned state: a real directory, not a link,
-    /// with the private mode where modes exist.
-    pub(crate) fn is_private_dir(&self) -> bool {
-        self.is_dir() && !self.is_symlink() && self.mode_equals(0o700)
-    }
 }
 
 /// Capture the identity of `path` without following a trailing link, so that

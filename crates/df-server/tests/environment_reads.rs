@@ -350,8 +350,8 @@ fn the_scan_reaches_the_game_library_and_persistence_so_it_cannot_pass_by_scanni
     let sites = scan("df-tools");
     let total: usize = sites.values().map(Sites::environment_total).sum();
     assert!(
-        total > 30,
-        "df-tools reads the environment in dozens of places, found {total}"
+        total > 5,
+        "df-tools still reads the environment in a handful of places, found {total}"
     );
 }
 

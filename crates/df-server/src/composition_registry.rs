@@ -99,7 +99,7 @@ const fn boundary(
 /// define input/serialization rather than external I/O. No public native port in
 /// the cited consumer modules is silently excluded. Server lifetime ownership is
 /// a composition responsibility; this catalogue does not construct those services.
-pub(crate) const NATIVE_BOUNDARIES: [BoundarySpec; 41] = [
+pub(crate) const NATIVE_BOUNDARIES: [BoundarySpec; 40] = [
     boundary(
         BoundaryKind::Consumer,
         "df_session::inbox::ActorInput",
@@ -430,15 +430,6 @@ pub(crate) const NATIVE_BOUNDARIES: [BoundarySpec; 41] = [
         CrateOwner::Tools,
         CrateOwner::Tools,
         "crates/df-tools/src/fixture.rs",
-        "TcpListener::bind",
-        SourceEvidence::FixtureListenerOnly,
-    ),
-    boundary(
-        BoundaryKind::Listener,
-        "df_tools::gameplay::serve",
-        CrateOwner::Tools,
-        CrateOwner::Tools,
-        "crates/df-tools/src/gameplay.rs",
         "TcpListener::bind",
         SourceEvidence::FixtureListenerOnly,
     ),
