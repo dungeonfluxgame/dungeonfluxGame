@@ -3145,7 +3145,9 @@ setting with its default stated once.
 
 **O.9 Build order for the crate, then the host.** Each step is small enough to review, ends with
 tests that fail before and pass after, and is accepted under RES44 when it reaches a user-visible
-surface. The old L.6 slices are void because the old code is gone.
+surface. The old L.6 slices are void because the old code is gone. O.16 amends this order (two
+spikes, the wire, the fixture contract, C5 before C4, H0 right after C3) and merges it with the
+presentation tracks.
 
 1. **C0 Foundations.** `outcome` (with the exhaustive decline mapping), `event` (variants, classes,
    the private types, audit-line rendering), `ports` (traits only, with the `testkit` fakes),
@@ -3833,6 +3835,87 @@ drivers as the other controls (O.14), and neither may carry anything a rule depe
   spatial only on the shared screen; a phone gets mono. The pan limit is 0.8, the gain floor 0.35 and
   the voice limits 12 and 6. Reduced effects shows a poster but does not mute sound; a separate
   per-seat switch turns item sound off.
+
+**O.16 Master build order (amends O.9; merges O.9, O.13, O.14 and O.15).** The plan has four orders
+that were written at different times: O.9 (the pure crate C0 to C7, then the host H0 to H3), O.13 (T0
+to T6, transforms), O.14 (G0 to G5, table controls) and O.15 (V0 to V5, video and item sound). The
+code does not follow O.9: the built part is the canvas workbench (O.12), and none of C0 to C7 exists
+yet. This section is the one order to build from, with what each step needs, what can run beside it
+and where it is accepted. It was written from a review of the plan against the code on 2026-11-02
+(issues #1591 to #1595).
+
+- **Facts it rests on.** `df-table` holds the canvas model only (ECS, canvas, motion, kinds); none of
+  outcome, config, envelope, owner queue, machine, registry, pipeline, pending, projection, table state
+  or inspect exists. `df-table-host` and `df-playground` are the workbench. `df-protocol` has about 26
+  lines of source and `df-api` about 760, so no view or intent can reach a client. `df-rules` has no
+  legal-choice listing and few exploration rules (O.10, M.5). The old server and its `dev latency`
+  test were deleted (O.1), so the riskiest assumption of L.7 has no test. The SAM item-location test
+  (second riskiest) has never run.
+- **Amendments to O.9.**
+  1. Two spikes are steps with owners: S1 (the owner-thread latency harness) and S2 (the SAM
+     item-location test). Both come before the work that depends on their answer.
+  2. A wire step W0 and W1 comes before H3, because the first playable path must reach a browser and a
+     phone.
+  3. A fixture contract K0 makes the playground the viewer for the real projections.
+  4. C5 (projection) is built before C4 (pending and windows): a pending choice is shown through a
+     projection, and K0 and W0 need one.
+  5. H0 (the owner actor with the queue and pipeline over fake adapters and the dev CLI) starts right
+     after C3, so C4 to C7 are exercised end to end and not only by tests.
+- **The steps.** *Needs* lists what must be done first. *Beside* lists what can run at the same time
+  without sharing edit areas. *Accepted by* says how the step is accepted (RES44 for anything a person
+  sees; tests and the CLI for the rest).
+
+  | Step | What | Needs | Beside | Accepted by |
+  |---|---|---|---|---|
+  | B0 | Close questions 87 to 90 (the crate edge, the minimum port set for C0, event class A fields that never change, the first machines for C2) and #1589, #1590 | none | T0 to T2, V0, V1 | the owner's answers recorded in the plan |
+  | C0, C1 | O.9 C0 foundations and C1 owner queue | B0 | T0 to T2, V0, V1, RR | O.9 acceptance (privacy by type, fairness, bounds, determinism) |
+  | RR | A readiness table for `df-rules`: for each machine, which rules calls exist, which are `not_supported_yet` (RES31) and which M.5 area owns the rest | none | anything | the table in the plan; no code |
+  | S1 | Owner-thread latency harness in `df-table-host` over fake ports: six seats and a TV, queue, a representative projection and a stub commit; report p50 and p95 of the view queue and the reduce | C1 | C2 | numbers recorded against H.5 (projection under 5 ms, rules-only path under 400 ms p95); a miss changes the design before C3 |
+  | S2 | The SAM item-location test: free noun-phrase prompts over about 20 stored plates (about $0.20) | none | anything | found rate recorded; under about 80 percent, item hotspots use their own pictures (L.7) |
+  | C2 | Machines, registry, conformance suite, lobby and a minimal explore | C0, C1 | S1, S2 | O.9 acceptance (a broken machine fails each check) |
+  | C3 | The pipeline over scripted ports, the golden sessions G.1, 2, 4 and the three known-bad lines | C2 | S2 | O.9 acceptance; goldens reviewed against the pinned source (RES52) |
+  | H0 | The owner actor and the dev CLI over fake adapters | C3, S1 | C5 | an input to a projection through the real queue, CLI-driven; S1 rerun on it |
+  | C5 | Projection: audiences, never-empty, sentinel-secret and paired-state tests | C3 | H0 | O.9 acceptance |
+  | K0 | The fixture contract: the playground's `Fixture` is a serialisation of the real shared-screen and seat projections; a host test projects a table state for the TV and a seat and parses it with `df_playground::fixture::Fixture` | C5 | W0 | the contract test, then the playground shows a real projection |
+  | W0, W1 | The first `MachineView` and `MachineIntent` fields under the field ledger (RES33, RES40), the generated contract, the WASM feasibility gate of `rpc-transport.md`, and one view and one intent through the gRPC-over-WebSocket bridge | C5 | K0 | the bridge round trip in a browser; field ledger entry |
+  | C4 | Pending and windows, two-phase apply, held turns, rulings | C5 | C6 | O.9 acceptance (M2-D4 to D7, restart without redraw) |
+  | C6 | Table state and scenes (epochs, seats and presence, the hand-off stack) | C3 | C4 | O.9 acceptance |
+  | C7 | Inspect and replay | C4, C6 | H1 | a recorded session replays to the same state hash |
+  | H1 | The broker (the rebuilt `Hub` with text and image kinds, queue classes, leases and epochs) | H0 | C4 to C7 | the broker's own tests; every service call audited at one place |
+  | H2 | The event sink to `df-observe` and the full CLI verb set (H.16) | H0 | H1 | the audit lines and `dump`, `viable`, `projection show` on a real run |
+  | H3 | The first playable path: lobby, one story scene, one conversation, on a TV and a phone | C4 to C7, W1, K0, H1, H2 | T and V steps | RES44: an evaluator operates the TV and a phone; S1 rerun with the real projection |
+  | SB | The scene builder (Describe, Background, Plate, Locate, Ready), the plate scheduler and the playout buffer | H1, S2 | G1 | RES44 plus the K.2 and K.3 timings measured from the logs |
+  | G1 | The Director's camera stage (O.14) driving the same checked numbers as the dev verbs, with `director show` | C6, H0 | SB | a controlled clock; the O.14 acceptance cases that need no engine events |
+  | G2, G3 | Engine wiring and the reasons (positions and speakers, then `hit`, `reveal`, `roll`, `spotlight`) | G1, H3 | machines | O.14 acceptance, including the hidden and visibility cases |
+  | T0 to T2 | Rotation for elements, scale, flip, opacity, layer, the generic tween (O.13) | none | everything | O.13 acceptance and a browser measurement |
+  | V0, V1 | Video in the library and on the page (O.15) | none | everything | O.15 acceptance and a browser measurement |
+  | V2, V3 | Item sound from an element, kind sounds, loops, footsteps (O.15) | none for the playground; V4 needs G1 | everything | O.15 acceptance |
+  | V4, V5 | Director cues and the projection rules; provider video, preload at a K.3 swap window | G1, SB | machines | O.15 acceptance and the measured start times |
+  | T3 to T6 | Filters, camera pan and drift, path, timelines, derived condition transforms | T2; T6 needs C5 and G1 | machines | O.13 acceptance; T6 behind the audience rules |
+  | M | The machines after H3, each behind a rules-readiness gate: travel, rest, shop and inventory, item inspector (needs S2 and SB), advancement, and combat last | H3, RR | G and V steps | the conformance suite, a golden session and RES44 per machine |
+
+- **Gates.** *Gate A (spine ready)* is B0, C0 to C3 and S1 within budget: the engine accepts an input
+  through the queue and pipeline over fakes and the owner thread is shown to fit its budget. *Gate B (first
+  playable)* is H3 accepted under RES44. No machine beyond lobby and the minimal explore starts before
+  Gate A, and no step that shows engine state to a person starts before K0 and W1. A machine starts only
+  when RR shows its rules calls exist or are declined `not_supported_yet` by the adapter (RES31).
+- **Order of the machines after H3, and why.** Dialogue (in H3) and explore need the fewest rules.
+  Travel and rest need exploration and time rules that exist in part (M2-D43, M2-D46). Shop and
+  inventory need the purse and item model (D20) and no SAM. The item inspector needs S2 and SB. Advancement
+  needs the creation rules (R02, R16). Combat needs legal choices, spells and the tactical layer in
+  `df-rules`, the largest gap, so it comes last and may need its own rules work first.
+- **What runs in parallel and who works on it.** The spine (C0 to C7) is one sequence with one owner;
+  the host steps follow it. The playground tracks (T, V and the part of G that needs no engine) are
+  independent of the spine and can run at once in `df-playground` and `df-table-host`, one implementer per
+  work item and no two in the same files (ADR 0001, ADR 0002). Rules work (RR, then the `df-rules`
+  additions each machine needs) is a third track that touches `df-rules` only.
+- **Freeze rule.** From the adoption of this order until Gate A, changes to this document are bug
+  fixes, answers to open questions and corrections found by a review. A new design section (like O.13 to
+  O.15) needs an owner request, because each one added since round 5 produced a round of its own review
+  findings (round 6: 24 issues, about 19 from O.13 and O.14).
+- **Review.** The order is reviewed like any other part of the plan: a critic checks that every
+  dependency above exists in the section it cites, that no step shows engine state before K0 and W1, and
+  that the acceptance column names a real surface. A step added later must name its row here.
 
 ### P. Round log
 
