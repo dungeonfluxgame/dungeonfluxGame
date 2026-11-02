@@ -71,13 +71,12 @@ pub(super) async fn issue(
     }
     let run_identity =
         super::super::run_restart::identity().map_err(|_| failed("run identity unavailable"))?;
-    let saved_player = format!(
-        "v2.{}.{}.{}.{}.{}",
-        super::super::hex(&credential),
-        super::super::hex(&session),
-        super::super::hex(&run),
-        super::super::hex(member),
-        run_identity
+    let saved_player = saved_player_value(
+        &super::super::hex(&credential),
+        &super::super::hex(&session),
+        &super::super::hex(&run),
+        &super::super::hex(member),
+        &run_identity,
     );
     drop(seats);
     let token = super::config::fresh_token().map_err(|_| failed("preview ticket unavailable"))?;
@@ -116,6 +115,23 @@ fn private_response(status: StatusCode, body: Html<String>) -> Response {
         body,
     )
         .into_response()
+}
+
+/// The browser's saved-player value: version, credential, session, run, binding, run identity,
+/// save time in milliseconds and the hero name in hex (empty: a development seat has none yet).
+/// The phone client parses exactly this shape, so a link that issues any other version never
+/// leaves the loading screen.
+fn saved_player_value(
+    credential: &str,
+    session: &str,
+    run: &str,
+    binding: &str,
+    run_identity: &str,
+) -> String {
+    let saved_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_millis());
+    format!("v3.{credential}.{session}.{run}.{binding}.{run_identity}.{saved_at_ms}.")
 }
 
 pub(super) async fn consume(
@@ -174,6 +190,22 @@ mod tests {
             run_identity: "run".to_owned(),
             expires_at: now + TICKET_LIFETIME,
         }
+    }
+    #[test]
+    fn saved_player_value_has_the_eight_fields_the_phone_client_parses() {
+        let value = saved_player_value(
+            &"a".repeat(64),
+            &"b".repeat(32),
+            &"c".repeat(32),
+            &"d".repeat(32),
+            "run",
+        );
+        let fields: Vec<&str> = value.split('.').collect();
+        assert_eq!(fields.len(), 8, "{value}");
+        assert_eq!(fields[0], "v3");
+        assert_eq!(fields[5], "run");
+        assert!(fields[6].parse::<u64>().is_ok_and(|saved_at| saved_at > 0));
+        assert_eq!(fields[7], "", "no hero name yet");
     }
     #[test]
     fn screen_ticket_rejects_another_run_and_marks_pages_private() {

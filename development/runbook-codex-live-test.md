@@ -295,8 +295,11 @@ Wait about 12 seconds before relaunching so the owned PostgreSQL stops. Every la
     job commit could return `Unknown` (the job moved between two reads); the creator treated that
     as final and the phone stopped polling while the job ran on. The request is now retried
     (`retry_unknown`) like the game's own image calls.
-24. **The dev ticket page (`dev screen <seat>`) can fail with "development player scope
-    invalid".** Use the real player URL above instead.
+24. **A `dev screen <seat>` link never leaves "Setting the table…".** The link carried the old
+    `v2` saved-player value while the phone client parses `v3` (eight dot-separated fields:
+    version, credential, session, run, binding, run identity, saved-at milliseconds, hero name
+    in hex), so the client failed with "development player scope invalid". The link now issues
+    `v3`; a unit test pins the shape. A link is single-use and lasts 60 seconds, so open it once.
 25. **Test environment.** `df-persistence` imagery suites need
     `DUNGEONFLUX_REQUIRE_SCRATCH_PG=1` and, for `imagery_service`, also
     `DUNGEONFLUX_RUNTIME_PG_PORT=55471`; `imagery_execution` uses 55471 by default. Run the
