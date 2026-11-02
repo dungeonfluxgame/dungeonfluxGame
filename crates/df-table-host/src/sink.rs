@@ -35,7 +35,7 @@ impl EventSink for HostSink {
         if event.class() == EventClass::Verbose && !self.records_moves {
             return;
         }
-        self.log.push(event.audit_line().render());
+        self.log.push(event.render_audit_line());
     }
 }
 

@@ -241,7 +241,7 @@ fn the_fastest_speed_still_lands_exactly_on_the_target() {
 
 #[test]
 fn the_travel_events_render_as_audit_lines() {
-    let line = |event: TableEvent| event.audit_line().render();
+    let line = |event: TableEvent| event.render_audit_line();
     assert_eq!(
         line(TableEvent::ElementTravelling {
             element: id("pip"),

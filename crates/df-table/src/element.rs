@@ -1,8 +1,9 @@
 //! Typed names, positions and values for things placed on the canvas.
 //!
-//! It owns the validation of names, the geometry of the canvas and the closed set of value
-//! shapes. It never knows what a kind means (kinds are data: `kind.rs`) and never reads or writes
-//! JSON: the wire form belongs to the host.
+//! It owns the validation of names (and the `name_type!` macro the rest of the crate uses for
+//! every registered name: machines, settings, actions, purposes), the geometry of the canvas and
+//! the closed set of value shapes. It never knows what a kind means (kinds are data: `kind.rs`)
+//! and never reads or writes JSON: the wire form belongs to the host.
 
 use std::collections::BTreeMap;
 
@@ -44,7 +45,7 @@ impl fmt::Display for NameError {
     }
 }
 
-fn validate_name(text: &str) -> Result<(), NameError> {
+pub(crate) fn validate_name(text: &str) -> Result<(), NameError> {
     let first = text.chars().next().ok_or(NameError::Empty)?;
     if !first.is_ascii_lowercase() {
         return Err(NameError::MustStartWithLetter);
@@ -71,8 +72,8 @@ macro_rules! name_type {
             /// Accepts a lowercase identifier of letters, digits, '_' and '-' that starts with a
             /// letter. Because only ASCII is allowed, a name is safe in an attribute, a log line
             /// and a URL.
-            pub fn new(text: &str) -> Result<Self, NameError> {
-                validate_name(text)?;
+            pub fn new(text: &str) -> Result<Self, $crate::element::NameError> {
+                $crate::element::validate_name(text)?;
                 Ok(Self(text.to_owned()))
             }
 
@@ -81,13 +82,34 @@ macro_rules! name_type {
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 formatter.write_str(&self.0)
+            }
+        }
+
+        impl ::serde::Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: ::serde::Serializer,
+            {
+                serializer.serialize_str(&self.0)
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: ::serde::Deserializer<'de>,
+            {
+                let text = <String as ::serde::Deserialize>::deserialize(deserializer)?;
+                Self::new(&text).map_err(::serde::de::Error::custom)
             }
         }
     };
 }
+
+pub(crate) use name_type;
 
 name_type!(
     /// The identity of one element on the canvas.
