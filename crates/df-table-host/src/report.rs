@@ -3,7 +3,7 @@
 //! It owns wording and layout only. It never sends a request and never reads a file.
 
 use crate::view::CanvasView;
-use crate::wire::{EventsReply, Reply};
+use crate::wire::{ControlsReply, EventsReply, Reply};
 
 /// The text of an answer to a change: `Ok` when the change was made, `Err` when it was not.
 pub fn describe_reply(reply: &Reply) -> Result<String, String> {
@@ -75,4 +75,28 @@ pub fn format_events(reply: &EventsReply, after: Option<u64>) -> String {
             .map(|line| format!("{:>4}  {}", line.sequence, line.text)),
     );
     lines.join("\n")
+}
+
+/// What the playground is showing, one setting per line, and the fixtures it can show.
+pub fn format_playground(reply: &ControlsReply, fixtures: &[String]) -> String {
+    let controls = &reply.controls;
+    let device = controls.device.key();
+    let pace = controls.pace.key();
+    let fixture = controls.fixture.as_deref().unwrap_or("(none)");
+    let listed = if fixtures.is_empty() {
+        "(none)".to_owned()
+    } else {
+        fixtures.join(", ")
+    };
+    format!(
+        "fixture: {fixture}
+device: {device}
+pace: {pace}
+status: {}
+unavailable: {}
+grid: {}
+revision: {}
+fixtures: {listed}",
+        controls.status_key, controls.show_unavailable, controls.show_grid, reply.revision
+    )
 }

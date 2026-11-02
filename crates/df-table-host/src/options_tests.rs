@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use crate::options::{
-    DEFAULT_KIND_DIRECTORY, DEFAULT_PORT, OptionError, parse_dev_arguments, parse_serve_options,
+    DEFAULT_KIND_DIRECTORY, DEFAULT_PACKAGE_DIRECTORY, DEFAULT_PLAYGROUND_DIRECTORY, DEFAULT_PORT,
+    OptionError, parse_dev_arguments, parse_serve_options,
 };
 
 fn strings(words: &[&str]) -> Vec<String> {
@@ -16,6 +17,14 @@ fn serve_without_options_uses_the_defaults() {
         options.kind_directory,
         PathBuf::from(DEFAULT_KIND_DIRECTORY)
     );
+    assert_eq!(
+        options.playground_directory,
+        PathBuf::from(DEFAULT_PLAYGROUND_DIRECTORY)
+    );
+    assert_eq!(
+        options.package_directory,
+        PathBuf::from(DEFAULT_PACKAGE_DIRECTORY)
+    );
     assert!(!options.records_moves);
     assert!(options.echoes_lines);
 }
@@ -23,11 +32,22 @@ fn serve_without_options_uses_the_defaults() {
 #[test]
 fn serve_reads_each_option() {
     let options = parse_serve_options(&strings(&[
-        "--port", "9000", "--kinds", "k", "--moves", "--quiet",
+        "--port",
+        "9000",
+        "--kinds",
+        "k",
+        "--playground",
+        "p",
+        "--package",
+        "q",
+        "--moves",
+        "--quiet",
     ]))
     .expect("parses");
     assert_eq!(options.port, 9000);
     assert_eq!(options.kind_directory, PathBuf::from("k"));
+    assert_eq!(options.playground_directory, PathBuf::from("p"));
+    assert_eq!(options.package_directory, PathBuf::from("q"));
     assert!(options.records_moves);
     assert!(!options.echoes_lines);
 }
@@ -62,6 +82,14 @@ fn an_option_without_its_value_and_an_unknown_option_are_refused() {
     assert_eq!(
         parse_serve_options(&strings(&["--kinds"])),
         Err(OptionError::MissingValue("--kinds"))
+    );
+    assert_eq!(
+        parse_serve_options(&strings(&["--playground"])),
+        Err(OptionError::MissingValue("--playground"))
+    );
+    assert_eq!(
+        parse_serve_options(&strings(&["--package"])),
+        Err(OptionError::MissingValue("--package"))
     );
     assert_eq!(
         parse_serve_options(&strings(&["--loud"])),

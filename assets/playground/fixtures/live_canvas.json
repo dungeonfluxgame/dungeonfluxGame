@@ -1,0 +1,16 @@
+{
+  "name": "Live canvas",
+  "description": "The stage shows whatever is on the running canvas. Drive it with `df-table dev spawn`, `set`, `move` and `despawn` and watch it change.",
+  "tv": {
+    "place": "The blank canvas",
+    "status": { "kind": "ok" },
+    "caption": { "speaker": "Narrator", "text": "Nothing is here until you spawn it." },
+    "elements": "live"
+  },
+  "phone": {
+    "hero": "Pip",
+    "status": { "kind": "ok" },
+    "narration": ["The phone is a fixture; only the shared screen follows the canvas."],
+    "groups": [{ "name": "Look", "choices": [{ "label": "Look around" }] }]
+  }
+}

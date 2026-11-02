@@ -8,6 +8,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::PathBuf;
 
+use df_playground::controls::{ControlsChange, Device};
+use df_playground::copy::ReadingPace;
+
 use crate::wire::{EffectRequest, ValueForm};
 
 const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
@@ -16,6 +19,11 @@ const MOVE_USAGE: &str = "move <id> <x> <y>";
 const DESPAWN_USAGE: &str = "despawn <id> [<id> ...]";
 const EVENTS_USAGE: &str = "events [after]";
 const SCRIPT_USAGE: &str = "script <file>";
+const PLAYGROUND_USAGE: &str = "playground [set <key>=<value> ...]";
+const FIXTURE_USAGE: &str =
+    "fixture show <name> | fixture write <name> <file> | fixture remove <name>";
+/// The keys `playground set` accepts and what each takes.
+const PLAYGROUND_KEYS: &str = "fixture=<name>, device=both|tv|phone, pace=slow|normal|fast, status=fixture|<status>, unavailable=true|false, grid=true|false";
 
 /// A command for the running canvas.
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +37,19 @@ pub enum Command {
         after: Option<u64>,
     },
     Reload,
+    /// Print what the playground is showing and the fixtures it can show.
+    Playground,
+    /// Change what the playground shows, in order.
+    PlaygroundSet(Vec<ControlsChange>),
+    /// The names of the fixture files.
+    Fixtures,
+    FixtureShow(String),
+    /// Write the file's text as the named fixture.
+    FixtureWrite {
+        name: String,
+        path: PathBuf,
+    },
+    FixtureRemove(String),
     /// A file of commands, one per line.
     Script(PathBuf),
     Help,
@@ -46,6 +67,12 @@ pub enum CommandError {
     },
     BadPair(String),
     DuplicateKey(String),
+    /// A playground key that is not one of the keys, or a value that is not one of its choices.
+    BadChoice {
+        key: String,
+        text: String,
+        allowed: &'static str,
+    },
     UnclosedQuote,
     /// `script` and `help` mean nothing inside a script.
     NotAllowedInScript(&'static str),
@@ -62,6 +89,12 @@ impl fmt::Display for CommandError {
             }
             Self::BadPair(text) => write!(formatter, "expected field=value, not '{text}'"),
             Self::DuplicateKey(key) => write!(formatter, "'{key}' is given twice"),
+            Self::BadChoice { key, text, allowed } => {
+                write!(
+                    formatter,
+                    "'{text}' is not a choice for {key}; use {allowed}"
+                )
+            }
             Self::UnclosedQuote => formatter.write_str("a quote is not closed"),
             Self::NotAllowedInScript(word) => {
                 write!(formatter, "'{word}' cannot be used inside a script")
@@ -83,6 +116,9 @@ pub fn usage_text() -> String {
          \n  kinds\n      list the kinds and their fields\n\
          \n  {EVENTS_USAGE}\n      print the newest events, or those after a sequence\n\
          \n  reload\n      re-read the kind files without a restart\n\
+         \n  {PLAYGROUND_USAGE}\n      show or change what the playground page shows; keys: {PLAYGROUND_KEYS}\n\
+         \n  fixtures\n      list the playground's fixture files\n\
+         \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\
          \n  {SCRIPT_USAGE}\n      run a file of commands, one per line; a line may start with #\n\
          \n  help\n      this text\n\
          \nQuote a value with spaces: name=\"Pip the Brave\".\n\
@@ -218,6 +254,77 @@ fn events(words: &[String]) -> Result<Command, CommandError> {
     }
 }
 
+fn truth(key: &str, text: &str) -> Result<bool, CommandError> {
+    match text {
+        "true" | "on" => Ok(true),
+        "false" | "off" => Ok(false),
+        _ => Err(CommandError::BadChoice {
+            key: key.to_owned(),
+            text: text.to_owned(),
+            allowed: "true or false",
+        }),
+    }
+}
+
+fn playground_change(key: &str, value: &str) -> Result<ControlsChange, CommandError> {
+    match key {
+        "fixture" => Ok(ControlsChange::Fixture(value.to_owned())),
+        "device" => Device::from_key(value)
+            .map(ControlsChange::Device)
+            .ok_or_else(|| CommandError::BadChoice {
+                key: key.to_owned(),
+                text: value.to_owned(),
+                allowed: "both, tv or phone",
+            }),
+        "pace" => ReadingPace::from_key(value)
+            .map(ControlsChange::Pace)
+            .ok_or_else(|| CommandError::BadChoice {
+                key: key.to_owned(),
+                text: value.to_owned(),
+                allowed: "slow, normal or fast",
+            }),
+        "status" => Ok(ControlsChange::Status(value.to_owned())),
+        "unavailable" => truth(key, value).map(ControlsChange::ShowUnavailable),
+        "grid" => truth(key, value).map(ControlsChange::ShowGrid),
+        _ => Err(CommandError::BadChoice {
+            key: "playground set".to_owned(),
+            text: key.to_owned(),
+            allowed: PLAYGROUND_KEYS,
+        }),
+    }
+}
+
+fn playground(words: &[String]) -> Result<Command, CommandError> {
+    match words {
+        [] => Ok(Command::Playground),
+        [word, pairs @ ..] if word == "set" && !pairs.is_empty() => {
+            let mut seen = BTreeSet::new();
+            let mut changes = Vec::new();
+            for text in pairs {
+                let (key, value) = pair(text)?;
+                if !seen.insert(key) {
+                    return Err(CommandError::DuplicateKey(key.to_owned()));
+                }
+                changes.push(playground_change(key, value)?);
+            }
+            Ok(Command::PlaygroundSet(changes))
+        }
+        _ => Err(CommandError::Usage(PLAYGROUND_USAGE)),
+    }
+}
+
+fn fixture(words: &[String]) -> Result<Command, CommandError> {
+    match words {
+        [verb, name] if verb == "show" => Ok(Command::FixtureShow(name.clone())),
+        [verb, name] if verb == "remove" => Ok(Command::FixtureRemove(name.clone())),
+        [verb, name, path] if verb == "write" => Ok(Command::FixtureWrite {
+            name: name.clone(),
+            path: PathBuf::from(path),
+        }),
+        _ => Err(CommandError::Usage(FIXTURE_USAGE)),
+    }
+}
+
 /// Parses one command line, already split into words.
 pub fn parse(words: &[String]) -> Result<Command, CommandError> {
     let (name, rest) = words.split_first().ok_or(CommandError::Empty)?;
@@ -240,6 +347,15 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "kinds" => Ok(Command::Kinds),
         "events" => events(rest),
         "reload" => Ok(Command::Reload),
+        "playground" => playground(rest),
+        "fixtures" => {
+            if rest.is_empty() {
+                Ok(Command::Fixtures)
+            } else {
+                Err(CommandError::Usage("fixtures"))
+            }
+        }
+        "fixture" => fixture(rest),
         "script" => match rest {
             [path] => Ok(Command::Script(PathBuf::from(path))),
             _ => Err(CommandError::Usage(SCRIPT_USAGE)),
@@ -249,7 +365,7 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
     }
 }
 
-/// Parses one line of a script. A script runs against the canvas only, so `script` and `help` are
+/// Parses one line of a script. A script drives the running host, so `script` and `help` are
 /// refused here, when the file is read, and not after earlier lines have already run.
 pub fn parse_script_line(words: &[String]) -> Result<Command, CommandError> {
     match parse(words)? {

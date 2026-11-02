@@ -1,0 +1,85 @@
+use crate::fixture::{ElementSource, Fixture, Status};
+
+const MINIMAL: &str = r#"{
+    "name": "Minimal",
+    "tv": {
+        "place": "Seed Market",
+        "status": {"kind": "ok"},
+        "elements": "live"
+    },
+    "phone": {"hero": "Pip", "status": {"kind": "ok"}}
+}"#;
+
+#[test]
+fn a_minimal_fixture_reads_and_fills_the_optional_parts_with_nothing() {
+    let fixture = Fixture::parse(MINIMAL).expect("parses");
+    assert_eq!(fixture.name, "Minimal");
+    assert!(fixture.tv.party.is_empty());
+    assert!(fixture.tv.caption.is_none());
+    assert!(fixture.phone.suggested.is_empty());
+    assert!(matches!(fixture.tv.elements, ElementSource::Live(_)));
+}
+
+#[test]
+fn elements_may_be_listed_inline_and_extra_keys_on_an_element_are_ignored() {
+    let text = MINIMAL.replace(
+        r#""elements": "live""#,
+        r##""elements": [
+            {"id": "pip", "kind": "character", "label": "Pip", "x": 20, "y": 30,
+             "color": "#4f8cff", "shape": "circle", "width_units": 6, "height_units": 6,
+             "fields": {"name": "Pip"}, "problem": null}
+        ]"##,
+    );
+    let fixture = Fixture::parse(&text).expect("parses");
+    let ElementSource::Inline(elements) = fixture.tv.elements else {
+        panic!("expected inline elements");
+    };
+    assert_eq!(elements.len(), 1);
+    assert_eq!(elements[0].label, "Pip");
+}
+
+#[test]
+fn a_word_other_than_live_where_live_is_expected_is_refused() {
+    let text = MINIMAL.replace(r#""elements": "live""#, r#""elements": "later""#);
+    assert!(Fixture::parse(&text).is_err());
+}
+
+#[test]
+fn a_misspelt_key_is_refused_with_the_line_and_column_of_the_mistake() {
+    let text = MINIMAL.replace(r#""place": "Seed Market""#, r#""plaace": "Seed Market""#);
+    let error = Fixture::parse(&text).expect_err("refused");
+    assert_eq!(error.line, 4);
+    assert!(error.message.contains("plaace"), "got: {}", error.message);
+}
+
+#[test]
+fn a_status_is_a_tagged_object_and_can_carry_who_is_waited_for() {
+    let text = MINIMAL.replace(
+        r#""phone": {"hero": "Pip", "status": {"kind": "ok"}}"#,
+        r#""phone": {"hero": "Pip", "status": {"kind": "waiting_for", "who": "Pip", "what": "to answer a reaction"}}"#,
+    );
+    let fixture = Fixture::parse(&text).expect("parses");
+    assert_eq!(
+        fixture.phone.status,
+        Status::WaitingFor {
+            who: "Pip".into(),
+            what: "to answer a reaction".into()
+        }
+    );
+}
+
+#[test]
+fn an_unknown_status_is_refused() {
+    let text = MINIMAL.replace(
+        r#""status": {"kind": "ok"}"#,
+        r#""status": {"kind": "sleepy"}"#,
+    );
+    assert!(Fixture::parse(&text).is_err());
+}
+
+#[test]
+fn a_missing_required_key_is_refused_by_name() {
+    let text = MINIMAL.replace(r#""hero": "Pip", "#, "");
+    let error = Fixture::parse(&text).expect_err("refused");
+    assert!(error.message.contains("hero"), "got: {}", error.message);
+}

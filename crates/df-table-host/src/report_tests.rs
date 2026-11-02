@@ -110,3 +110,28 @@ fn a_reader_ahead_of_the_newest_sequence_is_told_the_host_restarted() {
     let normal = format_events(&events(&[2], 2), Some(1));
     assert!(!normal.contains("restarted"));
 }
+
+#[test]
+fn the_playground_is_printed_one_setting_per_line_with_the_fixtures() {
+    let reply = crate::wire::ControlsReply {
+        revision: 3,
+        controls: df_playground::controls::Controls {
+            fixture: Some("a.json".into()),
+            ..df_playground::controls::Controls::default()
+        },
+    };
+    let text =
+        crate::report::format_playground(&reply, &["a.json".to_owned(), "b.json".to_owned()]);
+    assert_eq!(
+        text,
+        "fixture: a.json\ndevice: both\npace: normal\nstatus: fixture\nunavailable: false\ngrid: false\nrevision: 3\nfixtures: a.json, b.json"
+    );
+    let empty = crate::report::format_playground(
+        &crate::wire::ControlsReply {
+            revision: 0,
+            controls: df_playground::controls::Controls::default(),
+        },
+        &[],
+    );
+    assert!(empty.contains("fixture: (none)") && empty.contains("fixtures: (none)"));
+}

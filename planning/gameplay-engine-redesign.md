@@ -3025,6 +3025,22 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   API listens on `127.0.0.1` only, checks the Host header on every request, accepts changes only as
   JSON from a same-origin caller (so a web page cannot trigger a reload), caps a request at 64 KiB, and
   every piece of text that reaches the page is escaped.
+- **Playground (the display workbench).** `crates/df-playground` is a browser page, Rust compiled to
+  WebAssembly, that draws the shared screen and one phone from fixture files in `assets/playground/`,
+  served by the same host at `/playground` (`development/playground.sh build`, then `serve`). The page,
+  theme and fixtures are plain files that redraw on save, and a rebuilt package reloads the page. The
+  screen can show the running canvas live. The table-experience contract is code here, so a fixture that
+  breaks it shows the break: the status copy, the caption dwell, and the choice-list rule (at most four
+  suggested choices, fixed groups, labels of at most four words).
+- **The dev CLI has full access.** The host, not the page, owns what the playground shows, so the CLI and
+  the browser change the same state and see each other's changes within a poll. `df-table dev playground`
+  prints it and `playground set fixture=NAME device=both|tv|phone pace=slow|normal|fast status=KEY
+  unavailable=BOOL grid=BOOL` changes it; `fixtures`, `fixture show NAME`, `fixture write NAME FILE`
+  (the text is checked as a fixture first, with the line and column of a mistake) and `fixture remove
+  NAME` manage the files; a `script` may mix canvas and playground commands. Every change is an audit
+  line (`PLAYGROUND set device=tv revision=5`) in the same log. Rule for what comes next: anything a
+  person can do in a browser surface must also be a CLI verb, and a surface never keeps state the CLI
+  cannot read.
 - **Where it goes next.** The same pattern carries the real engine: a `TableEffect` applied by one
   function and recorded as one event; machines and the DM pipeline added behind the same CLI verbs
   (`spawn machine`, `input <seat> <text>`, `viable <seat>`, `projection show <audience>`); the scene

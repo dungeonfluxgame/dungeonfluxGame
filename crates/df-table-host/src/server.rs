@@ -6,8 +6,7 @@
 //! first (`guard.rs`), every change goes through `Canvas::apply`, and every rejection, including
 //! the ones that happen before a request becomes an effect, is recorded as an event.
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -17,18 +16,17 @@ use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use df_table::canvas::Canvas;
 use df_table::element::ElementId;
 use df_table::event::{EffectKind, RejectionCause, TableEvent};
 use df_table::ports::EventSink;
 use serde::Deserialize;
 
-use crate::event_log::EventLog;
 use crate::guard;
 use crate::kind_files::load_kind_files_async;
+use crate::playground;
 use crate::render;
 use crate::request::RequestError;
-use crate::sink::{HostSink, LineEcho};
+use crate::state::AppState;
 use crate::view::CanvasView;
 use crate::wire::{EffectRequest, EventsReply, Reply, capped, route};
 
@@ -36,60 +34,6 @@ use crate::wire::{EffectRequest, EventsReply, Reply, capped, route};
 pub const MAXIMUM_EVENTS_PER_ANSWER: usize = 60;
 /// Largest request body accepted, in bytes.
 pub const MAXIMUM_REQUEST_BYTES: usize = 64 * 1024;
-
-/// Everything the handlers share.
-pub struct AppState {
-    canvas: Mutex<Canvas>,
-    sink: HostSink,
-    echo: Option<LineEcho>,
-    kind_directory: PathBuf,
-}
-
-impl AppState {
-    /// `echo` prints new audit lines to the terminal; `None` keeps the log quiet.
-    pub fn new(
-        canvas: Canvas,
-        sink: HostSink,
-        echo: Option<LineEcho>,
-        kind_directory: PathBuf,
-    ) -> Self {
-        Self {
-            canvas: Mutex::new(canvas),
-            sink,
-            echo,
-            kind_directory,
-        }
-    }
-
-    fn canvas(&self) -> MutexGuard<'_, Canvas> {
-        self.canvas.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn log(&self) -> &Arc<EventLog> {
-        self.sink.log()
-    }
-
-    /// Records a rejection that happened before a request became an effect.
-    fn record_rejection(
-        &self,
-        effect: Option<EffectKind>,
-        element: Option<ElementId>,
-        cause: RejectionCause,
-    ) {
-        self.sink.record(&TableEvent::EffectRejected {
-            effect,
-            element,
-            cause,
-        });
-    }
-
-    /// Prints new audit lines. Call it with no lock held.
-    fn echo_new_lines(&self) {
-        if let Some(echo) = &self.echo {
-            echo.echo_new(self.log());
-        }
-    }
-}
 
 fn answer(status: StatusCode, reply: Reply) -> Response {
     (status, Json(reply)).into_response()
@@ -196,7 +140,7 @@ fn apply_effect_body(state: &AppState, body: Result<Bytes, BytesRejection>) -> R
         Ok(effect) => effect,
         Err(error) => return reject_conversion(state, effect_kind, element, &error),
     };
-    match canvas.apply(effect, &state.sink) {
+    match canvas.apply(effect, state.sink()) {
         Ok(()) => answer(
             StatusCode::OK,
             Reply::Done {
@@ -227,11 +171,11 @@ fn reject_conversion(
 }
 
 async fn reload(State(state): State<Arc<AppState>>) -> Response {
-    let loaded = load_kind_files_async(state.kind_directory.clone()).await;
+    let loaded = load_kind_files_async(state.kind_directory().to_path_buf()).await;
     let response = match loaded {
         Ok(registry) => {
             let mut canvas = state.canvas();
-            let report = canvas.replace_registry(registry, &state.sink);
+            let report = canvas.replace_registry(registry, state.sink());
             let notices = report
                 .problems
                 .iter()
@@ -246,7 +190,7 @@ async fn reload(State(state): State<Arc<AppState>>) -> Response {
             )
         }
         Err(problems) => {
-            state.sink.record(&TableEvent::KindsRejected {
+            state.sink().record(&TableEvent::KindsRejected {
                 errors: problems.len(),
             });
             answer(
@@ -264,20 +208,18 @@ async fn reload(State(state): State<Arc<AppState>>) -> Response {
     response
 }
 
-/// The routes of the developer API and the viewer.
+/// The routes of the developer API, the viewer and the playground.
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/", get(index))
         .route(route::CANVAS, get(canvas_json))
         .route(route::EVENTS, get(events_json))
         .route(route::EFFECT, post(apply_effect))
         .route(route::RELOAD, post(reload))
+        .with_state(state.clone());
+    api.merge(playground::router(state.clone()))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            guard_requests,
-        ))
-        .with_state(state)
+        .layer(middleware::from_fn_with_state(state, guard_requests))
 }
 
 /// Binds the loopback address only (port zero picks a free port), so the caller can report the

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gameplay display playground</title>
+<style>body { margin: 0; background: #09131d; color: #f2e8d5; font: 15px/1.5 system-ui, sans-serif; }</style>
+</head>
+<body>
+<p id="boot" style="padding: 16px">Starting the playground</p>
+<script type="module">
+// Loads the compiled package. All playground logic is Rust; this only starts it.
+const boot = document.getElementById("boot");
+try {
+  const { default: init } = await import("/playground/pkg/df_playground.js");
+  await init();
+  boot.remove();
+} catch (error) {
+  boot.textContent = "The playground could not start (" + error + "). Run development/playground.sh build, then reload.";
+}
+</script>
+</body>
+</html>

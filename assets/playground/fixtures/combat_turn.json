@@ -1,0 +1,42 @@
+{
+  "name": "Combat turn",
+  "description": "A fight at the table, waiting on one player. The phone shows attack, cast and move groups and what is unavailable.",
+  "tv": {
+    "place": "The cellar stairs",
+    "status": { "kind": "waiting_for", "who": "Pip", "what": "to choose an action" },
+    "caption": { "text": "The goblin snarls and lunges at Vex. The blade skids off her shield." },
+    "party": [
+      { "name": "Pip", "hit_points": 7, "maximum_hit_points": 9, "color": "#4f8cff" },
+      { "name": "Vex", "hit_points": 10, "maximum_hit_points": 10, "color": "#e5546b" }
+    ],
+    "elements": [
+      { "id": "stairs", "kind": "set_piece", "label": "Stairs", "x": 50, "y": 8, "color": "#5b6b86", "shape": "rect", "width_units": 22, "height_units": 6 },
+      { "id": "crates", "kind": "set_piece", "label": "Crates (half cover)", "x": 24, "y": 30, "color": "#7a4a2b", "shape": "rect", "width_units": 12, "height_units": 6 },
+      { "id": "goblin_a", "kind": "character", "label": "Goblin", "x": 62, "y": 24, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "goblin_b", "kind": "character", "label": "Goblin", "x": 74, "y": 32, "color": "#7da35b", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "pip", "kind": "character", "label": "Pip", "x": 34, "y": 34, "color": "#4f8cff", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "vex", "kind": "character", "label": "Vex", "x": 52, "y": 28, "color": "#e5546b", "shape": "circle", "width_units": 5, "height_units": 5 }
+    ]
+  },
+  "phone": {
+    "hero": "Pip",
+    "goal": "Hold the stairs",
+    "status": { "kind": "ok" },
+    "narration": ["It is your turn. Two goblins are in reach of Vex; neither is next to you."],
+    "suggested": [
+      { "label": "Shoot the near goblin", "explain": "Short bow, 30 ft away" },
+      { "label": "Move behind the crates", "explain": "Half cover" },
+      { "label": "Help Vex" }
+    ],
+    "groups": [
+      { "name": "Attack", "choices": [{ "label": "Short bow" }, { "label": "Dagger" }] },
+      { "name": "Cast", "choices": [{ "label": "Cure Wounds" }] },
+      { "name": "Move", "choices": [{ "label": "Dash" }, { "label": "Disengage" }] },
+      { "name": "Use", "choices": [{ "label": "Healing potion" }] }
+    ],
+    "unavailable": [
+      { "label": "Second Wind", "reason": "Already used this rest" },
+      { "label": "Opportunity attack", "reason": "Not your turn" }
+    ]
+  }
+}

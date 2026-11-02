@@ -199,3 +199,109 @@ fn the_help_text_names_every_command_and_the_rules_of_a_multi_effect_command() {
     assert!(help.contains("applied in order and every failure is reported"));
     assert!(help.contains("a script stops at its first failing line"));
 }
+
+fn playground_changes(line: &str) -> Vec<df_playground::controls::ControlsChange> {
+    let Command::PlaygroundSet(changes) = parse(&words(line)).expect("parses") else {
+        panic!("expected playground changes");
+    };
+    changes
+}
+
+#[test]
+fn playground_alone_shows_and_set_reads_each_key_by_its_choices() {
+    use df_playground::controls::{ControlsChange, Device};
+    use df_playground::copy::ReadingPace;
+    assert_eq!(parse(&words("playground")), Ok(Command::Playground));
+    assert_eq!(
+        playground_changes(
+            "playground set fixture=a.json device=tv pace=slow status=rolling unavailable=true grid=off"
+        ),
+        vec![
+            ControlsChange::Fixture("a.json".into()),
+            ControlsChange::Device(Device::Tv),
+            ControlsChange::Pace(ReadingPace::Slow),
+            ControlsChange::Status("rolling".into()),
+            ControlsChange::ShowUnavailable(true),
+            ControlsChange::ShowGrid(false),
+        ]
+    );
+}
+
+#[test]
+fn a_playground_value_that_is_not_a_choice_names_the_key_and_the_choices() {
+    for (line, key) in [
+        ("playground set device=watch", "device"),
+        ("playground set pace=sleepy", "pace"),
+        ("playground set grid=maybe", "grid"),
+        ("playground set unavailable=2", "unavailable"),
+    ] {
+        let error = parse(&words(line)).expect_err("refused");
+        assert!(
+            matches!(&error, CommandError::BadChoice { key: found, .. } if found == key),
+            "{line}"
+        );
+    }
+    let unknown = parse(&words("playground set volume=3")).expect_err("refused");
+    assert!(unknown.to_string().contains("fixture=<name>"));
+}
+
+#[test]
+fn playground_set_needs_pairs_and_refuses_a_key_given_twice() {
+    assert!(matches!(
+        parse(&words("playground set")),
+        Err(CommandError::Usage(_))
+    ));
+    assert!(matches!(
+        parse(&words("playground show")),
+        Err(CommandError::Usage(_))
+    ));
+    assert_eq!(
+        parse(&words("playground set grid=on grid=off")),
+        Err(CommandError::DuplicateKey("grid".into()))
+    );
+}
+
+#[test]
+fn fixture_commands_take_a_name_and_for_write_a_file() {
+    assert_eq!(parse(&words("fixtures")), Ok(Command::Fixtures));
+    assert_eq!(
+        parse(&words("fixture show tavern")),
+        Ok(Command::FixtureShow("tavern".into()))
+    );
+    assert_eq!(
+        parse(&words("fixture remove tavern")),
+        Ok(Command::FixtureRemove("tavern".into()))
+    );
+    assert_eq!(
+        parse(&words("fixture write tavern scene.json")),
+        Ok(Command::FixtureWrite {
+            name: "tavern".into(),
+            path: "scene.json".into()
+        })
+    );
+    for line in [
+        "fixture",
+        "fixture show",
+        "fixture write tavern",
+        "fixture burn tavern",
+        "fixtures all",
+    ] {
+        assert!(
+            matches!(parse(&words(line)), Err(CommandError::Usage(_))),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn the_help_text_lists_the_playground_and_fixture_commands() {
+    let help = usage_text();
+    for text in [
+        "playground",
+        "fixtures",
+        "fixture show",
+        "device=both|tv|phone",
+    ] {
+        assert!(help.contains(text), "{text}");
+    }
+}

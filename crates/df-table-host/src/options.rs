@@ -8,13 +8,19 @@ use std::path::PathBuf;
 pub const DEFAULT_PORT: u16 = 7878;
 /// The kind directory when `--kinds` is not given, relative to where the host is started.
 pub const DEFAULT_KIND_DIRECTORY: &str = "assets/canvas/kinds";
+/// The playground's page, theme and fixtures when `--playground` is not given.
+pub const DEFAULT_PLAYGROUND_DIRECTORY: &str = "assets/playground";
+/// The playground's compiled package when `--package` is not given (see `development/playground.sh`).
+pub const DEFAULT_PACKAGE_DIRECTORY: &str = "artifacts/playground/pkg";
 pub const PORT_ENVIRONMENT_VARIABLE: &str = "DF_TABLE_PORT";
 
 pub const SERVE_USAGE: &str = "\
-df-table serve [--port N] [--kinds DIR] [--moves] [--quiet]
+df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--moves] [--quiet]
 
   --port N     loopback port for the viewer and the developer API (default 7878)
   --kinds DIR  directory of kind files (default assets/canvas/kinds, relative to here)
+  --playground DIR  the playground's page, theme and fixtures (default assets/playground)
+  --package DIR     the playground's compiled package (default artifacts/playground/pkg)
   --moves      also record moves, which are frequent (the log shows gaps without them)
   --quiet      do not echo audit lines to this terminal
 
@@ -47,6 +53,8 @@ impl fmt::Display for OptionError {
 pub struct ServeOptions {
     pub port: u16,
     pub kind_directory: PathBuf,
+    pub playground_directory: PathBuf,
+    pub package_directory: PathBuf,
     pub records_moves: bool,
     pub echoes_lines: bool,
 }
@@ -61,6 +69,8 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
     let mut options = ServeOptions {
         port: DEFAULT_PORT,
         kind_directory: PathBuf::from(DEFAULT_KIND_DIRECTORY),
+        playground_directory: PathBuf::from(DEFAULT_PLAYGROUND_DIRECTORY),
+        package_directory: PathBuf::from(DEFAULT_PACKAGE_DIRECTORY),
         records_moves: false,
         echoes_lines: true,
     };
@@ -78,6 +88,18 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
                     .next()
                     .ok_or(OptionError::MissingValue("--kinds"))?;
                 options.kind_directory = PathBuf::from(value);
+            }
+            "--playground" => {
+                let value = arguments
+                    .next()
+                    .ok_or(OptionError::MissingValue("--playground"))?;
+                options.playground_directory = PathBuf::from(value);
+            }
+            "--package" => {
+                let value = arguments
+                    .next()
+                    .ok_or(OptionError::MissingValue("--package"))?;
+                options.package_directory = PathBuf::from(value);
             }
             "--moves" => options.records_moves = true,
             "--quiet" => options.echoes_lines = false,

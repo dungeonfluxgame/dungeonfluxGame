@@ -5,6 +5,7 @@
 //! rename breaks the build instead of a running command. It owns the shape and nothing else: it
 //! never touches the canvas, a socket or a file.
 
+pub use df_playground::controls::ControlsReply;
 use df_table::event::RejectionCause;
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,24 @@ pub mod route {
     pub const EVENTS: &str = "/events.json";
     pub const EFFECT: &str = "/dev/effect";
     pub const RELOAD: &str = "/dev/reload";
+
+    /// The playground page, its theme, its fixtures and its compiled package (all GET).
+    pub const PLAYGROUND: &str = "/playground";
+    pub const PLAYGROUND_SLASH: &str = "/playground/";
+    pub const PLAYGROUND_THEME: &str = "/playground/theme.css";
+    /// Changes when any playground file does: `<assets>.<package>`.
+    pub const PLAYGROUND_REVISION: &str = "/playground/revision";
+    pub const PLAYGROUND_FIXTURE_LIST: &str = "/playground/fixtures.json";
+    pub const PLAYGROUND_FIXTURE: &str = "/playground/fixtures/{name}";
+    pub const PLAYGROUND_PACKAGE_FILE: &str = "/playground/pkg/{name}";
+    /// What the playground page is showing (GET), so the page and the dev CLI agree.
+    pub const PLAYGROUND_CONTROLS: &str = "/playground/controls.json";
+    /// Changes what the playground shows (POST a `ControlsChange`).
+    pub const DEV_PLAYGROUND_CONTROLS: &str = "/dev/playground/controls";
+    /// Writes a fixture file (POST a `FixtureWrite`).
+    pub const DEV_FIXTURE_WRITE: &str = "/dev/playground/fixture";
+    /// Deletes a fixture file (POST a `FixtureRemove`).
+    pub const DEV_FIXTURE_REMOVE: &str = "/dev/playground/fixture/remove";
 }
 
 /// The query parameter of `route::EVENTS` that names the last sequence already seen.
@@ -85,6 +104,21 @@ pub enum Reply {
         message: String,
         problems: Vec<String>,
     },
+}
+
+/// A fixture to write: `name` with or without `.json`, and the whole file's text. The text must
+/// read as a fixture, or nothing is written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureWrite {
+    pub name: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixtureRemove {
+    pub name: String,
 }
 
 /// The answer to a request for events.

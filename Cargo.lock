@@ -805,6 +805,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "df-playground"
+version = "0.1.0"
+dependencies = [
+ "gloo-timers",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "df-portal"
 version = "0.1.0"
 dependencies = [
@@ -993,6 +1006,7 @@ name = "df-table-host"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "df-playground",
  "df-table",
  "serde",
  "serde_json",

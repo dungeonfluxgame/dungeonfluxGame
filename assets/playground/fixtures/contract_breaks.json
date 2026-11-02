@@ -1,0 +1,22 @@
+{
+  "name": "Breaks the contract",
+  "description": "A phone that breaks the choice-list rules on purpose, so the warnings show what an author gets wrong.",
+  "tv": {
+    "place": "Anywhere",
+    "status": { "kind": "reconnecting" },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Pip",
+    "status": { "kind": "read_only" },
+    "narration": ["Six suggestions, a long label, an unknown group and an empty group."],
+    "suggested": [
+      { "label": "One" }, { "label": "Two" }, { "label": "Three" }, { "label": "Four" },
+      { "label": "Five" }, { "label": "Try to pick the lock quietly" }
+    ],
+    "groups": [
+      { "name": "Chat", "choices": [{ "label": "Say hello" }] },
+      { "name": "Look", "choices": [] }
+    ]
+  }
+}

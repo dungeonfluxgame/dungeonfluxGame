@@ -1,0 +1,47 @@
+{
+  "name": "Tavern talk",
+  "description": "An NPC speaks to the table. The phone offers a short suggested list and the fixed groups.",
+  "tv": {
+    "place": "The Gilded Flagon",
+    "status": { "kind": "ok" },
+    "caption": {
+      "speaker": "Marta the innkeeper",
+      "text": "You'll want to keep your voice down. The man by the hearth has been asking about you since sundown."
+    },
+    "party": [
+      { "name": "Pip", "hit_points": 7, "maximum_hit_points": 9, "color": "#4f8cff" },
+      { "name": "Brother Anselm", "hit_points": 12, "maximum_hit_points": 12, "color": "#d9a441" },
+      { "name": "Vex", "hit_points": 4, "maximum_hit_points": 10, "conditions": ["Frightened"], "color": "#e5546b" }
+    ],
+    "elements": [
+      { "id": "hearth", "kind": "set_piece", "label": "Hearth", "x": 14, "y": 22, "color": "#7a4a2b", "shape": "rect", "width_units": 12, "height_units": 6 },
+      { "id": "bar", "kind": "set_piece", "label": "Bar", "x": 62, "y": 14, "color": "#5b6b86", "shape": "rect", "width_units": 28, "height_units": 5 },
+      { "id": "marta", "kind": "character", "label": "Marta", "x": 62, "y": 21, "color": "#d9a441", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "stranger", "kind": "character", "label": "Stranger", "x": 16, "y": 30, "color": "#8a94a6", "shape": "circle", "width_units": 5, "height_units": 5 },
+      { "id": "pip", "kind": "character", "label": "Pip", "x": 44, "y": 30, "color": "#4f8cff", "shape": "circle", "width_units": 5, "height_units": 5 }
+    ]
+  },
+  "phone": {
+    "hero": "Pip",
+    "goal": "Find who sent the letter",
+    "status": { "kind": "ok" },
+    "narration": [
+      "Marta wipes the same mug twice and does not look at the hearth.",
+      "The stranger's cloak is dry, though it rained all afternoon."
+    ],
+    "suggested": [
+      { "label": "Ask about the stranger", "explain": "She knows more than she says" },
+      { "label": "Sit near the stranger" },
+      { "label": "Slip out the back" }
+    ],
+    "groups": [
+      { "name": "Talk", "choices": [{ "label": "Greet the stranger" }, { "label": "Haggle for a room" }] },
+      { "name": "Look", "choices": [{ "label": "Study the stranger" }, { "label": "Search the bar" }] },
+      { "name": "Move", "choices": [{ "label": "Cross the room" }] }
+    ],
+    "unavailable": [
+      { "label": "Cast Light", "reason": "You have no spell slots" }
+    ],
+    "note": { "text": "The seal on your letter matches the ring on the stranger's hand." }
+  }
+}

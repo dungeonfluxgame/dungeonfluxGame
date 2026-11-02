@@ -204,7 +204,7 @@ async fn a_script_that_cannot_be_read_names_its_path() {
         .await
         .expect_err("refused");
     assert!(
-        matches!(&error, DevError::UnreadableScript { path, .. } if path.ends_with("script.txt"))
+        matches!(&error, DevError::UnreadableFile { path, .. } if path.ends_with("script.txt"))
     );
     assert!(error.to_string().contains("script.txt"));
 }

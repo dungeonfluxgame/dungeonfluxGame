@@ -11,7 +11,7 @@
 //!
 //! Reading order for a newcomer, following one command from the terminal to the viewer:
 //! `command` (parse the words) -> `dev` (send them) -> `client` (the socket) -> `guard` and
-//! `server` (accept them) -> `request` (words to a typed effect) -> `df_table::canvas` (apply and
+//! `server` (accept them; `playground` serves the playground's files) -> `request` (words to a typed effect) -> `df_table::canvas` (apply and
 //! record) -> `sink` and `event_log` (keep the line) -> `view` and `render` (draw it). `wire`
 //! holds the types both sides share.
 //!
@@ -25,12 +25,14 @@ pub mod event_log;
 pub mod guard;
 pub mod kind_files;
 pub mod options;
+pub mod playground;
 pub mod render;
 pub mod report;
 pub mod request;
 pub mod serve;
 pub mod server;
 pub mod sink;
+pub mod state;
 pub mod view;
 pub mod wire;
 
@@ -38,6 +40,8 @@ pub mod wire;
 mod client_tests;
 #[cfg(test)]
 mod command_tests;
+#[cfg(test)]
+mod dev_playground_tests;
 #[cfg(test)]
 mod dev_tests;
 #[cfg(test)]
@@ -48,6 +52,10 @@ mod guard_tests;
 mod kind_files_tests;
 #[cfg(test)]
 mod options_tests;
+#[cfg(test)]
+mod playground_control_tests;
+#[cfg(test)]
+mod playground_tests;
 #[cfg(test)]
 mod render_tests;
 #[cfg(test)]

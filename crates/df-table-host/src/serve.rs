@@ -18,8 +18,10 @@ use tokio::sync::Notify;
 use crate::event_log::EventLog;
 use crate::kind_files::load_kind_files_async;
 use crate::options::ServeOptions;
-use crate::server::{self, AppState};
+use crate::playground::PlaygroundFiles;
+use crate::server;
 use crate::sink::{HostSink, LineEcho};
+use crate::state::AppState;
 
 /// How long open connections get to finish after an interrupt.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -78,6 +80,10 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
         sink,
         echo,
         options.kind_directory.clone(),
+        PlaygroundFiles::new(
+            options.playground_directory.clone(),
+            options.package_directory.clone(),
+        ),
     ));
     let listener = server::bind(options.port)
         .await
@@ -89,7 +95,7 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
         .local_addr()
         .map_err(|error| ServeError::Serving(error.to_string()))?;
     announce(&format!(
-        "df-table canvas on http://{address}/ with {kinds} kinds from {}",
+        "df-table canvas on http://{address}/ with {kinds} kinds from {}\nplayground on http://{address}/playground",
         options.kind_directory.display()
     ));
 

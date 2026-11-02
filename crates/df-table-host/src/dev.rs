@@ -9,9 +9,14 @@ use std::path::{Path, PathBuf};
 
 use crate::client::{self, ClientError, Response};
 use crate::command::{self, Command, CommandError, usage_text};
-use crate::report::{describe_reply, format_canvas, format_events, format_kinds};
+use crate::playground::fixture_file_name;
+use crate::report::{
+    describe_reply, format_canvas, format_events, format_kinds, format_playground,
+};
 use crate::view::CanvasView;
-use crate::wire::{EVENTS_AFTER_PARAMETER, EffectRequest, EventsReply, Reply, route};
+use crate::wire::{
+    ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove, FixtureWrite, Reply, route,
+};
 
 /// Most characters of an unexpected answer echoed in an error.
 const MAXIMUM_ECHOED_ANSWER: usize = 200;
@@ -28,7 +33,7 @@ pub enum DevError {
         status: u16,
         body: String,
     },
-    UnreadableScript {
+    UnreadableFile {
         path: PathBuf,
         message: String,
     },
@@ -55,7 +60,7 @@ impl fmt::Display for DevError {
             Self::UnexpectedAnswer { status, body } => {
                 write!(formatter, "unexpected answer (status {status}): {body}")
             }
-            Self::UnreadableScript { path, message } => {
+            Self::UnreadableFile { path, message } => {
                 write!(formatter, "cannot read {}: {message}", path.display())
             }
             Self::ScriptLine { path, line, error } => {
@@ -92,37 +97,102 @@ fn read_reply(response: &Response) -> Result<Result<String, String>, DevError> {
     Ok(describe_reply(&reply))
 }
 
-async fn send_effects(port: u16, requests: &[EffectRequest]) -> Result<String, DevError> {
+/// Reads an answer to a change of the playground: the new controls, or a refusal.
+fn read_controls_reply(response: &Response) -> Result<Result<String, String>, DevError> {
+    if response.status == 200
+        && let Ok(reply) = serde_json::from_str::<ControlsReply>(&response.body)
+    {
+        return Ok(Ok(format!("ok (revision {})", reply.revision)));
+    }
+    read_reply(response)
+}
+
+/// Posts each body to `path` in order and reports every answer. A command with several bodies
+/// numbers them; one failure does not stop the rest, and any failure makes the command fail.
+async fn send_each(
+    port: u16,
+    path: &str,
+    label: &str,
+    bodies: &[String],
+    read: fn(&Response) -> Result<Result<String, String>, DevError>,
+) -> Result<String, DevError> {
     let mut lines = Vec::new();
     let mut any_rejected = false;
-    for (index, request) in requests.iter().enumerate() {
-        let body = serde_json::to_string(request)
-            .map_err(|_| DevError::Rejected("could not write the request".to_owned()))?;
-        let response = client::post_json(port, route::EFFECT, &body)
+    for body in bodies {
+        let response = client::post_json(port, path, body)
             .await
             .map_err(DevError::Client)?;
-        match read_reply(&response)? {
-            Ok(text) => lines.push((index, text)),
+        match read(&response)? {
+            Ok(text) => lines.push(text),
             Err(text) => {
                 any_rejected = true;
-                lines.push((index, text));
+                lines.push(text);
             }
         }
     }
-    let text = if let [(_, only)] = lines.as_slice() {
+    let text = if let [only] = lines.as_slice() {
         only.clone()
     } else {
         lines
             .iter()
-            .map(|(index, text)| format!("effect {}: {text}", index + 1))
+            .enumerate()
+            .map(|(index, text)| format!("{label} {}: {text}", index + 1))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join(
+                "
+",
+            )
     };
     if any_rejected {
         Err(DevError::Rejected(text))
     } else {
         Ok(text)
     }
+}
+
+fn to_body<T: serde::Serialize>(value: &T) -> Result<String, DevError> {
+    serde_json::to_string(value)
+        .map_err(|_| DevError::Rejected("could not write the request".to_owned()))
+}
+
+async fn fetch_fixture_names(port: u16) -> Result<Vec<String>, DevError> {
+    let response = client::get(port, route::PLAYGROUND_FIXTURE_LIST)
+        .await
+        .map_err(DevError::Client)?;
+    read_json(&response)
+}
+
+async fn show_playground(port: u16) -> Result<String, DevError> {
+    let response = client::get(port, route::PLAYGROUND_CONTROLS)
+        .await
+        .map_err(DevError::Client)?;
+    let reply: ControlsReply = read_json(&response)?;
+    Ok(format_playground(&reply, &fetch_fixture_names(port).await?))
+}
+
+async fn show_fixture(port: u16, name: &str) -> Result<String, DevError> {
+    let file_name = fixture_file_name(name).map_err(DevError::Rejected)?;
+    let path = route::PLAYGROUND_FIXTURE.replace("{name}", &file_name);
+    let response = client::get(port, &path).await.map_err(DevError::Client)?;
+    match response.status {
+        200 => Ok(response.body),
+        404 => Err(DevError::Rejected(format!(
+            "there is no fixture '{file_name}'"
+        ))),
+        _ => Err(unexpected(&response)),
+    }
+}
+
+async fn read_text_file(path: &Path) -> Result<String, DevError> {
+    let owned = path.to_path_buf();
+    let unreadable = |message: String| DevError::UnreadableFile {
+        path: path.to_path_buf(),
+        message,
+    };
+    tokio::task::spawn_blocking(move || std::fs::read_to_string(&owned))
+        .await
+        .map_err(|error| unreadable(error.to_string()))?
+        .map_err(|error| unreadable(error.to_string()))
 }
 
 async fn fetch_canvas(port: u16) -> Result<CanvasView, DevError> {
@@ -134,7 +204,53 @@ async fn fetch_canvas(port: u16) -> Result<CanvasView, DevError> {
 
 async fn execute(port: u16, command: Command) -> Result<String, DevError> {
     match command {
-        Command::Effects(requests) => send_effects(port, &requests).await,
+        Command::Effects(requests) => {
+            let bodies = requests
+                .iter()
+                .map(to_body)
+                .collect::<Result<Vec<_>, _>>()?;
+            send_each(port, route::EFFECT, "effect", &bodies, read_reply).await
+        }
+        Command::Playground => show_playground(port).await,
+        Command::PlaygroundSet(changes) => {
+            let bodies = changes.iter().map(to_body).collect::<Result<Vec<_>, _>>()?;
+            send_each(
+                port,
+                route::DEV_PLAYGROUND_CONTROLS,
+                "change",
+                &bodies,
+                read_controls_reply,
+            )
+            .await
+        }
+        Command::Fixtures => Ok(fetch_fixture_names(port).await?.join(
+            "
+",
+        )),
+        Command::FixtureShow(name) => show_fixture(port, &name).await,
+        Command::FixtureWrite { name, path } => {
+            let text = read_text_file(&path).await?;
+            let body = to_body(&FixtureWrite { name, text })?;
+            send_each(
+                port,
+                route::DEV_FIXTURE_WRITE,
+                "fixture",
+                &[body],
+                read_reply,
+            )
+            .await
+        }
+        Command::FixtureRemove(name) => {
+            let body = to_body(&FixtureRemove { name })?;
+            send_each(
+                port,
+                route::DEV_FIXTURE_REMOVE,
+                "fixture",
+                &[body],
+                read_reply,
+            )
+            .await
+        }
         Command::Canvas => {
             let view = fetch_canvas(port).await?;
             format_canvas(&view)
@@ -164,17 +280,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
 /// Reads and checks every line of a script before anything runs, so a typo on line nine does not
 /// leave the canvas half built.
 async fn read_script(path: &Path) -> Result<Vec<(usize, Command)>, DevError> {
-    let owned = path.to_path_buf();
-    let text = tokio::task::spawn_blocking(move || std::fs::read_to_string(&owned))
-        .await
-        .map_err(|error| DevError::UnreadableScript {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })?
-        .map_err(|error| DevError::UnreadableScript {
-            path: path.to_path_buf(),
-            message: error.to_string(),
-        })?;
+    let text = read_text_file(path).await?;
     let mut commands = Vec::new();
     for (index, line) in text.lines().enumerate() {
         let line_number = index + 1;
