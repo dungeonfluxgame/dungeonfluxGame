@@ -6,7 +6,7 @@
 //! a credential in this module; the composition root supplies the `Config`. One connection is used at a time. A connection failure drops it so
 //! the next operation reconnects instead of trusting a connection that may have lost an answer.
 
-use std::time::Duration;
+use std::{net::IpAddr, time::Duration};
 
 use df_ai::{
     text::{TextOutcome, TextPurpose, TextUsage, UnavailableReason},
@@ -438,16 +438,26 @@ async fn open(
     Ok(slot)
 }
 
-/// Plain TCP is accepted only to loopback, so the store never sends text to a remote host
-/// without TLS. Anything else is refused before a connection is attempted.
+/// Plain TCP is accepted only to a literal loopback address, so the store never sends text to a
+/// remote host without TLS. A `hostaddr` overrides where the connection goes whatever the host
+/// name says, and a name such as `localhost` is resolved by the system, so neither is trusted:
+/// every host and every hostaddr must be a literal loopback IP. Anything else is refused before a
+/// connection is attempted.
 fn require_loopback(config: &Config) -> Result<(), AttemptStoreError> {
     let hosts = config.get_hosts();
     if hosts.is_empty() {
         return Err(AttemptStoreError::Invalid);
     }
+    if config
+        .get_hostaddrs()
+        .iter()
+        .any(|address| !address.is_loopback())
+    {
+        return Err(AttemptStoreError::Invalid);
+    }
     for host in hosts {
         match host {
-            Host::Tcp(name) if matches!(name.as_str(), "127.0.0.1" | "localhost" | "::1") => {}
+            Host::Tcp(name) if name.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) => {}
             _ => return Err(AttemptStoreError::Invalid),
         }
     }

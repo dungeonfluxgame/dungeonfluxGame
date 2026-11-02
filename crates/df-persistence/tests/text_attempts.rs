@@ -18,10 +18,9 @@ use df_ai::{
         TextService, TextUsage, UnavailableReason,
     },
     text_attempts::{
-        AttemptMeta, AttemptOwner, AttemptPhase, AttemptScope, AttemptState,
-        AttemptStoreError, Basis, DurableTextError, DurableTextService, OperationKey, OutcomeKind,
-        Qualification, QualifyResult, StoredAttempt, Submission, TextAttemptStore, Verdict,
-        fingerprint,
+        AttemptMeta, AttemptOwner, AttemptPhase, AttemptScope, AttemptState, AttemptStoreError,
+        Basis, DurableTextError, DurableTextService, OperationKey, OutcomeKind, Qualification,
+        QualifyResult, StoredAttempt, Submission, TextAttemptStore, Verdict, fingerprint,
     },
     text_fixture::{FixedAuthority, ScriptedBackend},
 };
@@ -225,6 +224,28 @@ fn a_remote_store_host_is_refused_before_any_connection() {
         remote.host("example.com").port(5432).user("postgres");
         assert!(matches!(
             PostgresTextAttempts::connect(&remote).await,
+            Err(AttemptStoreError::Invalid)
+        ));
+    });
+}
+
+#[test]
+fn a_loopback_name_with_a_remote_hostaddr_or_a_resolved_name_is_refused() {
+    run(async {
+        let mut redirected = Config::new();
+        redirected
+            .host("127.0.0.1")
+            .hostaddr("10.0.0.5".parse().unwrap())
+            .port(5432)
+            .user("postgres");
+        assert!(matches!(
+            PostgresTextAttempts::connect(&redirected).await,
+            Err(AttemptStoreError::Invalid)
+        ));
+        let mut named = Config::new();
+        named.host("localhost").port(5432).user("postgres");
+        assert!(matches!(
+            PostgresTextAttempts::connect(&named).await,
             Err(AttemptStoreError::Invalid)
         ));
     });
