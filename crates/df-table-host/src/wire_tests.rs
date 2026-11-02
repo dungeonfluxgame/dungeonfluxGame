@@ -1,7 +1,8 @@
 use df_table::event::RejectionCause;
 use serde_json::json;
 
-use crate::wire::{EffectRequest, MAXIMUM_LISTED_PROBLEMS, Reply, ValueForm, capped};
+use crate::limits::MAXIMUM_LISTED_PROBLEMS;
+use crate::wire::{EffectRequest, Reply, ValueForm, capped};
 
 #[test]
 fn a_request_without_a_value_form_reads_its_values_as_json() {

@@ -4,7 +4,8 @@ use df_table::testkit::{CHARACTER_KIND, MARKER_KIND, RecordingSink, registry_fro
 use serde_json::json;
 
 use crate::event_log::LoggedLine;
-use crate::render::{MAXIMUM_LABEL_CHARACTERS, escape, page, shorten_label};
+use crate::limits::MAXIMUM_LABEL_CHARACTERS;
+use crate::render::{escape, page, shorten_label};
 use crate::view::{CanvasView, ElementView, PivotView};
 use crate::wire::EffectRequest;
 
@@ -62,14 +63,20 @@ fn shortening_counts_characters_not_bytes() {
 
 #[test]
 fn the_page_refreshes_with_a_meta_tag_and_contains_no_script() {
-    let html = page(&CanvasView::from_canvas(&character_canvas()), &[]);
+    let html = page(
+        &CanvasView::from_canvas(&character_canvas()).expect("copies"),
+        &[],
+    );
     assert!(html.contains(r#"<meta http-equiv="refresh" content="1">"#));
     assert!(!html.to_ascii_lowercase().contains("<script"));
 }
 
 #[test]
 fn an_element_is_drawn_with_its_kind_shape_color_and_label() {
-    let html = page(&CanvasView::from_canvas(&character_canvas()), &[]);
+    let html = page(
+        &CanvasView::from_canvas(&character_canvas()).expect("copies"),
+        &[],
+    );
     assert!(html.contains("<circle"));
     assert!(html.contains("#4f8cff"));
     assert!(html.contains(">Pip</text>"));
@@ -78,7 +85,7 @@ fn an_element_is_drawn_with_its_kind_shape_color_and_label() {
 
 #[test]
 fn a_rectangular_kind_is_drawn_as_a_rect_centred_on_the_element() {
-    let mut view = CanvasView::from_canvas(&character_canvas());
+    let mut view = CanvasView::from_canvas(&character_canvas()).expect("copies");
     view.elements[0].shape = Shape::Rect;
     view.elements[0].width_units = 10.0;
     view.elements[0].height_units = 4.0;
@@ -90,7 +97,7 @@ fn a_rectangular_kind_is_drawn_as_a_rect_centred_on_the_element() {
 fn an_element_whose_kind_was_removed_is_drawn_as_a_flagged_square_labelled_by_its_id() {
     let mut canvas = character_canvas();
     canvas.replace_registry(registry_from(&[MARKER_KIND]), &RecordingSink::default());
-    let html = page(&CanvasView::from_canvas(&canvas), &[]);
+    let html = page(&CanvasView::from_canvas(&canvas).expect("copies"), &[]);
     assert!(html.contains("<rect"));
     assert!(html.contains("stroke-dasharray"));
     assert!(html.contains(">pip</text>"));
@@ -104,7 +111,7 @@ fn a_kind_with_an_empty_label_falls_back_to_the_id() {
         &mut canvas,
         json!({"op": "spawn", "id": "m1", "kind": "marker"}),
     );
-    let html = page(&CanvasView::from_canvas(&canvas), &[]);
+    let html = page(&CanvasView::from_canvas(&canvas).expect("copies"), &[]);
     assert!(html.contains(">m1</text>"));
 }
 
@@ -144,7 +151,7 @@ fn every_piece_of_text_from_the_canvas_and_the_log_is_escaped() {
 
 #[test]
 fn the_log_is_drawn_newest_first_from_lines_given_oldest_first() {
-    let view = CanvasView::from_canvas(&character_canvas());
+    let view = CanvasView::from_canvas(&character_canvas()).expect("copies");
     let html = page(&view, &[line(1, "older-entry"), line(2, "newer-entry")]);
     let newer = html.find("newer-entry").expect("shows the newer line");
     let older = html.find("older-entry").expect("shows the older line");
@@ -154,7 +161,7 @@ fn the_log_is_drawn_newest_first_from_lines_given_oldest_first() {
 #[test]
 fn an_empty_canvas_and_log_tell_the_reader_what_to_do_or_that_nothing_happened() {
     let canvas = Canvas::new(registry_from(&[]));
-    let html = page(&CanvasView::from_canvas(&canvas), &[]);
+    let html = page(&CanvasView::from_canvas(&canvas).expect("copies"), &[]);
     assert!(html.contains("Nothing here yet"));
     assert!(html.contains("No kinds are loaded"));
     assert!(html.contains("Nothing has happened yet."));
@@ -162,13 +169,16 @@ fn an_empty_canvas_and_log_tell_the_reader_what_to_do_or_that_nothing_happened()
 
 #[test]
 fn the_header_states_the_revision_and_the_counts() {
-    let html = page(&CanvasView::from_canvas(&character_canvas()), &[]);
+    let html = page(
+        &CanvasView::from_canvas(&character_canvas()).expect("copies"),
+        &[],
+    );
     assert!(html.contains("revision 1 with 1 elements and 2 kinds"));
 }
 
 #[test]
 fn a_label_near_the_bottom_edge_stays_on_the_canvas() {
-    let mut view = CanvasView::from_canvas(&character_canvas());
+    let mut view = CanvasView::from_canvas(&character_canvas()).expect("copies");
     view.elements[0].y = 56.0;
     let html = page(&view, &[]);
     assert!(html.contains(r#"y="55.75""#));

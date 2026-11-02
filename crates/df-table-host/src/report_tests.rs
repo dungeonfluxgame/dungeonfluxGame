@@ -115,6 +115,7 @@ fn a_reader_ahead_of_the_newest_sequence_is_told_the_host_restarted() {
 fn the_playground_is_printed_one_setting_per_line_with_the_fixtures() {
     let reply = crate::wire::ControlsReply {
         revision: 3,
+        boot_id: String::new(),
         controls: df_playground::controls::Controls {
             fixture: Some("a.json".into()),
             ..df_playground::controls::Controls::default()
@@ -130,6 +131,7 @@ fn the_playground_is_printed_one_setting_per_line_with_the_fixtures() {
     let empty = crate::report::format_playground(
         &crate::wire::ControlsReply {
             revision: 0,
+            boot_id: String::new(),
             controls: df_playground::controls::Controls::default(),
             scene: df_playground::scene::SceneOverlay::default(),
         },

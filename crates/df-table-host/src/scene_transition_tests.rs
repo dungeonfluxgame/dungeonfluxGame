@@ -6,10 +6,10 @@ use df_playground::controls::{ControlsChange, TransitionStyle};
 
 use crate::client::get;
 use crate::command::{
-    Command, CommandError, DEFAULT_CYCLES, DEFAULT_HOLD_MS, MAXIMUM_CYCLES, MAXIMUM_WAIT_MS, parse,
-    split_words, usage_text,
+    Command, CommandError, DEFAULT_CYCLES, DEFAULT_HOLD_MS, parse, split_words, usage_text,
 };
 use crate::dev::{DevError, run_dev};
+use crate::limits::{MAXIMUM_CYCLES, MAXIMUM_WAIT_MS};
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::ControlsReply;
 
@@ -25,7 +25,7 @@ fn words(line: &str) -> Vec<String> {
 
 fn go(line: &str) -> Vec<ControlsChange> {
     match parse(&words(line)).expect("parses") {
-        Command::PlaygroundSet(changes) => changes,
+        Command::PlaygroundSet(changes) | Command::PlaygroundGo(changes) => changes,
         other => panic!("expected playground changes, got {other:?}"),
     }
 }
@@ -125,7 +125,10 @@ fn cycle_reads_rounds_pause_and_transition() {
 fn cycle_refuses_bad_rounds_pauses_and_keys() {
     for line in [
         "playground cycle a b times=0",
-        &format!("playground cycle a b times={}", MAXIMUM_CYCLES + 1),
+        &format!(
+            "playground cycle a b times={}",
+            u64::from(MAXIMUM_CYCLES) + 1
+        ),
         "playground cycle a b times=many",
         &format!("playground cycle a b hold={}", MAXIMUM_WAIT_MS + 1),
         "playground cycle a b hold=-1",
@@ -226,9 +229,11 @@ async fn a_transition_longer_than_the_limit_is_refused_before_anything_changes()
     let running = start(&STARTER_FILES).await;
     with_two_scenes(&running).await;
     let before = shown(&running).await;
-    let error = run(&running, "playground go tavern ms=9000")
-        .await
-        .expect_err("refused");
+    let too_long = format!(
+        "playground go tavern ms={}",
+        df_playground::controls::MAXIMUM_TRANSITION_MS + 1
+    );
+    let error = run(&running, &too_long).await.expect_err("refused");
     assert!(
         matches!(&error, DevError::Command(CommandError::BadChoice { key, .. }) if key == "ms"),
         "{error}"
@@ -280,16 +285,21 @@ async fn a_cycle_goes_back_and_forth_and_ends_on_the_second_scene() {
 }
 
 #[tokio::test]
-async fn a_cycle_pauses_between_scenes() {
+async fn a_cycle_pauses_between_scenes_but_not_after_the_last() {
     let running = start(&STARTER_FILES).await;
     with_two_scenes(&running).await;
     let started = Instant::now();
-    run(&running, "playground cycle quay tavern times=1 hold=80")
+    run(&running, "playground cycle quay tavern times=1 hold=700")
         .await
         .expect("cycles");
+    let elapsed = started.elapsed();
     assert!(
-        started.elapsed() >= Duration::from_millis(150),
-        "two holds of 80 ms"
+        elapsed >= Duration::from_millis(650),
+        "one hold of 700 ms between the two scenes: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(1_300),
+        "and none after the last scene (it used to be two): {elapsed:?}"
     );
 }
 

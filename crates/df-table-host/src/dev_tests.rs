@@ -220,7 +220,7 @@ async fn with_nothing_serving_the_error_says_how_to_start_it() {
 
 #[tokio::test]
 async fn an_answer_the_program_does_not_understand_is_reported_with_its_status_and_start() {
-    let body = "x".repeat(500);
+    let body = "x".repeat(crate::limits::MAXIMUM_ECHOED_ANSWER + 300);
     let answer = format!(
         "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
@@ -229,9 +229,9 @@ async fn an_answer_the_program_does_not_understand_is_reported_with_its_status_a
     let error = run_dev(port, &split_words("canvas").expect("splits"))
         .await
         .expect_err("fails");
-    let DevError::UnexpectedAnswer { status, body } = error else {
+    let DevError::UnexpectedAnswer { status, body, .. } = error else {
         panic!("expected an unexpected answer");
     };
     assert_eq!(status, 500);
-    assert_eq!(body.chars().count(), 200);
+    assert_eq!(body.chars().count(), crate::limits::MAXIMUM_ECHOED_ANSWER);
 }

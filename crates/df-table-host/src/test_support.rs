@@ -50,11 +50,18 @@ impl Running {
         std::fs::write(self.directory.path().join(file_name), text).expect("writes a file");
     }
 
-    /// Writes a playground asset (`index.html`, `theme.css`, or `fixtures/<name>.json`).
+    /// Writes a playground asset (`index.html`, `theme.css`, or `fixtures/<name>.json`). A fixture
+    /// is written the way `fixture write` does it: the host then reconciles what it shows with the
+    /// files (a read never does) and tells the pages.
     pub fn write_asset(&self, relative_path: &str, text: &str) {
         let path = self.playground.path().join("assets").join(relative_path);
         std::fs::create_dir_all(path.parent().expect("has a parent")).expect("makes a directory");
         std::fs::write(path, text).expect("writes an asset");
+        if relative_path.starts_with("fixtures/") {
+            self.state.playground().fixture_files_changed();
+            crate::playground::reconcile_fixtures(&self.state).expect("lists the fixtures");
+            self.state.announce_change();
+        }
     }
 
     /// A path under the playground's temporary directory (`assets/...` or `pkg/...`).

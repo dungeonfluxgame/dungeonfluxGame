@@ -52,6 +52,18 @@ fn collecting_echo(log: &EventLog) -> (LineEcho, Arc<Mutex<Vec<String>>>) {
     (echo, printed)
 }
 
+/// The lines written so far, once at least `count` are there (the writer is another thread).
+fn written(printed: &Arc<Mutex<Vec<String>>>, count: usize) -> Vec<String> {
+    for _ in 0..500 {
+        let lines = printed.lock().expect("not poisoned").clone();
+        if lines.len() >= count {
+            return lines;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    printed.lock().expect("not poisoned").clone()
+}
+
 #[test]
 fn the_echo_prints_each_new_line_once_and_in_order() {
     let log = Arc::new(EventLog::default());
@@ -62,7 +74,7 @@ fn the_echo_prints_each_new_line_once_and_in_order() {
     echo.echo_new(&log);
     echo.echo_new(&log);
     assert_eq!(
-        *printed.lock().expect("not poisoned"),
+        written(&printed, 2),
         vec![
             "CANVAS clear removed=3 revision=4",
             "CANVAS move element=pip revision=2"
@@ -70,7 +82,7 @@ fn the_echo_prints_each_new_line_once_and_in_order() {
     );
     sink.record(&cleared());
     echo.echo_new(&log);
-    assert_eq!(printed.lock().expect("not poisoned").len(), 3);
+    assert_eq!(written(&printed, 3).len(), 3);
 }
 
 #[test]
@@ -80,5 +92,6 @@ fn the_echo_skips_lines_logged_before_it_was_made() {
     sink.record(&cleared());
     let (echo, printed) = collecting_echo(&log);
     echo.echo_new(&log);
+    std::thread::sleep(std::time::Duration::from_millis(100));
     assert!(printed.lock().expect("not poisoned").is_empty());
 }

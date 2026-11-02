@@ -1,10 +1,8 @@
 use df_table::testkit::{CHARACTER_KIND, MARKER_KIND};
 use tempfile::TempDir;
 
-use crate::kind_files::{
-    KindFileProblem, MAXIMUM_KIND_FILE_BYTES, MAXIMUM_KIND_FILES, load_kind_files,
-    load_kind_files_async,
-};
+use crate::kind_files::{KindFileProblem, load_kind_files, load_kind_files_async};
+use crate::limits::{MAXIMUM_KIND_FILE_BYTES, MAXIMUM_KIND_FILES};
 
 fn directory_with(files: &[(&str, &str)]) -> TempDir {
     let directory = TempDir::new().expect("makes a temporary directory");

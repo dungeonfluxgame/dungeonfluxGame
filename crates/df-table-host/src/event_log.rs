@@ -10,8 +10,7 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-/// Most lines kept; older lines are dropped first.
-pub const MAXIMUM_LOGGED_LINES: usize = 500;
+use crate::limits::MAXIMUM_LOGGED_LINES;
 
 /// One recorded line and its place in the order. Sequences start at 1 and restart when the host
 /// does.
@@ -55,13 +54,14 @@ impl EventLog {
 
     /// Lines newer than `sequence`, oldest first, at most `limit` of them.
     pub fn after_sequence(&self, sequence: u64, limit: usize) -> Vec<LoggedLine> {
-        self.lock()
-            .kept
-            .iter()
-            .filter(|line| line.sequence > sequence)
-            .take(limit)
-            .cloned()
-            .collect()
+        let lines = self.lock();
+        // The kept lines have consecutive sequences, so the first newer one is found by
+        // arithmetic instead of by walking a log that can hold a hundred thousand lines.
+        let first_kept = lines.kept.front().map_or(0, |line| line.sequence);
+        let skip = usize::try_from(sequence.saturating_add(1).saturating_sub(first_kept))
+            .unwrap_or(usize::MAX)
+            .min(lines.kept.len());
+        lines.kept.range(skip..).take(limit).cloned().collect()
     }
 
     /// The newest `limit` lines, oldest first.

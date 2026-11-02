@@ -23,15 +23,15 @@ fn effects(line: &str) -> Vec<EffectRequest> {
 fn transform(id: &str, rotation_degrees: i64, pivot: Option<PivotRequest>) -> EffectRequest {
     EffectRequest::Transform {
         id: id.into(),
-        rotation_degrees,
+        rotation_degrees: serde_json::Number::from(rotation_degrees),
         pivot,
     }
 }
 
 fn hinge() -> PivotRequest {
     PivotRequest {
-        x_percent: 0,
-        y_percent: 50,
+        x_percent: 0.into(),
+        y_percent: 50.into(),
     }
 }
 
@@ -170,7 +170,9 @@ async fn rotating_through_the_running_host_turns_the_element_and_records_one_aud
             .iter()
             .filter(|line| line.starts_with("CANVAS transform"))
             .collect::<Vec<_>>(),
-        ["CANVAS transform element=pip kind=rotate degrees=90 revision=2"]
+        [
+            "CANVAS transform element=pip kind=rotate degrees=90 pivot_x_percent=0 pivot_y_percent=50 revision=2"
+        ]
     );
 }
 
@@ -344,12 +346,15 @@ async fn a_repl_line_and_a_script_both_rotate() {
 
     let directory = tempfile::TempDir::new().expect("makes a temporary directory");
     let path = directory.path().join("turn.txt");
-    std::fs::write(&path, "rotate m1 90\n# a note\nrotate m1 180 pivot=0,0\n")
-        .expect("writes the script");
+    std::fs::write(
+        &path,
+        "rotate m1 90\n# a note\nrotate m1 0\nrotate m1 180 pivot=0,0\n",
+    )
+    .expect("writes the script");
     let said = run(&running, &format!("script {}", path.display()))
         .await
         .expect("runs");
-    assert!(said.ends_with("ran 2 commands, all ok"), "{said}");
+    assert!(said.ends_with("ran 3 commands, all ok"), "{said}");
     let turned = element(&running, "m1").await;
     assert_eq!(turned.rotation_degrees, 180);
     assert_eq!((turned.pivot.x_percent, turned.pivot.y_percent), (0, 0));
@@ -367,4 +372,104 @@ async fn a_script_with_a_bad_rotation_on_a_late_line_runs_nothing() {
         .expect_err("refused");
     assert!(error.to_string().contains("0 to 359"), "{error}");
     assert_eq!(element(&running, "m1").await.rotation_degrees, 0);
+}
+
+/// A transform request body that cannot be a whole number in range, and the range its refusal
+/// must name.
+async fn refused_with_the_range(running: &Running, body: &str, range: &str) {
+    let (status, reply) = post_effect(running, body).await;
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        matches!(&reply, Reply::Rejected { message, cause, .. }
+            if message.contains(range) && *cause == Some(df_table::event::RejectionCause::InvalidTransform)),
+        "{body}: {reply:?}"
+    );
+    assert!(
+        log_lines(running).await.contains(
+            &"CANVAS reject effect=transform cause=invalid_transform element=m1".to_owned()
+        ),
+        "{body}: recorded against the element, not as a malformed request"
+    );
+    assert_eq!(element(running, "m1").await.rotation_degrees, 0, "{body}");
+}
+
+#[tokio::test]
+async fn a_rotation_too_big_for_64_bits_or_fractional_is_refused_with_its_range() {
+    let running = start(&STARTER_FILES).await;
+    run(&running, "spawn marker m1").await.expect("spawns");
+    for number in ["18446744073709551615", "90.0", "9e1", "1e30", "-0.5", "-1"] {
+        let body = format!(r#"{{"op":"transform","id":"m1","rotation_degrees":{number}}}"#);
+        refused_with_the_range(&running, &body, "0 to 359").await;
+    }
+}
+
+#[tokio::test]
+async fn a_pivot_that_is_negative_fractional_or_huge_is_refused_with_its_range() {
+    let running = start(&STARTER_FILES).await;
+    run(&running, "spawn marker m1").await.expect("spawns");
+    for pivot in ["-1", "50.5", "18446744073709551615", "1e3"] {
+        let body = format!(
+            r#"{{"op":"transform","id":"m1","rotation_degrees":0,"pivot":{{"x_percent":{pivot},"y_percent":50}}}}"#
+        );
+        refused_with_the_range(&running, &body, "0 to 100").await;
+    }
+}
+
+#[tokio::test]
+async fn a_missing_rotation_or_a_rotation_that_is_text_is_a_malformed_request() {
+    let running = start(&STARTER_FILES).await;
+    run(&running, "spawn marker m1").await.expect("spawns");
+    for body in [
+        r#"{"op":"transform","id":"m1"}"#,
+        r#"{"op":"transform","id":"m1","rotation_degrees":"90"}"#,
+        r#"{"op":"transform","id":"m1","rotation_degrees":null}"#,
+    ] {
+        let (status, reply) = post_effect(&running, body).await;
+        assert_eq!(status, 400, "{body}");
+        assert!(
+            matches!(
+                reply,
+                Reply::Rejected {
+                    cause: Some(df_table::event::RejectionCause::MalformedRequest),
+                    ..
+                }
+            ),
+            "{body}"
+        );
+    }
+    assert_eq!(element(&running, "m1").await.rotation_degrees, 0);
+}
+
+#[tokio::test]
+async fn a_pivot_change_on_a_turned_element_is_refused_once_and_the_log_says_why() {
+    let running = start(&STARTER_FILES).await;
+    run(&running, "spawn marker m1").await.expect("spawns");
+    run(&running, "rotate m1 90").await.expect("rotates");
+    let error = run(&running, "rotate m1 90 pivot=0,50")
+        .await
+        .expect_err("refused");
+    assert!(
+        matches!(&error, DevError::Rejected(text) if text.contains("rotate m1 0")),
+        "{error}"
+    );
+    let lines = log_lines(&running).await;
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("CANVAS reject effect=transform"))
+            .collect::<Vec<_>>(),
+        ["CANVAS reject effect=transform cause=invalid_transform element=m1"]
+    );
+    assert_eq!(element(&running, "m1").await.pivot, PivotView::default());
+    run(&running, "rotate m1 0").await.expect("back to zero");
+    run(&running, "rotate m1 0 pivot=0,50")
+        .await
+        .expect("now it may");
+    let lines = log_lines(&running).await;
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("degrees=0 pivot_x_percent=0 pivot_y_percent=50")),
+        "a pivot-only change shows in the log: {lines:?}"
+    );
 }

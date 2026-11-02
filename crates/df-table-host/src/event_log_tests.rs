@@ -1,4 +1,5 @@
-use crate::event_log::{EventLog, MAXIMUM_LOGGED_LINES};
+use crate::event_log::EventLog;
+use crate::limits::MAXIMUM_LOGGED_LINES;
 
 fn log_with(count: usize) -> EventLog {
     let log = EventLog::default();
@@ -65,4 +66,24 @@ fn the_oldest_lines_are_forgotten_first_and_numbering_goes_on() {
         log.latest_sequence(),
         u64::try_from(MAXIMUM_LOGGED_LINES + 1).expect("fits")
     );
+}
+
+#[test]
+fn after_a_sequence_that_was_forgotten_starts_at_the_oldest_kept_line() {
+    let log = log_with(MAXIMUM_LOGGED_LINES + 3);
+    let after_zero = log.after_sequence(0, 2);
+    assert_eq!(
+        after_zero
+            .iter()
+            .map(|line| line.sequence)
+            .collect::<Vec<_>>(),
+        vec![4, 5],
+        "lines 1 to 3 were forgotten"
+    );
+    let latest = log.latest_sequence();
+    assert!(log.after_sequence(latest, 10).is_empty());
+    assert!(log.after_sequence(latest + 50, 10).is_empty());
+    let last = log.after_sequence(latest - 1, 10);
+    assert_eq!(last.len(), 1);
+    assert_eq!(last[0].sequence, latest);
 }

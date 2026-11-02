@@ -18,7 +18,7 @@ fn shipped_directory() -> PathBuf {
 fn every_shipped_kind_file_loads_and_each_kind_is_present() {
     let registry = load_kind_files(&shipped_directory()).expect("the shipped kinds load");
     let canvas = Canvas::new(registry);
-    let view = CanvasView::from_canvas(&canvas);
+    let view = CanvasView::from_canvas(&canvas).expect("copies");
     let names: Vec<&str> = view.kinds.iter().map(|kind| kind.name.as_str()).collect();
     for expected in ["character", "item", "marker", "set_piece"] {
         assert!(names.contains(&expected), "missing kind {expected}");
@@ -30,6 +30,7 @@ fn each_shipped_kind_can_be_spawned_with_only_its_required_fields_and_gets_a_lab
     let registry = load_kind_files(&shipped_directory()).expect("the shipped kinds load");
     let mut canvas = Canvas::new(registry);
     let kinds: Vec<(String, bool)> = CanvasView::from_canvas(&canvas)
+        .expect("copies")
         .kinds
         .iter()
         .map(|kind| {
@@ -54,7 +55,7 @@ fn each_shipped_kind_can_be_spawned_with_only_its_required_fields_and_gets_a_lab
             .apply(effect, &RecordingSink::default())
             .unwrap_or_else(|error| panic!("{kind} did not spawn: {error}"));
     }
-    let view = CanvasView::from_canvas(&canvas);
+    let view = CanvasView::from_canvas(&canvas).expect("copies");
     assert!(
         view.elements
             .iter()

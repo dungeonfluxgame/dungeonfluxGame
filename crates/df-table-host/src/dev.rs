@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::client::{self, ClientError, Response};
 use crate::command::{self, Command, CommandError, usage_text};
+use crate::limits::MAXIMUM_ECHOED_ANSWER;
 use crate::playground::fixture_file_name;
 use crate::report::{
     describe_reply, format_canvas, format_clients, format_events, format_kinds, format_media,
@@ -18,12 +19,9 @@ use crate::report::{
 };
 use crate::view::CanvasView;
 use crate::wire::{
-    ClientView, ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove, FixtureWrite,
-    MediaRemove, Reply, route,
+    ClientView, ControlsBatch, ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove,
+    FixtureWrite, MediaRemove, Reply, route,
 };
-
-/// Most characters of an unexpected answer echoed in an error.
-const MAXIMUM_ECHOED_ANSWER: usize = 200;
 
 /// Why a `dev` command failed.
 #[derive(Debug, Clone, PartialEq)]
@@ -32,10 +30,17 @@ pub enum DevError {
     Client(ClientError),
     /// The canvas understood the request and refused it; the text says why.
     Rejected(String),
-    /// The canvas answered with something this program does not understand.
+    /// The canvas answered with something this program does not understand. `reason` is why the
+    /// answer did not read, when it was text that should have been JSON of a known shape.
     UnexpectedAnswer {
         status: u16,
         body: String,
+        reason: Option<String>,
+    },
+    /// A request or an answer this program built could not be written as JSON.
+    Unwritable {
+        what: &'static str,
+        reason: String,
     },
     UnreadableFile {
         path: PathBuf,
@@ -61,8 +66,21 @@ impl fmt::Display for DevError {
             Self::Command(error) => write!(formatter, "{error}"),
             Self::Client(error) => write!(formatter, "{error}"),
             Self::Rejected(text) => formatter.write_str(text),
-            Self::UnexpectedAnswer { status, body } => {
-                write!(formatter, "unexpected answer (status {status}): {body}")
+            Self::UnexpectedAnswer {
+                status,
+                body,
+                reason: None,
+            } => write!(formatter, "unexpected answer (status {status}): {body}"),
+            Self::UnexpectedAnswer {
+                status,
+                body,
+                reason: Some(reason),
+            } => write!(
+                formatter,
+                "unexpected answer (status {status}, {reason}): {body}"
+            ),
+            Self::Unwritable { what, reason } => {
+                write!(formatter, "could not write the {what}: {reason}")
             }
             Self::UnreadableFile { path, message } => {
                 write!(formatter, "cannot read {}: {message}", path.display())
@@ -85,6 +103,16 @@ fn unexpected(response: &Response) -> DevError {
     DevError::UnexpectedAnswer {
         status: response.status,
         body: shortened(&response.body),
+        reason: None,
+    }
+}
+
+/// An answer that should have read as JSON of a known shape and did not, with the reason.
+fn unreadable_answer(response: &Response, error: &serde_json::Error) -> DevError {
+    DevError::UnexpectedAnswer {
+        status: response.status,
+        body: shortened(&response.body),
+        reason: Some(error.to_string()),
     }
 }
 
@@ -93,11 +121,12 @@ fn read_json<T: serde::de::DeserializeOwned>(response: &Response) -> Result<T, D
     if response.status != 200 {
         return Err(unexpected(response));
     }
-    serde_json::from_str(&response.body).map_err(|_| unexpected(response))
+    serde_json::from_str(&response.body).map_err(|error| unreadable_answer(response, &error))
 }
 
 fn read_reply(response: &Response) -> Result<Result<String, String>, DevError> {
-    let reply: Reply = serde_json::from_str(&response.body).map_err(|_| unexpected(response))?;
+    let reply: Reply = serde_json::from_str(&response.body)
+        .map_err(|error| unreadable_answer(response, &error))?;
     Ok(describe_reply(&reply))
 }
 
@@ -155,8 +184,10 @@ async fn send_each(
 }
 
 fn to_body<T: serde::Serialize>(value: &T) -> Result<String, DevError> {
-    serde_json::to_string(value)
-        .map_err(|_| DevError::Rejected("could not write the request".to_owned()))
+    serde_json::to_string(value).map_err(|error| DevError::Unwritable {
+        what: "request",
+        reason: error.to_string(),
+    })
 }
 
 async fn fetch_fixture_names(port: u16) -> Result<Vec<String>, DevError> {
@@ -245,8 +276,7 @@ async fn upload_media(port: u16, name: String, path: &Path) -> Result<String, De
     .map_err(|error| unreadable(error.to_string()))?;
     let size =
         checked_file_size(size, crate::media_library::MAXIMUM_MEDIA_BYTES).map_err(&unreadable)?;
-    let quoted_name = serde_json::to_string(&name)
-        .map_err(|_| DevError::Rejected("could not write the request".to_owned()))?;
+    let quoted_name = to_body(&name)?;
     let prefix = format!("{{\"name\":{quoted_name},\"data_base64\":\"");
     let suffix = "\"}";
     let length = upload_body_length(prefix.len() + suffix.len(), size)
@@ -306,8 +336,26 @@ async fn send_upload(
     post.send(suffix.as_bytes()).await.map_err(to_host)
 }
 
-/// Goes to each of two scenes in turn, `times` rounds, pausing `hold_ms` after each. A scene that
-/// cannot be reached stops the cycle there and says which step it was.
+/// Changes the playground to `changes` as one change: the host applies all of them or none.
+async fn go(
+    port: u16,
+    changes: Vec<df_playground::controls::ControlsChange>,
+) -> Result<String, DevError> {
+    let body = to_body(&ControlsBatch { changes })?;
+    send_each(
+        port,
+        route::DEV_PLAYGROUND_CONTROLS_BATCH,
+        "change",
+        &[body],
+        read_controls_reply,
+    )
+    .await
+}
+
+/// Goes to each of two scenes in turn, `times` rounds, pausing `hold_ms` between scenes (so
+/// `2 * times - 1` pauses; the last scene is not held, the command returns). Each step changes the
+/// transition and the scene as one change. A scene that cannot be reached stops the cycle there
+/// and says which step it was.
 async fn cycle(
     port: u16,
     scenes: [String; 2],
@@ -316,33 +364,25 @@ async fn cycle(
     transition: &[df_playground::controls::ControlsChange],
 ) -> Result<String, DevError> {
     let mut lines = Vec::new();
-    let mut step = 0_u32;
+    let total_steps = u64::from(times).saturating_mul(2);
+    let mut step = 0_u64;
     for _ in 0..times {
         for scene in &scenes {
             step += 1;
-            let mut bodies = transition
-                .iter()
-                .map(to_body)
-                .collect::<Result<Vec<_>, _>>()?;
-            bodies.push(to_body(&df_playground::controls::ControlsChange::Fixture(
+            let mut changes = transition.to_vec();
+            changes.push(df_playground::controls::ControlsChange::Fixture(
                 scene.clone(),
-            ))?);
-            let answer = send_each(
-                port,
-                route::DEV_PLAYGROUND_CONTROLS,
-                "change",
-                &bodies,
-                read_controls_reply,
-            )
-            .await;
-            match answer {
+            ));
+            match go(port, changes).await {
                 Ok(text) => lines.push(format!("{step}: {scene} {}", last_line(&text))),
                 Err(error) => {
                     lines.push(format!("{step}: {scene} failed: {error}"));
                     return Err(DevError::Rejected(lines.join("\n")));
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(hold_ms)).await;
+            if step < total_steps {
+                tokio::time::sleep(std::time::Duration::from_millis(hold_ms)).await;
+            }
         }
     }
     lines.push(format!(
@@ -357,7 +397,8 @@ fn last_line(text: &str) -> &str {
 }
 
 async fn show_fixture(port: u16, name: &str) -> Result<String, DevError> {
-    let file_name = fixture_file_name(name).map_err(DevError::Rejected)?;
+    let file_name =
+        fixture_file_name(name).map_err(|error| DevError::Rejected(error.to_string()))?;
     let path = route::PLAYGROUND_FIXTURE.replace("{name}", &file_name);
     let response = client::get(port, &path).await.map_err(DevError::Client)?;
     match response.status {
@@ -409,6 +450,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             )
             .await
         }
+        Command::PlaygroundGo(changes) => go(port, changes).await,
         Command::Scene(change) => {
             let body = to_body(&change)?;
             send_each(
@@ -479,8 +521,10 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         }
         Command::Canvas => {
             let view = fetch_canvas(port).await?;
-            format_canvas(&view)
-                .map_err(|_| DevError::Rejected("could not write the canvas".to_owned()))
+            format_canvas(&view).map_err(|error| DevError::Unwritable {
+                what: "canvas",
+                reason: error.to_string(),
+            })
         }
         Command::Kinds => Ok(format_kinds(&fetch_canvas(port).await?)),
         Command::Events { after } => {

@@ -2,7 +2,9 @@
 //! the host, and run back to back from a script with two avatars on the canvas.
 
 use df_playground::fixture::Camera;
-use df_playground::scene::SceneChange;
+use df_playground::scene::{
+    MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT, SceneChange,
+};
 
 use crate::client::get;
 use crate::command::{
@@ -77,12 +79,14 @@ fn reset_moves_the_camera_back_out_to_the_whole_stage() {
 
 #[test]
 fn a_zoom_or_time_out_of_range_or_a_key_that_does_not_belong_is_refused_with_the_range() {
+    let too_far = format!("scene camera finn zoom={}", MAXIMUM_ZOOM_PERCENT + 1);
+    let too_long = format!("scene camera finn over={}", MAXIMUM_CAMERA_MS + 1);
     for line in [
         "scene camera finn zoom=99",
-        "scene camera finn zoom=401",
+        too_far.as_str(),
         "scene camera finn zoom=big",
         "scene camera finn zoom=-1",
-        "scene camera finn over=30001",
+        too_long.as_str(),
         "scene camera finn over=soon",
         "scene camera finn volume=3",
         "scene camera-reset zoom=200",
@@ -92,10 +96,11 @@ fn a_zoom_or_time_out_of_range_or_a_key_that_does_not_belong_is_refused_with_the
             "{line}"
         );
     }
-    let Err(CommandError::BadChoice { allowed, .. }) = scene("scene camera finn zoom=500") else {
+    let Err(CommandError::BadChoice { allowed, .. }) = scene(&too_far) else {
         panic!("expected a refusal");
     };
-    assert!(allowed.contains("100 to 400"), "{allowed}");
+    let range = format!("{MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT}");
+    assert!(allowed.contains(&range), "{allowed}");
     assert_eq!(
         scene("scene camera finn zoom=1 zoom=2"),
         Err(CommandError::DuplicateKey("zoom".into()))
@@ -141,8 +146,13 @@ async fn shown(running: &Running) -> ControlsReply {
     serde_json::from_str(&response.body).expect("controls")
 }
 
+/// The camera as shown, without the host's reading of how far the move has run, which changes
+/// with every look.
 async fn camera_of(running: &Running) -> Option<Camera> {
-    shown(running).await.scene.camera
+    shown(running).await.scene.camera.map(|camera| Camera {
+        elapsed_ms: 0,
+        ..camera
+    })
 }
 
 /// A host with the shipped avatar kind and the shipped camera scene chosen.
@@ -216,7 +226,7 @@ async fn the_camera_zooms_into_each_avatar_back_to_back_and_each_move_is_its_own
     let moves = events
         .events
         .iter()
-        .filter(|line| line.text.starts_with("PLAYGROUND scene change=camera"))
+        .filter(|line| line.text.starts_with("PLAYGROUND camera"))
         .count();
     assert_eq!(moves, 3, "each move is one audit line");
 }
@@ -246,14 +256,15 @@ async fn a_zoom_out_of_range_that_slips_past_the_command_line_is_refused_by_the_
     let running = with_the_camera_scene().await;
     with_two_avatars(&running).await;
     let body = serde_json::json!({
-        "change": "camera", "target": "finn", "zoom_percent": 900, "duration_ms": 10
+        "change": "camera", "target": "finn", "zoom_percent": MAXIMUM_ZOOM_PERCENT + 1, "duration_ms": 10
     });
     let response =
         crate::client::post_json(running.port, "/dev/playground/scene", &body.to_string())
             .await
             .expect("answers");
     assert_eq!(response.status, 400);
-    assert!(response.body.contains("100 to 400"), "{}", response.body);
+    let range = format!("{MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT}");
+    assert!(response.body.contains(&range), "{}", response.body);
     assert_eq!(camera_of(&running).await, None);
 }
 

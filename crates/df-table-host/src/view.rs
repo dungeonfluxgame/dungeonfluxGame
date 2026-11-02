@@ -1,11 +1,15 @@
 //! A copy of the canvas taken under the lock, for the viewer and the JSON answer.
 //!
 //! It owns the shape of what a reader of the canvas sees, in one typed form that the server
-//! writes and the command line reads back. Taking a copy keeps the lock short: rendering happens
-//! after it is released.
+//! writes and the command line reads back. Taking a copy keeps the lock short: every element is
+//! copied once, its problem is found in the same pass, and rendering or writing JSON happens after
+//! the lock is released. A value that cannot be written (a number that is not finite) is an error,
+//! never a quiet `null`.
+
+use std::fmt;
 
 use df_table::canvas::Canvas;
-use df_table::element::{Color, FieldValue, Pivot};
+use df_table::element::{Color, Element, FieldValue, Pivot};
 use df_table::field_type::FieldType;
 use df_table::kind::{KindDefinition, Shape};
 use serde::{Deserialize, Serialize};
@@ -108,15 +112,42 @@ pub struct CanvasView {
     pub kinds: Vec<KindView>,
 }
 
-/// A field value as JSON.
-pub fn value_json(value: &FieldValue) -> serde_json::Value {
-    match value {
+/// The canvas as the playground page reads it: the revision and the elements, without the kinds
+/// (the page never reads them, and they would be sent again with every frame).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FrameCanvas {
+    pub revision: u64,
+    pub elements: Vec<ElementView>,
+}
+
+/// Why a copy of the canvas could not be made.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewError {
+    /// A number field holds a value JSON cannot write (not a finite number).
+    NotWritable { element: String, field: String },
+}
+
+impl fmt::Display for ViewError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotWritable { element, field } => write!(
+                formatter,
+                "field '{field}' of element '{element}' holds a number that is not finite"
+            ),
+        }
+    }
+}
+
+/// A field value as JSON, or `None` for a number that is not finite.
+pub fn value_json(value: &FieldValue) -> Option<serde_json::Value> {
+    Some(match value {
         FieldValue::Text(text) => serde_json::Value::String(text.clone()),
-        FieldValue::Number(number) => serde_json::Number::from_f64(*number)
-            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        FieldValue::Number(number) => {
+            serde_json::Value::Number(serde_json::Number::from_f64(*number)?)
+        }
         FieldValue::Flag(flag) => serde_json::Value::Bool(*flag),
         FieldValue::Color(color) => serde_json::Value::String(color.to_hex()),
-    }
+    })
 }
 
 fn describe(field_type: &FieldType) -> (FieldKind, String) {
@@ -153,56 +184,73 @@ fn kind_view(definition: &KindDefinition) -> KindView {
                     kind,
                     description,
                     required: field.required,
-                    default: field.default.as_ref().map(value_json),
+                    default: field.default.as_ref().and_then(value_json),
                 }
             })
             .collect(),
     }
 }
 
-impl CanvasView {
-    pub fn from_canvas(canvas: &Canvas) -> Self {
-        let problems = canvas.problems();
-        let elements = canvas
-            .elements()
-            .map(|element| {
-                let definition = canvas.registry().get(&element.kind);
-                ElementView {
-                    id: element.id.to_string(),
-                    kind: element.kind.to_string(),
-                    x: element.position.x,
-                    y: element.position.y,
-                    label: definition
-                        .map_or_else(|| element.id.to_string(), |kind| kind.label(&element)),
-                    color: definition
-                        .and_then(|kind| kind.color(&element))
-                        .map(Color::to_hex),
-                    shape: definition.map_or(FALLBACK_SHAPE, |kind| kind.shape),
-                    width_units: definition.map_or(FALLBACK_SIZE_UNITS, |kind| kind.width_units),
-                    height_units: definition.map_or(FALLBACK_SIZE_UNITS, |kind| kind.height_units),
-                    fields: element
-                        .fields
-                        .iter()
-                        .map(|(name, value)| (name.to_string(), value_json(value)))
-                        .collect(),
-                    problem: problems
-                        .iter()
-                        .find(|problem| problem.element == element.id)
-                        .map(|problem| problem.problem.to_string()),
-                    travelling: element.motion.map(|motion| TravelView {
-                        x: motion.target.x,
-                        y: motion.target.y,
-                        speed: motion.speed.units_per_second(),
-                    }),
-                    rotation_degrees: element.appearance.rotation.get(),
-                    pivot: element.appearance.pivot.into(),
-                }
-            })
-            .collect();
-        Self {
+/// One element as a reader sees it, copied from the canvas once. Its problem is found here, in
+/// the same pass, not by searching a list of every element's problems.
+fn element_view(canvas: &Canvas, element: Element) -> Result<ElementView, ViewError> {
+    let definition = canvas.registry().get(&element.kind);
+    let mut fields = serde_json::Map::new();
+    for (name, value) in &element.fields {
+        let json = value_json(value).ok_or_else(|| ViewError::NotWritable {
+            element: element.id.to_string(),
+            field: name.to_string(),
+        })?;
+        fields.insert(name.to_string(), json);
+    }
+    Ok(ElementView {
+        id: element.id.to_string(),
+        kind: element.kind.to_string(),
+        x: element.position.x,
+        y: element.position.y,
+        label: definition.map_or_else(|| element.id.to_string(), |kind| kind.label(&element)),
+        color: definition
+            .and_then(|kind| kind.color(&element))
+            .map(Color::to_hex),
+        shape: definition.map_or(FALLBACK_SHAPE, |kind| kind.shape),
+        width_units: definition.map_or(FALLBACK_SIZE_UNITS, |kind| kind.width_units),
+        height_units: definition.map_or(FALLBACK_SIZE_UNITS, |kind| kind.height_units),
+        fields,
+        problem: canvas
+            .problem_of(&element)
+            .map(|problem| problem.to_string()),
+        travelling: element.motion.map(|motion| TravelView {
+            x: motion.target.x,
+            y: motion.target.y,
+            speed: motion.speed.units_per_second(),
+        }),
+        rotation_degrees: element.appearance.rotation.get(),
+        pivot: element.appearance.pivot.into(),
+    })
+}
+
+fn element_views(canvas: &Canvas) -> Result<Vec<ElementView>, ViewError> {
+    canvas
+        .elements()
+        .map(|element| element_view(canvas, element))
+        .collect()
+}
+
+impl FrameCanvas {
+    pub fn from_canvas(canvas: &Canvas) -> Result<Self, ViewError> {
+        Ok(Self {
             revision: canvas.revision(),
-            elements,
+            elements: element_views(canvas)?,
+        })
+    }
+}
+
+impl CanvasView {
+    pub fn from_canvas(canvas: &Canvas) -> Result<Self, ViewError> {
+        Ok(Self {
+            revision: canvas.revision(),
+            elements: element_views(canvas)?,
             kinds: canvas.registry().iter().map(kind_view).collect(),
-        }
+        })
     }
 }

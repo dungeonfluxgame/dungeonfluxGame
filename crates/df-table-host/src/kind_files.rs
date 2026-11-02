@@ -11,10 +11,7 @@ use std::path::{Path, PathBuf};
 use df_table::kind::KindRegistry;
 use df_table::kind_file::{KindError, KindFile};
 
-/// Most kind files read from one directory.
-pub const MAXIMUM_KIND_FILES: usize = 64;
-/// Largest kind file accepted, in bytes.
-pub const MAXIMUM_KIND_FILE_BYTES: u64 = 64 * 1024;
+use crate::limits::{MAXIMUM_KIND_FILE_BYTES, MAXIMUM_KIND_FILES};
 
 /// One thing wrong with the kind directory or one of its files.
 #[derive(Debug, Clone, PartialEq)]

@@ -24,12 +24,14 @@ pub mod dev;
 pub mod event_log;
 pub mod guard;
 pub mod kind_files;
+pub mod limits;
 mod media_ingest;
 pub mod media_library;
 mod media_range;
 mod media_store;
 mod media_upload;
 pub mod options;
+pub mod owner_latency;
 pub mod playground;
 pub mod render;
 pub mod repl;
@@ -44,17 +46,25 @@ pub mod view;
 pub mod wire;
 
 #[cfg(test)]
+mod boot_tests;
+#[cfg(test)]
 mod camera_tests;
 #[cfg(test)]
 mod client_tests;
 #[cfg(test)]
 mod command_tests;
 #[cfg(test)]
+mod contract_tests;
+#[cfg(test)]
 mod dev_playground_tests;
 #[cfg(test)]
 mod dev_tests;
 #[cfg(test)]
+mod echo_tests;
+#[cfg(test)]
 mod event_log_tests;
+#[cfg(test)]
+mod frame_tests;
 #[cfg(test)]
 mod guard_tests;
 #[cfg(test)]
@@ -71,6 +81,10 @@ mod media_upload_tests;
 mod motion_command_tests;
 #[cfg(test)]
 mod options_tests;
+#[cfg(test)]
+mod owner_latency_tests;
+#[cfg(test)]
+mod playground_atomic_tests;
 #[cfg(test)]
 mod playground_control_tests;
 #[cfg(test)]

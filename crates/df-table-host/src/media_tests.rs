@@ -181,10 +181,10 @@ fn media_and_clients_commands_parse_and_the_help_lists_every_new_verb() {
         parse(&words("media add")),
         Err(CommandError::Usage(_))
     ));
-    assert!(matches!(
+    assert_eq!(
         parse(&words("clients now")),
-        Err(CommandError::Unknown(_))
-    ));
+        Err(CommandError::Usage("clients"))
+    );
     let help = usage_text();
     for text in [
         "scene image",
@@ -534,7 +534,12 @@ async fn a_report_does_not_wake_pages_and_is_not_an_audit_line() {
 #[tokio::test]
 async fn a_report_with_a_bad_client_name_or_body_is_refused() {
     let running = start(&STARTER_FILES).await;
-    for name in ["", "has space", "a/b", &"x".repeat(41)] {
+    for name in [
+        "",
+        "has space",
+        "a/b",
+        &"x".repeat(crate::limits::MAXIMUM_CLIENT_NAME + 1),
+    ] {
         assert_eq!(
             send_report(&running, name, &report(AudioState::Locked, 0)).await,
             400,
@@ -548,9 +553,9 @@ async fn a_report_with_a_bad_client_name_or_body_is_refused() {
 }
 
 #[tokio::test]
-async fn only_the_newest_few_pages_are_remembered() {
+async fn only_the_newest_pages_are_remembered_past_the_maximum() {
     let running = start(&STARTER_FILES).await;
-    for index in 0..10 {
+    for index in 0..crate::limits::MAXIMUM_CLIENTS + 2 {
         send_report(
             &running,
             &format!("page-{index}"),
@@ -564,7 +569,7 @@ async fn only_the_newest_few_pages_are_remembered() {
         .expect("answers")
         .body;
     let clients: Vec<ClientView> = serde_json::from_str(&body).expect("clients");
-    assert_eq!(clients.len(), crate::playground::MAXIMUM_CLIENTS);
+    assert_eq!(clients.len(), crate::limits::MAXIMUM_CLIENTS);
     assert!(
         clients
             .iter()
@@ -576,15 +581,21 @@ async fn only_the_newest_few_pages_are_remembered() {
 async fn a_report_keeps_only_its_newest_errors() {
     let running = start(&STARTER_FILES).await;
     let mut noisy = report(AudioState::Locked, 0);
-    noisy.errors = (0..20).map(|index| format!("error {index}")).collect();
+    let kept = df_playground::media::MAXIMUM_REPORTED_ERRORS;
+    noisy.errors = (0..kept + 12)
+        .map(|index| format!("error {index}"))
+        .collect();
     send_report(&running, "page-1", &noisy).await;
     let body = get(running.port, "/playground/clients.json")
         .await
         .expect("answers")
         .body;
     let clients: Vec<ClientView> = serde_json::from_str(&body).expect("clients");
-    assert_eq!(clients[0].report.errors.len(), 8);
-    assert_eq!(clients[0].report.errors[7], "error 19");
+    assert_eq!(clients[0].report.errors.len(), kept);
+    assert_eq!(
+        clients[0].report.errors[kept - 1],
+        format!("error {}", kept + 11)
+    );
 }
 
 #[tokio::test]
@@ -593,7 +604,7 @@ async fn a_page_that_has_gone_quiet_is_forgotten() {
     send_report(&running, "page-1", &report(AudioState::Locked, 0)).await;
     let soon = std::time::Instant::now() + std::time::Duration::from_secs(10);
     assert_eq!(running.state.playground().clients_at(soon).len(), 1);
-    let later = std::time::Instant::now() + crate::playground::FORGET_CLIENT_AFTER;
+    let later = std::time::Instant::now() + crate::limits::FORGET_CLIENT_AFTER;
     assert!(running.state.playground().clients_at(later).is_empty());
     assert!(
         running.state.playground().clients().is_empty(),
@@ -666,7 +677,10 @@ fn slide_refuses_a_bad_share_a_bad_length_an_unknown_key_and_a_missing_name() {
         "scene slide tv-card a.png from=101",
         "scene slide tv-card a.png to=-1",
         "scene slide tv-card a.png over=0",
-        "scene slide tv-card a.png over=60001",
+        &format!(
+            "scene slide tv-card a.png over={}",
+            df_playground::scene::MAXIMUM_SLIDE_MS + 1
+        ),
         "scene slide tv-card a.png over=slowly",
         "scene slide tv-card a.png rotate=360",
         "scene slide tv-card a.png speed=3",

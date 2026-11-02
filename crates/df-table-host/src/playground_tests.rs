@@ -1,9 +1,10 @@
 use tempfile::TempDir;
 
 use crate::client::get;
+use crate::limits::MAXIMUM_FILE_BYTES;
 use crate::playground::{
-    FileProblem, MAXIMUM_FILE_BYTES, PlaygroundFiles, content_type, fixture_names,
-    is_plain_file_name, read_file, revision,
+    FileProblem, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
+    revision,
 };
 use crate::test_support::{STARTER_FILES, raw_exchange, start};
 
@@ -36,7 +37,7 @@ fn only_plain_names_can_reach_the_disk() {
         "a b.json",
         "c:x.json",
         "x\0.json",
-        &"a".repeat(65),
+        &"a".repeat(df_playground::media::MAXIMUM_NAME_LENGTH + 1),
     ] {
         assert!(!is_plain_file_name(bad), "{bad:?}");
     }

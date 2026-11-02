@@ -10,12 +10,11 @@ use df_table::element::{CANVAS_HEIGHT_UNITS, CANVAS_WIDTH_UNITS};
 use df_table::kind::Shape;
 
 use crate::event_log::LoggedLine;
+use crate::limits::MAXIMUM_LABEL_CHARACTERS;
 use crate::view::{CanvasView, ElementView};
 
 /// Seconds between automatic refreshes of the page.
 pub const REFRESH_SECONDS: u32 = 1;
-/// Most characters of a label drawn on the canvas; longer labels are cut with an ellipsis.
-pub const MAXIMUM_LABEL_CHARACTERS: usize = 24;
 /// Distance between grid lines, in canvas units.
 const GRID_STEP_UNITS: f32 = 10.0;
 const DEFAULT_FILL: &str = "#8a94a6";

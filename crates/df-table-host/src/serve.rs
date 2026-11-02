@@ -7,7 +7,6 @@
 use std::fmt;
 use std::io::Write;
 use std::sync::Arc;
-use std::time::Duration;
 
 use df_table::canvas::Canvas;
 use df_table::event::TableEvent;
@@ -17,14 +16,12 @@ use tokio::sync::Notify;
 
 use crate::event_log::EventLog;
 use crate::kind_files::load_kind_files_async;
+use crate::limits::SHUTDOWN_GRACE;
 use crate::options::ServeOptions;
 use crate::playground::PlaygroundFiles;
 use crate::server;
 use crate::sink::{HostSink, LineEcho};
 use crate::state::AppState;
-
-/// How long open connections get to finish after an interrupt.
-const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 /// Stops a background task when serving ends by any route, including an early return.
 struct StopWhenDropped(tokio::task::JoinHandle<()>);
@@ -94,6 +91,15 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
             options.package_directory.clone(),
         ),
     ));
+    // Show a fixture from the first request: the host reconciles what is shown with the files at
+    // startup and when a fixture is written or removed, never when a page reads.
+    if let Err(problem) = crate::playground::reconcile_fixtures(&state) {
+        announce(&format!(
+            "the playground's fixtures could not be read: {}",
+            problem.message()
+        ));
+    }
+    state.echo_new_lines();
     let listener = server::bind(options.port)
         .await
         .map_err(|error| ServeError::Listen {

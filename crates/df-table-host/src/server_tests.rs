@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use crate::client::{get, post_json};
-use crate::server::{MAXIMUM_EVENTS_PER_ANSWER, MAXIMUM_REQUEST_BYTES};
+use crate::limits::{MAXIMUM_EVENTS_PER_ANSWER, MAXIMUM_REQUEST_BYTES};
 use crate::test_support::{Running, STARTER_FILES, post_request, raw_exchange, start};
 use crate::view::CanvasView;
 use crate::wire::{EventsReply, Reply};

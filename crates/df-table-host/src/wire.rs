@@ -11,7 +11,8 @@ use df_table::event::RejectionCause;
 use serde::{Deserialize, Serialize};
 
 use crate::event_log::LoggedLine;
-use crate::view::CanvasView;
+use crate::limits::MAXIMUM_LISTED_PROBLEMS;
+use crate::view::FrameCanvas;
 
 /// The addresses of the API. `CANVAS` and `EVENTS` answer GET; `EFFECT` and `RELOAD` answer POST
 /// with JSON.
@@ -49,6 +50,9 @@ pub mod route {
     pub const PLAYGROUND_CONTROLS: &str = "/playground/controls.json";
     /// Changes what the playground shows (POST a `ControlsChange`).
     pub const DEV_PLAYGROUND_CONTROLS: &str = "/dev/playground/controls";
+    /// Several changes of what the playground shows, applied together or not at all (POST a
+    /// `ControlsBatch`).
+    pub const DEV_PLAYGROUND_CONTROLS_BATCH: &str = "/dev/playground/controls/batch";
     /// Changes the live scene: caption, party, choices (POST a `SceneChange`).
     pub const DEV_PLAYGROUND_SCENE: &str = "/dev/playground/scene";
     /// Writes a fixture file (POST a `FixtureWrite`).
@@ -61,8 +65,6 @@ pub mod route {
 pub const FRAME_AFTER_PARAMETER: &str = "after";
 /// The query parameter of `route::EVENTS` that names the last sequence already seen.
 pub const EVENTS_AFTER_PARAMETER: &str = "after";
-/// Most notices or problems one answer carries; more are summarized as "and N more".
-pub const MAXIMUM_LISTED_PROBLEMS: usize = 50;
 
 /// How the values in a request are written.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,11 +123,12 @@ pub enum EffectRequest {
         id: String,
     },
     /// Turns the element clockwise to `rotation_degrees` (0 to 359) about `pivot`, or about the
-    /// pivot it already has when none is given. The numbers are wide on purpose, so a value out of
-    /// range is refused with its range instead of failing to read.
+    /// pivot it already has when none is given. The numbers are any JSON number on purpose, so a
+    /// value out of range, fractional or larger than 64 bits is refused with its range instead of
+    /// failing to read.
     Transform {
         id: String,
-        rotation_degrees: i64,
+        rotation_degrees: serde_json::Number,
         #[serde(default)]
         pivot: Option<PivotRequest>,
     },
@@ -134,11 +137,11 @@ pub enum EffectRequest {
 
 /// The point an element turns about, as whole percent of its own width and height (0 to 100;
 /// 50 and 50 is the centre).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PivotRequest {
-    pub x_percent: i64,
-    pub y_percent: i64,
+    pub x_percent: serde_json::Number,
+    pub y_percent: serde_json::Number,
 }
 
 /// The answer to a request that changes something.
@@ -155,6 +158,14 @@ pub enum Reply {
         message: String,
         problems: Vec<String>,
     },
+}
+
+/// Changes of what the playground shows that are applied together: if one is refused none is
+/// applied, and the whole is one numbered change with one audit line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlsBatch {
+    pub changes: Vec<df_playground::controls::ControlsChange>,
 }
 
 /// A fixture to write: `name` with or without `.json`, and the whole file's text. The text must
@@ -201,7 +212,7 @@ pub struct ClientView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
     pub frame: u64,
-    pub canvas: CanvasView,
+    pub canvas: FrameCanvas,
     pub controls: ControlsReply,
 }
 

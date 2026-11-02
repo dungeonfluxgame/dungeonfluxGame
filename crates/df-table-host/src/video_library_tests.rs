@@ -455,7 +455,7 @@ async fn the_raised_body_limit_belongs_to_the_add_route_alone() {
     let running = start(&STARTER_FILES).await;
     let large = format!(
         r#"{{"name":"a.png","padding":"{}"}}"#,
-        "x".repeat(crate::server::MAXIMUM_REQUEST_BYTES + 1024)
+        "x".repeat(crate::limits::MAXIMUM_REQUEST_BYTES + 1024)
     );
     let request = post_request("/dev/playground/media/remove", &large, "");
     let answer = raw_exchange(running.port, &request).await;
@@ -464,7 +464,7 @@ async fn the_raised_body_limit_belongs_to_the_add_route_alone() {
         "{}",
         answer.lines().next().unwrap_or("")
     );
-    let bytes = vec![7_u8; crate::server::MAXIMUM_REQUEST_BYTES * 2];
+    let bytes = vec![7_u8; crate::limits::MAXIMUM_REQUEST_BYTES * 2];
     assert_eq!(add(&running, "wider-than-64-kib.png", &bytes).await.0, 200);
 }
 

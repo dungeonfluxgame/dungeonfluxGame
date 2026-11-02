@@ -54,20 +54,27 @@ fn a_fixture_name_may_leave_off_its_extension_but_not_leave_its_directory() {
         "a b",
         ".hidden",
         "a\\b",
-        &"a".repeat(80),
+        &"a".repeat(df_playground::media::MAXIMUM_NAME_LENGTH + 1),
     ] {
         assert!(fixture_file_name(bad).is_err(), "{bad:?}");
     }
 }
 
 #[tokio::test]
-async fn with_no_fixture_the_controls_start_empty_and_the_first_is_chosen_once_one_exists() {
+async fn with_no_fixture_the_controls_start_empty_and_the_first_written_is_chosen() {
     let running = start(&STARTER_FILES).await;
     assert_eq!(controls(&running).await.controls.fixture, None);
     running.write_asset("fixtures/b.json", MINIMAL_FIXTURE);
+    let reply = controls(&running).await;
+    assert_eq!(reply.controls.fixture.as_deref(), Some("b.json"));
+    assert_eq!(reply.revision, 1);
     running.write_asset("fixtures/a.json", MINIMAL_FIXTURE);
     let reply = controls(&running).await;
-    assert_eq!(reply.controls.fixture.as_deref(), Some("a.json"));
+    assert_eq!(
+        reply.controls.fixture.as_deref(),
+        Some("b.json"),
+        "a fixture that still exists stays chosen"
+    );
     assert_eq!(reply.revision, 1);
     assert_eq!(
         controls(&running).await.revision,
@@ -145,7 +152,14 @@ async fn a_removed_fixture_that_was_chosen_is_replaced_by_the_first_left() {
     running.write_asset("fixtures/a.json", MINIMAL_FIXTURE);
     running.write_asset("fixtures/b.json", MINIMAL_FIXTURE);
     change(&running, &ControlsChange::Fixture("b.json".into())).await;
-    std::fs::remove_file(running.playground_path("assets/fixtures/b.json")).expect("removes");
+    let removed = post_json(
+        running.port,
+        "/dev/playground/fixture/remove",
+        r#"{"name":"b"}"#,
+    )
+    .await
+    .expect("answers");
+    assert_eq!(removed.status, 200);
     assert_eq!(
         controls(&running).await.controls.fixture.as_deref(),
         Some("a.json")

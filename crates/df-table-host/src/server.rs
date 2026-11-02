@@ -7,12 +7,12 @@
 //! the ones that happen before a request becomes an effect, is recorded as an event.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{DefaultBodyLimit, Query, Request, State};
-use axum::http::{Method, StatusCode};
+use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -24,22 +24,14 @@ use serde::Deserialize;
 
 use crate::guard;
 use crate::kind_files::load_kind_files_async;
+use crate::limits::{FRAME_WAIT, MAXIMUM_EVENTS_PER_ANSWER, MAXIMUM_REQUEST_BYTES, TICK_INTERVAL};
 use crate::media_library;
 use crate::playground;
 use crate::render;
 use crate::request::RequestError;
 use crate::state::AppState;
-use crate::view::CanvasView;
-use crate::wire::{EffectRequest, EventsReply, Frame, Reply, capped, route};
-
-/// Most event lines the viewer shows and one events answer carries.
-pub const MAXIMUM_EVENTS_PER_ANSWER: usize = 60;
-/// How often the host's clock moves travelling elements (about 30 times a second).
-pub const TICK_INTERVAL: Duration = Duration::from_millis(33);
-/// Longest a frame request is held waiting for a change before it is answered anyway.
-pub const FRAME_WAIT: Duration = Duration::from_secs(25);
-/// Largest request body accepted, in bytes.
-pub const MAXIMUM_REQUEST_BYTES: usize = 64 * 1024;
+use crate::view::{CanvasView, ViewError};
+use crate::wire::{EffectRequest, EventsReply, Reply, capped, route};
 
 fn answer(status: StatusCode, reply: Reply) -> Response {
     (status, Json(reply)).into_response()
@@ -92,16 +84,34 @@ async fn announce_changes(
     response
 }
 
-async fn index(State(state): State<Arc<AppState>>) -> Html<String> {
-    let view = CanvasView::from_canvas(&state.canvas());
-    Html(render::page(
-        &view,
-        &state.log().newest(MAXIMUM_EVENTS_PER_ANSWER),
-    ))
+/// A copy of the canvas for the viewer or `canvas.json`, or a 500 that says why and is logged: a
+/// value that cannot be written must not become a quiet `null`.
+fn canvas_view(state: &AppState) -> Result<CanvasView, ViewError> {
+    CanvasView::from_canvas(&state.canvas())
 }
 
-async fn canvas_json(State(state): State<Arc<AppState>>) -> Json<CanvasView> {
-    Json(CanvasView::from_canvas(&state.canvas()))
+fn view_failed(state: &AppState, error: &dyn std::fmt::Display) -> Response {
+    state.record_line(format!("HOST view_failed reason={error}"));
+    state.echo_new_lines();
+    rejected(StatusCode::INTERNAL_SERVER_ERROR, None, &error.to_string())
+}
+
+async fn index(State(state): State<Arc<AppState>>) -> Response {
+    match canvas_view(&state) {
+        Ok(view) => Html(render::page(
+            &view,
+            &state.log().newest(MAXIMUM_EVENTS_PER_ANSWER),
+        ))
+        .into_response(),
+        Err(error) => view_failed(&state, &error),
+    }
+}
+
+async fn canvas_json(State(state): State<Arc<AppState>>) -> Response {
+    match canvas_view(&state) {
+        Ok(view) => Json(view).into_response(),
+        Err(error) => view_failed(&state, &error),
+    }
 }
 
 /// The query of `route::PLAYGROUND_FRAME`; the field is named like `wire::FRAME_AFTER_PARAMETER`.
@@ -110,29 +120,30 @@ struct FrameQuery {
     after: Option<u64>,
 }
 
-fn build_frame(state: &AppState) -> Frame {
-    let frame = state.change_count();
-    let canvas = CanvasView::from_canvas(&state.canvas());
-    Frame {
-        frame,
-        canvas,
-        controls: state.playground().snapshot(),
-    }
-}
-
 /// The current frame. With `after=N`, a request made while the host is still at frame N is held
 /// until the next change (or `FRAME_WAIT`), so a page learns of a change as it happens instead of
 /// by asking again and again. A different count, such as after a host restart, answers at once.
+/// The frame is built once for each change count and every page is sent the same bytes.
 async fn frame_json(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FrameQuery>,
-) -> Json<Frame> {
+) -> Response {
     if let Some(after) = query.after {
         let mut changes = state.watch_changes();
         // A timeout is not an error: the page asks again with the same count.
         let _ = tokio::time::timeout(FRAME_WAIT, changes.wait_for(|count| *count != after)).await;
     }
-    Json(build_frame(&state))
+    match state.frame() {
+        Ok(built) => {
+            let mut response = Response::new(axum::body::Body::from(Bytes::from_owner(built.json)));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            response
+        }
+        Err(error) => view_failed(&state, &error),
+    }
 }
 
 /// The query of `route::EVENTS`; the field is named like `wire::EVENTS_AFTER_PARAMETER`.
@@ -195,7 +206,11 @@ fn apply_effect_body(state: &AppState, body: Result<Bytes, BytesRejection>) -> R
         Ok(effect) => effect,
         Err(error) => return reject_conversion(state, effect_kind, element, &error),
     };
-    match canvas.apply(effect, state.sink()) {
+    let applied = canvas.apply(effect, state.sink());
+    if canvas.is_moving() {
+        state.wake_clock();
+    }
+    match applied {
         Ok(()) => answer(
             StatusCode::OK,
             Reply::Done {
@@ -283,15 +298,23 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(middleware::from_fn_with_state(state, guard_requests))
 }
 
-/// Starts the host's clock: every `TICK_INTERVAL` it advances travelling elements by the time
-/// that really passed, which the canvas cuts to a sane length if the host stalled. Abort the
-/// handle to stop it.
+/// Starts the host's clock: every `TICK_INTERVAL` while something travels it advances travelling
+/// elements by the time that really passed, which the canvas cuts to a sane length if the host
+/// stalled. With nothing travelling it sleeps until an effect wakes it, so an idle host has no
+/// timer running. Abort the handle to stop it.
 pub fn spawn_clock(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(TICK_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last = Instant::now();
         loop {
+            if !state.is_moving() {
+                state.clock_woken().await;
+                // Time spent asleep is not travel: start counting again from the wake-up.
+                interval.reset();
+                last = Instant::now();
+                continue;
+            }
             interval.tick().await;
             let now = Instant::now();
             let seconds = now.duration_since(last).as_secs_f32();

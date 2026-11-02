@@ -305,3 +305,58 @@ fn the_help_text_lists_the_playground_and_fixture_commands() {
         assert!(help.contains(text), "{text}");
     }
 }
+
+#[test]
+fn repl_clients_and_fixtures_with_stray_words_answer_with_their_usage_not_unknown_command() {
+    for (line, usage) in [
+        ("repl now", "repl"),
+        ("repl --port 7878", "repl"),
+        ("clients all", "clients"),
+        ("fixtures x", "fixtures"),
+    ] {
+        assert_eq!(
+            parse(&words(line)),
+            Err(CommandError::Usage(usage)),
+            "{line}"
+        );
+    }
+    assert_eq!(parse(&words("repl")), Ok(Command::Repl));
+    assert_eq!(parse(&words("clients")), Ok(Command::Clients));
+    assert_eq!(parse(&words("fixtures")), Ok(Command::Fixtures));
+}
+
+#[test]
+fn the_help_text_and_the_errors_are_built_from_the_limit_constants() {
+    use df_playground::controls::MAXIMUM_TRANSITION_MS;
+    use df_playground::scene::{MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
+    let help = usage_text();
+    assert!(
+        help.contains(&format!("ms=0-{MAXIMUM_TRANSITION_MS}")),
+        "{help}"
+    );
+    assert!(
+        help.contains(&format!(
+            "{MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT} percent, over is 0 to {MAXIMUM_CAMERA_MS} ms"
+        )),
+        "{help}"
+    );
+    let Err(CommandError::BadChoice { allowed, .. }) = parse(&words(&format!(
+        "wait {}",
+        u64::from(u32::MAX) * 100_000_000
+    ))) else {
+        panic!("refused");
+    };
+    assert!(
+        allowed.contains(&crate::limits::MAXIMUM_WAIT_MS.to_string()),
+        "{allowed}"
+    );
+    let Err(CommandError::BadChoice { allowed, .. }) =
+        parse(&words("playground cycle a b times=0"))
+    else {
+        panic!("refused");
+    };
+    assert!(
+        allowed.contains(&crate::limits::MAXIMUM_CYCLES.to_string()),
+        "{allowed}"
+    );
+}

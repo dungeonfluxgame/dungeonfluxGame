@@ -240,7 +240,7 @@ async fn a_scene_change_is_applied_numbered_shown_by_playground_and_recorded() {
         events
             .events
             .iter()
-            .any(|line| line.text.starts_with("PLAYGROUND scene change=caption"))
+            .any(|line| line.text.starts_with("PLAYGROUND caption"))
     );
 }
 

@@ -11,12 +11,10 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-/// Deadline for connecting, sending and reading one answer.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+use crate::limits::{MAXIMUM_RESPONSE_BYTES, REQUEST_TIMEOUT};
+
 /// Deadline for each step of a streamed request: connecting, sending one piece, reading the answer.
 const STREAM_STEP_TIMEOUT: Duration = Duration::from_secs(60);
-/// Largest answer accepted, in bytes.
-pub const MAXIMUM_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
