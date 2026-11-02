@@ -615,6 +615,20 @@ the main conflicts are noted inline below.
   (H.9); `force`, `input`, `dump` and `viable` (H.16); participation in the sentinel-secret and
   paired-state tests (H.11); `schema_version` and `load.refused` (H.12); and an entry in the
   golden sessions (H.17).
+  **What the suite enforces at C2 and which step takes the rest.** Enforced now (module
+  `conformance`, `ConformanceCheck`): registration (declared targets, scopes, wired ports), closed
+  state names, transitions as a change of state name, a typed failure on a damaged record, a
+  projection and an inspect report that are never empty and stable, the saved record and its
+  refusal to load what it cannot migrate or read, entry refusal, a hand-off the registry accepts
+  with a typed carry list the table backs, `accepts` against every unaddressed input kind, a
+  declined or waiting result that changes only what it may, the dice input and
+  `Waiting{pending_id}`, keyed resource results, a hand-off ask that stays true until taken,
+  determinism, effects that apply, no panic, and the scripted run alone. Deferred, with owners:
+  `view_revision` and operation-id handling (C1 owner queue and C3 pipeline; machines never see
+  them), participation in the sentinel-secret and paired-state tests (C5, H.11), suspend behaviour
+  and `resume` (C6, H.9; only the suspend declaration exists), the `dump`, `force`, `input` and
+  `viable` verbs and the CLI family (C7 and H2, H.16), and the entry in the golden sessions (C3
+  onward, H.17). The suite lists a check it could not run as skipped, never as passed.
 - **Shop and inventory machines (draft, from D20).**
   - The **shop machine** states: browsing, haggling, offer open, completed or declined. It holds
     the shop's own stock, prices and purse. A completed deal is one effect that moves the item and
@@ -1425,7 +1439,7 @@ risk; AFK is a deliberate approved command, not an inactivity penalty. A player 
 at a narrated beat, and in combat through the encounter owner's admission at the next round. A seat
 maps to `characters[]` with one `active`. A dead character is held with its record (M2-D1), and the
 seat goes to the creation machine for a replacement (R01, R02) only on a host "replace" or when no
-revival is possible; until then it waits or spectates (question 69); import goes only through the creation validation (today `df_rules::local_journey::validate_character`, which returns one error and admits only Fighter 1 and Soldier; `validate_build` is a tracked `df-rules` work item that does not exist yet, E row R01), and private
+revival is possible; until then it waits or spectates (question 69); import goes only through the creation validation (today `df_rules::local_journey::validate_character`, which returns one error and admits only Fighter 1 and Soldier; `validate_build` now exists in `df-rules` `creation_build.rs` and reports every refused rule, while the first release is still Fighter 1 and Soldier only, E row R01), and private
 import cannot mint rights (`rules-support.md`). A party wipe returns `EncounterOutcome=defeat` and
 hands off to `AdventureEnd`, where `narrative-engine.md` allows an authored failure state.
 Events: `seat.state_changed`, `character.status_changed`.
@@ -1470,7 +1484,7 @@ and D45.
 **D.7 Items and money (M12, M13, M14, E22).** Item and coin state is one rules-owned record in table
 state (R12). `money-arithmetic-contract.md` is billing arithmetic and does not cover in-game coin. An in-game
 `Coins` type in `df-rules` (denominations cp, sp, ep, gp and pp; checked subtract with change; price in copper
-for the SRD equipment list; an atomic item-and-coin move) is a tracked work item and a named prerequisite of
+for the SRD equipment list; an atomic item-and-coin move) is a tracked work item (built in df-rules coins.rs, with SRD copper prices in srd_equipment_prices.rs) and a named prerequisite of
 the shop and inventory machines (O.16). Decided 2026-11-02 (#1599): row R12 (Equipment, items and money) owns
 `Coins`, and M.5 lists it under Equipment as thin until built. The type and its checked arithmetic (subtract
 with change, price in copper, no negative balance) belong to `df-rules`; the atomic item-and-coin move is not
@@ -1494,7 +1508,7 @@ critic finding it closes.
 
 | Family | Machine home | Pipeline and projection | Events and CLI |
 |---|---|---|---|
-| R01 creation (M21) | creation: list options, submit, validate. The real calls today are `df_rules::local_journey::validate_character` (returns the first `JourneyRuleError` only, and admits Fighter 1 and Soldier only) and the creation constants with `species::choice_groups`, so `reasons` holds one entry for now. `validate_build` (every reason) and an options-listing function are tracked `df-rules` work items that do not exist yet (O.16 RR, #1596) | Offers on the phone; import and replacement characters only through the same validation | `build.validated`, `build.rejected{reasons}`; `sheet build`, `sheet validate` |
+| R01 creation (M21) | creation: list options, submit, validate. The real calls today are `df_rules::local_journey::validate_character` (returns the first `JourneyRuleError` only, and admits Fighter 1 and Soldier only) and the creation constants with `species::choice_groups`, so `reasons` holds one entry on that call. `validate_build` (every reason) and `creation_options` (the options listing) now exist in `df-rules` `creation_build.rs` (O.16 RR, #1596); the first release is still Fighter 1 and Soldier only | Offers on the phone; import and replacement characters only through the same validation | `build.validated`, `build.rejected{reasons}`; `sheet build`, `sheet validate` |
 | R02, R16 advancement (E14, M8) | advancement, entered by an `AwardId` effect | Private level-up on the seat's phone; the TV shows only the public result; `progression: xp or milestone` is a table setting (R16 policy) | `award.applied`, `award.duplicate`, `advance.offered`, `advance.chosen`; `advancement pending`, `character award` |
 | R03 species, feats (none) | creation, advancement | As above | As above |
 | R04 checks (E12, M17) | any machine, through a `CheckRequest` that opens a `PendingResolution` | Public `RollResultView` on the TV; secret rolls (Insight, Perception, Stealth against the unknown) go to one seat, identical for failure and for no information; passive checks run on scene entry with a private result; a retry of the same task is refused unless the rules owner allows it | `check.requested`, `check.resolved`, `roll{id, audience}`; `check show` |
@@ -1689,7 +1703,10 @@ lane has a per-seat bound and a table-wide bound, both large named constants unt
 overflow is a stall; the per-seat pending bound and the token bucket apply to the player lane only.
 Operation ids are per sender and per membership: a duplicate is a retry from the same sender, a seat
 that leaves and rejoins starts with no remembered ids, and an input abandoned by the owner's lease
-keeps its id (a late outcome is recorded once, and the commit checks the status before APPLY). Lane caps are measured when the owner queue first runs over real adapters (O.9 step 9, host H0 to H3); no O.9 step owns that measurement yet, so the caps stay candidates until one does. Test: send one operation id 50 times concurrently and assert one effect.
+keeps its id (a late outcome is recorded once, and the commit checkpoints before APPLY is reported). An
+input whose batch failed to commit is released: nothing of it was kept and it was not reported applied,
+so its operation id is forgotten and the same id may be retried and runs as a new operation, while an
+input that did commit is remembered by the results the table keeps and saves in every checkpoint. Lane caps are measured when the owner queue first runs over real adapters (O.9 step 9, host H0 to H3); no O.9 step owns that measurement yet, so the caps stay candidates until one does. Test: send one operation id 50 times concurrently and assert one effect.
 
 **H.3 Dice (N3).** Dice come from the explicit draws `df-session` supplies, used only in DECIDE and
 passed into `step` as input fields, so `step` is a pure function of (state, input, clock). Each draw
@@ -1708,7 +1725,7 @@ compares the state hash.
 | New scene background fails | The authored or last background for the place, else a place card | Playable scene without art | `scene.degraded{stage}` |
 | SAM fails | One retry, then one bounded regeneration (Q20), then the rules layout with the character `unlocated` | Hotspots as a list strip | `locate.failed` |
 | Image admission refused by the hosted entitlement or spend authority (hosted builds only; local builds never refuse for spend) | The tick stops requesting | The `art_delayed` status (art is not requested while admission is refused), play continues | `plate.admission_refused` |
-| Commit to Postgres fails | The input is refused and nothing is mutated in memory; the table goes read-only until a health probe passes | "Could not save, try again" | `persist.failed{cause}` |
+| Commit to Postgres fails | The input is refused and nothing is mutated in memory; the owner backs off (`commit_backoff_ms`) until the store answers again (a health probe passes). The input's operation id is released, so a retry with the same id is a new operation (H.2), and the failed attempt's commit id is burned | "Could not save, try again" | `persist.failed{cause}` |
 | Phone disconnects | The seat is kept and pending operations finish; reconnect resyncs the projection and the last 20 narration lines | Seat shown as disconnected to the table | `seat.state_changed` |
 | TV reloads | Fetch the current projection and the plate by `view_revision` | The current state, no replay | `display.resynced` |
 | Server restarts mid-pipeline | H.1 recovery and H.9 startup order | A short "server restarting" frame, then resume | `recovery.redelivered` |
@@ -1739,18 +1756,23 @@ carries a permitted claim id, and an id outside the listener's projection reject
 no keyword matching and no model-reported "which secret ids a clause revealed" (withdrawn by RES35).
 The qualification step redacts or re-requests once and logs `leak.blocked{fact_id}`.
 
-**H.7 Queues and backpressure (N9).** Broker queues are per class, in priority order
-`player_blocking` (interpret, narrate), `scene_build`, `plate`, `prefetch` (item views,
-portraits), with at least one text slot reserved for `player_blocking`. Bounds per table: plate 4
-(the oldest is dropped, `plate.dropped_stale`), prefetch 8. A class that cannot drop (scene build)
-surfaces as a status and never as a silent loss. Every queue reports depth, oldest age and drops in
+**H.7 Queues and backpressure (N9).** Broker queues are per class, in priority order `live`
+(interpret, narrate, describe, dress and staging text: what a player is waiting for), `plate` (the
+scene's picture), `lookahead` (the next places, SB-LA) and `background` (portraits and item views),
+with at least one text slot reserved for `live`. A higher class preempts a lower one that is only
+queued or sent. Bounds per table: plate 4 (the oldest is dropped, `plate.dropped_stale`), background 8;
+the live and lookahead bounds and the slot counts are large named constants until measured
+(`broker/limits.rs`). A class that cannot drop (live) surfaces as a typed refusal and never as a silent
+loss. Every queue reports depth, oldest age and drops in
 `/health` and `broker queues`.
 
 **H.8 Request identity, retries and cost (N19, N24).** A request key is the hash of purpose, canonical
 inputs, model and version, and `scene_epoch`. Identical in-flight keys coalesce. A retry after a
 timeout is allowed only if the dispatch is known not to have happened, otherwise the unknown-dispatch
-rule of the commerce plan applies and unknown spend is never released. A late result for a
-superseded request is stored as `late` and is not delivered as an input. Retries are bounded (two,
+rule of the commerce plan applies and unknown spend is never released. A result that
+arrives after its request's deadline, or after the request was superseded or cancelled, is rejected
+with a typed reason and recorded as stale; it is never delivered as an input, and the broker checks the
+deadline when it hands out work and when it takes an answer, so a late answer cannot be accepted. Retries are bounded (two,
 with backoff and jitter) and never outlive the originating turn's deadline. The cost view (D18) is a
 display of recorded usage and never an authority, and for unpriced stages it shows plates per hour,
 mean seconds per plate and calls per hour instead of "n/a" (question 29 stays open).
@@ -1785,7 +1807,9 @@ against a scripted model and nightly against the real one.
 
 **H.12 Versioning (N17).** Every persisted record type (table, scene, character, turn, effect
 intent, machine slot) carries `schema_version`. A record the engine cannot migrate fails the table
-load with `load.refused{type, version, expected}`, and the host sees "saved with an older engine"
+load with `load.refused{type, version, expected}` (as built: the record type, the table, the machine
+for a slot, the version found and expected, and a closed cause; a machine slot is `MachineSlot`, an
+effect intent an `EffectRecord`, and a record from a newer engine is refused before it is parsed), and the host sees "saved with an older engine"
 with `table export`. D7 allows delete and recreate until the stabilisation gate, and the refusal
 path is built now anyway because it is the same code. `table export` and `table import` round-trip
 a bundle (state, turn log, seed), which is also the fixture format.
@@ -1992,10 +2016,11 @@ and section L is the comparison of the current and the next implementation that 
   `ResolutionWindow`. The existing `ReactionWindow` and the `ReactionTimer` that declines an offer
   when its window runs out are the first implementation and are migrated, not duplicated.
   `TriggerWindow` is dropped as a name.
-- **The broker already exists in part (K9, F9, F10).** The resource broker of D6 is the `Hub` in
+- **The broker already exists in part (K9, F9, F10).** The resource broker of D6 was the `Hub` in
   `df-tools/src/gameplay/resources.rs` (typed specs, stable keys, single flight, failure memory, a
-  spend ledger that never blocks) extended with text and image kinds as facades over `df-ai` and
-  `df-imagery`, queue classes, leases and epochs. It is not a second service. Its header says
+  spend ledger that never blocks). That file is gone (the `df-tools` gameplay was removed in `14a2f715`).
+  The broker is rebuilt as H1 in `crates/df-table-host/src/broker/` with those ideas plus text and image
+  kinds, queue classes, leases and epochs, behind the `Broker` port. It is not a second service. Its header says
   generation is on demand and nothing is made ahead of time, so the `prefetch` class needs that rule
   relaxed (question 73: REF-067 relaxes it for next places; item views stay an open default). Durable intents today are single-slot (`run_committed_intents` finds the
   first pending one), and H.1 generalises them with `EffectRegistrationInspector` and `SentUnknown`.
@@ -2093,7 +2118,14 @@ and section L is the comparison of the current and the next implementation that 
   by `df-engine`. The active machine holds only `Waiting{pending_id}`. Answers carrying a pending id
   go to the pending handler and not to `accepts`. A hand-off is declined `pending_open` while any
   pending resolution of that scene exists, unless the hand-off is that resolution's own result.
-  `AwaitingAdjudicator` is a state of a pending ruling and not of a machine. A confirmation is
+  `AwaitingAdjudicator` is a state of a pending ruling and not of a machine. A window never ends on
+  its own and is never timed out into a decline; a window whose seat left the table for good, or one
+  the host moves past, has an exit that needs no answer: `EngineControl::CancelPending{pending, cause}`
+  (`seat_left`, `scene_changed`, `host_decision`) closes it, spends and rolls nothing, tells the rules
+  owner to release what it reserved (`abandon`) and tells a machine that waited on it
+  (`MachineInput::PendingCancelled`). An answer that arrives after the scene changed or after the seat
+  whose action the pending holds left cancels the pending the same way and is declined `window_closed`.
+  A confirmation is
   `pending{choice}` for the same seat, `Rejected` maps to `declined{intent_invalid}`,
   `PartiallyCompleted` maps to `applied` plus a clarification, and `Cancelled` maps to `applied`
   with the uncommitted part dropped. Pending kinds are choice, roll, reaction and ruling. A roll a
@@ -2106,7 +2138,7 @@ and section L is the comparison of the current and the next implementation that 
   where `outcome` is `applied`, `needs_clarification`, `declined{code, reason, alternatives}` or
   `pending{choice | roll | reaction | ruling}`; a step may instead return `Waiting{pending_id}`, which
   is a `StepResult` value and not an `Outcome` variant (O.7);
-  `exit(state) -> HandOff{target, carry[]}`.
+  `exit(state) -> HandOff{target, carry[]}` (the signatures as built at C2 are in the next bullet).
   Inputs are a player `InputEnvelope` (operation id, seat from the session, `view_revision`),
   `Dice{draw_ids, values}`, a resource result, a timer, an engine proposal, and an answer addressed
   to a pending id; the pending handler resolves the answer with the rules owner and then calls
@@ -2117,11 +2149,59 @@ and section L is the comparison of the current and the next implementation that 
   that commit. A machine owns neither a pending resolution nor the dice, and declares what it does
   with its in-flight requests on suspend. Hand-offs form a stack of depth three; each frame stores
   the machine, its slot and a `resume_check`, and on return `resume(state, table_state)` may reject
-  the frame and fall back to explore. A Long Rest interrupted by combat (rolling Initiative, damage, a spell other
+  the frame and fall back to explore. *As built (C6, #1683):* the active machine and its slot live in
+  the table state and nowhere else, one per scene and one for the table machine (the lobby), set by
+  `ActiveMachineSet` and updated by `ActiveSlotUpdated`; a hand-off that returns is `HandOffPushed`,
+  which suspends the active machine onto the scene's stack and activates the next in one effect (the
+  machine may not already be active or on the stack), and the return is `HandOffPopped`, which
+  resumes the frame's machine with its saved slot; the pipeline holds no slot of its own. A frame
+  keeps `pushed_at`, the revision of the push, where this text says `resume_check`. A scene that
+  closes or is replaced takes its machine and stack with it and says so in a `SCENE closed` event, for
+  whoever holds a pending of that scene to close it. A Long Rest interrupted by combat (rolling Initiative, damage, a spell other
   than a cantrip, or an hour of exertion) is offered a resume by the rest machine, never continued
   silently: if at least 1 hour was rested before the interruption the rested hours give the benefits
   of a Short Rest, and the Long Rest can be resumed immediately and then needs 1 additional hour per
   interruption (SRD p.185). A Short Rest is interrupted only by rolling Initiative, casting a spell other than a cantrip or taking any damage, never by an hour of walking or other exertion (which interrupts a Long Rest only), and an interrupted Short Rest confers no benefits (SRD p.187; its restart from zero is M2-D46's convention).
+- **RES27 as built (C2, 2026-11-02; change on request).** The code keeps RES27's four calls and
+  records these differences, each of which the plan did not say.
+  - *State is a `MachineSlot`.* State crosses the trait as `MachineSlot{machine, schema_version, state}`,
+    the saved record of H.12 (the state is a JSON value). A machine keeps a closed enum inside, decodes
+    it at the start of a call and encodes it at the end. Cost: a decode builds a value tree and costs an
+    allocation per field, so every call decodes at most once and the calls that only name the state
+    (`state_name`, `wants_hand_off`, `inspect`) read the tag and decode nothing; a step that changes
+    nothing returns `state: None`. No number is measured yet; S1 measures it.
+  - *Signatures.* `enter(table, entry) -> slot`, `accepts(table, input, slot) -> bool`,
+    `step(slot, StepInput) -> StepResult{state?, table_effects[], resource_requests[], outcome}`,
+    `exit(table, slot) -> HandOff`, and `project(table, slot, audience)`. `StepInput` is
+    `{correlation, now_ms, table, input, decision}`: the table is a read-only view of the shared facts
+    (seats, capacity, active scene), so a machine keeps only its own facts and never a copy that goes
+    stale (RES20: shared facts change only through effects), and `decision` is the DECIDE outcome
+    (`Resolved(Resolution)` or `RollPending(pending_id)`). The seat is the one inside `Intent`.
+  - *Inputs.* `MachineInput` is `Intent{seat, action}` (a target joins it at C3), `Dice{pending, draws}`,
+    `ResourceResult{key, outcome}`, `Timer` and `Proposal`. The operation id is in the correlation and
+    the `view_revision` was checked at ADMIT, so neither is a machine's duty; the checklist item
+    "operation-id and `view_revision` handling" belongs to the owner queue (C1) and the pipeline (C3).
+  - *Two additions to RES27's `StepResult` and O.7's `Waiting`.* `Waiting{pending_id}` is
+    `StepOutcome::Waiting`, a step value beside `Settled(Outcome)`, as O.7 says. `StepResult.state` is
+    optional (the one change to the four fields). RES21's "a machine may ask for a hand-off" is not a
+    result field: it is `wants_hand_off(slot) -> bool`, derived from the state, so an ask the engine
+    refuses (`pending_open`, a full stack, a disabled target) leaves the machine asking, and an ask
+    survives a restart. The pipeline polls it after each step and enqueues the ask as an engine
+    proposal (RES21); it may poll again on any later input or timer.
+  - *Results keep their promises.* A declined or clarified result changes nothing (no state, no effects,
+    no requests); a waiting result may change only the state, to record the pending it waits on. A
+    decline from the rules owner of a roll answer leaves the pending open for C4 to cancel or re-ask.
+  - *Resource requests.* A request carries a key the machine chose and stored (`RequestKey`); the
+    broker's handle never reaches a machine; a result is delivered only when final
+    (`ResourceOutcome::Ready` or `Failed`, no pending value), keyed by the same key (RES22).
+  - *Hand-offs.* `HandOff` names a machine, releases a seat lane, or returns to the frame below
+    (`HandOffTarget`). `Registry::check_hand_off` applies the declared-target, enabled and scope rules
+    to the value `exit` returned; the stack depth, `pending_open` and `resume(state, table_state)` with
+    `resume_check` are C6 and C4 and are not in the trait yet.
+  - *Hooks.* `validate` (decode the whole state, proving every field readable), `migrate` (one version
+    step) and the default `load` (migrate, then validate; refuse an unmigratable or unreadable record
+    as `load.refused{record type, table, machine, version, expected, cause}`), and the stubs `project`
+    (C5) and `inspect` (C7).
 - **RES28. Machine scope in the rest of the list (K6).** (This is the set of machines the registry
   knows; the build order after H3 is O.16 row M, with travel last because it has no rules code yet.)
   The first machines are lobby, creation,
@@ -2184,8 +2264,9 @@ and section L is the comparison of the current and the next implementation that 
 - **RES33. Wire and CLI (F5, F18, F19, F15).** One generic message pair is added to
   `gameplay.proto` under the field ledger: `MachineView{machine_id, state_label, offers[], status,
   reason, revision}` and `MachineIntent{machine_id, offer_id, payload}`. New machines use them and
-  `JourneyView` stays until combat migrates. The CLI gets one route `/dev/machine/{id}/{verb}` and
-  one command `dev machine <id> <verb>`, with `describe` generated from the registry, the H.16
+  `JourneyView` stays until combat migrates. The CLI gets one route per H.16 verb under `/dev/engine/*` (decided at H0; the earlier
+  `/dev/machine/{id}/{verb}` and `dev machine <id> <verb>` are dropped, because a verb acts on the table and not on one machine) and
+  one command per verb (`dev input`, `viable`, `dump`, `force`, `projection`, `queue`, `describe`, `broker`, `cost`, `health`, `clock`, `dice`, `chaos`), with `describe` generated from the registry, the H.16
   verbs as a fixed set (the minimum: H.16 also names the read verbs that section E and M2-D43 add), and `force` and `input` (H.16; the older name `drive` is retired) as new owner-inbox jobs. Interaction machines are
   called **table machines** and the client display ones **stage machines**. New code may not call
   `record_audit_line`; a shared event builder feeds `df-observe` and the dev timeline, and a boundary
@@ -2796,7 +2877,7 @@ they are recorded as RES35 to RES52 and the register in M.2.
 - **RES43. Hosted CLI and export (P12).** In hosted builds every dev verb that can read hidden or
   private content, and `table export` and `table import`, needs operator permission with a reason, an
   expiry and an audit record. Defaults are redacted. Hosted export is an `ExportGrant`. `table import`
-  is local-only, runs the creation validation (`validate_character` today, `validate_build` once that tracked `df-rules` item exists; E row R01) and admission, and cannot mint awards or rights. Question 70's
+  is local-only, runs the creation validation (`validate_character` today, `validate_build` `validate_build` now exists in `df-rules` `creation_build.rs` (with the options listing; the first release is still Fighter 1 and Soldier only); E row R01) and admission, and cannot mint awards or rights. Question 70's
   draft default is fixed.
 - **RES44. Acceptance (P13, P33).** Each slice is accepted only by an ADR 0005 evaluator operating TV
   and phone in a real browser at phone and TV sizes (reconnect, asset failure, audio observation),
@@ -2973,9 +3054,11 @@ section E's rows R09 and R10 follow `rules-coverage.md`; section L's slice refer
 and a slice 10 covers section K; the code counts are corrected; and the round-2 ledger is I.2.
 Facts I could not find in the code and that this document uses as names only: `AwardId`,
 `EncounterOutcome`, `RequestTimeAdvance`, `NarrativeDirector::evaluate`, `RuleFixture`,
-`TimeAdvance`, `legal_choices`, `SpatialQuery`, `TriggerWindow`, `validate_build` and `reachable` (the last
+`TimeAdvance`, `legal_choices`, `SpatialQuery`, `TriggerWindow` and `reachable` (the last
 two are named on the `df-rules` surface in `subsystem-interfaces.md`; the tactical layer has `reachable_cells`,
-and creation has `validate_character`, which is not the same call; #1596).
+and creation has `validate_character`, which is not the same call; #1596). `validate_build` is no longer a names-only
+fact: it and the options listing (`creation_options`) now exist in `df-rules` `creation_build.rs`, and the first
+release is still Fighter 1 and Soldier only.
 
 **M.4 Ledger for round 3.**
 
@@ -3052,9 +3135,13 @@ above into modules, types, seams and tests. Its two drivers, from the owner, are
 (a refinement or a new machine, action, setting or resource should be a data entry or one module,
 and the compiler or the conformance suite should say what was forgotten) and **observability**
 (every decision is a typed event that explains itself, nothing private can reach a log by accident,
-and every piece of state can be inspected). Only the first host slice, a blank-canvas workbench, is
-built (O.12); the machines, pipeline, owner queue, projection and the rest of this plan are not built
-yet, and O.12 lists where the built slice departs from the plan below.
+and every piece of state can be inspected). Built so far (2026-11-02): the blank-canvas workbench (O.12),
+the engine foundations C0 to C2 (committed), and the pipeline, pending, projection, table state, the owner
+actor, the broker, the wire contract and the fixture contract (C3 to C6, H0, H1, W0, W1 and K0, in the working
+tree and not yet committed). Not built: the inspect
+reports and the rest of the verb set (C7 and H2), the first playable path (H3), and the scene builder, the
+Director, the transform steps after T0, the animation steps and the video steps after V0. O.12 lists where the built code departs from the plan
+below, and the status board in O.16 has each step.
 
 **O.1 State of the branch, and what the removal changes in this document.**
 
@@ -3110,13 +3197,17 @@ does and how it fails.
 | `outcome` | `Outcome` (applied, needs clarification, declined, pending), `Decline` (its `Debug` shows the code and length classes only), `DeclineCode`, `PendingKind`, `OutcomeKind`, and the three exhaustive tables of a code: key, reason text, public class (built at C0) | RES16, RES26, C.6, RES40 |
 | `envelope` | `InputEnvelope`, `InputKind` (tap, submit text, say, private message, safety card, engine proposal, timer, resource result, pending answer), seat and utterance ids, `ViewStamp` | C.1, RES21 |
 | `owner_queue` | the four capped lanes (seat controls, engine, timers and results, player), round-robin by seat in the controls and player lanes, the per-seat bound and token bucket on the player lane, the one free-text line in INTERPRET, duplicate detection per sender and membership, the lease for a served input that never finishes, queue position, the serve order and `turn_seq` | RES22, H.2, C.1, K.6 |
-| `machine` | `MachineId`, `Scope`, `MachineSpec`, `StepResult`, `HandOff`, the `Machine` trait | RES27, RES28, RES20 |
-| `registry` | registration, startup validation (unique ids, known hand-off targets, scope rules, required capabilities), enable flags | D24, RES28, Q46 |
-| `pipeline` | the seven stages as pure functions over ports; the four outcomes; the failure fallbacks | C, RES15, C.7 |
-| `pending` | pending resolutions held in table state, two-phase apply, windows, answers | RES26, C.4, M2-D5 to M2-D7 of M.2 |
-| `effects` | `TableEffect` (a versioned closed enum), the applier over table state, the `carry` list | RES18, RES32, RES3 |
-| `table_state` | the composition view of the owners' state (checkpoint, world time, scenes, seats, cast), `scenes[]`, `scene_epoch` | D.1 to D.7, RES25 |
-| `projection` | audience projections, `ProjectionStatus`, the never-empty types, the structured readout, public-versus-private filtering | RES30, H.15, K.5 |
+| `machine` | `MachineId`, `StepInput`, `MachineInput`, `StepResult`, `HandOff` and its typed `carry` list (`CarryItem`), `Entry`, `RequestKey`, the `Machine` trait, the event builders `step_events`, `entered_event` and `exited_event` (re-exports `Scope` and `MachineSpec`) | RES27, RES28, RES20 |
+| `machine_spec` | `MachineSpec` (id, scope, schema version, closed state names, hand-off targets, required ports, rules actions standing in for the action registry until it exists, unseated actions, claimed engine inputs, suspend policy), `Scope` | RES27, RES20 |
+| `machine_slot` | `MachineSlot` (the saved record), `LoadError`, `LoadFault`, `RecordKind`, `ErrorClass` | RES32, H.12 |
+| `registry` | registration, startup validation (unique ids, known and enabled hand-off targets, required ports, a startable table: an enabled `Table` machine and an enabled `Group` machine), enable flags, `check_hand_off` on the value `exit` returned. Scope rules: `Table -> Group`, `Group -> Group` or `Table` (a scene may return the table to its table machine, so the lobby is reachable from a scene), `Seat -> Seat`; a seat lane ends by `ReleaseLane` and a group machine may `ReturnToFrameBelow` | D24, RES28, RES20, Q46 |
+| `lobby`, `explore` | the first two machines (question 90); neither imports the other, and shared facts go through `TableEffect`s | RES28, RES31 |
+| `limits` | the named large limits of the canvas, in one place | owner rule |
+| `pipeline` | the seven stages over ports, as built at C3: `Pipeline::run` changes a host-owned `PipelineTable` in memory for one input and releases nothing visible (it is not pure functions of a value in and a value out: the table is the state, and the host owns its checkpoint). Stage and release: the events that say a table changed (effects, pendings, rulings, `TurnApplied`), the broker requests and the narration job are held in the `TurnResult` and issued by the host after its commit (`TurnResult::release_events`, `Pipeline::issue_requests`, `Pipeline::attach_narration`); a refused batch is undone by `PipelineTable::checkpoint`. The four outcomes, the failure fallbacks, the result book that answers a replayed operation without asking a port, and the request and ruling books | C, RES15, C.7 |
+| `pending` | pending resolutions kept in the `PipelineTable` beside the table's facts (the book, the keyed rulings and the request book are saved in every checkpoint with versions and bounds), two-phase apply, windows, answers by pending id, the exit for a window that cannot be answered (`EngineControl::CancelPending`) | RES26, C.4, M2-D5 to M2-D7 of M.2 |
+| `effects` | `TableEffect` (a versioned closed enum: 18 effects since C6), `EffectRecord` (an effect as saved, refused when newer than the engine), `EffectRefusal` and `EffectError`; the applier and the state it changes moved to `table_state` at C6 and `effects` re-exports `TableState`, `TableStateError`, `ApplyOutcome` and `HandOffRecord`, so no machine import changed; the typed `carry` list lives in `machine` | RES18, RES32, RES3 |
+| `table_state` | the composition view of the owners' state (built at C6): the commit revision, world time, table status (`active`, `idle`, `paused`), `scenes[]` each with its `scene_generation` (`scene_epoch` of D.2, RES42), beat, active machine and hand-off stack of depth 3, seats with presence and scene, the cast (heroes and creatures with vitals, visibility, placement, conditions), `TableState::apply` (the one applier), the immutable `TableSnapshot` (one pointer copy, structural sharing), and the pure judgements on a snapshot: the split-party decline, the play-input and idle rules, stale-result rejection. Knowledge facts stay with the knowledge owner and reach projection as audience-tagged attachments | D.1 to D.7, RES25, RES29, RES42 |
+| `projection` | audience projections (built at C5): `project(snapshot, attachments, audience)` for the shared screen and each seat, `ProjectionStatus` (the nine H.15 keys), `NonEmptyText` and the never-empty views, `StructuredReadout`, `Attachments` (the owners' published story, private facts, readouts, declines and activity, filed by audience), the diagnostic `ProjectionRecord` with its counted `ProjectionWork`, and the JSON shape of the playground's `TvScene` and `PhoneScene` | RES30, H.15, K.5, K.13, RES36 |
 | `ports` | the seams: rules owner, interpreter, narrator, broker, clock, dice, knowledge view, event sink, and the small values they exchange (built at C0) | O.4 |
 | `event` | `TableEvent` (canvas and engine variants), event classes, `PipelineStep`, `FailureCause`, the exhaustive audit-line rendering through `write_audit_line`, the one renderer (built at C0) | O.6 |
 | `event_field` | the sealed `EventField` list of types an event may carry (ids, counts, closed keys, `LengthClass`, `EvidenceRef`) and the allocation-free line writer; split from `event` so the privacy rule has one home (C0) | O.6, RES36 |
@@ -3125,7 +3216,7 @@ does and how it fails.
 | `listed` | the one macro that declares a closed enum with its generated `ALL` list, crate-private (C0) | O.5 |
 | `inspect` | `Inspect` reports and the verb set behind the CLI | H.16, O.6 |
 | `config` | typed settings with defaults, ranges and owners; load-time validation with fallback and a `SettingRejected` event. Built at C0 with five settings; three names (`seat_pending_limit`, `seat_rate_burst`, `seat_rate_sustained_per_s`) are working names awaiting owner review, every range maximum is the large `LARGE_SETTING_MAXIMUM`, and the one cross-setting rule is J.4's (`narration_late_s` is never below `narration_batch_s`) | RES50, J.4 |
-| `testkit` (feature) | `ManualClock`, `ScriptedBroker`, `RecordingSink` (bounded, counts what it drops), scripted interpreter and rules owner, scripted and failing narrators, queued dice, a fixed knowledge view with sentinel secrets; a call outside a script panics with the port and the question (built at C0); the golden-session runner and the conformance suite follow | H.17 |
+| `testkit` (feature) | `ManualClock`, `ScriptedBroker`, `RecordingSink` (bounded, counts what it drops), scripted interpreter and rules owner, scripted and failing narrators, queued dice, a fixed knowledge view with sentinel secrets; a call outside a script panics with the port and the question (built at C0); the conformance suite is built (C2, module `conformance`, the same feature); the golden-session runner is built (module `golden`, working tree; the replay of C7 is its `replay_twice`) | H.17 |
 
 **O.4 The seams.** Every outward dependency is a port owned by this crate and has two real
 implementations, a production adapter and a scripted fake (which satisfies the style rule on
@@ -3133,9 +3224,9 @@ traits). The pipeline and the machines see only the ports.
 
 | Port | Question it answers | Production adapter (outside the crate) | Fake in `testkit` |
 |---|---|---|---|
-| `RulesOwner` | legal choices for an actor, `prepare` and `resolve` with explicit draws, spatial query, rest and time costs | an adapter over `df-rules`, `df-world`, `df-combat` | scripted table of answers |
+| `RulesOwner` | legal choices for an actor, `prepare` and `prepare_in_plan` (a plan's later step checked against what the earlier steps staged), `resolve` with explicit draws returning `Resolution::Applied(Resolved)` (the table effects the rules owner produced and the typed facts of the result), `NeedsDraws`, `Await`, `Declined`; `confirmation_needed`, `ruling_needed`, `resume` and `abandon` for the pending kinds; spatial query, rest and time costs | an adapter over `df-rules`, `df-world`, `df-combat` | scripted table of answers |
 | `Interpreter` | free text to an `IntentDisposition` and an `ActionPlan` (closed schema) | a Jev call behind the broker | scripted lines |
-| `Narrator` | a committed outcome to a speech envelope (qualified) | the storyteller behind the broker | scripted, and a failing one |
+| `Narrator` | a committed outcome (`CommittedOutcome`: seat, action, the applied steps and their typed facts) to a speech envelope (qualified). It is a job the host runs after its commit and gives to `Pipeline::attach_narration`; the pipeline never calls it and never waits for it | the storyteller behind the broker | scripted, and a failing one |
 | `Broker` | request a resource, learn its readiness, never wait | the rebuilt `Hub` | scripted readiness and failures |
 | `Clock` | monotonic now, in milliseconds | system clock | `ManualClock` |
 | `Dice` | the explicit draws for a decision | `df-session` supplies them | queued draws |
@@ -3224,7 +3315,9 @@ setting with its default stated once.
   carries a `PendingKind` of choice, roll, reaction or ruling. RES27's step result has a fifth value,
   `Waiting{pending_id}`, which is the machine's report that a pending is open and not a fifth outcome:
   the pipeline records the input's outcome as `pending{...}`, so the four outcomes stand. `Waiting`
-  belongs to the machine's `StepResult` and is not a variant of `Outcome`. `Decline` carries a code, a reason, the missing piece if any, and alternatives, and a
+  is `StepOutcome::Waiting`, a step value beside `Settled(Outcome)`, and is not a variant of `Outcome`;
+  it is the only addition to the outcome, and `StepResult.state` being optional the only change to the
+  result's four fields (RES27 as built). `Decline` carries a code, a reason, the missing piece if any, and alternatives, and a
   decline can only be built with a reason (the constructor requires non-empty text).
 - `NonEmptyText` is the only type a projection's narration slot accepts, and
   `Narration::or_readout(model, readout)` returns the readout when the model text is blank, so the
@@ -3246,6 +3339,27 @@ setting with its default stated once.
   `df-observe`. It owns every `.await`; `df-table` owns none.
 - **Wire and projection types:** `df-api` and `df-protocol` get `MachineView` and `MachineIntent`
   under the field ledger (RES33, RES40), mapped from `df-table` projections at the boundary.
+  **The mapper's field table (built with C5, 2026-11-02).** One function at the composition boundary
+  maps a `df_table::projection::Projection` to a `MachineView` and ends with `check_machine_view`.
+  Each wire field and its source:
+
+  | `MachineView` field | Source in the projection | Mapper refuses when |
+  |---|---|---|
+  | `revision` | `Projection::revision()`, never absent: the genesis revision (first epoch, sequence 0) before the first commit | never (the wire accepts sequence 0) |
+  | `machine_id` | `machine_id()`: the focus scene's active machine, else the table machine, else `table` | blank (cannot happen: `NonEmptyText`) |
+  | `state_label` | `state_label()`: published per machine with `Attachments::set_state_label`, else `waiting` | blank |
+  | `status` | `view().status` (`ProjectionStatus`, nine keys; `waiting_for` carries `who` and `what`) | an unknown key |
+  | `reason` | `reason()`: the plain sentence of any status but `ok`, in the playground's copy, `None` exactly when `ok` | present with `ok`, or absent otherwise |
+  | `readout` | `readout()`: the machine's readout, else the newest line's structured readout, else a plain sentence from the table's facts; the shared one is built from public facts only | blank |
+  | `shared_screen.place`, `caption`, `party` | `SharedView.place`, `caption` (speaker only for words the speaker said), `party` (name, hit points, conditions with `hidden`) | blank place or caption text |
+  | `shared_screen.elements` | `SharedView.elements` (id, kind, label, x, y, shape, size, `fields.hidden`, `portrait`, colour): the wire has no list yet, a later additive field | none: the mapper may leave them off |
+  | `seat.hero`, `narration`, `note` | `SeatView.hero`, `narration` (at most 20 lines, newest last, within 7,680 bytes), `note` (newest facts within 7,680 bytes) | blank slot |
+  | `seat.offers` | `offers()`: id, label, explain, group, unavailable reason; a decline's alternatives follow as `alternative-N` | a duplicate id |
+  | `MachineDecline` | the seat's notice (`Attachments::set_notice`), shown only while the table is at the revision the input answered | none |
+  | frame size | every published text is at most 5,760 bytes and a view's text stays under 46,080 (`WIRE_FRAME_BYTES` 61,440): over-long text is refused at publish (`TextTooLong`); the story and the note drop their oldest entries and say how many in `truncation` | an encoded view over 60 KiB (`TooLarge`) |
+
+  The projection also carries `attachment_version` (RES30's wake gate, with the revision), which the
+  wire may leave out.
 - **Client:** `df-web`, `df-player`, `df-display`, `df-ui` render `MachineView`; they never import
   `df-table`.
 - **Composition:** `df-server` wires the host, the stores and the providers. A local game start is
@@ -3260,34 +3374,118 @@ presentation tracks.
 1. **C0 Foundations.** `outcome` (with the exhaustive decline mapping), `event` (variants, classes,
    the private types, audit-line rendering), `ports` (traits only, with the `testkit` fakes),
    `config` (the setting specs), and the architecture test. Acceptance: the privacy-by-type test,
-   the exhaustive-mapping test, and an event round-trip test.
+   the exhaustive-mapping test, and an event round-trip test. Built (committed in `a2c0a937`).
 2. **C1 Owner queue.** `envelope` and `owner_queue`: lanes, round-robin, bounds, token bucket,
    duplicates, serve order. Acceptance: property tests for fairness (no seat starves another), bounds
    (nothing exceeds a cap), duplicates (one operation id runs once per sender) and determinism (same
    inputs, same serve order); a seat at its bound can still pause; a pause is served before queued
    player and engine input; a controls flood is bounded; one free-text line per seat is in INTERPRET;
-   a leaked input is found by age and reaped; serving is linear in the inputs served.
-3. **C2 Machines and registry.** `machine`, `registry`, `effects` skeleton and the conformance suite
-   with two real machines (lobby and a minimal explore) so the trait has two implementations.
-   Acceptance: a deliberately broken machine fails each conformance check.
+   a leaked input is found by age and reaped; serving is linear in the inputs served. Built (committed in `f22db84a`).
+3. **C2 Machines and registry.** `machine`, `registry`, `effects` (built complete, not a skeleton: the
+   applier is all or nothing and idempotent per operation id, over the minimal `TableState`) and the
+   conformance suite with two real machines (lobby and a minimal explore) so the trait has two
+   implementations. Acceptance: a deliberately broken machine fails each conformance check. Built
+   2026-11-02. The suite plays a machine through a stand-in pipeline (`conformance/script.rs`) that
+   duplicates the pending handling until C3 and C4 replace it. The test pair is `lobby -> explore ->
+   lobby`; explore's return to the lobby is that pair's flow and no plan row says it: a real scene
+   ends through `Group -> Group` hand-offs, adventure end (K.21), or a return to the frame below.
 4. **C3 Pipeline.** The seven stages over scripted ports, four outcomes, the model-failure fallbacks,
    the structured readout, clarification and confirmation, engine inputs. Acceptance: the section G
    traces 1, 2 and 4 as golden sessions (each recorded as a golden only after its review against the
-   pinned source, RES52), plus the three known-bad lines.
+   pinned source, RES52), plus the three known-bad lines. Built in the working tree (`pipeline` and `pipeline/`; the golden tests are in `pipeline_golden_tests.rs`).
 5. **C4 Pending and windows.** `pending` with two-phase apply, held turns, answers by pending id,
    rulings with keyed reuse. Acceptance: the M.2 register rows M2-D4 to M2-D7 as fixtures, and a restart
-   test that replays a committed pending without re-drawing.
+   test that replays a committed pending without re-drawing. Built in the working tree (`pending` and `pending/`).
 6. **C5 Projection.** Audience projections, status, never-empty, sentinel-secret and paired-state
-   tests. Acceptance: a seat never sees another seat's private fact in any projection.
+   tests. Acceptance: a seat never sees another seat's private fact in any projection. Built
+   2026-11-02 (`projection`, 82 tests in `projection_tests.rs`, `projection_privacy_tests.rs`,
+   `projection_cost_tests.rs`, `projection_attachments_tests.rs` and `projection_wire_tests.rs`). The sentinel test serialises every projection and its Debug text and
+   its event line for the shared screen and three seats, and the paired-state tests change one
+   seat's fact, line, specimen, decline or readout (and, separately, a hidden creature) and compare
+   every other audience's output and record. Cost is proved by counted work (`ProjectionWork`), not
+   time: for 400 creatures, 3,000 facts and seven audiences the build visits each cast entry once per
+   audience and each fact once, doubling the table exactly doubles the work, and the story's length
+   does not matter. Decisions taken while building it, each reversible: (1) **Facts are attachments,
+   not table facts.** Private text has no serde, so it cannot sit in a `TableEffect`; knowledge facts
+   stay with the knowledge owner and arrive as `Attachments`, filed by audience when they are published
+   (RES30), so a seat's build never looks at another seat's data. Public knowledge reaches views through
+   the public story and has no list of its own. (2) **A view is the playground's scene.** The shared
+   view serialises as a `TvScene` (`place`, `status`, `caption`, `party`, `elements`) and a seat view as
+   a `PhoneScene` (`hero`, `status`, `narration`, `suggested`, `note`), each inside `{viewer, revision,
+   view}`; a cross-crate check that composed them into a `Fixture` and parsed it with
+   `df_playground::fixture::Fixture::parse` passed, and K0 uses these types (its stand-in structs
+   are gone, in the working tree). The place, plate, camera, choice groups and goal are not built here: they belong to the plate,
+   camera and legal-choice owners. (3) **The structured readout comes first, the words after.** A story
+   line holds its readout and, if it arrived, the narration; a phone shows the readout then the
+   narration, and the shared caption shows the narration or, when it is blank, the readout (C.7, H.15).
+   (4) **A decline reaches only its seat**, as its reason text, with the alternatives as `suggested`
+   choices; the shared screen shows no decline and the public classes of RES40 stay a wire mapping.
+   (5) **A private line leaves no marker on the shared screen** (the plan's "marker with no content" for
+   a whisper is not built because it would break the paired-state rule). (6) **A hidden hero's own
+   phone shows its position** as a private overlay, and a threat the party knows of and cannot see is a
+   marker with no name (`Visibility::Sensed`, question 66). (7) **The audit event is class
+   B** (`PROJECTION built`), and a build counts the entries it examines, so the count of a table that
+   holds a hidden creature differs in the record's work counter and nowhere else.
+   Review fixes of 2026-11-02: (8) **Attachments are a shared snapshot**: every collection sits behind
+   an `Arc`, a publish copies only what it changes, `snapshot()` copies pointers, and `version()` is
+   RES30's `attachment_version`, carried by every projection. (9) **Nothing is write-only**: clears for
+   a notice, readouts, offers, a fact, a place and a whole seat (`forget_seat` in the `SeatLeft`
+   commit); a decline belongs to the table revision it answers and expires with the next commit. (10)
+   **Text is bounded to the wire frame**: a published text is at most 5,760 bytes, a view's text budget
+   is 46,080, the story and the note show their newest entries within 7,680 bytes each and report the
+   older ones in `truncation`; a phone shows at most 20 lines with a decline counted as one, and an
+   entry is shown whole or not at all. (11) **The caption names a speaker only for words the speaker
+   said.** (12) **The wire fields** (machine, state label, readout, reason, offers with ids, genesis
+   revision) and the hero portrait and colour are produced; the table is in O.8.
 7. **C6 Table state and scenes.** `table_state`, scene epochs, seats and presence, the hand-off stack.
-   Acceptance: the split-party decline, the stale-result rejection, and idle and pause rules.
+   Acceptance: the split-party decline, the stale-result rejection, and idle and pause rules. Built
+   2026-11-02 (`table_state`, 13 new effects, 92 tests in `table_state_tests.rs`,
+   `table_state_snapshot_tests.rs`, `table_state_rules_tests.rs`, `table_state_digest_tests.rs` and
+   `table_state_lanes_tests.rs`). Decisions taken while building
+   it, each reversible: (1) **`scene_epoch` is `SceneGeneration`** (RES42), issued from one counter that
+   only goes up, so a scene entered again never repeats one. (2) **`SceneEntered` is the whole party
+   entering a place**: every seat moves, every other scene closes, heroes come along and other creatures
+   stay behind. A single seat going alone is `SeatMoved`, which a table keeping the party together
+   refuses as `split_party_declined` (RES25, question 60) and a table built with
+   `SplitPolicy::Allowed` accepts; a scene closes when its last seat leaves it. (3) **The split decline
+   is `not_supported_yet`** with RES25's words and two alternatives (move to another area of this
+   place, ask the host to pause). (4) **Idle is advice, not a state change**: `judge_idle` takes the
+   clock, `idle_minutes` in milliseconds and the pending and held-turn counts as arguments (the table
+   reads no clock and pending resolutions belong to the pending handler) and the caller commits
+   `TableIdled`; `config` has no `idle_minutes` setting yet. A paused table declines play input as
+   `time_locked`, refuses `TimeAdvanced`, holds results back, and a result started before the pause
+   stays stale after the resume. (5) **Stale results** are judged by epoch, pause, pause floor, scene
+   and generation, in that order, and logged as `RESULT rejected`. (6) **The stack frame keeps
+   `pushed_at`** (the commit's revision) as the basis for the machine's own resume check, because
+   `Machine::resume` does not exist yet; `ActiveMachineSet`, `HandOffPushed` and `HandOffPopped` exist
+   but the pipeline does not emit them yet. (7) **The new effects joined schema version 1**, because
+   no record has been saved yet (D7), and `TableState::seats()` returns a `Seats` view with
+   `contains`, `len`, `is_empty`, `iter` and `to_set` so no caller changed. (8) **A commit moves the
+   revision to its own, even when empty**, and never back.
+   Review fixes of 2026-11-02 (#1682 to #1691): (9) **One digest.** `TableState::digest` and
+   `TableSnapshot::digest` walk every fact (and the applied-operation memory) in a fixed order, from
+   an exhaustive destructure of `Facts`, so a new fact cannot be missed; the pipeline's `state_hash`
+   folds it in. (10) **One home for the active machine and the stack**: the table state (see RES27),
+   with a table-scope home for the lobby; hand-off and return are single effects that keep the machine
+   and the stack consistent, and a scene that closes says what it took in a `SCENE closed` event.
+   (11) **A seat's mounts, companions, summons and hirelings travel with its hero** on `SceneEntered`
+   and `SeatMoved`, and must stand where the seat stands; a seat plays one hero at a time. (12) **One
+   split rule** (`facts.parts_company`), asked by both the applier and `judge_split`; a seat that is
+   not at the table or has no company is `not_viable`. (13) **The revision is never absent**: a table
+   starts at the genesis revision (first epoch, sequence 0). (14) **Table state is the membership
+   truth**: `reconcile_lanes` says which owner-queue lanes to open and close so exactly the table's
+   seats have one, and the pipeline calls it after every commit; presence keeps the lane, and its
+   producer is the host's connection tracker.
 8. **C7 Inspect and replay.** Reports for every module, the verb set, `TurnRecord` and the replay
    runner. Acceptance: every machine and port has a report, and a recorded session replays to the same
-   state hash.
+   state hash. In progress: `TurnRecord` and the golden runner (`replay_twice`) are in the working tree;
+   the inspect reports and the verb set are not (there is no `inspect` module).
 9. **Host H0 to H3** (outside this crate): the owner actor with the queue and pipeline over real
    adapters; the broker; the event sink and CLI; the first playable path (lobby, one story scene, one
    conversation). Then the wire, the client, and the remaining machines (creation, combat, rest,
-   advancement, inventory, shop, item inspector, travel) in the order of O.16 row M.
+   advancement, inventory, shop, item inspector, travel) in the order of O.16 row M. Status: H0 and H1 are
+   built in the working tree (`engine/`, `broker/`); H2 is in progress (the engine verbs in `engine/cli.rs`,
+   with no df-observe sink yet); H3 is not started.
 
 **O.10 Risks the plan accepts, and what would change it.**
 
@@ -3312,15 +3510,39 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
 - **Departures from O.1 to O.9 (the `df-table` crate docs in `crates/df-table/src/lib.rs` list the
   same).** The built slice is a workbench that exists ahead of O.9's order, which puts the host last,
   after C0 to C7: `crates/df-table`, `crates/df-table-host` and `crates/df-playground` are already
-  workspace members. C0 is built since 2026-11-02 (`outcome`, `event` with the engine variants,
-  `identity`, `private_data`, `event_field`, `ports` with all eight traits, `config`, `testkit` and the
-  architecture test); `envelope`, `owner_queue` and the rest of C1 to C7 are not. The canvas events keep
-  their bare revision counter and carry no `Correlation`; the engine events carry `SessionRevision`
+  workspace members. The engine modules, with their commit state (`git log -- <path>` on 2026-11-02):
+  - **Committed:** C0 (`outcome`, `identity`, `private_data`, `listed`, `ports` with all eight traits, `config`,
+    `testkit`, the architecture test, and `event` and `event_field` with the engine variants, in `a2c0a937` and
+    `f22db84a`); C1 (`envelope` and `owner_queue` with four lanes: seat controls, engine, timers and results,
+    player); C2 (`machine`, `machine_spec`, `machine_slot`, `registry`, `effects`, `lobby`, `explore` and the
+    `conformance` suite); the two `limits.rs` of `df-table` and `df-table-host` (`f22db84a`, `df13fff9`); the host's
+    `owner_latency` harness (`df13fff9`); the playground's `continuity.rs` and `limits.rs` (`3bda8569`). Those
+    committed files also carry uncommitted edits, since C6 moved the applier out of `effects`.
+  - **Working tree only, not committed:** C3 `pipeline` and `pipeline/` (with `TurnRecord`); C4 `pending` and
+    `pending/`; C5 `projection` and `projection/`; C6 `table_state` and `table_state/`, which took over the applier
+    and the table state from `effects`; `golden` and `golden/`, the golden-session runner that C7's `replay_twice`
+    is; the host's `engine/` (H0: the owner actor over the real pipeline, adapters, group commit with an owner-enforced commit deadline, dev routes and the engine verbs) and
+    `broker/` (H1); `machine_wire.rs` (the mapper from `df_table::projection` to `MachineView`);
+    `fixture_contract_tests.rs` and `projection_samples.rs` (K0); and the wire contract (W0, W1): `MachineView`
+    and `MachineIntent` in `gameplay.proto` (modified, uncommitted), `df-api/src/machine.rs`,
+    `df-protocol/tests/machine_contract.rs`, and `df-rpc-bridge`'s machine example and test.
+  - **Not built:** `inspect` (the C7 reports; there is no `inspect` module), the dialogue machine, the scene
+    builder, the Director, and the transform, animation and video steps of O.13 to O.17 (T0 rotation of elements
+    is built and committed in `d30964d2`; V0 video in the library is committed in `ac050e59`).
+
+  The canvas events keep their bare revision counter and carry no `Correlation`; the engine events carry `SessionRevision`
   and `Correlation` from `identity`, local types until the `df-types` edge at C6. `EventClass::Always`
-  and `Verbose` are the classes A and B of O.6. `CanvasEffect` stands in for the first
-  `TableEffect`, and the vocabulary says "canvas" where the plan says "table". Elements are entities in
+  and `Verbose` are the classes A and B of O.6. `CanvasEffect` is the workbench's own effect;
+  `effects::TableEffect` is the engine's, and the two do not share an applier yet. The vocabulary
+  says "canvas" where the plan says "table". Elements are entities in
   a small entity-component world (`ecs`, `world`, `motion`), which O does not describe (see the ECS
-  bullet below). O.2's dependency list is not yet true either (see O.2).
+  bullet below). O.2's dependency list is true of the built crate: `serde` and `serde_json` only, and the `testkit` feature adds no dependency.
+- **Wire and fixture contract (W0, W1, K0; working tree).** `df-protocol` declares `MachineView` and
+  `MachineIntent` in `gameplay.proto` under the field ledger, `df-api::machine` guards both, `df-rpc-bridge`
+  carries one view and one intent in a native test and in a Rust/WASM browser example, and `df-table-host`'s
+  `machine_wire` maps a real `df_table::projection` view to a `MachineView` and ends with the guard. The K0
+  contract test projects a real table state for the TV and a seat (see the K0 row in O.16). The O.16 rows W0,
+  W1 and K0 hold the details and what is still open.
 - **What it is.** A table that starts with nothing on it. Elements are placed on a 100 by 56.25 canvas
   and drawn by a live viewer. Every change is an effect that is checked, applied and recorded as a typed
   event, and every refusal is recorded too.
@@ -3343,7 +3565,7 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   kind=character revision=3`) in a bounded log that `events` and the viewer read; moves are recorded
   only with `--moves`, and a refusal, including a malformed or forbidden request, is an event too. The
   API listens on `127.0.0.1` only, checks the Host header on every request, accepts changes only as
-  JSON from a same-origin caller (so a web page cannot trigger a reload), caps a request at 64 KiB, and
+  JSON from a same-origin caller (so a web page cannot trigger a reload), caps a request at 16 MiB (`MAXIMUM_REQUEST_BYTES`, a named constant, scope down on a measured need), and
   every piece of text that reaches the page is escaped.
 - **Playground (the display workbench).** `crates/df-playground` is a browser page, Rust compiled to
   WebAssembly, that draws the shared screen and one phone from fixture files in `assets/playground/`,
@@ -3359,13 +3581,16 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   limits driving live tables. Verbs implemented today (the usage text of
   `crates/df-table-host/src/command.rs`): `spawn`, `set`, `move`, `travel`, `stop`, `despawn`,
   `clear`, `canvas`, `kinds`, `events`, `reload`, `playground`, `scene`, `media`, `clients`, `fixtures`,
-  `fixture`, `script`, `repl` and `help` (`media` and `clients` are described below; `clients` only
+  `fixture`, `script`, `rotate`, `wait`, `repl` and `help`, plus the engine verbs of H0 listed above
+  (`media` and `clients` are described below; `clients` only
   reads). The workbench `fixtures` and `fixture show|write|remove NAME` verbs manage **playground
   fixture files**, the screen and phone drawings under `assets/playground/`. They are a different
   thing from H.16's `fixture load <bundle>`, which loads a table bundle (state, turn log, seed) into a
   machine for a golden session; the two are distinct and the H.16 one does not exist yet. These are
-  workbench verbs; the H.16 set (`dump`, `force`, `input`,
-  `viable`, `describe` and the rest) arrives with the machines. The host, not
+  workbench verbs. The engine verbs of H.16 that exist (`engine/cli.rs`, reached from the same command
+  line) are `input`, `viable`, `dump`, `force`, `projection`, `queue`, `describe`, `broker`, `cost`, `health`,
+  `clock`, `dice` and `chaos`; the rest of H.16 (the C7 reports and the audience-level inspect verbs) arrives
+  with C7 and H2. The host, not
   the page, owns what the playground shows, so the CLI and
   the browser change the same state and see each other's changes within a poll. `df-table dev playground`
   prints it and `playground set fixture=NAME device=both|tv|phone pace=slow|normal|fast status=KEY
@@ -3401,6 +3626,12 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   screen in about 50 ms including the CLI's process start; a 70-unit travel produced about 32 updates
   a second and about 120 rendered frames a second with 2.4 to 2.7 px steps; 200 travelling elements
   cost about 3 ms per frame on the host and the page kept up with 6,000 style updates a second.
+  *Re-measured after avatars, portraits, the camera layer and the page rewrite (#1628, #1638; debug
+  wasm build, browser pane, 202 travelling markers, 363 frames):* the gap between frames was 33.1 ms at
+  p50 and 39.7 ms at p95, and the time from a frame's text arriving to the page's DOM writes finishing
+  was 2.5 ms at p50 and 3.0 ms at p95. *Not built, open:* O.14 camera rules 1 and 6 (the Director's
+  pull-back that outranks every reason, and the `focus_hold_s` return); the page half of a target that
+  is gone (the whole stage shows, from the frame alone) is built and tested.
 - **Pictures and sound on both screens, and a way for an agent to check.** A media library
   (`assets/playground/media`; pictures png, jpg, webp and gif, sounds mp3, ogg, wav, m4a and opus; no SVG
   because opened on its own it can run script from the host's origin) is filled with `media add FILE`,
@@ -3410,7 +3641,7 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   `scene music NAME [on=both|tv|phone] [volume=N] [loop=BOOL]` plays until stopped or replaced;
   `scene sound NAME` plays once. A fixture may name pictures too. A change that names a file the library
   does not hold, or the wrong kind, is refused with the names that exist. A sound is a numbered cue: the
-  host keeps the newest sixteen, a page plays each id once, the first frame of a page only learns the
+  host keeps the newest 4,096 (`MAXIMUM_CUES_KEPT`, a named constant, scope down on a measured need), a page plays each id once, the first frame of a page only learns the
   count (no replay of old sounds), and a reset or a new fixture keeps the count rising so a cue is never
   mistaken for an old one.
   An agent cannot see or hear a screen, so each page reports what it shows and plays
@@ -3437,7 +3668,7 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   generate` is a verb) is the next step and needs the services' durable store.
 - **Scenes and transitions.** A playground scene (a fixture scenario, not the table scene of RES34 and D.1) is a scenario with its own backdrop, card, party layout, phone
   choices and, new, its own music (`music` in the fixture, replaced or stopped by `scene music` and
-  `scene music-stop`). `playground go NAME [transition=cut|fade|wipe] [ms=0-5000]` moves to a scene (the
+  `scene music-stop`). `playground go NAME [transition=cut|fade|wipe] [ms=0 up to 86,400,000, `MAXIMUM_TRANSITION_MS`]` moves to a scene (the
   name may leave off `.json`; a transition that is too long is refused before anything changes, so a
   `go` is all or nothing), `playground set transition=.. ms=..` sets how the next change looks, `wait MS`
   pauses the command line (for a `script` or a `repl` session that stages scenes over time), and
@@ -3454,11 +3685,11 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
 - **Turning and sliding a picture.** `scene image tv-card NAME rotate=0-359` draws a picture turned
   clockwise (180 is upside down; 360 or more is refused with the range), and `scene slide tv-card NAME
   [from=15] [to=85] [over=5000] [rotate=..]` moves the card across the shared screen at an even pace
-  (0 to 100 percent of the width, 1 to 60000 ms; only the card on the shared screen can slide). The
+  (0 to 100 percent of the width, 1 to 86,400,000 ms, `MAXIMUM_SLIDE_MS`; only the card on the shared screen can slide). The
   host numbers each slide, so a page that redraws part-way carries on from where the card was, and a
   new command restarts it. Measured with the upside-down portrait: 15% at the start and 84.9% after
   5 s, and a redraw forced 2.2 s in made no jump. Transforms in general are catalogued in O.13.
-- **Camera, avatars and the tour.** `scene camera ELEMENT [zoom=100-400] [over=0-30000]` moves the
+- **Camera, avatars and the tour.** `scene camera ELEMENT [zoom=100-10000] [over=0-86400000]` (the ceilings are `MAXIMUM_ZOOM_PERCENT` and `MAXIMUM_CAMERA_MS`, named constants) moves the
   shared screen's camera in on an element and keeps it in the middle (defaults 200% over 1200 ms);
   `scene camera-reset [over=MS]` pulls back out to the whole stage. The camera moves one world layer
   (backdrop, grid and figures) with a single transform, so the card, caption, status and party strip
@@ -3488,8 +3719,8 @@ transforms are added the same way and none of them weakens the rules the table r
     is one checked number written as a CSS transform, never as text from a scene file. A turn of 360 or
     more is refused with the range in the message.
   - *Slide* (`scene slide tv-card NAME [from] [to] [over]`: 0 to 100 percent of the screen width, 1 to
-    60000 ms, even pace; only the shared screen's card) carries a host-assigned **serial**. A page notes
-    when it first saw each serial (16 are remembered), so a redraw part-way carries on from where the
+    86,400,000 ms (`MAXIMUM_SLIDE_MS`), even pace; only the shared screen's card) carries a host-assigned **serial**. A page notes
+    when it first saw each serial (1,024 are remembered, `MAXIMUM_REMEMBERED_SLIDES`, a named constant, scope down on a measured need), so a redraw part-way carries on from where the
     card was (a negative animation delay), a new command restarts it, and a scene change forgets it.
     Measured: 15% at the start and 84.9% after 5 s at 14 points a second; a redraw forced 2.2 s in made
     no jump. Known limits of what is built: a page that opens mid-slide starts it from the beginning
@@ -3500,7 +3731,7 @@ transforms are added the same way and none of them weakens the rules the table r
     playground's host-side world. In the engine the rules owner's committed position is the only truth
     that feeds Travel (O.14 G2, RES1), and Travel only moves the picture between committed positions. Measured: 32 updates a second, 2.4 to 2.7 px
     steps at about 120 rendered frames a second, 200 travellers at about 3 ms a frame on the host.
-  - *Scene transitions* (`playground go ... transition=cut|fade|wipe ms=0-5000`) lay a copy of the old
+  - *Scene transitions* (`playground go ... transition=cut|fade|wipe ms=0 up to 86,400,000`) lay a copy of the old
     scene over the new one and let a CSS animation take it away; the new scene is already in place.
 - **Two kinds, and they never mix.** *Placement* (position, size in canvas units, which audience sees
   an element, any state a rule reads) is truth in the workbench: it lives in the ECS world, which is the
@@ -3530,7 +3761,7 @@ transforms are added the same way and none of them weakens the rules the table r
   | Transform | Parameters and limits | Applies to | Drawn with | Status |
   |---|---|---|---|---|
   | Rotate | degrees 0 to 359 clockwise; pivot centre or `pivot=x,y` 0 to 100% | scene picture; then canvas element, figure, card | CSS `rotate` | built for pictures; T0 for elements |
-  | Slide | from and to 0 to 100% of the width, 1 to 60000 ms, easing | TV card; then backdrop pan, phone picture | CSS animation, serial | built for the card; T2 for the rest |
+  | Slide | from and to 0 to 100% of the width, 1 to 86,400,000 ms (`MAXIMUM_SLIDE_MS`), easing | TV card; then backdrop pan, phone picture | CSS animation, serial | built for the card; T2 for the rest |
   | Travel | target in canvas units, speed 0.1 to 400 units/s | canvas element | ECS `Motion`, host clock | built (truth) |
   | Glide | 90 ms linear between host samples | figures | CSS transition | built |
   | Scene change (stage transition) | cut, fade, wipe (built); push, dissolve, iris, flash-to-white, fade-through-black, camera-travel (O.17); any duration (no small cap) | whole scene | leaving copy plus animation | built for cut, fade and wipe; the rest in O.17 (A1) |
@@ -3547,7 +3778,7 @@ transforms are added the same way and none of them weakens the rules the table r
   | Filters | blur 0 to 20 px, brightness 0 to 200%, contrast, grayscale, sepia, hue 0 to 359 | picture, figure, scene | CSS `filter` | T3 |
   | Mask or frame | circle, rounded, arch | pictures (portraits) | `clip-path` | T3 |
   | Skew | -45 to 45 degrees | element | `skew` | T3, low use |
-  | Camera, focus on an element | zoom 100 to 400%, 0 to 30000 ms, even pace, from wherever the camera was | the stage world layer (backdrop, grid, figures); the card, caption, status and party strip stay on the screen | one transform on the world layer, host-numbered move | built (O.14) |
+  | Camera, focus on an element | zoom from 100% up to a large constant with the effective ceiling from the plate (O.14 rule 3), a move of 0 ms up to a large constant, even pace, from wherever the camera was | the stage world layer (backdrop, grid, figures); the card, caption, status and party strip stay on the screen | one transform on the world layer, host-numbered move | built (O.14) |
   | Camera, pan to a point, frame several, drift | pan x and y 0 to 100%, frame 2 to 8 targets, slow drift 5 to 120 s (a Ken Burns move) | the same world layer | the same transform | T4 |
   | Path | up to 8 waypoints, line, arc, orbit | element; a projectile, a circling familiar | host `Motion` with a `Path`, or decoration | T4 |
   | Attach | offset in canvas units from another element | element on element (a rider, a banner, a held light) | ECS `Attached` relation | T4 |
@@ -3681,7 +3912,7 @@ stays where D.6, K.13, M2-D17 and R06 put it.
 
   | Control | Dev verb (built) | What it does | Gameplay driver | Status |
   |---|---|---|---|---|
-  | Camera focus | `scene camera ELEMENT [zoom] [over]`, `scene camera-reset` | keeps one element in the middle of the shared screen at 100 to 400%, then pulls back | the Director, on a named reason (below) | built for the playground; engine wiring G1 |
+  | Camera focus | `scene camera ELEMENT [zoom] [over]`, `scene camera-reset` | keeps one element in the middle of the shared screen at 100% and up to the named ceiling `MAXIMUM_ZOOM_PERCENT` (10,000%, a named constant, scope down on a measured need), then pulls back | the Director, on a named reason (below) | built for the playground; engine wiring G1 |
   | Picture turn | `scene image SLOT NAME rotate=0-359` | draws a picture turned | a handout or sign shown the wrong way up; a prone portrait | built for pictures |
   | Card slide | `scene slide tv-card NAME [from] [to] [over]` | slides a card across the screen at an even pace | a speaker's portrait arriving or leaving; the next creature in the turn bar | built |
   | Travel | `travel ID X Y [speed]` | the host moves an element a little each tick | movement in combat and exploration (truth: the rules owner's committed position) | built as a canvas feature; engine wiring G2 |
@@ -3736,8 +3967,12 @@ stays where D.6, K.13, M2-D17 and R06 put it.
      screen-fixed and never move or scale (the overlays anchored on the plate ride with the layer, as
      above), so nothing a person must read or act on can be pushed off the screen by a zoom.
   3. *Framing keeps the picture full.* The slide is held so the world always covers the screen; a target
-     near an edge is as near the middle as the edge allows. A zoom is at most 4 times and the default for
-     play is 2 times (the playground's default); a faster or deeper move is refused, not clamped silently.
+     near an edge is as near the middle as the edge allows. The default zoom for play is 2 times (the
+     playground's default). The limit on a zoom or a move's length is a large constant in the model
+     (10,000 percent, a day), and the effective ceiling comes from the plate: the least of that
+     constant, the plate's width in pixels over the stage's width in device pixels, and the zoom asked
+     for, never below the whole stage. A request over the ceiling is drawn at the ceiling and logged
+     (`CAMERA clamped requested=400 allowed=210`), not refused (the decision for #1590, #1676).
   4. *Moves are numbered and continuous.* Each move has a host-assigned serial and starts from where the
      camera had got to, so a move interrupted by another pans on to the new target without pulling out;
      a redraw part-way carries on (measured: no jump); a scene change forgets the camera and starts wide.
@@ -3999,13 +4234,18 @@ yet. This section is the one order to build from, with what each step needs, wha
 and where it is accepted. It was written from a review of the plan against the code on 2026-11-02
 (issues #1591 to #1595).
 
-- **Facts it rests on.** `df-table` holds the canvas model only (ECS, canvas, motion, kinds); none of
-  outcome, config, envelope, owner queue, machine, registry, pipeline, pending, projection, table state
-  or inspect exists. `df-table-host` and `df-playground` are the workbench. `df-protocol` has about 26
-  lines of source and `df-api` about 760, so no view or intent can reach a client. `df-rules` has no
-  legal-choice listing and few exploration rules (O.10, M.5). The old server and its `dev latency`
-  test were deleted (O.1), so the riskiest assumption of L.7 has no test. The SAM item-location test
-  (second riskiest) has never run.
+- **Facts it rests on (checked against the tree on 2026-11-02).** `df-table` holds the canvas model (ECS,
+  canvas, motion, kinds) and the C0 to C2 foundations (committed: outcome, config, envelope, owner queue,
+  machine, machine_spec, machine_slot, registry, effects, lobby, explore, conformance). In the working tree,
+  not committed, it also holds the pipeline (C3), pending (C4), projection (C5), table state (C6) and the
+  golden-session runner (`golden`, part of C7). There is still no `inspect` module. `df-table-host` holds the
+  workbench, the owner actor (`engine/`, H0), the broker (`broker/`, H1), the wire mapper (`machine_wire.rs`)
+  and the K0 contract test, all in the working tree. `df-playground` is the browser workbench. The wire has
+  `MachineView` and `MachineIntent` (W0, W1): `gameplay.proto` is modified and uncommitted, and `df-api`'s
+  `machine.rs` is new, so a view reaches a browser in a test but not in the play path. `df-rules` has no
+  legal-choice listing and few exploration rules (O.10, M.5). The old server and its `dev latency` test were
+  deleted (O.1); the owner-thread latency is measured by S1 (`owner_latency`, committed, over a stand-in step),
+  and the SAM item-location test ran as S2 (its result is below).
 - **Amendments to O.9.**
   1. Two spikes are steps with owners: S1 (the owner-thread latency harness) and S2 (the SAM
      item-location test). Both come before the work that depends on their answer.
@@ -4030,11 +4270,11 @@ and where it is accepted. It was written from a review of the plan against the c
   | C2 | Machines, registry, conformance suite, lobby and a minimal explore | C0, C1 | S1, S2 | O.9 acceptance (a broken machine fails each check) |
   | C3 | The pipeline over scripted ports, the golden sessions G.1, 2, 4 and the three known-bad lines | C2 | S2 | O.9 acceptance; goldens reviewed against the pinned source (RES52) |
   | H0 | The owner actor and the dev CLI over fake adapters | C3, S1 | C5 | an input to a projection through the real queue, CLI-driven; S1 rerun on it |
-  | C5 | Projection: audiences, never-empty, sentinel-secret and paired-state tests | C3 | H0 | O.9 acceptance |
-  | K0 | The fixture contract: the playground's `Fixture` is a serialisation of the real shared-screen and seat projections; a host test projects a table state for the TV and a seat and parses it with `df_playground::fixture::Fixture` | C5 | W0 | the contract test, then the playground shows a real projection |
-  | W0, W1 | The first `MachineView` and `MachineIntent` fields under the field ledger (RES33, RES40), the generated contract, the WASM feasibility gate of `rpc-transport.md`, and one view and one intent through the gRPC-over-WebSocket bridge | C5 | K0 | the bridge round trip in a browser; field ledger entry |
+  | C5 | Projection: audiences, never-empty, sentinel-secret and paired-state tests | C3 | H0 | O.9 acceptance. **Built 2026-11-02** (82 tests; the O.9 C5 note lists the decisions). Since then (working tree): the pipeline's PROJECT stage calls `project` (`pipeline.rs`), K0 uses the projection types, and `machine_wire` maps a projection to `MachineView`; nothing is open here |
+  | K0 | The fixture contract: the playground's `Fixture` is a serialisation of the real shared-screen and seat projections; a host test projects a table state for the TV and a seat and parses it with `df_playground::fixture::Fixture`. **Built in the working tree on the real C5 types** (not committed). `crates/df-table-host/src/fixture_contract_tests.rs` has 6 `#[test]` functions. Each builds a real `TableState` through `projection_samples` (its public effects and the `Attachments` its owners publish), projects the shared screen and a seat with `df_table::projection::project`, serialises both and parses them as the `tv` and `phone` of a `df_playground::fixture::Fixture`. Today they check: both views parse with their content; another seat gets the same screen and none of the secrets of the first; a paused table and an empty table fill every slot; every status composes into the playground's status; the playground refuses a renamed, unknown, missing or mistyped key and a real projection that has drifted; and the `Fixture` holds no field that neither the projection nor the host accounts for, with `NOT_PROJECTED_YET` (12 entries, each with an owner: the scene builder, the Director, the cast presentation, the journal and the machine offers); a projection key the playground defaults when missing (a phone with no `narration`) is caught by a required-keys check, since parsing alone accepts it. The file's header comment describes this same design (no stand-in structs remain). Open: the 12 entries stay open until SB, G1, K.4, K.13 and RES33 supply those fields | C5 | W0 | the contract test, then the playground shows a real projection |
+  | W0, W1 | The first `MachineView` and `MachineIntent` fields under the field ledger (RES33, RES40), the generated contract, the WASM feasibility gate of `rpc-transport.md`, and one view and one intent through the gRPC-over-WebSocket bridge. **Built 2026-11-02, on a hand-built sample view (C5 is not needed for it).** W0: `MachineView` (revision, machine id, state label, `MachineStatus` of the nine H.15 keys, optional reason, a non-blank `readout`, and a `shared_screen` or `seat` audience; the `MachineOffer`s are in the seat's view only, so the shared screen cannot carry a choice, and field 7 of the view stays reserved) and `MachineIntent` (machine id, optional offer id, one payload of tap, submit text, say, pending answer or the pause card) are at the end of `gameplay.proto`, served by `ActionService.SubmitMachineIntent` (unary, answered by a `MachineReceipt` with the four outcomes of RES16, a decline carrying the closed `RejectionCode`) and `SessionService.WatchMachine` (server stream of `MachineView`); `field-ledger.txt` was refreshed whole and sorted (about 1,200 lines, the machine records and the older gameplay ones that had drifted) and `df-tools` `schema_ledger.rs` checks it against the descriptor in both directions; guards are `df_api::machine::check_machine_view`, `check_machine_receipt`, `check_machine_response` and `admit_machine_intent` (each refusal typed, with its RPC status class, and every message bounded below the bridge's 64 KiB); the generation is the existing `build.rs` (prost and tonic-prost, vendored protoc). Not in the first fields, each additive later: `InputSpec` on offers, entity, destination and number payloads, `SnapshotStamp`, stage elements and camera on the shared screen, a private message payload. The df-table to wire mapper is written (working tree): `crates/df-table-host/src/machine_wire.rs`, whose `machine_view` maps an `AudienceProjection` (revision, machine id, state label, readout, reason, offers with their ids, the audience's view) to a `MachineView` and ends with `check_machine_view`; what the wire still lacks (the stage, colours and portraits) is listed in its module docs and `df-api` does not depend on `df-table`. `machine_wire_tests.rs` maps real projections. The W0 sample view itself is still `df_api::machine::sample`. W1 feasibility result: PASS for one view and one intent. Native: `crates/df-rpc-bridge/tests/machine_round_trip.rs` (generated tonic clients over a loopback WebSocket, native HTTP/2 inside bounded binary messages, one connection). Browser: the Rust/WASM example `crates/df-rpc-bridge/examples/machine_browser.rs` through `BrowserChannel` against `examples/machine_bridge_server.rs` on an ephemeral loopback port, repeatable with `development/machine-browser.sh` (builds both, serves on an ephemeral loopback port, loads the page in headless Edge or Chrome and exits 0 on the page's own PASS report; also run by hand in the Claude desktop browser pane, Chromium 152, Windows ARM64 host, wasm-bindgen 0.2.129, h2 and tonic 0.14.6 as locked): watch, tap with receipt and the next view on the same stream, a decline by utterance id, and an `InvalidArgument` call failure all passed. Not verified, so the G02 gate of `rpc-transport.md` stays open: client-streaming and bidirectional calls with machine messages (no such methods exist; `TransportFixture` covers the four modes), deadlines, cancellation and half-close in a browser, iOS and Android browsers, receive-memory measurement, and the origin and credential admission. `protocol_service_inventory.rs` and `schema_ledger.rs` in `df-tools` were red before this work (a stale inventory and a ledger missing later gameplay messages); both are refreshed to the current descriptor and pass (#1681). | C5 | K0 | the bridge round trip in a browser; field ledger entry |
   | C4 | Pending and windows, two-phase apply, held turns, rulings | C5 | C6 | O.9 acceptance (M2-D4 to D7, restart without redraw) |
-  | C6 | Table state and scenes (epochs, seats and presence, the hand-off stack) | C3 | C4 | O.9 acceptance |
+  | C6 | Table state and scenes (epochs, seats and presence, the hand-off stack) | C3 | C4 | O.9 acceptance. **Built 2026-11-02** (92 tests; the O.9 C6 note lists the decisions). Open: the pipeline folds `TableState::digest` into its `state_hash` and drives the active machine, the stack and `reconcile_lanes` through the table state (#1682, #1683, #1691), and `idle_minutes` is not a setting yet |
   | C7 | Inspect and replay | C4, C6 | H1 | a recorded session replays to the same state hash |
   | H1 | The broker (the rebuilt `Hub` with text and image kinds, queue classes, leases and epochs) | H0 | C4 to C7 | the broker's own tests; every service call audited at one place |
   | H2 | The event sink to `df-observe` and the full CLI verb set (H.16) | H0 | H1 | the audit lines and `dump`, `viable`, `projection show` on a real run |
@@ -4053,6 +4293,20 @@ and where it is accepted. It was written from a review of the plan against the c
   | T3 to T6 | Filters, camera pan and drift, path, timelines, derived condition transforms | T2; T6 needs C5 and G1 | machines | O.13 acceptance; T6 behind the audience rules |
   | M | The machines after H3, each behind a rules-readiness gate, in this order: creation (Fighter 1 and Soldier only), combat for the Fighter subset, rest and advancement, inventory (after `Coins`), shop, item inspector (after S2 and SB), travel last (needs new rules code first) | H3, RR | G and V steps | the conformance suite, a golden session and RES44 per machine |
 
+- **Status board (2026-11-02).** Checked against the repository (`git log` and `git status` for each path, and the
+  module files). *done* means committed, *built* means in the working tree and not committed, and *in progress*
+  and *not started* say what they say.
+  - B0 done (`ef6b863c`). RR done (the table is in `cb990ccf`). C0 done (`a2c0a937`). C1 done (`f22db84a`). C2 done
+    (`f22db84a`; its files also carry uncommitted C6 edits). C3 built. C4 built. C5 built. C6 built.
+    C7 in progress (`golden` runner and `TurnRecord` built; no `inspect`).
+  - S1 built (harness in `df13fff9`; the result text is uncommitted). S2 done (the result is in the committed plan).
+  - H0 built (owner actor over the real pipeline; group commit formed from the mailbox, the owner enforcing the commit deadline; panics surfaced typed; review issues #1708 to #1715 fixed). H1 built (`broker/`: four classes, epochs, leases, deadlines enforced at claim and at answer; #1710, #1711, #1720 fixed). Not yet: a store that is not in memory (the commit store is a port with an in-memory and a scripted implementation) and an operation memory beyond the results the pipeline saves in each checkpoint. H2 in progress (engine verbs in `engine/cli.rs`; no df-observe sink). H3 not started.
+  - W0 built. W1 built (browser result recorded above). K0 built.
+  - SB not started. SB-LA not started. G1 not started. G2 not started. G3 not started.
+  - T0 done (`d30964d2`). T1 not started. T2 not started. T3 not started. T4 not started. T5 not started. T6 not started.
+  - V0 done (`ac050e59`). V1 not started (the library holds videos; the page does not play them yet).
+    V2 not started. V3 not started. V4 not started. V5 not started.
+  - A0 not started. A1 not started. A2 not started. A3 not started.
 - **RR readiness table (2026-11-02).** Read from the public functions and tests of `df-rules`, `df-world`,
   `df-combat`, `df-encounter` and `df-session`, not from names. *Ready* means the adapter can back the machine's
   calls today; *partial* means some calls exist and the adapter declines the rest `not_supported_yet` (RES31);
@@ -4065,7 +4319,7 @@ and where it is accepted. It was written from a review of the plan against the c
 
   | Machine | Rules calls it needs | Exists today | Missing or partial | M.5 area, M2-D rows | Readiness | Smallest `df-rules` addition |
   |---|---|---|---|---|---|---|
-  | lobby | none from the rules owner (seats, readiness, start gate) | `df_session::lobby::decide_start`, `readiness::decide_ready_change` (tests in both) | session-zero lines and veils (F.7) have no code; not a rules matter | none; D.4, F.7 | ready | none |
+  | lobby | none from the rules owner (seats, readiness, start gate) | `df_session::lobby::decide_start`, `readiness::decide_ready_change` (tests in both); the machine reads them as a model and does not depend on `df-session`: it keeps readiness and the all-ready gate and declines with the first reason where `decide_start` returns every blocker, and the campaign, character, display, funding and authorized-only blockers stay with the host and creation | session-zero lines and veils (F.7) have no code; not a rules matter | none; D.4, F.7 | ready | none |
   | creation | options list, submit, validate (E row R01) | `local_journey::validate_character`, `tactical::validate_archer`, `species::choice_groups`, `maximum_hit_points` | `validate_build` and an options-listing function are tracked work items, not code (#1596); options are constants only; `validate_character` returns the first error only, not `reasons[]`; Fighter 1 and Soldier only | Class features (thin), Species (thin); R01 to R03, M2-D50 | partial | `local_journey::creation_offers()` over the existing constants; `validate_character` returning every reason |
   | advancement | award to level-up offers, HP average or roll, ASI, XP or milestone (R02, R16) | `Battle::experience_award` (CR to XP), `FighterProgression::new` (1 to 5) and `apply`, `LEVEL_FIVE_BUILDS` | no XP threshold table; `AwardId` is a name only; ASI and HP average are fixed in `apply`, no `pending{choice}` (D30); Fighter only | XP (thin), Class features (thin); R02, R16, M2-D30 | partial | `local_journey::level_for_xp` (SRD p.23) and `FighterProgression::offers` (HP average or roll, level-4 ASI) |
   | explore | affordance lookup, `CheckRequest`, spatial query, time cost, passive checks, hide and search | `df_world::lookup_affordances` (caller-supplied bindings), `ability_check::resolve`, `df_world::select_due_events` and `stage_schedule_advancement` | check: no Advantage, passive, group or Help; spatial query only inside a `Battle`; no per-cell light, elevation or terrain kind (D.6); no Hide, Search, traps, falling; no action time cost | Exploration and travel (thin in code), Vision and light (thin), Traps and hazards (thin); M2-D17, D23, D32, D41, D42 | ready for the minimal explore (authored beat plus one check); partial beyond | `RollMode` and a second face in `ability_check::resolve` (reuse `influence::combine_sources`); unblocks passive and Help |
@@ -4073,8 +4327,8 @@ and where it is accepted. It was written from a review of the plan against the c
   | travel | leg data, pace and terrain, time cost, hazard proposals, Exhaustion, checks (F.3, F.3a) | `df_model::TravelLeg` (a record only), `df_world::stage_schedule_advancement` for passing time, `ability_check::resolve` | no travel rules at all (pace, terrain table, vessel, forage, navigation, weather); no Exhaustion; hazards are only `df_encounter::ChallengeMode::Hazard` labels over authored sources | Exploration and travel (plan-owned, no code), Traps and hazards (thin), Exhaustion (no code); M2-D43 to D45 | blocked | `df_rules::travel::leg_outcome(terrain, pace, hours)`: miles and the forage, navigation and search DCs (SRD p.192) |
   | rest | rest start and time cost, interruption, Hit Dice loop, recovery effects, 16 hour gap, attunement (R13) | `local_journey::short_rest_due`, `complete_no_hit_dice_short_rest` (`RestInterrupted`, `RestIncomplete`), `heal_hit_point_die`; `tactical::Action::ShortRest`, `LongRest`, `StableRecovery` | Long Rest only in a finished `Battle`; no Hit Dice pool, Short Rest spends none; interruption is a caller flag; no 16 hour gap, Exhaustion, Trance, attunement | Rests, Exhaustion (plan-owned); M2-D14, D29, D46, D48, D50 | partial | standalone `complete_long_rest` with a Hit Dice pool and the 16 hour gap as an input |
   | combat | legal choices, `prepare` and `resolve` with draws, spatial query, initiative, reactions, enemy turns, outcome (F.1) | `tactical::begin`, `tactical::resolve` (move, attack, opportunity window, Dash, Dodge, Help, Second Wind, death save), `Battle::legal_targets`, `reachable_cells`; `df_combat::tactical::choose` | no producer of an actor's full legal action list; no spells, Ready, Hide, Search, grapple, shove, surprise, general Resistance; Fighter heroes and 17 SRD creatures only; no flee or surrender outcome | Initiative, Actions, Reactions, Movement, Cover owned; Conditions, Bonus actions, Monsters, Damage types thin; Spellcasting none; M2-D1, D8, D33 to D35, D37, D47 | partial (closest to ready) | `tactical::legal_actions(&Battle, actor)`: the actions that pass the `resolve(.., &[])` probe `df-combat` already uses |
-  | shop | price, purse arithmetic, stock, haggle, shop hours, item and coin move (D.7) | `local_journey::selling_value_cp`, `influence::resolve`, `df_world::stage_schedule_advancement` (keeper location), `df_model::InventoryItem` and `ResourceState` records | no price catalog, coin denominations or purse arithmetic (#1597); no atomic item-and-coin move; `AwardId` is a name only; the in-game `Coins` type is a `df-rules` work item that no row owns yet and is a named prerequisite of this machine | Equipment (plan-owned; encumbrance R17); M2-D19, D29, D49 | blocked | `df_rules::equipment::Coins` (denominations, checked subtract with change) and `price_cp` for the SRD equipment list |
-  | inventory | who holds what, worn, contained, moves, attunement, armor times (R12) | `df_model::InventoryItem`; `Combatant::held_weapons`, `shield_equipped`, `Action::DoffShield`, `PickUpWeapon`; `Weapon` accessors | no non-combat equip, stow or move rule; no armor catalog or AC calculation (AC is fixed by the build); no encumbrance, attunement limit or don and doff times; transfers that carry coin need the `Coins` work item (#1597), a named prerequisite of this machine | Equipment, Magic items (plan-owned); M2-D29, D48, D49 | partial; scheduled after `Coins` | `df_rules::equipment::Loadout` with `equip` and `stow` checking hands, armor and the 3 item attunement limit |
+  | shop | price, purse arithmetic, stock, haggle, shop hours, item and coin move (D.7) | `local_journey::selling_value_cp`, `influence::resolve`, `df_world::stage_schedule_advancement` (keeper location), `df_model::InventoryItem` and `ResourceState` records | no atomic item-and-coin move; `AwardId` is a name only; the in-game `Coins` type is built in df-rules coins.rs (purse arithmetic and the SRD baseline copper prices, #1597), and only the atomic item-and-coin effect is still open | Equipment (plan-owned; encumbrance R17); M2-D19, D29, D49 | blocked | `df_rules::equipment::Coins` (denominations, checked subtract with change) and `price_cp` for the SRD equipment list |
+  | inventory | who holds what, worn, contained, moves, attunement, armor times (R12) | `df_model::InventoryItem`; `Combatant::held_weapons`, `shield_equipped`, `Action::DoffShield`, `PickUpWeapon`; `Weapon` accessors | no non-combat equip, stow or move rule; no armor catalog or AC calculation (AC is fixed by the build); no encumbrance, attunement limit or don and doff times; transfers that carry coin need `Coins`, built in df-rules coins.rs (#1597), and the atomic item-and-coin effect, which is still open | Equipment, Magic items (plan-owned); M2-D29, D48, D49 | partial; scheduled after `Coins` | `df_rules::equipment::Loadout` with `equip` and `stow` checking hands, armor and the 3 item attunement limit |
   | item inspector | item facts, properties under `SecretPolicy`, a rules-legal identify step (D.7) | `tactical::Weapon` accessors (dice, damage type, range, mastery, properties), `SRD_521_CREATURES` cards, `df_model::SecretPolicy` record | no item catalog beyond weapons and the shield; no identify step; no magic items; also gated by S2 and SB | Magic items, Equipment (plan-owned); M2-D29, D48 | partial in rules; gated by S2 and SB | `equipment::item_card(id)` for the SRD list; identify declines `not_supported_yet` |
 
   Reading it:
@@ -4123,11 +4377,91 @@ and where it is accepted. It was written from a review of the plan against the c
   back to the item's own picture on zero instances; that reaches 87 per cent at up to two calls per item.
   Evidence: `artifacts/tmp/sam-spike/` (scripts, `out/results.jsonl`, `out/retry.jsonl`, `out/summary.json`,
   overlay sheets).
+- **S1 result (2026-11-02).** Harness: `crates/df-table-host/src/owner_latency/` and
+  `cargo run --release -p df-table-host --example owner_latency -- help` (unit-tested statistics; the slow runs
+  are the example, never the normal test run). The real C1 `OwnerQueue` runs on one `std::thread` with six seats
+  and a TV audience, fed by producer threads (steady, burst, six at once, and a saturated closed loop). Per
+  served input the owner pays a stub `step` (7 effects on 300 elements and 2,500 facts), seven projections
+  from an immutable snapshot (phone view about 13 KB, TV about 10 KB; a combat profile about 28 KB and a heavy
+  profile about 75 KB per view), and a commit: serialise a checkpoint (about 300 KB, which is the state alone,
+  or about 2.1 MB with a journal), SHA-256 it, then store it by `fsync` of a temp file or by a fixed 20 ms sleep
+  that models Postgres. 5,000 measured inputs per scenario after 300 warm-up, release build, Windows on the
+  ARM64 laptop. Figures are milliseconds. Projection is far inside H.5: one phone p95 0.013 to 0.057, all seven
+  views p95 0.09 to 0.26 (combat views 0.37, heavy views 0.95, max 2.5), about 1.3 microseconds per KB per
+  view; a copy-on-write snapshot (a reader still holds the old one) adds a deep clone of 0.15 in `step`. Queue
+  `serve_next` and `finish` are each under 0.005. The commit is what costs: serialise 0.16 (300 KB) or 1.1 to
+  2.2 (2 MB), software SHA-256 0.9 to 1.2 or 6.5 to 7.6 (334 MB/s; a library using the ARM64 SHA-2 instructions
+  should be several times faster, not measured), store 20.3 for the Postgres model and, for `fsync`, p50 2.3 to
+  4.5 flat out (4 to 12 with gaps between inputs in a separate 290 KB write test), p95 4 to 285, p99 5 to 420, max 0.3 to 7.5 seconds. So
+  reduce (serve, step, project, commit, finish) p50/p95 is 1.06/1.20 with no storage, 3.6/5.2 with `fsync` of
+  300 KB flat out (one 322 ms stall in the run), 14.4/44.7 with `fsync` of 2 MB (p99 176), 22.0/22.4 with the
+  Postgres model and 28.2/31.5 with the Postgres model and 2 MB. At a table's real rate (1, 3, 6 inputs a
+  second) the owner is busy a mean 2.1, 6.5 and 13.6 per cent of each second with the Postgres model (6.1, 1.7
+  and 13.4 with `fsync`, which a stall dominates). Open loop, with the Postgres model: 25 a second steady
+  is end to end p95 22.4; six seats at once every 200 ms is p95 131.8 (queue wait p95 110, the last of six
+  waits for five reduces), 0 refused. **Verdict against H.5.** Projection under 5 ms: met by 20 to 50 times on
+  representative views and about 5 times on 75 KB views, with all seven audiences built on the owner thread
+  from one snapshot; it does not need memoising or a thread of its own at these sizes, and the real projection
+  would have to cost more than 20 times this stand-in to miss. Rules-only path under 400 ms at p95: met for
+  one input (22 to 32 ms of owner time, so about 370 ms is left for the real CHECK, DECIDE and APPLY) and for
+  six at once only if the rules cost under about 44 ms per input (the last of six ends at 6 times
+  (22 + rules)); not met for 18 at once (the pending bound of 3 per seat) even with zero rules cost, because
+  18 times 22 ms is 396 ms before any rules run (measured with `fsync`, p95 470, OVER by 70). Commit is more
+  than 90 per cent of reduce in every storage variant, so it is the phase that decides, not projection.
+  **What it implies.** (1) Keep projection on the owner thread and unmemoised for now; rerun at H3 with the real
+  projection. (2) The cost of "one whole-checkpoint commit per input inside reduce" scales with the number of
+  inputs in a burst, so decide before C3 whether the owner commits once per drained batch (one checkpoint after
+  up to N consecutive reduces, views published after it) instead of once per input; that turns the six-at-once
+  case from 6 commits into 1. (3) A storage that can stall for seconds cannot be waited on without a deadline:
+  with `fsync` under load the seat bound refused 242 of about 5,000 inputs in the six-at-once run, 501 in the
+  18-at-once run and 138 in the 40-a-second run (`table_busy`), so the commit needs the timeout and the
+  `persist.failed` path of H.4 on the owner thread. (4) Checkpoint size matters through serialise and hash
+  (about 9 ms CPU at 2 MB with software SHA-256), so keep checkpoints incremental or small if Postgres writes
+  need a whole document. **What it does not prove.** Everything is a stand-in: no real `step` (no CHECK, DECIDE,
+  APPLY, dice or machine), no sockets, no broker or provider traffic, events go to a discarding sink, the
+  Postgres commit is a fixed 20 ms sleep (a model, not a measurement of Postgres), and the state and views are
+  made up to the stated sizes. The machine was shared: other agents were building during 60 per cent of the
+  five-second samples (rustc, cargo or link running), which inflates every `fsync` tail and the closed-loop
+  queue waits (a saturated run keeps 18 inputs queued by design, so its wait is not a latency); the Postgres
+  model and the CPU phases are the steadier figures. Thermal: a 5-minute CPU-bound run (2 MB commit without
+  storage, saturated) showed no slowdown (reduce p50 11.4 in minute 1, 7.3 to 7.8 in minutes 3 to 5; minute 1
+  overlapped other builds), so throttling is neither shown nor ruled out; a first 10-minute `fsync` soak was
+  stopped early for the commit gate. Rerun after H0 and at H3 as O.16 requires. Raw run output is in the
+  session scratchpad, not in the repository.
+  *Decision from S1 (2026-11-02, change on request).* The commit is over 90 percent of the reduce and
+  eighteen simultaneous inputs miss the 400 ms budget even with zero rules cost, so the owner thread uses
+  **group commit**: it drains a batch of served inputs (a large named bound, default unbounded by count but
+  cut at a time slice), runs each input's step in serve order against the in-memory state, and writes ONE
+  checkpoint commit for the batch; each input's `TurnRecord` and projection are released after that commit;
+  the `TurnRecord` carries no commit identity (what the turn did, the draws, the effects and the state
+  digests before and after), and the host stamps the commit id and the table's revision once for the
+  batch (`PipelineTable::stamp_commit_revision`), so a batch of N inputs and N batches of one end in
+  the same state digest (a property test), and a commit failure fails the whole batch with a typed cause (no input
+  is reported applied that was not committed). The one-commit-per-input wording of L.7 and H.5 is amended
+  to "one commit per drained batch, at least one per input burst". The commit has a deadline
+  (`commit_deadline_ms`, a setting with a large default, tuned from measurement) after which the batch is
+  refused `table_busy` as a typed event and the queue backs off, instead of piling up behind a stalled
+  `fsync`. H0 builds the seam (`CommitPolicy`), C3 keeps stages pure so they run inside a batch, and S1 is
+  rerun at H0 and H3 against the real commit. *Amended after review (#1708, #1712).* The batch is formed
+  from the whole mailbox: every submit already waiting joins it, within the time slice and the count, so
+  inputs that pile up behind a commit are one batch (a live test: six concurrent submits make two commits,
+  not six). **The owner enforces the deadline**, not the store: the write runs on a committer thread and
+  the owner waits for it at most `commit_deadline_ms`, so a hung store costs one refused batch and never
+  the owner thread; while that write is still stuck, a new attempt is refused `unavailable` at once. Every
+  attempt has its own commit id and a failed attempt's id is burned, never reused, because a write whose
+  outcome is unknown may still land. The in-memory table, the staged events and the views of a failed
+  batch are dropped and its operation ids are released (H.2).
 - **Gates.** *Gate A (spine ready)* is B0, C0 to C3 and S1 within budget: the engine accepts an input
   through the queue and pipeline over fakes and the owner thread is shown to fit its budget. *Gate B (first
   playable)* is H3 accepted under RES44. No machine beyond lobby and the minimal explore starts before
   Gate A, and no step that shows engine state to a person starts before K0 and W1. A machine starts only
   when RR shows its rules calls exist or are declined `not_supported_yet` by the adapter (RES31).
+  *Status (2026-11-02).* Gate A is not passed. Its parts: B0 and the C0 to C2 foundations are done; C3 is built in
+  the working tree; S1 is measured, but its verdict missed the 400 ms budget at 18 simultaneous inputs with the
+  stand-in step, and the group-commit decision (`CommitPolicy` in `engine/commit.rs`, deadline
+  `DEFAULT_COMMIT_DEADLINE_MS`, a named default to tune from measurement) is built in H0. The S1 rerun on the
+  real commit that the plan asks for at H0 is not recorded. Gate B is not reached: H2 is in progress and H3 is
+  not started.
 - **Order of the machines after H3, and why.** *Decision (round 7, #1598):* creation (Fighter 1 and
   Soldier only), combat for the Fighter subset, rest and advancement, inventory (after `Coins`), shop,
   item inspector (after S2 and SB), travel last (needs new rules code first). Dialogue (in H3) and explore
