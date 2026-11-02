@@ -273,16 +273,14 @@ fn render_stage() {
         with_app(|app| match &app.live {
             Some(live) => {
                 view_tv::sync_figures(&document, &layer, &live.elements)?;
-                // A camera that follows a travelling element is framed again with each frame.
-                let world = document
-                    .query_selector(&format!(".{}", view_tv::WORLD_CLASS))?
-                    .filter(|_| app.fixture.is_some());
-                let camera = match &app.fixture {
-                    Some(Ok(fixture)) => fixture.tv.camera.as_ref(),
+                // A camera that follows a travelling element is framed again with each frame. The
+                // camera lives in the scene overlay, so it is read from the fixture as drawn.
+                let camera = match shown_fixture(app) {
+                    Some(Ok(fixture)) => fixture.tv.camera,
                     _ => None,
                 };
-                match world {
-                    Some(world) => view_tv::sync_camera(&world, camera, &live.elements),
+                match document.query_selector(&format!(".{}", view_tv::WORLD_CLASS))? {
+                    Some(world) => view_tv::sync_camera(&world, camera.as_ref(), &live.elements),
                     None => Ok(()),
                 }
             }
