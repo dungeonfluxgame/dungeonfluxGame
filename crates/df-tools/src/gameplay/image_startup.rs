@@ -167,9 +167,18 @@ pub(super) async fn start(inputs: Inputs<'_>) -> Result<StartedImages, io::Error
         &optional("DF_IMAGERY_OBJECT_ENV")?.unwrap_or_else(|| "local".to_owned()),
     )
     .map_err(|_| refused("image object environment invalid"))?;
+    // The telemetry store refuses a relative root, so a relative setting (or the default) is
+    // resolved against the directory the game was started from.
     let telemetry_root = PathBuf::from(
         optional("DF_TELEMETRY_DIR")?.unwrap_or_else(|| ".dungeonflux/telemetry".to_owned()),
     );
+    let telemetry_root = if telemetry_root.is_absolute() {
+        telemetry_root
+    } else {
+        std::env::current_dir()
+            .map_err(|_| refused("image telemetry directory unavailable"))?
+            .join(telemetry_root)
+    };
     let level = match optional("DF_IMAGERY_LOG_LEVEL")?
         .as_deref()
         .unwrap_or("info")

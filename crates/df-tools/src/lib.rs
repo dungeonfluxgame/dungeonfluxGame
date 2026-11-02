@@ -1,4 +1,7 @@
 //! Runnable S00 experiment. The fixture UI is Rust compiled to WebAssembly.
+// Gameplay awaits nest deeply (dialogue -> judgement -> text service -> backend), and the compiler
+// computes each async block's layout recursively when it generates code.
+#![recursion_limit = "256"]
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(not(target_arch = "wasm32"))]

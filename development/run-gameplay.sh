@@ -36,6 +36,8 @@ case "$(uname -s)" in
 esac
 if test "$WINDOWS" -eq 1; then EXE=.exe; else EXE=; fi
 export DF_GAMEPLAY_TEXT_CACHE=${DF_GAMEPLAY_TEXT_CACHE:-$PLAY/text-cache}
+# The telemetry store needs an absolute directory; keep it with the rest of the play state.
+export DF_TELEMETRY_DIR=${DF_TELEMETRY_DIR:-$PLAY/telemetry}
 DATABASE=
 NO_BUILD=0
 NATIVE_BUILT=0
