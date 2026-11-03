@@ -97,6 +97,10 @@ pub mod kind_file;
 pub mod limits;
 mod listed;
 pub mod lobby;
+pub mod lookahead;
+pub mod lookahead_candidate;
+pub mod lookahead_settings;
+pub mod lookahead_stamp;
 pub mod machine;
 pub mod machine_slot;
 pub mod machine_spec;
@@ -167,6 +171,8 @@ mod inspect_tests;
 mod kind_tests;
 #[cfg(test)]
 mod lobby_tests;
+#[cfg(test)]
+mod lookahead_tests;
 #[cfg(test)]
 mod machine_scan_tests;
 #[cfg(test)]
