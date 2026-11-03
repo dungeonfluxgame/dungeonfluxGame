@@ -11,13 +11,14 @@
 
 use std::sync::Arc;
 
+use df_rules::influence::{Attitude, InfluenceSkill, Willingness, WordQuality, WordTilt};
 use df_table::identity::SeatId;
 use df_table::ports::{ActionId, Dice, RulesOwner};
 
 use crate::engine::adapters::{DevDice, DevRulesOwner};
 use crate::engine::limits::DEV_SEAT_COUNT;
 
-use super::action_book::{ActionBook, DifficultyClass, RulesEntry};
+use super::action_book::{ActionBook, DifficultyClass, InfluenceSetup, RulesEntry};
 use super::dev_check::RulesCheckKit;
 use super::dice::RecordedDice;
 use super::error::AdapterError;
@@ -93,6 +94,25 @@ pub fn dev_book(check: &ActionId) -> Result<ActionBook, AdapterError> {
     )
 }
 
+/// The story table's one conversation as an authored urging: a persuasion of a gate guard who is
+/// friendly (Advantage, so two d20s), has Intelligence 10 (DC 15), and is hesitant; the words are
+/// judged plain. The port carries no per-input context, so this is set when the action is
+/// registered (O.16 RR, dialogue row).
+pub fn story_urging() -> Result<RulesEntry, AdapterError> {
+    const GUARD_INTELLIGENCE: u8 = 10;
+    let setup = InfluenceSetup::new(
+        InfluenceSkill::Persuasion,
+        Attitude::Friendly,
+        GUARD_INTELLIGENCE,
+        Willingness::Hesitant,
+        WordQuality {
+            tilt: WordTilt::Neutral,
+            reason: "the words were plain",
+        },
+    )?;
+    Ok(RulesEntry::influence(setup))
+}
+
 /// What the dev engine is started with for one backend.
 pub struct DevPorts {
     pub rules: Arc<dyn RulesOwner>,
@@ -110,18 +130,39 @@ pub fn dev_ports(
     check: &ActionId,
     seed: u64,
 ) -> Result<DevPorts, AdapterError> {
+    story_ports(backend, check, None, seed)
+}
+
+/// `dev_ports` for a table that also has a conversation: `urging` is its one action, which both
+/// backends run (the scripted one as a d20 with a typed `succeeded` fact, `df-rules` as the
+/// influence flow of `story_urging`).
+pub fn story_ports(
+    backend: RulesBackend,
+    check: &ActionId,
+    urging: Option<&ActionId>,
+    seed: u64,
+) -> Result<DevPorts, AdapterError> {
     match backend {
         RulesBackend::Scripted => {
             let dice = Arc::new(DevDice::seeded(seed));
+            let scripted = DevRulesOwner::new(check.clone());
+            let scripted = match urging {
+                Some(urging) => scripted.with_urging(urging.clone()),
+                None => scripted,
+            };
             Ok(DevPorts {
-                rules: Arc::new(DevRulesOwner::new(check.clone())),
+                rules: Arc::new(scripted),
                 dice: dice.clone(),
                 dice_control: Some(dice),
                 check_kit: None,
             })
         }
         RulesBackend::DfRules => {
-            let rules = Arc::new(DfRulesOwner::new(dev_roster()?, dev_book(check)?));
+            let book = match urging {
+                Some(urging) => dev_book(check)?.with_entry(urging.clone(), story_urging()?)?,
+                None => dev_book(check)?,
+            };
+            let rules = Arc::new(DfRulesOwner::new(dev_roster()?, book));
             let dice = Arc::new(RecordedDice::seeded(seed));
             Ok(DevPorts {
                 rules: rules.clone(),

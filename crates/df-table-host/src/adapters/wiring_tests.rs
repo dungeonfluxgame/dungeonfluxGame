@@ -31,6 +31,7 @@ fn tap(seat: u64, action: &str) -> InputRequest {
             action: action.to_owned(),
         },
         operation: None,
+        operation_id: None,
         view: None,
     }
 }

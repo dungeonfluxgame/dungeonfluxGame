@@ -343,3 +343,29 @@ fn the_report_names_every_phase_and_the_budgets() {
         assert!(text.contains(phase), "the report lacks {phase}:\n{text}");
     }
 }
+
+#[tokio::test]
+async fn the_real_engine_scenarios_run_and_report_what_they_measured() {
+    use crate::owner_latency::real::{lobby_burst, projection_cost, rules_path};
+
+    let directory = tempfile::tempdir().expect("a directory");
+    let burst = lobby_burst("six at once", CommitMode::Memory, 6, 4, 1, directory.path())
+        .await
+        .expect("the burst runs");
+    assert_eq!(burst.inputs, 24);
+    assert!(
+        burst.commits < 6 + 24,
+        "group commit: the six seats of a round share commits ({} commits)",
+        burst.commits
+    );
+    assert!(burst.render().contains("six at once: 24 inputs"));
+    let rules = rules_path("rules", CommitMode::Memory, 3, directory.path())
+        .await
+        .expect("the rules path runs");
+    assert_eq!(rules.inputs, 3);
+    let cost = projection_cost(20, directory.path())
+        .await
+        .expect("the projection cost is read");
+    assert!(cost.phone_wire_bytes > cost.tv_wire_bytes);
+    assert!(cost.render().starts_with("projection"));
+}

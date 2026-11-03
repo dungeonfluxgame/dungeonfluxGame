@@ -155,6 +155,15 @@ impl EngineHandle {
             .await
     }
 
+    /// What a TV (`Tv`) or one seat's phone is served now, as the wire's `MachineView`.
+    pub async fn machine_view(
+        &self,
+        audience: AudienceSpec,
+    ) -> Result<df_protocol::common::MachineView, EngineError> {
+        self.call(|reply| Command::MachineView(audience, reply))
+            .await
+    }
+
     pub async fn queue_show(&self) -> Result<QueueReport, EngineError> {
         self.call(Command::QueueShow).await
     }

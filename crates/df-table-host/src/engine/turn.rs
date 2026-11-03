@@ -33,6 +33,8 @@ pub(super) struct TurnContext<'a> {
     pub(super) limits: &'a PipelineLimits,
     pub(super) adapters: &'a Adapters,
     pub(super) sink: &'a dyn EventSink,
+    /// Publish what the running machine says for itself (`EngineConfig::story`).
+    pub(super) machine_surface: bool,
 }
 
 impl TurnContext<'_> {
@@ -54,6 +56,11 @@ impl TurnContext<'_> {
         };
         let pipeline =
             Pipeline::new(ports, self.registry, self.settings)?.with_limits(self.limits.clone());
+        let pipeline = if self.machine_surface {
+            pipeline.with_machine_surface()
+        } else {
+            pipeline
+        };
         Ok(act(&pipeline))
     }
 }

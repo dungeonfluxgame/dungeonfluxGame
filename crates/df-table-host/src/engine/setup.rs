@@ -2,7 +2,9 @@
 //! errors of putting them together.
 //!
 //! The dev table registers the two real machines of C2, the lobby and a minimal explore, over one
-//! authored scene and one authored beat. The action catalog is the stand-in for the action
+//! authored scene and one authored beat. The first playable path (H3) registers a third, the
+//! dialogue, and chains the explore to it: lobby, one story scene, one conversation (`story_machines`,
+//! chosen by `EngineConfig::story`). The action catalog is the stand-in for the action
 //! registry of O.5: for each machine, the actions a seat can send it, which `viable` and the
 //! interpreter read. Starting fails with a typed `EngineStartError` that names what to fix; a
 //! machine that is not startable is never left out silently.
@@ -11,6 +13,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use df_table::config::Settings;
+use df_table::dialogue::{Conversation, ConversationError, DialogueMachine};
 use df_table::effects::{EffectError, TableState, TableStateError};
 use df_table::element::NameError;
 use df_table::explore::{AuthoredBeat, ExploreMachine};
@@ -37,6 +40,13 @@ const DEV_FIRST_SCENE: u64 = 1;
 /// The authored beat of the dev scene and the check it offers.
 const DEV_BEAT: &str = "locked_gate";
 const DEV_CHECK: &str = "pick_lock";
+/// The authored conversation of the first playable path: who speaks, what they say, the one
+/// urging the table may try, and what they say when it moves them and when it does not.
+pub const STORY_URGE: &str = "persuade_guard";
+const STORY_SPEAKER: &str = "The gate guard";
+const STORY_OPENING: &str = "Halt. The gate is shut until dawn. What do you want?";
+const STORY_MOVED: &str = "Fine. Keep your voices down, and be quick about it.";
+const STORY_UNMOVED: &str = "No. Come back in the morning like honest folk.";
 /// The id of the one table the dev engine runs.
 const DEV_TABLE: u64 = 1;
 
@@ -67,6 +77,9 @@ pub struct EngineConfig {
     pub first_scene: SceneId,
     /// Start with serving held, so inputs wait until `queue step` or `queue release`.
     pub start_held: bool,
+    /// Run the first playable path (lobby, the story scene, the conversation) and not the dev
+    /// table (lobby and the one check), and publish each seat's standing buttons to its phone.
+    pub story: bool,
 }
 
 impl EngineConfig {
@@ -82,6 +95,15 @@ impl EngineConfig {
             commit_backoff_ms: DEFAULT_COMMIT_BACKOFF_MS,
             first_scene: SceneId::new(DEV_FIRST_SCENE),
             start_held: false,
+            story: false,
+        }
+    }
+
+    /// The first playable path (H3): the dev table's settings over the story machines.
+    pub fn first_playable() -> Self {
+        Self {
+            story: true,
+            ..Self::dev()
         }
     }
 }
@@ -90,6 +112,8 @@ impl EngineConfig {
 #[derive(Debug)]
 pub enum EngineStartError {
     Name(NameError),
+    /// The authored conversation of the story table is invalid.
+    Conversation(ConversationError),
     Spec(SpecError),
     Registry(Vec<RegistryError>),
     Machine(MachineError),
@@ -116,6 +140,7 @@ impl fmt::Display for EngineStartError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Name(error) => write!(formatter, "a name is invalid: {error}"),
+            Self::Conversation(error) => write!(formatter, "the conversation is invalid: {error}"),
             Self::Spec(error) => write!(formatter, "a machine spec is invalid: {error}"),
             Self::Registry(errors) => {
                 formatter.write_str("the machines cannot start:")?;
@@ -158,6 +183,7 @@ macro_rules! start_error_from {
 
 start_error_from!(
     NameError => Name,
+    ConversationError => Conversation,
     SpecError => Spec,
     Vec<RegistryError> => Registry,
     MachineError => Machine,
@@ -194,6 +220,17 @@ pub struct Machines {
     pub catalog: ActionCatalog,
     pub first: MachineId,
     pub check: ActionId,
+    /// The urging of the story table's conversation; `None` on the dev table.
+    pub urge: Option<ActionId>,
+}
+
+/// The machines `config` asks for: the story table's when `story` is set, else the dev table's.
+pub fn machines_for(config: &EngineConfig) -> Result<Machines, EngineStartError> {
+    if config.story {
+        story_machines(config.first_scene)
+    } else {
+        dev_machines(config.first_scene)
+    }
 }
 
 /// Registers the lobby and the minimal explore over the authored scene and beat.
@@ -219,6 +256,48 @@ pub fn dev_machines(first_scene: SceneId) -> Result<Machines, EngineStartError> 
         catalog,
         first: lobby_id,
         check,
+        urge: None,
+    })
+}
+
+/// Registers the first playable path: the lobby, the explore over the authored beat handing on to
+/// the dialogue, and the dialogue over the authored conversation handing back to the lobby.
+pub fn story_machines(first_scene: SceneId) -> Result<Machines, EngineStartError> {
+    let lobby = LobbyMachine::new(first_scene)?;
+    let beat = AuthoredBeat::new(DEV_BEAT, DEV_CHECK)?;
+    let explore = ExploreMachine::followed_by(beat, "dialogue")?;
+    let conversation = Conversation::new(
+        STORY_SPEAKER,
+        STORY_OPENING,
+        STORY_URGE,
+        STORY_MOVED,
+        STORY_UNMOVED,
+    )?;
+    let urge = conversation.urge().clone();
+    let dialogue = DialogueMachine::new(conversation)?;
+    let lobby_id = lobby.spec().id().clone();
+    let explore_id = explore.spec().id().clone();
+    let dialogue_id = dialogue.spec().id().clone();
+    let registry = RegistryBuilder::new()
+        .register(lobby)
+        .register(explore)
+        .register(dialogue)
+        .build(&WIRED_PORTS)?;
+    let check = ActionId::new(DEV_CHECK)?;
+    let lobby_actions = LobbyAction::ALL
+        .iter()
+        .map(|action| ActionId::new(action.key()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let catalog = ActionCatalog::default()
+        .with_machine(lobby_id.clone(), lobby_actions)
+        .with_machine(explore_id, vec![check.clone()])
+        .with_machine(dialogue_id, vec![urge.clone()]);
+    Ok(Machines {
+        registry,
+        catalog,
+        first: lobby_id,
+        check,
+        urge: Some(urge),
     })
 }
 

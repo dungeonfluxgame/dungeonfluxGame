@@ -146,6 +146,7 @@ pub fn request(input: InputBody) -> InputRequest {
     InputRequest {
         input,
         operation: None,
+        operation_id: None,
         view: None,
     }
 }
@@ -319,6 +320,64 @@ impl df_table::ports::Interpreter for PanickingInterpreter {
         _legal_choices: &[df_table::ports::ActionId],
     ) -> Result<df_table::ports::Interpretation, df_table::ports::PortError> {
         panic!("the interpreter broke")
+    }
+}
+
+/// The story table (H3): the lobby, the story scene and the conversation, over the scripted rules
+/// owner and dice that give `dice` first. Standing buttons are on.
+pub fn story_rig(dice: &[u16]) -> Rig {
+    story_rig_over(|machines| {
+        let urging = machines
+            .urge
+            .clone()
+            .expect("the story table has an urging");
+        (
+            Arc::new(DevRulesOwner::new(machines.check.clone()).with_urging(urging)),
+            Arc::new(DevDice::queued_then_seeded(dice.iter().copied(), 7)),
+        )
+    })
+}
+
+/// The story table over the production `df-rules` adapters with recorded dice from `seed`.
+pub fn story_rig_df_rules(seed: u64) -> Rig {
+    story_rig_over(|machines| {
+        let ports = crate::adapters::story_ports(
+            crate::adapters::RulesBackend::DfRules,
+            &machines.check,
+            machines.urge.as_ref(),
+            seed,
+        )
+        .expect("the production ports build");
+        (ports.rules, ports.dice)
+    })
+}
+
+type StoryPorts = (
+    Arc<dyn df_table::ports::RulesOwner>,
+    Arc<dyn df_table::ports::Dice>,
+);
+
+fn story_rig_over(ports: impl FnOnce(&super::setup::Machines) -> StoryPorts) -> Rig {
+    let options = RigOptions::default();
+    let clock = Arc::new(ManualClock::default());
+    let log = Arc::new(EventLog::default());
+    let store = Arc::new(ScriptedCommitStore::scripted(Vec::new()));
+    let story = EngineConfig {
+        story: true,
+        ..config(&options)
+    };
+    let machines = super::setup::machines_for(&story).expect("the story machines build");
+    let (rules, dice) = ports(&machines);
+    let mut adapters = adapters(clock.clone(), &log);
+    adapters.rules = rules;
+    adapters.dice = dice;
+    let handle = EngineHandle::start(story, adapters, store.clone(), Arc::clone(&log))
+        .expect("the owner starts");
+    Rig {
+        handle,
+        log,
+        store,
+        clock,
     }
 }
 

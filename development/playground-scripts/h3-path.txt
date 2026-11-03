@@ -1,0 +1,80 @@
+# H3, the first playable path through the dev CLI: a lobby where seats join through the owner queue,
+# one story scene, one conversation turn (dice and rules), group commit, and the real projection
+# served to the TV and the phone. Read the numbered answers; every line says what it did.
+#
+# Run it against a host of your own on another port (never the coordinator's):
+#   DF_RULES_BACKEND=df-rules df-table serve --port 7990      (df-rules = the production adapters;
+#                                                              leave it out for the scripted ones)
+#   df-table dev --port 7990 script development/playground-scripts/h3-path.txt
+# Stop the host by its process id when done (it is yours; there is no shutdown verb).
+#
+# What to look for, in order: a guest phone that can only press Join; a start that the lobby
+# declines in its own words; the readout of the shared screen after each step; the buttons of a
+# seat changing with the machine (ready/start/leave, then pick_lock, then persuade_guard, then
+# none); the guard's line on the TV after the roll; a retry of the same operation answering
+# "replayed" with no second effect; the trace of that operation; the commits (one per batch).
+
+# A seat may send one input a second (burst three, J.4), so the script moves the owner's own clock
+# forward (`clock advance`) between steps instead of waiting; take those lines out and a fast
+# script is refused `rate_limited`, in the typed words, which is also worth seeing once.
+#
+# The table before anyone sits: the lobby, and what a seat that has not joined is served.
+health
+lobby show
+wire view tv
+wire view 4
+
+# Seats join through the queue. A seat the queue does not know (9) is refused with a typed cause,
+# and joining twice is declined in the lobby's own words.
+lobby join 1
+lobby join 2
+lobby join 3
+lobby join 3
+lobby join 9
+wire view 1
+
+# Starting before everyone is ready is declined; ready, unready and the buttons follow the lobby.
+lobby ready 1
+lobby start 1
+clock advance 1500
+lobby unready 1
+wire view 1
+clock advance 4000
+
+# `scene start` readies every seat that is not ready and starts the lobby as seat 1: the lobby
+# hands the table to the story scene in the same commit.
+scene start 1
+clock advance 4000
+lobby show
+viable 1
+wire view tv
+wire view 2
+
+# The story scene: one authored beat and one check. A line the interpreter cannot read gives
+# buttons instead of a guess; the tap runs the rules and the dice, and the scene hands the table
+# to the conversation in the same commit.
+input 2 can we get past the gate
+input 1 --tap pick_lock
+clock advance 4000
+wire view tv
+wire view 1
+
+# The conversation turn through the wire contract, as a phone's tap: operation 5001 runs once; the
+# same operation again is a retry and answers "replayed" without a second roll.
+wire send 1 --op 5001 --tap persuade_guard
+clock advance 1500
+wire send 1 --op 5001 --tap persuade_guard
+wire view tv
+wire view 1
+wire view 2
+
+# What the engine kept: the events of that one operation, the queue and commits, the cost ledger,
+# and the committed table.
+trace 5001
+queue show
+cost
+dump
+
+# Show the engine's own shared screen and seat 1's phone on the pages the host already serves:
+# open /playground, then `playground go h3-live`; remove the fixture when done.
+play publish 1

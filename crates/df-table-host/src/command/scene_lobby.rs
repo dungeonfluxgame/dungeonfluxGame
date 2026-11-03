@@ -172,7 +172,7 @@ fn lobby(words: &[String]) -> Result<Command, CommandError> {
         }),
         [verb, name] if verb == "remove" => {
             let part = LobbyPart::from_key(name)
-                .ok_or_else(|| bad_choice("the part", name, &LobbyPart::keys_text()))?;
+                .ok_or_else(|| bad_choice("the part", name, LobbyPart::keys_text()))?;
             screen(ScreenEdit::LobbyRemove { part })
         }
         [verb, number] if verb == "seats" => screen(ScreenEdit::LobbySeats {

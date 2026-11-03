@@ -7,12 +7,16 @@
 //! guarantees of C5); this file only chooses the audience, reads the committed table and turns the
 //! view into JSON, because `AudienceProjection` serializes and does not deserialize. A view the
 //! pipeline built for a turn reaches the sender's report through `sender_view`, and is released
-//! only after the batch that made it has committed.
+//! only after the batch that made it has committed. `project_machine_view` is the same projection
+//! as the wire's `MachineView` (`machine_wire`), which a phone or a shared screen is served.
 
+use df_protocol::common as wire;
 use df_table::identity::SeatId;
 use df_table::pipeline::PipelineTable;
 use df_table::ports::Audience;
 use df_table::projection::{AudienceProjection, ProjectionError, Viewer, project};
+
+use crate::machine_wire::{MachineMapError, machine_view};
 
 /// The label of an audience in an audit line and a report: `tv`, or `seat:N`.
 pub fn audience_label(audience: Audience) -> String {
@@ -29,6 +33,8 @@ pub enum ViewError {
     Projection(ProjectionError),
     /// The view could not be written as JSON.
     Json(serde_json::Error),
+    /// The view could not be mapped to the wire's `MachineView`.
+    Wire(MachineMapError),
 }
 
 impl std::fmt::Display for ViewError {
@@ -36,6 +42,7 @@ impl std::fmt::Display for ViewError {
         match self {
             Self::Projection(error) => write!(formatter, "{error:?}"),
             Self::Json(error) => write!(formatter, "the view could not be written: {error}"),
+            Self::Wire(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -51,6 +58,19 @@ pub fn project_view(
     let projection =
         project(&snapshot, table.attachments(), audience).map_err(ViewError::Projection)?;
     view_json(&projection)
+}
+
+/// The committed table's view for `audience` as the wire's `MachineView`, checked by the wire's
+/// own guard. A seat that is not at the table has no projection (`SeatNotAtTable`); the owner
+/// answers it with a guest view of its own.
+pub fn project_machine_view(
+    table: &PipelineTable,
+    audience: Audience,
+) -> Result<wire::MachineView, ViewError> {
+    let snapshot = table.facts().snapshot();
+    let projection =
+        project(&snapshot, table.attachments(), audience).map_err(ViewError::Projection)?;
+    machine_view(&projection).map_err(ViewError::Wire)
 }
 
 /// The view a turn built for `seat`, as JSON, from the projections the pipeline made for it.

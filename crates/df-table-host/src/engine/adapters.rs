@@ -177,16 +177,36 @@ impl Interpreter for ChaosInterpreter {
     }
 }
 
+/// The lowest d20 face that moves the speaker of the dev table's conversation (SRD 5.2.1 page 6
+/// puts a Medium difficulty at 15; the stand-in uses the middle of the die so a forced 20 moves
+/// them and a forced 1 does not).
+const URGING_SUCCESS_FACE: u16 = 11;
+
 /// A rules owner for the dev table: one check, rolled on a d20 and always applied, and every
-/// other action declined `not_supported_yet` (RES31).
+/// other action declined `not_supported_yet` (RES31). The story table adds one urging, rolled on a
+/// d20 and reported with the typed fact `succeeded` (a face of 11 or more).
 #[derive(Debug, Clone)]
 pub struct DevRulesOwner {
     check: ActionId,
+    urging: Option<ActionId>,
 }
 
 impl DevRulesOwner {
     pub fn new(check: ActionId) -> Self {
-        Self { check }
+        Self {
+            check,
+            urging: None,
+        }
+    }
+
+    /// Also runs `urging`, the conversation's action, as a d20 that either moves the speaker or not.
+    pub fn with_urging(mut self, urging: ActionId) -> Self {
+        self.urging = Some(urging);
+        self
+    }
+
+    fn runs(&self, action: &ActionId) -> bool {
+        *action == self.check || self.urging.as_ref() == Some(action)
     }
 }
 
@@ -196,7 +216,9 @@ impl RulesOwner for DevRulesOwner {
         _correlation: Correlation,
         _seat: SeatId,
     ) -> Result<Vec<ActionId>, PortError> {
-        Ok(vec![self.check.clone()])
+        Ok(std::iter::once(self.check.clone())
+            .chain(self.urging.clone())
+            .collect())
     }
 
     fn prepare(
@@ -205,7 +227,7 @@ impl RulesOwner for DevRulesOwner {
         _seat: SeatId,
         action: &ActionId,
     ) -> Result<Preparation, PortError> {
-        if *action != self.check {
+        if !self.runs(action) {
             return Ok(Preparation::Declined(Decline::with_default_reason(
                 DeclineCode::NotSupportedYet,
             )));
@@ -222,13 +244,22 @@ impl RulesOwner for DevRulesOwner {
         action: &ActionId,
         draws: &[Draw],
     ) -> Result<Resolution, PortError> {
-        let rolled_the_check_die = matches!(draws, [only] if only.sides() == CHECK_DIE);
-        if *action == self.check && rolled_the_check_die {
-            Ok(Resolution::Applied(Resolved::default()))
-        } else {
-            Ok(Resolution::Declined(Decline::with_default_reason(
+        let rolled = match draws {
+            [only] if only.sides() == CHECK_DIE => Some(only.value()),
+            _ => None,
+        };
+        match rolled {
+            Some(_) if *action == self.check => Ok(Resolution::Applied(Resolved::default())),
+            Some(face) if self.urging.as_ref() == Some(action) => {
+                let succeeded = u64::from(face >= URGING_SUCCESS_FACE);
+                Resolved::default()
+                    .with_fact("succeeded", succeeded)
+                    .map(Resolution::Applied)
+                    .map_err(|_| PortError::new(PortName::RulesOwner, FailureCause::InvalidAnswer))
+            }
+            _ => Ok(Resolution::Declined(Decline::with_default_reason(
                 DeclineCode::NotViable,
-            )))
+            ))),
         }
     }
 

@@ -25,7 +25,7 @@ mod rules;
 pub use self::action_book::{
     ActionBook, DifficultyClass, InfluenceSetup, MissingPiece, RulesEntry, Runnable,
 };
-pub use self::backend::{DevPorts, RulesBackend, dev_ports};
+pub use self::backend::{DevPorts, RulesBackend, dev_ports, story_ports, story_urging};
 pub use self::dev_check::{RulesCheckKit, RulesCheckReport, RulesCheckRequest};
 pub use self::dice::{
     DrawRecord, EntropySource, MAXIMUM_RECORDED_DRAWS, RecordedDice, ReplayDice, SeededEntropy,

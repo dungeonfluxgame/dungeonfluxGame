@@ -50,7 +50,7 @@ impl fmt::Display for MachineMapError {
 
 impl std::error::Error for MachineMapError {}
 
-fn wire_revision(revision: SessionRevision) -> wire::SessionRevision {
+pub(crate) fn wire_revision(revision: SessionRevision) -> wire::SessionRevision {
     wire::SessionRevision {
         epoch: Some(wire::RecoveryEpoch {
             value: Some(revision.epoch().get()),

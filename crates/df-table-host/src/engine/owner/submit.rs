@@ -208,8 +208,9 @@ impl Owner {
     }
 
     fn operation_for(&mut self, request: &InputRequest) -> Result<OperationId, EngineError> {
-        match request.operation {
-            Some(number) => NonZeroU128::new(u128::from(number))
+        let wide = request.operation_id.or(request.operation.map(u128::from));
+        match wide {
+            Some(number) => NonZeroU128::new(number)
                 .map(OperationId::from_nonzero_u128)
                 .ok_or(EngineError::BadRequest {
                     reason: "an operation id is not zero".to_owned(),

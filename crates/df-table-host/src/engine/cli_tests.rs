@@ -25,6 +25,7 @@ fn input(body: InputBody) -> EngineCommand {
     EngineCommand::Input(InputRequest {
         input: body,
         operation: None,
+        operation_id: None,
         view: None,
     })
 }

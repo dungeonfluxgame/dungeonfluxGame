@@ -221,16 +221,20 @@ fn write_loop(shared: &Shared, file: File, existing_bytes: u64, maximum_spool_by
             on_disk = on_disk.saturating_add(length);
             written_classes.push(item.class);
         }
-        if out.flush().is_ok() {
-            let written = u64::try_from(written_classes.len()).unwrap_or(u64::MAX);
-            shared.confirmed.fetch_add(written, Ordering::Relaxed);
-        } else {
+        let flushed = out.flush().is_ok();
+        if !flushed {
             // What was buffered cannot be said to be on disk, so none of this batch is confirmed.
             written_classes
-                .into_iter()
-                .for_each(|class| shared.losses.record(class));
+                .iter()
+                .for_each(|class| shared.losses.record(*class));
         }
         let mut state = shared.locked();
+        if flushed {
+            // Confirmed rises under the same lock that lowers pending, so a status read (which
+            // takes the lock) never counts one record in both.
+            let written = u64::try_from(written_classes.len()).unwrap_or(u64::MAX);
+            shared.confirmed.fetch_add(written, Ordering::Relaxed);
+        }
         state.queued_bytes = state.queued_bytes.saturating_sub(bytes);
         state.pending = state
             .pending
@@ -265,13 +269,15 @@ impl RecordOutlet for FileSpool {
         }
         state.queued_bytes += cost;
         state.pending += 1;
+        // Accepted rises under the same lock that raises pending, so a status read (which takes
+        // the lock) always sees accepted = confirmed + pending + lost.
+        self.shared.accepted.fetch_add(1, Ordering::Relaxed);
         state.queue.push_back(Queued {
             line,
             class: record.class,
             observed_ms: record.observed_ms,
         });
         drop(state);
-        self.shared.accepted.fetch_add(1, Ordering::Relaxed);
         self.shared.wake_writer.notify_one();
         Ok(())
     }

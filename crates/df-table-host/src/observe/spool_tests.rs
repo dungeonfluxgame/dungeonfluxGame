@@ -157,3 +157,34 @@ fn a_spool_that_cannot_be_opened_is_a_typed_error() {
     assert!(matches!(error, super::SpoolError::Open { .. }), "{error}");
     assert!(error.to_string().contains("cannot be opened"), "{error}");
 }
+
+#[test]
+fn a_status_read_while_records_are_arriving_never_counts_a_record_twice_or_not_at_all() {
+    let directory = TempDir::new().expect("a directory");
+    let spool = Arc::new(FileSpool::open(&directory.path().join("events.jsonl")).expect("opens"));
+    let feeder = {
+        let spool = Arc::clone(&spool);
+        std::thread::spawn(move || {
+            for number in 0..2_000_u64 {
+                spool
+                    .accept(&record(&received(number), number + 1, 1_000))
+                    .expect("accepted");
+            }
+        })
+    };
+    while !feeder.is_finished() {
+        let status = spool.status(1_000);
+        assert_eq!(
+            status.accepted,
+            status.confirmed + status.pending + status.lost_always + status.lost_verbose,
+            "accepted is every record, each one confirmed, waiting or lost: {status:?}"
+        );
+    }
+    feeder.join().expect("the feeder ends");
+    assert!(spool.settle(SETTLE), "the writer finishes");
+    let status = spool.status(1_000);
+    assert_eq!(
+        (status.accepted, status.confirmed, status.pending),
+        (2_000, 2_000, 0)
+    );
+}

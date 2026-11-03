@@ -104,12 +104,17 @@ async fn describe_lists_the_registry_and_force_moves_the_table() {
     let host = start(&STARTER_FILES).await;
 
     let described = dev(host.port, "describe").await;
+    // The host runs the first playable path: the lobby, the story scene and the conversation.
     assert!(
-        described.contains("1: explore (group, enabled)"),
+        described.contains("1: dialogue (group, enabled)"),
         "{described}"
     );
     assert!(
-        described.contains("2: lobby (table, enabled, active)"),
+        described.contains("2: explore (group, enabled)"),
+        "{described}"
+    );
+    assert!(
+        described.contains("3: lobby (table, enabled, active)"),
         "{described}"
     );
     assert!(

@@ -36,6 +36,8 @@ commands:
   busy [seconds=60]          the owner's busy share at 1, 3 and 6 inputs per second
   soak [minutes=10]          saturated fsync run with a table of each minute, for thermal drift
   hash                       throughput of the stand-in software SHA-256
+  real                       the H3 rerun over the real owner actor, pipeline, production rules,
+                             real projection and group commit (store: memory, fsync, postgres20ms)
 ";
 
 fn main() -> Result<(), Failure> {
@@ -53,6 +55,7 @@ fn main() -> Result<(), Failure> {
         "busy" => busy(&mut out, &options, directory.path()),
         "soak" => soak(&mut out, &options, directory.path()),
         "hash" => hash_speed(&mut out),
+        "real" => real(&mut out, directory.path()),
         _ => Ok(out.write_all(HELP.as_bytes())?),
     }
 }
@@ -312,6 +315,43 @@ fn soak(out: &mut impl Write, options: &Options, directory: &Path) -> Result<(),
         ..base(directory)
     };
     report(out, &config)
+}
+
+fn real(out: &mut impl Write, directory: &Path) -> Result<(), Failure> {
+    use df_table_host::owner_latency::real::{
+        lobby_burst, lobby_single, projection_cost, rules_path,
+    };
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async {
+        let cost = projection_cost(2_000, directory).await?;
+        writeln!(out, "{}", cost.render())?;
+        for mode in [
+            CommitMode::Memory,
+            CommitMode::Fsync,
+            CommitMode::ModelledPostgres,
+        ] {
+            let name = mode.name();
+            let reports = [
+                lobby_single(&format!("one at a time, {name}"), mode, 400, 20, directory).await?,
+                lobby_burst(&format!("six at once, {name}"), mode, 6, 200, 50, directory).await?,
+                lobby_burst(
+                    &format!("eighteen at once, {name}"),
+                    mode,
+                    18,
+                    100,
+                    100,
+                    directory,
+                )
+                .await?,
+                rules_path(&format!("rules path, {name}"), mode, 200, directory).await?,
+            ];
+            for report in &reports {
+                writeln!(out, "{}", report.render())?;
+            }
+            out.flush()?;
+        }
+        Ok::<(), Failure>(())
+    })
 }
 
 fn hash_speed(out: &mut impl Write) -> Result<(), Failure> {

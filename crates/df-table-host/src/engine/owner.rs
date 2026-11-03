@@ -25,12 +25,14 @@ mod observe;
 mod reads;
 mod save;
 mod submit;
+mod wire_view;
 
 use std::collections::VecDeque;
 use std::num::NonZeroU128;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 
+use df_protocol::common as wire;
 use df_table::identity::{Correlation, OperationId, RecoveryEpoch, SeatId, SessionRevision};
 use df_table::owner_queue::{Lane, OwnerQueue};
 use df_table::pipeline::PipelineTable;
@@ -58,7 +60,7 @@ use super::request::{
     AudienceSpec, ChaosRequest, ClockControl, ConfigControl, DiceControl, ForceRequest,
     HistoryRequest, InputRequest, QueueControl, ReplayRequest,
 };
-use super::setup::{ActionCatalog, EngineConfig, EngineStartError, dev_machines, starting_world};
+use super::setup::{ActionCatalog, EngineConfig, EngineStartError, machines_for, starting_world};
 
 /// The one-shot answer to a command.
 pub(super) type Reply<T> = oneshot::Sender<Result<T, EngineError>>;
@@ -70,6 +72,7 @@ pub(super) enum Command {
     Viable(u64, Reply<ViableReport>),
     Force(ForceRequest, Reply<ForceReport>),
     Projection(AudienceSpec, Reply<serde_json::Value>),
+    MachineView(AudienceSpec, Reply<wire::MachineView>),
     QueueShow(Reply<QueueReport>),
     QueueControl(QueueControl, Reply<ServedReply>),
     Describe(Reply<Description>),
@@ -134,7 +137,7 @@ impl Owner {
         store: Arc<dyn CommitStore>,
         extras: Extras,
     ) -> Result<Self, EngineStartError> {
-        let machines = dev_machines(config.first_scene)?;
+        let machines = machines_for(&config)?;
         let committed = starting_world(&config, &machines)?;
         let Extras {
             sink: observer,
@@ -220,6 +223,7 @@ impl Owner {
             Command::Viable(seat, reply) => answer(reply, self.viable(seat)),
             Command::Force(request, reply) => answer(reply, self.force(request)),
             Command::Projection(audience, reply) => answer(reply, self.projection(audience)),
+            Command::MachineView(audience, reply) => answer(reply, self.wire_view(audience)),
             Command::QueueShow(reply) => answer(reply, Ok(self.queue_show())),
             Command::QueueControl(control, reply) => answer(reply, self.control_queue(control)),
             Command::Describe(reply) => answer(reply, Ok(self.describe())),

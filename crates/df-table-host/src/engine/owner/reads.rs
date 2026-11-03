@@ -106,10 +106,11 @@ impl Owner {
             limits: &self.config.limits,
             adapters: &self.adapters,
             sink: &*self.sink,
+            machine_surface: self.config.story,
         }
     }
 
-    fn seat_is_at_the_table(&self, seat: u64) -> Result<SeatId, EngineError> {
+    pub(super) fn seat_is_at_the_table(&self, seat: u64) -> Result<SeatId, EngineError> {
         let seat_id = SeatId::new(seat);
         match self.queue.seat_pending(seat_id) {
             Some(_) => Ok(seat_id),

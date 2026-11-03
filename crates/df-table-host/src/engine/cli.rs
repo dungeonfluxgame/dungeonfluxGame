@@ -27,6 +27,10 @@ use super::cli_observe::{
     CONFIG_USAGE, HISTORY_USAGE, REPLAY_USAGE, TRACE_USAGE, parse_config, parse_history,
     parse_replay, parse_trace, run_config, run_history, run_replay, run_trace,
 };
+use super::cli_play::{
+    LOBBY_USAGE, PLAY_USAGE, PlayCommand, SCENE_START_USAGE, WIRE_USAGE, parse as parse_play,
+    run as run_play,
+};
 use super::format::{
     format_broker_ledger, format_broker_queues, format_chaos, format_clock, format_description,
     format_dice, format_force, format_health, format_queue, format_requested, format_served,
@@ -55,7 +59,7 @@ pub const CHAOS_USAGE: &str =
     "chaos commit <unavailable|refused|deadline> [count] | chaos interpreter <down|up>";
 
 /// The verbs this module parses, for the dispatch in `command::parse`.
-pub const VERBS: [&str; 18] = [
+pub const VERBS: [&str; 21] = [
     "input",
     "viable",
     "dump",
@@ -74,6 +78,9 @@ pub const VERBS: [&str; 18] = [
     "trace",
     "replay",
     "config",
+    "lobby",
+    "wire",
+    "play",
 ];
 
 /// How many commits `chaos commit` makes fail when no count is given.
@@ -86,7 +93,9 @@ pub const DEFAULT_STEP_COUNT: usize = 1;
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineCommand {
     Input(InputRequest),
-    Viable { seat: u64 },
+    Viable {
+        seat: u64,
+    },
     Dump,
     Force(ForceRequest),
     ProjectionShow(AudienceSpec),
@@ -95,16 +104,22 @@ pub enum EngineCommand {
     Describe,
     BrokerQueues,
     BrokerLedger,
-    BrokerRequest { purpose: String },
+    BrokerRequest {
+        purpose: String,
+    },
     Health,
     Clock(ClockControl),
     Dice(DiceControl),
     Chaos(ChaosRequest),
     RulesCheck(RulesCheckRequest),
     History(HistoryRequest),
-    Trace { operation: String },
+    Trace {
+        operation: String,
+    },
     Replay(ReplayRequest),
     Config(ConfigControl),
+    /// A verb of the first playable path: `lobby`, `scene start`, `wire` or `play`.
+    Play(PlayCommand),
 }
 
 /// The usage line of every verb, in the order `describe` and `help` list them.
@@ -128,6 +143,10 @@ pub fn verb_usages() -> Vec<String> {
         TRACE_USAGE,
         REPLAY_USAGE,
         CONFIG_USAGE,
+        LOBBY_USAGE,
+        SCENE_START_USAGE,
+        WIRE_USAGE,
+        PLAY_USAGE,
     ]
     .iter()
     .map(|usage| (*usage).to_owned())
@@ -154,7 +173,11 @@ pub fn help_text() -> String {
          \n  {HISTORY_USAGE}\n      the newest events the host kept, oldest first, each with its number, class (A is always\n      on, B is verbose detail) and line, then the event stream's health; --area is an audit\n      area such as INPUT, TURN, COMMIT or ENGINE\n\
          \n  {TRACE_USAGE}\n      every event the host kept for one input, with what the queue did with it; the operation\n      is the number --op took or the 32 digits the answers print\n\
          \n  {REPLAY_USAGE}\n      replay a recorded turn log and compare it with the record; not built yet (it needs C7's\n      replay), so it says so\n\
-         \n  {CONFIG_USAGE}\n      the settings in force with their specs, or change one that the next input will use\n"
+         \n  {CONFIG_USAGE}\n      the settings in force with their specs, or change one that the next input will use\n\
+         \n  {LOBBY_USAGE}\n      the lobby as a seat's phone drives it: each action is the tap its button sends, through\n      the real owner queue, answered with the typed outcome; `show` prints who sits and who is ready\n\
+         \n  {SCENE_START_USAGE}\n      ready every seat at the table that is not ready, then start the lobby as the first seat\n      (or the one named); the lobby hands the table to the story scene\n\
+         \n  {WIRE_USAGE}\n      what a TV or a phone is served as a MachineView (with its protobuf size), or send a\n      MachineIntent as a seat and read its receipt\n\
+         \n  {PLAY_USAGE}\n      write the engine's own shared screen and one seat's phone as a fixture the playground\n      shows (`playground go h3-live`), or remove it\n"
     )
 }
 
@@ -207,6 +230,7 @@ pub fn parse(verb: &str, words: &[String]) -> Result<EngineCommand, CommandError
         "trace" => parse_trace(words).map(|operation| EngineCommand::Trace { operation }),
         "replay" => parse_replay(words).map(EngineCommand::Replay),
         "config" => parse_config(words).map(EngineCommand::Config),
+        "lobby" | "wire" | "play" => parse_play(verb, words).map(EngineCommand::Play),
         other => Err(CommandError::Unknown(other.to_owned())),
     }
 }
@@ -268,6 +292,7 @@ fn input(words: &[String]) -> Result<EngineCommand, CommandError> {
     Ok(EngineCommand::Input(InputRequest {
         input: body,
         operation,
+        operation_id: None,
         view,
     }))
 }
@@ -583,5 +608,6 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
         EngineCommand::Trace { operation } => run_trace(port, operation).await,
         EngineCommand::Replay(request) => run_replay(port, request).await,
         EngineCommand::Config(control) => run_config(port, control).await,
+        EngineCommand::Play(command) => run_play(port, command).await,
     }
 }

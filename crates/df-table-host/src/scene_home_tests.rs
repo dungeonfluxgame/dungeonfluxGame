@@ -1,7 +1,7 @@
 //! The `scene home` verbs of the landing page's brand mark, title block, bell, navigation rail and
 //! action bar: parsed into typed changes, applied by the host as numbered changes, drawn on top
 //! of the fixture, recorded in the audit log with the component and the field and never the free
-//! text, and the shipped placement script run end to end.
+//! text, and the shipped landing script (the three-component page) run end to end.
 
 use df_playground::fixture::Fixture;
 use df_playground::home_change::{HomeEdit, NavEdit};
@@ -334,24 +334,42 @@ async fn the_shipped_landing_script_assembles_the_page_in_order() {
     get(running.port, "/playground/controls.json")
         .await
         .expect("answers");
-    // The pauses are real time in the shipped script; the check runs the same lines without them.
-    // Only the lines of the components this file covers: the other parts of the shipped script
-    // (the adventure card, the campaign strip) are run by their own tests.
-    let mine = |line: &&str| {
-        let line = line.trim();
-        line.starts_with("playground go")
-            || line == "scene reset"
-            || line.starts_with("scene pill")
-            || line == "scene home clear"
-            || ["brand", "title", "top", "nav", "actions", "focus", "remove"]
-                .iter()
-                .any(|verb| line.starts_with(&format!("scene home {verb}")))
-    };
-    let quick: String = TOUR
+    // Every command of the shipped tour, in order, without the pauses (those are real time in the
+    // shipped script) and the comments. A command the real verbs refuse fails the whole script.
+    let commands: Vec<&str> = TOUR
         .lines()
-        .filter(mine)
-        .map(|line| format!("{line}\n"))
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("wait "))
         .collect();
+    assert!(
+        commands.len() >= 35,
+        "the shipped tour is a whole script: {}",
+        commands.len()
+    );
+    assert!(
+        commands.iter().all(|line| {
+            line.starts_with("playground go ")
+                || line == &"scene reset"
+                || line.starts_with("scene pill clear ")
+                || line.starts_with("scene home ")
+        }),
+        "the tour only drives the landing page: {commands:?}"
+    );
+    // The shipped pictures are not in a test host's library: stand in one file for each the tour names.
+    let pictures: std::collections::BTreeSet<&str> = commands
+        .iter()
+        .flat_map(|line| line.split(' '))
+        .filter_map(|word| word.strip_prefix("art="))
+        .collect();
+    assert_eq!(
+        pictures.len(),
+        3,
+        "the tour names three campaign pictures: {pictures:?}"
+    );
+    for picture in pictures {
+        running.write_asset(&format!("media/{picture}"), "picture");
+    }
+    let quick: String = commands.iter().map(|line| format!("{line}\n")).collect();
     let directory = tempfile::TempDir::new().expect("makes a directory");
     let path = directory.path().join("tour.txt");
     std::fs::write(&path, quick).expect("writes the script");
@@ -360,20 +378,53 @@ async fn the_shipped_landing_script_assembles_the_page_in_order() {
     assert!(said.ends_with("all ok"), "{said}");
     let scene = drawn(&running).await.tv;
     let home = scene.home.expect("a landing page");
-    assert_eq!(home.brand.expect("brand").wordmark, "DungeonFlux");
+    // The page is exactly three components: the menu, the one Play medallion, the past campaigns.
+    let rail = home.nav.expect("the menu");
+    let labels: Vec<&str> = rail.items.iter().map(|item| item.label.as_str()).collect();
     assert_eq!(
-        home.title.expect("title").tagline.as_deref(),
-        Some("Forge a world. Gather your party. Begin the legend.")
+        labels,
+        [
+            "Continue",
+            "New Adventure",
+            "Join Session",
+            "Characters",
+            "Settings"
+        ]
     );
-    let rail = home.nav.expect("nav");
-    assert_eq!(rail.items.len(), 6);
-    assert_eq!(rail.items.iter().filter(|item| item.active).count(), 1);
-    assert_eq!(home.actions.expect("actions").buttons.len(), 4);
-    let top = home.top.expect("top");
-    assert_eq!((top.bell, top.unread), (true, Some(3)));
+    let actions = home.actions.expect("the Play medallion");
+    assert_eq!(actions.buttons.len(), 1);
+    let play = &actions.buttons[0];
+    assert_eq!(play.label, "Play");
+    assert_eq!(play.subtitle.as_deref(), Some("The Ashen Citadel"));
+    assert_eq!(play.variant, ActionVariant::Primary);
+    assert!(play.enabled, "the tour switches Play back on");
+    let strip = home.campaigns.expect("the past campaigns");
+    assert_eq!(strip.title, "Past Campaigns");
+    let titles: Vec<&str> = strip.cards.iter().map(|card| card.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        [
+            "The Ashen Citadel",
+            "Neon Hollow",
+            "Crown of the Last Machine"
+        ]
+    );
+    assert_eq!(strip.selected_count(), 1);
+    assert!(
+        strip.cards[0].selected,
+        "the first campaign is the picked one"
+    );
+    assert_eq!(strip.cards[1].last_played, "Played 3 days ago");
+    // The parts the new page removed are absent from the screen (their verbs still exist).
+    assert!(home.brand.is_none(), "no brand mark");
+    assert!(home.title.is_none(), "no title block");
+    assert!(home.top.is_none(), "no top bar");
+    assert!(home.configure.is_none(), "no settings panel");
+    assert!(home.adventure.is_none(), "no adventure card");
     assert_eq!(home.focus, None, "the script ends on the default focus");
-    let pills = scene.pills.expect("pills");
-    assert_eq!(pills.balance.as_deref(), Some("$28.40"));
-    assert_eq!(pills.rate.as_deref(), Some("$3.90/hr"));
-    assert!(pills.profile);
+    // The top-right pills the fixture draws are cleared too.
+    let pills = scene.pills.unwrap_or_default();
+    assert_eq!(pills.balance, None);
+    assert_eq!(pills.rate, None);
+    assert!(!pills.profile);
 }

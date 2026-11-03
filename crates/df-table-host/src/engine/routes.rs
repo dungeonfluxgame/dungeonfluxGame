@@ -8,6 +8,7 @@
 //! their own beyond the handle to the owner thread, which they start with the router.
 
 mod observe;
+mod play;
 
 use std::sync::Arc;
 
@@ -22,7 +23,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::adapters::dev_route;
-use crate::adapters::{RulesBackend, RulesCheckKit, dev_ports};
+use crate::adapters::{RulesBackend, RulesCheckKit, story_ports};
 use crate::state::AppState;
 
 use super::adapters::{
@@ -37,7 +38,7 @@ use super::report::{EngineError, EngineReply};
 use super::request::{
     AudienceSpec, ChaosRequest, ClockControl, DiceControl, ForceRequest, InputRequest, QueueControl,
 };
-use super::setup::{EngineConfig, EngineStartError, dev_machines};
+use super::setup::{EngineConfig, EngineStartError, machines_for};
 
 /// The addresses of the dev engine API.
 pub mod path {
@@ -60,6 +61,10 @@ pub mod path {
     pub const TRACE: &str = "/dev/engine/trace";
     pub const REPLAY: &str = "/dev/engine/replay";
     pub const CONFIG: &str = "/dev/engine/config";
+    /// A TV's or a phone's `MachineView` as the dev report of it (GET `?audience=tv|N`).
+    pub const WIRE_VIEW: &str = "/dev/engine/wire/view";
+    /// A `MachineIntent` for a seat, answered with the dev report of its receipt (POST).
+    pub const WIRE_INTENT: &str = "/dev/engine/wire/intent";
 }
 
 /// The query parameter of `path::VIABLE`.
@@ -86,19 +91,21 @@ struct EngineRoutes {
     engine: Arc<Result<EngineHandle, EngineStartError>>,
 }
 
-/// Starts the dev engine over the host's log: the real machines and queue over fake adapters.
+/// Starts the engine over the host's log: the first playable path (the lobby, the story scene and
+/// the conversation) and the real queue and pipeline, over the dev adapters.
 fn start_dev_engine(
     app: &AppState,
 ) -> Result<(EngineHandle, Option<Arc<RulesCheckKit>>), EngineStartError> {
-    let config = EngineConfig::dev();
+    let config = EngineConfig::first_playable();
     let log = Arc::clone(app.log());
     let clock = Arc::new(DevClock::starting_now());
     let interpreter = Arc::new(ChaosInterpreter::default());
     let store = Arc::new(ScriptedCommitStore::default());
-    let machines = dev_machines(config.first_scene)?;
-    let ports = dev_ports(
+    let machines = machines_for(&config)?;
+    let ports = story_ports(
         RulesBackend::from_environment()?,
         &machines.check,
+        machines.urge.as_ref(),
         DEV_DICE_SEED,
     )?;
     let extras = Extras::from_environment(log)?;
@@ -329,6 +336,8 @@ pub fn router(app: Arc<AppState>) -> Router {
             path::CONFIG,
             get(observe::config_show).post(observe::config_set),
         )
+        .route(path::WIRE_VIEW, get(play::wire_view))
+        .route(path::WIRE_INTENT, post(play::wire_intent))
         .with_state(routes)
         .merge(rules_check)
 }

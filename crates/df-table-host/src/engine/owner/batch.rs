@@ -247,6 +247,7 @@ impl Owner {
             limits: &self.config.limits,
             adapters: &self.adapters,
             sink: &*self.sink,
+            machine_surface: self.config.story,
         };
         let committed = &mut self.committed;
         // A pipeline that cannot be built was reported when the batch ran.
@@ -302,6 +303,7 @@ impl Owner {
             limits: &self.config.limits,
             adapters: &self.adapters,
             sink: &*self.sink,
+            machine_surface: self.config.story,
         };
         let committed = &mut self.committed;
         let attached = ctx

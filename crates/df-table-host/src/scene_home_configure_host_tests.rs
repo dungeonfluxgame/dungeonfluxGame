@@ -1,7 +1,7 @@
 //! The `scene home configure` verbs end to end: sent to a running host, applied as numbered
 //! changes, drawn on top of the fixture, recorded in the audit log with the component and the
 //! field and never the free text, refused with a reason that leaves the panel as it was, and the
-//! settings section of the shipped landing tour run in order.
+//! settings-panel verb sequence run in order.
 
 use df_playground::fixture::Fixture;
 use df_playground::home_configure::{ConfigureData, Row};
@@ -11,8 +11,6 @@ use crate::command::split_words;
 use crate::dev::{DevError, run_dev};
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::{ControlsReply, EventsReply};
-
-const TOUR: &str = include_str!("../../../development/playground-scripts/landing-tour.txt");
 
 const FIXTURE: &str = r#"{
     "name": "One",
@@ -51,20 +49,85 @@ async fn audit_lines(running: &Running) -> Vec<String> {
     events.events.into_iter().map(|line| line.text).collect()
 }
 
-/// The lines of the shipped tour that build and change the settings panel, without their pauses and
-/// without the banner pictures, which a host started for a test has no library for.
-fn tour_lines() -> Vec<String> {
-    TOUR.lines()
+/// The settings-panel sequence the landing tour carried before the landing page became three
+/// components: the panel arrives empty, then the preset selector, the six cards, one change at a
+/// time to every kind of field, the remote over the cards, and the cards and rows coming and going.
+/// It lives here so the verbs keep their end-to-end coverage. The banner pictures are left out,
+/// which a host started for a test has no library for.
+const SETTINGS_SEQUENCE: &str = r#"
+scene home configure panel title="Configure Session" currency="$" layout=tiles
+scene home configure preset label="Presets:" value="Balanced Adventure" options="Balanced Adventure,Rules Purist,Story First,Combat Heavy,Quick Play"
+scene home configure card-add world kind=select label="World / Setting" icon=globe
+scene home configure row-add world setting kind=select label="World / Setting" value="Arcane Sci-Fi" options="Medieval Fantasy,Arcane Sci-Fi,Steampunk,Post-Apocalyptic,Techno-Fantasy,Custom"
+scene home configure card-add tone kind=select label="Session Tone" icon=masks accent=violet
+scene home configure row-add tone tone kind=select label="Session Tone" value=Heroic options="Heroic,Dark,Mysterious,Whimsical,Serious,Chaotic"
+scene home configure card-add party kind=select label=Party icon=party accent=violet
+scene home configure row-add party players kind=select label=Party value="4 Players (Local)" options="1 Player (Local),2 Players (Local),3 Players (Local),4 Players (Local),5 Players (Local),6 Players (Local)"
+scene home configure row-add party session_length kind=select label="Session Length" value="~3-4 Hours" options="~1-2 Hours,~2-3 Hours,~3-4 Hours,~4+ Hours"
+scene home configure card-add rules kind=sliders label="Rules & Gameplay" icon=swords
+scene home configure row-add rules rules_fidelity kind=slider label="Rules Fidelity" level=80
+scene home configure row-add rules combat_intensity kind=slider label="Combat Intensity" level=60
+scene home configure row-add rules narrative_freedom kind=slider label="Narrative Freedom" level=70
+scene home configure row-add rules exploration_depth kind=slider label="Exploration Depth" level=75
+scene home configure row-add rules puzzle_complexity kind=slider label="Puzzle Complexity" level=50
+scene home configure row-add rules difficulty kind=slider label=Difficulty level=65 unit=steps steps="Relaxed,Moderate,Challenging,Punishing"
+scene home configure card-add narration kind=mixed label="AI & Narration" icon=core
+scene home configure row-add narration narrator_voice kind=select label="Narrator Voice" value="Aria (Epic)" options="Aria (Epic),Vaelin (Epic),Brakka (Gruff)"
+scene home configure row-add narration imagination kind=slider label="Imagination Level" level=80
+scene home configure row-add narration response_speed kind=select label="Response Speed" value=Balanced options="Fast,Balanced,Thoughtful"
+scene home configure row-add narration narration_style kind=select label="Narration Style" value=Cinematic options="Cinematic,Storybook,Terse"
+scene home configure row-add narration memory_depth kind=slider label="Memory Depth" level=70 unit=steps steps="Short,Standard,Long,Extended"
+scene home configure card-add budget kind=budget label="Session Budget" icon=coins accent=green
+scene home configure row-add budget balance kind=stat label=Balance money=28.40 highlight=true
+scene home configure row-add budget spend_rate kind=stat label="Spend Rate" per-hour=3.90 info=true
+scene home configure row-add budget estimate kind=stat label="Estimated (2-3 hrs)" range=7.80-11.70
+scene home configure row world setting value=Steampunk
+scene home configure row world setting value="Arcane Sci-Fi"
+scene home configure row tone tone value=Dark
+scene home configure row tone tone value=Heroic
+scene home configure row rules rules_fidelity level=30
+scene home configure row rules rules_fidelity level=100
+scene home configure row rules rules_fidelity level=80
+scene home configure row narration narrator_voice value="Vaelin (Epic)"
+scene home configure row narration narrator_voice value="Aria (Epic)"
+scene home configure row budget balance money=21.50
+scene home configure row budget balance money=28.40
+scene home configure preset value="Story First"
+scene home configure preset value="Balanced Adventure"
+scene home configure card world label="World"
+scene home configure card world label="World / Setting" accent=green
+scene home configure card world accent=cyan
+scene home configure card party icon=dice
+scene home configure card party icon=party
+scene home configure row budget balance no-value=true
+scene home configure row budget balance money=28.40
+scene home focus configure:preset
+scene home focus configure:2
+scene home focus configure:4
+scene home focus configure:6
+scene home focus none
+scene home configure card-move budget 1
+scene home configure card-move budget 6
+scene home configure row-remove rules rules_fidelity
+scene home configure row-add rules rules_fidelity kind=slider label="Rules Fidelity" level=80 at=1
+scene home configure row-move rules narrative_freedom 1
+scene home configure row-move rules narrative_freedom 3
+scene home configure card-add extras kind=sliders label=Extras icon=sparkles
+scene home configure row-add extras luck kind=slider label=Luck level=40
+scene home configure card-remove extras
+scene home configure panel title="Tonight's Table"
+scene home configure panel title="Configure Session"
+scene home configure preset-remove
+scene home configure preset value="Balanced Adventure" label="Presets:"
+"#;
+
+/// The lines of the settings sequence, one verb each.
+fn settings_lines() -> Vec<String> {
+    SETTINGS_SEQUENCE
+        .lines()
         .map(str::trim)
-        .filter(|line| {
-            line.starts_with("scene home configure") || line.starts_with("scene home focus")
-        })
-        .map(|line| {
-            line.split(' ')
-                .filter(|word| !word.starts_with("banner="))
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
         .collect()
 }
 
@@ -224,24 +287,24 @@ async fn a_refused_panel_change_says_why_and_changes_nothing() {
 }
 
 #[tokio::test]
-async fn the_shipped_landing_tour_builds_the_settings_panel_in_order() {
+async fn the_settings_panel_sequence_builds_the_panel_in_order() {
     let running = start(&STARTER_FILES).await;
     with_fixture(&running).await;
-    let lines = tour_lines();
+    let lines = settings_lines();
     assert!(
         lines.len() > 60,
-        "the tour has a settings section: {}",
+        "the sequence has the whole settings section: {}",
         lines.len()
     );
     let directory = tempfile::TempDir::new().expect("makes a directory");
-    let path = directory.path().join("tour.txt");
+    let path = directory.path().join("settings.txt");
     let script: String = lines.iter().map(|line| format!("{line}\n")).collect();
     std::fs::write(&path, script).expect("writes the script");
     let words = ["script".to_owned(), path.to_string_lossy().into_owned()];
     let said = run_dev(running.port, &words).await.expect("runs");
     assert!(said.ends_with("all ok"), "{said}");
     let home = drawn(&running).await.tv.home.expect("a landing page");
-    assert_eq!(home.focus, None, "the tour ends on the default focus");
+    assert_eq!(home.focus, None, "the sequence ends on the default focus");
     let data = home.configure.expect("a panel");
     data.check().expect("the panel is in range");
     let keys: Vec<&str> = data.cards.iter().map(|card| card.key.as_str()).collect();

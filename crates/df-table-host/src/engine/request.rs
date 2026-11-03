@@ -32,14 +32,17 @@ pub enum InputBody {
 }
 
 /// One input to submit. `operation` is the operation id the sender minted (a duplicate of it is a
-/// retry); left out, the owner mints one. `view` is the revision the sender drew the input from;
-/// left out, it is the current one.
+/// retry); left out, the owner mints one. `operation_id` is the same for a sender that has all 128
+/// bits (a wire intent, whose id is 16 bytes) and wins when both are given. `view` is the revision
+/// the sender drew the input from; left out, it is the current one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InputRequest {
     pub input: InputBody,
     #[serde(default)]
     pub operation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<u128>,
     #[serde(default)]
     pub view: Option<u64>,
 }

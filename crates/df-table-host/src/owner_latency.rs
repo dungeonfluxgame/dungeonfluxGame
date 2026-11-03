@@ -12,12 +12,14 @@
 //! never does, and its workloads are stand-ins sized by `state::WorkloadProfile` and
 //! `commit::Committer`, with the sizes stated in the report. Run it with
 //! `cargo run --release -p df-table-host --example owner_latency -- help`. Rerun it after H0 and at
-//! H3 against the real step and projection (O.16, S1).
+//! H3 against the real step and projection (O.16, S1): `real` is that rerun, over the real owner
+//! actor and not over stand-ins.
 
 pub mod commit;
 pub mod error;
 pub mod producers;
 pub mod projection;
+pub mod real;
 pub mod report;
 pub mod run;
 pub mod sha256;

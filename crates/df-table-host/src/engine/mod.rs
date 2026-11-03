@@ -8,6 +8,12 @@
 //! and are saved by group commit (`commit`, the S1 decision). A view of the table comes from one
 //! seam (`projection_adapter`) that the real projection of C5 replaces.
 //!
+//! The first playable path (H3) is the same machinery with a third machine: `setup::story_machines`
+//! registers the lobby, the explore chained to the dialogue, and the dialogue, and
+//! `EngineConfig::story` publishes each seat's standing buttons. `machine_io` serves the wire's
+//! `MachineView` and takes its `MachineIntent` (`routes/play`, `cli_play`: the verbs `lobby`,
+//! `scene start`, `wire` and `play`).
+//!
 //! The host owns every `.await`: `handle` is the bounded mailbox and the typed calls over it,
 //! `routes` serves `/dev/engine/*` behind the host's guard, and `cli` parses and runs the verbs
 //! `input`, `viable`, `dump`, `force`, `projection show`, `queue` and `describe` (plus the
@@ -24,6 +30,7 @@ mod audit_fields;
 mod broker_fields;
 pub mod cli;
 mod cli_observe;
+mod cli_play;
 pub mod commit;
 mod committer;
 pub mod extras;
@@ -32,6 +39,7 @@ mod format_observe;
 pub mod handle;
 mod labels;
 pub mod limits;
+pub mod machine_io;
 mod owner;
 pub mod projection_adapter;
 pub mod replay;
@@ -45,6 +53,7 @@ mod verb_set;
 
 pub use self::broker_fields::SinkBrokerAudit;
 pub use self::cli::{EngineCommand, help_text, parse as parse_verb, run, verb_usages};
+pub use self::cli_play::{PlayCommand, parse_scene_start};
 pub use self::extras::Extras;
 pub use self::handle::EngineHandle;
 pub use self::replay::{PendingReplay, ReplayRefusal, Replayer};
@@ -58,7 +67,11 @@ mod batch_tests;
 #[cfg(test)]
 mod cli_observe_tests;
 #[cfg(test)]
+mod cli_play_tests;
+#[cfg(test)]
 mod cli_tests;
+#[cfg(test)]
+mod h3_tests;
 #[cfg(test)]
 mod observe_tests;
 #[cfg(test)]
