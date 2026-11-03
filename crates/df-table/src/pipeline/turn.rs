@@ -26,6 +26,7 @@ use crate::outcome::{Decline, OutcomeKind};
 use crate::pending::StoredDraw;
 use crate::ports::{ActionId, NonActionKind, PortName, ResultFact, RulingAnswer};
 
+use super::books::ResultKey;
 use super::events::PipelineEvent;
 use super::table_access::PipelineTable;
 use super::{Clarification, NarrationJob, Pipeline};
@@ -35,6 +36,9 @@ pub(super) struct Turn<'t, 'p> {
     pub(super) correlation: Correlation,
     pub(super) kind: InputKind,
     pub(super) sender: Sender,
+    /// The membership the sender held when the input began: with the sender and the operation id,
+    /// what the result books and the table's memory of applied operations know it by.
+    pub(super) membership: u64,
     pub(super) seat: Option<SeatId>,
     pub(super) scope: TableScope,
     pub(super) started_ms: u64,
@@ -100,6 +104,7 @@ impl<'t, 'p> Turn<'t, 'p> {
             correlation,
             kind,
             sender,
+            membership: table.facts().membership_of(sender),
             seat,
             scope: table.scope(),
             started_ms: pipeline.ports.clock.now_ms(),
@@ -127,6 +132,11 @@ impl<'t, 'p> Turn<'t, 'p> {
             replayed_readout: None,
             also_told: Vec::new(),
         }
+    }
+
+    /// What this input's result is remembered under.
+    pub(super) fn result_key(&self) -> ResultKey {
+        ResultKey::new(self.sender, self.membership, self.correlation.operation_id)
     }
 
     /// Where the staged lines stand now.

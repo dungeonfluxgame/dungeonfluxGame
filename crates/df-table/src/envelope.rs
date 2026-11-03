@@ -83,7 +83,8 @@ impl ViewStamp {
 
 listed_enum! {
     /// The nine kinds of input (O.3 `envelope`).
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum InputKind {
         Tap,
         SubmitText,

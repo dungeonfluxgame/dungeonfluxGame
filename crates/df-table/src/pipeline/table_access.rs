@@ -33,6 +33,7 @@ use super::books::{
     BookLoadError, ReleaseBook, ReleaseRecord, RequestBook, RequestRecord, ResultBook, ResultRecord,
 };
 use crate::effects::{ApplyOutcome, EffectError, TableEffect, TableState};
+use crate::envelope::Sender;
 use crate::identity::{Correlation, SceneId, SeatId, SessionRevision, TableId, TableScope};
 use crate::machine::MachineId;
 use crate::machine_slot::MachineSlot;
@@ -347,13 +348,14 @@ impl PipelineTable {
     /// Applies one commit's effects to the shared facts, all or nothing, once per operation id.
     pub(super) fn apply_effects(
         &mut self,
+        sender: Sender,
         scope: &TableScope,
         correlation: Correlation,
         effects: &[TableEffect],
     ) -> Result<ApplyOutcome, EffectError> {
         let given = self.state_correlation(correlation);
         self.forget_hashes();
-        self.facts.apply(scope, given, effects)
+        self.facts.apply_from(sender, scope, given, effects)
     }
 
     /// A stable digest of everything a turn can change, for golden sessions and replay: the facts
@@ -483,7 +485,7 @@ impl PipelineTable {
 }
 
 /// The schema version of `PipelineRecord`.
-pub const PIPELINE_RECORD_VERSION: u32 = 2;
+pub const PIPELINE_RECORD_VERSION: u32 = 3;
 
 /// The saved form of everything the pipeline holds beside the table state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

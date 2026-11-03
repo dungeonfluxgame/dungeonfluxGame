@@ -188,6 +188,8 @@ mod pipeline_golden_tests;
 #[cfg(test)]
 mod pipeline_review_tests;
 #[cfg(test)]
+mod pipeline_sender_scope_tests;
+#[cfg(test)]
 mod pipeline_staging_tests;
 #[cfg(test)]
 mod pipeline_tests;

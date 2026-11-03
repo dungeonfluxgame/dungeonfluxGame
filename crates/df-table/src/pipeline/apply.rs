@@ -163,7 +163,7 @@ fn commit_staged(
             effects.push(TableEffect::ActiveSlotUpdated { home, slot });
         }
     }
-    match table.apply_effects(&scope, turn.correlation, &effects) {
+    match table.apply_effects(turn.sender, &scope, turn.correlation, &effects) {
         Ok(ApplyOutcome::Applied(events)) => turn.on_commit.extend(events),
         Ok(ApplyOutcome::AlreadyApplied) => {
             turn.stage_done(PipelineStep::Apply, started, Some(OutcomeKind::Declined));

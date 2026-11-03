@@ -549,7 +549,15 @@ fn the_table_and_the_result_book_cannot_disagree_about_a_forgotten_operation() {
     send(&mut world, &tap_envelope(2, 1, "wave"), 2);
     send(&mut world, &tap_envelope(3, 1, "wave"), 3);
     assert!(
-        world.table.results().find(first.operation_id()).is_none(),
+        world
+            .table
+            .results()
+            .find(crate::pipeline::ResultKey::new(
+                first.sender(),
+                world.table.facts().membership_of(first.sender()),
+                first.operation_id()
+            ))
+            .is_none(),
         "the result book has forgotten the first operation"
     );
     let calls = world.rules.calls().len();
@@ -582,10 +590,10 @@ fn a_host_commit_stamp_is_never_an_operation_and_never_pushes_one_out_of_memory(
 
     for commit in 0..50 {
         assert!(
-            !world
-                .table
-                .facts()
-                .has_applied(&correlation(10_000 + commit).operation_id),
+            !world.table.facts().has_applied(
+                crate::envelope::Sender::Engine,
+                &correlation(10_000 + commit).operation_id
+            ),
             "a commit id is not remembered as an operation"
         );
     }

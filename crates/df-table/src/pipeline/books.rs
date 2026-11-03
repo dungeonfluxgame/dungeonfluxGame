@@ -11,6 +11,13 @@
 //! restart finds its stored result before any port is asked and no die is drawn again (H.2). The
 //! result book keeps what the seat was told (the readout, the decline, the clarification, the
 //! routed kind), so a duplicate delivery gets the same answer and writes nothing to the views.
+//! An operation id means something only together with its sender, so the result book is keyed by
+//! `ResultKey`: the sender, the membership of that sender (a seat's changes each time it joins,
+//! the owner queue's rule) and the id. Another seat that reuses an id, or a seat that left and
+//! came back, finds nothing and its input runs; the sender, membership and input kind are saved
+//! with each result. A record saved before results were kept per sender cannot say who sent each
+//! one, so it is refused on load with a typed `BookLoadError` (the host records `load.refused`,
+//! H.12) and never guessed.
 //! `ReleaseBook` holds the reservations a cancelled pending gave up (`RulesOwner::abandon`): they
 //! are recorded with the commit and told to the rules owner after it, like a broker request, so a
 //! refused batch leaves the reservation where it was.
@@ -24,6 +31,7 @@ use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
+use crate::envelope::{InputKind, Sender};
 use crate::identity::{
     Correlation, MachineId, OperationId, RecoveryEpoch, SceneId, SeatId, SessionRevision,
 };
@@ -35,8 +43,12 @@ use crate::pipeline::events::ClarifyCause;
 use crate::ports::{ActionId, NonActionKind, PurposeName};
 use crate::table_state::{ResultStamp, SceneGeneration};
 
-/// The schema version of the request and result records.
+/// The schema version of the request and release records.
 pub const BOOK_SCHEMA_VERSION: u32 = 1;
+
+/// The schema version of the result record: 2 keeps each result under its sender and the
+/// membership of that sender and records the input kind; version 1 had the operation id alone.
+pub const RESULT_SCHEMA_VERSION: u32 = 2;
 
 /// A `ResultStamp` as saved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -142,6 +154,9 @@ pub enum BookLoadError {
     /// A handle bound to two requests.
     HandleReused,
     ImpossibleStamp,
+    /// A result that does not say who sent it, so whose answer it is cannot be told: refused, never
+    /// guessed.
+    SenderMissing,
 }
 
 impl fmt::Display for BookLoadError {
@@ -156,6 +171,9 @@ impl fmt::Display for BookLoadError {
             Self::Duplicate => formatter.write_str("a record holds the same entry twice"),
             Self::HandleReused => formatter.write_str("a record binds one handle twice"),
             Self::ImpossibleStamp => formatter.write_str("a record holds an impossible stamp"),
+            Self::SenderMissing => {
+                formatter.write_str("a result record does not say who sent the operation")
+            }
         }
     }
 }
@@ -306,7 +324,12 @@ impl RequestBook {
     }
 
     pub fn from_record(record: RequestRecord) -> Result<Self, BookLoadError> {
-        check_header(record.schema_version, record.maximum, record.entries.len())?;
+        check_header(
+            BOOK_SCHEMA_VERSION,
+            record.schema_version,
+            record.maximum,
+            record.entries.len(),
+        )?;
         let mut book = Self::holding_at_most(record.maximum);
         for entry in record.entries {
             let slot = (entry.machine.clone(), entry.key);
@@ -341,11 +364,16 @@ impl RequestBook {
     }
 }
 
-fn check_header(version: u32, maximum: usize, held: usize) -> Result<(), BookLoadError> {
-    if version != BOOK_SCHEMA_VERSION {
+fn check_header(
+    expected: u32,
+    version: u32,
+    maximum: usize,
+    held: usize,
+) -> Result<(), BookLoadError> {
+    if version != expected {
         return Err(BookLoadError::UnsupportedVersion {
             found: version,
-            expected: BOOK_SCHEMA_VERSION,
+            expected,
         });
     }
     if maximum == 0 {
@@ -392,11 +420,68 @@ pub struct StoredOutcome {
     pub routed: Option<NonActionKind>,
 }
 
+/// Who sent an operation, as saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "from", rename_all = "snake_case", deny_unknown_fields)]
+pub enum StoredSender {
+    Engine,
+    Seat { seat: u64 },
+}
+
+impl StoredSender {
+    fn of(sender: Sender) -> Self {
+        match sender {
+            Sender::Engine => Self::Engine,
+            Sender::Seat(seat) => Self::Seat { seat: seat.get() },
+        }
+    }
+
+    fn restore(self) -> Sender {
+        match self {
+            Self::Engine => Sender::Engine,
+            Self::Seat { seat } => Sender::Seat(SeatId::new(seat)),
+        }
+    }
+}
+
+/// What a result is remembered under: the sender, the membership of that sender (zero for the
+/// engine; a seat's changes each time it joins, so a rejoined seat, or another player who took its
+/// seat id, never meets the result of the one before) and the id the sender gave the operation.
+/// The owner queue finds duplicates under the same identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ResultKey {
+    sender: Sender,
+    membership: u64,
+    operation: OperationId,
+}
+
+impl ResultKey {
+    pub fn new(sender: Sender, membership: u64, operation: OperationId) -> Self {
+        Self {
+            sender,
+            membership,
+            operation,
+        }
+    }
+}
+
+/// Who sent a result's operation, which membership of that sender and what kind of input it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredOrigin {
+    sender: StoredSender,
+    membership: u64,
+    kind: InputKind,
+}
+
 /// One operation and how it ended.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoredResult {
     operation: OperationId,
+    /// Absent only in a record saved before version 2, which is refused on load.
+    #[serde(default)]
+    origin: Option<StoredOrigin>,
     outcome: StoredOutcome,
 }
 
@@ -405,6 +490,20 @@ impl StoredResult {
         let mut hasher = Fnv::new();
         self.hash(&mut hasher);
         hasher.finish()
+    }
+
+    fn key(&self) -> Option<ResultKey> {
+        let origin = self.origin?;
+        Some(ResultKey::new(
+            origin.sender.restore(),
+            origin.membership,
+            self.operation,
+        ))
+    }
+
+    /// The kind of input that made this result.
+    pub fn kind(&self) -> Option<InputKind> {
+        self.origin.map(|origin| origin.kind)
     }
 }
 
@@ -417,10 +516,10 @@ pub struct ResultRecord {
     entries: Vec<StoredResult>,
 }
 
-/// How the most recent committed operations ended.
+/// How the most recent committed operations ended, per sender.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResultBook {
-    entries: BoundedMap<OperationId, StoredResult>,
+    entries: BoundedMap<ResultKey, StoredResult>,
     digest: u64,
 }
 
@@ -444,18 +543,35 @@ impl ResultBook {
         self.digest ^ mix(self.entries.maximum() as u64)
     }
 
-    /// How the operation ended, if it was committed and is still remembered.
-    pub fn find(&self, operation: OperationId) -> Option<StoredOutcome> {
-        self.entries
-            .get(&operation)
-            .map(|stored| stored.outcome.clone())
+    /// How the operation ended, if it was committed, is still remembered and was sent by the same
+    /// sender under the same membership. Another sender's id, or the id of the seat's earlier
+    /// membership, is not found.
+    pub fn find(&self, key: ResultKey) -> Option<StoredOutcome> {
+        self.entries.get(&key).map(|stored| stored.outcome.clone())
     }
 
-    /// Remembers how a committed operation ended.
-    pub fn record(&mut self, operation: OperationId, outcome: StoredOutcome) {
-        let stored = StoredResult { operation, outcome };
+    /// The saved record of the operation, with the kind of input that made it.
+    pub fn find_stored(&self, key: ResultKey) -> Option<&StoredResult> {
+        self.entries.get(&key)
+    }
+
+    /// Remembers how an operation ended, and what kind of input it was.
+    pub fn record(&mut self, key: ResultKey, kind: InputKind, outcome: StoredOutcome) {
+        let stored = StoredResult {
+            operation: key.operation,
+            origin: Some(StoredOrigin {
+                sender: StoredSender::of(key.sender),
+                membership: key.membership,
+                kind,
+            }),
+            outcome,
+        };
+        self.insert(key, stored);
+    }
+
+    fn insert(&mut self, key: ResultKey, stored: StoredResult) {
         self.digest ^= stored.logical_hash();
-        let removed = self.entries.insert(operation, stored);
+        let removed = self.entries.insert(key, stored);
         for old in removed.replaced.iter().chain(removed.evicted.iter()) {
             self.digest ^= old.logical_hash();
         }
@@ -463,20 +579,26 @@ impl ResultBook {
 
     pub fn to_record(&self) -> ResultRecord {
         ResultRecord {
-            schema_version: BOOK_SCHEMA_VERSION,
+            schema_version: RESULT_SCHEMA_VERSION,
             maximum: self.entries.maximum(),
             entries: self.entries.oldest_first().into_iter().cloned().collect(),
         }
     }
 
     pub fn from_record(record: ResultRecord) -> Result<Self, BookLoadError> {
-        check_header(record.schema_version, record.maximum, record.entries.len())?;
+        check_header(
+            RESULT_SCHEMA_VERSION,
+            record.schema_version,
+            record.maximum,
+            record.entries.len(),
+        )?;
         let mut book = Self::remembering(record.maximum);
         for stored in record.entries {
-            if book.entries.contains(&stored.operation) {
+            let key = stored.key().ok_or(BookLoadError::SenderMissing)?;
+            if book.entries.contains(&key) {
                 return Err(BookLoadError::Duplicate);
             }
-            book.record(stored.operation, stored.outcome);
+            book.insert(key, stored);
         }
         Ok(book)
     }
@@ -590,7 +712,12 @@ impl ReleaseBook {
     }
 
     pub fn from_record(record: ReleaseRecord) -> Result<Self, BookLoadError> {
-        check_header(record.schema_version, record.maximum, record.entries.len())?;
+        check_header(
+            BOOK_SCHEMA_VERSION,
+            record.schema_version,
+            record.maximum,
+            record.entries.len(),
+        )?;
         let mut book = Self::holding_at_most(record.maximum);
         for entry in record.entries {
             if book.entries.contains(&entry.pending) {

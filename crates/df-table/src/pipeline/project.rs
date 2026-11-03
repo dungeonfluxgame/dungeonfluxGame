@@ -56,11 +56,11 @@ impl Pipeline<'_> {
         let readout = Readout::new(text);
         if !turn.replayed {
             let stored = stored_outcome(&turn, &outcome, readout.as_str());
-            let operation = turn.correlation.operation_id;
+            let key = turn.result_key();
             if turn.committed {
-                table.results_mut().record(operation, stored);
+                table.results_mut().record(key, turn.kind, stored);
             } else {
-                table.ends_mut().record(operation, stored);
+                table.ends_mut().record(key, turn.kind, stored);
             }
         }
         let projections = self.project_audiences(&mut turn, table, &outcome, &readout);

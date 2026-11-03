@@ -84,8 +84,8 @@ mod turn;
 pub use action::SPLIT_ACTION;
 pub use books::{
     BookLoadError, ReleaseBook, ReleaseEntry, ReleaseRecord, RequestBook, RequestEntry,
-    RequestRecord, ResultBook, ResultRecord, StoredClarification, StoredEnding, StoredOutcome,
-    TakenRequest,
+    RequestRecord, ResultBook, ResultKey, ResultRecord, StoredClarification, StoredEnding,
+    StoredOutcome, StoredResult, StoredSender, TakenRequest,
 };
 pub use events::{ClarifyCause, ViewPart};
 pub use narrate::NarrationJob;
@@ -326,15 +326,15 @@ impl<'a> Pipeline<'a> {
             correlation,
         );
         let operation = envelope.operation_id();
-        let remembered = table
-            .results()
-            .find(operation)
-            .or_else(|| table.ends().find(operation));
+        // An operation id means something only together with its sender and that sender's
+        // membership: another seat's id, or the id of a seat's earlier occupant, is a new input.
+        let key = turn.result_key();
+        let remembered = table.results().find(key).or_else(|| table.ends().find(key));
         if let Some(stored) = remembered {
             let outcome = replayed_outcome(&mut turn, table, stored);
             return self.finish(turn, table, outcome);
         }
-        if table.facts().has_applied(&operation) {
+        if table.facts().has_applied(turn.sender, &operation) {
             // The table remembers an operation whose result was forgotten: it was applied, so it
             // is not run again and no die is drawn for it.
             turn.replayed = true;

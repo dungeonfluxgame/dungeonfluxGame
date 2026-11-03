@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::effects::{BeatName, EffectError, TableEffect};
+use crate::envelope::Sender;
 use crate::event::TableEvent;
 use crate::identity::{Correlation, OperationId, SceneId, SeatId, SessionRevision, TableScope};
 use crate::owner_queue::{MAXIMUM_REMEMBERED_OPERATIONS, MAXIMUM_SEATS};
@@ -96,18 +97,37 @@ impl fmt::Display for TableStateError {
 
 impl std::error::Error for TableStateError {}
 
-/// The operation ids already applied, newest last; the oldest is forgotten first once `maximum`
-/// newer ones were applied, after which an old id is new again (the owner queue's rule).
+/// What an applied operation is remembered under: its sender, the membership of that sender (zero
+/// for the engine; a seat's membership changes each time it joins) and the id the sender gave it.
+/// An id means something only together with its sender (the owner queue's rule), so one seat's id
+/// never stands in for another's, and a seat that left and came back, or another player who took
+/// its seat id, meets none of the history of the one before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct AppliedKey {
+    sender: Sender,
+    membership: u64,
+    operation: OperationId,
+}
+
+/// The operations already applied, newest last; the oldest is forgotten first once `maximum`
+/// newer ones were applied, after which an old id is new again (the owner queue's rule). Each is
+/// remembered per sender and per membership of that sender (`AppliedKey`). It also holds the
+/// membership each seated seat joined under, which is what makes that stamp.
 ///
 /// It is a `BoundedMap`, so a copy of the table shares it (a checkpoint costs a few pointer copies,
 /// not one copy of up to a million ids) and a lookup is one bucket access. Its digest is the
-/// exclusive or of the hash of each remembered id, kept up to date where an id enters or leaves,
+/// exclusive or of the hash of each remembered key, kept up to date where a key enters or leaves,
 /// so asking for the table's digest costs the same however many ids are remembered. A commit's own
 /// id is remembered here and a host's commit stamp never is (`TableState::stamp_commit`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AppliedOperations {
-    members: BoundedMap<OperationId, OperationId>,
+    members: BoundedMap<AppliedKey, AppliedKey>,
     digest: u64,
+    /// The membership of each seated seat: the number its join was given. A seat that left has
+    /// none, so an input it sends is stamped zero, which no seated seat holds.
+    memberships: BTreeMap<SeatId, u64>,
+    /// The membership the next join is given; it only grows, so a rejoined seat never repeats one.
+    next_membership: u64,
 }
 
 impl AppliedOperations {
@@ -115,38 +135,80 @@ impl AppliedOperations {
         Self {
             members: BoundedMap::holding_at_most(maximum),
             digest: 0,
+            memberships: BTreeMap::new(),
+            next_membership: 0,
         }
     }
 
-    fn hash_of(operation: &OperationId) -> u64 {
+    /// The same memberships and a new, empty memory of at most `maximum` operations.
+    fn forgetting_operations(self, maximum: usize) -> Self {
+        Self {
+            memberships: self.memberships,
+            next_membership: self.next_membership,
+            ..Self::remembering(maximum)
+        }
+    }
+
+    fn hash_of(key: &AppliedKey) -> u64 {
         let mut hasher = Fnv::new();
-        operation.hash(&mut hasher);
+        key.hash(&mut hasher);
         hasher.finish()
     }
 
-    /// The bound and the digest of the remembered ids, which does not depend on the order they
-    /// were applied in.
+    /// The bound, the digest of the remembered keys (which does not depend on the order they were
+    /// applied in) and the memberships, in seat order.
     fn digest_into(&self, digest: &mut Digest) {
         digest.count(self.members.maximum());
         digest.count(self.members.len());
         digest.number(self.digest ^ mix(self.members.maximum() as u64));
+        digest.number(self.next_membership);
+        digest.count(self.memberships.len());
+        for (seat, membership) in &self.memberships {
+            digest.number(seat.get());
+            digest.number(*membership);
+        }
     }
 
-    fn contains(&self, operation: &OperationId) -> bool {
-        self.members.contains(operation)
+    fn membership_of(&self, sender: Sender) -> u64 {
+        match sender {
+            Sender::Engine => 0,
+            Sender::Seat(seat) => self.memberships.get(&seat).copied().unwrap_or(0),
+        }
     }
 
-    fn remember(&mut self, operation: OperationId) {
-        if self.members.contains(&operation) {
+    fn key_of(&self, sender: Sender, operation: OperationId) -> AppliedKey {
+        AppliedKey {
+            sender,
+            membership: self.membership_of(sender),
+            operation,
+        }
+    }
+
+    fn contains(&self, key: &AppliedKey) -> bool {
+        self.members.contains(key)
+    }
+
+    fn remember(&mut self, key: AppliedKey) {
+        if self.members.contains(&key) {
             return;
         }
-        let removed = self.members.insert(operation, operation);
-        self.digest ^= Self::hash_of(&operation);
-        // A replaced or evicted id leaves the digest again; with a bound of zero the id just
+        let removed = self.members.insert(key, key);
+        self.digest ^= Self::hash_of(&key);
+        // A replaced or evicted key leaves the digest again; with a bound of zero the key just
         // given is the one evicted, so it enters and leaves and the digest is unchanged.
         for old in removed.replaced.iter().chain(removed.evicted.iter()) {
             self.digest ^= Self::hash_of(old);
         }
+    }
+
+    /// Gives a seat a membership of its own: a join starts a new one.
+    fn seat_joined(&mut self, seat: SeatId) {
+        self.next_membership = self.next_membership.saturating_add(1);
+        self.memberships.insert(seat, self.next_membership);
+    }
+
+    fn seat_left(&mut self, seat: SeatId) {
+        self.memberships.remove(&seat);
     }
 }
 
@@ -238,18 +300,23 @@ impl TableState {
                 return Err(TableStateError::DuplicateSeat(*seat));
             }
         }
+        let mut applied = AppliedOperations::remembering(MAXIMUM_REMEMBERED_OPERATIONS);
+        for seat in taken.keys() {
+            applied.seat_joined(*seat);
+        }
         let mut facts = Facts::empty(seat_capacity);
         facts.seats = Arc::new(taken);
         Ok(Self {
             facts: Arc::new(facts),
-            applied: AppliedOperations::remembering(MAXIMUM_REMEMBERED_OPERATIONS),
+            applied,
             memo: DigestMemo::empty(),
         })
     }
 
-    /// Remembers at most `maximum` applied operation ids; zero remembers none.
+    /// Remembers at most `maximum` applied operations; zero remembers none. The seats keep the
+    /// memberships they were seated with.
     pub fn remembering_operations(mut self, maximum: usize) -> Self {
-        self.applied = AppliedOperations::remembering(maximum);
+        self.applied = self.applied.forgetting_operations(maximum);
         self.memo.forget();
         self
     }
@@ -288,9 +355,19 @@ impl TableState {
         digest.finish()
     }
 
-    /// Whether this operation id is remembered as applied.
-    pub fn has_applied(&self, operation: &OperationId) -> bool {
-        self.applied.contains(operation)
+    /// Whether `sender`, under the membership it holds now, has an operation with this id
+    /// remembered as applied. Another sender's id, and the id of a seat's earlier membership, is
+    /// not found: an id means something only together with its sender.
+    pub fn has_applied(&self, sender: Sender, operation: &OperationId) -> bool {
+        self.applied
+            .contains(&self.applied.key_of(sender, *operation))
+    }
+
+    /// The membership of a sender: zero for the engine, the number a seat's last join was given
+    /// for a seated seat (it changes each time the seat joins, as the owner queue's does), and
+    /// zero for a seat that is not at the table.
+    pub fn membership_of(&self, sender: Sender) -> u64 {
+        self.applied.membership_of(sender)
     }
 
     /// Moves the revision to the one the host stamped for its commit, if it is later. A commit
@@ -343,16 +420,29 @@ impl TableState {
         self.facts.same_world_as(&other.facts)
     }
 
-    /// Applies one commit's effects, all or nothing. A commit whose operation id was applied
-    /// before changes nothing and says so. A refused effect leaves the table as it was. An applied
-    /// commit, even an empty one, moves the revision stamp to its own.
+    /// Applies the engine's own commit (the host's, a lobby's), as `apply_from` the engine.
     pub fn apply(
         &mut self,
         scope: &TableScope,
         correlation: Correlation,
         effects: &[TableEffect],
     ) -> Result<ApplyOutcome, EffectError> {
-        if self.applied.contains(&correlation.operation_id) {
+        self.apply_from(Sender::Engine, scope, correlation, effects)
+    }
+
+    /// Applies one commit's effects, all or nothing. A commit whose operation id `sender` applied
+    /// before, under the membership it holds now, changes nothing and says so; the same id from
+    /// another sender is a different operation. A refused effect leaves the table as it was. An
+    /// applied commit, even an empty one, moves the revision stamp to its own.
+    pub fn apply_from(
+        &mut self,
+        sender: Sender,
+        scope: &TableScope,
+        correlation: Correlation,
+        effects: &[TableEffect],
+    ) -> Result<ApplyOutcome, EffectError> {
+        let key = self.applied.key_of(sender, correlation.operation_id);
+        if self.applied.contains(&key) {
             return Ok(ApplyOutcome::AlreadyApplied);
         }
         let mut next = (*self.facts).clone();
@@ -385,7 +475,14 @@ impl TableState {
         }
         next.revision = next.revision.max(correlation.revision);
         self.facts = Arc::new(next);
-        self.applied.remember(correlation.operation_id);
+        self.applied.remember(key);
+        for effect in effects {
+            match effect {
+                TableEffect::SeatJoined { seat } => self.applied.seat_joined(*seat),
+                TableEffect::SeatLeft { seat } => self.applied.seat_left(*seat),
+                _ => {}
+            }
+        }
         self.memo.forget();
         Ok(ApplyOutcome::Applied(events))
     }
