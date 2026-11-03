@@ -322,7 +322,7 @@ mod browser {
                 attribution: "Synthetic narrator",
                 position: "Supplied still caption · No audio timeline",
                 still: Some((
-                    "assets/concept-art/scene-campfire-under-stars.webp",
+                    "assets/placeholder/scene-campfire.webp",
                     "Campfire beneath the stars",
                 )),
                 skip_offer: None,

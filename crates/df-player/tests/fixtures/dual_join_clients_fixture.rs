@@ -921,8 +921,8 @@ mod browser {
                             }
                             10 | 11 => {
                                 for screen in [fixture.player.root(), fixture.display.root()] {
-                                    required(screen, ".scene-art")?.set_attribute("src", if operation == 10 { "assets/concept-art/fixture-missing-join-art.webp" } else { ConceptScene::Harbor.asset_path() })?;
-                                    required(screen, ".narrator")?.set_attribute("src", if operation == 10 { "assets/concept-art/fixture-missing-join-avatar.webp" } else { "assets/concept-art/dm-avatar.webp" })?;
+                                    required(screen, ".scene-art")?.set_attribute("src", if operation == 10 { "assets/placeholder/fixture-missing-join-art.webp" } else { ConceptScene::Harbor.asset_path() })?;
+                                    required(screen, ".narrator")?.set_attribute("src", if operation == 10 { "assets/placeholder/fixture-missing-join-avatar.webp" } else { "assets/placeholder/avatar-narrator.webp" })?;
                                 }
                             }
                             _ => return Err(JsValue::from_str("unknown join fixture operation")),

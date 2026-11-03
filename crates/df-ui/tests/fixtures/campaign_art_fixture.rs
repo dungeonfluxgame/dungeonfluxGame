@@ -42,113 +42,6 @@ mod browser {
             state: ObjectiveState::Pending,
         },
     ];
-    const ART: &[(&str, &str, &str)] = &[
-        (
-            "battlemap-crypt-sarcophagus-vault.webp",
-            "Battlemap Crypt Sarcophagus Vault",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "battlemap-flooded-hall-waterfall-temple.webp",
-            "Battlemap Flooded Hall Waterfall Temple",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "battlemap-harbor-docks-moonlit.webp",
-            "Battlemap Harbor Docks Moonlit",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "battlemap-library-orrery-reading-hall.webp",
-            "Battlemap Library Orrery Reading Hall",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "battlemap-swamp-boardwalk-shrine.webp",
-            "Battlemap Swamp Boardwalk Shrine",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "combat-harbor-docks-wide-lanterns.webp",
-            "Combat Harbor Docks Wide Lanterns",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "dm-avatar.webp",
-            "Dm Avatar",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "establishing-harbor-canal-rowboat-bridge.webp",
-            "Establishing Harbor Canal Rowboat Bridge",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "scene-barkeep-vell.webp",
-            "Scene Barkeep Vell",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "scene-campfire-under-stars.webp",
-            "Scene Campfire Under Stars",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "scene-crypt-lich-king-confrontation.webp",
-            "Scene Crypt Lich King Confrontation",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "scene-flooded-hall-party-wading-torchlit.webp",
-            "Scene Flooded Hall Party Wading Torchlit",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "scene-mountain-ruins-snowy-ridge-trek.webp",
-            "Scene Mountain Ruins Snowy Ridge Trek",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "scene-tavern-barkeep-talk-rain.webp",
-            "Scene Tavern Barkeep Talk Rain",
-            "Original scene / portrait artwork",
-        ),
-        (
-            "ui-phone-tavern-persuasion-sheet-screens.webp",
-            "Ui Phone Tavern Persuasion Sheet Screens",
-            "UI reference · baked concept mockup",
-        ),
-        (
-            "ui-tv-character-creation-phone-picker.webp",
-            "Ui Tv Character Creation Phone Picker",
-            "UI reference · baked concept mockup",
-        ),
-        (
-            "ui-tv-opening-scene-drowned-lantern-tavern.webp",
-            "Ui Tv Opening Scene Drowned Lantern Tavern",
-            "UI reference · baked concept mockup",
-        ),
-        (
-            "ui-tv-sunken-halls-exploration-hud.webp",
-            "Ui Tv Sunken Halls Exploration Hud",
-            "UI reference · baked concept mockup",
-        ),
-        (
-            "ui-tv-tavern-barkeep-dialogue-choices.webp",
-            "Ui Tv Tavern Barkeep Dialogue Choices",
-            "UI reference · baked concept mockup",
-        ),
-        (
-            "ui-tv-title-screen-join-lobby.webp",
-            "Ui Tv Title Screen Join Lobby",
-            "UI reference · baked concept mockup",
-        ),
-        (
-            "vell-avatar.webp",
-            "Vell Avatar",
-            "Original scene / portrait artwork",
-        ),
-    ];
     struct Fixture {
         surface: Rc<CampaignSurface>,
         controls: Vec<Rc<ControlledAction>>,
@@ -259,41 +152,6 @@ mod browser {
         parent.append_child(&node)?;
         Ok(node)
     }
-    fn gallery(document: &Document, surface: &CampaignSurface) -> Result<(), JsValue> {
-        let details = child(document, surface.root(), "details", "art-gallery", None)?;
-        child(
-            document,
-            &details,
-            "summary",
-            "",
-            Some("The original art collection · 21 pieces"),
-        )?;
-        child(
-            document,
-            &details,
-            "p",
-            "connection",
-            Some(
-                "Original ShellHacks concept artwork. Interface mockups are references; the campaign screen above is built from real Rust/WASM components.",
-            ),
-        )?;
-        let grid = child(document, &details, "div", "gallery-grid", None)?;
-        for (file, label, kind) in ART {
-            let card = child(document, &grid, "figure", "gallery-card", None)?;
-            let link = child(document, &card, "a", "", None)?;
-            let path = format!("assets/concept-art/{file}");
-            link.set_attribute("href", &path)?;
-            link.set_attribute("target", "_blank")?;
-            link.set_attribute("rel", "noopener")?;
-            let image = child(document, &link, "img", "", None)?;
-            image.set_attribute("src", &path)?;
-            image.set_attribute("alt", label)?;
-            image.set_attribute("loading", "lazy")?;
-            let caption = child(document, &card, "figcaption", "", Some(label))?;
-            child(document, &caption, "div", "overline", Some(kind))?;
-        }
-        Ok(())
-    }
     #[wasm_bindgen(start)]
     pub fn start() -> Result<(), JsValue> {
         if FIXTURE.with(|slot| slot.borrow().is_some()) {
@@ -389,7 +247,6 @@ mod browser {
                 })
                 .map_err(error)?;
         }
-        gallery(&document, &surface)?;
         let checks = child(&document, surface.root(), "details", "art-gallery", None)?;
         child(
             &document,

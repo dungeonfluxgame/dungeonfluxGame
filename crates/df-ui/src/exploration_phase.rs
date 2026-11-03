@@ -15,8 +15,8 @@ pub enum ExplorationPortrait {
 impl ExplorationPortrait {
     pub const fn asset_path(self) -> &'static str {
         match self {
-            Self::Vell => "assets/concept-art/vell-avatar.webp",
-            Self::Narrator => "assets/concept-art/dm-avatar.webp",
+            Self::Vell => "assets/placeholder/avatar-vell.webp",
+            Self::Narrator => "assets/placeholder/avatar-narrator.webp",
             // Generated art is served extensionless; an absent file hides the portrait.
             Self::Courier => "assets/ui/generated/sprite-courier-documentary-photo",
             Self::Bandit => "assets/ui/generated/sprite-bandit-documentary-photo",
@@ -1231,7 +1231,7 @@ mod tests {
         assert_eq!(fence.draft("  ".into()), None);
         assert_eq!(
             ExplorationPortrait::Vell.asset_path(),
-            "assets/concept-art/vell-avatar.webp"
+            "assets/placeholder/avatar-vell.webp"
         );
     }
 }

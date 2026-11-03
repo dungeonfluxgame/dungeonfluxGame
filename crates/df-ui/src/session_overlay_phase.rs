@@ -1066,10 +1066,8 @@ mod tests {
             current.validate(),
             Err(SessionOverlayValidationError::InvalidStill)
         );
-        current.bookend.as_mut().expect("bookend").still = Some((
-            "assets/concept-art/scene-campfire-under-stars.webp",
-            "Campfire",
-        ));
+        current.bookend.as_mut().expect("bookend").still =
+            Some(("assets/placeholder/scene-campfire.webp", "Campfire"));
         assert_eq!(current.validate(), Ok(()));
         current.subtitle = " ";
         assert_eq!(

@@ -661,7 +661,7 @@ mod browser {
                                 Ok(())
                             })(),
                             5 => check(fixture),
-                            _ => (|| { if let Some(art) = fixture.phase.root().query_selector(".scene-art")? { art.set_attribute("src", "assets/concept-art/fixture-missing-art.webp")?; } Ok(()) })(),
+                            _ => (|| { if let Some(art) = fixture.phase.root().query_selector(".scene-art")? { art.set_attribute("src", "assets/placeholder/fixture-missing-art.webp")?; } Ok(()) })(),
                         };
                         fixture.status.set_text_content(Some(if result.is_ok() { if operation == 5 { "PASS · 64 updates retained focus, selection, draft and nodes; pending/refusal, stale generation, visibility and asset fallback verified." } else { "Synthetic server view applied by fixture controller." } } else { "FAIL · Fixture presentation check or update failed." }));
                     }

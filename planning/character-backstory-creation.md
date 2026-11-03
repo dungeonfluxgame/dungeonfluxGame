@@ -312,8 +312,8 @@ SRD rules in that order to the collected signals.
 
 ### 4.2 Stage cards (3-6 illustrated choices each, plus Roll for me and Write my own)
 
-Every stage has 6 illustrated cards (art from the existing concept-art pool or the asset
-engine), a **Roll for me** card (a recorded die roll on the stage table, as the generator
+Every stage has 6 illustrated cards (art from the asset engine; the old concept-art pool
+was removed on 2026-11-02 and is available in git history at commit 1ff6e69e), a **Roll for me** card (a recorded die roll on the stage table, as the generator
 does) and a **My own** card (a short text box; the server maps it with the free-text path
 or keeps it as colour). Option text reuses the dossier tables where an equivalent exists so
 a player and an NPC can share an `origin` or `bond` id. Hero-only rows are added in a new

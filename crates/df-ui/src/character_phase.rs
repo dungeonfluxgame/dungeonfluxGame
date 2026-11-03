@@ -12,7 +12,7 @@ impl CharacterPortrait {
     pub const fn asset_path(self) -> &'static str {
         match self {
             Self::Narrator => "assets/ui/portraits/lantern-keeper-generated-v2.png",
-            Self::Vell => "assets/concept-art/vell-avatar.webp",
+            Self::Vell => "assets/placeholder/avatar-vell.webp",
         }
     }
     pub const fn description(self) -> &'static str {
@@ -965,7 +965,7 @@ mod browser {
                 Some(crate::character_phase_theme::STYLES),
             )?;
             let backdrop = child(document, &root, "img", "character-backdrop", None)?;
-            backdrop.set_attribute("src", "assets/concept-art/scene-campfire-under-stars.webp")?;
+            backdrop.set_attribute("src", "assets/placeholder/scene-campfire.webp")?;
             backdrop.set_attribute("alt", "")?;
             let header = child(document, &root, "header", "character-header", None)?;
             let brand = child(document, &header, "div", "character-brand", Some("Dungeon"))?;
@@ -1054,10 +1054,7 @@ mod browser {
                 ),
             )?;
             let image = child(document, &reference, "img", "", None)?;
-            image.set_attribute(
-                "src",
-                "assets/concept-art/ui-tv-character-creation-phone-picker.webp",
-            )?;
+            image.set_attribute("src", "assets/placeholder/scene-character-picker.webp")?;
             image.set_attribute(
                 "alt",
                 "Original character creation television and phone interface concept",

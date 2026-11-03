@@ -16,11 +16,9 @@ pub enum CombatArt {
 impl CombatArt {
     pub const fn asset_path(self) -> &'static str {
         match self {
-            Self::Harbor => "assets/concept-art/combat-harbor-docks-wide-lanterns.webp",
-            Self::Crypt => "assets/concept-art/scene-crypt-lich-king-confrontation.webp",
-            Self::FloodedTemple => {
-                "assets/concept-art/battlemap-flooded-hall-waterfall-temple.webp"
-            }
+            Self::Harbor => "assets/placeholder/combat-harbor.webp",
+            Self::Crypt => "assets/placeholder/combat-crypt.webp",
+            Self::FloodedTemple => "assets/placeholder/combat-flooded-hall.webp",
         }
     }
     pub const fn description(self) -> &'static str {

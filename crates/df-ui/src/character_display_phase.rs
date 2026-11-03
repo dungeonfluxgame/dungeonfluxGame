@@ -281,7 +281,7 @@ mod browser {
                 Some(crate::character_display_phase_theme::STYLES),
             )?;
             let backdrop = child(document, &root, "img", "character-backdrop", None)?;
-            backdrop.set_attribute("src", "assets/concept-art/scene-campfire-under-stars.webp")?;
+            backdrop.set_attribute("src", "assets/placeholder/scene-campfire.webp")?;
             backdrop.set_attribute("alt", "")?;
             let header = child(document, &root, "header", "character-header", None)?;
             let brand = child(document, &header, "div", "character-brand", Some("Dungeon"))?;

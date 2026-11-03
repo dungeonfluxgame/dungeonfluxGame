@@ -3,12 +3,8 @@
   "kit": "DungeonFlux generated interface chrome",
   "generated_at": "2026-10-11",
   "source_origin": "Synthetic interface chrome (icons, frames, ribbons, dice, status icons, wordmark) generated for DungeonFlux. Illustrative only; adds no gameplay requirements. Painted depictions (portraits, figures, sprites, scenes, grounds, props) were removed under the art contract (crates/df-render/src/art_contract.rs): depictions are live photographic imagery or the reviewed -documentary-photo assets listed in documentary-photo-v2.assets.json.",
-  "style_references": [
-    "assets/concept-art/ui-tv-title-screen-join-lobby.webp",
-    "assets/concept-art/ui-phone-tavern-persuasion-sheet-screens.webp",
-    "assets/concept-art/ui-tv-tavern-barkeep-dialogue-choices.webp",
-    "assets/concept-art/combat-harbor-docks-wide-lanterns.webp"
-  ],
+  "style_references": [],
+  "style_references_note": "The concept art used as style references was removed on 2026-11-02; it is available in git history at commit 1ff6e69e.",
   "assets": [
     {
       "name": "wordmark",
@@ -27,7 +23,7 @@
         "prompt": "Use case: logo-brand. Create a premium AAA fantasy game production wordmark asset matching the supplied title-screen and phone concept art. Reference images are style references only; extract the typography style, not any scene or UI. Output exactly 2048x768 PNG with a genuinely transparent alpha background. Subject is ONLY the single word \"DungeonFlux\", spelled D-u-n-g-e-o-n-F-l-u-x, capital D and F. Match the title-screen logo closely: tall ornate angular fantasy serif, sharp clean engraved letterforms and tapered pointed serifs, Dungeon in burnished antique gold with warm highlights, Flux transitioning to luminous ice-blue with white icy highlights. Subtle bevel and restrained soft glow, painterly cinematic material realism with crisp typography. Single line, centered, occupy most of canvas width with clear transparent padding, whole word uncropped. No tagline, no symbols, no ornament surrounding the word, no background, no frame, no other elements, no watermark, no signature. Actual transparent pixels behind and inside letters, never a rendered checkerboard.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "panel-frame",
@@ -46,7 +42,7 @@
         "prompt": "Use case: stylized-concept. A production UI ornamental border sprite for DungeonFlux. EXACT image canvas 1536x1024 PNG RGBA, genuine transparent exterior and completely transparent interior. Draw only a perfectly straight rectangular THIN DOUBLE GOLD RULE. The OUTER STRAIGHT RULE MUST run at x=40, x=1496, y=40, y=984, inner rule spaced 5 pixels inward. Tiny engraved identical corner flourishes within 25 pixels of each corner. No wide glow whatsoever. Antique warm gold metal line work with tiny bevel highlights, restrained AAA cinematic fantasy finish matching the reference UI. Four identical symmetric corners, orthographic front view, correct aspect ratio. Entire rectangle visible, no cropping, no perspective, no bends. Nothing else anywhere: absolutely no panel fill, NO COLORED HAZE, no backdrop, no black field, no scene, no text, no watermark or signature. Beyond a 2-pixel soft antialiased edge around gold lines, all pixels must be alpha=0. Border intended for 9-slice use; leave only 40 pixels of canvas margin, not 75 or 90.",
         "attempts": 3
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "button-frame",
@@ -65,7 +61,7 @@
         "prompt": "Create one exact 1536x384 PNG RGBA sprite, aspect ratio exactly 4:1. DungeonFlux thin antique-gold button frame. Only a hairline gold outline around a long empty rectangle with clipped corners and a small pointed diamond notch at midpoint of each vertical end. Entire border centered with 35px padding around it. Gold line thickness ONLY 2 to 3 pixels, not a thick metal molding, no rounded corners, no medallions. Transparent background AND transparent empty center, actual alpha=0. Restrained elegant antique-gold fine engraving and subtle 3px warm glow, premium cinematic fantasy game finish. Single orthographic sprite matching thin reference phone buttons. No text, no UI icons, no background, no surface fill, no watermark, no signature. Exact resolution 1536 pixels wide and 384 pixels tall is mandatory, do not generate 2048x682.",
         "attempts": 3
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "divider",
@@ -84,7 +80,7 @@
         "prompt": "Use case: stylized-concept. DungeonFlux premium AAA fantasy UI ornament sprite matching delicate antique-gold dividers in reference phone panels. Exact PNG canvas 1536x192, aspect ratio8:1. Genuine transparent alpha background. ONE horizontal thin antique-gold line running across the middle and gracefully fading to transparency at both ends. Small four-point star / elongated diamond motif exactly centered. Extremely restrained 2-pixel engraved gold rule, tiny warm highlights, no large ornament, no medallion. Center star height24px, clean symmetric four points, gold color. Painterly cinematic metal realism with crisp ornament edges. Entire line and motif visible with transparent padding. No text, no frame, no UI, no panel surface, no background, no scene, no watermark or signature. Deliver actual alpha=0 background, no rendered checkerboard. Exact1536x192 dimensions.",
         "attempts": 3
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "ribbon-success",
@@ -103,7 +99,7 @@
         "prompt": "Use case: stylized-concept. DungeonFlux premium AAA fantasy UI success ribbon asset. Supplied phone screenshot is style reference, especially its restrained Success ribbon silhouette; do not reproduce its text. Exact1536x384 PNG RGBA, wide4:1canvas. Genuine transparent alpha exterior. ONE empty emerald-green horizontal ribbon banner with fine antique-gold trim and identical pointed/notched ends, matching slim symmetric polygonal ribbon in the phone concept art. Flat orthographic front view, centered, large across canvas with transparent padding. Deep emerald green surface with subtle velvet-like painterly texture, warm gold edge highlights; no folds blocking label area, no hanging tails. Empty broad center ready for overlaid text. Elegant restrained engraving, cinematic painterly realism, clean fine sharp outline, not cartoon. NO TEXT of any kind, no letters, no Success wording, no icon, no star, no frame beyond ribbon gold trim, no background, no scene, no watermark/signature. Actual alpha=0 around ribbon. Canvas must1536x384.\nREPAIR: gold trim must be much thinner, delicate 2pixel antique-gold line instead of thick metal molding. Ends must have small angular notched indentations on their shoulders like the reference Success banner. No corner ornament hooks. Ribbon surface deep emerald velvet, thin restrained luminous-green inner edge. Exact1536x384 canvas, centered with only40px outer padding.",
         "attempts": 2
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "ribbon-failure",
@@ -122,7 +118,7 @@
         "prompt": "Use case: precise-object-edit. Input image is the final DungeonFlux emerald success ribbon asset. Produce matching failure ribbon. Change ONLY the emerald-green ribbon surface and green inner glow to DEEP CRIMSON RED. Keep the EXACT same ribbon silhouette, fine antique-gold trim, notches, dimensions, centered position, surface texture, empty center, lighting and alpha silhouette. No text whatsoever. Same premium AAA cinematic painterly fantasy game style. Output requested1536x384 PNG with genuine transparent alpha exterior; all pixels outside ribbon remain transparent. Do not add any text, icon, background, watermark or signature. Deep crimson velvet tone, not bright scarlet, gold trim stays antique gold.\nCORRECTION: Deep dark burgundy/crimson, muted night palette, red inner glow dim and restrained. Do not use bright scarlet/neon red. Preserve original success ribbon exact geometry and gold trim. Native shape must match reference; requested canvas1536x384.",
         "attempts": 2
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "d20",
@@ -141,7 +137,7 @@
         "prompt": "Use case: stylized-concept. DungeonFlux premium AAA fantasy dice asset matching the obsidian die in supplied phone Persuasion Check screenshot. References for materials, cinematic painterly realism, moonlit navy highlights and warm antique gold only, no UI. EXACT1024x1024 PNG with genuinely transparent alpha background. ONE single twenty-sided die, a geometrically coherent regular icosahedron with twenty triangular facets. Polished obsidian black stone facets with thin antique-gold engraved edges. Die floating centered, fully visible, generous transparent padding. Camera shows a large upward-facing front/top triangular face oriented to the viewer, and multiple smaller SIDE triangles. The LARGE CENTRAL UPWARD-FACING FRONT/TOP TRIANGLE IS COMPLETELY BLANK POLISHED OBSIDIAN: no number, no symbol, no engraving on this face, ready for a number overlay. Gold numerals ONLY on visible smaller SIDE faces, clean legible engraved digits such as 3,7,10,19, softly glowing warm gold. No extra numerals outside die. Faint delicate ice-blue arcane mist curls immediately around the die, with transparent alpha between and beyond curls. Crisp elegant facets, cool reflected highlights, subtle worn stone texture, realistic cinematic lighting and deep navy fantasy palette. No pedestal, no shadow plane, no scene/backdrop, no frame or UI, no floating text, no watermark/signature. Real alpha transparency, not a checkerboard. Exact1024x1024.\nREPAIR: Generate EXACT1024x1024 pixels (not1280x1280). Arcane mist must be very faint, wispy translucent blue threads, at most10% visual opacity, not thick bright swirls. Obsidian central blank triangle must be polished and clean with subtle reflective sheen, not cracked pavement. Maintain coherent icosahedron, blank upward front/top face and gold side numerals only. Die occupies approximately70% canvas width.",
         "attempts": 3
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-attack",
@@ -160,7 +156,7 @@
         "prompt": "Use case: stylized-concept. Asset type: DungeonFlux AAA fantasy game UI icon. Output square 512x512 PNG with genuine transparent alpha. Draw a single centered minimalist engraved LINE-ART emblem with hollow transparent interiors, occupying 70% canvas. Use antique-gold medium-weight contour strokes, restrained warm amber glow, crisp elegant contours with subtle etched highlights. The entire drawing is gold strokes only, like an engraving traced in luminous antique-gold ink, with empty transparent spaces inside and outside. Uniform stroke weight roughly 3% of emblem width; legible at 32px. This belongs on deep navy fantasy game UI panels with cinematic painterly harbor art, but do not include any panel or scenery. Keep design simple, polished and refined, balanced visual weight. Absolutely no solid metallic fill, no 3D object rendering, no bronze sculpture, no black fill, no backdrop, no background plate, no enclosing frame or border, no text/letters/numbers, no watermark/signature, no UI. Subject: exactly two crossed swords, blades upper left and upper right, hilts below, clean simple sword outline shapes with a single blade engraving line. Gold contour lines only, transparent blade interiors.",
         "attempts": 3
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-sword",
@@ -179,7 +175,7 @@
         "prompt": "Use case: stylized-concept. Asset type: DungeonFlux AAA fantasy game UI icon. Output square 512x512 PNG with genuine transparent alpha. Draw a single centered minimalist engraved LINE-ART emblem with hollow transparent interiors, occupying 70% canvas. Use antique-gold medium-weight contour strokes, restrained warm amber glow, crisp elegant contours with subtle etched highlights. The entire drawing is gold strokes only, like an engraving traced in luminous antique-gold ink, with empty transparent spaces inside and outside. Uniform stroke weight roughly 3% of emblem width; legible at 32px. This belongs on deep navy fantasy game UI panels with cinematic painterly harbor art, but do not include any panel or scenery. Keep design simple, polished and refined, balanced visual weight. Absolutely no solid metallic fill, no 3D object rendering, no bronze sculpture, no black fill, no backdrop, no background plate, no enclosing frame or border, no text/letters/numbers, no watermark/signature, no UI. Subject: exactly two crossed swords, blades upper left and upper right, hilts below, clean simple sword outline shapes with a single blade engraving line. Gold contour lines only, transparent blade interiors.",
         "attempts": 3
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-second-wind",
@@ -198,7 +194,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a heart outline wrapped by one fluid swirl of wind, three curved wind lines sweep from lower left around the heart to upper right. Hollow heart with transparent interior. Gold engraved line emblem only.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-heart",
@@ -217,7 +213,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a heart outline wrapped by one fluid swirl of wind, three curved wind lines sweep from lower left around the heart to upper right. Hollow heart with transparent interior. Gold engraved line emblem only.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-end-turn",
@@ -236,7 +232,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a clean upright hourglass outline, two horizontal caps and two inward-curving glass contours, small sand triangle in each chamber. Simple symmetric gold engraving.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-short-rest",
@@ -255,7 +251,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a small campfire with exactly three distinct logs at its base, three elegant flame contours rising above. Gold engraved line art flames and logs only.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-journey",
@@ -274,7 +270,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a winding road drawn as two simple curving gold lines converging toward a distant small arched lit doorway. No landscape, no building facade, no scenery; a compact single emblem of road and doorway.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-compass",
@@ -293,7 +289,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a winding road drawn as two simple curving gold lines converging toward a distant small arched lit doorway. No landscape, no building facade, no scenery; a compact single emblem of road and doorway.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-talk",
@@ -312,7 +308,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a large dominant speech bubble outline, empty transparent interior, with a TINY quill tucked at its lower-right edge. Quill height only ONE THIRD of speech bubble height, subordinate accent. Bubble occupies most of emblem. Quill must be small. No text.",
         "attempts": 2
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-speech",
@@ -331,7 +327,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a large dominant speech bubble outline, empty transparent interior, with a TINY quill tucked at its lower-right edge. Quill height only ONE THIRD of speech bubble height, subordinate accent. Bubble occupies most of emblem. Quill must be small. No text.",
         "attempts": 2
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-investigate",
@@ -350,7 +346,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a single magnifying glass, circular hollow ring lens with fully transparent interior and a simple diagonal handle lower right.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-character",
@@ -369,7 +365,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a hooded bust silhouette with ONLY a simple outer hood arch, one inner opening line, and a single shoulder contour beneath. Faceless fully empty transparent hood opening. Minimal symbol, absolutely no folds, drapery etchings, decorative clothing, or additional detail. Clean unbroken contours.",
         "attempts": 2
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-journal",
@@ -388,7 +384,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: an open book outlined in gold, two facing pages with a clear center spine and a single ribbon marker. Blank transparent pages, no writing.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-book",
@@ -407,7 +403,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: an open book outlined in gold, two facing pages with a clear center spine and a single ribbon marker. Blank transparent pages, no writing.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-map",
@@ -426,7 +422,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a folded map with three accordion-folded panels, minimal route lines and one small clear location pin. Transparent panel interiors, no labels or lettering.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-menu",
@@ -445,7 +441,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: exactly three stacked parallel horizontal gold bars, each like a slender lens shape with widest body at middle and steadily NARROWING to sharp tapered pointed tips at both ends. Ends narrower than middle, no diamond finials, no flared ends. Equal lengths, clear equal spacing. ONLY three simple tapered bars.",
         "attempts": 2
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-dice",
@@ -464,7 +460,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a twenty-sided die outline, isometric regular icosahedron emblem with clean triangular facet lines. No numbers, hollow transparent facets.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-players",
@@ -483,7 +479,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: exactly three small anonymous figure silhouettes shoulder to shoulder, central bust slightly taller, three round heads and simple shoulder contours, no faces or anatomy details. Gold outline silhouette emblem.",
         "attempts": 1
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "icon-shield",
@@ -502,7 +498,7 @@
         "prompt": "Create one premium fantasy UI pictogram, square 512 by 512 PNG. TRANSPARENT BACKGROUND. Flat antique-gold engraved outline drawing, elegant restrained old-gold strokes of medium weight, extremely slight warm glow. Single centered emblem within central 70 percent of canvas. Transparent empty interiors, transparent negative spaces. Simple, crisp, clean and readable at 32 pixels. Gold LINE ART only. No solid fill, no bevel, no 3D metallic object, no textures within shapes, no decoration, no lettering, no numerals, no border, no panel, no background plate, no watermark. Intended for DungeonFlux moonlit-harbor fantasy UI on navy panels. Subject: a traditional medieval HEATER shield outline: straight horizontal flat top edge, two short vertical upper sides then curving inward sides meeting in pointed bottom. Absolutely no point or peak at top. One SMALL five-point star centered within, star width only one quarter shield width. Hollow transparent interior. Simple classic heater shield silhouette.",
         "attempts": 2
       },
-      "review": "Coordinator visual review against assets/concept-art on 2026-10-11"
+      "review": "Coordinator visual review against the concept art (since removed, see git history at 1ff6e69e) on 2026-10-11"
     },
     {
       "name": "status-blinded",

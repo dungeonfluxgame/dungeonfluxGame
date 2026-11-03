@@ -23,13 +23,13 @@ impl GameplaySceneArt {
             },
             // Generic prepared artwork is atmosphere, not Mara's identity or an action outcome.
             Self::HarborEncounter => SceneArtSelection {
-                asset_path: "assets/concept-art/combat-harbor-docks-wide-lanterns.webp",
+                asset_path: "assets/placeholder/combat-harbor.webp",
                 title: "Trouble on the Docks",
                 image_description: "A painted harbor skirmish beneath warm dock lanterns.",
                 fallback_label: "Dockside illustration unavailable",
             },
             Self::CampfireRest => SceneArtSelection {
-                asset_path: "assets/concept-art/scene-campfire-under-stars.webp",
+                asset_path: "assets/placeholder/scene-campfire.webp",
                 title: "Beneath the Stars",
                 image_description: "A campfire glows beneath a starry sky above a misty valley.",
                 fallback_label: "Campfire illustration unavailable",

@@ -74,7 +74,7 @@ mod browser {
                 "Possible future · This montage predicts no outcome and creates no campaign facts.",
                 "The road may lead north, where broken pillars rise from the snow.",
                 "Supplied speculative narration · Synthetic story",
-                "assets/concept-art/scene-mountain-ruins-snowy-ridge-trek.webp",
+                "assets/placeholder/scene-mountain.webp",
             ),
             7 => (
                 SessionBookendKind::CriticalCue,
@@ -82,7 +82,7 @@ mod browser {
                 "Cosmetic still of a supplied committed event · Essential input remains available.",
                 "The lantern caught the carved archway, and the party saw the way into the sunken hall.",
                 "Supplied event caption · Synthetic story",
-                "assets/concept-art/scene-flooded-hall-party-wading-torchlit.webp",
+                "assets/placeholder/scene-sunken-hall.webp",
             ),
             _ => (
                 SessionBookendKind::Recap,
@@ -90,7 +90,7 @@ mod browser {
                 "Session 04 · Authorized events supplied by the view owner",
                 "You followed the lantern through the rain. Vell said the light had not gone out for twenty years. By nightfall, the road had carried you beyond Greyhaven.",
                 "Vell's claim is attributed to Vell; it is not established truth. · Synthetic story",
-                "assets/concept-art/scene-campfire-under-stars.webp",
+                "assets/placeholder/scene-campfire.webp",
             ),
         };
         SessionOverlayView {

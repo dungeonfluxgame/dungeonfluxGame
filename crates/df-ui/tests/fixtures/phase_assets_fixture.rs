@@ -203,7 +203,7 @@ mod browser {
         image(
             &document,
             &portrait,
-            "assets/concept-art/dm-avatar.webp",
+            "assets/placeholder/avatar-narrator.webp",
             "The Storyteller",
             "portrait-photo",
             &status,

@@ -20,21 +20,11 @@
     "pixel_manipulation": "none; original native PNG copied byte-for-byte",
     "prompt": "Use case: stylized-concept\nAsset type: DungeonFlux game character portrait used in TV and phone character cards.\nPrimary request: Generate one new high-detail cinematic fantasy illustration of the same fictional hooded lantern-keeper concept shown in Image 1, with glowing warm amber eyes and a dark textured cloak.\nInput images: Image 1 is subject and silhouette reference (dm-avatar.webp); Image 2 is color, lighting, material, and cinematic atmosphere reference (scene-campfire-under-stars.webp). These are references, not edit targets.\nScene/backdrop: Unobtrusive charcoal and midnight-blue atmospheric darkness, with subtle warm campfire light.\nSubject: One centered hooded storyteller, head and shoulders, face deeply shadowed under the hood and two small luminous amber eyes. Preserve the memorable pointed hood silhouette and quiet mysterious presence. Layered worn dark fabric with believable weave, seams, folds, and restrained weathered brass details.\nStyle/medium: Polished cinematic fantasy concept illustration with rich natural material detail, restrained painterly realism, coherent with the existing campfire art.\nComposition/framing: Portrait-oriented single image, centered head and shoulders, front-facing. Keep hood, eyes, and shoulder silhouette within a generous central safe area for both square and tall character-card crops. No decorative frame or circular border; let the app supply framing.\nLighting/mood: Warm amber campfire rim light and soft cool midnight fill reveal the textured cloak; luminous eyes remain the focal point. Mysterious but calm, readable at small card sizes with enough detail for a large shared display.\nColor palette: Charcoal black, muted midnight blue, weathered brass, warm ember amber.\nConstraints: Fictional illustrative character, no claims of a canonical species, class, or gameplay mechanics. One character only; no text, letters, logos, watermark, UI, borders, or additional figures. No gore or exaggerated horror. Produce a finished native high-resolution raster asset.",
     "transparent_background": false,
-    "references": [
-      {
-        "path": "assets/concept-art/dm-avatar.webp",
-        "role": "subject and silhouette",
-        "sha256": "33a01374e0a76d288ed57c0dd3aa2942ac1092e936bec6d50af20a7ef9325bd7"
-      },
-      {
-        "path": "assets/concept-art/scene-campfire-under-stars.webp",
-        "role": "color, lighting, material, atmosphere",
-        "sha256": "9ca4b1443dfb2108b7fb6b8a1d6811a0165432bedbb7f38c4baf5e1d9726ca13"
-      }
-    ]
+    "references": [],
+    "references_note": "The two reference images (dm-avatar.webp, scene-campfire-under-stars.webp) were concept art removed on 2026-11-02; they are available in git history at commit 1ff6e69e."
   },
   "disclosure": "AI-generated v2 fictional illustrative lantern-keeper portrait. Cosmetic presentation only; no canonical D&D species, class, or mechanics implied.",
-  "reference_preservation": "Original concept-art files retained unchanged",
+  "reference_preservation": "Original concept-art files were retained unchanged when this asset was made; they were removed on 2026-11-02 and are available in git history at commit 1ff6e69e",
   "visual_inspection": {
     "performed": true,
     "result": "One centered hooded head-and-shoulders figure; warm amber eyes, detailed charcoal cloak, brass fastenings, campfire light; no visible text, logo, UI, watermark, or border.",

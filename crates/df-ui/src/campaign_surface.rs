@@ -23,12 +23,12 @@ const HARBOR_PHOTO_PATH: &str = "assets/ui/generated/scene-salt-quay-arrival-doc
 impl ConceptScene {
     pub const fn asset_path(self) -> &'static str {
         match self {
-            Self::Harbor => "assets/concept-art/establishing-harbor-canal-rowboat-bridge.webp",
+            Self::Harbor => "assets/placeholder/scene-harbor.webp",
             Self::MaraHarbor => "assets/ui/scenes/mara-harbor-v4.png",
-            Self::Tavern => "assets/concept-art/scene-tavern-barkeep-talk-rain.webp",
-            Self::Mountain => "assets/concept-art/scene-mountain-ruins-snowy-ridge-trek.webp",
-            Self::SunkenHall => "assets/concept-art/scene-flooded-hall-party-wading-torchlit.webp",
-            Self::Campfire => "assets/concept-art/scene-campfire-under-stars.webp",
+            Self::Tavern => "assets/placeholder/scene-tavern.webp",
+            Self::Mountain => "assets/placeholder/scene-mountain.webp",
+            Self::SunkenHall => "assets/placeholder/scene-sunken-hall.webp",
+            Self::Campfire => "assets/placeholder/scene-campfire.webp",
             Self::LobbyHarbor | Self::WharfArrival | Self::WhisperInTheRain | Self::CourierRoad => {
                 HARBOR_PHOTO_PATH
             }
@@ -489,7 +489,7 @@ mod browser {
             let narration_panel = child(document, &lower, "section", "narration", None)?;
             narration_panel.set_attribute("aria-label", "Narration")?;
             let avatar = child(document, &narration_panel, "img", "narrator", None)?;
-            avatar.set_attribute("src", "assets/concept-art/dm-avatar.webp")?;
+            avatar.set_attribute("src", "assets/placeholder/avatar-narrator.webp")?;
             avatar.set_attribute("alt", "Hooded narrator portrait")?;
             let narrative = child(document, &narration_panel, "div", "", None)?;
             child(
