@@ -30,7 +30,7 @@ pub(super) struct ExecutedImage {
 pub(super) struct DispatchFailure {
     pub error: RuntimeError,
     pub usage: Option<ObservedDispatchUsage>,
-    pub api: Option<api::ApiFailure>,
+    pub api: Option<Box<api::ApiFailure>>,
 }
 
 pub(super) struct ObservedDispatchUsage {
@@ -717,7 +717,7 @@ async fn execute_api<E: ImageExecutionJournal, K: ImageCredentials>(
                     event.measurements.delivery_identified = Some(failure.delivery_host.is_some());
                     event.measurements.admission_refused = Some(failure.admission_reason.is_some());
                     telemetry.observe(event);
-                    api_failure(failure.observation)
+                    api_failure(*failure.observation)
                 })?;
             let credits = image
                 .credits
@@ -894,7 +894,7 @@ fn api_failure(failure: api::ApiFailure) -> DispatchFailure {
     DispatchFailure {
         error: api_error(failure.error),
         usage: None,
-        api: Some(failure),
+        api: Some(Box::new(failure)),
     }
 }
 
@@ -915,7 +915,7 @@ fn openai_failure(failure: api::ApiFailure) -> DispatchFailure {
     DispatchFailure {
         error: api_error(failure.error),
         usage: Some(observed),
-        api: Some(failure),
+        api: Some(Box::new(failure)),
     }
 }
 

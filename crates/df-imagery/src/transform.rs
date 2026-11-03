@@ -711,12 +711,11 @@ impl TransformSpec {
         if let TransformSource::SegmentationMask {
             contract_revision, ..
         } = &self.source
+            && *contract_revision != 1
         {
-            if *contract_revision != 1 {
-                return Err(TransformError::OutOfRange {
-                    field: "segmentation_mask_revision",
-                });
-            }
+            return Err(TransformError::OutOfRange {
+                field: "segmentation_mask_revision",
+            });
         }
         if self.steps.len() > limits.max_transform_steps {
             return Err(TransformError::TooManySteps);

@@ -235,7 +235,7 @@ where
                 config_digest: candidate.basis.config_digest,
                 parent_dispatch: Some(candidate.scope.dispatch),
             },
-            super::planned_publication(&publication_stage)?,
+            super::planned_publication(publication_stage)?,
             self.settings.capacity.clone(),
             kind == StageKind::LocalTransform || publication_stage.local_accounting,
             self.clock.now_ms(),
@@ -373,15 +373,13 @@ where
                 )
                 .await
                 .map_err(RuntimeError::Execution)?
-            {
-                if let Some(local) = self
+                && let Some(local) = self
                     .execution
                     .read_local_inspection(&job.owner, &job.job, &stage.stage)
                     .await
                     .map_err(RuntimeError::Execution)?
-                {
-                    local_inspections.push(local);
-                }
+            {
+                local_inspections.push(local);
             }
         }
         local_inspections.sort_by_key(|local| local.scope.stage);

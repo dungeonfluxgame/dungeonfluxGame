@@ -332,7 +332,7 @@ async fn photo_check_reads_visible_features_in_the_same_quality_judgement() {
         "region": [650, 220, 920, 600], "recorded_id": null,
     }]);
     let (judge, request) = fake_judge(answer).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg());
     let reading = read_scene_photo(
         &judge,
         &image_jpeg(),
@@ -361,7 +361,7 @@ async fn photo_check_reads_visible_features_in_the_same_quality_judgement() {
 
 #[tokio::test]
 async fn photo_check_rejects_invalid_regions_and_never_exports_rejected_picture_features() {
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg());
     for (heroes, region, expected_error) in [
         (6, json!([600, 200, 500, 400]), true),
         (6, json!([0, 0, 1001, 1000]), true),
@@ -399,7 +399,7 @@ async fn photo_check_rejects_invalid_regions_and_never_exports_rejected_picture_
 
 #[tokio::test]
 async fn scene_photo_counts_against_the_sheet_and_requires_the_actual_count() {
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg());
     for expected in [1, 2, 4, 6] {
         for seen in [0, expected, expected + 1] {
             let (judge, request) = fake_judge(scene_answer(seen as u64)).await;
@@ -475,7 +475,7 @@ async fn scene_photo_does_not_allow_text_fallback_to_hide_a_count_failure() {
             &image_jpeg(),
             ImageFormat::Jpeg,
             SceneParty::new(6, 2).unwrap(),
-            &ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into()),
+            &ReferenceImage::new(ImageFormat::Jpeg, image_jpeg()),
             Duration::from_secs(5),
         )
         .await
@@ -720,7 +720,7 @@ async fn canonical_room_uses_explicit_people_presence_and_high_detail() {
 
 #[tokio::test]
 async fn scene_photo_rejects_unrecorded_drawn_weapons_with_a_typed_reason() {
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg());
     for recorded_draw in [false, true] {
         let mut value = scene_answer(6);
         value["weapon_custody"] = json!(if recorded_draw {
@@ -814,7 +814,7 @@ async fn scene_photo_uses_compact_hand_facts_within_the_judge_instruction_limit(
     )
     .to_string();
     let (judge, request) = fake_judge(scene_answer(6)).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg());
     assert_eq!(
         check_scene_photo_with_custody(
             &judge,
@@ -847,7 +847,7 @@ async fn photo_publication_gate_preserves_features_and_public_record_ids_without
         "region":[600,200,900,700], "recorded_id":null
     }]);
     let (judge, sent) = fake_judge(answer).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg());
     let (failure, features) = photo_failure(
         &judge,
         PhotoCheckKind::ScenePlate,
@@ -873,7 +873,7 @@ async fn photo_feature_public_catalog_keeps_quality_and_custody_within_the_instr
     answer["visible_features"] = json!([{"name":"recorded object 255","look":"An already recorded public object.",
         "region":[100,200,300,400],"recorded_id":"market-item-255"}]);
     let (judge, sent) = fake_judge(answer).await;
-    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg().into());
+    let sheet = ReferenceImage::new(ImageFormat::Jpeg, image_jpeg());
     let result = read_scene_photo(
         &judge,
         &image_jpeg(),

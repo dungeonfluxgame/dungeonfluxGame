@@ -448,8 +448,10 @@ fn distinct_creator_general_prompt_is_bound_private_and_historically_absent() {
         Some(&separate)
     );
     assert!(!format!("{separate:?}").contains("private restrained alternate image prompt"));
-    let mut bounded = RequestLimits::default();
-    bounded.max_prompt_chars = 32;
+    let bounded = RequestLimits {
+        max_prompt_chars: 32,
+        ..RequestLimits::default()
+    };
     assert!(encode_intent(&request(Some(separate.clone())), &bounded, 1_048_576).is_err());
     separate.creator.as_mut().unwrap().general_prompt = Some(PrivateImageText::new(" "));
     assert!(

@@ -122,17 +122,16 @@ where
                 category,
                 crate::CreatorCategory::General
                     | crate::CreatorCategory::AdultNonsexualAnatomyDetail
-            ) {
-                if let Some(pipeline) = &mut pipeline {
-                    if let Some(general) = pipeline
-                        .creator
-                        .as_ref()
-                        .and_then(|creator| creator.general_prompt.as_ref())
-                    {
-                        text = general.text().to_owned();
-                    }
-                    pipeline.rating = crate::ImageContentRating::Restrained;
+            ) && let Some(pipeline) = &mut pipeline
+            {
+                if let Some(general) = pipeline
+                    .creator
+                    .as_ref()
+                    .and_then(|creator| creator.general_prompt.as_ref())
+                {
+                    text = general.text().to_owned();
                 }
+                pipeline.rating = crate::ImageContentRating::Restrained;
             }
         }
         if stage.kind == StageKind::Correction {
@@ -702,6 +701,6 @@ fn clone_intent(original: &DecodedIntent, operation: ImageOperation) -> DecodedI
         freshness: original.freshness,
         audience: original.audience.clone(),
         expected_source_revision: original.expected_source_revision,
-        output: original.output.clone(),
+        output: original.output,
     }
 }

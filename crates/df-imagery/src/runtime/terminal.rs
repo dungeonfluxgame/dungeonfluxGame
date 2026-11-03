@@ -127,15 +127,13 @@ where
                 )
                 .await
                 .map_err(RuntimeError::Execution)?
-            {
-                if let Some(local) = self
+                && let Some(local) = self
                     .execution
                     .read_local_inspection(&job.owner, &job.job, &stage.stage)
                     .await
                     .map_err(RuntimeError::Execution)?
-                {
-                    evidence.local_inspections.push(local);
-                }
+            {
+                evidence.local_inspections.push(local);
             }
         }
         evidence

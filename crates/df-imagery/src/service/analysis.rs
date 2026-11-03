@@ -413,17 +413,15 @@ pub(crate) fn validate_result_binding(
         ImageAnalysisOperation::Segmentation(spec),
         ImageAnalysisResult::Segmentation { masks, .. },
     ) = (operation, result)
-    {
-        if masks.len() != spec.prompts.len()
+        && (masks.len() != spec.prompts.len()
             || masks.iter().zip(&spec.prompts).any(|(masks, prompt)| {
                 masks.prompt != *prompt
                     || masks.instances.len()
                         > usize::try_from(spec.maximum_masks).unwrap_or(usize::MAX)
                     || masks.validate().is_err()
-            })
-        {
-            return Err(());
-        }
+            }))
+    {
+        return Err(());
     }
     Ok(())
 }

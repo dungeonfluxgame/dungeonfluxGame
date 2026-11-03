@@ -195,7 +195,7 @@ pub(crate) struct BflFailure {
     pub(crate) http_status: Option<u16>,
     pub(crate) delivery_host: Option<String>,
     pub(crate) admission_reason: Option<&'static str>,
-    pub(crate) observation: ApiFailure,
+    pub(crate) observation: Box<ApiFailure>,
 }
 
 struct BflDiagnostics {
@@ -225,7 +225,7 @@ impl BflDiagnostics {
                 .or(self.http_status),
             delivery_host: self.delivery_host,
             admission_reason: self.admission_reason,
-            observation,
+            observation: Box::new(observation),
         }
     }
 }

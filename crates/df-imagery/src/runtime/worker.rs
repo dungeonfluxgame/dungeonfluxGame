@@ -1091,7 +1091,7 @@ where
                 } else {
                     let observed = failure
                         .usage
-                        .or_else(|| failure.api.as_ref().map(dispatch::retain_api_failure));
+                        .or_else(|| failure.api.as_deref().map(dispatch::retain_api_failure));
                     Some(
                         self.retain_usage(
                             &context,

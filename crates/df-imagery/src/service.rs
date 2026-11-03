@@ -941,20 +941,19 @@ where
                 }
             }
         }
-        if view.interest.state == crate::InterestState::Attached {
-            if let Some(usage) = self
+        if view.interest.state == crate::InterestState::Attached
+            && let Some(usage) = self
                 .observations
                 .read_usage(&handle.owner, view.job.job)
                 .await
                 .map_err(|error| map_lookup_error(error, handle))?
-            {
-                if usage.job_revision != view.job.revision {
-                    return Err(ImageServiceError::Unknown {
-                        handle: handle.clone(),
-                    });
-                }
-                demand.usage = Some(usage.summary);
+        {
+            if usage.job_revision != view.job.revision {
+                return Err(ImageServiceError::Unknown {
+                    handle: handle.clone(),
+                });
             }
+            demand.usage = Some(usage.summary);
         }
         self.project_owned_artifact(handle, view, &mut demand)
             .await?;
