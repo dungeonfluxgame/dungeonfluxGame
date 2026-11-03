@@ -13,7 +13,9 @@
 //! - *Certain first.* The next scene of an authored beat and the destination of a committed travel
 //!   leg start at once. A scene that is only likely waits `lookahead_start_s` after the current
 //!   scene is Ready, so it never competes with the current scene's own first plate. At most
-//!   `lookahead_depth` scenes are built or ready at a time (the default is the one certain scene).
+//!   `lookahead_depth` wanted scenes are built or ready at a time (the default is the one certain
+//!   scene); a built scene nobody wants stays in the book without using that budget, and a certain
+//!   scene that finds the depth full of likely builds cancels the lowest-ranked one.
 //! - *Never a gate.* It pauses starting anything while the current scene's plates or a live line
 //!   need the lane, a build is cancelled at `lookahead_deadline_s`, and a build that is not done
 //!   when the table enters the scene is dropped (`Take::Late`): the table builds the scene the
@@ -236,7 +238,7 @@ struct Slot {
 }
 
 impl Slot {
-    fn counts_toward_depth(&self) -> bool {
+    fn is_built_or_building(&self) -> bool {
         matches!(self.phase, Phase::Building { .. } | Phase::Ready { .. })
     }
 }
@@ -246,7 +248,10 @@ impl Slot {
 pub struct LookaheadPlanner {
     settings: LookaheadSettings,
     paused: bool,
+    closed: bool,
     wanted: Vec<Candidate>,
+    /// The place of each wanted scene in `wanted` (0 is the most wanted).
+    rank: BTreeMap<SceneId, usize>,
     slots: BTreeMap<SceneId, Slot>,
     next_token: u64,
     counts: LookaheadCounts,
@@ -257,7 +262,9 @@ impl LookaheadPlanner {
         Self {
             settings,
             paused: false,
+            closed: false,
             wanted: Vec::new(),
+            rank: BTreeMap::new(),
             slots: BTreeMap::new(),
             next_token: 1,
             counts: LookaheadCounts::default(),
@@ -327,14 +334,23 @@ impl LookaheadPlanner {
 
     /// The story now expects `candidates` (ranked, from `lookahead_candidates`). Builds of scenes it
     /// no longer expects, or whose facts changed, are cancelled; a build that already finished for a
-    /// scene no longer expected stays in the book for reuse.
-    pub fn set_expected(&mut self, candidates: Vec<Candidate>) -> Vec<Action> {
+    /// scene no longer expected stays in the book for reuse. A closed planner refuses it.
+    pub fn set_expected(
+        &mut self,
+        candidates: Vec<Candidate>,
+    ) -> Result<Vec<Action>, LookaheadError> {
+        if self.closed {
+            return Err(LookaheadError::Closed);
+        }
+        let rank: BTreeMap<SceneId, usize> = candidates
+            .iter()
+            .enumerate()
+            .map(|(place, candidate)| (candidate.scene(), place))
+            .collect();
         let mut actions = Vec::new();
         let scenes: Vec<SceneId> = self.slots.keys().copied().collect();
         for scene in scenes {
-            let now = candidates
-                .iter()
-                .find(|candidate| candidate.scene() == scene);
+            let now = rank.get(&scene).map(|place| &candidates[*place]);
             let Some(slot) = self.slots.get(&scene) else {
                 continue;
             };
@@ -353,13 +369,56 @@ impl LookaheadPlanner {
             }
         }
         self.wanted = candidates;
-        actions
+        self.rank = rank;
+        Ok(actions)
+    }
+
+    /// How many wanted scenes are built or building, and how many of those are certain. A built
+    /// scene nobody wants stays in the book for reuse and is not counted: the book and the budget
+    /// of `lookahead_depth` are separate.
+    fn live(&self) -> (usize, usize) {
+        let mut live = 0;
+        let mut certain = 0;
+        for (scene, slot) in &self.slots {
+            if slot.is_built_or_building() && self.rank.contains_key(scene) {
+                live += 1;
+                if slot.expectation.is_certain() {
+                    certain += 1;
+                }
+            }
+        }
+        (live, certain)
+    }
+
+    /// Cancels the lowest-ranked running build that is only likely, so a certain scene is not made
+    /// to wait behind a guess. Whether it did.
+    fn make_room(&mut self, actions: &mut Vec<Action>) -> bool {
+        let victim = self
+            .slots
+            .iter()
+            .filter(|(_, slot)| {
+                matches!(slot.phase, Phase::Building { .. }) && !slot.expectation.is_certain()
+            })
+            .filter_map(|(scene, _)| self.rank.get(scene).map(|place| (*place, *scene)))
+            .max();
+        match victim {
+            Some((_, scene)) => {
+                actions.extend(self.cancel(scene, CancelReason::Retargeted));
+                true
+            }
+            None => false,
+        }
     }
 
     /// One look at the clock: ages out old builds, cancels builds past their deadline and starts
-    /// what the rules allow.
+    /// what the rules allow. A certain scene that has no slot because likely ones fill the depth
+    /// cancels the lowest-ranked running likely build and starts at once. A closed planner starts
+    /// nothing. It allocates only when it starts a build.
     pub fn plan(&mut self, now_ms: u64, view: PlanView) -> Vec<Action> {
         let mut actions = Vec::new();
+        if self.closed {
+            return actions;
+        }
         if !self.settings.enabled() {
             let scenes: Vec<SceneId> = self.slots.keys().copied().collect();
             for scene in scenes {
@@ -371,31 +430,40 @@ impl LookaheadPlanner {
         if self.paused || view.foreground_busy {
             return actions;
         }
-        let mut live = self
-            .slots
-            .values()
-            .filter(|slot| slot.counts_toward_depth())
-            .count();
+        let depth = self.settings.depth();
+        let (mut live, mut live_certain) = self.live();
         let start_gate = view
             .current_ready_ms
             .map(|ready| ready.saturating_add(self.settings.start_ms()));
-        let candidates = self.wanted.clone();
-        for candidate in candidates {
-            if live >= self.settings.depth() || self.slots.len() >= MAXIMUM_BOOKED_SCENES {
+        for index in 0..self.wanted.len() {
+            if self.slots.len() >= MAXIMUM_BOOKED_SCENES {
                 break;
             }
-            if self.slots.contains_key(&candidate.scene()) {
+            let candidate = &self.wanted[index];
+            let scene = candidate.scene();
+            let certain = candidate.is_certain();
+            if live >= depth && (!certain || live_certain >= depth) {
+                break;
+            }
+            if self.slots.contains_key(&scene) {
                 continue;
             }
-            if !candidate.is_certain() && !start_gate.is_some_and(|gate| now_ms >= gate) {
+            if !certain && !start_gate.is_some_and(|gate| now_ms >= gate) {
                 continue;
             }
+            if live >= depth && self.make_room(&mut actions) {
+                live -= 1;
+            }
+            let candidate = &self.wanted[index];
             let token = BuildToken(self.next_token);
             self.next_token += 1;
             self.counts.started += 1;
             live += 1;
+            if certain {
+                live_certain += 1;
+            }
             self.slots.insert(
-                candidate.scene(),
+                scene,
                 Slot {
                     token,
                     stamp: candidate.stamp(),
@@ -509,6 +577,7 @@ impl LookaheadPlanner {
             }
         }
         self.wanted.clear();
+        self.rank.clear();
         let take = match self.slots.remove(&scene) {
             None => {
                 self.counts.miss += 1;
@@ -558,8 +627,10 @@ impl LookaheadPlanner {
         Entered { take, actions }
     }
 
-    /// The table closed: every running build is cancelled and the book is emptied.
+    /// The table closed: every running build is cancelled, the book is emptied and the planner
+    /// takes no more work (`set_expected` is refused, `plan` starts nothing).
     pub fn close(&mut self) -> Vec<Action> {
+        self.closed = true;
         let scenes: Vec<SceneId> = self.slots.keys().copied().collect();
         let mut actions = Vec::new();
         for scene in scenes {
@@ -567,6 +638,7 @@ impl LookaheadPlanner {
         }
         self.slots.clear();
         self.wanted.clear();
+        self.rank.clear();
         actions
     }
 }

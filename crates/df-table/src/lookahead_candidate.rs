@@ -121,6 +121,8 @@ pub enum LookaheadError {
     BookFull {
         maximum: usize,
     },
+    /// The table closed: the planner takes no more work.
+    Closed,
 }
 
 impl fmt::Display for LookaheadError {
@@ -138,6 +140,10 @@ impl fmt::Display for LookaheadError {
             Self::StaleBuild { scene } => write!(
                 formatter,
                 "the build of scene {scene} was cancelled, so its result is not kept"
+            ),
+            Self::Closed => write!(
+                formatter,
+                "the table is closed, so nothing more is built ahead"
             ),
             Self::BookFull { maximum } => {
                 write!(

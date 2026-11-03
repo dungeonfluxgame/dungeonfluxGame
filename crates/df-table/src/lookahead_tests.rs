@@ -72,10 +72,12 @@ fn cancelled(actions: &[Action]) -> Vec<(SceneId, CancelReason)> {
 /// A planner that expects `NEXT` for certain and has started its build.
 fn building(world: &World) -> (LookaheadPlanner, BuildToken) {
     let mut planner = planner();
-    planner.set_expected(candidates(
-        world,
-        vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
-    ));
+    planner
+        .set_expected(candidates(
+            world,
+            vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
+        ))
+        .expect("expected");
     let actions = planner.plan(0, PlanView::default());
     let (_, token) = started(&actions)[0];
     (planner, token)
@@ -154,10 +156,12 @@ fn a_scene_named_twice_keeps_its_more_certain_entry_and_a_wild_likelihood_is_ref
 fn a_certain_next_scene_starts_at_once_and_only_once() {
     let world = market();
     let mut planner = planner();
-    planner.set_expected(candidates(
-        &world,
-        vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
-    ));
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
+        ))
+        .expect("expected");
     let first = planner.plan(0, PlanView::default());
     assert_eq!(started(&first).len(), 1);
     assert!(
@@ -175,10 +179,12 @@ fn a_likely_scene_waits_for_the_current_scene_to_be_ready_and_the_start_delay() 
             .with(LookaheadSetting::Depth, 2)
             .expect("depth"),
     );
-    planner.set_expected(candidates(
-        &world,
-        vec![expected(NEXT, Expectation::ExitHint, 800)],
-    ));
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(NEXT, Expectation::ExitHint, 800)],
+        ))
+        .expect("expected");
     assert!(
         planner.plan(50_000, PlanView::default()).is_empty(),
         "the scene is not ready yet"
@@ -208,7 +214,8 @@ fn depth_limits_how_many_scenes_are_built_at_once() {
     };
     let mut one = planner();
     assert_eq!(DEFAULT_LOOKAHEAD_DEPTH, 1);
-    one.set_expected(candidates(&world, list.clone()));
+    one.set_expected(candidates(&world, list.clone()))
+        .expect("expected");
     let first: Vec<u64> = started(&one.plan(60_000, view))
         .iter()
         .map(|(scene, _)| scene.get())
@@ -219,7 +226,9 @@ fn depth_limits_how_many_scenes_are_built_at_once() {
             .with(LookaheadSetting::Depth, 3)
             .expect("depth"),
     );
-    three.set_expected(candidates(&world, list));
+    three
+        .set_expected(candidates(&world, list))
+        .expect("expected");
     let order: Vec<u64> = started(&three.plan(60_000, view))
         .iter()
         .map(|(scene, _)| scene.get())
@@ -231,10 +240,12 @@ fn depth_limits_how_many_scenes_are_built_at_once() {
 fn nothing_new_starts_while_the_current_scene_needs_the_lane_or_the_worker_is_paused() {
     let world = market();
     let mut planner = planner();
-    planner.set_expected(candidates(
-        &world,
-        vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
-    ));
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
+        ))
+        .expect("expected");
     let busy = PlanView {
         current_ready_ms: Some(0),
         foreground_busy: true,
@@ -377,10 +388,12 @@ fn a_scene_nobody_built_is_a_miss_and_a_failed_build_says_why() {
 fn a_branch_cancels_the_build_and_a_late_result_for_it_is_refused() {
     let world = market();
     let (mut planner, token) = building(&world);
-    let actions = planner.set_expected(candidates(
-        &world,
-        vec![expected(OTHER, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
-    ));
+    let actions = planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(OTHER, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
+        ))
+        .expect("expected");
     assert_eq!(
         cancelled(&actions),
         vec![(scene(NEXT), CancelReason::Retargeted)]
@@ -405,10 +418,12 @@ fn a_result_of_a_replaced_build_is_refused_by_its_token() {
     world.apply(&[TableEffect::CastLeft {
         cast: crate::plate_fixtures_tests::element("mara"),
     }]);
-    let actions = planner.set_expected(candidates(
-        &world,
-        vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
-    ));
+    let actions = planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
+        ))
+        .expect("expected");
     assert_eq!(
         cancelled(&actions),
         vec![(scene(NEXT), CancelReason::StampChanged)]
@@ -433,13 +448,15 @@ fn entering_another_scene_cancels_running_builds_and_keeps_built_ones_for_reuse(
             .with(LookaheadSetting::Depth, 2)
             .expect("depth"),
     );
-    planner.set_expected(candidates(
-        &world,
-        vec![
-            expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE),
-            expected(OTHER, Expectation::TravelLeg, CERTAIN_PERMILLE),
-        ],
-    ));
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![
+                expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE),
+                expected(OTHER, Expectation::TravelLeg, CERTAIN_PERMILLE),
+            ],
+        ))
+        .expect("expected");
     let tokens = started(&planner.plan(0, PlanView::default()));
     let next_token = tokens
         .iter()
@@ -499,7 +516,7 @@ fn a_build_still_out_at_the_deadline_is_cancelled_and_not_started_again() {
 fn a_built_scene_nobody_took_ages_out_of_the_book() {
     let world = market();
     let mut planner = ready(&world, 1_000);
-    planner.set_expected(Vec::new());
+    planner.set_expected(Vec::new()).expect("expected");
     assert!(
         planner
             .plan(1_000 + BOOK_AGE_MS - 1, PlanView::default())
@@ -589,4 +606,143 @@ fn a_stamp_tells_a_changed_cast_from_a_changed_place() {
     );
     let renamed = WorldStamp::of(&world.snapshot(), &brief_of(NEXT, "Elsewhere"));
     assert_eq!(before.change_to(&renamed), StampChange::PlaceOrTime);
+}
+
+fn gate_open() -> PlanView {
+    PlanView {
+        current_ready_ms: Some(0),
+        foreground_busy: false,
+    }
+}
+
+#[test]
+fn a_certain_scene_cancels_the_likely_build_that_holds_the_only_slot() {
+    let world = market();
+    let mut planner = planner();
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(OTHER, Expectation::ExitHint, 900)],
+        ))
+        .expect("expected");
+    assert_eq!(started(&planner.plan(60_000, gate_open())).len(), 1);
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![
+                expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE),
+                expected(OTHER, Expectation::ExitHint, 900),
+            ],
+        ))
+        .expect("expected");
+    let actions = planner.plan(60_001, gate_open());
+    assert_eq!(
+        started(&actions)
+            .iter()
+            .map(|(scene, _)| scene.get())
+            .collect::<Vec<_>>(),
+        vec![NEXT],
+        "the certain scene is started at once"
+    );
+    assert_eq!(
+        cancelled(&actions),
+        vec![(scene(OTHER), CancelReason::Retargeted)],
+        "the likely build gives its slot up"
+    );
+    assert!(
+        planner.plan(60_002, gate_open()).is_empty(),
+        "the likely scene does not start again behind the certain one"
+    );
+}
+
+#[test]
+fn a_certain_scene_is_not_held_back_by_a_built_likely_scene_either() {
+    let world = market();
+    let mut planner = planner();
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(OTHER, Expectation::ExitHint, 900)],
+        ))
+        .expect("expected");
+    let (_, token) = started(&planner.plan(60_000, gate_open()))[0];
+    planner
+        .build_finished(60_100, scene(OTHER), token, BuildOutcome::Ready(outputs()))
+        .expect("finished");
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![
+                expected(NEXT, Expectation::TravelLeg, CERTAIN_PERMILLE),
+                expected(OTHER, Expectation::ExitHint, 900),
+            ],
+        ))
+        .expect("expected");
+    let actions = planner.plan(60_101, gate_open());
+    assert_eq!(started(&actions).len(), 1, "the certain scene starts");
+    assert!(cancelled(&actions).is_empty(), "the built scene is kept");
+    assert_eq!(planner.booked(), 2);
+}
+
+#[test]
+fn an_unused_built_scene_stays_in_the_book_without_using_the_depth() {
+    let world = market();
+    let mut planner = ready(&world, 1_000);
+    planner
+        .set_expected(candidates(
+            &world,
+            vec![expected(OTHER, Expectation::TravelLeg, CERTAIN_PERMILLE)],
+        ))
+        .expect("expected");
+    let actions = planner.plan(1_001, PlanView::default());
+    assert_eq!(
+        started(&actions)
+            .iter()
+            .map(|(scene, _)| scene.get())
+            .collect::<Vec<_>>(),
+        vec![OTHER],
+        "depth 1 still builds the certain scene"
+    );
+    let report = planner.report(1_001);
+    assert!(
+        report
+            .book
+            .iter()
+            .any(|entry| entry.scene == NEXT && entry.state == "ready"),
+        "the unused scene is still in the book"
+    );
+}
+
+#[test]
+fn a_closed_planner_refuses_expectations_and_starts_nothing() {
+    let world = market();
+    let (mut planner, _) = building(&world);
+    planner.close();
+    let refused = planner.set_expected(candidates(
+        &world,
+        vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)],
+    ));
+    assert_eq!(refused, Err(LookaheadError::Closed));
+    assert!(started(&planner.plan(5, PlanView::default())).is_empty());
+    assert!(planner.wanted().is_empty());
+    assert!(LookaheadError::Closed.to_string().contains("closed"));
+}
+
+#[test]
+fn a_full_depth_tick_changes_nothing_however_many_scenes_are_expected() {
+    let world = market();
+    let mut planner = planner();
+    let mut list = vec![expected(NEXT, Expectation::AuthoredBeat, CERTAIN_PERMILLE)];
+    for number in 100..2_100 {
+        list.push(expected(number, Expectation::ExitHint, 500));
+    }
+    planner
+        .set_expected(candidates(&world, list))
+        .expect("expected");
+    assert_eq!(started(&planner.plan(0, gate_open())).len(), 1);
+    let before = planner.wanted().to_vec();
+    assert!(planner.plan(60_000, gate_open()).is_empty());
+    assert!(planner.plan(60_001, gate_open()).is_empty());
+    assert_eq!(planner.wanted(), before.as_slice());
+    assert_eq!(planner.counts().started, 1);
 }
