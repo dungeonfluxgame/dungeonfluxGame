@@ -35,7 +35,7 @@ use df_table::lookahead::{
     Action, BuildOutcome, BuildToken, Expected, LookaheadError, LookaheadPlanner, LookaheadReport,
     PlanView, Take, lookahead_candidates,
 };
-use df_table::lookahead_settings::LookaheadSettings;
+use df_table::lookahead_settings::{LookaheadSetting, LookaheadSettings};
 use df_table::lookahead_stamp::WorldStamp;
 use df_table::plate_digest::PlateDigest;
 use df_table::ports::{PurposeName, ResourceHandle};
@@ -132,8 +132,16 @@ impl LookaheadWorker {
         self.planner.settings()
     }
 
+    /// Changes the settings and records the new values in one audit line.
     pub fn set_settings(&mut self, settings: LookaheadSettings) {
         self.planner.set_settings(settings);
+        self.record(SceneBuilderEvent::LookaheadSettings {
+            enabled: settings.enabled(),
+            depth: settings.value_of(LookaheadSetting::Depth),
+            start_s: settings.value_of(LookaheadSetting::StartS),
+            deadline_s: settings.value_of(LookaheadSetting::DeadlineS),
+            book_age_s: settings.value_of(LookaheadSetting::BookAgeS),
+        });
     }
 
     /// How many builds have requests out or are about to.
@@ -170,10 +178,9 @@ impl LookaheadWorker {
         expected: Vec<Expected>,
     ) -> Result<(), LookaheadError> {
         let candidates = lookahead_candidates(snapshot, current, expected)?;
-        self.record(SceneBuilderEvent::LookaheadTargets {
-            scenes: candidates.len(),
-        });
-        let actions = self.planner.set_expected(candidates);
+        let scenes = candidates.len();
+        let actions = self.planner.set_expected(candidates)?;
+        self.record(SceneBuilderEvent::LookaheadTargets { scenes });
         self.apply(actions, now_ms, snapshot);
         Ok(())
     }
@@ -181,20 +188,26 @@ impl LookaheadWorker {
     /// One look at the clock: moves every build as far as the broker's answers allow, then lets the
     /// planner age out, cancel and start. It never waits.
     pub fn advance(&mut self, now_ms: u64, snapshot: &TableSnapshot, view: PlanView) {
+        self.poll_runs(now_ms, snapshot);
+        let actions = self.planner.plan(now_ms, view);
+        self.apply(actions, now_ms, snapshot);
+    }
+
+    /// Drives every open build once, so each sees what the broker has settled by `now_ms`.
+    fn poll_runs(&mut self, now_ms: u64, snapshot: &TableSnapshot) {
         let scenes: Vec<SceneId> = self.runs.keys().copied().collect();
         for scene in scenes {
             if let Some(run) = self.runs.remove(&scene) {
                 self.drive(scene, run, now_ms, snapshot);
             }
         }
-        let actions = self.planner.plan(now_ms, view);
-        self.apply(actions, now_ms, snapshot);
     }
 
     /// The table is entering `scene`, whose brief is `brief`: what the look-ahead has for it. Call it
     /// before the broker's epoch moves to the scene, so a build that is still out is cancelled as
     /// late and the table builds the scene the normal way. A hit or a cast-only change returns the
-    /// stages built, for `SceneBuilder::adopt`.
+    /// stages built, for `SceneBuilder::adopt`. Open builds are polled first, so a build whose last
+    /// request settled since the previous `advance` is Ready, not Late.
     pub fn enter(
         &mut self,
         now_ms: u64,
@@ -202,6 +215,7 @@ impl LookaheadWorker {
         snapshot: &TableSnapshot,
         brief: &SceneBrief,
     ) -> Take {
+        self.poll_runs(now_ms, snapshot);
         let stamp = WorldStamp::of(snapshot, brief);
         let entered = self.planner.enter(scene, &stamp);
         self.apply(entered.actions, now_ms, snapshot);

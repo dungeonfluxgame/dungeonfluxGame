@@ -5,7 +5,7 @@
 //! Reading order: `worker` (the build, the broker requests and the lease and epoch checks, over
 //! the pure planner in `df_table::lookahead`), `request` (what the dev routes carry), `bench` (the
 //! workbench side: the expected scene, the scripted providers and the verbs' answers), `format` and
-//! `cli` (the verbs `scene lookahead show|pause|resume|target|clear`).
+//! `cli` (the verbs `scene lookahead show|pause|resume|target|clear|set`).
 //!
 //! What the first version builds: the certain next scene's dress step (Describe) and Background. A
 //! scene built ahead is adopted by the scene builder at the transition (`SceneBuilder::adopt`), so

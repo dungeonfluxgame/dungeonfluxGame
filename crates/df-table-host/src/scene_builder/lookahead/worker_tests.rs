@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 
+use df_table::effects::TableEffect;
+use df_table::element::ElementId;
 use df_table::identity::{SceneId, TableId};
 use df_table::lookahead::{Expectation, Expected, PlanView, Take};
 use df_table::lookahead_settings::LookaheadSettings;
@@ -144,9 +146,20 @@ impl Rig {
     /// The table enters scene `number` (a place called `place`): the world changes, the look-ahead is
     /// asked, and the scene is opened in the builder with what it built, as the pacer does.
     fn transition(&mut self, number: u64, place: &str) -> Take {
+        self.transition_after(number, place, |_| {})
+    }
+
+    /// As `transition`, with `change` made to the world after the party has entered the scene.
+    fn transition_after(
+        &mut self,
+        number: u64,
+        place: &str,
+        change: impl FnOnce(&mut DevWorld),
+    ) -> Take {
         let scene = SceneId::new(number);
         let generation = self.world.enter_scene(scene).expect("enters");
         self.world.people_of(scene).expect("the party");
+        change(&mut self.world);
         let snapshot = self.world.snapshot();
         let brief = dev_brief(scene, place).expect("a brief");
         let now = self.now();
@@ -611,4 +624,69 @@ fn every_look_ahead_line_is_one_audit_line_with_ids_and_keys_and_no_player_text(
             );
         }
     }
+}
+
+#[test]
+fn a_build_that_settled_since_the_last_advance_is_a_hit_not_late() {
+    let mut reference = rig();
+    reference.expect(vec![certain(NEXT, "Quay")]);
+    while reference.lookahead.planner().counts().built == 0 {
+        reference.step(PlanView::default());
+    }
+    let settled_at = reference.now();
+
+    let mut rig = rig();
+    rig.expect(vec![certain(NEXT, "Quay")]);
+    while rig.now() + STEP_MS < settled_at {
+        rig.step(PlanView::default());
+    }
+    // The last request settles at `settled_at`; the owner has not called `advance` since.
+    rig.clock.advance_ms(STEP_MS);
+    let now = rig.now();
+    rig.providers.pump(now);
+    assert_eq!(rig.lookahead.planner().counts().built, 0, "not seen yet");
+    let take = rig.transition(NEXT, "Quay");
+    assert!(matches!(take, Take::Hit(_)), "{take:?}");
+    assert_eq!(rig.lookahead.planner().counts().late, 0);
+}
+
+#[test]
+fn a_changed_party_keeps_the_picture_and_asks_for_the_description_again() {
+    let mut rig = rig();
+    rig.expect(vec![certain(NEXT, "Quay")]);
+    rig.run(BUILD_MS + 500, PlanView::default());
+    let before = rig.broker_purposes().len();
+    let take = rig.transition_after(NEXT, "Quay", |world| {
+        world
+            .apply(&[TableEffect::CastLeft {
+                cast: ElementId::new("mara").expect("an id"),
+            }])
+            .expect("mara leaves");
+    });
+    assert_eq!(take.key(), "redress", "{take:?}");
+    assert_eq!(rig.lines_with("LOOKAHEAD taken scene=2 outcome=redress"), 1);
+    assert_eq!(
+        rig.lines_with("stage_stored scene=2 generation=2 job=0 stage=background source=lookahead"),
+        1,
+        "the picture is adopted"
+    );
+    assert_eq!(
+        rig.lines_with("stage_stored scene=2 generation=2 job=0 stage=describe source=lookahead"),
+        0,
+        "the description is not"
+    );
+    rig.build_first_plate(NEXT).expect("a plate");
+    let asked: Vec<String> = rig.broker_purposes().split_off(before);
+    let own = |stage: &str| {
+        asked
+            .iter()
+            .filter(|purpose| !purpose.starts_with("lookahead_") && purpose.ends_with(stage))
+            .count()
+    };
+    assert_eq!(own("describe"), 1, "the dress step runs again: {asked:?}");
+    assert_eq!(
+        own("background"),
+        0,
+        "the picture is not made again: {asked:?}"
+    );
 }

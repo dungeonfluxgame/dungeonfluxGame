@@ -1,4 +1,4 @@
-//! The dev verbs of the look-ahead worker: `scene lookahead show|pause|resume|clear|target`.
+//! The dev verbs of the look-ahead worker: `scene lookahead show|pause|resume|clear|set|target`.
 //!
 //! They have the shape of the other scene verbs: words in, one typed `LookaheadCommand` out, a usage
 //! line on a mistake, a numbered answer. `command::scene` hands every `scene lookahead ...` line to
@@ -7,7 +7,7 @@
 use df_table::lookahead::Expectation;
 
 use super::format::format_reply;
-use super::request::{LookaheadReply, LookaheadRequest};
+use super::request::{LookaheadReply, LookaheadRequest, LookaheadSettingName};
 use crate::client;
 use crate::command::CommandError;
 use crate::dev::DevError;
@@ -15,7 +15,7 @@ use crate::limits::MAXIMUM_ECHOED_ANSWER;
 use crate::scene_builder::request::{DevStage, SceneReply, SlowStage};
 use crate::scene_builder::routes::path;
 
-pub const LOOKAHEAD_USAGE: &str = "scene lookahead show | pause | resume | clear | target <place> [kind=authored_beat|travel_leg|exit_hint] [likelihood=<thousandths>] [fail=<describe|background>] [slow=<describe|background>:<seconds>]";
+pub const LOOKAHEAD_USAGE: &str = "scene lookahead show | pause | resume | clear | set <enabled|depth|start_s|deadline_s|book_age_s> <value> | target <place> [kind=authored_beat|travel_leg|exit_hint] [likelihood=<thousandths>] [fail=<describe|background>] [slow=<describe|background>:<seconds>]";
 
 /// A look-ahead verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,7 +27,8 @@ pub enum LookaheadCommand {
 /// The help text of these verbs, to follow the scene builder's in `help`.
 pub fn help_text() -> String {
     format!(
-        "\n  {LOOKAHEAD_USAGE}\n      the look-ahead worker builds the next scene's description and background on the lowest\n      broker class while the current scene plays; target says which scene the story expects next\n      (the one the next scene build makes), pause stops new builds, clear cancels them; show prints\n      the settings, the expected scene, the book of built scenes and the hit, miss and stale counts\n"
+        "\n  {LOOKAHEAD_USAGE}\n      the look-ahead worker builds the next scene's description and background on the lowest\n      broker class while the current scene plays; target says which scene the story expects next\n      (the one the next scene build makes), pause stops new builds, clear cancels them; set changes
+      a lookahead_* setting (enabled takes on or off, the others a whole number); show prints\n      the settings, the expected scene, the book of built scenes and the hit, miss and stale counts\n"
     )
 }
 
@@ -109,6 +110,36 @@ fn target(words: &[String]) -> Result<LookaheadCommand, CommandError> {
     }))
 }
 
+fn set(words: &[String]) -> Result<LookaheadCommand, CommandError> {
+    let [name, value] = words else {
+        return Err(CommandError::Usage(LOOKAHEAD_USAGE));
+    };
+    let setting = LookaheadSettingName::parse(name).ok_or_else(|| CommandError::BadChoice {
+        key: "setting".to_owned(),
+        text: name.clone(),
+        allowed: "enabled, depth, start_s, deadline_s or book_age_s".to_owned(),
+    })?;
+    let value = if setting == LookaheadSettingName::Enabled {
+        match value.as_str() {
+            "on" => 1,
+            "off" => 0,
+            _ => {
+                return Err(CommandError::BadChoice {
+                    key: "enabled".to_owned(),
+                    text: value.clone(),
+                    allowed: "on or off".to_owned(),
+                });
+            }
+        }
+    } else {
+        whole_number("the value", value)?
+    };
+    Ok(LookaheadCommand::Change(LookaheadRequest::Set {
+        setting,
+        value,
+    }))
+}
+
 /// Parses the words after `scene lookahead`.
 pub fn parse(words: &[String]) -> Result<LookaheadCommand, CommandError> {
     match words {
@@ -116,6 +147,7 @@ pub fn parse(words: &[String]) -> Result<LookaheadCommand, CommandError> {
         [word] if word == "pause" => Ok(LookaheadCommand::Change(LookaheadRequest::Pause)),
         [word] if word == "resume" => Ok(LookaheadCommand::Change(LookaheadRequest::Resume)),
         [word] if word == "clear" => Ok(LookaheadCommand::Change(LookaheadRequest::Clear)),
+        [word, rest @ ..] if word == "set" => set(rest),
         [word, rest @ ..] if word == "target" => target(rest),
         _ => Err(CommandError::Usage(LOOKAHEAD_USAGE)),
     }

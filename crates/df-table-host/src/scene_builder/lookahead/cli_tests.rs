@@ -4,7 +4,7 @@
 use df_table::lookahead::Expectation;
 
 use super::cli::{LOOKAHEAD_USAGE, LookaheadCommand};
-use super::request::{LookaheadReply, LookaheadRequest};
+use super::request::{LookaheadReply, LookaheadRequest, LookaheadSettingName};
 use crate::command::{Command, CommandError, parse, split_words};
 use crate::dev::run_dev;
 use crate::scene_builder::SceneBuilderCommand;
@@ -69,6 +69,52 @@ fn the_verbs_have_the_shape_of_the_other_scene_verbs() {
             }),
         })
     );
+}
+
+#[test]
+fn set_takes_a_setting_and_a_value() {
+    assert_eq!(
+        command("scene lookahead set depth 2").expect("parses"),
+        LookaheadCommand::Change(LookaheadRequest::Set {
+            setting: LookaheadSettingName::Depth,
+            value: 2,
+        })
+    );
+    assert_eq!(
+        command("scene lookahead set enabled off").expect("parses"),
+        LookaheadCommand::Change(LookaheadRequest::Set {
+            setting: LookaheadSettingName::Enabled,
+            value: 0,
+        })
+    );
+    for name in LookaheadSettingName::ALL {
+        let value = if name == LookaheadSettingName::Enabled {
+            "on"
+        } else {
+            "7"
+        };
+        assert!(
+            command(&format!("scene lookahead set {} {value}", name.key())).is_ok(),
+            "{}",
+            name.key()
+        );
+    }
+    assert!(matches!(
+        command("scene lookahead set speed 2"),
+        Err(CommandError::BadChoice { .. })
+    ));
+    assert!(matches!(
+        command("scene lookahead set depth many"),
+        Err(CommandError::BadCount { .. })
+    ));
+    assert!(matches!(
+        command("scene lookahead set enabled 2"),
+        Err(CommandError::BadChoice { .. })
+    ));
+    assert!(matches!(
+        command("scene lookahead set depth"),
+        Err(CommandError::Usage(_))
+    ));
 }
 
 #[test]
@@ -209,4 +255,51 @@ async fn a_reply_reads_back_as_the_typed_value() {
         panic!("pause was refused: {body}");
     };
     assert!(value.report.paused && value.report.enabled);
+}
+
+async fn refused(port: u16, line: &str) -> String {
+    let words = split_words(line).expect("the line splits");
+    match run_dev(port, &words).await {
+        Err(error) => error.to_string(),
+        Ok(text) => panic!("'{line}' was not refused: {text}"),
+    }
+}
+
+#[tokio::test]
+async fn the_settings_are_set_through_the_route_and_change_what_the_worker_does() {
+    let host = start(&STARTER_FILES).await;
+    dev(host.port, "scene build \"Harbor market\"").await;
+
+    let depth = dev(host.port, "scene lookahead set depth 2").await;
+    assert!(depth.contains("depth 2,"), "{depth}");
+    assert!(
+        depth.contains("LOOKAHEAD settings enabled=true depth=2"),
+        "the change is one audit line: {depth}"
+    );
+    let shown = dev(host.port, "scene lookahead show").await;
+    assert!(shown.contains("depth 2,"), "{shown}");
+    let wrong = refused(host.port, "scene lookahead set depth 0").await;
+    assert!(wrong.contains("lookahead_depth"), "{wrong}");
+    let unchanged = dev(host.port, "scene lookahead show").await;
+    assert!(unchanged.contains("depth 2,"), "{unchanged}");
+
+    let off = dev(host.port, "scene lookahead set enabled off").await;
+    assert!(off.contains(": off,"), "{off}");
+    let idle = dev(host.port, "scene lookahead target Quay").await;
+    assert!(
+        !idle.contains("LOOKAHEAD started"),
+        "a disabled worker starts nothing: {idle}"
+    );
+    let on = dev(host.port, "scene lookahead set enabled on").await;
+    assert!(on.contains("LOOKAHEAD started scene=2"), "{on}");
+    let wrong = refused(host.port, "scene lookahead set book_age_s 2000000").await;
+    assert!(wrong.contains("lookahead_book_age_s"), "{wrong}");
+
+    dev(host.port, "scene lookahead clear").await;
+    dev(host.port, "scene lookahead set deadline_s 1").await;
+    dev(host.port, "scene lookahead target Quay slow=background:90").await;
+    dev(host.port, "plates run 3 quiet").await;
+    let late = dev(host.port, "scene lookahead show").await;
+    assert!(late.contains("a build is cancelled after 1 s"), "{late}");
+    assert!(late.contains("failed (deadline timed_out)"), "{late}");
 }

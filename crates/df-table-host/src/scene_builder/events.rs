@@ -246,6 +246,23 @@ pub enum SceneBuilderEvent {
     LookaheadPaused {
         paused: bool,
     },
+    /// A target scripted the look-ahead provider of `stage` to take `latency_ms` from now on.
+    LookaheadSlowed {
+        stage: SceneStage,
+        latency_ms: u64,
+    },
+    /// A target scripted the look-ahead provider of `stage` to refuse its next call.
+    LookaheadRefusing {
+        stage: SceneStage,
+    },
+    /// The look-ahead settings changed to these values.
+    LookaheadSettings {
+        enabled: bool,
+        depth: u32,
+        start_s: u32,
+        deadline_s: u32,
+        book_age_s: u32,
+    },
 }
 
 impl SceneBuilderEvent {
@@ -269,7 +286,10 @@ impl SceneBuilderEvent {
             | Self::LookaheadTaken { .. }
             | Self::LookaheadExpired { .. }
             | Self::LookaheadTargets { .. }
-            | Self::LookaheadPaused { .. } => "LOOKAHEAD",
+            | Self::LookaheadPaused { .. }
+            | Self::LookaheadSlowed { .. }
+            | Self::LookaheadRefusing { .. }
+            | Self::LookaheadSettings { .. } => "LOOKAHEAD",
             Self::Table(event) => event.area(),
             Self::TickQueued { .. }
             | Self::TickSkipped { .. }
@@ -550,6 +570,20 @@ impl SceneBuilderEvent {
                 out,
                 "paused paused={}",
                 if *paused { "true" } else { "false" }
+            ),
+            Self::LookaheadSlowed { stage, latency_ms } => {
+                write!(out, "slowed stage={} latency_ms={latency_ms}", stage.key())
+            }
+            Self::LookaheadRefusing { stage } => write!(out, "refusing stage={}", stage.key()),
+            Self::LookaheadSettings {
+                enabled,
+                depth,
+                start_s,
+                deadline_s,
+                book_age_s,
+            } => write!(
+                out,
+                "settings enabled={enabled} depth={depth} start_s={start_s} deadline_s={deadline_s} book_age_s={book_age_s}"
             ),
         }
     }
