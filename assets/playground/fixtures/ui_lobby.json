@@ -1,0 +1,49 @@
+{
+  "name": "UI: session lobby",
+  "description": "The lobby as the concept renders 11, 21, 24 and 25 draw it: three seat states (locked in, creating, open), the invite panel with a placeholder QR block, the begin button and the key to the states. The backdrop is the lobby render with its baked interface painted out. The QR block is a placeholder, not a scannable code.",
+  "tv": {
+    "place": "",
+    "status": { "kind": "ok" },
+    "caption": null,
+    "backdrop": { "media": "lobby-hall-plate.webp", "caption": null },
+    "card": null,
+    "pills": { "logo": "stacked", "balance": "$28.40", "rate": "$3.90/hr", "profile": true },
+    "lobby": {
+      "eyebrow": "Session lobby",
+      "title": "The Ashen Citadel Awaits",
+      "subtitle": "A lost stronghold. Ancient machines. A power that should have stayed buried.",
+      "seats": [
+        { "state": "locked_in", "name": "Cam", "class": "Paladin", "glyph": "shield", "portrait": "lobby-cam.webp", "host": true },
+        { "state": "creating", "name": "Alyssa", "class": "Mage", "portrait": "lobby-mage.webp", "stage": "Creating character", "progress_percent": 70 },
+        { "state": "locked_in", "name": "Nyx", "class": "Rogue", "glyph": "sword", "portrait": "lobby-nyx.webp" },
+        { "state": "creating", "name": "Marco", "stage": "Creating character", "progress_percent": 65 },
+        { "state": "open" },
+        { "state": "open" }
+      ],
+      "invite": {
+        "heading": "Invite Players",
+        "hint": "Have friends join this session",
+        "join_link": "dungeonflux.com/join/AC7F-K8M2",
+        "game_code": "AC7F-K8M2",
+        "joined": 4,
+        "capacity": 6,
+        "word": "Ready",
+        "icon": "check"
+      },
+      "begin": { "label": "Begin Adventure", "enabled": true },
+      "legend": true
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Cam",
+    "goal": "Wait for the table to fill",
+    "status": { "kind": "ok" },
+    "narration": ["Four players are at the table. Two seats are still open."],
+    "suggested": [{ "label": "Lock in my hero" }, { "label": "Invite a friend" }],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

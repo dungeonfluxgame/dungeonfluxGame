@@ -1,0 +1,37 @@
+# The Ember Roads: the narration box, the seat strip and the logo placed one at a time on the harbour
+# plate, so the scene assembles on screen in order. Needs the playground host running
+# (df-table serve) and the pictures in assets/playground/media.
+playground go scene_ember_roads
+scene reset
+# Start from the bare plate: take away what the fixture draws.
+scene logo off
+scene narration clear
+scene seats clear
+scene party clear
+wait 2500
+# The logo, then the heroes one at a time as seat cards, then the open seats.
+scene logo on
+wait 1500
+scene seat set Kael class=Fighter level=3 portrait=brakka.webp glyph=shield hp=42 max=42
+wait 1200
+scene seat set Lyra class=Ranger level=3 portrait=sigrun.webp glyph=bow hp=38 max=38
+wait 1200
+scene seat set Seris class=Cleric level=3 portrait=finn-alder.webp glyph=sun hp=36 max=36
+wait 1200
+scene seat set Thoren class=Wizard level=3 portrait=dain-rusk.webp glyph=book hp=44 max=44
+wait 1200
+scene seats open 2
+wait 2000
+# The narrator speaks.
+scene narration set "Beneath a crimson sky, the port city of Valemere stirs to life. Caravans from distant lands crowd the docks, rumors travel faster than the ships, and somewhere in the chaos, an opportunity, or a danger, awaits your party." speaker="The Dungeon Master" continue=Continue placement=right
+wait 5000
+# Change one field at a time: the speaker, then the line, then the scene progress.
+scene narration edit speaker="Dockmaster" badge=scales
+wait 2500
+scene narration edit text="You want passage to Valemere before the next full moon? I am offering you a favor." badge=none speaker="The Dungeon Master" scene=1/5:Introduction
+wait 4000
+# A hero is hurt, and one is poisoned.
+scene seat set Kael hp=17
+wait 1500
+scene seat set Lyra conditions=Poisoned hp=30
+wait 3000

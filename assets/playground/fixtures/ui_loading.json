@@ -1,0 +1,40 @@
+{
+  "name": "UI: loading screen",
+  "description": "The loading screen of render 38: where the party is going, the narrator's chip, the progress bar and the six seats. The backdrop is render 38 with its baked interface painted out.",
+  "tv": {
+    "place": "",
+    "status": { "kind": "ok" },
+    "caption": null,
+    "backdrop": { "media": "loading-citadel-plate.webp", "caption": null },
+    "card": null,
+    "pills": { "logo": "stacked" },
+    "loading": {
+      "kicker": "Entering",
+      "title": "The Ashen Citadel",
+      "subtitle": "The Iron Abbey stirs beneath twin moons... and six travelers cross the threshold of legend.",
+      "narrator": { "name": "Narrator: Vaelin (Epic)", "status": "Narrator initializing...", "portrait": "vaelin-narrator.webp" },
+      "label": "Initializing adventure",
+      "percent": 76,
+      "seats": [
+        { "name": "Cam", "portrait": "chip-cam.webp", "ready": true },
+        { "name": "Vyx", "portrait": "chip-vyx.webp", "ready": true },
+        { "name": "Nyx", "portrait": "chip-nyx.webp", "ready": true },
+        { "name": "Seat 4", "ready": true },
+        { "name": "Seat 5", "ready": true },
+        { "name": "Seat 6", "ready": true }
+      ]
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Cam",
+    "goal": "Wait for the adventure to load",
+    "status": { "kind": "ok" },
+    "narration": ["The story is loading."],
+    "suggested": [],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

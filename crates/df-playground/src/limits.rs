@@ -75,3 +75,10 @@ pub const DEFAULT_TRANSITION_MS: u32 = 700;
 /// How long the screen glides to a camera framing that is not a move (a retarget or a pull back),
 /// in milliseconds. It matches the glide of a figure.
 pub const CAMERA_GLIDE_MS: u32 = 90;
+
+// Layout tuning of the overlay components. They are how the screen is composed, not caps.
+
+/// The share of a hero's health, in percent, below which the bar turns amber.
+pub const HEALTH_AMBER_PERCENT: u16 = 50;
+/// The share of a hero's health, in percent, below which the bar turns red.
+pub const HEALTH_RED_PERCENT: u16 = 25;

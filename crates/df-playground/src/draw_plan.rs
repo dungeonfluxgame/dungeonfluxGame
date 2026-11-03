@@ -22,7 +22,9 @@ pub enum Part {
     TvGrid,
     TvPlace,
     TvCard,
+    TvPanels,
     TvStatus,
+    TvPills,
     TvCaption,
     TvParty,
     PhoneHead,
@@ -42,7 +44,9 @@ impl Part {
             Self::TvGrid => "tv-grid",
             Self::TvPlace => "tv-place",
             Self::TvCard => "tv-card",
+            Self::TvPanels => "tv-panels",
             Self::TvStatus => "tv-status",
+            Self::TvPills => "tv-pills",
             Self::TvCaption => "tv-caption",
             Self::TvParty => "tv-party",
             Self::PhoneHead => "phone-head",
@@ -161,14 +165,30 @@ impl DrawPlan {
             Part::TvGrid,
             before_controls.show_grid != after_controls.show_grid,
         );
-        self.mark(Part::TvPlace, before.tv.place != after.tv.place);
+        self.mark(
+            Part::TvPlace,
+            before.tv.place != after.tv.place || before.tv.brand != after.tv.brand,
+        );
         self.mark(Part::TvCard, !same_image(&before.tv.card, &after.tv.card));
+        self.mark(
+            Part::TvPanels,
+            crate::overlay_changes::panels_differ(&before.tv, &after.tv),
+        );
+        self.mark(
+            Part::TvPills,
+            crate::overlay_changes::pills_differ(&before.tv, &after.tv),
+        );
         self.mark(Part::TvStatus, status_before != status_after);
         self.mark(
             Part::TvCaption,
-            before.tv.caption != after.tv.caption || before_controls.pace != after_controls.pace,
+            before.tv.caption != after.tv.caption
+                || before.tv.narration != after.tv.narration
+                || before_controls.pace != after_controls.pace,
         );
-        self.mark(Part::TvParty, before.tv.party != after.tv.party);
+        self.mark(
+            Part::TvParty,
+            before.tv.party != after.tv.party || before.tv.seats != after.tv.seats,
+        );
     }
 
     /// The pieces of a phone that differ. Returns whether the choices differ.

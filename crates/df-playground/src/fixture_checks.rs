@@ -10,11 +10,12 @@ use crate::fixture::{
     Camera, Choice, ElementSource, Fixture, FixtureError, ImageRef, PartyMember, Slide,
 };
 use crate::limits::{MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_PIVOT_PERCENT};
+use crate::overlay_checks;
 use crate::scene::SceneError;
 
 /// One step into the JSON of a fixture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Step {
+pub(crate) enum Step {
     Key(&'static str),
     Index(usize),
 }
@@ -250,6 +251,39 @@ fn phone_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
     }
 }
 
+/// Turns what the overlay checks found into problems of this file.
+fn add_found(found: &mut Vec<Problem>, more: Vec<overlay_checks::Found>) {
+    found.extend(
+        more.into_iter()
+            .map(|one| Problem::at(&one.path, one.error)),
+    );
+}
+
+fn overlay_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
+    let tv = [Step::Key("tv")];
+    let at = |key: &'static str| [tv[0], Step::Key(key)];
+    if let Some(narration) = &fixture.tv.narration {
+        add_found(
+            found,
+            overlay_checks::narration(&at("narration"), narration),
+        );
+        if fixture.tv.caption.is_some() {
+            found.push(Problem::at(
+                &at("narration"),
+                SceneError::NarrationAndCaption,
+            ));
+        }
+    }
+    if let Some(home) = &fixture.tv.home
+        && let Err(error) = crate::home_checks::home(home)
+    {
+        found.push(Problem::at(&at("home"), error));
+    }
+    if let Some(seats) = &fixture.tv.seats {
+        add_found(found, overlay_checks::seat_strip(&at("seats"), seats));
+    }
+}
+
 fn tv_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
     let tv = [Step::Key("tv")];
     if let Some(caption) = &fixture.tv.caption {
@@ -282,6 +316,7 @@ fn tv_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
     if let Some(camera) = &fixture.tv.camera {
         camera_problems(found, camera, &fixture.tv.elements);
     }
+    overlay_problems(found, fixture);
     if let ElementSource::Inline(elements) = &fixture.tv.elements {
         for (index, element) in elements.iter().enumerate() {
             let at = [tv[0], Step::Key("elements"), Step::Index(index)];

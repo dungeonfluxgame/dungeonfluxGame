@@ -1,37 +1,123 @@
 {
   "name": "Scene: Garrick's Goods, Valemere",
-  "description": "A new gameplay scene to place the concept-art components on: the merchant Garrick across his counter (the plate is the concept render '14 Merchant / no menus' with its baked caption cropped off), Garrick's line as the narration, the four heroes in the party strip, and a phone with a few choices. Place components with the scene verbs (development/playground-scripts/garrick-shop-tour.txt).",
+  "description": "The merchant Garrick across his counter with the shop laid out as in concept render 06: the merchant's menu on the left, category tabs over the item grid, the selected item's card with its stat rows at the top right and the purple phone prompt under it. Everything on the panels is drawn from the shop data; the plate is render 14 with its baked caption painted out, shifted so Garrick stays left of the grid.",
   "tv": {
     "place": "Garrick's Goods, Valemere",
-    "status": { "kind": "ok" },
-    "caption": {
-      "speaker": "Garrick the Trader",
-      "text": "Ah, back again? New supplies, a sturdier blade, or perhaps something a little more... unique?"
+    "status": {
+      "kind": "ok"
     },
-    "backdrop": { "media": "garrick-shop-plate.webp", "caption": "Garrick behind his counter" },
+    "backdrop": {
+      "media": "garrick-shop-plate.webp",
+      "caption": "Garrick behind his counter"
+    },
     "party": [
-      { "name": "Kael", "hit_points": 22, "maximum_hit_points": 28, "color": "#c9a45c" },
-      { "name": "Lyra", "hit_points": 18, "maximum_hit_points": 24, "color": "#7da35b" },
-      { "name": "Seris", "hit_points": 20, "maximum_hit_points": 24, "color": "#e3c76b" },
-      { "name": "Thoren", "hit_points": 14, "maximum_hit_points": 20, "color": "#7f8fd1" }
+      {
+        "name": "Kael",
+        "hit_points": 22,
+        "maximum_hit_points": 28,
+        "color": "#c9a45c"
+      },
+      {
+        "name": "Lyra",
+        "hit_points": 18,
+        "maximum_hit_points": 24,
+        "color": "#7da35b"
+      },
+      {
+        "name": "Seris",
+        "hit_points": 20,
+        "maximum_hit_points": 24,
+        "color": "#e3c76b"
+      },
+      {
+        "name": "Thoren",
+        "hit_points": 14,
+        "maximum_hit_points": 20,
+        "color": "#7f8fd1"
+      }
     ],
+    "seats": {
+      "looks": [
+        {
+          "name": "Kael",
+          "class": "Fighter",
+          "level": 3,
+          "portrait": "brakka.webp",
+          "glyph": "shield",
+          "accent": "#e0675a"
+        },
+        {
+          "name": "Lyra",
+          "class": "Ranger",
+          "level": 3,
+          "portrait": "sigrun.webp",
+          "glyph": "bow",
+          "accent": "#6cdb88"
+        },
+        {
+          "name": "Seris",
+          "class": "Cleric",
+          "level": 3,
+          "portrait": "finn-alder.webp",
+          "glyph": "sun",
+          "accent": "#f8d74c"
+        },
+        {
+          "name": "Thoren",
+          "class": "Wizard",
+          "level": 3,
+          "portrait": "dain-rusk.webp",
+          "glyph": "book",
+          "accent": "#4faef7"
+        }
+      ],
+      "open": 2
+    },
     "elements": []
   },
   "phone": {
     "hero": "Kael",
     "goal": "Find a sturdier blade",
-    "status": { "kind": "ok" },
+    "status": {
+      "kind": "ok"
+    },
     "narration": [
       "Lantern light catches the swords on the wall. Garrick leans on the counter, smiling like a man who already knows what you can afford."
     ],
     "suggested": [
-      { "label": "Browse the blades" },
-      { "label": "Haggle the price" },
-      { "label": "Sell some loot" }
+      {
+        "label": "Browse the blades"
+      },
+      {
+        "label": "Haggle the price"
+      },
+      {
+        "label": "Sell some loot"
+      }
     ],
     "groups": [
-      { "name": "Talk", "choices": [{ "label": "Ask about rumours" }, { "label": "Ask about the unique" }] },
-      { "name": "Look", "choices": [{ "label": "Study the armour" }, { "label": "Study the counter" }] }
+      {
+        "name": "Talk",
+        "choices": [
+          {
+            "label": "Ask about rumours"
+          },
+          {
+            "label": "Ask about the unique"
+          }
+        ]
+      },
+      {
+        "name": "Look",
+        "choices": [
+          {
+            "label": "Study the armour"
+          },
+          {
+            "label": "Study the counter"
+          }
+        ]
+      }
     ]
   }
 }

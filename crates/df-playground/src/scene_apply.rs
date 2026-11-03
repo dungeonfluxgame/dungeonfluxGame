@@ -15,7 +15,7 @@ use crate::scene::{
 
 impl SceneOverlay {
     /// The party as drawn: the overlay's, or the fixture's.
-    fn party_or<'a>(&'a self, base: &'a Fixture) -> &'a [PartyMember] {
+    pub(crate) fn party_or<'a>(&'a self, base: &'a Fixture) -> &'a [PartyMember] {
         self.party.as_deref().unwrap_or(&base.tv.party)
     }
 
@@ -104,6 +104,15 @@ impl SceneOverlay {
                 zoom_percent,
                 duration_ms,
             } => self.move_camera(target, zoom_percent, duration_ms, now_ms),
+            change @ (SceneChange::Narration { .. }
+            | SceneChange::ClearNarration {}
+            | SceneChange::SeatSet { .. }
+            | SceneChange::SeatRemove { .. }
+            | SceneChange::SeatsOpen { .. }
+            | SceneChange::SeatsClear {}
+            | SceneChange::Brand { .. }) => self.apply_ui(change, base),
+            SceneChange::Screen { edit } => self.screens.apply(edit, base),
+            SceneChange::Home { edit } => self.apply_home(edit, base),
             SceneChange::Reset {} => {
                 *self = self.cleared();
                 Ok(())

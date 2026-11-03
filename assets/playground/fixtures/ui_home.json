@@ -1,0 +1,421 @@
+{
+  "name": "UI: landing page",
+  "description": "The Home screen as concept render 19 draws it, laid out for a television: the navigation rail, the title block, the four actions, the settings panel, tonight's adventure and the recent campaigns over a candlelit hall. The backdrop is the render with its baked interface painted out; every part on the screen is a component drawn from the data below and changeable from the dev CLI (scene home ...). Balances and rates are shown only because this scene gives them.",
+  "tv": {
+    "place": "",
+    "status": {
+      "kind": "ok"
+    },
+    "caption": null,
+    "backdrop": {
+      "media": "home-hall-plate.webp",
+      "caption": null
+    },
+    "card": null,
+    "pills": {
+      "balance": "$28.40",
+      "rate": "$3.90/hr",
+      "profile": true
+    },
+    "home": {
+      "brand": {
+        "wordmark": "DungeonFlux",
+        "size": "compact",
+        "star": true
+      },
+      "top": {
+        "bell": true
+      },
+      "title": {
+        "title": "DungeonFlux",
+        "tagline": "Forge a world. Gather your party. Begin the legend.",
+        "rule": true
+      },
+      "nav": {
+        "items": [
+          {
+            "label": "Home",
+            "glyph": "home",
+            "active": true
+          },
+          {
+            "label": "Campaigns",
+            "glyph": "campaigns"
+          },
+          {
+            "label": "Characters",
+            "glyph": "characters"
+          },
+          {
+            "label": "Players",
+            "glyph": "players"
+          },
+          {
+            "label": "Assets",
+            "glyph": "assets"
+          },
+          {
+            "label": "Settings",
+            "glyph": "settings"
+          }
+        ]
+      },
+      "actions": {
+        "buttons": [
+          {
+            "label": "Continue Campaign",
+            "subtitle": "The Ashen Citadel",
+            "glyph": "play",
+            "variant": "primary"
+          },
+          {
+            "label": "Start New Adventure",
+            "glyph": "sparkle"
+          },
+          {
+            "label": "Join Session",
+            "glyph": "players"
+          },
+          {
+            "label": "Quick Launch",
+            "glyph": "bolt"
+          }
+        ]
+      },
+      "configure": {
+        "title": "Configure Session",
+        "currency": "$",
+        "presets": {
+          "label": "Presets:",
+          "value": "Balanced Adventure",
+          "options": [
+            "Balanced Adventure",
+            "Rules Purist",
+            "Story First",
+            "Combat Heavy",
+            "Quick Play"
+          ]
+        },
+        "cards": [
+          {
+            "key": "world",
+            "kind": "select",
+            "label": "World / Setting",
+            "icon": "globe",
+            "banner": "home-banner-world-arcane-citadel.webp",
+            "accent": "cyan",
+            "rows": [
+              {
+                "row": "select",
+                "key": "setting",
+                "label": "World / Setting",
+                "value": "Arcane Sci-Fi",
+                "options": [
+                  "Medieval Fantasy",
+                  "Arcane Sci-Fi",
+                  "Steampunk",
+                  "Post-Apocalyptic",
+                  "Techno-Fantasy",
+                  "Custom"
+                ]
+              }
+            ]
+          },
+          {
+            "key": "tone",
+            "kind": "select",
+            "label": "Session Tone",
+            "icon": "masks",
+            "banner": "home-banner-tone-banners-and-torch.webp",
+            "accent": "violet",
+            "rows": [
+              {
+                "row": "select",
+                "key": "tone",
+                "label": "Session Tone",
+                "value": "Heroic",
+                "options": [
+                  "Heroic",
+                  "Dark",
+                  "Mysterious",
+                  "Whimsical",
+                  "Serious",
+                  "Chaotic"
+                ]
+              }
+            ]
+          },
+          {
+            "key": "party",
+            "kind": "select",
+            "label": "Party",
+            "icon": "party",
+            "banner": "home-banner-party-travellers-with-torch.webp",
+            "accent": "violet",
+            "rows": [
+              {
+                "row": "select",
+                "key": "players",
+                "label": "Party",
+                "value": "4 Players (Local)",
+                "options": [
+                  "1 Player (Local)",
+                  "2 Players (Local)",
+                  "3 Players (Local)",
+                  "4 Players (Local)",
+                  "5 Players (Local)",
+                  "6 Players (Local)"
+                ]
+              },
+              {
+                "row": "select",
+                "key": "session_length",
+                "label": "Session Length",
+                "value": "~3-4 Hours",
+                "options": [
+                  "~1-2 Hours",
+                  "~2-3 Hours",
+                  "~3-4 Hours",
+                  "~4+ Hours"
+                ]
+              }
+            ]
+          },
+          {
+            "key": "rules",
+            "kind": "sliders",
+            "label": "Rules & Gameplay",
+            "icon": "swords",
+            "accent": "cyan",
+            "shown_rows": 3,
+            "rows": [
+              {
+                "row": "slider",
+                "key": "rules_fidelity",
+                "label": "Rules Fidelity",
+                "value": 80,
+                "unit": "percent"
+              },
+              {
+                "row": "slider",
+                "key": "combat_intensity",
+                "label": "Combat Intensity",
+                "value": 60,
+                "unit": "percent"
+              },
+              {
+                "row": "slider",
+                "key": "narrative_freedom",
+                "label": "Narrative Freedom",
+                "value": 70,
+                "unit": "percent"
+              },
+              {
+                "row": "slider",
+                "key": "exploration_depth",
+                "label": "Exploration Depth",
+                "value": 75,
+                "unit": "percent"
+              },
+              {
+                "row": "slider",
+                "key": "puzzle_complexity",
+                "label": "Puzzle Complexity",
+                "value": 50,
+                "unit": "percent"
+              },
+              {
+                "row": "slider",
+                "key": "difficulty",
+                "label": "Difficulty",
+                "value": 65,
+                "unit": "steps",
+                "steps": [
+                  "Relaxed",
+                  "Moderate",
+                  "Challenging",
+                  "Punishing"
+                ]
+              }
+            ]
+          },
+          {
+            "key": "narration",
+            "kind": "mixed",
+            "label": "AI & Narration",
+            "icon": "core",
+            "accent": "cyan",
+            "shown_rows": 3,
+            "rows": [
+              {
+                "row": "select",
+                "key": "narrator_voice",
+                "label": "Narrator Voice",
+                "value": "Aria (Epic)",
+                "options": [
+                  "Aria (Epic)",
+                  "Vaelin (Epic)",
+                  "Brakka (Gruff)"
+                ]
+              },
+              {
+                "row": "slider",
+                "key": "imagination",
+                "label": "Imagination Level",
+                "value": 80,
+                "unit": "percent"
+              },
+              {
+                "row": "select",
+                "key": "response_speed",
+                "label": "Response Speed",
+                "value": "Balanced",
+                "options": [
+                  "Fast",
+                  "Balanced",
+                  "Thoughtful"
+                ]
+              },
+              {
+                "row": "select",
+                "key": "narration_style",
+                "label": "Narration Style",
+                "value": "Cinematic",
+                "options": [
+                  "Cinematic",
+                  "Storybook",
+                  "Terse"
+                ]
+              },
+              {
+                "row": "slider",
+                "key": "memory_depth",
+                "label": "Memory Depth",
+                "value": 70,
+                "unit": "steps",
+                "steps": [
+                  "Short",
+                  "Standard",
+                  "Long",
+                  "Extended"
+                ]
+              }
+            ]
+          },
+          {
+            "key": "budget",
+            "kind": "budget",
+            "label": "Session Budget",
+            "icon": "coins",
+            "accent": "green",
+            "shown_rows": 3,
+            "rows": [
+              {
+                "row": "stat",
+                "key": "balance",
+                "label": "Balance",
+                "value": {
+                  "kind": "money",
+                  "cents": 2840
+                },
+                "highlight": true
+              },
+              {
+                "row": "stat",
+                "key": "spend_rate",
+                "label": "Spend Rate",
+                "info": true,
+                "value": {
+                  "kind": "per_hour",
+                  "cents": 390
+                }
+              },
+              {
+                "row": "stat",
+                "key": "estimate",
+                "label": "Estimated (2–3 hrs)",
+                "value": {
+                  "kind": "range",
+                  "low_cents": 780,
+                  "high_cents": 1170
+                },
+                "highlight": true
+              }
+            ]
+          }
+        ],
+        "layout": "tiles"
+      },
+      "adventure": {
+        "heading": "Tonight's Adventure",
+        "picture": "adventure-citadel-waterfall.webp",
+        "title": "The Ashen Citadel",
+        "blurb": "A sanctum where magic and machine have fused.",
+        "facts": [
+          {
+            "icon": "mountain",
+            "label": "Region",
+            "value": "Veylmar Expanse"
+          },
+          {
+            "icon": "skull",
+            "label": "Threat Level",
+            "value": "High"
+          },
+          {
+            "icon": "hourglass",
+            "label": "Est. Duration",
+            "value": "2 – 3 hours"
+          }
+        ],
+        "launch_label": "Launch Session",
+        "enabled": true
+      },
+      "campaigns": {
+        "title": "Recent Campaigns",
+        "view_all": "See all campaigns",
+        "cards": [
+          {
+            "art": "campaign-ashen-citadel.webp",
+            "title": "The Ashen Citadel",
+            "last_played": "Played yesterday",
+            "selected": true
+          },
+          {
+            "art": "campaign-neon-alley.webp",
+            "title": "Neon Hollow",
+            "last_played": "Played 3 days ago"
+          },
+          {
+            "art": "campaign-ringed-station.webp",
+            "title": "Crown of the Last Machine",
+            "last_played": "Played 1 week ago"
+          }
+        ]
+      }
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Cam",
+    "goal": "Choose what to play tonight",
+    "status": {
+      "kind": "ok"
+    },
+    "narration": [
+      "The table is on the landing page."
+    ],
+    "suggested": [
+      {
+        "label": "Continue the campaign"
+      },
+      {
+        "label": "Start something new"
+      }
+    ],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

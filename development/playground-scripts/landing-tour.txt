@@ -1,0 +1,279 @@
+# The landing page (Home screen): every part placed one at a time over the hall plate, so the page
+# assembles on screen in order, then changed field by field. Needs the playground host running
+# (df-table serve) and the pictures in assets/playground/media.
+playground go ui_home
+scene reset
+# Start from the bare hall: take away the whole page and the pills the fixture draws.
+scene home clear
+scene pill clear balance
+scene pill clear rate
+scene pill clear profile
+wait 2500
+# The logo at the top left, then the title block: the name, its tagline and the diamond rule.
+scene home brand wordmark=DungeonFlux size=compact star=on
+wait 1500
+scene home title text=DungeonFlux
+wait 1200
+scene home title tagline="Forge a world. Gather your party. Begin the legend."
+wait 1500
+# The navigation rail, item by item; the number after the last adds an item.
+scene home nav 1 label=Home glyph=home active=true
+wait 700
+scene home nav 2 label=Campaigns glyph=campaigns
+wait 700
+scene home nav 3 label=Characters glyph=characters
+wait 700
+scene home nav 4 label=Players glyph=players
+wait 700
+scene home nav 5 label=Assets glyph=assets
+wait 700
+scene home nav 6 label=Settings glyph=settings
+wait 1500
+# The four actions: the gold one first.
+scene home actions 1 label="Continue Campaign" subtitle="The Ashen Citadel" glyph=play variant=primary
+wait 1200
+scene home actions 2 label="Start New Adventure" glyph=sparkle
+wait 1000
+scene home actions 3 label="Join Session" glyph=players
+wait 1000
+scene home actions 4 label="Quick Launch" glyph=bolt
+wait 2000
+# The top bar: the bell, then the balance and the rate the table pays, then the profile mark.
+scene home top bell=on
+wait 1000
+scene pill set balance "$28.40"
+wait 1000
+scene pill set rate "$3.90/hr"
+wait 1000
+scene pill set profile on
+wait 2500
+# Change one field at a time: a notice arrives, another page is the one shown, a button is off.
+scene home top unread=3
+wait 2500
+scene home nav 2 active=true badge=2
+wait 2500
+scene home nav 2 badge=none
+scene home nav 1 active=true
+wait 1500
+scene home actions 3 enabled=false
+wait 2500
+scene home actions 3 enabled=true
+wait 1500
+scene home title tagline="The table is ready."
+wait 2500
+scene home title tagline="Forge a world. Gather your party. Begin the legend."
+wait 2000
+# The focus: the remote moves across the actions, down to the rail, then back to the default.
+scene home focus actions:2
+wait 1500
+scene home focus actions:3
+wait 1500
+scene home focus nav:3
+wait 1800
+scene home focus none
+wait 1500
+# Take a part away and put it back.
+scene home remove nav
+wait 2000
+scene home nav 1 label=Home glyph=home active=true
+scene home nav 2 label=Campaigns glyph=campaigns
+scene home nav 3 label=Characters glyph=characters
+scene home nav 4 label=Players glyph=players
+scene home nav 5 label=Assets glyph=assets
+scene home nav 6 label=Settings glyph=settings
+wait 2000
+# Tonight's Adventure card (D3): the card arrives with its picture and title, then the blurb (kept in
+# the data; the television box has no room to draw it) and the three fact rows one at a time; the
+# launch button is there from the start. Only the first three fact rows are drawn.
+scene home adventure set heading="Tonight's Adventure" picture=adventure-citadel-waterfall.webp title="The Ashen Citadel"
+wait 2000
+scene home adventure set blurb="A sanctum where magic and machine have fused."
+wait 1500
+scene home adventure fact-add Region "Veylmar Expanse" icon=mountain
+wait 800
+scene home adventure fact-add "Threat Level" High icon=skull
+wait 800
+scene home adventure fact-add "Est. Duration" "2 - 3 hours" icon=hourglass
+wait 2500
+# The remote moves to the launch button, then away.
+scene home focus adventure:launch
+wait 2500
+scene home focus none
+wait 1500
+# Change one field at a time: the threat, a fact's drawing, the launch words, the title, the picture.
+scene home adventure fact 2 value=Extreme
+wait 2000
+scene home adventure fact 2 icon=sword
+wait 2000
+scene home adventure fact 2 icon=skull
+scene home adventure set launch="Begin Tonight"
+wait 2000
+scene home adventure set launch="Launch Session"
+scene home adventure set title="Ember Roads"
+wait 2000
+scene home adventure set title="The Ashen Citadel"
+scene home adventure set picture=none
+wait 2000
+scene home adventure set picture=adventure-citadel-waterfall.webp
+wait 1500
+# The launch button can be switched off (the server decides) and on again.
+scene home adventure set enabled=false
+wait 2500
+scene home adventure set enabled=true
+wait 1500
+# Take a fact row away, clear them all, then put the three back.
+scene home adventure fact-remove 1
+wait 1500
+scene home adventure facts-clear
+wait 1500
+scene home adventure fact-add Region "Veylmar Expanse" icon=mountain
+scene home adventure fact-add "Threat Level" High icon=skull
+scene home adventure fact-add "Est. Duration" "2 - 3 hours" icon=hourglass
+wait 2000
+# Recent Campaigns strip (D3): the three cards arrive one at a time, the first selected.
+scene home campaigns set title="Recent Campaigns" view-all="See all campaigns"
+wait 1200
+scene home campaigns card-add "The Ashen Citadel" art=campaign-ashen-citadel.webp last="Played yesterday" selected=true
+wait 900
+scene home campaigns card-add "Neon Hollow" art=campaign-neon-alley.webp last="Played 3 days ago"
+wait 900
+scene home campaigns card-add "Crown of the Last Machine" art=campaign-ringed-station.webp last="Played 1 week ago"
+wait 2500
+# The remote (focus) and the selection are separate: focus a card that is not the selected one.
+scene home focus campaigns:2
+wait 2500
+scene home campaigns select 3
+wait 2000
+scene home campaigns select 1
+scene home focus none
+wait 1500
+# A card changes: its words, its art, and the strip's words.
+scene home campaigns card 2 last="Played today"
+wait 2000
+scene home campaigns card 2 title="Neon Hollow II"
+wait 2000
+scene home campaigns card 2 title="Neon Hollow" art=none
+wait 2000
+scene home campaigns card 2 art=campaign-neon-alley.webp last="Played 3 days ago"
+scene home campaigns set title="Pick up where you left off" view-all="See all"
+wait 2000
+scene home campaigns set title="Recent Campaigns" view-all="See all campaigns"
+wait 1500
+# A card goes, the strip empties, and the three come back.
+scene home campaigns card-remove 3
+wait 2000
+scene home campaigns cards-clear
+wait 1500
+scene home campaigns card-add "The Ashen Citadel" art=campaign-ashen-citadel.webp last="Played yesterday" selected=true
+scene home campaigns card-add "Neon Hollow" art=campaign-neon-alley.webp last="Played 3 days ago"
+scene home campaigns card-add "Crown of the Last Machine" art=campaign-ringed-station.webp last="Played 1 week ago"
+wait 2500
+# Configure Session panel (D2): the panel arrives empty, then the preset selector, then the six cards
+# one at a time. Every row of every card is data; the screen draws the first row of each (a small
+# slot is read from a sofa), and the rest answer to these verbs.
+scene home configure panel title="Configure Session" currency="$" layout=tiles
+wait 1500
+scene home configure preset label="Presets:" value="Balanced Adventure" options="Balanced Adventure,Rules Purist,Story First,Combat Heavy,Quick Play"
+wait 1500
+scene home configure card-add world kind=select label="World / Setting" icon=globe banner=home-banner-world-arcane-citadel.webp
+scene home configure row-add world setting kind=select label="World / Setting" value="Arcane Sci-Fi" options="Medieval Fantasy,Arcane Sci-Fi,Steampunk,Post-Apocalyptic,Techno-Fantasy,Custom"
+wait 900
+scene home configure card-add tone kind=select label="Session Tone" icon=masks accent=violet banner=home-banner-tone-banners-and-torch.webp
+scene home configure row-add tone tone kind=select label="Session Tone" value=Heroic options="Heroic,Dark,Mysterious,Whimsical,Serious,Chaotic"
+wait 900
+scene home configure card-add party kind=select label=Party icon=party accent=violet banner=home-banner-party-travellers-with-torch.webp
+scene home configure row-add party players kind=select label=Party value="4 Players (Local)" options="1 Player (Local),2 Players (Local),3 Players (Local),4 Players (Local),5 Players (Local),6 Players (Local)"
+scene home configure row-add party session_length kind=select label="Session Length" value="~3-4 Hours" options="~1-2 Hours,~2-3 Hours,~3-4 Hours,~4+ Hours"
+wait 900
+scene home configure card-add rules kind=sliders label="Rules & Gameplay" icon=swords
+scene home configure row-add rules rules_fidelity kind=slider label="Rules Fidelity" level=80
+scene home configure row-add rules combat_intensity kind=slider label="Combat Intensity" level=60
+scene home configure row-add rules narrative_freedom kind=slider label="Narrative Freedom" level=70
+scene home configure row-add rules exploration_depth kind=slider label="Exploration Depth" level=75
+scene home configure row-add rules puzzle_complexity kind=slider label="Puzzle Complexity" level=50
+scene home configure row-add rules difficulty kind=slider label=Difficulty level=65 unit=steps steps="Relaxed,Moderate,Challenging,Punishing"
+wait 900
+scene home configure card-add narration kind=mixed label="AI & Narration" icon=core
+scene home configure row-add narration narrator_voice kind=select label="Narrator Voice" value="Aria (Epic)" options="Aria (Epic),Vaelin (Epic),Brakka (Gruff)"
+scene home configure row-add narration imagination kind=slider label="Imagination Level" level=80
+scene home configure row-add narration response_speed kind=select label="Response Speed" value=Balanced options="Fast,Balanced,Thoughtful"
+scene home configure row-add narration narration_style kind=select label="Narration Style" value=Cinematic options="Cinematic,Storybook,Terse"
+scene home configure row-add narration memory_depth kind=slider label="Memory Depth" level=70 unit=steps steps="Short,Standard,Long,Extended"
+wait 900
+scene home configure card-add budget kind=budget label="Session Budget" icon=coins accent=green
+scene home configure row-add budget balance kind=stat label=Balance money=28.40 highlight=true
+scene home configure row-add budget spend_rate kind=stat label="Spend Rate" per-hour=3.90 info=true
+scene home configure row-add budget estimate kind=stat label="Estimated (2-3 hrs)" range=7.80-11.70
+wait 2500
+# Change one field at a time: a choice, a slider, a number, the preset.
+scene home configure row world setting value=Steampunk
+wait 2000
+scene home configure row world setting value="Arcane Sci-Fi"
+scene home configure row tone tone value=Dark
+wait 2000
+scene home configure row tone tone value=Heroic
+scene home configure row rules rules_fidelity level=30
+wait 2000
+scene home configure row rules rules_fidelity level=100
+wait 1500
+scene home configure row rules rules_fidelity level=80
+scene home configure row narration narrator_voice value="Vaelin (Epic)"
+wait 2000
+scene home configure row narration narrator_voice value="Aria (Epic)"
+scene home configure row budget balance money=21.50
+wait 2000
+scene home configure row budget balance money=28.40
+scene home configure preset value="Story First"
+wait 2000
+scene home configure preset value="Balanced Adventure"
+wait 1500
+# A card changes its words, its picture, its colour; a row's words change; money shows only when given.
+scene home configure card world label="World"
+wait 1800
+scene home configure card world label="World / Setting" accent=green
+wait 1800
+scene home configure card world accent=cyan
+scene home configure card party icon=dice
+wait 1800
+scene home configure card party icon=party
+scene home configure row budget balance no-value=true
+wait 2000
+scene home configure row budget balance money=28.40
+wait 1500
+# The focus moves over the cards and the preset selector, then back to the default.
+scene home focus configure:preset
+wait 1500
+scene home focus configure:2
+wait 1500
+scene home focus configure:4
+wait 1500
+scene home focus configure:6
+wait 1800
+scene home focus none
+wait 1200
+# Cards and rows come and go: a card moves to the front, a row goes and comes back, a card is added.
+scene home configure card-move budget 1
+wait 2000
+scene home configure card-move budget 6
+wait 1800
+scene home configure row-remove rules rules_fidelity
+wait 2000
+scene home configure row-add rules rules_fidelity kind=slider label="Rules Fidelity" level=80 at=1
+wait 1800
+scene home configure row-move rules narrative_freedom 1
+wait 2000
+scene home configure row-move rules narrative_freedom 3
+wait 1500
+scene home configure card-add extras kind=sliders label=Extras icon=sparkles
+scene home configure row-add extras luck kind=slider label=Luck level=40
+wait 2000
+scene home configure card-remove extras
+wait 1500
+# The panel's own words, then the preset selector is taken away and put back.
+scene home configure panel title="Tonight's Table"
+wait 1800
+scene home configure panel title="Configure Session"
+scene home configure preset-remove
+wait 1800
+scene home configure preset value="Balanced Adventure" label="Presets:"
+wait 1500

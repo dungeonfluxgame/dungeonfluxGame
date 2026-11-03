@@ -1,0 +1,50 @@
+{
+  "name": "UI: roleplay card",
+  "description": "The roleplay card of renders 18 and 22: a title bar, speech bubbles whose tails point at whoever is speaking (hero gold, ally blue-white, mystic violet), and a caption, over the table of the tavern. The backdrop is render 18 with its bubbles painted out. Every bubble is a component drawn from data and changeable live with scene roleplay set.",
+  "tv": {
+    "place": "",
+    "status": { "kind": "ok" },
+    "caption": null,
+    "backdrop": { "media": "innkeeper-table-plate.webp", "caption": null },
+    "card": null,
+    "pills": { "logo": "inline", "session": "The Ember Roads", "party": { "joined": 4, "capacity": 6 } },
+    "party": [
+      { "name": "Kael", "hit_points": 42, "maximum_hit_points": 42, "color": "#e0675a" },
+      { "name": "Lyra", "hit_points": 38, "maximum_hit_points": 38, "color": "#6cdb88" },
+      { "name": "Seris", "hit_points": 36, "maximum_hit_points": 36, "color": "#f8d74c" },
+      { "name": "Thoren", "hit_points": 44, "maximum_hit_points": 44, "color": "#4faef7" }
+    ],
+    "seats": {
+      "looks": [
+        { "name": "Kael", "class": "Fighter", "level": 3, "portrait": "brakka.webp", "glyph": "shield" },
+        { "name": "Lyra", "class": "Ranger", "level": 3, "portrait": "sigrun.webp", "glyph": "bow" },
+        { "name": "Seris", "class": "Cleric", "level": 3, "portrait": "finn-alder.webp", "glyph": "sun" },
+        { "name": "Thoren", "class": "Wizard", "level": 3, "portrait": "dain-rusk.webp", "glyph": "book" }
+      ],
+      "open": 2
+    },
+    "roleplay": {
+      "title": { "glyph": "mug", "text": "Gather information" },
+      "bubbles": [
+        { "speaker": "Lyra", "glyph": "bow", "tone": "hero", "line": "We're looking for a guide to the Ember Roads. Someone reliable. Any suggestions?", "left_percent": 22, "top_percent": 19, "width_percent": 22, "tail_x_percent": 31, "tail_y_percent": 31 },
+        { "speaker": "Thoren", "glyph": "book", "tone": "ally", "line": "Not mercenaries. A local who knows the real dangers.", "left_percent": 49, "top_percent": 9, "width_percent": 18, "tail_x_percent": 60, "tail_y_percent": 29 },
+        { "speaker": "Innkeeper", "glyph": "mug", "tone": "mystic", "line": "Depends... are you after a safe road, or the fast one? Both have a price.", "left_percent": 79, "top_percent": 11, "width_percent": 19, "tail_x_percent": 84, "tail_y_percent": 32 },
+        { "speaker": "Seris", "glyph": "sun", "tone": "ally", "line": "What kind of dangers are we talking about?", "left_percent": 49, "top_percent": 55, "width_percent": 18, "tail_x_percent": 53, "tail_y_percent": 51 },
+        { "speaker": "Kael", "glyph": "shield", "tone": "hero", "line": "Price isn't the issue. We just need the truth.", "left_percent": 18, "top_percent": 55, "width_percent": 18, "tail_x_percent": 21, "tail_y_percent": 50 }
+      ],
+      "caption": "The party questions a local about recent events on the Ember Roads."
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Kael",
+    "goal": "Find a guide to the Ember Roads",
+    "status": { "kind": "ok" },
+    "narration": ["The innkeeper wipes a mug and waits for your answer."],
+    "suggested": [{ "label": "Ask about the price" }, { "label": "Ask about the road" }],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

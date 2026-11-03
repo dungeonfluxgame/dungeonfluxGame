@@ -17,6 +17,7 @@ use crate::fixture::{
     Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide, UnavailableChoice,
 };
 use crate::limits::MAXIMUM_PIVOT_PERCENT;
+use crate::overlay::{Edit, Glyph, NarrationBox, NarrationPlacement, Progress, SeatStrip};
 
 pub use crate::limits::{
     MAXIMUM_CAMERA_MS, MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CHOICES_PER_LIST, MAXIMUM_CUES_KEPT,
@@ -119,6 +120,21 @@ pub struct SceneOverlay {
     pub phone_image: Option<Override<ImageRef>>,
     pub music: Option<Override<Track>>,
     pub camera: Option<Camera>,
+    /// The narration box: set, or cleared so the fixture's own (or the caption) shows.
+    #[serde(default)]
+    pub narration: Option<Override<NarrationBox>>,
+    /// The looks of the party strip's heroes and its open seats.
+    #[serde(default)]
+    pub seats: Option<SeatStrip>,
+    /// Whether the logo is drawn.
+    #[serde(default)]
+    pub brand: Option<bool>,
+    /// The lobby, loading screen, roleplay card and top bar the dev CLI changed (`lobby_change`).
+    #[serde(default)]
+    pub screens: crate::lobby_change::ScreenOverlay,
+    /// The landing page: set whole, or cleared (see `home_change`).
+    #[serde(default)]
+    pub home: Option<Override<crate::home_model::HomeScene>>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
     #[serde(default)]
@@ -207,6 +223,63 @@ pub enum SceneChange {
         zoom_percent: u16,
         duration_ms: u32,
     },
+    /// Sets the narration box, or changes its fields: a field left out stays as it is, and the
+    /// text is needed only when there is no narration box yet.
+    Narration {
+        text: Option<String>,
+        #[serde(default)]
+        speaker: Edit<String>,
+        #[serde(default)]
+        badge: Edit<Glyph>,
+        #[serde(default)]
+        continue_label: Edit<String>,
+        voice: Option<bool>,
+        placement: Option<NarrationPlacement>,
+        #[serde(default)]
+        progress: Edit<Progress>,
+    },
+    /// Takes the narration box away (the caption, if there is one, shows instead).
+    ClearNarration {},
+    /// Sets how a hero of the party strip looks, and their hit points. A hero who is not in the
+    /// party yet is added (it needs `hit_points`); a field left out stays as it is.
+    SeatSet {
+        name: String,
+        #[serde(default)]
+        class: Edit<String>,
+        #[serde(default)]
+        level: Edit<u8>,
+        #[serde(default)]
+        portrait: Edit<String>,
+        #[serde(default)]
+        glyph: Edit<Glyph>,
+        #[serde(default)]
+        accent: Edit<String>,
+        hit_points: Option<u32>,
+        maximum_hit_points: Option<u32>,
+        conditions: Option<Vec<String>>,
+    },
+    /// Takes a hero out of the party strip (their look and their place in the party).
+    SeatRemove {
+        name: String,
+    },
+    /// Sets how many open seats follow the heroes.
+    SeatsOpen {
+        open: u8,
+    },
+    /// Takes every look and every open seat away; the party's hit points stay.
+    SeatsClear {},
+    /// Draws or hides the logo at the top left.
+    Brand {
+        on: bool,
+    },
+    /// Changes the lobby, the loading screen, the roleplay card or the top bar (`lobby_change`).
+    Screen {
+        edit: crate::lobby_change::ScreenEdit,
+    },
+    /// Changes the landing page (`home_change`).
+    Home {
+        edit: crate::home_change::HomeEdit,
+    },
     /// Drops every change and returns to the fixture. Cues already made stay counted.
     Reset {},
 }
@@ -238,6 +311,26 @@ pub enum SceneError {
     BadPivot(u8),
     /// A scenario file sets a number only the host sets.
     HostOwned(&'static str),
+    /// A list of overlay parts is longer than its very large limit.
+    TooMany {
+        what: &'static str,
+        limit: usize,
+    },
+    /// A scene's number is 0 or past its total.
+    BadProgress {
+        index: u16,
+        total: u16,
+    },
+    /// A scene has both a caption and a narration box, which share one place.
+    NarrationAndCaption,
+    /// A hero who is not in the party was given no hit points.
+    NeedsHitPoints(String),
+    /// A narration box was asked for with no text and there is none to change.
+    NoNarrationYet,
+    /// A change to the lobby, loading screen, roleplay card or top bar is out of range.
+    Screen(crate::lobby_change::ScreenError),
+    /// A change to the landing page, or a value of it, is out of range.
+    Home(crate::home_checks::HomeError),
 }
 
 impl fmt::Display for SceneError {
@@ -290,6 +383,24 @@ impl fmt::Display for SceneError {
                 formatter,
                 "a rotation is from 0 to {MAXIMUM_ROTATION_DEGREES} degrees, not {degrees}"
             ),
+            Self::TooMany { what, limit } => {
+                write!(formatter, "{what} holds at most {limit} entries")
+            }
+            Self::BadProgress { index, total } => write!(
+                formatter,
+                "scene {index} of {total} does not exist: a scene is counted from 1 up to the total"
+            ),
+            Self::NarrationAndCaption => formatter.write_str(
+                "a scene has a caption or a narration box, not both: they share one place",
+            ),
+            Self::NeedsHitPoints(name) => write!(
+                formatter,
+                "'{name}' is not in the party yet: give hp=N to add them"
+            ),
+            Self::NoNarrationYet => formatter
+                .write_str("there is no narration box to change: give the text to make one"),
+            Self::Screen(error) => write!(formatter, "{error}"),
+            Self::Home(error) => write!(formatter, "{error}"),
             Self::BadVolume(volume) => {
                 write!(
                     formatter,
@@ -370,6 +481,23 @@ impl SceneOverlay {
         }
         if let Some(camera) = &self.camera {
             fixture.tv.camera = Some(camera.clone());
+        }
+        match &self.narration {
+            Some(Override::Set(narration)) => fixture.tv.narration = Some(narration.clone()),
+            Some(Override::Clear) => fixture.tv.narration = None,
+            None => {}
+        }
+        if let Some(seats) = &self.seats {
+            fixture.tv.seats = Some(seats.clone());
+        }
+        if let Some(on) = self.brand {
+            fixture.tv.brand = on;
+        }
+        self.screens.apply_to(&mut fixture.tv);
+        match &self.home {
+            Some(Override::Set(home)) => fixture.tv.home = Some(home.clone()),
+            Some(Override::Clear) => fixture.tv.home = None,
+            None => {}
         }
         apply_image(&self.backdrop, &mut fixture.tv.backdrop);
         apply_image(&self.card, &mut fixture.tv.card);

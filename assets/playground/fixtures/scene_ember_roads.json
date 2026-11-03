@@ -1,0 +1,49 @@
+{
+  "name": "Scene: The Ember Roads, Valemere harbour",
+  "description": "The narrator's opening scene (concept renders 13 and 02): the harbour of Valemere at dusk (the plate is render 13 with its baked interface painted out, so the plate holds scene art only), the Dungeon Master's narration box against the right edge, and the party strip as seat cards: four heroes and two open seats. Portraits are stand-ins from the media library. The pills and the roleplay card are placed on this scene by their own fixtures and verbs.",
+  "tv": {
+    "place": "",
+    "status": { "kind": "ok" },
+    "pills": { "logo": "inline", "session": "The Ember Roads", "party": { "joined": 4, "capacity": 6 } },
+    "narration": {
+      "speaker": "The Dungeon Master",
+      "text": "Beneath a crimson sky, the port city of Valemere stirs to life. Caravans from distant lands crowd the docks, rumors travel faster than the ships, and somewhere in the chaos, an opportunity, or a danger, awaits your party.",
+      "continue_label": "Continue",
+      "placement": "right"
+    },
+    "backdrop": { "media": "quay-in-the-rain.webp", "caption": null },
+    "party": [
+      { "name": "Kael", "hit_points": 42, "maximum_hit_points": 42, "color": "#e0675a" },
+      { "name": "Lyra", "hit_points": 38, "maximum_hit_points": 38, "color": "#6cdb88" },
+      { "name": "Seris", "hit_points": 36, "maximum_hit_points": 36, "color": "#f8d74c" },
+      { "name": "Thoren", "hit_points": 44, "maximum_hit_points": 44, "color": "#4faef7" }
+    ],
+    "seats": {
+      "looks": [
+        { "name": "Kael", "class": "Fighter", "level": 3, "portrait": "brakka.webp", "glyph": "shield" },
+        { "name": "Lyra", "class": "Ranger", "level": 3, "portrait": "sigrun.webp", "glyph": "bow" },
+        { "name": "Seris", "class": "Cleric", "level": 3, "portrait": "finn-alder.webp", "glyph": "sun" },
+        { "name": "Thoren", "class": "Wizard", "level": 3, "portrait": "dain-rusk.webp", "glyph": "book" }
+      ],
+      "open": 2
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Kael",
+    "goal": "Find out what is waiting in Valemere",
+    "status": { "kind": "ok" },
+    "narration": [
+      "The docks are loud. A dockmaster eyes your party from beside a stack of crates, then looks away too quickly."
+    ],
+    "suggested": [
+      { "label": "Talk to the dockmaster" },
+      { "label": "Look over the docks" },
+      { "label": "Ask for rumors" }
+    ],
+    "groups": [
+      { "name": "Talk", "choices": [{ "label": "Greet the dockmaster" }, { "label": "Ask about the ships" }] },
+      { "name": "Look", "choices": [{ "label": "Study the crates" }, { "label": "Watch the crowd" }] }
+    ]
+  }
+}

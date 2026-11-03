@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::overlay::{NarrationBox, SeatStrip};
 use crate::scene::Track;
 
 /// Where the stage gets its elements from.
@@ -202,6 +203,32 @@ pub struct TvScene {
     pub camera: Option<Camera>,
     #[serde(default)]
     pub party: Vec<PartyMember>,
+    /// The narrator's box. It takes the caption's place, so a scene has a caption or a narration
+    /// box, not both. Optional and additive (see `overlay`).
+    #[serde(default)]
+    pub narration: Option<NarrationBox>,
+    /// How the party strip's heroes look, and how many open seats follow them.
+    #[serde(default)]
+    pub seats: Option<SeatStrip>,
+    /// Whether the DungeonFlux logo is drawn at the top left; the place name moves under it.
+    #[serde(default)]
+    pub brand: bool,
+    /// The lobby: title block, six seats, invite panel and begin button (see `lobby_model`).
+    #[serde(default)]
+    pub lobby: Option<crate::lobby_model::LobbyScreen>,
+    /// The loading screen: where the party is going, the narrator and a progress bar.
+    #[serde(default)]
+    pub loading: Option<crate::lobby_model::LoadingScreen>,
+    /// The roleplay card: title bar, speech bubbles and caption.
+    #[serde(default)]
+    pub roleplay: Option<crate::lobby_model::RoleplayScene>,
+    /// The top bar: wordmark, session and party pills, and the optional balance and rate.
+    #[serde(default)]
+    pub pills: Option<crate::lobby_model::TopBar>,
+    /// The landing page: brand, title, navigation, actions, settings, adventure and campaigns
+    /// (see `home_model`).
+    #[serde(default)]
+    pub home: Option<crate::home_model::HomeScene>,
     pub elements: ElementSource,
 }
 

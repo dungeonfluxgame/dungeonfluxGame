@@ -23,20 +23,20 @@ use crate::dom::{
 };
 use crate::draw_plan::Part;
 use crate::figure::{FigureLook, figure_style, first_turn, label_style, next_turn};
-use crate::fixture::{Camera, ElementShape, PartyMember, StageElement, Status, TvScene};
-use crate::layout::hit_point_permille;
+use crate::fixture::{Camera, ElementShape, StageElement, Status, TvScene};
 use crate::limits::MAXIMUM_ZOOM_PERCENT;
 use crate::media::{MediaKind, media_kind};
 use crate::motion_style::{CameraAction, CameraDrawn, camera_action, camera_style};
-use crate::style::css_color;
 
 /// The parts of the shared screen, in the order they are drawn.
-pub const PARTS: [Part; 7] = [
+pub const PARTS: [Part; 9] = [
     Part::TvBackdrop,
     Part::TvGrid,
     Part::TvPlace,
     Part::TvCard,
+    Part::TvPanels,
     Part::TvStatus,
+    Part::TvPills,
     Part::TvCaption,
     Part::TvParty,
 ];
@@ -400,6 +400,9 @@ fn caption(
     scene: &TvScene,
     controls: &Controls,
 ) -> Result<Option<Element>, JsValue> {
+    if let Some(narration) = &scene.narration {
+        return crate::view_narration::narration(document, narration, controls).map(Some);
+    }
     let Some(caption) = &scene.caption else {
         return Ok(None);
     };
@@ -430,47 +433,8 @@ fn caption(
     Ok(Some(node))
 }
 
-fn party_card(document: &Document, member: &PartyMember) -> Result<Element, JsValue> {
-    let card = element(document, "div", "party-card")?;
-    let name = text_element(document, "div", "party-name", &member.name)?;
-    if let Some(color) = member.color.as_deref().and_then(css_color) {
-        set_style(&name, &format!("border-color:{color};"))?;
-    }
-    append(&card, &name)?;
-    append(
-        &card,
-        &text_element(
-            document,
-            "div",
-            "party-hp",
-            &format!("{} / {}", member.hit_points, member.maximum_hit_points),
-        )?,
-    )?;
-    let bar = element(document, "div", "party-bar")?;
-    let fill = element(document, "div", "party-bar-fill")?;
-    let permille = hit_point_permille(member.hit_points, member.maximum_hit_points);
-    set_style(&fill, &format!("width:{:.1}%;", f32::from(permille) / 10.0))?;
-    append(&bar, &fill)?;
-    append(&card, &bar)?;
-    if !member.conditions.is_empty() {
-        let chips = element(document, "div", "party-conditions")?;
-        for condition in &member.conditions {
-            append(&chips, &text_element(document, "span", "chip", condition)?)?;
-        }
-        append(&card, &chips)?;
-    }
-    Ok(card)
-}
-
 fn party(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
-    if scene.party.is_empty() {
-        return Ok(None);
-    }
-    let strip = element(document, "div", "tv-party")?;
-    for member in &scene.party {
-        append(&strip, &party_card(document, member)?)?;
-    }
-    Ok(Some(strip))
+    crate::view_seats::strip(document, scene)
 }
 
 /// What goes in the slot of `part`, or `None` when the piece is empty. A part that is not of the
@@ -488,13 +452,15 @@ pub fn build_part(
             .map(|image| picture(document, "tv-backdrop", image))
             .transpose(),
         Part::TvGrid => controls.show_grid.then(|| grid(document)).transpose(),
-        Part::TvPlace => text_element(document, "div", "tv-place", &scene.place).map(Some),
+        Part::TvPlace => crate::view_brand::place(document, scene).map(Some),
         Part::TvCard => scene
             .card
             .as_ref()
             .map(|image| picture(document, "tv-card", image))
             .transpose(),
+        Part::TvPanels => crate::view_overlays::panels(document, scene),
         Part::TvStatus => status_banner(document, &controls.status_for(&scene.status)),
+        Part::TvPills => crate::view_pills::build(document, scene),
         Part::TvCaption => caption(document, scene, controls),
         Part::TvParty => party(document, scene),
         other => Err(JsValue::from_str(&format!(

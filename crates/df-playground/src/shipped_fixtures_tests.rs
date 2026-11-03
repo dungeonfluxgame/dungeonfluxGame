@@ -82,6 +82,36 @@ fn every_picture_a_shipped_fixture_names_is_in_the_media_library_and_is_a_pictur
 }
 
 #[test]
+fn every_portrait_a_seat_strip_names_is_in_the_media_library_and_is_a_picture() {
+    use crate::media::{MediaKind, media_kind};
+    let media = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/playground/media");
+    for (name, fixture) in fixtures() {
+        let looks = fixture.tv.seats.iter().flat_map(|seats| &seats.looks);
+        for portrait in looks.filter_map(|look| look.portrait.as_deref()) {
+            assert_eq!(
+                media_kind(portrait),
+                Some(MediaKind::Image),
+                "{name}: {portrait}"
+            );
+            assert!(media.join(portrait).is_file(), "{name} names {portrait}");
+        }
+        if let Some(seats) = &fixture.tv.seats {
+            for look in &seats.looks {
+                assert!(
+                    fixture
+                        .tv
+                        .party
+                        .iter()
+                        .any(|member| member.name == look.name),
+                    "{name}: {} has a look but is not in the party",
+                    look.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn the_shipped_media_are_plain_names_of_known_types_within_the_size_limit() {
     use crate::media::media_kind;
     let media = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/playground/media");
