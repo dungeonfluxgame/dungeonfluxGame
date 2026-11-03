@@ -6,12 +6,15 @@
 //! opens a scene when the table enters it, submits the jobs the plate scheduler queues, and calls
 //! `advance` often (it never waits): each call moves every job as far as the broker's answers allow
 //! and returns the plates that finished and the jobs that ended. A job after a scene's first starts
-//! at the Plate stage because the scene already stored its description and background.
+//! at the Plate stage because the scene already stored its description and background, which
+//! the look-ahead worker may also have built (`adopt`).
 //!
 //! The build takes a `BuildPriority`. `Current` builds the table's own scene at the live and plate
-//! classes; `Lookahead` builds at the lowest class, the seam SB-LA uses to build the next scene
-//! early with the same pipeline (that worker is not built here: it would call `open_scene` with
-//! `Lookahead` and the certain next scene's brief, and `submit` a job for it).
+//! classes; `Lookahead` is the priority of a build at the lowest class. The look-ahead worker of
+//! SB-LA (`lookahead/`) builds the next scene's description and background itself, through the
+//! broker at that class, and hands them over at the transition with `adopt`, so the scene's first
+//! plate starts at the Plate stage. The plate and Locate stages of a look-ahead build need S2 and
+//! are not built; `open_scene` with `Lookahead` stays the seam for them.
 //!
 //! Waiting for art is never a gate (K.2): after the build's budget with no plate on screen the
 //! builder reports the card due and the projection shows the establishing card, while the build goes
@@ -262,6 +265,38 @@ impl SceneBuilder {
             },
         );
         Ok(ended)
+    }
+
+    /// Gives a scene the stages the look-ahead worker built before the table entered it (SB-LA):
+    /// the description and the background are stored as if the scene had made them, so its first
+    /// plate starts at the Plate stage. A description the brief already held is kept, and a stage
+    /// the scene already stored is never replaced.
+    pub fn adopt(&mut self, scene: SceneId, built: &StageOutputs) -> Result<(), BuilderError> {
+        let record = self
+            .scenes
+            .get_mut(&scene)
+            .ok_or(BuilderError::UnknownScene { scene })?;
+        let generation = record.generation;
+        let mut stored = Vec::new();
+        if record.outputs.description.is_none() && built.description.is_some() {
+            record.outputs.description.clone_from(&built.description);
+            stored.push(df_table::scene_plan::SceneStage::Describe);
+        }
+        if record.outputs.background.is_none() && built.background.is_some() {
+            record.outputs.background = built.background;
+            stored.push(df_table::scene_plan::SceneStage::Background);
+        }
+        for stage in stored {
+            self.audit.record(&SceneBuilderEvent::StageStored {
+                scene,
+                generation,
+                job: SCENE_LEVEL_JOB,
+                stage,
+                source: StageSource::Lookahead,
+                ms: 0,
+            });
+        }
+        Ok(())
     }
 
     /// The table entered a scene under `generation`, so the broker's epoch moves up to it and every

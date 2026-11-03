@@ -17,6 +17,7 @@ use std::fmt::{self, Write};
 
 use df_table::event::{FailureCause, TableEvent};
 use df_table::identity::SceneId;
+use df_table::lookahead::{CancelReason, Expectation};
 use df_table::plate_buffer::{RejectReason, Swap, WaitReason};
 use df_table::plate_job::{JobCause, PlateJobId};
 use df_table::plate_scheduler::{JobEnd, SkipReason};
@@ -37,6 +38,8 @@ pub enum StageSource {
     SceneRecord,
     /// Nothing was left to ask for (a plate with nobody and nothing to find).
     NothingToAsk,
+    /// The look-ahead worker built it before the table entered the scene (SB-LA).
+    Lookahead,
 }
 
 impl StageSource {
@@ -45,6 +48,7 @@ impl StageSource {
             Self::Requested => "requested",
             Self::SceneRecord => "scene_record",
             Self::NothingToAsk => "nothing_to_ask",
+            Self::Lookahead => "lookahead",
         }
     }
 }
@@ -184,6 +188,64 @@ pub enum SceneBuilderEvent {
         on: bool,
         age_ms: u64,
     },
+    /// A look-ahead build of the next scene started (SB-LA). `epoch` is the broker epoch its
+    /// requests are for.
+    LookaheadStarted {
+        scene: SceneId,
+        token: u64,
+        expectation: Expectation,
+        likelihood_permille: u16,
+        epoch: u64,
+    },
+    /// A look-ahead stage was stored (`ms` of provider time).
+    LookaheadStored {
+        scene: SceneId,
+        token: u64,
+        stage: SceneStage,
+        source: StageSource,
+        ms: u64,
+    },
+    /// The description and the background of the next scene are stored.
+    LookaheadReady {
+        scene: SceneId,
+        token: u64,
+        ms: u64,
+    },
+    LookaheadFailed {
+        scene: SceneId,
+        token: u64,
+        stage: SceneStage,
+        cause: FailureCause,
+    },
+    LookaheadCancelled {
+        scene: SceneId,
+        token: u64,
+        reason: CancelReason,
+    },
+    /// A build whose epoch passed was discarded and nothing of it kept (the lease and epoch check).
+    LookaheadDiscarded {
+        scene: SceneId,
+        token: u64,
+        stage: SceneStage,
+    },
+    /// What the transition found: `hit`, `redress`, `stale`, `late`, `failed` or `miss`;
+    /// `ready_for_ms` is how long a built scene had waited.
+    LookaheadTaken {
+        scene: SceneId,
+        outcome: &'static str,
+        ready_for_ms: Option<u64>,
+    },
+    /// A built scene nobody took aged out of the book.
+    LookaheadExpired {
+        scene: SceneId,
+    },
+    /// The story's expected scenes were stated again.
+    LookaheadTargets {
+        scenes: usize,
+    },
+    LookaheadPaused {
+        paused: bool,
+    },
 }
 
 impl SceneBuilderEvent {
@@ -198,6 +260,16 @@ impl SceneBuilderEvent {
             | Self::CardDue { .. }
             | Self::JobReady { .. }
             | Self::JobEnded { .. } => "SCENE",
+            Self::LookaheadStarted { .. }
+            | Self::LookaheadStored { .. }
+            | Self::LookaheadReady { .. }
+            | Self::LookaheadFailed { .. }
+            | Self::LookaheadCancelled { .. }
+            | Self::LookaheadDiscarded { .. }
+            | Self::LookaheadTaken { .. }
+            | Self::LookaheadExpired { .. }
+            | Self::LookaheadTargets { .. }
+            | Self::LookaheadPaused { .. } => "LOOKAHEAD",
             Self::Table(event) => event.area(),
             Self::TickQueued { .. }
             | Self::TickSkipped { .. }
@@ -407,6 +479,77 @@ impl SceneBuilderEvent {
                 out,
                 "catching_up scene={scene} on={} age_ms={age_ms}",
                 if *on { "true" } else { "false" }
+            ),
+            Self::LookaheadStarted {
+                scene,
+                token,
+                expectation,
+                likelihood_permille,
+                epoch,
+            } => write!(
+                out,
+                "started scene={scene} token={token} expectation={} likelihood_permille={likelihood_permille} epoch={epoch}",
+                expectation.key()
+            ),
+            Self::LookaheadStored {
+                scene,
+                token,
+                stage,
+                source,
+                ms,
+            } => write!(
+                out,
+                "stage_stored scene={scene} token={token} stage={} source={} ms={ms}",
+                stage.key(),
+                source.key()
+            ),
+            Self::LookaheadReady { scene, token, ms } => {
+                write!(out, "ready scene={scene} token={token} ms={ms}")
+            }
+            Self::LookaheadFailed {
+                scene,
+                token,
+                stage,
+                cause,
+            } => write!(
+                out,
+                "failed scene={scene} token={token} stage={} cause={}",
+                stage.key(),
+                cause.key()
+            ),
+            Self::LookaheadCancelled {
+                scene,
+                token,
+                reason,
+            } => write!(
+                out,
+                "cancelled scene={scene} token={token} reason={}",
+                reason.key()
+            ),
+            Self::LookaheadDiscarded {
+                scene,
+                token,
+                stage,
+            } => write!(
+                out,
+                "discarded scene={scene} token={token} stage={} reason=epoch_moved",
+                stage.key()
+            ),
+            Self::LookaheadTaken {
+                scene,
+                outcome,
+                ready_for_ms,
+            } => write!(
+                out,
+                "taken scene={scene} outcome={outcome} ready_for_ms={}",
+                OptionalNumber(*ready_for_ms)
+            ),
+            Self::LookaheadExpired { scene } => write!(out, "expired scene={scene}"),
+            Self::LookaheadTargets { scenes } => write!(out, "targets scenes={scenes}"),
+            Self::LookaheadPaused { paused } => write!(
+                out,
+                "paused paused={}",
+                if *paused { "true" } else { "false" }
             ),
         }
     }

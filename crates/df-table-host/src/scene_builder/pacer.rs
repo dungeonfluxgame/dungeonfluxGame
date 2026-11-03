@@ -21,6 +21,7 @@ use df_table::plate_buffer::{Delivery, GenerationRegression, StageMoment, Step};
 use df_table::plate_job::{JobError, PlateJob};
 use df_table::plate_scheduler::{JobEnd, PlateScheduler, Tick, TickOutcome};
 use df_table::plate_timing::{PlateTiming, SceneBuildKind};
+use df_table::scene_plan::StageOutputs;
 use df_table::scene_plan_brief::SceneBrief;
 use df_table::table_state::{SceneGeneration, TableSnapshot};
 
@@ -119,6 +120,21 @@ impl ScenePacer {
         kind: SceneBuildKind,
         builder: &mut SceneBuilder,
     ) -> Result<Vec<JobOutcome>, PacerError> {
+        self.enter_scene_with(now_ms, snapshot, brief, kind, builder, None)
+    }
+
+    /// `enter_scene` for a scene the look-ahead worker built ahead (SB-LA): `built` holds the
+    /// stages it stored, which the builder adopts before the first plate's job is handed to it, so
+    /// that job starts at the Plate stage.
+    pub fn enter_scene_with(
+        &mut self,
+        now_ms: u64,
+        snapshot: &TableSnapshot,
+        brief: &SceneBrief,
+        kind: SceneBuildKind,
+        builder: &mut SceneBuilder,
+        built: Option<&StageOutputs>,
+    ) -> Result<Vec<JobOutcome>, PacerError> {
         let generation = snapshot
             .scene(self.scene)
             .ok_or(JobError::SceneNotOpen { scene: self.scene })?
@@ -133,6 +149,9 @@ impl ScenePacer {
         )?;
         let mut ended = Vec::new();
         self.settle(outputs, &mut ended);
+        if let Some(built) = built {
+            builder.adopt(self.scene, built)?;
+        }
         let tick = self.scheduler.enter_scene(now_ms, snapshot, brief)?;
         self.record_tick(&tick, snapshot);
         self.hand_jobs_to(builder, &mut ended);

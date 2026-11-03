@@ -592,7 +592,7 @@ impl Driver<'_> {
 }
 
 /// A stage's output from what its request produced, or why it cannot be used.
-fn output_of(
+pub(super) fn output_of(
     stage: SceneStage,
     handle: ResourceHandle,
     result: ResourceResult,

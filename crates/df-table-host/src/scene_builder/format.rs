@@ -17,7 +17,7 @@ use super::request::{
 const MICRO_DOLLARS_PER_DOLLAR: u64 = 1_000_000;
 const MICRO_DOLLARS_PER_CENT: u64 = 10_000;
 
-fn numbered(lines: impl IntoIterator<Item = String>) -> String {
+pub(super) fn numbered(lines: impl IntoIterator<Item = String>) -> String {
     lines
         .into_iter()
         .enumerate()
@@ -27,7 +27,7 @@ fn numbered(lines: impl IntoIterator<Item = String>) -> String {
 }
 
 /// `1.5 s` from 1,500 milliseconds.
-fn seconds(milliseconds: u64) -> String {
+pub(super) fn seconds(milliseconds: u64) -> String {
     format!("{}.{} s", milliseconds / 1_000, milliseconds % 1_000 / 100)
 }
 
@@ -39,7 +39,7 @@ fn dollars(micro_dollars: u64) -> String {
     )
 }
 
-fn timed(line: &TimedLine) -> String {
+pub(super) fn timed(line: &TimedLine) -> String {
     format!("[{}] {}", seconds(line.at_ms), line.line)
 }
 
@@ -65,8 +65,14 @@ pub fn format_build(reply: &BuildReply) -> String {
             seconds(after)
         )
     });
+    let ahead = reply
+        .lookahead
+        .as_ref()
+        .map_or_else(String::new, |outcome| {
+            format!("\nthe look-ahead found it: {outcome}")
+        });
     format!(
-        "scene {} (generation {}), {}: {}, {} in all{card}\n{}",
+        "scene {} (generation {}), {}: {}, {} in all{card}{ahead}\n{}",
         reply.scene,
         reply.generation,
         reply.place,

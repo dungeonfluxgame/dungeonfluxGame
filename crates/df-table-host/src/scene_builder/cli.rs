@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use super::format::{format_buffer, format_build, format_plates, format_run, format_show};
+use super::lookahead::{self, LookaheadCommand};
 use super::request::{
     BufferShow, BuildReply, BuildRequest, DevMoment, DevStage, PlatesReport, RunReply, RunRequest,
     SceneReply, SceneShow, SlowStage,
@@ -34,6 +35,7 @@ pub const VERBS: [&str; 2] = ["plates", "buffer"];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SceneBuilderCommand {
     Build(BuildRequest),
+    Lookahead(LookaheadCommand),
     Show,
     Plates,
     PlatesRun(RunRequest),
@@ -41,8 +43,14 @@ pub enum SceneBuilderCommand {
 }
 
 /// The usage line of every verb, in the order `help` lists them.
-pub fn verb_usages() -> [&'static str; 4] {
-    [BUILD_USAGE, SHOW_USAGE, PLATES_USAGE, BUFFER_USAGE]
+pub fn verb_usages() -> [&'static str; 5] {
+    [
+        BUILD_USAGE,
+        SHOW_USAGE,
+        PLATES_USAGE,
+        BUFFER_USAGE,
+        lookahead::cli::LOOKAHEAD_USAGE,
+    ]
 }
 
 /// The help text of these verbs, to follow the other commands' in `help`.
@@ -51,7 +59,8 @@ pub fn help_text() -> String {
         "\n  {BUILD_USAGE}\n      the dev party enters a new scene and it is built through the broker over fake providers\n      in a clock of its own, until its first plate is on screen; fail= makes a stage's provider refuse,\n      slow= makes a stage take that many seconds (past the budget, the establishing card holds the screen)\n\
          \n  {SHOW_USAGE}\n      what each open scene has stored, its jobs, the establishing card and where Locate found\n      each person and item (or the explicit fallback point of one it did not)\n\
          \n  {PLATES_USAGE}\n      the plate clock, its queue, the jobs in flight and the cost of the interval; run lets the clock\n      tick (a creature moves each beat, or nothing changes with quiet, and no plate is paid for)\n\
-         \n  {BUFFER_USAGE}\n      the playout buffer: the plate on screen, what is ready and pending, and the lateness\n"
+         \n  {BUFFER_USAGE}\n      the playout buffer: the plate on screen, what is ready and pending, and the lateness\n{}",
+        lookahead::cli::help_text()
     )
 }
 
@@ -137,12 +146,13 @@ fn run(words: &[String]) -> Result<SceneBuilderCommand, CommandError> {
     Ok(SceneBuilderCommand::PlatesRun(request))
 }
 
-/// Parses the `scene` verbs `build` and `show`; `verb` is one of them.
+/// Parses the `scene` verbs `build`, `show` and `lookahead`; `verb` is one of them.
 pub fn parse_scene(verb: &str, words: &[String]) -> Result<SceneBuilderCommand, CommandError> {
     match verb {
         "build" => build(words),
         "show" if words.is_empty() => Ok(SceneBuilderCommand::Show),
         "show" => Err(usage(SHOW_USAGE)),
+        "lookahead" => lookahead::parse(words).map(SceneBuilderCommand::Lookahead),
         other => Err(CommandError::Unknown(other.to_owned())),
     }
 }
@@ -204,6 +214,7 @@ pub async fn execute(port: u16, command: SceneBuilderCommand) -> Result<String, 
             let reply: BuildReply = send(port, path::BUILD, &request).await?;
             Ok(format_build(&reply))
         }
+        SceneBuilderCommand::Lookahead(command) => lookahead::execute(port, command).await,
         SceneBuilderCommand::Show => {
             let show: SceneShow = fetch(port, path::SHOW).await?;
             Ok(format_show(&show))

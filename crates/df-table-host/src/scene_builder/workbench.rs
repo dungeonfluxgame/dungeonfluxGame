@@ -20,6 +20,8 @@ use std::fmt::Display;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use df_table::identity::{SceneId, TableId};
+use df_table::lookahead::{PlanView, Take};
+use df_table::lookahead_settings::LookaheadSettings;
 use df_table::plate_buffer::{StageMoment, Step, StepAction};
 use df_table::plate_timing::{PlateTiming, SceneBuildKind};
 use df_table::ports::{Clock, PurposeName};
@@ -33,6 +35,8 @@ use super::dev_world::{
 use super::events::{SceneBuilderAudit, SceneBuilderEvent, end_key};
 use super::fakes::{FakeStageWorker, StageScript};
 use super::inputs::StageInputs;
+use super::lookahead::request::{LookaheadReply, LookaheadRequest};
+use super::lookahead::{BenchContext, LookaheadBench};
 use super::pacer::{PacerError, ScenePacer};
 use super::purposes::{BuildPriority, StagePurposes, cost_view, scene_purpose_table};
 use super::report::{LocateReport, SceneReport};
@@ -174,6 +178,8 @@ struct Active {
     scene: SceneId,
     brief: SceneBrief,
     pacer: ScenePacer,
+    /// When the first plate of the scene was on screen: the scene is Ready.
+    ready_ms: Option<u64>,
 }
 
 /// The pipeline, the fake providers and the dev table, together.
@@ -183,6 +189,7 @@ pub struct Workbench {
     world: DevWorld,
     worker: FakeStageWorker,
     builder: SceneBuilder,
+    lookahead: LookaheadBench,
     timing: PlateTiming,
     next_scene: u64,
     active: Option<Active>,
@@ -268,6 +275,12 @@ impl Workbench {
             Arc::clone(&clock) as Arc<dyn Clock>,
         ));
         let inputs = Arc::new(StageInputs::default());
+        let lookahead = LookaheadBench::new(
+            Arc::clone(&hub),
+            Arc::clone(&audit) as Arc<dyn SceneBuilderAudit>,
+            Arc::clone(&inputs),
+            LookaheadSettings::defaults(),
+        )?;
         let worker = FakeStageWorker::new(
             Arc::clone(&hub),
             Arc::clone(&inputs),
@@ -288,6 +301,7 @@ impl Workbench {
             world: DevWorld::new()?,
             worker,
             builder,
+            lookahead,
             timing,
             next_scene: 1,
             active: None,
@@ -307,6 +321,18 @@ impl Workbench {
         let shift = u32::try_from(step).unwrap_or(0) * VISIBLE_STEP_UNITS;
         self.world.move_cast(id, home_x + shift, HERO_ROW_Y)?;
         Ok(())
+    }
+
+    /// What the current scene looks like to the look-ahead: when it became Ready, and whether its
+    /// own plates are being built (they have the lane first).
+    fn plan_view(&self) -> PlanView {
+        PlanView {
+            current_ready_ms: self.active.as_ref().and_then(|active| active.ready_ms),
+            foreground_busy: self
+                .active
+                .as_ref()
+                .is_some_and(|active| self.builder.jobs_in_flight(active.scene) > 0),
+        }
     }
 
     /// Moves the clock a tenth of a second and looks at the pipeline once.
@@ -332,6 +358,11 @@ impl Workbench {
             moment,
             DEV_READING_MS,
         )?;
+        if matches!(pumped.step.action, StepAction::Swapped(_)) && active.ready_ms.is_none() {
+            active.ready_ms = Some(now);
+        }
+        let view = self.plan_view();
+        self.lookahead.advance(now, &snapshot, view);
         Ok(pumped.step)
     }
 
@@ -353,6 +384,10 @@ impl Workbench {
         self.world.people_of(scene)?;
         let snapshot = self.world.snapshot();
         let brief = dev_brief(scene, place.as_str())?;
+        let started_ms = self.now_ms();
+        // The look-ahead is asked before the broker's epoch moves to the scene: a build that is
+        // not done is cancelled as late, and the scene is built the normal way.
+        let take = self.lookahead.enter(started_ms, scene, &snapshot, &brief);
         self.worker.set_script(tweak_script(
             dev_script()?,
             &brief,
@@ -364,12 +399,23 @@ impl Workbench {
             self.timing,
             Arc::clone(&self.audit) as Arc<dyn SceneBuilderAudit>,
         );
-        let started_ms = self.now_ms();
-        pacer.enter_scene(started_ms, &snapshot, &brief, kind, &mut self.builder)?;
+        let built = match &take {
+            Take::Hit(booked) | Take::Redress(booked) => Some(&booked.outputs),
+            _ => None,
+        };
+        pacer.enter_scene_with(
+            started_ms,
+            &snapshot,
+            &brief,
+            kind,
+            &mut self.builder,
+            built,
+        )?;
         self.active = Some(Active {
             scene,
             brief,
             pacer,
+            ready_ms: None,
         });
         let on_screen_at = self.run_until_first_plate(started_ms)?;
         let taken = self.take_run();
@@ -389,6 +435,7 @@ impl Workbench {
                 .scene_reports()
                 .into_iter()
                 .find(|report| report.scene == scene.get()),
+            lookahead: (!matches!(take, Take::Miss)).then(|| take.key().to_owned()),
         })
     }
 
@@ -455,6 +502,34 @@ impl Workbench {
             quiet: request.quiet,
             lines: taken.lines,
             buffer: active.pacer.playout().buffer().report(self.now_ms()),
+        })
+    }
+
+    /// The look-ahead worker: carries out `request` when there is one, and answers with the planner
+    /// as it stands and the audit lines of the call.
+    pub fn lookahead(
+        &mut self,
+        request: Option<&LookaheadRequest>,
+    ) -> Result<LookaheadReply, SceneError> {
+        self.audit.take();
+        if let Some(request) = request {
+            let now_ms = self.now_ms();
+            let snapshot = self.world.snapshot();
+            let context = BenchContext {
+                now_ms,
+                snapshot: &snapshot,
+                current: self.active.as_ref().map(|active| active.scene),
+                next_scene: self.next_scene,
+                view: self.plan_view(),
+                providers: &mut self.worker,
+            };
+            self.lookahead.handle(request, context)?;
+        }
+        let taken = self.take_run();
+        Ok(LookaheadReply {
+            now_ms: self.now_ms(),
+            report: self.lookahead.worker().report(self.now_ms()),
+            lines: taken.lines,
         })
     }
 

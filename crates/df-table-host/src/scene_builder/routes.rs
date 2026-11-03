@@ -20,6 +20,7 @@ use df_table::plate_timing::PlateTiming;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use super::lookahead::LookaheadRequest;
 use super::request::{BuildRequest, RunRequest, SceneError, SceneReply};
 use super::workbench::Workbench;
 use crate::state::AppState;
@@ -30,6 +31,7 @@ pub mod path {
     pub const SHOW: &str = "/dev/engine/scene/show";
     pub const PLATES: &str = "/dev/engine/scene/plates";
     pub const BUFFER: &str = "/dev/engine/scene/buffer";
+    pub const LOOKAHEAD: &str = "/dev/engine/scene/lookahead";
 }
 
 struct SceneRoutes {
@@ -104,6 +106,17 @@ async fn plates_run(axum::extract::State(routes): Shared, bytes: Bytes) -> Respo
     reply(&routes, result)
 }
 
+async fn lookahead(axum::extract::State(routes): Shared) -> Response {
+    let result = routes.with(|bench| bench.lookahead(None));
+    reply(&routes, result)
+}
+
+async fn lookahead_change(axum::extract::State(routes): Shared, bytes: Bytes) -> Response {
+    let result = body::<LookaheadRequest>(&bytes)
+        .and_then(|request| routes.with(|bench| bench.lookahead(Some(&request))));
+    reply(&routes, result)
+}
+
 async fn buffer(axum::extract::State(routes): Shared) -> Response {
     let result = routes.with(|bench| Ok(bench.buffer_show()));
     reply(&routes, result)
@@ -121,5 +134,6 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route(path::SHOW, get(show))
         .route(path::PLATES, get(plates).post(plates_run))
         .route(path::BUFFER, get(buffer))
+        .route(path::LOOKAHEAD, get(lookahead).post(lookahead_change))
         .with_state(routes)
 }

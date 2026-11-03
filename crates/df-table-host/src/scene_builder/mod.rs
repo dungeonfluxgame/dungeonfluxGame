@@ -16,9 +16,10 @@
 //! `fakes` (the scripted provider worker), and for the developer surface `workbench`, `request`,
 //! `format`, `cli` and `routes`.
 //!
-//! What is only a seam: the look-ahead worker of SB-LA is not built. `BuildPriority::Lookahead` and
-//! the `lookahead_*` purposes are the seam, so a worker that opens the next scene's record at that
-//! class can reuse everything here. No real provider is called: the only worker is the fake one.
+//! The look-ahead worker of SB-LA is in `lookahead/`: it builds the next scene's description and
+//! background through the broker at the `lookahead_*` purposes while the current scene plays, and
+//! the builder adopts them at the transition (`SceneBuilder::adopt`). No real provider is called:
+//! the only worker is the fake one.
 //!
 //! Where the plan and the code differ: Ready is the last step and asks the broker for nothing, so
 //! "each stage is one request" holds for the four stages before it; Locate is one request for each
@@ -34,6 +35,7 @@ mod fakes;
 mod format;
 mod inputs;
 mod job_run;
+pub mod lookahead;
 mod pacer;
 mod playout;
 mod purposes;
@@ -53,6 +55,7 @@ pub use self::fakes::{
     PumpReport, StageScript, StartedCall,
 };
 pub use self::inputs::{MAXIMUM_REMEMBERED_INPUTS, StageInput, StageInputs};
+pub use self::lookahead::{LookaheadBench, LookaheadCommand, LookaheadWorker};
 pub use self::pacer::{PacerError, Pumped, ScenePacer};
 pub use self::playout::Playout;
 pub use self::purposes::{

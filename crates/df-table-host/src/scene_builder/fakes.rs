@@ -93,6 +93,20 @@ impl StageScript {
         self
     }
 
+    /// Sets how long every call of `purpose` takes from now on, on a script already running.
+    pub fn set_latency(&mut self, purpose: &PurposeName, latency_ms: u64) {
+        self.latency_ms.insert(purpose.clone(), latency_ms);
+    }
+
+    /// Adds calls of `purpose` after the ones the script already has, on a script already running.
+    pub fn push_calls(
+        &mut self,
+        purpose: &PurposeName,
+        calls: impl IntoIterator<Item = ScriptedCall>,
+    ) {
+        self.calls.entry(purpose.clone()).or_default().extend(calls);
+    }
+
     fn latency_of(
         &self,
         purpose: &PurposeName,
@@ -188,6 +202,11 @@ impl FakeStageWorker {
     /// Replaces the script: the calls it had not served yet are forgotten.
     pub fn set_script(&mut self, script: StageScript) {
         self.script = script;
+    }
+
+    /// The script it follows, to add to while it runs.
+    pub fn script_mut(&mut self) -> &mut StageScript {
+        &mut self.script
     }
 
     /// How many calls the fake was given.

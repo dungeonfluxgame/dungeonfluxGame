@@ -152,6 +152,10 @@ pub struct BuildReply {
     pub card_due_after_ms: Option<u64>,
     pub lines: Vec<TimedLine>,
     pub scene_report: Option<SceneReport>,
+    /// What the look-ahead found for the scene (`hit`, `redress`, `stale`, `late` or `failed`); none
+    /// when nothing was built ahead for it.
+    #[serde(default)]
+    pub lookahead: Option<String>,
 }
 
 /// The answer to `plates run`.
