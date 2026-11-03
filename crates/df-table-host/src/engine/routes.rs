@@ -7,6 +7,8 @@
 //! busy or stopped state is a 503 while any other refusal is a 400. The routes hold no state of
 //! their own beyond the handle to the owner thread, which they start with the router.
 
+mod observe;
+
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -19,15 +21,18 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::adapters::dev_route;
+use crate::adapters::{RulesBackend, RulesCheckKit, dev_ports};
 use crate::state::AppState;
 
 use super::adapters::{
-    Adapters, BrokerSide, ChaosInterpreter, DevClock, DevControls, DevDice, DevKnowledge,
-    DevNarrator, DevRulesOwner,
+    Adapters, BrokerSide, ChaosInterpreter, DevClock, DevControls, DevKnowledge, DevNarrator,
 };
-use super::audit::LogBrokerAudit;
+use super::broker_fields::SinkBrokerAudit;
 use super::commit::ScriptedCommitStore;
+use super::extras::Extras;
 use super::handle::EngineHandle;
+use super::limits::COMMAND_MAILBOX_CAPACITY;
 use super::report::{EngineError, EngineReply};
 use super::request::{
     AudienceSpec, ChaosRequest, ClockControl, DiceControl, ForceRequest, InputRequest, QueueControl,
@@ -50,12 +55,23 @@ pub mod path {
     pub const CLOCK: &str = "/dev/engine/clock";
     pub const DICE: &str = "/dev/engine/dice";
     pub const CHAOS: &str = "/dev/engine/chaos";
+    pub const RULES_CHECK: &str = "/dev/engine/rules/check";
+    pub const HISTORY: &str = "/dev/engine/history";
+    pub const TRACE: &str = "/dev/engine/trace";
+    pub const REPLAY: &str = "/dev/engine/replay";
+    pub const CONFIG: &str = "/dev/engine/config";
 }
 
 /// The query parameter of `path::VIABLE`.
 pub const SEAT_PARAMETER: &str = "seat";
 /// The query parameter of `path::PROJECTION`: `tv`, or a seat number.
 pub const AUDIENCE_PARAMETER: &str = "audience";
+/// The query parameters of `path::HISTORY`; they are the fields of `HistoryRequest`.
+pub const LIMIT_PARAMETER: &str = "limit";
+pub const AREA_PARAMETER: &str = "area";
+pub const CLASS_PARAMETER: &str = "class";
+/// The query parameter of `path::TRACE`: a number or 32 hexadecimal digits.
+pub const OPERATION_PARAMETER: &str = "operation";
 
 /// The body of `path::BROKER_REQUEST`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,33 +87,42 @@ struct EngineRoutes {
 }
 
 /// Starts the dev engine over the host's log: the real machines and queue over fake adapters.
-fn start_dev_engine(app: &AppState) -> Result<EngineHandle, EngineStartError> {
+fn start_dev_engine(
+    app: &AppState,
+) -> Result<(EngineHandle, Option<Arc<RulesCheckKit>>), EngineStartError> {
     let config = EngineConfig::dev();
     let log = Arc::clone(app.log());
     let clock = Arc::new(DevClock::starting_now());
-    let dice = Arc::new(DevDice::seeded(DEV_DICE_SEED));
     let interpreter = Arc::new(ChaosInterpreter::default());
     let store = Arc::new(ScriptedCommitStore::default());
     let machines = dev_machines(config.first_scene)?;
+    let ports = dev_ports(
+        RulesBackend::from_environment()?,
+        &machines.check,
+        DEV_DICE_SEED,
+    )?;
+    let extras = Extras::from_environment(log)?;
     let adapters = Adapters {
         broker: BrokerSide::dev(
             clock.clone(),
-            Arc::new(LogBrokerAudit::new(Arc::clone(&log))),
+            Arc::new(SinkBrokerAudit::new(Arc::clone(&extras.sink))),
         )?,
-        rules: Arc::new(DevRulesOwner::new(machines.check)),
+        rules: ports.rules,
         interpreter: interpreter.clone(),
         narrator: Arc::new(DevNarrator),
-        dice: dice.clone(),
+        dice: ports.dice,
         knowledge: Arc::new(DevKnowledge),
         controls: DevControls {
             clock: Some(clock.clone()),
-            dice: Some(dice),
+            dice: ports.dice_control,
             interpreter: Some(interpreter),
             commit: Some(store.clone()),
         },
         clock,
     };
-    EngineHandle::start(config, adapters, store, log)
+    let engine =
+        EngineHandle::start_with_extras(config, adapters, store, extras, COMMAND_MAILBOX_CAPACITY)?;
+    Ok((engine, ports.check_kit))
 }
 
 /// The seed of the dev engine's dice, so a run is reproducible.
@@ -109,6 +134,7 @@ fn status_of(error: &EngineError) -> StatusCode {
             StatusCode::SERVICE_UNAVAILABLE
         }
         EngineError::NoAnswer | EngineError::Unwritable { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        EngineError::NotSupportedYet { .. } => StatusCode::NOT_IMPLEMENTED,
         _ => StatusCode::BAD_REQUEST,
     }
 }
@@ -276,7 +302,10 @@ async fn broker_request(State(routes): State<EngineRoutes>, bytes: Bytes) -> Res
 /// The routes of the dev engine, with the owner thread they talk to. The guard and the body limit
 /// of the host's router apply to them when this is merged into it.
 pub fn router(app: Arc<AppState>) -> Router {
-    let engine = Arc::new(start_dev_engine(&app));
+    let started = start_dev_engine(&app);
+    let check_kit = started.as_ref().ok().and_then(|(_, kit)| kit.clone());
+    let engine = Arc::new(started.map(|(handle, _)| handle));
+    let rules_check = dev_route::router(Arc::clone(&app), check_kit);
     let routes = EngineRoutes { app, engine };
     Router::new()
         .route(path::INPUT, post(input))
@@ -293,5 +322,13 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route(path::CLOCK, post(clock))
         .route(path::DICE, post(dice))
         .route(path::CHAOS, post(chaos))
+        .route(path::HISTORY, get(observe::history))
+        .route(path::TRACE, get(observe::trace))
+        .route(path::REPLAY, post(observe::replay))
+        .route(
+            path::CONFIG,
+            get(observe::config_show).post(observe::config_set),
+        )
         .with_state(routes)
+        .merge(rules_check)
 }

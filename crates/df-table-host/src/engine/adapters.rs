@@ -21,13 +21,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
+use df_table::envelope::PendingId;
 use df_table::event::FailureCause;
 use df_table::identity::{Correlation, FactId, SeatId};
 use df_table::outcome::{Decline, DeclineCode};
 use df_table::ports::{
-    ActionId, Audience, Clock, CommittedOutcome, Dice, Draw, DrawRequest, Interpretation,
-    Interpreter, KnowledgeView, Narrator, PortError, PortName, Preparation, Resolution, Resolved,
-    RulesOwner,
+    ActionId, Audience, Clock, CommittedOutcome, ConfirmationReason, Dice, Draw, DrawRequest,
+    Interpretation, Interpreter, KnowledgeView, Narrator, PlanSoFar, PortError, PortName,
+    Preparation, Resolution, Resolved, Resumption, RulesOwner, RulingRequest,
 };
 use df_table::private_data::{Narration, PlayerText, Secret};
 
@@ -230,6 +231,56 @@ impl RulesOwner for DevRulesOwner {
             )))
         }
     }
+
+    // The dev table tracks no action economy, reserves nothing, asks for no confirmation and no
+    // ruling, and has no windows, so each of these says so explicitly.
+    fn prepare_in_plan(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        _so_far: &PlanSoFar<'_>,
+    ) -> Result<Preparation, PortError> {
+        self.prepare(correlation, seat, action)
+    }
+
+    fn abandon(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        _action: &ActionId,
+        _pending: PendingId,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+
+    fn confirmation_needed(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        _action: &ActionId,
+    ) -> Result<Option<ConfirmationReason>, PortError> {
+        Ok(None)
+    }
+
+    fn ruling_needed(
+        &self,
+        _correlation: Correlation,
+        _seat: SeatId,
+        _action: &ActionId,
+    ) -> Result<Option<RulingRequest>, PortError> {
+        Ok(None)
+    }
+
+    fn resume(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        resumption: &Resumption<'_>,
+    ) -> Result<Resolution, PortError> {
+        self.resolve(correlation, seat, action, resumption.draws)
+    }
 }
 
 /// A narrator that states the committed outcome in one structured line, with no model.
@@ -339,6 +390,13 @@ impl Dice for DevDice {
         };
         Draw::new(request.sides, value)
             .ok_or(PortError::new(PortName::Dice, FailureCause::InvalidAnswer))
+    }
+
+    fn give_back(&self, _correlation: Correlation, draws: &[Draw]) {
+        let mut state = self.locked();
+        for draw in draws.iter().rev() {
+            state.queued.push_front(draw.value());
+        }
     }
 }
 

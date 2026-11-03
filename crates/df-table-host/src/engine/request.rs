@@ -128,3 +128,53 @@ pub enum ChaosRequest {
     Commit { fault: CommitFault, count: u32 },
     Interpreter { down: bool },
 }
+
+/// Which class of event `history` is asked to show: the letter the plan uses or its key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassFilter {
+    /// Class A: always on and never sampled.
+    #[serde(alias = "a")]
+    Always,
+    /// Class B: verbose detail.
+    #[serde(alias = "b")]
+    Verbose,
+}
+
+/// What `history` is asked for: the newest events the host kept, optionally of one area or class.
+/// `limit` left out is `DEFAULT_HISTORY_RECORDS`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryRequest {
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub area: Option<String>,
+    #[serde(default)]
+    pub class: Option<ClassFilter>,
+}
+
+/// What to do with the settings in force (H.16 `config show|set`, J.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "control", rename_all = "snake_case")]
+pub enum ConfigControl {
+    Show,
+    /// Changes one setting. The owner checks the name and the value against the setting's spec
+    /// and refuses with a typed error that names the cause.
+    Set {
+        name: String,
+        value: u64,
+    },
+}
+
+/// A turn log to replay (H.16 `replay <log> [--until seq] [--diff]`). `log` names the log; the
+/// host does not read it, the replay behind the seam does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayRequest {
+    pub log: String,
+    #[serde(default)]
+    pub until: Option<u64>,
+    #[serde(default)]
+    pub diff: bool,
+}

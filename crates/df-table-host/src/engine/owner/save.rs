@@ -23,8 +23,6 @@ use super::Owner;
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Saved {
     pub(super) commit: CommitId,
-    /// The correlation the table's revision was stamped with, for the work that follows a commit.
-    pub(super) correlation: Correlation,
 }
 
 impl Owner {
@@ -60,10 +58,7 @@ impl Owner {
                     ms: took_ms,
                     policy: self.config.policy.key(),
                 });
-                Ok(Saved {
-                    commit: attempt,
-                    correlation,
-                })
+                Ok(Saved { commit: attempt })
             }
             Err(error) => {
                 self.stats.failures += 1;

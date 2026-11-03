@@ -13,7 +13,7 @@ Usage: development/gate.sh [--quick] [crate ...]
 
 Runs the commit gate in order and stops at the first failing stage:
   fmt          cargo fmt -p <crates> -- --check
-  clippy       cargo clippy -p <crates> --offline --all-targets -- -D warnings
+  clippy       cargo clippy -p <crates> --offline --no-deps --all-targets -- -D warnings
   wasm-clippy  cargo clippy -p df-playground --offline --target wasm32-unknown-unknown -- -D warnings
                (only when df-playground is among the crates)
   tests        cargo test -p <crates> --offline --lib [-- GATE_TEST_ARGS]
@@ -114,7 +114,7 @@ echo "[gate] crates: ${crates[*]}"
 echo "[gate] target: $CARGO_TARGET_DIR"
 
 run_stage fmt cargo fmt "${pkg_args[@]}" -- --check
-run_stage clippy cargo clippy "${pkg_args[@]}" --offline --all-targets -- -D warnings
+run_stage clippy cargo clippy "${pkg_args[@]}" --offline --no-deps --all-targets -- -D warnings
 
 if [[ $has_playground -eq 1 ]]; then
   run_stage wasm-clippy cargo clippy -p df-playground --offline --target wasm32-unknown-unknown -- -D warnings

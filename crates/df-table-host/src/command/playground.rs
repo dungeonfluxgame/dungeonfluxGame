@@ -166,6 +166,7 @@ pub(super) fn media(words: &[String]) -> Result<Command, CommandError> {
                 name,
             })
         }
+        [verb, rest @ ..] if verb == "generate" => super::media_generate::parse(rest),
         _ => Err(CommandError::Usage(MEDIA_USAGE)),
     }
 }

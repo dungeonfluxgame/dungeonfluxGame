@@ -1,24 +1,24 @@
-//! What the owner actor records: the sinks that carry typed events into the host's log, and the
+//! What the owner actor records besides the table's own events: the broker's audit and the
 //! `EngineAudit` lines for every dev call and every commit.
 //!
-//! The engine's `TableEvent`s go to `AuditSink`, which renders each with the one renderer and
-//! appends it to the same bounded log the canvas uses, so `df-table dev events` shows both. The
-//! broker's events go to `LogBrokerAudit` the same way. A dev call and a commit are not table
-//! events (the pure crate's enum is closed and has no variant for them), so they are
-//! `EngineAudit`: a closed enum whose `ENGINE verb key=value` and `COMMIT verb key=value` lines
-//! hold ids, closed keys and counts only, never player text. Every field is a validated type
-//! (`MachineId`, `PurposeName`, `OperationId`, `Sender`) or a closed key, so a string from a
-//! request, which could hold a newline and forge a line, cannot be passed in; the one place a
-//! request's name is refused is recorded as the fixed key `invalid_name`.
+//! The engine's `TableEvent`s go to the host's event sink (`crate::observe::HostEventSink`), which
+//! renders each as the line and the structured record; the broker's events go to `LogBrokerAudit`,
+//! which appends their line to the same bounded log the canvas uses, so `df-table dev events`
+//! shows all of them. A dev call and a commit are not table events (the pure crate's enum is
+//! closed and has no variant for them), so they are `EngineAudit`: a closed enum whose `ENGINE
+//! verb key=value` and `COMMIT verb key=value` lines hold ids, closed keys and counts only, never
+//! player text, and which `audit_fields` also gives to the sink as structured records. Every
+//! field is a validated type (`MachineId`, `PurposeName`, `OperationId`, `Sender`) or a closed
+//! key, so a string from a request, which could hold a newline and forge a line, cannot be passed
+//! in; the one place a request's name is refused is recorded as the fixed key `invalid_name`.
 
 use std::fmt::Write;
 use std::sync::Arc;
 
 use df_table::envelope::Sender;
-use df_table::event::TableEvent;
 use df_table::identity::{MachineId, OperationId};
 use df_table::machine::StateName;
-use df_table::ports::{Audience, EventSink, PurposeName};
+use df_table::ports::{Audience, PurposeName};
 
 use crate::broker::{BrokerAudit, BrokerEvent};
 use crate::event_log::EventLog;
@@ -26,24 +26,6 @@ use crate::event_log::EventLog;
 use super::commit::CommitError;
 use super::labels::sender_label;
 use super::projection_adapter::audience_label;
-
-/// Appends every engine event, of both classes, to the host's log. The dev engine's events are
-/// few, so the verbose class is kept.
-pub struct AuditSink {
-    log: Arc<EventLog>,
-}
-
-impl AuditSink {
-    pub fn new(log: Arc<EventLog>) -> Self {
-        Self { log }
-    }
-}
-
-impl EventSink for AuditSink {
-    fn record(&self, event: &TableEvent) {
-        self.log.push(event.render_audit_line());
-    }
-}
 
 /// Appends every broker event to the host's log.
 pub struct LogBrokerAudit {
@@ -70,7 +52,7 @@ pub enum SubmitResult {
 }
 
 impl SubmitResult {
-    fn key(self) -> &'static str {
+    pub(super) fn key(self) -> &'static str {
         match self {
             Self::Admitted => "admitted",
             Self::Refused => "refused",
@@ -163,6 +145,36 @@ pub enum EngineAudit {
     BackingOff {
         operation: OperationId,
         retry_after_ms: u64,
+    },
+    /// `history` was read: how many records it showed.
+    History {
+        count: usize,
+    },
+    /// `trace` was read: the operation and how many events of it were retained.
+    Trace {
+        operation: OperationId,
+        events: usize,
+    },
+    /// `config show` or `config set`. `setting` and `value` are present for a change, and the
+    /// setting is always one of the closed list of names, never a name from the request.
+    Config {
+        verb: &'static str,
+        setting: Option<&'static str>,
+        value: Option<u32>,
+    },
+    /// A `config set` that was refused. `setting` is absent when the name given is not a setting.
+    ConfigRefused {
+        setting: Option<&'static str>,
+        cause: &'static str,
+    },
+    /// `replay` ran and replayed this many turns.
+    Replayed {
+        turns: u64,
+    },
+    /// `replay` was asked for and refused with `cause`, a closed key (`not_supported_yet` until
+    /// C7's replay is behind the seam).
+    ReplayRefused {
+        cause: &'static str,
     },
 }
 
@@ -285,6 +297,30 @@ impl EngineAudit {
                 out,
                 "refused operation_id={operation} cause=backing_off retry_after_ms={retry_after_ms}"
             ),
+            Self::History { count } => write!(out, "history count={count}"),
+            Self::Trace { operation, events } => {
+                write!(out, "trace operation_id={operation} events={events}")
+            }
+            Self::Config {
+                verb,
+                setting,
+                value,
+            } => {
+                write!(out, "config verb={verb}")?;
+                if let (Some(setting), Some(value)) = (setting, value) {
+                    write!(out, " setting={setting} value={value} driven=true")?;
+                }
+                Ok(())
+            }
+            Self::ConfigRefused { setting, cause } => {
+                write!(out, "config_refused")?;
+                if let Some(setting) = setting {
+                    write!(out, " setting={setting}")?;
+                }
+                write!(out, " cause={cause}")
+            }
+            Self::Replayed { turns } => write!(out, "replay turns={turns}"),
+            Self::ReplayRefused { cause } => write!(out, "replay_refused cause={cause}"),
         }
     }
 }

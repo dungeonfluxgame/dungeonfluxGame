@@ -21,15 +21,19 @@ use crate::event_log::EventLog;
 
 use super::adapters::Adapters;
 use super::audit::EngineAudit;
+use super::audit_fields::record_engine;
 use super::commit::CommitStore;
+use super::extras::Extras;
 use super::limits::{COMMAND_MAILBOX_CAPACITY, LOST_ANSWER_WAIT};
 use super::owner::{Command, Owner, Reply};
 use super::report::{
     BrokerRequested, BrokerView, ChaosReport, ClockReport, Description, DiceReport, EngineDump,
     EngineError, ForceReport, HealthReport, QueueReport, ServedReply, SubmitReply, ViableReport,
 };
+use super::report_observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
 use super::request::{
-    AudienceSpec, ChaosRequest, ClockControl, DiceControl, ForceRequest, InputRequest, QueueControl,
+    AudienceSpec, ChaosRequest, ClockControl, ConfigControl, DiceControl, ForceRequest,
+    HistoryRequest, InputRequest, QueueControl, ReplayRequest,
 };
 use super::setup::{EngineConfig, EngineStartError};
 
@@ -64,7 +68,25 @@ impl EngineHandle {
         log: Arc<EventLog>,
         mailbox_capacity: usize,
     ) -> Result<Self, EngineStartError> {
-        let owner = Owner::new(config, adapters, store, Arc::clone(&log))?;
+        Self::start_with_extras(
+            config,
+            adapters,
+            store,
+            Extras::memory_only(log),
+            mailbox_capacity,
+        )
+    }
+
+    /// `start` with the event sink and the replayer the caller chose (`Extras`).
+    pub fn start_with_extras(
+        config: EngineConfig,
+        adapters: Adapters,
+        store: Arc<dyn CommitStore>,
+        extras: Extras,
+        mailbox_capacity: usize,
+    ) -> Result<Self, EngineStartError> {
+        let observer = Arc::clone(&extras.sink);
+        let owner = Owner::new(config, adapters, store, extras)?;
         let (sender, mailbox) = sync_channel(mailbox_capacity);
         let (ended_sender, ended) = watch::channel(None);
         std::thread::Builder::new()
@@ -72,7 +94,7 @@ impl EngineHandle {
             .spawn(move || {
                 let outcome = catch_unwind(AssertUnwindSafe(move || owner.run(mailbox)));
                 if outcome.is_err() {
-                    log.push(EngineAudit::Panicked.render_audit_line());
+                    record_engine(&observer, &EngineAudit::Panicked);
                     ended_sender.send_replace(Some(Ended::Panicked));
                 }
             })
@@ -173,6 +195,22 @@ impl EngineHandle {
     pub async fn broker_request(&self, purpose: String) -> Result<BrokerRequested, EngineError> {
         self.call(|reply| Command::BrokerRequest(purpose, reply))
             .await
+    }
+
+    pub async fn history(&self, request: HistoryRequest) -> Result<HistoryReport, EngineError> {
+        self.call(|reply| Command::History(request, reply)).await
+    }
+
+    pub async fn trace(&self, operation: String) -> Result<TraceReport, EngineError> {
+        self.call(|reply| Command::Trace(operation, reply)).await
+    }
+
+    pub async fn replay(&self, request: ReplayRequest) -> Result<ReplayReport, EngineError> {
+        self.call(|reply| Command::Replay(request, reply)).await
+    }
+
+    pub async fn config(&self, control: ConfigControl) -> Result<ConfigReport, EngineError> {
+        self.call(|reply| Command::Config(control, reply)).await
     }
 }
 

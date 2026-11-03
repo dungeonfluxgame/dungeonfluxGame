@@ -308,6 +308,15 @@ async fn lanes_are_served_controls_then_engine_then_timers_then_player_and_queue
         held: true,
         ..RigOptions::default()
     });
+    // Seat 2 joins first and the join is served, because a pause card from a seat that was never
+    // seated is declined and the lanes below need a seated sender for it.
+    rig.handle.submit(tap(2, "join")).await.expect("answered");
+    let joined = rig
+        .handle
+        .queue_control(QueueControl::Step { count: 1 })
+        .await
+        .expect("answered");
+    assert_eq!(joined.turns[0].outcome, OutcomeKind::Applied);
     rig.handle.submit(tap(2, "join")).await.expect("answered");
     rig.handle
         .submit(timer("idle_nudge"))
@@ -318,7 +327,7 @@ async fn lanes_are_served_controls_then_engine_then_timers_then_player_and_queue
         .await
         .expect("answered");
     rig.handle
-        .submit(request(InputBody::Pause { seat: 3 }))
+        .submit(request(InputBody::Pause { seat: 2 }))
         .await
         .expect("answered");
 
@@ -353,10 +362,10 @@ async fn lanes_are_served_controls_then_engine_then_timers_then_player_and_queue
     assert_eq!(
         order,
         [
-            (1, Lane::SeatControls, OutcomeKind::Applied),
-            (2, Lane::Engine, OutcomeKind::Declined),
-            (3, Lane::TimersAndResults, OutcomeKind::Declined),
-            (4, Lane::Player, OutcomeKind::Declined)
+            (2, Lane::SeatControls, OutcomeKind::Applied),
+            (3, Lane::Engine, OutcomeKind::Declined),
+            (4, Lane::TimersAndResults, OutcomeKind::Declined),
+            (5, Lane::Player, OutcomeKind::Declined)
         ]
     );
     assert_eq!(served.turns[1].decline, Some(DeclineCode::NotViable));

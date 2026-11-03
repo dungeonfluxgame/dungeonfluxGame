@@ -8,6 +8,7 @@
 //! adapters do not offer (it is not the dev table) answers `NotAvailable` and changes nothing.
 
 use df_table::identity::SeatId;
+use df_table::inspect;
 use df_table::owner_queue::Lane;
 use df_table::pipeline::PipelineTable;
 use df_table::ports::{Broker, Clock, PurposeName, Readiness};
@@ -26,6 +27,7 @@ use crate::engine::report::{
 use crate::engine::request::{AudienceSpec, ChaosRequest, ClockControl, CommitFault, DiceControl};
 use crate::engine::setup::WIRED_PORTS;
 use crate::engine::turn::{TurnContext, machine_state, viable_actions};
+use crate::engine::verb_set::{not_built, verb_lines};
 
 use super::Owner;
 
@@ -216,6 +218,7 @@ impl Owner {
     }
 
     pub(super) fn describe(&self) -> Description {
+        let verb_set = verb_lines(&inspect::describe(&self.registry).verbs);
         let machines = self
             .registry
             .report()
@@ -267,6 +270,8 @@ impl Owner {
                 .collect(),
             commit_policy: self.config.policy.key().to_owned(),
             verbs: verb_usages(),
+            not_built: not_built(&verb_set),
+            verb_set,
         }
     }
 
@@ -289,6 +294,7 @@ impl Owner {
             broker_epoch: queues.epoch,
             broker_closed: queues.closed,
             now_ms,
+            events: self.observer.health(),
         }
     }
 

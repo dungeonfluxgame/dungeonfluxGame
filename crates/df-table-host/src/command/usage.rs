@@ -6,6 +6,8 @@
 use df_playground::controls::MAXIMUM_TRANSITION_MS;
 use df_playground::scene::{MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
 
+use super::media_generate::MEDIA_GENERATE_USAGE;
+
 pub(super) const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
 pub(super) const SET_USAGE: &str = "set <id> <field>=<value> [<field>=<value> ...]";
 pub(super) const MOVE_USAGE: &str = "move <id> <x> <y>";
@@ -28,6 +30,10 @@ pub(super) const CAMERA_USAGE: &str =
 pub(super) const MUSIC_USAGE: &str =
     "scene music <name> [on=both|tv|phone] [volume=0-100] [loop=true|false] | scene music-stop";
 pub(super) const SOUND_USAGE: &str = "scene sound <name> [on=both|tv|phone] [volume=0-100]";
+pub(super) const NARRATION_USAGE: &str = "scene narration set <text> [speaker=NAME|none] [badge=GLYPH|none] [continue=TEXT|none] [voice=true|false] [placement=center|right] [scene=I/N[:TITLE]|none] | edit <key>=<value> ... (the same keys and text=) | clear";
+pub(super) const SEAT_USAGE: &str = "scene seat set <name> [class=TEXT|none] [level=N|none] [portrait=FILE|none] [glyph=NAME|none] [accent=#rrggbb|none] [hp=N] [max=N] [conditions=a,b] | remove <name>";
+pub(super) const SEATS_USAGE: &str = "scene seats open <N> | clear";
+pub(super) const LOGO_USAGE: &str = "scene logo on|off";
 pub(super) const MEDIA_USAGE: &str = "media | media add <file> [as=NAME] | media remove <name>";
 pub(super) const CHOICES_USAGE: &str = "scene choices suggested [<label>[=<explanation>] ...] | group <name> [<label> ...] | unavailable [<label>=<reason> ...] | clear";
 pub(super) const FIXTURE_USAGE: &str =
@@ -48,6 +54,16 @@ pub fn usage_text() -> String {
     let video_limits = crate::media_library::video_limits_text();
     let playground_keys = playground_keys();
     let engine_help = crate::engine::help_text();
+    let scene_builder_help = crate::scene_builder::help_text();
+    let screens_help = format!(
+        "{}{}{}{}{}{}",
+        super::scene_lobby::HELP,
+        super::scene_pills::HELP,
+        super::scene_home::HELP,
+        super::scene_home_configure::HELP,
+        super::scene_home_adventure::HELP,
+        super::scene_home_campaigns::HELP,
+    );
     format!(
         "df-table dev [--port N] <command>\n\
          \n  {SPAWN_USAGE}\n      put an element on the canvas (x and y are its position; a field\n      called x or y can be changed with set)\n\
@@ -70,13 +86,18 @@ pub fn usage_text() -> String {
          \n  {CAMERA_USAGE}\n      move the shared screen's camera in on an element and keep it in the middle (zoom is\n      {MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT} percent, over is 0 to {MAXIMUM_CAMERA_MS} ms; defaults 200 and 1200), or back out to the whole\n      stage; the caption, card and party strip stay put\n\
          \n  {MUSIC_USAGE}\n      play music until it is stopped or replaced\n\
          \n  {SOUND_USAGE}\n      play a sound once\n\
+         \n  {NARRATION_USAGE}\n      the narrator's box in the caption's place: set it from its text, change any of its\n      fields (speaker, badge, continue label, voice mark, placement, scene progress; none takes a\n      field away) or clear it\n\
+         \n  {SEAT_USAGE}\n      a hero of the party strip as a seat card: look (class, level, portrait, glyph, accent) and\n      hit points; a hero not yet in the party needs hp=\n\
+         \n  {SEATS_USAGE}\n      open seats after the heroes, or take every look and open seat away\n\
+         \n  {LOGO_USAGE}\n      the DungeonFlux logo at the top left of the shared screen\n\
          \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove pictures, sounds and videos;\n      {video_limits}; a video's size is in the listing; videos are not placed on a screen yet\n\
+         \n  {MEDIA_GENERATE_USAGE}\n      make one picture from a prompt through the image service (the Codex CLI backend) and store it in\n      the library as NAME.png; the host needs DF_IMAGERY_MODE=live, DF_IMAGERY_BACKEND=codex-cli and\n      CODEX_HOME=<signed-in folder> in its environment; a picture takes minutes, so without wait=true\n      it runs on and `media generate status` shows it\n\
          \n  {CLIENTS_USAGE}\n      what each open page says it is showing and playing, and whether its sound is\n      locked (a browser plays sound only after someone clicks the page)\n\
          \n  {WAIT_USAGE}\n      pause here; stage scenes over time in a script or a session\n\
          \n  {FIXTURES_USAGE}\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\
          \n  {SCRIPT_USAGE}\n      run a file of commands, one per line; a line may start with #\n\
-         {engine_help}\n  help\n      this text\n\
+         {engine_help}{scene_builder_help}{screens_help}\n  help\n      this text\n\
          \nQuote a value with spaces: name=\"Pip the Brave\".\n\
          Several effects in one command are applied in order and every failure is reported;\n\
          a script stops at its first failing line.\n\

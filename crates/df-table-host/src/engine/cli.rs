@@ -2,7 +2,8 @@
 //!
 //! It owns the grammar and usage text of `input`, `viable`, `dump`, `force`, `projection show`,
 //! `queue` and `describe` (and the broker's `broker queues`, `broker ledger` and `broker request`),
-//! and running one against a host on a port. Each verb has the shape of the canvas commands: words
+//! and running one against a host on a port. The event and settings verbs (`history`, `trace`,
+//! `replay`, `config`) have their grammar in `cli_observe` and are dispatched from here. Each verb has the shape of the canvas commands: words
 //! in, one typed `EngineCommand` out, a usage line on a mistake (`CommandError::Usage`), and a
 //! numbered answer. They work from the repl and from a script like any other command, because
 //! they are parsed by the same `command::parse`.
@@ -14,11 +15,18 @@
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::adapters::dev_check::{
+    RULES_CHECK_USAGE, RulesCheckRequest, format_rules_check, parse as parse_rules_check,
+};
 use crate::client::{self, Response};
 use crate::command::CommandError;
 use crate::dev::DevError;
 use crate::limits::MAXIMUM_ECHOED_ANSWER;
 
+use super::cli_observe::{
+    CONFIG_USAGE, HISTORY_USAGE, REPLAY_USAGE, TRACE_USAGE, parse_config, parse_history,
+    parse_replay, parse_trace, run_config, run_history, run_replay, run_trace,
+};
 use super::format::{
     format_broker_ledger, format_broker_queues, format_chaos, format_clock, format_description,
     format_dice, format_force, format_health, format_queue, format_requested, format_served,
@@ -26,8 +34,8 @@ use super::format::{
 };
 use super::report::{BrokerView, EngineReply};
 use super::request::{
-    AudienceSpec, ChaosRequest, ClockControl, CommitFault, DiceControl, ForceRequest, InputBody,
-    InputRequest, QueueControl,
+    AudienceSpec, ChaosRequest, ClockControl, CommitFault, ConfigControl, DiceControl,
+    ForceRequest, HistoryRequest, InputBody, InputRequest, QueueControl, ReplayRequest,
 };
 use super::routes::{AUDIENCE_PARAMETER, BrokerRequestBody, SEAT_PARAMETER, path};
 
@@ -47,7 +55,7 @@ pub const CHAOS_USAGE: &str =
     "chaos commit <unavailable|refused|deadline> [count] | chaos interpreter <down|up>";
 
 /// The verbs this module parses, for the dispatch in `command::parse`.
-pub const VERBS: [&str; 13] = [
+pub const VERBS: [&str; 18] = [
     "input",
     "viable",
     "dump",
@@ -61,6 +69,11 @@ pub const VERBS: [&str; 13] = [
     "clock",
     "dice",
     "chaos",
+    "rules",
+    "history",
+    "trace",
+    "replay",
+    "config",
 ];
 
 /// How many commits `chaos commit` makes fail when no count is given.
@@ -87,6 +100,11 @@ pub enum EngineCommand {
     Clock(ClockControl),
     Dice(DiceControl),
     Chaos(ChaosRequest),
+    RulesCheck(RulesCheckRequest),
+    History(HistoryRequest),
+    Trace { operation: String },
+    Replay(ReplayRequest),
+    Config(ConfigControl),
 }
 
 /// The usage line of every verb, in the order `describe` and `help` list them.
@@ -105,6 +123,11 @@ pub fn verb_usages() -> Vec<String> {
         CLOCK_USAGE,
         DICE_USAGE,
         CHAOS_USAGE,
+        RULES_CHECK_USAGE,
+        HISTORY_USAGE,
+        TRACE_USAGE,
+        REPLAY_USAGE,
+        CONFIG_USAGE,
     ]
     .iter()
     .map(|usage| (*usage).to_owned())
@@ -126,7 +149,12 @@ pub fn help_text() -> String {
          \n  {HEALTH_USAGE}\n      whether the owner is serving, what waits, how commits have gone\n\
          \n  {CLOCK_USAGE}\n      read the owner's clock, move it forward, stop it or let it run (a driven change)\n\
          \n  {DICE_USAGE}\n      restart the seeded dice or queue the values rolled next (a driven change)\n\
-         \n  {CHAOS_USAGE}\n      make the next commits fail, or take the interpreter down, to see the fallbacks\n"
+         \n  {CHAOS_USAGE}\n      make the next commits fail, or take the interpreter down, to see the fallbacks\n\
+         \n  {RULES_CHECK_USAGE}\n      run one real skill check through the df-rules adapter with a recorded draw (needs\n      DF_RULES_BACKEND=df-rules; the DC is 15 when not given)\n\
+         \n  {HISTORY_USAGE}\n      the newest events the host kept, oldest first, each with its number, class (A is always\n      on, B is verbose detail) and line, then the event stream's health; --area is an audit\n      area such as INPUT, TURN, COMMIT or ENGINE\n\
+         \n  {TRACE_USAGE}\n      every event the host kept for one input, with what the queue did with it; the operation\n      is the number --op took or the 32 digits the answers print\n\
+         \n  {REPLAY_USAGE}\n      replay a recorded turn log and compare it with the record; not built yet (it needs C7's\n      replay), so it says so\n\
+         \n  {CONFIG_USAGE}\n      the settings in force with their specs, or change one that the next input will use\n"
     )
 }
 
@@ -174,6 +202,11 @@ pub fn parse(verb: &str, words: &[String]) -> Result<EngineCommand, CommandError
         "clock" => clock(words),
         "dice" => dice(words),
         "chaos" => chaos(words),
+        "rules" => parse_rules_check(words).map(EngineCommand::RulesCheck),
+        "history" => parse_history(words).map(EngineCommand::History),
+        "trace" => parse_trace(words).map(|operation| EngineCommand::Trace { operation }),
+        "replay" => parse_replay(words).map(EngineCommand::Replay),
+        "config" => parse_config(words).map(EngineCommand::Config),
         other => Err(CommandError::Unknown(other.to_owned())),
     }
 }
@@ -456,12 +489,12 @@ fn read<T: DeserializeOwned>(response: &Response) -> Result<T, DevError> {
     }
 }
 
-async fn fetch<T: DeserializeOwned>(port: u16, address: &str) -> Result<T, DevError> {
+pub(super) async fn fetch<T: DeserializeOwned>(port: u16, address: &str) -> Result<T, DevError> {
     let response = client::get(port, address).await.map_err(DevError::Client)?;
     read(&response)
 }
 
-async fn send<T: DeserializeOwned>(
+pub(super) async fn send<T: DeserializeOwned>(
     port: u16,
     address: &str,
     body: &impl Serialize,
@@ -543,5 +576,12 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
         EngineCommand::Chaos(request) => {
             Ok(format_chaos(&send(port, path::CHAOS, &request).await?))
         }
+        EngineCommand::RulesCheck(request) => Ok(format_rules_check(
+            &send(port, path::RULES_CHECK, &request).await?,
+        )),
+        EngineCommand::History(request) => run_history(port, request).await,
+        EngineCommand::Trace { operation } => run_trace(port, operation).await,
+        EngineCommand::Replay(request) => run_replay(port, request).await,
+        EngineCommand::Config(control) => run_config(port, control).await,
     }
 }

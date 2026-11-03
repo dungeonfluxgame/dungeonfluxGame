@@ -386,6 +386,17 @@ pub(super) fn scene(words: &[String]) -> Result<Command, CommandError> {
         Some((verb, rest)) if verb == "reset" && rest.is_empty() => {
             Ok(Command::Scene(SceneChange::Reset {}))
         }
+        Some((verb, rest)) if matches!(verb.as_str(), "lobby" | "loading" | "roleplay") => {
+            super::scene_lobby::parse(verb, rest)
+        }
+        Some((verb, rest)) if verb == "pill" => super::scene_pills::parse(rest),
+        Some((verb, rest)) if verb == "home" => super::scene_home::parse(rest),
+        Some((verb, rest)) if verb == "build" || verb == "show" => {
+            crate::scene_builder::parse_scene(verb, rest).map(Command::SceneBuilder)
+        }
+        Some((verb, rest)) if matches!(verb.as_str(), "narration" | "seat" | "seats" | "logo") => {
+            super::scene_ui::parse(verb, rest)
+        }
         _ => Err(CommandError::Usage(SCENE_USAGE)),
     }
 }

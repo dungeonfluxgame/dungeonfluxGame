@@ -26,6 +26,7 @@ use df_table::ports::{ActionId, PortName};
 use df_table::registry::{Registry, RegistryBuilder, RegistryError};
 use df_table::table_state::MachineHome;
 
+use crate::adapters::AdapterError;
 use crate::broker::purpose::PurposeError;
 
 use super::commit::CommitPolicy;
@@ -99,10 +100,16 @@ pub enum EngineStartError {
     Queue(QueueConfigError),
     Seat(SeatError),
     Purpose(PurposeError),
+    /// The production rules adapters could not be built or the `rules_backend` setting is invalid.
+    Adapter(AdapterError),
     /// The machine the table starts in is not registered and enabled.
     FirstMachineMissing(MachineId),
     /// The owner thread could not be started.
     Thread(String),
+    /// The event spool that the environment asks for could not be opened.
+    Spool {
+        reason: String,
+    },
 }
 
 impl fmt::Display for EngineStartError {
@@ -123,10 +130,14 @@ impl fmt::Display for EngineStartError {
             Self::Queue(error) => write!(formatter, "the owner queue cannot be built: {error}"),
             Self::Seat(error) => write!(formatter, "a seat cannot join the queue: {error}"),
             Self::Purpose(error) => write!(formatter, "the broker's purposes are invalid: {error}"),
+            Self::Adapter(error) => write!(formatter, "the rules adapters cannot start: {error}"),
             Self::FirstMachineMissing(machine) => {
                 write!(formatter, "the starting machine {machine} is not enabled")
             }
             Self::Thread(message) => write!(formatter, "the owner thread did not start: {message}"),
+            Self::Spool { reason } => {
+                write!(formatter, "the event spool cannot be opened: {reason}")
+            }
         }
     }
 }
@@ -156,6 +167,7 @@ start_error_from!(
     QueueConfigError => Queue,
     SeatError => Seat,
     PurposeError => Purpose,
+    AdapterError => Adapter,
 );
 
 /// For each machine, the actions a seat can send it: the stand-in for the action registry.

@@ -21,6 +21,7 @@
 
 mod batch;
 mod force;
+mod observe;
 mod reads;
 mod save;
 mod submit;
@@ -37,20 +38,25 @@ use df_table::ports::EventSink;
 use df_table::registry::Registry;
 use tokio::sync::oneshot;
 
-use crate::event_log::EventLog;
+use crate::observe::HostEventSink;
 
 use super::adapters::Adapters;
-use super::audit::{AuditSink, EngineAudit};
+use super::audit::EngineAudit;
+use super::audit_fields::record_engine;
 use super::commit::{CommitId, CommitStore};
 use super::committer::Committer;
+use super::extras::Extras;
 use super::limits::IDLE_TICK;
+use super::replay::Replayer;
 use super::report::{
     BrokerRequested, BrokerView, ChaosReport, ClockReport, Description, DiceReport, EngineDump,
     EngineError, ForceReport, HealthReport, QueueReport, ServedReply, SubmissionReport,
     SubmitReply, TurnReport, ViableReport,
 };
+use super::report_observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
 use super::request::{
-    AudienceSpec, ChaosRequest, ClockControl, DiceControl, ForceRequest, InputRequest, QueueControl,
+    AudienceSpec, ChaosRequest, ClockControl, ConfigControl, DiceControl, ForceRequest,
+    HistoryRequest, InputRequest, QueueControl, ReplayRequest,
 };
 use super::setup::{ActionCatalog, EngineConfig, EngineStartError, dev_machines, starting_world};
 
@@ -74,6 +80,10 @@ pub(super) enum Command {
     BrokerQueues(Reply<BrokerView>),
     BrokerLedger(Reply<BrokerView>),
     BrokerRequest(String, Reply<BrokerRequested>),
+    History(HistoryRequest, Reply<HistoryReport>),
+    Trace(String, Reply<TraceReport>),
+    Replay(ReplayRequest, Reply<ReplayReport>),
+    Config(ConfigControl, Reply<ConfigReport>),
 }
 
 /// How commits have gone, for `queue show`.
@@ -90,8 +100,11 @@ pub(super) struct Owner {
     pub(super) registry: Registry,
     pub(super) catalog: ActionCatalog,
     pub(super) adapters: Adapters,
+    /// The table's event port, which is `observer` seen as the port the pure crate takes.
     pub(super) sink: Arc<dyn EventSink>,
-    pub(super) log: Arc<EventLog>,
+    /// The sink as itself, for the engine's own lines, `history`, `trace` and `health`.
+    pub(super) observer: Arc<HostEventSink>,
+    pub(super) replayer: Arc<dyn Replayer>,
     pub(super) committer: Committer,
     pub(super) queue: OwnerQueue,
     pub(super) committed: PipelineTable,
@@ -119,11 +132,15 @@ impl Owner {
         config: EngineConfig,
         adapters: Adapters,
         store: Arc<dyn CommitStore>,
-        log: Arc<EventLog>,
+        extras: Extras,
     ) -> Result<Self, EngineStartError> {
         let machines = dev_machines(config.first_scene)?;
         let committed = starting_world(&config, &machines)?;
-        let sink: Arc<dyn EventSink> = Arc::new(AuditSink::new(Arc::clone(&log)));
+        let Extras {
+            sink: observer,
+            replayer,
+        } = extras;
+        let sink: Arc<dyn EventSink> = observer.clone();
         let mut queue = OwnerQueue::new(config.table, &config.settings, Arc::clone(&sink))?;
         let now_ms = adapters.clock.now_ms();
         for seat in 1..=config.seats {
@@ -140,7 +157,8 @@ impl Owner {
             config,
             adapters,
             sink,
-            log,
+            observer,
+            replayer,
             committer: Committer::start(store)?,
             queue,
             commit_id: CommitId::new(0),
@@ -212,6 +230,10 @@ impl Owner {
             Command::BrokerQueues(reply) => answer(reply, Ok(self.broker_queues())),
             Command::BrokerLedger(reply) => answer(reply, Ok(self.broker_ledger())),
             Command::BrokerRequest(purpose, reply) => answer(reply, self.broker_request(&purpose)),
+            Command::History(request, reply) => answer(reply, Ok(self.history(&request))),
+            Command::Trace(operation, reply) => answer(reply, self.trace(&operation)),
+            Command::Replay(request, reply) => answer(reply, self.replay(&request)),
+            Command::Config(control, reply) => answer(reply, self.config(control)),
         }
     }
 
@@ -244,8 +266,9 @@ impl Owner {
         Lane::ALL.iter().map(|lane| self.queue.depth(*lane)).sum()
     }
 
+    /// Records one engine line: the line to the log and the record to every outlet.
     pub(super) fn audit(&self, audit: EngineAudit) {
-        self.log.push(audit.render_audit_line());
+        record_engine(&self.observer, &audit);
     }
 
     pub(super) fn now_ms(&self) -> u64 {

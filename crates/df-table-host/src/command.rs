@@ -7,8 +7,16 @@
 //! The verbs about elements are here; the `scene` verbs are in `scene`, the `playground`, `media`
 //! and `fixture` verbs in `playground`, and the usage lines and the help in `usage`.
 
+mod media_generate;
 mod playground;
 mod scene;
+mod scene_home;
+mod scene_home_adventure;
+mod scene_home_campaigns;
+mod scene_home_configure;
+mod scene_lobby;
+mod scene_pills;
+mod scene_ui;
 mod usage;
 
 use std::collections::BTreeSet;
@@ -21,6 +29,7 @@ use df_table::element::{Degrees, Percent};
 
 use crate::wire::{EffectRequest, PivotRequest, ValueForm};
 
+pub use self::media_generate::MediaGenerate;
 pub use self::playground::{DEFAULT_CYCLES, DEFAULT_HOLD_MS};
 pub use self::scene::{DEFAULT_CAMERA_MS, DEFAULT_SLIDE, DEFAULT_VOLUME, DEFAULT_ZOOM_PERCENT};
 pub use self::usage::usage_text;
@@ -76,6 +85,8 @@ pub enum Command {
         name: Option<String>,
     },
     MediaRemove(String),
+    /// Make one picture from a prompt through the image service, or list the generations.
+    MediaGenerate(MediaGenerate),
     /// What each open page says it is showing and playing.
     Clients,
     /// The names of the fixture files.
@@ -93,6 +104,9 @@ pub enum Command {
     /// A verb of the owner actor: `input`, `viable`, `dump`, `force`, `projection`, `queue`,
     /// `describe` or `broker`.
     Engine(crate::engine::EngineCommand),
+    /// A verb of the scene builder's workbench: `scene build`, `scene show`, `plates` or
+    /// `buffer`.
+    SceneBuilder(crate::scene_builder::SceneBuilderCommand),
 }
 
 /// Why a command line was refused.
@@ -455,6 +469,9 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "help" => Ok(Command::Help),
         verb if crate::engine::VERBS.contains(&verb) => {
             crate::engine::parse_verb(verb, rest).map(Command::Engine)
+        }
+        verb if crate::scene_builder::cli::VERBS.contains(&verb) => {
+            crate::scene_builder::parse(verb, rest).map(Command::SceneBuilder)
         }
         other => Err(CommandError::Unknown(other.to_owned())),
     }

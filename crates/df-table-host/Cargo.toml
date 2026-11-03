@@ -18,6 +18,9 @@ df-table = { path = "../df-table" }
 df-playground = { path = "../df-playground" }
 df-api = { path = "../df-api" }
 df-protocol = { path = "../df-protocol" }
+df-observe = { path = "../df-observe" }
+df-rules = { path = "../df-rules" }
+df-imagery = { path = "../df-imagery" }
 axum = "=0.8.9"
 base64 = "=0.22.1"
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
@@ -28,4 +31,6 @@ tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-t
 [dev-dependencies]
 df-table = { path = "../df-table", features = ["testkit"] }
 tempfile = "=3.27.0"
+df-telemetry = { path = "../df-telemetry" }
+df-types = { path = "../df-types" }
 prost.workspace = true

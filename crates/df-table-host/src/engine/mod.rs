@@ -20,23 +20,34 @@
 
 pub mod adapters;
 pub mod audit;
+mod audit_fields;
+mod broker_fields;
 pub mod cli;
+mod cli_observe;
 pub mod commit;
 mod committer;
+pub mod extras;
 mod format;
+mod format_observe;
 pub mod handle;
 mod labels;
 pub mod limits;
 mod owner;
 pub mod projection_adapter;
+pub mod replay;
 pub mod report;
+pub mod report_observe;
 pub mod request;
 pub mod routes;
 pub mod setup;
 mod turn;
+mod verb_set;
 
+pub use self::broker_fields::SinkBrokerAudit;
 pub use self::cli::{EngineCommand, help_text, parse as parse_verb, run, verb_usages};
+pub use self::extras::Extras;
 pub use self::handle::EngineHandle;
+pub use self::replay::{PendingReplay, ReplayRefusal, Replayer};
 pub use self::routes::router;
 
 /// The verbs of the engine's command line, for the dispatch in `command::parse`.
@@ -45,7 +56,11 @@ pub use self::cli::VERBS;
 #[cfg(test)]
 mod batch_tests;
 #[cfg(test)]
+mod cli_observe_tests;
+#[cfg(test)]
 mod cli_tests;
+#[cfg(test)]
+mod observe_tests;
 #[cfg(test)]
 mod owner_tests;
 #[cfg(test)]

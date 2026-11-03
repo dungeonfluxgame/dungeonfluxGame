@@ -126,6 +126,8 @@ pub mod cost;
 /// Durable stage and dispatch infrastructure contracts.
 pub mod execution;
 
+pub mod oneshot;
+
 pub mod publication;
 
 pub mod runtime;

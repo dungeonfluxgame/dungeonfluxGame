@@ -9,13 +9,14 @@ use crate::broker::ledger::{LedgerEnd, LedgerEntry};
 use crate::broker::purpose::Price;
 use crate::broker::report::{LedgerReport, QueuesReport};
 
+use super::format_observe::stream_lines;
 use super::report::{
     BrokerRequested, ChaosReport, ClockReport, CommitDisposition, CommitReport, Description,
     DiceReport, ForceReport, HealthReport, QueueReport, ServedReply, SubmissionReport, SubmitReply,
     TurnReport, ViableReport,
 };
 
-fn numbered(lines: impl IntoIterator<Item = String>) -> String {
+pub(super) fn numbered(lines: impl IntoIterator<Item = String>) -> String {
     lines
         .into_iter()
         .enumerate()
@@ -24,7 +25,7 @@ fn numbered(lines: impl IntoIterator<Item = String>) -> String {
         .join("\n")
 }
 
-fn list_or_none(lines: impl IntoIterator<Item = String>, none: &str) -> String {
+pub(super) fn list_or_none(lines: impl IntoIterator<Item = String>, none: &str) -> String {
     let text = numbered(lines);
     if text.is_empty() {
         none.to_owned()
@@ -41,7 +42,7 @@ fn commit_text(commit: &CommitDisposition) -> String {
     }
 }
 
-fn submission_text(submission: &SubmissionReport) -> String {
+pub(super) fn submission_text(submission: &SubmissionReport) -> String {
     let head = format!(
         "{} {} ({})",
         submission.operation, submission.sender, submission.kind
@@ -62,7 +63,7 @@ fn submission_text(submission: &SubmissionReport) -> String {
     }
 }
 
-fn turn_text(turn: &TurnReport) -> String {
+pub(super) fn turn_text(turn: &TurnReport) -> String {
     let outcome = match turn.decline {
         Some(code) => format!("{} ({})", turn.outcome.key(), code.key()),
         None => turn.outcome.key().to_owned(),
@@ -203,8 +204,24 @@ pub fn format_description(description: &Description) -> String {
     }));
     let lanes: Vec<&str> = description.lanes.iter().map(|lane| lane.key()).collect();
     let verbs = numbered(description.verbs.iter().cloned());
+    let verb_set = numbered(description.verb_set.iter().map(|line| {
+        format!(
+            "{} ({}, {}): {}",
+            line.words,
+            line.effect,
+            line.access,
+            line.host.key(),
+        )
+    }));
+    let not_built = list_or_none(
+        description
+            .not_built
+            .iter()
+            .map(|verb| format!("{} (waits for: {})", verb.verb, verb.needs)),
+        "none",
+    );
     format!(
-        "machines:\n{machines}\nlanes, in the order they are served: {}\nports wired: {}\ncommit policy: {}\nverbs:\n{verbs}",
+        "machines:\n{machines}\nlanes, in the order they are served: {}\nports wired: {}\ncommit policy: {}\nverbs:\n{verbs}\nthe verb set of C7's inspect, and what this host has of it:\n{verb_set}\nH.16 verbs not built yet:\n{not_built}",
         lanes.join(", "),
         description.ports.join(", "),
         description.commit_policy,
@@ -318,14 +335,15 @@ pub fn format_health(report: &HealthReport) -> String {
         text.push_str(&format!(", refusing input for {remaining} ms more"));
     }
     text.push_str(&format!(
-        "\n2: broker at epoch {}{}\n3: the owner's clock reads {} ms",
+        "\n2: broker at epoch {}{}\n3: the owner's clock reads {} ms\n{}",
         report.broker_epoch,
         if report.broker_closed {
             " (closed)"
         } else {
             ""
         },
-        report.now_ms
+        report.now_ms,
+        stream_lines(&report.events, 4),
     ));
     text
 }

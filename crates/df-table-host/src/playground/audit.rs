@@ -80,6 +80,21 @@ pub(crate) fn controls_pairs(changes: &[ControlsChange]) -> Vec<(&'static str, S
         .collect()
 }
 
+/// The audit pair of one field of an edit: its value when it is set, `clear` when it is taken
+/// away, and nothing when it is left alone.
+fn edit_pair<T>(
+    key: &'static str,
+    edit: &df_playground::overlay::Edit<T>,
+    show: impl FnOnce(&T) -> String,
+) -> Option<(&'static str, String)> {
+    use df_playground::overlay::Edit;
+    match edit {
+        Edit::Keep => None,
+        Edit::Clear => Some((key, "clear".to_owned())),
+        Edit::Set(set) => Some((key, show(set))),
+    }
+}
+
 /// The verb and pairs of an applied scene change. It is one match with an arm for each kind of
 /// change, kept whole on purpose: every verb's typed fields are read in one place, and the compiler
 /// refuses a new kind of change until it has an arm. `scene` is the overlay after the change, which
@@ -208,6 +223,68 @@ fn scene_fields(
                 ],
             ),
         },
+        SceneChange::Narration {
+            text,
+            speaker,
+            badge,
+            continue_label,
+            voice,
+            placement,
+            progress,
+        } => {
+            let mut pairs = Vec::new();
+            if let Some(text) = text {
+                pairs.push(("text_chars", text.chars().count().to_string()));
+            }
+            pairs.extend(edit_pair("speaker", speaker, |text| value(text)));
+            pairs.extend(edit_pair("badge", badge, |glyph| glyph.key().to_owned()));
+            pairs.extend(edit_pair("continue", continue_label, |text| value(text)));
+            if let Some(voice) = voice {
+                pairs.push(("voice", voice.to_string()));
+            }
+            if let Some(placement) = placement {
+                pairs.push(("placement", placement.key().to_owned()));
+            }
+            pairs.extend(edit_pair("scene", progress, |progress| {
+                format!("{}/{}", progress.index, progress.total)
+            }));
+            ("narration", pairs)
+        }
+        SceneChange::ClearNarration {} => ("narration_clear", Vec::new()),
+        SceneChange::SeatSet {
+            name,
+            class,
+            level,
+            portrait,
+            glyph,
+            accent,
+            hit_points,
+            maximum_hit_points,
+            conditions,
+        } => {
+            let mut pairs = vec![("name", value(name))];
+            pairs.extend(edit_pair("class", class, |text| value(text)));
+            pairs.extend(edit_pair("level", level, |level| level.to_string()));
+            pairs.extend(edit_pair("portrait", portrait, |text| value(text)));
+            pairs.extend(edit_pair("glyph", glyph, |glyph| glyph.key().to_owned()));
+            pairs.extend(edit_pair("accent", accent, |text| value(text)));
+            if let Some(hit_points) = hit_points {
+                pairs.push(("hp", hit_points.to_string()));
+            }
+            if let Some(maximum) = maximum_hit_points {
+                pairs.push(("max", maximum.to_string()));
+            }
+            if let Some(conditions) = conditions {
+                pairs.push(("conditions", conditions.len().to_string()));
+            }
+            ("seat_set", pairs)
+        }
+        SceneChange::SeatRemove { name } => ("seat_remove", vec![("name", value(name))]),
+        SceneChange::SeatsOpen { open } => ("seats_open", vec![("open", open.to_string())]),
+        SceneChange::SeatsClear {} => ("seats_clear", Vec::new()),
+        SceneChange::Brand { on } => ("logo", vec![("on", on.to_string())]),
+        SceneChange::Screen { edit } => edit.audit_fields(),
+        SceneChange::Home { edit } => edit.audit_fields(),
         SceneChange::Reset {} => ("reset", Vec::new()),
     }
 }

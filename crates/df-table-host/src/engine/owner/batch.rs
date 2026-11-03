@@ -14,7 +14,7 @@
 
 use df_table::envelope::{EngineInput, InputOrigin, PlayerInput, ProposalOrigin};
 use df_table::event::{FailureCause, TableEvent};
-use df_table::identity::{Correlation, TableScope};
+use df_table::identity::TableScope;
 use df_table::outcome::{DeclineCode, OutcomeKind};
 use df_table::owner_queue::{ServeError, ServedInput};
 use df_table::pipeline::{PipelineTable, TurnResult};
@@ -203,7 +203,10 @@ impl Owner {
         pending: Vec<PendingTurn>,
     ) -> (Vec<TurnReport>, BatchEnd) {
         let inputs = pending.len();
-        if working.state_hash() == self.committed.state_hash() {
+        // What the views show is not worth a checkpoint by itself: a batch that only declined
+        // changes the notices and readouts and nothing a restart must keep, so it writes none and
+        // the views are saved with the next checkpoint.
+        if working.durable_hash() == self.committed.durable_hash() {
             self.committed = working;
             self.audit(EngineAudit::NothingToCommit { inputs });
             let reports = self.release(pending, &CommitDisposition::NothingToCommit);
@@ -222,7 +225,7 @@ impl Owner {
                     id: saved.commit.get(),
                 };
                 let reports = self.release(pending, &disposition);
-                self.issue_committed_requests(saved.correlation);
+                self.issue_committed_requests();
                 (reports, BatchEnd::Committed)
             }
             Err(error) => (
@@ -232,9 +235,11 @@ impl Owner {
         }
     }
 
-    /// Sends to the broker the resource requests the commit recorded. A refused batch leaves no
-    /// request at the broker, which is why this waits for the commit.
-    fn issue_committed_requests(&mut self, correlation: Correlation) {
+    /// Sends to the broker the resource requests the commit recorded, each under the correlation
+    /// of the input that asked, and tells the rules owner which reservations the commit released.
+    /// A refused batch leaves no request at the broker and releases nothing, which is why this
+    /// waits for the commit.
+    fn issue_committed_requests(&mut self) {
         let ctx = TurnContext {
             registry: &self.registry,
             catalog: &self.catalog,
@@ -245,7 +250,7 @@ impl Owner {
         };
         let committed = &mut self.committed;
         // A pipeline that cannot be built was reported when the batch ran.
-        let _ = ctx.with_pipeline(|pipeline| pipeline.issue_requests(committed, correlation));
+        let _ = ctx.with_pipeline(|pipeline| pipeline.issue_requests(committed));
     }
 
     /// Ends every input of a batch that was saved: its staged events reach the log, the queue
@@ -315,6 +320,11 @@ impl Owner {
     fn fail_batch(&mut self, pending: Vec<PendingTurn>, cause: String) -> Vec<TurnReport> {
         let disposition = CommitDisposition::Failed { cause };
         let now_ms = self.now_ms();
+        // The dice the refused inputs drew are provisional until a commit: they go back to the
+        // source, newest input first, so the same ids sent again meet the same values (H.3).
+        for turn in pending.iter().rev() {
+            turn.result.return_draws(&*self.adapters.dice);
+        }
         let mut reports = Vec::with_capacity(pending.len());
         for turn in pending {
             let (sender, operation) = (

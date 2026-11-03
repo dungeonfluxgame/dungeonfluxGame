@@ -16,6 +16,10 @@ use df_table::private_data::LengthClass;
 use serde::{Deserialize, Serialize};
 
 use crate::broker::report::{LedgerReport, QueuesReport};
+use crate::observe::SinkHealth;
+
+use super::report_observe::NotBuiltVerb;
+use super::verb_set::VerbLine;
 
 /// The table's shared facts, as `dump` shows them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +201,9 @@ pub struct HealthReport {
     pub broker_epoch: u64,
     pub broker_closed: bool,
     pub now_ms: u64,
+    /// The event stream: what was seen by class, what each outlet confirmed and lost, and how far
+    /// behind ingestion is (`lag_ms`).
+    pub events: SinkHealth,
 }
 
 /// `clock`: the owner's time.
@@ -265,6 +272,10 @@ pub struct Description {
     pub ports: Vec<String>,
     pub commit_policy: String,
     pub verbs: Vec<String>,
+    /// C7's verb set, generated from `df_table::inspect`, with what the host has of each.
+    pub verb_set: Vec<VerbLine>,
+    /// The H.16 verbs the host does not have yet and what each waits for.
+    pub not_built: Vec<NotBuiltVerb>,
 }
 
 /// `broker request`: the handle of the request that was made.
@@ -337,6 +348,32 @@ pub enum EngineError {
     NotAvailable {
         what: String,
     },
+    /// No setting has this name.
+    UnknownSetting {
+        name: String,
+    },
+    /// The setting's spec refused the value; `cause` is the closed key of the fault.
+    SettingRefused {
+        name: String,
+        cause: String,
+    },
+    /// The setting is read once when the owner starts, so it cannot change while the owner runs.
+    SettingNeedsRestart {
+        name: String,
+    },
+    /// A feature that is half built declines and says what it waits for (RES31).
+    NotSupportedYet {
+        what: String,
+        needs: String,
+    },
+    /// There is no turn log of that name.
+    UnknownLog {
+        log: String,
+    },
+    /// The replay ran and failed.
+    ReplayFailed {
+        reason: String,
+    },
 }
 
 impl fmt::Display for EngineError {
@@ -372,6 +409,19 @@ impl fmt::Display for EngineError {
                 "the owner thread panicked and the table is stopped; see the log for the line",
             ),
             Self::NotAvailable { what } => write!(formatter, "this table has no {what}"),
+            Self::UnknownSetting { name } => write!(formatter, "there is no setting '{name}'"),
+            Self::SettingRefused { name, cause } => {
+                write!(formatter, "{name} was refused: {cause}")
+            }
+            Self::SettingNeedsRestart { name } => write!(
+                formatter,
+                "{name} is read once when the owner starts, so it cannot be changed while it runs"
+            ),
+            Self::NotSupportedYet { what, needs } => {
+                write!(formatter, "{what} is not built yet: it needs {needs}")
+            }
+            Self::UnknownLog { log } => write!(formatter, "there is no turn log '{log}'"),
+            Self::ReplayFailed { reason } => write!(formatter, "the replay failed: {reason}"),
         }
     }
 }

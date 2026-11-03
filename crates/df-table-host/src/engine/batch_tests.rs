@@ -496,3 +496,31 @@ async fn step_serves_one_batch_of_at_most_the_count_and_a_zero_step_is_refused()
     ));
     assert_eq!(rig.store.records().len(), 2);
 }
+
+#[test]
+fn dev_dice_serve_what_a_refused_batch_gave_back_before_they_roll_again() {
+    use df_table::ports::{Dice, DrawRequest};
+    let die = DrawRequest {
+        sides: std::num::NonZeroU16::new(20).expect("a die has sides"),
+    };
+    let dice = super::adapters::DevDice::seeded(3);
+    let (first, second) = (
+        df_table::testkit::correlation(1),
+        df_table::testkit::correlation(2),
+    );
+    let turn_one: Vec<_> = (0..2)
+        .map(|_| dice.draw(first, die).expect("a draw"))
+        .collect();
+    let turn_two: Vec<_> = (0..1)
+        .map(|_| dice.draw(second, die).expect("a draw"))
+        .collect();
+
+    dice.give_back(second, &turn_two);
+    dice.give_back(first, &turn_one);
+
+    let again: Vec<_> = (0..3)
+        .map(|_| dice.draw(first, die).expect("a draw"))
+        .collect();
+    let expected: Vec<_> = turn_one.iter().chain(&turn_two).copied().collect();
+    assert_eq!(again, expected, "the same values in the same order");
+}
