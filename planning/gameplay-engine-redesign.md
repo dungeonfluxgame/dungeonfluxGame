@@ -1321,7 +1321,12 @@ each step against the actor's remaining action, bonus action, reaction, movement
 interaction (R05), applies the longest valid prefix, and asks one question about the first step
 that fails, as `interaction-engine.md` already allows. The viable list, the phone's choices and the
 decline text all come from the one legal-choice call for that actor, so the phone greys out spent
-options and cannot offer what the rules refuse. A plan outlives neither its turn nor its bound.
+options and cannot offer what the rules refuse: the alternatives of a decline from the rules owner are
+filtered to what that call lists (one call per declined input, recorded once if it fails), and the
+buttons of an ambiguity are the candidates in that list, fewer than two of them being a failed
+reading. A plan that stops at a step after a valid prefix was applied is applied plus that one
+question, with the actor's legal choices as its buttons (RES26 `PartiallyCompleted`). A plan
+outlives neither its turn nor its bound.
 
 **C.3 Improvised actions and rulings (C6, E2, M4, M5).** "I swing from the chandelier and kick the
 archer", "I tell the guard I am the inspector and hand him a letter I forged" and "I use fire bolt
@@ -1363,7 +1368,16 @@ spell that can be countered, a legendary action), the Outcome carries a window (
 (continuation, ordered dice, spent resources, remaining choices) and opens the window. Each eligible
 seat's phone gets its offer and nobody else sees the options. Answers come back as inputs addressed
 to the pending id, and phase two re-validates against current state and resumes. Nesting is bounded
-by the effect-model plan, and a bound hit becomes `needs_ruling`. A step reports
+by the effect-model plan, and a bound hit is a `needs_ruling` for the host: the answer is not taken,
+the window stays open, one failure is recorded, and the host ends the window with the exit below.
+Every pending, a confirmation and a ruling as much as a window, a choice or a roll, is held with the
+machine on `Waiting{pending_id}`, so a second pending cannot stack on the first: a plan that arrives
+while a pending of the scene is open is declined `pending_open`. The exits are the answer, the
+seat's own cancel, the host's refusal and `CancelPending` (a seat that left for good, a scene that
+changed, the host's decision); each returns the machine to its normal state. A reservation is held
+by the rules owner, not by the pipeline: a pending that is cancelled gives it up by `abandon(pending)`,
+which the pipeline records with the commit and tells the owner after the commit is durable, so a
+refused batch releases nothing and a restored pending finds its reservation where it was. A step reports
 `Waiting{pending_id}`, and the machine contract gains a dice input (`Dice{draw_ids, values}`) so
 `step` stays pure. While a window is open the plate tick keeps running and game time does not
 advance (question 67). Which pause policy applies when an eligible seat is slow is a campaign policy and is
@@ -1374,7 +1388,10 @@ question 59.
 target, or whose reading changes the economy spent, never executes on a guess. A reading that is
 irreversible or harms an ally or a neutral (attacking, giving away an item, breaking a quest item)
 needs a one-tap confirmation on that player's phone. Taps and offered choices skip INTERPRET and
-confirmation. There is no undo and no reroll except one a source rule grants (Heroic Inspiration
+confirmation; a tap that answers a clarification is read as clarified, so it is checked for harm like
+a typed line. The rule that a line with more than one legal target never executes on a guess belongs
+to the interpreter adapter, which answers `Ambiguous`; the pipeline offers its candidates that are
+legal and trusts the adapter for the rest. There is no undo and no reroll except one a source rule grants (Heroic Inspiration
 or Lucky, M2-D4): otherwise dice are never rerolled, and a wrong act is handled by the ruling
 flow. Narration may not state what a player character does, says, feels or decides beyond the
 committed outcome, and the qualification step rejects text that does.
@@ -1670,6 +1687,11 @@ sessions in section H.
    phones show "waiting for the wizard's player", and the TV shows a plain waiting state. If the
    wizard's phone drops, the turn is `Held`, nothing is spent, and the reconnect reacquires the
    window by `pending_id`.
+6. **The three known-bad lines**, named once and used by every golden and by the nightly accuracy
+   run (H.17): "I draw my greatsword and attack Dain Rusk" (read as Intimidation in the observations;
+   a plan of two steps), "I swing my greatsword at Dain Rusk and cut him down" (answered "Nothing
+   like that is here to act on"; the attack), and "I draw my greatsword and attack" with no one named
+   (L.3; a clarification, never a threat).
 
 ### H. Quality contract: robust, resilient, fast, logged, performant, CLI-capable
 
@@ -1701,7 +1723,13 @@ by seat), engine inputs (proposals and hand-offs), timers and resource results, 
 (round-robin by seat). The serve order is the single total order recorded as `turn.seq`. The controls
 lane has a per-seat bound and a table-wide bound, both large named constants until measured, and
 overflow is a stall; the per-seat pending bound and the token bucket apply to the player lane only.
-Operation ids are per sender and per membership: a duplicate is a retry from the same sender, a seat
+An operation that committed is remembered in two places that cannot disagree about it: the
+result book the pipeline saves in every checkpoint (how it ended and what its seat was told, so a
+duplicate is answered without a port and writes nothing to the views) and the table state's memory of
+applied operations (one bound, commit ids never in it); if the first forgot an operation the second
+remembers, the duplicate is declined `intent_invalid` and nothing runs. An input that committed
+nothing (declined, clarified, routed) is remembered for the session only, so a duplicate does not
+call the model again; a restart forgets it and a model call may repeat. Operation ids are per sender and per membership: a duplicate is a retry from the same sender, a seat
 that leaves and rejoins starts with no remembered ids, and an input abandoned by the owner's lease
 keeps its id (a late outcome is recorded once, and the commit checkpoints before APPLY is reported). An
 input whose batch failed to commit is released: nothing of it was kept and it was not reported applied,
@@ -1710,7 +1738,11 @@ input that did commit is remembered by the results the table keeps and saves in 
 
 **H.3 Dice (N3).** Dice come from the explicit draws `df-session` supplies, used only in DECIDE and
 passed into `step` as input fields, so `step` is a pure function of (state, input, clock). Each draw
-is logged `dice.drawn{op, draw_ids, values}`. The CLI has `dice seed`, `dice force` and
+is logged `dice.drawn{op, draw, sides, value}`, one line per die, staged with the turn and released
+with the commit (dice are public in play). A draw is provisional until the host's commit: a batch the
+host refuses gives its draws back (`Dice::give_back`, newest turn first) and the source serves them
+again before it draws anything new, so a retried input meets the same values and replay stays
+deterministic. The CLI has `dice seed`, `dice force` and
 `ops show <id>`, and a forced draw is marked `driven=true`. This is an operator tool in local and
 test builds and is never reachable in hosted play (`rules-coverage.md`: no operator force-dice).
 Replay is a diagnostic and test tool, supported where reducers and migrations are compatible, and it
@@ -1854,6 +1886,20 @@ registered machine missing `force`, `input` or `dump`. A fixture is a table bund
 broker script keyed by request key. Question 34 (read freely, drive only for scripted tests) now
 also decides whether `sim` and `soak` on a development table count as playtests.
 
+*As built (H2, 2026-11-02), by verb.* `describe` is generated from C7's `df_table::inspect::Verb` and shows this table's
+"host" column for each verb of that set.
+
+| Verb | Host | Note |
+|---|---|---|
+| `describe`, `dump`, `force`, `input`, `viable`, `dice`, `clock`, `chaos`, `health`, `cost`, `projection show`, `queue`, `broker` | built | `dump` takes no machine name yet and always prints JSON; `health` carries the event stream (lag, loss, degraded) |
+| `trace <operation>` | built | the host's events for one input (table, engine and broker lines, matched by `df.operation`) with what the queue did; the number `--op` took or 32 hex digits; the broker's later events of a request join it by handle, not operation |
+| `history [--limit N] [--area A] [--class a\|b]` | built, host's own | not in H.16's list or C7's set: the newest retained events and the stream health |
+| `config show\|set <name> <value>` | built, host's own | the settings with their specs; the five the pipeline reads each batch change at once, the three seat limits of the queue are read at start and refused |
+| `replay <log> [--until N] [--diff]` | seam only | the verb, route (501) and typed `not_supported_yet` exist; C7's replay and a loadable turn log stand behind it |
+| `fixture load`, `sim run`, `soak`, `fuzz` | not built | table export and import (H.12), the sim runner and the H.17 drivers |
+| `pending list\|show`, `rulings list\|show` | not built | C7's `PendingReport` and `RulingsReport` exist; the host route does not |
+| `combat choices`, `combat anchors show`, `spatial query`, `effects list`, `check show`; `sheet`, `advancement`, `character`; `camera`, `director`, `scene state` | not built | wait for their machines (M2, O.16 row M, O.14) |
+
 **H.17 Tests (N14, C24).** Property tests over random input sequences with a scripted broker assert:
 exactly one active group machine per scene (the lobby is table-scope before the first scene) and
 at most one machine per seat lane; the projection is non-empty and has a status for each
@@ -1861,7 +1907,11 @@ seat and the TV after every step; every input ends in one of the four outcomes; 
 id absent from the scene; coin and item totals are conserved except through named awards; a replay
 reproduces the state hash. Golden sessions in `tests/golden/` (seed, scripted broker, inputs, the
 section G traces once each is reviewed against the pinned source (RES52); G.3 and the spell part of
-G.5, the Shield reaction, are fixtures pending R10) diff the turn log, snapshot and per-seat projections. Chaos tests inject each row
+G.5, the Shield reaction, are fixtures pending R10) diff the turn log, snapshot and per-seat projections:
+each golden step asserts the stage lines in the order of C, the released lines on their own, the dice
+(sides and value), the state of the machine, the open pendings with who may answer what, and what
+the shared screen and each seat's projection show (readout, status reason, buttons). Each cites the
+plan text it was written from. Chaos tests inject each row
 of H.4. A load test runs six tables of six seats on a scripted broker and checks that
 `live_tasks` returns to zero and memory stays flat. The real-model INTERPRET accuracy run is nightly,
 on a labelled line set that includes the three known-bad lines of the observations. Persistence
@@ -2118,12 +2168,16 @@ and section L is the comparison of the current and the next implementation that 
   by `df-engine`. The active machine holds only `Waiting{pending_id}`. Answers carrying a pending id
   go to the pending handler and not to `accepts`. A hand-off is declined `pending_open` while any
   pending resolution of that scene exists, unless the hand-off is that resolution's own result.
-  `AwaitingAdjudicator` is a state of a pending ruling and not of a machine. A window never ends on
-  its own and is never timed out into a decline; a window whose seat left the table for good, or one
-  the host moves past, has an exit that needs no answer: `EngineControl::CancelPending{pending, cause}`
-  (`seat_left`, `scene_changed`, `host_decision`) closes it, spends and rolls nothing, tells the rules
-  owner to release what it reserved (`abandon`) and tells a machine that waited on it
-  (`MachineInput::PendingCancelled`). An answer that arrives after the scene changed or after the seat
+  `AwaitingAdjudicator` is a state of a pending ruling and not of a machine; the machine holds
+  `Waiting{pending_id}` for every pending, a confirmation and a ruling included (C.3 step 3, K.5), so
+  a second pending cannot stack and a plan that arrives meanwhile is declined `pending_open`. A window
+  never ends on its own and is never timed out into a decline; a window whose seat left the table for
+  good, or one the host moves past, has an exit that needs no answer:
+  `EngineControl::CancelPending{pending, cause}` (`seat_left`, `scene_changed`, `host_decision`)
+  closes it, spends and rolls nothing, returns a machine that waited on it to its normal state
+  (`MachineInput::PendingCancelled`) and, after the commit is durable, tells the rules owner to
+  release what it reserved (`abandon(pending)`, recorded with the commit and issued by
+  `Pipeline::issue_requests`). An answer that arrives after the scene changed or after the seat
   whose action the pending holds left cancels the pending the same way and is declined `window_closed`.
   A confirmation is
   `pending{choice}` for the same seat, `Rejected` maps to `declined{intent_invalid}`,
@@ -2200,8 +2254,8 @@ and section L is the comparison of the current and the next implementation that 
     `resume_check` are C6 and C4 and are not in the trait yet.
   - *Hooks.* `validate` (decode the whole state, proving every field readable), `migrate` (one version
     step) and the default `load` (migrate, then validate; refuse an unmigratable or unreadable record
-    as `load.refused{record type, table, machine, version, expected, cause}`), and the stubs `project`
-    (C5) and `inspect` (C7).
+    as `load.refused{record type, table, machine, version, expected, cause}`), and the hooks `project`
+    (C5) and `inspect` (C7, built: `inspect::MachinesOf` serves it).
 - **RES28. Machine scope in the rest of the list (K6).** (This is the set of machines the registry
   knows; the build order after H3 is O.16 row M, with travel last because it has no rules code yet.)
   The first machines are lobby, creation,
@@ -3138,8 +3192,8 @@ and the compiler or the conformance suite should say what was forgotten) and **o
 and every piece of state can be inspected). Built so far (2026-11-02): the blank-canvas workbench (O.12),
 the engine foundations C0 to C2 (committed), and the pipeline, pending, projection, table state, the owner
 actor, the broker, the wire contract and the fixture contract (C3 to C6, H0, H1, W0, W1 and K0, in the working
-tree and not yet committed). Not built: the inspect
-reports and the rest of the verb set (C7 and H2), the first playable path (H3), and the scene builder, the
+tree and not yet committed), and the inspect reports, the verb set and the replay of C7 (working tree). Not built: the host's
+side of the verb set (H2), the first playable path (H3), and the scene builder, the
 Director, the transform steps after T0, the animation steps and the video steps after V0. O.12 lists where the built code departs from the plan
 below, and the status board in O.16 has each step.
 
@@ -3174,7 +3228,8 @@ below, and the status board in O.16 has each step.
 - **Dependencies today.** The built `crates/df-table` depends on `serde` and `serde_json` only (its
   `Cargo.toml`; a `testkit` feature adds nothing). It has no edge to `df-types` or `df-model`, and the
   three new crates (`df-table`, `df-table-host`, `df-playground`) are already workspace members while
-  question 87, the approval of the new crate edges, is still open.
+  question 87, the approval of the new crate edges, is still open. The host `df-table-host` has one edge
+  to an owner crate since 2026-11-02, `df-rules`, for the production rules adapter (O.8).
 - **Dependencies it may have (planned, pending question 87).** `df-types` (ids, `SessionRevision`),
   `df-model` (the checkpoint,
   `PendingResolution`, `KnowledgeGrant`, `IntentDisposition`), and `df-observe` types only if the
@@ -3203,7 +3258,7 @@ does and how it fails.
 | `registry` | registration, startup validation (unique ids, known and enabled hand-off targets, required ports, a startable table: an enabled `Table` machine and an enabled `Group` machine), enable flags, `check_hand_off` on the value `exit` returned. Scope rules: `Table -> Group`, `Group -> Group` or `Table` (a scene may return the table to its table machine, so the lobby is reachable from a scene), `Seat -> Seat`; a seat lane ends by `ReleaseLane` and a group machine may `ReturnToFrameBelow` | D24, RES28, RES20, Q46 |
 | `lobby`, `explore` | the first two machines (question 90); neither imports the other, and shared facts go through `TableEffect`s | RES28, RES31 |
 | `limits` | the named large limits of the canvas, in one place | owner rule |
-| `pipeline` | the seven stages over ports, as built at C3: `Pipeline::run` changes a host-owned `PipelineTable` in memory for one input and releases nothing visible (it is not pure functions of a value in and a value out: the table is the state, and the host owns its checkpoint). Stage and release: the events that say a table changed (effects, pendings, rulings, `TurnApplied`), the broker requests and the narration job are held in the `TurnResult` and issued by the host after its commit (`TurnResult::release_events`, `Pipeline::issue_requests`, `Pipeline::attach_narration`); a refused batch is undone by `PipelineTable::checkpoint`. The four outcomes, the failure fallbacks, the result book that answers a replayed operation without asking a port, and the request and ruling books | C, RES15, C.7 |
+| `pipeline` | the seven stages over ports, as built at C3: `Pipeline::run` changes a host-owned `PipelineTable` in memory for one input and releases nothing visible: it is not pure functions of a value in and a value out, the table is the state, and the host owns its checkpoint. "Nothing visible" is exact. Only the timing line of a stage (`step.finished`) and a failure (`boundary.failed`, `machine.failed`, `effect.refused`) are recorded as the stages run, because they happened whatever the commit does. Everything else is staged in the `TurnResult` and released by the host after its durable commit: the lines that say what the input came to and asked of the ports (`dice.drawn` per draw with its id and value, `input.declined`, `input.clarified`, `input.routed`, `plan_partly_applied`: `outcome_events`) and the lines that say the table changed (effects, pendings, rulings, `turn.applied`: `committed_events`, empty unless the turn committed), then the broker requests (each under the correlation of the input that asked) and the reservations a cancelled pending gave up (recorded as intents in the table, told to the broker and the rules owner by `Pipeline::issue_requests`) and the narration job (`Pipeline::attach_narration`). A refused batch is undone by `PipelineTable::checkpoint` and by giving its dice back (`TurnResult::return_draws`, newest turn first): a draw is provisional until the commit, so a retried input meets the same values. The four outcomes, the failure fallbacks, the result book that answers a replayed operation without asking a port, and the request and ruling books | C, RES15, C.7 |
 | `pending` | pending resolutions kept in the `PipelineTable` beside the table's facts (the book, the keyed rulings and the request book are saved in every checkpoint with versions and bounds), two-phase apply, windows, answers by pending id, the exit for a window that cannot be answered (`EngineControl::CancelPending`) | RES26, C.4, M2-D5 to M2-D7 of M.2 |
 | `effects` | `TableEffect` (a versioned closed enum: 18 effects since C6), `EffectRecord` (an effect as saved, refused when newer than the engine), `EffectRefusal` and `EffectError`; the applier and the state it changes moved to `table_state` at C6 and `effects` re-exports `TableState`, `TableStateError`, `ApplyOutcome` and `HandOffRecord`, so no machine import changed; the typed `carry` list lives in `machine` | RES18, RES32, RES3 |
 | `table_state` | the composition view of the owners' state (built at C6): the commit revision, world time, table status (`active`, `idle`, `paused`), `scenes[]` each with its `scene_generation` (`scene_epoch` of D.2, RES42), beat, active machine and hand-off stack of depth 3, seats with presence and scene, the cast (heroes and creatures with vitals, visibility, placement, conditions), `TableState::apply` (the one applier), the immutable `TableSnapshot` (one pointer copy, structural sharing), and the pure judgements on a snapshot: the split-party decline, the play-input and idle rules, stale-result rejection. Knowledge facts stay with the knowledge owner and reach projection as audience-tagged attachments | D.1 to D.7, RES25, RES29, RES42 |
@@ -3214,9 +3269,10 @@ does and how it fails.
 | `private_data` | `PlayerText`, `Narration`, `Secret<T>` and `LengthClass`: no `Display`, no serde, no `EventField`, `Debug` shows a length class only; split from `event` (C0) | O.6, RES36 |
 | `identity` | `TableId`, `SceneId`, `SeatId`, `TurnSeq`, `MachineId`, and the `df-types`-shaped `OperationId`, `FactId`, `EvidenceRef`, `RecoveryEpoch`, `SessionRevision`, plus `Correlation` and `TableScope`; local until the `df-types` edge at C6 (C0) | O.6, RES42, H.10 |
 | `listed` | the one macro that declares a closed enum with its generated `ALL` list, crate-private (C0) | O.5 |
-| `inspect` | `Inspect` reports and the verb set behind the CLI | H.16, O.6 |
+| `inspect` | the `Inspect` trait and `InspectAudience` (operator, host, seat), `Visible` (a field is shown or redacted, and for whom), one report per stateful module (owner queue, registry, wired ports, active machines, table state, pending book, rulings, request and result books, settings, the pipeline's table), `Verb` and `VerbSpec` (the H.16 verb set as data: words, usage, effect, least audience, machine support) and `describe` generated from the registry (built at C7) | H.16, O.6 |
+| `replay` | `RecordedSession`, `RecordedTurn` and `RecordedInput` (versioned, serde, typed text kept as a length class only), `SessionRecorder`, and with the `testkit` fakes `record`, `Replay` (`run`, `diff`, `until`) and `golden_script`; a recording that fails its schema version or its state hash chain is refused with a typed `SessionError` (built at C7) | H.17, RES19, RES36 |
 | `config` | typed settings with defaults, ranges and owners; load-time validation with fallback and a `SettingRejected` event. Built at C0 with five settings; three names (`seat_pending_limit`, `seat_rate_burst`, `seat_rate_sustained_per_s`) are working names awaiting owner review, every range maximum is the large `LARGE_SETTING_MAXIMUM`, and the one cross-setting rule is J.4's (`narration_late_s` is never below `narration_batch_s`) | RES50, J.4 |
-| `testkit` (feature) | `ManualClock`, `ScriptedBroker`, `RecordingSink` (bounded, counts what it drops), scripted interpreter and rules owner, scripted and failing narrators, queued dice, a fixed knowledge view with sentinel secrets; a call outside a script panics with the port and the question (built at C0); the conformance suite is built (C2, module `conformance`, the same feature); the golden-session runner is built (module `golden`, working tree; the replay of C7 is its `replay_twice`) | H.17 |
+| `testkit` (feature) | `ManualClock`, `ScriptedBroker`, `RecordingSink` (bounded, counts what it drops), scripted interpreter and rules owner, scripted and failing narrators, queued dice, a fixed knowledge view with sentinel secrets; a call outside a script panics with the port and the question (built at C0); the conformance suite is built (C2, module `conformance`, the same feature); the golden-session runner is built (module `golden`, working tree; recorded sessions and their replay are the `replay` module of C7) | H.17 |
 
 **O.4 The seams.** Every outward dependency is a port owned by this crate and has two real
 implementations, a production adapter and a scripted fake (which satisfies the style rule on
@@ -3224,12 +3280,12 @@ traits). The pipeline and the machines see only the ports.
 
 | Port | Question it answers | Production adapter (outside the crate) | Fake in `testkit` |
 |---|---|---|---|
-| `RulesOwner` | legal choices for an actor, `prepare` and `prepare_in_plan` (a plan's later step checked against what the earlier steps staged), `resolve` with explicit draws returning `Resolution::Applied(Resolved)` (the table effects the rules owner produced and the typed facts of the result), `NeedsDraws`, `Await`, `Declined`; `confirmation_needed`, `ruling_needed`, `resume` and `abandon` for the pending kinds; spatial query, rest and time costs | an adapter over `df-rules`, `df-world`, `df-combat` | scripted table of answers |
+| `RulesOwner` | legal choices for an actor, `prepare` and `prepare_in_plan` (a plan's later step checked against what the earlier steps staged), `resolve` with explicit draws returning `Resolution::Applied(Resolved)` (the table effects the rules owner produced and the typed facts of the result), `NeedsDraws`, `Await`, `Declined`; `confirmation_needed`, `ruling_needed`, `resume` and `abandon(pending)` for the pending kinds (told after the commit that cancelled the pending is durable, never while the stages run); spatial query, rest and time costs | an adapter over `df-rules`, `df-world`, `df-combat` | scripted table of answers |
 | `Interpreter` | free text to an `IntentDisposition` and an `ActionPlan` (closed schema) | a Jev call behind the broker | scripted lines |
 | `Narrator` | a committed outcome (`CommittedOutcome`: seat, action, the applied steps and their typed facts) to a speech envelope (qualified). It is a job the host runs after its commit and gives to `Pipeline::attach_narration`; the pipeline never calls it and never waits for it | the storyteller behind the broker | scripted, and a failing one |
 | `Broker` | request a resource, learn its readiness, never wait | the rebuilt `Hub` | scripted readiness and failures |
 | `Clock` | monotonic now, in milliseconds | system clock | `ManualClock` |
-| `Dice` | the explicit draws for a decision | `df-session` supplies them | queued draws |
+| `Dice` | the explicit draws for a decision, provisional until the host's commit (`give_back` returns the draws of a refused batch, newest turn first, and the source serves them again before it draws anything new) | `df-session` supplies them | queued draws |
 | `KnowledgeView` | what an audience may know | `df-knowledge` | fixed sets with sentinel secrets |
 | `EventSink` | record a `TableEvent` | the audit line plus OTEL sink in the host | `RecordingSink` |
 
@@ -3337,6 +3393,18 @@ setting with its default stated once.
   classes, leases and epochs), the plate scheduler and playout buffer, durable intents through
   `df-session`, the dev-control server that exposes the Inspect verbs, and the event sink adapter to
   `df-observe`. It owns every `.await`; `df-table` owns none.
+  **Production adapters (built 2026-11-02, `crates/df-table-host/src/adapters/`).** The host's first
+  edge to an owner crate: `df-table-host` depends on `df-rules` (a workspace path crate whose only
+  external packages, `serde` and `serde_json`, the host already has, so the dependency inventory does not
+  change). `DfRulesOwner` implements the `RulesOwner` port over `df-rules` (ability and skill checks, the
+  influence flow, explicit draws, `not_supported_yet` with a named missing piece for the rest) and
+  `RecordedDice` implements `Dice` over a seeded or system-keyed std-only source that records every draw
+  (`ReplayDice` re-supplies them). `df-world`, `df-combat` and `df-session` are not host dependencies yet: the
+  port has no spatial, rest or time-cost method, a battle is not held by the table, and `df-session` has no
+  draw supplier (its draw record is `df_model::ActualDraw`, which the commit path maps from `DrawRecord`).
+  The `rules_backend` setting (`scripted`, the default, or `df-rules`) is read from `DF_RULES_BACKEND` when
+  the dev engine starts, and the dev verb `rules check <skill> <seat> [dc=N]` runs one real check with a
+  recorded draw.
 - **Wire and projection types:** `df-api` and `df-protocol` get `MachineView` and `MachineIntent`
   under the field ledger (RES33, RES40), mapped from `df-table` projections at the boundary.
   **The mapper's field table (built with C5, 2026-11-02).** One function at the composition boundary
@@ -3478,8 +3546,37 @@ presentation tracks.
    producer is the host's connection tracker.
 8. **C7 Inspect and replay.** Reports for every module, the verb set, `TurnRecord` and the replay
    runner. Acceptance: every machine and port has a report, and a recorded session replays to the same
-   state hash. In progress: `TurnRecord` and the golden runner (`replay_twice`) are in the working tree;
-   the inspect reports and the verb set are not (there is no `inspect` module).
+   state hash. Built 2026-11-02 in the working tree (`inspect` and `inspect/`, `replay` and `replay/`, with `TurnRecord` and the
+   golden runner from C3; 61 tests in `inspect_tests.rs`, `inspect_redaction_tests.rs`, `replay_tests.rs` and
+   `replay_session_tests.rs`). Decisions taken while building it, each reversible: (1) **Three audiences.** The operator sees
+   everything. The host sees what the shared screen shows and what administers the table (the queue, the registry, the
+   wiring, every pending with its continuation, the stored rulings, a scene's beat) and not hidden creatures, saved machine
+   payloads, drawn dice or the table digest. A seat sees what the shared screen shows and its own lines. Question 70 (who may
+   read hidden content through the CLI) stays open: the default is operator-only. (2) **The report redacts, not the caller.**
+   A hidden value is never built into a report: a field is `Visible::Shown` or `Visible::Redacted{needs}`, and a list a seat
+   may see only part of holds only that part. Nothing that moves when a hidden fact moves is shown below the operator: a
+   creature the party cannot see is left out whole (not counted), and the table digest, the state hash and a projection's
+   work counter are operator-only. (3) **Machines are reported through `Machine::inspect`** (state name, schema version),
+   unchanged; the saved payload is added for the operator by `MachinesOf`. A machine whose report fails is a `ReportFailed`
+   line and a slot with no enabled machine is `NotAvailable`, never dropped; the existing `InspectReport` conformance check
+   is the gate, and `describe` gives every enabled machine `dump`, `force` and `input`. (4) **Ports.** The crate reports the
+   wiring (`WiredPorts`: which ports are wired and which enabled machines need them); the broker and the other adapters
+   report from the host. `Clock` and `EventSink` have no `PortName`. (5) **The verb set** is the closed enum `Verb` of 23 verbs:
+   the H.16 minimum plus `describe`, `queue`, `broker`, `pending show` and `rulings show`; the family verbs of later
+   machines (combat, sheet, camera, director) are registered by their owners. Each has a least audience, operator or host; a
+   hosted build offers the host verbs only. `force`, `input` and `dump` are machine-required, `viable` applies where
+   meaningful. (6) **`describe`** is read off the registry, the verb table and a table of each report's fields; a test compares
+   each table with the keys the report writes and with who is shown each. (7) **The recording** is versioned (schema 1) and
+   holds, per turn, the input, the correlation, the outcome, the dice, the effects and three state hashes: before, after and
+   `settled`, taken after the host's commit stamp, released events, issued requests and narration, because those move the
+   hash between inputs. The chain is: the first turn starts at the recorded initial hash and each turn starts at the hash the
+   one before settled at. Typed text is a length class only (RES36), so a replay is given the words (`LineTexts`) and refuses
+   words of another length class. (8) **Replay checks the scripted ports against the recording.** It injects no dice: the
+   world's fakes answer and every field of every turn is compared. `Replay::run` stops at the first divergence with a typed
+   error, which is how a tampered turn is refused; `diff` lists every divergence; `until` stops after a turn number. A world
+   that starts at another hash is refused before any input runs. (9) **Bounds.** A recording holds at most
+   `MAXIMUM_RECORDED_TURNS` (1,000,000, the owner's huge-constants rule); `SessionRecorder::holding_at_most` lowers it.
+   `golden_script` turns the inputs of a golden script into a script to record; the golden runner's `replay_twice` stays.
 9. **Host H0 to H3** (outside this crate): the owner actor with the queue and pipeline over real
    adapters; the broker; the event sink and CLI; the first playable path (lobby, one story scene, one
    conversation). Then the wire, the client, and the remaining machines (creation, combat, rest,
@@ -3520,14 +3617,14 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
     committed files also carry uncommitted edits, since C6 moved the applier out of `effects`.
   - **Working tree only, not committed:** C3 `pipeline` and `pipeline/` (with `TurnRecord`); C4 `pending` and
     `pending/`; C5 `projection` and `projection/`; C6 `table_state` and `table_state/`, which took over the applier
-    and the table state from `effects`; `golden` and `golden/`, the golden-session runner that C7's `replay_twice`
-    is; the host's `engine/` (H0: the owner actor over the real pipeline, adapters, group commit with an owner-enforced commit deadline, dev routes and the engine verbs) and
-    `broker/` (H1); `machine_wire.rs` (the mapper from `df_table::projection` to `MachineView`);
+    and the table state from `effects`; `golden` and `golden/`, the golden-session runner; `inspect` and `inspect/`,
+    `replay` and `replay/` (C7); the host's `engine/` (H0: the owner actor over the real pipeline, adapters, group commit with an owner-enforced commit deadline, dev routes and the engine verbs) and
+    `broker/` (H1); `scene_builder/` (SB: the scene builder, the plate scheduler's host side, the playout buffer's audit and the dev verbs `scene build`, `scene show`, `plates` and `buffer show` over the fake providers, with the pure parts in `df-table` as `scene_plan*` and `plate_*`); `adapters/` (the production `RulesOwner` over `df-rules` and the recorded `Dice`, with the
+  `rules_backend` setting and the dev verb `rules check`); `machine_wire.rs` (the mapper from `df_table::projection` to `MachineView`);
     `fixture_contract_tests.rs` and `projection_samples.rs` (K0); and the wire contract (W0, W1): `MachineView`
     and `MachineIntent` in `gameplay.proto` (modified, uncommitted), `df-api/src/machine.rs`,
     `df-protocol/tests/machine_contract.rs`, and `df-rpc-bridge`'s machine example and test.
-  - **Not built:** `inspect` (the C7 reports; there is no `inspect` module), the dialogue machine, the scene
-    builder, the Director, and the transform, animation and video steps of O.13 to O.17 (T0 rotation of elements
+  - **Not built:** the dialogue machine, the look-ahead worker (SB-LA), the Director, and the transform, animation and video steps of O.13 to O.17 (T0 rotation of elements
     is built and committed in `d30964d2`; V0 video in the library is committed in `ac050e59`).
 
   The canvas events keep their bare revision counter and carry no `Correlation`; the engine events carry `SessionRevision`
@@ -3567,13 +3664,34 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   API listens on `127.0.0.1` only, checks the Host header on every request, accepts changes only as
   JSON from a same-origin caller (so a web page cannot trigger a reload), caps a request at 16 MiB (`MAXIMUM_REQUEST_BYTES`, a named constant, scope down on a measured need), and
   every piece of text that reaches the page is escaped.
+- **Event sink (H2, built).** Every `TableEvent`, every engine line (`ENGINE`, `COMMIT`) and every broker event
+  (`RESOURCE`, `SPEND`) goes through one `HostEventSink` (`crates/df-table-host/src/observe/`, `engine/audit_fields.rs`,
+  `engine/broker_fields.rs`): its audit line (the event's own `render_audit_line`) goes to the host's log, and a structured
+  record made from the same value (typed fields flattened to text, whole numbers and flags, the correlation lifted into
+  `df.operation`, `df.turn_seq`, `df.revision.*`, `df.table`, `df.scene`, `df.machine`) goes to every outlet, both stamped
+  with one audit id. Class A is never sampled; class B is a verbose level (the default for the dev engine) and an event it
+  leaves out is counted. Outlets are bounded and count what they lose by class: the in-memory history that `history` and
+  `trace` read (1,000,000 records or 256 MiB, oldest forgotten first and counted), a JSON-lines file spool with its own writer
+  thread (when `DF_TABLE_EVENT_SPOOL` names a directory; 4 GiB, 256 MiB queued), and an adapter onto df-observe's shared
+  diagnostic path (`NativeDiagnosticSink`), tested against the real df-telemetry store. `health` shows the stream: events
+  seen by class, left out by the level, not recordable, lost by class, ingestion lag and whether the stream is degraded. Not
+  wired: the dev host does not compose the shared path (a producer identity, an ingress and a store are the composition's,
+  as in df-server), so by default records reach memory and, if asked, the spool, and no process-wide trace is started (H.10's
+  one trace per input waits for that composition); the canvas workbench's own `HostSink` (the `CANVAS` lines of `sink.rs`)
+  still writes only the log, a second path to be folded into this sink; and the `df_observe::record_audit_line` bridge is
+  deliberately not used because it appends its own keys.
 - **Playground (the display workbench).** `crates/df-playground` is a browser page, Rust compiled to
   WebAssembly, that draws the shared screen and one phone from fixture files in `assets/playground/`,
   served by the same host at `/playground` (`development/playground.sh build`, then `serve`). The page,
   theme and fixtures are plain files that redraw on save, and a rebuilt package reloads the page. The
   screen can show the running canvas live. The table-experience contract is code here, so a fixture that
   breaks it shows the break: the status copy, the caption dwell, and the choice-list rule (at most four
-  suggested choices, fixed groups, labels of at most four words).
+  suggested choices, fixed groups, labels of at most four words). *Concept components (2026-11-02, built in the
+  playground; the analysis is in `client-presentation.md`):* design tokens `--ui-*` in `theme.css`; the narration box
+  (`TvScene.narration`, in the caption layer) and the party strip as seat cards (`TvScene.seats`: looks and open seats;
+  hit points stay the party member's own and every hero is always drawn, K.13); an overlay slot for panels above the
+  world layer and outside the camera; fixtures `scene_garrick_shop` and `scene_ember_roads`. All new fields are optional
+  and additive for the projection to carry later.
 - **The dev CLI has full access (local builds only).** Hosted builds expose only the operator-safe
   verbs of H.3 and H.16: `force`, `fixture load` (H.16) and every verb that can read hidden or private content are
   operator-only and absent from hosted builds (RES43, H.3, H.16), and driven changes will carry
@@ -3589,8 +3707,10 @@ the `df-table` binary), and it is the workbench the machines and the pipeline wi
   machine for a golden session; the two are distinct and the H.16 one does not exist yet. These are
   workbench verbs. The engine verbs of H.16 that exist (`engine/cli.rs`, reached from the same command
   line) are `input`, `viable`, `dump`, `force`, `projection`, `queue`, `describe`, `broker`, `cost`, `health`,
-  `clock`, `dice` and `chaos`; the rest of H.16 (the C7 reports and the audience-level inspect verbs) arrives
-  with C7 and H2. The host, not
+  `clock`, `dice` and `chaos`, and, built with H2, `history`, `trace <operation>`, `config show|set` and
+  `replay` (the verb, its route and its typed `not_supported_yet` refusal are built; C7's replay stands behind it through the
+  `Replayer` seam of `engine/replay.rs`). The rest of H.16 is data in `df_table::inspect::Verb` (C7), and `describe` is generated from
+  it and says, for each verb, what the host has (`engine/verb_set.rs`); the table under H.16 lists what is not built. The host, not
   the page, owns what the playground shows, so the CLI and
   the browser change the same state and see each other's changes within a poll. `df-table dev playground`
   prints it and `playground set fixture=NAME device=both|tv|phone pace=slow|normal|fast status=KEY
@@ -4238,7 +4358,8 @@ and where it is accepted. It was written from a review of the plan against the c
   canvas, motion, kinds) and the C0 to C2 foundations (committed: outcome, config, envelope, owner queue,
   machine, machine_spec, machine_slot, registry, effects, lobby, explore, conformance). In the working tree,
   not committed, it also holds the pipeline (C3), pending (C4), projection (C5), table state (C6) and the
-  golden-session runner (`golden`, part of C7). There is still no `inspect` module. `df-table-host` holds the
+  golden-session runner (`golden`, part of C7), the inspect reports and the verb set (`inspect`) and recorded sessions
+  (`replay`). `df-table-host` holds the
   workbench, the owner actor (`engine/`, H0), the broker (`broker/`, H1), the wire mapper (`machine_wire.rs`)
   and the K0 contract test, all in the working tree. `df-playground` is the browser workbench. The wire has
   `MachineView` and `MachineIntent` (W0, W1): `gameplay.proto` is modified and uncommitted, and `df-api`'s
@@ -4275,7 +4396,7 @@ and where it is accepted. It was written from a review of the plan against the c
   | W0, W1 | The first `MachineView` and `MachineIntent` fields under the field ledger (RES33, RES40), the generated contract, the WASM feasibility gate of `rpc-transport.md`, and one view and one intent through the gRPC-over-WebSocket bridge. **Built 2026-11-02, on a hand-built sample view (C5 is not needed for it).** W0: `MachineView` (revision, machine id, state label, `MachineStatus` of the nine H.15 keys, optional reason, a non-blank `readout`, and a `shared_screen` or `seat` audience; the `MachineOffer`s are in the seat's view only, so the shared screen cannot carry a choice, and field 7 of the view stays reserved) and `MachineIntent` (machine id, optional offer id, one payload of tap, submit text, say, pending answer or the pause card) are at the end of `gameplay.proto`, served by `ActionService.SubmitMachineIntent` (unary, answered by a `MachineReceipt` with the four outcomes of RES16, a decline carrying the closed `RejectionCode`) and `SessionService.WatchMachine` (server stream of `MachineView`); `field-ledger.txt` was refreshed whole and sorted (about 1,200 lines, the machine records and the older gameplay ones that had drifted) and `df-tools` `schema_ledger.rs` checks it against the descriptor in both directions; guards are `df_api::machine::check_machine_view`, `check_machine_receipt`, `check_machine_response` and `admit_machine_intent` (each refusal typed, with its RPC status class, and every message bounded below the bridge's 64 KiB); the generation is the existing `build.rs` (prost and tonic-prost, vendored protoc). Not in the first fields, each additive later: `InputSpec` on offers, entity, destination and number payloads, `SnapshotStamp`, stage elements and camera on the shared screen, a private message payload. The df-table to wire mapper is written (working tree): `crates/df-table-host/src/machine_wire.rs`, whose `machine_view` maps an `AudienceProjection` (revision, machine id, state label, readout, reason, offers with their ids, the audience's view) to a `MachineView` and ends with `check_machine_view`; what the wire still lacks (the stage, colours and portraits) is listed in its module docs and `df-api` does not depend on `df-table`. `machine_wire_tests.rs` maps real projections. The W0 sample view itself is still `df_api::machine::sample`. W1 feasibility result: PASS for one view and one intent. Native: `crates/df-rpc-bridge/tests/machine_round_trip.rs` (generated tonic clients over a loopback WebSocket, native HTTP/2 inside bounded binary messages, one connection). Browser: the Rust/WASM example `crates/df-rpc-bridge/examples/machine_browser.rs` through `BrowserChannel` against `examples/machine_bridge_server.rs` on an ephemeral loopback port, repeatable with `development/machine-browser.sh` (builds both, serves on an ephemeral loopback port, loads the page in headless Edge or Chrome and exits 0 on the page's own PASS report; also run by hand in the Claude desktop browser pane, Chromium 152, Windows ARM64 host, wasm-bindgen 0.2.129, h2 and tonic 0.14.6 as locked): watch, tap with receipt and the next view on the same stream, a decline by utterance id, and an `InvalidArgument` call failure all passed. Not verified, so the G02 gate of `rpc-transport.md` stays open: client-streaming and bidirectional calls with machine messages (no such methods exist; `TransportFixture` covers the four modes), deadlines, cancellation and half-close in a browser, iOS and Android browsers, receive-memory measurement, and the origin and credential admission. `protocol_service_inventory.rs` and `schema_ledger.rs` in `df-tools` were red before this work (a stale inventory and a ledger missing later gameplay messages); both are refreshed to the current descriptor and pass (#1681). | C5 | K0 | the bridge round trip in a browser; field ledger entry |
   | C4 | Pending and windows, two-phase apply, held turns, rulings | C5 | C6 | O.9 acceptance (M2-D4 to D7, restart without redraw) |
   | C6 | Table state and scenes (epochs, seats and presence, the hand-off stack) | C3 | C4 | O.9 acceptance. **Built 2026-11-02** (92 tests; the O.9 C6 note lists the decisions). Open: the pipeline folds `TableState::digest` into its `state_hash` and drives the active machine, the stack and `reconcile_lanes` through the table state (#1682, #1683, #1691), and `idle_minutes` is not a setting yet |
-  | C7 | Inspect and replay | C4, C6 | H1 | a recorded session replays to the same state hash |
+  | C7 | Inspect and replay | C4, C6 | H1 | a recorded session replays to the same state hash. **Built 2026-11-02** (61 tests; the O.9 C7 note lists the decisions) |
   | H1 | The broker (the rebuilt `Hub` with text and image kinds, queue classes, leases and epochs) | H0 | C4 to C7 | the broker's own tests; every service call audited at one place |
   | H2 | The event sink to `df-observe` and the full CLI verb set (H.16) | H0 | H1 | the audit lines and `dump`, `viable`, `projection show` on a real run |
   | H3 | The first playable path: lobby, one story scene, one conversation, on a TV and a phone | C4 to C7, W1, K0, H1, H2 | T and V steps | RES44: an evaluator operates the TV and a phone; S1 rerun with the real projection |
@@ -4298,11 +4419,11 @@ and where it is accepted. It was written from a review of the plan against the c
   and *not started* say what they say.
   - B0 done (`ef6b863c`). RR done (the table is in `cb990ccf`). C0 done (`a2c0a937`). C1 done (`f22db84a`). C2 done
     (`f22db84a`; its files also carry uncommitted C6 edits). C3 built. C4 built. C5 built. C6 built.
-    C7 in progress (`golden` runner and `TurnRecord` built; no `inspect`).
+    C7 built (`inspect`, `replay`, `TurnRecord` and the `golden` runner; the O.9 C7 note lists the decisions).
   - S1 built (harness in `df13fff9`; the result text is uncommitted). S2 done (the result is in the committed plan).
-  - H0 built (owner actor over the real pipeline; group commit formed from the mailbox, the owner enforcing the commit deadline; panics surfaced typed; review issues #1708 to #1715 fixed). H1 built (`broker/`: four classes, epochs, leases, deadlines enforced at claim and at answer; #1710, #1711, #1720 fixed). Not yet: a store that is not in memory (the commit store is a port with an in-memory and a scripted implementation) and an operation memory beyond the results the pipeline saves in each checkpoint. H2 in progress (engine verbs in `engine/cli.rs`; no df-observe sink). H3 not started.
+  - H0 built (owner actor over the real pipeline; group commit formed from the mailbox, the owner enforcing the commit deadline; panics surfaced typed; review issues #1708 to #1715 fixed). H1 built (`broker/`: four classes, epochs, leases, deadlines enforced at claim and at answer; #1710, #1711, #1720 fixed). Not yet: a store that is not in memory (the commit store is a port with an in-memory and a scripted implementation) and an operation memory beyond the results the pipeline saves in each checkpoint. H2 built (the event sink and its outlets in `observe/`, the shared-path adapter tested against the real telemetry store, and `history`, `trace`, `config`, `replay` as a seam, with `describe` generated from C7's verb set; see the event sink under O.12 and the table under H.16; not wired: the shared path in the dev host, spans, and the pending and rulings verbs). H3 not started.
   - W0 built. W1 built (browser result recorded above). K0 built.
-  - SB not started. SB-LA not started. G1 not started. G2 not started. G3 not started.
+  - SB built over the fake providers (pure parts in `df-table` as `scene_plan*` and `plate_*`, 82 tests; host `scene_builder/`, 56 tests). The stages Describe, Background, Plate and Locate are four kinds of stored, audited broker request (`describe`, `background`, `plate` and `locate`; Locate is added here at USD 0.01 a request, one request for each prompt, deadline 30 s, and it joins the plate class), and Ready asks for nothing: it hands the plate and its anchors to the buffer. A stage starts only from a stored output, and a result for a scene that moved on is rejected by `judge_result`. Locate follows the S2 policy (the people once, each item by up to three phrases in rounds, the nearest instance, each instance to one person, an item that no phrase finds falls back to its own picture, a person or item with neither is `Unlocated` at an explicit fallback point, never dropped). The plate scheduler skips a quiet table, an overlay-only change, a paused table and a scene with no viewer, keeps a queue of four and never bursts after a stall. The playout buffer shows plates in order one interval apart and swaps only at a line boundary, reports slot lateness and job age apart, and never shows another scene or generation. The establishing card falls due after `scene_build_budget_s` (20 s for the first scene). The cost view and the verbs `scene build`, `scene show`, `plates` and `buffer show` are in `/dev/engine/scene/*`. Open: the five timings are `PlateTiming`, not yet `config` settings; Locate has no `Fallback` variant of its own in the broker (it uses `Nothing`); the SAM answer travels as closed JSON in a text result; no real worker, media store or durable stage store yet; the engine owner does not call `ScenePacer` yet. SB-LA not started (the seam is `BuildPriority::Lookahead` and the `lookahead_*` purposes). G1 not started. G2 not started. G3 not started.
   - T0 done (`d30964d2`). T1 not started. T2 not started. T3 not started. T4 not started. T5 not started. T6 not started.
   - V0 done (`ac050e59`). V1 not started (the library holds videos; the page does not play them yet).
     V2 not started. V3 not started. V4 not started. V5 not started.
@@ -4322,8 +4443,8 @@ and where it is accepted. It was written from a review of the plan against the c
   | lobby | none from the rules owner (seats, readiness, start gate) | `df_session::lobby::decide_start`, `readiness::decide_ready_change` (tests in both); the machine reads them as a model and does not depend on `df-session`: it keeps readiness and the all-ready gate and declines with the first reason where `decide_start` returns every blocker, and the campaign, character, display, funding and authorized-only blockers stay with the host and creation | session-zero lines and veils (F.7) have no code; not a rules matter | none; D.4, F.7 | ready | none |
   | creation | options list, submit, validate (E row R01) | `local_journey::validate_character`, `tactical::validate_archer`, `species::choice_groups`, `maximum_hit_points` | `validate_build` and an options-listing function are tracked work items, not code (#1596); options are constants only; `validate_character` returns the first error only, not `reasons[]`; Fighter 1 and Soldier only | Class features (thin), Species (thin); R01 to R03, M2-D50 | partial | `local_journey::creation_offers()` over the existing constants; `validate_character` returning every reason |
   | advancement | award to level-up offers, HP average or roll, ASI, XP or milestone (R02, R16) | `Battle::experience_award` (CR to XP), `FighterProgression::new` (1 to 5) and `apply`, `LEVEL_FIVE_BUILDS` | no XP threshold table; `AwardId` is a name only; ASI and HP average are fixed in `apply`, no `pending{choice}` (D30); Fighter only | XP (thin), Class features (thin); R02, R16, M2-D30 | partial | `local_journey::level_for_xp` (SRD p.23) and `FighterProgression::offers` (HP average or roll, level-4 ASI) |
-  | explore | affordance lookup, `CheckRequest`, spatial query, time cost, passive checks, hide and search | `df_world::lookup_affordances` (caller-supplied bindings), `ability_check::resolve`, `df_world::select_due_events` and `stage_schedule_advancement` | check: no Advantage, passive, group or Help; spatial query only inside a `Battle`; no per-cell light, elevation or terrain kind (D.6); no Hide, Search, traps, falling; no action time cost | Exploration and travel (thin in code), Vision and light (thin), Traps and hazards (thin); M2-D17, D23, D32, D41, D42 | ready for the minimal explore (authored beat plus one check); partial beyond | `RollMode` and a second face in `ability_check::resolve` (reuse `influence::combine_sources`); unblocks passive and Help |
-  | dialogue | Influence resolution (RES47), `CheckRequest`, attitude and willingness | `influence::resolve` with explicit faces, `skill_for_approach`, `combine_sources`, 24 hour retry, `InfluenceResult::explanation` | willingness and attitude are caller inputs (EMO owns them); no fear or mental stress; no Help or group check outside combat | Social (thin: fear, stress); RES47, M2-D21 | ready | none for the first conversation; Help and group check (D21) later |
+  | explore | affordance lookup, `CheckRequest`, spatial query, time cost, passive checks, hide and search | `df_world::lookup_affordances` (caller-supplied bindings), `ability_check::resolve`, `df_world::select_due_events` and `stage_schedule_advancement`; **the production adapter (host `adapters/rules.rs`, 2026-11-02) backs `ability_check::resolve` for a registered skill check** with one explicit d20, the 18 SRD skills and an authored DC, and calls none of the others (the port has no spatial, rest or time-cost method yet, and `df-world` needs state the port does not carry) | check: no Advantage, passive, group or Help; spatial query only inside a `Battle`; no per-cell light, elevation or terrain kind (D.6); no Hide, Search, traps, falling; no action time cost | Exploration and travel (thin in code), Vision and light (thin), Traps and hazards (thin); M2-D17, D23, D32, D41, D42 | ready for the minimal explore (authored beat plus one check); partial beyond | `RollMode` and a second face in `ability_check::resolve` (reuse `influence::combine_sources`); unblocks passive and Help |
+  | dialogue | Influence resolution (RES47), `CheckRequest`, attitude and willingness | `influence::resolve` with explicit faces, `skill_for_approach`, `combine_sources`, 24 hour retry, `InfluenceResult::explanation`; **the production adapter backs `influence::resolve`** through an authored `InfluenceSetup` entry (attitude, Intelligence, willingness and the words' tilt are set when the action is registered, because the port carries no per-input context; the 24 hour retry is a fact, since no `TableEffect` locks an urging yet) | willingness and attitude are caller inputs (EMO owns them); no fear or mental stress; no Help or group check outside combat | Social (thin: fear, stress); RES47, M2-D21 | ready | none for the first conversation; Help and group check (D21) later |
   | travel | leg data, pace and terrain, time cost, hazard proposals, Exhaustion, checks (F.3, F.3a) | `df_model::TravelLeg` (a record only), `df_world::stage_schedule_advancement` for passing time, `ability_check::resolve` | no travel rules at all (pace, terrain table, vessel, forage, navigation, weather); no Exhaustion; hazards are only `df_encounter::ChallengeMode::Hazard` labels over authored sources | Exploration and travel (plan-owned, no code), Traps and hazards (thin), Exhaustion (no code); M2-D43 to D45 | blocked | `df_rules::travel::leg_outcome(terrain, pace, hours)`: miles and the forage, navigation and search DCs (SRD p.192) |
   | rest | rest start and time cost, interruption, Hit Dice loop, recovery effects, 16 hour gap, attunement (R13) | `local_journey::short_rest_due`, `complete_no_hit_dice_short_rest` (`RestInterrupted`, `RestIncomplete`), `heal_hit_point_die`; `tactical::Action::ShortRest`, `LongRest`, `StableRecovery` | Long Rest only in a finished `Battle`; no Hit Dice pool, Short Rest spends none; interruption is a caller flag; no 16 hour gap, Exhaustion, Trance, attunement | Rests, Exhaustion (plan-owned); M2-D14, D29, D46, D48, D50 | partial | standalone `complete_long_rest` with a Hit Dice pool and the 16 hour gap as an input |
   | combat | legal choices, `prepare` and `resolve` with draws, spatial query, initiative, reactions, enemy turns, outcome (F.1) | `tactical::begin`, `tactical::resolve` (move, attack, opportunity window, Dash, Dodge, Help, Second Wind, death save), `Battle::legal_targets`, `reachable_cells`; `df_combat::tactical::choose` | no producer of an actor's full legal action list; no spells, Ready, Hide, Search, grapple, shove, surprise, general Resistance; Fighter heroes and 17 SRD creatures only; no flee or surrender outcome | Initiative, Actions, Reactions, Movement, Cover owned; Conditions, Bonus actions, Monsters, Damage types thin; Spellcasting none; M2-D1, D8, D33 to D35, D37, D47 | partial (closest to ready) | `tactical::legal_actions(&Battle, actor)`: the actions that pass the `resolve(.., &[])` probe `df-combat` already uses |
@@ -4436,7 +4557,14 @@ and where it is accepted. It was written from a review of the plan against the c
   the `TurnRecord` carries no commit identity (what the turn did, the draws, the effects and the state
   digests before and after), and the host stamps the commit id and the table's revision once for the
   batch (`PipelineTable::stamp_commit_revision`), so a batch of N inputs and N batches of one end in
-  the same state digest (a property test), and a commit failure fails the whole batch with a typed cause (no input
+  the same state digest (a property test with the host's own stamping, once per batch in one arm
+  and after each input in the other): "the same" means the digest of the table **without the commit
+  stamps** (`PipelineTable::state_hash`: the facts without the revision and the pause stamp, the memory
+  of applied operations, every book and the views the table shows, with no clock reading and no commit
+  id; a commit id is not an operation and is never put in the operation memory). A batch that only
+  declined changes what the views show and nothing a checkpoint must keep (`durable_hash`), so the
+  host writes none for it. A refused batch is undone by the checkpoint and by giving its dice back, and
+  the same inputs then give equal records (stages are re-entrant), and a commit failure fails the whole batch with a typed cause (no input
   is reported applied that was not committed). The one-commit-per-input wording of L.7 and H.5 is amended
   to "one commit per drained batch, at least one per input burst". The commit has a deadline
   (`commit_deadline_ms`, a setting with a large default, tuned from measurement) after which the batch is
