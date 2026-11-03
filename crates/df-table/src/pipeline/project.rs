@@ -54,7 +54,7 @@ impl Pipeline<'_> {
             None => self.readout_text(&turn, table, &outcome),
         };
         let readout = Readout::new(text);
-        if !turn.replayed {
+        if !turn.replayed && !turn.is_unidentified() {
             let stored = stored_outcome(&turn, &outcome, readout.as_str());
             let key = turn.result_key();
             if turn.committed {

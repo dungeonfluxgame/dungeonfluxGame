@@ -328,6 +328,12 @@ impl<'a> Pipeline<'a> {
         let operation = envelope.operation_id();
         // An operation id means something only together with its sender and that sender's
         // membership: another seat's id, or the id of a seat's earlier occupant, is a new input.
+        if turn.is_unidentified() && !self.may_join_unseated(&turn, table, envelope) {
+            // A seat that never sat has no membership to keep a result under; only the action a
+            // machine declares for an unseated seat (the lobby's join) may run for it.
+            let outcome = Outcome::Declined(Decline::with_default_reason(DeclineCode::NotViable));
+            return self.finish(turn, table, outcome);
+        }
         let key = turn.result_key();
         let remembered = table.results().find(key).or_else(|| table.ends().find(key));
         if let Some(stored) = remembered {
@@ -349,6 +355,23 @@ impl<'a> Pipeline<'a> {
             InputOrigin::Engine(input) => engine::run_engine(&mut turn, table, input),
         };
         self.finish(turn, table, outcome)
+    }
+
+    /// Whether the input is the action the active machine declares for a seat that is not at the
+    /// table, the one way a seat that never sat can become seated.
+    fn may_join_unseated(
+        &self,
+        turn: &Turn<'_, '_>,
+        table: &PipelineTable,
+        envelope: &InputEnvelope,
+    ) -> bool {
+        match envelope.origin() {
+            InputOrigin::Player {
+                input: crate::envelope::PlayerInput::Tap { action },
+                ..
+            } => admit::declared_for_unseated(turn, table, action),
+            InputOrigin::Player { .. } | InputOrigin::Engine(_) => false,
+        }
     }
 
     fn run_player(

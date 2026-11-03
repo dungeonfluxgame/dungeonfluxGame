@@ -2,12 +2,15 @@
 //! every commit that changes the world moves it.
 
 use crate::effects::{BeatName, TableEffect};
+use crate::envelope::Sender;
+use crate::pipeline::ResultKey;
 use crate::table_state::{
     CastChange, ConditionName, Presence, SplitPolicy, TableState, Visibility,
 };
 use crate::table_state_tests::{
     apply, creature, element, hero, machine, scene, seat, set_active, slot_with, table_in_scene_ten,
 };
+use crate::testkit::correlation;
 
 /// A table with a hero, a creature, an active machine and one frame on the stack, which allows a
 /// split so a seat can move.
@@ -307,4 +310,71 @@ fn the_split_policy_and_the_seat_capacity_are_part_of_the_digest() {
     let small = TableState::seated(2, &[seat(1)]).unwrap();
     let large = TableState::seated(3, &[seat(1)]).unwrap();
     assert_ne!(small.digest(), large.digest());
+}
+
+#[test]
+fn each_period_a_seat_spends_away_has_a_membership_of_its_own() {
+    let mut table = table_in_scene_ten();
+    let sender = Sender::Seat(seat(2));
+    let seated = table.membership_of(sender);
+    assert_ne!(seated, 0);
+
+    apply(&mut table, 2, &[TableEffect::SeatLeft { seat: seat(2) }]).unwrap();
+    let first_away = table.membership_of(sender);
+    apply(&mut table, 3, &[TableEffect::SeatJoined { seat: seat(2) }]).unwrap();
+    let rejoined = table.membership_of(sender);
+    apply(&mut table, 4, &[TableEffect::SeatLeft { seat: seat(2) }]).unwrap();
+    let second_away = table.membership_of(sender);
+
+    let held = [seated, first_away, rejoined, second_away];
+    for (index, membership) in held.iter().enumerate() {
+        assert_ne!(*membership, 0, "period {index} is named");
+        for other in &held[index + 1..] {
+            assert_ne!(membership, other, "no two periods share a membership");
+        }
+    }
+    assert_eq!(
+        table.membership_of(Sender::Seat(seat(9))),
+        0,
+        "never seated"
+    );
+    assert_eq!(table.membership_of(Sender::Engine), 0);
+    let operation = correlation(1).operation_id;
+    assert_ne!(
+        ResultKey::new(sender, first_away, operation),
+        ResultKey::new(sender, second_away, operation),
+    );
+}
+
+#[test]
+fn the_departed_memberships_are_part_of_the_digest() {
+    let leave_in_order = |order: [u64; 2]| {
+        let mut table = table_in_scene_ten();
+        let effects: Vec<TableEffect> = order
+            .iter()
+            .map(|number| TableEffect::SeatLeft {
+                seat: seat(*number),
+            })
+            .collect();
+        apply(&mut table, 2, &effects).unwrap();
+        table
+    };
+    let one_then_two = leave_in_order([1, 2]);
+    let two_then_one = leave_in_order([2, 1]);
+
+    assert_eq!(one_then_two.digest(), leave_in_order([1, 2]).digest());
+    assert_eq!(
+        one_then_two.digest_without_stamps(),
+        leave_in_order([1, 2]).digest_without_stamps()
+    );
+    assert!(one_then_two.same_world_as(&two_then_one));
+    assert_ne!(
+        one_then_two.digest(),
+        two_then_one.digest(),
+        "which seat left first is part of who each seat was while away"
+    );
+    assert_ne!(
+        one_then_two.digest_without_stamps(),
+        two_then_one.digest_without_stamps()
+    );
 }

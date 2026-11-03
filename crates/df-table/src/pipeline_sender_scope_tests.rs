@@ -8,7 +8,7 @@ use crate::effects::TableEffect;
 use crate::envelope::{InputEnvelope, InputKind, PlayerInput, Sender, ViewStamp};
 use crate::golden::{CountingDice, TABLE, World};
 use crate::identity::TableScope;
-use crate::outcome::Outcome;
+use crate::outcome::{DeclineCode, Outcome};
 use crate::pipeline::{
     BookLoadError, PipelineLimits, PipelineLoadError, PipelineRecord, PipelineTable, ResultBook,
     ResultKey, ResultRecord, TurnResult,
@@ -164,11 +164,15 @@ fn a_duplicate_from_the_same_sender_gets_the_original_without_drawing_again() {
 }
 
 #[test]
-fn a_declined_input_is_kept_per_sender_too() {
+fn a_seat_that_never_sat_is_declined_and_nothing_is_kept_for_it() {
     let mut world = world(&[]);
     let refused = tap(1, 9, "wave");
+    assert_eq!(world.table.facts().membership_of(refused.sender()), 0);
     let first = send(&mut world, &refused, 1);
     assert!(matches!(first.outcome, Outcome::Declined(_)));
+    assert_eq!(first.record.declined, Some(DeclineCode::NotViable));
+    assert!(world.table.results().is_empty());
+    assert!(world.table.ends().is_empty());
 
     let waved = send(&mut world, &tap(1, 1, "wave"), 1);
 
@@ -178,8 +182,50 @@ fn a_declined_input_is_kept_per_sender_too() {
     );
     assert_eq!(waved.outcome, Outcome::Applied);
     let again = send(&mut world, &refused, 1);
-    assert!(again.record.replayed);
+    assert!(
+        !again.record.replayed,
+        "nothing was kept for the sender, so nothing is replayed"
+    );
     assert_eq!(again.readout, first.readout);
+    assert_eq!(again.record.declined, Some(DeclineCode::NotViable));
+    let zero = ResultKey::new(refused.sender(), 0, refused.operation_id());
+    assert!(world.table.ends().find_stored(zero).is_none());
+    assert!(world.table.results().find_stored(zero).is_none());
+}
+
+#[test]
+fn two_periods_a_seat_spent_away_never_share_a_result_key() {
+    let mut world = world(&[]);
+    let probe = tap(1, 2, "wave");
+
+    change_table(&mut world, 1, &[TableEffect::SeatLeft { seat: seat(2) }]);
+    let first_key = key_of(&world, &probe);
+    let first = send(&mut world, &probe, 1);
+    assert!(matches!(first.outcome, Outcome::Declined(_)));
+    assert!(
+        world.table.ends().find_stored(first_key).is_some(),
+        "the first period away keeps its decline under its own membership"
+    );
+
+    change_table(&mut world, 2, &[TableEffect::SeatJoined { seat: seat(2) }]);
+    change_table(&mut world, 3, &[TableEffect::SeatLeft { seat: seat(2) }]);
+    let second_key = key_of(&world, &probe);
+    assert_ne!(first_key, second_key);
+    assert_ne!(
+        world.table.facts().membership_of(probe.sender()),
+        0,
+        "a seat that sat holds a membership of its own while away"
+    );
+    assert!(
+        world.table.ends().find_stored(second_key).is_none(),
+        "the second period away does not read the first one's decline"
+    );
+    let second = send(&mut world, &probe, 1);
+    assert!(
+        !second.record.replayed,
+        "the second period's input ran; it is not the first period's duplicate"
+    );
+    assert!(world.table.ends().find_stored(second_key).is_some());
 }
 
 #[test]
@@ -191,14 +237,13 @@ fn a_rejoined_seat_does_not_see_the_previous_occupants_stored_outcome() {
     assert_ne!(before, 0);
 
     change_table(&mut world, 1, &[TableEffect::SeatLeft { seat: seat(2) }]);
-    assert_eq!(
-        world.table.facts().membership_of(Sender::Seat(seat(2))),
-        0,
-        "a seat that is not at the table holds no membership"
-    );
+    let away = world.table.facts().membership_of(Sender::Seat(seat(2)));
+    assert_ne!(away, 0, "the time away is a period of its own");
+    assert_ne!(away, before, "the time away is not the seated period");
     change_table(&mut world, 2, &[TableEffect::SeatJoined { seat: seat(2) }]);
     let after = world.table.facts().membership_of(Sender::Seat(seat(2)));
     assert!(after > before, "a join is a new membership");
+    assert!(after > away, "a join is a new membership");
 
     // The new occupant sends the id the old one used, for a different action.
     let rolled = tap(1, 2, "roll");
@@ -216,6 +261,17 @@ fn a_rejoined_seat_does_not_see_the_previous_occupants_stored_outcome() {
             .facts()
             .has_applied(Sender::Seat(seat(2)), &rolled.operation_id()),
         "the new membership's own operation is remembered"
+    );
+    let own =
+        |membership: u64| ResultKey::new(Sender::Seat(seat(2)), membership, waved.operation_id());
+    assert!(
+        world.table.results().find_stored(own(before)).is_some(),
+        "the earlier membership's result is still its own, under its own key"
+    );
+    assert_ne!(
+        world.table.results().find_stored(own(after)),
+        world.table.results().find_stored(own(before)),
+        "the rejoined seat's key holds its own result, not what was stored before the leave"
     );
 }
 

@@ -134,6 +134,12 @@ impl<'t, 'p> Turn<'t, 'p> {
         }
     }
 
+    /// Whether the sender is a seat that never sat at this table: its membership is zero, which
+    /// names no period of any seat, so nothing it sends can be remembered or replayed under it.
+    pub(super) fn is_unidentified(&self) -> bool {
+        matches!(self.sender, Sender::Seat(_)) && self.membership == 0
+    }
+
     /// What this input's result is remembered under.
     pub(super) fn result_key(&self) -> ResultKey {
         ResultKey::new(self.sender, self.membership, self.correlation.operation_id)

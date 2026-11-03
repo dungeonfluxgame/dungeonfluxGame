@@ -120,7 +120,11 @@ pub(super) fn admit<'i>(
 }
 
 /// Whether the active machine lets a seat that is not at the table send this action.
-fn declared_for_unseated(turn: &Turn<'_, '_>, table: &PipelineTable, action: &ActionId) -> bool {
+pub(super) fn declared_for_unseated(
+    turn: &Turn<'_, '_>,
+    table: &PipelineTable,
+    action: &ActionId,
+) -> bool {
     table
         .running_machine()
         .and_then(|id| turn.pipeline.registry.machine(&id))

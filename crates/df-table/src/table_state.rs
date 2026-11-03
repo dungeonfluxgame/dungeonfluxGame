@@ -123,9 +123,13 @@ struct AppliedKey {
 struct AppliedOperations {
     members: BoundedMap<AppliedKey, AppliedKey>,
     digest: u64,
-    /// The membership of each seated seat: the number its join was given. A seat that left has
-    /// none, so an input it sends is stamped zero, which no seated seat holds.
+    /// The membership of each seated seat: the number its join was given.
     memberships: BTreeMap<SeatId, u64>,
+    /// The membership of each seat that left and has not come back: a number drawn from
+    /// `next_membership` when it left, which no seat ever held or will hold, so the period a seat
+    /// spent away from the table is its own and shares no key with another period. A seat that
+    /// never sat has no entry and stays at zero, which no seat holds.
+    departed: BTreeMap<SeatId, u64>,
     /// The membership the next join is given; it only grows, so a rejoined seat never repeats one.
     next_membership: u64,
 }
@@ -136,6 +140,7 @@ impl AppliedOperations {
             members: BoundedMap::holding_at_most(maximum),
             digest: 0,
             memberships: BTreeMap::new(),
+            departed: BTreeMap::new(),
             next_membership: 0,
         }
     }
@@ -144,6 +149,7 @@ impl AppliedOperations {
     fn forgetting_operations(self, maximum: usize) -> Self {
         Self {
             memberships: self.memberships,
+            departed: self.departed,
             next_membership: self.next_membership,
             ..Self::remembering(maximum)
         }
@@ -156,7 +162,7 @@ impl AppliedOperations {
     }
 
     /// The bound, the digest of the remembered keys (which does not depend on the order they were
-    /// applied in) and the memberships, in seat order.
+    /// applied in), the memberships and the departed memberships, each in seat order.
     fn digest_into(&self, digest: &mut Digest) {
         digest.count(self.members.maximum());
         digest.count(self.members.len());
@@ -167,12 +173,22 @@ impl AppliedOperations {
             digest.number(seat.get());
             digest.number(*membership);
         }
+        digest.count(self.departed.len());
+        for (seat, membership) in &self.departed {
+            digest.number(seat.get());
+            digest.number(*membership);
+        }
     }
 
     fn membership_of(&self, sender: Sender) -> u64 {
         match sender {
             Sender::Engine => 0,
-            Sender::Seat(seat) => self.memberships.get(&seat).copied().unwrap_or(0),
+            Sender::Seat(seat) => self
+                .memberships
+                .get(&seat)
+                .or_else(|| self.departed.get(&seat))
+                .copied()
+                .unwrap_or(0),
         }
     }
 
@@ -203,12 +219,19 @@ impl AppliedOperations {
 
     /// Gives a seat a membership of its own: a join starts a new one.
     fn seat_joined(&mut self, seat: SeatId) {
+        self.departed.remove(&seat);
         self.next_membership = self.next_membership.saturating_add(1);
         self.memberships.insert(seat, self.next_membership);
     }
 
+    /// A seat that leaves is given a membership of its own for the time it is away, so what it
+    /// sends then never meets what it sent in another period. A seat that was not seated has
+    /// nothing to leave.
     fn seat_left(&mut self, seat: SeatId) {
-        self.memberships.remove(&seat);
+        if self.memberships.remove(&seat).is_some() {
+            self.next_membership = self.next_membership.saturating_add(1);
+            self.departed.insert(seat, self.next_membership);
+        }
     }
 }
 
@@ -364,8 +387,9 @@ impl TableState {
     }
 
     /// The membership of a sender: zero for the engine, the number a seat's last join was given
-    /// for a seated seat (it changes each time the seat joins, as the owner queue's does), and
-    /// zero for a seat that is not at the table.
+    /// for a seated seat (it changes each time the seat joins, as the owner queue's does), the
+    /// number its leaving was given for a seat that left (each period away is its own), and zero
+    /// only for a seat that never sat at this table.
     pub fn membership_of(&self, sender: Sender) -> u64 {
         self.applied.membership_of(sender)
     }
