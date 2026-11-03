@@ -27,6 +27,7 @@ fn input(body: InputBody) -> EngineCommand {
         operation: None,
         operation_id: None,
         view: None,
+        machine: None,
     })
 }
 

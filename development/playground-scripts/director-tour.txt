@@ -1,0 +1,30 @@
+# The Director's camera: directions with reasons, what holds them back, and the return.
+# Needs the playground host running (df-table serve) and the avatar kind (assets/canvas/kinds).
+# The Director has a clock of its own and `director advance` moves it, so a hold ends and a
+# waiting direction starts without any wait here.
+playground go camera_demo
+scene reset
+clear
+spawn avatar finn x=30 y=30 name=Finn color=#d9a441 portrait=finn-alder.webp
+spawn avatar sigrun x=70 y=26 name=Sigrun color=#7da35b portrait=sigrun.webp
+spawn avatar lurker x=50 y=40 name=Lurker color=#555555
+director view clear
+director view hero finn
+director view hide lurker
+camera focus finn reason=speaker
+camera focus sigrun reason=speaker
+director advance 800
+camera focus lurker reason=hit
+camera focus sigrun reason=hit
+director show
+director end hit sigrun
+director advance 1000
+camera focus finn reason=reveal hold=2000
+director advance 2000
+director view hide sigrun
+director view unhide sigrun
+director advance 1000
+camera focus sigrun reason=arrival
+director view hide sigrun
+director show
+director view clear

@@ -134,8 +134,8 @@ const FAMILY_VERBS_WAITING: [(&str, &str); 4] = [
         "the creation and advancement machines (O.16 row M)",
     ),
     (
-        "camera focus|wide|frame|follow | director show|pause|resume|auto | scene state",
-        "the Director's camera stage (O.14, G1)",
+        "camera frame|follow | director auto slide|cue | scene state",
+        "camera frame is O.13 T4 (G4) and camera follow needs the travelling elements of G2; the slide and cue classes of `director auto` come with their stages (A1, V4); scene state reads what the machines put on the screen (G2). `camera focus|wide` and `director show|pause|resume|auto camera|advance|end|start|view` are built (G1)",
     ),
     (
         "dump <machine|table> naming a machine or the table",

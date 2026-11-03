@@ -45,6 +45,11 @@ pub struct InputRequest {
     pub operation_id: Option<u128>,
     #[serde(default)]
     pub view: Option<u64>,
+    /// The machine the sender drew the input from (a wire intent names it). When given and the
+    /// table's focus is another machine, the input is declined `window_closed` (a stale offer)
+    /// and not run. Left out, nothing is compared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// Moves the table to `machine` in `state`. `payload` is the machine's saved state, for a state

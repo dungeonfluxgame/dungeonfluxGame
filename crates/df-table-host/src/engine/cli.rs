@@ -294,6 +294,7 @@ fn input(words: &[String]) -> Result<EngineCommand, CommandError> {
         operation,
         operation_id: None,
         view,
+        machine: None,
     }))
 }
 

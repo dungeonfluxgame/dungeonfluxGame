@@ -148,6 +148,7 @@ pub fn request(input: InputBody) -> InputRequest {
         operation: None,
         operation_id: None,
         view: None,
+        machine: None,
     }
 }
 
@@ -357,11 +358,43 @@ type StoryPorts = (
     Arc<dyn df_table::ports::Dice>,
 );
 
+/// The story table over the dev rules owner and dice, started with the options a test chooses
+/// (held, a commit script, the J.4 seat limits).
+pub fn story_rig_options(options: RigOptions) -> Rig {
+    let store = Arc::new(ScriptedCommitStore::scripted(options.script.clone()));
+    story_rig_started(options, store, no_dice)
+}
+
+/// The story table over a store the test keeps, so a second engine can be started over the same
+/// store, as a restart of the host is.
+pub fn story_rig_on(store: Arc<ScriptedCommitStore>) -> Rig {
+    story_rig_started(RigOptions::default(), store, no_dice)
+}
+
+fn no_dice(machines: &super::setup::Machines) -> StoryPorts {
+    let urging = machines
+        .urge
+        .clone()
+        .expect("the story table has an urging");
+    (
+        Arc::new(DevRulesOwner::new(machines.check.clone()).with_urging(urging)),
+        Arc::new(DevDice::queued_then_seeded(std::iter::empty(), 7)),
+    )
+}
+
 fn story_rig_over(ports: impl FnOnce(&super::setup::Machines) -> StoryPorts) -> Rig {
     let options = RigOptions::default();
+    let store = Arc::new(ScriptedCommitStore::scripted(Vec::new()));
+    story_rig_started(options, store, ports)
+}
+
+fn story_rig_started(
+    options: RigOptions,
+    store: Arc<ScriptedCommitStore>,
+    ports: impl FnOnce(&super::setup::Machines) -> StoryPorts,
+) -> Rig {
     let clock = Arc::new(ManualClock::default());
     let log = Arc::new(EventLog::default());
-    let store = Arc::new(ScriptedCommitStore::scripted(Vec::new()));
     let story = EngineConfig {
         story: true,
         ..config(&options)

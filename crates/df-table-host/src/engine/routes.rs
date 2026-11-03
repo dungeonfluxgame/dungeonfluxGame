@@ -137,10 +137,15 @@ const DEV_DICE_SEED: u64 = 20_261_102;
 
 fn status_of(error: &EngineError) -> StatusCode {
     match error {
-        EngineError::MailboxFull | EngineError::Stopped | EngineError::NotStarted { .. } => {
-            StatusCode::SERVICE_UNAVAILABLE
-        }
-        EngineError::NoAnswer | EngineError::Unwritable { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        EngineError::MailboxFull
+        | EngineError::Stopped
+        | EngineError::NotStarted { .. }
+        | EngineError::Stalled
+        | EngineError::NotServedYet => StatusCode::SERVICE_UNAVAILABLE,
+        EngineError::TooFast { .. } => StatusCode::TOO_MANY_REQUESTS,
+        EngineError::NoAnswer
+        | EngineError::Unwritable { .. }
+        | EngineError::ViewUnavailable { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         EngineError::NotSupportedYet { .. } => StatusCode::NOT_IMPLEMENTED,
         _ => StatusCode::BAD_REQUEST,
     }

@@ -374,6 +374,21 @@ pub enum EngineError {
     ReplayFailed {
         reason: String,
     },
+    /// Too much, too fast (a rate limit or a seat with its inputs waiting): retry after the
+    /// pause, when the queue gave one.
+    TooFast {
+        retry_after_ms: Option<u64>,
+    },
+    /// A lane is full: a stall and not a decline (RES22). Retry the same operation id later.
+    Stalled,
+    /// A view could not be made: the table has no running machine, or its projection or its wire
+    /// mapping failed. A fault of the host, never of the caller.
+    ViewUnavailable {
+        what: String,
+    },
+    /// The input is admitted and waits (the owner is holding, or it is queued behind others):
+    /// nothing has run for it yet, so there is no answer. Retry the same operation id.
+    NotServedYet,
 }
 
 impl fmt::Display for EngineError {
@@ -422,6 +437,20 @@ impl fmt::Display for EngineError {
             }
             Self::UnknownLog { log } => write!(formatter, "there is no turn log '{log}'"),
             Self::ReplayFailed { reason } => write!(formatter, "the replay failed: {reason}"),
+            Self::TooFast {
+                retry_after_ms: Some(retry_after_ms),
+            } => write!(
+                formatter,
+                "too many inputs too fast; retry in {retry_after_ms} ms"
+            ),
+            Self::TooFast {
+                retry_after_ms: None,
+            } => formatter.write_str("too many inputs too fast"),
+            Self::Stalled => formatter.write_str("a lane is full; retry the same operation later"),
+            Self::ViewUnavailable { what } => write!(formatter, "no view could be made: {what}"),
+            Self::NotServedYet => formatter.write_str(
+                "the input waits in the queue and has not run; retry the same operation id",
+            ),
         }
     }
 }

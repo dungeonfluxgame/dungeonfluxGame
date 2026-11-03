@@ -32,5 +32,6 @@ tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-t
 [dev-dependencies]
 df-table = { path = "../df-table", features = ["testkit"] }
 tempfile = "=3.27.0"
+tokio = { version = "=1.53.1", default-features = false, features = ["test-util"] }
 df-telemetry = { path = "../df-telemetry" }
 df-types = { path = "../df-types" }

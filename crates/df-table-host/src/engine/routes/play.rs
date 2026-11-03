@@ -5,26 +5,21 @@
 //! call on the owner (`EngineHandle::machine_view` and `machine_intent`): the same messages, the
 //! same guards, with the JSON of `machine_io` for a person and the protobuf bytes of a view
 //! beside it. A view is a GET; an intent is a POST of a `WireIntentBody`, whose machine, revision
-//! and operation id are filled from the seat's own view and a counter when left out.
-
-use std::sync::atomic::{AtomicU64, Ordering};
+//! and operation id are filled from the seat's own view and 128 random bits when left out (a
+//! counter would restart at 1 with the host and collide with the operation memory a checkpoint
+//! keeps).
 
 use axum::body::Bytes;
 use axum::extract::{Query, State};
 use axum::response::Response;
 use serde::Deserialize;
 
+use crate::engine::fresh_id::random_u128;
 use crate::engine::machine_io::{WireIntentBody, receipt_report, view_report};
 use crate::engine::report::EngineError;
 use crate::engine::request::AudienceSpec;
 
 use super::{EngineRoutes, audience_of, body, engine, reply};
-
-/// Wire operation ids the route mints start here, above every number a person types and above the
-/// ids the owner mints for seats and for the engine.
-const MINTED_WIRE_OPERATIONS: u128 = 3 << 64;
-
-static NEXT_WIRE_OPERATION: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ViewQuery {
@@ -64,11 +59,7 @@ pub(super) async fn wire_intent(State(routes): State<EngineRoutes>, bytes: Bytes
                     reason: "an operation id is not zero".to_owned(),
                 });
             }
-            None => {
-                // Relaxed: a counter that orders no other data.
-                let next = NEXT_WIRE_OPERATION.fetch_add(1, Ordering::Relaxed);
-                MINTED_WIRE_OPERATIONS + u128::from(next)
-            }
+            None => random_u128(),
         };
         let request = intent.request(&machine, observed, operation);
         let response = engine.machine_intent(intent.seat, &request).await?;

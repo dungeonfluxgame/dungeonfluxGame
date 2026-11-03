@@ -188,3 +188,64 @@ fn a_status_read_while_records_are_arriving_never_counts_a_record_twice_or_not_a
         (2_000, 2_000, 0)
     );
 }
+
+#[test]
+fn the_identity_holds_on_every_read_while_records_are_refused_and_lost_by_the_writer() {
+    let directory = TempDir::new().expect("a directory");
+    let line = serde_json::to_vec(&record(&received(0), 1, 1_000))
+        .expect("a line")
+        .len()
+        + 1;
+    // Room for three lines on disk and for two waiting: later records are lost by the writer, and
+    // while it is busy more are refused at the door.
+    let spool = Arc::new(
+        FileSpool::open_with_bounds(
+            &directory.path().join("events.jsonl"),
+            3 * line as u64,
+            2 * line,
+        )
+        .expect("opens"),
+    );
+    let feeders: Vec<_> = (0..2_u64)
+        .map(|feeder| {
+            let spool = Arc::clone(&spool);
+            std::thread::spawn(move || {
+                for number in 0..1_000_u64 {
+                    // A refusal is the point of the test: it is counted, not handled.
+                    let _ = spool.accept(&record(&received(number), number + 1, 1_000 + feeder));
+                }
+            })
+        })
+        .collect();
+    while feeders.iter().any(|feeder| !feeder.is_finished()) {
+        let (status, refused) = spool.status_with_refusals(1_000);
+        assert_eq!(
+            status.accepted + refused,
+            status.confirmed + status.pending + status.lost_always + status.lost_verbose,
+            "every offered record is confirmed, waiting, lost by the writer or refused: {status:?} refused={refused}"
+        );
+    }
+    for feeder in feeders {
+        feeder.join().expect("the feeder ends");
+    }
+    assert!(spool.settle(SETTLE), "the writer finishes");
+    let (status, refused) = spool.status_with_refusals(1_000);
+    assert_eq!(status.pending, 0);
+    assert_eq!(
+        status.accepted + refused,
+        2_000,
+        "every record was offered once"
+    );
+    assert_eq!(
+        status.accepted + refused,
+        status.confirmed + status.lost_always + status.lost_verbose
+    );
+    assert!(
+        status.confirmed <= 3,
+        "the file holds three lines: {status:?}"
+    );
+    assert!(
+        status.lost_always + status.lost_verbose > refused,
+        "the writer lost records of its own: {status:?} refused={refused}"
+    );
+}

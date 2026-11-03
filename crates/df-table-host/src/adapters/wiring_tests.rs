@@ -33,6 +33,7 @@ fn tap(seat: u64, action: &str) -> InputRequest {
         operation: None,
         operation_id: None,
         view: None,
+        machine: None,
     }
 }
 

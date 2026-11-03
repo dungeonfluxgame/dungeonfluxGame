@@ -397,6 +397,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(media_library::router(state.clone()))
         .merge(crate::engine::router(state.clone()))
         .merge(crate::scene_builder::router(state.clone()))
+        .merge(crate::director::router(state.clone()))
         .merge(crate::imagegen::router(state.clone()))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(

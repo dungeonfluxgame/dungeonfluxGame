@@ -346,7 +346,9 @@ fn the_report_names_every_phase_and_the_budgets() {
 
 #[tokio::test]
 async fn the_real_engine_scenarios_run_and_report_what_they_measured() {
-    use crate::owner_latency::real::{lobby_burst, projection_cost, rules_path};
+    use crate::owner_latency::real::{
+        lobby_burst, lobby_burst_with_reads, projection_cost, rules_path,
+    };
 
     let directory = tempfile::tempdir().expect("a directory");
     let burst = lobby_burst("six at once", CommitMode::Memory, 6, 4, 1, directory.path())
@@ -359,6 +361,23 @@ async fn the_real_engine_scenarios_run_and_report_what_they_measured() {
         burst.commits
     );
     assert!(burst.render().contains("six at once: 24 inputs"));
+    let with_reads = lobby_burst_with_reads(
+        "six at once with reads",
+        CommitMode::Memory,
+        6,
+        4,
+        1,
+        directory.path(),
+    )
+    .await
+    .expect("the burst with reads runs");
+    assert_eq!(with_reads.inputs, 24);
+    assert!(
+        with_reads.commits < 6 + 24,
+        "reads do not split the batches into one commit per input ({} commits, {} without reads)",
+        with_reads.commits,
+        burst.commits
+    );
     let rules = rules_path("rules", CommitMode::Memory, 3, directory.path())
         .await
         .expect("the rules path runs");

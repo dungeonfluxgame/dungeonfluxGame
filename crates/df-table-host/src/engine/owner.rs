@@ -62,6 +62,11 @@ use super::request::{
 };
 use super::setup::{ActionCatalog, EngineConfig, EngineStartError, machines_for, starting_world};
 
+/// How an operation that has not finished is worded in a duplicate's `first_status`: the words
+/// a wire intent reads to tell "not served yet" from "finished and forgotten".
+pub(super) const STATUS_QUEUED: &str = "queued";
+pub(super) const STATUS_IN_PROGRESS: &str = "in_progress";
+
 /// The one-shot answer to a command.
 pub(super) type Reply<T> = oneshot::Sender<Result<T, EngineError>>;
 
@@ -87,6 +92,24 @@ pub(super) enum Command {
     Trace(String, Reply<TraceReport>),
     Replay(ReplayRequest, Reply<ReplayReport>),
     Config(ConfigControl, Reply<ConfigReport>),
+}
+
+impl Command {
+    /// Whether the command only reads the committed world, which does not change until a batch is
+    /// drained. A batch being collected answers such a command where it stands and goes on
+    /// collecting; every other command ends the collection (S1 group commit).
+    pub(super) fn only_reads(&self) -> bool {
+        matches!(
+            self,
+            Self::Dump(_)
+                | Self::Viable(..)
+                | Self::Projection(..)
+                | Self::MachineView(..)
+                | Self::QueueShow(_)
+                | Self::Describe(_)
+                | Self::Health(_)
+        )
+    }
 }
 
 /// How commits have gone, for `queue show`.
@@ -167,8 +190,8 @@ impl Owner {
             commit_id: CommitId::new(0),
             last_attempt,
             backoff_until_ms: None,
-            next_operation: 0,
-            next_engine_operation: 0,
+            next_operation: counter_start(last_attempt),
+            next_engine_operation: counter_start(last_attempt),
             next_utterance: 0,
             recent_turns: VecDeque::new(),
             recent_submissions: VecDeque::new(),
@@ -198,8 +221,8 @@ impl Owner {
     }
 
     /// Handles one command. A submit to an owner that is serving collects every submit waiting
-    /// behind it into one batch; the first command that is not a submit ends the collection and
-    /// is returned to be handled next.
+    /// behind it into one batch, answering the reads among them as they come; the first command
+    /// that changes something ends the collection and is returned to be handled next.
     fn dispatch(&mut self, command: Command, mailbox: &Receiver<Box<Command>>) -> Option<Command> {
         self.keep_house();
         match command {
@@ -306,6 +329,16 @@ impl Owner {
         self.next_engine_operation = self.next_engine_operation.saturating_add(1);
         minted(MINTED_ENGINE_OPERATIONS, self.next_engine_operation)
     }
+}
+
+/// Where a run's operation counters start: a fixed room per commit attempt the store has seen, so
+/// a run that restarts over a store holding earlier operations mints above all of them, and a
+/// fresh store (no replay of recorded draws changes) starts at zero. A run that committed anything
+/// moved the attempt on, and a run mints far fewer than this many ids before its first commit.
+const OPERATIONS_PER_ATTEMPT: u64 = 1 << 32;
+
+fn counter_start(last_attempt: CommitId) -> u64 {
+    last_attempt.get().saturating_mul(OPERATIONS_PER_ATTEMPT)
 }
 
 fn minted(base: u128, counter: u64) -> OperationId {

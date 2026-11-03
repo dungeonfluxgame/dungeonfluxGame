@@ -250,7 +250,7 @@ fn the_verbs_not_built_are_named_with_what_they_wait_for_and_the_family_verbs_fo
         "fixture load",
         "pending list",
         "replay (seam only)",
-        "camera focus",
+        "camera frame",
         "combat choices",
     ] {
         assert!(

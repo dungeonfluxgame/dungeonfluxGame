@@ -12,9 +12,11 @@
 //!
 //! Workloads: six seats at the lobby alternate `unready` and `ready` (each input changes the
 //! lobby's state, so each batch has something to commit) one at a time, six at once, and
-//! eighteen at once (three each, the pending bound); and the rules path, the conversation's
-//! urging with its two d20s through the production influence flow, on a fresh table for every
-//! sample. Projection cost is read as the difference between asking for a view and asking for
+//! eighteen at once (three each, the pending bound); the same six at once with a view read in
+//! front of every input, as the live path has (a phone polls its view and the wire route reads one
+//! before each intent), so the figures say what reads cost the group commit; and the rules path,
+//! the conversation's urging with its two d20s through the production influence flow, on a fresh
+//! table for every sample. Projection cost is read as the difference between asking for a view and asking for
 //! the owner's health (a call that does no work), over many calls.
 //!
 //! It reads `std::time::Instant`, which the pure crate never does, and is a measurement tool.
@@ -182,6 +184,7 @@ fn tap(seat: u64, action: &str) -> InputRequest {
         operation: None,
         operation_id: None,
         view: None,
+        machine: None,
     }
 }
 
@@ -263,6 +266,32 @@ pub async fn lobby_burst(
     gap_ms: u64,
     directory: &std::path::Path,
 ) -> Result<RealReport, RealError> {
+    burst(label, mode, per_round, rounds, gap_ms, directory, false).await
+}
+
+/// `lobby_burst` with one read of the seat's own view in front of every input, the way a phone
+/// and the wire route work. The reads are not in the latency samples; they only share the
+/// owner's mailbox with the inputs, so the commits per input tell what they cost the batch.
+pub async fn lobby_burst_with_reads(
+    label: &str,
+    mode: CommitMode,
+    per_round: u64,
+    rounds: usize,
+    gap_ms: u64,
+    directory: &std::path::Path,
+) -> Result<RealReport, RealError> {
+    burst(label, mode, per_round, rounds, gap_ms, directory, true).await
+}
+
+async fn burst(
+    label: &str,
+    mode: CommitMode,
+    per_round: u64,
+    rounds: usize,
+    gap_ms: u64,
+    directory: &std::path::Path,
+    read_first: bool,
+) -> Result<RealReport, RealError> {
     let handle = Arc::new(start(mode, directory)?);
     seat_down(&handle).await?;
     let mut samples = Vec::new();
@@ -274,15 +303,21 @@ pub async fn lobby_burst(
             let handle = Arc::clone(&handle);
             // Several inputs of one seat in a round (the 18 at once) are sent as separate calls.
             tasks.push(tokio::spawn(async move {
+                if read_first {
+                    handle
+                        .machine_view(AudienceSpec::Seat { seat })
+                        .await
+                        .map_err(|error| RealError::Call(format!("{error:?}")))?;
+                }
                 let started = Instant::now();
                 let outcome = call(&handle, tap(seat, action)).await;
-                (nanoseconds(started.elapsed()), outcome)
+                Ok::<_, RealError>((nanoseconds(started.elapsed()), outcome))
             }));
         }
         for task in tasks {
             let (nanos, outcome) = task
                 .await
-                .map_err(|error| RealError::Call(error.to_string()))?;
+                .map_err(|error| RealError::Call(error.to_string()))??;
             outcome?;
             samples.push(nanos);
         }

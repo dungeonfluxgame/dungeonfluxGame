@@ -12,6 +12,7 @@
 //! projections as a fixture the playground's TV and phone panes already show (the K0 contract),
 //! so a person can look at the engine's own state on the pages the host serves.
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::client;
@@ -186,13 +187,39 @@ pub fn parse(verb: &str, words: &[String]) -> Result<PlayCommand, CommandError> 
     }
 }
 
+/// The id of the lobby machine and the state it gathers in: the lobby's own names, in one place.
+const LOBBY_MACHINE: &str = "lobby";
+const GATHERING_STATE: &str = "gathering";
+
+/// What the verbs read of a gathering lobby's saved state: who said they are ready. The field is
+/// required, so a lobby whose saved state changed shape fails by name and does not read as "nobody
+/// is ready".
+#[derive(Debug, Deserialize)]
+struct GatheringSlot {
+    ready: Vec<u64>,
+}
+
+fn is_gathering(dump: &EngineDump) -> bool {
+    dump.machine == LOBBY_MACHINE && dump.state == GATHERING_STATE
+}
+
 /// The seats of the lobby that said they are ready, from the lobby's saved state.
-fn ready_seats(dump: &EngineDump) -> Vec<u64> {
-    dump.slot
-        .get("ready")
-        .and_then(Value::as_array)
-        .map(|seats| seats.iter().filter_map(Value::as_u64).collect())
-        .unwrap_or_default()
+fn ready_seats(dump: &EngineDump) -> Result<Vec<u64>, DevError> {
+    serde_json::from_value::<GatheringSlot>(dump.slot.clone())
+        .map(|slot| slot.ready)
+        .map_err(|error| {
+            rejected(format!(
+                "the lobby's saved state has no readable 'ready' list: {error}"
+            ))
+        })
+}
+
+/// A field a projection must carry, or the rejection that names it.
+fn required<'a>(projection: &'a Value, field: &str, whose: &str) -> Result<&'a Value, DevError> {
+    projection
+        .get(field)
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| rejected(format!("{whose} has no '{field}'")))
 }
 
 fn seats_text(seats: &[u64]) -> String {
@@ -207,15 +234,23 @@ fn seats_text(seats: &[u64]) -> String {
     }
 }
 
-fn format_lobby(dump: &EngineDump, readout: &str) -> String {
-    format!(
-        "1: the table is in {} ({}) at revision {}\n2: seats at the table: {}; ready: {}\n3: the shared screen reads: {readout}",
+fn format_lobby(dump: &EngineDump, readout: &str) -> Result<String, DevError> {
+    // Only a gathering lobby has a ready list; once the game started another machine runs.
+    let ready = if is_gathering(dump) {
+        seats_text(&ready_seats(dump)?)
+    } else {
+        format!(
+            "not asked (the table is in {}, {})",
+            dump.machine, dump.state
+        )
+    };
+    Ok(format!(
+        "1: the table is in {} ({}) at revision {}\n2: seats at the table: {}; ready: {ready}\n3: the shared screen reads: {readout}",
         dump.machine,
         dump.state,
         dump.revision,
         seats_text(&dump.table.seats),
-        seats_text(&ready_seats(dump)),
-    )
+    ))
 }
 
 async fn tap(port: u16, seat: u64, action: &str) -> Result<SubmitReply, DevError> {
@@ -227,6 +262,7 @@ async fn tap(port: u16, seat: u64, action: &str) -> Result<SubmitReply, DevError
         operation: None,
         operation_id: None,
         view: None,
+        machine: None,
     };
     send(port, path::INPUT, &request).await
 }
@@ -242,8 +278,10 @@ async fn lobby(port: u16, command: LobbyCommand) -> Result<String, DevError> {
         LobbyCommand::Show => {
             let dump: EngineDump = fetch(port, path::DUMP).await?;
             let tv = audience_view(port, "tv").await?;
-            let readout = tv.get("readout").and_then(Value::as_str).unwrap_or("");
-            Ok(format_lobby(&dump, readout))
+            let readout = required(&tv, "readout", "the shared screen's projection")?
+                .as_str()
+                .ok_or_else(|| rejected("the shared screen's 'readout' is not text".to_owned()))?;
+            format_lobby(&dump, readout)
         }
     }
 }
@@ -254,7 +292,7 @@ fn rejected(message: String) -> DevError {
 
 async fn scene_start(port: u16, starter: Option<u64>) -> Result<String, DevError> {
     let dump: EngineDump = fetch(port, path::DUMP).await?;
-    if dump.machine != "lobby" || dump.state != "gathering" {
+    if !is_gathering(&dump) {
         return Err(rejected(format!(
             "the lobby is not gathering (the table is in {}, {}); there is no scene to start",
             dump.machine, dump.state
@@ -265,7 +303,7 @@ async fn scene_start(port: u16, starter: Option<u64>) -> Result<String, DevError
             "nobody is at the table; use `lobby join <seat>` first".to_owned(),
         ));
     };
-    let ready = ready_seats(&dump);
+    let ready = ready_seats(&dump)?;
     let mut lines = Vec::new();
     for seat in dump.table.seats.iter().filter(|seat| !ready.contains(seat)) {
         let reply = tap(port, *seat, "ready").await?;
@@ -370,14 +408,20 @@ fn format_receipt(report: &WireReceiptReport) -> String {
 }
 
 /// The fixture text of the real projections of `tv` and one seat, as the K0 contract defines it.
-fn fixture_text(tv: &Value, seat: &Value, seat_number: u64) -> String {
-    json!({
+fn fixture_text(tv: &Value, seat: &Value, seat_number: u64) -> Result<String, DevError> {
+    let tv_view = required(tv, "view", "the shared screen's projection")?;
+    let phone_view = required(
+        seat,
+        "view",
+        &format!("the projection of seat {seat_number}"),
+    )?;
+    Ok(json!({
         "name": LIVE_FIXTURE,
         "description": format!("The engine's own shared screen and the phone of seat {seat_number}, as projected now."),
-        "tv": tv.get("view").cloned().unwrap_or(Value::Null),
-        "phone": seat.get("view").cloned().unwrap_or(Value::Null),
+        "tv": tv_view,
+        "phone": phone_view,
     })
-    .to_string()
+    .to_string())
 }
 
 async fn publish(port: u16, seat: Option<u64>) -> Result<String, DevError> {
@@ -394,7 +438,7 @@ async fn publish(port: u16, seat: Option<u64>) -> Result<String, DevError> {
     let phone = audience_view(port, &seat.to_string()).await?;
     let body = FixtureWrite {
         name: format!("{LIVE_FIXTURE}.json"),
-        text: fixture_text(&tv, &phone, seat),
+        text: fixture_text(&tv, &phone, seat)?,
     };
     let text = serde_json::to_string(&body).map_err(|error| DevError::Unwritable {
         what: "fixture",

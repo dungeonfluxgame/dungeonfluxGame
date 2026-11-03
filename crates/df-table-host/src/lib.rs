@@ -23,6 +23,7 @@ pub mod broker;
 pub mod client;
 pub mod command;
 pub mod dev;
+pub mod director;
 pub mod engine;
 pub mod event_log;
 pub mod guard;

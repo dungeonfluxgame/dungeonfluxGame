@@ -252,13 +252,88 @@ fn stage_ids(state: &AppState, base: &Fixture) -> Vec<String> {
     }
 }
 
-fn refuse_scene_change(state: &AppState, reason: &'static str, message: String) -> Response {
+/// Why a scene change was not applied: the status a route answers with, and the words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SceneApplyError {
+    pub(crate) status: StatusCode,
+    pub(crate) message: String,
+}
+
+impl From<(StatusCode, String)> for SceneApplyError {
+    fn from((status, message): (StatusCode, String)) -> Self {
+        Self { status, message }
+    }
+}
+
+/// Records the refusal of a scene change that is the caller's mistake.
+fn refuse_scene_change(state: &AppState, reason: &'static str, message: String) -> SceneApplyError {
     state.record_line(reject_line(
         RejectionCause::InvalidValue,
         &[("reason", reason.to_owned())],
     ));
-    state.echo_new_lines();
-    refused(StatusCode::BAD_REQUEST, message)
+    SceneApplyError {
+        status: StatusCode::BAD_REQUEST,
+        message,
+    }
+}
+
+/// Reads the fixture the live scene is drawn on, with the generation it was read at.
+async fn shown_fixture(state: &AppState) -> Result<(Fixture, u64), SceneApplyError> {
+    let Some((name, generation)) = state.playground().scene_target() else {
+        return Err(SceneApplyError {
+            status: StatusCode::BAD_REQUEST,
+            message: "no fixture is shown; write one with `fixture write` first".to_owned(),
+        });
+    };
+    let directory = state.playground().files().assets().join(FIXTURE_DIRECTORY);
+    let base = read_fixture(directory, name).await?;
+    Ok((base, generation))
+}
+
+/// The ids of the elements on the stage the live scene is drawn on now.
+pub(crate) async fn current_stage_ids(state: &AppState) -> Result<Vec<String>, SceneApplyError> {
+    let (base, _) = shown_fixture(state).await?;
+    Ok(stage_ids(state, &base))
+}
+
+/// Applies one change to the live scene, checked against the media library and the stage, and
+/// records it. This is the one path of `POST /dev/playground/scene` and of the Director, so a
+/// dev verb and the engine make a camera move with the same checks and the same audit line.
+pub(crate) async fn apply_scene_change(
+    state: &AppState,
+    change: SceneChange,
+) -> Result<ControlsReply, SceneApplyError> {
+    let (base, generation) = shown_fixture(state).await?;
+    let media_directory = media_directory(state.playground().files());
+    let library = tokio::task::spawn_blocking(move || media_entries(&media_directory))
+        .await
+        .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
+    let library = library.map_err(|problem| SceneApplyError {
+        status: problem.status(),
+        message: problem.message(),
+    })?;
+    if let Some(message) = media_problem(&change, &library) {
+        return Err(refuse_scene_change(state, "no_such_media", message));
+    }
+    if let Some(message) = camera_problem(&change, &stage_ids(state, &base)) {
+        return Err(refuse_scene_change(state, "no_such_element", message));
+    }
+    // The change is applied only if the fixture is still the one it was checked against.
+    state
+        .playground()
+        .change_scene(change.clone(), &base, generation, |reply| {
+            state.record_line(scene_line(&change, &reply.scene, reply.revision));
+        })
+        .map_err(|refusal| {
+            state.record_line(reject_line(
+                RejectionCause::InvalidValue,
+                &[("reason", refusal.reason().to_owned())],
+            ));
+            SceneApplyError {
+                status: refusal.status(),
+                message: refusal.to_string(),
+            }
+        })
 }
 
 async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
@@ -266,47 +341,10 @@ async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
         Ok(change) => change,
         Err(error) => return reject_malformed(&state, &error),
     };
-    let Some((name, generation)) = state.playground().scene_target() else {
-        return refused(
-            StatusCode::BAD_REQUEST,
-            "no fixture is shown; write one with `fixture write` first".to_owned(),
-        );
+    let response = match apply_scene_change(&state, change).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(error) => refused(error.status, error.message),
     };
-    let directory = state.playground().files().assets().join(FIXTURE_DIRECTORY);
-    let base = match read_fixture(directory, name).await {
-        Ok(base) => base,
-        Err((status, message)) => return refused(status, message),
-    };
-    let media_directory = media_directory(state.playground().files());
-    let library = tokio::task::spawn_blocking(move || media_entries(&media_directory))
-        .await
-        .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
-    let library = match library {
-        Ok(library) => library,
-        Err(problem) => return refused(problem.status(), problem.message()),
-    };
-    if let Some(message) = media_problem(&change, &library) {
-        return refuse_scene_change(&state, "no_such_media", message);
-    }
-    if let Some(message) = camera_problem(&change, &stage_ids(&state, &base)) {
-        return refuse_scene_change(&state, "no_such_element", message);
-    }
-    // The change is applied only if the fixture is still the one it was checked against.
-    let response =
-        match state
-            .playground()
-            .change_scene(change.clone(), &base, generation, |reply| {
-                state.record_line(scene_line(&change, &reply.scene, reply.revision));
-            }) {
-            Ok(reply) => Json(reply).into_response(),
-            Err(refusal) => {
-                state.record_line(reject_line(
-                    RejectionCause::InvalidValue,
-                    &[("reason", refusal.reason().to_owned())],
-                ));
-                refused(refusal.status(), refusal.to_string())
-            }
-        };
     state.echo_new_lines();
     response
 }

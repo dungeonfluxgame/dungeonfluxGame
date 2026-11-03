@@ -107,6 +107,8 @@ pub enum Command {
     /// A verb of the scene builder's workbench: `scene build`, `scene show`, `plates` or
     /// `buffer`.
     SceneBuilder(crate::scene_builder::SceneBuilderCommand),
+    /// A verb of the Director: `camera focus|wide` or `director ...`.
+    Director(crate::director::DirectorCommand),
 }
 
 /// Why a command line was refused.
@@ -472,6 +474,9 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         }
         verb if crate::scene_builder::cli::VERBS.contains(&verb) => {
             crate::scene_builder::parse(verb, rest).map(Command::SceneBuilder)
+        }
+        verb if crate::director::cli::VERBS.contains(&verb) => {
+            crate::director::parse(verb, rest).map(Command::Director)
         }
         other => Err(CommandError::Unknown(other.to_owned())),
     }

@@ -77,6 +77,9 @@ struct Shared {
     settled: Condvar,
     accepted: AtomicU64,
     confirmed: AtomicU64,
+    /// Records refused at `accept` (full, closed, unserializable). They are lost and counted by
+    /// class in `losses`, but never accepted.
+    refused: AtomicU64,
     losses: Losses,
     maximum_queue_bytes: usize,
 }
@@ -136,6 +139,7 @@ impl FileSpool {
             settled: Condvar::new(),
             accepted: AtomicU64::new(0),
             confirmed: AtomicU64::new(0),
+            refused: AtomicU64::new(0),
             losses: Losses::default(),
             maximum_queue_bytes,
         });
@@ -162,6 +166,7 @@ impl FileSpool {
                 settled: Condvar::new(),
                 accepted: AtomicU64::new(0),
                 confirmed: AtomicU64::new(0),
+                refused: AtomicU64::new(0),
                 losses: Losses::default(),
                 maximum_queue_bytes,
             }),
@@ -210,12 +215,13 @@ fn write_loop(shared: &Shared, file: File, existing_bytes: u64, maximum_spool_by
         let count = batch.len();
         let bytes: usize = batch.iter().map(|item| item.line.len()).sum();
         let mut written_classes = Vec::with_capacity(count);
+        let mut lost_classes = Vec::new();
         for item in batch {
             let length = u64::try_from(item.line.len()).unwrap_or(u64::MAX);
             if on_disk.saturating_add(length) > maximum_spool_bytes
                 || out.write_all(&item.line).is_err()
             {
-                shared.losses.record(item.class);
+                lost_classes.push(item.class);
                 continue;
             }
             on_disk = on_disk.saturating_add(length);
@@ -224,17 +230,16 @@ fn write_loop(shared: &Shared, file: File, existing_bytes: u64, maximum_spool_by
         let flushed = out.flush().is_ok();
         if !flushed {
             // What was buffered cannot be said to be on disk, so none of this batch is confirmed.
-            written_classes
-                .iter()
-                .for_each(|class| shared.losses.record(*class));
+            lost_classes.append(&mut written_classes);
         }
         let mut state = shared.locked();
-        if flushed {
-            // Confirmed rises under the same lock that lowers pending, so a status read (which
-            // takes the lock) never counts one record in both.
-            let written = u64::try_from(written_classes.len()).unwrap_or(u64::MAX);
-            shared.confirmed.fetch_add(written, Ordering::Relaxed);
-        }
+        // Confirmed and the writer's losses change under the same lock that lowers pending, so a
+        // status read (which takes the lock) never counts one record in two of the three.
+        let written = u64::try_from(written_classes.len()).unwrap_or(u64::MAX);
+        shared.confirmed.fetch_add(written, Ordering::Relaxed);
+        lost_classes
+            .iter()
+            .for_each(|class| shared.losses.record(*class));
         state.queued_bytes = state.queued_bytes.saturating_sub(bytes);
         state.pending = state
             .pending
@@ -251,26 +256,27 @@ impl RecordOutlet for FileSpool {
     }
 
     fn accept(&self, record: &ObservedRecord) -> Result<(), OutletRefusal> {
-        let losses = &self.shared.losses;
-        let Ok(mut line) = serde_json::to_vec(record) else {
-            losses.record(record.class);
+        let serialized = serde_json::to_vec(record);
+        // Every counter changes under the state lock, so a status read (which takes it) sees them
+        // as one moment: accepted + refused = confirmed + pending + lost, where `refused` is the
+        // part of `lost` that was never accepted (see `status_with_refusals`).
+        let mut state = self.shared.locked();
+        let Ok(mut line) = serialized else {
+            self.refuse(record.class);
             return Err(OutletRefusal::Rejected);
         };
         line.push(b'\n');
         let cost = line.len();
-        let mut state = self.shared.locked();
         if state.closed {
-            losses.record(record.class);
+            self.refuse(record.class);
             return Err(OutletRefusal::Closed);
         }
         if state.queued_bytes.saturating_add(cost) > self.shared.maximum_queue_bytes {
-            losses.record(record.class);
+            self.refuse(record.class);
             return Err(OutletRefusal::Full);
         }
         state.queued_bytes += cost;
         state.pending += 1;
-        // Accepted rises under the same lock that raises pending, so a status read (which takes
-        // the lock) always sees accepted = confirmed + pending + lost.
         self.shared.accepted.fetch_add(1, Ordering::Relaxed);
         state.queue.push_back(Queued {
             line,
@@ -283,6 +289,23 @@ impl RecordOutlet for FileSpool {
     }
 
     fn status(&self, now_ms: u64) -> OutletStatus {
+        self.status_with_refusals(now_ms).0
+    }
+}
+
+impl FileSpool {
+    /// Counts a record refused at `accept`: lost, by class, and never accepted. The caller holds
+    /// the state lock.
+    fn refuse(&self, class: RecordClass) {
+        self.shared.losses.record(class);
+        self.shared.refused.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The status and, read at the same moment, how many records were refused at `accept`. What
+    /// it reports always satisfies `accepted + refused = confirmed + pending + lost_always +
+    /// lost_verbose`: a record is confirmed, waiting, lost by the writer (accepted first) or
+    /// refused at the door (never accepted).
+    pub(super) fn status_with_refusals(&self, now_ms: u64) -> (OutletStatus, u64) {
         let state = self.shared.locked();
         let oldest = state
             .queue
@@ -291,7 +314,7 @@ impl RecordOutlet for FileSpool {
             .into_iter()
             .chain(state.in_flight_oldest_ms)
             .min();
-        OutletStatus {
+        let status = OutletStatus {
             name: self.name().to_owned(),
             accepted: self.shared.accepted.load(Ordering::Relaxed),
             confirmed: self.shared.confirmed.load(Ordering::Relaxed),
@@ -301,6 +324,7 @@ impl RecordOutlet for FileSpool {
             lost_verbose: self.shared.losses.verbose(),
             evicted: 0,
             unconfirmed: 0,
-        }
+        };
+        (status, self.shared.refused.load(Ordering::Relaxed))
     }
 }

@@ -12,7 +12,10 @@
 //!
 //! `serve_submits` is where the group commit of S1 is formed in the live path: every submit already
 //! in the mailbox joins the batch, within the policy's time slice and count, and each caller gets
-//! its answer after the one commit.
+//! its answer after the one commit. A read in the mailbox (a phone's view, `queue show`) does not
+//! end the collection: it reads the committed world, which does not change before the batch is
+//! drained, so it is answered at once and the batch goes on. Only a command that changes
+//! something ends it.
 
 use std::num::NonZeroU128;
 use std::sync::mpsc::Receiver;
@@ -38,12 +41,14 @@ use crate::engine::report::{
 };
 use crate::engine::request::{InputBody, InputRequest};
 
-use super::{Command, Owner, Reply, answer};
+use super::{Command, Owner, Reply, STATUS_IN_PROGRESS, STATUS_QUEUED, answer};
 
 fn status_text(status: OperationStatus) -> String {
     match status {
-        OperationStatus::Queued { lane } => format!("queued lane={}", lane.key()),
-        OperationStatus::InProgress { turn_seq } => format!("in_progress turn_seq={turn_seq}"),
+        OperationStatus::Queued { lane } => format!("{STATUS_QUEUED} lane={}", lane.key()),
+        OperationStatus::InProgress { turn_seq } => {
+            format!("{STATUS_IN_PROGRESS} turn_seq={turn_seq}")
+        }
         OperationStatus::Finished { turn_seq, outcome } => {
             format!("finished turn_seq={turn_seq} outcome={}", outcome.key())
         }
@@ -73,6 +78,9 @@ fn invalid_name(text: &str) -> EngineError {
     }
 }
 
+/// The line a seat reads when its input was aimed at a machine that a hand-off replaced.
+const STALE_MACHINE_DETAIL: &str = "That offer belongs to a scene that has moved on.";
+
 /// A submit that was admitted or refused, waiting for its turns and its answer.
 type Waiting = (SubmissionReport, Reply<SubmitReply>);
 
@@ -90,8 +98,8 @@ impl Owner {
     }
 
     /// Collects `first` and every submit waiting behind it into one batch, serves it, writes one
-    /// commit, and answers each. The first command that is not a submit ends the collection and
-    /// is returned to be handled next.
+    /// commit, and answers each. A read is answered where it stands; the first command that
+    /// changes something ends the collection and is returned to be handled next.
     pub(super) fn serve_submits(
         &mut self,
         first: (InputRequest, Reply<SubmitReply>),
@@ -109,13 +117,7 @@ impl Owner {
             if !self.may_collect_more(started_ms, waiting.len()) {
                 break;
             }
-            // An empty or closed mailbox means nothing more waits.
-            if let Ok(command) = mailbox.try_recv() {
-                match *command {
-                    Command::Submit(request, reply) => next = Some((request, reply)),
-                    other => carried = Some(other),
-                }
-            }
+            next = self.next_submit(mailbox, &mut carried, started_ms, waiting.len());
         }
         let turns = self.drain();
         let shares = partition_turns(turns, &waiting);
@@ -123,6 +125,29 @@ impl Owner {
             answer(reply, Ok(SubmitReply { submission, turns }));
         }
         carried
+    }
+
+    /// The next submit waiting in the mailbox, answering the reads in front of it. `None` when the
+    /// mailbox is empty or closed (nothing more waits), when a command that changes something comes
+    /// first (it is left in `carried`), or when the batch is full.
+    fn next_submit(
+        &mut self,
+        mailbox: &Receiver<Box<Command>>,
+        carried: &mut Option<Command>,
+        started_ms: u64,
+        collected: usize,
+    ) -> Option<(InputRequest, Reply<SubmitReply>)> {
+        while self.may_collect_more(started_ms, collected) {
+            match *mailbox.try_recv().ok()? {
+                Command::Submit(request, reply) => return Some((request, reply)),
+                read if read.only_reads() => self.handle(read),
+                other => {
+                    *carried = Some(other);
+                    return None;
+                }
+            }
+        }
+        None
     }
 
     /// Whether the batch may take another submit: under the policy's count and inside its slice.
@@ -148,7 +173,16 @@ impl Owner {
             lane: None,
             refusal: None,
         };
-        let admitted = if let Some(retry_after_ms) = self.backoff_remaining_ms(now_ms) {
+        let admitted = if self.aimed_at_replaced_machine(&request, &envelope) {
+            self.refuse_stale_machine(&envelope);
+            report.refusal = Some(RefusalView {
+                cause: DeclineCode::WindowClosed.key().to_owned(),
+                detail: STALE_MACHINE_DETAIL.to_owned(),
+                retry_after_ms: None,
+                first_status: None,
+            });
+            false
+        } else if let Some(retry_after_ms) = self.backoff_remaining_ms(now_ms) {
             self.refuse_while_backing_off(&envelope, retry_after_ms);
             report.refusal = Some(RefusalView {
                 cause: DeclineCode::TableBusy.key().to_owned(),
@@ -188,6 +222,42 @@ impl Owner {
         while self.recent_submissions.len() > MAXIMUM_RECENT_SUBMISSIONS {
             self.recent_submissions.pop_front();
         }
+    }
+
+    /// Whether the request names a machine and the table is running another: a hand-off replaced
+    /// the machine the offer was drawn from. A repeat of an operation the queue already knows is
+    /// the queue's to answer, whatever machine runs now, so it is never stale.
+    fn aimed_at_replaced_machine(&self, request: &InputRequest, envelope: &InputEnvelope) -> bool {
+        let Some(aimed) = request.machine.as_deref() else {
+            return false;
+        };
+        if self
+            .queue
+            .status(envelope.sender(), envelope.operation_id())
+            .is_some()
+        {
+            return false;
+        }
+        self.committed
+            .facts()
+            .snapshot()
+            .focus_machine()
+            .is_none_or(|running| running.machine().as_str() != aimed)
+    }
+
+    /// Records the decline of an input aimed at a machine that no longer runs, without admitting
+    /// it: the operation id stays free.
+    fn refuse_stale_machine(&self, envelope: &InputEnvelope) {
+        let correlation = Correlation {
+            operation_id: envelope.operation_id(),
+            turn_seq: NOT_YET_SERVED,
+            revision: self.session_revision(),
+        };
+        self.sink.record(&TableEvent::InputDeclined {
+            scope: TableScope::of_table(self.config.table),
+            correlation,
+            code: DeclineCode::WindowClosed,
+        });
     }
 
     fn refuse_while_backing_off(&self, envelope: &InputEnvelope, retry_after_ms: u64) {

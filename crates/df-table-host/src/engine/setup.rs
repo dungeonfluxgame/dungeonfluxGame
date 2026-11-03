@@ -43,6 +43,8 @@ const DEV_CHECK: &str = "pick_lock";
 /// The authored conversation of the first playable path: who speaks, what they say, the one
 /// urging the table may try, and what they say when it moves them and when it does not.
 pub const STORY_URGE: &str = "persuade_guard";
+/// The urging as a phone reads it after "You can try to".
+const STORY_URGE_LABEL: &str = "persuade the guard";
 const STORY_SPEAKER: &str = "The gate guard";
 const STORY_OPENING: &str = "Halt. The gate is shut until dawn. What do you want?";
 const STORY_MOVED: &str = "Fine. Keep your voices down, and be quick about it.";
@@ -270,6 +272,7 @@ pub fn story_machines(first_scene: SceneId) -> Result<Machines, EngineStartError
         STORY_SPEAKER,
         STORY_OPENING,
         STORY_URGE,
+        STORY_URGE_LABEL,
         STORY_MOVED,
         STORY_UNMOVED,
     )?;

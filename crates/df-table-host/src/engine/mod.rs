@@ -36,6 +36,7 @@ mod committer;
 pub mod extras;
 mod format;
 mod format_observe;
+mod fresh_id;
 pub mod handle;
 mod labels;
 pub mod limits;

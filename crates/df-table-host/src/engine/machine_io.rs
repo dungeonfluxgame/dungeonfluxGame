@@ -12,10 +12,15 @@
 //!
 //! What is not carried over yet, each answered typed and never silently: an answer to an open
 //! pending (`PendingAnswer`) is declined `capability_unavailable` (no machine of the first path
-//! opens a pending the phone must answer), the machine id of the intent is not compared with the
-//! running machine (the revision it was drawn from is what ADMIT checks), and a decline's
-//! alternatives and missing piece are in the seat's next view and not in the receipt, whose reason
-//! is the line the seat was shown.
+//! opens a pending the phone must answer), and a decline's alternatives and missing piece are in
+//! the seat's next view and not in the receipt, whose reason is the line the seat was shown. An
+//! intent aimed at a machine other than the one running (a hand-off replaced it) is declined
+//! `window_closed`, which is the wire's stale offer, by the owner, before the input is admitted.
+//!
+//! What is not a receipt is a typed `WireIntentError` and never a decline: a full lane (a stall,
+//! RES22) and an input that waits in the queue with nothing run for it are UNAVAILABLE and are
+//! retried under the same operation id; a seat the table does not know and a refusal this file has
+//! no answer for are errors of their own, so none is told to a phone as "that cannot be done".
 //!
 //! The dev forms (`WireViewReport`, `WireIntentBody`, `WireReceiptReport`) are the JSON the dev
 //! routes and the command line speak for the same messages: a summary a person reads, and for a
@@ -31,14 +36,16 @@ use df_api::machine::{
 };
 use df_protocol::common as wire;
 use df_table::identity::{RecoveryEpoch, SessionRevision};
-use df_table::outcome::{Decline, DeclineCode, OutcomeKind};
+use df_table::outcome::{Decline, DeclineCode, DeclineError, OutcomeKind};
+use df_table::owner_queue::NotDeclinedCause;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
 use crate::machine_wire::{WireDecline, wire_decline, wire_revision};
 
 use super::handle::EngineHandle;
-use super::report::{EngineError, SubmitReply, TurnReport};
+use super::owner::{STATUS_IN_PROGRESS, STATUS_QUEUED};
+use super::report::{EngineError, RefusalReport, SubmitReply, TurnReport};
 use super::request::{InputBody, InputRequest};
 
 /// What a refused wire intent is, so every service answers the same way (RES40).
@@ -61,19 +68,47 @@ pub enum WireIntentError {
     Engine(EngineError),
     /// The receipt the owner built broke a wire rule.
     Receipt(MachineReceiptError),
-    /// The decline is of the class that is a call failure and not a message.
-    TooFast,
+    /// The decline is of the class that is a call failure and not a message (`rate_limited` and
+    /// `table_busy`, RES40); `retry_after_ms` is the pause the queue asked for, when it did.
+    TooFast {
+        retry_after_ms: Option<u64>,
+    },
+    /// A lane is full: a stall and not a decline (RES22). Retry the same operation id later.
+    Stalled,
+    /// The seat the call's credentials name is not at this table.
+    UnknownSeat {
+        seat: u64,
+    },
+    /// The input waits in the queue (the owner is holding, or it is queued) and nothing has run
+    /// for it yet, so there is no receipt. Retry the same operation id.
+    NotServedYet,
+    /// The queue refused for a cause this file has no answer for (a repeat included, which is
+    /// answered before).
+    UnknownRefusal {
+        cause: String,
+    },
+    /// A declined turn carries no decline code, so there is no code to tell the phone.
+    MissingDeclineCode,
+    /// The line a decline carries cannot make a decline.
+    Decline(DeclineError),
 }
 
 impl WireIntentError {
     pub fn failure(&self) -> CallFailure {
         match self {
             Self::Refused(_) => CallFailure::InvalidArgument,
-            Self::TooFast => CallFailure::ResourceExhausted,
-            Self::Engine(EngineError::MailboxFull | EngineError::Stopped) => {
+            Self::TooFast { .. } => CallFailure::ResourceExhausted,
+            Self::UnknownSeat { .. } => CallFailure::InvalidArgument,
+            Self::Stalled
+            | Self::NotServedYet
+            | Self::Engine(EngineError::MailboxFull | EngineError::Stopped) => {
                 CallFailure::Unavailable
             }
-            Self::Engine(_) | Self::Receipt(_) => CallFailure::Internal,
+            Self::Engine(_)
+            | Self::Receipt(_)
+            | Self::UnknownRefusal { .. }
+            | Self::MissingDeclineCode
+            | Self::Decline(_) => CallFailure::Internal,
         }
     }
 }
@@ -86,7 +121,25 @@ impl fmt::Display for WireIntentError {
             }
             Self::Engine(error) => write!(formatter, "the owner could not take it: {error:?}"),
             Self::Receipt(error) => write!(formatter, "the receipt broke a wire rule: {error:?}"),
-            Self::TooFast => formatter.write_str("too many inputs too fast"),
+            Self::TooFast {
+                retry_after_ms: Some(retry_after_ms),
+            } => write!(
+                formatter,
+                "too many inputs too fast; retry in {retry_after_ms} ms"
+            ),
+            Self::TooFast {
+                retry_after_ms: None,
+            } => formatter.write_str("too many inputs too fast"),
+            Self::Stalled => formatter.write_str("a lane is full; retry the same operation later"),
+            Self::UnknownSeat { seat } => write!(formatter, "seat {seat} is not at this table"),
+            Self::NotServedYet => {
+                formatter.write_str("the input waits in the queue; retry the same operation id")
+            }
+            Self::UnknownRefusal { cause } => {
+                write!(formatter, "the queue refused with the cause '{cause}'")
+            }
+            Self::MissingDeclineCode => formatter.write_str("a declined turn has no decline code"),
+            Self::Decline(error) => write!(formatter, "the decline cannot be built: {error}"),
         }
     }
 }
@@ -97,7 +150,15 @@ impl From<WireIntentError> for EngineError {
     fn from(error: WireIntentError) -> Self {
         match error {
             WireIntentError::Engine(error) => error,
-            WireIntentError::TooFast => EngineError::MailboxFull,
+            WireIntentError::TooFast { retry_after_ms } => EngineError::TooFast { retry_after_ms },
+            WireIntentError::Stalled => EngineError::Stalled,
+            WireIntentError::NotServedYet => EngineError::NotServedYet,
+            WireIntentError::UnknownSeat { seat } => EngineError::UnknownSeat { seat },
+            error @ (WireIntentError::UnknownRefusal { .. }
+            | WireIntentError::MissingDeclineCode
+            | WireIntentError::Decline(_)) => EngineError::Unwritable {
+                what: error.to_string(),
+            },
             WireIntentError::Refused(error) => EngineError::BadRequest {
                 reason: format!("the intent was refused at the edge: {error:?}"),
             },
@@ -159,52 +220,85 @@ fn receipt_for(
     }
 }
 
-/// The wire decline of `code` with the line the seat was shown as its reason.
+/// The wire decline of `code` with the line the seat was shown as its reason. The two codes that
+/// mean "too much, too fast" are not a receipt (RES40): they are `TooFast` with the pause the
+/// queue asked for.
 fn declined(
     code: DeclineCode,
     reason: &str,
+    retry_after_ms: Option<u64>,
 ) -> Result<wire::machine_receipt::Result, WireIntentError> {
-    let decline = Decline::new(code, reason).unwrap_or_else(|_| Decline::with_default_reason(code));
+    let decline = Decline::new(code, reason).map_err(WireIntentError::Decline)?;
     match wire_decline(&decline) {
         WireDecline::Receipt(decline) => Ok(wire::machine_receipt::Result::Declined(decline)),
-        WireDecline::ResourceExhausted => Err(WireIntentError::TooFast),
+        WireDecline::ResourceExhausted => Err(WireIntentError::TooFast { retry_after_ms }),
     }
 }
 
-/// The code a queue refusal's cause key names, when it is one of the decline codes.
-fn code_of_cause(cause: &str) -> DeclineCode {
-    DeclineCode::ALL
+/// What a queue refusal's cause key names: a decline code or one of the queue's own causes.
+enum Cause {
+    Declined(DeclineCode),
+    NotDeclined(NotDeclinedCause),
+}
+
+fn cause_of(key: &str) -> Result<Cause, WireIntentError> {
+    if let Some(code) = DeclineCode::ALL
         .iter()
         .copied()
-        .find(|code| code.key() == cause)
-        .unwrap_or(DeclineCode::NotViable)
+        .find(|code| code.key() == key)
+    {
+        return Ok(Cause::Declined(code));
+    }
+    NotDeclinedCause::ALL
+        .iter()
+        .copied()
+        .find(|cause| cause.key() == key)
+        .map(Cause::NotDeclined)
+        .ok_or_else(|| WireIntentError::UnknownRefusal {
+            cause: key.to_owned(),
+        })
+}
+
+/// The answer to a refusal by the queue: a decline receipt for a decline code that is a message,
+/// and a typed error for everything else. The match is exhaustive, so a cause the queue gains
+/// without an answer here does not compile, and a key that names none fails.
+pub(super) fn refused(
+    refusal: &RefusalReport,
+    seat: u64,
+) -> Result<wire::machine_receipt::Result, WireIntentError> {
+    match cause_of(&refusal.cause)? {
+        Cause::Declined(code) => declined(code, &refusal.detail, refusal.retry_after_ms),
+        Cause::NotDeclined(NotDeclinedCause::LaneStalled) => Err(WireIntentError::Stalled),
+        Cause::NotDeclined(NotDeclinedCause::UnknownSeat) => {
+            Err(WireIntentError::UnknownSeat { seat })
+        }
+        Cause::NotDeclined(NotDeclinedCause::Duplicate) => Err(WireIntentError::UnknownRefusal {
+            cause: refusal.cause.clone(),
+        }),
+    }
 }
 
 /// The cause key the queue gives a repeat of an operation it already admitted.
 const DUPLICATE_CAUSE: &str = "duplicate";
 
 /// What the owner answered, as the one result of the receipt, and the revision it was answered at.
+/// An input that was admitted and has no turn yet (the owner is holding) is not an answer.
 fn result_of(
     reply: &SubmitReply,
     observed: u64,
+    seat: u64,
 ) -> Result<(wire::machine_receipt::Result, u64, bool), WireIntentError> {
     if let Some(refusal) = &reply.submission.refusal {
-        let code = code_of_cause(&refusal.cause);
-        return Ok((declined(code, &refusal.detail)?, observed, false));
+        return Ok((refused(refusal, seat)?, observed, false));
     }
     let Some(turn) = reply.turns.first() else {
-        // The queue is held, so the input waits and nothing ran for it yet.
-        let held = declined(
-            DeclineCode::TableBusy,
-            "The table is not taking input right now.",
-        )?;
-        return Ok((held, observed, false));
+        return Err(WireIntentError::NotServedYet);
     };
     result_of_turn(turn, observed).map(|(result, sequence)| (result, sequence, turn.replayed))
 }
 
 /// The one result of the receipt for a turn the owner ran, and the revision it ended at.
-fn result_of_turn(
+pub(super) fn result_of_turn(
     turn: &TurnReport,
     observed: u64,
 ) -> Result<(wire::machine_receipt::Result, u64), WireIntentError> {
@@ -221,8 +315,9 @@ fn result_of_turn(
             pending_id: turn.pending,
         }),
         OutcomeKind::Declined => declined(
-            turn.decline.unwrap_or(DeclineCode::NotViable),
+            turn.decline.ok_or(WireIntentError::MissingDeclineCode)?,
             &turn.readout,
+            None,
         )?,
     };
     Ok((result, sequence))
@@ -230,7 +325,7 @@ fn result_of_turn(
 
 /// The answer to a repeat of an operation the owner no longer holds a turn for: the operation is
 /// not remembered, which the wire says as an observation and not as a receipt.
-fn forgotten() -> wire::SubmitMachineIntentResponse {
+pub(super) fn forgotten() -> wire::SubmitMachineIntentResponse {
     wire::SubmitMachineIntentResponse {
         outcome: Some(
             wire::submit_machine_intent_response::Outcome::OperationObservation(
@@ -257,6 +352,7 @@ impl EngineHandle {
                 let result = declined(
                     DeclineCode::NotSupportedYet,
                     "That answer is not supported on this table yet.",
+                    None,
                 )?;
                 receipt_for(&intent, observed, false, result)
             }
@@ -267,18 +363,19 @@ impl EngineHandle {
                         operation: None,
                         operation_id: Some(u128::from_be_bytes(*intent.operation.as_bytes())),
                         view: Some(observed),
+                        machine: Some(intent.machine_id.clone()),
                     })
                     .await
                     .map_err(WireIntentError::Engine)?;
-                let is_repeat = reply
+                let repeat = reply
                     .submission
                     .refusal
                     .as_ref()
-                    .is_some_and(|refusal| refusal.cause == DUPLICATE_CAUSE);
-                if is_repeat {
-                    self.repeat_answer(seat, &intent, observed).await?
+                    .filter(|refusal| refusal.cause == DUPLICATE_CAUSE);
+                if let Some(first) = repeat {
+                    self.repeat_answer(seat, &intent, observed, first).await?
                 } else {
-                    let (result, sequence, replayed) = result_of(&reply, observed)?;
+                    let (result, sequence, replayed) = result_of(&reply, observed, seat)?;
                     receipt_for(&intent, sequence, replayed, result)
                 }
             }
@@ -291,14 +388,23 @@ impl EngineHandle {
 impl EngineHandle {
     /// The answer to a repeat of an operation the queue already admitted: the receipt of the turn
     /// the first delivery ran (from the trace the owner keeps), marked replayed, so a retry gets
-    /// what the first send got and nothing runs twice (H.2). When the owner no longer holds that
-    /// turn, or it has not finished, the answer is the observation that it is not remembered.
+    /// what the first send got and nothing runs twice (H.2). While the first copy still waits or
+    /// runs there is nothing to replay yet, which is `NotServedYet` (retry the same id); only when
+    /// the owner no longer holds the finished turn is the answer the observation that the
+    /// operation is not remembered.
     async fn repeat_answer(
         &self,
         seat: u64,
         intent: &AdmittedMachineIntent,
         observed: u64,
+        first: &RefusalReport,
     ) -> Result<wire::SubmitMachineIntentResponse, WireIntentError> {
+        let unfinished = first.first_status.as_deref().is_some_and(|status| {
+            status.starts_with(STATUS_QUEUED) || status.starts_with(STATUS_IN_PROGRESS)
+        });
+        if unfinished {
+            return Err(WireIntentError::NotServedYet);
+        }
         let operation = u128::from_be_bytes(*intent.operation.as_bytes());
         let trace = self
             .trace(format!("{operation:032x}"))

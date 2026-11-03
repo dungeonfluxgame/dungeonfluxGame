@@ -481,6 +481,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::Help => Ok(usage_text()),
         Command::Engine(command) => crate::engine::run(port, command).await,
         Command::SceneBuilder(command) => crate::scene_builder::execute(port, command).await,
+        Command::Director(command) => crate::director::execute(port, command).await,
         Command::Repl => Err(DevError::Rejected(
             "repl is started from the command line: df-table dev repl".to_owned(),
         )),

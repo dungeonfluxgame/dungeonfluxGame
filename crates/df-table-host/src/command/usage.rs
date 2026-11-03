@@ -55,6 +55,7 @@ pub fn usage_text() -> String {
     let playground_keys = playground_keys();
     let engine_help = crate::engine::help_text();
     let scene_builder_help = crate::scene_builder::help_text();
+    let director_help = crate::director::help_text();
     let screens_help = format!(
         "{}{}{}{}{}{}",
         super::scene_lobby::HELP,
@@ -97,7 +98,7 @@ pub fn usage_text() -> String {
          \n  {FIXTURES_USAGE}\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\
          \n  {SCRIPT_USAGE}\n      run a file of commands, one per line; a line may start with #\n\
-         {engine_help}{scene_builder_help}{screens_help}\n  help\n      this text\n\
+         {engine_help}{scene_builder_help}{director_help}{screens_help}\n  help\n      this text\n\
          \nQuote a value with spaces: name=\"Pip the Brave\".\n\
          Several effects in one command are applied in order and every failure is reported;\n\
          a script stops at its first failing line.\n\
