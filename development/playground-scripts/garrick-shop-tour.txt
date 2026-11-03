@@ -1,0 +1,12 @@
+# Garrick's shop: the scene, then the components placed one at a time as they are built.
+# Needs the playground host running (df-table serve). The first lines work today; the lines for
+# the new components (scene narration, seats, panel, status) are added as those verbs land.
+playground go scene_garrick_shop
+scene reset
+wait 1500
+# A few live touches with the verbs that exist today.
+scene caption "Ah, back again? New supplies, a sturdier blade, or perhaps something a little more... unique?" speaker="Garrick the Trader"
+wait 2500
+scene party set Kael hp=17
+wait 1500
+scene party set Kael hp=22
