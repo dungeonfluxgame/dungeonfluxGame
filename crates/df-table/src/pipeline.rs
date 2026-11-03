@@ -271,6 +271,9 @@ pub struct Pipeline<'a> {
     settings: &'a Settings,
     limits: PipelineLimits,
     choices: Choices,
+    /// Whether PROJECT also publishes what the running machine says for itself: the buttons it
+    /// states for each seat and its own line after an applied turn.
+    machine_surface: bool,
 }
 
 impl<'a> Pipeline<'a> {
@@ -285,7 +288,19 @@ impl<'a> Pipeline<'a> {
             settings,
             limits: PipelineLimits::default(),
             choices: Choices::new().map_err(PipelineError::InvalidChoiceName)?,
+            machine_surface: false,
         })
+    }
+
+    /// Makes PROJECT publish what the running machine says for itself (H3): for a seat with no
+    /// pending of its own, the buttons the machine states for it (`Machine::standing_offers`), so
+    /// a phone can tap the lobby's ready and start; and, after an applied turn, the machine's own
+    /// public line (`Machine::project`) added to the structured readout, so the shared screen says
+    /// what the scene says. Off by default: a pipeline built without it publishes only the buttons
+    /// of pendings and clarifications and the structured readout, as before.
+    pub fn with_machine_surface(mut self) -> Self {
+        self.machine_surface = true;
+        self
     }
 
     pub fn with_limits(mut self, limits: PipelineLimits) -> Self {

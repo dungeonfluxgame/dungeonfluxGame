@@ -233,6 +233,30 @@ impl Machine for LobbyMachine {
         }
     }
 
+    /// A seated seat in the gathering lobby may toggle ready, leave, or start: `start` is always
+    /// offered, and the lobby's own decline says who is not ready yet.
+    fn standing_offers(
+        &self,
+        table: &TableState,
+        slot: &MachineSlot,
+        seat: SeatId,
+    ) -> Vec<ActionId> {
+        let (Ok(LobbyState::Gathering { ready }), true) =
+            (self.state_of(slot), table.seats().contains(&seat))
+        else {
+            return Vec::new();
+        };
+        let toggle = if ready.contains(&seat) {
+            LobbyAction::Unready
+        } else {
+            LobbyAction::Ready
+        };
+        [toggle, LobbyAction::Start, LobbyAction::Leave]
+            .into_iter()
+            .filter_map(|action| ActionId::new(action.key()).ok())
+            .collect()
+    }
+
     fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {
         Ok(self.state_name(slot)?.as_str() == STARTED)
     }

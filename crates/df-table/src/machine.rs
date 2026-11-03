@@ -577,6 +577,20 @@ pub trait Machine: Send + Sync {
         audience: Audience,
     ) -> Result<MachineReadout, MachineError>;
 
+    /// The actions `seat`, which is at the table, may take now: the buttons its phone holds while
+    /// nothing is pending (H3). A list the machine states itself, never a guess from the words of
+    /// a line; the pipeline publishes it only when asked to (`Pipeline::with_machine_surface`),
+    /// and a tap on one still goes through `accepts` and the rules like any other. The default is
+    /// none, so a machine with no standing choices needs no code.
+    fn standing_offers(
+        &self,
+        _table: &TableState,
+        _state: &MachineSlot,
+        _seat: SeatId,
+    ) -> Vec<ActionId> {
+        Vec::new()
+    }
+
     /// The machine's report on itself: the conformance suite requires it and
     /// `inspect::MachinesOf` serves it.
     fn inspect(&self, state: &MachineSlot) -> Result<InspectReport, MachineError>;

@@ -435,3 +435,19 @@ fn a_fixture_without_a_refused_entry_fails_for_a_machine_that_reads_its_entry() 
             .contains(&conformance::ConformanceCheck::EntryRefusal)
     );
 }
+
+#[test]
+fn the_check_is_a_standing_offer_to_a_seat_at_the_table_while_the_beat_is_presented() {
+    let (machine, slot, table) = entered();
+    assert_eq!(
+        machine.standing_offers(&table, &slot, seat(1)),
+        [action("investigate")]
+    );
+    assert!(machine.standing_offers(&table, &slot, seat(9)).is_empty());
+    let waiting = waiting_state(&machine, &slot, &table);
+    assert!(
+        machine
+            .standing_offers(&table, &waiting, seat(1))
+            .is_empty()
+    );
+}

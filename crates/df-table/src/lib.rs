@@ -73,6 +73,7 @@ pub mod canvas;
 pub mod config;
 #[cfg(any(test, feature = "testkit"))]
 pub mod conformance;
+pub mod dialogue;
 pub mod ecs;
 pub mod effects;
 pub mod element;
@@ -129,6 +130,8 @@ mod canvas_travel_tests;
 mod config_tests;
 #[cfg(test)]
 mod conformance_tests;
+#[cfg(test)]
+mod dialogue_tests;
 #[cfg(test)]
 mod ecs_tests;
 #[cfg(test)]

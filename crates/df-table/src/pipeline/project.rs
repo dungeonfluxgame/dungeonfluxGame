@@ -51,7 +51,10 @@ impl Pipeline<'_> {
         };
         let text = match turn.replayed_readout.clone() {
             Some(shown) => shown,
-            None => self.readout_text(&turn, table, &outcome),
+            None => {
+                let text = self.readout_text(&turn, table, &outcome);
+                self.with_machine_line(text, table, &outcome)
+            }
         };
         let readout = Readout::new(text);
         if !turn.replayed && !turn.is_unidentified() {
@@ -102,6 +105,27 @@ impl Pipeline<'_> {
             } else {
                 Vec::new()
             },
+        }
+    }
+
+    /// The readout with the line the running machine says for itself after an applied turn, when
+    /// the pipeline was asked for the machine's surface (`with_machine_surface`): the public
+    /// reading of the machine as the turn left it, so the shared screen says what the scene says
+    /// (the guard's answer, the lobby's count). A machine that cannot read itself adds nothing.
+    fn with_machine_line(&self, text: String, table: &PipelineTable, outcome: &Outcome) -> String {
+        if !self.machine_surface || !matches!(outcome, Outcome::Applied) {
+            return text;
+        }
+        let snapshot = table.facts().snapshot();
+        let Some(running) = table.running(&snapshot) else {
+            return text;
+        };
+        let Some(machine) = self.registry.machine(running.id) else {
+            return text;
+        };
+        match machine.project(table.facts(), running.slot, Audience::Public) {
+            Ok(line) => format!("{text} {}", line.as_str()),
+            Err(_) => text,
         }
     }
 
@@ -359,7 +383,7 @@ impl Pipeline<'_> {
                     }
                 }
             }
-            if offers::sync_offers(table).is_err() {
+            if offers::sync_offers(table, self.machine_surface.then_some(self.registry)).is_err() {
                 self.view_failed(turn, table, ViewPart::Offers, None);
             }
         }

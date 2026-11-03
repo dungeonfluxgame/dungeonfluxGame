@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effects::{BeatName, TableEffect, TableState};
 use crate::element::NameError;
-use crate::identity::SceneId;
+use crate::identity::{SceneId, SeatId};
 use crate::machine::{
     CarryItem, Decision, Entry, EntryRefusal, HandOff, InspectReport, Machine, MachineError,
     MachineId, MachineInput, MachineReadout, MachineSpec, Scope, SpecError, StateName, StepInput,
@@ -85,6 +85,13 @@ pub struct ExploreMachine {
 
 impl ExploreMachine {
     pub fn new(beat: AuthoredBeat) -> Result<Self, SpecError> {
+        Self::followed_by(beat, NEXT_MACHINE)
+    }
+
+    /// The machine with the machine it hands the table to when the beat is done: `new` hands it
+    /// back to the lobby, and a story that goes on (the first playable path hands the table to its
+    /// conversation) names the next scene machine here. The registry checks the target.
+    pub fn followed_by(beat: AuthoredBeat, next: &str) -> Result<Self, SpecError> {
         let spec = MachineSpec::new(
             "explore",
             Scope::Group,
@@ -92,11 +99,11 @@ impl ExploreMachine {
             &[PRESENTING, AWAITING_ROLL, RESOLVED],
             SuspendPolicy::FinishAndHold,
         )?
-        .handing_off_to(NEXT_MACHINE)?
+        .handing_off_to(next)?
         .requiring_port(PortName::RulesOwner)
         .with_rules_action(beat.check.clone())?
         .reading_entry();
-        let next_machine = MachineId::new(NEXT_MACHINE).map_err(SpecError::InvalidName)?;
+        let next_machine = MachineId::new(next).map_err(SpecError::InvalidName)?;
         Ok(Self {
             spec,
             next_machine,
@@ -202,6 +209,23 @@ impl Machine for ExploreMachine {
                 Ok(StepResult::declined(decline.clone()))
             }
             _ => not_viable(),
+        }
+    }
+
+    fn standing_offers(
+        &self,
+        table: &TableState,
+        slot: &MachineSlot,
+        seat: SeatId,
+    ) -> Vec<ActionId> {
+        let input = MachineInput::Intent {
+            seat,
+            action: self.beat.check.clone(),
+        };
+        if self.accepts(table, &input, slot) {
+            vec![self.beat.check.clone()]
+        } else {
+            Vec::new()
         }
     }
 

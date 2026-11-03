@@ -484,3 +484,30 @@ fn a_decline_hands_back_no_copy_of_the_state() {
     assert!(refused.state.is_none());
     assert_eq!(refused.state_after(&slot), &slot);
 }
+
+#[test]
+fn a_seated_seat_in_the_gathering_lobby_is_offered_ready_start_and_leave_and_a_stranger_nothing() {
+    let table = table_with_two_seated();
+    let (machine, slot) = entered(&table);
+    let names = |offers: Vec<ActionId>| -> Vec<String> {
+        offers
+            .iter()
+            .map(|offer| offer.as_str().to_owned())
+            .collect()
+    };
+    assert_eq!(
+        names(machine.standing_offers(&table, &slot, seat(1))),
+        ["ready", "start", "leave"]
+    );
+    assert!(machine.standing_offers(&table, &slot, seat(9)).is_empty());
+    let ready = run(&machine, &table, &slot, intent(1, "ready"));
+    let after = ready.state_after(&slot).clone();
+    assert_eq!(
+        names(machine.standing_offers(&table, &after, seat(1))),
+        ["unready", "start", "leave"]
+    );
+    assert_eq!(
+        names(machine.standing_offers(&table, &after, seat(2))),
+        ["ready", "start", "leave"]
+    );
+}
