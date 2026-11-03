@@ -1,0 +1,98 @@
+# The player lobby (the shared screen before a game starts): five components over the hall plate,
+# assembled one at a time, then changed field by field. The title block is the session's name; the seat
+# cards are the players (a ready seal in gold, a violet bar while a hero is made, an open seat with a plus,
+# the host's crown); the join panel is the game code beside its QR picture; the party summary counts who is
+# ready; the Begin Adventure plate is the one primary action. Every figure is a number or a word the server
+# sends, so each can be set here. The QR picture is a placeholder, not a scannable code.
+# Needs the playground host running (df-table serve) and the pictures in assets/playground/media.
+playground go ui_lobby
+scene reset
+# Start from the bare hall: take away the whole lobby the fixture draws.
+scene lobby clear
+wait 2500
+# The session's name first: the line over it, the name in gold, its words and the rule.
+scene lobby set title The Ashen Citadel Awaits
+wait 1500
+scene lobby set subtitle "A lost stronghold. Ancient machines. A power that should have stayed buried."
+wait 2000
+# The seats, one at a time. The number after the last adds a seat; `seats 6` makes the table six seats.
+scene lobby seat 1 state=locked name=Cam class=Paladin level=5 glyph=shield portrait=lobby-cam.webp host=true
+wait 1200
+scene lobby seat 2 state=creating name=Alyssa portrait=lobby-mage.webp stage="Creating character" progress=35
+wait 1200
+scene lobby seat 3 state=locked name=Nyx class=Rogue level=4 glyph=sword portrait=lobby-nyx.webp
+wait 1200
+scene lobby seats 6
+wait 2000
+# How a phone joins: the game code, over its QR picture.
+scene lobby join code=AC7F-K8M2 hint="Scan, or enter the game code"
+wait 2200
+# How many are ready, and who the table is waiting for.
+scene lobby party joined=2 capacity=6 word=Ready detail="Alyssa is still choosing" icon=check
+wait 2200
+# The one primary action. It starts quiet, with a note, until the table is ready; the focus is on it from the start.
+scene lobby begin label="Begin Adventure" enabled=false note="Waiting for Alyssa to finish her hero"
+wait 3000
+# A player finishes her hero: the bar fills, the seat turns ready, the count changes, the button lights.
+scene lobby seat 2 progress=80
+wait 1500
+scene lobby seat 2 state=locked class=Mage level=5 glyph=star
+wait 1800
+scene lobby party joined=3 detail="Everyone who joined is ready"
+wait 1500
+scene lobby begin enabled=true
+wait 3000
+# More players: a seat fills, one is closed by the host.
+scene lobby seat 4 state=creating name=Marco stage="Creating character" progress=55
+wait 1800
+scene lobby seat 6 state=closed
+wait 1800
+scene lobby party joined=4 detail="Marco is still choosing"
+wait 2500
+# The focus (where the remote is): across the seats and back to the begin plate. Exactly one at a time.
+scene lobby focus seat:1
+wait 1500
+scene lobby focus seat:2
+wait 1500
+scene lobby focus seat:3
+wait 1500
+scene lobby focus begin
+wait 2000
+scene lobby focus none
+wait 1500
+# Change one field at a time: the title, a name, a class, the code.
+scene lobby set title "The Ember Roads"
+wait 2200
+scene lobby set title "The Ashen Citadel Awaits"
+wait 1500
+scene lobby seat 1 name="Cam the Bold" level=6
+wait 2200
+scene lobby seat 1 name=Cam level=5
+wait 1500
+scene lobby join code=ZK9P-3QW7
+wait 2200
+scene lobby join code=AC7F-K8M2
+wait 1500
+# A smaller table: four seats, then back to six. A title that is long steps down in size.
+scene lobby seats 4
+wait 2500
+scene lobby seats 6
+wait 2000
+scene lobby set title "The Long Road Back to the Ashen Citadel of the Three Forgotten Kings"
+wait 2800
+scene lobby set title "The Ashen Citadel Awaits"
+wait 1500
+# A component goes and comes back.
+scene lobby remove party
+wait 2000
+scene lobby party joined=4 capacity=6 word=Ready detail="Marco is still choosing"
+wait 2000
+scene lobby remove join
+wait 2000
+scene lobby join code=AC7F-K8M2 hint="Scan, or enter the game code"
+wait 2500
+# Everyone ready.
+scene lobby seat 4 state=locked class=Ranger level=3 glyph=bow
+wait 1500
+scene lobby party joined=4 detail="Everyone is ready"
+wait 3000

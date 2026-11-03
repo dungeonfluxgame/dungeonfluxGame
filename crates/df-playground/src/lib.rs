@@ -78,6 +78,12 @@ mod view_kit;
 #[cfg(target_arch = "wasm32")]
 mod view_lobby;
 #[cfg(target_arch = "wasm32")]
+mod view_lobby_page;
+#[cfg(target_arch = "wasm32")]
+mod view_lobby_panels;
+#[cfg(target_arch = "wasm32")]
+mod view_lobby_seat;
+#[cfg(target_arch = "wasm32")]
 mod view_narration;
 #[cfg(target_arch = "wasm32")]
 mod view_overlays;

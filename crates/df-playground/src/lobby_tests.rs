@@ -2,9 +2,10 @@
 //! count and a code read, the placeholder QR cells and where a bubble's tail sits.
 
 use crate::lobby_model::{
-    Bubble, BubbleTone, CHARACTER_STEPS, Invite, LEGEND, LobbySeat, PartyCount, QR_CELLS,
-    SeatState, SummaryIcon, count_text, party_text, qr_like_cells, seat_view, session_text,
-    spaced_code, summary_word, tail_of,
+    BEGIN_FOCUS_ID, BeginButton, Bubble, BubbleTone, CHARACTER_STEPS, LobbyScreen, LobbySeat,
+    PartyCount, PartySummary, QR_CELLS, SEATS_SHOWN, SeatState, SummaryIcon, count_text,
+    party_text, qr_like_cells, seat_focus_id, seat_size_key, seat_view, session_text, summary_word,
+    tail_of, title_size_key,
 };
 
 fn seat(state: SeatState) -> LobbySeat {
@@ -46,7 +47,7 @@ fn a_closed_seat_says_closed_not_locked_in() {
 }
 
 #[test]
-fn a_locked_in_seat_shows_class_and_level_and_the_locked_in_badge() {
+fn a_locked_in_seat_shows_class_and_level_and_the_ready_seal() {
     let mut cam = seat(SeatState::LockedIn);
     cam.name = Some("  Cam ".to_owned());
     cam.class = Some("Paladin".to_owned());
@@ -54,14 +55,14 @@ fn a_locked_in_seat_shows_class_and_level_and_the_locked_in_badge() {
     let view = seat_view(&cam, 0);
     assert_eq!(view.name, "Cam");
     assert_eq!(view.sub_line.as_deref(), Some("Paladin \u{2022} Lv 5"));
-    assert_eq!(view.badge.as_deref(), Some("Locked in"));
+    assert_eq!(view.badge.as_deref(), Some("Ready"));
 }
 
 #[test]
 fn a_badge_word_from_the_scene_replaces_the_states_own() {
     let mut nyx = seat(SeatState::LockedIn);
-    nyx.badge = Some("Ready".to_owned());
-    assert_eq!(seat_view(&nyx, 2).badge.as_deref(), Some("Ready"));
+    nyx.badge = Some("Locked in".to_owned());
+    assert_eq!(seat_view(&nyx, 2).badge.as_deref(), Some("Locked in"));
 }
 
 #[test]
@@ -91,9 +92,8 @@ fn progress_and_step_belong_to_a_creating_seat_only() {
 }
 
 #[test]
-fn counts_codes_and_pills_read_the_way_the_renders_do() {
+fn counts_and_pills_read_the_way_the_renders_do() {
     assert_eq!(count_text(4, 6), "4 of 6");
-    assert_eq!(spaced_code("AC7F-K8M2"), "A C 7 F \u{2013} K 8 M 2");
     assert_eq!(
         party_text(PartyCount {
             joined: 4,
@@ -109,26 +109,65 @@ fn counts_codes_and_pills_read_the_way_the_renders_do() {
 
 #[test]
 fn the_summary_word_defaults_to_joined() {
-    let mut invite = Invite {
-        heading: None,
-        hint: None,
-        join_link: None,
-        game_code: None,
+    let mut party = PartySummary {
         joined: 3,
         capacity: 6,
         word: None,
         detail: None,
         icon: SummaryIcon::Check,
     };
-    assert_eq!(summary_word(&invite), "Joined");
-    invite.word = Some("Ready".to_owned());
-    assert_eq!(summary_word(&invite), "Ready");
+    assert_eq!(summary_word(&party), "Joined");
+    party.word = Some("Ready".to_owned());
+    assert_eq!(summary_word(&party), "Ready");
+}
+
+fn lobby(seats: usize, begin: bool) -> LobbyScreen {
+    LobbyScreen {
+        eyebrow: None,
+        title: "The Ashen Citadel Awaits".to_owned(),
+        subtitle: None,
+        seats: (0..seats).map(|_| seat(SeatState::Open)).collect(),
+        join: None,
+        party: None,
+        begin: begin.then_some(BeginButton {
+            label: None,
+            enabled: true,
+            note: None,
+        }),
+        focus: None,
+    }
 }
 
 #[test]
-fn the_legend_names_the_three_states_in_order() {
-    let keys: Vec<&str> = LEGEND.iter().map(|entry| entry.key).collect();
-    assert_eq!(keys, ["locked", "creating", "open"]);
+fn the_focus_is_the_begin_button_unless_the_scene_says_otherwise() {
+    let mut screen = lobby(4, true);
+    assert_eq!(screen.focus_id().as_deref(), Some(BEGIN_FOCUS_ID));
+    screen.focus = Some(seat_focus_id(2));
+    assert_eq!(screen.focus_id().as_deref(), Some("seat:2"));
+    assert_eq!(lobby(4, false).focus_id(), None);
+}
+
+#[test]
+fn the_lobby_draws_at_most_six_seats_and_keeps_the_rest_in_its_data() {
+    let screen = lobby(9, true);
+    assert_eq!(screen.shown_seats().len(), SEATS_SHOWN);
+    assert_eq!(screen.seats.len(), 9);
+    assert!(lobby(0, true).shown_seats().is_empty());
+}
+
+#[test]
+fn cards_are_wide_up_to_five_seats_and_narrow_at_six() {
+    assert_eq!(seat_size_key(2), "wide");
+    assert_eq!(seat_size_key(5), "wide");
+    assert_eq!(seat_size_key(6), "narrow");
+}
+
+#[test]
+fn a_long_title_steps_down_in_size() {
+    assert_eq!(title_size_key("The Ashen Citadel Awaits"), "full");
+    assert_eq!(title_size_key(&"x".repeat(35)), "middle");
+    assert_eq!(title_size_key(&"x".repeat(90)), "long");
+    assert_eq!(title_size_key("   "), "full");
 }
 
 #[test]

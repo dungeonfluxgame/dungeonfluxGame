@@ -7,7 +7,8 @@
 //! value is of the right kind.
 
 use df_playground::lobby_change::{
-    BeginEdit, ChipEdit, InviteEdit, LoadingEdit, LobbyLine, RoleplayEdit, ScreenEdit, SeatEdit,
+    BeginEdit, ChipEdit, JoinEdit, LoadingEdit, LobbyLine, LobbyPart, PartyEdit, RoleplayEdit,
+    ScreenEdit, SeatEdit,
 };
 use df_playground::lobby_model::{BubbleTone, CHARACTER_STEPS, SeatState, SummaryIcon};
 use df_playground::overlay::Glyph;
@@ -15,13 +16,13 @@ use df_playground::scene::SceneChange;
 
 use super::{Command, CommandError, bad_choice, count, keyed, truth};
 
-pub(super) const LOBBY_USAGE: &str = "scene lobby set title|subtitle|eyebrow <text> | seat <n> [state=locked|creating|open|closed] [name=T] [class=T] [glyph=G] [level=N] [portrait=FILE] [step=class|race|finalize] [progress=0-100] [stage=T] [badge=T] [host=true|false] [controller=true|false] | invite [code=T] [link=T] [joined=N] [capacity=N] [heading=T] [hint=T] [word=T] [detail=T] [icon=check|people|spinner] | begin [enabled=true|false] [label=T] [note=T] | legend on|off | clear";
+pub(super) const LOBBY_USAGE: &str = "scene lobby set title|subtitle|eyebrow <text> | seats <n> | seat <n> [state=locked|creating|open|closed] [name=T] [class=T] [glyph=G] [level=N] [portrait=FILE] [step=class|race|finalize] [progress=0-100] [stage=T] [badge=T] [host=true|false] [controller=true|false] | join [code=T] [link=T] [hint=T] | party [joined=N] [capacity=N] [word=T] [detail=T] [icon=check|people|spinner] | begin [enabled=true|false] [label=T] [note=T] | focus begin|seat:<n>|none | remove title|seats|join|party|begin | clear";
 pub(super) const LOADING_USAGE: &str = "scene loading set [kicker=T] [title=T] [subtitle=T] [label=T] [percent=0-100] [narrator=T] [status=T] [portrait=FILE] | seat <n> [name=T] [portrait=FILE] [ready=true|false] | clear";
 pub(super) const ROLEPLAY_USAGE: &str = "scene roleplay set [title=T] [icon=G] [bubble=N] [speaker=T] [line=T] [emphasis=T] [speaker-icon=G] [portrait=FILE] [tone=hero|ally|mystic|npc|narrator|danger] [left=0-100] [top=0-100] [width=0-100] [tail-x=0-100] [tail-y=0-100] [caption=T] | clear";
 
 /// The help lines of these verbs, as `help` prints them.
 pub(super) const HELP: &str = concat!(
-    "\n  scene lobby ...\n      the lobby: its words, its seats, the invite panel, the begin button and the key\n      (scene lobby set|seat|invite|begin|legend|clear)\n",
+    "\n  scene lobby ...\n      the player lobby: its title words, its seats (seats <n> sets how many, seat <n> changes\n      one), the join code, the party summary, the begin button, focus <id> (the one element the\n      remote is on, begin or seat:2), remove <part>, clear\n",
     "\n  scene loading ...\n      the loading screen: its words, the bar's percent, the narrator and the seats\n",
     "\n  scene roleplay ...\n      the roleplay card: the title bar, a speech bubble (by number), the caption\n",
 );
@@ -125,23 +126,33 @@ fn lobby_seat(rest: &[String]) -> Result<Command, CommandError> {
     screen(ScreenEdit::LobbySeat { number, seat })
 }
 
-fn lobby_invite(pairs: &[String]) -> Result<Command, CommandError> {
-    let mut invite = InviteEdit::default();
-    let keys = [
-        "code", "link", "joined", "capacity", "heading", "hint", "word", "detail", "icon",
-    ];
-    for (key, value) in keyed(pairs, "the keys in `scene lobby invite`", &keys)? {
+fn lobby_join(pairs: &[String]) -> Result<Command, CommandError> {
+    let mut join = JoinEdit::default();
+    for (key, value) in keyed(
+        pairs,
+        "the keys in `scene lobby join`",
+        &["code", "link", "hint"],
+    )? {
         match key {
-            "code" => invite.game_code = text(value),
-            "link" => invite.join_link = text(value),
-            "joined" => invite.joined = Some(small(key, value)?),
-            "capacity" => invite.capacity = Some(small(key, value)?),
-            "heading" => invite.heading = text(value),
-            "hint" => invite.hint = text(value),
-            "word" => invite.word = text(value),
-            "detail" => invite.detail = text(value),
+            "code" => join.game_code = text(value),
+            "link" => join.join_link = text(value),
+            _ => join.hint = text(value),
+        }
+    }
+    screen(ScreenEdit::LobbyJoin { join })
+}
+
+fn lobby_party(pairs: &[String]) -> Result<Command, CommandError> {
+    let mut party = PartyEdit::default();
+    let keys = ["joined", "capacity", "word", "detail", "icon"];
+    for (key, value) in keyed(pairs, "the keys in `scene lobby party`", &keys)? {
+        match key {
+            "joined" => party.joined = Some(small(key, value)?),
+            "capacity" => party.capacity = Some(small(key, value)?),
+            "word" => party.word = text(value),
+            "detail" => party.detail = text(value),
             _ => {
-                invite.icon = Some(
+                party.icon = Some(
                     serde_json::from_value::<SummaryIcon>(serde_json::Value::String(
                         value.to_owned(),
                     ))
@@ -150,14 +161,23 @@ fn lobby_invite(pairs: &[String]) -> Result<Command, CommandError> {
             }
         }
     }
-    screen(ScreenEdit::LobbyInvite { invite })
+    screen(ScreenEdit::LobbyParty { party })
 }
 
 fn lobby(words: &[String]) -> Result<Command, CommandError> {
     match words {
         [verb] if verb == "clear" => screen(ScreenEdit::LobbyClear {}),
-        [verb, onoff] if verb == "legend" => screen(ScreenEdit::LobbyLegend {
-            shown: truth("legend", onoff)?,
+        [verb, id] if verb == "focus" => screen(ScreenEdit::LobbyFocus {
+            id: (id != "none").then(|| id.clone()),
+        }),
+        [verb, name] if verb == "remove" => {
+            let part = LobbyPart::from_key(name)
+                .ok_or_else(|| bad_choice("the part", name, &LobbyPart::keys_text()))?;
+            screen(ScreenEdit::LobbyRemove { part })
+        }
+        [verb, number] if verb == "seats" => screen(ScreenEdit::LobbySeats {
+            count: usize::try_from(count("the number of seats", number)?)
+                .map_err(|_| CommandError::Usage(LOBBY_USAGE))?,
         }),
         [verb, which, words @ ..] if verb == "set" && !words.is_empty() => {
             let field = match which.as_str() {
@@ -172,7 +192,8 @@ fn lobby(words: &[String]) -> Result<Command, CommandError> {
             })
         }
         [verb, rest @ ..] if verb == "seat" => lobby_seat(rest),
-        [verb, pairs @ ..] if verb == "invite" && !pairs.is_empty() => lobby_invite(pairs),
+        [verb, pairs @ ..] if verb == "join" && !pairs.is_empty() => lobby_join(pairs),
+        [verb, pairs @ ..] if verb == "party" && !pairs.is_empty() => lobby_party(pairs),
         [verb, pairs @ ..] if verb == "begin" && !pairs.is_empty() => {
             let mut begin = BeginEdit::default();
             for (key, value) in keyed(

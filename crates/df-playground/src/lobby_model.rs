@@ -15,20 +15,27 @@ use crate::overlay::Glyph;
 
 /// The three steps of making a character, in the order the seat card's dots show them.
 pub const CHARACTER_STEPS: [&str; 3] = ["Class", "Race", "Finalize"];
-/// The word on a locked-in seat's badge when the scene does not give one.
-pub const LOCKED_IN_WORD: &str = "Locked in";
+/// The word on a locked-in seat's seal when the scene does not give one.
+pub const LOCKED_IN_WORD: &str = "Ready";
 /// What a seat that is making a character says when the scene does not say.
 pub const CREATING_WORD: &str = "Creating character";
 /// The word under an open seat's name.
 pub const OPEN_WORD: &str = "Open";
 /// The word under a closed seat's name.
 pub const CLOSED_WORD: &str = "Closed";
-/// What the invite panel is called when the scene does not say.
-pub const INVITE_HEADING: &str = "Invite players";
-/// What the invite panel says under its heading when the scene does not say.
-pub const INVITE_HINT: &str = "Have friends join this session";
-/// The label of the game code box.
-pub const GAME_CODE_LABEL: &str = "Game code";
+/// What the join panel says over the game code when the scene does not say.
+pub const JOIN_HINT: &str = "Game code";
+/// The most seats the lobby draws: a television density rule (fewer, bigger things), not a limit
+/// on the data. The seats after these stay in the data.
+pub const SEATS_SHOWN: usize = 6;
+/// The most seats a lobby draws at the wide card size; one more draws all at the narrow size.
+pub const WIDE_SEATS: usize = 5;
+/// The longest title, in characters, drawn at the full size; longer ones step down.
+pub const TITLE_FULL_CHARACTERS: usize = 26;
+/// The longest title, in characters, drawn at the middle size.
+pub const TITLE_MIDDLE_CHARACTERS: usize = 40;
+/// The id of the begin button for the remote's focus.
+pub const BEGIN_FOCUS_ID: &str = "begin";
 /// The word after the count of players when the scene does not say.
 pub const JOINED_WORD: &str = "Joined";
 /// What the begin button says when the scene does not say.
@@ -108,24 +115,28 @@ pub enum SummaryIcon {
     Spinner,
 }
 
-/// How players join and how many have.
+/// How a phone joins: the game code, the link it belongs to and the words over the code.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct JoinCode {
+    /// The words over the code; "Game code" when left out.
+    pub hint: Option<String>,
+    /// The address of the join page. It is data for the phone's side: the television draws the
+    /// code and its QR picture only.
+    pub join_link: Option<String>,
+    pub game_code: Option<String>,
+}
+
+/// How many players are at the table and what they are doing: "4 of 6 Ready".
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Invite {
-    #[serde(default)]
-    pub heading: Option<String>,
-    #[serde(default)]
-    pub hint: Option<String>,
-    #[serde(default)]
-    pub join_link: Option<String>,
-    #[serde(default)]
-    pub game_code: Option<String>,
+pub struct PartySummary {
     pub joined: u8,
     pub capacity: u8,
     /// The word after the count, such as "Joined", "Ready" or "Locked in".
     #[serde(default)]
     pub word: Option<String>,
-    /// A second line under the count, such as "2 in character selection".
+    /// A second line under the count, such as "2 still choosing".
     #[serde(default)]
     pub detail: Option<String>,
     #[serde(default)]
@@ -140,12 +151,13 @@ pub struct BeginButton {
     pub label: Option<String>,
     #[serde(default)]
     pub enabled: bool,
-    /// What a button that may not be pressed says, such as "Wait for all players to be ready".
+    /// What a button that may not be pressed says, such as "Waiting for 2 players".
     #[serde(default)]
     pub note: Option<String>,
 }
 
-/// The lobby: title block, six seats, the invite panel, the begin button and the key.
+/// The player lobby: the session's name, the seats, how a phone joins, how many are ready and the
+/// begin button. Each is its own component and is drawn only when the scene has it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LobbyScreen {
@@ -157,12 +169,54 @@ pub struct LobbyScreen {
     #[serde(default)]
     pub seats: Vec<LobbySeat>,
     #[serde(default)]
-    pub invite: Option<Invite>,
+    pub join: Option<JoinCode>,
+    #[serde(default)]
+    pub party: Option<PartySummary>,
     #[serde(default)]
     pub begin: Option<BeginButton>,
-    /// Whether the key to the seat states is drawn.
+    /// The one element the remote is on: `begin` or `seat:<n>` (counted from 1). Without one the
+    /// focus is on the begin button.
     #[serde(default)]
-    pub legend: bool,
+    pub focus: Option<String>,
+}
+
+/// The focus id of the seat numbered `number`, counted from 1.
+pub fn seat_focus_id(number: usize) -> String {
+    format!("seat:{number}")
+}
+
+impl LobbyScreen {
+    /// The id of the element that has focus: the scene's own, or else the begin button.
+    pub fn focus_id(&self) -> Option<String> {
+        match &self.focus {
+            Some(id) => Some(id.clone()),
+            None => self.begin.as_ref().map(|_| BEGIN_FOCUS_ID.to_owned()),
+        }
+    }
+
+    /// The seats the lobby draws: the first `SEATS_SHOWN`.
+    pub fn shown_seats(&self) -> &[LobbySeat] {
+        &self.seats[..self.seats.len().min(SEATS_SHOWN)]
+    }
+}
+
+/// How the title is sized: the full size for a short name and a step down for a long one, so a
+/// long name stays on one or two lines above the seats.
+pub fn title_size_key(title: &str) -> &'static str {
+    match title.trim().chars().count() {
+        0..=TITLE_FULL_CHARACTERS => "full",
+        count if count <= TITLE_MIDDLE_CHARACTERS => "middle",
+        _ => "long",
+    }
+}
+
+/// How wide the seat cards are: the wide size for up to `WIDE_SEATS` seats, the narrow for more.
+pub fn seat_size_key(drawn: usize) -> &'static str {
+    if drawn <= WIDE_SEATS {
+        "wide"
+    } else {
+        "narrow"
+    }
 }
 
 /// The narrator's chip of the loading screen.
@@ -322,7 +376,7 @@ pub struct SeatView {
     pub step: Option<usize>,
 }
 
-/// The state key of a seat, used for its class and for the legend.
+/// The state key of a seat, used for its class.
 pub fn seat_key(state: SeatState) -> &'static str {
     match state {
         SeatState::LockedIn => "locked",
@@ -384,14 +438,14 @@ pub fn seat_view(seat: &LobbySeat, index: usize) -> SeatView {
     }
 }
 
-/// "4 of 6", the count the invite panel states.
+/// "4 of 6", the count the party summary states.
 pub fn count_text(joined: u8, capacity: u8) -> String {
     format!("{joined} of {capacity}")
 }
 
 /// The word after the count.
-pub fn summary_word(invite: &Invite) -> &str {
-    clean(invite.word.as_ref()).unwrap_or(JOINED_WORD)
+pub fn summary_word(party: &PartySummary) -> &str {
+    clean(party.word.as_ref()).unwrap_or(JOINED_WORD)
 }
 
 /// The text of the party pill, "Party: 4 / 6".
@@ -404,51 +458,7 @@ pub fn session_text(name: &str) -> String {
     format!("Session: {}", name.trim())
 }
 
-/// The game code with a space between its characters, so it reads as a code: "AC7F-K8M2" is
-/// "A C 7 F \u{2013} K 8 M 2".
-pub fn spaced_code(code: &str) -> String {
-    let mut spaced = String::with_capacity(code.len() * 2);
-    for (index, character) in code.trim().chars().enumerate() {
-        if index > 0 {
-            spaced.push(' ');
-        }
-        spaced.push(if character == '-' {
-            '\u{2013}'
-        } else {
-            character
-        });
-    }
-    spaced
-}
-
-/// One line of the key to the seat states.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LegendEntry {
-    pub key: &'static str,
-    pub label: &'static str,
-    pub hint: &'static str,
-}
-
-/// The key to the seat states, in the order it is drawn.
-pub const LEGEND: [LegendEntry; 3] = [
-    LegendEntry {
-        key: "locked",
-        label: "Locked in",
-        hint: "Ready to play",
-    },
-    LegendEntry {
-        key: "creating",
-        label: "Creating",
-        hint: "In character setup",
-    },
-    LegendEntry {
-        key: "open",
-        label: "Open",
-        hint: "Available seat",
-    },
-];
-
-/// A placeholder for the invite's QR code: a square of cells that look like one (a finder square
+/// A placeholder for the join panel's QR picture: a square of cells that look like one (a finder square
 /// in three corners and a pattern between them) and are the same every time for the same code. It
 /// is NOT a code anyone can scan: the real one comes from the server. Row by row, `true` is dark.
 pub fn qr_like_cells(code: &str) -> Vec<bool> {

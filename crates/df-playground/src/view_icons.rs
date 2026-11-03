@@ -17,9 +17,7 @@ const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Icon {
     People,
-    Link,
     Controller,
-    Copy,
     Coins,
     Bolt,
     User,
@@ -27,7 +25,6 @@ pub enum Icon {
     Silhouette,
     Spinner,
     CheckRing,
-    PlusRing,
     Waveform,
     Compass,
 }
@@ -41,19 +38,9 @@ impl Icon {
                 r#"<circle cx="16" cy="7" r="4.2"/><path d="M7.5 21c0-5 3.6-8 8.5-8s8.5 3 8.5 8z"/><circle cx="6" cy="9" r="3"/><path d="M0.5 20c0-3.6 2.2-5.8 5.5-5.8 1 0 1.8.2 2.6.6-1.6 1.4-2.5 3.2-2.7 5.2z"/><circle cx="26" cy="9" r="3"/><path d="M31.5 20c0-3.6-2.2-5.8-5.5-5.8-1 0-1.8.2-2.6.6 1.6 1.4 2.5 3.2 2.7 5.2z"/>"#,
                 true,
             ),
-            Self::Link => (
-                "0 0 24 24",
-                r#"<path d="M10 14a4 4 0 0 0 5.6 0l3.4-3.4a4 4 0 0 0-5.6-5.6l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.6 0L5 13.4a4 4 0 0 0 5.6 5.6l1.2-1.2"/>"#,
-                false,
-            ),
             Self::Controller => (
                 "0 0 24 24",
                 r#"<path d="M7 7h10a5 5 0 0 1 4.8 6.4l-.9 3.3a2.4 2.4 0 0 1-4.2.8L15 15H9l-1.7 2.5a2.4 2.4 0 0 1-4.2-.8l-.9-3.3A5 5 0 0 1 7 7z"/><path d="M8 10v3M6.5 11.5h3"/><circle cx="15.5" cy="10.5" r=".6"/><circle cx="17.5" cy="12.5" r=".6"/>"#,
-                false,
-            ),
-            Self::Copy => (
-                "0 0 24 24",
-                r#"<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2"/>"#,
                 false,
             ),
             Self::Coins => (
@@ -81,11 +68,6 @@ impl Icon {
             Self::CheckRing => (
                 "0 0 24 24",
                 r#"<circle cx="12" cy="12" r="10"/><path d="M7 12.5l3.4 3.4L17 9"/>"#,
-                false,
-            ),
-            Self::PlusRing => (
-                "0 0 24 24",
-                r#"<circle cx="12" cy="12" r="10"/><path d="M12 7v10M7 12h10"/>"#,
                 false,
             ),
             Self::Waveform => (

@@ -3,7 +3,7 @@
 //! recorded in the audit log with the component and the field, never the free text.
 
 use df_playground::fixture::Fixture;
-use df_playground::lobby_change::{LobbyLine, PillPart, ScreenEdit};
+use df_playground::lobby_change::{LobbyLine, LobbyPart, PillPart, ScreenEdit};
 use df_playground::lobby_model::{LogoStyle, PartyCount, SeatState, SummaryIcon};
 use df_playground::scene::SceneChange;
 
@@ -80,16 +80,43 @@ fn the_lobby_verbs_read_into_typed_edits() {
     );
     assert_eq!(edit("scene lobby clear"), Ok(ScreenEdit::LobbyClear {}));
     assert_eq!(
-        edit("scene lobby legend on"),
-        Ok(ScreenEdit::LobbyLegend { shown: true })
+        edit("scene lobby seats 4"),
+        Ok(ScreenEdit::LobbySeats { count: 4 })
     );
-    let invite = edit("scene lobby invite code=AC7F-K8M2 link=dungeonflux.com/join/AC7F-K8M2 joined=3 capacity=6 icon=people")
-        .expect("reads");
-    let ScreenEdit::LobbyInvite { invite } = invite else {
-        panic!("an invite edit");
+    assert_eq!(
+        edit("scene lobby focus seat:2"),
+        Ok(ScreenEdit::LobbyFocus {
+            id: Some("seat:2".into())
+        })
+    );
+    assert_eq!(
+        edit("scene lobby focus none"),
+        Ok(ScreenEdit::LobbyFocus { id: None })
+    );
+    assert_eq!(
+        edit("scene lobby remove party"),
+        Ok(ScreenEdit::LobbyRemove {
+            part: LobbyPart::Party
+        })
+    );
+    let ScreenEdit::LobbyJoin { join } =
+        edit("scene lobby join code=AC7F-K8M2 link=dungeonflux.com/join hint=\"Game code\"")
+            .expect("reads")
+    else {
+        panic!("a join edit");
     };
     assert_eq!(
-        (invite.joined, invite.capacity, invite.icon),
+        (join.game_code.as_deref(), join.hint.as_deref()),
+        (Some("AC7F-K8M2"), Some("Game code"))
+    );
+    let ScreenEdit::LobbyParty { party } = edit(
+        "scene lobby party joined=3 capacity=6 word=Ready detail=\"2 still choosing\" icon=people",
+    )
+    .expect("reads") else {
+        panic!("a party edit");
+    };
+    assert_eq!(
+        (party.joined, party.capacity, party.icon),
         (Some(3), Some(6), Some(SummaryIcon::People))
     );
     let ScreenEdit::LobbyBegin { begin } =
@@ -131,15 +158,23 @@ fn the_lobby_verbs_refuse_what_is_not_of_the_right_kind_with_the_usage() {
         Err(CommandError::DuplicateKey(_))
     ));
     assert!(matches!(
-        edit("scene lobby invite joined=many"),
+        edit("scene lobby party joined=many"),
         Err(CommandError::BadChoice { .. })
+    ));
+    assert!(matches!(
+        edit("scene lobby seats many"),
+        Err(CommandError::BadCount { .. })
+    ));
+    assert!(matches!(
+        edit("scene lobby remove legend"),
+        Err(CommandError::BadChoice { .. })
+    ));
+    assert!(matches!(
+        edit("scene lobby invite code=X"),
+        Err(CommandError::Usage(_))
     ));
     assert!(matches!(
         edit("scene lobby set heading Words"),
-        Err(CommandError::BadChoice { .. })
-    ));
-    assert!(matches!(
-        edit("scene lobby legend maybe"),
         Err(CommandError::BadChoice { .. })
     ));
 }
@@ -268,12 +303,12 @@ async fn lobby_changes_are_applied_numbered_drawn_and_audited_without_their_text
     )
     .await
     .expect("applies");
-    run(
-        &running,
-        "scene lobby invite code=AC7F-K8M2 joined=2 capacity=6",
-    )
-    .await
-    .expect("applies");
+    run(&running, "scene lobby join code=AC7F-K8M2")
+        .await
+        .expect("applies");
+    run(&running, "scene lobby party joined=2 capacity=6")
+        .await
+        .expect("applies");
     run(
         &running,
         "scene lobby begin enabled=false note=\"Wait for all players to be ready\"",
@@ -289,10 +324,17 @@ async fn lobby_changes_are_applied_numbered_drawn_and_audited_without_their_text
     assert_eq!(lobby.seats[1].progress_percent, Some(70));
     assert_eq!(
         lobby
-            .invite
+            .party
             .as_ref()
-            .map(|invite| (invite.joined, invite.capacity)),
+            .map(|party| (party.joined, party.capacity)),
         Some((2, 6))
+    );
+    assert_eq!(
+        lobby
+            .join
+            .as_ref()
+            .and_then(|join| join.game_code.as_deref()),
+        Some("AC7F-K8M2")
     );
     assert!(!lobby.begin.expect("a begin button").enabled);
     run(&running, "scene lobby begin enabled=true")
@@ -338,9 +380,10 @@ async fn a_refused_lobby_change_says_why_and_changes_nothing() {
         ("scene lobby seat 1 step=3", "step"),
         ("scene lobby seat 0 state=open", "numbered"),
         (
-            "scene lobby invite joined=7 capacity=6",
+            "scene lobby party joined=7 capacity=6",
             "cannot have joined",
         ),
+        ("scene lobby focus nav:1", "focus"),
         (
             "scene lobby seat 1 portrait=no-such-picture.webp",
             "no-such-picture.webp",

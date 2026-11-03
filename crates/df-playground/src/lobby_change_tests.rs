@@ -4,8 +4,8 @@
 
 use crate::fixture::Fixture;
 use crate::lobby_change::{
-    BeginEdit, ChipEdit, InviteEdit, LoadingEdit, LobbyLine, MAXIMUM_LOBBY_SEATS, PillEdit,
-    PillPart, RoleplayEdit, ScreenEdit, ScreenError, SeatEdit,
+    BeginEdit, ChipEdit, JoinEdit, LoadingEdit, LobbyLine, LobbyPart, MAXIMUM_LOBBY_SEATS,
+    PartyEdit, PillEdit, PillPart, RoleplayEdit, ScreenEdit, ScreenError, SeatEdit,
 };
 use crate::lobby_model::{BubbleTone, LogoStyle, PartyCount, SeatState, SummaryIcon};
 use crate::overlay::Glyph;
@@ -159,23 +159,21 @@ fn a_progress_over_one_hundred_and_a_step_past_the_three_are_refused() {
 }
 
 #[test]
-fn the_invite_counts_players_and_refuses_more_than_the_seats() {
-    let edit = |joined, capacity| ScreenEdit::LobbyInvite {
-        invite: InviteEdit {
-            game_code: Some("AC7F-K8M2".to_owned()),
+fn the_party_counts_players_and_refuses_more_than_the_seats() {
+    let edit = |joined, capacity| ScreenEdit::LobbyParty {
+        party: PartyEdit {
             joined,
             capacity,
             icon: Some(SummaryIcon::People),
-            ..InviteEdit::default()
+            ..PartyEdit::default()
         },
     };
     let fixture = apply_all(vec![edit(Some(3), Some(6))]);
-    let invite = fixture.tv.lobby.expect("lobby").invite.expect("invite");
+    let party = fixture.tv.lobby.expect("lobby").party.expect("party");
     assert_eq!(
-        (invite.joined, invite.capacity, invite.icon),
+        (party.joined, party.capacity, party.icon),
         (3, 6, SummaryIcon::People)
     );
-    assert_eq!(invite.game_code.as_deref(), Some("AC7F-K8M2"));
     assert_eq!(
         make(edit(Some(7), Some(6))).1,
         Err(SceneError::Screen(ScreenError::JoinedOverCapacity {
@@ -183,6 +181,140 @@ fn the_invite_counts_players_and_refuses_more_than_the_seats() {
             capacity: 6
         }))
     );
+}
+
+#[test]
+fn the_join_code_is_set_and_an_empty_text_takes_a_field_away() {
+    let join = |game_code: &str, hint: &str| ScreenEdit::LobbyJoin {
+        join: JoinEdit {
+            game_code: Some(game_code.to_owned()),
+            hint: Some(hint.to_owned()),
+            ..JoinEdit::default()
+        },
+    };
+    let fixture = apply_all(vec![join("AC7F-K8M2", "Game code")]);
+    let code = fixture.tv.lobby.expect("lobby").join.expect("join");
+    assert_eq!(code.game_code.as_deref(), Some("AC7F-K8M2"));
+    assert_eq!(code.hint.as_deref(), Some("Game code"));
+    let fixture = apply_all(vec![join("AC7F-K8M2", "Game code"), join("", "")]);
+    let code = fixture.tv.lobby.expect("lobby").join.expect("join");
+    assert_eq!((code.game_code, code.hint), (None, None));
+}
+
+#[test]
+fn the_seat_count_adds_open_seats_and_takes_the_rest_away() {
+    let fixture = apply_all(vec![
+        seat(1, SeatState::LockedIn, "Cam"),
+        ScreenEdit::LobbySeats { count: 4 },
+    ]);
+    let lobby = fixture.tv.lobby.expect("lobby");
+    assert_eq!(lobby.seats.len(), 4);
+    assert_eq!(lobby.seats[0].state, SeatState::LockedIn);
+    assert_eq!(lobby.seats[3].state, SeatState::Open);
+    let fixture = apply_all(vec![
+        seat(5, SeatState::Open, "x"),
+        ScreenEdit::LobbySeats { count: 2 },
+    ]);
+    assert_eq!(fixture.tv.lobby.expect("lobby").seats.len(), 2);
+    assert_eq!(
+        make(ScreenEdit::LobbySeats {
+            count: MAXIMUM_LOBBY_SEATS + 1
+        })
+        .1,
+        Err(SceneError::Screen(ScreenError::BadSeatNumber {
+            number: MAXIMUM_LOBBY_SEATS + 1
+        }))
+    );
+}
+
+#[test]
+fn the_focus_goes_to_the_begin_button_or_a_seat_and_nothing_else() {
+    let focus = |id: &str| ScreenEdit::LobbyFocus {
+        id: Some(id.to_owned()),
+    };
+    let fixture = apply_all(vec![focus("seat:2")]);
+    assert_eq!(
+        fixture.tv.lobby.expect("lobby").focus.as_deref(),
+        Some("seat:2")
+    );
+    let fixture = apply_all(vec![focus("begin")]);
+    assert_eq!(
+        fixture.tv.lobby.expect("lobby").focus.as_deref(),
+        Some("begin")
+    );
+    let fixture = apply_all(vec![focus("seat:2"), ScreenEdit::LobbyFocus { id: None }]);
+    assert_eq!(fixture.tv.lobby.expect("lobby").focus, None);
+    for bad in [
+        "seat:0",
+        "seat:1001",
+        "seat:x",
+        "nav:1",
+        "Begin",
+        "begin now",
+    ] {
+        assert_eq!(
+            make(focus(bad)).1,
+            Err(SceneError::Screen(ScreenError::BadFocus(bad.to_owned()))),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn a_part_can_be_taken_away_on_its_own() {
+    let built = vec![
+        ScreenEdit::LobbyLine {
+            field: LobbyLine::Title,
+            text: "The Ashen Citadel Awaits".to_owned(),
+        },
+        ScreenEdit::LobbySeats { count: 3 },
+        ScreenEdit::LobbyJoin {
+            join: JoinEdit {
+                game_code: Some("AC7F-K8M2".to_owned()),
+                ..JoinEdit::default()
+            },
+        },
+        ScreenEdit::LobbyParty {
+            party: PartyEdit {
+                joined: Some(1),
+                ..PartyEdit::default()
+            },
+        },
+        ScreenEdit::LobbyBegin {
+            begin: BeginEdit {
+                enabled: Some(true),
+                ..BeginEdit::default()
+            },
+        },
+    ];
+    for part in LobbyPart::ALL {
+        let mut edits = built.clone();
+        edits.push(ScreenEdit::LobbyRemove { part });
+        let lobby = apply_all(edits).tv.lobby.expect("lobby");
+        let gone = match part {
+            LobbyPart::Title => lobby.title.is_empty(),
+            LobbyPart::Seats => lobby.seats.is_empty(),
+            LobbyPart::Join => lobby.join.is_none(),
+            LobbyPart::Party => lobby.party.is_none(),
+            LobbyPart::Begin => lobby.begin.is_none(),
+        };
+        assert!(gone, "{}", part.key());
+        let kept = [
+            !lobby.title.is_empty(),
+            !lobby.seats.is_empty(),
+            lobby.join.is_some(),
+            lobby.party.is_some(),
+            lobby.begin.is_some(),
+        ];
+        assert_eq!(
+            kept.iter().filter(|kept| **kept).count(),
+            4,
+            "{}",
+            part.key()
+        );
+    }
+    assert_eq!(LobbyPart::from_key("seats"), Some(LobbyPart::Seats));
+    assert_eq!(LobbyPart::from_key("legend"), None);
 }
 
 #[test]
@@ -208,7 +340,7 @@ fn the_begin_button_is_enabled_and_labelled_live() {
 }
 
 #[test]
-fn the_lobby_lines_and_the_legend_change_and_clear_takes_the_lobby_away() {
+fn the_lobby_lines_change_and_clear_takes_the_lobby_away() {
     let fixture = apply_all(vec![
         ScreenEdit::LobbyLine {
             field: LobbyLine::Title,
@@ -218,16 +350,11 @@ fn the_lobby_lines_and_the_legend_change_and_clear_takes_the_lobby_away() {
             field: LobbyLine::Subtitle,
             text: "A lost stronghold.".to_owned(),
         },
-        ScreenEdit::LobbyLegend { shown: true },
     ]);
     let lobby = fixture.tv.lobby.expect("lobby");
     assert_eq!(
-        (
-            lobby.title.as_str(),
-            lobby.subtitle.as_deref(),
-            lobby.legend
-        ),
-        ("The Ashen Citadel Awaits", Some("A lost stronghold."), true)
+        (lobby.title.as_str(), lobby.subtitle.as_deref()),
+        ("The Ashen Citadel Awaits", Some("A lost stronghold."))
     );
     let cleared = apply_all(vec![
         ScreenEdit::LobbyLine {
@@ -442,6 +569,21 @@ fn the_audit_fields_name_the_component_and_field_and_never_carry_free_text() {
 fn the_audit_lines_of_the_other_components_are_named() {
     let cases = [
         (ScreenEdit::LobbyClear {}, "lobby", "clear"),
+        (ScreenEdit::LobbySeats { count: 4 }, "lobby", "seats"),
+        (
+            ScreenEdit::LobbyFocus {
+                id: Some("begin".to_owned()),
+            },
+            "lobby",
+            "focus",
+        ),
+        (
+            ScreenEdit::LobbyRemove {
+                part: LobbyPart::Join,
+            },
+            "lobby",
+            "remove",
+        ),
         (
             ScreenEdit::PillClear {
                 part: PillPart::Balance,

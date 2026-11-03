@@ -1,37 +1,32 @@
 {
-  "name": "UI: session lobby",
-  "description": "The lobby as the concept renders 11, 21, 24 and 25 draw it: three seat states (locked in, creating, open), the invite panel with a placeholder QR block, the begin button and the key to the states. The backdrop is the lobby render with its baked interface painted out. The QR block is a placeholder, not a scannable code.",
+  "name": "UI: player lobby",
+  "description": "The player lobby as concept renders 11, 24 and 37 draw it, drawn for a television read from a sofa: the session's name, up to six seat cards (ready, creating, open), a join code with a placeholder QR picture, the party summary and the one Begin Adventure button. The backdrop is the generated hall, with no interface painted in. The QR picture is a placeholder, not a scannable code.",
   "tv": {
     "place": "",
     "status": { "kind": "ok" },
     "caption": null,
-    "backdrop": { "media": "lobby-hall-plate.webp", "caption": null },
+    "backdrop": { "media": "home-hall-generated.png", "caption": null },
     "card": null,
-    "pills": { "logo": "stacked", "balance": "$28.40", "rate": "$3.90/hr", "profile": true },
+    "pills": null,
     "lobby": {
       "eyebrow": "Session lobby",
       "title": "The Ashen Citadel Awaits",
       "subtitle": "A lost stronghold. Ancient machines. A power that should have stayed buried.",
       "seats": [
-        { "state": "locked_in", "name": "Cam", "class": "Paladin", "glyph": "shield", "portrait": "lobby-cam.webp", "host": true },
-        { "state": "creating", "name": "Alyssa", "class": "Mage", "portrait": "lobby-mage.webp", "stage": "Creating character", "progress_percent": 70 },
-        { "state": "locked_in", "name": "Nyx", "class": "Rogue", "glyph": "sword", "portrait": "lobby-nyx.webp" },
-        { "state": "creating", "name": "Marco", "stage": "Creating character", "progress_percent": 65 },
+        { "state": "locked_in", "name": "Cam", "class": "Paladin", "level": 5, "glyph": "shield", "portrait": "lobby-cam.webp", "host": true },
+        { "state": "locked_in", "name": "Alyssa", "class": "Mage", "level": 5, "glyph": "star", "portrait": "lobby-mage.webp" },
+        { "state": "locked_in", "name": "Nyx", "class": "Rogue", "level": 4, "glyph": "sword", "portrait": "lobby-nyx.webp" },
+        { "state": "creating", "name": "Marco", "stage": "Creating character", "progress_percent": 55 },
         { "state": "open" },
         { "state": "open" }
       ],
-      "invite": {
-        "heading": "Invite Players",
-        "hint": "Have friends join this session",
-        "join_link": "dungeonflux.com/join/AC7F-K8M2",
-        "game_code": "AC7F-K8M2",
-        "joined": 4,
-        "capacity": 6,
-        "word": "Ready",
-        "icon": "check"
+      "join": {
+        "hint": "Scan, or enter the game code",
+        "join_link": "dungeonflux.com/join",
+        "game_code": "AC7F-K8M2"
       },
-      "begin": { "label": "Begin Adventure", "enabled": true },
-      "legend": true
+      "party": { "joined": 3, "capacity": 6, "word": "Ready", "detail": "Marco is still choosing", "icon": "check" },
+      "begin": { "label": "Begin Adventure", "enabled": true }
     },
     "elements": []
   },

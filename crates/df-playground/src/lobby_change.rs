@@ -19,12 +19,25 @@ use crate::checks;
 use crate::fixture::{Fixture, TvScene};
 use crate::limits::{MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_NAME_CHARACTERS};
 use crate::lobby_model::{
-    BeginButton, Bubble, BubbleTone, CHARACTER_STEPS, Invite, LoadingScreen, LobbyScreen,
-    LobbySeat, LogoStyle, NarratorChip, PartyCount, ReadyChip, RoleplayScene, SceneTitle,
-    SeatState, SummaryIcon, TopBar, seat_key,
+    BEGIN_FOCUS_ID, BeginButton, CHARACTER_STEPS, LoadingScreen, LobbyScreen, LogoStyle,
+    NarratorChip, PartyCount, PartySummary, ReadyChip, RoleplayScene, SceneTitle, SeatState,
+    SummaryIcon, TopBar,
 };
 use crate::overlay::Glyph;
 use crate::scene::{Override, SceneError};
+
+#[path = "lobby_change_roleplay.rs"]
+mod roleplay;
+
+pub use self::roleplay::RoleplayEdit;
+use self::roleplay::{new_bubble, roleplay_pairs};
+#[path = "lobby_change_lobby.rs"]
+mod lobby;
+
+pub use self::lobby::{BeginEdit, JoinEdit, LobbyLine, LobbyPart, PartyEdit, SeatEdit};
+use self::lobby::{
+    empty_seat, focus_id_ok, join_pairs, lobby_of, party_pairs, seat_index, seat_pairs,
+};
 
 /// Most seats a lobby or chips a loading screen holds: a very large number that only bounds memory.
 pub const MAXIMUM_LOBBY_SEATS: usize = 1_000;
@@ -53,6 +66,8 @@ pub enum ScreenError {
     BadStep(u8),
     /// More players joined than there are seats.
     JoinedOverCapacity { joined: u8, capacity: u8 },
+    /// A focus id that is neither `begin` nor `seat:<n>` for a seat number in range.
+    BadFocus(String),
 }
 
 impl fmt::Display for ScreenError {
@@ -82,6 +97,10 @@ impl fmt::Display for ScreenError {
                 formatter,
                 "{joined} players cannot have joined a table of {capacity} seats"
             ),
+            Self::BadFocus(id) => write!(
+                formatter,
+                "the lobby's focus is `{BEGIN_FOCUS_ID}` or `seat:<n>` for a seat from 1 to {MAXIMUM_LOBBY_SEATS}, not `{id}`"
+            ),
         }
     }
 }
@@ -90,58 +109,6 @@ impl From<ScreenError> for SceneError {
     fn from(error: ScreenError) -> Self {
         Self::Screen(error)
     }
-}
-
-/// Which line of the lobby's title block a text change is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LobbyLine {
-    Eyebrow,
-    Title,
-    Subtitle,
-}
-
-/// A change to one lobby seat. A field left out stays as it is; a text left empty is taken away.
-/// Setting the state to open or closed first empties the seat.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct SeatEdit {
-    pub state: Option<SeatState>,
-    pub name: Option<String>,
-    pub class: Option<String>,
-    pub glyph: Option<Glyph>,
-    pub level: Option<u8>,
-    pub portrait: Option<String>,
-    pub host: Option<bool>,
-    pub progress_percent: Option<u8>,
-    pub step: Option<u8>,
-    pub stage: Option<String>,
-    pub badge: Option<String>,
-    pub controller: Option<bool>,
-}
-
-/// A change to the invite panel.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct InviteEdit {
-    pub heading: Option<String>,
-    pub hint: Option<String>,
-    pub join_link: Option<String>,
-    pub game_code: Option<String>,
-    pub joined: Option<u8>,
-    pub capacity: Option<u8>,
-    pub word: Option<String>,
-    pub detail: Option<String>,
-    pub icon: Option<SummaryIcon>,
-}
-
-/// A change to the begin button.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BeginEdit {
-    pub enabled: Option<bool>,
-    pub label: Option<String>,
-    pub note: Option<String>,
 }
 
 /// A change to the loading screen's own words, its bar and its narrator.
@@ -217,28 +184,6 @@ impl PillPart {
     }
 }
 
-/// A change to the roleplay card: its title bar, one bubble (number 1 when none is named) and the
-/// caption.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct RoleplayEdit {
-    pub title: Option<String>,
-    pub icon: Option<Glyph>,
-    pub bubble: Option<usize>,
-    pub speaker: Option<String>,
-    pub line: Option<String>,
-    pub emphasis: Option<String>,
-    pub speaker_icon: Option<Glyph>,
-    pub portrait: Option<String>,
-    pub tone: Option<BubbleTone>,
-    pub left_percent: Option<u8>,
-    pub top_percent: Option<u8>,
-    pub width_percent: Option<u8>,
-    pub tail_x_percent: Option<u8>,
-    pub tail_y_percent: Option<u8>,
-    pub caption: Option<String>,
-}
-
 /// One change to a screen component, as the dev CLI sends it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -252,14 +197,28 @@ pub enum ScreenEdit {
         number: usize,
         seat: SeatEdit,
     },
-    LobbyInvite {
-        invite: InviteEdit,
+    /// Makes the table have exactly this many seats: seats past the end are added open, the ones
+    /// beyond are taken away.
+    LobbySeats {
+        count: usize,
+    },
+    LobbyJoin {
+        join: JoinEdit,
+    },
+    LobbyParty {
+        party: PartyEdit,
     },
     LobbyBegin {
         begin: BeginEdit,
     },
-    LobbyLegend {
-        shown: bool,
+    /// Puts the focus on one element by its id (`begin`, `seat:2`); `None` returns it to the
+    /// begin button.
+    LobbyFocus {
+        id: Option<String>,
+    },
+    /// Takes one part of the lobby away.
+    LobbyRemove {
+        part: LobbyPart,
     },
     LobbyClear {},
     LoadingSet {
@@ -337,81 +296,6 @@ fn percent(what: &'static str, value: u8) -> Result<u8, ScreenError> {
     }
 }
 
-fn seat_index(number: usize) -> Result<usize, ScreenError> {
-    if (1..=MAXIMUM_LOBBY_SEATS).contains(&number) {
-        Ok(number - 1)
-    } else {
-        Err(ScreenError::BadSeatNumber { number })
-    }
-}
-
-fn empty_seat(state: SeatState) -> LobbySeat {
-    LobbySeat {
-        state,
-        name: None,
-        class: None,
-        glyph: None,
-        level: None,
-        portrait: None,
-        host: false,
-        progress_percent: None,
-        step: None,
-        stage: None,
-        badge: None,
-        controller: false,
-    }
-}
-
-impl SeatEdit {
-    fn apply(self, seat: &mut LobbySeat) -> Result<(), SceneError> {
-        if let Some(state) = self.state {
-            if matches!(state, SeatState::Open | SeatState::Closed) {
-                *seat = empty_seat(state);
-            }
-            seat.state = state;
-        }
-        put(&mut seat.name, self.name, "a seat's name")?;
-        put(&mut seat.class, self.class, "a class")?;
-        put(&mut seat.portrait, self.portrait, "a media name")?;
-        put(&mut seat.stage, self.stage, "a seat's stage")?;
-        put(&mut seat.badge, self.badge, "a seat's badge")?;
-        if let Some(glyph) = self.glyph {
-            seat.glyph = Some(glyph);
-        }
-        if let Some(level) = self.level {
-            seat.level = Some(level);
-        }
-        if let Some(host) = self.host {
-            seat.host = host;
-        }
-        if let Some(controller) = self.controller {
-            seat.controller = controller;
-        }
-        if let Some(progress) = self.progress_percent {
-            seat.progress_percent = Some(percent("a seat's progress", progress)?);
-        }
-        if let Some(step) = self.step {
-            if usize::from(step) >= CHARACTER_STEPS.len() {
-                return Err(ScreenError::BadStep(step).into());
-            }
-            seat.step = Some(step);
-        }
-        Ok(())
-    }
-}
-
-fn lobby_of(overlay: &ScreenOverlay, base: &TvScene) -> LobbyScreen {
-    drawn(&overlay.lobby, &base.lobby).unwrap_or_else(|| LobbyScreen {
-        eyebrow: None,
-        title: String::new(),
-        subtitle: None,
-        seats: Vec::new(),
-        invite: None,
-        begin: None,
-        legend: false,
-    })
-}
-
 fn loading_of(overlay: &ScreenOverlay, base: &TvScene) -> LoadingScreen {
     drawn(&overlay.loading, &base.loading).unwrap_or_else(|| LoadingScreen {
         kicker: None,
@@ -422,34 +306,6 @@ fn loading_of(overlay: &ScreenOverlay, base: &TvScene) -> LoadingScreen {
         percent: 0,
         seats: Vec::new(),
     })
-}
-
-impl InviteEdit {
-    fn apply(self, invite: &mut Invite) -> Result<(), SceneError> {
-        put(&mut invite.heading, self.heading, "the invite heading")?;
-        put(&mut invite.hint, self.hint, "the invite hint")?;
-        put(&mut invite.join_link, self.join_link, "a join link")?;
-        put(&mut invite.game_code, self.game_code, "a game code")?;
-        put(&mut invite.word, self.word, "the count's word")?;
-        put(&mut invite.detail, self.detail, "the count's detail")?;
-        if let Some(joined) = self.joined {
-            invite.joined = joined;
-        }
-        if let Some(capacity) = self.capacity {
-            invite.capacity = capacity;
-        }
-        if let Some(icon) = self.icon {
-            invite.icon = icon;
-        }
-        if invite.joined > invite.capacity {
-            return Err(ScreenError::JoinedOverCapacity {
-                joined: invite.joined,
-                capacity: invite.capacity,
-            }
-            .into());
-        }
-        Ok(())
-    }
 }
 
 impl ScreenOverlay {
@@ -485,14 +341,28 @@ impl ScreenOverlay {
                 seat.apply(&mut lobby.seats[index])?;
                 self.lobby = Some(Override::Set(lobby));
             }
-            ScreenEdit::LobbyInvite { invite } => {
+            ScreenEdit::LobbySeats { count } => {
+                if count > MAXIMUM_LOBBY_SEATS {
+                    return Err(ScreenError::BadSeatNumber { number: count }.into());
+                }
+                let mut lobby = lobby_of(self, tv);
+                lobby.seats.truncate(count);
+                while lobby.seats.len() < count {
+                    lobby.seats.push(empty_seat(SeatState::Open));
+                }
+                self.lobby = Some(Override::Set(lobby));
+            }
+            ScreenEdit::LobbyJoin { join } => {
+                let mut lobby = lobby_of(self, tv);
+                let mut current = lobby.join.take().unwrap_or_default();
+                join.apply(&mut current)?;
+                lobby.join = Some(current);
+                self.lobby = Some(Override::Set(lobby));
+            }
+            ScreenEdit::LobbyParty { party } => {
                 let mut lobby = lobby_of(self, tv);
                 let capacity = u8::try_from(lobby.seats.len()).unwrap_or(DEFAULT_CAPACITY);
-                let mut current = lobby.invite.take().unwrap_or(Invite {
-                    heading: None,
-                    hint: None,
-                    join_link: None,
-                    game_code: None,
+                let mut current = lobby.party.take().unwrap_or(PartySummary {
                     joined: 0,
                     capacity: if capacity == 0 {
                         DEFAULT_CAPACITY
@@ -503,8 +373,8 @@ impl ScreenOverlay {
                     detail: None,
                     icon: SummaryIcon::default(),
                 });
-                invite.apply(&mut current)?;
-                lobby.invite = Some(current);
+                party.apply(&mut current)?;
+                lobby.party = Some(current);
                 self.lobby = Some(Override::Set(lobby));
             }
             ScreenEdit::LobbyBegin { begin } => {
@@ -522,9 +392,29 @@ impl ScreenOverlay {
                 lobby.begin = Some(current);
                 self.lobby = Some(Override::Set(lobby));
             }
-            ScreenEdit::LobbyLegend { shown } => {
+            ScreenEdit::LobbyFocus { id } => {
+                if let Some(id) = &id
+                    && !focus_id_ok(id)
+                {
+                    return Err(ScreenError::BadFocus(id.clone()).into());
+                }
                 let mut lobby = lobby_of(self, tv);
-                lobby.legend = shown;
+                lobby.focus = id;
+                self.lobby = Some(Override::Set(lobby));
+            }
+            ScreenEdit::LobbyRemove { part } => {
+                let mut lobby = lobby_of(self, tv);
+                match part {
+                    LobbyPart::Title => {
+                        lobby.eyebrow = None;
+                        lobby.title = String::new();
+                        lobby.subtitle = None;
+                    }
+                    LobbyPart::Seats => lobby.seats.clear(),
+                    LobbyPart::Join => lobby.join = None,
+                    LobbyPart::Party => lobby.party = None,
+                    LobbyPart::Begin => lobby.begin = None,
+                }
                 self.lobby = Some(Override::Set(lobby));
             }
             ScreenEdit::LobbyClear {} => self.lobby = Some(Override::Clear),
@@ -662,85 +552,6 @@ impl ScreenOverlay {
     }
 }
 
-fn new_bubble() -> Bubble {
-    let (left, top, width, tail_x, tail_y) = DEFAULT_BUBBLE;
-    Bubble {
-        speaker: String::new(),
-        line: String::new(),
-        emphasis: None,
-        glyph: None,
-        portrait: None,
-        tone: BubbleTone::default(),
-        left_percent: left,
-        top_percent: top,
-        width_percent: width,
-        tail_x_percent: tail_x,
-        tail_y_percent: tail_y,
-    }
-}
-
-impl RoleplayEdit {
-    fn has_bubble_fields(&self) -> bool {
-        self.emphasis.is_some()
-            || self.speaker_icon.is_some()
-            || self.portrait.is_some()
-            || self.tone.is_some()
-            || self.left_percent.is_some()
-            || self.top_percent.is_some()
-            || self.width_percent.is_some()
-            || self.tail_x_percent.is_some()
-            || self.tail_y_percent.is_some()
-    }
-
-    fn apply_to_bubble(&self, bubble: &mut Bubble) -> Result<(), SceneError> {
-        put_text(&mut bubble.speaker, self.speaker.clone(), "a speaker")?;
-        if let Some(line) = self.line.clone() {
-            checks::text("a bubble's line", &line, MAXIMUM_CAPTION_CHARACTERS)?;
-            bubble.line = line;
-        }
-        put(
-            &mut bubble.emphasis,
-            self.emphasis.clone(),
-            "a bubble's emphasis",
-        )?;
-        put(&mut bubble.portrait, self.portrait.clone(), "a media name")?;
-        if let Some(icon) = self.speaker_icon {
-            bubble.glyph = Some(icon);
-        }
-        if let Some(tone) = self.tone {
-            bubble.tone = tone;
-        }
-        for (what, value, slot) in [
-            (
-                "a bubble's left edge",
-                self.left_percent,
-                &mut bubble.left_percent,
-            ),
-            ("a bubble's top", self.top_percent, &mut bubble.top_percent),
-            (
-                "a bubble's width",
-                self.width_percent,
-                &mut bubble.width_percent,
-            ),
-            (
-                "a bubble's tail x",
-                self.tail_x_percent,
-                &mut bubble.tail_x_percent,
-            ),
-            (
-                "a bubble's tail y",
-                self.tail_y_percent,
-                &mut bubble.tail_y_percent,
-            ),
-        ] {
-            if let Some(value) = value {
-                *slot = percent(what, value)?;
-            }
-        }
-        Ok(())
-    }
-}
-
 fn plain(text: &str) -> String {
     text.chars()
         .map(|character| {
@@ -777,7 +588,17 @@ impl ScreenEdit {
                 )
             }
             Self::LobbySeat { number, seat } => ("lobby", "seat", seat_pairs(*number, seat)),
-            Self::LobbyInvite { invite } => ("lobby", "invite", invite_pairs(invite)),
+            Self::LobbySeats { count } => ("lobby", "seats", vec![("count", count.to_string())]),
+            Self::LobbyJoin { join } => ("lobby", "join", join_pairs(join)),
+            Self::LobbyParty { party } => ("lobby", "party", party_pairs(party)),
+            Self::LobbyFocus { id } => (
+                "lobby",
+                "focus",
+                vec![("id", id.clone().unwrap_or_else(|| "default".to_owned()))],
+            ),
+            Self::LobbyRemove { part } => {
+                ("lobby", "remove", vec![("part", part.key().to_owned())])
+            }
             Self::LobbyBegin { begin } => {
                 let mut pairs = Vec::new();
                 if let Some(enabled) = begin.enabled {
@@ -787,7 +608,6 @@ impl ScreenEdit {
                 present(&mut pairs, "note", &begin.note);
                 ("lobby", "begin", pairs)
             }
-            Self::LobbyLegend { shown } => ("lobby", "legend", vec![("shown", shown.to_string())]),
             Self::LobbyClear {} => ("lobby", "clear", Vec::new()),
             Self::LoadingSet { loading } => ("loading", "set", loading_pairs(loading)),
             Self::LoadingSeat { number, chip } => {
@@ -829,51 +649,6 @@ impl ScreenEdit {
     }
 }
 
-fn seat_pairs(number: usize, seat: &SeatEdit) -> Vec<(&'static str, String)> {
-    let mut pairs = vec![("seat", number.to_string())];
-    if let Some(state) = seat.state {
-        pairs.push(("state", seat_key(state).to_owned()));
-    }
-    present(&mut pairs, "name", &seat.name);
-    present(&mut pairs, "class", &seat.class);
-    if let Some(media) = &seat.portrait {
-        pairs.push(("portrait", plain(media)));
-    }
-    if let Some(host) = seat.host {
-        pairs.push(("host", host.to_string()));
-    }
-    if let Some(progress) = seat.progress_percent {
-        pairs.push(("progress", progress.to_string()));
-    }
-    if let Some(step) = seat.step {
-        pairs.push(("step", step.to_string()));
-    }
-    present(&mut pairs, "stage", &seat.stage);
-    present(&mut pairs, "badge", &seat.badge);
-    if let Some(controller) = seat.controller {
-        pairs.push(("controller", controller.to_string()));
-    }
-    pairs
-}
-
-fn invite_pairs(invite: &InviteEdit) -> Vec<(&'static str, String)> {
-    let mut pairs = Vec::new();
-    present(&mut pairs, "link", &invite.join_link);
-    present(&mut pairs, "code", &invite.game_code);
-    if let Some(joined) = invite.joined {
-        pairs.push(("joined", joined.to_string()));
-    }
-    if let Some(capacity) = invite.capacity {
-        pairs.push(("capacity", capacity.to_string()));
-    }
-    present(&mut pairs, "heading", &invite.heading);
-    present(&mut pairs, "hint", &invite.hint);
-    present(&mut pairs, "word", &invite.word);
-    present(&mut pairs, "detail", &invite.detail);
-    present(&mut pairs, "icon", &invite.icon);
-    pairs
-}
-
 fn loading_pairs(loading: &LoadingEdit) -> Vec<(&'static str, String)> {
     let mut pairs = Vec::new();
     present(&mut pairs, "kicker", &loading.kicker);
@@ -908,34 +683,6 @@ fn pill_pairs(pill: &PillEdit) -> Vec<(&'static str, String)> {
     present(&mut pairs, "rate", &pill.rate);
     if let Some(profile) = pill.profile {
         pairs.push(("profile", profile.to_string()));
-    }
-    pairs
-}
-
-fn roleplay_pairs(edit: &RoleplayEdit) -> Vec<(&'static str, String)> {
-    let mut pairs = Vec::new();
-    present(&mut pairs, "title", &edit.title);
-    present(&mut pairs, "icon", &edit.icon);
-    if let Some(bubble) = edit.bubble {
-        pairs.push(("bubble", bubble.to_string()));
-    }
-    present(&mut pairs, "speaker", &edit.speaker);
-    present(&mut pairs, "line", &edit.line);
-    present(&mut pairs, "emphasis", &edit.emphasis);
-    present(&mut pairs, "caption", &edit.caption);
-    if let Some(media) = &edit.portrait {
-        pairs.push(("portrait", plain(media)));
-    }
-    for (key, value) in [
-        ("left", edit.left_percent),
-        ("top", edit.top_percent),
-        ("width", edit.width_percent),
-        ("tail_x", edit.tail_x_percent),
-        ("tail_y", edit.tail_y_percent),
-    ] {
-        if let Some(value) = value {
-            pairs.push((key, value.to_string()));
-        }
     }
     pairs
 }
