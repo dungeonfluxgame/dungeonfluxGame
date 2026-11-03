@@ -4,8 +4,8 @@
   "zip_sha256": "9a9a33af5c9fdba0232294d8f25e5e910d9d233427665c4dd3747838e6537ba5",
   "contact_sheet": {
     "file": "contact-sheet.jpg",
-    "bytes": 1106856,
-    "sha256": "ea3ccb2011fd11936d95d43715c461f50c65362886d29424d085b4b985972ff2"
+    "bytes": 1520277,
+    "sha256": "f07ba7262438b502df5a377c1a686b5a53b76ac79659a8109df962144c656b5f"
   },
   "assets": [
     {
@@ -64,17 +64,6 @@
       "sha256": "cc44af6568b58f263b12b59dca6c7101a12beff34a44d7fb9e4655cffa89d597"
     },
     {
-      "file": "06-shop-and-chest-v2.webp",
-      "description": "Shop and chest v2",
-      "original_file": "renders/a_cinematic_high_detail_game_ui_concept_scene_in.png",
-      "width": 1672,
-      "height": 941,
-      "original_bytes": 2277519,
-      "original_sha256": "db2ec40455d27b644b7960fe61fe3fd2a31ba78fcd639aca6675dbbbc1900de3",
-      "bytes": 338546,
-      "sha256": "923650da147a2707910306d1147dfd46265922e22cdbcd926dbf1238b0229821"
-    },
-    {
       "file": "07-prototype-overview-board-1.webp",
       "description": "Prototype overview board 1",
       "original_file": "renders/a_cinematic_high_detail_prototype_concept_board_f.png",
@@ -106,17 +95,6 @@
       "original_sha256": "1ce6910a0d5e8fdd12d8e8e4b6472f8aadc4a5e34517532ad103d5994c5c151d",
       "bytes": 290656,
       "sha256": "cab67e4b3e5335feb38a25d01e90a97ca4bd3e190c0fb9287548b9dad6353fe5"
-    },
-    {
-      "file": "10-shop-and-chest-concept-board.webp",
-      "description": "Shop and chest concept board",
-      "original_file": "renders/a_cinematic_highly_detailed_game_ui_concept_board.png",
-      "width": 1672,
-      "height": 941,
-      "original_bytes": 2343845,
-      "original_sha256": "cba4ea80a978f613bd3f24a4b921f8bb435b131796a9272ce83473be9ecc9c9e",
-      "bytes": 367610,
-      "sha256": "bf7781d9cc7f570228952e2f95fadb42477ea94747c73fda2b349a89d59e27dc"
     },
     {
       "file": "11-lobby-6-seats.webp",
@@ -161,28 +139,6 @@
       "original_sha256": "d13584b77330dec48c669ff4013f9bf517e5e0411876d9ef1823f7a416f467b6",
       "bytes": 280906,
       "sha256": "4bb53f9c01842f7e8eb6f7ff6b7f502c64c9c211064b5ca24e19032b8991d36a"
-    },
-    {
-      "file": "15-full-screen-merchant-shop.webp",
-      "description": "Full-screen merchant shop",
-      "original_file": "renders/a_cinematic_realistic_game_ui_scene_a_detailed_i.png",
-      "width": 1672,
-      "height": 941,
-      "original_bytes": 2156776,
-      "original_sha256": "7fa80648ccf3f29f03f466d47c4831fc2dde00f915ea232c3b3bde8cf49a8f5e",
-      "bytes": 315046,
-      "sha256": "f88d6fb2431a2ff48c8d128658073eb65bc36eb5607eceb7f0950fee4f3f46fc"
-    },
-    {
-      "file": "16-merchant-shop-physical-stock.webp",
-      "description": "Merchant shop / physical stock",
-      "original_file": "renders/a_cinematic_realistic_in_world_merchant_shop_ui.png",
-      "width": 1672,
-      "height": 941,
-      "original_bytes": 2160950,
-      "original_sha256": "0ee84f4330ff71fea2dd83eacb9a1e436f13a73f2db18cded1393df06ecb6867",
-      "bytes": 317836,
-      "sha256": "9f67364fd7f2b1fdcb76eaa3729157bc1888276127c8ee79ddf7b0869ee53307"
     },
     {
       "file": "17-prototype-overview-board-2.webp",
@@ -425,6 +381,24 @@
       "original_sha256": "6d3664654eb0a1b8620ca79a20bf43d8699a55bbc0bd6eff6807f197df35595c",
       "bytes": 353960,
       "sha256": "92decb844e7b2fa348e0863df126a658379382bdc84f6897a0722f294a8857f5"
+    }
+  ],
+  "removed": [
+    {
+      "file": "06-shop-and-chest-v2.webp",
+      "reason": "vendor-menu shop screens removed on 2026-11-02: items should appear naturally in the scene, not in game-style vendor menus"
+    },
+    {
+      "file": "10-shop-and-chest-concept-board.webp",
+      "reason": "vendor-menu shop screens removed on 2026-11-02: items should appear naturally in the scene, not in game-style vendor menus"
+    },
+    {
+      "file": "15-full-screen-merchant-shop.webp",
+      "reason": "vendor-menu shop screens removed on 2026-11-02: items should appear naturally in the scene, not in game-style vendor menus"
+    },
+    {
+      "file": "16-merchant-shop-physical-stock.webp",
+      "reason": "vendor-menu shop screens removed on 2026-11-02: items should appear naturally in the scene, not in game-style vendor menus"
     }
   ]
 }
