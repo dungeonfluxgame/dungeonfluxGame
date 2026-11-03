@@ -32,6 +32,7 @@ use super::PipelineLimits;
 use super::books::{
     BookLoadError, ReleaseBook, ReleaseRecord, RequestBook, RequestRecord, ResultBook, ResultRecord,
 };
+use super::offers::{MachineSurfaceError, OffersError};
 use crate::effects::{ApplyOutcome, EffectError, TableEffect, TableState};
 use crate::envelope::Sender;
 use crate::identity::{Correlation, SceneId, SeatId, SessionRevision, TableId, TableScope};
@@ -43,6 +44,7 @@ use crate::pending::{
 };
 use crate::ports::ActionId;
 use crate::projection::{Attachments, PublishedLoadError, PublishedRecord};
+use crate::registry::Registry;
 use crate::table_state::{DigestMemo, MachineHome, TableSnapshot};
 
 /// The machine that runs now, borrowed from a snapshot of the table.
@@ -424,13 +426,30 @@ impl PipelineTable {
 
     /// The table of a restored process: the facts the host loaded and everything the pipeline
     /// held, with the pendings' waits put back against `now_ms`. A record this engine cannot read
-    /// is refused with a typed error and nothing is half loaded.
+    /// is refused with a typed error and nothing is half loaded. The offers are rebuilt from the
+    /// pendings and clarifications only, which is right for a pipeline that does not publish the
+    /// machine's standing buttons; a pipeline that does loads with `Pipeline::load_table`.
     pub fn from_record(
         table: TableId,
         facts: TableState,
         record: PipelineRecord,
         now_ms: u64,
         limits: &PipelineLimits,
+    ) -> Result<Self, PipelineLoadError> {
+        Self::from_record_with_standing(table, facts, record, now_ms, limits, None)
+    }
+
+    /// `from_record` for a pipeline that publishes the running machine's standing buttons
+    /// (`standing` is its registry): the offers are rebuilt with those buttons too, without
+    /// counting a new publish, so a restored phone holds the buttons it held when the checkpoint
+    /// was taken.
+    pub fn from_record_with_standing(
+        table: TableId,
+        facts: TableState,
+        record: PipelineRecord,
+        now_ms: u64,
+        limits: &PipelineLimits,
+        standing: Option<&Registry>,
     ) -> Result<Self, PipelineLoadError> {
         if record.schema_version != PIPELINE_RECORD_VERSION {
             return Err(PipelineLoadError::UnsupportedVersion {
@@ -479,7 +498,10 @@ impl PipelineTable {
         };
         // The offers are derived from the pendings and the clarifications, so they are rebuilt and
         // not saved: a seat that reconnects finds the same buttons by the same pending ids.
-        super::offers::restore_offers(&mut loaded).map_err(PipelineLoadError::Offers)?;
+        super::offers::restore_offers(&mut loaded, standing).map_err(|error| match error {
+            OffersError::Attachments(error) => PipelineLoadError::Offers(error),
+            OffersError::Machine(error) => PipelineLoadError::Surface(error),
+        })?;
         Ok(loaded)
     }
 }
@@ -518,6 +540,8 @@ pub enum PipelineLoadError {
     Published(PublishedLoadError),
     /// The offers derived from the pendings could not be published.
     Offers(crate::projection::AttachmentError),
+    /// The running machine could not say what it offers a restored seat.
+    Surface(MachineSurfaceError),
 }
 
 impl std::fmt::Display for PipelineLoadError {
@@ -534,6 +558,7 @@ impl std::fmt::Display for PipelineLoadError {
             }
             Self::Published(error) => error.fmt(formatter),
             Self::Offers(error) => error.fmt(formatter),
+            Self::Surface(error) => error.fmt(formatter),
         }
     }
 }

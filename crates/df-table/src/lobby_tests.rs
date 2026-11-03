@@ -25,6 +25,21 @@ pub(crate) fn action(name: &str) -> ActionId {
     ActionId::new(name).expect("valid action")
 }
 
+/// The buttons one seat holds, from one call of the machine that answers for all of them.
+pub(crate) fn offered(
+    machine: &impl Machine,
+    table: &TableState,
+    slot: &MachineSlot,
+    who: SeatId,
+) -> Vec<ActionId> {
+    machine
+        .standing_offers(table, slot, &[who])
+        .expect("the state reads")
+        .into_iter()
+        .flat_map(|(_, actions)| actions)
+        .collect()
+}
+
 pub(crate) fn lobby() -> LobbyMachine {
     LobbyMachine::new(FIRST_SCENE).expect("the lobby spec is valid")
 }
@@ -496,18 +511,35 @@ fn a_seated_seat_in_the_gathering_lobby_is_offered_ready_start_and_leave_and_a_s
             .collect()
     };
     assert_eq!(
-        names(machine.standing_offers(&table, &slot, seat(1))),
+        names(offered(&machine, &table, &slot, seat(1))),
         ["ready", "start", "leave"]
     );
-    assert!(machine.standing_offers(&table, &slot, seat(9)).is_empty());
+    assert!(offered(&machine, &table, &slot, seat(9)).is_empty());
     let ready = run(&machine, &table, &slot, intent(1, "ready"));
     let after = ready.state_after(&slot).clone();
     assert_eq!(
-        names(machine.standing_offers(&table, &after, seat(1))),
+        names(offered(&machine, &table, &after, seat(1))),
         ["unready", "start", "leave"]
     );
     assert_eq!(
-        names(machine.standing_offers(&table, &after, seat(2))),
+        names(offered(&machine, &table, &after, seat(2))),
         ["ready", "start", "leave"]
+    );
+}
+
+#[test]
+fn the_lobby_builds_the_name_of_every_action_once_and_offers_exactly_those_names() {
+    assert!(LobbyMachine::new(FIRST_SCENE).is_ok());
+    let table = table_with_two_seated();
+    let (machine, slot) = entered(&table);
+    let offers = offered(&machine, &table, &slot, seat(1));
+    let named: Vec<&str> = offers.iter().map(|offer| offer.as_str()).collect();
+    assert_eq!(
+        named,
+        [
+            LobbyAction::Ready.key(),
+            LobbyAction::Start.key(),
+            LobbyAction::Leave.key()
+        ]
     );
 }

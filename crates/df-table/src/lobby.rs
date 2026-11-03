@@ -23,11 +23,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::effects::{TableEffect, TableState};
+use crate::element::NameError;
 use crate::identity::{SceneId, SeatId};
 use crate::listed::listed_enum;
 use crate::machine::{
     CarryItem, Entry, HandOff, InspectReport, Machine, MachineError, MachineId, MachineInput,
-    MachineReadout, MachineSpec, Scope, SpecError, StateName, StepInput, StepResult, SuspendPolicy,
+    MachineReadout, MachineSpec, Scope, SpecError, StandingOffers, StateName, StepInput,
+    StepResult, SuspendPolicy,
 };
 use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode};
@@ -92,11 +94,46 @@ pub struct LobbyMachine {
     spec: MachineSpec,
     next_machine: MachineId,
     first_scene: SceneId,
+    ids: LobbyIds,
+}
+
+/// The registry name of each lobby action, built once so a bad key fails at construction.
+#[derive(Debug, Clone)]
+struct LobbyIds {
+    join: ActionId,
+    leave: ActionId,
+    ready: ActionId,
+    unready: ActionId,
+    start: ActionId,
+}
+
+impl LobbyIds {
+    fn new() -> Result<Self, NameError> {
+        let id = |action: LobbyAction| ActionId::new(action.key());
+        Ok(Self {
+            join: id(LobbyAction::Join)?,
+            leave: id(LobbyAction::Leave)?,
+            ready: id(LobbyAction::Ready)?,
+            unready: id(LobbyAction::Unready)?,
+            start: id(LobbyAction::Start)?,
+        })
+    }
+
+    fn of(&self, action: LobbyAction) -> &ActionId {
+        match action {
+            LobbyAction::Join => &self.join,
+            LobbyAction::Leave => &self.leave,
+            LobbyAction::Ready => &self.ready,
+            LobbyAction::Unready => &self.unready,
+            LobbyAction::Start => &self.start,
+        }
+    }
 }
 
 impl LobbyMachine {
     pub fn new(first_scene: SceneId) -> Result<Self, SpecError> {
-        let join = ActionId::new(LobbyAction::Join.key()).map_err(SpecError::InvalidName)?;
+        let ids = LobbyIds::new().map_err(SpecError::InvalidName)?;
+        let join = ids.of(LobbyAction::Join).clone();
         let spec = MachineSpec::new(
             "lobby",
             Scope::Table,
@@ -111,6 +148,7 @@ impl LobbyMachine {
             spec,
             next_machine,
             first_scene,
+            ids,
         })
     }
 
@@ -127,6 +165,13 @@ impl LobbyMachine {
         ready.dedup();
         self.encode(&LobbyState::Gathering { ready })
     }
+}
+
+/// Whether the gathering lobby is addressed by this input, for the seats the table holds now.
+fn admits(table: &TableState, state: &LobbyState, input: &MachineInput) -> bool {
+    let addressed = recognised(input)
+        .is_some_and(|(seat, action)| action == LobbyAction::Join || table.seats().contains(&seat));
+    matches!(state, LobbyState::Gathering { .. }) && addressed
 }
 
 /// The seat and action of an input the lobby handles, if it is one.
@@ -165,11 +210,8 @@ impl Machine for LobbyMachine {
     }
 
     fn accepts(&self, table: &TableState, input: &MachineInput, state: &MachineSlot) -> bool {
-        let gathering = matches!(self.state_of(state), Ok(LobbyState::Gathering { .. }));
-        let addressed = recognised(input).is_some_and(|(seat, action)| {
-            action == LobbyAction::Join || table.seats().contains(&seat)
-        });
-        gathering && addressed
+        self.state_of(state)
+            .is_ok_and(|state| admits(table, &state, input))
     }
 
     fn step(&self, slot: &MachineSlot, input: &StepInput<'_>) -> Result<StepResult, MachineError> {
@@ -234,27 +276,41 @@ impl Machine for LobbyMachine {
     }
 
     /// A seated seat in the gathering lobby may toggle ready, leave, or start: `start` is always
-    /// offered, and the lobby's own decline says who is not ready yet.
+    /// offered, and the lobby's own decline says who is not ready yet. The lobby offers choices
+    /// that are not rules actions, so it states them itself, each one only if it `admits` it.
     fn standing_offers(
         &self,
         table: &TableState,
         slot: &MachineSlot,
-        seat: SeatId,
-    ) -> Vec<ActionId> {
-        let (Ok(LobbyState::Gathering { ready }), true) =
-            (self.state_of(slot), table.seats().contains(&seat))
-        else {
-            return Vec::new();
+        seats: &[SeatId],
+    ) -> Result<StandingOffers, MachineError> {
+        let state = self.state_of(slot)?;
+        let offers = |seat: SeatId| -> Vec<ActionId> {
+            let LobbyState::Gathering { ready } = &state else {
+                return Vec::new();
+            };
+            let toggle = if ready.contains(&seat) {
+                LobbyAction::Unready
+            } else {
+                LobbyAction::Ready
+            };
+            [toggle, LobbyAction::Start, LobbyAction::Leave]
+                .into_iter()
+                .map(|action| self.ids.of(action))
+                .filter(|id| {
+                    admits(
+                        table,
+                        &state,
+                        &MachineInput::Intent {
+                            seat,
+                            action: (*id).clone(),
+                        },
+                    )
+                })
+                .cloned()
+                .collect()
         };
-        let toggle = if ready.contains(&seat) {
-            LobbyAction::Unready
-        } else {
-            LobbyAction::Ready
-        };
-        [toggle, LobbyAction::Start, LobbyAction::Leave]
-            .into_iter()
-            .filter_map(|action| ActionId::new(action.key()).ok())
-            .collect()
+        Ok(seats.iter().map(|seat| (*seat, offers(*seat))).collect())
     }
 
     fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {

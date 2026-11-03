@@ -11,7 +11,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::effects::BeatName;
+use crate::effects::{BeatName, ConversationOutcome};
 use crate::identity::{MachineId, SceneId, SessionRevision};
 use crate::machine_slot::MachineSlot;
 use crate::table_state::digest::Digest;
@@ -129,6 +129,7 @@ impl HandOffRecord {
 pub struct SceneRecord {
     pub(super) generation: SceneGeneration,
     pub(super) beat: Option<BeatName>,
+    pub(super) conversation: Option<ConversationOutcome>,
     pub(super) active: Option<ActiveMachine>,
     pub(super) stack: Vec<HandOffFrame>,
 }
@@ -138,6 +139,7 @@ impl SceneRecord {
         Self {
             generation,
             beat: None,
+            conversation: None,
             active: None,
             stack: Vec::new(),
         }
@@ -150,6 +152,11 @@ impl SceneRecord {
     /// The authored beat that was played through last, if any.
     pub fn beat(&self) -> Option<&BeatName> {
         self.beat.as_ref()
+    }
+
+    /// How the scene's conversation ended, once it did.
+    pub fn conversation(&self) -> Option<ConversationOutcome> {
+        self.conversation
     }
 
     /// The scene's one active group machine and its saved state, once one was set.
@@ -171,11 +178,13 @@ impl SceneRecord {
         let Self {
             generation,
             beat,
+            conversation,
             active,
             stack,
         } = self;
         digest.number(generation.get());
         digest.option(beat, |digest, beat| digest.beat(beat));
+        digest.option(conversation, |digest, outcome| digest.text(outcome.key()));
         digest.option(active, |digest, active| active.digest_into(digest));
         digest.count(stack.len());
         for frame in stack {

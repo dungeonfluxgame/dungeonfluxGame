@@ -74,6 +74,11 @@ pub mod config;
 #[cfg(any(test, feature = "testkit"))]
 pub mod conformance;
 pub mod dialogue;
+pub mod director;
+pub mod director_error;
+pub mod director_log;
+pub mod director_reason;
+pub mod director_view;
 pub mod ecs;
 pub mod effects;
 pub mod element;
@@ -132,6 +137,12 @@ mod config_tests;
 mod conformance_tests;
 #[cfg(test)]
 mod dialogue_tests;
+#[cfg(test)]
+mod director_defect_tests;
+#[cfg(test)]
+mod director_pace_tests;
+#[cfg(test)]
+mod director_tests;
 #[cfg(test)]
 mod ecs_tests;
 #[cfg(test)]
@@ -195,6 +206,8 @@ mod pipeline_sender_scope_tests;
 #[cfg(test)]
 mod pipeline_staging_tests;
 #[cfg(test)]
+mod pipeline_surface_tests;
+#[cfg(test)]
 mod pipeline_tests;
 #[cfg(test)]
 mod plate_buffer_tests;
@@ -230,6 +243,8 @@ mod scene_plan_card_tests;
 mod scene_plan_locate_tests;
 #[cfg(test)]
 mod scene_plan_tests;
+#[cfg(test)]
+mod standing_offers_tests;
 #[cfg(test)]
 mod table_state_digest_tests;
 #[cfg(test)]

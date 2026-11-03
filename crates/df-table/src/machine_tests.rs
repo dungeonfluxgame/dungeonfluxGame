@@ -449,6 +449,10 @@ fn every_machine_error_maps_to_one_closed_cause_and_a_record_failure_keeps_its_f
             MachineError::Decline(DeclineError::EmptyReason),
             MachineFailureCause::DeclineInvalid,
         ),
+        (
+            MachineError::Result(crate::machine::ResultFault::FactsConflict),
+            MachineFailureCause::ResultInvalid,
+        ),
     ];
     let causes: BTreeSet<_> = errors.iter().map(|(_, cause)| cause.key()).collect();
     assert_eq!(causes.len(), MachineFailureCause::ALL.len());

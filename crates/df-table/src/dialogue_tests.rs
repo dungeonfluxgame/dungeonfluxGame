@@ -1,16 +1,21 @@
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
+use serde_json::json;
+
 use crate::conformance::{self, ConformanceFixture, Expectation, ScriptedStep};
 use crate::dialogue::{Conversation, ConversationError, DialogueMachine};
-use crate::effects::TableState;
+use crate::effects::{
+    ApplyOutcome, ConversationOutcome, EffectRecord, EffectRefusal, TableEffect, TableState,
+};
 use crate::envelope::{PendingId, TimerName};
 use crate::explore::{AuthoredBeat, ExploreMachine};
 use crate::explore_tests::{entry_to_the_first_scene, table_in_the_first_scene};
-use crate::lobby_tests::{FIRST_SCENE, action, lobby, seat};
+use crate::identity::{MachineId, SceneId, TableId, TableScope};
+use crate::lobby_tests::{FIRST_SCENE, action, lobby, offered, seat};
 use crate::machine::{
-    CarryItem, Decision, Entry, EntryRefusal, Machine, MachineError, MachineInput, StepInput,
-    StepOutcome, StepResult,
+    CarryItem, Decision, Entry, EntryRefusal, Machine, MachineError, MachineFailureCause,
+    MachineInput, ResultFault, StepInput, StepOutcome, StepResult,
 };
 use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode, Outcome};
@@ -18,12 +23,14 @@ use crate::ports::{Audience, Draw, DrawRequest, PortName, Preparation, Resolutio
 use crate::testkit::{QueuedDice, ScriptedBroker, ScriptedRulesOwner, correlation};
 
 const URGE: &str = "persuade_guard";
+const URGE_LABEL: &str = "persuade the guard";
 
 fn conversation() -> Conversation {
     Conversation::new(
         "The gate guard",
         "Halt. Who goes there?",
         URGE,
+        URGE_LABEL,
         "Fine. Go through.",
         "Not a chance.",
     )
@@ -160,7 +167,7 @@ fn dialogue_passes_the_whole_conformance_suite() {
 #[test]
 fn a_conversation_with_a_blank_line_or_a_bad_urging_is_refused_with_the_field_named() {
     let build = |speaker, opening, urge, moved, unmoved| {
-        Conversation::new(speaker, opening, urge, moved, unmoved)
+        Conversation::new(speaker, opening, urge, URGE_LABEL, moved, unmoved)
     };
     assert_eq!(
         build(" ", "Hi.", URGE, "Yes.", "No."),
@@ -182,6 +189,16 @@ fn a_conversation_with_a_blank_line_or_a_bad_urging_is_refused_with_the_field_na
         build("Guard", "Hi.", "Not A Name!", "Yes.", "No."),
         Err(ConversationError::InvalidAction(_))
     ));
+}
+
+#[test]
+fn a_blank_urging_label_is_refused_with_the_field_named() {
+    for blank in ["", "   "] {
+        assert_eq!(
+            Conversation::new("Guard", "Hi.", URGE, blank, "Yes.", "No."),
+            Err(ConversationError::Blank("urging label"))
+        );
+    }
 }
 
 #[test]
@@ -266,7 +283,6 @@ fn the_typed_facts_of_the_rules_result_decide_how_the_conversation_ends() {
         (resolved_with("succeeded", 0), "Not a chance."),
         (resolved_with("complied", 1), "Fine. Go through."),
         (resolved_with("complied", 0), "Not a chance."),
-        (Resolution::applied(), "has heard you out"),
     ];
     for (resolution, expected) in cases {
         let (machine, done, table) = concluded_by(resolution.clone());
@@ -320,13 +336,10 @@ fn a_decline_from_the_rules_owner_changes_nothing() {
 #[test]
 fn standing_offers_name_the_urging_only_while_listening_and_only_for_a_seated_seat() {
     let (machine, slot, table) = entered();
-    assert_eq!(
-        machine.standing_offers(&table, &slot, seat(1)),
-        [action(URGE)]
-    );
-    assert!(machine.standing_offers(&table, &slot, seat(9)).is_empty());
+    assert_eq!(offered(&machine, &table, &slot, seat(1)), [action(URGE)]);
+    assert!(offered(&machine, &table, &slot, seat(9)).is_empty());
     let (machine, done, table) = concluded_by(resolved_with("succeeded", 1));
-    assert!(machine.standing_offers(&table, &done, seat(1)).is_empty());
+    assert!(offered(&machine, &table, &done, seat(1)).is_empty());
 }
 
 #[test]
@@ -337,10 +350,346 @@ fn the_phone_reads_the_opening_line_and_the_urging_and_the_tv_reads_the_line_alo
         .expect("projects");
     assert_eq!(
         phone.as_str(),
-        "The gate guard: \"Halt. Who goes there?\" You can try to persuade guard."
+        "The gate guard: \"Halt. Who goes there?\" You can try to persuade the guard."
     );
     assert_eq!(
         readout(&machine, &slot, &table),
         "The gate guard: \"Halt. Who goes there?\""
+    );
+}
+
+fn waiting_on(pending: u64) -> (DialogueMachine, MachineSlot, TableState) {
+    let (machine, slot, table) = entered();
+    let waiting = machine
+        .step(
+            &slot,
+            &with(
+                &table,
+                urge(1),
+                Some(Decision::RollPending(PendingId::new(pending))),
+            ),
+        )
+        .expect("steps");
+    let state = waiting.state.expect("the pending is recorded");
+    (machine, state, table)
+}
+
+fn dice_for(pending: u64) -> MachineInput {
+    MachineInput::Dice {
+        pending: PendingId::new(pending),
+        draws: vec![Draw::new(NonZeroU16::new(20).expect("sides"), 14).expect("on the die")],
+    }
+}
+
+fn scope() -> TableScope {
+    TableScope::of_table(TableId::new(1))
+}
+
+fn resolved_facts(facts: &[(&str, u64)]) -> Resolution {
+    let mut resolved = Resolved::default();
+    for (label, amount) in facts {
+        resolved = resolved.with_fact(label, *amount).expect("a valid label");
+    }
+    Resolution::Applied(resolved)
+}
+
+fn urged(
+    machine: &DialogueMachine,
+    slot: &MachineSlot,
+    table: &TableState,
+    resolution: Resolution,
+) -> Result<StepResult, MachineError> {
+    machine.step(
+        slot,
+        &with(table, urge(1), Some(Decision::Resolved(resolution))),
+    )
+}
+
+#[test]
+fn a_dice_answer_or_a_cancel_for_another_pending_is_declined_and_leaves_the_slot_alone() {
+    let (machine, state, table) = waiting_on(5);
+    let answers = [
+        dice_for(6),
+        MachineInput::PendingCancelled {
+            pending: PendingId::new(6),
+        },
+    ];
+    for (which, input) in answers.into_iter().enumerate() {
+        assert!(!machine.accepts(&table, &input, &state), "answer {which}");
+        let decision = Some(Decision::Resolved(resolved_with("succeeded", 1)));
+        let result = machine
+            .step(&state, &with(&table, input, decision))
+            .expect("steps");
+        assert_eq!(
+            declined_code(&result),
+            Some(DeclineCode::NotViable),
+            "answer {which}"
+        );
+        assert!(result.state.is_none() && result.table_effects.is_empty());
+    }
+}
+
+#[test]
+fn a_second_roll_decision_while_a_roll_is_awaited_is_declined_and_never_re_arms_the_pending() {
+    let (machine, state, table) = waiting_on(5);
+    assert!(!machine.accepts(&table, &urge(1), &state));
+    let again = machine
+        .step(
+            &state,
+            &with(
+                &table,
+                urge(1),
+                Some(Decision::RollPending(PendingId::new(6))),
+            ),
+        )
+        .expect("steps");
+    assert_eq!(declined_code(&again), Some(DeclineCode::NotViable));
+    assert!(again.state.is_none() && again.table_effects.is_empty());
+    assert_eq!(state.payload()["pending"], 5);
+}
+
+#[test]
+fn a_declined_resolution_on_the_dice_answer_leaves_the_roll_awaited_on_the_same_pending() {
+    let (machine, state, table) = waiting_on(5);
+    let decline = Decline::with_default_reason(DeclineCode::MissingRequirement);
+    let refused = machine
+        .step(
+            &state,
+            &with(
+                &table,
+                dice_for(5),
+                Some(Decision::Resolved(Resolution::Declined(decline))),
+            ),
+        )
+        .expect("steps");
+    assert_eq!(
+        declined_code(&refused),
+        Some(DeclineCode::MissingRequirement)
+    );
+    assert!(refused.state.is_none() && refused.table_effects.is_empty());
+    assert!(machine.accepts(&table, &dice_for(5), refused.state_after(&state)));
+    assert_eq!(
+        machine
+            .state_name(refused.state_after(&state))
+            .expect("named")
+            .as_str(),
+        "awaiting_roll"
+    );
+}
+
+#[test]
+fn a_seat_that_left_the_table_after_entry_cannot_urge_is_offered_nothing_and_is_not_carried_out() {
+    let (machine, slot, table) = entered();
+    let mut smaller = table.clone();
+    smaller
+        .apply(
+            &scope(),
+            correlation(200),
+            &[TableEffect::SeatLeft { seat: seat(2) }],
+        )
+        .expect("the seat leaves");
+    assert!(machine.accepts(&smaller, &urge(1), &slot));
+    assert!(!machine.accepts(&smaller, &urge(2), &slot));
+    assert_eq!(offered(&machine, &smaller, &slot, seat(1)), [action(URGE)]);
+    assert!(offered(&machine, &smaller, &slot, seat(2)).is_empty());
+    let (machine, done, _) = concluded_by(resolved_with("succeeded", 1));
+    let hand_off = machine.exit(&smaller, &done).expect("exits");
+    assert_eq!(
+        hand_off.carry(),
+        [CarryItem::Scene(FIRST_SCENE), CarryItem::Seat(seat(1))]
+    );
+}
+
+#[test]
+fn a_corrupt_slot_gives_the_typed_error_or_no_button_and_never_a_panic() {
+    let (machine, _, table) = entered();
+    let dialogue_id = MachineId::new("dialogue").expect("a machine id");
+    let corrupt = [
+        (
+            MachineSlot::from_parts(dialogue_id.clone(), 1, json!({ "phase": "listening" })),
+            MachineFailureCause::SlotMalformed,
+        ),
+        (
+            MachineSlot::from_parts(dialogue_id.clone(), 1, json!({ "phase": "bogus" })),
+            MachineFailureCause::SlotMalformed,
+        ),
+        (
+            MachineSlot::from_parts(dialogue_id, 9, json!({ "phase": "listening" })),
+            MachineFailureCause::SlotUnsupportedVersion,
+        ),
+        (
+            MachineSlot::from_parts(
+                MachineId::new("lobby").expect("a machine id"),
+                1,
+                json!({ "phase": "gathering", "ready": [] }),
+            ),
+            MachineFailureCause::SlotWrongMachine,
+        ),
+    ];
+    for (slot, cause) in corrupt {
+        let projected = machine.project(&table, &slot, Audience::Public);
+        assert_eq!(projected.map_err(|error| error.cause()), Err(cause));
+        assert!(!machine.accepts(&table, &urge(1), &slot));
+        let offers = machine.standing_offers(&table, &slot, &[seat(1), seat(2)]);
+        assert_eq!(offers.map_err(|error| error.cause()), Err(cause));
+    }
+}
+
+#[test]
+fn the_waiting_result_carries_exactly_the_pending_it_was_given() {
+    let (machine, slot, table) = entered();
+    for given in [1, 5, u64::MAX] {
+        let pending = PendingId::new(given);
+        let result = machine
+            .step(
+                &slot,
+                &with(&table, urge(1), Some(Decision::RollPending(pending))),
+            )
+            .expect("steps");
+        assert_eq!(result.outcome, StepOutcome::Waiting(pending));
+        let state = result.state.expect("the pending is recorded");
+        assert_eq!(state.payload()["phase"], "awaiting_roll");
+        assert_eq!(state.payload()["pending"], given);
+    }
+}
+
+type Facts<'a> = &'a [(&'a str, u64)];
+
+#[test]
+fn a_rules_result_is_read_as_a_verdict_or_refused_with_a_typed_reason() {
+    let (machine, slot, table) = entered();
+    let moved = Some(ConversationOutcome::Moved);
+    let unmoved = Some(ConversationOutcome::Unmoved);
+    let cases: [(Facts, Result<Option<ConversationOutcome>, ResultFault>); 12] = [
+        (&[("succeeded", 1)], Ok(moved)),
+        (&[("succeeded", 0)], Ok(unmoved)),
+        (&[("complied", 1)], Ok(moved)),
+        (&[("complied", 0)], Ok(unmoved)),
+        (&[("succeeded", 1), ("complied", 1)], Ok(moved)),
+        (&[("succeeded", 0), ("complied", 0)], Ok(unmoved)),
+        (&[], Ok(None)),
+        (&[("damage", 7)], Ok(None)),
+        (&[("succeeded", 2)], Err(ResultFault::AmountNotZeroOrOne)),
+        (
+            &[("complied", u64::MAX)],
+            Err(ResultFault::AmountNotZeroOrOne),
+        ),
+        (
+            &[("succeeded", 0), ("complied", 1)],
+            Err(ResultFault::FactsConflict),
+        ),
+        (
+            &[("succeeded", 1), ("succeeded", 1)],
+            Err(ResultFault::DuplicateFact),
+        ),
+    ];
+    for (facts, wanted) in cases {
+        let result = urged(&machine, &slot, &table, resolved_facts(facts));
+        match wanted {
+            Ok(Some(outcome)) => {
+                let applied = result.unwrap_or_else(|error| panic!("{facts:?} gave {error}"));
+                assert_eq!(
+                    applied.table_effects,
+                    [TableEffect::ConversationEnded {
+                        scene: FIRST_SCENE,
+                        outcome
+                    }],
+                    "{facts:?}"
+                );
+            }
+            Ok(None) => {
+                let declined = result.expect("a result with no verdict is declined, not failed");
+                assert_eq!(
+                    declined_code(&declined),
+                    Some(DeclineCode::NotSupportedYet),
+                    "{facts:?}"
+                );
+                assert!(declined.state.is_none() && declined.table_effects.is_empty());
+            }
+            Err(fault) => assert_eq!(result, Err(MachineError::Result(fault)), "{facts:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_result_with_no_verdict_leaves_the_urging_open_to_be_tried_again() {
+    let (machine, slot, table) = entered();
+    let declined = urged(&machine, &slot, &table, Resolution::applied()).expect("steps");
+    assert!(declined.state.is_none());
+    assert!(machine.accepts(&table, &urge(1), &slot));
+    assert!(!machine.wants_hand_off(&slot).expect("asks"));
+    let retried = urged(&machine, &slot, &table, resolved_with("succeeded", 1)).expect("steps");
+    assert_eq!(retried.outcome, StepOutcome::Settled(Outcome::Applied));
+}
+
+#[test]
+fn the_end_of_the_conversation_is_a_table_effect_the_events_and_a_checkpoint_keep() {
+    for (amount, outcome) in [
+        (1, ConversationOutcome::Moved),
+        (0, ConversationOutcome::Unmoved),
+    ] {
+        let (machine, slot, table) = entered();
+        let result =
+            urged(&machine, &slot, &table, resolved_with("succeeded", amount)).expect("steps");
+        let ended = TableEffect::ConversationEnded {
+            scene: FIRST_SCENE,
+            outcome,
+        };
+        assert_eq!(result.table_effects, std::slice::from_ref(&ended));
+
+        let mut live = table.clone();
+        assert_eq!(live.active_conversation(), None);
+        let applied = live
+            .apply(&scope(), correlation(300), &result.table_effects)
+            .expect("applies");
+        let ApplyOutcome::Applied(events) = applied else {
+            unreachable!("a new operation is applied");
+        };
+        let lines: Vec<String> = events
+            .iter()
+            .map(|event| event.render_audit_line())
+            .collect();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("effect=conversation_ended")),
+            "{lines:?}"
+        );
+        assert_eq!(live.active_conversation(), Some(outcome));
+        assert_ne!(live.digest_without_stamps(), table.digest_without_stamps());
+
+        let saved =
+            serde_json::to_string(&EffectRecord::stamp(&ended).expect("stamps")).expect("saves");
+        let record: EffectRecord = serde_json::from_str(&saved).expect("loads");
+        let mut restored = table_in_the_first_scene();
+        restored
+            .apply(
+                &scope(),
+                correlation(300),
+                &[record.open().expect("a record this engine reads")],
+            )
+            .expect("replays");
+        assert_eq!(restored.active_conversation(), Some(outcome));
+        assert_eq!(
+            restored.digest_without_stamps(),
+            live.digest_without_stamps()
+        );
+    }
+}
+
+#[test]
+fn a_conversation_that_ended_in_a_scene_that_is_not_open_is_refused() {
+    let mut table = table_in_the_first_scene();
+    let refused = table.apply(
+        &scope(),
+        correlation(301),
+        &[TableEffect::ConversationEnded {
+            scene: SceneId::new(99),
+            outcome: ConversationOutcome::Moved,
+        }],
+    );
+    assert_eq!(
+        refused.expect_err("refused").cause,
+        EffectRefusal::SceneNotActive
     );
 }

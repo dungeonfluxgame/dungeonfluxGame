@@ -29,7 +29,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::effects::{BeatName, EffectError, TableEffect};
+use crate::effects::{BeatName, ConversationOutcome, EffectError, TableEffect};
 use crate::envelope::Sender;
 use crate::event::TableEvent;
 use crate::identity::{Correlation, OperationId, SceneId, SeatId, SessionRevision, TableScope};
@@ -430,6 +430,14 @@ impl TableState {
             .focus
             .and_then(|scene| self.facts.scenes.get(&scene))
             .and_then(SceneRecord::beat)
+    }
+
+    /// How the conversation of the active scene ended, if it did.
+    pub fn active_conversation(&self) -> Option<ConversationOutcome> {
+        self.facts
+            .focus
+            .and_then(|scene| self.facts.scenes.get(&scene))
+            .and_then(SceneRecord::conversation)
     }
 
     pub fn last_hand_off(&self) -> Option<&HandOffRecord> {

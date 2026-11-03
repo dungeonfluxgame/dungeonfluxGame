@@ -6,7 +6,7 @@ use crate::effects::{BeatName, TableEffect, TableState};
 use crate::envelope::{PendingId, TimerName};
 use crate::explore::{AuthoredBeat, ExploreMachine};
 use crate::identity::{SceneId, TableId, TableScope};
-use crate::lobby_tests::{FIRST_SCENE, action, explore_for_neighbour, lobby, seat};
+use crate::lobby_tests::{FIRST_SCENE, action, explore_for_neighbour, lobby, offered, seat};
 use crate::machine::{
     CarryItem, Decision, Entry, EntryRefusal, Machine, MachineError, MachineInput, StepInput,
     StepOutcome, StepResult,
@@ -440,14 +440,10 @@ fn a_fixture_without_a_refused_entry_fails_for_a_machine_that_reads_its_entry() 
 fn the_check_is_a_standing_offer_to_a_seat_at_the_table_while_the_beat_is_presented() {
     let (machine, slot, table) = entered();
     assert_eq!(
-        machine.standing_offers(&table, &slot, seat(1)),
+        offered(&machine, &table, &slot, seat(1)),
         [action("investigate")]
     );
-    assert!(machine.standing_offers(&table, &slot, seat(9)).is_empty());
+    assert!(offered(&machine, &table, &slot, seat(9)).is_empty());
     let waiting = waiting_state(&machine, &slot, &table);
-    assert!(
-        machine
-            .standing_offers(&table, &waiting, seat(1))
-            .is_empty()
-    );
+    assert!(offered(&machine, &table, &waiting, seat(1)).is_empty());
 }

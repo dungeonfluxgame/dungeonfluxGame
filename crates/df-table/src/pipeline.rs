@@ -89,6 +89,7 @@ pub use books::{
 };
 pub use events::{ClarifyCause, ViewPart};
 pub use narrate::NarrationJob;
+pub use offers::MachineSurfaceError;
 pub use record::{Readout, TurnRecord};
 pub use table_access::{PipelineLoadError, PipelineRecord, PipelineTable};
 
@@ -306,6 +307,27 @@ impl<'a> Pipeline<'a> {
     pub fn with_limits(mut self, limits: PipelineLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// The table of a restored process, loaded the way this pipeline will run it: when the pipeline
+    /// publishes the machine's surface (`with_machine_surface`), the restored offers hold the
+    /// machine's standing buttons too, so a phone has them before any input and the load counts no
+    /// new publish.
+    pub fn load_table(
+        &self,
+        table: crate::identity::TableId,
+        facts: crate::effects::TableState,
+        record: PipelineRecord,
+        now_ms: u64,
+    ) -> Result<PipelineTable, PipelineLoadError> {
+        PipelineTable::from_record_with_standing(
+            table,
+            facts,
+            record,
+            now_ms,
+            &self.limits,
+            self.machine_surface.then_some(self.registry),
+        )
     }
 
     /// The names of the answers the pipeline offers (confirm, cancel, roll, and the ruling taps).

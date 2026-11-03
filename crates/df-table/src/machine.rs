@@ -245,6 +245,30 @@ impl fmt::Display for ReadoutError {
 
 impl std::error::Error for ReadoutError {}
 
+/// Why the rules owner's result could not be read as the verdict a machine needs. The rules owner
+/// broke its contract; the machine does not guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultFault {
+    /// A verdict fact carries an amount other than 0 (no) or 1 (yes).
+    AmountNotZeroOrOne,
+    /// Two facts of one result say different things about the same verdict.
+    FactsConflict,
+    /// One verdict fact appears twice in a result.
+    DuplicateFact,
+}
+
+impl fmt::Display for ResultFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::AmountNotZeroOrOne => "a verdict fact is neither 0 nor 1",
+            Self::FactsConflict => "the facts of one result give opposite verdicts",
+            Self::DuplicateFact => "a verdict fact appears twice in one result",
+        })
+    }
+}
+
+impl std::error::Error for ResultFault {}
+
 listed_enum! {
     /// The closed cause of a failed machine call, as the `MachineFailed` event records it. A
     /// record that could not be read keeps the fault that `load.refused` would name.
@@ -262,6 +286,8 @@ listed_enum! {
         ProjectionBlank,
         /// A decline was built without a usable reason.
         DeclineInvalid,
+        /// The rules owner's result could not be read as a verdict.
+        ResultInvalid,
     }
 }
 
@@ -276,6 +302,7 @@ impl MachineFailureCause {
             Self::HandOffRefused => "hand_off_refused",
             Self::ProjectionBlank => "projection_blank",
             Self::DeclineInvalid => "decline_invalid",
+            Self::ResultInvalid => "result_invalid",
         }
     }
 }
@@ -300,6 +327,7 @@ pub enum MachineError {
     HandOff(HandOffError),
     Projection(ReadoutError),
     Decline(DeclineError),
+    Result(ResultFault),
 }
 
 impl MachineError {
@@ -311,6 +339,7 @@ impl MachineError {
             Self::HandOff(_) => MachineFailureCause::HandOffRefused,
             Self::Projection(_) => MachineFailureCause::ProjectionBlank,
             Self::Decline(_) => MachineFailureCause::DeclineInvalid,
+            Self::Result(_) => MachineFailureCause::ResultInvalid,
         }
     }
 
@@ -333,6 +362,7 @@ impl fmt::Display for MachineError {
             Self::HandOff(error) => error.fmt(formatter),
             Self::Projection(error) => error.fmt(formatter),
             Self::Decline(error) => error.fmt(formatter),
+            Self::Result(error) => error.fmt(formatter),
         }
     }
 }
@@ -358,6 +388,7 @@ machine_error_from!(
     HandOffError => HandOff,
     ReadoutError => Projection,
     DeclineError => Decline,
+    ResultFault => Result,
 );
 
 impl From<NameError> for MachineError {
@@ -540,6 +571,35 @@ pub struct InspectReport {
     pub schema_version: u32,
 }
 
+/// The standing buttons of each seat asked about, in the order the seats were given.
+pub type StandingOffers = Vec<(SeatId, Vec<ActionId>)>;
+
+/// The rules actions of `spec` that `admits` accepts as an intent from each of `seats`: the one
+/// derivation of a standing offer from the spec, so a button is never one the machine declines.
+pub fn rules_action_offers(
+    spec: &MachineSpec,
+    seats: &[SeatId],
+    admits: impl Fn(&MachineInput) -> bool,
+) -> StandingOffers {
+    seats
+        .iter()
+        .map(|seat| {
+            let actions = spec
+                .rules_actions()
+                .iter()
+                .filter(|action| {
+                    admits(&MachineInput::Intent {
+                        seat: *seat,
+                        action: (*action).clone(),
+                    })
+                })
+                .cloned()
+                .collect();
+            (*seat, actions)
+        })
+        .collect()
+}
+
 /// A machine. See the module documentation for what each method owes and what it never does.
 pub trait Machine: Send + Sync {
     fn spec(&self) -> &MachineSpec;
@@ -577,18 +637,25 @@ pub trait Machine: Send + Sync {
         audience: Audience,
     ) -> Result<MachineReadout, MachineError>;
 
-    /// The actions `seat`, which is at the table, may take now: the buttons its phone holds while
-    /// nothing is pending (H3). A list the machine states itself, never a guess from the words of
-    /// a line; the pipeline publishes it only when asked to (`Pipeline::with_machine_surface`),
-    /// and a tap on one still goes through `accepts` and the rules like any other. The default is
-    /// none, so a machine with no standing choices needs no code.
+    /// The actions each of `seats` may take now: the buttons a phone holds while nothing is
+    /// pending (H3), one answer for every seat from one reading of the state. The list is the
+    /// machine's own statement, never a guess from the words of a line; the pipeline publishes it
+    /// only when asked to (`Pipeline::with_machine_surface`), and a tap on one still goes through
+    /// `accepts` and the rules like any other. The default offers each rules action of the spec
+    /// that `accepts` an intent from the seat, so the offered set cannot drift from the accepted
+    /// one; a record that cannot be read is the typed error and never an empty list. A machine
+    /// overrides it to read its state once for all the seats (`rules_action_offers`) or to offer
+    /// choices that are not rules actions (the lobby).
     fn standing_offers(
         &self,
-        _table: &TableState,
-        _state: &MachineSlot,
-        _seat: SeatId,
-    ) -> Vec<ActionId> {
-        Vec::new()
+        table: &TableState,
+        state: &MachineSlot,
+        seats: &[SeatId],
+    ) -> Result<StandingOffers, MachineError> {
+        self.validate(state)?;
+        Ok(rules_action_offers(self.spec(), seats, |input| {
+            self.accepts(table, input, state)
+        }))
     }
 
     /// The machine's report on itself: the conformance suite requires it and

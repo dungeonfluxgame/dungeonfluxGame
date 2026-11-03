@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::effects::{BeatName, EffectRefusal, TableEffect};
+use crate::effects::{BeatName, ConversationOutcome, EffectRefusal, TableEffect};
 use crate::element::ElementId;
 use crate::identity::{MachineId, SceneId, SeatId, SessionRevision};
 use crate::machine_slot::MachineSlot;
@@ -49,6 +49,9 @@ impl Facts {
             TableEffect::SeatMoved { seat, scene } => self.move_seat(*seat, *scene),
             TableEffect::SceneEntered { scene } => self.enter_scene(*scene),
             TableEffect::BeatResolved { scene, beat } => self.resolve_beat(*scene, beat),
+            TableEffect::ConversationEnded { scene, outcome } => {
+                self.end_conversation(*scene, *outcome)
+            }
             TableEffect::HandOffRecorded { from, to, carried } => {
                 self.last_hand_off = Some(HandOffRecord {
                     from: from.clone(),
@@ -190,6 +193,15 @@ impl Facts {
 
     fn resolve_beat(&mut self, scene: SceneId, beat: &BeatName) -> Result<(), EffectRefusal> {
         self.scene_mut(scene)?.beat = Some(beat.clone());
+        Ok(())
+    }
+
+    fn end_conversation(
+        &mut self,
+        scene: SceneId,
+        outcome: ConversationOutcome,
+    ) -> Result<(), EffectRefusal> {
+        self.scene_mut(scene)?.conversation = Some(outcome);
         Ok(())
     }
 

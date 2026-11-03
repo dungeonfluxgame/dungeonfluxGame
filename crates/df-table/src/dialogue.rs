@@ -7,9 +7,13 @@
 //! this machine proposes the urging and the rules owner settles it. The machine never rolls, never
 //! reads the words of a line (the interpreter chose the action before the pipeline got here) and
 //! never decides whether the speaker was moved: it reads the typed facts of the rules owner's
-//! result (`succeeded`, or `complied` for a creature that needed no roll) and nothing else. A
-//! result with neither fact (a scripted rules owner that reports none) ends as `heard`, which says
-//! only that the speaker was told.
+//! result (`succeeded`, or `complied` for a creature that needed no roll) and nothing else. Each
+//! fact is 0 or 1 and appears once. Two facts that disagree, an amount of 2 or more and a repeated
+//! fact are the typed `ResultFault` (the rules owner broke its contract and the machine does not
+//! guess), and a result with neither fact is declined `not_supported_yet` with the state as it
+//! was, so the urging can be tried again. The end leaves as a `ConversationEnded` effect, as the
+//! explore machine's `BeatResolved` does, so the table state, the event stream and a replay all
+//! say how the conversation ended.
 //!
 //! When the roll is a player's own (`Decision::RollPending`), the machine reports `Waiting` and
 //! holds only that pending id, as the explore machine does (RES26); the answer comes back as a
@@ -25,13 +29,14 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::effects::TableState;
+use crate::effects::{ConversationOutcome, TableEffect, TableState};
 use crate::element::NameError;
 use crate::identity::{SceneId, SeatId};
 use crate::machine::{
     CarryItem, Decision, Entry, EntryRefusal, HandOff, InspectReport, Machine, MachineError,
-    MachineId, MachineInput, MachineReadout, MachineSpec, Scope, SpecError, StateName, StepInput,
-    StepOutcome, StepResult, SuspendPolicy,
+    MachineId, MachineInput, MachineReadout, MachineSpec, ResultFault, Scope, SpecError,
+    StandingOffers, StateName, StepInput, StepOutcome, StepResult, SuspendPolicy,
+    rules_action_offers,
 };
 use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode};
@@ -68,12 +73,14 @@ impl fmt::Display for ConversationError {
 impl std::error::Error for ConversationError {}
 
 /// The authored content of the one conversation: who speaks, what they say first, the urging the
-/// table may try, and what they say when it moves them and when it does not.
+/// table may try (its action name and the words a phone shows for it), and what they say when it
+/// moves them and when it does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Conversation {
     speaker: String,
     opening: String,
     urge: ActionId,
+    urge_label: String,
     moved: String,
     unmoved: String,
 }
@@ -83,6 +90,7 @@ impl Conversation {
         speaker: &str,
         opening: &str,
         urge: &str,
+        urge_label: &str,
         moved: &str,
         unmoved: &str,
     ) -> Result<Self, ConversationError> {
@@ -97,6 +105,7 @@ impl Conversation {
             speaker: line("speaker", speaker)?,
             opening: line("opening line", opening)?,
             urge: ActionId::new(urge).map_err(ConversationError::InvalidAction)?,
+            urge_label: line("urging label", urge_label)?,
             moved: line("line when moved", moved)?,
             unmoved: line("line when unmoved", unmoved)?,
         })
@@ -107,37 +116,45 @@ impl Conversation {
         &self.urge
     }
 
-    fn line_for(&self, outcome: Conclusion) -> String {
+    fn line_for(&self, outcome: ConversationOutcome) -> String {
         let said = match outcome {
-            Conclusion::Moved => &self.moved,
-            Conclusion::Unmoved => &self.unmoved,
-            Conclusion::Heard => return format!("{} has heard you out.", self.speaker),
+            ConversationOutcome::Moved => &self.moved,
+            ConversationOutcome::Unmoved => &self.unmoved,
         };
         format!("{}: \"{said}\"", self.speaker)
     }
 }
 
-/// How the conversation ended, as the typed facts of the rules owner's result said.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Conclusion {
-    Moved,
-    Unmoved,
-    Heard,
-}
-
-fn conclusion_of(resolved: &Resolved) -> Conclusion {
-    let fact = |label: &str| {
-        resolved
+/// The verdict the typed facts of a rules result carry, if it carries one: each fact is 0 (no) or
+/// 1 (yes) and appears once, and two facts must agree. A result with neither fact has no verdict.
+fn verdict_of(resolved: &Resolved) -> Result<Option<ConversationOutcome>, ResultFault> {
+    let fact = |label: &str| -> Result<Option<bool>, ResultFault> {
+        let mut found = None;
+        for held in resolved
             .facts
             .iter()
-            .find(|fact| fact.label.as_str() == label)
-            .map(|fact| fact.amount)
+            .filter(|held| held.label.as_str() == label)
+        {
+            if found.is_some() {
+                return Err(ResultFault::DuplicateFact);
+            }
+            found = Some(match held.amount {
+                0 => false,
+                1 => true,
+                _ => return Err(ResultFault::AmountNotZeroOrOne),
+            });
+        }
+        Ok(found)
     };
-    match (fact(SUCCEEDED_FACT), fact(COMPLIED_FACT)) {
-        (Some(0), _) | (None, Some(0)) => Conclusion::Unmoved,
-        (Some(_), _) | (None, Some(_)) => Conclusion::Moved,
-        (None, None) => Conclusion::Heard,
+    let (succeeded, complied) = (fact(SUCCEEDED_FACT)?, fact(COMPLIED_FACT)?);
+    match (succeeded, complied) {
+        (None, None) => Ok(None),
+        (Some(said), Some(other)) if said != other => Err(ResultFault::FactsConflict),
+        (Some(moved), _) | (None, Some(moved)) => Ok(Some(if moved {
+            ConversationOutcome::Moved
+        } else {
+            ConversationOutcome::Unmoved
+        })),
     }
 }
 
@@ -145,9 +162,17 @@ fn conclusion_of(resolved: &Resolved) -> Conclusion {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case", deny_unknown_fields)]
 enum DialogueState {
-    Listening { scene: SceneId },
-    AwaitingRoll { scene: SceneId, pending: u64 },
-    Concluded { scene: SceneId, how: Conclusion },
+    Listening {
+        scene: SceneId,
+    },
+    AwaitingRoll {
+        scene: SceneId,
+        pending: u64,
+    },
+    Concluded {
+        scene: SceneId,
+        how: ConversationOutcome,
+    },
 }
 
 impl DialogueState {
@@ -217,10 +242,19 @@ impl DialogueMachine {
         }
     }
 
+    /// Ends the conversation as the rules result says, or declines when it says nothing.
     fn conclude(&self, scene: SceneId, resolved: &Resolved) -> Result<StepResult, MachineError> {
-        let how = conclusion_of(resolved);
+        let Some(how) = verdict_of(resolved)? else {
+            return Ok(StepResult::declined(Decline::with_default_reason(
+                DeclineCode::NotSupportedYet,
+            )));
+        };
         let next = self.encode(&DialogueState::Concluded { scene, how })?;
-        Ok(StepResult::applied(next, Vec::new()))
+        let ended = TableEffect::ConversationEnded {
+            scene,
+            outcome: how,
+        };
+        Ok(StepResult::applied(next, vec![ended]))
     }
 }
 
@@ -289,17 +323,12 @@ impl Machine for DialogueMachine {
         &self,
         table: &TableState,
         slot: &MachineSlot,
-        seat: SeatId,
-    ) -> Vec<ActionId> {
-        let input = MachineInput::Intent {
-            seat,
-            action: self.conversation.urge.clone(),
-        };
-        if self.accepts(table, &input, slot) {
-            vec![self.conversation.urge.clone()]
-        } else {
-            Vec::new()
-        }
+        seats: &[SeatId],
+    ) -> Result<StandingOffers, MachineError> {
+        let state = self.state_of(slot)?;
+        Ok(rules_action_offers(&self.spec, seats, |input| {
+            self.handles(table, &state, input)
+        }))
     }
 
     fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {
@@ -335,8 +364,7 @@ impl Machine for DialogueMachine {
             {
                 format!(
                     "{speaker}: \"{}\" You can try to {}.",
-                    self.conversation.opening,
-                    self.conversation.urge.as_str().replace(['_', '-'], " ")
+                    self.conversation.opening, self.conversation.urge_label
                 )
             }
             (DialogueState::Listening { .. }, _) => {

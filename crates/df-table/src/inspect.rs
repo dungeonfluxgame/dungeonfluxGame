@@ -41,7 +41,7 @@ mod settings;
 mod table;
 mod verbs;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::identity::SeatId;
 use crate::listed::listed_enum;
@@ -69,7 +69,7 @@ pub use table::{CastLine, SceneLine, SeatLine, TableReport, VitalsLine};
 pub use verbs::{MachineSupport, Verb, VerbAccess, VerbEffect, VerbSpec};
 
 /// Who a report is built for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "audience", rename_all = "snake_case")]
 pub enum InspectAudience {
     /// The developer or operator of this build: nothing is hidden.

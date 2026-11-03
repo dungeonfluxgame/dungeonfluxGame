@@ -151,6 +151,8 @@ pub struct World {
     pub settings: Settings,
     pub table: PipelineTable,
     pub limits: PipelineLimits,
+    /// Whether the pipeline publishes the running machine's own buttons and line (H3).
+    pub machine_surface: bool,
     next_input: u64,
 }
 
@@ -218,8 +220,84 @@ impl World {
             settings: Settings::defaults(),
             table,
             limits: PipelineLimits::default(),
+            machine_surface: false,
             next_input: 0,
         })
+    }
+
+    /// A world that runs `first` of these machines, with `seats` seats at the table: when `scene`
+    /// is true the party is in the first scene and the machine runs there, carrying the scene and
+    /// the seats; otherwise the machine is the table's own. Every fake starts empty.
+    pub fn running(
+        machines: Vec<Arc<dyn Machine>>,
+        first: &str,
+        seats: u64,
+        scene: bool,
+    ) -> Result<Self, WorldError> {
+        let machine_error =
+            |error: &dyn std::error::Error| WorldError::Machine(error.to_string().into());
+        let mut builder = RegistryBuilder::new();
+        for machine in &machines {
+            builder = builder.register_shared(Arc::clone(machine));
+        }
+        let registry = builder
+            .build(crate::ports::PortName::ALL)
+            .map_err(WorldError::Registry)?;
+        let first =
+            crate::identity::MachineId::new(first).map_err(|error| machine_error(&error))?;
+        let machine = registry.machine(&first).ok_or_else(|| {
+            WorldError::Machine(format!("the machine {first} is not registered").into())
+        })?;
+        let seated: Vec<SeatId> = (1..=seats).map(SeatId::new).collect();
+        let mut facts = TableState::seated(seats.max(1) as usize, &seated)
+            .map_err(|error| machine_error(&error))?;
+        let (home, entry) = if scene {
+            facts
+                .apply(
+                    &TableScope::of_table(TABLE),
+                    correlation(0),
+                    &[TableEffect::SceneEntered { scene: FIRST_SCENE }],
+                )
+                .map_err(|error| machine_error(&error))?;
+            let carry = std::iter::once(crate::machine::CarryItem::Scene(FIRST_SCENE))
+                .chain(seated.iter().copied().map(crate::machine::CarryItem::Seat))
+                .collect();
+            (
+                MachineHome::Scene { scene: FIRST_SCENE },
+                crate::machine::Entry::carrying(carry),
+            )
+        } else {
+            (MachineHome::Table, crate::machine::Entry::empty())
+        };
+        let mut table = PipelineTable::new(TABLE, facts);
+        let slot = machine
+            .enter(table.facts(), &entry)
+            .map_err(|error| machine_error(&error))?;
+        table
+            .start_machine(setup_correlation(), home, slot)
+            .map_err(|error| machine_error(&error))?;
+        Ok(Self {
+            rules: ScriptedRulesOwner::default(),
+            interpreter: ScriptedInterpreter::default(),
+            narrator: Box::new(FixedNarrator("The moment passes.".to_owned())),
+            broker: ScriptedBroker::default(),
+            clock: Arc::new(ManualClock::starting_at(1_000)),
+            dice: CountingDice::default(),
+            knowledge: FixedKnowledgeView::default(),
+            sink: RecordingSink::default(),
+            registry,
+            settings: Settings::defaults(),
+            table,
+            limits: PipelineLimits::default(),
+            machine_surface: false,
+            next_input: 0,
+        })
+    }
+
+    /// The same world with the pipeline publishing the running machine's own buttons and line.
+    pub fn with_machine_surface(mut self) -> Self {
+        self.machine_surface = true;
+        self
     }
 
     /// The name of the state the running machine is in, if one runs.
@@ -318,6 +396,7 @@ impl World {
             settings,
             table,
             limits,
+            machine_surface,
             ..
         } = self;
         let ports = Ports {
@@ -333,6 +412,11 @@ impl World {
         let pipeline = Pipeline::new(ports, registry, settings)
             .map_err(WorldError::Pipeline)?
             .with_limits(limits.clone());
+        let pipeline = if *machine_surface {
+            pipeline.with_machine_surface()
+        } else {
+            pipeline
+        };
         Ok(act(&pipeline, table))
     }
 

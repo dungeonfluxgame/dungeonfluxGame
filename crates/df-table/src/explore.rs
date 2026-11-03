@@ -26,8 +26,8 @@ use crate::element::NameError;
 use crate::identity::{SceneId, SeatId};
 use crate::machine::{
     CarryItem, Decision, Entry, EntryRefusal, HandOff, InspectReport, Machine, MachineError,
-    MachineId, MachineInput, MachineReadout, MachineSpec, Scope, SpecError, StateName, StepInput,
-    StepOutcome, StepResult, SuspendPolicy,
+    MachineId, MachineInput, MachineReadout, MachineSpec, Scope, SpecError, StandingOffers,
+    StateName, StepInput, StepOutcome, StepResult, SuspendPolicy, rules_action_offers,
 };
 use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode};
@@ -216,17 +216,12 @@ impl Machine for ExploreMachine {
         &self,
         table: &TableState,
         slot: &MachineSlot,
-        seat: SeatId,
-    ) -> Vec<ActionId> {
-        let input = MachineInput::Intent {
-            seat,
-            action: self.beat.check.clone(),
-        };
-        if self.accepts(table, &input, slot) {
-            vec![self.beat.check.clone()]
-        } else {
-            Vec::new()
-        }
+        seats: &[SeatId],
+    ) -> Result<StandingOffers, MachineError> {
+        let state = self.state_of(slot)?;
+        Ok(rules_action_offers(&self.spec, seats, |input| {
+            self.handles(table, &state, input)
+        }))
     }
 
     fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {

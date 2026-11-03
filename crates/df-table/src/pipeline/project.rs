@@ -26,9 +26,11 @@ use crate::projection::{
     AttachmentError, Attachments, AudienceProjection, NonEmptyText, ProjectionStatus, StoryLine,
     project,
 };
+use crate::table_state::TableSnapshot;
 
 use super::events::{ClarifyCause, PipelineEvent, ViewPart};
-use super::record::{self, applied_line, routed_line};
+use super::offers::{MachineSurfaceError, OffersError};
+use super::record::{self, applied_line, routed_line, separated_words};
 use super::stored::stored_outcome;
 use super::table_access::PipelineTable;
 use super::turn::Turn;
@@ -49,11 +51,22 @@ impl Pipeline<'_> {
         } else {
             self.record_end(&mut turn, table, outcome)
         };
+        // One snapshot for the whole of PROJECT: nothing below changes the table's facts, only the
+        // attachments the views read.
+        let snapshot = table.facts().snapshot();
+        let mut machine_degraded = false;
         let text = match turn.replayed_readout.clone() {
             Some(shown) => shown,
             None => {
                 let text = self.readout_text(&turn, table, &outcome);
-                self.with_machine_line(text, table, &outcome)
+                match self.with_machine_line(&text, table, &snapshot, &outcome) {
+                    Ok(line) => line,
+                    Err(_) => {
+                        self.view_failed(&turn, table, ViewPart::Machine, None);
+                        machine_degraded = true;
+                        text
+                    }
+                }
             }
         };
         let readout = Readout::new(text);
@@ -66,7 +79,14 @@ impl Pipeline<'_> {
                 table.ends_mut().record(key, turn.kind, stored);
             }
         }
-        let projections = self.project_audiences(&mut turn, table, &outcome, &readout);
+        let projections = self.project_audiences(
+            &mut turn,
+            table,
+            &snapshot,
+            &outcome,
+            &readout,
+            machine_degraded,
+        );
         turn.stage_done(PipelineStep::Project, started, Some(outcome.kind()));
         let declined = match &outcome {
             Outcome::Declined(decline) => Some(decline.code()),
@@ -111,22 +131,27 @@ impl Pipeline<'_> {
     /// The readout with the line the running machine says for itself after an applied turn, when
     /// the pipeline was asked for the machine's surface (`with_machine_surface`): the public
     /// reading of the machine as the turn left it, so the shared screen says what the scene says
-    /// (the guard's answer, the lobby's count). A machine that cannot read itself adds nothing.
-    fn with_machine_line(&self, text: String, table: &PipelineTable, outcome: &Outcome) -> String {
+    /// (the guard's answer, the lobby's count). No machine running adds nothing; a machine that
+    /// cannot read itself, or that the registry does not hold, is the typed error, and the caller
+    /// records it (`ViewPart::Machine`) and shows the readout as it was.
+    fn with_machine_line(
+        &self,
+        text: &str,
+        table: &PipelineTable,
+        snapshot: &TableSnapshot,
+        outcome: &Outcome,
+    ) -> Result<String, MachineSurfaceError> {
         if !self.machine_surface || !matches!(outcome, Outcome::Applied) {
-            return text;
+            return Ok(text.to_owned());
         }
-        let snapshot = table.facts().snapshot();
-        let Some(running) = table.running(&snapshot) else {
-            return text;
+        let Some(surface) = offers::running_surface(table, snapshot, self.registry)? else {
+            return Ok(text.to_owned());
         };
-        let Some(machine) = self.registry.machine(running.id) else {
-            return text;
-        };
-        match machine.project(table.facts(), running.slot, Audience::Public) {
-            Ok(line) => format!("{text} {}", line.as_str()),
-            Err(_) => text,
-        }
+        let line = surface
+            .machine
+            .project(table.facts(), surface.running.slot, Audience::Public)
+            .map_err(|error| MachineSurfaceError::Failed(error.cause()))?;
+        Ok(format!("{text} {}", line.as_str()))
     }
 
     /// Stages how the input ended, once: a decline, a clarification, a routed line. These say what
@@ -286,7 +311,7 @@ fn applied_text(turn: &Turn<'_, '_>) -> String {
     if let Some(answer) = &turn.ruling_note {
         line.push_str(&format!(
             "Ruling (earlier): {}. ",
-            answer.as_str().replace(['_', '-'], " ")
+            separated_words(answer.as_str())
         ));
     }
     if turn.cancelled {
@@ -351,13 +376,19 @@ impl Pipeline<'_> {
         &self,
         turn: &mut Turn<'_, '_>,
         table: &mut PipelineTable,
+        snapshot: &TableSnapshot,
         outcome: &Outcome,
         readout: &Readout,
+        machine_degraded: bool,
     ) -> Vec<AudienceProjection> {
         if !turn.replayed {
             let text = NonEmptyText::or_fallback(readout.as_str());
-            let activity = activity_of(table, outcome, turn.pending);
-            let revision = table.facts().snapshot().revision();
+            let activity = if machine_degraded {
+                ProjectionStatus::Degraded
+            } else {
+                activity_of(table, outcome, turn.pending)
+            };
+            let revision = snapshot.revision();
             match publish(
                 table.attachments_mut(),
                 turn,
@@ -383,16 +414,29 @@ impl Pipeline<'_> {
                     }
                 }
             }
-            if offers::sync_offers(table, self.machine_surface.then_some(self.registry)).is_err() {
-                self.view_failed(turn, table, ViewPart::Offers, None);
+            let standing = self.machine_surface.then_some(self.registry);
+            match offers::sync_offers(table, snapshot, standing) {
+                Ok(()) => {}
+                Err(OffersError::Attachments(_)) => {
+                    self.view_failed(turn, table, ViewPart::Offers, None);
+                }
+                Err(OffersError::Machine(_)) => {
+                    self.view_failed(turn, table, ViewPart::Machine, None);
+                    if table
+                        .attachments_mut()
+                        .set_activity(ProjectionStatus::Degraded)
+                        .is_err()
+                    {
+                        self.view_failed(turn, table, ViewPart::Publish, None);
+                    }
+                }
             }
         }
-        let snapshot = table.facts().snapshot();
         let attachments = table.attachments();
         let mut projections = Vec::new();
         let mut refused = Vec::new();
         let mut keep = |audience: Audience, seat: Option<SeatId>| match project(
-            &snapshot,
+            snapshot,
             attachments,
             audience,
         ) {

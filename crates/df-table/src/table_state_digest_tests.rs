@@ -77,6 +77,13 @@ fn world_changing_effects() -> Vec<(&'static str, TableEffect)> {
             },
         ),
         (
+            "a conversation ends",
+            TableEffect::ConversationEnded {
+                scene: scene(10),
+                outcome: crate::effects::ConversationOutcome::Moved,
+            },
+        ),
+        (
             "a hand-off is recorded",
             TableEffect::HandOffRecorded {
                 from: machine("lobby"),

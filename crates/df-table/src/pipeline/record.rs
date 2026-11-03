@@ -38,9 +38,15 @@ impl Readout {
     }
 }
 
+/// A registry name as it reads in a sentence: its separators as spaces. The one place a name
+/// becomes words, for the pipeline's lines and buttons.
+pub(crate) fn separated_words(name: &str) -> String {
+    name.replace(['_', '-'], " ")
+}
+
 /// How a seat's action reads in a sentence: the registry name with its separators as spaces.
 pub(crate) fn action_words(action: &ActionId) -> String {
-    action.as_str().replace(['_', '-'], " ")
+    separated_words(action.as_str())
 }
 
 /// The line for an applied outcome (C.7): who did what, then the typed facts of the result, from
@@ -52,22 +58,18 @@ pub(crate) fn applied_line(seat: SeatId, action: &ActionId, facts: &[ResultFact]
         for fact in earlier {
             line.push_str(&format!(
                 "{} {}, ",
-                action_words_of(fact.label.as_str()),
+                separated_words(fact.label.as_str()),
                 fact.amount
             ));
         }
         line.push_str(&format!(
             "{} {})",
-            action_words_of(last.label.as_str()),
+            separated_words(last.label.as_str()),
             last.amount
         ));
     }
     line.push('.');
     line
-}
-
-fn action_words_of(name: &str) -> String {
-    name.replace(['_', '-'], " ")
 }
 
 /// The line for a line of text that is not an action and was routed to its handler (C.8).

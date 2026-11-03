@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use crate::effects::{
-    ApplyOutcome, BeatName, EffectRecord, EffectRefusal, TABLE_EFFECT_SCHEMA_VERSION, TableEffect,
-    TableEffectKind, TableState, TableStateError,
+    ApplyOutcome, BeatName, ConversationOutcome, EffectRecord, EffectRefusal,
+    TABLE_EFFECT_SCHEMA_VERSION, TableEffect, TableEffectKind, TableState, TableStateError,
 };
 use crate::identity::{MachineId, SceneId, SeatId, TableId, TableScope};
 use crate::machine_slot::LoadFault;
@@ -35,6 +35,10 @@ fn sample(kind: TableEffectKind) -> TableEffect {
         TableEffectKind::BeatResolved => TableEffect::BeatResolved {
             scene: SceneId::new(4),
             beat: beat(),
+        },
+        TableEffectKind::ConversationEnded => TableEffect::ConversationEnded {
+            scene: SceneId::new(4),
+            outcome: ConversationOutcome::Moved,
         },
         TableEffectKind::HandOffRecorded => TableEffect::HandOffRecorded {
             from: machine("lobby"),

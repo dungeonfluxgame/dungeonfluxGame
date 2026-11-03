@@ -36,6 +36,26 @@ name_type!(
     BeatName
 );
 
+listed_enum! {
+    /// How a conversation ended, as the rules owner's typed verdict said: the speaker gave way
+    /// or did not. A result with no verdict is no ending, so there is no third value.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ConversationOutcome {
+        Moved,
+        Unmoved,
+    }
+}
+
+impl ConversationOutcome {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Moved => "moved",
+            Self::Unmoved => "unmoved",
+        }
+    }
+}
+
 /// The newest effect schema this engine writes and reads. Raised when an effect is added.
 pub const TABLE_EFFECT_SCHEMA_VERSION: u32 = 1;
 
@@ -48,6 +68,7 @@ listed_enum! {
         SeatLeft,
         SceneEntered,
         BeatResolved,
+        ConversationEnded,
         HandOffRecorded,
         SeatPresenceChanged,
         SeatMoved,
@@ -72,6 +93,7 @@ impl TableEffectKind {
             Self::SeatLeft => "seat_left",
             Self::SceneEntered => "scene_entered",
             Self::BeatResolved => "beat_resolved",
+            Self::ConversationEnded => "conversation_ended",
             Self::HandOffRecorded => "hand_off_recorded",
             Self::SeatPresenceChanged => "seat_presence_changed",
             Self::SeatMoved => "seat_moved",
@@ -96,6 +118,7 @@ impl TableEffectKind {
             | Self::SeatLeft
             | Self::SceneEntered
             | Self::BeatResolved
+            | Self::ConversationEnded
             | Self::HandOffRecorded
             | Self::SeatPresenceChanged
             | Self::SeatMoved
@@ -134,6 +157,12 @@ pub enum TableEffect {
     BeatResolved {
         scene: SceneId,
         beat: BeatName,
+    },
+    /// The conversation of an open scene ended, and how: the one record of whether the speaker
+    /// was moved, readable by a later scene, the narrator and replay.
+    ConversationEnded {
+        scene: SceneId,
+        outcome: ConversationOutcome,
     },
     /// The engine moved the table from one machine to another, carrying `carried` items.
     HandOffRecorded {
@@ -203,6 +232,7 @@ impl TableEffect {
             Self::SeatLeft { .. } => TableEffectKind::SeatLeft,
             Self::SceneEntered { .. } => TableEffectKind::SceneEntered,
             Self::BeatResolved { .. } => TableEffectKind::BeatResolved,
+            Self::ConversationEnded { .. } => TableEffectKind::ConversationEnded,
             Self::HandOffRecorded { .. } => TableEffectKind::HandOffRecorded,
             Self::SeatPresenceChanged { .. } => TableEffectKind::SeatPresenceChanged,
             Self::SeatMoved { .. } => TableEffectKind::SeatMoved,

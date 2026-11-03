@@ -61,6 +61,9 @@ listed_enum! {
         Offers,
         /// An audience's projection could not be built.
         Projection,
+        /// What the running machine says for itself (its line, its standing buttons) could not be
+        /// read: its saved state is corrupt or the registry does not hold it.
+        Machine,
     }
 }
 
@@ -70,6 +73,7 @@ impl ViewPart {
             Self::Publish => "publish",
             Self::Offers => "offers",
             Self::Projection => "projection",
+            Self::Machine => "machine",
         }
     }
 }
