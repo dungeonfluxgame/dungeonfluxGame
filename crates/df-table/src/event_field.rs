@@ -21,7 +21,7 @@ use crate::machine_slot::{LoadFault, RecordKind};
 use crate::outcome::{DeclineCode, OutcomeKind, PendingKind};
 use crate::owner_queue::{Lane, NotDeclinedCause};
 use crate::pending::RulingSource;
-use crate::pipeline::events::ClarifyCause;
+use crate::pipeline::events::{ClarifyCause, ViewPart};
 use crate::ports::PortName;
 use crate::ports::{NonActionKind, RulingKey, RulingTier};
 use crate::private_data::LengthClass;
@@ -108,6 +108,7 @@ event_field_by_key!(
     RulingTier,
     RulingSource,
     ClarifyCause,
+    ViewPart,
     CancelCause,
     NonActionKind,
     StaleCause,

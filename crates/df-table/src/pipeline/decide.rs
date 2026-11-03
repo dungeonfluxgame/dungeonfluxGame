@@ -22,6 +22,7 @@ use crate::ports::{
     RulingAnswer, WindowAnswer,
 };
 
+use super::events::PipelineEvent;
 use super::turn::Turn;
 
 /// What DECIDE settled.
@@ -64,7 +65,9 @@ pub(super) fn decide(
         Err(decline) => Decided::Declined(decline),
         Ok(()) => match resolve_loop(turn, seat, action, drawn, entry) {
             Ok(Resolution::Applied(resolved)) => Decided::Applied(resolved),
-            Ok(Resolution::Declined(decline)) => Decided::Declined(decline),
+            Ok(Resolution::Declined(decline)) => {
+                Decided::Declined(turn.pipeline.with_legal_alternatives(turn, decline))
+            }
             Ok(Resolution::Await(awaiting)) => Decided::Await(awaiting),
             Ok(Resolution::NeedsDraws(_)) => {
                 // `resolve_loop` never returns this; refuse rather than guess if it ever does.
@@ -93,8 +96,18 @@ pub(super) fn draw_all(
         let started = turn.now();
         match turn.pipeline.ports.dice.draw(turn.correlation, *request) {
             Ok(draw) => {
+                let (index, sides, value) = (turn.draws.len(), draw.sides().get(), draw.value());
                 drawn.push(draw);
                 turn.draws.push(StoredDraw::of(draw));
+                turn.stage_outcome(turn.pipeline_event(|scope, correlation| {
+                    PipelineEvent::DiceDrawn {
+                        scope,
+                        correlation,
+                        draw: index,
+                        sides,
+                        value,
+                    }
+                }));
             }
             Err(error) => {
                 turn.boundary_failed(error.port, error.cause, started);
@@ -136,6 +149,12 @@ pub(super) fn resolve_loop(
             ),
         };
         match answered {
+            Ok(Resolution::NeedsDraws(requests)) if requests.is_empty() => {
+                // An empty request is no progress, so it is an answer the port had no right to
+                // give, not a reason to ask again until the deadline.
+                turn.boundary_failed(PortName::RulesOwner, FailureCause::InvalidAnswer, started);
+                return Err(Decline::with_default_reason(DeclineCode::NotSupportedYet));
+            }
             Ok(Resolution::NeedsDraws(requests)) => draw_all(turn, &requests, drawn)?,
             Ok(settled) => return Ok(settled),
             Err(error) => {

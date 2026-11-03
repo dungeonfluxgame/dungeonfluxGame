@@ -1,5 +1,5 @@
-//! The two small books the pipeline keeps beside the pending book: the resource requests that are
-//! out, and the results of the operations it committed.
+//! The small books the pipeline keeps beside the pending book: the resource requests that are out,
+//! the reservations to release once a commit is durable, and how operations ended.
 //!
 //! `RequestBook` holds every request a machine's step asked the broker for: the machine and the
 //! key it chose, the `ResultStamp` it was made under (scene, generation, revision, so a late
@@ -8,7 +8,12 @@
 //! commit and issued after it, so a refused batch leaves nothing at the broker; a restart keeps
 //! the intents that were not issued, and issuing is idempotent per key. `ResultBook` holds, for
 //! the most recent committed operations, how each ended, so a duplicate operation id after a
-//! restart finds its stored result before any port is asked and no die is drawn again (H.2).
+//! restart finds its stored result before any port is asked and no die is drawn again (H.2). The
+//! result book keeps what the seat was told (the readout, the decline, the clarification, the
+//! routed kind), so a duplicate delivery gets the same answer and writes nothing to the views.
+//! `ReleaseBook` holds the reservations a cancelled pending gave up (`RulesOwner::abandon`): they
+//! are recorded with the commit and told to the rules owner after it, like a broker request, so a
+//! refused batch leaves the reservation where it was.
 //!
 //! Both are bounded (`BoundedMap`, the oldest forgotten first), serialisable with a version and
 //! checked on load, and keep an exclusive-or digest of their logical state (the broker handle is
@@ -19,12 +24,15 @@ use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 
-use crate::identity::{MachineId, OperationId, RecoveryEpoch, SceneId, SessionRevision};
+use crate::identity::{
+    Correlation, MachineId, OperationId, RecoveryEpoch, SceneId, SeatId, SessionRevision,
+};
 use crate::machine::RequestKey;
-use crate::outcome::{DeclineCode, PendingKind};
+use crate::outcome::{DeclineRecord, PendingKind};
 use crate::pending::bounded::BoundedMap;
 use crate::pending::digest::{Fnv, mix};
-use crate::ports::PurposeName;
+use crate::pipeline::events::ClarifyCause;
+use crate::ports::{ActionId, NonActionKind, PurposeName};
 use crate::table_state::{ResultStamp, SceneGeneration};
 
 /// The schema version of the request and result records.
@@ -69,6 +77,8 @@ pub struct RequestEntry {
     key: u64,
     purpose: PurposeName,
     stamp: Option<StoredStamp>,
+    /// The input that asked, so the broker's work joins back to it (O.4).
+    asked_by: Correlation,
     /// The broker's handle, once the host issued the request.
     handle: Option<u64>,
 }
@@ -90,6 +100,11 @@ impl RequestEntry {
         self.handle.is_some()
     }
 
+    /// The correlation of the input that asked for this request.
+    pub fn asked_by(&self) -> Correlation {
+        self.asked_by
+    }
+
     /// Hashes what the request is and whether it was issued, never the handle itself.
     fn logical_hash(&self) -> u64 {
         let mut hasher = Fnv::new();
@@ -97,6 +112,7 @@ impl RequestEntry {
         self.key.hash(&mut hasher);
         self.purpose.hash(&mut hasher);
         self.stamp.hash(&mut hasher);
+        self.asked_by.hash(&mut hasher);
         self.handle.is_some().hash(&mut hasher);
         hasher.finish()
     }
@@ -160,6 +176,8 @@ pub struct RequestRecord {
 pub struct RequestBook {
     entries: BoundedMap<RequestSlot, RequestEntry>,
     by_handle: std::collections::BTreeMap<u64, RequestSlot>,
+    /// How many entries have no broker handle yet, so issuing costs nothing when none is due.
+    unissued: usize,
     digest: u64,
 }
 
@@ -168,6 +186,7 @@ impl RequestBook {
         Self {
             entries: BoundedMap::holding_at_most(maximum),
             by_handle: std::collections::BTreeMap::new(),
+            unissued: 0,
             digest: 0,
         }
     }
@@ -180,14 +199,22 @@ impl RequestBook {
         self.entries.len() == 0
     }
 
+    /// How many requests were recorded and not issued to the broker yet.
+    pub fn unissued_count(&self) -> usize {
+        self.unissued
+    }
+
     pub fn digest(&self) -> u64 {
         self.digest ^ mix(self.entries.maximum() as u64)
     }
 
     fn forget(&mut self, entry: &RequestEntry) {
         self.digest ^= entry.logical_hash();
-        if let Some(handle) = entry.handle {
-            self.by_handle.remove(&handle);
+        match entry.handle {
+            Some(handle) => {
+                self.by_handle.remove(&handle);
+            }
+            None => self.unissued = self.unissued.saturating_sub(1),
         }
     }
 
@@ -199,15 +226,18 @@ impl RequestBook {
         key: RequestKey,
         purpose: PurposeName,
         stamp: Option<ResultStamp>,
+        asked_by: Correlation,
     ) {
         let entry = RequestEntry {
             machine: machine.clone(),
             key: key.get(),
             purpose,
             stamp: stamp.map(StoredStamp::of),
+            asked_by,
             handle: None,
         };
         self.digest ^= entry.logical_hash();
+        self.unissued += 1;
         let removed = self.entries.insert((machine, key.get()), entry);
         for old in removed.replaced.iter().chain(removed.evicted.iter()) {
             self.forget(old);
@@ -216,6 +246,9 @@ impl RequestBook {
 
     /// The requests recorded and not issued to the broker yet, oldest first.
     pub fn unissued(&self) -> Vec<RequestEntry> {
+        if self.unissued == 0 {
+            return Vec::new();
+        }
         self.entries
             .oldest_first()
             .into_iter()
@@ -231,8 +264,12 @@ impl RequestBook {
             return false;
         };
         self.digest ^= entry.logical_hash();
+        let was_unissued = entry.handle.is_none();
         entry.handle = Some(handle);
         self.digest ^= entry.logical_hash();
+        if was_unissued {
+            self.unissued = self.unissued.saturating_sub(1);
+        }
         self.by_handle.insert(handle, slot);
         true
     }
@@ -280,10 +317,13 @@ impl RequestBook {
                 return Err(BookLoadError::ImpossibleStamp);
             }
             book.digest ^= entry.logical_hash();
-            if let Some(handle) = entry.handle
-                && book.by_handle.insert(handle, slot.clone()).is_some()
-            {
-                return Err(BookLoadError::HandleReused);
+            match entry.handle {
+                Some(handle) => {
+                    if book.by_handle.insert(handle, slot.clone()).is_some() {
+                        return Err(BookLoadError::HandleReused);
+                    }
+                }
+                None => book.unissued += 1,
             }
             book.entries.insert(slot, entry);
         }
@@ -317,17 +357,43 @@ fn check_header(version: u32, maximum: usize, held: usize) -> Result<(), BookLoa
     Ok(())
 }
 
-/// How a committed operation ended, as the result book keeps it.
+/// How an operation ended, as the result book keeps it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "ended", rename_all = "snake_case", deny_unknown_fields)]
-pub enum StoredOutcome {
+pub enum StoredEnding {
     Applied,
     Pending { pending: u64, kind: PendingKind },
-    Declined { code: DeclineCode },
+    Declined,
+    NeedsClarification,
 }
 
-/// One committed operation and how it ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// The buttons a seat was asked to pick from, as saved.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredClarification {
+    pub options: Vec<ActionId>,
+    pub cause: ClarifyCause,
+    pub keeps_draft: bool,
+}
+
+/// What an operation came to and what its seat was told, so a duplicate delivery of the same
+/// operation id gets the same answer and no port is asked (H.2).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredOutcome {
+    pub ending: StoredEnding,
+    /// The structured line the seat was shown.
+    pub readout: String,
+    /// The decline of a declined operation, or of the step that stopped a plan after a valid
+    /// prefix was applied.
+    pub decline: Option<DeclineRecord>,
+    pub clarification: Option<StoredClarification>,
+    /// The kind of a line that was not an action and was routed to its handler.
+    pub routed: Option<NonActionKind>,
+}
+
+/// One operation and how it ended.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StoredResult {
     operation: OperationId,
@@ -380,7 +446,9 @@ impl ResultBook {
 
     /// How the operation ended, if it was committed and is still remembered.
     pub fn find(&self, operation: OperationId) -> Option<StoredOutcome> {
-        self.entries.get(&operation).map(|stored| stored.outcome)
+        self.entries
+            .get(&operation)
+            .map(|stored| stored.outcome.clone())
     }
 
     /// Remembers how a committed operation ended.
@@ -397,7 +465,7 @@ impl ResultBook {
         ResultRecord {
             schema_version: BOOK_SCHEMA_VERSION,
             maximum: self.entries.maximum(),
-            entries: self.entries.oldest_first().into_iter().copied().collect(),
+            entries: self.entries.oldest_first().into_iter().cloned().collect(),
         }
     }
 
@@ -409,6 +477,127 @@ impl ResultBook {
                 return Err(BookLoadError::Duplicate);
             }
             book.record(stored.operation, stored.outcome);
+        }
+        Ok(book)
+    }
+}
+
+/// One reservation a cancelled pending gave up, waiting to be told to the rules owner.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseEntry {
+    pending: u64,
+    seat: u64,
+    action: ActionId,
+    /// The input that cancelled the pending.
+    asked_by: Correlation,
+}
+
+impl ReleaseEntry {
+    pub fn pending(&self) -> u64 {
+        self.pending
+    }
+
+    pub fn seat(&self) -> SeatId {
+        SeatId::new(self.seat)
+    }
+
+    pub fn action(&self) -> &ActionId {
+        &self.action
+    }
+
+    pub fn asked_by(&self) -> Correlation {
+        self.asked_by
+    }
+
+    fn logical_hash(&self) -> u64 {
+        let mut hasher = Fnv::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// The saved form of a `ReleaseBook`, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseRecord {
+    schema_version: u32,
+    maximum: usize,
+    entries: Vec<ReleaseEntry>,
+}
+
+/// The reservations to tell the rules owner about once the commit that cancelled their pendings is
+/// durable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleaseBook {
+    entries: BoundedMap<u64, ReleaseEntry>,
+    digest: u64,
+}
+
+impl ReleaseBook {
+    pub fn holding_at_most(maximum: usize) -> Self {
+        Self {
+            entries: BoundedMap::holding_at_most(maximum),
+            digest: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.len() == 0
+    }
+
+    pub fn digest(&self) -> u64 {
+        self.digest ^ mix(self.entries.maximum() as u64)
+    }
+
+    /// Records that the pending's reservation is to be released.
+    pub fn record(&mut self, pending: u64, seat: SeatId, action: ActionId, asked_by: Correlation) {
+        let entry = ReleaseEntry {
+            pending,
+            seat: seat.get(),
+            action,
+            asked_by,
+        };
+        self.digest ^= entry.logical_hash();
+        let removed = self.entries.insert(pending, entry);
+        for old in removed.replaced.iter().chain(removed.evicted.iter()) {
+            self.digest ^= old.logical_hash();
+        }
+    }
+
+    /// The releases due, oldest first.
+    pub fn due(&self) -> Vec<ReleaseEntry> {
+        self.entries.oldest_first().into_iter().cloned().collect()
+    }
+
+    /// Forgets a release that was told to the rules owner.
+    pub fn done(&mut self, pending: u64) {
+        if let Some(old) = self.entries.remove(&pending) {
+            self.digest ^= old.logical_hash();
+        }
+    }
+
+    pub fn to_record(&self) -> ReleaseRecord {
+        ReleaseRecord {
+            schema_version: BOOK_SCHEMA_VERSION,
+            maximum: self.entries.maximum(),
+            entries: self.entries.oldest_first().into_iter().cloned().collect(),
+        }
+    }
+
+    pub fn from_record(record: ReleaseRecord) -> Result<Self, BookLoadError> {
+        check_header(record.schema_version, record.maximum, record.entries.len())?;
+        let mut book = Self::holding_at_most(record.maximum);
+        for entry in record.entries {
+            if book.entries.contains(&entry.pending) {
+                return Err(BookLoadError::Duplicate);
+            }
+            book.digest ^= entry.logical_hash();
+            book.entries.insert(entry.pending, entry);
         }
         Ok(book)
     }

@@ -74,6 +74,8 @@ pub struct SceneMachine {
     spec: MachineSpec,
     actions: Vec<(ActionId, Leaves)>,
     finishing_after: Option<u64>,
+    /// The machine cannot say whether it wants to hand off: a failure the pipeline must record.
+    unable_to_say_if_finished: bool,
     request: Option<(ActionId, PurposeName, RequestKey)>,
     next_machine: MachineId,
 }
@@ -103,6 +105,7 @@ impl SceneMachine {
             spec,
             actions: held,
             finishing_after: None,
+            unable_to_say_if_finished: false,
             request: None,
             next_machine,
         })
@@ -121,6 +124,12 @@ impl SceneMachine {
             RequestKey::new(key),
         ));
         Ok(self)
+    }
+
+    /// The scene fails when it is asked whether it wants to hand off, as a damaged state would.
+    pub fn unable_to_say_if_finished(mut self) -> Self {
+        self.unable_to_say_if_finished = true;
+        self
     }
 
     /// The scene asks for a hand-off to the lobby once it has taken this many turns.
@@ -296,6 +305,11 @@ impl Machine for SceneMachine {
     }
 
     fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {
+        if self.unable_to_say_if_finished {
+            return Err(MachineError::Slot(
+                crate::machine_slot::SlotError::InvalidStateName(NameError::Empty),
+            ));
+        }
         let turns = counters_of(&self.state_of(slot)?).turns;
         Ok(self.finishing_after.is_some_and(|after| turns >= after))
     }

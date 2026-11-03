@@ -335,8 +335,8 @@ fn a_rules_owner_that_fails_declines_the_input_and_commits_nothing() {
 
     assert_eq!(result.record.declined, Some(DeclineCode::NotSupportedYet));
     assert_eq!(
-        result.record.state_hash_before,
-        result.record.state_hash_after
+        result.record.durable_hash_before,
+        result.record.durable_hash_after
     );
     assert_eq!(
         failures_of(&world.events()),
@@ -363,8 +363,8 @@ fn a_die_off_the_die_is_an_invalid_answer_never_replaced_by_a_roll() {
         [(PortName::Dice, FailureCause::InvalidAnswer)]
     );
     assert_eq!(
-        result.record.state_hash_before,
-        result.record.state_hash_after
+        result.record.durable_hash_before,
+        result.record.durable_hash_after
     );
 }
 

@@ -3,11 +3,14 @@
 //! It owns `GoldenStep` (an input and what must come of it), `play` (feeds the steps to a `World`
 //! one by one and compares each turn) and `replay_twice` (plays the script in two fresh worlds and
 //! requires equal `TurnRecord`s and state digests, which is the determinism of replay). What a
-//! step expects is written out by hand as an explicit sequence: how the input ended, whether the
-//! state digest moved, the compact line of every event in order (the audit line without the keys
-//! every line shares and without timings), the readout and the options offered. A golden is
-//! written only after its trace was reviewed against the pinned source (RES52); nothing here
-//! records one from a run.
+//! step expects is written out by hand, and each part is checked on its own so that a golden
+//! freezes only what the plan says: how the input ended, whether the durable state moved, the
+//! stage lines in the plan's order (C), the other lines the host releases in the order it
+//! releases them, the dice drawn (sides and value), the readout, the buttons of a clarification,
+//! the state the machine is in, the open pendings with who may answer what, and what each
+//! audience's projection shows (H.17: the turn log, the snapshot and the per-seat projections). A
+//! golden is written only after its trace was read against the plan text it cites (RES52);
+//! nothing here records one from a run.
 //!
 //! The runner reports every difference as text in the report and never panics, so a failing
 //! golden says which step and what differed. Fakes outside their script still fail loudly, as
@@ -20,7 +23,9 @@ use crate::envelope::{EngineInput, ProposalOrigin, TimerName};
 use crate::event::TableEvent;
 use crate::identity::{Correlation, SessionRevision};
 use crate::outcome::{DeclineCode, Outcome, PendingKind};
-use crate::pipeline::TurnRecord;
+use crate::pending::PendingResolution;
+use crate::pipeline::{TurnRecord, TurnResult};
+use crate::projection::{AudienceProjection, Viewer};
 use crate::testkit::correlation;
 
 pub use scene_machine::{Leaves, SceneMachine};
@@ -74,16 +79,39 @@ pub enum StateChange {
     Unchanged,
 }
 
+/// What one audience's projection must show after a step.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewExpect {
+    pub viewer: Viewer,
+    pub readout: &'static str,
+    /// The sentence that says why the status is not ok, when it is not.
+    pub reason: Option<&'static str>,
+    /// The ids of the buttons the audience holds.
+    pub offers: &'static [&'static str],
+}
+
 /// What a step must come to.
 #[derive(Debug, Clone, Copy)]
 pub struct Expect {
     pub ending: Ending,
     pub state: StateChange,
-    /// The compact line of every event of the step, in order.
-    pub events: &'static [&'static str],
+    /// The compact line of every stage, in the order of section C.
+    pub stages: &'static [&'static str],
+    /// The compact line of every other event of the step, in the order the host releases them:
+    /// what the input came to and asked of the ports, then what it changed, then the narration.
+    pub released: &'static [&'static str],
+    /// The dice the step drew, as sides and value, in order.
+    pub dice: &'static [(u16, u16)],
     pub readout: &'static str,
     /// The names the seat is asked to pick from, when it is.
     pub options: &'static [&'static str],
+    /// The state the running machine is in once the step is done.
+    pub machine: &'static str,
+    /// The pendings that are open once the step is done, one compact line each
+    /// (`pending_line`).
+    pub pendings: &'static [&'static str],
+    /// What these audiences' projections show once the step is done.
+    pub views: &'static [ViewExpect],
 }
 
 /// One input and what must come of it.
@@ -186,7 +214,7 @@ pub fn play(world: &mut World, steps: &[GoldenStep]) -> GoldenReport {
             &mut report.failures,
         );
         let seen: Vec<String> = step_events.iter().map(compact).collect();
-        compare(step, &result, &seen, &mut report.failures);
+        compare(step, &result, &seen, world, &mut report.failures);
         report.records.push(result.record);
     }
     report.final_hash = world.table.state_hash();
@@ -245,10 +273,77 @@ pub(crate) fn check_identity(
     }
 }
 
+/// One open pending as a golden writes it: its id, kind and status, and for each seat that may
+/// still answer, the choices it is offered.
+pub fn pending_line(pending: &PendingResolution) -> String {
+    let offers: Vec<String> = pending
+        .window()
+        .offers()
+        .iter()
+        .filter(|offer| offer.answer().is_none())
+        .map(|offer| {
+            let choices: Vec<&str> = offer
+                .choices()
+                .iter()
+                .map(|choice| choice.as_str())
+                .collect();
+            format!("seat{}:{}", offer.seat(), choices.join("|"))
+        })
+        .collect();
+    format!(
+        "pending={} kind={} status={} offers={}",
+        pending.id().get(),
+        pending.kind().key(),
+        pending.status().key(),
+        offers.join(";")
+    )
+}
+
+/// What a projection shows, as the three parts a golden compares.
+fn shown(projection: &AudienceProjection) -> (String, Option<String>, Vec<String>) {
+    match projection {
+        AudienceProjection::Shared(view) => (
+            view.readout().as_str().to_owned(),
+            view.reason().map(|reason| reason.as_str().to_owned()),
+            view.offers()
+                .iter()
+                .map(|offer| offer.offer_id.as_str().to_owned())
+                .collect(),
+        ),
+        AudienceProjection::Seat(view) => (
+            view.readout().as_str().to_owned(),
+            view.reason().map(|reason| reason.as_str().to_owned()),
+            view.offers()
+                .iter()
+                .map(|offer| offer.offer_id.as_str().to_owned())
+                .collect(),
+        ),
+    }
+}
+
+fn compare_lists(
+    step: &GoldenStep,
+    what: &str,
+    found: &[String],
+    expected: &[&str],
+    failures: &mut Vec<String>,
+) {
+    let found: Vec<&str> = found.iter().map(String::as_str).collect();
+    if found != expected {
+        failures.push(format!(
+            "{}: {what} were\n  {}\nexpected\n  {}",
+            step.name,
+            found.join("\n  "),
+            expected.join("\n  ")
+        ));
+    }
+}
+
 fn compare(
     step: &GoldenStep,
-    result: &crate::pipeline::TurnResult,
+    result: &TurnResult,
     seen_events: &[String],
+    world: &World,
     failures: &mut Vec<String>,
 ) {
     let expect = &step.expect;
@@ -259,23 +354,30 @@ fn compare(
             step.name, expect.ending
         ));
     }
-    let moved = result.record.state_hash_before != result.record.state_hash_after;
+    let moved = result.record.durable_hash_before != result.record.durable_hash_after;
     if moved != (expect.state == StateChange::Changed) {
         failures.push(format!(
-            "{}: the state digest {}, expected it to {:?}",
+            "{}: the durable state digest {}, expected it to {:?}",
             step.name,
             if moved { "moved" } else { "stayed" },
             expect.state
         ));
     }
-    let expected_events: Vec<&str> = expect.events.to_vec();
-    let found_events: Vec<&str> = seen_events.iter().map(String::as_str).collect();
-    if found_events != expected_events {
+    let (stages, released): (Vec<String>, Vec<String>) = seen_events
+        .iter()
+        .cloned()
+        .partition(|line| line.starts_with("STEP "));
+    compare_lists(step, "stage lines", &stages, expect.stages, failures);
+    compare_lists(step, "released lines", &released, expect.released, failures);
+    let drawn: Vec<(u16, u16)> = result
+        .draws()
+        .iter()
+        .map(|draw| (draw.sides().get(), draw.value()))
+        .collect();
+    if drawn != expect.dice {
         failures.push(format!(
-            "{}: events were\n  {}\nexpected\n  {}",
-            step.name,
-            found_events.join("\n  "),
-            expected_events.join("\n  ")
+            "{}: dice were {drawn:?}, expected {:?}",
+            step.name, expect.dice
         ));
     }
     if result.readout.as_str() != expect.readout {
@@ -302,6 +404,41 @@ fn compare(
             "{}: options were {options:?}, expected {:?}",
             step.name, expect.options
         ));
+    }
+    let machine = world.machine_state().unwrap_or_default();
+    if machine != expect.machine {
+        failures.push(format!(
+            "{}: the machine is {machine:?}, expected {:?}",
+            step.name, expect.machine
+        ));
+    }
+    let pendings: Vec<String> = world.table.pending().iter().map(pending_line).collect();
+    compare_lists(step, "open pendings", &pendings, expect.pendings, failures);
+    for view in expect.views {
+        let found = result
+            .projections
+            .iter()
+            .find(|projection| projection.viewer() == view.viewer);
+        let Some(found) = found else {
+            failures.push(format!(
+                "{}: no projection for {:?}",
+                step.name, view.viewer
+            ));
+            continue;
+        };
+        let (readout, reason, offers) = shown(found);
+        if readout != view.readout || reason.as_deref() != view.reason {
+            failures.push(format!(
+                "{}: {:?} shows readout {readout:?} and reason {reason:?}, expected {:?} and {:?}",
+                step.name, view.viewer, view.readout, view.reason
+            ));
+        }
+        if offers != view.offers {
+            failures.push(format!(
+                "{}: {:?} holds the offers {offers:?}, expected {:?}",
+                step.name, view.viewer, view.offers
+            ));
+        }
     }
 }
 

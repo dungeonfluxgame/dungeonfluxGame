@@ -110,7 +110,7 @@ fn a_paused_table_declines_play_time_locked_until_it_is_resumed() {
 
     let blocked = world.tap(1, "wave").expect("the tap runs");
     let typed = world.text(1, "wave at them").expect("the line runs");
-    let before_resume = world.table.state_hash();
+    let before_resume = world.table.durable_hash();
 
     assert_eq!(
         blocked.record.declined,
@@ -119,7 +119,7 @@ fn a_paused_table_declines_play_time_locked_until_it_is_resumed() {
     );
     assert_eq!(typed.record.declined, Some(DeclineCode::TimeLocked));
     assert!(changes(&blocked).is_empty());
-    assert_eq!(world.table.state_hash(), before_resume);
+    assert_eq!(world.table.durable_hash(), before_resume);
     assert_eq!(world.rules.calls(), Vec::<RulesCall>::new());
     assert_eq!(world.interpreter.calls().first_attempts, 0);
 
@@ -265,7 +265,7 @@ fn an_answer_after_the_party_moved_to_another_scene_cancels_the_window() {
 #[test]
 fn exiting_a_pending_that_is_not_there_is_declined_and_changes_nothing() {
     let mut world = shield_world();
-    let before = world.table.state_hash();
+    let before = world.table.durable_hash();
 
     let ended = world
         .engine(EngineInput::Control(EngineControl::CancelPending {
@@ -275,7 +275,7 @@ fn exiting_a_pending_that_is_not_there_is_declined_and_changes_nothing() {
         .expect("the exit runs");
 
     assert_eq!(ended.record.declined, Some(DeclineCode::WindowClosed));
-    assert_eq!(world.table.state_hash(), before);
+    assert_eq!(world.table.durable_hash(), before);
     assert_eq!(cancelled_lines(&world), Vec::<String>::new());
 }
 
@@ -313,12 +313,12 @@ fn a_machine_that_settles_as_pending_is_a_machine_failure_recorded_once() {
     let scene = SceneMachine::new(&[("odd", Leaves::SettlesPending)]).expect("the scene builds");
     let mut world = World::with_scene_machine(scene, 1).expect("the world builds");
     world.rules = allows(ScriptedRulesOwner::default(), "odd");
-    let before = world.table.state_hash();
+    let before = world.table.durable_hash();
 
     let result = ran(&mut world, 1, "odd");
 
     assert_eq!(result.record.declined, Some(DeclineCode::NotViable));
-    assert_eq!(world.table.state_hash(), before, "nothing was committed");
+    assert_eq!(world.table.durable_hash(), before, "nothing was committed");
     assert!(world.table.pending().is_empty());
     let failures: Vec<String> = lines(&world)
         .into_iter()
@@ -526,13 +526,13 @@ fn what_the_rules_owner_resolved_is_committed_with_its_effects_and_named_by_its_
 fn an_effect_the_table_refuses_declines_the_input_and_commits_nothing() {
     let resolved = Resolved::with_effects(vec![beat(1, "first"), beat(9, "in_a_scene_nobody_has")]);
     let mut world = striking_world(resolved);
-    let before = world.table.state_hash();
+    let before = world.table.durable_hash();
 
     let result = ran(&mut world, 1, "strike");
 
     assert_eq!(result.record.declined, Some(DeclineCode::NotViable));
     assert_eq!(
-        world.table.state_hash(),
+        world.table.durable_hash(),
         before,
         "all or nothing: the first effect was not kept"
     );

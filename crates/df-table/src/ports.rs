@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effects::TableEffect;
 use crate::element::{NameError, name_type};
+use crate::envelope::PendingId;
 use crate::event::{FailureCause, TableEvent};
 use crate::identity::{Correlation, FactId, SeatId};
 use crate::listed::listed_enum;
@@ -449,63 +450,58 @@ pub trait RulesOwner: Send + Sync {
         draws: &[Draw],
     ) -> Result<Resolution, PortError>;
 
-    /// Checks one step of a plan against what its earlier steps already did (C.2). The default
-    /// ignores them and checks the step alone, which is right only for an owner that tracks no
-    /// economy.
+    /// Checks one step of a plan against what its earlier steps already did (C.2). An owner that
+    /// tracks no economy says so by checking the step alone (`self.prepare(..)`): there is no
+    /// default, so an adapter that forgot the economy does not compile.
     fn prepare_in_plan(
         &self,
         correlation: Correlation,
         seat: SeatId,
         action: &ActionId,
-        _so_far: &PlanSoFar<'_>,
-    ) -> Result<Preparation, PortError> {
-        self.prepare(correlation, seat, action)
-    }
+        so_far: &PlanSoFar<'_>,
+    ) -> Result<Preparation, PortError>;
 
-    /// Releases what a resolution that awaited answers had reserved, because it will not be
-    /// resumed (its pending was cancelled, C.4). The default has nothing reserved.
+    /// Tells the owner that a resolution which awaited answers will not be resumed, so it may
+    /// release what it reserved (its pending was cancelled, C.4). The pipeline calls it after the
+    /// commit that cancelled the pending is durable, never while the stages run, so a refused
+    /// batch has released nothing; `pending` names which reservation it is, so a pending that
+    /// came back from a checkpoint is matched. An owner that reserved nothing returns `Ok(())`.
     fn abandon(
         &self,
-        _correlation: Correlation,
-        _seat: SeatId,
-        _action: &ActionId,
-    ) -> Result<(), PortError> {
-        Ok(())
-    }
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        pending: PendingId,
+    ) -> Result<(), PortError>;
 
-    /// Whether the action needs the seat's one-tap confirmation first (C.5). The default asks for
-    /// none; an adapter that knows an ally or a neutral would be harmed says so.
+    /// Whether the action needs the seat's one-tap confirmation first (C.5): it harms an ally or a
+    /// neutral, or cannot be undone. An owner that knows of none returns `Ok(None)`.
     fn confirmation_needed(
         &self,
-        _correlation: Correlation,
-        _seat: SeatId,
-        _action: &ActionId,
-    ) -> Result<Option<ConfirmationReason>, PortError> {
-        Ok(None)
-    }
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+    ) -> Result<Option<ConfirmationReason>, PortError>;
 
-    /// The ruling the source leaves open for this action, if any (RES15). The default has none.
+    /// The ruling the source leaves open for this action, if any (RES15). An owner with none
+    /// returns `Ok(None)`.
     fn ruling_needed(
         &self,
-        _correlation: Correlation,
-        _seat: SeatId,
-        _action: &ActionId,
-    ) -> Result<Option<RulingRequest>, PortError> {
-        Ok(None)
-    }
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+    ) -> Result<Option<RulingRequest>, PortError>;
 
     /// Continues a resolution that was waiting for answers or a ruling, re-validating it against
-    /// the state now (C.4). The default resolves with the dice drawn so far and ignores the rest,
-    /// which is right only for an owner with no windows and no rulings.
+    /// the state now (C.4). An owner with no windows and no rulings resolves with the dice drawn
+    /// so far (`self.resolve(.., resumption.draws)`).
     fn resume(
         &self,
         correlation: Correlation,
         seat: SeatId,
         action: &ActionId,
         resumption: &Resumption<'_>,
-    ) -> Result<Resolution, PortError> {
-        self.resolve(correlation, seat, action, resumption.draws)
-    }
+    ) -> Result<Resolution, PortError>;
 }
 
 /// The interpreter: free text to a closed choice, never to a guess.
@@ -562,8 +558,20 @@ pub trait Clock: Send + Sync {
 }
 
 /// The dice: the one draw point. Recovery never draws again (coding-style section 8, pattern 5).
+///
+/// A draw is provisional until the host's commit: the pipeline draws while it runs an input in
+/// memory, and a batch the host refuses must not have used those dice up, or the retried inputs
+/// would draw other values. The host therefore gives back the draws of every refused turn,
+/// newest turn first (`TurnResult::return_draws`), and the source serves them again, in the order
+/// they were drawn, before it draws anything new. A replay stays deterministic because a retried
+/// input meets the same values in the same order.
 pub trait Dice: Send + Sync {
     fn draw(&self, correlation: Correlation, request: DrawRequest) -> Result<Draw, PortError>;
+
+    /// Takes back the draws of one refused turn, in the order they were drawn: the next draws
+    /// are these again, in this order. The host calls it for the newest refused turn first, so
+    /// the oldest turn's draws end up first.
+    fn give_back(&self, correlation: Correlation, draws: &[Draw]);
 }
 
 /// The knowledge view: what an audience may know. `None` means the audience may not know it, which

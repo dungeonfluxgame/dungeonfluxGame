@@ -33,6 +33,9 @@ listed_enum! {
         Unclear,
         /// The interpreter failed twice, so the buttons stand in for it and the draft is kept.
         Unreadable,
+        /// A plan stopped at a step the rules owner declined after the steps before it were
+        /// applied: the one question about the first step that failed (C.2, RES26).
+        StepDeclined,
     }
 }
 
@@ -42,6 +45,31 @@ impl ClarifyCause {
             Self::Ambiguous => "ambiguous",
             Self::Unclear => "unclear",
             Self::Unreadable => "unreadable",
+            Self::StepDeclined => "step_declined",
+        }
+    }
+}
+
+listed_enum! {
+    /// Which part of the views a turn could not build (PROJECT).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ViewPart {
+        /// A readout, a notice, the story or the activity was refused by the attachments.
+        Publish,
+        /// A seat's buttons were refused by the attachments.
+        Offers,
+        /// An audience's projection could not be built.
+        Projection,
+    }
+}
+
+impl ViewPart {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Publish => "publish",
+            Self::Offers => "offers",
+            Self::Projection => "projection",
         }
     }
 }
@@ -70,11 +98,15 @@ pub enum PipelineEvent {
         applied: usize,
         total: usize,
     },
-    /// `count` dice were drawn at the one draw point (H.3).
+    /// One die was drawn at the one draw point (H.3): `draw` is its place among the draws of this
+    /// input, which with the correlation is its id, then the die and the face it showed. Dice are
+    /// public in play, so the value belongs in the log.
     DiceDrawn {
         scope: TableScope,
         correlation: Correlation,
-        count: usize,
+        draw: usize,
+        sides: u16,
+        value: u16,
     },
     /// The storyteller's text passed qualification and was appended to the structured readout.
     NarrationAttached {
@@ -158,6 +190,13 @@ pub enum PipelineEvent {
         correlation: Correlation,
         kind: NonActionKind,
     },
+    /// Part of the views could not be built, so the table shows the last ones it had.
+    ViewFailed {
+        scope: TableScope,
+        correlation: Correlation,
+        part: ViewPart,
+        seat: Option<SeatId>,
+    },
 }
 
 impl PipelineEvent {
@@ -179,7 +218,8 @@ impl PipelineEvent {
             | Self::RulingReused { .. }
             | Self::RulingRevoked { .. }
             | Self::PendingCancelled { .. }
-            | Self::InputRouted { .. } => EventClass::Always,
+            | Self::InputRouted { .. }
+            | Self::ViewFailed { .. } => EventClass::Always,
         }
     }
 
@@ -191,6 +231,7 @@ impl PipelineEvent {
             | Self::InputRouted { .. } => "INPUT",
             Self::DiceDrawn { .. } => "DICE",
             Self::NarrationAttached { .. } => "NARRATION",
+            Self::ViewFailed { .. } => "PROJECT",
             Self::PendingOpened { .. }
             | Self::PendingAnswered { .. }
             | Self::PendingResolved { .. }
@@ -235,11 +276,15 @@ impl PipelineEvent {
             Self::DiceDrawn {
                 scope,
                 correlation,
-                count,
+                draw,
+                sides,
+                value,
             } => {
                 let mut line = LineWriter::start(out, "drawn")?;
                 write_context(&mut line, scope, correlation)?;
-                line.field("count", count)
+                line.field("draw", draw)?;
+                line.field("sides", &u64::from(*sides))?;
+                line.field("value", &u64::from(*value))
             }
             Self::NarrationAttached {
                 scope,
@@ -376,6 +421,17 @@ impl PipelineEvent {
                 let mut line = LineWriter::start(out, "routed")?;
                 write_context(&mut line, scope, correlation)?;
                 line.field("kind", kind)
+            }
+            Self::ViewFailed {
+                scope,
+                correlation,
+                part,
+                seat,
+            } => {
+                let mut line = LineWriter::start(out, "view_failed")?;
+                write_context(&mut line, scope, correlation)?;
+                line.field("part", part)?;
+                line.field_if_present("seat", seat)
             }
         }
     }

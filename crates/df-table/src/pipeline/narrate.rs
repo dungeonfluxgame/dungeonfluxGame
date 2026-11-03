@@ -15,7 +15,10 @@
 //! pipeline can check is the shape of the text. That it states nothing a player character does,
 //! says or feels beyond the committed outcome, and nothing a seat may not know, is qualified by
 //! the narrator's adapter before it hands the text over (C.5, H.6); the pipeline never searches
-//! the words. A qualified line is added to the public story the projections read.
+//! the words. A qualified line extends the public story line the turn already pushed with its
+//! structured readout (`NarrationJob::story_sequence`), so the story holds one line per turn and
+//! the readout the seat saw is the readout it keeps; a line the bounded story has dropped is not
+//! brought back, and a turn that pushed none gets one line of its own.
 
 use crate::event::{FailureCause, PipelineStep, TableEvent};
 use crate::identity::{Correlation, SeatId};
@@ -37,6 +40,9 @@ const MILLISECONDS_PER_SECOND: u64 = 1_000;
 pub struct NarrationJob {
     pub correlation: Correlation,
     pub committed: CommittedOutcome,
+    /// The place in the public story of the line this turn pushed with its readout, which the
+    /// narration extends. `None` when the turn pushed no line.
+    pub story_sequence: Option<u64>,
 }
 
 /// Stages the narration of an applied turn. It calls nothing and waits for nothing.
@@ -52,6 +58,7 @@ pub(super) fn stage(turn: &mut Turn<'_, '_>, seat: SeatId) {
                 steps: turn.applied_steps.clone(),
                 facts: turn.result_facts.clone(),
             },
+            story_sequence: None,
         });
     }
     turn.stage_done(PipelineStep::Narrate, started, None);
@@ -97,13 +104,21 @@ impl Pipeline<'_> {
             return None;
         }
         let committed = &job.committed;
-        let readout = NonEmptyText::or_fallback(&applied_line(
-            committed.seat,
-            &committed.action,
-            &committed.facts,
-        ));
-        let line = StoryLine::new(readout).with_narration(narration.clone());
-        if table.attachments_mut().push_public(line).is_err() {
+        let attached = match job.story_sequence {
+            Some(sequence) => table
+                .attachments_mut()
+                .extend_public_narration(sequence, narration.clone()),
+            None => {
+                let readout = NonEmptyText::or_fallback(&applied_line(
+                    committed.seat,
+                    &committed.action,
+                    &committed.facts,
+                ));
+                let line = StoryLine::new(readout).with_narration(narration.clone());
+                table.attachments_mut().push_public(line).map(|()| true)
+            }
+        };
+        if !matches!(attached, Ok(true)) {
             fail(PortName::Narrator, FailureCause::Unavailable);
             return None;
         }

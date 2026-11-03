@@ -173,6 +173,7 @@ type ReadinessAnswers = VecDeque<Result<Readiness, FailureCause>>;
 #[derive(Debug)]
 struct IssuedRequest {
     purpose: PurposeName,
+    asked_by: Correlation,
     answers: ReadinessAnswers,
 }
 
@@ -230,6 +231,15 @@ impl ScriptedBroker {
             .collect()
     }
 
+    /// The correlation each remembered request was made under, oldest first.
+    pub fn request_correlations(&self) -> Vec<Correlation> {
+        locked(&self.script)
+            .issued
+            .values()
+            .map(|request| request.asked_by)
+            .collect()
+    }
+
     /// How many requests were forgotten to stay within the maximum.
     pub fn forgotten_requests(&self) -> u64 {
         locked(&self.script).forgotten
@@ -239,7 +249,7 @@ impl ScriptedBroker {
 impl Broker for ScriptedBroker {
     fn request(
         &self,
-        _correlation: Correlation,
+        correlation: Correlation,
         purpose: &PurposeName,
     ) -> Result<ResourceHandle, PortError> {
         let mut script = locked(&self.script);
@@ -253,6 +263,7 @@ impl Broker for ScriptedBroker {
             handle,
             IssuedRequest {
                 purpose: purpose.clone(),
+                asked_by: correlation,
                 answers,
             },
         );
@@ -581,6 +592,7 @@ impl RulesOwner for ScriptedRulesOwner {
         _correlation: Correlation,
         _seat: SeatId,
         action: &ActionId,
+        _pending: crate::envelope::PendingId,
     ) -> Result<(), PortError> {
         self.fail_if_down()?;
         self.locked_script()
@@ -727,6 +739,13 @@ impl Dice for QueuedDice {
         };
         Draw::new(request.sides, value)
             .ok_or(PortError::new(PortName::Dice, FailureCause::InvalidAnswer))
+    }
+
+    fn give_back(&self, _correlation: Correlation, draws: &[Draw]) {
+        let mut values = locked(&self.values);
+        for draw in draws.iter().rev() {
+            values.push_front(draw.value());
+        }
     }
 }
 

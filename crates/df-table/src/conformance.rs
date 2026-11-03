@@ -19,11 +19,16 @@
 //! built by `step_events`, a readout that cannot be blank) are not checked again here. A check
 //! that could not run is listed in `ConformanceReport::skipped`, never counted as passed.
 //!
+//! The verbs every machine needs (`inspect::Verb::machine_required`: `dump`, `force`, `input`) are
+//! generated for each registered machine by `inspect::describe`, so a machine cannot lack one.
+//! They need nothing of a machine that this suite does not already check: `dump` is the
+//! `InspectReport` check (a machine without a report fails it), `force` needs the closed state
+//! names the spec lists (`StateNames`) and `input` needs `accepts` (`Accepts`).
+//!
 //! Not yet run, because the part of the engine they test does not exist: the sentinel-secret and
-//! paired-state tests (C5, H.11), the `dump`, `force`, `input` and `viable` verbs (C7, H.16),
-//! suspend behaviour (C6; the declaration is part of the spec), the view revision of an input
-//! (C3; machines never see it) and the golden sessions (C3 onward, H.17). A report is data: it
-//! never fails a test by itself.
+//! paired-state tests (C5, H.11), suspend behaviour (C6; the declaration is part of the spec), the
+//! view revision of an input (C3; machines never see it) and the golden sessions (C3 onward,
+//! H.17). A report is data: it never fails a test by itself.
 
 mod probes;
 mod script;

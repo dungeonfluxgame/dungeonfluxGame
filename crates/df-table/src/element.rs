@@ -43,6 +43,8 @@ impl fmt::Display for NameError {
     }
 }
 
+impl std::error::Error for NameError {}
+
 pub(crate) fn validate_name(text: &str) -> Result<(), NameError> {
     let first = text.chars().next().ok_or(NameError::Empty)?;
     if !first.is_ascii_lowercase() {

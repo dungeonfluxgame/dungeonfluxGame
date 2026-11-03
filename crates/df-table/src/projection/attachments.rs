@@ -47,6 +47,10 @@ use crate::projection::status::ProjectionStatus;
 use crate::projection::text::NonEmptyText;
 use crate::table_state::DisplayName;
 
+mod published;
+
+pub use published::{PUBLISHED_RECORD_VERSION, PublishedLoadError, PublishedRecord};
+
 name_type!(
     /// The id a tap on an offer sends back (`MachineOffer.offer_id`).
     OfferId
@@ -201,6 +205,11 @@ impl OfferEntry {
         self
     }
 
+    /// The id a tap on this offer sends back.
+    pub fn id(&self) -> &OfferId {
+        &self.offer_id
+    }
+
     pub(super) fn text_bytes(&self) -> usize {
         let optional = |text: &Option<NonEmptyText>| text.as_ref().map_or(0, |t| t.as_str().len());
         self.offer_id.as_str().len()
@@ -309,6 +318,9 @@ pub struct Attachments {
     seat_readouts: Arc<BTreeMap<SeatId, NonEmptyText>>,
     notices: Arc<BTreeMap<SeatId, Notice>>,
     activity: ProjectionStatus,
+    /// The exclusive or of the hash of every story entry in every queue, kept up to date where an
+    /// entry enters, changes or leaves, so the digest of the attachments does not walk the story.
+    story_digest: u64,
 }
 
 impl Default for Attachments {
@@ -317,13 +329,18 @@ impl Default for Attachments {
     }
 }
 
-/// Appends `entry`, dropping the oldest while the queue holds more than `maximum`.
-fn push_bounded(queue: &mut Story, entry: StoryEntry, maximum: usize) {
+/// Appends `entry`, dropping the oldest while the queue holds more than `maximum`. Returns what the
+/// story digest changes by: the hash of the entry in, and of each entry dropped out.
+fn push_bounded(queue: &mut Story, entry: StoryEntry, maximum: usize, tag: u64) -> u64 {
     let queue = Arc::make_mut(queue);
+    let mut delta = published::entry_hash(tag, &entry);
     queue.push_back(Arc::new(entry));
     while queue.len() > maximum {
-        queue.pop_front();
+        if let Some(dropped) = queue.pop_front() {
+            delta ^= published::entry_hash(tag, &dropped);
+        }
     }
+    delta
 }
 
 fn check_room<V>(
@@ -359,6 +376,7 @@ impl Attachments {
             seat_readouts: Arc::default(),
             notices: Arc::default(),
             activity: ProjectionStatus::Ok,
+            story_digest: 0,
         }
     }
 
@@ -458,15 +476,22 @@ impl Attachments {
 
     /// Appends a line the whole table may see.
     pub fn push_public(&mut self, line: StoryLine) -> Result<(), AttachmentError> {
+        self.push_story(line).map(|_| ())
+    }
+
+    /// Appends a line the whole table may see and returns its place in the story, so a later
+    /// narration can extend this line and not add another (`extend_public_narration`).
+    pub fn push_story(&mut self, line: StoryLine) -> Result<u64, AttachmentError> {
         line.check()?;
         self.bump_public()?;
         let sequence = self.next_sequence()?;
-        push_bounded(
+        self.story_digest ^= push_bounded(
             &mut self.public_story,
             StoryEntry { sequence, line },
             self.limits.story_entries,
+            0,
         );
-        Ok(())
+        Ok(sequence)
     }
 
     /// Appends a line only `seat` may see.
@@ -476,10 +501,11 @@ impl Attachments {
         self.bump_seat(seat)?;
         let sequence = self.next_sequence()?;
         let queue = Arc::make_mut(&mut self.seat_story).entry(seat).or_default();
-        push_bounded(
+        self.story_digest ^= push_bounded(
             queue,
             StoryEntry { sequence, line },
             self.limits.story_entries,
+            seat.get().saturating_add(1),
         );
         Ok(())
     }
@@ -670,6 +696,9 @@ impl Attachments {
             return Ok(());
         }
         Arc::make_mut(&mut self.seat_versions).remove(&seat);
+        if let Some(queue) = self.seat_story.get(&seat) {
+            self.story_digest ^= published::queue_hash(seat.get().saturating_add(1), queue);
+        }
         Arc::make_mut(&mut self.seat_story).remove(&seat);
         Arc::make_mut(&mut self.seat_facts).remove(&seat);
         Arc::make_mut(&mut self.seat_offers).remove(&seat);
@@ -707,6 +736,11 @@ impl Attachments {
 
     pub(super) fn seat_facts(&self, seat: SeatId) -> Option<&SeatFacts> {
         self.seat_facts.get(&seat).map(|facts| &**facts)
+    }
+
+    /// The offers `seat` holds now.
+    pub fn offers_of(&self, seat: SeatId) -> &[OfferEntry] {
+        self.seat_offers(seat)
     }
 
     pub(super) fn seat_offers(&self, seat: SeatId) -> &[OfferEntry] {

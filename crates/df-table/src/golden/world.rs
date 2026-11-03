@@ -72,6 +72,14 @@ impl Dice for CountingDice {
         self.drawn.fetch_add(1, Ordering::Relaxed);
         self.inner.draw(correlation, request)
     }
+
+    fn give_back(&self, correlation: Correlation, draws: &[Draw]) {
+        // Relaxed: a counter that orders no other data, like `drawn`.
+        let count = u64::try_from(draws.len()).unwrap_or(u64::MAX);
+        self.drawn
+            .fetch_sub(count.min(self.drawn()), Ordering::Relaxed);
+        self.inner.give_back(correlation, draws);
+    }
 }
 
 /// A narrator that always says the same qualified line.
@@ -110,7 +118,8 @@ impl Narrator for SlowNarrator {
 #[derive(Debug)]
 pub enum WorldError {
     Registry(Vec<RegistryError>),
-    Machine(String),
+    /// A machine, a table or a name could not be built: the error as it came, not its text.
+    Machine(Box<dyn std::error::Error + Send + Sync>),
     Pipeline(PipelineError),
 }
 
@@ -120,7 +129,7 @@ impl std::fmt::Display for WorldError {
             Self::Registry(errors) => {
                 write!(formatter, "the registry has {} problems", errors.len())
             }
-            Self::Machine(text) => write!(formatter, "a machine could not be built: {text}"),
+            Self::Machine(error) => write!(formatter, "a machine could not be built: {error}"),
             Self::Pipeline(error) => error.fmt(formatter),
         }
     }
@@ -154,7 +163,7 @@ impl World {
         finishing_after: Option<u64>,
     ) -> Result<Self, WorldError> {
         let mut scene =
-            SceneMachine::new(actions).map_err(|error| WorldError::Machine(error.to_string()))?;
+            SceneMachine::new(actions).map_err(|error| WorldError::Machine(Box::new(error)))?;
         if let Some(turns) = finishing_after {
             scene = scene.finishing_after(turns);
         }
@@ -163,12 +172,12 @@ impl World {
 
     /// Like `with_scene`, for a scene machine the caller configured.
     pub fn with_scene_machine(scene: SceneMachine, seats: u64) -> Result<Self, WorldError> {
-        let lobby = LobbyMachine::new(FIRST_SCENE)
-            .map_err(|error| WorldError::Machine(error.to_string()))?;
+        let lobby =
+            LobbyMachine::new(FIRST_SCENE).map_err(|error| WorldError::Machine(Box::new(error)))?;
         let beat = AuthoredBeat::new("gate", "open_gate")
-            .map_err(|error| WorldError::Machine(error.to_string()))?;
+            .map_err(|error| WorldError::Machine(Box::new(error)))?;
         let explore =
-            ExploreMachine::new(beat).map_err(|error| WorldError::Machine(error.to_string()))?;
+            ExploreMachine::new(beat).map_err(|error| WorldError::Machine(Box::new(error)))?;
         let registry = RegistryBuilder::new()
             .register(lobby)
             .register(explore)
@@ -177,25 +186,25 @@ impl World {
             .map_err(WorldError::Registry)?;
         let seated: Vec<SeatId> = (1..=seats).map(SeatId::new).collect();
         let mut facts = TableState::seated(seats.max(1) as usize, &seated)
-            .map_err(|error| WorldError::Machine(error.to_string()))?;
+            .map_err(|error| WorldError::Machine(Box::new(error)))?;
         facts
             .apply(
                 &TableScope::of_table(TABLE),
                 correlation(0),
                 &[TableEffect::SceneEntered { scene: FIRST_SCENE }],
             )
-            .map_err(|error| WorldError::Machine(error.to_string()))?;
+            .map_err(|error| WorldError::Machine(Box::new(error)))?;
         let mut table = PipelineTable::new(TABLE, facts);
         let slot = scene
             .enter(table.facts(), &crate::machine::Entry::empty())
-            .map_err(|error| WorldError::Machine(error.to_string()))?;
+            .map_err(|error| WorldError::Machine(Box::new(error)))?;
         table
             .start_machine(
                 setup_correlation(),
                 MachineHome::Scene { scene: FIRST_SCENE },
                 slot,
             )
-            .map_err(|error| WorldError::Machine(error.to_string()))?;
+            .map_err(|error| WorldError::Machine(Box::new(error)))?;
         Ok(Self {
             rules: ScriptedRulesOwner::default(),
             interpreter: ScriptedInterpreter::default(),
@@ -211,6 +220,17 @@ impl World {
             limits: PipelineLimits::default(),
             next_input: 0,
         })
+    }
+
+    /// The name of the state the running machine is in, if one runs.
+    pub fn machine_state(&self) -> Option<String> {
+        let snapshot = self.table.facts().snapshot();
+        let active = snapshot.focus_machine()?;
+        let machine = self.registry.machine(active.machine())?;
+        machine
+            .state_name(active.slot())
+            .ok()
+            .map(|name| name.as_str().to_owned())
     }
 
     /// A world that restarted after `turns` inputs: the next input is numbered after them.
@@ -252,7 +272,7 @@ impl World {
     ) -> Result<TurnResult, WorldError> {
         let result = self.run_unreleased(envelope, correlation)?;
         result.release_events(&self.sink);
-        self.with_pipeline(|pipeline, table| pipeline.issue_requests(table, correlation))?;
+        self.with_pipeline(|pipeline, table| pipeline.issue_requests(table))?;
         Ok(result)
     }
 
@@ -388,5 +408,5 @@ fn setup_correlation() -> Correlation {
 }
 
 fn name(text: &str) -> Result<ActionId, WorldError> {
-    ActionId::new(text).map_err(|error| WorldError::Machine(error.to_string()))
+    ActionId::new(text).map_err(|error| WorldError::Machine(Box::new(error)))
 }

@@ -77,9 +77,19 @@ pub(super) struct Staged {
     pub(super) marks: Vec<PendingMark>,
     pub(super) rulings: Vec<RulingChange>,
     pub(super) requests: Vec<StagedRequest>,
+    /// Reservations the closed pendings give up, told to the rules owner after the commit.
+    pub(super) releases: Vec<StagedRelease>,
     /// The broker handles of requests whose result this turn consumed or refused.
     pub(super) finished_requests: Vec<u64>,
     pub(super) clarification: ClarificationChange,
+}
+
+/// A reservation to release once the commit that cancelled its pending is durable.
+#[derive(Debug, Clone)]
+pub(super) struct StagedRelease {
+    pub(super) pending: PendingId,
+    pub(super) seat: SeatId,
+    pub(super) action: crate::ports::ActionId,
 }
 
 impl Staged {
@@ -93,6 +103,7 @@ impl Staged {
             marks: Vec::new(),
             rulings: Vec::new(),
             requests: Vec::new(),
+            releases: Vec::new(),
             finished_requests: Vec::new(),
             clarification: ClarificationChange::Keep,
         }
@@ -186,9 +197,21 @@ fn commit_staged(
         table.requests_mut().take_by_handle(handle);
     }
     for request in staged.requests {
-        table
-            .requests_mut()
-            .record_intent(request.machine, request.key, request.purpose, stamp);
+        table.requests_mut().record_intent(
+            request.machine,
+            request.key,
+            request.purpose,
+            stamp,
+            turn.correlation,
+        );
+    }
+    for release in staged.releases {
+        table.releases_mut().record(
+            release.pending.get(),
+            release.seat,
+            release.action,
+            turn.correlation,
+        );
     }
     if let ClarificationChange::Clear(seat) = staged.clarification {
         table.clear_clarification(seat);

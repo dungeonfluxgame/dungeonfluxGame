@@ -70,12 +70,9 @@ pub(super) fn admit<'i>(
     input: &'i PlayerInput,
 ) -> Admission<'i> {
     if table.has_seat(seat) && table.view_is_stale(seat, envelope.view().revision()) {
-        turn.emit(
-            &turn.pipeline_event(|scope, correlation| PipelineEvent::InputRechecked {
-                scope,
-                correlation,
-            }),
-        );
+        turn.stage_outcome(turn.pipeline_event(|scope, correlation| {
+            PipelineEvent::InputRechecked { scope, correlation }
+        }));
     }
     if !matches!(
         input,

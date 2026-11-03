@@ -37,6 +37,14 @@ impl TableSnapshot {
         digest.finish()
     }
 
+    /// The digest of the facts without the commit stamps (the revision and the revision a pause
+    /// was stamped at), for comparing tables that differ only in how commits were grouped.
+    pub fn digest_without_stamps(&self) -> u64 {
+        let mut digest = Digest::new();
+        self.facts.digest_without_stamps_into(&mut digest);
+        digest.finish()
+    }
+
     pub fn seat_capacity(&self) -> usize {
         self.facts.seat_capacity
     }

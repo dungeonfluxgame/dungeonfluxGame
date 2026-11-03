@@ -124,6 +124,17 @@ impl Digest {
 impl Facts {
     /// Walks every fact. The destructure names every field, so a new one must be walked here.
     pub(super) fn digest_into(&self, digest: &mut Digest) {
+        self.digest_walk(digest, true);
+    }
+
+    /// The same walk without the commit stamps: the revision of the last commit and the revision
+    /// the last pause was stamped at, which the host commit moves and which say nothing about the
+    /// world (S1: a batch of N and N batches of one are the same table).
+    pub(super) fn digest_without_stamps_into(&self, digest: &mut Digest) {
+        self.digest_walk(digest, false);
+    }
+
+    fn digest_walk(&self, digest: &mut Digest, stamps: bool) {
         let Self {
             seat_capacity,
             seats,
@@ -159,8 +170,12 @@ impl Facts {
         digest.number(*last_generation);
         digest.number(*world_time_s);
         digest.text(status.key());
-        digest.option(last_paused_at, |digest, at| digest.revision(*at));
-        digest.revision(*revision);
+        if stamps {
+            digest.option(last_paused_at, |digest, at| digest.revision(*at));
+            digest.revision(*revision);
+        } else {
+            digest.option(last_paused_at, |digest, _| digest.byte(0));
+        }
         digest.option(table_machine, |digest, machine| machine.digest_into(digest));
         digest.option(last_hand_off, |digest, record| record.digest_into(digest));
         digest.text(split_policy.key());

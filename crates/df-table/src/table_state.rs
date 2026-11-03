@@ -23,14 +23,18 @@
 //! `effects` re-exports `TableState`, `TableStateError`, `ApplyOutcome` and `HandOffRecord`, the
 //! names the machines import, so moving the applier here changed no caller.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::effects::{BeatName, EffectError, TableEffect};
 use crate::event::TableEvent;
-use crate::identity::{Correlation, OperationId, SceneId, SeatId, TableScope};
+use crate::identity::{Correlation, OperationId, SceneId, SeatId, SessionRevision, TableScope};
 use crate::owner_queue::{MAXIMUM_REMEMBERED_OPERATIONS, MAXIMUM_SEATS};
+use crate::pending::bounded::BoundedMap;
+use crate::pending::digest::{Fnv, mix};
 
 mod apply;
 pub mod bounds;
@@ -94,38 +98,54 @@ impl std::error::Error for TableStateError {}
 
 /// The operation ids already applied, newest last; the oldest is forgotten first once `maximum`
 /// newer ones were applied, after which an old id is new again (the owner queue's rule).
+///
+/// It is a `BoundedMap`, so a copy of the table shares it (a checkpoint costs a few pointer copies,
+/// not one copy of up to a million ids) and a lookup is one bucket access. Its digest is the
+/// exclusive or of the hash of each remembered id, kept up to date where an id enters or leaves,
+/// so asking for the table's digest costs the same however many ids are remembered. A commit's own
+/// id is remembered here and a host's commit stamp never is (`TableState::stamp_commit`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AppliedOperations {
-    order: VecDeque<OperationId>,
-    members: BTreeSet<OperationId>,
-    maximum: usize,
+    members: BoundedMap<OperationId, OperationId>,
+    digest: u64,
 }
 
 impl AppliedOperations {
-    /// The order the operations were applied in and how many are remembered; the membership set
-    /// is derived from the order.
-    fn digest_into(&self, digest: &mut Digest) {
-        let Self {
-            order,
-            members: _,
-            maximum,
-        } = self;
-        digest.count(*maximum);
-        digest.count(order.len());
-        for operation in order {
-            digest.bytes(operation.as_bytes());
+    fn remembering(maximum: usize) -> Self {
+        Self {
+            members: BoundedMap::holding_at_most(maximum),
+            digest: 0,
         }
     }
 
+    fn hash_of(operation: &OperationId) -> u64 {
+        let mut hasher = Fnv::new();
+        operation.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// The bound and the digest of the remembered ids, which does not depend on the order they
+    /// were applied in.
+    fn digest_into(&self, digest: &mut Digest) {
+        digest.count(self.members.maximum());
+        digest.count(self.members.len());
+        digest.number(self.digest ^ mix(self.members.maximum() as u64));
+    }
+
+    fn contains(&self, operation: &OperationId) -> bool {
+        self.members.contains(operation)
+    }
+
     fn remember(&mut self, operation: OperationId) {
-        if self.maximum == 0 || !self.members.insert(operation) {
+        if self.members.contains(&operation) {
             return;
         }
-        self.order.push_back(operation);
-        while self.order.len() > self.maximum {
-            if let Some(oldest) = self.order.pop_front() {
-                self.members.remove(&oldest);
-            }
+        let removed = self.members.insert(operation, operation);
+        self.digest ^= Self::hash_of(&operation);
+        // A replaced or evicted id leaves the digest again; with a bound of zero the id just
+        // given is the one evicted, so it enters and leaves and the digest is unchanged.
+        for old in removed.replaced.iter().chain(removed.evicted.iter()) {
+            self.digest ^= Self::hash_of(old);
         }
     }
 }
@@ -144,7 +164,50 @@ pub enum ApplyOutcome {
 pub struct TableState {
     facts: Arc<Facts>,
     applied: AppliedOperations,
+    memo: DigestMemo,
 }
+
+/// The last digest worked out, kept until the table changes, so asking twice costs one walk. It
+/// is a cache and never part of what two tables are compared by. A digest of zero is worked out
+/// again, which costs a walk and is never wrong.
+#[derive(Debug, Default)]
+pub(crate) struct DigestMemo(AtomicU64);
+
+impl DigestMemo {
+    pub(crate) fn empty() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    pub(crate) fn get(&self) -> Option<u64> {
+        // Relaxed: a cache of a pure function of the table, read and written by whoever holds it.
+        match self.0.load(Ordering::Relaxed) {
+            0 => None,
+            known => Some(known),
+        }
+    }
+
+    pub(crate) fn set(&self, digest: u64) {
+        self.0.store(digest, Ordering::Relaxed);
+    }
+
+    pub(crate) fn forget(&self) {
+        self.0.store(0, Ordering::Relaxed);
+    }
+}
+
+impl Clone for DigestMemo {
+    fn clone(&self) -> Self {
+        Self(AtomicU64::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
+impl PartialEq for DigestMemo {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for DigestMemo {}
 
 impl TableState {
     /// An empty table with room for `seat_capacity` seats.
@@ -179,17 +242,15 @@ impl TableState {
         facts.seats = Arc::new(taken);
         Ok(Self {
             facts: Arc::new(facts),
-            applied: AppliedOperations {
-                order: VecDeque::new(),
-                members: BTreeSet::new(),
-                maximum: MAXIMUM_REMEMBERED_OPERATIONS,
-            },
+            applied: AppliedOperations::remembering(MAXIMUM_REMEMBERED_OPERATIONS),
+            memo: DigestMemo::empty(),
         })
     }
 
     /// Remembers at most `maximum` applied operation ids; zero remembers none.
     pub fn remembering_operations(mut self, maximum: usize) -> Self {
-        self.applied.maximum = maximum;
+        self.applied = AppliedOperations::remembering(maximum);
+        self.memo.forget();
         self
     }
 
@@ -197,6 +258,7 @@ impl TableState {
     /// split declined, which is the first release's rule.
     pub fn with_split_policy(mut self, policy: SplitPolicy) -> Self {
         Arc::make_mut(&mut self.facts).split_policy = policy;
+        self.memo.forget();
         self
     }
 
@@ -204,10 +266,41 @@ impl TableState {
     /// equal digests in every run, and any commit that changes the world or the memory changes it
     /// (#1682). The walk reads no clock, so golden sessions and replay may compare it.
     pub fn digest(&self) -> u64 {
+        if let Some(known) = self.memo.get() {
+            return known;
+        }
         let mut digest = Digest::new();
         self.facts.digest_into(&mut digest);
         self.applied.digest_into(&mut digest);
+        let worked_out = digest.finish();
+        self.memo.set(worked_out);
+        worked_out
+    }
+
+    /// The digest without the commit stamps: the facts as `TableSnapshot::digest_without_stamps`
+    /// reads them and the memory of applied operations, whose digest does not depend on the order
+    /// the operations arrived in. Two tables that applied the same operations in one batch or in
+    /// several are equal here, whatever commits the host stamped between them (S1).
+    pub fn digest_without_stamps(&self) -> u64 {
+        let mut digest = Digest::new();
+        self.facts.digest_without_stamps_into(&mut digest);
+        self.applied.digest_into(&mut digest);
         digest.finish()
+    }
+
+    /// Whether this operation id is remembered as applied.
+    pub fn has_applied(&self, operation: &OperationId) -> bool {
+        self.applied.contains(operation)
+    }
+
+    /// Moves the revision to the one the host stamped for its commit, if it is later. A commit
+    /// stamp is not an operation: its id is not remembered, so commit ids never use up the memory
+    /// of real operations and the digest does not depend on how many commits a run took.
+    pub fn stamp_commit(&mut self, revision: SessionRevision) {
+        if revision > self.facts.revision {
+            Arc::make_mut(&mut self.facts).revision = revision;
+            self.memo.forget();
+        }
     }
 
     /// The table as it is now, immutable and cheap to hold (one pointer copy).
@@ -259,7 +352,7 @@ impl TableState {
         correlation: Correlation,
         effects: &[TableEffect],
     ) -> Result<ApplyOutcome, EffectError> {
-        if self.applied.members.contains(&correlation.operation_id) {
+        if self.applied.contains(&correlation.operation_id) {
             return Ok(ApplyOutcome::AlreadyApplied);
         }
         let mut next = (*self.facts).clone();
@@ -293,6 +386,7 @@ impl TableState {
         next.revision = next.revision.max(correlation.revision);
         self.facts = Arc::new(next);
         self.applied.remember(correlation.operation_id);
+        self.memo.forget();
         Ok(ApplyOutcome::Applied(events))
     }
 }

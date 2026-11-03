@@ -14,13 +14,19 @@
 //! How it runs (the group commit of O.16 S1): `Pipeline::run` changes the `PipelineTable` in
 //! memory, so the next input of a batch sees it, and does nothing visible outside it before the
 //! host's commit. What would be visible is staged in the result: the events of the changes
-//! (`TurnResult::committed_events`, released by `release_events`), the resource requests (recorded
-//! as intents in the table and issued by `issue_requests`) and the narration job (run by the host
-//! with the narrator and given back to `attach_narration`). A refused batch is undone by restoring
-//! the checkpoint the host took before it (`PipelineTable::checkpoint`). A `TurnRecord` carries no
-//! commit identity: the host stamps the batch commit. The pipeline holds no state of its own, and
-//! a duplicate operation id that was committed is found in the result book before any port is
-//! asked, so a replay draws no die and calls nothing.
+//! (`TurnResult::committed_events`, only for a turn that committed) and the lines that say what
+//! the input came to and what it asked of the ports (`outcome_events`: a die drawn, a decline, a
+//! clarification, a plan that stopped part way), both released by `release_events`; the resource
+//! requests and the reservations a cancelled pending gave up (recorded as intents in the table and
+//! told to the broker and the rules owner by `issue_requests`); and the narration job (run by the
+//! host with the narrator and given back to `attach_narration`). Only the timing line of a stage
+//! and a failure are recorded as the stages run. The dice a refused batch drew are given back
+//! (`TurnResult::return_draws`), and a refused batch is undone by restoring the checkpoint the
+//! host took before it (`PipelineTable::checkpoint`). A `TurnRecord` carries no commit identity:
+//! the host stamps the batch commit. The pipeline holds no state of its own, and a duplicate
+//! operation id is found in the result book (committed) or in the session's memory of how
+//! uncommitted inputs ended, before any port is asked, so a replay draws no die, calls nothing,
+//! and gives the seat the answer it got the first time without writing to the views again.
 //!
 //! Every port call carries the `Correlation` of the input, each stage records
 //! `step.finished{step, machine, ms}` through the `Clock` port, and a failed port is recorded once,
@@ -33,9 +39,10 @@
 //! rules text: a decline's reason comes from the rules owner or from the code's default.
 //!
 //! Where it differs from the plan, so nobody is surprised: a plan that opens a pending ends at it
-//! (C.2); a confirmation and a ruling hold the action in the pending and do not set the machine to
-//! `Waiting`, because a refused ruling would leave a machine waiting, while a window, a choice and
-//! a roll do, and they can end by `cancel_pending`.
+//! (C.2). Every pending, a confirmation and a ruling included, sets the machine to
+//! `Waiting{pending_id}` (C.3, RES26, K.5), so a second pending for the same machine cannot stack,
+//! and each ends by an answer, by the seat's own cancel or by `cancel_pending` (a seat that left
+//! for good, a scene that changed, the host's decision).
 
 use std::sync::Arc;
 
@@ -43,17 +50,15 @@ use crate::config::Settings;
 use crate::element::NameError;
 use crate::envelope::{InputEnvelope, InputOrigin, PendingId};
 use crate::event::{PipelineStep, TableEvent};
-use crate::identity::{Correlation, SeatId, SessionRevision};
+use crate::identity::{Correlation, SeatId};
 use crate::machine::Machine;
-use crate::outcome::{Decline, DeclineCode, Outcome, OutcomeKind, PendingKind};
+use crate::outcome::{Decline, DeclineCode, Outcome, OutcomeKind};
+use crate::pending::StoredDraw;
 use crate::ports::{
-    ActionId, Audience, Broker, Clock, Dice, EventSink, Interpreter, KnowledgeView, Narrator,
-    NonActionKind, RulesOwner,
+    ActionId, Broker, Clock, Dice, EventSink, Interpreter, KnowledgeView, Narrator, NonActionKind,
+    RulesOwner,
 };
-use crate::projection::{
-    AttachmentError, Attachments, AudienceProjection, NonEmptyText, ProjectionStatus, StoryLine,
-    project,
-};
+use crate::projection::AudienceProjection;
 use crate::registry::Registry;
 use crate::table_state::TableSnapshot;
 
@@ -66,25 +71,29 @@ mod check;
 mod decide;
 mod engine;
 pub mod events;
+mod hold;
 mod interpret;
 mod narrate;
+mod offers;
+mod project;
 mod record;
+mod stored;
 mod table_access;
 mod turn;
 
 pub use action::SPLIT_ACTION;
 pub use books::{
-    BookLoadError, RequestBook, RequestEntry, RequestRecord, ResultBook, ResultRecord,
-    StoredOutcome, TakenRequest,
+    BookLoadError, ReleaseBook, ReleaseEntry, ReleaseRecord, RequestBook, RequestEntry,
+    RequestRecord, ResultBook, ResultRecord, StoredClarification, StoredEnding, StoredOutcome,
+    TakenRequest,
 };
-pub use events::ClarifyCause;
+pub use events::{ClarifyCause, ViewPart};
 pub use narrate::NarrationJob;
 pub use record::{Readout, TurnRecord};
 pub use table_access::{PipelineLoadError, PipelineRecord, PipelineTable};
 
 use admit::{Admission, Reading};
-use events::PipelineEvent;
-use record::{applied_line, routed_line};
+use stored::replayed_outcome;
 use table_access::Running;
 use turn::Turn;
 
@@ -218,15 +227,39 @@ pub struct TurnResult {
     /// One projection per audience, built from the table as this turn left it: the shared screen
     /// and every seat at the table, never empty (C5).
     pub projections: Vec<AudienceProjection>,
+    /// The lines that say what the input came to and what it asked of the ports (a die drawn, a
+    /// decline, a clarification, a routed line, a plan that stopped part way), released after the
+    /// host's commit and not before, whether or not the turn changed the table.
+    pub outcome_events: Vec<TableEvent>,
     /// The events of the changes this turn made, released after the host's commit and not before.
+    /// Empty unless the turn committed.
     pub committed_events: Vec<TableEvent>,
 }
 
 impl TurnResult {
-    /// Records the events of this turn's changes. The host calls it after its commit succeeded.
+    /// Records the lines of this turn: what it came to, then what it changed. The host calls it
+    /// after its commit succeeded, once per turn, and never for a refused batch.
     pub fn release_events(&self, sink: &dyn EventSink) {
-        for event in &self.committed_events {
+        for event in self.outcome_events.iter().chain(&self.committed_events) {
             sink.record(event);
+        }
+    }
+
+    /// The dice this turn drew, in order.
+    pub fn draws(&self) -> Vec<crate::ports::Draw> {
+        self.record
+            .draws
+            .iter()
+            .filter_map(|stored| StoredDraw::restore(*stored).ok())
+            .collect()
+    }
+
+    /// Gives this turn's dice back to the source: the host calls it for every turn of a batch it
+    /// refused, newest turn first, so the retried inputs meet the same values in the same order.
+    pub fn return_draws(&self, dice: &dyn Dice) {
+        let draws = self.draws();
+        if !draws.is_empty() {
+            dice.give_back(self.record.correlation, &draws);
         }
     }
 }
@@ -292,8 +325,21 @@ impl<'a> Pipeline<'a> {
             envelope.seat(),
             correlation,
         );
-        if let Some(stored) = table.results().find(envelope.operation_id()) {
+        let operation = envelope.operation_id();
+        let remembered = table
+            .results()
+            .find(operation)
+            .or_else(|| table.ends().find(operation));
+        if let Some(stored) = remembered {
             let outcome = replayed_outcome(&mut turn, table, stored);
+            return self.finish(turn, table, outcome);
+        }
+        if table.facts().has_applied(&operation) {
+            // The table remembers an operation whose result was forgotten: it was applied, so it
+            // is not run again and no die is drawn for it.
+            turn.replayed = true;
+            let outcome =
+                Outcome::Declined(Decline::with_default_reason(DeclineCode::IntentInvalid));
             return self.finish(turn, table, outcome);
         }
         let outcome = match envelope.origin() {
@@ -359,136 +405,21 @@ impl<'a> Pipeline<'a> {
         }
     }
 
-    /// PROJECT: the structured readout, the projections, the events that explain the end, and the
-    /// record.
-    fn finish(
-        &self,
-        mut turn: Turn<'_, '_>,
-        table: &mut PipelineTable,
-        outcome: Outcome,
-    ) -> TurnResult {
-        let started = turn.now();
-        self.record_end(&mut turn, table, &outcome);
-        if turn.committed {
-            let stored = stored_outcome(&turn, &outcome);
-            table
-                .results_mut()
-                .record(turn.correlation.operation_id, stored);
-        }
-        let readout = Readout::new(self.readout_text(&turn, table, &outcome));
-        let projections = project_audiences(&turn, table, &outcome, &readout);
-        turn.stage_done(PipelineStep::Project, started, Some(outcome.kind()));
-        let declined = match &outcome {
-            Outcome::Declined(decline) => Some(decline.code()),
-            Outcome::Applied | Outcome::NeedsClarification | Outcome::Pending(_) => None,
-        };
-        let record = TurnRecord {
-            correlation: turn.correlation,
-            sender: turn.sender,
-            kind: turn.kind,
-            outcome: outcome.kind(),
-            declined,
-            pending: turn.pending,
-            draws: turn.draws,
-            effects: turn.effects,
-            state_hash_before: turn.hash_before,
-            state_hash_after: table.state_hash(),
-            replayed: turn.replayed,
-        };
-        TurnResult {
-            record,
-            outcome,
-            readout,
-            narration_job: turn.narration,
-            clarification: turn.clarification,
-            pending: turn.pending,
-            unfinished: turn.unfinished,
-            routed: turn.routed,
-            hand_off_wanted: turn.hand_off_wanted,
-            pause_requested: turn.pause_requested,
-            projections,
-            committed_events: turn.on_commit,
-        }
-    }
-
-    /// Records how the input ended, once: a decline, a clarification, a routed line and the dice
-    /// drawn. These say what was asked of the ports and what the seat was told; they are not
-    /// changes of the table, so they are recorded now.
-    fn record_end(&self, turn: &mut Turn<'_, '_>, table: &mut PipelineTable, outcome: &Outcome) {
-        if !turn.draws.is_empty() {
-            turn.emit(
-                &turn.pipeline_event(|scope, correlation| PipelineEvent::DiceDrawn {
-                    scope,
-                    correlation,
-                    count: turn.draws.len(),
-                }),
-            );
-        }
-        if let Some(kind) = turn.routed {
-            turn.emit(
-                &turn.pipeline_event(|scope, correlation| PipelineEvent::InputRouted {
-                    scope,
-                    correlation,
-                    kind,
-                }),
-            );
-        }
-        match outcome {
-            Outcome::Declined(decline) => turn.emit(&TableEvent::InputDeclined {
-                scope: turn.scope.clone(),
-                correlation: turn.correlation,
-                code: decline.code(),
-            }),
-            Outcome::NeedsClarification => {
-                if let Some(clarification) = &turn.clarification {
-                    let (options, cause) = (clarification.options.len(), clarification.cause);
-                    turn.emit(&turn.pipeline_event(|scope, correlation| {
-                        PipelineEvent::InputClarified {
-                            scope,
-                            correlation,
-                            options,
-                            cause,
-                        }
-                    }));
-                    if let Some(seat) = turn.seat {
-                        table.set_clarification(seat, clarification.options.clone());
-                    }
-                }
-            }
-            Outcome::Applied | Outcome::Pending(_) => {}
-        }
-    }
-
-    fn readout_text(
-        &self,
-        turn: &Turn<'_, '_>,
-        table: &PipelineTable,
-        outcome: &Outcome,
-    ) -> String {
-        match outcome {
-            Outcome::Declined(decline) => declined_line(decline),
-            Outcome::NeedsClarification => match turn.clarification.as_ref().map(|c| c.cause) {
-                Some(ClarifyCause::Ambiguous) => "Which did you mean? Pick one:".to_owned(),
-                Some(ClarifyCause::Unclear | ClarifyCause::Unreadable) | None => {
-                    "I could not read that. Pick one:".to_owned()
-                }
-            },
-            Outcome::Pending(kind) => pending_line(table, turn.pending, *kind),
-            Outcome::Applied => applied_text(turn),
-        }
-    }
-
-    /// Issues to the broker the resource requests that were committed and not issued yet, and
-    /// binds each broker handle to its request. The host calls it after its commit, never before:
-    /// a refused batch leaves no request at the broker. Issuing is idempotent per request key (a
-    /// request that already has a handle is not asked for again), so a restart that kept the
-    /// intents issues what was missing. A request the broker refuses is recorded once and stays
-    /// unissued for the next call. Returns how many were issued.
-    pub fn issue_requests(&self, table: &mut PipelineTable, correlation: Correlation) -> usize {
+    /// Tells the outside what the commit made due: issues to the broker the resource requests that
+    /// were committed and not issued yet (each under the correlation of the input that asked, so
+    /// the broker's work joins back to it) and binds each broker handle to its request, and tells
+    /// the rules owner which reservations a cancelled pending gave up. The host calls it after its
+    /// commit, never before: a refused batch leaves no request at the broker and no reservation
+    /// released. Issuing is idempotent per request key (a request that already has a handle is not
+    /// asked for again), so a restart that kept the intents issues what was missing. A request the
+    /// broker refuses, or a release the rules owner refuses, is recorded once and stays due for
+    /// the next call. Returns how many requests were issued.
+    pub fn issue_requests(&self, table: &mut PipelineTable) -> usize {
         let mut issued = 0;
         for entry in table.requests().unissued() {
             let started = self.ports.clock.now_ms();
-            match self.ports.broker.request(correlation, entry.purpose()) {
+            let asked_by = entry.asked_by();
+            match self.ports.broker.request(asked_by, entry.purpose()) {
                 Ok(handle) => {
                     table
                         .requests_mut()
@@ -497,7 +428,26 @@ impl<'a> Pipeline<'a> {
                 }
                 Err(error) => self.ports.sink.record(&TableEvent::BoundaryFailed {
                     scope: table.scope(),
-                    correlation,
+                    correlation: asked_by,
+                    port: error.port,
+                    cause: error.cause,
+                    ms: self.ports.clock.now_ms().saturating_sub(started),
+                }),
+            }
+        }
+        for entry in table.releases().due() {
+            let started = self.ports.clock.now_ms();
+            let asked_by = entry.asked_by();
+            match self.ports.rules.abandon(
+                asked_by,
+                entry.seat(),
+                entry.action(),
+                PendingId::new(entry.pending()),
+            ) {
+                Ok(()) => table.releases_mut().done(entry.pending()),
+                Err(error) => self.ports.sink.record(&TableEvent::BoundaryFailed {
+                    scope: table.scope(),
+                    correlation: asked_by,
                     port: error.port,
                     cause: error.cause,
                     ms: self.ports.clock.now_ms().saturating_sub(started),
@@ -519,190 +469,4 @@ fn pause(turn: &mut Turn<'_, '_>, table: &mut PipelineTable) -> Outcome {
         Ok(()) => Outcome::Applied,
         Err(decline) => Outcome::Declined(decline),
     }
-}
-
-/// The outcome of an operation that was committed before: found in the result book, so no port
-/// is asked and no die is drawn.
-fn replayed_outcome(
-    turn: &mut Turn<'_, '_>,
-    table: &PipelineTable,
-    stored: StoredOutcome,
-) -> Outcome {
-    turn.replayed = true;
-    match stored {
-        StoredOutcome::Applied => Outcome::Applied,
-        StoredOutcome::Declined { code } => Outcome::Declined(Decline::with_default_reason(code)),
-        StoredOutcome::Pending { pending, kind } => {
-            let id = PendingId::new(pending);
-            if table.pending().get(id).is_some() {
-                turn.pending = Some(id);
-                Outcome::Pending(kind)
-            } else {
-                // The pending resolved since: telling the seat it is still waiting would be a
-                // pending nobody can answer.
-                Outcome::Declined(Decline::with_default_reason(DeclineCode::WindowClosed))
-            }
-        }
-    }
-}
-
-fn stored_outcome(turn: &Turn<'_, '_>, outcome: &Outcome) -> StoredOutcome {
-    match (outcome, turn.pending) {
-        (Outcome::Pending(kind), Some(id)) => StoredOutcome::Pending {
-            pending: id.get(),
-            kind: *kind,
-        },
-        (Outcome::Declined(decline), _) => StoredOutcome::Declined {
-            code: decline.code(),
-        },
-        (Outcome::Applied | Outcome::NeedsClarification | Outcome::Pending(_), _) => {
-            StoredOutcome::Applied
-        }
-    }
-}
-
-/// The line for a decline: the rules owner's reason, then what would be possible (C.6).
-fn declined_line(decline: &Decline) -> String {
-    let mut line = decline.reason().to_owned();
-    let alternatives = decline.alternatives();
-    let Some((last, earlier)) = alternatives.split_last() else {
-        return line;
-    };
-    line.push_str(" You could ");
-    match earlier.split_last() {
-        None => line.push_str(last),
-        Some((only, [])) => line.push_str(&format!("{only} or {last}")),
-        Some(_) => {
-            for alternative in earlier {
-                line.push_str(alternative);
-                line.push_str(", ");
-            }
-            line.push_str(&format!("or {last}"));
-        }
-    }
-    line.push('.');
-    line
-}
-
-fn applied_text(turn: &Turn<'_, '_>) -> String {
-    if let Some(kind) = turn.routed {
-        return routed_line(kind).to_owned();
-    }
-    let mut line = String::new();
-    if let Some(answer) = &turn.ruling_note {
-        line.push_str(&format!(
-            "Ruling (earlier): {}. ",
-            answer.as_str().replace(['_', '-'], " ")
-        ));
-    }
-    if turn.cancelled {
-        line.push_str("Cancelled.");
-    } else if let Some((seat, action)) = &turn.acted {
-        line.push_str(&applied_line(*seat, action, &turn.result_facts));
-    } else {
-        line.push_str("Done.");
-    }
-    if let Some(decline) = &turn.unfinished {
-        line.push(' ');
-        line.push_str(decline.reason());
-    }
-    line
-}
-
-fn pending_line(table: &PipelineTable, pending: Option<PendingId>, kind: PendingKind) -> String {
-    let waiting_on = pending
-        .and_then(|id| table.pending().get(id))
-        .and_then(|held| held.window().awaiting().next());
-    match (kind, waiting_on) {
-        (PendingKind::Ruling, _) => "Needs a ruling.".to_owned(),
-        (PendingKind::Choice, Some(seat)) => format!("Waiting for seat {seat} to choose."),
-        (PendingKind::Roll, Some(seat)) => format!("Waiting for seat {seat} to roll."),
-        (PendingKind::Reaction, Some(seat)) => {
-            format!("Waiting for seat {seat} to answer a reaction.")
-        }
-        (_, None) => "Waiting for an answer.".to_owned(),
-    }
-}
-
-/// The activity every view shows while the table waits on a person (K.5), or `Ok` again.
-fn activity_of(
-    table: &PipelineTable,
-    outcome: &Outcome,
-    pending: Option<PendingId>,
-) -> ProjectionStatus {
-    let Outcome::Pending(kind) = outcome else {
-        return ProjectionStatus::Ok;
-    };
-    let waiting_on = pending
-        .and_then(|id| table.pending().get(id))
-        .and_then(|held| held.window().awaiting().next());
-    let (who, what) = match (kind, waiting_on) {
-        (PendingKind::Ruling, _) => ("the host".to_owned(), "to rule"),
-        (PendingKind::Choice, Some(seat)) => (format!("seat {seat}"), "to choose"),
-        (PendingKind::Roll, Some(seat)) => (format!("seat {seat}"), "to roll"),
-        (PendingKind::Reaction, Some(seat)) => (format!("seat {seat}"), "to answer a reaction"),
-        (_, None) => ("the table".to_owned(), "to answer"),
-    };
-    ProjectionStatus::waiting_for(&who, what).unwrap_or(ProjectionStatus::Degraded)
-}
-
-/// Publishes what this turn said to the attachments the projections read, then projects the
-/// shared screen and every seat at the table from the table as the turn left it. An attachment
-/// that is refused (a text over the wire frame, a bundle at its bound) leaves the views at the
-/// overview with a `degraded` status, which says the table could not show more, and the turn is
-/// not failed by it.
-fn project_audiences(
-    turn: &Turn<'_, '_>,
-    table: &mut PipelineTable,
-    outcome: &Outcome,
-    readout: &Readout,
-) -> Vec<AudienceProjection> {
-    let text = NonEmptyText::or_fallback(readout.as_str());
-    let activity = activity_of(table, outcome, turn.pending);
-    let revision = table.facts().snapshot().revision();
-    let attachments = table.attachments_mut();
-    if publish(attachments, turn, outcome, text, activity, revision).is_err() {
-        // The status is a closed value; if even it is refused the views keep the last one.
-        let _ = attachments.set_activity(ProjectionStatus::Degraded);
-    }
-    let snapshot = table.facts().snapshot();
-    let attachments = table.attachments();
-    let mut projections = Vec::new();
-    projections.extend(project(&snapshot, attachments, Audience::Public).ok());
-    for seat in snapshot.seats().iter() {
-        projections.extend(project(&snapshot, attachments, Audience::Seat(*seat)).ok());
-    }
-    projections
-}
-
-fn publish(
-    attachments: &mut Attachments,
-    turn: &Turn<'_, '_>,
-    outcome: &Outcome,
-    text: NonEmptyText,
-    activity: ProjectionStatus,
-    revision: SessionRevision,
-) -> Result<(), AttachmentError> {
-    attachments.set_activity(activity)?;
-    match outcome {
-        Outcome::Applied => {
-            attachments.set_shared_readout(text.clone())?;
-            if let Some(seat) = turn.seat {
-                attachments.set_seat_readout(seat, text.clone())?;
-            }
-            attachments.push_public(StoryLine::new(text))?;
-        }
-        Outcome::Declined(decline) => {
-            if let Some(seat) = turn.seat {
-                attachments.set_notice(seat, decline.clone(), revision)?;
-                attachments.set_seat_readout(seat, text)?;
-            }
-        }
-        Outcome::NeedsClarification | Outcome::Pending(_) => {
-            if let Some(seat) = turn.seat {
-                attachments.set_seat_readout(seat, text)?;
-            }
-        }
-    }
-    Ok(())
 }

@@ -98,6 +98,10 @@ pub struct TurnRecord {
     pub effects: Vec<TableEffect>,
     pub state_hash_before: u64,
     pub state_hash_after: u64,
+    /// The same digests without the views (`PipelineTable::durable_hash`): they differ only when
+    /// the turn changed something a checkpoint must keep.
+    pub durable_hash_before: u64,
+    pub durable_hash_after: u64,
     /// The input had opened a pending before (a restart replays it) and nothing was drawn or run.
     pub replayed: bool,
 }

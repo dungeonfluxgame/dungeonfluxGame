@@ -8,11 +8,15 @@
 //! change of legal choices and the story and notices the projections read. When the table state
 //! grows to hold more of these, this is the file that changes.
 //!
-//! Every book is behind an `Arc` and changed with copy on write, so `checkpoint` is a handful of
-//! pointer copies: a host that groups inputs into one commit takes a checkpoint before the batch
-//! and restores it if the commit is refused (O.16 S1). `state_hash` is a stable digest of the
-//! table's own digest and every book's: no clock reading, no allocation, and each book's digest is
-//! kept up to date where an entry changes, so it costs the same however much a book holds.
+//! Every book is behind an `Arc` and changed with copy on write, and each is a `BoundedMap` that
+//! shares its buckets and its order queue, so `checkpoint` is a few thousand pointer copies and the
+//! first change after it copies one bucket, not the history: a host that groups inputs into one
+//! commit takes a checkpoint before the batch and restores it if the commit is refused (O.16 S1).
+//! `state_hash` is a stable digest of the table's facts without the commit stamps, the memory of
+//! applied operations (commit ids are not in it) and every book, the published views included: no
+//! clock reading, each book's digest kept up to date where an entry changes, and the whole kept
+//! until the next change, so an input costs the same however much a book holds and `hash_before`
+//! of an input is the `hash_after` of the one before it.
 //!
 //! It never decides what a turn does: it applies what a stage staged, all or nothing for the
 //! table's facts, and answers reads. `to_record` and `from_record` are the saved form of
@@ -25,7 +29,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use super::PipelineLimits;
-use super::books::{BookLoadError, RequestBook, RequestRecord, ResultBook, ResultRecord};
+use super::books::{
+    BookLoadError, ReleaseBook, ReleaseRecord, RequestBook, RequestRecord, ResultBook, ResultRecord,
+};
 use crate::effects::{ApplyOutcome, EffectError, TableEffect, TableState};
 use crate::identity::{Correlation, SceneId, SeatId, SessionRevision, TableId, TableScope};
 use crate::machine::MachineId;
@@ -35,8 +41,8 @@ use crate::pending::{
     PendingBook, PendingLoadError, PendingRecord, RulingBook, RulingLoadError, RulingRecord,
 };
 use crate::ports::ActionId;
-use crate::projection::Attachments;
-use crate::table_state::{MachineHome, TableSnapshot};
+use crate::projection::{Attachments, PublishedLoadError, PublishedRecord};
+use crate::table_state::{DigestMemo, MachineHome, TableSnapshot};
 
 /// The machine that runs now, borrowed from a snapshot of the table.
 #[derive(Debug, Clone, Copy)]
@@ -55,10 +61,18 @@ pub struct PipelineTable {
     rulings: Arc<RulingBook>,
     requests: Arc<RequestBook>,
     results: Arc<ResultBook>,
+    /// How inputs that committed nothing ended (declined, clarified, routed): kept so a duplicate
+    /// delivery is answered without a model call. A cache of the session: it is neither saved nor
+    /// in the digest, so a restart may ask the interpreter again, and a batch that only declined
+    /// changes nothing worth a checkpoint.
+    ends: Arc<ResultBook>,
+    releases: Arc<ReleaseBook>,
     attachments: Arc<Attachments>,
     clarifications: Arc<BTreeMap<SeatId, Vec<ActionId>>>,
     choice_stamps: BTreeMap<SeatId, SessionRevision>,
     host: Option<SeatId>,
+    hash_memo: DigestMemo,
+    durable_memo: DigestMemo,
 }
 
 impl PipelineTable {
@@ -77,22 +91,30 @@ impl PipelineTable {
                 limits.maximum_outstanding_requests,
             )),
             results: Arc::new(ResultBook::remembering(limits.maximum_remembered_results)),
+            ends: Arc::new(ResultBook::remembering(limits.maximum_remembered_results)),
+            releases: Arc::new(ReleaseBook::holding_at_most(
+                limits.maximum_outstanding_requests,
+            )),
             attachments: Arc::new(Attachments::new()),
             clarifications: Arc::new(BTreeMap::new()),
             choice_stamps: BTreeMap::new(),
             host: None,
+            hash_memo: DigestMemo::empty(),
+            durable_memo: DigestMemo::empty(),
         }
     }
 
     /// The seat whose phone adjudicates rulings (K.4).
     pub fn hosted_by(mut self, host: SeatId) -> Self {
         self.host = Some(host);
+        self.forget_hashes();
         self
     }
 
     /// The table with these rulings already stored, as a host that seeds a table does.
     pub fn with_rulings(mut self, rulings: RulingBook) -> Self {
         self.rulings = Arc::new(rulings);
+        self.forget_hashes();
         self
     }
 
@@ -110,6 +132,7 @@ impl PipelineTable {
             slot,
         }];
         let scope = self.scope();
+        self.forget_hashes();
         self.facts.apply(&scope, correlation, &effects).map(|_| ())
     }
 
@@ -117,18 +140,22 @@ impl PipelineTable {
     /// again (C.0 ADMIT). The owner calls it when it commits a change to what a seat may do.
     pub fn stamp_choices_changed(&mut self, seat: SeatId, revision: SessionRevision) {
         self.choice_stamps.insert(seat, revision);
+        self.forget_hashes();
     }
 
     /// Stamps the table's revision with the revision of the commit that held the inputs run so far:
     /// the host calls it once at a batch commit. The pipeline never stamps it from an input's own
-    /// correlation, so a batch of N and N batches of one end on the same revision.
+    /// correlation, and the commit's id is not remembered as an operation, so a batch of N and N
+    /// batches of one end in the same state digest (S1: the digest leaves the stamps out).
     pub fn stamp_commit_revision(&mut self, commit: Correlation) -> Result<(), EffectError> {
-        let scope = self.scope();
-        self.facts.apply(&scope, commit, &[]).map(|_| ())
+        self.facts.stamp_commit(commit.revision);
+        self.forget_hashes();
+        Ok(())
     }
 
-    /// A copy to restore if a batch commit is refused: the books are shared by pointer, so it
-    /// costs a few pointer copies and the table state's own sharing.
+    /// A copy to restore if a batch commit is refused: the books and the table's memory of applied
+    /// operations share their buckets, so it copies pointers and no entry, however much history
+    /// they hold.
     pub fn checkpoint(&self) -> Self {
         self.clone()
     }
@@ -156,6 +183,16 @@ impl PipelineTable {
 
     pub fn results(&self) -> &ResultBook {
         &self.results
+    }
+
+    /// How inputs that committed nothing ended, as far as this session remembers.
+    pub fn ends(&self) -> &ResultBook {
+        &self.ends
+    }
+
+    /// The reservations a cancelled pending gave up and the rules owner has not been told about.
+    pub fn releases(&self) -> &ReleaseBook {
+        &self.releases
     }
 
     /// What the projections read: the story so far, the notices, the readouts and the activity.
@@ -230,31 +267,47 @@ impl PipelineTable {
     }
 
     pub(super) fn pending_mut(&mut self) -> &mut PendingBook {
+        self.forget_hashes();
         Arc::make_mut(&mut self.pending)
     }
 
     pub(super) fn rulings_mut(&mut self) -> &mut RulingBook {
+        self.forget_hashes();
         Arc::make_mut(&mut self.rulings)
     }
 
     pub(super) fn requests_mut(&mut self) -> &mut RequestBook {
+        self.forget_hashes();
         Arc::make_mut(&mut self.requests)
     }
 
     pub(super) fn results_mut(&mut self) -> &mut ResultBook {
+        self.forget_hashes();
         Arc::make_mut(&mut self.results)
     }
 
+    pub(super) fn ends_mut(&mut self) -> &mut ResultBook {
+        Arc::make_mut(&mut self.ends)
+    }
+
+    pub(super) fn releases_mut(&mut self) -> &mut ReleaseBook {
+        self.forget_hashes();
+        Arc::make_mut(&mut self.releases)
+    }
+
     pub(super) fn attachments_mut(&mut self) -> &mut Attachments {
+        self.hash_memo.forget();
         Arc::make_mut(&mut self.attachments)
     }
 
     pub(super) fn set_clarification(&mut self, seat: SeatId, options: Vec<ActionId>) {
+        self.forget_hashes();
         Arc::make_mut(&mut self.clarifications).insert(seat, options);
     }
 
     pub(super) fn clear_clarification(&mut self, seat: SeatId) {
         if self.clarifications.contains_key(&seat) {
+            self.forget_hashes();
             Arc::make_mut(&mut self.clarifications).remove(&seat);
         }
     }
@@ -264,9 +317,19 @@ impl PipelineTable {
     pub(super) fn forget_absent_seats(&mut self) {
         let seats = self.facts.seats();
         if self.clarifications.keys().any(|seat| !seats.contains(seat)) {
+            self.forget_hashes();
             Arc::make_mut(&mut self.clarifications).retain(|seat, _| seats.contains(seat));
         }
-        self.choice_stamps.retain(|seat, _| seats.contains(seat));
+        if self.choice_stamps.keys().any(|seat| !seats.contains(seat)) {
+            self.forget_hashes();
+            self.choice_stamps.retain(|seat, _| seats.contains(seat));
+        }
+    }
+
+    /// Forgets both digests: something the pipeline keeps changed.
+    fn forget_hashes(&self) {
+        self.hash_memo.forget();
+        self.durable_memo.forget();
     }
 
     /// The correlation the table state is given. The table's revision is the commit's, which the
@@ -289,22 +352,48 @@ impl PipelineTable {
         effects: &[TableEffect],
     ) -> Result<ApplyOutcome, EffectError> {
         let given = self.state_correlation(correlation);
+        self.forget_hashes();
         self.facts.apply(scope, given, effects)
     }
 
-    /// A stable digest of everything a turn can change, for golden sessions and replay: the table
-    /// state's own digest and each book's, with no clock reading in it.
+    /// A stable digest of everything a turn can change, for golden sessions and replay: the facts
+    /// of the table without the commit stamps, the memory of applied operations, each book and the
+    /// views the table shows (the story, the readouts, the notices, the offers, the activity). It
+    /// reads no clock and depends on no commit id: a batch of N inputs and N batches of one are
+    /// equal. It is kept until the table next changes, so asking costs nothing the second time.
     pub fn state_hash(&self) -> u64 {
+        if let Some(known) = self.hash_memo.get() {
+            return known;
+        }
         let mut hasher = Fnv::new();
-        self.facts.digest().hash(&mut hasher);
+        self.durable_hash().hash(&mut hasher);
+        self.attachments.digest().hash(&mut hasher);
+        let worked_out = hasher.finish();
+        self.hash_memo.set(worked_out);
+        worked_out
+    }
+
+    /// The digest of what a checkpoint must keep for the table to go on: the facts without the
+    /// commit stamps, the memory of applied operations and every book, and not the views. A batch
+    /// that changed only what the views show (a decline's notice, a readout) leaves it as it was,
+    /// so a host writes no checkpoint for it; the views are saved with the next one.
+    pub fn durable_hash(&self) -> u64 {
+        if let Some(known) = self.durable_memo.get() {
+            return known;
+        }
+        let mut hasher = Fnv::new();
+        self.facts.digest_without_stamps().hash(&mut hasher);
         self.pending.digest().hash(&mut hasher);
         self.rulings.digest().hash(&mut hasher);
         self.requests.digest().hash(&mut hasher);
         self.results.digest().hash(&mut hasher);
+        self.releases.digest().hash(&mut hasher);
         self.clarifications.as_ref().hash(&mut hasher);
         self.choice_stamps.hash(&mut hasher);
         self.host.hash(&mut hasher);
-        hasher.finish()
+        let worked_out = hasher.finish();
+        self.durable_memo.set(worked_out);
+        worked_out
     }
 
     /// Everything the pipeline holds, in its saved form. A wait is saved as an age at `now_ms`.
@@ -315,6 +404,8 @@ impl PipelineTable {
             rulings: self.rulings.to_record(),
             requests: self.requests.to_record(),
             results: self.results.to_record(),
+            releases: self.releases.to_record(),
+            published: self.attachments.to_published(),
             clarifications: self
                 .clarifications
                 .iter()
@@ -354,14 +445,20 @@ impl PipelineTable {
             RequestBook::from_record(record.requests).map_err(PipelineLoadError::Requests)?;
         let results =
             ResultBook::from_record(record.results).map_err(PipelineLoadError::Results)?;
-        Ok(Self {
+        let releases =
+            ReleaseBook::from_record(record.releases).map_err(PipelineLoadError::Releases)?;
+        let attachments =
+            Attachments::from_published(&record.published).map_err(PipelineLoadError::Published)?;
+        let mut loaded = Self {
             table,
             facts,
             pending: Arc::new(pending),
             rulings: Arc::new(rulings),
             requests: Arc::new(requests),
             results: Arc::new(results),
-            attachments: Arc::new(Attachments::new()),
+            ends: Arc::new(ResultBook::remembering(limits.maximum_remembered_results)),
+            releases: Arc::new(releases),
+            attachments: Arc::new(attachments),
             clarifications: Arc::new(
                 record
                     .clarifications
@@ -375,12 +472,18 @@ impl PipelineTable {
                 .map(|(seat, revision)| (SeatId::new(seat), revision))
                 .collect(),
             host: record.host.map(SeatId::new),
-        })
+            hash_memo: DigestMemo::empty(),
+            durable_memo: DigestMemo::empty(),
+        };
+        // The offers are derived from the pendings and the clarifications, so they are rebuilt and
+        // not saved: a seat that reconnects finds the same buttons by the same pending ids.
+        super::offers::restore_offers(&mut loaded).map_err(PipelineLoadError::Offers)?;
+        Ok(loaded)
     }
 }
 
 /// The schema version of `PipelineRecord`.
-pub const PIPELINE_RECORD_VERSION: u32 = 1;
+pub const PIPELINE_RECORD_VERSION: u32 = 2;
 
 /// The saved form of everything the pipeline holds beside the table state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,6 +494,8 @@ pub struct PipelineRecord {
     rulings: RulingRecord,
     requests: RequestRecord,
     results: ResultRecord,
+    releases: ReleaseRecord,
+    published: PublishedRecord,
     clarifications: Vec<(u64, Vec<ActionId>)>,
     choice_stamps: Vec<(u64, SessionRevision)>,
     host: Option<u64>,
@@ -399,11 +504,18 @@ pub struct PipelineRecord {
 /// Why a saved pipeline record was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineLoadError {
-    UnsupportedVersion { found: u32, expected: u32 },
+    UnsupportedVersion {
+        found: u32,
+        expected: u32,
+    },
     Pending(PendingLoadError),
     Rulings(RulingLoadError),
     Requests(BookLoadError),
     Results(BookLoadError),
+    Releases(BookLoadError),
+    Published(PublishedLoadError),
+    /// The offers derived from the pendings could not be published.
+    Offers(crate::projection::AttachmentError),
 }
 
 impl std::fmt::Display for PipelineLoadError {
@@ -415,7 +527,11 @@ impl std::fmt::Display for PipelineLoadError {
             ),
             Self::Pending(error) => error.fmt(formatter),
             Self::Rulings(error) => error.fmt(formatter),
-            Self::Requests(error) | Self::Results(error) => error.fmt(formatter),
+            Self::Requests(error) | Self::Results(error) | Self::Releases(error) => {
+                error.fmt(formatter)
+            }
+            Self::Published(error) => error.fmt(formatter),
+            Self::Offers(error) => error.fmt(formatter),
         }
     }
 }

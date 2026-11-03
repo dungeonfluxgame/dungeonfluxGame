@@ -5,7 +5,7 @@
 //! port answers under a closed schema, and this stage checks the answer: the plan has between one
 //! and `MAXIMUM_PLAN_STEPS` steps (C.0), every step is a registered action (the active machine
 //! declares it, the rules owner offers it, or the machine accepts it now), and an ambiguity names
-//! at least two registered candidates. An answer that breaks the schema is a failure with cause
+//! at least two candidates the seat may take now (they become the buttons, C.2). An answer that breaks the schema is a failure with cause
 //! `text_invalid`, exactly like a time out or an unavailable model (C.7: output that is the wrong
 //! shape is a failure), and all of them take the same path: the interpreter is asked once more
 //! with the legal choices only, and if that fails too the failure is recorded once, the table says
@@ -114,7 +114,12 @@ fn read_line(
             keeps_draft: false,
         }),
         Interpretation::Ambiguous { candidates } => Interpreted::Clarify(Clarification {
-            options: candidates,
+            // Only the candidates the seat may take now are offered as buttons (C.2): a button
+            // the rules refuse is a tap that is declined.
+            options: candidates
+                .into_iter()
+                .filter(|candidate| legal.contains(candidate))
+                .collect(),
             cause: ClarifyCause::Ambiguous,
             keeps_draft: false,
         }),
@@ -167,7 +172,12 @@ impl Known<'_> {
                     && steps.iter().all(|step| self.is_registered(step))
             }
             Interpretation::Ambiguous { candidates } => {
-                candidates.len() >= 2 && candidates.iter().all(|step| self.is_registered(step))
+                candidates.iter().all(|step| self.is_registered(step))
+                    && candidates
+                        .iter()
+                        .filter(|candidate| self.legal.contains(candidate))
+                        .count()
+                        >= 2
             }
             Interpretation::NeedsClarification
             | Interpretation::NonAction(_)

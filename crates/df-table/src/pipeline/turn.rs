@@ -3,10 +3,20 @@
 //! `Turn` carries what every stage needs and what the stages hand to each other: the correlation
 //! every port call receives, the scope of the events, the clock reading the input started at, the
 //! dice drawn so far, the effects committed, and the events that may only be recorded once the
-//! commit has happened (a pending opened, a ruling stored). It owns the one way a stage records
-//! its end (`step.finished`) and the one way a port failure is recorded (`BoundaryFailed`, once,
-//! by the stage that handles it). It never decides what a stage does and holds nothing across
-//! inputs: a new `Turn` is built for every input, so the pipeline keeps no state of its own.
+//! host's commit has happened. Those are of two kinds: `on_commit` holds the events that say the
+//! table changed (a pending opened, a ruling stored, the effects, `TurnApplied`) and is released
+//! only when the turn committed, and `outcome_events` holds the lines that say what the input came
+//! to and what it asked of the ports (a die drawn, a decline, a clarification, a routed line, a
+//! plan that stopped part way), which are released with the turn whether or not it changed the
+//! table. Nothing of either kind is recorded while the stages run, so a refused batch leaves no
+//! line behind (O.16 S1). Only the timing line of a stage (`step.finished`) and a failure
+//! (`BoundaryFailed`, `MachineFailed`, `EffectRefused`) are recorded at once: they happened
+//! whatever the commit does.
+//!
+//! A stage that may fail after it staged something takes a `StageMark` first and rewinds to it, so
+//! a step that is declined takes its staged lines and its ruling note with it. `Turn` never decides
+//! what a stage does and holds nothing across inputs: a new `Turn` is built for every input, so the
+//! pipeline keeps no state of its own.
 
 use crate::effects::TableEffect;
 use crate::envelope::{InputKind, PendingId, Sender};
@@ -29,11 +39,16 @@ pub(super) struct Turn<'t, 'p> {
     pub(super) scope: TableScope,
     pub(super) started_ms: u64,
     pub(super) hash_before: u64,
+    pub(super) durable_before: u64,
     pub(super) draws: Vec<StoredDraw>,
     pub(super) effects: Vec<TableEffect>,
     /// Events about changes that exist only once the host's commit succeeded: the host releases
-    /// them with the turn's result, and nothing records them before (O.16 S1).
+    /// them with the turn's result, and nothing records them before (O.16 S1). Only a turn that
+    /// committed releases them.
     pub(super) on_commit: Vec<TableEvent>,
+    /// The lines that say what the input came to and what it asked of the ports, released with the
+    /// turn's result whether or not it changed the table, and never before.
+    pub(super) outcome_events: Vec<TableEvent>,
     /// The table accepted this turn's commit.
     pub(super) committed: bool,
     /// The table was idle: the turn's first commit resumes it.
@@ -57,6 +72,18 @@ pub(super) struct Turn<'t, 'p> {
     pub(super) hand_off_wanted: bool,
     pub(super) pause_requested: bool,
     pub(super) replayed: bool,
+    /// The line the seat was shown the first time, when this is a duplicate delivery.
+    pub(super) replayed_readout: Option<String>,
+    /// Seats other than the sender whose own readout this turn changes: the seat whose pending
+    /// it closed, so its phone does not keep saying it is waiting.
+    pub(super) also_told: Vec<SeatId>,
+}
+
+/// How far the staged lines and the ruling note had got, to rewind to if a step is declined.
+pub(super) struct StageMark {
+    on_commit: usize,
+    outcome_events: usize,
+    ruling_note: Option<RulingAnswer>,
 }
 
 impl<'t, 'p> Turn<'t, 'p> {
@@ -77,9 +104,11 @@ impl<'t, 'p> Turn<'t, 'p> {
             scope: table.scope(),
             started_ms: pipeline.ports.clock.now_ms(),
             hash_before: table.state_hash(),
+            durable_before: table.durable_hash(),
             draws: Vec::new(),
             effects: Vec::new(),
             on_commit: Vec::new(),
+            outcome_events: Vec::new(),
             committed: false,
             wake_idle: false,
             applied_steps: Vec::new(),
@@ -95,7 +124,30 @@ impl<'t, 'p> Turn<'t, 'p> {
             hand_off_wanted: false,
             pause_requested: false,
             replayed: false,
+            replayed_readout: None,
+            also_told: Vec::new(),
         }
+    }
+
+    /// Where the staged lines stand now.
+    pub(super) fn mark(&self) -> StageMark {
+        StageMark {
+            on_commit: self.on_commit.len(),
+            outcome_events: self.outcome_events.len(),
+            ruling_note: self.ruling_note.clone(),
+        }
+    }
+
+    /// Drops what was staged since `mark`, and the ruling note a declined step set.
+    pub(super) fn rewind(&mut self, mark: StageMark) {
+        self.on_commit.truncate(mark.on_commit);
+        self.outcome_events.truncate(mark.outcome_events);
+        self.ruling_note = mark.ruling_note;
+    }
+
+    /// Stages a line about what the input came to, to be released with the turn.
+    pub(super) fn stage_outcome(&mut self, event: TableEvent) {
+        self.outcome_events.push(event);
     }
 
     pub(super) fn now(&self) -> u64 {

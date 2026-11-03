@@ -69,7 +69,9 @@ pub(super) fn check(
     };
     let draws = match rules.prepare_in_plan(turn.correlation, seat, action, so_far) {
         Ok(Preparation::Ready { draws }) => draws,
-        Ok(Preparation::Declined(decline)) => return Checked::Declined(decline),
+        Ok(Preparation::Declined(decline)) => {
+            return Checked::Declined(turn.pipeline.with_legal_alternatives(turn, decline));
+        }
         Err(error) => return failed(error),
     };
     if settled.harm_check && !settled.confirmed {

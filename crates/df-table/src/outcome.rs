@@ -237,6 +237,71 @@ impl Decline {
     pub fn alternatives(&self) -> &[String] {
         &self.alternatives
     }
+
+    /// The same decline keeping only the alternatives `keep` accepts, so the text a seat reads
+    /// offers nothing the rules owner's legal choices do not (C.2).
+    pub fn keeping_alternatives(&self, keep: impl Fn(&str) -> bool) -> Self {
+        Self {
+            code: self.code,
+            reason: self.reason.clone(),
+            missing_piece: self.missing_piece.clone(),
+            alternatives: self
+                .alternatives
+                .iter()
+                .filter(|alternative| keep(alternative))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// The saved form of a decline: the words a seat was shown, for a checkpoint or a result book.
+    pub fn to_record(&self) -> DeclineRecord {
+        DeclineRecord {
+            code: self.code,
+            reason: self.reason.clone(),
+            missing_piece: self.missing_piece.clone(),
+            alternatives: self.alternatives.clone(),
+        }
+    }
+
+    /// A decline read back from its saved form, refused if a text is blank.
+    pub fn from_record(record: DeclineRecord) -> Result<Self, DeclineError> {
+        let mut decline = Self::new(record.code, &record.reason)?;
+        if let Some(missing) = &record.missing_piece {
+            decline = decline.with_missing_piece(missing)?;
+        }
+        for alternative in &record.alternatives {
+            decline = decline.with_alternative(alternative)?;
+        }
+        Ok(decline)
+    }
+}
+
+/// A decline as it is saved. It holds the texts a seat was shown, so it belongs in the table's own
+/// checkpoint and never in a log.
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeclineRecord {
+    code: DeclineCode,
+    reason: String,
+    missing_piece: Option<String>,
+    alternatives: Vec<String>,
+}
+
+impl DeclineRecord {
+    pub fn code(&self) -> DeclineCode {
+        self.code
+    }
+}
+
+impl fmt::Debug for DeclineRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeclineRecord")
+            .field("code", &self.code)
+            .field("alternatives", &self.alternatives.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for Decline {

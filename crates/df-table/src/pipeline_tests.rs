@@ -108,8 +108,8 @@ fn a_tap_by_a_seat_that_is_not_at_the_table_is_declined_and_changes_nothing() {
 
     assert_eq!(result.record.declined, Some(DeclineCode::NotViable));
     assert_eq!(
-        result.record.state_hash_before,
-        result.record.state_hash_after
+        result.record.durable_hash_before,
+        result.record.durable_hash_after
     );
     assert_eq!(world.rules.calls(), Vec::<RulesCall>::new());
 }
@@ -131,8 +131,8 @@ fn a_declined_action_carries_the_rules_owners_decline_and_commits_nothing() {
         "You have already used that this turn."
     );
     assert_eq!(
-        result.record.state_hash_before,
-        result.record.state_hash_after
+        result.record.durable_hash_before,
+        result.record.durable_hash_after
     );
     assert!(changes(&result).is_empty());
     assert!(
@@ -530,10 +530,10 @@ fn a_hand_off_is_declined_pending_open_while_a_pending_resolution_is_open() {
         "stab",
     )
     .with_confirmation(action("stab"), ConfirmationReason::HarmsANeutral);
-    let opened = world.text(2, "stab him").expect("the line runs");
-    assert_eq!(opened.outcome, Outcome::Pending(PendingKind::Choice));
     let finished = ran(&mut world, 1, "wave");
     assert!(finished.hand_off_wanted);
+    let opened = world.text(2, "stab him").expect("the line runs");
+    assert_eq!(opened.outcome, Outcome::Pending(PendingKind::Choice));
 
     let proposal = world
         .engine(EngineInput::Proposal {
@@ -650,6 +650,27 @@ impl RulesOwner for Spy<ScriptedRulesOwner> {
         self.note(correlation);
         self.inner.prepare(correlation, seat, action)
     }
+    fn prepare_in_plan(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        so_far: &crate::ports::PlanSoFar<'_>,
+    ) -> Result<Preparation, PortError> {
+        self.note(correlation);
+        self.inner
+            .prepare_in_plan(correlation, seat, action, so_far)
+    }
+    fn abandon(
+        &self,
+        correlation: Correlation,
+        seat: SeatId,
+        action: &ActionId,
+        pending: crate::envelope::PendingId,
+    ) -> Result<(), PortError> {
+        self.note(correlation);
+        self.inner.abandon(correlation, seat, action, pending)
+    }
     fn resolve(
         &self,
         correlation: Correlation,
@@ -718,6 +739,9 @@ impl Dice for Spy<crate::golden::CountingDice> {
     fn draw(&self, correlation: Correlation, request: DrawRequest) -> Result<Draw, PortError> {
         self.note(correlation);
         self.inner.draw(correlation, request)
+    }
+    fn give_back(&self, correlation: Correlation, draws: &[Draw]) {
+        self.inner.give_back(correlation, draws);
     }
 }
 
@@ -851,11 +875,19 @@ fn declined_with(alternatives: &[&str]) -> String {
             .with_alternative(alternative)
             .expect("an alternative");
     }
-    let rules = ScriptedRulesOwner::default().with_action(
-        action("wave"),
-        Preparation::Declined(decline.clone()),
-        Resolution::Declined(decline),
-    );
+    // The alternatives the decline offers are the seat's legal choices, said in words (C.2).
+    let legal = alternatives
+        .iter()
+        .map(|alternative| action(&alternative.replace(' ', "_")))
+        .chain([action("wave")])
+        .collect();
+    let rules = ScriptedRulesOwner::default()
+        .with_choices(seat(1), legal)
+        .with_action(
+            action("wave"),
+            Preparation::Declined(decline.clone()),
+            Resolution::Declined(decline),
+        );
     let mut world = world_of(&["wave"], 1, rules);
     ran(&mut world, 1, "wave").readout.as_str().to_owned()
 }
@@ -874,6 +906,30 @@ fn a_decline_names_what_would_be_possible_in_a_plain_list() {
     assert_eq!(
         declined_with(&["run", "climb", "shoot"]),
         "That is not here. You could run, climb, or shoot."
+    );
+}
+
+#[test]
+fn a_decline_offers_only_what_the_legal_choice_call_lists() {
+    let decline = crate::outcome::Decline::new(DeclineCode::NotViable, "That is not here.")
+        .and_then(|decline| decline.with_alternative("shoot"))
+        .and_then(|decline| decline.with_alternative("fly"))
+        .expect("a decline");
+    let rules = ScriptedRulesOwner::default()
+        .with_choices(seat(1), vec![action("shoot"), action("wave")])
+        .with_action(
+            action("wave"),
+            Preparation::Declined(decline.clone()),
+            Resolution::Declined(decline),
+        );
+    let mut world = world_of(&["wave"], 1, rules);
+
+    let result = ran(&mut world, 1, "wave");
+
+    assert_eq!(
+        result.readout.as_str(),
+        "That is not here. You could shoot.",
+        "the phone cannot be told to fly when the rules do not list it"
     );
 }
 

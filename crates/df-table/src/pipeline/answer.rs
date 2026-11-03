@@ -9,8 +9,9 @@
 //! same seat: `intent_invalid`), and when the window is complete finishes it by what the pending
 //! holds:
 //!
-//! - a confirmation is the seat's own yes (the action then runs with the harm check settled) or
-//!   its cancel (the uncommitted part is dropped and the input is applied, RES26);
+//! - a confirmation is the seat's own yes (the machine is released from waiting and the action
+//!   then runs with the harm check settled) or its cancel (the machine is released, the
+//!   uncommitted part is dropped and the input is applied, RES26);
 //! - a ruling is the host's tap on the suggestion, an alternative or a refusal, or the
 //!   requester's cancel; an answer is stored as a ruling keyed for reuse under the scene the
 //!   question was asked in (RES48), a confirmed reuse is recorded for the scene, and the action
@@ -23,9 +24,11 @@
 //!   and the pending stays open.
 //!
 //! `cancel_pending` is the exit that needs no answer (C.4): a window whose seat left for good, or
-//! one the host moves past, ends without spending, rolling or inventing anything. The rules owner
-//! releases what it reserved (`abandon`) and a machine that waited on the pending is told
-//! (`MachineInput::PendingCancelled`). A roll draws its dice only when the player answers, once:
+//! one the host moves past, ends without spending, rolling or inventing anything. The machine that
+//! waited on the pending is told (`MachineInput::PendingCancelled`) and returns to its normal
+//! state, and the rules owner is told after the commit to release what it reserved (`abandon`, a
+//! release recorded with the commit and issued by `Pipeline::issue_requests`, so a refused batch
+//! releases nothing). A roll draws its dice only when the player answers, once:
 //! the dice are kept in the pending even when the rules owner fails afterwards, so a later answer
 //! resumes with them and never draws again. It never reads player text and never changes anything
 //! but through `commit`.
@@ -47,7 +50,7 @@ use crate::ports::{
 
 use super::action::{self, PlanState, StepMode};
 use super::admit::Reading;
-use super::apply::{self, Staged};
+use super::apply::{self, Staged, StagedRelease};
 use super::decide::{self, Entry};
 use super::events::PipelineEvent;
 use super::narrate;
@@ -97,6 +100,7 @@ pub(super) fn answer(
                 note_resolved(turn, &updated);
                 let mode = StepMode {
                     confirmed: true,
+                    release_waiting: Some(id),
                     ..StepMode::default()
                 };
                 action::run_plan(
@@ -152,6 +156,7 @@ fn no_longer_current(table: &PipelineTable, pending: &PendingResolution) -> Opti
 }
 
 fn note_resolved(turn: &mut Turn<'_, '_>, pending: &PendingResolution) {
+    turn.also_told.push(pending.continuation().seat());
     let (id, kind, ms) = (pending.id(), pending.kind(), pending.waited_ms(turn.now()));
     turn.on_commit.push(
         turn.pipeline_event(|scope, correlation| PipelineEvent::PendingResolved {
@@ -182,16 +187,29 @@ fn keep_waiting(
     }
 }
 
+/// Closes the pending and returns the machine that waited on it to its normal state, staged with
+/// the commit. The one way a pending ends without the action running.
+fn close_and_release(
+    turn: &mut Turn<'_, '_>,
+    table: &PipelineTable,
+    pending: &PendingResolution,
+) -> Staged {
+    let mut staged = Staged::new();
+    staged.close.push(pending.id());
+    let snapshot = table.facts().snapshot();
+    staged.slot = release_machine(turn, table, &snapshot, pending.id());
+    staged
+}
+
 /// The seat or the requester dropped the uncommitted part: the input is applied with nothing
-/// changed beyond closing the pending (RES26 `Cancelled`).
+/// changed beyond closing the pending and releasing the machine (RES26 `Cancelled`).
 fn cancel(
     turn: &mut Turn<'_, '_>,
     table: &mut PipelineTable,
     pending: &PendingResolution,
 ) -> Outcome {
     note_resolved(turn, pending);
-    let mut staged = Staged::new();
-    staged.close.push(pending.id());
+    let staged = close_and_release(turn, table, pending);
     match apply::commit(turn, table, staged) {
         Ok(()) => {
             turn.cancelled = true;
@@ -209,28 +227,22 @@ pub(super) fn cancel_pending(
     pending: &PendingResolution,
     cause: CancelCause,
 ) -> Outcome {
-    let snapshot = table.facts().snapshot();
-    let mut staged = Staged::new();
-    staged.close.push(pending.id());
-    let mut released = None;
+    let mut staged = close_and_release(turn, table, pending);
     if let Continuation::Resolve {
         seat: actor,
         action,
         ..
     } = pending.continuation()
     {
-        let started = turn.now();
-        if let Err(error) = turn
-            .pipeline
-            .ports
-            .rules
-            .abandon(turn.correlation, *actor, action)
-        {
-            turn.boundary_failed(error.port, error.cause, started);
-        }
-        released = release_machine(turn, table, &snapshot, pending.id());
+        // The rules owner is told after the commit, with the other things the commit made due.
+        staged.releases.push(StagedRelease {
+            pending: pending.id(),
+            seat: *actor,
+            action: action.clone(),
+        });
     }
     let (id, kind) = (pending.id(), pending.kind());
+    turn.also_told.push(pending.continuation().seat());
     turn.on_commit
         .push(
             turn.pipeline_event(|scope, correlation| PipelineEvent::PendingCancelled {
@@ -241,9 +253,6 @@ pub(super) fn cancel_pending(
                 cause,
             }),
         );
-    if let Some(slot) = released {
-        staged.slot = Some(slot);
-    }
     match apply::commit(turn, table, staged) {
         Ok(()) => {
             turn.cancelled = true;
@@ -253,8 +262,9 @@ pub(super) fn cancel_pending(
     }
 }
 
-/// Tells the running machine its pending was cancelled, and returns the state it moved to.
-fn release_machine(
+/// Tells the running machine its pending ended without the action running, and returns the state
+/// it moved to: a machine that waited on the pending returns to its normal state.
+pub(super) fn release_machine(
     turn: &mut Turn<'_, '_>,
     table: &PipelineTable,
     snapshot: &crate::table_state::TableSnapshot,
@@ -273,7 +283,21 @@ fn release_machine(
         decision: None,
     };
     match machine.step(running.slot, &step) {
-        Ok(result) => result.state,
+        Ok(result) => {
+            if let Some(next) = &result.state
+                && let (Ok(from), Ok(to)) =
+                    (machine.state_name(running.slot), machine.state_name(next))
+                && from != to
+            {
+                turn.on_commit.push(TableEvent::MachineTransitioned {
+                    scope: turn.scope.clone(),
+                    correlation: turn.correlation,
+                    from,
+                    to,
+                });
+            }
+            result.state
+        }
         Err(error) => {
             turn.emit(&error.event(&turn.scope, turn.correlation));
             None
@@ -296,8 +320,7 @@ fn finish_ruling(
     }
     if *choice == choices.decline_ruling {
         note_resolved(turn, pending);
-        let mut staged = Staged::new();
-        staged.close.push(pending.id());
+        let staged = close_and_release(turn, table, pending);
         return match apply::commit(turn, table, staged) {
             Ok(()) => declined(DeclineCode::NotViable),
             Err(decline) => Outcome::Declined(decline),
@@ -320,6 +343,7 @@ fn finish_ruling(
     let mut mode = StepMode {
         confirmed: true,
         ruling: Some(option.answer.clone()),
+        release_waiting: Some(pending.id()),
         ..StepMode::default()
     };
     if same_as_stored {
@@ -423,9 +447,11 @@ fn resume(
             nesting,
             next,
         ),
-        Ok(Resolution::Declined(decline)) | Err(decline) => {
+        Ok(Resolution::Declined(decline)) => {
+            let decline = turn.pipeline.with_legal_alternatives(turn, decline);
             ask_again(turn, table, &updated, answering, decline)
         }
+        Err(decline) => ask_again(turn, table, &updated, answering, decline),
         Ok(Resolution::NeedsDraws(_)) => ask_again(
             turn,
             table,
@@ -490,14 +516,14 @@ fn finish_resolution(
     action::absorb(turn, machine.as_ref(), state, result);
     note_resolved(turn, updated);
     state.staged.close.push(updated.id());
-    let wants_hand_off = machine.wants_hand_off(&state.slot);
+    let wants_hand_off = action::wants_hand_off(turn, machine.as_ref(), &state.slot);
     let staged = std::mem::replace(&mut state.staged, Staged::new());
     if let Err(decline) = apply::commit(turn, table, staged) {
         return Outcome::Declined(decline);
     }
     turn.acted = Some((actor, action.clone()));
     turn.applied_steps.push(action.clone());
-    turn.hand_off_wanted = wants_hand_off.unwrap_or(false);
+    turn.hand_off_wanted = wants_hand_off;
     narrate::stage(turn, actor);
     Outcome::Applied
 }

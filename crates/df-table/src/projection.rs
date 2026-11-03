@@ -59,7 +59,7 @@ mod text;
 
 pub use attachments::{
     AttachmentError, AttachmentLimits, AttachmentVersion, Attachments, OfferEntry, OfferId,
-    StoryLine,
+    PUBLISHED_RECORD_VERSION, PublishedLoadError, PublishedRecord, StoryLine,
 };
 pub use events::ProjectionEvent;
 pub use readout::StructuredReadout;

@@ -306,7 +306,7 @@ fn deliver_to_active(
         StepOutcome::Settled(_) | StepOutcome::Waiting(_) => return not_viable(),
     }
     action::absorb(turn, machine.as_ref(), &mut state, result);
-    turn.hand_off_wanted = machine.wants_hand_off(&state.slot).unwrap_or(false);
+    turn.hand_off_wanted = action::wants_hand_off(turn, machine.as_ref(), &state.slot);
     committed(turn, table, state.staged)
 }
 

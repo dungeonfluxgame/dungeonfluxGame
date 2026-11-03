@@ -5,18 +5,20 @@
 
 use crate::ports::{ActionId, PurposeName, RulingAnswer, RulingKey, RulingScope, RulingTier};
 
-use crate::envelope::{EngineInput, TimerName};
-use crate::golden::{CountingDice, World};
-use crate::identity::{MachineId, SceneId};
+use crate::envelope::PendingId;
+use crate::golden::World;
+use crate::identity::{MachineId, SceneId, TurnSeq};
 use crate::machine::RequestKey;
-use crate::outcome::Outcome;
+use crate::outcome::PendingKind;
 use crate::pending::bounded::BoundedMap;
 use crate::pending::digest::{reset_walked_entries, walked_entries};
+use crate::pending::window::{Completion, ResolutionWindow};
+use crate::pending::{Continuation, PendingBook, PendingMark, PendingOpening, PendingResolution};
 use crate::pending::{RulingBook, RulingSource, ScopedRuling};
-use crate::pipeline::{PENDING_NUDGE_TIMER, RequestBook};
-use crate::pipeline_fixtures_tests::{action, allows, d20, seat, world_of};
-use crate::ports::{ConfirmationReason, Interpretation, Preparation, Resolution};
-use crate::testkit::{ScriptedInterpreter, ScriptedRulesOwner};
+use crate::pipeline::RequestBook;
+use crate::pipeline_fixtures_tests::{action, allows, seat, world_of};
+use crate::ports::{ConfirmationReason, Offer};
+use crate::testkit::{ScriptedRulesOwner, correlation};
 
 /// A small deterministic generator, so a script is a function of its seed.
 struct Lcg(u64);
@@ -138,7 +140,7 @@ fn the_request_book_keeps_a_digest_equal_to_the_one_worked_out_from_its_entries(
             let machine = machines[random.below(machines.len() as u64) as usize].clone();
             let key = RequestKey::new(random.below(QUESTIONS));
             match random.below(4) {
-                0 | 1 => book.record_intent(machine, key, purpose.clone(), None),
+                0 | 1 => book.record_intent(machine, key, purpose.clone(), None, correlation(1)),
                 2 => {
                     next_handle += 1;
                     book.bind_handle(&machine, key, next_handle);
@@ -158,97 +160,121 @@ fn the_request_book_keeps_a_digest_equal_to_the_one_worked_out_from_its_entries(
     }
 }
 
-/// A world in which every typed "hit" is read as a strike that asks its seat for a yes, so each seat that taps leaves
-/// one pending open without the machine waiting for any of them.
-fn crowded_world(windows: usize, seats: u64) -> World {
-    let mut rules = ScriptedRulesOwner::default();
-    for number in 1..=seats {
-        rules = rules.with_choices(seat(number), vec![action("wave"), action("strike")]);
-    }
-    let rules = allows(rules, "wave")
-        .with_action(
-            action("strike"),
-            Preparation::Ready { draws: vec![d20()] },
-            Resolution::applied(),
-        )
-        .with_confirmation(action("strike"), ConfirmationReason::HarmsANeutral);
-    let mut world = world_of(&["wave", "strike"], seats, rules);
-    world.interpreter =
-        ScriptedInterpreter::default().with_line("hit", Interpretation::Action(action("strike")));
-    world.dice = CountingDice::new((0..windows).map(|_| 12));
-    world
-}
-
-fn pending_digest_is_kept(world: &World) -> bool {
-    world.table.pending().digest() == world.table.pending().recomputed_digest()
+/// A pending of `seat` that offers the seat a confirm and a cancel, as the book would hold it.
+fn opening(id: u64, seat_number: u64) -> PendingResolution {
+    let window = ResolutionWindow::new(
+        vec![Offer {
+            seat: seat(seat_number),
+            choices: vec![action("confirm"), action("cancel")],
+        }],
+        Completion::AnyOffer,
+    )
+    .expect("a window");
+    PendingResolution::open(PendingOpening {
+        id: PendingId::new(id),
+        kind: PendingKind::Choice,
+        opened_by: seat(seat_number),
+        operation: correlation(id).operation_id,
+        turn: TurnSeq::new(id),
+        now_ms: id * 1_000,
+        scene: Some(SceneId::new(1)),
+        continuation: Continuation::Confirm {
+            seat: seat(seat_number),
+            action: action("strike"),
+            reason: ConfirmationReason::HarmsANeutral,
+        },
+        draws: Vec::new(),
+        window,
+    })
 }
 
 #[test]
 fn the_pending_book_keeps_a_digest_equal_to_the_one_worked_out_from_its_entries() {
     for seed in 1..=SEEDS {
         let mut random = Lcg(seed);
-        let mut world = crowded_world(OPERATIONS, SEATS);
+        let mut book = PendingBook::holding_at_most(BOOK_BOUND);
         for step in 0..OPERATIONS {
-            let open = world
-                .table
-                .pending()
-                .iter()
-                .next()
-                .map_or((99, 1), |pending| {
-                    (pending.id().get(), pending.opened_by().get())
-                });
-            let result = match random.below(4) {
-                0 => world.text(1 + random.below(SEATS), "hit"),
-                1 => world.answer(
-                    open.1,
-                    open.0,
-                    if random.below(2) == 0 {
-                        "confirm"
-                    } else {
-                        "cancel"
-                    },
-                ),
-                2 => world.tap(1 + random.below(SEATS), "wave"),
+            let seat_number = 1 + random.below(SEATS);
+            match random.below(5) {
+                0 | 1 => {
+                    let next = book.next_id().get();
+                    // A full book refuses, which leaves the digest as it was.
+                    let _ = book.insert(opening(next, seat_number));
+                }
+                2 => {
+                    let held: Vec<PendingId> = book.iter().map(PendingResolution::id).collect();
+                    if let Some(id) = held.get(random.below(held.len().max(1) as u64) as usize) {
+                        book.remove(*id);
+                    }
+                }
+                3 => book.mark(if random.below(2) == 0 {
+                    PendingMark::Hold(seat(seat_number))
+                } else {
+                    PendingMark::Release(seat(seat_number))
+                }),
                 _ => {
-                    world.clock.advance_ms(40_000);
-                    world.engine(EngineInput::Timer {
-                        timer: TimerName::new(PENDING_NUDGE_TIMER).expect("a timer"),
-                    })
+                    let held: Vec<PendingId> = book.iter().map(PendingResolution::id).collect();
+                    if let Some(id) = held.first() {
+                        book.mark(PendingMark::Nudged(*id));
+                    }
                 }
             }
-            .expect("the input runs");
-            assert!(
-                matches!(
-                    result.outcome,
-                    Outcome::Applied | Outcome::Pending(_) | Outcome::Declined(_)
-                ),
-                "seed {seed} step {step}"
+            assert!(book.len() <= BOOK_BOUND, "seed {seed} step {step}");
+            assert_eq!(
+                book.digest(),
+                book.recomputed_digest(),
+                "seed {seed} step {step}: the kept digest drifted"
             );
-            assert!(pending_digest_is_kept(&world), "seed {seed} step {step}");
         }
     }
 }
 
+/// A world whose table already remembers `rulings` stored rulings.
+fn world_with_rulings(rulings: usize) -> World {
+    let mut book = RulingBook::remembering(rulings + 1);
+    let mut random = Lcg(3);
+    for index in 0..rulings {
+        let mut one = ruling(&mut random);
+        one = ScopedRuling::new(
+            RulingKey::new(&format!("remembered_{index}")).expect("a key"),
+            RulingScope::Table,
+            None,
+            one.answer().clone(),
+            one.tier(),
+            one.source(),
+            one.asked_by_action().clone(),
+        );
+        book.store(one);
+    }
+    let rules = allows(
+        ScriptedRulesOwner::default().with_choices(seat(1), vec![action("wave")]),
+        "wave",
+    );
+    let mut world = world_of(&["wave"], 1, rules);
+    world.table = world.table.clone().with_rulings(book);
+    world
+}
+
 #[test]
 fn an_input_walks_no_book_whether_the_books_hold_few_entries_or_many() {
-    let walked_by_a_wave_with = |windows: u64| {
-        let mut world = crowded_world(windows as usize + 1, windows + 1);
-        for opener in 1..=windows {
-            world.text(opener, "hit").expect("the confirmation opens");
-        }
+    let walked_by_a_wave_with = |rulings: usize| {
+        let mut world = world_with_rulings(rulings);
         reset_walked_entries();
-        world.tap(windows + 1, "wave").expect("the wave runs");
-        (world.table.pending().len(), walked_entries())
+        world.tap(1, "wave").expect("the wave runs");
+        world.tap(1, "wave").expect("the wave runs again");
+        let issued = world.with_pipeline(|pipeline, table| pipeline.issue_requests(table));
+        assert_eq!(issued.ok(), Some(0));
+        (world.table.rulings().len(), walked_entries())
     };
 
     let few = walked_by_a_wave_with(4);
-    let many = walked_by_a_wave_with(24);
+    let many = walked_by_a_wave_with(2_000);
 
     assert_eq!(few.0, 4);
-    assert_eq!(many.0, 24);
+    assert_eq!(many.0, 2_000);
     assert_eq!(
         few.1, many.1,
-        "an input costs the same with 4 open pendings or with 24"
+        "an input costs the same with 4 stored rulings or with 2000"
     );
     assert_eq!(few.1, 0);
 }

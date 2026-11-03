@@ -41,6 +41,38 @@ fn choice_window(seat_number: u64, choices: &[&str]) -> Awaiting {
     }
 }
 
+/// The effect the rules owner reports for something the machine did not do itself.
+fn beat(name: &str) -> crate::effects::TableEffect {
+    crate::effects::TableEffect::BeatResolved {
+        scene: SceneId::new(1),
+        beat: crate::effects::BeatName::new(name).expect("a beat name"),
+    }
+}
+
+/// What the rules owner resolved: its own effects and typed facts (RES18).
+fn resolved(effects: Vec<crate::effects::TableEffect>, facts: &[(&str, u64)]) -> Resolution {
+    let mut resolved = crate::ports::Resolved::with_effects(effects);
+    for (label, amount) in facts {
+        resolved = resolved.with_fact(label, *amount).expect("a label");
+    }
+    Resolution::Applied(resolved)
+}
+
+/// The typed facts the narration job carries, as label and amount.
+fn narrated_facts(result: &TurnResult) -> Vec<(String, u64)> {
+    result
+        .narration_job
+        .as_ref()
+        .map(|job| {
+            job.committed
+                .facts
+                .iter()
+                .map(|fact| (fact.label.as_str().to_owned(), fact.amount))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// M2-D4 rules owner: a strike rolls a d20, then the roller may use Heroic Inspiration.
 fn strike_rules(resumptions: Vec<Resolution>) -> ScriptedRulesOwner {
     ScriptedRulesOwner::default()
@@ -61,9 +93,11 @@ fn strike_rules(resumptions: Vec<Resolution>) -> ScriptedRulesOwner {
 
 #[test]
 fn m2_d4_a_miss_by_one_plus_heroic_inspiration_replaces_the_die_and_commits_one_change() {
+    // The reroll turns the miss by one into a hit of 18: the rules owner spends the Inspiration
+    // and reports the total of the new die, and the first die's 19 is not in what commits.
     let rules = strike_rules(vec![
         Resolution::NeedsDraws(vec![d20()]),
-        Resolution::applied(),
+        resolved(vec![beat("inspiration_spent")], &[("attack_total", 18)]),
     ]);
     let mut world = world_of(&["strike"], 2, rules);
     world.dice = CountingDice::new([19, 17]);
@@ -102,7 +136,20 @@ fn m2_d4_a_miss_by_one_plus_heroic_inspiration_replaces_the_die_and_commits_one_
         "the reroll draws one new die"
     );
     assert_eq!(world.dice.drawn(), 2);
-    assert_eq!(changes(&resolved).len(), 1, "one change commits");
+    assert_eq!(
+        changes(&resolved),
+        [&beat("inspiration_spent"), &beat("strike")],
+        "the Inspiration the rules owner spent commits with the strike's own beat"
+    );
+    assert_eq!(
+        resolved.readout.as_str(),
+        "Seat 1: strike done (attack total 18)."
+    );
+    assert_eq!(
+        narrated_facts(&resolved),
+        [("attack_total".to_owned(), 18)],
+        "the result of the second die is what is told, and the first die's 19 is not"
+    );
     assert!(world.table.pending().is_empty());
     assert_eq!(phase_of(&world), "open");
     assert_eq!(
@@ -153,7 +200,11 @@ fn m2_d4_after_the_reroll_nothing_more_is_offered_and_the_closed_choice_cannot_b
 
 #[test]
 fn m2_d4_keeping_the_roll_draws_nothing_new_and_commits_one_change() {
-    let mut world = world_of(&["strike"], 2, strike_rules(vec![Resolution::applied()]));
+    let mut world = world_of(
+        &["strike"],
+        2,
+        strike_rules(vec![resolved(Vec::new(), &[("attack_total", 19)])]),
+    );
     world.dice = CountingDice::new([19]);
     ran(&mut world, 1, "strike");
 
@@ -161,7 +212,12 @@ fn m2_d4_keeping_the_roll_draws_nothing_new_and_commits_one_change() {
 
     assert_eq!(kept.outcome, Outcome::Applied);
     assert_eq!(world.dice.drawn(), 1);
-    assert_eq!(changes(&kept).len(), 1);
+    assert_eq!(
+        changes(&kept),
+        [&beat("strike")],
+        "no Inspiration is spent, so only the strike's own beat commits"
+    );
+    assert_eq!(narrated_facts(&kept), [("attack_total".to_owned(), 19)]);
 }
 
 /// M2-D5 rules owner: a fireball draws nothing until its window closes.
@@ -192,10 +248,15 @@ fn counterspell_offer() -> Vec<Offer> {
 
 #[test]
 fn m2_d5_a_countered_fireball_spends_the_action_and_consumes_no_damage_draw() {
+    // A countered spell resolves to a fact and no damage effect: the action is spent and nothing
+    // is hurt.
     let mut world = world_of(
         &["fireball"],
         3,
-        fireball_rules(vec![Resolution::applied()], counterspell_offer()),
+        fireball_rules(
+            vec![resolved(Vec::new(), &[("spell_countered", 1)])],
+            counterspell_offer(),
+        ),
     );
     world.dice = CountingDice::new([6]);
 
@@ -214,7 +275,19 @@ fn m2_d5_a_countered_fireball_spends_the_action_and_consumes_no_damage_draw() {
     );
     assert_eq!(countered.outcome, Outcome::Applied);
     assert_eq!(world.dice.drawn(), 0, "no damage draw was consumed");
-    assert_eq!(changes(&countered).len(), 1, "the action is spent");
+    assert_eq!(
+        changes(&countered),
+        [&beat("fireball")],
+        "the action is spent and no damage effect commits"
+    );
+    assert_eq!(
+        countered.readout.as_str(),
+        "Seat 1: fireball done (spell countered 1)."
+    );
+    assert_eq!(
+        narrated_facts(&countered),
+        [("spell_countered".to_owned(), 1)]
+    );
     assert_eq!(
         world.rules.calls().last(),
         Some(&RulesCall::Resume {
@@ -229,7 +302,10 @@ fn m2_d5_a_countered_fireball_spends_the_action_and_consumes_no_damage_draw() {
 #[test]
 fn m2_d5_when_the_window_passes_the_damage_is_drawn_and_spent_after_it() {
     let rules = fireball_rules(
-        vec![Resolution::NeedsDraws(vec![d8()]), Resolution::applied()],
+        vec![
+            Resolution::NeedsDraws(vec![d8()]),
+            resolved(vec![beat("fireball_damage")], &[("damage", 7)]),
+        ],
         counterspell_offer(),
     );
     let mut world = world_of(&["fireball"], 3, rules);
@@ -241,6 +317,14 @@ fn m2_d5_when_the_window_passes_the_damage_is_drawn_and_spent_after_it() {
     assert_eq!(passed.outcome, Outcome::Applied);
     assert_eq!(world.dice.drawn(), 1);
     assert_eq!(passed.record.draws.len(), 1);
+    assert_eq!(
+        changes(&passed),
+        [&beat("fireball_damage"), &beat("fireball")],
+        "the damage the rules owner resolved commits with the spell's own beat, and a countered \
+         spell does not"
+    );
+    assert_eq!(passed.readout.as_str(), "Seat 1: fireball done (damage 7).");
+    assert_eq!(narrated_facts(&passed), [("damage".to_owned(), 7)]);
     assert!(
         steps_of(&world.events())
             .iter()
@@ -321,7 +405,7 @@ fn a_seat_answering_twice_a_seat_with_no_offer_and_an_unoffered_choice_are_decli
     );
     ran(&mut world, 1, "fireball");
     answer(&mut world, 2, 1, "shield");
-    let before = world.table.state_hash();
+    let before = world.table.durable_hash();
 
     let twice = answer(&mut world, 2, 1, "pass");
     let stranger = answer(&mut world, 4, 1, "pass");
@@ -333,7 +417,7 @@ fn a_seat_answering_twice_a_seat_with_no_offer_and_an_unoffered_choice_are_decli
         off_the_offer.record.declined,
         Some(DeclineCode::IntentInvalid)
     );
-    assert_eq!(before, world.table.state_hash());
+    assert_eq!(before, world.table.durable_hash());
 }
 
 #[test]
@@ -557,7 +641,7 @@ fn m2_d7_an_unbound_trigger_is_a_pending_ruling_and_a_concentration_that_breaks_
     assert_eq!(opened.readout.as_str(), "Needs a ruling.");
     assert_eq!(
         (status, untouched_phase.as_str()),
-        (Some("awaiting_adjudicator"), "open")
+        (Some("awaiting_adjudicator"), "waiting")
     );
     assert_eq!(fired_nothing.outcome, Outcome::Applied);
     assert!(
@@ -904,12 +988,12 @@ fn a_full_pending_book_declines_table_busy_and_commits_nothing() {
             ..PipelineLimits::default()
         },
     );
-    let before = world.table.state_hash();
+    let before = world.table.durable_hash();
 
     let refused = ran(&mut world, 1, "fireball");
 
     assert_eq!(refused.record.declined, Some(DeclineCode::TableBusy));
-    assert_eq!(before, world.table.state_hash());
+    assert_eq!(before, world.table.durable_hash());
 }
 
 fn stab_world() -> World {
@@ -937,8 +1021,8 @@ fn a_tap_on_an_offered_choice_skips_the_confirmation_but_a_typed_reading_asks_fi
     assert_eq!(asked.readout.as_str(), "Waiting for seat 1 to choose.");
     assert_eq!(
         phase_of(&typed),
-        "open",
-        "the machine has not seen the action"
+        "waiting",
+        "the machine holds only the id of the confirmation it waits on (C.3, RES26)"
     );
     assert!(
         !typed

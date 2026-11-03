@@ -26,7 +26,8 @@
 //!
 //! A resource request carries a key the machine chose and stores in its state; the broker handle
 //! never reaches a machine, and a result is delivered only when final (`ResourceOutcome` has no
-//! pending value), keyed by the same key. `project` and `inspect` are stubs for C5 and C7;
+//! pending value), keyed by the same key. `project` is a stub for C5, and `inspect` is the report
+//! that `inspect::MachinesOf` serves, with the saved payload for the operator only (C7);
 //! `migrate` and `validate` are the H.12 hooks, and `resume` for the hand-off stack waits for C6.
 //!
 //! It never validates a hand-off against the stack or the pending resolutions (C6, C4), never
@@ -530,7 +531,8 @@ impl MachineReadout {
 }
 
 /// A machine's report on itself: which machine, in which state, under which schema version. The
-/// full audience-aware report arrives with `inspect` (C7).
+/// audience-aware report that serves it is `inspect::MachinesOf`, which adds the saved payload for
+/// the operator only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectReport {
     pub machine: MachineId,
@@ -575,7 +577,8 @@ pub trait Machine: Send + Sync {
         audience: Audience,
     ) -> Result<MachineReadout, MachineError>;
 
-    /// The machine's report on itself (stub until C7).
+    /// The machine's report on itself: the conformance suite requires it and
+    /// `inspect::MachinesOf` serves it.
     fn inspect(&self, state: &MachineSlot) -> Result<InspectReport, MachineError>;
 
     /// Moves a record one schema version forward. A machine that changes its state overrides
