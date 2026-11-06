@@ -186,6 +186,8 @@ async fn the_cast_and_the_camera_follow_the_backdrop_the_scene_shows() {
         .into_iter()
         .skip(before)
         .map(|line| line.text)
+        // The host edge's own `HTTP served` line of the request is not the playground's.
+        .filter(|text| !text.starts_with("HTTP "))
         .collect();
     assert_eq!(
         written,

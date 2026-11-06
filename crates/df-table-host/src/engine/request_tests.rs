@@ -4,9 +4,13 @@
 use df_table::identity::OperationId;
 
 use super::machine_io::WireIntentBody;
+use df_table::identity::SeatId;
+use df_table::inspect::InspectAudience;
+
 use super::request::{
-    AudienceQuery, AudienceSpec, ClockControl, CommitFault, ProposalSource, TraceOperation,
-    TraceQuery, ViableQuery,
+    AudienceQuery, AudienceSpec, ClockControl, CommitFault, DumpQuery, EventLevelRequest,
+    InspectName, InspectQuery, ProposalSource, TraceOperation, TraceQuery, ViableQuery,
+    inspect_audience_from_word, inspect_audience_word,
 };
 
 fn serde_name(value: &impl serde::Serialize) -> String {
@@ -75,4 +79,53 @@ fn a_control_or_a_wire_intent_with_an_unknown_field_is_refused() {
     assert!(serde_json::from_str::<WireIntentBody>(intent).is_ok());
     let extra = r#"{"seat":1,"intent":{"kind":"tap","offer":"join"},"seet":2}"#;
     assert!(serde_json::from_str::<WireIntentBody>(extra).is_err());
+}
+
+#[test]
+fn inspect_reports_and_audiences_are_keyed_and_read_back() {
+    for name in InspectName::ALL {
+        assert_eq!(name.key(), serde_name(&name));
+        assert_eq!(InspectName::from_key(name.key()), Some(name));
+    }
+    assert_eq!(InspectName::from_key("everything"), None);
+    for audience in [
+        InspectAudience::Operator,
+        InspectAudience::Host,
+        InspectAudience::Seat {
+            seat: SeatId::new(3),
+        },
+    ] {
+        let word = inspect_audience_word(audience);
+        assert_eq!(inspect_audience_from_word(&word), Ok(audience), "{word}");
+    }
+    assert_eq!(
+        inspect_audience_word(InspectAudience::Seat {
+            seat: SeatId::new(3)
+        }),
+        "seat:3"
+    );
+    for bad in ["", "tv", "seat:", "seat:x", "seat3", "guest"] {
+        assert!(inspect_audience_from_word(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn the_inspect_dump_and_level_requests_refuse_what_they_do_not_read() {
+    let query: InspectQuery = serde_json::from_str(r#"{"audience":"seat:2"}"#).expect("reads");
+    assert_eq!(
+        query.audience.map(|audience| audience.0),
+        Some(InspectAudience::Seat {
+            seat: SeatId::new(2)
+        })
+    );
+    let empty: InspectQuery = serde_json::from_str("{}").expect("reads");
+    assert_eq!(empty.audience, None);
+    assert!(serde_json::from_str::<InspectQuery>(r#"{"audience":"tv"}"#).is_err());
+    assert!(serde_json::from_str::<InspectQuery>(r#"{"seat":1}"#).is_err());
+    let dump: DumpQuery = serde_json::from_str(r#"{"machine":"lobby"}"#).expect("reads");
+    assert_eq!(dump.machine.as_deref(), Some("lobby"));
+    assert!(serde_json::from_str::<DumpQuery>(r#"{"name":"lobby"}"#).is_err());
+    let level: EventLevelRequest = serde_json::from_str(r#"{"level":"always"}"#).expect("reads");
+    assert_eq!(serde_name(&level.level), "always");
+    assert!(serde_json::from_str::<EventLevelRequest>(r#"{"level":"loud"}"#).is_err());
 }

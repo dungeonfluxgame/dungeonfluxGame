@@ -23,9 +23,10 @@ use df_table::event::{EffectKind, RejectionCause, TableEvent};
 use df_table::ports::EventSink;
 
 use crate::event_log::EventLog;
-use crate::limits::TURN_SETTLE;
+use crate::limits::{TICK_INTERVAL, TURN_SETTLE};
 use crate::observe::HostEventSink;
 use crate::playground::{PlaygroundFiles, PlaygroundState};
+use crate::server::request::{ClockStatus, HostStatus, LogStatus};
 use crate::sink::LineEcho;
 use crate::view::{FrameCanvas, ViewError};
 
@@ -36,11 +37,17 @@ use crate::view::{FrameCanvas, ViewError};
 #[derive(Debug, Clone)]
 pub(crate) struct BuiltFrame {
     pub(crate) canvas: Arc<[u8]>,
+    count: u64,
     head: Vec<u8>,
     tail: Vec<u8>,
 }
 
 impl BuiltFrame {
+    /// The change count the frame was built at (its `frame` value).
+    pub(crate) fn count(&self) -> u64 {
+        self.count
+    }
+
     /// The JSON of the whole frame as the pieces in order, without copying the canvas.
     pub(crate) fn chunks(&self) -> [Bytes; 3] {
         [
@@ -131,6 +138,12 @@ pub struct AppState {
     motion: Notify,
     /// How many ticks took the canvas lock, so a test can see that an idle clock does not.
     ticks: AtomicU64,
+    /// The change count of the newest change that was not the clock moving something, so a frame
+    /// line is written for what a person changed and not for each step of a travel.
+    last_content_change: AtomicU64,
+    /// One more than the newest `last_content_change` a `FRAME served` line was written for (0:
+    /// none), so each change is logged once however many pages read it.
+    frame_logged: AtomicU64,
 }
 
 impl AppState {
@@ -154,11 +167,23 @@ impl AppState {
             turns: Mutex::new(BTreeMap::new()),
             motion: Notify::new(),
             ticks: AtomicU64::new(0),
+            last_content_change: AtomicU64::new(0),
+            frame_logged: AtomicU64::new(0),
         }
     }
 
     /// Says that something a reader could see has changed. A reader waiting on `changes` wakes.
     pub(crate) fn announce_change(&self) {
+        self.changes.send_modify(|count| {
+            *count += 1;
+            // Stored under the channel's lock, so it never goes back past a later change.
+            self.last_content_change.store(*count, Ordering::Relaxed);
+        });
+    }
+
+    /// Says that the clock moved something: readers wake as for any change, but no frame line is
+    /// written for it (a travel steps every tick).
+    fn announce_motion(&self) {
         self.changes.send_modify(|count| *count += 1);
     }
 
@@ -217,6 +242,27 @@ impl AppState {
         self.ticks.load(Ordering::Relaxed)
     }
 
+    /// How many elements are travelling. It copies the elements under the canvas lock, so it is
+    /// for the clock's wake-up line and the status, not for every tick.
+    pub(crate) fn moving_count(&self) -> usize {
+        self.canvas()
+            .elements()
+            .filter(|element| element.motion.is_some())
+            .count()
+    }
+
+    /// `true` the first time a frame of change count `count` that holds the newest change that was
+    /// not the clock's is served, so the caller writes its `FRAME served` line once per such
+    /// change. Frames that differ only by the clock's steps of a travel are not logged.
+    pub(crate) fn first_to_serve_frame(&self, count: u64) -> bool {
+        let change = self.last_content_change.load(Ordering::Relaxed);
+        if count < change {
+            return false;
+        }
+        let marker = change.saturating_add(1);
+        self.frame_logged.fetch_max(marker, Ordering::Relaxed) < marker
+    }
+
     fn cached_canvas(&self, count: u64) -> Option<Arc<[u8]>> {
         self.frame
             .lock()
@@ -266,7 +312,12 @@ impl AppState {
         let controls = serde_json::to_vec(&self.playground.snapshot()).map_err(FrameError::Json)?;
         let head = format!("{{\"frame\":{count},\"canvas\":").into_bytes();
         let tail = [b",\"controls\":".as_slice(), controls.as_slice(), b"}"].concat();
-        Ok(BuiltFrame { canvas, head, tail })
+        Ok(BuiltFrame {
+            canvas,
+            count,
+            head,
+            tail,
+        })
     }
 
     /// Advances every travelling element by `seconds` of the host's clock. Idle, it takes the lock
@@ -281,7 +332,7 @@ impl AppState {
             canvas.tick(seconds, &self.sink)
         };
         if report.moved > 0 || !report.arrived.is_empty() {
-            self.announce_change();
+            self.announce_motion();
         }
         if !report.arrived.is_empty() {
             self.echo_new_lines();
@@ -342,6 +393,35 @@ impl AppState {
     /// more. `true` when it did (or there is no echo).
     pub fn finish_echo(&self, patience: Duration) -> bool {
         self.echo.as_ref().is_none_or(|echo| echo.finish(patience))
+    }
+
+    /// The log and its echo, as `host status` shows them.
+    pub(crate) fn log_status(&self) -> LogStatus {
+        let counts = self.log().counts();
+        LogStatus {
+            latest: counts.latest,
+            kept: counts.kept,
+            bytes: counts.bytes,
+            forgotten: counts.forgotten,
+            echo_pending: self.echo.as_ref().map_or(0, LineEcho::pending_bytes),
+            echo_dropped: self.echo.as_ref().map_or(0, LineEcho::dropped_lines),
+            echo_writer_gone: self.echo.as_ref().is_some_and(LineEcho::writer_gone),
+            undelivered_audit_lines: df_observe::undelivered_audit_lines(),
+        }
+    }
+
+    /// What `GET /dev/host/status` answers.
+    pub(crate) fn host_status(&self) -> HostStatus {
+        HostStatus {
+            log: self.log_status(),
+            sink: self.sink.health(),
+            clock: ClockStatus {
+                ticks: self.tick_count(),
+                moving: self.moving_count(),
+                tick_ms: u64::try_from(TICK_INTERVAL.as_millis()).unwrap_or(u64::MAX),
+            },
+            engine_sink: None,
+        }
     }
 
     /// Prints new audit lines. Call it with no lock held.

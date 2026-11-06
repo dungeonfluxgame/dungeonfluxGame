@@ -2,13 +2,16 @@
 //! and a script, on an ephemeral port.
 
 use crate::command::split_words;
-use crate::dev::run_dev;
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::dev_http::{BodyCause, BodyError};
 use crate::test_support::{STARTER_FILES, post_request, raw_exchange, start};
 use crate::wire::EventsReply;
 
+use super::cli::{SceneBuilderCommand, run};
 use super::fixtures::refusal_of;
-use super::request::{BuildReply, SceneBuilderError, SceneReply};
+use super::request::{
+    BuildReply, PlateTimingSetting, SceneBuilderError, SceneReply, TimingRequest,
+};
 use super::routes::path;
 
 async fn dev(port: u16, line: &str) -> String {
@@ -180,6 +183,84 @@ async fn the_routes_are_behind_the_hosts_guard() {
     assert!(
         shown.contains("no scene is open"),
         "nothing the guard refused built a scene: {shown}"
+    );
+}
+
+fn logged_with(host: &crate::test_support::Running, text: &str) -> usize {
+    host.state
+        .log()
+        .newest(10_000)
+        .into_iter()
+        .filter(|line| line.text == text)
+        .count()
+}
+
+async fn timing(port: u16, setting: PlateTimingSetting, value: u64) -> Result<String, DevError> {
+    run(
+        port,
+        SceneBuilderCommand::Timing(TimingRequest { setting, value }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_timing_set_changes_the_next_plates_run_and_is_refused_while_plates_are_built() {
+    let host = start(&STARTER_FILES).await;
+    dev(host.port, "scene build quay").await;
+    let set = timing(host.port, PlateTimingSetting::IntervalS, 5)
+        .await
+        .expect("sets");
+    assert!(
+        set.starts_with("1: interval_s was 15; timing: interval 5 s"),
+        "{set}"
+    );
+    assert!(
+        set.contains("PLATE timing name=interval_s value=5 previous=15 driven=true"),
+        "{set}"
+    );
+    let plates = dev(host.port, "plates").await;
+    assert!(
+        plates.contains("interval 5 s: at most 720 plates an hour"),
+        "{plates}"
+    );
+    assert!(plates.contains("workbench broker: epoch 1"), "{plates}");
+    let ran = dev(host.port, "plates run 16").await;
+    assert!(ran.contains("PLATE tick_queued"), "{ran}");
+
+    let refused = timing(host.port, PlateTimingSetting::IntervalS, 10)
+        .await
+        .expect_err("plates are being built");
+    assert!(
+        matches!(
+            refused,
+            DevError::Rejected {
+                error: ReplyError::SceneBuilder(SceneBuilderError::Building),
+                ..
+            }
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(
+        logged_with(&host, "SCENE refused verb=timing error=building"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_refused_look_ahead_change_is_logged_as_the_change_verb() {
+    let host = start(&STARTER_FILES).await;
+    let bad = raw_exchange(
+        host.port,
+        &post_request(path::LOOKAHEAD, r#"{"surprise":1}"#, ""),
+    )
+    .await;
+    assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
+    assert_eq!(
+        logged_with(
+            &host,
+            "SCENE refused verb=lookahead_change error=invalid_body"
+        ),
+        1
     );
 }
 

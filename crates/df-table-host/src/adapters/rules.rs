@@ -15,7 +15,14 @@
 //! port has no spatial query, rest or time-cost method yet, so there is nothing to answer for
 //! them, and a rest, travel, shop, spell or battle action registered in the book declines with
 //! the piece that is missing. A call that cannot be answered fails with a `PortError`, never a
-//! guess: `invalid_answer` for dice that do not fit the question or a value `df-rules` refuses.
+//! guess: `invalid_answer` for dice that do not fit the question or a value `df-rules` refuses,
+//! with a closed `RulesRefusal` cause behind it.
+//!
+//! Every call through the port that resolves writes `RULES resolved` with the die, the total, the
+//! DC, the result and the roll mode, and every call it cannot answer writes `RULES refused` with
+//! the cause (`audit`). A decline and a call for more dice are answers, not lines of their own.
+
+mod audit;
 
 use std::num::NonZeroU16;
 
@@ -23,18 +30,20 @@ use df_rules::ability_check::{self, AbilityCheckInput};
 use df_rules::influence::{self, InfluenceInput, InfluenceOutcome, NoRollCause, RollMode};
 use df_table::element::NameError;
 use df_table::envelope::PendingId;
-use df_table::event::FailureCause;
-use df_table::identity::{Correlation, SeatId};
+use df_table::identity::{Correlation, OperationId, SeatId};
 use df_table::outcome::{Decline, DeclineCode};
 use df_table::ports::{
-    ActionId, ConfirmationReason, Draw, DrawRequest, PlanSoFar, PortError, PortName, Preparation,
-    Resolution, Resolved, Resumption, RulesOwner, RulingRequest,
+    ActionId, ConfirmationReason, Draw, DrawRequest, PlanSoFar, PortError, Preparation, Resolution,
+    Resolved, Resumption, RulesOwner, RulingRequest,
 };
 
 use super::action_book::{
     ActionBook, DifficultyClass, InfluenceSetup, MissingPiece, RulesEntry, Runnable,
 };
 use super::hero_profile::{HeroProfile, SeatRoster, Skill, SkillBonus};
+
+pub use self::audit::{ResolvedKind, ResolvedLine, ResolvedResult, RulesRefusal};
+use self::audit::{record, refused_line, resolved_line};
 
 /// The die of every d20 test: 20 sides (the smallest non-zero number, plus 19).
 const D20_SIDES: NonZeroU16 = NonZeroU16::MIN.saturating_add(19);
@@ -49,22 +58,34 @@ pub struct DfRulesOwner {
     book: ActionBook,
 }
 
-fn refused() -> PortError {
-    PortError::new(PortName::RulesOwner, FailureCause::InvalidAnswer)
-}
-
 /// Both texts of every decline built here are non-blank constants (a test pins that), so the only
 /// error `Decline` can report is impossible; the port still fails typed if it ever happens.
-fn not_supported(piece: MissingPiece) -> Result<Decline, PortError> {
+fn not_supported(piece: MissingPiece) -> Result<Decline, RulesRefusal> {
     Decline::with_default_reason(DeclineCode::NotSupportedYet)
         .with_missing_piece(piece.describe())
-        .map_err(|_| refused())
+        .map_err(|_| RulesRefusal::DeclineText)
 }
 
-fn seat_has_no_hero() -> Result<Decline, PortError> {
+fn seat_has_no_hero() -> Result<Decline, RulesRefusal> {
     Decline::with_default_reason(DeclineCode::MissingRequirement)
         .with_missing_piece("a hero for this seat")
-        .map_err(|_| refused())
+        .map_err(|_| RulesRefusal::DeclineText)
+}
+
+/// A resolution, and the numbers of its `RULES resolved` line when it resolved a roll or an
+/// urging.
+struct Resolving {
+    resolution: Resolution,
+    line: Option<ResolvedLine>,
+}
+
+impl Resolving {
+    fn answer(resolution: Resolution) -> Self {
+        Self {
+            resolution,
+            line: None,
+        }
+    }
 }
 
 fn d20_requests(count: usize) -> Vec<DrawRequest> {
@@ -79,16 +100,16 @@ enum Supply {
 
 /// Reads the draws as d20 faces. More draws than needed, or a die that is not a d20, does not fit
 /// the question and is refused.
-fn supply(draws: &[Draw], needed: usize) -> Result<Supply, PortError> {
+fn supply(draws: &[Draw], needed: usize) -> Result<Supply, RulesRefusal> {
     if draws.len() > needed || draws.iter().any(|draw| draw.sides() != D20_SIDES) {
-        return Err(refused());
+        return Err(RulesRefusal::DrawsUnfit);
     }
     if draws.len() < needed {
         return Ok(Supply::Missing(d20_requests(needed - draws.len())));
     }
     draws
         .iter()
-        .map(|draw| u8::try_from(draw.value()).map_err(|_| refused()))
+        .map(|draw| u8::try_from(draw.value()).map_err(|_| RulesRefusal::FaceOutOfRange))
         .collect::<Result<Vec<_>, _>>()
         .map(Supply::Faces)
 }
@@ -101,8 +122,8 @@ fn dice_for(mode: Option<RollMode>) -> usize {
     }
 }
 
-fn name_refused(_: NameError) -> PortError {
-    refused()
+fn name_refused(_: NameError) -> RulesRefusal {
+    RulesRefusal::FactName
 }
 
 /// Adds `value` as `positive` when it is zero or more and as `negative` (its size) when below zero,
@@ -112,14 +133,14 @@ fn signed_fact(
     positive: &str,
     negative: &str,
     value: i16,
-) -> Result<Resolved, PortError> {
+) -> Result<Resolved, RulesRefusal> {
     let label = if value >= 0 { positive } else { negative };
     resolved
         .with_fact(label, u64::from(value.unsigned_abs()))
         .map_err(name_refused)
 }
 
-fn flag_fact(resolved: Resolved, label: &str, set: bool) -> Result<Resolved, PortError> {
+fn flag_fact(resolved: Resolved, label: &str, set: bool) -> Result<Resolved, RulesRefusal> {
     resolved
         .with_fact(label, u64::from(set))
         .map_err(name_refused)
@@ -136,6 +157,15 @@ impl DfRulesOwner {
         seat: SeatId,
         entry: &RulesEntry,
     ) -> Result<Preparation, PortError> {
+        self.prepare_registered(seat, entry)
+            .map_err(RulesRefusal::port_error)
+    }
+
+    fn prepare_registered(
+        &self,
+        seat: SeatId,
+        entry: &RulesEntry,
+    ) -> Result<Preparation, RulesRefusal> {
         let runnable = match entry {
             RulesEntry::Runs(runnable) => runnable,
             RulesEntry::Unsupported(piece) => {
@@ -162,14 +192,27 @@ impl DfRulesOwner {
         entry: &RulesEntry,
         draws: &[Draw],
     ) -> Result<Resolution, PortError> {
+        self.resolve_registered(seat, entry, draws)
+            .map(|resolving| resolving.resolution)
+            .map_err(RulesRefusal::port_error)
+    }
+
+    fn resolve_registered(
+        &self,
+        seat: SeatId,
+        entry: &RulesEntry,
+        draws: &[Draw],
+    ) -> Result<Resolving, RulesRefusal> {
         let runnable = match entry {
             RulesEntry::Runs(runnable) => runnable,
             RulesEntry::Unsupported(piece) => {
-                return Ok(Resolution::Declined(not_supported(*piece)?));
+                return Ok(Resolving::answer(Resolution::Declined(not_supported(
+                    *piece,
+                )?)));
             }
         };
         let Some(hero) = self.roster.hero(seat) else {
-            return Ok(Resolution::Declined(seat_has_no_hero()?));
+            return Ok(Resolving::answer(Resolution::Declined(seat_has_no_hero()?)));
         };
         match runnable {
             Runnable::SkillCheck {
@@ -185,18 +228,38 @@ impl DfRulesOwner {
     }
 }
 
+/// Writes the line of a call through the port: `RULES resolved` for a roll or an urging that
+/// resolved, `RULES refused` for a call that could not be answered, nothing for another answer.
+fn record_call<T>(
+    action: &ActionId,
+    operation: OperationId,
+    result: &Result<T, RulesRefusal>,
+    line: impl FnOnce(&T) -> Option<ResolvedLine>,
+) {
+    match result {
+        Ok(answer) => {
+            if let Some(line) = line(answer) {
+                record(operation, resolved_line(action, operation, &line));
+            }
+        }
+        Err(cause) => record(operation, refused_line(action, operation, *cause)),
+    }
+}
+
 fn resolve_skill_check(
     hero: &HeroProfile,
     skill: Skill,
     difficulty_class: DifficultyClass,
     draws: &[Draw],
-) -> Result<Resolution, PortError> {
+) -> Result<Resolving, RulesRefusal> {
     let faces = match supply(draws, 1)? {
-        Supply::Missing(requests) => return Ok(Resolution::NeedsDraws(requests)),
+        Supply::Missing(requests) => {
+            return Ok(Resolving::answer(Resolution::NeedsDraws(requests)));
+        }
         Supply::Faces(faces) => faces,
     };
     let [die] = faces.as_slice() else {
-        return Err(refused());
+        return Err(RulesRefusal::DrawsUnfit);
     };
     let SkillBonus {
         ability_modifier,
@@ -208,7 +271,19 @@ fn resolve_skill_check(
         proficiency_bonus,
         difficulty_class: difficulty_class.get(),
     })
-    .map_err(|_| refused())?;
+    .map_err(|_| RulesRefusal::CheckRefused)?;
+    let line = ResolvedLine {
+        kind: ResolvedKind::SkillCheck,
+        natural: Some(result.die),
+        total: Some(result.total),
+        difficulty_class: result.difficulty_class,
+        result: if result.succeeded {
+            ResolvedResult::Success
+        } else {
+            ResolvedResult::Failure
+        },
+        mode: RollMode::Normal,
+    };
     let resolved = Resolved::default()
         .with_fact("natural_die", u64::from(result.die))
         .map_err(name_refused)?;
@@ -225,20 +300,21 @@ fn resolve_skill_check(
     let resolved = resolved
         .with_fact("difficulty_class", u64::from(result.difficulty_class))
         .map_err(name_refused)?;
-    Ok(Resolution::Applied(flag_fact(
-        resolved,
-        "succeeded",
-        result.succeeded,
-    )?))
+    Ok(Resolving {
+        resolution: Resolution::Applied(flag_fact(resolved, "succeeded", result.succeeded)?),
+        line: Some(line),
+    })
 }
 
 fn resolve_influence(
     hero: &HeroProfile,
     setup: &InfluenceSetup,
     draws: &[Draw],
-) -> Result<Resolution, PortError> {
+) -> Result<Resolving, RulesRefusal> {
     let faces = match supply(draws, dice_for(setup.roll_mode()))? {
-        Supply::Missing(requests) => return Ok(Resolution::NeedsDraws(requests)),
+        Supply::Missing(requests) => {
+            return Ok(Resolving::answer(Resolution::NeedsDraws(requests)));
+        }
         Supply::Faces(faces) => faces,
     };
     let SkillBonus {
@@ -256,7 +332,19 @@ fn resolve_influence(
         extra_sources: &[],
         faces: &faces,
     })
-    .map_err(|_| refused())?;
+    .map_err(|_| RulesRefusal::InfluenceRefused)?;
+    let line = ResolvedLine {
+        kind: ResolvedKind::Influence,
+        natural: result.counted,
+        total: result.total,
+        difficulty_class: result.difficulty_class,
+        result: match result.outcome {
+            InfluenceOutcome::Success => ResolvedResult::Success,
+            InfluenceOutcome::Failure => ResolvedResult::Failure,
+            InfluenceOutcome::NoRoll(_) => ResolvedResult::NoRoll,
+        },
+        mode: result.mode,
+    };
     let resolved = match result.outcome {
         InfluenceOutcome::NoRoll(cause) => {
             let resolved = flag_fact(Resolved::default(), "no_roll", true)?;
@@ -266,18 +354,22 @@ fn resolve_influence(
             influence_roll_facts(&result, result.outcome == InfluenceOutcome::Success)?
         }
     };
-    Ok(Resolution::Applied(resolved))
+    Ok(Resolving {
+        resolution: Resolution::Applied(resolved),
+        line: Some(line),
+    })
 }
 
 fn influence_roll_facts(
     result: &influence::InfluenceResult,
     succeeded: bool,
-) -> Result<Resolved, PortError> {
+) -> Result<Resolved, RulesRefusal> {
     let (counted, total) = match (result.counted, result.total) {
         (Some(counted), Some(total)) => (counted, total),
-        _ => return Err(refused()),
+        _ => return Err(RulesRefusal::InfluenceIncomplete),
     };
-    let dice_rolled = u64::try_from(result.faces.len()).map_err(|_| refused())?;
+    let dice_rolled =
+        u64::try_from(result.faces.len()).map_err(|_| RulesRefusal::InfluenceIncomplete)?;
     let resolved = Resolved::default()
         .with_fact("dice_rolled", dice_rolled)
         .map_err(name_refused)?
@@ -337,21 +429,29 @@ impl RulesOwner for DfRulesOwner {
 
     fn prepare(
         &self,
-        _correlation: Correlation,
+        correlation: Correlation,
         seat: SeatId,
         action: &ActionId,
     ) -> Result<Preparation, PortError> {
-        self.prepare_entry(seat, self.registered(action))
+        let prepared = self.prepare_registered(seat, self.registered(action));
+        record_call(action, correlation.operation_id, &prepared, |_| None);
+        prepared.map_err(RulesRefusal::port_error)
     }
 
     fn resolve(
         &self,
-        _correlation: Correlation,
+        correlation: Correlation,
         seat: SeatId,
         action: &ActionId,
         draws: &[Draw],
     ) -> Result<Resolution, PortError> {
-        self.resolve_entry(seat, self.registered(action), draws)
+        let resolved = self.resolve_registered(seat, self.registered(action), draws);
+        record_call(action, correlation.operation_id, &resolved, |resolving| {
+            resolving.line
+        });
+        resolved
+            .map(|resolving| resolving.resolution)
+            .map_err(RulesRefusal::port_error)
     }
 
     // This adapter tracks no action economy, reserves nothing, asks for no confirmation and no
@@ -404,3 +504,6 @@ impl RulesOwner for DfRulesOwner {
         self.resolve(correlation, seat, action, resumption.draws)
     }
 }
+
+#[cfg(test)]
+mod audit_tests;

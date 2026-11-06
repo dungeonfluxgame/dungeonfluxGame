@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::action_book::DifficultyClass;
 use crate::adapters::hero_profile::{Ability, Skill};
 use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::engine::report::UnreadableBodyCause;
 
 /// What `rules check` asks for. The actor is a seat, which is how the rules port names a hero.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +62,8 @@ pub enum RulesCheckReport {
 pub enum RulesCheckError {
     /// The request body is not a `RulesCheckRequest`.
     InvalidBody(BodyError),
+    /// The request body could not be read at all: it is over the host's limit, or it broke off.
+    UnreadableBody { cause: UnreadableBodyCause },
     /// The table runs the scripted rules backend, which has no check kit.
     ScriptedBackend,
     /// A port the check went through could not answer.
@@ -76,6 +79,7 @@ impl RulesCheckError {
     pub fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
+            Self::UnreadableBody { .. } => "unreadable_body",
             Self::ScriptedBackend => "scripted_backend",
             Self::PortFailed { .. } => "port_failed",
             Self::UnexpectedResolution => "unexpected_resolution",
@@ -103,6 +107,12 @@ impl std::fmt::Display for RulesCheckError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
+            Self::UnreadableBody {
+                cause: UnreadableBodyCause::TooLarge,
+            } => formatter.write_str("the request body is over the host's limit"),
+            Self::UnreadableBody {
+                cause: UnreadableBodyCause::Interrupted,
+            } => formatter.write_str("the request body broke off before it was read"),
             Self::ScriptedBackend => formatter.write_str(
                 "a rules check is not available: this table runs the scripted rules backend",
             ),
@@ -125,7 +135,13 @@ impl std::error::Error for RulesCheckError {}
 impl RouteError for RulesCheckError {
     fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidBody(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidBody(_)
+            | Self::UnreadableBody {
+                cause: UnreadableBodyCause::Interrupted,
+            } => StatusCode::BAD_REQUEST,
+            Self::UnreadableBody {
+                cause: UnreadableBodyCause::TooLarge,
+            } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::ScriptedBackend => StatusCode::CONFLICT,
             Self::PortFailed { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::UnexpectedResolution | Self::NoVerdict => StatusCode::INTERNAL_SERVER_ERROR,

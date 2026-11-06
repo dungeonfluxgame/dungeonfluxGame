@@ -16,12 +16,15 @@ use df_table::lookahead::{CERTAIN_PERMILLE, Expectation, Take};
 use df_table::plate::buffer::{BufferReport, StageMoment};
 use df_table::plate::cost::CostView;
 use df_table::plate::scheduler::{JobEnd, SchedulerReport};
+use df_table::plate::timing::{TimingError, TimingSetting};
 use df_table::scene_plan::SceneStage;
 use df_table::table_state::DisplayName;
 use serde::{Deserialize, Serialize};
 
+use super::limits::MAXIMUM_MINIMUM_ON_SCREEN_MS;
 use super::lookahead::request::LookaheadSettingName;
 use super::report::{CardReport, JobReport, LocateReport, SceneReport};
+use crate::broker::report::QueuesReport;
 use crate::dev_http::{BodyError, DevReply, RouteError};
 
 /// The stages a dev call can slow down or make fail: the four that ask the broker for something.
@@ -271,6 +274,68 @@ pub struct PlatesReport {
     /// The mean time plates took from their tick to ready, over the plates finished so far.
     pub mean_build_ms: Option<u64>,
     pub plates_finished: u64,
+    /// The plate timings the workbench runs with.
+    pub timing: PlateTimingReport,
+    /// The queues and running calls of the workbench's own broker.
+    pub broker: QueuesReport,
+}
+
+/// A plate timing `scene timing set` changes. The dissolve of a swap is not one: `df-table`'s
+/// playout buffer fixes it at its minimum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlateTimingSetting {
+    /// Seconds between plate ticks (`plate_interval_s`).
+    IntervalS,
+    /// The reading time a plate stays up at least before the next replaces it.
+    MinimumOnScreenMs,
+}
+
+impl PlateTimingSetting {
+    pub const ALL: [Self; 2] = [Self::IntervalS, Self::MinimumOnScreenMs];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::IntervalS => "interval_s",
+            Self::MinimumOnScreenMs => "minimum_on_screen_ms",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|setting| setting.key() == key)
+    }
+}
+
+/// The body of `scene timing set`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimingRequest {
+    pub setting: PlateTimingSetting,
+    pub value: u64,
+}
+
+/// The plate timings the workbench runs with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlateTimingReport {
+    pub interval_s: u32,
+    /// The interval the scene on screen swaps its plates at: the one it was entered with, which a
+    /// later `scene timing set interval_s` leaves alone until the next scene. None with no scene.
+    pub on_screen_interval_s: Option<u32>,
+    pub minimum_on_screen_ms: u64,
+    /// How long the newest swap dissolved; none before the first swap.
+    pub dissolve_ms: Option<u64>,
+    /// How old the oldest outstanding plate may get before the "picture catching up" mark shows
+    /// (`image_stale_limit_s`, RES10).
+    pub catch_up_ms: u64,
+}
+
+/// The answer to `scene timing set`: the timing before, the timings now and the audit line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimingReply {
+    pub setting: PlateTimingSetting,
+    pub previous: u64,
+    pub timing: PlateTimingReport,
+    pub lines: Vec<TimedLine>,
 }
 
 /// The answer to `scene show`.
@@ -331,6 +396,14 @@ pub enum SceneBuilderError {
         setting: LookaheadSettingName,
         value: u64,
     },
+    /// `scene timing set` with a value outside the setting's range.
+    InvalidTiming {
+        setting: PlateTimingSetting,
+        value: u64,
+    },
+    /// `scene timing set` while the scene on screen has plate jobs queued or in flight: let
+    /// them finish (`plates run <seconds> quiet`) and ask again.
+    Building,
     /// A look-ahead target that slows or fails a stage the look-ahead does not build.
     InvalidLookaheadStage { stage: DevStage },
     /// A look-ahead target whose likelihood does not fit its kind: a certain kind takes none, a
@@ -364,6 +437,8 @@ impl SceneBuilderError {
             Self::InvalidBody(_) => "invalid_body",
             Self::NothingBuilt => "nothing_built",
             Self::InvalidSetting { .. } => "invalid_setting",
+            Self::InvalidTiming { .. } => "invalid_timing",
+            Self::Building => "building",
             Self::InvalidLookaheadStage { .. } => "invalid_lookahead_stage",
             Self::InvalidLikelihood { .. } => "invalid_likelihood",
             Self::Workbench { .. } => "workbench",
@@ -413,6 +488,24 @@ impl fmt::Display for SceneBuilderError {
                 ),
                 None => write!(formatter, "lookahead_enabled is 0 or 1, not {value}"),
             },
+            Self::InvalidTiming { setting, value } => match setting {
+                PlateTimingSetting::IntervalS => write!(
+                    formatter,
+                    "{}",
+                    TimingError {
+                        setting: TimingSetting::PlateIntervalS,
+                        value: *value
+                    }
+                ),
+                PlateTimingSetting::MinimumOnScreenMs => write!(
+                    formatter,
+                    "minimum_on_screen_ms is 0 to {MAXIMUM_MINIMUM_ON_SCREEN_MS} ms, not {value}"
+                ),
+            },
+            Self::Building => formatter.write_str(
+                "the scene on screen has plate jobs out: let them finish (plates run <seconds> \
+                 quiet) and set the timing again",
+            ),
             Self::InvalidLookaheadStage { stage } => write!(
                 formatter,
                 "only describe and background are built ahead, not {}",
@@ -443,8 +536,10 @@ impl RouteError for SceneBuilderError {
             Self::InvalidBody(_)
             | Self::NothingBuilt
             | Self::InvalidSetting { .. }
+            | Self::InvalidTiming { .. }
             | Self::InvalidLookaheadStage { .. }
             | Self::InvalidLikelihood { .. } => StatusCode::BAD_REQUEST,
+            Self::Building => StatusCode::CONFLICT,
             Self::Workbench { .. } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NotStarted { .. } | Self::Stopped => StatusCode::SERVICE_UNAVAILABLE,
         }

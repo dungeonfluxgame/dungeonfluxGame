@@ -75,6 +75,16 @@ pub const MAXIMUM_REPORTED_IMAGES: usize = 10_000;
 /// Most a whole client report holds, in bytes of text: the bound that keeps a table of pages
 /// bounded by design, whatever the fields add up to.
 pub const MAXIMUM_REPORT_BYTES: usize = 1_048_576;
+/// Most timeline records a page holds before it has reported them, and so most a report carries;
+/// past it the oldest unreported go first.
+pub const MAXIMUM_TIMELINE_RECORDS: usize = 4_096;
+/// Most timeline records the host keeps of each page; past it the oldest go first.
+pub const MAXIMUM_KEPT_TIMELINE_RECORDS: usize = 16_384;
+/// Longest id of a timeline record, and of each piece a draw record names, in characters. Ids are
+/// media names, figure ids, scene files and hashes, so this is the longest media name.
+pub const MAXIMUM_TIMELINE_ID_CHARACTERS: usize = MAXIMUM_MEDIA_NAME_BYTES;
+/// Most pieces a draw record names.
+pub const MAXIMUM_TIMELINE_PARTS: usize = 1_000;
 /// Most sound effects a page holds at once, played or still waiting; the oldest are let go first.
 pub const MAXIMUM_LIVE_EFFECTS: usize = 4_096;
 /// Most fact rows on the adventure card.

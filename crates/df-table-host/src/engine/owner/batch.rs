@@ -41,6 +41,8 @@ struct PendingTurn {
     machine_after: (String, String),
     /// What the sending seat is shown after this input, held until the batch is saved.
     view: Option<serde_json::Value>,
+    /// How long the input's step took on the owner's clock.
+    step_ms: u64,
 }
 
 /// Why a batch stopped.
@@ -123,6 +125,7 @@ impl Owner {
                     break;
                 }
             };
+            let step_started_ms = self.now_ms();
             let ran = {
                 let ctx = self.turn_context();
                 let before = machine_state(&ctx, &working);
@@ -135,6 +138,7 @@ impl Owner {
                 self.stop_unbuildable(&served);
                 break;
             };
+            let step_ms = self.now_ms().saturating_sub(step_started_ms);
             if is_hand_off(&served) && result.record.outcome == OutcomeKind::Applied {
                 hand_off_asked = false;
             }
@@ -155,6 +159,7 @@ impl Owner {
                 machine_before,
                 machine_after,
                 view,
+                step_ms,
             });
         }
         if pending.is_empty() {
@@ -262,6 +267,7 @@ impl Owner {
         for turn in pending {
             turn.result.release_events(&*self.sink);
             self.end_in_queue(&turn.served, turn.result.record.outcome);
+            self.audit_served(&turn, turn.result.record.outcome);
             self.take_unconsumed_result(&turn.served);
             let narration = self.narrate(&turn);
             let mut report = turn_report(&turn, disposition, self.revision(), narration);
@@ -339,6 +345,7 @@ impl Owner {
                 correlation: turn.served.correlation(),
                 code: DeclineCode::TableBusy,
             });
+            self.audit_served(&turn, OutcomeKind::Declined);
             let mut report = turn_report(&turn, &disposition, self.revision(), None);
             report.outcome = OutcomeKind::Declined;
             report.decline = Some(DeclineCode::TableBusy);
@@ -351,6 +358,17 @@ impl Owner {
         }
         self.remember_turns(&reports);
         reports
+    }
+
+    /// The `ENGINE served` line of a turn whose batch was saved or failed: how long it waited in
+    /// its lane, how long its step took and how it ended.
+    fn audit_served(&self, turn: &PendingTurn, outcome: OutcomeKind) {
+        self.audit(EngineAudit::Served {
+            operation: turn.served.envelope.operation_id(),
+            waited_ms: turn.served.waited_ms,
+            step_ms: turn.step_ms,
+            outcome,
+        });
     }
 
     fn end_in_queue(&mut self, served: &ServedInput, outcome: OutcomeKind) {

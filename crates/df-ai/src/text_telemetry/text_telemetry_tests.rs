@@ -27,6 +27,8 @@ fn event(kind: TextEventKind) -> TextEvent {
         output_name: "narration".to_owned(),
         kind,
         elapsed: Duration::from_millis(12),
+        usage: None,
+        attempt: 1,
     }
 }
 

@@ -51,23 +51,27 @@ impl Parts {
 fn parts_of(event: &BrokerEvent) -> Parts {
     match event {
         BrokerEvent::Requested {
+            hub: _,
             handle,
             purpose,
             class,
             epoch,
             key,
             operation,
+            depth,
         } => {
             let mut parts = Parts::new("broker.requested", "request")
                 .field("purpose", text(&purpose.to_string()))
                 .field("class", text(class.key()))
                 .field("handle", whole(handle.get()))
                 .field("epoch", whole(epoch.get()))
-                .field("key", text(&format!("{:016x}", key.get())));
+                .field("key", text(&format!("{:016x}", key.get())))
+                .field("depth", whole(*depth));
             parts.operation = Some(operation.to_string());
             parts
         }
         BrokerEvent::Joined {
+            hub: _,
             handle,
             purpose,
             holders,
@@ -75,23 +79,31 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("purpose", text(&purpose.to_string()))
             .field("handle", whole(handle.get()))
             .field("holders", whole(*holders)),
-        BrokerEvent::Refused { purpose, kind } => Parts::new("broker.refused", "refused")
+        BrokerEvent::Refused {
+            hub: _,
+            purpose,
+            kind,
+        } => Parts::new("broker.refused", "refused")
             .warn()
             .field("purpose", text(&purpose.to_string()))
             .field("cause", text(kind.key())),
         BrokerEvent::Claimed {
+            hub: _,
             handle,
             purpose,
             attempt,
             worker,
             number,
+            waited_ms,
         } => Parts::new("broker.claimed", "claimed")
             .field("purpose", text(&purpose.to_string()))
             .field("handle", whole(handle.get()))
             .field("attempt", whole(attempt.get()))
             .field("worker", whole(worker.get()))
-            .field("number", whole(*number)),
+            .field("number", whole(*number))
+            .field("waited_ms", whole(*waited_ms)),
         BrokerEvent::Spent {
+            hub: _,
             handle,
             purpose,
             attempt,
@@ -109,6 +121,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             }
         }
         BrokerEvent::Retrying {
+            hub: _,
             handle,
             purpose,
             retry,
@@ -122,6 +135,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("backoff_ms", whole(*backoff_ms))
             .field("cause", text(cause.key())),
         BrokerEvent::Ready {
+            hub: _,
             handle,
             purpose,
             ms,
@@ -130,6 +144,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("handle", whole(handle.get()))
             .field("ms", whole(*ms)),
         BrokerEvent::Failed {
+            hub: _,
             handle,
             purpose,
             cause,
@@ -145,10 +160,15 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             parts.severity = RecordSeverity::Error;
             parts
         }
-        BrokerEvent::Cancelled { handle, purpose } => Parts::new("broker.cancelled", "cancelled")
+        BrokerEvent::Cancelled {
+            hub: _,
+            handle,
+            purpose,
+        } => Parts::new("broker.cancelled", "cancelled")
             .field("purpose", text(&purpose.to_string()))
             .field("handle", whole(handle.get())),
         BrokerEvent::Preempted {
+            hub: _,
             handle,
             purpose,
             by,
@@ -158,6 +178,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("handle", whole(handle.get()))
             .field("by", whole(by.get())),
         BrokerEvent::Dropped {
+            hub: _,
             handle,
             purpose,
             class,
@@ -167,6 +188,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("handle", whole(handle.get()))
             .field("class", text(class.key())),
         BrokerEvent::Stale {
+            hub: _,
             handle,
             purpose,
             epoch,
@@ -185,6 +207,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             }
         }
         BrokerEvent::Abandoned {
+            hub: _,
             handle,
             attempt,
             reason,
@@ -194,6 +217,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("attempt", whole(attempt.get()))
             .field("reason", text(reason.key())),
         BrokerEvent::LeaseExpired {
+            hub: _,
             handle,
             attempt,
             sent,
@@ -205,6 +229,7 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("sent", AttributeValue::Flag(*sent))
             .field("requeued", AttributeValue::Flag(*requeued)),
         BrokerEvent::EpochAdvanced {
+            hub: _,
             from,
             to,
             superseded,
@@ -212,6 +237,9 @@ fn parts_of(event: &BrokerEvent) -> Parts {
             .field("from", whole(from.get()))
             .field("to", whole(to.get()))
             .field("superseded", whole(*superseded)),
+        BrokerEvent::Closed { hub: _, cancelled } => {
+            Parts::new("broker.closed", "closed").field("cancelled", whole(*cancelled))
+        }
     }
 }
 
@@ -230,6 +258,7 @@ pub fn broker_draft(event: &BrokerEvent) -> RecordDraft {
     if let Some(operation) = parts.operation {
         draft = draft.about_operation(operation);
     }
+    draft = draft.with_field("hub", text(event.hub().key()));
     for (name, value) in parts.fields {
         draft = draft.with_field(name, value);
     }

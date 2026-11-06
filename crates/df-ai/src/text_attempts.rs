@@ -9,16 +9,22 @@
 //! in-memory one for fixtures. Composition supplies the owner token and the authority, so this
 //! module reads no clock, randomness or environment.
 
-use std::{fmt, future::Future, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    fmt,
+    future::Future,
+    sync::{Arc, Mutex, PoisonError},
+    time::Instant,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::text::{
-    LabelError, MAXIMUM_LABEL_BYTES, NoTextObserver, TextBackend, TextEventKind, TextObserver,
-    TextOutcome, TextProfile, TextPurpose, TextRequest, TextRequestError, TextService, TextUsage,
-    checked_label, kind_of,
+    EventFacts, LabelError, MAXIMUM_LABEL_BYTES, NoTextObserver, TextBackend, TextEventKind,
+    TextObserver, TextOutcome, TextProfile, TextPurpose, TextRequest, TextRequestError,
+    TextService, TextUsage, checked_label, kind_of,
 };
 
 /// The longest operation key, in bytes.
@@ -615,6 +621,51 @@ pub struct DurableTextService<B, S, A, O = NoTextObserver> {
     store: S,
     authority: A,
     owner: AttemptOwner,
+    submits: Mutex<SubmitCounts>,
+}
+
+/// The most operation keys whose submits one service counts at once. The count only fills the
+/// `attempt` event field, so a small bound is enough: past it the key counted first is forgotten,
+/// and a later submit of that key reports `attempt=1` again.
+const MAXIMUM_COUNTED_OPERATIONS: usize = 4096;
+
+/// Submit counts per operation key, oldest key first, bounded by [`MAXIMUM_COUNTED_OPERATIONS`].
+#[derive(Default)]
+struct SubmitCounts {
+    counts: HashMap<OperationKey, u32>,
+    order: VecDeque<OperationKey>,
+}
+
+impl SubmitCounts {
+    /// Counts one more submit of `key` and returns its number, from 1. A new key past the bound
+    /// forgets only the key counted first, so recent keys keep their counts.
+    fn count(&mut self, key: &OperationKey) -> u32 {
+        if !self.counts.contains_key(key) {
+            if self.order.len() >= MAXIMUM_COUNTED_OPERATIONS
+                && let Some(oldest) = self.order.pop_front()
+            {
+                self.counts.remove(&oldest);
+            }
+            self.order.push_back(key.clone());
+        }
+        let count = self.counts.entry(key.clone()).or_insert(0);
+        *count = count.saturating_add(1);
+        *count
+    }
+
+    /// The latest submit number of `key`, or 1 when it is not counted.
+    fn latest(&self, key: &OperationKey) -> u32 {
+        self.counts.get(key).copied().unwrap_or(1)
+    }
+}
+
+/// One served call: what every event it reports names.
+#[derive(Clone, Copy)]
+struct Call<'a> {
+    key: &'a OperationKey,
+    request: &'a TextRequest,
+    started: Instant,
+    attempt: u32,
 }
 
 impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
@@ -628,7 +679,31 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
             store,
             authority,
             owner,
+            submits: Mutex::new(SubmitCounts::default()),
         }
+    }
+
+    /// Counts one more submit of `key` and returns its number, from 1.
+    fn count_submit(&self, key: &OperationKey) -> u32 {
+        // A poisoned count map only held counts; it is still usable.
+        let mut submits = self.submits.lock().unwrap_or_else(PoisonError::into_inner);
+        submits.count(key)
+    }
+
+    /// The latest submit number of `key`, or 1 when this service has not served it.
+    fn latest_attempt(&self, key: &OperationKey) -> u32 {
+        let submits = self.submits.lock().unwrap_or_else(PoisonError::into_inner);
+        submits.latest(key)
+    }
+
+    /// Reports exactly one event for `call`, with the usage its own backend call reported.
+    fn report(&self, call: Call<'_>, kind: TextEventKind, usage: Option<TextUsage>) {
+        let facts = EventFacts {
+            usage,
+            attempt: call.attempt,
+        };
+        self.text
+            .report(Some(call.key), call.request, kind, call.started, facts);
     }
 
     /// Serves one logical request under `key`. Refused requests are never admitted. Reports
@@ -638,16 +713,19 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
         key: &OperationKey,
         request: &TextRequest,
     ) -> Result<Submission, DurableTextError> {
-        let started = Instant::now();
+        let call = Call {
+            key,
+            request,
+            started: Instant::now(),
+            attempt: self.count_submit(key),
+        };
         if let Err(error) = self.text.check(request) {
-            self.text
-                .report(Some(key), request, TextEventKind::Refused(error), started);
+            self.report(call, TextEventKind::Refused(error), None);
             return Err(DurableTextError::Refused(error));
         }
         // Authority comes first: a request the owner does not hold never reads or writes the store.
         let Some(basis) = self.authority.current_basis(key).await else {
-            self.text
-                .report(Some(key), request, TextEventKind::Unauthorized, started);
+            self.report(call, TextEventKind::Unauthorized, None);
             return Err(DurableTextError::Unauthorized);
         };
         let fingerprint = fingerprint(request);
@@ -658,17 +736,15 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
             fingerprint: &fingerprint,
         };
         let stored = match self.store.admit(key, &meta).await {
-            Ok(Admission::Created) => return self.dispatch(key, request, basis, started).await,
+            Ok(Admission::Created) => return self.dispatch(call, basis).await,
             Ok(Admission::Existing(stored)) => stored,
-            Err(error) => return Err(self.store_failed(key, request, error, started)),
+            Err(error) => return Err(self.store_failed(call, error)),
         };
         if stored.fingerprint != fingerprint {
-            self.text
-                .report(Some(key), request, TextEventKind::Conflict, started);
+            self.report(call, TextEventKind::Conflict, None);
             return Err(DurableTextError::Conflict);
         }
-        self.resume(key, request, stored.state, basis, started)
-            .await
+        self.resume(call, stored.state, basis).await
     }
 
     /// Records the feature's verdict on a candidate. The request must be the one that produced
@@ -679,8 +755,8 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
         request: &TextRequest,
         verdict: Verdict,
     ) -> Result<Qualification, DurableTextError> {
-        let started = Instant::now();
-        self.match_attempt(key, request, started).await?;
+        let call = self.verdict_call(key, request);
+        self.match_attempt(call).await?;
         // A basis the owner no longer holds is not an error here: the store records Stale.
         let basis_now = self.authority.current_basis(key).await;
         match self.store.qualify(key, verdict, basis_now).await {
@@ -689,20 +765,28 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
                     Verdict::Accepted => (TextEventKind::Qualified, Qualification::Qualified),
                     Verdict::Rejected => (TextEventKind::Rejected, Qualification::Rejected),
                 };
-                self.text.report(Some(key), request, kind, started);
+                self.report(call, kind, None);
                 Ok(result)
             }
             Ok(QualifyResult::NotCandidate) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::NotCandidate, started);
+                self.report(call, TextEventKind::NotCandidate, None);
                 Ok(Qualification::NotACandidate)
             }
             Ok(QualifyResult::BasisMoved) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Stale, started);
+                self.report(call, TextEventKind::Stale, None);
                 Ok(Qualification::Stale)
             }
-            Err(error) => Err(self.store_failed(key, request, error, started)),
+            Err(error) => Err(self.store_failed(call, error)),
+        }
+    }
+
+    /// A verdict or withdrawal names the operation's latest submit; it is not a submit itself.
+    fn verdict_call<'a>(&self, key: &'a OperationKey, request: &'a TextRequest) -> Call<'a> {
+        Call {
+            key,
+            request,
+            started: Instant::now(),
+            attempt: self.latest_attempt(key),
         }
     }
 
@@ -713,17 +797,16 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
         key: &OperationKey,
         request: &TextRequest,
     ) -> Result<bool, DurableTextError> {
-        let started = Instant::now();
-        self.match_attempt(key, request, started).await?;
+        let call = self.verdict_call(key, request);
+        self.match_attempt(call).await?;
         match self.store.invalidate(key).await {
             Ok(changed) => {
                 if changed {
-                    self.text
-                        .report(Some(key), request, TextEventKind::Invalidated, started);
+                    self.report(call, TextEventKind::Invalidated, None);
                 }
                 Ok(changed)
             }
-            Err(error) => Err(self.store_failed(key, request, error, started)),
+            Err(error) => Err(self.store_failed(call, error)),
         }
     }
 
@@ -737,25 +820,23 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
             .map_err(DurableTextError::Store)
     }
 
+    /// Answers a submit whose attempt already exists. A replay made no call, so its event carries
+    /// no usage; the submission still returns the stored usage.
     async fn resume(
         &self,
-        key: &OperationKey,
-        request: &TextRequest,
+        call: Call<'_>,
         state: AttemptState,
         basis: Basis,
-        started: Instant,
     ) -> Result<Submission, DurableTextError> {
         match state {
-            AttemptState::Accepted => self.dispatch(key, request, basis, started).await,
+            AttemptState::Accepted => self.dispatch(call, basis).await,
             AttemptState::Dispatched { owner } if owner == self.owner => {
-                self.text
-                    .report(Some(key), request, TextEventKind::InFlight, started);
+                self.report(call, TextEventKind::InFlight, None);
                 Ok(Submission::InFlight)
             }
-            AttemptState::Dispatched { .. } => self.lost(key, request, started).await,
+            AttemptState::Dispatched { .. } => self.lost(call, None).await,
             AttemptState::Candidate { answer, usage } => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Replayed, started);
+                self.report(call, TextEventKind::Replayed, None);
                 Ok(Submission::Candidate {
                     answer,
                     replayed: true,
@@ -763,8 +844,7 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
                 })
             }
             AttemptState::Settled { outcome, usage } => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Replayed, started);
+                self.report(call, TextEventKind::Replayed, None);
                 Ok(Submission::Settled {
                     outcome,
                     replayed: true,
@@ -772,49 +852,40 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
                 })
             }
             AttemptState::Rejected { usage } => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Rejected, started);
+                self.report(call, TextEventKind::Rejected, None);
                 Ok(Submission::Rejected { usage })
             }
             AttemptState::Unknown => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Unknown, started);
+                self.report(call, TextEventKind::Unknown, None);
                 Ok(Submission::Unknown)
             }
             AttemptState::Cancelled => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Cancelled, started);
+                self.report(call, TextEventKind::Cancelled, None);
                 Ok(Submission::Cancelled)
             }
         }
     }
 
-    async fn dispatch(
-        &self,
-        key: &OperationKey,
-        request: &TextRequest,
-        basis: Basis,
-        started: Instant,
-    ) -> Result<Submission, DurableTextError> {
+    /// Sends the request once. Every event after the send carries the usage the backend reported.
+    async fn dispatch(&self, call: Call<'_>, basis: Basis) -> Result<Submission, DurableTextError> {
+        let (key, request) = (call.key, call.request);
         // The last look before the send: the store round trips above can outlast the basis.
         if self.authority.current_basis(key).await != Some(basis) {
-            self.text
-                .report(Some(key), request, TextEventKind::Unauthorized, started);
+            self.report(call, TextEventKind::Unauthorized, None);
             return Err(DurableTextError::Unauthorized);
         }
         match self.store.begin_dispatch(key, self.owner, basis).await {
             Ok(true) => {}
             Ok(false) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::InFlight, started);
+                self.report(call, TextEventKind::InFlight, None);
                 return Ok(Submission::InFlight);
             }
-            Err(error) => return Err(self.store_failed(key, request, error, started)),
+            Err(error) => return Err(self.store_failed(call, error)),
         }
         let receipt = self.text.call_backend(request).await;
         let usage = receipt.usage;
         if receipt.outcome == TextOutcome::Unknown {
-            return self.lost(key, request, started).await;
+            return self.lost(call, usage).await;
         }
         // The basis may have moved while the request was in flight. A moved basis discards the
         // answer: it is recorded as Stale, never stored as a candidate.
@@ -830,8 +901,7 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
         };
         match (recorded, outcome) {
             (Ok(true), TextOutcome::Answered(answer)) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Answered, started);
+                self.report(call, TextEventKind::Answered, usage);
                 Ok(Submission::Candidate {
                     answer,
                     replayed: false,
@@ -839,8 +909,7 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
                 })
             }
             (Ok(true), outcome) => {
-                self.text
-                    .report(Some(key), request, kind_of(&outcome), started);
+                self.report(call, kind_of(&outcome), usage);
                 Ok(Submission::Settled {
                     outcome,
                     replayed: false,
@@ -849,78 +918,56 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
             }
             // The answer exists but its record does not: the honest durable state is Unknown.
             (Ok(false) | Err(_), _) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Unknown, started);
+                self.report(call, TextEventKind::Unknown, usage);
                 Ok(Submission::Unknown)
             }
         }
     }
 
     /// A dispatch whose result is not recorded: another owner's, or one the backend could not
-    /// account for. It resolves to Unknown and is never resent.
+    /// account for. It resolves to Unknown and is never resent. `usage` is what this call's own
+    /// send reported, if it made one.
     async fn lost(
         &self,
-        key: &OperationKey,
-        request: &TextRequest,
-        started: Instant,
+        call: Call<'_>,
+        usage: Option<TextUsage>,
     ) -> Result<Submission, DurableTextError> {
-        match self.store.mark_unknown(key).await {
+        match self.store.mark_unknown(call.key).await {
             Ok(true) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Unknown, started);
+                self.report(call, TextEventKind::Unknown, usage);
                 Ok(Submission::Unknown)
             }
             // Another caller changed the record first; its state decides the next submit.
             Ok(false) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::InFlight, started);
+                self.report(call, TextEventKind::InFlight, usage);
                 Ok(Submission::InFlight)
             }
-            Err(error) => Err(self.store_failed(key, request, error, started)),
+            Err(error) => Err(self.store_failed(call, error)),
         }
     }
 
     /// The stored attempt under `key` must exist and have been made for this exact request.
-    async fn match_attempt(
-        &self,
-        key: &OperationKey,
-        request: &TextRequest,
-        started: Instant,
-    ) -> Result<(), DurableTextError> {
-        if let Err(error) = self.text.check(request) {
-            self.text
-                .report(Some(key), request, TextEventKind::Refused(error), started);
+    async fn match_attempt(&self, call: Call<'_>) -> Result<(), DurableTextError> {
+        if let Err(error) = self.text.check(call.request) {
+            self.report(call, TextEventKind::Refused(error), None);
             return Err(DurableTextError::Refused(error));
         }
-        match self.store.lookup(key).await {
-            Ok(Some(stored)) if stored.fingerprint == fingerprint(request) => Ok(()),
+        match self.store.lookup(call.key).await {
+            Ok(Some(stored)) if stored.fingerprint == fingerprint(call.request) => Ok(()),
             Ok(Some(_)) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::Conflict, started);
+                self.report(call, TextEventKind::Conflict, None);
                 Err(DurableTextError::Conflict)
             }
             Ok(None) => {
-                self.text
-                    .report(Some(key), request, TextEventKind::NotCandidate, started);
+                self.report(call, TextEventKind::NotCandidate, None);
                 Err(DurableTextError::UnknownOperation)
             }
-            Err(error) => Err(self.store_failed(key, request, error, started)),
+            Err(error) => Err(self.store_failed(call, error)),
         }
     }
 
-    fn store_failed(
-        &self,
-        key: &OperationKey,
-        request: &TextRequest,
-        error: AttemptStoreError,
-        started: Instant,
-    ) -> DurableTextError {
-        self.text.report(
-            Some(key),
-            request,
-            TextEventKind::StoreFailed(error),
-            started,
-        );
+    fn store_failed(&self, call: Call<'_>, error: AttemptStoreError) -> DurableTextError {
+        self.report(call, TextEventKind::StoreFailed(error), None);
         DurableTextError::Store(error)
     }
 }

@@ -212,3 +212,57 @@ fn the_largest_add_is_the_largest_file_as_base64_plus_the_envelope() {
         limits.maximum_file_bytes.div_ceil(3) * 4 + 4096
     );
 }
+
+#[tokio::test]
+async fn an_add_that_declares_more_than_the_largest_add_is_refused_and_recorded_unread() {
+    use crate::test_support::{STARTER_FILES, raw_exchange, start};
+    let running = start(&STARTER_FILES).await;
+    let declared = crate::media_library::MAXIMUM_UPLOAD_BODY_BYTES + 1;
+    let request = format!(
+        "POST /dev/playground/media HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+         Content-Type: application/json\r\nContent-Length: {declared}\r\n\
+         Connection: close\r\n\r\n"
+    );
+    let answer = raw_exchange(running.port, &request).await;
+    assert!(answer.starts_with("HTTP/1.1 413"), "{answer}");
+    let refused: Vec<String> = running
+        .state
+        .log()
+        .newest(100)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("PLAYGROUND media_refused "))
+        .collect();
+    assert_eq!(
+        refused,
+        vec![
+            "PLAYGROUND media_refused verb=add name=- cause=too_large received_bytes=0".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn each_ingest_error_has_a_distinct_closed_key() {
+    let errors = [
+        IngestError::InvalidRequest(EnvelopeCause::UnknownField),
+        IngestError::InvalidMediaName {
+            name: "x".to_owned(),
+        },
+        IngestError::InvalidBase64,
+        IngestError::Empty,
+        IngestError::TooLarge { maximum_bytes: 1 },
+        IngestError::LibraryFull { maximum_files: 1 },
+        IngestError::TooLong {
+            duration: std::time::Duration::from_secs(2),
+            maximum: std::time::Duration::from_secs(1),
+        },
+        IngestError::FileFailed(std::io::ErrorKind::Other),
+    ];
+    let keys: std::collections::BTreeSet<&str> = errors.iter().map(IngestError::key).collect();
+    assert_eq!(keys.len(), errors.len(), "{keys:?}");
+    assert!(keys.iter().all(|key| {
+        key.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        })
+    }));
+}

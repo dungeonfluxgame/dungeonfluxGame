@@ -23,6 +23,7 @@ use super::events::{SceneBuilderAudit, SceneBuilderEvent};
 /// The playout buffer of the scene the shared screen shows, and what it has already said.
 pub struct Playout {
     buffer: PlayoutBuffer,
+    timing: PlateTiming,
     audit: Arc<dyn SceneBuilderAudit>,
     late_reported_for_slot: Option<u64>,
     catching_up_reported: bool,
@@ -38,6 +39,7 @@ impl Playout {
     ) -> Self {
         Self {
             buffer: PlayoutBuffer::new(scene, generation, timing),
+            timing,
             audit,
             late_reported_for_slot: None,
             catching_up_reported: false,
@@ -47,6 +49,12 @@ impl Playout {
 
     pub fn buffer(&self) -> &PlayoutBuffer {
         &self.buffer
+    }
+
+    /// The timings the buffer was made with, which it swaps by for as long as it lives:
+    /// `df-table`'s buffer takes timings only when made.
+    pub fn timing(&self) -> PlateTiming {
+        self.timing
     }
 
     fn scene(&self) -> SceneId {

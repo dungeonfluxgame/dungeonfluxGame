@@ -200,19 +200,20 @@ fn the_verb_set_is_c7s_with_what_the_host_has_of_each_verb() {
             .as_deref()
             .is_some_and(|needs| needs.contains("C7"))
     );
-    for missing in [
-        "fixture load",
-        "sim run",
-        "soak",
-        "fuzz",
-        "pending list",
-        "pending show",
-        "rulings list",
-        "rulings show",
-    ] {
+    for missing in ["fixture load", "sim run", "soak", "fuzz"] {
         let verb = line(&lines, missing);
         assert_eq!(verb.host, HostSupport::NotBuilt, "{missing}");
         assert!(verb.needs.is_some(), "{missing} says what it waits for");
+    }
+    for (folded, report) in [
+        ("pending list", "inspect pending"),
+        ("pending show", "inspect pending"),
+        ("rulings list", "inspect rulings"),
+        ("rulings show", "inspect rulings"),
+    ] {
+        let verb = line(&lines, folded);
+        assert_eq!(verb.host, HostSupport::Inspect, "{folded}");
+        assert_eq!(verb.needs.as_deref(), Some(report), "{folded}");
     }
 }
 
@@ -236,6 +237,13 @@ fn what_the_host_says_it_has_is_what_the_command_line_dispatches() {
                     line.words
                 );
             }
+            HostSupport::Inspect => {
+                assert!(
+                    !dispatched && VERBS.contains(&"inspect"),
+                    "{} is served by inspect and has no verb of its own",
+                    line.words
+                );
+            }
         }
     }
 }
@@ -250,7 +258,6 @@ fn the_verbs_not_built_are_named_with_what_they_wait_for_and_the_family_verbs_fo
         "soak",
         "fuzz",
         "fixture load",
-        "pending list",
         "replay (seam only)",
         "camera frame",
         "combat choices",
@@ -260,7 +267,9 @@ fn the_verbs_not_built_are_named_with_what_they_wait_for_and_the_family_verbs_fo
             "{expected} is not listed"
         );
     }
-    for built in ["history", "trace", "config", "input", "health"] {
+    for built in [
+        "history", "trace", "config", "input", "health", "dump", "pending", "rulings",
+    ] {
         assert!(
             !missing.iter().any(|verb| verb.verb.starts_with(built)),
             "{built} is built and must not be listed as missing"

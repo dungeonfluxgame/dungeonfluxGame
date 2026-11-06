@@ -4,9 +4,9 @@
 //! change, no foreign origin), because they are merged into the one router before its layers. A
 //! read is a GET and a change is a POST of JSON; every answer is a `SceneReply`, `done` with the
 //! value or `rejected` with a `SceneBuilderError` and its message, at the error's status: a
-//! refusal that is the caller's mistake is a 400, a workbench that failed a 500 and one that never
-//! started a 503. A refusal writes one `SCENE refused` audit line; the guard's middleware echoes
-//! the request's lines.
+//! refusal that is the caller's mistake is a 400, a timing change while plates are being built a
+//! 409, a workbench that failed a 500 and one that never started a 503. A refusal writes one
+//! `SCENE refused` audit line; the guard's middleware echoes the request's lines.
 //!
 //! The routes hold the workbench behind one lock that is taken for the length of a call and never
 //! across an `.await`. A call runs the pipeline over fake providers in a clock of its own (a
@@ -24,7 +24,7 @@ use df_table::plate::timing::PlateTiming;
 use serde::Serialize;
 
 use super::lookahead::LookaheadRequest;
-use super::request::{BuildRequest, RunRequest, SceneBuilderError};
+use super::request::{BuildRequest, RunRequest, SceneBuilderError, TimingRequest};
 use super::workbench::Workbench;
 use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
@@ -36,6 +36,8 @@ pub mod path {
     pub const PLATES: &str = "/dev/engine/scene/plates";
     pub const BUFFER: &str = "/dev/engine/scene/buffer";
     pub const LOOKAHEAD: &str = "/dev/engine/scene/lookahead";
+    /// POST only: `scene timing set`. The timings are read with `plates`.
+    pub const TIMING: &str = "/dev/engine/scene/timing";
 }
 
 struct SceneRoutes {
@@ -129,7 +131,15 @@ async fn lookahead_change(State(routes): State<Arc<SceneRoutes>>, bytes: Bytes) 
         Ok(request) => on_workbench(&routes, move |bench| bench.lookahead(Some(&request))).await,
         Err(error) => Err(error.into()),
     };
-    answer(&routes, "lookahead", result)
+    answer(&routes, "lookahead_change", result)
+}
+
+async fn timing(State(routes): State<Arc<SceneRoutes>>, bytes: Bytes) -> Response {
+    let result = match parse_body::<TimingRequest>(&bytes) {
+        Ok(request) => on_workbench(&routes, move |bench| bench.set_timing(&request)).await,
+        Err(error) => Err(error.into()),
+    };
+    answer(&routes, "timing", result)
 }
 
 async fn buffer(State(routes): State<Arc<SceneRoutes>>) -> Response {
@@ -151,5 +161,6 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route(path::PLATES, get(plates).post(plates_run))
         .route(path::BUFFER, get(buffer))
         .route(path::LOOKAHEAD, get(lookahead).post(lookahead_change))
+        .route(path::TIMING, post(timing))
         .with_state(routes)
 }

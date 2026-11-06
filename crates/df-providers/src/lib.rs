@@ -50,7 +50,7 @@ pub use speech_adapter::{
 pub use native_http::{
     MAXIMUM_BODY_BYTES, MAXIMUM_CHUNKS, MAXIMUM_EXCHANGE_TIME, MAXIMUM_HEADER_BYTES, NativeHttp,
     NativeHttpCause, NativeHttpError, NativeHttpLimits, NativeHttpMetadata, NativeHttpResponse,
-    NativeRetryAfter, NativeRetryAfterValue, ProviderLimits,
+    NativeRetryAfter, NativeRetryAfterValue, ProviderLimits, SendState,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_text_provider;
@@ -66,7 +66,7 @@ pub use text_schema::{TextOutputSchema, TextSchemaError, TextSchemaLimits, parse
 pub use df_provider_api::ProviderFailureClass;
 pub use http_contract::{
     ElevenLabsAudioObservation, FalQueueObservation, FalSubmitObservation, HttpMethod, HttpRequest,
-    HttpRequestError, ProviderImageMetadata, ProviderRequestId, classify_fal_status,
+    HttpRequestError, ProviderImageMetadata, ProviderName, ProviderRequestId, classify_fal_status,
     classify_fal_status_response, classify_fal_submit_response, elevenlabs_stream_request,
     fal_result_request, fal_status_request, fal_submit_request, validate_elevenlabs_audio,
     validate_fal_images,

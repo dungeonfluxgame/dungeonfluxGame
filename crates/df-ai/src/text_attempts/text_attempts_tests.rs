@@ -708,3 +708,90 @@ fn store_errors_have_snake_case_keys_and_durable_errors_keep_their_source() {
     );
     assert!(std::error::Error::source(&DurableTextError::Conflict).is_none());
 }
+
+impl Harness {
+    /// Each event's kind, usage and attempt, in order.
+    fn facts(&self) -> Vec<(&'static str, Option<TextUsage>, u32)> {
+        self.events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|event| (event.kind.key(), event.usage, event.attempt))
+            .collect()
+    }
+}
+
+#[test]
+fn an_answered_event_carries_the_usage_of_its_call_and_a_replay_carries_none() {
+    let receipt = TextReceipt {
+        outcome: answer(),
+        usage: Some(billed(42)),
+    };
+    let harness = Harness::new([receipt]);
+    harness.submit("turn-1", &request()).unwrap();
+    harness.submit("turn-1", &request()).unwrap();
+    harness
+        .qualify("turn-1", &request(), Verdict::Accepted)
+        .unwrap();
+    assert_eq!(
+        harness.facts(),
+        vec![
+            ("answered", Some(billed(42)), 1),
+            ("replayed", None, 2),
+            ("qualified", None, 2),
+        ]
+    );
+}
+
+#[test]
+fn the_attempt_counts_each_submit_of_a_key_and_a_retry_that_sends_reports_its_usage() {
+    // The first submit loses the basis before dispatch; the retry under the same key sends.
+    let authority = FixedAuthority::sequence([Some(BASIS), None, Some(BASIS)]);
+    let receipt = TextReceipt {
+        outcome: TextOutcome::Invalid,
+        usage: Some(billed(9)),
+    };
+    let harness = Harness::with_authority([receipt], authority);
+    assert_eq!(
+        harness.submit("turn-1", &request()),
+        Err(DurableTextError::Unauthorized)
+    );
+    assert_eq!(
+        harness.submit("turn-1", &request()),
+        Ok(Submission::Settled {
+            outcome: TextOutcome::Invalid,
+            replayed: false,
+            usage: Some(billed(9)),
+        })
+    );
+    harness.submit("turn-2", &request()).unwrap();
+    assert_eq!(
+        harness.facts(),
+        vec![
+            ("unauthorized", None, 1),
+            ("invalid", Some(billed(9)), 2),
+            // Another key counts from 1; the exhausted script answers it unavailable.
+            ("unavailable", None, 1),
+        ]
+    );
+}
+
+#[test]
+fn a_new_key_past_the_count_bound_forgets_only_the_oldest_key() {
+    let mut counts = SubmitCounts::default();
+    assert_eq!(counts.count(&key("op-0")), 1);
+    assert_eq!(counts.count(&key("op-0")), 2);
+    for index in 1..MAXIMUM_COUNTED_OPERATIONS {
+        counts.count(&key(&format!("op-{index}")));
+    }
+    assert_eq!(counts.count(&key("op-1")), 2);
+    // The map is full: one new key forgets op-0 alone, and the recent keys keep their counts.
+    assert_eq!(counts.count(&key("op-new")), 1);
+    assert_eq!(counts.counts.len(), MAXIMUM_COUNTED_OPERATIONS);
+    assert_eq!(counts.latest(&key("op-0")), 1);
+    assert_eq!(counts.latest(&key("op-1")), 2);
+    assert_eq!(counts.count(&key("op-0")), 1);
+    assert_eq!(counts.counts.len(), MAXIMUM_COUNTED_OPERATIONS);
+    assert_eq!(counts.order.len(), MAXIMUM_COUNTED_OPERATIONS);
+}

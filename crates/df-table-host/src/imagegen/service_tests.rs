@@ -162,11 +162,19 @@ async fn a_picture_is_stored_in_the_library_with_its_provenance() {
     assert!(asked[0].0.text.contains("background picture"));
 
     let lines = rig.lines();
-    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(lines[0].starts_with("IMAGEGEN check backend=fake duration_ms="));
+    assert!(lines[0].ends_with(" result=ok"));
     assert!(
-        lines[0].starts_with("IMAGEGEN requested job=1 name=hall purpose=background aspect=16:9")
+        lines[1].starts_with("IMAGEGEN requested job=1 name=hall purpose=background aspect=16:9")
     );
-    assert!(lines[1].starts_with("IMAGEGEN stored job=1 name=hall file=hall.png bytes="));
+    assert!(lines[1].ends_with(" running=1"), "{lines:?}");
+    assert!(lines[2].starts_with("IMAGEGEN started job=1 wait_ms="));
+    assert!(lines[3].starts_with("IMAGEGEN stored job=1 name=hall file=hall.png bytes="));
+    assert!(
+        lines[3].ends_with(" tokens_in=10 tokens_out=20"),
+        "{lines:?}"
+    );
     assert!(lines.iter().all(|line| !line.contains("candlelit")));
 }
 
@@ -242,7 +250,13 @@ async fn a_missing_login_is_refused_before_any_job_starts() {
     );
     assert!(backend.asked().is_empty(), "the backend was never asked");
     assert!(generator.views().is_empty(), "no job was made");
-    assert!(rig.lines().is_empty(), "the caller records a refusal");
+    let lines = rig.lines();
+    assert_eq!(
+        lines.len(),
+        1,
+        "only the check; the caller records a refusal: {lines:?}"
+    );
+    assert!(lines[0].ends_with(" result=no_login"), "{lines:?}");
 }
 
 #[tokio::test]
@@ -467,5 +481,94 @@ async fn a_deadline_setting_that_does_not_read_is_an_audit_line_and_the_default(
             "IMAGEGEN setting variable={DEADLINE_SECONDS_VARIABLE} status=invalid default_ms={}",
             DEFAULT_DEADLINE.as_millis()
         )]
+    );
+}
+
+#[tokio::test]
+async fn a_check_and_a_started_line_take_their_times_from_the_injected_clock() {
+    let rig = Rig::new().await;
+    let clock = Arc::new(ManualClock::starting_at(1_000));
+    let slow = FakeBackend::checking_for(Script::Picture(picture()), clock.clone(), 250);
+    let generator = Arc::new(ImageGenerator::new(slow).with_clock(clock.clone()));
+    let view = rig
+        .run_to_end(&generator, request("hall"))
+        .await
+        .expect("stored");
+    assert_eq!(view.job, 1);
+
+    let lines = rig.lines();
+    assert_eq!(
+        lines[..3],
+        [
+            "IMAGEGEN check backend=fake duration_ms=250 result=ok".to_owned(),
+            format!(
+                concat!(
+                    "IMAGEGEN requested job=1 name=hall purpose=background aspect=16:9 ",
+                    "prompt_chars=24 deadline_ms={} backend=fake running=1"
+                ),
+                DEFAULT_DEADLINE.as_millis()
+            ),
+            "IMAGEGEN started job=1 wait_ms=250".to_owned(),
+        ],
+        "{lines:?}"
+    );
+    assert_eq!(generator.last_outcome(), Some("stored"));
+}
+
+#[tokio::test]
+async fn a_requested_line_counts_the_jobs_running_this_one_included() {
+    let rig = Rig::new().await;
+    let slow = FakeBackend::slow(Script::Picture(picture()), Duration::from_millis(300));
+    let generator = rig.generator(slow);
+    let first = generator
+        .start(&rig.running.state, request("hall"))
+        .await
+        .expect("starts");
+    let second = generator
+        .start(&rig.running.state, request("yard"))
+        .await
+        .expect("starts");
+    assert_eq!(generator.running(), 2);
+    first.finished.await.expect("finishes").expect("stored");
+    second.finished.await.expect("finishes").expect("stored");
+    assert_eq!(generator.running(), 0);
+
+    let requested: Vec<String> = rig
+        .lines()
+        .into_iter()
+        .filter(|line| line.starts_with("IMAGEGEN requested"))
+        .collect();
+    assert_eq!(requested.len(), 2, "{requested:?}");
+    assert!(requested[0].ends_with(" running=1"), "{requested:?}");
+    assert!(requested[1].ends_with(" running=2"), "{requested:?}");
+}
+
+#[tokio::test]
+async fn the_last_outcome_is_the_key_of_the_job_that_ended_last() {
+    let rig = Rig::new().await;
+    let generator = rig.generator(FakeBackend::new(Script::Fail(BackendError::Timeout)));
+    assert_eq!(generator.last_outcome(), None);
+    let ended = rig.run_to_end(&generator, request("hall")).await;
+    assert!(ended.is_err());
+    assert_eq!(generator.last_outcome(), Some("backend"));
+}
+
+#[tokio::test]
+async fn a_scratch_folder_left_behind_is_recorded_and_the_picture_still_stored() {
+    let rig = Rig::new().await;
+    let left_behind = GeneratedImage {
+        cleanup: Some(df_imagery::oneshot::CleanupCause::ResourceBusy),
+        ..picture()
+    };
+    let generator = rig.generator(FakeBackend::new(Script::Picture(left_behind)));
+    let view = rig
+        .run_to_end(&generator, request("hall"))
+        .await
+        .expect("stored");
+    assert!(matches!(view.state, JobState::Stored { .. }), "{view:?}");
+    let lines = rig.lines();
+    assert!(
+        lines.contains(&"IMAGEGEN cleanup_failed job=1 kind=resource_busy".to_owned()),
+        "{lines:?}"
     );
 }

@@ -2,8 +2,18 @@
 //!
 //! It owns wording and layout only. It never sends a request and never reads a file.
 
+mod clients;
+mod host;
+
+use serde::Deserialize;
+
+pub use self::clients::{format_clients, format_timeline};
+pub use self::host::{
+    FrameShapeError, format_frame, format_frame_unchanged, format_host_status, format_media_head,
+    frame_count,
+};
 use crate::view::CanvasView;
-use crate::wire::{ClientView, ControlsReply, EventsReply};
+use crate::wire::{ControlsReply, EventsReply};
 
 /// The text of a change that was made (`Reply::Done`): its revision and its notices. A refusal
 /// prints as its `DevError::Rejected`.
@@ -46,13 +56,19 @@ pub fn format_kinds(view: &CanvasView) -> String {
     lines.join("\n")
 }
 
-/// Event lines oldest first, with a note when the host has restarted since the reader last looked.
+/// Event lines oldest first, each with the time it was recorded (`at_ms`, milliseconds since the
+/// Unix epoch), a note when the host has restarted since the reader last looked and a
+/// `forgotten=N` header when the log has dropped lines to keep its bounds.
 pub fn format_events(reply: &EventsReply, after: Option<u64>) -> String {
     let restarted = after.is_some_and(|after| after > reply.latest);
-    if reply.events.is_empty() {
-        return "no events".to_owned();
-    }
     let mut lines: Vec<String> = Vec::new();
+    if reply.forgotten > 0 {
+        lines.push(format!("forgotten={}", reply.forgotten));
+    }
+    if reply.events.is_empty() {
+        lines.push("no events".to_owned());
+        return lines.join("\n");
+    }
     if restarted {
         lines.push("(the host has restarted; showing the newest events)".to_owned());
     }
@@ -60,9 +76,47 @@ pub fn format_events(reply: &EventsReply, after: Option<u64>) -> String {
         reply
             .events
             .iter()
-            .map(|line| format!("{:>4}  {}", line.sequence, line.text)),
+            .map(|line| format!("{:>4}  {:>13}  {}", line.sequence, line.at_ms, line.text)),
     );
     lines.join("\n")
+}
+
+/// What the media library holds against its bounds, as the listing reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MediaLimits {
+    pub used_bytes: u64,
+    pub files: u64,
+    pub maximum_file_bytes: u64,
+    pub maximum_upload_body_bytes: u64,
+}
+
+/// The media listing: its files, and the library's limits when the host reports them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum MediaListing {
+    /// A host that lists only the files.
+    Files(Vec<df_playground::media::MediaEntry>),
+    Library {
+        #[serde(alias = "media")]
+        entries: Vec<df_playground::media::MediaEntry>,
+        limits: MediaLimits,
+    },
+}
+
+/// The media library, one file per line, then its limits when the listing has them.
+pub fn format_media_listing(listing: &MediaListing) -> String {
+    match listing {
+        MediaListing::Files(entries) => format_media(entries),
+        MediaListing::Library { entries, limits } => format!(
+            "{}\nlimits: used_bytes={} files={} maximum_file_bytes={} \
+             maximum_upload_body_bytes={}",
+            format_media(entries),
+            limits.used_bytes,
+            limits.files,
+            limits.maximum_file_bytes,
+            limits.maximum_upload_body_bytes
+        ),
+    }
 }
 
 /// What the playground is showing, one setting per line, and the fixtures it can show.
@@ -126,39 +180,4 @@ pub fn format_media(entries: &[df_playground::media::MediaEntry]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// What each open page says it is showing and playing. An agent cannot see or hear a screen, so
-/// this is how it checks that a picture or a sound arrived.
-pub fn format_clients(clients: &[ClientView]) -> String {
-    use df_playground::media::AudioState;
-    if clients.is_empty() {
-        return "clients: none (open the playground page)".to_owned();
-    }
-    let mut lines = Vec::new();
-    for client in clients {
-        let report = &client.report;
-        let audio = match report.audio {
-            AudioState::Unlocked => "audio unlocked",
-            AudioState::Locked => {
-                "audio LOCKED (the browser plays sound only after someone clicks the page)"
-            }
-        };
-        let music = report.music.as_deref().unwrap_or("none");
-        let shown = if report.images_shown.is_empty() {
-            "none".to_owned()
-        } else {
-            report.images_shown.join(", ")
-        };
-        lines.push(format!(
-            "client {} ({:.1} s ago): {audio}; last sound cue {}; music {music}; pictures shown {shown}",
-            client.client,
-            client.age_ms as f64 / 1000.0,
-            report.last_cue
-        ));
-        for error in &report.errors {
-            lines.push(format!("  error: {error}"));
-        }
-    }
-    lines.join("\n")
 }

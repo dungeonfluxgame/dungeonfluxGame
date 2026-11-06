@@ -415,7 +415,12 @@ async fn director_show_lists_what_was_queued_applied_and_dropped_and_matches_the
         text.contains("directions: 1 queued, 1 applied, 2 dropped"),
         "{text}"
     );
-    let written = lines_starting(&running, "CAMERA").await;
+    // `CAMERA applied` is the host's line for the playground's part, not a Director log entry.
+    let written: Vec<String> = lines_starting(&running, "CAMERA")
+        .await
+        .into_iter()
+        .filter(|line| !line.starts_with("CAMERA applied"))
+        .collect();
     assert!(!written.is_empty());
     for line in &written {
         assert!(

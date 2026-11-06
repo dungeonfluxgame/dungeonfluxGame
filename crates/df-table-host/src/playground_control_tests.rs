@@ -102,7 +102,8 @@ async fn a_change_is_applied_numbered_and_recorded() {
         events(&running)
             .await
             .iter()
-            .any(|line| line == "PLAYGROUND set device=tv revision=2")
+            // The line ends with who asked, which the attribution tests check.
+            .any(|line| line.starts_with("PLAYGROUND set device=tv revision=2 source="))
     );
 }
 

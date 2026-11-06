@@ -9,7 +9,8 @@ use std::io::ErrorKind;
 
 use axum::http::StatusCode;
 use df_imagery::identity_question::IdentifyError;
-use df_imagery::oneshot_segment::{SegmentError, SegmentationPrompt};
+use df_imagery::oneshot_segment::{SegmentCause, SegmentationPrompt};
+use df_providers::SendState;
 use df_scene_layout::SceneLayout;
 use serde::{Deserialize, Serialize};
 
@@ -230,26 +231,34 @@ impl fmt::Display for IoCause {
     }
 }
 
-/// Why the imagery API's segmentation gave no masks (`df_imagery::oneshot_segment::SegmentError`
-/// on the wire).
+/// Why the imagery API's segmentation gave no masks (`df_imagery::oneshot_segment::SegmentCause`
+/// on the wire): the supplier's own cause, never one "supplier" bucket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScanCause {
     Configuration,
     Picture,
     Refused,
-    Supplier,
-    Timeout,
+    RateLimited,
+    Quota,
+    Unknown,
+    Failure,
+    Expired,
+    Cancelled,
     Malformed,
 }
 
 impl ScanCause {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::Configuration,
         Self::Picture,
         Self::Refused,
-        Self::Supplier,
-        Self::Timeout,
+        Self::RateLimited,
+        Self::Quota,
+        Self::Unknown,
+        Self::Failure,
+        Self::Expired,
+        Self::Cancelled,
         Self::Malformed,
     ];
 
@@ -258,8 +267,12 @@ impl ScanCause {
             Self::Configuration => "configuration",
             Self::Picture => "picture",
             Self::Refused => "refused",
-            Self::Supplier => "supplier",
-            Self::Timeout => "timeout",
+            Self::RateLimited => "rate_limited",
+            Self::Quota => "quota",
+            Self::Unknown => "unknown",
+            Self::Failure => "failure",
+            Self::Expired => "expired",
+            Self::Cancelled => "cancelled",
             Self::Malformed => "malformed",
         }
     }
@@ -269,15 +282,55 @@ impl ScanCause {
     }
 }
 
-impl From<SegmentError> for ScanCause {
-    fn from(error: SegmentError) -> Self {
-        match error {
-            SegmentError::Configuration => Self::Configuration,
-            SegmentError::Picture => Self::Picture,
-            SegmentError::Refused => Self::Refused,
-            SegmentError::Supplier => Self::Supplier,
-            SegmentError::Timeout => Self::Timeout,
-            SegmentError::Malformed => Self::Malformed,
+impl From<SegmentCause> for ScanCause {
+    fn from(cause: SegmentCause) -> Self {
+        match cause {
+            SegmentCause::Configuration => Self::Configuration,
+            SegmentCause::Picture => Self::Picture,
+            SegmentCause::Refused => Self::Refused,
+            SegmentCause::RateLimited => Self::RateLimited,
+            SegmentCause::Quota => Self::Quota,
+            SegmentCause::Unknown => Self::Unknown,
+            SegmentCause::Failure => Self::Failure,
+            SegmentCause::Expired => Self::Expired,
+            SegmentCause::Cancelled => Self::Cancelled,
+            SegmentCause::Malformed => Self::Malformed,
+        }
+    }
+}
+
+/// How far a failed scan's request got toward the supplier (`df_providers::SendState` on the
+/// wire): a request that may have been sent may have been paid for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanSendState {
+    Unsent,
+    PossiblySent,
+    KnownSent,
+}
+
+impl ScanSendState {
+    pub const ALL: [Self; 3] = [Self::Unsent, Self::PossiblySent, Self::KnownSent];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Unsent => "unsent",
+            Self::PossiblySent => "possibly_sent",
+            Self::KnownSent => "known_sent",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|state| state.key() == key)
+    }
+}
+
+impl From<SendState> for ScanSendState {
+    fn from(state: SendState) -> Self {
+        match state {
+            SendState::Unsent => Self::Unsent,
+            SendState::PossiblySent => Self::PossiblySent,
+            SendState::KnownSent => Self::KnownSent,
         }
     }
 }
@@ -392,6 +445,69 @@ impl fmt::Display for TextServiceCause {
     }
 }
 
+/// The stage of a scan or an identification at which work that had begun failed, as the
+/// `LOCATE failed` and `LOCATE identify_stage` lines name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocateStage {
+    /// Reading the picture and asking the imagery API for its masks.
+    Scan,
+    /// Writing the layout.
+    Store,
+    /// Reading the layout and pictures and preparing the identity question.
+    Prepare,
+    /// Asking the text service the identity question.
+    Ask,
+}
+
+impl LocateStage {
+    pub const ALL: [Self; 4] = [Self::Scan, Self::Store, Self::Prepare, Self::Ask];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Scan => "scan",
+            Self::Store => "store",
+            Self::Prepare => "prepare",
+            Self::Ask => "ask",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|stage| stage.key() == key)
+    }
+}
+
+/// A locate error at the stage of work where it happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocateStageError {
+    pub stage: LocateStage,
+    pub error: LocateError,
+}
+
+impl LocateStageError {
+    /// `error` at `stage`, as a `map_err` closure takes it.
+    pub fn at(stage: LocateStage) -> impl Fn(LocateError) -> Self {
+        move |error| Self { stage, error }
+    }
+}
+
+impl fmt::Display for LocateStageError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "the {} stage failed: {}",
+            self.stage.key(),
+            self.error
+        )
+    }
+}
+
+impl std::error::Error for LocateStageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 /// Why a locate request did not give a layout. Each variant names the value at fault.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
@@ -463,6 +579,7 @@ pub enum LocateError {
     FalKeyMissing,
     ScanFailed {
         cause: ScanCause,
+        send_state: ScanSendState,
     },
     QuestionInvalid {
         cause: QuestionCause,
@@ -509,6 +626,20 @@ impl LocateError {
             Self::TextService { .. } => "text_service",
             Self::InvalidOperationKey => "invalid_operation_key",
             Self::Stopped => "stopped",
+        }
+    }
+
+    /// The key of the error's typed cause, for the audit line, when it has one.
+    pub fn cause_key(&self) -> Option<&'static str> {
+        match self {
+            Self::InvalidBody(error) => Some(error.cause.key()),
+            Self::PictureUnreadable { cause, .. }
+            | Self::LayoutUnreadable { cause, .. }
+            | Self::LayoutUnwritable { cause, .. } => Some(cause.key()),
+            Self::ScanFailed { cause, .. } => Some(cause.key()),
+            Self::QuestionInvalid { cause } => Some(cause.key()),
+            Self::TextService { cause, .. } => Some(cause.key()),
+            _ => None,
         }
     }
 
@@ -606,10 +737,11 @@ impl fmt::Display for LocateError {
                 "no fal key in the host's environment: ",
                 "set DF_FAL_KEY (or FAL_KEY) before `df-table serve`"
             )),
-            Self::ScanFailed { cause } => write!(
+            Self::ScanFailed { cause, send_state } => write!(
                 formatter,
-                "the imagery API's segmentation did not give masks ({})",
-                cause.key()
+                "the imagery API's segmentation did not give masks ({}; the request was {})",
+                cause.key(),
+                send_state.key()
             ),
             Self::QuestionInvalid { cause } => write!(
                 formatter,

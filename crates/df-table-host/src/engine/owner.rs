@@ -22,6 +22,7 @@
 mod batch;
 mod force;
 mod observe;
+mod reach;
 mod reads;
 mod save;
 mod submit;
@@ -34,13 +35,14 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 
 use df_protocol::common as wire;
 use df_table::identity::{Correlation, OperationId, RecoveryEpoch, SeatId, SessionRevision};
+use df_table::inspect::InspectAudience;
 use df_table::owner_queue::{Lane, OwnerQueue};
 use df_table::pipeline::PipelineTable;
 use df_table::ports::EventSink;
 use df_table::registry::Registry;
 use tokio::sync::oneshot;
 
-use crate::broker::report::{LedgerReport, QueuesReport};
+use crate::broker::report::LedgerReport;
 use crate::observe::HostEventSink;
 
 use super::adapters::Adapters;
@@ -52,6 +54,7 @@ use super::extras::Extras;
 use super::limits::IDLE_TICK;
 use super::replay::Replayer;
 use super::report::observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
+use super::report::reach::{BrokerQueuesReport, DumpReport, InspectReport};
 use super::report::{
     BrokerRequested, ChaosReport, ClockReport, Description, DiceReport, EngineDump, EngineError,
     ForceReport, HealthReport, QueueReport, ServedReply, SubmissionReport, SubmitReply, TurnReport,
@@ -59,7 +62,7 @@ use super::report::{
 };
 use super::request::{
     AudienceSpec, ChaosRequest, ClockControl, ConfigControl, DiceControl, ForceRequest,
-    HistoryRequest, InputRequest, QueueControl, ReplayRequest,
+    HistoryRequest, InputRequest, InspectName, QueueControl, ReplayRequest,
 };
 use super::setup::{ActionCatalog, EngineConfig, EngineStartError, machines_for, starting_world};
 
@@ -68,6 +71,15 @@ use super::setup::{ActionCatalog, EngineConfig, EngineStartError, machines_for, 
 pub(super) const STATUS_QUEUED: &str = "queued";
 pub(super) const STATUS_IN_PROGRESS: &str = "in_progress";
 
+/// Who a `MachineView` is made for: a TV or a phone it is served to, which is audited as a
+/// `wire_view` line, or the route of a wire intent reading the seat's view to fill the intent,
+/// which is part of that intent's own line and writes none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ViewUse {
+    Served,
+    Internal,
+}
+
 /// The one-shot answer to a command.
 pub(super) type Reply<T> = oneshot::Sender<Result<T, EngineError>>;
 
@@ -75,10 +87,13 @@ pub(super) type Reply<T> = oneshot::Sender<Result<T, EngineError>>;
 pub(super) enum Command {
     Submit(InputRequest, Reply<SubmitReply>),
     Dump(Reply<EngineDump>),
+    DumpOf(String, Reply<DumpReport>),
+    Inspect(InspectName, InspectAudience, Reply<InspectReport>),
+    ChaosShow(Reply<Vec<ChaosReport>>),
     Viable(u64, Reply<ViableReport>),
     Force(ForceRequest, Reply<ForceReport>),
     Projection(AudienceSpec, Reply<serde_json::Value>),
-    MachineView(AudienceSpec, Reply<wire::MachineView>),
+    MachineView(AudienceSpec, ViewUse, Reply<wire::MachineView>),
     QueueShow(Reply<QueueReport>),
     QueueControl(QueueControl, Reply<ServedReply>),
     Describe(Reply<Description>),
@@ -86,7 +101,7 @@ pub(super) enum Command {
     Clock(ClockControl, Reply<ClockReport>),
     Dice(DiceControl, Reply<DiceReport>),
     Chaos(ChaosRequest, Reply<ChaosReport>),
-    BrokerQueues(Reply<QueuesReport>),
+    BrokerQueues(Reply<BrokerQueuesReport>),
     BrokerLedger(Reply<LedgerReport>),
     BrokerRequest(String, Reply<BrokerRequested>),
     History(HistoryRequest, Reply<HistoryReport>),
@@ -103,6 +118,9 @@ impl Command {
         matches!(
             self,
             Self::Dump(_)
+                | Self::DumpOf(..)
+                | Self::Inspect(..)
+                | Self::ChaosShow(_)
                 | Self::Viable(..)
                 | Self::Projection(..)
                 | Self::MachineView(..)
@@ -166,6 +184,7 @@ impl Owner {
         let Extras {
             sink: observer,
             replayer,
+            ..
         } = extras;
         let sink: Arc<dyn EventSink> = observer.clone();
         let mut queue = OwnerQueue::new(config.table, &config.settings, Arc::clone(&sink))?;
@@ -244,10 +263,17 @@ impl Owner {
                 answer(reply, result);
             }
             Command::Dump(reply) => answer(reply, self.dump()),
+            Command::DumpOf(target, reply) => answer(reply, self.dump_named(&target)),
+            Command::Inspect(report, audience, reply) => {
+                answer(reply, self.inspect(report, audience));
+            }
+            Command::ChaosShow(reply) => answer(reply, Ok(self.chaos_show())),
             Command::Viable(seat, reply) => answer(reply, self.viable(seat)),
             Command::Force(request, reply) => answer(reply, self.force(request)),
             Command::Projection(audience, reply) => answer(reply, self.projection(audience)),
-            Command::MachineView(audience, reply) => answer(reply, self.wire_view(audience)),
+            Command::MachineView(audience, view_use, reply) => {
+                answer(reply, self.wire_view(audience, view_use));
+            }
             Command::QueueShow(reply) => answer(reply, Ok(self.queue_show())),
             Command::QueueControl(control, reply) => answer(reply, self.control_queue(control)),
             Command::Describe(reply) => answer(reply, Ok(self.describe())),

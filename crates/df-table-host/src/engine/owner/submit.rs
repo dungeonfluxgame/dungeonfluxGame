@@ -197,6 +197,7 @@ impl Owner {
             } else {
                 SubmitResult::Refused
             },
+            lane_depth: report.lane.map(|lane| self.queue.depth(lane)),
         });
         self.remember_submission(report.clone());
         Ok(report)

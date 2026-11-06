@@ -109,6 +109,12 @@ impl ScenePacer {
         &self.playout
     }
 
+    /// Changes the plate clock's timings; its next tick keeps its time. The playout buffer keeps
+    /// the timings the scene was entered with: `df-table`'s buffer takes them only when made.
+    pub fn set_timing(&mut self, timing: PlateTiming) {
+        self.scheduler.set_timing(timing);
+    }
+
     /// The table entered the scene: opens its build, empties the screen's buffer and queues the
     /// first plate at once. The jobs of an earlier build of the scene that were still out are
     /// returned as ended.

@@ -16,12 +16,15 @@ pub const DEFAULT_PACKAGE_DIRECTORY: &str = "artifacts/playground/pkg";
 pub const PORT_VARIABLE: &str = "DF_TABLE_PORT";
 
 pub const SERVE_USAGE: &str = "\
-df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--moves] [--quiet]
+df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--telemetry DIR]
+               [--moves] [--quiet]
 
   --port N     loopback port for the viewer and the developer API (default 7878)
   --kinds DIR  directory of kind files (default assets/canvas/kinds, relative to here)
   --playground DIR  the playground's page, theme and fixtures (default assets/playground)
   --package DIR     the playground's compiled package (default artifacts/playground/pkg)
+  --telemetry DIR   the telemetry store root: the canvas's records also go down the shared
+                    diagnostic path to it (default: none, the records stay in this process)
   --moves      also record moves, which are frequent (the log shows gaps without them)
   --quiet      do not echo audit lines to this terminal
 
@@ -56,6 +59,8 @@ pub struct ServeOptions {
     pub kind_directory: PathBuf,
     pub playground_directory: PathBuf,
     pub package_directory: PathBuf,
+    /// The telemetry store root the shared diagnostic path writes to, when one is given.
+    pub telemetry_root: Option<PathBuf>,
     pub records_moves: bool,
     pub echoes_lines: bool,
 }
@@ -72,6 +77,7 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
         kind_directory: PathBuf::from(DEFAULT_KIND_DIRECTORY),
         playground_directory: PathBuf::from(DEFAULT_PLAYGROUND_DIRECTORY),
         package_directory: PathBuf::from(DEFAULT_PACKAGE_DIRECTORY),
+        telemetry_root: None,
         records_moves: false,
         echoes_lines: true,
     };
@@ -101,6 +107,12 @@ pub fn parse_serve_options(arguments: &[String]) -> Result<ServeOptions, OptionE
                     .next()
                     .ok_or(OptionError::MissingValue("--package"))?;
                 options.package_directory = PathBuf::from(value);
+            }
+            "--telemetry" => {
+                let value = arguments
+                    .next()
+                    .ok_or(OptionError::MissingValue("--telemetry"))?;
+                options.telemetry_root = Some(PathBuf::from(value));
             }
             "--moves" => options.records_moves = true,
             "--quiet" => options.echoes_lines = false,

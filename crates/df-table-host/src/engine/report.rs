@@ -8,6 +8,7 @@
 //! what it said.
 
 pub mod observe;
+pub mod reach;
 
 use std::fmt;
 
@@ -363,15 +364,18 @@ pub enum ViewCause {
     Projection,
     /// The wire's guard refused the `MachineView` that was built.
     WireCheck,
+    /// An inspect report could not be written as JSON.
+    Report,
 }
 
 impl ViewCause {
-    pub const ALL: [Self; 2] = [Self::Projection, Self::WireCheck];
+    pub const ALL: [Self; 3] = [Self::Projection, Self::WireCheck, Self::Report];
 
     pub fn key(self) -> &'static str {
         match self {
             Self::Projection => "projection",
             Self::WireCheck => "wire_check",
+            Self::Report => "report",
         }
     }
 
@@ -462,6 +466,31 @@ impl DevControl {
     }
 }
 
+/// Why a request body could not be read at all, before its JSON was looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnreadableBodyCause {
+    /// The body is longer than the host's request limit.
+    TooLarge,
+    /// The connection failed or ended while the body was read.
+    Interrupted,
+}
+
+impl UnreadableBodyCause {
+    pub const ALL: [Self; 2] = [Self::TooLarge, Self::Interrupted];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::TooLarge => "too_large",
+            Self::Interrupted => "interrupted",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+}
+
 /// A query of an engine GET route that is missing a parameter or has one that does not read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -501,6 +530,10 @@ pub enum EngineError {
     },
     /// The request body is not the JSON the route reads.
     InvalidBody(BodyError),
+    /// The request body could not be read at all: it is over the host's limit, or it broke off.
+    UnreadableBody {
+        cause: UnreadableBodyCause,
+    },
     /// The query of a GET is missing a parameter or has one that does not read.
     InvalidQuery(QueryError),
     /// An operation id is zero; ids start at 1.
@@ -515,6 +548,14 @@ pub enum EngineError {
     },
     UnknownMachine {
         machine: String,
+    },
+    /// The machine is registered but holds no place on the table now (`dump <machine>`).
+    MachineNotOnTable {
+        machine: String,
+    },
+    /// No inspect report has this name.
+    UnknownReport {
+        report: String,
     },
     UnknownState {
         machine: String,
@@ -612,12 +653,15 @@ impl EngineError {
             Self::OwnerPanicked => "owner_panicked",
             Self::NotStarted { .. } => "not_started",
             Self::InvalidBody(_) => "invalid_body",
+            Self::UnreadableBody { .. } => "unreadable_body",
             Self::InvalidQuery(_) => "invalid_query",
             Self::ZeroOperation => "zero_operation",
             Self::ZeroStep => "zero_step",
             Self::InvalidName { .. } => "invalid_name",
             Self::UnknownSeat { .. } => "unknown_seat",
             Self::UnknownMachine { .. } => "unknown_machine",
+            Self::MachineNotOnTable { .. } => "machine_not_on_table",
+            Self::UnknownReport { .. } => "unknown_report",
             Self::UnknownState { .. } => "unknown_state",
             Self::UnknownPurpose { .. } => "unknown_purpose",
             Self::PayloadUnreadable { .. } => "payload_unreadable",
@@ -651,10 +695,20 @@ impl fmt::Display for EngineError {
             Self::OwnerPanicked => formatter.write_str(
                 "the owner thread panicked and the table is stopped; see the log for the line",
             ),
-            Self::NotStarted { detail, .. } => {
-                write!(formatter, "the owner did not start: {detail}")
+            Self::NotStarted { cause, detail } => {
+                write!(
+                    formatter,
+                    "the owner did not start ({}): {detail}",
+                    cause.key()
+                )
             }
             Self::InvalidBody(error) => write!(formatter, "{error}"),
+            Self::UnreadableBody {
+                cause: UnreadableBodyCause::TooLarge,
+            } => formatter.write_str("the request body is over the host's limit"),
+            Self::UnreadableBody {
+                cause: UnreadableBodyCause::Interrupted,
+            } => formatter.write_str("the request body broke off before it was read"),
             Self::InvalidQuery(error) => write!(formatter, "{error}"),
             Self::ZeroOperation => formatter.write_str("an operation id is not zero"),
             Self::ZeroStep => formatter.write_str("a step serves at least one input"),
@@ -666,6 +720,13 @@ impl fmt::Display for EngineError {
                     "no machine '{machine}' is registered and enabled"
                 )
             }
+            Self::MachineNotOnTable { machine } => {
+                write!(formatter, "{machine} holds no place on the table now")
+            }
+            Self::UnknownReport { report } => write!(
+                formatter,
+                "there is no report '{report}'; see `inspect` for the list"
+            ),
             Self::UnknownState { machine, state } => {
                 write!(formatter, "{machine} has no state '{state}'")
             }
@@ -805,6 +866,9 @@ impl RouteError for EngineError {
                 ..
             } => StatusCode::SERVICE_UNAVAILABLE,
             Self::TooFast { .. } => StatusCode::TOO_MANY_REQUESTS,
+            Self::UnreadableBody {
+                cause: UnreadableBodyCause::TooLarge,
+            } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::NoAnswer
             | Self::SettingSpecInvalid { .. }
             | Self::NoMachineRunning
@@ -819,12 +883,17 @@ impl RouteError for EngineError {
             } => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NotSupportedYet { .. } => StatusCode::NOT_IMPLEMENTED,
             Self::InvalidBody(_)
+            | Self::UnreadableBody {
+                cause: UnreadableBodyCause::Interrupted,
+            }
             | Self::InvalidQuery(_)
             | Self::ZeroOperation
             | Self::ZeroStep
             | Self::InvalidName { .. }
             | Self::UnknownSeat { .. }
             | Self::UnknownMachine { .. }
+            | Self::MachineNotOnTable { .. }
+            | Self::UnknownReport { .. }
             | Self::UnknownState { .. }
             | Self::UnknownPurpose { .. }
             | Self::PayloadUnreadable { .. }

@@ -25,8 +25,20 @@ fn serve_without_options_uses_the_defaults() {
         options.package_directory,
         PathBuf::from(DEFAULT_PACKAGE_DIRECTORY)
     );
+    assert_eq!(options.telemetry_root, None);
     assert!(!options.records_moves);
     assert!(options.echoes_lines);
+}
+
+#[test]
+fn serve_reads_the_telemetry_root_and_refuses_it_without_a_value() {
+    let options = parse_serve_options(&strings(&["--telemetry", "t"])).expect("parses");
+    assert_eq!(options.telemetry_root, Some(PathBuf::from("t")));
+    assert_eq!(
+        parse_serve_options(&strings(&["--telemetry"])),
+        Err(OptionError::MissingValue("--telemetry"))
+    );
+    assert!(crate::options::SERVE_USAGE.contains("--telemetry DIR"));
 }
 
 #[test]

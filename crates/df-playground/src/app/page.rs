@@ -5,23 +5,29 @@
 //! of a scene change lives beside the devices, not in them, so a redraw never takes it away and a
 //! transition in progress is never cut short. A copy that leaves is frozen where its original
 //! stood: a clone of an element with a running animation would start that animation again.
+//!
+//! Every draw that rebuilds the devices or some of their pieces is a timeline record, and after
+//! every draw and every stage move the page says what the shared screen shows now (`page_log`), so
+//! the host can time each line, plate, figure and scene.
 
 use std::collections::HashMap;
 
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlElement};
 
-use super::state::{App, ROOT_ID, log_error, stage_elements_of, with_app_mut};
+use super::state::{App, ROOT_ID, log_error, stage_elements_of, with_app, with_app_mut};
 use super::toolbar::toolbar;
 use crate::audio;
 use crate::choices::build;
-use crate::controls::Transition;
+use crate::controls::{Transition, TransitionStyle};
 use crate::decisions::is_animating;
 use crate::dom::{append, clear, document, element, js_message, text_element};
 use crate::draw_plan::{DrawPlan, Part, is_leaving, leaving_class};
 use crate::fixture::Fixture;
 use crate::media::AudioState;
 use crate::motion_style::{frozen_card_style, frozen_world_style};
+use crate::page_log::{now_ms, with_log};
+use crate::timeline::{ErrorSource, Showing};
 use crate::view;
 
 /// The pieces of the page once it is drawn.
@@ -344,12 +350,14 @@ fn reduced_motion() -> Result<bool, JsValue> {
     Ok(query.is_some_and(|query| query.matches()))
 }
 
+/// Rebuilds the devices, leaving the old ones with `leaving` unless the person asked for reduced
+/// motion. Returns the transition drawn.
 fn rebuild_devices(
     document: &Document,
     page: &mut Page,
     app: &App,
     leaving: Option<Transition>,
-) -> Result<(), JsValue> {
+) -> Result<Option<Transition>, JsValue> {
     let leaving = if reduced_motion()? { None } else { leaving };
     let copy = leaving
         .map(|transition| leaving_copy(&page.devices, transition))
@@ -362,7 +370,7 @@ fn rebuild_devices(
     if let Some(copy) = copy {
         append(&page.wrap, &copy)?;
     }
-    Ok(())
+    Ok(leaving)
 }
 
 fn redraw_parts(
@@ -408,19 +416,66 @@ fn build_page(document: &Document, root: &Element, app: &App) -> Result<Page, Js
     })
 }
 
+/// What a draw changed on the devices, for its timeline record.
+#[derive(Default)]
+struct DrawnChange {
+    devices: bool,
+    parts: Vec<String>,
+    transition: Option<TransitionStyle>,
+    /// Only the figures and the camera were moved.
+    stage_only: bool,
+}
+
+/// Notes a draw on the page's timeline: a record for one that rebuilt the devices or pieces of
+/// them, a count of moves for one that only moved the stage.
+fn note_draw(app: &App, change: &DrawnChange) {
+    let now = now_ms();
+    if change.devices || !change.parts.is_empty() {
+        let parts = change.parts.clone();
+        with_log(|log| log.note_draw(app.frame, change.devices, parts, change.transition, now));
+    } else if change.stage_only {
+        with_log(|log| log.note_stage_move());
+    }
+}
+
+/// Tells the page's log what the shared screen shows now, so it can open and close records.
+fn observe_shown(app: &App, transition: Option<TransitionStyle>) {
+    let showing = Showing {
+        transition,
+        ..Showing::of(
+            app.loaded_name.as_deref(),
+            shown_fixture(app),
+            app.stage_elements(),
+            app.controls.pace,
+            app.controls.device.shows_tv(),
+        )
+    };
+    let now = now_ms();
+    with_log(|log| log.observe(showing, now));
+}
+
 fn draw(document: &Document, root: &Element, app: &mut App) -> Result<(), JsValue> {
     let unlocked = audio::state() == AudioState::Unlocked;
     let now = app.snapshot(unlocked);
     let Some(mut page) = app.page.take() else {
         app.page = Some(build_page(document, root, app)?);
         app.drawn = Some(now);
+        let change = DrawnChange {
+            devices: true,
+            ..DrawnChange::default()
+        };
+        note_draw(app, &change);
+        observe_shown(app, None);
         return Ok(());
     };
     let plan = DrawPlan::between(app.drawn.as_ref(), &now);
     let result = apply_plan(document, &mut page, app, &plan);
     app.page = Some(page);
     app.drawn = Some(now);
-    result
+    let change = result?;
+    note_draw(app, &change);
+    observe_shown(app, change.transition);
+    Ok(())
 }
 
 fn apply_plan(
@@ -428,14 +483,24 @@ fn apply_plan(
     page: &mut Page,
     app: &mut App,
     plan: &DrawPlan,
-) -> Result<(), JsValue> {
+) -> Result<DrawnChange, JsValue> {
+    let mut change = DrawnChange::default();
     if plan.toolbar {
         rebuild_toolbar(document, page, app)?;
     }
     if plan.devices {
         let leaving = app.pending_transition.take();
-        rebuild_devices(document, page, app, leaving)?;
+        let drawn = rebuild_devices(document, page, app, leaving)?;
+        change.devices = true;
+        change.transition = drawn.map(|transition| transition.style);
     } else {
+        change.parts = plan
+            .parts
+            .iter()
+            .filter(|part| page.slots.contains_key(part))
+            .map(|part| part.dom_marker().to_owned())
+            .collect();
+        change.stage_only = plan.stage && change.parts.is_empty();
         redraw_parts(document, page, app, plan.parts.iter().copied())?;
         if plan.stage
             && let Some(tv) = &mut page.tv
@@ -448,7 +513,7 @@ fn apply_plan(
     if plan.notes {
         fill_notes(document, &page.notes, app)?;
     }
-    Ok(())
+    Ok(change)
 }
 
 /// Draws what changed since the last draw.
@@ -460,10 +525,10 @@ pub fn render() {
         with_app_mut(|app| draw(&document, &root, app))
     });
     if let Err(error) = drawn {
-        log_error(&format!(
-            "could not draw the playground: {}",
-            js_message(&error)
-        ));
+        log_error(
+            ErrorSource::Draw,
+            &format!("could not draw the playground: {}", js_message(&error)),
+        );
     }
 }
 
@@ -489,4 +554,6 @@ pub fn update_stage() {
     if let Err(error) = moved {
         view::tv::log_sync_failure(&error);
     }
+    with_log(|log| log.note_stage_move());
+    with_app(|app| observe_shown(app, None));
 }

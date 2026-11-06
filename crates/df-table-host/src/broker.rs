@@ -28,7 +28,7 @@ pub mod report;
 pub mod request;
 pub mod scheduler;
 
-pub use self::events::{BrokerAudit, BrokerEvent};
+pub use self::events::{BrokerAudit, BrokerEvent, HubName};
 pub use self::hub::BrokerHub;
 pub use self::purpose::{Fallback, Price, PurposeTable, QueueClass, ResourceKind};
 pub use self::queues::QueueBounds;

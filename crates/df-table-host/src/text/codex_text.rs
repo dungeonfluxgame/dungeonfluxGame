@@ -8,9 +8,12 @@
 //! (no saved session), read-only, in a fresh folder outside any repository, with standard input
 //! closed, and is killed at the request's deadline. It uses whatever Codex home the host's
 //! environment names (`CODEX_HOME`, else Codex's own default) and never reads its credentials. It
-//! never retries or resends; prompts, pictures and answers never reach a log. A file or process
-//! step that fails is one `TEXT codex_failed step=.. error_kind=..` line. Every file step runs on
-//! the blocking pool; only the wait for the child is async.
+//! never retries or resends; prompts, pictures and answers never reach a log. Spawning the child,
+//! waiting for it and reading its last message are each one `TEXT codex_step step=.. outcome=ok`
+//! line with their time; a file or process step that fails is one `TEXT codex_step step=..
+//! outcome=failed .. error_kind=<closed key>` line (a run that wrote no last message is a read
+//! that failed with `not_found`). Every file step runs on the blocking pool; only
+//! the wait for the child is async.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -21,6 +24,7 @@ use df_ai::text::{
     TextBackend, TextOutcome, TextReceipt, TextRequest, TextUsage, UnavailableReason,
 };
 use serde_json::Value;
+use tokio::time::Instant;
 
 use super::limits::MAXIMUM_CODEX_OUTPUT_BYTES;
 use super::{facts_text, usage_from};
@@ -82,7 +86,7 @@ pub struct CodexTextBackend {
 }
 
 impl CodexTextBackend {
-    /// A backend over `route` that writes its `TEXT codex_failed` lines through `record`.
+    /// A backend over `route` that writes its `TEXT codex_step` lines through `record`.
     pub fn new(route: Option<CodexRoute>, record: Arc<dyn Fn(String) + Send + Sync>) -> Self {
         Self { route, record }
     }
@@ -212,7 +216,7 @@ impl Drop for AttemptFolder {
     }
 }
 
-/// A step of a run whose file or process work can fail, as its `TEXT codex_failed` line names it.
+/// A step of a run whose file or process work can fail, as its `TEXT codex_step` line names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RunStep {
     /// The blocking task that prepares or finishes the attempt stopped without an answer.
@@ -222,7 +226,8 @@ pub(super) enum RunStep {
     Picture,
     Spawn,
     Wait,
-    Message,
+    /// Reading the run's last message.
+    Read,
     /// Removing the attempt's folder after the run.
     Cleanup,
 }
@@ -236,7 +241,7 @@ impl RunStep {
             Self::Picture => "picture",
             Self::Spawn => "spawn",
             Self::Wait => "wait",
-            Self::Message => "message",
+            Self::Read => "read",
             Self::Cleanup => "cleanup",
         }
     }
@@ -244,6 +249,60 @@ impl RunStep {
     /// This step's failure with `error` as its cause.
     fn failed(self, error: std::io::Error) -> StepError {
         StepError { step: self, error }
+    }
+}
+
+/// Why a run step failed, as its line names it: a closed reading of the file or process error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StepCause {
+    NotFound,
+    PermissionDenied,
+    TimedOut,
+    Interrupted,
+    StorageFull,
+    InvalidData,
+    Other,
+}
+
+impl StepCause {
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::PermissionDenied => "permission_denied",
+            Self::TimedOut => "timed_out",
+            Self::Interrupted => "interrupted",
+            Self::StorageFull => "storage_full",
+            Self::InvalidData => "invalid_data",
+            Self::Other => "other",
+        }
+    }
+
+    pub(super) fn from_kind(kind: std::io::ErrorKind) -> Self {
+        use std::io::ErrorKind;
+        match kind {
+            ErrorKind::NotFound => Self::NotFound,
+            ErrorKind::PermissionDenied => Self::PermissionDenied,
+            ErrorKind::TimedOut => Self::TimedOut,
+            ErrorKind::Interrupted => Self::Interrupted,
+            ErrorKind::StorageFull => Self::StorageFull,
+            ErrorKind::InvalidData | ErrorKind::InvalidInput => Self::InvalidData,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// One `TEXT codex_step` line: the step, whether it held, its time and, for a failure, its cause.
+pub(super) fn step_line(step: RunStep, duration_ms: u128, failed: Option<StepCause>) -> String {
+    match failed {
+        None => format!(
+            "TEXT codex_step step={} outcome=ok duration_ms={duration_ms}",
+            step.key()
+        ),
+        Some(cause) => format!(
+            "TEXT codex_step step={} outcome=failed duration_ms={duration_ms} error_kind={}",
+            step.key(),
+            cause.key()
+        ),
     }
 }
 
@@ -323,7 +382,7 @@ pub(super) async fn finish(attempt: PreparedAttempt) -> Finished {
             // No message file means the run gave no answer, which `receipt` makes `Unknown`.
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => {
-                failures.push(RunStep::Message.failed(error));
+                failures.push(RunStep::Read.failed(error));
                 None
             }
         };
@@ -371,22 +430,26 @@ fn command(
 }
 
 impl CodexTextBackend {
-    fn record_failure(&self, failure: &StepError) {
-        (self.record)(format!(
-            "TEXT codex_failed step={} error_kind={:?}",
-            failure.step.key(),
-            failure.error.kind()
-        ));
+    /// Records `step`, begun at `started`, as held (`failed` is `None`) or failed.
+    fn record_step(&self, step: RunStep, started: Instant, failed: Option<&std::io::Error>) {
+        let cause = failed.map(|error| StepCause::from_kind(error.kind()));
+        (self.record)(step_line(step, started.elapsed().as_millis(), cause));
     }
 
-    /// Finishes the attempt and records each step that failed; returns the run's last message.
-    async fn finish_recorded(&self, attempt: PreparedAttempt) -> Option<String> {
+    /// Finishes the attempt and records each step that failed; returns the run's last message and
+    /// whether reading it held.
+    async fn finish_recorded(&self, attempt: PreparedAttempt) -> (Option<String>, bool) {
+        let started = Instant::now();
         let finished = finish(attempt).await;
         finished
             .failures
             .iter()
-            .for_each(|failure| self.record_failure(failure));
-        finished.message
+            .for_each(|failure| self.record_step(failure.step, started, Some(&failure.error)));
+        let read = !finished
+            .failures
+            .iter()
+            .any(|failure| matches!(failure.step, RunStep::Read | RunStep::Task));
+        (finished.message, read)
     }
 
     async fn run(&self, route: &CodexRoute, request: &TextRequest) -> TextReceipt {
@@ -398,35 +461,52 @@ impl CodexTextBackend {
             .iter()
             .map(|image| (extension(image.media_type.mime()), image.bytes.clone()))
             .collect();
+        let preparing = Instant::now();
         let prepared = tokio::task::spawn_blocking(move || prepare(&root, &schema_text, &images))
             .await
             .unwrap_or_else(|error| Err(RunStep::Task.failed(std::io::Error::other(error))));
         let attempt = match prepared {
             Ok(attempt) => attempt,
             Err(failure) => {
-                self.record_failure(&failure);
+                self.record_step(failure.step, preparing, Some(&failure.error));
                 return configuration();
             }
         };
+        let spawning = Instant::now();
         let child = match command(route, request, &attempt).spawn() {
             Ok(child) => child,
             Err(error) => {
-                self.record_failure(&RunStep::Spawn.failed(error));
+                self.record_step(RunStep::Spawn, spawning, Some(&error));
                 // Nothing ran, so there is no message; only the folder's removal matters here.
                 self.finish_recorded(attempt).await;
                 return configuration();
             }
         };
+        self.record_step(RunStep::Spawn, spawning, None);
         // The text service has already bounded the deadline (`df_ai::text::TextLimits`). The child
         // is killed when the timed-out future drops it.
+        let waiting = Instant::now();
         let waited = tokio::time::timeout(request.deadline, child.wait_with_output()).await;
-        let message = self.finish_recorded(attempt).await;
+        match &waited {
+            Ok(Ok(_)) => self.record_step(RunStep::Wait, waiting, None),
+            Ok(Err(error)) => self.record_step(RunStep::Wait, waiting, Some(error)),
+            Err(_) => {
+                let timed_out = std::io::Error::from(std::io::ErrorKind::TimedOut);
+                self.record_step(RunStep::Wait, waiting, Some(&timed_out));
+            }
+        }
+        let reading = Instant::now();
+        let (message, read) = self.finish_recorded(attempt).await;
+        if read {
+            // A run that wrote no last message left nothing to read.
+            let unwritten = message
+                .is_none()
+                .then(|| std::io::Error::from(std::io::ErrorKind::NotFound));
+            self.record_step(RunStep::Read, reading, unwritten.as_ref());
+        }
         match waited {
             Err(_) => TextOutcome::Deadline.into(),
-            Ok(Err(error)) => {
-                self.record_failure(&RunStep::Wait.failed(error));
-                TextOutcome::Unknown.into()
-            }
+            Ok(Err(_)) => TextOutcome::Unknown.into(),
             Ok(Ok(output)) => receipt(
                 output.status.success(),
                 message.as_deref().filter(|text| !text.trim().is_empty()),

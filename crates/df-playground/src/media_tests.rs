@@ -3,6 +3,16 @@ use crate::limits::{MAXIMUM_MEDIA_NAME_BYTES, MAXIMUM_REPORTED_ERRORS};
 use crate::media::{
     AudioState, ClientReport, MediaKind, content_type, is_plain_file_name, media_kind,
 };
+use crate::timeline::{ClientError, ErrorSource, TimelineKind, TimelineRecord};
+
+fn error(message: String) -> ClientError {
+    ClientError {
+        seq: 0,
+        source: ErrorSource::Asset,
+        page_ms: 0,
+        message,
+    }
+}
 
 #[test]
 fn only_plain_names_pass() {
@@ -68,11 +78,10 @@ fn each_type_is_served_with_its_own_media_type() {
 
 fn report(errors: usize) -> ClientReport {
     ClientReport {
-        audio: AudioState::Locked,
-        last_cue: 0,
-        music: None,
-        images_shown: Vec::new(),
-        errors: (0..errors).map(|index| format!("error {index}")).collect(),
+        errors: (0..errors)
+            .map(|index| error(format!("error {index}")))
+            .collect(),
+        ..ClientReport::default()
     }
 }
 
@@ -80,9 +89,9 @@ fn report(errors: usize) -> ClientReport {
 fn a_report_keeps_only_the_newest_errors() {
     let bounded = report(MAXIMUM_REPORTED_ERRORS + 3).bounded();
     assert_eq!(bounded.errors.len(), MAXIMUM_REPORTED_ERRORS);
-    assert_eq!(bounded.errors[0], "error 3");
+    assert_eq!(bounded.errors[0].message, "error 3");
     assert_eq!(
-        bounded.errors.last().map(String::as_str),
+        bounded.errors.last().map(|error| error.message.as_str()),
         Some(format!("error {}", MAXIMUM_REPORTED_ERRORS + 2).as_str())
     );
     assert_eq!(report(2).bounded().errors.len(), 2);
@@ -95,7 +104,22 @@ fn a_report_survives_a_round_trip_and_names_the_audio_state() {
         last_cue: 4,
         music: Some("ambience.wav".into()),
         images_shown: vec!["tavern.png".into()],
-        errors: Vec::new(),
+        frame: Some(7),
+        boot: Some("boot-1".into()),
+        asset_revision: "00ff.00aa".into(),
+        page_clock_ms: 1_234,
+        errors: vec![error("a picture did not load".into())],
+        timeline: vec![TimelineRecord {
+            seq: 2,
+            kind: TimelineKind::Line,
+            id: "line-0000abcd".into(),
+            start_page_ms: 10,
+            end_page_ms: None,
+            end_reason: None,
+            planned_ms: Some(1_800),
+            detail: None,
+        }],
+        ..ClientReport::default()
     };
     let text = serde_json::to_string(&original).expect("writes");
     assert!(text.contains(r#""audio":"unlocked""#));
@@ -109,17 +133,16 @@ fn a_report_survives_a_round_trip_and_names_the_audio_state() {
 fn a_reports_texts_are_cut_to_their_length_and_its_pictures_to_their_count() {
     let long = "e".repeat(crate::limits::MAXIMUM_REPORTED_ERROR_CHARACTERS + 50);
     let report = ClientReport {
-        audio: AudioState::Locked,
-        last_cue: 0,
         music: Some("m".repeat(MAXIMUM_MEDIA_NAME_BYTES + 10)),
         images_shown: (0..crate::limits::MAXIMUM_REPORTED_IMAGES + 5)
             .map(|index| format!("{index}.png"))
             .collect(),
-        errors: vec![long],
+        errors: vec![error(long)],
+        ..ClientReport::default()
     }
     .bounded();
     assert_eq!(
-        report.errors[0].chars().count(),
+        report.errors[0].message.chars().count(),
         crate::limits::MAXIMUM_REPORTED_ERROR_CHARACTERS
     );
     assert_eq!(
@@ -135,24 +158,29 @@ fn a_reports_texts_are_cut_to_their_length_and_its_pictures_to_their_count() {
 #[test]
 fn a_report_is_held_to_its_total_size_dropping_the_oldest_errors_first() {
     let big = "x".repeat(crate::limits::MAXIMUM_REPORTED_ERROR_CHARACTERS);
-    let errors: Vec<String> = (0..crate::limits::MAXIMUM_REPORTED_ERRORS)
-        .map(|index| format!("{index:04}{big}"))
+    let errors: Vec<ClientError> = (0..crate::limits::MAXIMUM_REPORTED_ERRORS)
+        .map(|index| error(format!("{index:04}{big}")))
         .collect();
-    let newest = errors.last().cloned().map(|text| text[..4].to_owned());
+    let newest = errors.last().map(|error| error.message[..4].to_owned());
     let report = ClientReport {
-        audio: AudioState::Locked,
-        last_cue: 0,
-        music: None,
         images_shown: vec!["a.png".into()],
         errors,
+        ..ClientReport::default()
     }
     .bounded();
-    let held: usize = report.errors.iter().map(String::len).sum::<usize>()
+    let held: usize = report
+        .errors
+        .iter()
+        .map(|error| error.message.len())
+        .sum::<usize>()
         + report.images_shown.iter().map(String::len).sum::<usize>();
     assert!(held <= crate::limits::MAXIMUM_REPORT_BYTES, "{held}");
     assert!(!report.errors.is_empty());
     assert_eq!(
-        report.errors.last().map(|text| text[..4].to_owned()),
+        report
+            .errors
+            .last()
+            .map(|error| error.message[..4].to_owned()),
         newest
     );
     assert_eq!(
@@ -165,11 +193,8 @@ fn a_report_is_held_to_its_total_size_dropping_the_oldest_errors_first() {
 #[test]
 fn a_multibyte_text_is_cut_on_a_character_and_never_panics() {
     let report = ClientReport {
-        audio: AudioState::Locked,
-        last_cue: 0,
         music: Some("\u{e9}".repeat(MAXIMUM_MEDIA_NAME_BYTES + 1)),
-        images_shown: Vec::new(),
-        errors: Vec::new(),
+        ..ClientReport::default()
     }
     .bounded();
     assert_eq!(
@@ -190,8 +215,39 @@ fn the_keys_of_an_audio_state_are_its_serde_names() {
 
 #[test]
 fn a_report_with_a_misspelt_key_is_refused() {
-    let report = r#"{"audio":"locked","last_cue":0,"music":null,"images_shown":[],"errors":[]}"#;
-    assert!(serde_json::from_str::<ClientReport>(report).is_ok());
+    let report = serde_json::to_string(&ClientReport::default()).expect("writes");
+    assert!(serde_json::from_str::<ClientReport>(&report).is_ok());
     let misspelt = report.replace("\"errors\":[]", "\"errors\":[],\"image_shown\":[]");
+    assert_ne!(misspelt, report);
     assert!(serde_json::from_str::<ClientReport>(&misspelt).is_err());
+}
+
+#[test]
+fn a_reports_timeline_is_held_to_its_count_keeping_the_newest() {
+    let records = (0..crate::limits::MAXIMUM_TIMELINE_RECORDS as u64 + 5)
+        .map(|seq| TimelineRecord {
+            seq,
+            kind: TimelineKind::Figure,
+            id: "x".repeat(crate::limits::MAXIMUM_TIMELINE_ID_CHARACTERS + 3),
+            start_page_ms: seq,
+            end_page_ms: None,
+            end_reason: None,
+            planned_ms: None,
+            detail: None,
+        })
+        .collect();
+    let report = ClientReport {
+        timeline: records,
+        ..ClientReport::default()
+    }
+    .bounded();
+    assert_eq!(
+        report.timeline.len(),
+        crate::limits::MAXIMUM_TIMELINE_RECORDS
+    );
+    assert_eq!(report.timeline[0].seq, 5, "the oldest go first");
+    assert_eq!(
+        report.timeline[0].id.chars().count(),
+        crate::limits::MAXIMUM_TIMELINE_ID_CHARACTERS
+    );
 }

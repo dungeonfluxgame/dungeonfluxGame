@@ -70,15 +70,22 @@ async fn go_to_a_scene_that_does_not_exist_with_a_transition_changes_nothing() {
     assert_eq!(after, before, "the transition was not applied either");
     assert_eq!(after.controls.transition.style, TransitionStyle::Fade);
     let lines = log_lines(&running).await;
+    // The refusal writes its reject line, and its request the `HTTP served` line.
     assert_eq!(
         lines.len(),
-        lines_before + 1,
-        "one reject line and nothing else"
+        lines_before + 2,
+        "one reject line and the request's served line, nothing else: {lines:?}"
+    );
+    assert!(
+        lines[lines.len() - 2].starts_with("PLAYGROUND reject cause=invalid_value"),
+        "{lines:?}"
     );
     assert!(
         lines
             .last()
-            .is_some_and(|line| line.starts_with("PLAYGROUND reject cause=invalid_value"))
+            .is_some_and(|line| line.starts_with("HTTP served method=post route=")
+                && line.contains(" status=400 ")),
+        "{lines:?}"
     );
     let text = run(&running, "playground").await.expect("shows");
     assert!(text.contains("transition: fade 700 ms"), "{text}");
@@ -100,7 +107,14 @@ async fn a_go_is_one_numbered_change_with_one_audit_line_that_names_every_part()
         "PLAYGROUND set transition_style=wipe transition_ms=900 fixture=tavern.json revision={}",
         after.revision
     );
-    assert!(log_lines(&running).await.contains(&expected));
+    // The line ends with who asked (`source= client=`), which the attribution tests check.
+    let attributed = format!("{expected} source=");
+    assert!(
+        log_lines(&running)
+            .await
+            .iter()
+            .any(|line| line.starts_with(&attributed))
+    );
 }
 
 #[tokio::test]
@@ -489,13 +503,7 @@ fn a_page_ages_and_is_forgotten_on_the_playground_clock() {
         "test-boot".to_owned(),
     )
     .with_clock(Arc::clone(&clock) as Arc<dyn df_table::ports::Clock>);
-    let report = df_playground::media::ClientReport {
-        audio: df_playground::media::AudioState::Locked,
-        last_cue: 0,
-        music: None,
-        images_shown: Vec::new(),
-        errors: Vec::new(),
-    };
+    let report = df_playground::media::ClientReport::default();
     state.record_client("page-1".to_owned(), report);
     clock.0.store(1_250, Ordering::SeqCst);
     let clients = state.clients();

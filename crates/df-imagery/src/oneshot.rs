@@ -30,6 +30,7 @@ use crate::backends::codex_cli::{
     AlphaRequirement, AttemptDirs, CodexCliConfig, CodexError, CodexImageRequest, CodexOutcome,
     GenerationFailureKind, ImageKind, UnknownReason, execute,
 };
+use crate::listed::listed_enum;
 use crate::output::{Dimensions, OutputFormat};
 use crate::request::TextPrompt;
 
@@ -90,7 +91,72 @@ pub struct OneShotImage {
     /// Token counts when the CLI reported them.
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// Whether the attempt's folder was removed. A leftover costs only disk space, never the
+    /// picture, so the caller records it.
+    pub cleanup: Result<(), CleanupError>,
 }
+
+listed_enum! {
+    keyed
+    /// Why an attempt's folder was not removed: the operating system's error kind, or the
+    /// blocking task that removes it stopped.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum CleanupCause {
+        NotFound,
+        PermissionDenied,
+        ResourceBusy,
+        DirectoryNotEmpty,
+        ReadOnlyFilesystem,
+        Other,
+        /// The blocking task that removes the folder stopped before it reported.
+        Stopped,
+    }
+}
+
+impl CleanupCause {
+    /// A closed lowercase key for logs.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::PermissionDenied => "permission_denied",
+            Self::ResourceBusy => "resource_busy",
+            Self::DirectoryNotEmpty => "directory_not_empty",
+            Self::ReadOnlyFilesystem => "read_only_filesystem",
+            Self::Other => "other",
+            Self::Stopped => "stopped",
+        }
+    }
+
+    fn from_io(kind: std::io::ErrorKind) -> Self {
+        use std::io::ErrorKind;
+        match kind {
+            ErrorKind::NotFound => Self::NotFound,
+            ErrorKind::PermissionDenied => Self::PermissionDenied,
+            ErrorKind::ResourceBusy => Self::ResourceBusy,
+            ErrorKind::DirectoryNotEmpty => Self::DirectoryNotEmpty,
+            ErrorKind::ReadOnlyFilesystem => Self::ReadOnlyFilesystem,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// An attempt's folder that was not removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CleanupError {
+    pub cause: CleanupCause,
+}
+
+impl std::fmt::Display for CleanupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the attempt folder was not removed: {}",
+            self.cause.key()
+        )
+    }
+}
+
+impl std::error::Error for CleanupError {}
 
 /// Why no picture came back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,13 +273,20 @@ impl AttemptFolder {
         Ok((folder, AttemptDirs::new(scratch, inputs, outputs)))
     }
 
-    async fn remove(mut self) {
+    /// Removes the folder on a blocking thread. A leftover costs only disk space, never the
+    /// picture, so the caller decides how to record a failure.
+    async fn remove(mut self) -> Result<(), CleanupError> {
         let Some(root) = self.root.take() else {
-            return;
+            return Ok(());
         };
-        // The folder is ours and holds only this attempt; a leftover or a failed blocking task
-        // costs only disk space, never the picture.
-        let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(root)).await;
+        tokio::task::spawn_blocking(move || std::fs::remove_dir_all(root))
+            .await
+            .map_err(|_| CleanupError {
+                cause: CleanupCause::Stopped,
+            })?
+            .map_err(|error| CleanupError {
+                cause: CleanupCause::from_io(error.kind()),
+            })
     }
 }
 
@@ -336,11 +409,20 @@ pub async fn generate(
         CodexOutcome::Failed { error, .. } => Err(map_failure(error)),
         CodexOutcome::Unknown { reason, .. } => Err(map_unknown(reason)),
     };
-    folder.remove().await;
-    let (bytes, input_tokens, output_tokens) = delivered?;
-    let (mime, width_px, height_px) = describe(&bytes).ok_or(OneShotError::Refused {
-        detail: "the delivered file is not a readable picture".to_owned(),
-    })?;
+    let cleanup = folder.remove().await;
+    let described = delivered.and_then(|delivered| {
+        let described = describe(&delivered.0).ok_or(OneShotError::Refused {
+            detail: "the delivered file is not a readable picture".to_owned(),
+        })?;
+        Ok((delivered, described))
+    });
+    let ((bytes, input_tokens, output_tokens), (mime, width_px, height_px)) = match described {
+        Ok(described) => described,
+        Err(error) => {
+            record_unreturned_cleanup(cleanup, &error);
+            return Err(error);
+        }
+    };
     Ok(OneShotImage {
         sha256_hex: crate::lower_hex(&Sha256::digest(&bytes)),
         bytes,
@@ -350,7 +432,24 @@ pub async fn generate(
         elapsed,
         input_tokens,
         output_tokens,
+        cleanup,
     })
+}
+
+/// A failed attempt returns only its error, so a folder it also left behind is recorded here:
+/// `IMAGERY cleanup_failed kind=<cleanup key> outcome=<error key>`.
+fn record_unreturned_cleanup(cleanup: Result<(), CleanupError>, error: &OneShotError) {
+    if let Err(failure) = cleanup {
+        df_observe::record_audit_line("IMAGERY", cleanup_line(failure, error));
+    }
+}
+
+fn cleanup_line(failure: CleanupError, error: &OneShotError) -> String {
+    format!(
+        "IMAGERY cleanup_failed kind={} outcome={}",
+        failure.cause.key(),
+        error.key()
+    )
 }
 
 /// Reads the verified artifact's bytes on a blocking thread.
@@ -514,6 +613,56 @@ mod tests {
         let removed = !root.exists();
         let _ = std::fs::remove_dir_all(&work_root);
         assert!(removed, "the attempt's folder was left behind");
+    }
+
+    #[tokio::test]
+    async fn a_folder_that_cannot_be_removed_surfaces_its_cause() {
+        let work_root = attempt_work_root("cleanup");
+        let (folder, _attempt) = AttemptFolder::create(&work_root).await.unwrap();
+        let root = folder.root.clone().expect("a new folder has its root");
+        // Removed out from under the attempt, so its own removal fails.
+        std::fs::remove_dir_all(&root).unwrap();
+        let cleanup = folder.remove().await;
+        let _ = std::fs::remove_dir_all(&work_root);
+        assert_eq!(
+            cleanup,
+            Err(CleanupError {
+                cause: CleanupCause::NotFound
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_removed_folder_reports_success() {
+        let work_root = attempt_work_root("cleanup-ok");
+        let (folder, _attempt) = AttemptFolder::create(&work_root).await.unwrap();
+        let root = folder.root.clone().expect("a new folder has its root");
+        let cleanup = folder.remove().await;
+        let removed = !root.exists();
+        let _ = std::fs::remove_dir_all(&work_root);
+        assert_eq!(cleanup, Ok(()));
+        assert!(removed);
+    }
+
+    #[test]
+    fn a_cleanup_line_holds_closed_keys_only() {
+        let failure = CleanupError {
+            cause: CleanupCause::from_io(std::io::ErrorKind::PermissionDenied),
+        };
+        let error = OneShotError::Refused {
+            detail: "free text that never reaches the line".to_owned(),
+        };
+        assert_eq!(
+            cleanup_line(failure, &error),
+            "IMAGERY cleanup_failed kind=permission_denied outcome=refused"
+        );
+        for cause in CleanupCause::ALL {
+            assert_eq!(CleanupCause::from_key(cause.key()), Some(*cause));
+        }
+        assert_eq!(
+            CleanupCause::from_io(std::io::ErrorKind::AddrInUse),
+            CleanupCause::Other
+        );
     }
 
     #[test]

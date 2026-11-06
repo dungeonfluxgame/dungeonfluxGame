@@ -18,8 +18,11 @@ use tempfile::TempDir;
 
 use crate::event_log::EventLog;
 
-use super::fixtures::{dice_drawn, operation_of, received};
-use super::{HostEventSink, SharedPathOutlet};
+use super::fixtures::{dice_drawn, operation_of, received, spawned};
+use super::{
+    HostEventSink, SharedPathCause, SharedPathHealth, SharedPathOutlet, compose_shared_path,
+    shared_path_line,
+};
 
 const SETTLE: Duration = Duration::from_secs(10);
 
@@ -100,6 +103,17 @@ struct FullIngress;
 impl TelemetryIngress for FullIngress {
     fn submit(&self, _signal: Signal, _bytes: &[u8]) -> Result<PendingReceipt, TelemetryError> {
         Err(TelemetryError::Capacity)
+    }
+}
+
+/// An ingress that admits each record and then drops its receipt, so the receipt fails.
+#[derive(Debug)]
+struct DroppingIngress;
+
+impl TelemetryIngress for DroppingIngress {
+    fn submit(&self, _signal: Signal, _bytes: &[u8]) -> Result<PendingReceipt, TelemetryError> {
+        let (_sender, pending) = PendingReceipt::channel();
+        Ok(pending)
     }
 }
 
@@ -203,4 +217,134 @@ fn a_refusal_of_the_path_is_counted_by_class_and_never_reaches_the_caller() {
         "the history and the line log still have it"
     );
     assert_eq!(diagnostics.health().refused, 1);
+}
+
+#[test]
+fn the_first_failed_receipt_writes_sink_degraded_once_without_a_health_read() {
+    let diagnostics = diagnostics(Arc::new(DroppingIngress));
+    let log = Arc::new(EventLog::default());
+    let sink = HostEventSink::new(Arc::clone(&log), Arc::new(ManualClock::starting_at(10_000)))
+        .with_outlet(Arc::new(SharedPathOutlet::new(Arc::clone(&diagnostics))));
+
+    sink.record(&received(1));
+    sink.record(&received(2));
+
+    let degraded: Vec<String> = log
+        .newest(10)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("HOST sink_degraded"))
+        .collect();
+    assert_eq!(
+        degraded,
+        ["HOST sink_degraded outlet=shared_path cause=receipt_failed lost_always=0"]
+    );
+    let health = sink.health();
+    assert!(health.degraded);
+    assert_eq!(health.outlets[1].unconfirmed, 2);
+    assert_eq!(
+        log.newest(10)
+            .iter()
+            .filter(|line| line.text.starts_with("HOST sink_degraded"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn once_composed_a_host_record_reaches_a_local_fixture_store() {
+    let directory = TempDir::new().expect("a directory");
+    let root = directory.path().join("telemetry");
+
+    let (path, line) = compose_shared_path(Some(&root));
+
+    assert_eq!(line, "HOST shared_path composed=true root_set=true");
+    let path = path.expect("the path is composed");
+    let sink = HostEventSink::new(
+        Arc::new(EventLog::default()),
+        Arc::new(ManualClock::starting_at(10_000)),
+    )
+    .with_outlet(path.outlet());
+    sink.record(&spawned());
+    sink.record(&received(1));
+    path.shutdown(SETTLE).expect("the store confirms and stops");
+
+    let shared = sink.health().shared.expect("the sink has the shared path");
+    assert_eq!(
+        shared,
+        SharedPathHealth {
+            spooled: 2,
+            exported: 2,
+            dropped: 0,
+            lag_ms: 0,
+        }
+    );
+    let mut reader = DiagnosticReader::open(&root).expect("a read-only reader");
+    let page = reader
+        .query(&QueryFilter::default(), 0, 100)
+        .expect("a page");
+    assert_eq!(page.records.len(), 2);
+    assert!(contains(
+        &page.records[0].otlp,
+        &spawned().render_audit_line()
+    ));
+    assert!(contains(&page.records[1].otlp, "df-table-host"));
+}
+
+#[test]
+fn without_a_root_nothing_is_composed_and_the_line_says_so() {
+    let (path, line) = compose_shared_path(None);
+    assert!(path.is_none());
+    assert_eq!(line, "HOST shared_path composed=false root_set=false");
+}
+
+#[test]
+fn a_root_the_store_cannot_own_is_not_composed_and_the_line_has_its_cause_but_not_the_path() {
+    let directory = TempDir::new().expect("a directory");
+    let file = directory.path().join("a-file");
+    std::fs::write(&file, b"not a directory").expect("a file");
+    let root = file.join("telemetry");
+
+    let (path, line) = compose_shared_path(Some(&root));
+
+    assert!(path.is_none());
+    let cause = line
+        .strip_prefix("HOST shared_path composed=false root_set=true cause=")
+        .expect("a refusal line");
+    assert!(SharedPathCause::from_key(cause).is_some(), "{line}");
+    assert!(!line.contains("a-file"));
+}
+
+#[test]
+fn the_shared_path_line_is_closed_keys_only() {
+    assert_eq!(
+        shared_path_line(true, Some(SharedPathCause::Ownership)),
+        "HOST shared_path composed=false root_set=true cause=ownership"
+    );
+    for cause in SharedPathCause::ALL {
+        let serde = serde_json::to_value(cause).expect("serializes");
+        assert_eq!(serde, serde_json::Value::from(cause.key()));
+        assert_eq!(SharedPathCause::from_key(cause.key()), Some(cause));
+    }
+}
+
+#[test]
+fn shared_health_reads_lag_and_loss_from_the_outlet() {
+    let ingress = Arc::new(HoldingIngress::default());
+    let diagnostics = diagnostics(ingress.clone());
+    let (sink, clock) = sink_over(&diagnostics);
+
+    sink.record(&received(1));
+    clock.advance_ms(70);
+
+    assert_eq!(
+        sink.health().shared,
+        Some(SharedPathHealth {
+            spooled: 1,
+            exported: 0,
+            dropped: 0,
+            lag_ms: 70,
+        })
+    );
+    ingress.answer_all();
 }

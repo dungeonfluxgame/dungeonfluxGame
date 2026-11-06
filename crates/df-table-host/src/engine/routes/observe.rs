@@ -5,57 +5,69 @@
 //! typed `not_supported_yet`, never a 200 with nothing in it.
 
 use axum::body::Bytes;
-use axum::extract::rejection::QueryRejection;
+use axum::extract::rejection::{BytesRejection, QueryRejection};
 use axum::extract::{Query, State};
 use axum::response::Response;
+use tokio::time::Instant;
 
-use crate::dev_http::{parse_body, reply};
 use crate::engine::request::{ConfigControl, HistoryRequest, ReplayRequest, TraceQuery};
 
-use super::{EngineRoutes, engine, query};
+use super::{EngineRoutes, answer, body, engine, query};
 
 pub(super) async fn history(
     State(routes): State<EngineRoutes>,
     history_query: Result<Query<HistoryRequest>, QueryRejection>,
 ) -> Response {
+    let started = Instant::now();
     let result = async {
         let request = query(history_query)?;
         engine(&routes)?.history(request).await
     }
     .await;
-    reply(result)
+    answer(&routes, "history", started, result)
 }
 
 pub(super) async fn trace(
     State(routes): State<EngineRoutes>,
     trace_query: Result<Query<TraceQuery>, QueryRejection>,
 ) -> Response {
+    let started = Instant::now();
     let result = async {
         let TraceQuery { operation } = query(trace_query)?;
         engine(&routes)?.trace(operation).await
     }
     .await;
-    reply(result)
+    answer(&routes, "trace", started, result)
 }
 
-pub(super) async fn replay(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+pub(super) async fn replay(
+    State(routes): State<EngineRoutes>,
+    bytes: Result<Bytes, BytesRejection>,
+) -> Response {
+    let started = Instant::now();
     let result = async {
-        let request: ReplayRequest = parse_body(&bytes)?;
+        let request: ReplayRequest = body(bytes)?;
         engine(&routes)?.replay(request).await
     }
     .await;
-    reply(result)
+    answer(&routes, "replay", started, result)
 }
 
 pub(super) async fn config_show(State(routes): State<EngineRoutes>) -> Response {
-    reply(async { engine(&routes)?.config(ConfigControl::Show).await }.await)
+    let started = Instant::now();
+    let result = async { engine(&routes)?.config(ConfigControl::Show).await }.await;
+    answer(&routes, "config", started, result)
 }
 
-pub(super) async fn config_set(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
+pub(super) async fn config_set(
+    State(routes): State<EngineRoutes>,
+    bytes: Result<Bytes, BytesRejection>,
+) -> Response {
+    let started = Instant::now();
     let result = async {
-        let control: ConfigControl = parse_body(&bytes)?;
+        let control: ConfigControl = body(bytes)?;
         engine(&routes)?.config(control).await
     }
     .await;
-    reply(result)
+    answer(&routes, "config", started, result)
 }

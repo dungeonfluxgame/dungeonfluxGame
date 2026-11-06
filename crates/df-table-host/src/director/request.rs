@@ -16,6 +16,7 @@ use df_table::element::ElementId;
 use serde::{Deserialize, Serialize};
 
 use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::playground::PlaygroundChangeError;
 
 /// What the host does when a scene or combat starts, named for the verb `director start`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +190,59 @@ impl From<DecisionError> for DirectorError {
 
 /// The answer to a verb or a read: `done` with the value, or `rejected`.
 pub type DirectorReply<T> = DevReply<T, DirectorError>;
+
+/// Why the playground did not apply one of the Director's moves, for the `CAMERA apply_failed`
+/// line: the playground's refusal as a closed key, never its words or its status number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApplyCause {
+    /// The playground's checks refused the move: no fixture shown, or no such element.
+    InvalidChange,
+    /// The fixture or the scene changed while the move was checked.
+    FixtureChanged,
+    FileMissing,
+    FileTooLarge,
+    FileUnreadable,
+}
+
+impl ApplyCause {
+    pub const ALL: [Self; 5] = [
+        Self::InvalidChange,
+        Self::FixtureChanged,
+        Self::FileMissing,
+        Self::FileTooLarge,
+        Self::FileUnreadable,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::InvalidChange => "invalid_change",
+            Self::FixtureChanged => "fixture_changed",
+            Self::FileMissing => "file_missing",
+            Self::FileTooLarge => "file_too_large",
+            Self::FileUnreadable => "file_unreadable",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+}
+
+impl From<&PlaygroundChangeError> for ApplyCause {
+    fn from(error: &PlaygroundChangeError) -> Self {
+        match error {
+            // A Director's move is no body, so only the playground's checks refuse it.
+            PlaygroundChangeError::InvalidBody(_)
+            | PlaygroundChangeError::UnreadableBody { .. }
+            | PlaygroundChangeError::InvalidChange { .. } => Self::InvalidChange,
+            PlaygroundChangeError::FixtureChanged { .. } => Self::FixtureChanged,
+            PlaygroundChangeError::FileMissing { .. } => Self::FileMissing,
+            PlaygroundChangeError::FileTooLarge { .. } => Self::FileTooLarge,
+            PlaygroundChangeError::FileUnreadable { .. } => Self::FileUnreadable,
+        }
+    }
+}
 
 /// What a verb did: the audit lines it wrote (the same lines `director show` is built from) and
 /// anything the host could not apply.

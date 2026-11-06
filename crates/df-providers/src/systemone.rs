@@ -9,7 +9,7 @@ use crate::metering::{
     AnsweredUsage, CallMeter, MeterSlot, MeteredClient, SentCall, settle_refusal, settle_status,
 };
 use crate::native_http::{NativeHttp, is_valid_credential};
-use crate::{HttpRequest, NativeHttpCause, NativeHttpLimits};
+use crate::{HttpRequest, NativeHttpCause, NativeHttpLimits, ProviderName};
 
 // 800 ms and 32 KiB failed every free-roam judgement (larger generated-place context) as a
 // transport error, which silenced every stranger (2026-10-24, owner: remove the limits).
@@ -147,7 +147,9 @@ impl SystemOneChoiceProvider {
             &self.credential,
             "application/json".to_owned(),
             body,
-        );
+        )
+        .with_provider(ProviderName::SystemOne)
+        .with_operation("choice");
         let ticket = self.meter.sent(SentCall {
             client: MeteredClient::Choice,
             model: MODEL,

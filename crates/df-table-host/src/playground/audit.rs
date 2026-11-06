@@ -5,10 +5,97 @@
 //! text, which is free text, is never written; only its length is. Camera rule 9 of O.14 asks for
 //! exactly this, so a playtest can measure when the camera moved and why.
 
+use axum::http::HeaderMap;
 use df_playground::controls::ControlsChange;
 use df_playground::fixture::Slide;
+use df_playground::path::CLIENT_HEADER;
 use df_playground::scene::{ImageSlot, SceneChange, SceneOverlay, Target};
 use df_table::event::RejectionCause;
+use serde::{Deserialize, Serialize};
+
+use super::check_client_name;
+
+/// What kind of caller asked for a change, as its `X-Df-Client` header says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeSource {
+    /// A playground page, which names itself `page-xxxxxxxx`.
+    Page,
+    /// The dev command line.
+    Cli,
+}
+
+impl ChangeSource {
+    pub const ALL: [Self; 2] = [Self::Page, Self::Cli];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Page => "page",
+            Self::Cli => "cli",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|source| source.key() == key)
+    }
+}
+
+/// The `X-Df-Client` value of the dev command line.
+const CLI_CLIENT: &str = "cli";
+/// How a page's name starts.
+const PAGE_CLIENT_PREFIX: &str = "page-";
+
+/// Who asked for a change: `source=page client=page-..`, `source=cli client=-`, or `-` for both
+/// when the header is missing or is not a name the host accepts (it is never written as given).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ChangeOrigin {
+    source: Option<ChangeSource>,
+    client: Option<String>,
+}
+
+impl ChangeOrigin {
+    pub(crate) fn from_headers(headers: &HeaderMap) -> Self {
+        let Some(value) = headers
+            .get(CLIENT_HEADER)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return Self::default();
+        };
+        if value == CLI_CLIENT {
+            return Self {
+                source: Some(ChangeSource::Cli),
+                client: None,
+            };
+        }
+        if value.starts_with(PAGE_CLIENT_PREFIX) && check_client_name(value).is_ok() {
+            return Self {
+                source: Some(ChangeSource::Page),
+                client: Some(value.to_owned()),
+            };
+        }
+        Self::default()
+    }
+
+    /// Whether the dev command line asked.
+    pub(crate) fn is_cli(&self) -> bool {
+        self.source == Some(ChangeSource::Cli)
+    }
+
+    /// The `source` and `client` pairs, which end the line.
+    pub(crate) fn pairs(&self) -> [(&'static str, String); 2] {
+        [
+            (
+                "source",
+                self.source
+                    .map_or_else(|| "-".to_owned(), |source| source.key().to_owned()),
+            ),
+            (
+                "client",
+                self.client.clone().unwrap_or_else(|| "-".to_owned()),
+            ),
+        ]
+    }
+}
 
 /// A text as one value of a line: as it is when it is a plain word, otherwise quoted.
 fn value(text: &str) -> String {
@@ -35,6 +122,18 @@ pub(crate) fn playground_line(verb: &str, pairs: &[(&str, String)]) -> String {
 /// The line of a refused request: `PLAYGROUND reject cause=<cause>` and any extra pairs.
 pub(crate) fn reject_line(cause: RejectionCause, extra: &[(&str, String)]) -> String {
     let mut pairs = vec![("cause", cause.key().to_owned())];
+    pairs.extend(extra.iter().cloned());
+    playground_line("reject", &pairs)
+}
+
+/// The line of a request refused because a file could not be read or written:
+/// `PLAYGROUND reject cause=file_error reason=<reason>` and any extra pairs. `reason` is a
+/// `FileError` key or a closed word naming the file (`fixture_unreadable`, `media_unreadable`).
+pub(crate) fn file_reject_line(reason: &'static str, extra: &[(&str, String)]) -> String {
+    let mut pairs = vec![
+        ("cause", "file_error".to_owned()),
+        ("reason", reason.to_owned()),
+    ];
     pairs.extend(extra.iter().cloned());
     playground_line("reject", &pairs)
 }

@@ -4,6 +4,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use df_table::testkit::ManualClock;
 use futures_util::future::BoxFuture;
 
 use super::backend::{BackendError, ImageBackend};
@@ -20,6 +21,8 @@ pub(super) struct FakeBackend {
     script: Script,
     delay: Duration,
     check: Result<(), BackendError>,
+    /// A clock the check moves on by this many milliseconds, standing in for a slow check.
+    check_takes: Option<(Arc<ManualClock>, u64)>,
     asked: Mutex<Vec<(BackendRequest, Duration)>>,
 }
 
@@ -29,6 +32,7 @@ impl FakeBackend {
             script,
             delay: Duration::ZERO,
             check: Ok(()),
+            check_takes: None,
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -38,6 +42,7 @@ impl FakeBackend {
             script,
             delay,
             check: Ok(()),
+            check_takes: None,
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -47,6 +52,22 @@ impl FakeBackend {
             script: Script::Fail(BackendError::Internal),
             delay: Duration::ZERO,
             check: Err(error),
+            check_takes: None,
+            asked: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// A backend that draws `script` and whose check moves `clock` on by `check_ms`.
+    pub(super) fn checking_for(
+        script: Script,
+        clock: Arc<ManualClock>,
+        check_ms: u64,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            script,
+            delay: Duration::ZERO,
+            check: Ok(()),
+            check_takes: Some((clock, check_ms)),
             asked: Mutex::new(Vec::new()),
         })
     }
@@ -65,6 +86,9 @@ impl ImageBackend for FakeBackend {
     }
 
     fn check(&self) -> Result<(), BackendError> {
+        if let Some((clock, check_ms)) = &self.check_takes {
+            clock.advance_ms(*check_ms);
+        }
         self.check.clone()
     }
 
@@ -110,5 +134,6 @@ pub(super) fn picture() -> GeneratedImage {
         duration: Duration::from_millis(4200),
         input_tokens: Some(10),
         output_tokens: Some(20),
+        cleanup: None,
     }
 }

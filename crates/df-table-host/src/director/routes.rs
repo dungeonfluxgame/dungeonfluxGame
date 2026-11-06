@@ -29,16 +29,19 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use df_playground::controls::ControlsReply;
 use df_table::director::StageDirection;
+use df_table::director::reason::MINIMUM_ZOOM_PERCENT;
 use df_table::inspect::InspectAudience;
 use df_table::ports::Clock;
 use tokio::sync::Mutex as GateMutex;
 use tokio::time::Instant;
 
 use super::limits::HOST_TICK_MS;
-use super::request::{ActReply, DirectorAct, DirectorError};
+use super::request::{ActReply, ApplyCause, DirectorAct, DirectorError};
 use super::workbench::{Decided, Workbench, scene_change};
 use crate::dev_http::{parse_body, reply};
-use crate::playground::{SceneApplyError, apply_scene_change, current_stage_ids};
+use crate::playground::{
+    PlaygroundChangeError, SceneApplyError, apply_scene_change, current_stage_ids,
+};
 use crate::state::AppState;
 
 /// The addresses of the Director's dev API.
@@ -81,6 +84,37 @@ impl CameraMark {
             target: reply.scene.camera_target().map(str::to_owned),
         }
     }
+}
+
+/// `CAMERA <verb> kind=focus|wide target=<element|->` of a direction.
+fn camera_line(verb: &str, direction: &StageDirection) -> String {
+    match direction {
+        StageDirection::Focus { element, .. } => {
+            format!("CAMERA {verb} kind=focus target={element}")
+        }
+        StageDirection::Wide { .. } => format!("CAMERA {verb} kind=wide target=-"),
+    }
+}
+
+/// The line of a direction the playground applied: what it drew and how long applying took.
+fn applied_line(direction: &StageDirection, duration_ms: u64) -> String {
+    let (zoom_percent, over_ms) = match direction {
+        StageDirection::Focus {
+            zoom_percent,
+            over_ms,
+            ..
+        } => (*zoom_percent, *over_ms),
+        StageDirection::Wide { over_ms, .. } => (MINIMUM_ZOOM_PERCENT, *over_ms),
+    };
+    format!(
+        "{} zoom={zoom_percent} over_ms={over_ms} duration_ms={duration_ms}",
+        camera_line("applied", direction)
+    )
+}
+
+/// The line of a host tick the Director refused: the error's key, never its sentence.
+pub(super) fn tick_failed_line(error: &DirectorError) -> String {
+    format!("CAMERA tick_failed error={}", error.key())
 }
 
 pub(super) struct DirectorRoutes {
@@ -155,12 +189,20 @@ impl DirectorRoutes {
         }
         let mut problems = Vec::new();
         for direction in &decided.directions {
+            let started = Instant::now();
             match self.apply_one(direction).await {
-                Ok(reply) => *seen = CameraMark::of(&reply),
+                Ok(reply) => {
+                    *seen = CameraMark::of(&reply);
+                    let duration_ms =
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    self.app.record_line(applied_line(direction, duration_ms));
+                }
                 Err(error) => {
+                    let cause = ApplyCause::from(&PlaygroundChangeError::from(error.clone()));
                     self.app.record_line(format!(
-                        "CAMERA apply_failed status={}",
-                        error.status.as_u16()
+                        "{} error={}",
+                        camera_line("apply_failed", direction),
+                        cause.key()
                     ));
                     problems.push(error.message);
                     self.with(|workbench| workbench.apply_failed(direction));
@@ -193,8 +235,8 @@ impl DirectorRoutes {
 
     /// One host tick: the Director decides for the time now, if it has anything to decide, and
     /// the moves are applied, as one step. Nothing answers a tick, so a failure is a line with
-    /// the error's key and its sentence (the only record of why), and no request's middleware
-    /// echoes the tick's lines: it echoes them itself.
+    /// the error's key, and no request's middleware echoes the tick's lines: it echoes them
+    /// itself.
     pub(super) async fn host_tick(&self) {
         let mut seen = self.gate.lock().await;
         if !self.with(|workbench| workbench.is_busy()) {
@@ -204,10 +246,7 @@ impl DirectorRoutes {
             Ok(decided) => {
                 self.apply(decided, &mut seen).await;
             }
-            Err(error) => self.app.record_line(format!(
-                "CAMERA tick_failed error={} reason={error}",
-                error.key()
-            )),
+            Err(error) => self.app.record_line(tick_failed_line(&error)),
         }
         self.app.echo_new_lines();
     }
@@ -249,10 +288,14 @@ async fn show(State(routes): State<Arc<DirectorRoutes>>) -> Response {
     ))
 }
 
+/// Starts the host tick, with a `DIRECTOR tick_started` line, and writes `DIRECTOR tick_stopped`
+/// when it ends because the routes were dropped.
 fn spawn_host_tick(routes: &Arc<DirectorRoutes>) {
     if tokio::runtime::Handle::try_current().is_err() {
         return;
     }
+    let app = Arc::clone(&routes.app);
+    app.record_line_and_echo(format!("DIRECTOR tick_started interval_ms={HOST_TICK_MS}"));
     let weak: Weak<DirectorRoutes> = Arc::downgrade(routes);
     tokio::spawn(async move {
         loop {
@@ -262,6 +305,7 @@ fn spawn_host_tick(routes: &Arc<DirectorRoutes>) {
             };
             routes.host_tick().await;
         }
+        app.record_line_and_echo("DIRECTOR tick_stopped".to_owned());
     });
 }
 

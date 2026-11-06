@@ -493,6 +493,14 @@ pub struct TextEvent {
     pub output_name: String,
     pub kind: TextEventKind,
     pub elapsed: Duration,
+    /// The tokens the supplier reported for the call this event settles; `None` when no call was
+    /// made by this request (a replay, a refusal) or the supplier reported none.
+    pub usage: Option<TextUsage>,
+    /// Which submit of the operation this is, from 1: a durable service counts the submits of each
+    /// operation key it served since it started (a retry under the same key is the next
+    /// number); a verdict or withdrawal carries the operation's latest count; a request with no
+    /// operation is 1.
+    pub attempt: u32,
 }
 
 /// Receives one event per request. The default observer keeps nothing.
@@ -566,13 +574,17 @@ impl<B: TextBackend, O: TextObserver> TextService<B, O> {
         request: &TextRequest,
     ) -> Result<TextOutcome, TextRequestError> {
         let started = Instant::now();
+        // A request with no operation is its own first and only attempt.
+        let facts = |usage| EventFacts { usage, attempt: 1 };
         if let Err(error) = self.check(request) {
-            self.report(None, request, TextEventKind::Refused(error), started);
+            let kind = TextEventKind::Refused(error);
+            self.report(None, request, kind, started, facts(None));
             return Err(error);
         }
-        let outcome = self.call_backend(request).await.outcome;
-        self.report(None, request, kind_of(&outcome), started);
-        Ok(outcome)
+        let receipt = self.call_backend(request).await;
+        let kind = kind_of(&receipt.outcome);
+        self.report(None, request, kind, started, facts(receipt.usage));
+        Ok(receipt.outcome)
     }
 
     /// Checks a request without calling the backend or reporting an event.
@@ -624,6 +636,7 @@ impl<B: TextBackend, O: TextObserver> TextService<B, O> {
         request: &TextRequest,
         kind: TextEventKind,
         started: Instant,
+        facts: EventFacts,
     ) {
         self.observer.observe(&TextEvent {
             purpose: request.purpose,
@@ -633,8 +646,18 @@ impl<B: TextBackend, O: TextObserver> TextService<B, O> {
             output_name: request.output_name.clone(),
             kind,
             elapsed: started.elapsed(),
+            usage: facts.usage,
+            attempt: facts.attempt,
         });
     }
+}
+
+/// What an event says about its call beyond its kind: the usage this request's call reported and
+/// which submit of the operation it is (see [`TextEvent`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EventFacts {
+    pub(crate) usage: Option<TextUsage>,
+    pub(crate) attempt: u32,
 }
 
 /// Whether `value` serializes to at most `maximum_bytes`. Serialization stops at the first byte

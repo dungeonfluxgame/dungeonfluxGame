@@ -27,7 +27,7 @@ use df_table::scene_plan::SceneStage;
 use df_table::table_state::SceneGeneration;
 
 use super::purposes::BuildPriority;
-use super::request::BuildEnd;
+use super::request::{BuildEnd, PlateTimingSetting};
 use crate::broker::purpose::Fallback;
 
 /// Where a stage's stored output came from.
@@ -96,6 +96,8 @@ pub enum SceneBuilderEvent {
         stage: SceneStage,
         cause: FailureCause,
         fallback: Fallback,
+        /// From the stage's start to its failure, in the pipeline's time.
+        duration_ms: u64,
     },
     LocateRound {
         scene: SceneId,
@@ -127,6 +129,8 @@ pub enum SceneBuilderEvent {
         generation: SceneGeneration,
         job: PlateJobId,
         end: JobEnd,
+        /// From the tick that asked for the job to its end.
+        duration_ms: u64,
     },
     /// A result set aside as stale (D.2): the pure crate's own typed event.
     Table(TableEvent),
@@ -189,6 +193,12 @@ pub enum SceneBuilderEvent {
         on: bool,
         age_ms: u64,
     },
+    /// An operator changed a plate timing (`scene timing set`): always driven.
+    TimingSet {
+        setting: PlateTimingSetting,
+        value: u64,
+        previous: u64,
+    },
     /// A look-ahead build of the next scene started (SB-LA). `epoch` is the broker epoch its
     /// requests are for.
     LookaheadStarted {
@@ -197,6 +207,10 @@ pub enum SceneBuilderEvent {
         expectation: Expectation,
         likelihood_permille: u16,
         epoch: u64,
+        /// Builds with requests out, this one included.
+        in_flight: usize,
+        /// Scenes the planner's book holds, built or building.
+        book: usize,
     },
     /// A look-ahead stage was stored (`ms` of provider time).
     LookaheadStored {
@@ -217,6 +231,8 @@ pub enum SceneBuilderEvent {
         token: u64,
         stage: SceneStage,
         cause: FailureCause,
+        /// From the build's start to its failure.
+        duration_ms: u64,
     },
     LookaheadCancelled {
         scene: SceneId,
@@ -302,7 +318,8 @@ impl SceneBuilderEvent {
             | Self::Waiting { .. }
             | Self::SwapOverdue { .. }
             | Self::Late { .. }
-            | Self::CatchingUp { .. } => "PLATE",
+            | Self::CatchingUp { .. }
+            | Self::TimingSet { .. } => "PLATE",
         }
     }
 
@@ -363,13 +380,20 @@ impl SceneBuilderEvent {
                 stage,
                 cause,
                 fallback,
-            } => write!(
-                out,
-                "stage_failed scene={scene} generation={generation} job={job} stage={} cause={} fallback={}",
-                stage.key(),
-                cause.key(),
-                fallback.key()
-            ),
+                duration_ms,
+            } => {
+                write!(
+                    out,
+                    "stage_failed scene={scene} generation={generation} job={job} stage={}",
+                    stage.key()
+                )?;
+                write!(
+                    out,
+                    " cause={} fallback={} duration_ms={duration_ms}",
+                    cause.key(),
+                    fallback.key()
+                )
+            }
             Self::LocateRound {
                 scene,
                 generation,
@@ -416,10 +440,12 @@ impl SceneBuilderEvent {
                 generation,
                 job,
                 end,
+                duration_ms,
             } => write!(
                 out,
-                "job_ended scene={scene} generation={generation} job={job} end={}",
-                BuildEnd::from(*end).key()
+                "job_ended scene={scene} generation={generation} job={job} end={} duration_ms={}",
+                BuildEnd::from(*end).key(),
+                duration_ms
             ),
             Self::Table(_) => Ok(()),
             Self::TickQueued {
@@ -501,17 +527,32 @@ impl SceneBuilderEvent {
                 "catching_up scene={scene} on={} age_ms={age_ms}",
                 if *on { "true" } else { "false" }
             ),
+            Self::TimingSet {
+                setting,
+                value,
+                previous,
+            } => write!(
+                out,
+                "timing name={} value={value} previous={previous} driven=true",
+                setting.key()
+            ),
             Self::LookaheadStarted {
                 scene,
                 token,
                 expectation,
                 likelihood_permille,
                 epoch,
-            } => write!(
-                out,
-                "started scene={scene} token={token} expectation={} likelihood_permille={likelihood_permille} epoch={epoch}",
-                expectation.key()
-            ),
+                in_flight,
+                book,
+            } => {
+                write!(
+                    out,
+                    "started scene={scene} token={token} expectation={} likelihood_permille={}",
+                    expectation.key(),
+                    likelihood_permille
+                )?;
+                write!(out, " epoch={epoch} in_flight={in_flight} book={book}")
+            }
             Self::LookaheadStored {
                 scene,
                 token,
@@ -532,9 +573,10 @@ impl SceneBuilderEvent {
                 token,
                 stage,
                 cause,
+                duration_ms,
             } => write!(
                 out,
-                "failed scene={scene} token={token} stage={} cause={}",
+                "failed scene={scene} token={token} stage={} cause={} duration_ms={duration_ms}",
                 stage.key(),
                 cause.key()
             ),

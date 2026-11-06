@@ -20,11 +20,17 @@ use super::setup::EngineStartError;
 pub struct Extras {
     pub sink: Arc<HostEventSink>,
     pub replayer: Arc<dyn Replayer>,
+    /// Whether the sink writes a file spool beside its history, for the start line.
+    pub spooled: bool,
 }
 
 impl Extras {
     pub fn new(sink: Arc<HostEventSink>, replayer: Arc<dyn Replayer>) -> Self {
-        Self { sink, replayer }
+        Self {
+            sink,
+            replayer,
+            spooled: false,
+        }
     }
 
     /// The history in memory and nothing on disk: every event is a line in `log` and a record in
@@ -47,6 +53,7 @@ impl Extras {
         directory: Option<PathBuf>,
     ) -> Result<Self, EngineStartError> {
         let sink = HostEventSink::new(log, Arc::new(WallClock));
+        let spooled = directory.is_some();
         let sink = match directory {
             None => sink,
             Some(directory) => {
@@ -60,7 +67,10 @@ impl Extras {
                 sink.with_outlet(Arc::new(spool))
             }
         };
-        Ok(Self::new(Arc::new(sink), Arc::new(PendingReplay)))
+        Ok(Self {
+            spooled,
+            ..Self::new(Arc::new(sink), Arc::new(PendingReplay))
+        })
     }
 }
 

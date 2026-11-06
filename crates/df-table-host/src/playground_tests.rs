@@ -311,4 +311,367 @@ async fn a_fixture_body_that_is_not_json_is_refused_with_its_typed_cause() {
         };
         assert_eq!(cause, Some(RejectionCause::MalformedRequest), "{route}");
     }
+    let rejects: Vec<String> = playground_lines(&running)
+        .into_iter()
+        .filter(|line| line.starts_with("PLAYGROUND reject "))
+        .collect();
+    assert_eq!(
+        rejects,
+        vec!["PLAYGROUND reject cause=malformed_request reason=data".to_owned(); 3]
+    );
+}
+
+/// The playground's audit lines, oldest first.
+fn playground_lines(running: &crate::test_support::Running) -> Vec<String> {
+    running
+        .state
+        .log()
+        .newest(1_000)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("PLAYGROUND "))
+        .collect()
+}
+
+/// Posts `body` to `path` with `headers` (each ending in `\r\n`) and returns the status line.
+async fn post_with(port: u16, path: &str, body: &str, headers: &str) -> String {
+    let answer = raw_exchange(
+        port,
+        &crate::test_support::post_request(path, body, headers),
+    )
+    .await;
+    answer.lines().next().unwrap_or("").to_owned()
+}
+
+#[test]
+fn every_closed_key_reads_back_and_matches_its_serde_name() {
+    use crate::playground::{BodyReadCause, ChangeSource, ServedFileKind};
+    for kind in ServedFileKind::ALL {
+        assert_eq!(ServedFileKind::from_key(kind.key()), Some(kind));
+        assert_eq!(serde_json::to_value(kind).expect("writes"), kind.key());
+    }
+    for source in ChangeSource::ALL {
+        assert_eq!(ChangeSource::from_key(source.key()), Some(source));
+        assert_eq!(serde_json::to_value(source).expect("writes"), source.key());
+    }
+    for cause in BodyReadCause::ALL {
+        assert_eq!(BodyReadCause::from_key(cause.key()), Some(cause));
+        assert_eq!(serde_json::to_value(cause).expect("writes"), cause.key());
+    }
+}
+
+#[test]
+fn each_file_error_has_a_closed_key() {
+    let keys: Vec<&str> = [
+        FileError::InvalidName,
+        FileError::NotFound,
+        FileError::TooLarge { maximum_bytes: 1 },
+        FileError::Io(std::io::ErrorKind::PermissionDenied),
+        FileError::ModifiedBeforeEpoch,
+        FileError::Stopped,
+    ]
+    .iter()
+    .map(FileError::key)
+    .collect();
+    assert_eq!(
+        keys,
+        vec![
+            "invalid_name",
+            "not_found",
+            "too_large",
+            "io",
+            "modified_before_epoch",
+            "stopped"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_change_of_the_controls_names_who_asked_from_the_client_header() {
+    let running = start(&STARTER_FILES).await;
+    let body = r#"{"change": "show_grid", "value": true}"#;
+    let off = r#"{"change": "show_grid", "value": false}"#;
+    let path = "/dev/playground/controls";
+    for (body, header) in [
+        (body, "X-Df-Client: page-1a2b3c4d\r\n"),
+        (off, "X-Df-Client: cli\r\n"),
+        (body, "X-Df-Client: not a name\r\n"),
+        (off, ""),
+    ] {
+        let status = post_with(running.port, path, body, header).await;
+        assert!(status.starts_with("HTTP/1.1 200"), "{header}: {status}");
+    }
+    let origins: Vec<String> = playground_lines(&running)
+        .into_iter()
+        .filter(|line| line.starts_with("PLAYGROUND set show_grid="))
+        .map(|line| {
+            line.split_once(" source=")
+                .expect("has a source")
+                .1
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        origins,
+        vec![
+            "page client=page-1a2b3c4d",
+            "cli client=-",
+            "- client=-",
+            "- client=-"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_fixture_name_that_is_not_one_writes_exactly_one_reject_line() {
+    let running = start(&STARTER_FILES).await;
+    let status = post_with(
+        running.port,
+        "/dev/playground/controls",
+        r#"{"change": "fixture", "value": "../escape"}"#,
+        "X-Df-Client: cli\r\n",
+    )
+    .await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    assert_eq!(
+        playground_lines(&running),
+        vec![
+            "PLAYGROUND reject cause=invalid_value reason=invalid_fixture_name source=cli client=-"
+                .to_owned()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_controls_body_that_is_not_json_names_its_body_cause() {
+    let running = start(&STARTER_FILES).await;
+    let status = post_with(running.port, "/dev/playground/controls", "{", "").await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    assert_eq!(
+        playground_lines(&running),
+        vec![
+            "PLAYGROUND reject cause=malformed_request reason=truncated source=- client=-"
+                .to_owned()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_scene_change_with_no_fixture_shown_writes_exactly_one_reject_line() {
+    let running = start(&STARTER_FILES).await;
+    let status = post_with(
+        running.port,
+        "/dev/playground/scene",
+        r#"{"change": "caption", "speaker": null, "text": "Hello"}"#,
+        "",
+    )
+    .await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    assert_eq!(
+        playground_lines(&running),
+        vec!["PLAYGROUND reject cause=invalid_value reason=no_fixture_shown".to_owned()]
+    );
+    let status = post_with(running.port, "/dev/playground/scene", "{", "").await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    assert_eq!(
+        playground_lines(&running).last(),
+        Some(&"PLAYGROUND reject cause=malformed_request reason=truncated".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn a_missing_package_file_writes_one_file_unreadable_line_and_a_missing_fixture_none() {
+    let running = start(&STARTER_FILES).await;
+    let package = get(running.port, "/playground/pkg/df_playground.js")
+        .await
+        .expect("answers");
+    assert_eq!(package.status, StatusCode::NOT_FOUND);
+    let fixture = get(running.port, "/playground/fixtures/ghost.json")
+        .await
+        .expect("answers");
+    assert_eq!(fixture.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        playground_lines(&running),
+        vec!["PLAYGROUND file_unreadable kind=package name=df_playground.js status=404".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn fixture_refusals_name_their_reason_and_a_write_its_duration() {
+    let running = start(&STARTER_FILES).await;
+    let remove = "/dev/playground/fixture/remove";
+    let status = post_with(running.port, remove, r#"{"name": "ghost"}"#, "").await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    let status = post_with(running.port, remove, r#"{"name": "../up"}"#, "").await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    let write = r#"{"name": "../up", "text": "{}"}"#;
+    let status = post_with(running.port, "/dev/playground/fixture", write, "").await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    assert_eq!(
+        playground_lines(&running),
+        vec![
+            "PLAYGROUND reject cause=invalid_value reason=no_such_fixture fixture=ghost.json"
+                .to_owned(),
+            "PLAYGROUND reject cause=invalid_value reason=invalid_fixture_name fixture=-"
+                .to_owned(),
+            "PLAYGROUND reject cause=invalid_value reason=invalid_fixture_name fixture=-"
+                .to_owned(),
+        ]
+    );
+    let fixture = r#"{"name": "One", "tv": {"place": "Here", "status": {"kind": "ok"},
+        "elements": []}, "phone": {"hero": "Pip", "status": {"kind": "ok"}}}"#;
+    let write = serde_json::json!({"name": "one", "text": fixture}).to_string();
+    let status = post_with(running.port, "/dev/playground/fixture", &write, "").await;
+    assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+    let written: Vec<String> = playground_lines(&running)
+        .into_iter()
+        .filter(|line| line.starts_with("PLAYGROUND fixture_write "))
+        .collect();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let (head, duration) = written[0]
+        .rsplit_once(" duration_ms=")
+        .expect("has a duration");
+    assert_eq!(
+        head,
+        format!(
+            "PLAYGROUND fixture_write name=one.json bytes={}",
+            fixture.len()
+        )
+    );
+    assert!(duration.parse::<u64>().is_ok(), "{written:?}");
+}
+
+/// A fixture the page can show.
+const ONE_FIXTURE: &str = r#"{"name": "One", "tv": {"place": "Here", "status": {"kind": "ok"},
+    "elements": []}, "phone": {"hero": "Pip", "status": {"kind": "ok"}}}"#;
+
+/// Puts a plain file where the playground keeps the directory `relative_path`, so reading that
+/// directory fails with an error that is not "missing".
+fn file_in_place_of_directory(running: &crate::test_support::Running, relative_path: &str) {
+    let path = running.playground_path(relative_path);
+    match std::fs::remove_dir_all(&path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("removes the directory: {error}"),
+    }
+    let parent = path.parent().expect("has a parent");
+    std::fs::create_dir_all(parent).expect("makes the parent directory");
+    std::fs::write(&path, "not a directory").expect("writes a file in its place");
+}
+
+const CAPTION: &str = r#"{"change": "caption", "speaker": null, "text": "Hello"}"#;
+
+#[tokio::test]
+async fn a_scene_change_on_a_fixture_removed_behind_the_hosts_back_names_the_fixture() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/one.json", ONE_FIXTURE);
+    std::fs::remove_file(running.playground_path("assets/fixtures/one.json"))
+        .expect("removes the file outside the host");
+    let status = post_with(running.port, "/dev/playground/scene", CAPTION, "").await;
+    assert!(status.starts_with("HTTP/1.1 404"), "{status}");
+    assert_eq!(
+        playground_lines(&running).last(),
+        Some(
+            &"PLAYGROUND reject cause=file_error reason=fixture_unreadable fixture=one.json"
+                .to_owned()
+        )
+    );
+}
+
+#[tokio::test]
+async fn a_media_library_that_cannot_be_read_is_recorded_by_the_listing_and_a_scene_change() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/one.json", ONE_FIXTURE);
+    file_in_place_of_directory(&running, "assets/media");
+    let listing = get(running.port, "/playground/media.json")
+        .await
+        .expect("answers");
+    assert_eq!(listing.status, StatusCode::INTERNAL_SERVER_ERROR);
+    let status = post_with(running.port, "/dev/playground/scene", CAPTION, "").await;
+    assert!(status.starts_with("HTTP/1.1 500"), "{status}");
+    let lines = playground_lines(&running);
+    assert_eq!(
+        lines[lines.len() - 2..],
+        [
+            "PLAYGROUND media_unreadable name=- reason=io".to_owned(),
+            "PLAYGROUND reject cause=file_error reason=media_unreadable fixture=one.json"
+                .to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_fixture_directory_that_cannot_be_read_is_recorded_by_each_route_that_reads_it() {
+    use crate::wire::path;
+    let running = start(&STARTER_FILES).await;
+    file_in_place_of_directory(&running, "assets/fixtures");
+    let body = r#"{"change": "show_grid", "value": true}"#;
+    let status = post_with(running.port, "/dev/playground/controls", body, "").await;
+    assert!(status.starts_with("HTTP/1.1 500"), "{status}");
+    for route in [path::PLAYGROUND_FIXTURE_LIST, path::PLAYGROUND_REVISION] {
+        let answer = get(running.port, route).await.expect("answers");
+        assert_eq!(answer.status, StatusCode::INTERNAL_SERVER_ERROR, "{route}");
+    }
+    let write = serde_json::json!({"name": "one", "text": ONE_FIXTURE}).to_string();
+    let status = post_with(running.port, "/dev/playground/fixture", &write, "").await;
+    assert!(status.starts_with("HTTP/1.1 "), "{status}");
+    let lines = playground_lines(&running);
+    assert_eq!(
+        lines[..3],
+        [
+            "PLAYGROUND reject cause=file_error reason=io source=- client=-".to_owned(),
+            "PLAYGROUND file_unreadable kind=fixture_list name=- status=500".to_owned(),
+            "PLAYGROUND file_unreadable kind=revision name=- status=500".to_owned(),
+        ],
+        "{lines:?}"
+    );
+    // Which error the write meets depends on the system (a file where its directory should be).
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(
+        lines[3].starts_with("PLAYGROUND reject cause=file_error reason=")
+            && lines[3].ends_with(" fixture=one.json"),
+        "{lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_fixture_text_that_is_not_a_fixture_names_its_reason() {
+    let running = start(&STARTER_FILES).await;
+    let write = r#"{"name": "bad", "text": "not a fixture"}"#;
+    let status = post_with(running.port, "/dev/playground/fixture", write, "").await;
+    assert!(status.starts_with("HTTP/1.1 400"), "{status}");
+    assert_eq!(
+        playground_lines(&running),
+        vec![
+            "PLAYGROUND reject cause=invalid_value reason=invalid_fixture_text fixture=bad.json"
+                .to_owned()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_controls_body_that_breaks_off_is_recorded_as_unreadable() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let running = start(&STARTER_FILES).await;
+    // The body declares more bytes than are sent before the sender stops writing.
+    let request = "POST /dev/playground/controls HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+                   Content-Type: application/json\r\nContent-Length: 100\r\n\
+                   Connection: close\r\n\r\n{\"change\"";
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", running.port))
+        .await
+        .expect("connects");
+    stream.write_all(request.as_bytes()).await.expect("sends");
+    stream.shutdown().await.expect("stops writing");
+    let mut answer = Vec::new();
+    // The host may answer or close; either way the refusal was recorded first.
+    let _ = stream.read_to_end(&mut answer).await;
+    let expected =
+        "PLAYGROUND reject cause=malformed_request reason=unreadable source=- client=-".to_owned();
+    for _ in 0..200 {
+        if playground_lines(&running).contains(&expected) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("no unreadable line: {:?}", playground_lines(&running));
 }

@@ -576,7 +576,7 @@ async fn a_request_to_the_broker_settles_off_the_owner_and_arrives_as_an_engine_
         (requested.handle, requested.readiness.as_str()),
         (1, "pending")
     );
-    let queues = rig.handle.broker_queues().await.expect("answered");
+    let queues = rig.handle.broker_queues().await.expect("answered").queues;
     assert_eq!(queues.running.len(), 1);
     assert!(queues.running[0].sent);
 
@@ -756,4 +756,221 @@ async fn shutting_down_records_how_many_waiting_inputs_it_dropped() {
         count_lines(&log, "ENGINE stopped cause=closed dropped_inputs=3"),
         1
     );
+}
+
+// ---- The served line and the inspect reports (wave 3, U2) ----
+
+#[tokio::test]
+async fn the_served_line_carries_the_wait_measured_on_the_owners_clock() {
+    let rig = rig_with(RigOptions {
+        held: true,
+        ..RigOptions::default()
+    });
+    let admitted = rig.handle.submit(tap(1, "join")).await.expect("answered");
+    let operation = admitted.submission.operation.clone();
+
+    rig.clock.advance_ms(250);
+    let served = rig
+        .handle
+        .queue_control(QueueControl::Step { count: 1 })
+        .await
+        .expect("answered");
+
+    assert_eq!(served.turns.len(), 1);
+    assert_eq!(
+        count_lines(&rig.log, "result=admitted lane_depth=1"),
+        1,
+        "{:?}",
+        lines(&rig.log)
+    );
+    assert_eq!(
+        count_lines(
+            &rig.log,
+            &format!("ENGINE served operation={operation} waited_ms=250 step_ms=0 outcome=applied")
+        ),
+        1,
+        "{:?}",
+        lines(&rig.log)
+    );
+}
+
+#[tokio::test]
+async fn a_failed_commit_serves_its_turn_declined() {
+    let rig = rig_with(RigOptions {
+        script: vec![super::commit::ScriptedCommit::Fails(
+            super::commit::CommitError::Unavailable,
+        )],
+        ..RigOptions::default()
+    });
+
+    let reply = rig.handle.submit(tap(1, "join")).await.expect("answered");
+
+    let operation = &reply.submission.operation;
+    assert_eq!(
+        count_lines(
+            &rig.log,
+            &format!("ENGINE served operation={operation} waited_ms=0 step_ms=0 outcome=declined")
+        ),
+        1,
+        "{:?}",
+        lines(&rig.log)
+    );
+}
+
+#[tokio::test]
+async fn inspect_pending_hides_from_a_seat_what_only_the_host_may_count() {
+    use df_table::identity::SeatId;
+    use df_table::inspect::InspectAudience;
+
+    use super::request::InspectName;
+
+    let rig = rig();
+
+    let seat = rig
+        .handle
+        .inspect(
+            InspectName::Pending,
+            InspectAudience::Seat {
+                seat: SeatId::new(1),
+            },
+        )
+        .await
+        .expect("answered");
+    let operator = rig
+        .handle
+        .inspect(InspectName::Pending, InspectAudience::Operator)
+        .await
+        .expect("answered");
+    let stranger = rig
+        .handle
+        .inspect(
+            InspectName::Pending,
+            InspectAudience::Seat {
+                seat: SeatId::new(99),
+            },
+        )
+        .await;
+
+    assert_eq!(seat.audience, "seat:1");
+    assert_eq!(seat.value["open"]["visibility"], "redacted");
+    assert_eq!(seat.value["open"]["needs"], "host");
+    assert_eq!(operator.value["open"]["visibility"], "shown");
+    assert_eq!(operator.value["open"]["value"], 0);
+    assert_eq!(stranger, Err(EngineError::UnknownSeat { seat: 99 }));
+    assert_eq!(
+        count_lines(&rig.log, "ENGINE inspect report=pending audience=seat:1"),
+        1
+    );
+    assert_eq!(
+        count_lines(&rig.log, "ENGINE inspect report=pending audience=operator"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn every_inspect_report_builds_for_every_audience() {
+    use df_table::identity::SeatId;
+    use df_table::inspect::InspectAudience;
+
+    use super::request::InspectName;
+
+    let rig = rig();
+    rig.handle.submit(tap(1, "join")).await.expect("answered");
+
+    for audience in [
+        InspectAudience::Operator,
+        InspectAudience::Host,
+        InspectAudience::Seat {
+            seat: SeatId::new(1),
+        },
+    ] {
+        for report in InspectName::ALL {
+            let built = rig
+                .handle
+                .inspect(report, audience)
+                .await
+                .unwrap_or_else(|error| panic!("{report:?} for {audience:?}: {error}"));
+            assert_eq!((built.report, built.revision), (report, 1));
+            assert!(built.value.is_object(), "{report:?}: {}", built.value);
+        }
+    }
+}
+
+#[tokio::test]
+async fn dump_of_a_machine_off_the_table_and_of_an_unknown_one_are_refused_typed() {
+    let rig = rig();
+
+    let explore = rig.handle.dump_named("explore".to_owned()).await;
+    let nobody = rig.handle.dump_named("nobody".to_owned()).await;
+    let invalid = rig.handle.dump_named("not a name".to_owned()).await;
+
+    assert_eq!(
+        explore,
+        Err(EngineError::MachineNotOnTable {
+            machine: "explore".to_owned()
+        })
+    );
+    assert_eq!(
+        nobody,
+        Err(EngineError::UnknownMachine {
+            machine: "nobody".to_owned()
+        })
+    );
+    assert!(
+        matches!(invalid, Err(EngineError::InvalidName { .. })),
+        "{invalid:?}"
+    );
+    assert_eq!(count_lines(&rig.log, "ENGINE dump "), 0);
+}
+
+#[tokio::test]
+async fn chaos_on_a_table_without_controls_shows_none_in_force() {
+    let rig = rig();
+
+    let faults = rig.handle.chaos_show().await.expect("answered");
+
+    assert!(faults.is_empty(), "{faults:?}");
+    assert_eq!(
+        count_lines(&rig.log, "ENGINE chaos verb=show in_force=0"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn broker_queues_show_the_limits_of_every_class() {
+    let rig = rig();
+
+    let queues = rig.handle.broker_queues().await.expect("answered");
+
+    let classes: Vec<&str> = queues
+        .limits
+        .queue_bounds
+        .iter()
+        .map(|bound| bound.class.key())
+        .collect();
+    assert_eq!(classes, ["live", "plate", "lookahead", "background"]);
+    assert!(
+        queues
+            .limits
+            .queue_bounds
+            .iter()
+            .all(|bound| bound.bound > 0)
+    );
+    assert_eq!(queues.limits.text_slots, queues.queues.text_slots);
+}
+
+#[tokio::test]
+async fn a_refused_input_has_no_lane_depth() {
+    let rig = rig();
+    rig.handle
+        .submit(with_operation(tap(1, "join"), 5))
+        .await
+        .expect("answered");
+
+    rig.handle
+        .submit(with_operation(tap(1, "join"), 5))
+        .await
+        .expect("answered");
+
+    assert_eq!(count_lines(&rig.log, "result=refused lane_depth=-"), 1);
 }

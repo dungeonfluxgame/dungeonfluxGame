@@ -26,16 +26,17 @@ mod validate;
 
 pub use self::cli::{MediaLocate, run};
 pub use self::identify::{
-    DEFAULT_MIN_CONFIDENCE_PERMILLE, IDENTIFY_SCOPE, IdentityAnswer, PreparedIdentity,
-    apply_identification, ask_identity, identity_request, prepare_identity, store_identification,
+    DEFAULT_MIN_CONFIDENCE_PERMILLE, IDENTIFY_SCOPE, IdentityAnswer, IdentitySubmission,
+    PreparedIdentity, apply_identification, ask_identity, identity_request, identity_submission,
+    prepare_identity, store_identification,
 };
 pub use self::limits::{MAXIMUM_PICTURE_NAME_BYTES, SCAN_TIMEOUT};
 pub use self::request::{
     CharacterRequest, IdentifiedLayout, IdentifyRequest, IdentityOutcome, IdentityRow, IoCause,
-    LabelRequest, LocateError, LocateReply, LocateRequest, LocatedLayout, QuestionCause, ScanCause,
-    ScanPrompt, ShowQuery, StoredLayout, TextServiceCause,
+    LabelRequest, LocateError, LocateReply, LocateRequest, LocateStage, LocateStageError,
+    LocatedLayout, QuestionCause, ScanCause, ScanPrompt, ShowQuery, StoredLayout, TextServiceCause,
 };
-pub use self::routes::router;
+pub use self::routes::{router, router_with, text_runtime};
 pub use self::scan::{
     FAL_KEY_VARIABLES, KEEP_LABEL_OVERLAP_PERMILLE, Scanned, keep_labels, layout_from, relabel,
     scan_picture,

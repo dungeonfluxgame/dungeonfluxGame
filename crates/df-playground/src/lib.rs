@@ -36,6 +36,7 @@ pub mod scene;
 mod scene_apply;
 pub mod sound_plan;
 pub mod style;
+pub mod timeline;
 
 #[cfg(target_arch = "wasm32")]
 mod app;
@@ -45,6 +46,8 @@ mod audio;
 mod dom;
 #[cfg(target_arch = "wasm32")]
 mod net;
+#[cfg(target_arch = "wasm32")]
+mod page_log;
 #[cfg(target_arch = "wasm32")]
 mod view;
 
@@ -97,6 +100,8 @@ mod scene_tests;
 mod sound_plan_tests;
 #[cfg(test)]
 mod style_tests;
+#[cfg(test)]
+mod timeline_tests;
 
 /// Starts the playground when the page loads.
 #[cfg(target_arch = "wasm32")]

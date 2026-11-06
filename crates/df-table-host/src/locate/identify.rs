@@ -197,34 +197,50 @@ fn text_service(cause: TextServiceCause, detail: Option<String>) -> LocateError 
     LocateError::TextService { cause, detail }
 }
 
-/// Asks the text service the prepared question and checks the answer with the imagery API: a
-/// candidate that passes is qualified, one that fails is rejected (and never asked again under the
-/// same question); an answer the service already qualified replays without a call.
-pub async fn ask_identity(
+/// The identity question as the text service is asked it, and the operation it is asked under.
+pub struct IdentitySubmission {
+    pub key: df_ai::text_attempts::OperationKey,
+    pub request: df_ai::text::TextRequest,
+}
+
+/// The submission of a prepared question: refused when the text service is not configured. The
+/// same question about the same pictures is the same operation, so its answer replays.
+pub fn identity_submission(
     text: &crate::text::TextRuntime,
     prepared: &PreparedIdentity,
-) -> Result<IdentityAnswer, LocateError> {
-    use df_ai::text::TextOutcome;
-    use df_ai::text_attempts::{Submission, fingerprint};
-    use df_imagery::identity_question::read_answer;
+) -> Result<IdentitySubmission, LocateError> {
+    use df_ai::text_attempts::fingerprint;
     if let Some(missing) = text.missing() {
         return Err(LocateError::TextServiceMissing {
             missing: missing.to_owned(),
         });
     }
     let request = identity_request(&prepared.question, text.identity_profile());
-    // The same question about the same pictures is the same operation: its answer replays.
     let operation = format!("identify:{}", &hex(&fingerprint(&request))[..32]);
     let key = crate::text::TextRuntime::key(IDENTIFY_SCOPE, &operation)
         .ok_or(LocateError::InvalidOperationKey)?;
+    Ok(IdentitySubmission { key, request })
+}
+
+/// Asks the text service the prepared question and checks the answer with the imagery API: a
+/// candidate that passes is qualified, one that fails is rejected (and never asked again under the
+/// same question); an answer the service already qualified replays without a call.
+pub async fn ask_identity(
+    text: &crate::text::TextRuntime,
+    prepared: &PreparedIdentity,
+    submission: &IdentitySubmission,
+) -> Result<IdentityAnswer, LocateError> {
+    use df_ai::text::TextOutcome;
+    use df_ai::text_attempts::Submission;
+    use df_imagery::identity_question::read_answer;
+    let IdentitySubmission { key, request } = submission;
     let submitted = text
-        .service()
-        .submit(&key, &request)
+        .submit(key, request)
         .await
         .map_err(|error| text_service(TextServiceCause::Refused, Some(format!("{error:?}"))))?;
     match submitted {
         Submission::Candidate { answer, .. } => {
-            qualify_candidate(text, &key, &request, &answer, prepared).await
+            qualify_candidate(text, key, request, &answer, prepared).await
         }
         Submission::Settled {
             outcome: TextOutcome::Answered(answer),

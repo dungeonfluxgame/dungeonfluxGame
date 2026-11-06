@@ -603,6 +603,44 @@ fn a_refused_stage_fails_the_build_once_and_the_transition_says_why() {
 }
 
 #[test]
+fn a_build_says_what_was_running_when_it_started_and_how_long_it_took_to_fail() {
+    let script = dev_script().expect("the dev script").with_calls(
+        &purpose("lookahead_background"),
+        [ScriptedCall::fails_after(0, ProviderFault::Refused)],
+    );
+    let mut rig = rig_with(
+        script,
+        BrokerLimits::default(),
+        LookaheadSettings::default(),
+    );
+    rig.expect(vec![certain(NEXT, "Quay")]);
+    rig.run(BUILD_MS + 5_000, PlanView::default());
+    let lines = rig.audit.scene_lines();
+    let started: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("LOOKAHEAD started"))
+        .collect();
+    assert_eq!(started.len(), 1, "{lines:?}");
+    assert!(
+        started[0].ends_with(" in_flight=1 book=1"),
+        "the build is the only one out and the only scene booked: {}",
+        started[0]
+    );
+    let failed = lines
+        .iter()
+        .find(|line| line.starts_with("LOOKAHEAD failed"))
+        .expect("a failed line");
+    let duration_ms: u64 = failed
+        .rsplit_once(" duration_ms=")
+        .and_then(|(_, value)| value.parse().ok())
+        .expect("a duration");
+    assert!(
+        duration_ms > 0,
+        "the description was built before the background refused: {failed}"
+    );
+}
+
+#[test]
 fn every_look_ahead_line_is_one_audit_line_with_ids_and_keys_and_no_player_text() {
     let mut rig = rig();
     rig.expect(vec![certain(NEXT, "Quay")]);

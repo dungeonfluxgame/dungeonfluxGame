@@ -9,9 +9,10 @@ pub(super) mod observe;
 
 use crate::broker::ledger::{LedgerEnd, LedgerEntry};
 use crate::broker::purpose::Price;
-use crate::broker::report::{LedgerReport, QueuesReport};
+use crate::broker::report::LedgerReport;
 
 use self::observe::stream_lines;
+use super::report::reach::{BrokerQueuesReport, InspectReport};
 use super::report::{
     BrokerRequested, ChaosReport, ClockReport, CommitDisposition, CommitReport, Description,
     DiceReport, ForceReport, HealthReport, QueueReport, ServedReply, SubmissionReport, SubmitReply,
@@ -246,7 +247,9 @@ pub fn format_requested(requested: &BrokerRequested) -> String {
     )
 }
 
-pub fn format_broker_queues(report: &QueuesReport) -> String {
+pub fn format_broker_queues(reply: &BrokerQueuesReport) -> String {
+    let report = &reply.queues;
+    let limits = &reply.limits;
     let classes = numbered(report.classes.iter().map(|class| {
         let oldest = class
             .oldest_age_ms
@@ -274,13 +277,23 @@ pub fn format_broker_queues(report: &QueuesReport) -> String {
         }),
         "none",
     );
+    let bounds = limits
+        .queue_bounds
+        .iter()
+        .map(|bound| format!("{} {}", bound.class.key(), bound.bound))
+        .collect::<Vec<_>>()
+        .join(", ");
     format!(
         "epoch {}{}; {} text slots, {} image slots\nclasses, in the order they are \
-         served:\n{classes}\nrunning:\n{running}",
+         served:\n{classes}\nrunning:\n{running}\nlimits: {} text slots ({} kept for live), {} \
+         image slots; most waiting: {bounds}",
         report.epoch,
         if report.closed { " (closed)" } else { "" },
         report.text_slots,
         report.image_slots,
+        limits.text_slots,
+        limits.reserved_live_text_slots,
+        limits.image_slots,
     )
 }
 
@@ -381,4 +394,26 @@ pub fn format_dice(report: &DiceReport) -> String {
 
 pub fn format_chaos(report: &ChaosReport) -> String {
     format!("1: {} fault in force: {}", report.fault, report.in_force)
+}
+
+/// `chaos` with no words: one line per control the table has.
+pub fn format_chaos_standing(faults: &[ChaosReport]) -> String {
+    list_or_none(
+        faults
+            .iter()
+            .map(|fault| format!("{}: {}", fault.fault, fault.in_force)),
+        "this table has no chaos controls",
+    )
+}
+
+/// `inspect <report>`: a header line, then the report as JSON.
+pub fn format_inspect(report: &InspectReport) -> Result<String, serde_json::Error> {
+    Ok(format!(
+        "1: {} as {} sees it, at revision {} ({} ms)\n{}",
+        report.report.key(),
+        report.audience,
+        report.revision,
+        report.now_ms,
+        serde_json::to_string_pretty(&report.value)?
+    ))
 }

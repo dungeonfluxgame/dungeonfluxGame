@@ -2,8 +2,10 @@
 //!
 //! It owns one request at a time and reports a failure as a typed error that names the address and
 //! carries the exception the browser threw, so the page can show it and a bug is not mistaken for
-//! a refusal. It never retries; the caller's poll loop does that.
+//! a refusal. Every request names the page (`path::CLIENT_HEADER`). It never retries; the caller's
+//! poll loop does that.
 
+use std::cell::RefCell;
 use std::fmt;
 
 use wasm_bindgen::{JsCast, JsValue};
@@ -11,6 +13,7 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, RequestInit, Response};
 
 use crate::dom::BrowserError;
+use crate::path::CLIENT_HEADER;
 
 /// Why a request did not give text.
 #[derive(Debug, Clone, PartialEq)]
@@ -116,10 +119,35 @@ async fn response_of(address: &str, request: js_sys::Promise) -> Result<Response
         })
 }
 
+thread_local! {
+    /// The page's name for itself, sent with every request so the host can say who asked.
+    static CLIENT: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Names the page in every request from now on.
+pub fn set_client(name: &str) {
+    CLIENT.with(|client| *client.borrow_mut() = name.to_owned());
+}
+
+/// The headers every request carries: the page's name, when it has one.
+fn request_headers() -> Result<Headers, NetError> {
+    let headers = Headers::new().map_err(request_error("make the request headers"))?;
+    let name = CLIENT.with(|client| client.borrow().clone());
+    if !name.is_empty() {
+        headers
+            .set(CLIENT_HEADER, &name)
+            .map_err(request_error("name the page in the request"))?;
+    }
+    Ok(headers)
+}
+
 /// Reads `address` as text. A non-success status is an error that names the address and status.
 pub async fn fetch_text(address: &str) -> Result<String, NetError> {
     let window = web_sys::window().ok_or(NetError::NoWindow)?;
-    let response = response_of(address, window.fetch_with_str(address)).await?;
+    let init = RequestInit::new();
+    let headers = request_headers()?;
+    init.set_headers(&headers);
+    let response = response_of(address, window.fetch_with_str_and_init(address, &init)).await?;
     read_body(address, response).await
 }
 
@@ -127,7 +155,7 @@ pub async fn fetch_text(address: &str) -> Result<String, NetError> {
 /// carries the host's own explanation.
 pub async fn post_json(address: &str, body: &str) -> Result<String, NetError> {
     let window = web_sys::window().ok_or(NetError::NoWindow)?;
-    let headers = Headers::new().map_err(request_error("make the request headers"))?;
+    let headers = request_headers()?;
     headers
         .set("Content-Type", "application/json")
         .map_err(request_error("set the content type"))?;

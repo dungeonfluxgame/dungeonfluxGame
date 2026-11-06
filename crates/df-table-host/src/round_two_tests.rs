@@ -207,7 +207,12 @@ async fn a_change_that_alters_nothing_and_an_empty_batch_write_no_set_line() {
         1,
         "only the change that counted: {lines:?}"
     );
-    assert!(lines.contains(&"PLAYGROUND reject cause=invalid_value reason=empty_batch".to_owned()));
+    // The line ends with who asked, which the attribution tests check.
+    assert!(
+        lines.iter().any(|line| line
+            .starts_with("PLAYGROUND reject cause=invalid_value reason=empty_batch source=")),
+        "{lines:?}"
+    );
 }
 
 #[tokio::test]
@@ -222,8 +227,12 @@ async fn a_refusal_names_its_reason_as_a_token() {
         .expect_err("refused");
     let lines = log_lines(&running).await;
     for reason in ["unknown_status", "no_such_fixture"] {
-        let wanted = format!("PLAYGROUND reject cause=invalid_value reason={reason}");
-        assert!(lines.contains(&wanted), "{reason}: {lines:?}");
+        // The line ends with who asked, which the attribution tests check.
+        let wanted = format!("PLAYGROUND reject cause=invalid_value reason={reason} source=");
+        assert!(
+            lines.iter().any(|line| line.starts_with(&wanted)),
+            "{reason}: {lines:?}"
+        );
     }
 }
 

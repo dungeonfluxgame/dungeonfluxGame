@@ -15,6 +15,13 @@
 //! each outlet has confirmed and lost, how old the oldest unconfirmed record is (`lag_ms`), and
 //! whether anything was lost (`degraded`). It never blocks the owner: every call here is bounded
 //! work (rendering, one lock per outlet) and no call touches a disk or a network.
+//!
+//! The sink also writes three `HOST` lines of its own to the same log: `HOST spool opened` or
+//! `HOST spool failed` when a spool is added through `with_spool`, and `HOST sink_degraded`, once,
+//! when the first loss is found (later losses are counts in `health`). The sink writes it for a
+//! class A refusal at `accept`; an outlet that loses a record after taking it (the spool's writer,
+//! a failed shared-path receipt) writes it through the sink's `DegradedNotice` when it finds the
+//! loss, so the line is written without anyone reading `health`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,8 +35,10 @@ use crate::event_log::EventLog;
 
 use super::limits::{MAXIMUM_RETAINED_BYTES, UNQUERIED_HISTORY_RECORDS};
 use super::memory::{HistoryFilter, HistoryPage, MemoryOutlet};
-use super::outlet::{OutletStatus, RecordOutlet};
+use super::outlet::{DegradedNotice, LossCause, OutletStatus, RecordOutlet};
 use super::record::{ObservedRecord, RecordClass, RecordDraft};
+use super::shared_path::{SHARED_PATH_OUTLET, SharedPathHealth};
+use super::spool::{FileSpool, SpoolError};
 
 /// Which events are recorded: class A only, or both classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +104,9 @@ pub struct SinkHealth {
     /// failed receipt. A degraded stream is never a complete corpus.
     pub degraded: bool,
     pub outlets: Vec<OutletStatus>,
+    /// The shared diagnostic path to the telemetry store, when the sink has it as an outlet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared: Option<SharedPathHealth>,
 }
 
 /// The sink.
@@ -109,6 +121,8 @@ pub struct HostEventSink {
     verbose_seen: AtomicU64,
     filtered_verbose: AtomicU64,
     unrenderable: AtomicU64,
+    /// The one `HOST sink_degraded` line, shared with the outlets that can lose after `accept`.
+    degraded: Arc<DegradedNotice>,
 }
 
 impl HostEventSink {
@@ -116,7 +130,6 @@ impl HostEventSink {
     /// `clock` reads milliseconds since the Unix epoch (`WallClock` outside tests).
     pub fn new(log: Arc<EventLog>, clock: Arc<dyn Clock>) -> Self {
         Self {
-            log,
             clock,
             memory: Arc::new(MemoryOutlet::default()),
             outlets: Vec::new(),
@@ -126,6 +139,8 @@ impl HostEventSink {
             verbose_seen: AtomicU64::new(0),
             filtered_verbose: AtomicU64::new(0),
             unrenderable: AtomicU64::new(0),
+            degraded: Arc::new(DegradedNotice::new(Arc::clone(&log))),
+            log,
         }
     }
 
@@ -144,10 +159,33 @@ impl HostEventSink {
         self
     }
 
-    /// Adds an outlet beside the history: a file spool, the shared diagnostic path.
+    /// Adds an outlet beside the history: a file spool, the shared diagnostic path. The outlet
+    /// keeps the sink's `DegradedNotice` for a loss it finds after taking a record.
     pub fn with_outlet(mut self, outlet: Arc<dyn RecordOutlet>) -> Self {
+        outlet.watch_losses(Arc::clone(&self.degraded));
         self.outlets.push(outlet);
         self
+    }
+
+    /// Adds the spool that `opened` holds and writes `HOST spool opened path_set=true bytes=<n>`,
+    /// or writes `HOST spool failed cause=<key>` and returns the error, so a spool that was asked
+    /// for and is missing is a line and a typed error, never a quiet default. The path is never
+    /// in the line.
+    pub fn with_spool(self, opened: Result<FileSpool, SpoolError>) -> Result<Self, SpoolError> {
+        match opened {
+            Ok(spool) => {
+                self.log.push(format!(
+                    "HOST spool opened path_set=true bytes={}",
+                    spool.opened_bytes()
+                ));
+                Ok(self.with_outlet(Arc::new(spool)))
+            }
+            Err(error) => {
+                self.log
+                    .push(format!("HOST spool failed cause={}", error.key()));
+                Err(error)
+            }
+        }
     }
 
     pub fn with_level(self, level: EventLevel) -> Self {
@@ -212,10 +250,17 @@ impl HostEventSink {
     }
 
     fn deliver(&self, record: &ObservedRecord) {
-        // A refusal is counted by the outlet that made it; the caller has nothing to do with it.
-        let _ = self.memory.accept(record);
-        for outlet in &self.outlets {
-            let _ = outlet.accept(record);
+        // A refusal is counted by the outlet that made it; the caller has nothing to do with it
+        // beyond the one `sink_degraded` line for the first class A loss.
+        let memory = &*self.memory as &dyn RecordOutlet;
+        for outlet in std::iter::once(memory).chain(self.outlets.iter().map(|outlet| &**outlet)) {
+            if let Err(error) = outlet.accept(record)
+                && record.class == RecordClass::Always
+            {
+                let lost_always = outlet.status(record.observed_ms).lost_always;
+                self.degraded
+                    .first_loss(outlet.name(), LossCause::Refused(error), lost_always);
+            }
         }
     }
 
@@ -232,6 +277,10 @@ impl HostEventSink {
         let lost_always = outlets.iter().map(|status| status.lost_always).sum();
         let lost_verbose = outlets.iter().map(|status| status.lost_verbose).sum();
         let unconfirmed: u64 = outlets.iter().map(|status| status.unconfirmed).sum();
+        let shared = outlets
+            .iter()
+            .find(|status| status.name == SHARED_PATH_OUTLET)
+            .map(SharedPathHealth::of);
         SinkHealth {
             level: self.level().key().to_owned(),
             seen: always.saturating_add(verbose),
@@ -250,6 +299,7 @@ impl HostEventSink {
             lost_verbose,
             degraded: lost_always > 0 || unrenderable > 0 || unconfirmed > 0,
             outlets,
+            shared,
         }
     }
 }

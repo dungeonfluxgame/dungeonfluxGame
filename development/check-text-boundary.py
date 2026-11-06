@@ -160,6 +160,7 @@ ALLOWLIST = _allow([
     ("crates/df-providers/src/native_http.rs", "test-literal", "/v1/responses", 3, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-providers/src/systemone.rs", "test-literal", "/v1/systemone", 1, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-providers/tests/text_response.rs", "test-literal", "/v1/responses", 1, "fixture", PHASE_REASONS["fixture"]),
+    ("crates/df-providers/tests/provider_exchange.rs", "test-literal", "/v1/responses", 2, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-tools/src/gameplay/creator_portrait_route_tests.rs", "test-literal", "/v1/systemone", 5, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-tools/src/gameplay/imagery/mural_prompt.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-tools/src/gameplay/imagery_tests.rs", "test-literal", "/v1/chat/completions", 3, "fixture", PHASE_REASONS["fixture"]),

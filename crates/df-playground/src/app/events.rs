@@ -12,6 +12,8 @@ use super::state::with_app;
 use crate::audio;
 use crate::controls::{ControlsChange, Device};
 use crate::copy::ReadingPace;
+use crate::page_log;
+use crate::timeline::ErrorSource;
 
 fn action_of(event: &Event) -> Option<(Element, String)> {
     let target = event.target()?.dyn_into::<Element>().ok()?;
@@ -40,7 +42,10 @@ pub fn on_media_event(event: &Event, failed: bool) {
         return;
     };
     if failed {
-        audio::note_error(format!("picture '{name}' did not load"));
+        page_log::note_error(
+            ErrorSource::Asset,
+            &format!("picture '{name}' did not load"),
+        );
     }
     schedule_report();
 }

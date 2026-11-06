@@ -24,7 +24,7 @@ use df_table::identity::{SceneId, TableId};
 use df_table::lookahead::settings::LookaheadSettings;
 use df_table::lookahead::{LookaheadError, PlanView, Take};
 use df_table::plate::buffer::{StageMoment, Step, StepAction};
-use df_table::plate::timing::{PlateTiming, SceneBuildKind};
+use df_table::plate::timing::{PlateTiming, SceneBuildKind, TimingSetting};
 use df_table::ports::Clock;
 use df_table::scene_plan::brief::SceneBrief;
 use df_table::units::MILLISECONDS_PER_SECOND;
@@ -36,7 +36,7 @@ use super::dev_world::{
 use super::events::{SceneBuilderAudit, SceneBuilderEvent};
 use super::fakes::{FakeStageWorker, StageScript};
 use super::inputs::StageInputs;
-use super::limits::{MAXIMUM_DEV_VIRTUAL_MS, MAXIMUM_KEPT_EVENTS};
+use super::limits::{MAXIMUM_DEV_VIRTUAL_MS, MAXIMUM_KEPT_EVENTS, MAXIMUM_MINIMUM_ON_SCREEN_MS};
 use super::lookahead::request::{LookaheadReply, LookaheadRequest};
 use super::lookahead::{BenchContext, LookaheadBench};
 use super::pacer::{PacerError, ScenePacer};
@@ -44,21 +44,22 @@ use super::purposes::{BuildPriority, cost_view, dev_stage_purpose, scene_purpose
 use super::report::{LocateReport, SceneReport};
 use super::request::{
     BufferShow, BuildEnd, BuildOutcome, BuildReply, BuildRequest, DevStage, LookaheadTake,
-    PlatesReport, RunReply, RunRequest, SceneBuilderError, SceneShow, SlowStage, TimedLine,
-    WorkbenchCause,
+    PlateTimingReport, PlateTimingSetting, PlatesReport, RunReply, RunRequest, SceneBuilderError,
+    SceneShow, SlowStage, TimedLine, TimingReply, TimingRequest, WorkbenchCause,
 };
 use crate::broker::providers::ScriptedCall;
 use crate::broker::purpose::PurposeError;
 use crate::broker::request::{ProviderFault, WorkerId};
 use crate::broker::scheduler::BrokerLimits;
-use crate::broker::{BrokerAudit, BrokerEvent, BrokerHub};
+use crate::broker::{BrokerAudit, BrokerEvent, BrokerHub, HubName};
 use crate::event_log::EventLog;
 
 /// How far the workbench's clock moves between looks at the pipeline, in milliseconds: a tenth of
 /// a second, fine enough that a stage's time is read to the tenth.
 pub const DEV_STEP_MS: u64 = 100;
-/// The reading time the dev screen assumes for the lines over a plate, in milliseconds: a plate
-/// stays up at least this long before the next one replaces it (K.5: cards of three seconds).
+/// The reading time the dev screen assumes for the lines over a plate until `scene timing set`
+/// changes it, in milliseconds: a plate stays up at least this long before the next one replaces
+/// it (K.5: cards of three seconds).
 pub const DEV_READING_MS: u64 = 3_000;
 /// How far a creature steps along the row when the workbench makes a visible change, in canvas
 /// units, and how many steps it takes before it starts again.
@@ -95,12 +96,15 @@ impl TimedAudit {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Keeps `recorded` for the answer, and passes its line on to the host's log with the
+    /// workbench's time (`at_ms`), so the order and timing of a run can be read off the log.
     fn keep(&self, recorded: Recorded) {
+        let at_ms = self.clock.now_ms();
         if let Some(log) = &self.log {
-            log.push(recorded.line());
+            log.push(format!("{} at_ms={at_ms}", recorded.line()));
         }
         let mut kept = self.kept();
-        kept.push_back((self.clock.now_ms(), recorded));
+        kept.push_back((at_ms, recorded));
         while kept.len() > MAXIMUM_KEPT_EVENTS {
             kept.pop_front();
         }
@@ -132,6 +136,8 @@ struct Taken {
     plates_finished: u64,
     finished_build_ms: u64,
     last_end: Option<BuildOutcome>,
+    /// How long the newest swap of the stretch dissolved.
+    last_dissolve_ms: Option<u64>,
 }
 
 fn summarise(events: Vec<(u64, Recorded)>) -> Taken {
@@ -139,6 +145,9 @@ fn summarise(events: Vec<(u64, Recorded)>) -> Taken {
     for (at_ms, recorded) in events {
         if let Recorded::Scene(event) = &recorded {
             match event {
+                SceneBuilderEvent::Swapped { swap, .. } => {
+                    taken.last_dissolve_ms = Some(swap.dissolve_ms);
+                }
                 SceneBuilderEvent::CardDue { after_ms, .. } => {
                     taken.card_due_after_ms = Some(*after_ms);
                 }
@@ -195,7 +204,13 @@ pub struct Workbench {
     worker: FakeStageWorker,
     builder: SceneBuilder,
     lookahead: LookaheadBench,
+    /// The workbench's own broker, which the builder, the look-ahead and the worker share.
+    hub: Arc<BrokerHub>,
     timing: PlateTiming,
+    /// The reading time a plate stays up at least before the next replaces it.
+    minimum_on_screen_ms: u64,
+    /// How long the newest swap dissolved; none before the first.
+    last_dissolve_ms: Option<u64>,
     next_scene: u64,
     active: Option<Active>,
     plates_finished: u64,
@@ -328,12 +343,15 @@ impl Workbench {
             kept: Mutex::new(VecDeque::new()),
         });
         let table = scene_purpose_table()?;
-        let hub = Arc::new(BrokerHub::new(
-            table.clone(),
-            BrokerLimits::default(),
-            Arc::clone(&audit) as Arc<dyn BrokerAudit>,
-            Arc::clone(&clock) as Arc<dyn Clock>,
-        ));
+        let hub = Arc::new(
+            BrokerHub::new(
+                table.clone(),
+                BrokerLimits::default(),
+                Arc::clone(&audit) as Arc<dyn BrokerAudit>,
+                Arc::clone(&clock) as Arc<dyn Clock>,
+            )
+            .with_hub(HubName::Workbench),
+        );
         let inputs = Arc::new(StageInputs::default());
         let lookahead = LookaheadBench::new(
             Arc::clone(&hub),
@@ -350,7 +368,7 @@ impl Workbench {
         let builder = SceneBuilder::new(
             TableId::new(1),
             table,
-            hub,
+            Arc::clone(&hub),
             Arc::clone(&audit) as Arc<dyn SceneBuilderAudit>,
             inputs,
             timing,
@@ -362,7 +380,10 @@ impl Workbench {
             worker,
             builder,
             lookahead,
+            hub,
             timing,
+            minimum_on_screen_ms: DEV_READING_MS,
+            last_dissolve_ms: None,
             next_scene: 1,
             active: None,
             plates_finished: 0,
@@ -423,7 +444,7 @@ impl Workbench {
                 &active.brief,
                 &mut self.builder,
                 moment,
-                DEV_READING_MS,
+                self.minimum_on_screen_ms,
             )
             .map_err(WorkbenchError::failed)?;
         if matches!(pumped.step.action, StepAction::Swapped(_)) && active.ready_ms.is_none() {
@@ -547,6 +568,9 @@ impl Workbench {
     /// Takes the events of the run since the last take and counts the plates it finished.
     fn take_run(&mut self) -> Taken {
         let taken = summarise(self.audit.take());
+        if taken.last_dissolve_ms.is_some() {
+            self.last_dissolve_ms = taken.last_dissolve_ms;
+        }
         self.plates_finished += taken.plates_finished;
         self.finished_build_ms = self
             .finished_build_ms
@@ -673,7 +697,81 @@ impl Workbench {
             cost,
             mean_build_ms: self.finished_build_ms.checked_div(self.plates_finished),
             plates_finished: self.plates_finished,
+            timing: self.timing_report(),
+            broker: self.hub.queues_report(),
         }
+    }
+
+    fn timing_report(&self) -> PlateTimingReport {
+        PlateTimingReport {
+            interval_s: self.timing.plate_interval_s(),
+            on_screen_interval_s: self
+                .active
+                .as_ref()
+                .map(|active| active.pacer.playout().timing().plate_interval_s()),
+            minimum_on_screen_ms: self.minimum_on_screen_ms,
+            dissolve_ms: self.last_dissolve_ms,
+            catch_up_ms: self.timing.image_stale_limit_ms(),
+        }
+    }
+
+    /// Whether the scene on screen has plate jobs queued or in flight.
+    fn building(&self) -> bool {
+        self.active.as_ref().is_some_and(|active| {
+            self.builder.jobs_in_flight(active.scene) > 0 || active.pacer.scheduler().queued() > 0
+        })
+    }
+
+    /// `scene timing set`: changes one plate timing, from the next tick of the scene on screen
+    /// and for every scene after it. The screen's buffer of the scene on screen keeps swapping at
+    /// the interval it was entered with (`on_screen_interval_s` in `plates`) until the next
+    /// scene. Refused while the scene on screen has plate jobs out.
+    pub fn set_timing(
+        &mut self,
+        request: &TimingRequest,
+    ) -> Result<TimingReply, SceneBuilderError> {
+        if self.building() {
+            return Err(SceneBuilderError::Building);
+        }
+        self.audit.take();
+        let TimingRequest { setting, value } = *request;
+        let invalid = || SceneBuilderError::InvalidTiming { setting, value };
+        let previous = match setting {
+            PlateTimingSetting::IntervalS => {
+                let previous = u64::from(self.timing.plate_interval_s());
+                // `TimingError` holds the setting and the value, which `invalid` carries.
+                self.timing = self
+                    .timing
+                    .with(TimingSetting::PlateIntervalS, value)
+                    .map_err(|_| invalid())?;
+                self.builder.set_timing(self.timing);
+                if let Some(active) = self.active.as_mut() {
+                    active.pacer.set_timing(self.timing);
+                }
+                previous
+            }
+            PlateTimingSetting::MinimumOnScreenMs => {
+                if value > MAXIMUM_MINIMUM_ON_SCREEN_MS {
+                    return Err(invalid());
+                }
+                std::mem::replace(&mut self.minimum_on_screen_ms, value)
+            }
+        };
+        SceneBuilderAudit::record(
+            self.audit.as_ref(),
+            &SceneBuilderEvent::TimingSet {
+                setting,
+                value,
+                previous,
+            },
+        );
+        let taken = self.take_run();
+        Ok(TimingReply {
+            setting,
+            previous,
+            timing: self.timing_report(),
+            lines: taken.lines,
+        })
     }
 
     /// The playout buffer and the establishing card.

@@ -174,7 +174,8 @@ impl NativeEmbeddingProvider {
             &self.credential,
             "application/json".to_owned(),
             body,
-        );
+        )
+        .with_operation("embeddings");
         let response = self
             .http
             .execute(request, deadline, std::future::pending())

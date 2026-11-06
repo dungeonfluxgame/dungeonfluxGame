@@ -12,8 +12,8 @@ use crate::dev_http::{BodyCause, BodyError, RouteError};
 
 use super::commit::CommitError;
 use super::report::{
-    CommitDisposition, DevControl, EngineError, ForceCause, QueryError, RefusalCause, ViewCause,
-    WireIntentCause,
+    CommitDisposition, DevControl, EngineError, ForceCause, QueryError, RefusalCause,
+    UnreadableBodyCause, ViewCause, WireIntentCause,
 };
 use super::setup::StartCause;
 
@@ -47,6 +47,10 @@ fn every_closed_key_of_the_engine_routes_is_its_serde_name_and_reads_back() {
         assert_eq!(cause.key(), serde_name(&cause));
         assert_eq!(StartCause::from_key(cause.key()), Some(cause));
     }
+    for cause in UnreadableBodyCause::ALL {
+        assert_eq!(cause.key(), serde_name(&cause));
+        assert_eq!(UnreadableBodyCause::from_key(cause.key()), Some(cause));
+    }
 }
 
 /// One of every variant, so a variant added without a key or a status is caught.
@@ -69,6 +73,18 @@ fn every_error() -> Vec<EngineError> {
         EngineError::InvalidQuery(QueryError {
             detail: "missing field `seat`".to_owned(),
         }),
+        EngineError::UnreadableBody {
+            cause: UnreadableBodyCause::TooLarge,
+        },
+        EngineError::UnreadableBody {
+            cause: UnreadableBodyCause::Interrupted,
+        },
+        EngineError::MachineNotOnTable {
+            machine: "dialogue".to_owned(),
+        },
+        EngineError::UnknownReport {
+            report: "everything".to_owned(),
+        },
         EngineError::ZeroOperation,
         EngineError::ZeroStep,
         EngineError::InvalidName {
@@ -273,4 +289,47 @@ fn a_refusal_status_names_whose_fault_it_is() {
         .status(),
         StatusCode::INTERNAL_SERVER_ERROR
     );
+}
+
+#[test]
+fn a_body_over_the_limit_is_413_one_that_broke_off_400_and_a_report_name_the_callers_mistake() {
+    let too_large = EngineError::UnreadableBody {
+        cause: UnreadableBodyCause::TooLarge,
+    };
+    let broke_off = EngineError::UnreadableBody {
+        cause: UnreadableBodyCause::Interrupted,
+    };
+
+    assert_eq!(too_large.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(broke_off.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(too_large.key(), "unreadable_body");
+    let written = serde_json::to_value(&too_large).expect("serializes");
+    assert_eq!(
+        written,
+        serde_json::json!({"error": "unreadable_body", "cause": "too_large"})
+    );
+    for mistake in [
+        EngineError::UnknownReport {
+            report: "x".to_owned(),
+        },
+        EngineError::MachineNotOnTable {
+            machine: "explore".to_owned(),
+        },
+    ] {
+        assert_eq!(mistake.status(), StatusCode::BAD_REQUEST, "{mistake:?}");
+    }
+}
+
+#[test]
+fn an_owner_that_did_not_start_names_its_cause_in_its_sentence() {
+    let error = EngineError::NotStarted {
+        cause: StartCause::Spool,
+        detail: "the spool cannot be opened".to_owned(),
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "the owner did not start (spool): the spool cannot be opened"
+    );
+    assert_eq!(error.status(), StatusCode::SERVICE_UNAVAILABLE);
 }

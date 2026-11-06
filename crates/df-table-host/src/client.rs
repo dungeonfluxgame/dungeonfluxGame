@@ -8,12 +8,17 @@ use std::fmt;
 use std::io::ErrorKind;
 
 use axum::http::StatusCode;
+use df_playground::path::CLIENT_HEADER;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::limits::{
     MAXIMUM_RESPONSE_BYTES, REQUEST_TIMEOUT, STREAM_ANSWER_TIMEOUT, STREAM_STEP_TIMEOUT,
 };
+
+/// The name the command line gives itself in the `X-Df-Client` header of every request, so the
+/// host can say in its audit lines that a change came from the command line and not a page.
+pub const CLI_CLIENT_NAME: &str = "cli";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
@@ -157,7 +162,8 @@ async fn request(
     limit: usize,
 ) -> Result<Response, ClientError> {
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         {CLIENT_HEADER}: {CLI_CLIENT_NAME}\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
@@ -175,6 +181,63 @@ pub async fn get(port: u16, path: &str) -> Result<Response, ClientError> {
 /// POST `body` (JSON, possibly empty) to `path` and read the whole answer.
 pub async fn post_json(port: u16, path: &str, body: &str) -> Result<Response, ClientError> {
     request(port, "POST", path, body, MAXIMUM_RESPONSE_BYTES).await
+}
+
+/// What a HEAD answered: the status and the headers `media head` prints. A HEAD answer has no
+/// body, so its length is the header's, not a count of bytes read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadAnswer {
+    pub status: StatusCode,
+    pub content_type: Option<String>,
+    pub content_length: Option<u64>,
+    pub entity_tag: Option<String>,
+}
+
+/// The value of the header `name` in `head`, trimmed.
+fn header_value(head: &str, name: &str) -> Option<String> {
+    head.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case(name)
+            .then(|| value.trim().to_owned())
+    })
+}
+
+/// Reads the head of an answer to a HEAD request.
+fn parse_head_answer(answer: &[u8]) -> Result<HeadAnswer, ClientError> {
+    const HEAD_END: &[u8] = b"\r\n\r\n";
+    let head_length = answer
+        .windows(HEAD_END.len())
+        .position(|window| window == HEAD_END)
+        .ok_or(ClientError::InvalidResponse)?;
+    let head = String::from_utf8_lossy(&answer[..head_length]);
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| StatusCode::from_bytes(code.as_bytes()).ok())
+        .ok_or(ClientError::InvalidResponse)?;
+    Ok(HeadAnswer {
+        status,
+        content_type: header_value(&head, "content-type"),
+        content_length: content_length(&head).and_then(|length| u64::try_from(length).ok()),
+        entity_tag: header_value(&head, "etag"),
+    })
+}
+
+/// HEAD `path` and read the status and headers of the answer.
+pub async fn head(port: u16, path: &str) -> Result<HeadAnswer, ClientError> {
+    let request = format!(
+        "HEAD {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{CLIENT_HEADER}: {CLI_CLIENT_NAME}\r\n\
+         Connection: close\r\n\r\n"
+    );
+    let answer = tokio::time::timeout(
+        REQUEST_TIMEOUT,
+        exchange(port, request.as_bytes(), MAXIMUM_RESPONSE_BYTES),
+    )
+    .await
+    .map_err(|_| ClientError::TimedOut)??;
+    parse_head_answer(&answer)
 }
 
 /// `get` with a smaller cap, so a test can reach the cap without a huge answer.
@@ -202,7 +265,8 @@ impl StreamedPost {
             .await
             .map_err(|_| ClientError::TimedOut)??;
         let head = format!(
-            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\n\
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+             {CLIENT_HEADER}: {CLI_CLIENT_NAME}\r\nContent-Type: application/json\r\n\
              Content-Length: {content_length}\r\nConnection: close\r\n\r\n"
         );
         send_piece(&mut stream, head.as_bytes()).await?;

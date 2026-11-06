@@ -76,7 +76,11 @@ pub fn audit_line(request: &RulesCheckRequest, report: &RulesCheckReport) -> Str
     )
 }
 
-/// The audit line of a refused check: the error's closed key only.
-pub fn refusal_audit_line(error: &RulesCheckError) -> String {
-    format!("ENGINE refused verb=rules_check error={}", error.key())
+/// The audit line of a refused check, the shape of every engine route's refusal: the error's
+/// closed key and how long the call took.
+pub fn refusal_audit_line(error: &RulesCheckError, duration_ms: u128) -> String {
+    format!(
+        "ENGINE refused verb=rules_check error={} duration_ms={duration_ms}",
+        error.key()
+    )
 }

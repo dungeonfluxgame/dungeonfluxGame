@@ -10,6 +10,7 @@ df-types = { path = "../df-types" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 df-model = { path = "../df-model" }
+df-observe = { path = "../df-observe" }
 base64 = "=0.22.1"
 httpdate = "=1.0.3"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"] }

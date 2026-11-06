@@ -113,6 +113,11 @@ impl LineEcho {
         self.dropped.load(Ordering::Relaxed)
     }
 
+    /// Bytes queued for the writer and not yet written, each line counted with its overhead.
+    pub fn pending_bytes(&self) -> usize {
+        self.pending_bytes.load(Ordering::Relaxed)
+    }
+
     /// Whether the writer is gone: it could not be started, or it died (its writer panicked).
     pub fn writer_gone(&self) -> bool {
         self.writer_gone.load(Ordering::Relaxed)

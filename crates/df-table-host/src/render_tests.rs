@@ -30,6 +30,7 @@ fn line(sequence: u64, text: &str) -> LoggedLine {
     LoggedLine {
         sequence,
         text: text.to_owned(),
+        at_ms: 0,
     }
 }
 

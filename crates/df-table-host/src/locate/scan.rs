@@ -4,14 +4,14 @@
 use std::path::Path;
 
 use df_imagery::oneshot_segment::{
-    self, AnalysisMaskSet, SegmentConfig, SegmentError, SegmentRequest,
+    self, AnalysisMaskSet, SegmentConfig, SegmentError, SegmentPhases, SegmentRequest,
 };
 use df_scene_layout::{
     FULL_PERMILLE, PictureBinding, RegionGeometry, RegionRef, SceneLayout, SceneRegion, region_id,
 };
 
 use super::limits::SCAN_TIMEOUT;
-use super::request::{LocateError, LocateRequest, ScanPrompt};
+use super::request::{LocateError, LocateRequest, LocateStage, LocateStageError, ScanPrompt};
 use super::storage::{lock_layout_writes, read_layout, read_picture, write_layout};
 use super::validate::{check_label, check_masks, check_picture_name};
 
@@ -170,6 +170,25 @@ pub struct Scanned {
     pub left_out: usize,
     /// The layout this scan replaced could not be read, so none of its names were kept.
     pub old_layout_unreadable: bool,
+    /// How long the imagery API took for each phase of the scan.
+    pub phases: SegmentPhases,
+}
+
+/// Where a scan sends: the imagery API's endpoint, and the supplier key as the host's environment
+/// held it when the scan started (`None`: no key). It has no `Debug`, so the key is never printed.
+pub(super) struct ScanSupplier {
+    pub(super) endpoint: String,
+    pub(super) credential: Option<String>,
+}
+
+impl ScanSupplier {
+    /// The fal endpoint, with the key the host's environment holds now.
+    pub(super) fn from_environment() -> Self {
+        Self {
+            endpoint: oneshot_segment::DEFAULT_ENDPOINT.to_owned(),
+            credential: crate::environment::first_text(&FAL_KEY_VARIABLES),
+        }
+    }
 }
 
 /// Scans `picture` of `media` through the imagery API and stores its layout in `layouts`. Reading
@@ -180,6 +199,42 @@ pub async fn scan_picture(
     layouts: &Path,
     request: &LocateRequest,
 ) -> Result<Scanned, LocateError> {
+    scan_stages(media, layouts, request, ScanSupplier::from_environment())
+        .await
+        .map_err(|failed| failed.error)
+}
+
+/// [`scan_picture`] through `supplier`, with the stage each error happened at: reading the
+/// picture and the segmentation are the scan, writing the layout the store.
+pub(super) async fn scan_stages(
+    media: &Path,
+    layouts: &Path,
+    request: &LocateRequest,
+    supplier: ScanSupplier,
+) -> Result<Scanned, LocateStageError> {
+    let scanned = scan_masks(media, request, supplier)
+        .await
+        .map_err(LocateStageError::at(LocateStage::Scan))?;
+    store_scan(layouts, request, scanned)
+        .await
+        .map_err(LocateStageError::at(LocateStage::Store))
+}
+
+/// What the segmentation gave, before it is stored: the layout, how many instances it left out
+/// and how long the supplier took, in all and by phase.
+struct ScannedMasks {
+    layout: SceneLayout,
+    left_out: usize,
+    duration_ms: u64,
+    phases: SegmentPhases,
+}
+
+/// Reads the picture and asks the imagery API at `supplier` for its masks, reduced to a layout.
+async fn scan_masks(
+    media: &Path,
+    request: &LocateRequest,
+    supplier: ScanSupplier,
+) -> Result<ScannedMasks, LocateError> {
     check_picture_name(&request.picture)?;
     let prompt = request.prompt.unwrap_or_default();
     let masks = check_masks(request.masks)?;
@@ -197,16 +252,15 @@ pub async fn scan_picture(
         width_px: 0,
         height_px: 0,
     };
-    let credential =
-        crate::environment::first_text(&FAL_KEY_VARIABLES).ok_or(LocateError::FalKeyMissing)?;
+    let credential = supplier.credential.ok_or(LocateError::FalKeyMissing)?;
     let config = SegmentConfig {
-        endpoint: oneshot_segment::DEFAULT_ENDPOINT.to_owned(),
+        endpoint: supplier.endpoint,
         model: oneshot_segment::DEFAULT_MODEL.to_owned(),
         credential,
         timeout: SCAN_TIMEOUT,
     };
     let started = tokio::time::Instant::now();
-    let set = oneshot_segment::segment(
+    let segmented = oneshot_segment::segment(
         &config,
         SegmentRequest {
             source,
@@ -216,10 +270,31 @@ pub async fn scan_picture(
     )
     .await
     .map_err(|error: SegmentError| LocateError::ScanFailed {
-        cause: error.into(),
+        cause: error.cause.into(),
+        send_state: error.send_state.into(),
     })?;
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let (mut layout, left_out) = layout_from(&set, "sam-3.1", prompt, binding);
+    let (layout, left_out) = layout_from(&segmented.masks, "sam-3.1", prompt, binding);
+    Ok(ScannedMasks {
+        layout,
+        left_out,
+        duration_ms,
+        phases: segmented.phases,
+    })
+}
+
+/// Stores the scanned layout, keeping the names of the old layout's regions it finds again.
+async fn store_scan(
+    layouts: &Path,
+    request: &LocateRequest,
+    scanned: ScannedMasks,
+) -> Result<Scanned, LocateError> {
+    let ScannedMasks {
+        mut layout,
+        left_out,
+        duration_ms,
+        phases,
+    } = scanned;
     let (layouts, picture) = (layouts.to_owned(), request.picture.clone());
     tokio::task::spawn_blocking(move || {
         let _writing = lock_layout_writes();
@@ -237,6 +312,7 @@ pub async fn scan_picture(
             kept_labels,
             left_out,
             old_layout_unreadable,
+            phases,
         })
     })
     .await

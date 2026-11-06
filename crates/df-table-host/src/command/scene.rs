@@ -414,7 +414,9 @@ pub(super) fn scene(words: &[String]) -> Result<Command, CommandError> {
         Some((verb, rest)) if verb == "home" => home::parse(rest),
         Some((verb, rest)) if verb == "start" => crate::engine::parse_scene_start(rest)
             .map(|command| Command::Engine(crate::engine::EngineCommand::Play(command))),
-        Some((verb, rest)) if matches!(verb.as_str(), "build" | "show" | "lookahead") => {
+        Some((verb, rest))
+            if matches!(verb.as_str(), "build" | "show" | "lookahead" | "timing") =>
+        {
             crate::scene_builder::parse_scene(verb, rest).map(Command::SceneBuilder)
         }
         Some((verb, rest)) if matches!(verb.as_str(), "narration" | "seat" | "seats" | "logo") => {

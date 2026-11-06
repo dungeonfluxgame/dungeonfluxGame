@@ -345,4 +345,6 @@ pub struct GeneratedImage {
     pub duration: Duration,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// Why the attempt's scratch folder was left behind, when it was. The picture stands.
+    pub cleanup: Option<df_imagery::oneshot::CleanupCause>,
 }

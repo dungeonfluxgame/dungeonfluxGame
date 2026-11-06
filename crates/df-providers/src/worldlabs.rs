@@ -27,11 +27,12 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
 use crate::native_http::{
-    MAXIMUM_CHUNKS, NativeHttp, NativeHttpCause, hardened_client_builder, header_block_bytes,
-    is_loopback_socket, is_valid_credential,
+    ExchangeRecord, ExchangeTrace, MAXIMUM_CHUNKS, NativeHttp, NativeHttpCause, SendState,
+    exchange_host, hardened_client_builder, header_block_bytes, is_loopback_socket,
+    is_valid_credential,
 };
 use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, is_public};
-use crate::{HttpMethod, ProviderLimits};
+use crate::{HttpMethod, ProviderLimits, ProviderName};
 
 const LIVE_BASE: &str = "https://api.worldlabs.ai";
 // The image, display name and prompt bounds are the Marble request contract.
@@ -306,7 +307,12 @@ impl NativeWorldLabs {
     pub async fn submit(&self, request: &WorldRequest<'_>) -> Result<OperationId, WorldLabsError> {
         let body = submit_body(request)?;
         let value = self
-            .api_json(HttpMethod::Post, "/marble/v1/worlds:generate", Some(body))
+            .api_json(
+                HttpMethod::Post,
+                "generate",
+                "/marble/v1/worlds:generate",
+                Some(body),
+            )
             .await?;
         let id = value
             .get("operation_id")
@@ -320,6 +326,7 @@ impl NativeWorldLabs {
         let value = self
             .api_json(
                 HttpMethod::Get,
+                "poll",
                 &format!("/marble/v1/operations/{}", operation.as_str()),
                 None,
             )
@@ -347,6 +354,7 @@ impl NativeWorldLabs {
         let mut value = self
             .api_json(
                 HttpMethod::Post,
+                "export",
                 &format!("/marble/v1/worlds/{world_id}:export"),
                 Some(body.to_string().into_bytes()),
             )
@@ -382,6 +390,7 @@ impl NativeWorldLabs {
             value = self
                 .api_json(
                     HttpMethod::Get,
+                    "poll",
                     &format!("/marble/v1/operations/{next}"),
                     None,
                 )
@@ -392,7 +401,40 @@ impl NativeWorldLabs {
     /// Downloads `url` (a signed asset URL) with no key header, keeping at
     /// most `maximum_bytes`. Exceeding the bound is an error, never a
     /// truncated success.
+    /// Writes one `PROVIDER exchange operation=download` line naming only the download host.
     pub async fn download(&self, url: &str, maximum_bytes: u64) -> Result<Vec<u8>, WorldLabsError> {
+        let started = std::time::Instant::now();
+        let mut trace = ExchangeTrace::default();
+        let result = self.download_traced(url, maximum_bytes, &mut trace).await;
+        let host = self
+            .resolve_download_url(url)
+            .map_or_else(|_| "-".to_owned(), |target| exchange_host(&target));
+        ExchangeRecord {
+            provider: ProviderName::WorldLabs,
+            operation: Some("download"),
+            host: &host,
+            status: trace.status,
+            cause: match &result {
+                Ok(_) => "ok",
+                Err(WorldLabsError::Transport(cause)) => cause.key(),
+                Err(error) => error.key(),
+            },
+            sent: trace.sent,
+            request_bytes: 0,
+            response_bytes: result.as_ref().map_or(0, Vec::len),
+            duration: started.elapsed(),
+            request_id: None,
+        }
+        .record();
+        result
+    }
+
+    async fn download_traced(
+        &self,
+        url: &str,
+        maximum_bytes: u64,
+        trace: &mut ExchangeTrace,
+    ) -> Result<Vec<u8>, WorldLabsError> {
         if maximum_bytes == 0 || maximum_bytes > MAXIMUM_DOWNLOAD_BYTES {
             return Err(WorldLabsError::InvalidRequest);
         }
@@ -407,10 +449,14 @@ impl NativeWorldLabs {
             }
         };
         let send = client.get(&target).send();
+        // From here the supplier may have the request, whatever happens next.
+        trace.sent = SendState::PossiblySent;
         let mut response = tokio::time::timeout_at(deadline, send)
             .await
             .map_err(|_| WorldLabsError::Timeout)?
             .map_err(map_reqwest_error)?;
+        trace.sent = SendState::KnownSent;
+        trace.status = Some(response.status().as_u16());
         if let Some(accepted) = &pinned_addresses {
             let connected = response
                 .remote_addr()
@@ -495,12 +541,49 @@ impl NativeWorldLabs {
         Ok(url.to_owned())
     }
 
-    /// One JSON exchange with the API, sent with exactly the given method.
+    /// One JSON exchange with the API, sent with exactly the given method, and its
+    /// `PROVIDER exchange` audit line labelled `operation`.
     async fn api_json(
+        &self,
+        method: HttpMethod,
+        operation: &'static str,
+        path: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<Value, WorldLabsError> {
+        let started = std::time::Instant::now();
+        let request_bytes = body.as_ref().map_or(0, Vec::len);
+        let mut trace = ExchangeTrace::default();
+        let mut response_bytes = 0;
+        let result = self
+            .api_json_traced(method, path, body, &mut trace, &mut response_bytes)
+            .await;
+        ExchangeRecord {
+            provider: ProviderName::WorldLabs,
+            operation: Some(operation),
+            host: &exchange_host(&self.base),
+            status: trace.status,
+            cause: match &result {
+                Ok(_) => "ok",
+                Err(WorldLabsError::Transport(cause)) => cause.key(),
+                Err(error) => error.key(),
+            },
+            sent: trace.sent,
+            request_bytes,
+            response_bytes,
+            duration: started.elapsed(),
+            request_id: None,
+        }
+        .record();
+        result
+    }
+
+    async fn api_json_traced(
         &self,
         method: HttpMethod,
         path: &str,
         body: Option<Vec<u8>>,
+        trace: &mut ExchangeTrace,
+        response_bytes: &mut usize,
     ) -> Result<Value, WorldLabsError> {
         let url = format!("{}{path}", self.base);
         let mut builder = match method {
@@ -514,10 +597,13 @@ impl NativeWorldLabs {
             builder = builder.body(body);
         }
         let send = builder.send();
+        trace.sent = SendState::PossiblySent;
         let mut response = tokio::time::timeout(self.total_timeout, send)
             .await
             .map_err(|_| WorldLabsError::Timeout)?
             .map_err(map_reqwest_error)?;
+        trace.sent = SendState::KnownSent;
+        trace.status = Some(response.status().as_u16());
         if response.status().is_redirection() {
             return Err(WorldLabsError::Transport(NativeHttpCause::Redirect));
         }
@@ -544,6 +630,7 @@ impl NativeWorldLabs {
                 return Err(WorldLabsError::Transport(NativeHttpCause::ResponseTooLarge));
             }
             bytes.extend_from_slice(&chunk);
+            *response_bytes = bytes.len();
         }
         if status != 200 {
             return Err(map_status(status, Some(&bytes)));

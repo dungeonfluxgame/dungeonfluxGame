@@ -46,36 +46,123 @@ pub struct HttpRequest {
     url: String,
     headers: Vec<(&'static str, String)>,
     body: Vec<u8>,
+    provider: ProviderName,
+    operation: Option<&'static str>,
+}
+
+/// The supplier a request goes to, named in its `PROVIDER exchange` audit line. Each request
+/// builder sets it from the credential shape it writes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderName {
+    OpenAi,
+    Fal,
+    Bfl,
+    ElevenLabs,
+    WorldLabs,
+    /// The choice service behind `SystemOneChoiceProvider`.
+    SystemOne,
+}
+
+impl ProviderName {
+    pub const ALL: [Self; 6] = [
+        Self::OpenAi,
+        Self::Fal,
+        Self::Bfl,
+        Self::ElevenLabs,
+        Self::WorldLabs,
+        Self::SystemOne,
+    ];
+
+    /// The supplier's published spelling, as audit lines carry it.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::OpenAi => "openai",
+            Self::Fal => "fal",
+            Self::Bfl => "bfl",
+            Self::ElevenLabs => "elevenlabs",
+            Self::WorldLabs => "worldlabs",
+            Self::SystemOne => "systemone",
+        }
+    }
+
+    /// The supplier whose `key()` is `key`, if any.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|provider| provider.key() == key)
+    }
 }
 
 impl HttpRequest {
+    fn new(
+        provider: ProviderName,
+        method: HttpMethod,
+        url: String,
+        headers: Vec<(&'static str, String)>,
+        body: Vec<u8>,
+    ) -> Self {
+        Self {
+            method,
+            url,
+            headers,
+            body,
+            provider,
+            operation: None,
+        }
+    }
+
+    /// Names the call in the transport's `PROVIDER exchange` line (`operation=`), such as
+    /// `images_generations`. A label is lowercase ASCII letters, digits and `_`; the line writes
+    /// any other label as `-`, like an unnamed call.
+    pub fn with_operation(mut self, operation: &'static str) -> Self {
+        self.operation = Some(operation);
+        self
+    }
+
+    /// Replaces the supplier the builder chose, for a bearer call that is not OpenAI's.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_provider(mut self, provider: ProviderName) -> Self {
+        self.provider = provider;
+        self
+    }
+
+    /// The supplier this request goes to.
+    pub const fn provider(&self) -> ProviderName {
+        self.provider
+    }
+
+    /// The caller's label for this call, when it named one.
+    pub const fn operation(&self) -> Option<&'static str> {
+        self.operation
+    }
+
     /// Native BFL request with an `x-key` credential header.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn bfl_native(method: HttpMethod, endpoint: &str, credential: &str, body: Vec<u8>) -> Self {
-        Self {
+        Self::new(
+            ProviderName::Bfl,
             method,
-            url: endpoint.to_owned(),
-            headers: vec![
+            endpoint.to_owned(),
+            vec![
                 ("x-key", credential.to_owned()),
                 ("Content-Type", "application/json".to_owned()),
             ],
             body,
-        }
+        )
     }
     /// Native fal request with a `Key` credential header and no retry.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn fal_native(method: HttpMethod, endpoint: &str, credential: &str, body: Vec<u8>) -> Self {
-        Self {
+        Self::new(
+            ProviderName::Fal,
             method,
-            url: endpoint.to_owned(),
-            headers: vec![
+            endpoint.to_owned(),
+            vec![
                 ("Authorization", format!("Key {credential}")),
                 ("Content-Type", "application/json".to_owned()),
                 ("X-Fal-No-Retry", "1".to_owned()),
                 (FAL_STORE_IO_HEADER.0, FAL_STORE_IO_HEADER.1.to_owned()),
             ],
             body,
-        }
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -85,18 +172,20 @@ impl HttpRequest {
         content_type: String,
         body: Vec<u8>,
     ) -> Self {
-        Self {
-            method: HttpMethod::Post,
-            url: endpoint.to_owned(),
-            headers: vec![
+        Self::new(
+            ProviderName::ElevenLabs,
+            HttpMethod::Post,
+            endpoint.to_owned(),
+            vec![
                 ("xi-api-key", credential.to_owned()),
                 ("Content-Type", content_type),
             ],
             body,
-        }
+        )
     }
 
     /// A bearer-authenticated `POST` with a caller-built body, such as a multipart image edit.
+    /// Its supplier is OpenAI.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn bearer_native(
         endpoint: &str,
@@ -104,15 +193,16 @@ impl HttpRequest {
         content_type: String,
         body: Vec<u8>,
     ) -> Self {
-        Self {
-            method: HttpMethod::Post,
-            url: endpoint.to_owned(),
-            headers: vec![
+        Self::new(
+            ProviderName::OpenAi,
+            HttpMethod::Post,
+            endpoint.to_owned(),
+            vec![
                 ("Authorization", format!("Bearer {credential}")),
                 ("Content-Type", content_type),
             ],
             body,
-        }
+        )
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -130,6 +220,7 @@ impl HttpRequest {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn responses(endpoint: &str, credential: &str, body: Vec<u8>) -> Self {
         Self::bearer_native(endpoint, credential, "application/json".to_owned(), body)
+            .with_operation("responses")
     }
 
     pub const fn method(&self) -> HttpMethod {
@@ -375,15 +466,17 @@ pub fn elevenlabs_stream_request(
         json_string(ELEVEN_MODEL)
     );
 
-    Ok(HttpRequest {
-        method: HttpMethod::Post,
+    Ok(HttpRequest::new(
+        ProviderName::ElevenLabs,
+        HttpMethod::Post,
         url,
-        headers: vec![
+        vec![
             ("xi-api-key", api_key.to_owned()),
             ("Content-Type", "application/json".to_owned()),
         ],
-        body: body.into_bytes(),
-    })
+        body.into_bytes(),
+    )
+    .with_operation("text_to_speech"))
 }
 
 /// Builds the selected FAL FLUX Schnell queue submission request shape.
@@ -405,16 +498,18 @@ pub fn fal_submit_request(api_key: &str, prompt: &str) -> Result<HttpRequest, Ht
         ),
         json_string(prompt)
     );
-    Ok(HttpRequest {
-        method: HttpMethod::Post,
-        url: FAL_QUEUE_BASE.to_owned(),
-        headers: vec![
+    Ok(HttpRequest::new(
+        ProviderName::Fal,
+        HttpMethod::Post,
+        FAL_QUEUE_BASE.to_owned(),
+        vec![
             ("Authorization", format!("Key {api_key}")),
             ("Content-Type", "application/json".to_owned()),
             (FAL_STORE_IO_HEADER.0, FAL_STORE_IO_HEADER.1.to_owned()),
         ],
-        body: body.into_bytes(),
-    })
+        body.into_bytes(),
+    )
+    .with_operation("submit"))
 }
 
 /// Validates the selected MP3 stream and preserves optional supplier metadata.
@@ -589,7 +684,7 @@ pub fn fal_status_request(
     api_key: &str,
     request_id: &ProviderRequestId,
 ) -> Result<HttpRequest, HttpRequestError> {
-    fal_get_request(api_key, request_id, "status")
+    fal_get_request(api_key, request_id, "status", "status")
 }
 
 /// Constructs the canonical result URL for a previously captured request ID.
@@ -605,13 +700,14 @@ pub fn fal_result_request(
         } if completed_id == request_id => {}
         _ => return Err(HttpRequestError::ResultBeforeCompletion),
     }
-    fal_get_request(api_key, request_id, "response")
+    fal_get_request(api_key, request_id, "response", "result")
 }
 
 fn fal_get_request(
     api_key: &str,
     request_id: &ProviderRequestId,
     suffix: &str,
+    operation: &'static str,
 ) -> Result<HttpRequest, HttpRequestError> {
     if api_key.is_empty() {
         return Err(HttpRequestError::EmptyCredential);
@@ -625,15 +721,17 @@ fn fal_get_request(
         "{FAL_QUEUE_BASE}/requests/{}{suffix}",
         encode_path_segment(request_id.as_str())
     );
-    Ok(HttpRequest {
-        method: HttpMethod::Get,
+    Ok(HttpRequest::new(
+        ProviderName::Fal,
+        HttpMethod::Get,
         url,
-        headers: vec![
+        vec![
             ("Authorization", format!("Key {api_key}")),
             (FAL_STORE_IO_HEADER.0, FAL_STORE_IO_HEADER.1.to_owned()),
         ],
-        body: Vec::new(),
-    })
+        Vec::new(),
+    )
+    .with_operation(operation))
 }
 
 fn expected_fal_status_url(request_id: &ProviderRequestId) -> String {

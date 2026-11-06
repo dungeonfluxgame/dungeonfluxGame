@@ -167,7 +167,7 @@ impl NativeElevenMusicProvider {
             "model_id": MUSIC_MODEL,
             "force_instrumental": true,
         });
-        self.post("/v1/music", &body, deadline).await
+        self.post("/v1/music", "music", &body, deadline).await
     }
 
     /// Makes a loopable ambience bed of `seconds` from `description`; one call, never retried.
@@ -190,12 +190,15 @@ impl NativeElevenMusicProvider {
             "loop": true,
             "model_id": SOUND_MODEL,
         });
-        self.post("/v1/sound-generation", &body, deadline).await
+        self.post("/v1/sound-generation", "ambience", &body, deadline)
+            .await
     }
 
+    /// One POST to `path`, labelled `operation` in its exchange audit line.
     async fn post(
         &self,
         path: &str,
+        operation: &'static str,
         body: &serde_json::Value,
         deadline: Duration,
     ) -> Result<GeneratedAudio, ElevenMusicError> {
@@ -205,7 +208,8 @@ impl NativeElevenMusicProvider {
             &self.credential,
             "application/json".to_owned(),
             body,
-        );
+        )
+        .with_operation(operation);
         let response = self
             .http
             .execute_profile(

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use df_table::ports::{Clock, EventSink};
 use df_table::testkit::ManualClock;
@@ -9,8 +9,8 @@ use super::fixtures::{
     boundary_failed, dice_drawn, operation_of, received, spawned, step_finished,
 };
 use super::{
-    EventLevel, HistoryFilter, HostEventSink, Losses, MemoryOutlet, ObservedRecord, OutletError,
-    OutletStatus, RecordClass, RecordOutlet,
+    DegradedNotice, EventLevel, HistoryFilter, HostEventSink, LossCause, Losses, MemoryOutlet,
+    ObservedRecord, OutletError, OutletStatus, RecordClass, RecordOutlet,
 };
 
 fn sink() -> (HostEventSink, Arc<EventLog>, Arc<ManualClock>) {
@@ -21,6 +21,58 @@ fn sink() -> (HostEventSink, Arc<EventLog>, Arc<ManualClock>) {
         log,
         clock,
     )
+}
+
+/// The texts of the log's lines that start with `prefix`.
+fn lines_starting(log: &EventLog, prefix: &str) -> Vec<String> {
+    log.newest(100)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with(prefix))
+        .collect()
+}
+
+/// An outlet that takes every record and then loses the class A ones, as a writer that fails
+/// after `accept` would: it counts the loss and tells the sink's notice, as the spool's writer
+/// does.
+#[derive(Default)]
+struct LosingOutlet {
+    losses: Losses,
+    notice: OnceLock<Arc<DegradedNotice>>,
+}
+
+impl RecordOutlet for LosingOutlet {
+    fn name(&self) -> &'static str {
+        "spool"
+    }
+
+    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletError> {
+        if record.class == RecordClass::Always {
+            self.losses.record(record.class);
+            if let Some(notice) = self.notice.get() {
+                notice.first_loss("spool", LossCause::WriteFailed, self.losses.always());
+            }
+        }
+        Ok(())
+    }
+
+    fn watch_losses(&self, notice: Arc<DegradedNotice>) {
+        let _ = self.notice.set(notice);
+    }
+
+    fn status(&self, _now_ms: u64) -> OutletStatus {
+        OutletStatus {
+            name: "spool".to_owned(),
+            accepted: 0,
+            confirmed: 0,
+            pending: 0,
+            lag_ms: 0,
+            lost_always: self.losses.always(),
+            lost_verbose: self.losses.verbose(),
+            evicted: 0,
+            unconfirmed: 0,
+        }
+    }
 }
 
 /// An outlet that takes nothing, as a full disk would.
@@ -235,7 +287,16 @@ fn an_outlet_that_refuses_is_counted_by_class_and_the_stream_is_degraded_but_the
     assert_eq!(health.outlets.len(), 2);
     assert_eq!(health.outlets[1].name, "full");
     assert_eq!(health.retained, 2, "the history still has both");
-    assert_eq!(log.newest(10).len(), 2, "so does the line log");
+    let lines: Vec<String> = log.newest(10).into_iter().map(|line| line.text).collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "so does the line log, with the one degraded line"
+    );
+    assert_eq!(
+        lines[1],
+        "HOST sink_degraded outlet=full cause=full lost_always=1"
+    );
 }
 
 #[test]
@@ -247,4 +308,67 @@ fn the_health_of_an_untroubled_sink_has_no_lag_and_is_not_degraded() {
     assert_eq!(health.outlets[0].name, "memory");
     clock.advance_ms(40);
     assert_eq!(sink.health().lag_ms, 0, "memory confirms at once");
+}
+
+#[test]
+fn the_first_class_a_loss_writes_sink_degraded_once_and_later_losses_are_only_counted() {
+    let log = Arc::new(EventLog::default());
+    let sink = HostEventSink::new(Arc::clone(&log), Arc::new(ManualClock::default()))
+        .with_outlet(Arc::new(FullOutlet::default()));
+
+    sink.record(&step_finished(1));
+    assert!(
+        lines_starting(&log, "HOST sink_degraded").is_empty(),
+        "a class B loss is counted, not announced"
+    );
+    sink.record(&received(1));
+    sink.record(&received(2));
+    sink.record(&boundary_failed(2));
+
+    assert_eq!(
+        lines_starting(&log, "HOST sink_degraded"),
+        ["HOST sink_degraded outlet=full cause=full lost_always=1"]
+    );
+    assert_eq!(sink.health().lost_always, 3);
+    assert_eq!(lines_starting(&log, "HOST sink_degraded").len(), 1);
+}
+
+#[test]
+fn a_loss_an_outlet_finds_after_accepting_is_announced_once_when_found_without_a_health_read() {
+    let log = Arc::new(EventLog::default());
+    let sink = HostEventSink::new(Arc::clone(&log), Arc::new(ManualClock::default()))
+        .with_outlet(Arc::new(LosingOutlet::default()));
+
+    sink.record(&received(1));
+    assert_eq!(
+        lines_starting(&log, "HOST sink_degraded"),
+        ["HOST sink_degraded outlet=spool cause=write_failed lost_always=1"],
+        "written when the outlet found the loss, before anyone read the health"
+    );
+
+    sink.record(&received(2));
+    assert!(sink.health().degraded);
+    assert_eq!(lines_starting(&log, "HOST sink_degraded").len(), 1);
+}
+
+#[test]
+fn a_refusal_and_a_later_loss_after_accept_share_the_one_degraded_line() {
+    let log = Arc::new(EventLog::default());
+    let sink = HostEventSink::new(Arc::clone(&log), Arc::new(ManualClock::default()))
+        .with_outlet(Arc::new(FullOutlet::default()))
+        .with_outlet(Arc::new(LosingOutlet::default()));
+
+    sink.record(&received(1));
+    sink.record(&received(2));
+
+    assert_eq!(
+        lines_starting(&log, "HOST sink_degraded"),
+        ["HOST sink_degraded outlet=full cause=full lost_always=1"]
+    );
+}
+
+#[test]
+fn health_has_no_shared_path_part_when_the_sink_has_no_shared_path() {
+    let (sink, _log, _clock) = sink();
+    assert_eq!(sink.health().shared, None);
 }

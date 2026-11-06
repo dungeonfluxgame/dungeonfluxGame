@@ -23,17 +23,22 @@ use crate::imagegen::format::{format_ended, format_refusal};
 use crate::imagegen::request::{GenerateError, JobView};
 use crate::limits::UPLOAD_PIECE_BYTES;
 use crate::locate::request::LocateError;
-use crate::playground::{ChangeReply, FixtureNameError, PlaygroundChangeError, fixture_file_name};
+use crate::playground::{
+    ChangeReply, ClientsError, FixtureNameError, PlaygroundChangeError, fixture_file_name,
+};
 use crate::report::{
-    describe_done, format_canvas, format_clients, format_events, format_kinds, format_media,
-    format_playground,
+    describe_done, format_canvas, format_clients, format_kinds, format_playground,
 };
 use crate::scene_builder::SceneBuilderError;
+use crate::server::request::HostError;
+use crate::services::{self, ServicesError};
 use crate::view::CanvasView;
 use crate::wire::{
-    ClientView, ControlsBatch, ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove,
-    FixtureWrite, MediaRemove, Reply, route,
+    ClientView, ControlsBatch, ControlsReply, FixtureRemove, FixtureWrite, MediaRemove, Reply,
+    route,
 };
+
+mod reads;
 
 /// The typed error of a route's refusal, by the routes that refused.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +58,11 @@ pub enum ReplyError {
     Generate(GenerateError),
     Cast(CastError),
     RulesCheck(RulesCheckError),
+    /// A host route: the events query or the host status.
+    Host(HostError),
+    /// A page's timeline read.
+    Clients(ClientsError),
+    Services(ServicesError),
 }
 
 impl fmt::Display for ReplyError {
@@ -72,11 +82,32 @@ impl fmt::Display for ReplyError {
             Self::Generate(error) => write!(formatter, "{error}"),
             Self::Cast(error) => write!(formatter, "{error}"),
             Self::RulesCheck(error) => write!(formatter, "{error}"),
+            Self::Host(error) => write!(formatter, "{error}"),
+            Self::Clients(error) => write!(formatter, "{error}"),
+            Self::Services(error) => write!(formatter, "{error}"),
         }
     }
 }
 
 impl std::error::Error for ReplyError {}
+
+impl From<HostError> for ReplyError {
+    fn from(error: HostError) -> Self {
+        Self::Host(error)
+    }
+}
+
+impl From<ClientsError> for ReplyError {
+    fn from(error: ClientsError) -> Self {
+        Self::Clients(error)
+    }
+}
+
+impl From<ServicesError> for ReplyError {
+    fn from(error: ServicesError) -> Self {
+        Self::Services(error)
+    }
+}
 
 impl From<PlaygroundChangeError> for ReplyError {
     fn from(error: PlaygroundChangeError) -> Self {
@@ -151,6 +182,9 @@ fn write_refusal(
         ReplyError::SceneBuilder(error) => error.key(),
         ReplyError::Locate(error) => error.key(),
         ReplyError::Cast(error) => error.key(),
+        ReplyError::Host(error) => error.key(),
+        ReplyError::Clients(error) => error.key(),
+        ReplyError::Services(error) => error.key(),
     };
     write!(formatter, "refused ({key}): {message}")
 }
@@ -422,9 +456,12 @@ async fn show_playground(port: u16) -> Result<String, DevError> {
     let reply: ControlsReply = get_success(port, route::PLAYGROUND_CONTROLS).await?;
     let fixtures: Vec<String> = get_success(port, route::PLAYGROUND_FIXTURE_LIST).await?;
     let clients: Vec<ClientView> = get_success(port, route::PLAYGROUND_CLIENTS).await?;
+    let revision = reads::files_revision(port).await?;
     let mut text = format_playground(&reply, &fixtures);
-    text.push('\n');
-    text.push_str(&format_clients(&clients));
+    text.push_str(&format!("\nfiles: revision={revision}\n"));
+    // The host frame is not read here: reading it writes the `FRAME served` line, and `playground`
+    // is a read that writes none. `clients` compares each page with the host's frame.
+    text.push_str(&format_clients(&clients, None));
     Ok(text)
 }
 
@@ -637,15 +674,6 @@ async fn read_text_file(path: &Path) -> Result<String, DevError> {
         .map_err(|error| unreadable(error.to_string()))
 }
 
-async fn show_events(port: u16, after: Option<u64>) -> Result<String, DevError> {
-    let path = match after {
-        Some(after) => format!("{}?{EVENTS_AFTER_PARAMETER}={after}", route::EVENTS),
-        None => route::EVENTS.to_owned(),
-    };
-    let reply: EventsReply = get_success(port, &path).await?;
-    Ok(format_events(&reply, after))
-}
-
 async fn show_canvas(port: u16) -> Result<String, DevError> {
     let view: CanvasView = get_success(port, route::CANVAS).await?;
     format_canvas(&view).map_err(|error| DevError::Unwritable {
@@ -692,11 +720,8 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
             Ok(format!("waited {ms} ms"))
         }
-        Command::Media => {
-            let media: Vec<df_playground::media::MediaEntry> =
-                get_success(port, route::PLAYGROUND_MEDIA_LIST).await?;
-            Ok(format_media(&media))
-        }
+        Command::Media => reads::show_media(port).await,
+        Command::MediaHead(name) => reads::media_head(port, &name).await,
         Command::MediaAdd { path, name } => {
             let name = media_name(&path, name)?;
             upload_media(port, name, &path).await
@@ -708,10 +733,10 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::MediaGenerate(command) => crate::imagegen::run(port, command).await,
         Command::MediaLocate(command) => crate::locate::cli::run(port, command).await,
         Command::Cast(command) => crate::cast::cli::run(port, command).await,
-        Command::Clients => {
-            let clients: Vec<ClientView> = get_success(port, route::PLAYGROUND_CLIENTS).await?;
-            Ok(format_clients(&clients))
-        }
+        Command::Clients => reads::show_clients(port).await,
+        Command::ClientShow(client) => reads::show_client(port, &client).await,
+        Command::ClientsTimeline(read) => reads::client_timeline(port, &read).await,
+        Command::Services(services::Services) => reads::services(port).await,
         Command::Fixtures => {
             let names: Vec<String> = get_success(port, route::PLAYGROUND_FIXTURE_LIST).await?;
             Ok(names.join("\n"))
@@ -737,7 +762,10 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             let view: CanvasView = get_success(port, route::CANVAS).await?;
             Ok(format_kinds(&view))
         }
-        Command::Events { after } => show_events(port, after).await,
+        Command::Events(read) => reads::show_events(port, &read).await,
+        Command::EventsLevel(level) => reads::events_level(port, level).await,
+        Command::HostStatus => reads::host_status(port).await,
+        Command::Frame { after } => reads::frame(port, after).await,
         Command::Reload => {
             let response = dev_client::post(port, route::RELOAD, "").await?;
             read_canvas_reply(&response)

@@ -7,11 +7,12 @@ use std::{
 };
 
 use crate::native_http::{
-    MAXIMUM_BODY_BYTES, NativeHttp, classify_transport_error, hardened_client_builder,
-    header_block_bytes, is_loopback_socket, read_bounded_body,
+    ExchangeRecord, ExchangeTrace, MAXIMUM_BODY_BYTES, NativeHttp, SendState,
+    classify_transport_error, exchange_host, hardened_client_builder, header_block_bytes,
+    is_loopback_socket, read_bounded_body,
 };
 use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, strict_fal_locator};
-use crate::{NativeHttpCause, NativeHttpLimits, inspect_dns_answers};
+use crate::{NativeHttpCause, NativeHttpLimits, ProviderName, inspect_dns_answers};
 
 /// The largest response header block a media fetcher accepts, in bytes.
 pub(crate) const MAXIMUM_MEDIA_HEADER_BYTES: usize = 16_384;
@@ -288,6 +289,8 @@ impl NativeMediaFetch {
         .await
     }
 
+    /// One download and its `PROVIDER exchange operation=download` audit line. The line names
+    /// the locator's host only when the locator is allowed, never its path or query.
     async fn fetch_checked(
         &self,
         locator: &str,
@@ -295,6 +298,55 @@ impl NativeMediaFetch {
         remaining_bytes: usize,
         deadline: Duration,
         cancellation: impl Future<Output = ()>,
+    ) -> Result<(Vec<u8>, String), NativeHttpCause> {
+        let started = std::time::Instant::now();
+        let mut trace = ExchangeTrace::default();
+        let result = self
+            .fetch_traced(
+                locator,
+                mime,
+                remaining_bytes,
+                deadline,
+                cancellation,
+                &mut trace,
+            )
+            .await;
+        let host = if self.allows_locator(locator) {
+            exchange_host(locator)
+        } else {
+            "-".to_owned()
+        };
+        ExchangeRecord {
+            provider: if self.bfl {
+                ProviderName::Bfl
+            } else {
+                ProviderName::Fal
+            },
+            operation: Some("download"),
+            host: &host,
+            status: trace.status,
+            cause: match &result {
+                Ok(_) => "ok",
+                Err(cause) => cause.key(),
+            },
+            sent: trace.sent,
+            request_bytes: 0,
+            response_bytes: result.as_ref().map_or(0, |(bytes, _)| bytes.len()),
+            duration: started.elapsed(),
+            request_id: None,
+        }
+        .record();
+        result
+    }
+
+    async fn fetch_traced(
+        &self,
+        locator: &str,
+        mime: &str,
+        remaining_bytes: usize,
+        deadline: Duration,
+        cancellation: impl Future<Output = ()>,
+        trace: &mut ExchangeTrace,
     ) -> Result<(Vec<u8>, String), NativeHttpCause> {
         if !self.allows_locator(locator)
             || locator.len() > MAXIMUM_LOCATOR_BYTES
@@ -334,7 +386,7 @@ impl NativeMediaFetch {
             biased;
             () = cancellation => Err(NativeHttpCause::Cancelled),
             response = tokio::time::timeout(duration,
-                self.read(client, &target, &addresses, mime, remaining_bytes)) => {
+                self.read(client, &target, &addresses, mime, remaining_bytes, trace)) => {
                 response.map_err(|_| NativeHttpCause::Deadline)?
             }
         }
@@ -347,12 +399,17 @@ impl NativeMediaFetch {
         addresses: &[SocketAddr],
         mime: &str,
         remaining_bytes: usize,
+        trace: &mut ExchangeTrace,
     ) -> Result<(Vec<u8>, String), NativeHttpCause> {
+        // From here the supplier may have the request, whatever happens next.
+        trace.sent = SendState::PossiblySent;
         let mut response = client
             .get(target)
             .send()
             .await
             .map_err(classify_transport_error)?;
+        trace.sent = SendState::KnownSent;
+        trace.status = Some(response.status().as_u16());
         if self.bfl {
             self.observed_status.store(
                 response.status().as_u16(),

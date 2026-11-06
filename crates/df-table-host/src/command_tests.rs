@@ -1,4 +1,11 @@
-use crate::command::{Command, CommandError, parse, parse_script_line, split_words, usage_text};
+use df_playground::timeline::TimelineKind;
+
+use crate::command::{
+    Command, CommandError, EventsRead, TimelineRead, VERBS, parse, parse_script_line, split_words,
+    usage_text,
+};
+use crate::observe::EventLevel;
+use crate::server::request::LineArea;
 use crate::wire::{EffectRequest, ValueForm};
 
 fn words(line: &str) -> Vec<String> {
@@ -134,10 +141,16 @@ fn despawn_takes_several_ids_and_clear_takes_none() {
 
 #[test]
 fn events_may_name_the_last_line_already_seen_or_ask_for_the_newest() {
-    assert_eq!(parse(&words("events")), Ok(Command::Events { after: None }));
+    assert_eq!(
+        parse(&words("events")),
+        Ok(Command::Events(EventsRead::default()))
+    );
     assert_eq!(
         parse(&words("events 12")),
-        Ok(Command::Events { after: Some(12) })
+        Ok(Command::Events(EventsRead {
+            after: Some(12),
+            ..EventsRead::default()
+        }))
     );
     assert!(matches!(
         parse(&words("events soon")),
@@ -311,7 +324,6 @@ fn repl_clients_and_fixtures_with_stray_words_answer_with_their_usage_not_unknow
     for (line, usage) in [
         ("repl now", "repl"),
         ("repl --port 7878", "repl"),
-        ("clients all", "clients"),
         ("fixtures x", "fixtures"),
     ] {
         assert_eq!(
@@ -409,7 +421,7 @@ fn the_help_text_starts_an_entry_with_every_top_level_verb() {
 }
 
 /// Every sub-verb `scene` accepts.
-const SCENE_SUB_VERBS: [&str; 29] = [
+const SCENE_SUB_VERBS: [&str; 30] = [
     "caption",
     "caption-clear",
     "party",
@@ -439,6 +451,7 @@ const SCENE_SUB_VERBS: [&str; 29] = [
     "build",
     "show",
     "lookahead",
+    "timing",
 ];
 
 #[test]
@@ -463,4 +476,220 @@ fn the_scene_usage_names_every_sub_verb_the_scene_parser_accepts() {
         );
     }
     assert_eq!(named.len(), SCENE_SUB_VERBS.len(), "{named:?}");
+}
+
+fn area(text: &str) -> LineArea {
+    LineArea::new(text).expect("an area")
+}
+
+#[test]
+fn events_take_an_area_and_a_limit_beside_the_sequence() {
+    assert_eq!(
+        parse(&words("events 5 area=LOCATE limit=10")),
+        Ok(Command::Events(EventsRead {
+            after: Some(5),
+            area: Some(area("LOCATE")),
+            limit: Some(10),
+        }))
+    );
+    assert_eq!(
+        parse(&words("events limit=3 area=HOST")),
+        Ok(Command::Events(EventsRead {
+            after: None,
+            area: Some(area("HOST")),
+            limit: Some(3),
+        }))
+    );
+}
+
+#[test]
+fn events_refuse_a_bad_area_a_zero_limit_an_unknown_key_and_a_repeat() {
+    for line in [
+        "events area=locate",
+        "events area=",
+        "events limit=0",
+        "events limit=x",
+    ] {
+        assert!(
+            matches!(parse(&words(line)), Err(CommandError::BadChoice { .. })),
+            "{line}"
+        );
+    }
+    assert!(matches!(
+        parse(&words("events colour=red")),
+        Err(CommandError::BadChoice { .. })
+    ));
+    assert!(matches!(
+        parse(&words("events area=A area=B")),
+        Err(CommandError::DuplicateKey(_))
+    ));
+    assert!(matches!(
+        parse(&words("events 1 2 area=A")),
+        Err(CommandError::Usage(usage)) if usage.starts_with("events ")
+    ));
+}
+
+#[test]
+fn events_level_reads_or_sets_the_level() {
+    assert_eq!(
+        parse(&words("events level")),
+        Ok(Command::EventsLevel(None))
+    );
+    assert_eq!(
+        parse(&words("events level verbose")),
+        Ok(Command::EventsLevel(Some(EventLevel::Verbose)))
+    );
+    assert_eq!(
+        parse(&words("events level always")),
+        Ok(Command::EventsLevel(Some(EventLevel::Always)))
+    );
+    assert!(matches!(
+        parse(&words("events level loud")),
+        Err(CommandError::BadChoice { key, .. }) if key == "level"
+    ));
+    assert!(matches!(
+        parse(&words("events level always now")),
+        Err(CommandError::Usage(_))
+    ));
+}
+
+#[test]
+fn host_status_and_frame_have_their_own_grammar() {
+    assert_eq!(parse(&words("host status")), Ok(Command::HostStatus));
+    for line in ["host", "host status now", "host reboot"] {
+        assert_eq!(
+            parse(&words(line)),
+            Err(CommandError::Usage("host status")),
+            "{line}"
+        );
+    }
+    assert_eq!(parse(&words("frame")), Ok(Command::Frame { after: None }));
+    assert_eq!(
+        parse(&words("frame after=7")),
+        Ok(Command::Frame { after: Some(7) })
+    );
+    assert!(matches!(
+        parse(&words("frame after=soon")),
+        Err(CommandError::BadNumber { .. })
+    ));
+    assert!(matches!(
+        parse(&words("frame 7")),
+        Err(CommandError::BadPair(_))
+    ));
+}
+
+#[test]
+fn clients_read_one_page_or_its_timeline() {
+    assert_eq!(
+        parse(&words("clients page-1a2b3c4d")),
+        Ok(Command::ClientShow("page-1a2b3c4d".to_owned()))
+    );
+    assert_eq!(
+        parse(&words("clients timeline page-1a2b3c4d kind=line")),
+        Ok(Command::ClientsTimeline(TimelineRead {
+            client: "page-1a2b3c4d".to_owned(),
+            kind: Some(TimelineKind::Line),
+            after: None,
+        }))
+    );
+    assert_eq!(
+        parse(&words("clients timeline cli after=12 kind=camera")),
+        Ok(Command::ClientsTimeline(TimelineRead {
+            client: "cli".to_owned(),
+            kind: Some(TimelineKind::Camera),
+            after: Some(12),
+        }))
+    );
+}
+
+#[test]
+fn clients_refuse_a_bad_name_kind_or_sequence() {
+    assert!(matches!(
+        parse(&words("clients bad/name")),
+        Err(CommandError::BadChoice { key, .. }) if key == "client"
+    ));
+    assert!(matches!(
+        parse(&words("clients timeline page-1 kind=sparkle")),
+        Err(CommandError::BadChoice { key, .. }) if key == "kind"
+    ));
+    assert!(matches!(
+        parse(&words("clients timeline page-1 after=x")),
+        Err(CommandError::BadNumber { .. })
+    ));
+    assert!(matches!(
+        parse(&words("clients timeline")),
+        Err(CommandError::Usage(usage)) if usage.starts_with("clients ")
+    ));
+    assert!(matches!(
+        parse(&words("clients one two")),
+        Err(CommandError::Usage(_))
+    ));
+}
+
+#[test]
+fn every_timeline_kind_is_in_the_clients_usage() {
+    let CommandError::Usage(usage) = parse(&words("clients timeline")).expect_err("usage") else {
+        panic!("expected the usage line");
+    };
+    for kind in TimelineKind::ALL {
+        assert!(usage.contains(kind.key()), "{}", kind.key());
+    }
+}
+
+#[test]
+fn media_head_takes_one_plain_name() {
+    assert_eq!(
+        parse(&words("media head x.png")),
+        Ok(Command::MediaHead("x.png".to_owned()))
+    );
+    assert!(matches!(
+        parse(&words("media head ../x.png")),
+        Err(CommandError::BadChoice { key, .. }) if key == "name"
+    ));
+    assert!(matches!(
+        parse(&words("media head")),
+        Err(CommandError::Usage(usage)) if usage.contains("media head <name>")
+    ));
+}
+
+#[test]
+fn services_takes_no_words() {
+    assert!(matches!(
+        parse(&words("services")),
+        Ok(Command::Services(_))
+    ));
+    assert_eq!(
+        parse(&words("services now")),
+        Err(CommandError::Usage("services"))
+    );
+}
+
+#[test]
+fn the_new_verbs_are_listed_once_and_helped() {
+    let help = usage_text();
+    for verb in ["host", "frame", "services", "events", "clients"] {
+        assert_eq!(
+            VERBS.iter().filter(|name| **name == verb).count(),
+            1,
+            "{verb}"
+        );
+    }
+    for fragment in [
+        "events [after] [area=AREA] [limit=N] | events level [always|verbose]",
+        "host status",
+        "frame [after=N]",
+        "media head <name>",
+        "clients [<client>] | clients timeline <client>",
+        "lookahead ... | timing ...",
+    ] {
+        assert!(help.contains(fragment), "{fragment}");
+    }
+}
+
+#[test]
+fn scene_timing_reaches_the_scene_builder() {
+    assert!(matches!(
+        parse(&words("scene timing set interval_s 30")),
+        Ok(Command::SceneBuilder(_))
+    ));
 }

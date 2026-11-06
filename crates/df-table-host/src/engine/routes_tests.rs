@@ -451,3 +451,334 @@ async fn a_body_with_an_unknown_field_is_refused_typed() {
         "{error:?}"
     );
 }
+
+// ---- Route logging and the reads that reach into the owner (wave 3, U2) ----
+
+/// Every line of the host's log that starts with `prefix`.
+fn lines_starting(host: &crate::test_support::Running, prefix: &str) -> Vec<String> {
+    super::fixtures::lines(host.state.log())
+        .into_iter()
+        .filter(|line| line.starts_with(prefix))
+        .collect()
+}
+
+/// Serves `router` alone on an ephemeral port, for a test that needs a router the host does not
+/// build (an owner that never started, a small body limit).
+async fn serve_alone(router: axum::Router) -> u16 {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("binds an ephemeral port");
+    let port = listener.local_addr().expect("has an address").port();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    port
+}
+
+#[tokio::test]
+async fn a_bad_body_writes_one_refused_line_with_its_verb_its_error_and_its_duration() {
+    let host = start(&STARTER_FILES).await;
+
+    let answer = client::post_json(host.port, path::INPUT, r#"{"input":{"kind":"tap"}}"#)
+        .await
+        .expect("answered");
+
+    assert_eq!(answer.status, StatusCode::BAD_REQUEST);
+    let refused = lines_starting(&host, "ENGINE refused verb=input ");
+    let [line] = refused.as_slice() else {
+        panic!("one refused line: {refused:?}");
+    };
+    let duration = line
+        .strip_prefix("ENGINE refused verb=input error=invalid_body duration_ms=")
+        .unwrap_or_else(|| panic!("the refused line's shape: {line}"));
+    assert!(duration.parse::<u64>().is_ok(), "{line}");
+}
+
+#[tokio::test]
+async fn the_engine_writes_its_start_line_with_its_machines_spool_and_level() {
+    let host = start(&STARTER_FILES).await;
+    // The server builds its router on its own task: an answer means it has.
+    dev(host.port, "health").await;
+
+    let started = lines_starting(&host, "ENGINE started ");
+
+    let [line] = started.as_slice() else {
+        panic!("one start line: {started:?}");
+    };
+    assert!(line.contains(" machines=3 "), "{line}");
+    assert!(line.contains(" spool=off "), "{line}");
+    assert!(line.ends_with(" level=verbose"), "{line}");
+}
+
+#[tokio::test]
+async fn an_owner_that_never_started_refuses_typed_with_its_cause_and_logs_both() {
+    let host = start(&STARTER_FILES).await;
+    let router = super::routes::router_not_started(
+        std::sync::Arc::clone(&host.state),
+        super::setup::EngineStartError::Thread(std::io::ErrorKind::Other),
+    );
+    let port = serve_alone(router).await;
+
+    let input = client::post_json(port, path::INPUT, r#"{"input":{"kind":"pause","seat":1}}"#)
+        .await
+        .expect("answered");
+    let health = client::get(port, path::HEALTH).await.expect("answered");
+
+    assert_eq!(input.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(health.status, StatusCode::SERVICE_UNAVAILABLE);
+    let error = rejected_with(&health.body);
+    assert!(
+        matches!(
+            error,
+            EngineError::NotStarted {
+                cause: super::setup::StartCause::Thread,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    assert!(error.to_string().contains("(thread)"), "{error}");
+    assert_eq!(
+        lines_starting(&host, "ENGINE start_failed "),
+        ["ENGINE start_failed cause=thread"]
+    );
+    for verb in ["input", "health"] {
+        let refused = lines_starting(&host, &format!("ENGINE refused verb={verb} "));
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(
+            refused[0].contains(" error=not_started duration_ms="),
+            "{refused:?}"
+        );
+    }
+    let printed = run_dev(port, &split_words("health").expect("splits"))
+        .await
+        .expect_err("refused")
+        .to_string();
+    assert!(
+        printed.contains("refused (not_started)") && printed.contains("(thread)"),
+        "{printed}"
+    );
+}
+
+#[tokio::test]
+async fn a_body_over_the_limit_is_answered_413_typed_and_logged() {
+    let host = start(&STARTER_FILES).await;
+    let router = super::routes::router(std::sync::Arc::clone(&host.state))
+        .layer(axum::extract::DefaultBodyLimit::max(32));
+    let port = serve_alone(router).await;
+    let body = format!(
+        r#"{{"input":{{"kind":"say","seat":1,"text":"{}"}}}}"#,
+        "a".repeat(200)
+    );
+
+    let reply = raw_exchange(port, &post_request(path::INPUT, &body, "")).await;
+
+    assert!(reply.starts_with("HTTP/1.1 413"), "{reply}");
+    assert!(reply.contains(r#""error":"unreadable_body""#), "{reply}");
+    assert!(reply.contains(r#""cause":"too_large""#), "{reply}");
+    let refused = lines_starting(&host, "ENGINE refused verb=input ");
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0].contains(" error=unreadable_body duration_ms="),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn inspect_serves_every_report_and_a_seat_sees_the_pending_count_redacted() {
+    let host = start(&STARTER_FILES).await;
+
+    for report in super::request::InspectName::ALL {
+        let answer = dev(host.port, &format!("inspect {}", report.key())).await;
+        assert!(
+            answer.starts_with(&format!("1: {} as operator sees it", report.key())),
+            "{answer}"
+        );
+    }
+    let seat = dev(host.port, "inspect pending --seat 1").await;
+    assert!(seat.starts_with("1: pending as seat:1 sees it"), "{seat}");
+    assert!(seat.contains("\"visibility\": \"redacted\""), "{seat}");
+    let host_view = dev(host.port, "inspect requests --host").await;
+    assert!(
+        host_view.contains("\"visibility\": \"shown\""),
+        "{host_view}"
+    );
+    assert_eq!(
+        lines_starting(&host, "ENGINE inspect report=pending audience=seat:1").len(),
+        1
+    );
+
+    let unknown = client::get(host.port, &path::inspect_path("everything"))
+        .await
+        .expect("answered");
+    assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        rejected_with(&unknown.body),
+        EngineError::UnknownReport {
+            report: "everything".to_owned()
+        }
+    );
+    let stranger = client::get(
+        host.port,
+        &format!("{}?audience=seat:99", path::inspect_path("pending")),
+    )
+    .await
+    .expect("answered");
+    assert_eq!(
+        rejected_with(&stranger.body),
+        EngineError::UnknownSeat { seat: 99 }
+    );
+    assert_eq!(
+        lines_starting(&host, "ENGINE refused verb=inspect ").len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn dump_names_the_table_or_one_machine_and_refuses_one_off_the_table() {
+    use super::report::reach::DumpReport;
+
+    let host = start(&STARTER_FILES).await;
+
+    let table = dev(host.port, "dump table").await;
+    let lobby = dev(host.port, "dump lobby").await;
+    let refused = run_dev(host.port, &split_words("dump dialogue").expect("splits"))
+        .await
+        .expect_err("the dialogue is not on the table yet")
+        .to_string();
+
+    let table: DumpReport = serde_json::from_str(&table).expect("a table dump");
+    assert!(matches!(table, DumpReport::Table { .. }), "{table:?}");
+    let lobby: DumpReport = serde_json::from_str(&lobby).expect("a machine dump");
+    let DumpReport::Machine { places, .. } = lobby else {
+        panic!("a machine dump: {lobby:?}");
+    };
+    assert_eq!(places.len(), 1);
+    assert!(places[0].focus && !places[0].stacked, "{places:?}");
+    assert_eq!(places[0].machine, "lobby");
+    assert!(refused.contains("machine_not_on_table"), "{refused}");
+    for of in ["of=table", "of=lobby"] {
+        assert_eq!(
+            super::fixtures::count_lines(host.state.log(), of),
+            1,
+            "no dump line {of}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn chaos_with_no_words_and_broker_queues_read_what_is_in_force() {
+    let host = start(&STARTER_FILES).await;
+    dev(host.port, "chaos commit refused 2").await;
+    dev(host.port, "chaos interpreter down").await;
+
+    let standing = dev(host.port, "chaos").await;
+    let queues = dev(host.port, "broker queues").await;
+
+    assert!(
+        standing.contains("1: commit: 2 scripted writes wait"),
+        "{standing}"
+    );
+    assert!(standing.contains("2: interpreter: down"), "{standing}");
+    assert!(
+        queues.contains("limits: ") && queues.contains("most waiting: live "),
+        "{queues}"
+    );
+    assert_eq!(
+        lines_starting(&host, "ENGINE chaos verb=show in_force=2").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn the_event_level_is_read_and_set_through_its_route_with_a_host_line() {
+    let host = start(&STARTER_FILES).await;
+
+    let before = client::get(host.port, path::EVENTS_LEVEL)
+        .await
+        .expect("answered");
+    let set = client::post_json(host.port, path::EVENTS_LEVEL, r#"{"level":"always"}"#)
+        .await
+        .expect("answered");
+    let after = client::get(host.port, path::EVENTS_LEVEL)
+        .await
+        .expect("answered");
+    let refused = client::post_json(host.port, path::EVENTS_LEVEL, r#"{"level":"loud"}"#)
+        .await
+        .expect("answered");
+
+    let level = |body: &str| match serde_json::from_str::<EngineReply<serde_json::Value>>(body) {
+        Ok(EngineReply::Done { value }) => value["level"].clone(),
+        other => panic!("a level: {other:?}"),
+    };
+    assert_eq!(level(&before.body), "verbose");
+    assert_eq!(level(&set.body), "always");
+    assert_eq!(level(&after.body), "always");
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        lines_starting(&host, "HOST sink_level "),
+        ["HOST sink_level from=verbose to=always driven=true"]
+    );
+    assert_eq!(
+        lines_starting(
+            &host,
+            "ENGINE refused verb=events_level error=invalid_body "
+        )
+        .len(),
+        1
+    );
+    let health = dev(host.port, "health").await;
+    assert!(
+        health.contains("events at level always"),
+        "the engine's sink follows: {health}"
+    );
+}
+
+#[tokio::test]
+async fn a_wire_intent_through_the_route_writes_its_line_and_no_projection_line() {
+    let host = start(&STARTER_FILES).await;
+
+    let joined = client::post_json(
+        host.port,
+        path::WIRE_INTENT,
+        r#"{"seat":1,"intent":{"kind":"tap","offer":"join"},"operation":41}"#,
+    )
+    .await
+    .expect("answered");
+    let zero = client::post_json(
+        host.port,
+        path::WIRE_INTENT,
+        r#"{"seat":1,"intent":{"kind":"pause"},"operation":0}"#,
+    )
+    .await
+    .expect("answered");
+    let view = client::get(host.port, &format!("{}?audience=tv", path::WIRE_VIEW))
+        .await
+        .expect("answered");
+
+    assert_eq!(joined.status, StatusCode::OK, "{}", joined.body);
+    assert_eq!(zero.status, StatusCode::BAD_REQUEST);
+    assert_eq!(view.status, StatusCode::OK);
+    assert_eq!(
+        lines_starting(&host, "ENGINE wire_intent "),
+        [
+            format!(
+                "ENGINE wire_intent seat=1 operation={:032x} outcome=accepted code=-",
+                41
+            ),
+            "ENGINE wire_intent seat=1 operation=- outcome=refused code=zero_operation".to_owned(),
+        ]
+    );
+    assert!(
+        lines_starting(&host, "ENGINE projection ").is_empty(),
+        "the intent's own view read is not a projection"
+    );
+    let served = lines_starting(&host, "ENGINE wire_view ");
+    let [line] = served.as_slice() else {
+        panic!("one served view: {served:?}");
+    };
+    assert!(
+        line.starts_with("ENGINE wire_view audience=tv revision=1 bytes="),
+        "{line}"
+    );
+}

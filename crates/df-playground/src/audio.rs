@@ -6,7 +6,8 @@
 //! reported to the host, where `df-table dev clients` shows it, so the agent knows to ask a person
 //! to click the page. It decides nothing about what to play: the scene overlay does, `sound_plan`
 //! says which cues are new and what a change of music means, and `scene` has already checked the
-//! volumes.
+//! volumes. Each sound and song started is a timeline record (`page_log`) that ends when it plays
+//! out, is stopped or replaced, or is refused.
 
 use std::cell::RefCell;
 
@@ -16,11 +17,16 @@ use web_sys::{Event, HtmlAudioElement};
 
 use crate::controls::Device;
 use crate::dom::js_message;
-use crate::limits::{MAXIMUM_LIVE_EFFECTS, MAXIMUM_REPORTED_ERRORS};
+use crate::limits::MAXIMUM_LIVE_EFFECTS;
 use crate::media::AudioState;
+use crate::page_log::{self, now_ms, with_log};
 use crate::path::media_file;
 use crate::scene::{Cue, Track};
 use crate::sound_plan::{MusicChange, fresh_cues, music_change, volume_of};
+use crate::timeline::{EndReason, ErrorSource, TimelineKind};
+
+/// The attribute of an audio element that holds the sequence number of its timeline record.
+const TIMELINE_SEQ_ATTRIBUTE: &str = "data-timeline-seq";
 
 #[derive(Default)]
 struct Engine {
@@ -40,7 +46,6 @@ struct Engine {
     music_blocked: bool,
     /// Sounds started and not yet over. One the browser refuses or cannot load is let go at once.
     effects: Vec<HtmlAudioElement>,
-    errors: Vec<String>,
 }
 
 thread_local! {
@@ -48,6 +53,9 @@ thread_local! {
     /// The one handler every effect's `error` event calls.
     static EFFECT_FAILED: Closure<dyn FnMut(Event)> =
         Closure::<dyn FnMut(Event)>::new(|event: Event| on_effect_error(&event));
+    /// The one handler every sound's and song's `ended` event calls.
+    static MEDIA_ENDED: Closure<dyn FnMut(Event)> =
+        Closure::<dyn FnMut(Event)>::new(|event: Event| on_media_ended(&event));
 }
 
 fn with_engine<R>(change: impl FnOnce(&mut Engine) -> R) -> R {
@@ -60,19 +68,48 @@ pub struct Status {
     pub last_cue: u64,
     /// The music playing now, by media name.
     pub music: Option<String>,
-    pub errors: Vec<String>,
 }
 
-/// Records something that went wrong, for the report. A repeat of the newest error is dropped.
+/// Records something that went wrong with sound, for the report. A repeat of the newest error is
+/// dropped.
 pub fn note_error(message: String) {
-    with_engine(|engine| {
-        if engine.errors.last() != Some(&message) {
-            engine.errors.push(message);
-            if engine.errors.len() > MAXIMUM_REPORTED_ERRORS {
-                engine.errors.remove(0);
-            }
-        }
-    });
+    page_log::note_error(ErrorSource::Audio, &message);
+}
+
+/// Starts the timeline record of a sound or a song and marks the element with it.
+fn open_record(audio: &HtmlAudioElement, media: &str, kind: Kind) {
+    let kind = match kind {
+        Kind::Music => TimelineKind::Music,
+        Kind::Effect => TimelineKind::Sound,
+    };
+    let now = now_ms();
+    if let Some(seq) = with_log(|log| log.open(kind, media, now, None, None))
+        && let Err(error) = audio.set_attribute(TIMELINE_SEQ_ATTRIBUTE, &seq.to_string())
+    {
+        note_error(format!("could not mark a sound: {}", js_message(&error)));
+    }
+}
+
+/// Ends the timeline record of a sound or a song. One already ended is left.
+fn end_record(audio: &HtmlAudioElement, reason: EndReason) {
+    let Some(seq) = audio
+        .get_attribute(TIMELINE_SEQ_ATTRIBUTE)
+        .and_then(|seq| seq.parse::<u64>().ok())
+    else {
+        return;
+    };
+    let now = now_ms();
+    with_log(|log| log.close(seq, now, reason));
+}
+
+/// A sound or a song played to its end.
+fn on_media_ended(event: &Event) {
+    if let Some(audio) = event
+        .target()
+        .and_then(|target| target.dyn_into::<HtmlAudioElement>().ok())
+    {
+        end_record(&audio, EndReason::Ended);
+    }
 }
 
 /// Forgets which cues were taken in, because the host that numbered them started again.
@@ -84,6 +121,9 @@ fn new_audio(media: &str, volume_percent: u8, looping: bool) -> Result<HtmlAudio
     let audio = HtmlAudioElement::new_with_src(&media_file(media))?;
     audio.set_volume(volume_of(volume_percent));
     audio.set_loop(looping);
+    MEDIA_ENDED.with(|handler| {
+        audio.add_event_listener_with_callback("ended", handler.as_ref().unchecked_ref())
+    })?;
     Ok(audio)
 }
 
@@ -104,16 +144,19 @@ enum Kind {
 
 /// Lets an effect go: it will not play, so nothing should keep it.
 fn release_effect(audio: &HtmlAudioElement) {
+    end_record(audio, EndReason::Failed);
     with_engine(|engine| engine.effects.retain(|held| held != audio));
 }
 
-/// Starts an audio element. A refusal is recorded; for music it also marks it blocked, and an
-/// effect that did not start is let go.
+/// Starts an audio element and its timeline record. A refusal is recorded and ends the record; for
+/// music it also marks it blocked, and an effect that did not start is let go.
 fn start(audio: &HtmlAudioElement, media: String, kind: Kind) {
+    open_record(audio, &media, kind);
     let promise = match audio.play() {
         Ok(promise) => promise,
         Err(error) => {
             note_error(format!("could not play '{media}': {}", js_message(&error)));
+            end_record(audio, EndReason::Failed);
             if kind == Kind::Effect {
                 release_effect(audio);
             }
@@ -126,6 +169,7 @@ fn start(audio: &HtmlAudioElement, media: String, kind: Kind) {
             Ok(_) => with_engine(|engine| engine.played_ok = true),
             Err(error) => {
                 note_refusal(&error, &media, kind);
+                end_record(&audio, EndReason::Failed);
                 if kind == Kind::Effect {
                     release_effect(&audio);
                 }
@@ -194,11 +238,13 @@ pub fn state() -> AudioState {
     }
 }
 
-fn stop_music() {
+/// Stops the music, ending its record with `reason`.
+fn stop_music(reason: EndReason) {
     if let Some((_, audio)) = with_engine(|engine| {
         engine.music_blocked = false;
         engine.music.take()
     }) {
+        end_record(&audio, reason);
         // A pause that fails leaves nothing playing that the next line does not also drop.
         if let Err(error) = audio.pause() {
             note_error(format!("could not pause the music: {}", js_message(&error)));
@@ -227,9 +273,9 @@ pub fn sync_music(desired: Option<&Track>, device: Device) {
                 track.looping = looping;
             }
         }),
-        MusicChange::Stop => stop_music(),
+        MusicChange::Stop => stop_music(EndReason::Removed),
         MusicChange::Replace => {
-            stop_music();
+            stop_music(EndReason::Replaced);
             if let Some(track) = wanted {
                 start_music(track);
             }
@@ -296,12 +342,13 @@ fn hold_effect(audio: &HtmlAudioElement) {
             ));
         }
     });
-    with_engine(|engine| {
+    let let_go = with_engine(|engine| {
         engine.effects.push(audio.clone());
-        if engine.effects.len() > MAXIMUM_LIVE_EFFECTS {
-            engine.effects.remove(0);
-        }
+        (engine.effects.len() > MAXIMUM_LIVE_EFFECTS).then(|| engine.effects.remove(0))
     });
+    if let Some(oldest) = let_go {
+        end_record(&oldest, EndReason::Expired);
+    }
 }
 
 pub fn status() -> Status {
@@ -314,6 +361,5 @@ pub fn status() -> Status {
             .as_ref()
             .filter(|(_, audio)| !audio.paused() && !engine.music_blocked)
             .map(|(track, _)| track.media.clone()),
-        errors: engine.errors.clone(),
     })
 }

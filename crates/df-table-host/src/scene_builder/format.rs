@@ -11,8 +11,10 @@ use df_table::plate::scheduler::SchedulerReport;
 
 use super::report::{AnchorReport, CardReport, JobReport, LocateReport, SceneReport};
 use super::request::{
-    BufferShow, BuildOutcome, BuildReply, PlatesReport, RunReply, SceneShow, TimedLine,
+    BufferShow, BuildOutcome, BuildReply, PlateTimingReport, PlatesReport, RunReply, SceneShow,
+    TimedLine, TimingReply,
 };
+use crate::broker::report::QueuesReport;
 
 const MICRO_DOLLARS_PER_DOLLAR: u64 = 1_000_000;
 const MICRO_DOLLARS_PER_CENT: u64 = 10_000;
@@ -313,6 +315,64 @@ pub fn format_plates(report: &PlatesReport) -> String {
     if let Some(cost) = &report.cost {
         lines.extend(cost_lines(cost));
     }
+    lines.push(timing_line(&report.timing));
+    lines.push(broker_line(&report.broker));
+    numbered(lines)
+}
+
+fn timing_line(timing: &PlateTimingReport) -> String {
+    let on_screen = match timing.on_screen_interval_s {
+        Some(on_screen) if on_screen != timing.interval_s => {
+            format!(" (the scene on screen swaps every {on_screen} s until the next scene)")
+        }
+        _ => String::new(),
+    };
+    format!(
+        concat!(
+            "timing: interval {} s{}, a plate up at least {}, dissolve {},",
+            " catching up after {}"
+        ),
+        timing.interval_s,
+        on_screen,
+        seconds(timing.minimum_on_screen_ms),
+        timing
+            .dissolve_ms
+            .map_or_else(|| "not seen yet".to_owned(), seconds),
+        seconds(timing.catch_up_ms),
+    )
+}
+
+fn broker_line(broker: &QueuesReport) -> String {
+    let classes = broker
+        .classes
+        .iter()
+        .map(|class| {
+            format!(
+                "{} {} waiting ({} dropped)",
+                class.class.key(),
+                class.depth,
+                class.dropped
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "workbench broker: epoch {}{}; {classes}; {} running",
+        broker.epoch,
+        if broker.closed { " (closed)" } else { "" },
+        broker.running.len()
+    )
+}
+
+/// `scene timing set`: the change and the timings now.
+pub fn format_timing(reply: &TimingReply) -> String {
+    let mut lines = vec![format!(
+        "{} was {}; {}",
+        reply.setting.key(),
+        reply.previous,
+        timing_line(&reply.timing)
+    )];
+    lines.extend(reply.lines.iter().map(timed));
     numbered(lines)
 }
 

@@ -1,13 +1,13 @@
 //! The dev command line of the owner actor: the H.16 verbs the host can serve now.
 //!
 //! It owns the grammar and usage text of `input`, `viable`, `dump`, `force`, `projection show`,
-//! `queue` and `describe` (and the broker's `broker queues`, `broker ledger` and `broker request`),
-//! and running one against a host on a port. The event and settings verbs (`history`, `trace`,
-//! `replay`, `config`) have their grammar in `cli/observe`, and the verbs of the first playable
-//! path theirs in `cli/play`; both are dispatched from here. Each verb has the shape of the canvas
-//! commands: words in, one typed `EngineCommand` out, a usage line on a mistake
-//! (`CommandError::Usage`), and a numbered answer. They work from the repl and from a script like
-//! any other command, because they are parsed by the same `command::parse`.
+//! `queue`, `describe` and `inspect` (and the broker's `broker queues`, `broker ledger` and
+//! `broker request`), and running one against a host on a port. The event and settings verbs
+//! (`history`, `trace`, `replay`, `config`) have their grammar in `cli/observe`, and the verbs of
+//! the first playable path theirs in `cli/play`; both are dispatched from here. Each verb has the
+//! shape of the canvas commands: words in, one typed `EngineCommand` out, a usage line on a
+//! mistake (`CommandError::Usage`), and a numbered answer. They work from the repl and from a
+//! script like any other command, because they are parsed by the same `command::parse`.
 //!
 //! The registry-generated `describe` and every list read from the owner; nothing here knows what
 //! a machine is. Hosted builds omit `force` and the broker's `request` (RES43, H.16): they are
@@ -34,24 +34,28 @@ use self::play::{
     LOBBY_USAGE, PLAY_USAGE, PlayCommand, SCENE_START_USAGE, WIRE_USAGE, parse as parse_play,
     run as run_play,
 };
+use df_table::identity::SeatId;
+use df_table::inspect::InspectAudience;
+
 use super::format::{
-    format_broker_ledger, format_broker_queues, format_chaos, format_clock, format_description,
-    format_dice, format_force, format_health, format_queue, format_requested, format_served,
-    format_submit, format_viable, format_view,
+    format_broker_ledger, format_broker_queues, format_chaos, format_chaos_standing, format_clock,
+    format_description, format_dice, format_force, format_health, format_inspect, format_queue,
+    format_requested, format_served, format_submit, format_viable, format_view,
 };
-use super::report::{EngineDump, EngineReply};
+use super::report::reach::DumpReport;
+use super::report::{ChaosReport, EngineDump, EngineReply};
 use super::request::{
     AudienceSpec, BrokerRequest, ChaosRequest, ClockControl, CommitFault, ConfigControl,
-    DiceControl, ForceRequest, HistoryRequest, InputBody, InputRequest, ProposalSource,
-    QueueControl, ReplayRequest, TraceOperation,
+    DiceControl, ForceRequest, HistoryRequest, InputBody, InputRequest, InspectName,
+    ProposalSource, QueueControl, ReplayRequest, TraceOperation, inspect_audience_word,
 };
-use super::routes::{AUDIENCE_PARAMETER, SEAT_PARAMETER, path};
+use super::routes::{AUDIENCE_PARAMETER, MACHINE_PARAMETER, SEAT_PARAMETER, path};
 
 pub const INPUT_USAGE: &str = "input <seat> <text> | input <seat> --tap <action> | --say <text> \
     | --private <seat> <text> | --pause | input engine --timer <name> \
     | --proposal <origin> <proposer>  (any: --op N, --view N)";
 pub const VIABLE_USAGE: &str = "viable <seat>";
-pub const DUMP_USAGE: &str = "dump";
+pub const DUMP_USAGE: &str = "dump [table | <machine>]";
 pub const FORCE_USAGE: &str = "force <machine> <state> [<field>=<value> ...]";
 pub const PROJECTION_USAGE: &str = "projection show <tv|seat-number>";
 pub const QUEUE_USAGE: &str = "queue show | hold | release | step [N]";
@@ -61,14 +65,17 @@ pub const COST_USAGE: &str = "cost";
 pub const HEALTH_USAGE: &str = "health";
 pub const CLOCK_USAGE: &str = "clock now | advance <ms> | freeze | resume";
 pub const DICE_USAGE: &str = "dice seed <number> | force <value> [<value> ...]";
-pub const CHAOS_USAGE: &str =
-    "chaos commit <unavailable|refused|deadline> [count] | chaos interpreter <down|up>";
+pub const CHAOS_USAGE: &str = "chaos | chaos commit <unavailable|refused|deadline> [count] \
+    | chaos interpreter <down|up>";
+pub const INSPECT_USAGE: &str = "inspect <table|machines|pending|rulings|requests|results|pipeline\
+    |queue|registry|ports|settings> [--host | --seat N]";
 
 /// The verbs this module parses, for the dispatch in `command::parse`.
-pub const VERBS: [&str; 21] = [
+pub const VERBS: [&str; 22] = [
     "input",
     "viable",
     "dump",
+    "inspect",
     "force",
     "projection",
     "queue",
@@ -103,6 +110,14 @@ pub enum EngineCommand {
         seat: u64,
     },
     Dump,
+    /// `dump table` or `dump <machine>`: the word as typed, checked by the owner.
+    DumpNamed {
+        target: String,
+    },
+    Inspect {
+        report: InspectName,
+        audience: InspectAudience,
+    },
     Force(ForceRequest),
     ProjectionShow(AudienceSpec),
     QueueShow,
@@ -116,6 +131,8 @@ pub enum EngineCommand {
     Health,
     Clock(ClockControl),
     Dice(DiceControl),
+    /// `chaos` with no words: the faults in force.
+    ChaosShow,
     Chaos(ChaosRequest),
     RulesCheck(RulesCheckRequest),
     History(HistoryRequest),
@@ -130,7 +147,7 @@ pub enum EngineCommand {
 
 /// Every verb's usage line and the lines of its help, in the order `describe` and `help` list
 /// them.
-const VERB_HELP: [(&str, &[&str]); 22] = [
+const VERB_HELP: [(&str, &[&str]); 23] = [
     (
         INPUT_USAGE,
         &[
@@ -146,7 +163,21 @@ const VERB_HELP: [(&str, &[&str]); 22] = [
     ),
     (
         DUMP_USAGE,
-        &["the committed table state and the active machine's saved state, as JSON"],
+        &[
+            "the committed table state and the active machine's saved state, as JSON; `table` \
+             prints",
+            "the table's shared facts alone, and a machine's name every place it holds with its \
+             saved state",
+        ],
+    ),
+    (
+        INSPECT_USAGE,
+        &[
+            "one module's report of what it holds, as the operator (the default), the host or one \
+             seat",
+            "may see it; a hidden value says who could see it. `pending` and `rulings` are the \
+             books",
+        ],
     ),
     (
         FORCE_USAGE,
@@ -197,7 +228,11 @@ const VERB_HELP: [(&str, &[&str]); 22] = [
     ),
     (
         CHAOS_USAGE,
-        &["make the next commits fail, or take the interpreter down, to see the fallbacks"],
+        &[
+            "the faults in force, or make the next commits fail, or take the interpreter down, \
+             to see",
+            "the fallbacks",
+        ],
     ),
     (
         RULES_CHECK_USAGE,
@@ -314,7 +349,14 @@ pub fn parse(verb: &str, words: &[String]) -> Result<EngineCommand, CommandError
             }),
             _ => Err(CommandError::Usage(VIABLE_USAGE)),
         },
-        "dump" => without_words(words, DUMP_USAGE, EngineCommand::Dump),
+        "dump" => match words {
+            [] => Ok(EngineCommand::Dump),
+            [target] => Ok(EngineCommand::DumpNamed {
+                target: query_word(target)?,
+            }),
+            _ => Err(CommandError::Usage(DUMP_USAGE)),
+        },
+        "inspect" => inspect(words),
         "force" => force(words),
         "projection" => projection(words),
         "queue" => queue(words),
@@ -558,8 +600,34 @@ fn dice(words: &[String]) -> Result<EngineCommand, CommandError> {
     Ok(EngineCommand::Dice(control))
 }
 
+/// `inspect <report> [--host | --seat N]`.
+fn inspect(words: &[String]) -> Result<EngineCommand, CommandError> {
+    let (name, audience) = match words {
+        [name] => (name, InspectAudience::Operator),
+        [name, flag] if flag == "--host" => (name, InspectAudience::Host),
+        [name, flag, seat] if flag == "--seat" => (
+            name,
+            InspectAudience::Seat {
+                seat: SeatId::new(whole_number("the seat", seat)?),
+            },
+        ),
+        _ => return Err(CommandError::Usage(INSPECT_USAGE)),
+    };
+    let report = InspectName::from_key(name).ok_or_else(|| CommandError::BadChoice {
+        key: "the report".to_owned(),
+        text: name.clone(),
+        allowed: InspectName::ALL
+            .iter()
+            .map(|name| name.key())
+            .collect::<Vec<_>>()
+            .join(", "),
+    })?;
+    Ok(EngineCommand::Inspect { report, audience })
+}
+
 fn chaos(words: &[String]) -> Result<EngineCommand, CommandError> {
     let request = match words {
+        [] => return Ok(EngineCommand::ChaosShow),
         [dependency, fault, rest @ ..] if dependency == "commit" && rest.len() <= 1 => {
             let fault = CommitFault::from_key(fault).ok_or_else(|| CommandError::BadChoice {
                 key: "the commit fault".to_owned(),
@@ -613,8 +681,26 @@ pub(super) async fn send<T: DeserializeOwned>(
     reply_value(dev_client::post_json(port, address, body).await?)
 }
 
+/// A machine's name as a query value: the owner checks the name, and a word that would need
+/// encoding is no machine's name, so it is refused here instead of being sent mangled.
+fn query_word(word: &str) -> Result<String, CommandError> {
+    if word
+        .chars()
+        .all(|letter| letter.is_ascii_alphanumeric() || matches!(letter, '_' | '-' | '.'))
+    {
+        Ok(word.to_owned())
+    } else {
+        Err(CommandError::BadChoice {
+            key: "the machine".to_owned(),
+            text: word.to_owned(),
+            allowed: "table or a machine's name".to_owned(),
+        })
+    }
+}
+
 /// `address` with one query parameter. Every value the verbs put in a query is a number, `tv`,
-/// hexadecimal digits or an audit area (checked by `parse_history`), so none needs encoding.
+/// hexadecimal digits, an audit area (checked by `parse_history`), an inspect audience or a
+/// checked machine name (`query_word`), so none needs encoding.
 pub(super) fn with_query(address: &str, parameter: &str, value: &str) -> String {
     format!("{address}?{parameter}={value}")
 }
@@ -639,6 +725,23 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
         EngineCommand::Dump => {
             let dump: EngineDump = fetch(port, path::DUMP).await?;
             pretty("dump", &dump)
+        }
+        EngineCommand::DumpNamed { target } => {
+            let address = with_query(path::DUMP, MACHINE_PARAMETER, &target);
+            let dump: DumpReport = fetch(port, &address).await?;
+            pretty("dump", &dump)
+        }
+        EngineCommand::Inspect { report, audience } => {
+            let address = with_query(
+                &path::inspect_path(report.key()),
+                AUDIENCE_PARAMETER,
+                &inspect_audience_word(audience),
+            );
+            let report = fetch(port, &address).await?;
+            format_inspect(&report).map_err(|error| DevError::Unwritable {
+                what: "inspect",
+                reason: error.to_string(),
+            })
         }
         EngineCommand::Force(request) => {
             Ok(format_force(&send(port, path::FORCE, &request).await?))
@@ -673,6 +776,10 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
             Ok(format_clock(&send(port, path::CLOCK, &control).await?))
         }
         EngineCommand::Dice(control) => Ok(format_dice(&send(port, path::DICE, &control).await?)),
+        EngineCommand::ChaosShow => {
+            let faults: Vec<ChaosReport> = fetch(port, path::CHAOS).await?;
+            Ok(format_chaos_standing(&faults))
+        }
         EngineCommand::Chaos(request) => {
             Ok(format_chaos(&send(port, path::CHAOS, &request).await?))
         }

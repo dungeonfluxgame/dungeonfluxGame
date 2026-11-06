@@ -24,6 +24,8 @@ df-imagery = { path = "../df-imagery" }
 df-ai = { path = "../df-ai" }
 df-providers = { path = "../df-providers" }
 df-scene-layout = { path = "../df-scene-layout" }
+df-telemetry = { path = "../df-telemetry" }
+df-types = { path = "../df-types" }
 axum = "=0.8.9"
 base64 = "=0.22.1"
 prost.workspace = true
@@ -36,5 +38,3 @@ tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-t
 df-table = { path = "../df-table", features = ["testkit"] }
 tempfile = "=3.27.0"
 tokio = { version = "=1.53.1", default-features = false, features = ["test-util"] }
-df-telemetry = { path = "../df-telemetry" }
-df-types = { path = "../df-types" }

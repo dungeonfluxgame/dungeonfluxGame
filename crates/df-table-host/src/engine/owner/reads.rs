@@ -13,13 +13,15 @@ use df_table::owner_queue::Lane;
 use df_table::pipeline::PipelineTable;
 use df_table::ports::{Broker, Clock, PurposeName, Readiness};
 
-use crate::broker::report::{LedgerReport, QueuesReport};
-use crate::engine::audit::EngineAudit;
+use crate::broker::purpose::QueueClass;
+use crate::broker::report::LedgerReport;
+use crate::engine::audit::{DumpOf, EngineAudit};
 use crate::engine::cli::verb_usages;
 use crate::engine::commit::{CommitId, ScriptedCommit};
 use crate::engine::labels::sender_label;
 use crate::engine::limits::{MAXIMUM_LEDGER_ENTRIES_PER_ANSWER, MAXIMUM_LINES_PER_ANSWER};
 use crate::engine::projection_adapter::project_view;
+use crate::engine::report::reach::{BrokerLimitsReport, BrokerQueuesReport, QueueBoundReport};
 use crate::engine::report::{
     BrokerRequested, ChaosReport, ClockReport, CommitReport, Description, DevControl, DiceReport,
     EngineDump, EngineError, HandOffDump, HealthReport, InProgressReport, LaneDepth,
@@ -36,7 +38,7 @@ fn not_available(control: DevControl) -> EngineError {
     EngineError::NotAvailable { control }
 }
 
-fn table_dump(table: &PipelineTable) -> TableDump {
+pub(super) fn table_dump(table: &PipelineTable) -> TableDump {
     let facts = table.facts();
     let snapshot = facts.snapshot();
     TableDump {
@@ -116,6 +118,7 @@ impl Owner {
         self.audit(EngineAudit::Dump {
             revision: dump.revision,
             commit: dump.commit,
+            of: DumpOf::Active,
         });
         Ok(dump)
     }
@@ -402,12 +405,28 @@ impl Owner {
         }
     }
 
-    pub(super) fn broker_queues(&self) -> QueuesReport {
+    /// The queues and what runs, with the limits the hub was built with.
+    pub(super) fn broker_queues(&self) -> BrokerQueuesReport {
         self.audit(EngineAudit::Broker {
             verb: "queues",
             purpose: None,
         });
-        self.adapters.broker.hub.queues_report()
+        let limits = self.adapters.broker.limits;
+        BrokerQueuesReport {
+            queues: self.adapters.broker.hub.queues_report(),
+            limits: BrokerLimitsReport {
+                text_slots: limits.text_slots,
+                image_slots: limits.image_slots,
+                reserved_live_text_slots: limits.reserved_live_text_slots,
+                queue_bounds: QueueClass::ALL
+                    .iter()
+                    .map(|class| QueueBoundReport {
+                        class: *class,
+                        bound: limits.queues.of(*class),
+                    })
+                    .collect(),
+            },
+        }
     }
 
     pub(super) fn broker_ledger(&self) -> LedgerReport {

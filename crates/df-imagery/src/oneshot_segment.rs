@@ -16,8 +16,9 @@
 //! `segment` is `Send`, so a host awaits it on its own task; hashing, decoding and preparing the
 //! picture run on a blocking thread.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use df_providers::SendState;
 use sha2::{Digest, Sha256};
 
 use crate::backends::analysis::standalone::{
@@ -88,33 +89,46 @@ pub struct SegmentRequest {
 
 listed_enum! {
     keyed
-    /// Why a scan did not give masks.
+    /// Why a scan did not give masks. The supplier causes keep the runtime's cause instead of
+    /// one "supplier" or "timeout" bucket.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum SegmentError {
+    pub enum SegmentCause {
         /// The endpoint, model, key or limits are not usable.
         Configuration,
         /// The picture could not be read or prepared within the limits.
         Picture,
         /// The supplier refused the request.
         Refused,
-        /// The supplier failed, ran out of quota or rate-limited the key.
-        Supplier,
+        /// The supplier rate-limited the key.
+        RateLimited,
+        /// The supplier quota is exhausted or blocks the call.
+        Quota,
+        /// The supplier's outcome is unknown.
+        Unknown,
+        /// The supplier failed.
+        Failure,
         /// The time limit passed before the answer.
-        Timeout,
+        Expired,
+        /// The scan was cancelled before the answer.
+        Cancelled,
         /// The answer did not have the contract's shape.
         Malformed,
     }
 }
 
-impl SegmentError {
+impl SegmentCause {
     /// A short stable name for a log line.
     pub fn key(self) -> &'static str {
         match self {
             Self::Configuration => "configuration",
             Self::Picture => "picture",
             Self::Refused => "refused",
-            Self::Supplier => "supplier",
-            Self::Timeout => "timeout",
+            Self::RateLimited => "rate_limited",
+            Self::Quota => "quota",
+            Self::Unknown => "unknown",
+            Self::Failure => "failure",
+            Self::Expired => "expired",
+            Self::Cancelled => "cancelled",
             Self::Malformed => "malformed",
         }
     }
@@ -126,65 +140,155 @@ impl SegmentError {
             }
             RuntimeError::SourceDenied | RuntimeError::UnsupportedCapability => Self::Picture,
             RuntimeError::ProviderRefused => Self::Refused,
-            RuntimeError::Expired | RuntimeError::Cancelled => Self::Timeout,
-            RuntimeError::SupplierFailure(_)
-            | RuntimeError::SupplierQuotaExhausted
-            | RuntimeError::SupplierRateLimited
-            | RuntimeError::QuotaBlocked { .. }
-            | RuntimeError::ProviderUnknown => Self::Supplier,
+            RuntimeError::SupplierRateLimited => Self::RateLimited,
+            RuntimeError::SupplierQuotaExhausted | RuntimeError::QuotaBlocked { .. } => Self::Quota,
+            RuntimeError::ProviderUnknown => Self::Unknown,
+            RuntimeError::SupplierFailure(_) => Self::Failure,
+            RuntimeError::Expired => Self::Expired,
+            RuntimeError::Cancelled => Self::Cancelled,
             _ => Self::Malformed,
         }
     }
 }
 
+/// Why a scan did not give masks, and how far its request got toward the supplier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentError {
+    pub cause: SegmentCause,
+    pub send_state: SendState,
+}
+
+impl SegmentError {
+    /// A refusal before anything was sent.
+    const fn unsent(cause: SegmentCause) -> Self {
+        Self {
+            cause,
+            send_state: SendState::Unsent,
+        }
+    }
+
+    /// A runtime failure at a point the request had reached `send_state`.
+    fn from_runtime(error: &RuntimeError, send_state: SendState) -> Self {
+        Self {
+            cause: SegmentCause::from_runtime(error),
+            send_state,
+        }
+    }
+
+    /// The cause's key, for a log line.
+    pub fn key(self) -> &'static str {
+        self.cause.key()
+    }
+}
+
 impl std::fmt::Display for SegmentError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.key())
+        write!(
+            formatter,
+            "the scan gave no masks: {} ({})",
+            self.cause.key(),
+            self.send_state.key()
+        )
     }
 }
 
 impl std::error::Error for SegmentError {}
 
-/// Scans one picture and returns its masks at the prepared picture's size.
+/// How long each phase of a scan took, in milliseconds: preparing the picture, the supplier's
+/// submit, and polling to the answer (with reading it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SegmentPhases {
+    pub prepare_ms: u64,
+    pub submit_ms: u64,
+    pub resume_ms: u64,
+}
+
+/// A scan's masks and its phase timings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Segmented {
+    pub masks: AnalysisMaskSet,
+    pub phases: SegmentPhases,
+}
+
+/// The milliseconds since `started`, saturating.
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Scans one picture and returns its masks at the prepared picture's size, with the time each
+/// phase took.
 pub async fn segment(
     config: &SegmentConfig,
     request: SegmentRequest,
-) -> Result<AnalysisMaskSet, SegmentError> {
+) -> Result<Segmented, SegmentError> {
+    let configuration = SegmentError::unsent(SegmentCause::Configuration);
     if !(1..=MAXIMUM_MASKS).contains(&request.maximum_masks)
         || config.timeout.is_zero()
         || config.timeout > MAXIMUM_TIMEOUT
     {
-        return Err(SegmentError::Configuration);
+        return Err(configuration);
     }
     let route = SegmentationRoute {
         provider: SegmentationProvider::Fal,
-        account: AccountHandle::new("oneshot-segment").map_err(|_| SegmentError::Configuration)?,
-        model: ModelName::new(&config.model).map_err(|_| SegmentError::Configuration)?,
-        endpoint: ApiEndpoint::new(&config.endpoint).map_err(|_| SegmentError::Configuration)?,
+        account: AccountHandle::new("oneshot-segment").map_err(|_| configuration)?,
+        model: ModelName::new(&config.model).map_err(|_| configuration)?,
+        endpoint: ApiEndpoint::new(&config.endpoint).map_err(|_| configuration)?,
     };
     let (prompt, maximum_masks) = (request.prompt, request.maximum_masks);
     let (timeout, credential) = (config.timeout, config.credential.clone());
+    let started = Instant::now();
     let mut prepared =
         tokio::task::spawn_blocking(move || prepare(&request, &route, timeout, &credential))
             .await
             // A preparation that panicked never produced a picture to send.
-            .map_err(|_| SegmentError::Picture)??;
+            .map_err(|_| SegmentError::unsent(SegmentCause::Picture))??;
+    let prepare_ms = elapsed_ms(started);
     let (width_px, height_px) = (prepared.width_px, prepared.height_px);
+    let started = Instant::now();
+    // A failed submit may have reached the supplier: only an answer says it did.
     let raw = prepared
         .submit()
         .await
-        .map_err(|error| SegmentError::from_runtime(&error))?;
-    let checkpoint = prepared
-        .checkpoint(&raw)
-        .map_err(|error| SegmentError::from_runtime(&error))?;
-    let answer = prepared
-        .resume(&checkpoint)
-        .await
-        .map_err(|error| SegmentError::from_runtime(&error))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&answer.body).map_err(|_| SegmentError::Malformed)?;
-    parse_segmentation(&value, prompt, width_px, height_px, maximum_masks)
-        .map_err(|_| SegmentError::Malformed)
+        .map_err(|error| SegmentError::from_runtime(&error, submit_send_state(&error)))?;
+    let submit_ms = elapsed_ms(started);
+    // From here the supplier has answered the submit.
+    let answered = |cause| SegmentError {
+        cause,
+        send_state: SendState::KnownSent,
+    };
+    if raw.status == RATE_LIMITED_STATUS {
+        return Err(answered(SegmentCause::RateLimited));
+    }
+    let failed = |error: RuntimeError| answered(SegmentCause::from_runtime(&error));
+    let checkpoint = prepared.checkpoint(&raw).map_err(failed)?;
+    let started = Instant::now();
+    let answer = prepared.resume(&checkpoint).await.map_err(failed)?;
+    if answer.status == RATE_LIMITED_STATUS {
+        return Err(answered(SegmentCause::RateLimited));
+    }
+    let malformed = |_| answered(SegmentCause::Malformed);
+    let value: serde_json::Value = serde_json::from_slice(&answer.body).map_err(malformed)?;
+    let masks = parse_segmentation(&value, prompt, width_px, height_px, maximum_masks)
+        .map_err(|_| answered(SegmentCause::Malformed))?;
+    Ok(Segmented {
+        masks,
+        phases: SegmentPhases {
+            prepare_ms,
+            submit_ms,
+            resume_ms: elapsed_ms(started),
+        },
+    })
+}
+
+/// The HTTP status a supplier rate limit answers with.
+const RATE_LIMITED_STATUS: u16 = 429;
+
+/// How far a submit that returned no answer got: refused before sending, or possibly sent.
+fn submit_send_state(error: &RuntimeError) -> SendState {
+    match error {
+        RuntimeError::Disabled | RuntimeError::InvalidRecord => SendState::Unsent,
+        _ => SendState::PossiblySent,
+    }
 }
 
 /// Hashes, decodes and prepares the picture as a scene plate, on a blocking thread.
@@ -195,9 +299,9 @@ fn prepare(
     credential: &str,
 ) -> Result<PreparedSegmentation, SegmentError> {
     let source_digest: [u8; 32] = Sha256::digest(&request.source).into();
+    let picture = SegmentError::unsent(SegmentCause::Picture);
     let pin = SourceRef {
-        asset: df_assets::AssetId::from_bytes(&source_digest[..16])
-            .map_err(|_| SegmentError::Picture)?,
+        asset: df_assets::AssetId::from_bytes(&source_digest[..16]).map_err(|_| picture)?,
         digest: AssetDigest::from_bytes(source_digest),
         audience: df_assets::Audience::PublicStatic,
     };
@@ -222,10 +326,10 @@ fn prepare(
         credential,
     )
     .map_err(|error| match error {
-        RuntimeError::InvalidRecord | RuntimeError::SourceDenied => SegmentError::Picture,
+        RuntimeError::InvalidRecord | RuntimeError::SourceDenied => picture,
         // Preparation refuses limits the HTTP client cannot take as an unsupported capability.
-        RuntimeError::UnsupportedCapability => SegmentError::Configuration,
-        other => SegmentError::from_runtime(&other),
+        RuntimeError::UnsupportedCapability => SegmentError::unsent(SegmentCause::Configuration),
+        other => SegmentError::from_runtime(&other, SendState::Unsent),
     })
 }
 
@@ -342,14 +446,20 @@ mod tests {
     async fn a_mask_count_outside_the_contract_is_refused_before_any_call() {
         for count in [0, MAXIMUM_MASKS + 1] {
             let result = segment(&config(DEFAULT_MODEL, "key"), request(png(), count)).await;
-            assert_eq!(result, Err(SegmentError::Configuration));
+            assert_eq!(
+                result,
+                Err(SegmentError::unsent(SegmentCause::Configuration))
+            );
         }
     }
 
     #[tokio::test]
     async fn an_empty_key_is_refused_before_any_call() {
         let result = segment(&config(DEFAULT_MODEL, ""), request(png(), 8)).await;
-        assert_eq!(result, Err(SegmentError::Configuration));
+        assert_eq!(
+            result,
+            Err(SegmentError::unsent(SegmentCause::Configuration))
+        );
     }
 
     #[tokio::test]
@@ -359,7 +469,108 @@ mod tests {
             request(b"not a picture".to_vec(), 8),
         )
         .await;
-        assert_eq!(result, Err(SegmentError::Picture));
+        assert_eq!(result, Err(SegmentError::unsent(SegmentCause::Picture)));
+    }
+
+    #[test]
+    fn each_runtime_cause_keeps_its_own_key() {
+        use crate::execution::FailureCause;
+        let causes = [
+            (RuntimeError::SupplierRateLimited, "rate_limited"),
+            (RuntimeError::SupplierQuotaExhausted, "quota"),
+            (
+                RuntimeError::QuotaBlocked {
+                    retry_at_ms: None,
+                    notice: None,
+                },
+                "quota",
+            ),
+            (RuntimeError::ProviderUnknown, "unknown"),
+            (
+                RuntimeError::SupplierFailure(FailureCause::RateLimited),
+                "failure",
+            ),
+            (RuntimeError::Expired, "expired"),
+            (RuntimeError::Cancelled, "cancelled"),
+            (RuntimeError::ProviderRefused, "refused"),
+            (RuntimeError::InvalidConfiguration, "configuration"),
+            (RuntimeError::SourceDenied, "picture"),
+            (RuntimeError::InvalidRecord, "malformed"),
+        ];
+        for (error, key) in causes {
+            let failure = SegmentError::from_runtime(&error, SendState::PossiblySent);
+            assert_eq!(failure.key(), key, "{error:?}");
+            assert_eq!(failure.send_state, SendState::PossiblySent);
+        }
+        for cause in SegmentCause::ALL {
+            assert_eq!(SegmentCause::from_key(cause.key()), Some(*cause));
+        }
+    }
+
+    #[test]
+    fn a_submit_without_an_answer_is_possibly_sent_unless_refused_before_sending() {
+        assert_eq!(
+            submit_send_state(&RuntimeError::ProviderUnknown),
+            SendState::PossiblySent
+        );
+        assert_eq!(
+            submit_send_state(&RuntimeError::Expired),
+            SendState::PossiblySent
+        );
+        assert_eq!(
+            submit_send_state(&RuntimeError::Disabled),
+            SendState::Unsent
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_submit_keeps_its_cause_and_says_it_was_sent() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut chunk = [0u8; 65_536];
+            let header_end = loop {
+                let count = stream.read(&mut chunk).unwrap();
+                assert_ne!(count, 0);
+                bytes.extend_from_slice(&chunk[..count]);
+                if let Some(at) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break at + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&bytes[..header_end]).to_ascii_lowercase();
+            let length: usize = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map_or(0, |value| value.trim().parse().unwrap());
+            while bytes.len() < header_end + length {
+                let count = stream.read(&mut chunk).unwrap();
+                assert_ne!(count, 0);
+                bytes.extend_from_slice(&chunk[..count]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\n\
+                      Content-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .unwrap();
+        });
+        let mut fixture = config(DEFAULT_MODEL, "key");
+        fixture.endpoint = format!("http://{address}");
+        let result = segment(&fixture, request(png(), 8)).await;
+        server.join().unwrap();
+        assert_eq!(
+            result,
+            Err(SegmentError {
+                cause: SegmentCause::RateLimited,
+                send_state: SendState::KnownSent,
+            })
+        );
     }
 
     #[test]

@@ -100,6 +100,10 @@ pub const MAXIMUM_UPLOAD_NAME_BYTES: usize = 512;
 /// How often the host's clock moves travelling elements (about 30 times a second), while
 /// something moves.
 pub const TICK_INTERVAL: Duration = Duration::from_millis(33);
+/// Longest step of travel the canvas takes: a longer gap between ticks (a stalled host) is cut to
+/// this, and the clock records the stall. It is `df_table`'s `MAXIMUM_TICK_SECONDS` (0.25 s), which
+/// that crate keeps private, so the two are kept equal by hand.
+pub const TRAVEL_TICK_CUT: Duration = Duration::from_millis(250);
 /// Longest a frame request is held waiting for a change before it is answered anyway.
 pub const FRAME_WAIT: Duration = Duration::from_secs(25);
 /// A page not heard from for this long is forgotten: it sends a sign of life every ten seconds,

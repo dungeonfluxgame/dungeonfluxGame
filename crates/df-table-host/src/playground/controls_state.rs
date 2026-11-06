@@ -250,6 +250,11 @@ impl PlaygroundState {
         self.clients.record(client, report, self.now_ms());
     }
 
+    /// The table of open pages, for the client routes, which write the lines it gives.
+    pub(super) fn client_table(&self) -> &ClientTable {
+        &self.clients
+    }
+
     /// The pages heard from, by name, with how long ago each last spoke.
     pub fn clients(&self) -> Vec<ClientView> {
         self.clients_at(self.now_ms())

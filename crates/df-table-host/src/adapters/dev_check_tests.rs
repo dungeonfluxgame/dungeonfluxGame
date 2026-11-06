@@ -13,6 +13,7 @@ use crate::client;
 use crate::command::{CommandError, split_words};
 use crate::dev::{DevError, ReplyError, run_dev};
 use crate::dev_http::{BodyCause, DevReply, RouteError};
+use crate::engine::report::UnreadableBodyCause;
 use crate::engine::routes::path;
 use crate::test_support::{STARTER_FILES, start};
 
@@ -377,12 +378,65 @@ async fn the_route_with_no_kit_says_the_check_is_not_available_and_a_bad_body_is
         .filter(|line| line.text.starts_with("ENGINE refused verb=rules_check "))
         .map(|line| line.text.as_str())
         .collect();
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    assert!(
+        refused[0]
+            .starts_with("ENGINE refused verb=rules_check error=scripted_backend duration_ms="),
+        "{refused:?}"
+    );
+    assert!(
+        refused[1].starts_with("ENGINE refused verb=rules_check error=invalid_body duration_ms="),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_body_over_the_limit_is_refused_413_typed_and_logged() {
+    let host = start(&STARTER_FILES).await;
+    let listener = crate::server::bind(0).await.expect("binds");
+    let port = listener.local_addr().expect("an address").port();
+    let router = dev_route::router(Arc::clone(&host.state), Some(kit()))
+        .layer(axum::extract::DefaultBodyLimit::max(16));
+    let serving = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+
+    let reply = client::post_json(
+        port,
+        path::RULES_CHECK,
+        r#"{"skill":"sleight_of_hand","actor":1,"dc":15}"#,
+    )
+    .await
+    .expect("answered");
+
+    serving.abort();
     assert_eq!(
-        refused,
-        [
-            "ENGINE refused verb=rules_check error=scripted_backend",
-            "ENGINE refused verb=rules_check error=invalid_body",
-        ]
+        reply.status,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "{}",
+        reply.body
+    );
+    let parsed: RulesCheckReply = serde_json::from_str(&reply.body).expect("a reply");
+    let DevReply::Rejected { error, .. } = parsed else {
+        panic!("not a refusal: {}", reply.body);
+    };
+    assert_eq!(
+        error,
+        RulesCheckError::UnreadableBody {
+            cause: UnreadableBodyCause::TooLarge
+        }
+    );
+    let logged = host.state.log().after_sequence(0, 100_000);
+    let refused: Vec<_> = logged
+        .iter()
+        .filter(|line| line.text.starts_with("ENGINE refused verb=rules_check "))
+        .map(|line| line.text.as_str())
+        .collect();
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert!(
+        refused[0]
+            .starts_with("ENGINE refused verb=rules_check error=unreadable_body duration_ms="),
+        "{refused:?}"
     );
 }
 
@@ -429,6 +483,18 @@ fn every_refusal_answers_its_status_and_its_key_is_its_serde_tag() {
             RulesCheckError::InvalidBody(body_error),
             StatusCode::BAD_REQUEST,
         ),
+        (
+            RulesCheckError::UnreadableBody {
+                cause: UnreadableBodyCause::TooLarge,
+            },
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (
+            RulesCheckError::UnreadableBody {
+                cause: UnreadableBodyCause::Interrupted,
+            },
+            StatusCode::BAD_REQUEST,
+        ),
         (RulesCheckError::ScriptedBackend, StatusCode::CONFLICT),
         (
             RulesCheckError::PortFailed {
@@ -455,8 +521,11 @@ fn every_refusal_answers_its_status_and_its_key_is_its_serde_tag() {
             error
         );
         assert_eq!(
-            refusal_audit_line(&error),
-            format!("ENGINE refused verb=rules_check error={}", error.key())
+            refusal_audit_line(&error, 3),
+            format!(
+                "ENGINE refused verb=rules_check error={} duration_ms=3",
+                error.key()
+            )
         );
     }
 }

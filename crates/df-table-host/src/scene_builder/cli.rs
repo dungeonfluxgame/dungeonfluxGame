@@ -1,5 +1,5 @@
-//! The dev command line of the scene builder: `scene build`, `scene show`, `plates` and
-//! `buffer show` (coding style section 8, pattern 8).
+//! The dev command line of the scene builder: `scene build`, `scene show`, `scene timing set`,
+//! `plates` and `buffer show` (coding style section 8, pattern 8).
 //!
 //! It owns the grammar and the usage text of these verbs, and running one against a host on a port.
 //! Each verb has the shape of the other dev commands: words in, one typed `SceneBuilderCommand`
@@ -9,11 +9,13 @@
 
 use df_table::table_state::DisplayName;
 
-use super::format::{format_buffer, format_build, format_plates, format_run, format_show};
+use super::format::{
+    format_buffer, format_build, format_plates, format_run, format_show, format_timing,
+};
 use super::lookahead::{self, LookaheadCommand};
 use super::request::{
-    BufferShow, BuildReply, BuildRequest, DevMoment, DevStage, PlatesReport, RunReply, RunRequest,
-    SceneReply, SceneShow, SlowStage,
+    BufferShow, BuildReply, BuildRequest, DevMoment, DevStage, PlateTimingSetting, PlatesReport,
+    RunReply, RunRequest, SceneReply, SceneShow, SlowStage, TimingReply, TimingRequest,
 };
 use super::routes::path;
 use crate::command::CommandError;
@@ -30,6 +32,7 @@ pub const PLATES_USAGE: &str = concat!(
     " [moment=line_boundary|mid_line|dice_or_result_card|reveal_beat]",
 );
 pub const BUFFER_USAGE: &str = "buffer show";
+pub const TIMING_USAGE: &str = "scene timing set <interval_s|minimum_on_screen_ms> <n>";
 
 /// The top-level verbs this module parses, for the dispatch in `command::parse`. The `scene` verbs
 /// `build` and `show` join the playground's `scene` verb, which `command::scene` hands over here.
@@ -44,14 +47,16 @@ pub enum SceneBuilderCommand {
     Plates,
     PlatesRun(RunRequest),
     BufferShow,
+    Timing(TimingRequest),
 }
 
 /// The usage line of every verb, in the order `help` lists them.
-pub fn verb_usages() -> [&'static str; 5] {
+pub fn verb_usages() -> [&'static str; 6] {
     [
         BUILD_USAGE,
         SHOW_USAGE,
         PLATES_USAGE,
+        TIMING_USAGE,
         BUFFER_USAGE,
         lookahead::cli::LOOKAHEAD_USAGE,
     ]
@@ -71,9 +76,14 @@ pub fn help_text() -> String {
             "      Locate found each person and item (or the explicit fallback point of one\n",
             "      it did not)\n",
             "\n  {plates}\n",
-            "      the plate clock, its queue, the jobs in flight and the cost of the\n",
-            "      interval; run lets the clock tick (a creature moves each beat, or nothing\n",
-            "      changes with quiet, and no plate is paid for)\n",
+            "      the plate clock, its queue, the jobs in flight, the cost of the\n",
+            "      interval, the timings and the workbench broker's queues; run lets the\n",
+            "      clock tick (a creature moves each beat, or nothing changes with quiet,\n",
+            "      and no plate is paid for)\n",
+            "\n  {timing}\n",
+            "      changes the plate interval (seconds) or the reading time a plate stays up\n",
+            "      at least (milliseconds), from the next tick on; refused while plates are\n",
+            "      being built\n",
             "\n  {buffer}\n",
             "      the playout buffer: the plate on screen, what is ready and pending, and\n",
             "      the lateness\n",
@@ -82,6 +92,7 @@ pub fn help_text() -> String {
         build = BUILD_USAGE,
         show = SHOW_USAGE,
         plates = PLATES_USAGE,
+        timing = TIMING_USAGE,
         buffer = BUFFER_USAGE,
         lookahead = lookahead::cli::help_text(),
     )
@@ -197,13 +208,33 @@ fn plates_run(words: &[String]) -> Result<SceneBuilderCommand, CommandError> {
     Ok(SceneBuilderCommand::PlatesRun(request))
 }
 
-/// Parses the `scene` verbs `build`, `show` and `lookahead`; `verb` is one of them.
+/// `scene timing set <setting> <n>`; `words` follow `timing`.
+fn timing(words: &[String]) -> Result<SceneBuilderCommand, CommandError> {
+    let [set, name, value] = words else {
+        return Err(CommandError::Usage(TIMING_USAGE));
+    };
+    if set != "set" {
+        return Err(CommandError::Usage(TIMING_USAGE));
+    }
+    let setting = PlateTimingSetting::from_key(name).ok_or_else(|| CommandError::BadChoice {
+        key: "the timing".to_owned(),
+        text: name.clone(),
+        allowed: "interval_s or minimum_on_screen_ms".to_owned(),
+    })?;
+    Ok(SceneBuilderCommand::Timing(TimingRequest {
+        setting,
+        value: whole_number("the value", value)?,
+    }))
+}
+
+/// Parses the `scene` verbs `build`, `show`, `lookahead` and `timing`; `verb` is one of them.
 pub fn parse_scene(verb: &str, words: &[String]) -> Result<SceneBuilderCommand, CommandError> {
     match verb {
         "build" => build(words),
         "show" if words.is_empty() => Ok(SceneBuilderCommand::Show),
         "show" => Err(CommandError::Usage(SHOW_USAGE)),
         "lookahead" => lookahead::parse(words).map(SceneBuilderCommand::Lookahead),
+        "timing" => timing(words),
         other => Err(CommandError::Unknown(other.to_owned())),
     }
 }
@@ -249,6 +280,10 @@ pub async fn run(port: u16, command: SceneBuilderCommand) -> Result<String, DevE
         SceneBuilderCommand::BufferShow => {
             let show: BufferShow = reply_value(get_json(port, path::BUFFER).await?)?;
             Ok(format_buffer(&show))
+        }
+        SceneBuilderCommand::Timing(request) => {
+            let reply: TimingReply = reply_value(post_json(port, path::TIMING, &request).await?)?;
+            Ok(format_timing(&reply))
         }
     }
 }

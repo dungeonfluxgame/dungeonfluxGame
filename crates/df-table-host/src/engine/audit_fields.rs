@@ -10,9 +10,10 @@
 
 use crate::observe::{AttributeValue, HostEventSink, RecordClass, RecordDraft, RecordSeverity};
 
-use super::audit::EngineAudit;
+use super::audit::{EngineAudit, WireIntentOutcome};
 use super::labels::sender_label;
 use super::projection_adapter::audience_label;
+use super::request::inspect_audience_word;
 
 pub(super) fn text(value: &str) -> AttributeValue {
     AttributeValue::Text(value.to_owned())
@@ -72,17 +73,78 @@ impl EngineAudit {
                 kind,
                 operation,
                 result,
-            } => Parts::new("engine.input", "input")
+                lane_depth,
+            } => {
+                let parts = Parts::new("engine.input", "input")
+                    .operation(operation.to_string())
+                    .field("sender", text(&sender_label(*sender)))
+                    .field("input_kind", text(kind))
+                    .field("result", text(result.key()));
+                match lane_depth {
+                    Some(depth) => parts.field("lane_depth", whole(*depth)),
+                    None => parts,
+                }
+            }
+            Self::Served {
+                operation,
+                waited_ms,
+                step_ms,
+                outcome,
+            } => Parts::new("engine.served", "served")
                 .operation(operation.to_string())
-                .field("sender", text(&sender_label(*sender)))
-                .field("input_kind", text(kind))
-                .field("result", text(result.key())),
+                .field("waited_ms", whole(*waited_ms))
+                .field("step_ms", whole(*step_ms))
+                .field("outcome", text(outcome.key())),
+            Self::WireIntent {
+                seat,
+                operation,
+                outcome,
+                code,
+            } => {
+                let severity = match outcome {
+                    WireIntentOutcome::Accepted | WireIntentOutcome::Declined => {
+                        RecordSeverity::Info
+                    }
+                    WireIntentOutcome::Refused => RecordSeverity::Warn,
+                };
+                let parts = Parts::new("engine.wire_intent", "wire_intent")
+                    .severity(severity)
+                    .field("seat", whole(*seat))
+                    .field("outcome", text(outcome.key()));
+                let parts = match operation {
+                    Some(operation) => parts.operation(operation.to_string()),
+                    None => parts,
+                };
+                match code {
+                    Some(code) => parts.field("code", text(code)),
+                    None => parts,
+                }
+            }
+            Self::WireView {
+                audience,
+                revision,
+                bytes,
+            } => Parts::new("engine.wire_view", "wire_view")
+                .field("audience", text(&audience_label(*audience)))
+                .field("revision", whole(*revision))
+                .field("bytes", whole(*bytes)),
+            Self::Inspect { report, audience } => Parts::new("engine.inspect", "inspect")
+                .field("report", text(report.key()))
+                .field("audience", text(&inspect_audience_word(*audience))),
+            Self::ChaosShow { in_force } => Parts::new("engine.chaos", "chaos")
+                .field("verb", text("show"))
+                .field("in_force", whole(*in_force)),
             Self::Viable { seat, count } => Parts::new("engine.viable", "viable")
                 .field("seat", whole(*seat))
                 .field("count", whole(*count)),
-            Self::Dump { revision, commit } => Parts::new("engine.dump", "dump")
+            Self::Dump {
+                revision,
+                commit,
+                of,
+            } => Parts::new("engine.dump", "dump")
                 .field("revision", whole(*revision))
-                .field("commit", whole(*commit)),
+                .field("commit", whole(*commit))
+                .field("of", text(&of.label())),
             Self::Force {
                 machine,
                 state,

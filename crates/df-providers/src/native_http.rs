@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use crate::{HttpMethod, HttpRequest, ProviderFailureClass, ProviderRequestId};
+use crate::{HttpMethod, HttpRequest, ProviderFailureClass, ProviderName, ProviderRequestId};
 
 /// The longest any one exchange (connect, read or total) may be allowed to take: an hour, so a slow
 /// provider call during development is bounded by its caller's deadline, not by the transport.
@@ -174,6 +174,48 @@ pub enum NativeHttpCause {
 }
 
 impl NativeHttpCause {
+    pub const ALL: [Self; 14] = [
+        Self::InvalidLimits,
+        Self::InvalidConfiguration,
+        Self::InvalidEndpoint,
+        Self::InvalidCredential,
+        Self::ProviderDisabled,
+        Self::RequestTooLarge,
+        Self::ResponseTooLarge,
+        Self::HeadersTooLarge,
+        Self::TooManyChunks,
+        Self::ContentType,
+        Self::Redirect,
+        Self::Cancelled,
+        Self::Deadline,
+        Self::Unknown,
+    ];
+
+    /// The closed key audit lines carry for this cause.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::InvalidLimits => "invalid_limits",
+            Self::InvalidConfiguration => "invalid_configuration",
+            Self::InvalidEndpoint => "invalid_endpoint",
+            Self::InvalidCredential => "invalid_credential",
+            Self::ProviderDisabled => "provider_disabled",
+            Self::RequestTooLarge => "request_too_large",
+            Self::ResponseTooLarge => "response_too_large",
+            Self::HeadersTooLarge => "headers_too_large",
+            Self::TooManyChunks => "too_many_chunks",
+            Self::ContentType => "content_type",
+            Self::Redirect => "redirect",
+            Self::Cancelled => "cancelled",
+            Self::Deadline => "deadline",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// The cause whose `key()` is `key`, if any.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+
     pub const fn failure_class(self) -> ProviderFailureClass {
         match self {
             Self::Cancelled => ProviderFailureClass::Cancelled,
@@ -414,7 +456,12 @@ impl NativeHttp {
         cancellation: impl Future<Output = ()>,
         profile: NativeResponseProfile,
     ) -> Result<NativeHttpResponse, NativeHttpError> {
+        let started = Instant::now();
+        let (provider, operation) = (request.provider(), request.operation());
+        let host = exchange_host(request.url());
+        let request_bytes = request.body().len();
         let mut captured = NativeHttpMetadata::default();
+        let mut trace = ExchangeTrace::default();
         let result = self
             .execute_owned(
                 request,
@@ -422,8 +469,34 @@ impl NativeHttp {
                 cancellation,
                 profile,
                 &mut captured,
+                &mut trace,
             )
             .await;
+        let (cause, response_bytes, metadata) = match &result {
+            Ok(response) => (
+                answered_cause(response.status),
+                response.body.len(),
+                &response.metadata,
+            ),
+            Err(cause) => (cause.key(), 0, &captured),
+        };
+        ExchangeRecord {
+            provider,
+            operation,
+            host: &host,
+            status: trace.status,
+            cause,
+            sent: trace.sent,
+            request_bytes,
+            response_bytes,
+            duration: started.elapsed(),
+            request_id: metadata
+                .transport_request_id
+                .as_ref()
+                .or(metadata.request_id.as_ref())
+                .map(ProviderRequestId::as_str),
+        }
+        .record();
         result.map_err(|cause| NativeHttpError {
             cause,
             transport_request_id: captured.transport_request_id.clone(),
@@ -438,6 +511,7 @@ impl NativeHttp {
         cancellation: impl Future<Output = ()>,
         profile: NativeResponseProfile,
         captured: &mut NativeHttpMetadata,
+        trace: &mut ExchangeTrace,
     ) -> Result<NativeHttpResponse, NativeHttpCause> {
         if self.openai_api_disabled && is_openai_api(request.url()) {
             return Err(NativeHttpCause::ProviderDisabled);
@@ -451,7 +525,7 @@ impl NativeHttp {
         }
         // This single future owns send and body. Dropping it on cancellation,
         // deadline or caller drop releases the response and its network work.
-        let exchange = self.send_and_read(request, profile, captured);
+        let exchange = self.send_and_read(request, profile, captured, trace);
         tokio::select! {
             biased;
             () = cancellation => Err(NativeHttpCause::Cancelled),
@@ -466,6 +540,7 @@ impl NativeHttp {
         request: HttpRequest,
         profile: NativeResponseProfile,
         captured: &mut NativeHttpMetadata,
+        trace: &mut ExchangeTrace,
     ) -> Result<NativeHttpResponse, NativeHttpCause> {
         let method = match request.method() {
             HttpMethod::Get => reqwest::Method::GET,
@@ -476,11 +551,15 @@ impl NativeHttp {
         for (name, value) in request.headers() {
             builder = builder.header(*name, value);
         }
+        // From here the supplier may have the request, whatever happens next.
+        trace.sent = SendState::PossiblySent;
         let mut response = builder
             .body(request.into_body())
             .send()
             .await
             .map_err(classify_transport_error)?;
+        trace.sent = SendState::KnownSent;
+        trace.status = Some(response.status().as_u16());
         if matches!(profile, NativeResponseProfile::Json) {
             // Preserve the existing Responses transport's selected-header contract.
             if let Some(value) = response.headers().get("x-request-id") {
@@ -600,6 +679,120 @@ pub(crate) fn hardened_client_builder(
         .connect_timeout(limits.connect_timeout)
         .read_timeout(limits.read_timeout)
         .timeout(limits.total_timeout)
+}
+
+/// How far a provider request got toward the supplier, as audit lines say (`send_state=`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SendState {
+    /// Refused or stopped before the request left this process.
+    #[default]
+    Unsent,
+    /// The send began but no answer arrived: the supplier may have the request.
+    PossiblySent,
+    /// The supplier answered with a status.
+    KnownSent,
+}
+
+impl SendState {
+    pub const ALL: [Self; 3] = [Self::Unsent, Self::PossiblySent, Self::KnownSent];
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Unsent => "unsent",
+            Self::PossiblySent => "possibly_sent",
+            Self::KnownSent => "known_sent",
+        }
+    }
+
+    /// The state whose `key()` is `key`, if any.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|state| state.key() == key)
+    }
+}
+
+/// What one exchange reached, kept outside the exchange future so a cancelled or timed-out
+/// exchange still says how far it got.
+#[derive(Default)]
+pub(crate) struct ExchangeTrace {
+    pub(crate) sent: SendState,
+    pub(crate) status: Option<u16>,
+}
+
+/// The cause key of an exchange the supplier answered: `ok` below 400, else the status class.
+pub(crate) const fn answered_cause(status: u16) -> &'static str {
+    match status {
+        429 => "rate_limited",
+        400..=499 => "rejected",
+        500.. => "supplier_error",
+        _ => "ok",
+    }
+}
+
+/// The host of `url` for an audit line: never its path, query or credentials; `-` when it has
+/// none.
+pub(crate) fn exchange_host(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "-".to_owned())
+}
+
+/// One provider exchange, as its `PROVIDER exchange` audit line describes it: closed keys,
+/// numbers, the endpoint host and the supplier's request id. Never a URL path or query, a
+/// credential or a body.
+pub(crate) struct ExchangeRecord<'a> {
+    pub(crate) provider: ProviderName,
+    pub(crate) operation: Option<&'static str>,
+    pub(crate) host: &'a str,
+    pub(crate) status: Option<u16>,
+    pub(crate) cause: &'static str,
+    pub(crate) sent: SendState,
+    pub(crate) request_bytes: usize,
+    pub(crate) response_bytes: usize,
+    pub(crate) duration: Duration,
+    pub(crate) request_id: Option<&'a str>,
+}
+
+impl ExchangeRecord<'_> {
+    /// Writes the line through the shared audit path.
+    pub(crate) fn record(&self) {
+        df_observe::record_audit_line("PROVIDER", self.line());
+    }
+
+    fn line(&self) -> String {
+        let operation = self
+            .operation
+            .filter(|label| {
+                !label.is_empty()
+                    && label
+                        .bytes()
+                        .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+            })
+            .unwrap_or("-");
+        let status = self
+            .status
+            .map_or_else(|| "-".to_owned(), |status| status.to_string());
+        let request_id = self
+            .request_id
+            .filter(|id| {
+                !id.is_empty()
+                    && id.len() <= MAXIMUM_SUPPLIER_ID_BYTES
+                    && id.bytes().all(is_visible_ascii)
+            })
+            .unwrap_or("-");
+        format!(
+            "PROVIDER exchange provider={} operation={operation} host={} status={status} \
+             cause={} send_state={} request_bytes={} response_bytes={} duration_ms={} \
+             request_id={request_id}",
+            self.provider.key(),
+            self.host,
+            self.cause,
+            self.sent.key(),
+            self.request_bytes,
+            self.response_bytes,
+            u64::try_from(self.duration.as_millis()).unwrap_or(u64::MAX),
+        )
+    }
 }
 
 /// The size of a response header block (names plus values), in bytes; `None` on overflow.

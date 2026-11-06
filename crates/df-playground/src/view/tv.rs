@@ -277,8 +277,9 @@ impl TvHandles {
     }
 
     /// The zoom the picture can bear for this move. A request over it is drawn at the ceiling and
-    /// said once in the console, not cut silently. The stage is measured only when the move or the
-    /// plate changes, because reading its width makes the browser lay the page out.
+    /// noted once on the camera's timeline record, not cut silently. The stage is measured only
+    /// when the move or the plate changes, because reading its width makes the browser lay the
+    /// page out.
     fn zoom_ceiling(&mut self, camera: &Camera) -> u16 {
         let plate = self.plate_width_px();
         let known = self
@@ -302,10 +303,10 @@ impl TvHandles {
             && self.clamp_logged != camera.serial
         {
             self.clamp_logged = camera.serial;
-            web_sys::console::warn_1(&JsValue::from_str(&format!(
-                "CAMERA clamped requested={} allowed={allowed} serial={}",
-                camera.zoom_percent, camera.serial
-            )));
+            let now = crate::page_log::now_ms();
+            crate::page_log::with_log(|log| {
+                log.note_camera_clamp(camera.serial, camera.zoom_percent, allowed, now)
+            });
         }
         percent
     }
@@ -482,8 +483,7 @@ pub fn build_part(
 /// Logs a failure to move the figures; a draw that cannot finish is shown in the console, not
 /// hidden.
 pub fn log_sync_failure(error: &JsValue) {
-    web_sys::console::error_1(&JsValue::from_str(&format!(
-        "could not move the figures: {}",
-        js_message(error)
-    )));
+    let message = format!("could not move the figures: {}", js_message(error));
+    web_sys::console::error_1(&JsValue::from_str(&message));
+    crate::page_log::note_error(crate::timeline::ErrorSource::Stage, &message);
 }

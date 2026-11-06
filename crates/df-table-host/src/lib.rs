@@ -60,6 +60,7 @@ pub mod request;
 pub mod scene_builder;
 pub mod serve;
 pub mod server;
+pub mod services;
 pub mod sink;
 pub mod state;
 pub mod text;

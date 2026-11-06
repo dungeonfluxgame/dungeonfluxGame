@@ -1,6 +1,7 @@
-//! What the picture generator records: one typed event for each request, each stored picture,
-//! each job that ended without one, each refusal and each setting that does not read, rendered as
-//! one `IMAGEGEN <verb> key=value` line for the audit log.
+//! What the picture generator records: one typed event for each precondition check, each request,
+//! each job's start, each stored picture, each job that ended without one, each refusal, each
+//! scratch folder left behind and each setting that does not read, rendered as one
+//! `IMAGEGEN <verb> key=value` line for the audit log.
 //!
 //! The request and its outcome are only recorded: no budget, price or count of pictures ever
 //! blocks a request (owner decision: no spend caps). A line holds ids, closed keys, sizes and
@@ -8,14 +9,24 @@
 
 use std::time::Duration;
 
+use super::backend::BackendError;
 use super::limits::MAXIMUM_NAME_CHARS;
 use super::model::{Aspect, Purpose};
 use super::request::GenerateError;
+use df_imagery::oneshot::CleanupCause;
 
 /// One thing the generator did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageGenEvent {
-    /// A job started: the request was valid and every precondition held.
+    /// The backend's preconditions were looked at before a job: how long that took, and the
+    /// precondition that failed (`None`: every one held).
+    Check {
+        backend: &'static str,
+        duration: Duration,
+        failed: Option<BackendError>,
+    },
+    /// A job was opened: the request was valid and every precondition held. `running` counts the
+    /// jobs running now, this one included.
     Requested {
         job: u64,
         name: String,
@@ -24,7 +35,10 @@ pub enum ImageGenEvent {
         prompt_chars: usize,
         deadline: Duration,
         backend: &'static str,
+        running: usize,
     },
+    /// The job's own task began its work, `wait` after the request arrived (the check included).
+    Started { job: u64, wait: Duration },
     /// The picture was made and stored in the media library.
     Stored {
         job: u64,
@@ -36,6 +50,9 @@ pub enum ImageGenEvent {
         duration: Duration,
         backend: &'static str,
         sha256_prefix: String,
+        /// The token counts the backend reported, when it reported them.
+        tokens_in: Option<u64>,
+        tokens_out: Option<u64>,
     },
     /// The job ended without a stored picture.
     Failed {
@@ -58,6 +75,13 @@ pub enum ImageGenEvent {
         variable: &'static str,
         default: Duration,
     },
+    /// The job's scratch folder could not be removed after the attempt; the job's outcome stands.
+    CleanupFailed { job: u64, cause: CleanupCause },
+}
+
+/// A count as a line writes it: the number, or `-` when it is not known.
+fn count_or_dash(count: Option<u64>) -> String {
+    count.map_or_else(|| "-".to_owned(), |count| count.to_string())
 }
 
 /// A name as one plain word of a line: anything that is not a letter, digit, '-' or '_' becomes
@@ -92,11 +116,14 @@ fn error_fields(error: &GenerateError) -> String {
 impl ImageGenEvent {
     pub fn verb(&self) -> &'static str {
         match self {
+            Self::Check { .. } => "check",
             Self::Requested { .. } => "requested",
+            Self::Started { .. } => "started",
             Self::Stored { .. } => "stored",
             Self::Failed { .. } => "failed",
             Self::Refused { .. } => "refused",
             Self::InvalidSetting { .. } => "setting",
+            Self::CleanupFailed { .. } => "cleanup_failed",
         }
     }
 
@@ -104,6 +131,15 @@ impl ImageGenEvent {
     pub fn line(&self) -> String {
         let verb = self.verb();
         match self {
+            Self::Check {
+                backend,
+                duration,
+                failed,
+            } => format!(
+                "IMAGEGEN {verb} backend={backend} duration_ms={} result={}",
+                duration.as_millis(),
+                failed.as_ref().map_or("ok", BackendError::key)
+            ),
             Self::Requested {
                 job,
                 name,
@@ -112,10 +148,11 @@ impl ImageGenEvent {
                 prompt_chars,
                 deadline,
                 backend,
+                running,
             } => format!(
                 concat!(
                     "IMAGEGEN {} job={} name={} purpose={} aspect={} prompt_chars={} ",
-                    "deadline_ms={} backend={}"
+                    "deadline_ms={} backend={} running={}"
                 ),
                 verb,
                 job,
@@ -124,8 +161,12 @@ impl ImageGenEvent {
                 aspect,
                 prompt_chars,
                 deadline.as_millis(),
-                backend
+                backend,
+                running
             ),
+            Self::Started { job, wait } => {
+                format!("IMAGEGEN {verb} job={job} wait_ms={}", wait.as_millis())
+            }
             Self::Stored {
                 job,
                 name,
@@ -136,10 +177,12 @@ impl ImageGenEvent {
                 duration,
                 backend,
                 sha256_prefix,
+                tokens_in,
+                tokens_out,
             } => format!(
                 concat!(
                     "IMAGEGEN {} job={} name={} file={} bytes={} size={}x{} duration_ms={} ",
-                    "backend={} sha256={}"
+                    "backend={} sha256={} tokens_in={} tokens_out={}"
                 ),
                 verb,
                 job,
@@ -150,7 +193,9 @@ impl ImageGenEvent {
                 height_px,
                 duration.as_millis(),
                 backend,
-                sha256_prefix
+                sha256_prefix,
+                count_or_dash(*tokens_in),
+                count_or_dash(*tokens_out)
             ),
             Self::Failed {
                 job,
@@ -176,6 +221,9 @@ impl ImageGenEvent {
                 "IMAGEGEN {verb} variable={variable} status=invalid default_ms={}",
                 default.as_millis()
             ),
+            Self::CleanupFailed { job, cause } => {
+                format!("IMAGEGEN {verb} job={job} kind={}", cause.key())
+            }
         }
     }
 }

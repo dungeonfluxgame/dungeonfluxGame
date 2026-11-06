@@ -125,6 +125,22 @@ pub(crate) enum IngestError {
 }
 
 impl IngestError {
+    /// A closed word for the audit line, so a log says why without carrying free text.
+    pub(crate) fn key(&self) -> &'static str {
+        match self {
+            Self::InvalidRequest(_) => "invalid_request",
+            Self::InvalidMediaName { .. } => "invalid_media_name",
+            Self::InvalidBase64 => "invalid_base64",
+            Self::Empty => "empty",
+            Self::TooLarge { .. } => "too_large",
+            Self::LibraryFull { .. } => "library_full",
+            Self::NotThatVideoType { .. } => "not_that_video_type",
+            Self::DurationUnreadable { .. } => "duration_unreadable",
+            Self::TooLong { .. } => "too_long",
+            Self::FileFailed(_) => "file_failed",
+        }
+    }
+
     pub(crate) fn status(&self) -> StatusCode {
         match self {
             Self::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,

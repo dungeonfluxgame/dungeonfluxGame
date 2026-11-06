@@ -11,6 +11,7 @@ use crate::draw_plan::transition_for;
 use crate::fixture::{Fixture, FixtureTitle};
 use crate::net::fetch_text;
 use crate::path;
+use crate::timeline::ErrorSource;
 use wasm_bindgen::JsValue;
 
 fn set_theme(css: &str) -> Result<(), JsValue> {
@@ -31,7 +32,10 @@ async fn read_titles(names: Vec<String>) -> Vec<FixtureTitle> {
         titles.push(match fetch_text(&address).await {
             Ok(text) => FixtureTitle::read(file, &text),
             Err(error) => {
-                log_error(&format!("could not read the title of {file}: {error}"));
+                log_error(
+                    ErrorSource::Asset,
+                    &format!("could not read the title of {file}: {error}"),
+                );
                 FixtureTitle { file, title: None }
             }
         });
@@ -44,7 +48,10 @@ pub async fn refresh_assets() {
     match fetch_text(path::THEME).await {
         Ok(css) => {
             if let Err(error) = set_theme(&css) {
-                log_error(&format!("could not set the theme: {}", js_message(&error)));
+                log_error(
+                    ErrorSource::Asset,
+                    &format!("could not set the theme: {}", js_message(&error)),
+                );
             }
         }
         Err(error) => set_problem(error),
@@ -64,7 +71,12 @@ pub async fn refresh_assets() {
     }
     match fetch_text(path::REVISION).await {
         Ok(revision) => with_app_mut(|app| app.asset_revision = revision),
-        Err(error) => log_error(&format!("could not read the revision: {error}")),
+        Err(error) => {
+            log_error(
+                ErrorSource::Net,
+                &format!("could not read the revision: {error}"),
+            );
+        }
     }
 }
 

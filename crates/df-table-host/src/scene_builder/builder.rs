@@ -223,7 +223,7 @@ impl SceneBuilder {
                     requested: generation,
                 });
             }
-            ended = self.retire(scene);
+            ended = self.retire(scene, now_ms);
         }
         if priority == BuildPriority::Current {
             self.move_epoch_to(generation);
@@ -312,7 +312,7 @@ impl SceneBuilder {
     }
 
     /// Retires a scene: cancels what its jobs have out and reports each as ended `Stale`.
-    fn retire(&mut self, scene: SceneId) -> Vec<BuilderOutput> {
+    fn retire(&mut self, scene: SceneId, now_ms: u64) -> Vec<BuilderOutput> {
         let Some(record) = self.scenes.remove(&scene) else {
             return Vec::new();
         };
@@ -327,6 +327,7 @@ impl SceneBuilder {
                     generation: record.generation,
                     job: job.id(),
                     end: JobEnd::Stale,
+                    duration_ms: now_ms.saturating_sub(job.tick_ms()),
                 });
                 BuilderOutput::JobEnded(JobOutcome {
                     job: job.id(),

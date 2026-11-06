@@ -37,6 +37,10 @@ pub const DEFAULT_HISTORY_RECORDS: usize = 20;
 /// one is refused as unrenderable and counted, never truncated.
 pub const MAXIMUM_ATTRIBUTE_DEPTH: usize = 32;
 
+/// Most records the composed shared path may hand to the telemetry store without a receipt yet.
+/// One more is refused and counted as lost, so a stalled store costs memory up to this.
+pub const MAXIMUM_SHARED_PATH_PENDING_RECEIPTS: usize = 1_000_000;
+
 /// The environment variable that names a directory for the file spool of the dev engine. Left
 /// unset, the dev engine keeps its history in memory only.
 pub const EVENT_SPOOL_VARIABLE: &str = "DF_TABLE_EVENT_SPOOL";

@@ -174,6 +174,7 @@ impl Driver<'_> {
             generation: job.stamp().generation,
             job: job.id(),
             end,
+            duration_ms: self.now_ms.saturating_sub(job.tick_ms()),
         });
         BuilderOutput::JobEnded(JobOutcome {
             job: job.id(),
@@ -208,6 +209,7 @@ impl Driver<'_> {
             stage,
             cause,
             fallback,
+            duration_ms: self.now_ms.saturating_sub(run.stage_started_ms),
         });
         self.ended(run, JobEnd::Failed, failure)
     }
@@ -251,6 +253,8 @@ impl Driver<'_> {
     }
 
     fn start(&self, record: &SceneRecord, run: &mut JobRun, stage: SceneStage) -> Started {
+        // Set before `begin`, so a stage the plan refuses to begin fails after no time.
+        run.stage_started_ms = self.now_ms;
         match run.plan.begin(self.snapshot, stage) {
             Ok(()) => {}
             Err(PlanError::Stale(stale)) => return Started::Ended(self.end_stale(run, stale)),
@@ -258,7 +262,6 @@ impl Driver<'_> {
                 return Started::Ended(self.fail(record, run, stage, FailureCause::InvalidAnswer));
             }
         }
-        run.stage_started_ms = self.now_ms;
         if stage == SceneStage::Locate {
             return self.start_locate(record, run);
         }

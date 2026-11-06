@@ -90,6 +90,40 @@ fn a_record_that_does_not_fit_the_spool_is_lost_and_counted_by_class_and_nothing
 }
 
 #[test]
+fn the_writer_announces_its_first_class_a_loss_once_without_a_health_read() {
+    let directory = TempDir::new().expect("a directory");
+    let path = directory.path().join("events.jsonl");
+    let spool = Arc::new(FileSpool::open_with_bounds(&path, 1, usize::MAX).expect("opens"));
+    let log = Arc::new(EventLog::default());
+    let sink = HostEventSink::new(Arc::clone(&log), Arc::new(ManualClock::starting_at(1)))
+        .with_outlet(Arc::clone(&spool) as Arc<dyn RecordOutlet>);
+
+    sink.record(&step_finished(1));
+    assert!(spool.settle(SETTLE));
+    assert!(
+        log.newest(10)
+            .iter()
+            .all(|line| !line.text.starts_with("HOST sink_degraded")),
+        "a class B loss is counted, not announced"
+    );
+    sink.record(&received(1));
+    sink.record(&received(2));
+    assert!(spool.settle(SETTLE));
+
+    let degraded: Vec<String> = log
+        .newest(10)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("HOST sink_degraded"))
+        .collect();
+    assert_eq!(degraded.len(), 1, "{degraded:?}");
+    assert!(
+        degraded[0].starts_with("HOST sink_degraded outlet=spool cause=size_bound lost_always="),
+        "{degraded:?}"
+    );
+}
+
+#[test]
 fn what_was_already_in_the_file_counts_toward_the_size_bound() {
     let directory = TempDir::new().expect("a directory");
     let path = directory.path().join("events.jsonl");
@@ -144,6 +178,40 @@ fn records_waiting_for_the_writer_show_their_age_as_lag_until_it_catches_up() {
         spool.status(1_000).lag_ms,
         0,
         "a clock behind the record reads no lag"
+    );
+}
+
+#[test]
+fn a_spool_added_through_the_sink_says_it_opened_and_how_many_bytes_it_found() {
+    let directory = TempDir::new().expect("a directory");
+    let path = directory.path().join("events.jsonl");
+    std::fs::write(&path, b"0123456789\n").expect("an earlier line");
+    let log = Arc::new(EventLog::default());
+
+    let sink = HostEventSink::new(Arc::clone(&log), Arc::new(ManualClock::starting_at(1)))
+        .with_spool(FileSpool::open(&path))
+        .expect("the spool opens");
+
+    let lines: Vec<String> = log.newest(10).into_iter().map(|line| line.text).collect();
+    assert_eq!(lines, ["HOST spool opened path_set=true bytes=11"]);
+    assert_eq!(sink.health().outlets[1].name, "spool");
+}
+
+#[test]
+fn a_spool_that_fails_to_open_through_the_sink_is_a_line_with_its_cause_and_a_typed_error() {
+    let directory = TempDir::new().expect("a directory");
+    let path = directory.path().join("missing").join("events.jsonl");
+    let log = Arc::new(EventLog::default());
+
+    let refused = HostEventSink::new(Arc::clone(&log), Arc::new(ManualClock::starting_at(1)))
+        .with_spool(FileSpool::open(&path));
+
+    assert!(matches!(refused, Err(super::SpoolError::Open { .. })));
+    let lines: Vec<String> = log.newest(10).into_iter().map(|line| line.text).collect();
+    assert_eq!(lines, ["HOST spool failed cause=open_failed"]);
+    assert!(
+        !lines[0].contains("missing"),
+        "the path is never in the line"
     );
 }
 

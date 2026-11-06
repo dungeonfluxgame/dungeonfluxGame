@@ -12,7 +12,7 @@ use crate::execution::{
     LocalInspectionReason, QuotaDeferralReason, StageKind, StageState, SubmitDeclineContract,
 };
 use crate::identity_question::IdentifyError;
-use crate::oneshot_segment::SegmentError;
+use crate::oneshot_segment::SegmentCause;
 use crate::runtime::inspection_policy::{PhotoCheckCause, UnjudgedReason};
 use crate::runtime::{NoDeliveryReason, PreflightCause};
 use crate::{
@@ -256,9 +256,9 @@ fn analysis_and_one_shot_keys_are_snake_case_and_read_back() {
         &[],
     );
     assert_keys(
-        SegmentError::ALL,
-        SegmentError::key,
-        SegmentError::from_key,
+        SegmentCause::ALL,
+        SegmentCause::key,
+        SegmentCause::from_key,
         &[],
     );
 }

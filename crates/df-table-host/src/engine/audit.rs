@@ -17,7 +17,9 @@ use std::sync::Arc;
 
 use df_table::envelope::Sender;
 use df_table::identity::{MachineId, OperationId};
+use df_table::inspect::InspectAudience;
 use df_table::machine::StateName;
+use df_table::outcome::OutcomeKind;
 use df_table::ports::{Audience, PurposeName};
 
 use crate::broker::{BrokerAudit, BrokerEvent};
@@ -26,6 +28,7 @@ use crate::event_log::EventLog;
 use super::commit::CommitError;
 use super::labels::sender_label;
 use super::projection_adapter::audience_label;
+use super::request::{InspectName, inspect_audience_word};
 
 /// Appends every broker event to the host's log.
 pub struct LogBrokerAudit {
@@ -60,6 +63,43 @@ impl SubmitResult {
     }
 }
 
+/// What a `dump` printed: the active machine with the table, the table alone, or one machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DumpOf {
+    Active,
+    Table,
+    Machine(MachineId),
+}
+
+impl DumpOf {
+    pub(super) fn label(&self) -> String {
+        match self {
+            Self::Active => "active".to_owned(),
+            Self::Table => "table".to_owned(),
+            Self::Machine(machine) => machine.to_string(),
+        }
+    }
+}
+
+/// How a wire intent was answered: a receipt that took it, a receipt that declined it, or no
+/// receipt at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WireIntentOutcome {
+    Accepted,
+    Declined,
+    Refused,
+}
+
+impl WireIntentOutcome {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Declined => "declined",
+            Self::Refused => "refused",
+        }
+    }
+}
+
 /// One audited dev call or commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineAudit {
@@ -68,6 +108,40 @@ pub enum EngineAudit {
         kind: &'static str,
         operation: OperationId,
         result: SubmitResult,
+        /// How many inputs wait in the lane it was admitted to, itself included; `None` when it
+        /// was refused.
+        lane_depth: Option<usize>,
+    },
+    /// One input ran to its end: how long it waited in its lane, how long its step took on the
+    /// owner's clock, and how it ended once its batch was saved or failed.
+    Served {
+        operation: OperationId,
+        waited_ms: u64,
+        step_ms: u64,
+        outcome: OutcomeKind,
+    },
+    /// One wire intent and its answer. `operation` is absent when the intent was refused before
+    /// its id was read; `code` is the decline code or the refusal's key, a closed key either way.
+    WireIntent {
+        seat: u64,
+        operation: Option<OperationId>,
+        outcome: WireIntentOutcome,
+        code: Option<&'static str>,
+    },
+    /// A `MachineView` served to a TV or a phone, and its size on the wire.
+    WireView {
+        audience: Audience,
+        revision: u64,
+        bytes: usize,
+    },
+    /// An inspect report was built for an audience.
+    Inspect {
+        report: InspectName,
+        audience: InspectAudience,
+    },
+    /// `chaos` with no words: how many faults are in force.
+    ChaosShow {
+        in_force: usize,
     },
     Viable {
         seat: u64,
@@ -76,6 +150,7 @@ pub enum EngineAudit {
     Dump {
         revision: u64,
         commit: u64,
+        of: DumpOf,
     },
     Force {
         machine: MachineId,
@@ -205,16 +280,63 @@ impl EngineAudit {
                 kind,
                 operation,
                 result,
+                lane_depth,
+            } => {
+                write!(
+                    out,
+                    "input sender={} kind={kind} operation_id={operation} result={} lane_depth=",
+                    sender_label(*sender),
+                    result.key()
+                )?;
+                write_or_dash(out, *lane_depth)
+            }
+            Self::Served {
+                operation,
+                waited_ms,
+                step_ms,
+                outcome,
             } => write!(
                 out,
-                "input sender={} kind={kind} operation_id={operation} result={}",
-                sender_label(*sender),
-                result.key()
+                "served operation={operation} waited_ms={waited_ms} step_ms={step_ms} outcome={}",
+                outcome.key()
             ),
-            Self::Viable { seat, count } => write!(out, "viable seat={seat} count={count}"),
-            Self::Dump { revision, commit } => {
-                write!(out, "dump revision={revision} commit={commit}")
+            Self::WireIntent {
+                seat,
+                operation,
+                outcome,
+                code,
+            } => {
+                write!(out, "wire_intent seat={seat} operation=")?;
+                write_or_dash(out, operation.as_ref())?;
+                write!(out, " outcome={} code=", outcome.key())?;
+                write_or_dash(out, *code)
             }
+            Self::WireView {
+                audience,
+                revision,
+                bytes,
+            } => write!(
+                out,
+                "wire_view audience={} revision={revision} bytes={bytes}",
+                audience_label(*audience)
+            ),
+            Self::Inspect { report, audience } => write!(
+                out,
+                "inspect report={} audience={}",
+                report.key(),
+                inspect_audience_word(*audience)
+            ),
+            Self::ChaosShow { in_force } => write!(out, "chaos verb=show in_force={in_force}"),
+            Self::Viable { seat, count } => write!(out, "viable seat={seat} count={count}"),
+            Self::Dump {
+                revision,
+                commit,
+                of,
+            } => write!(
+                out,
+                "dump revision={revision} commit={commit} of={}",
+                of.label()
+            ),
             Self::Force {
                 machine,
                 state,
@@ -323,5 +445,13 @@ impl EngineAudit {
             Self::Replayed { turns } => write!(out, "replay turns={turns}"),
             Self::ReplayRefused { cause } => write!(out, "replay_refused cause={cause}"),
         }
+    }
+}
+
+/// Writes `value`, or `-` when there is none.
+fn write_or_dash(out: &mut String, value: Option<impl std::fmt::Display>) -> std::fmt::Result {
+    match value {
+        Some(value) => write!(out, "{value}"),
+        None => out.write_str("-"),
     }
 }

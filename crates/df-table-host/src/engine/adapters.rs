@@ -437,6 +437,8 @@ impl Dice for DevDice {
 pub struct BrokerSide {
     pub hub: Arc<BrokerHub>,
     pub worker: FakeWorker,
+    /// The limits the hub was built with, which `broker queues` shows.
+    pub limits: BrokerLimits,
 }
 
 impl BrokerSide {
@@ -445,9 +447,10 @@ impl BrokerSide {
         clock: Arc<dyn Clock>,
         audit: Arc<dyn BrokerAudit>,
     ) -> Result<Self, crate::broker::purpose::PurposeError> {
+        let limits = BrokerLimits::default();
         let hub = Arc::new(BrokerHub::new(
             PurposeTable::built_in()?,
-            BrokerLimits::default(),
+            limits,
             audit,
             clock,
         ));
@@ -457,7 +460,11 @@ impl BrokerSide {
             FakeProvider::new(ResourceKind::Text, DEV_TEXT_LATENCY_MS),
             FakeProvider::new(ResourceKind::Image, DEV_IMAGE_LATENCY_MS),
         );
-        Ok(Self { hub, worker })
+        Ok(Self {
+            hub,
+            worker,
+            limits,
+        })
     }
 }
 

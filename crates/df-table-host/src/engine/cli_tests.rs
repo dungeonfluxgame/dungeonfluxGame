@@ -1,11 +1,14 @@
 use crate::command::{self, Command, CommandError, split_words, usage_text};
 
+use df_table::identity::SeatId;
+use df_table::inspect::InspectAudience;
+
 use super::cli::{
-    BROKER_USAGE, DEFAULT_STEP_COUNT, DUMP_USAGE, EngineCommand, FORCE_USAGE, INPUT_USAGE,
-    PROJECTION_USAGE, QUEUE_USAGE, VERBS, VIABLE_USAGE, verb_usages,
+    BROKER_USAGE, CHAOS_USAGE, DEFAULT_STEP_COUNT, DUMP_USAGE, EngineCommand, FORCE_USAGE,
+    INPUT_USAGE, INSPECT_USAGE, PROJECTION_USAGE, QUEUE_USAGE, VERBS, VIABLE_USAGE, verb_usages,
 };
 use super::request::{
-    AudienceSpec, ForceRequest, InputBody, InputRequest, ProposalSource, QueueControl,
+    AudienceSpec, ForceRequest, InputBody, InputRequest, InspectName, ProposalSource, QueueControl,
 };
 
 fn words(line: &str) -> Vec<String> {
@@ -143,7 +146,7 @@ fn the_read_verbs_take_exactly_what_their_usage_says() {
     assert_eq!(parsed("viable"), Err(CommandError::Usage(VIABLE_USAGE)));
     assert_eq!(parsed("viable 1 2"), Err(CommandError::Usage(VIABLE_USAGE)));
     assert_eq!(engine("dump"), EngineCommand::Dump);
-    assert_eq!(parsed("dump now"), Err(CommandError::Usage(DUMP_USAGE)));
+    assert_eq!(parsed("dump a b"), Err(CommandError::Usage(DUMP_USAGE)));
     assert_eq!(engine("describe"), EngineCommand::Describe);
     assert_eq!(
         engine("projection show tv"),
@@ -300,7 +303,6 @@ fn health_cost_clock_dice_and_chaos_have_their_forms_and_refuse_the_rest() {
         "dice",
         "dice force",
         "dice force x",
-        "chaos",
         "chaos commit",
         "chaos commit sideways",
         "chaos interpreter sideways",
@@ -311,4 +313,93 @@ fn health_cost_clock_dice_and_chaos_have_their_forms_and_refuse_the_rest() {
             parsed(bad)
         );
     }
+}
+
+#[test]
+fn dump_names_the_table_or_one_machine_and_refuses_a_word_no_machine_has() {
+    assert_eq!(
+        engine("dump table"),
+        EngineCommand::DumpNamed {
+            target: "table".to_owned()
+        }
+    );
+    assert_eq!(
+        engine("dump lobby"),
+        EngineCommand::DumpNamed {
+            target: "lobby".to_owned()
+        }
+    );
+    assert!(matches!(
+        parsed("dump lob&by"),
+        Err(CommandError::BadChoice { .. })
+    ));
+    assert_eq!(
+        parsed("dump lobby now"),
+        Err(CommandError::Usage(DUMP_USAGE))
+    );
+    assert!(DUMP_USAGE.contains("table"), "{DUMP_USAGE}");
+}
+
+#[test]
+fn inspect_takes_every_report_and_an_audience() {
+    for report in InspectName::ALL {
+        assert_eq!(
+            engine(&format!("inspect {}", report.key())),
+            EngineCommand::Inspect {
+                report,
+                audience: InspectAudience::Operator
+            }
+        );
+        assert!(
+            INSPECT_USAGE.contains(report.key()),
+            "{INSPECT_USAGE} lacks {}",
+            report.key()
+        );
+    }
+    assert_eq!(
+        engine("inspect pending --host"),
+        EngineCommand::Inspect {
+            report: InspectName::Pending,
+            audience: InspectAudience::Host
+        }
+    );
+    assert_eq!(
+        engine("inspect pending --seat 2"),
+        EngineCommand::Inspect {
+            report: InspectName::Pending,
+            audience: InspectAudience::Seat {
+                seat: SeatId::new(2)
+            }
+        }
+    );
+    for bad in [
+        "inspect",
+        "inspect pending --seat",
+        "inspect pending --guest",
+        "inspect pending --host 2",
+    ] {
+        assert_eq!(
+            parsed(bad),
+            Err(CommandError::Usage(INSPECT_USAGE)),
+            "{bad}"
+        );
+    }
+    assert!(matches!(
+        parsed("inspect pending --seat two"),
+        Err(CommandError::BadCount { .. })
+    ));
+    assert!(matches!(
+        parsed("inspect everything"),
+        Err(CommandError::BadChoice { .. })
+    ));
+}
+
+#[test]
+fn chaos_with_no_words_reads_the_faults_in_force() {
+    assert_eq!(engine("chaos"), EngineCommand::ChaosShow);
+    assert!(CHAOS_USAGE.starts_with("chaos | "), "{CHAOS_USAGE}");
+    assert_eq!(
+        parsed("chaos sideways"),
+        Err(CommandError::Usage(CHAOS_USAGE))
+    );
 }

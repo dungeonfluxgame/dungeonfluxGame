@@ -32,6 +32,14 @@ pub(crate) enum AddError {
 }
 
 impl AddError {
+    /// The closed word of the refusal, for the audit line: the ingest or file error's key.
+    pub(crate) fn key(&self) -> &'static str {
+        match self {
+            Self::Ingest(error) => error.key(),
+            Self::File(error) => error.key(),
+        }
+    }
+
     pub(crate) fn status(&self) -> StatusCode {
         match self {
             Self::Ingest(error) => error.status(),

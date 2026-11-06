@@ -606,7 +606,8 @@ impl NativeSpeechProvider {
             &self.credential,
             body.0,
             body.1,
-        );
+        )
+        .with_operation("speech_to_text");
         let response = self
             .http
             .execute_profile(
@@ -734,7 +735,8 @@ impl NativeSpeechProvider {
             &self.credential,
             "application/json".to_owned(),
             body.into_bytes(),
-        );
+        )
+        .with_operation("text_to_speech");
         let response = self
             .http
             .execute_profile(

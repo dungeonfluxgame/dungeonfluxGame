@@ -5,6 +5,9 @@
 //! I/O, an `.await` or a provider call, so a request from the owner thread never waits for a
 //! provider: it takes the lock for a moment, queues, and returns a handle. The hub reads the time
 //! from the injected `Clock`, so tests and the dev engine can drive it with a manual one.
+//!
+//! A hub is the engine's unless `with_hub` names it otherwise (the scene workbench runs its own),
+//! and every `RESOURCE` and `SPEND` line it writes carries that name as `hub=<key>`.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -12,7 +15,7 @@ use df_table::event::FailureCause;
 use df_table::identity::Correlation;
 use df_table::ports::{Broker, Clock, PortError, PortName, PurposeName, Readiness, ResourceHandle};
 
-use super::events::BrokerAudit;
+use super::events::{BrokerAudit, HubName};
 use super::purpose::{PurposeTable, ResourceKind};
 use super::report::{LedgerReport, QueuesReport};
 use super::request::{
@@ -30,6 +33,7 @@ pub struct BrokerHub {
 }
 
 impl BrokerHub {
+    /// The engine's broker; `with_hub` names another.
     pub fn new(
         purposes: PurposeTable,
         limits: BrokerLimits,
@@ -40,6 +44,22 @@ impl BrokerHub {
             core: Mutex::new(BrokerCore::new(purposes, limits, audit)),
             clock,
         }
+    }
+
+    /// This broker under the name `hub`, which every line it writes carries.
+    pub fn with_hub(self, hub: HubName) -> Self {
+        let core = self
+            .core
+            .into_inner()
+            .unwrap_or_else(PoisonError::into_inner);
+        Self {
+            core: Mutex::new(core.with_hub(hub)),
+            clock: self.clock,
+        }
+    }
+
+    pub fn hub(&self) -> HubName {
+        self.core().hub()
     }
 
     fn core(&self) -> MutexGuard<'_, BrokerCore> {

@@ -12,8 +12,11 @@ use std::num::NonZeroU128;
 
 use df_table::envelope::ProposalOrigin;
 use df_table::identity::{OperationId, SeatId};
+use df_table::inspect::InspectAudience;
 use df_table::ports::Audience;
 use serde::{Deserialize, Serialize};
+
+use crate::observe::EventLevel;
 
 /// What one submitted input is. A seat's inputs name the seat; an engine input names none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +191,147 @@ impl TryFrom<String> for AudienceParameter {
 #[serde(deny_unknown_fields)]
 pub struct AudienceQuery {
     pub audience: AudienceParameter,
+}
+
+/// The reports `inspect` serves: one per stateful module of `df_table::inspect`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InspectName {
+    /// The table state: seats, scenes, cast, vitals.
+    Table,
+    /// The machines on the table, active and stacked.
+    Machines,
+    /// The open pending resolutions.
+    Pending,
+    /// The stored rulings.
+    Rulings,
+    /// The resource requests that are out.
+    Requests,
+    /// The remembered operations.
+    Results,
+    /// Everything the pipeline's table holds, with clarifications and projection work.
+    Pipeline,
+    /// The owner queue: lanes, seats, in-progress inputs.
+    Queue,
+    /// The registered machines and their specs.
+    Registry,
+    /// The ports the host wired and who needs them.
+    Ports,
+    /// The settings in force.
+    Settings,
+}
+
+impl InspectName {
+    pub const ALL: [Self; 11] = [
+        Self::Table,
+        Self::Machines,
+        Self::Pending,
+        Self::Rulings,
+        Self::Requests,
+        Self::Results,
+        Self::Pipeline,
+        Self::Queue,
+        Self::Registry,
+        Self::Ports,
+        Self::Settings,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Machines => "machines",
+            Self::Pending => "pending",
+            Self::Rulings => "rulings",
+            Self::Requests => "requests",
+            Self::Results => "results",
+            Self::Pipeline => "pipeline",
+            Self::Queue => "queue",
+            Self::Registry => "registry",
+            Self::Ports => "ports",
+            Self::Settings => "settings",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|name| name.key() == key)
+    }
+}
+
+/// The audience of an inspect report as a query and an audit line write it: `operator`, `host`
+/// or `seat:N`.
+pub fn inspect_audience_word(audience: InspectAudience) -> String {
+    match audience {
+        InspectAudience::Operator => "operator".to_owned(),
+        InspectAudience::Host => "host".to_owned(),
+        InspectAudience::Seat { seat } => format!("seat:{seat}"),
+    }
+}
+
+/// A text that is not `operator`, `host` or `seat:N`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InspectAudienceError;
+
+impl fmt::Display for InspectAudienceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an inspect audience is operator, host or seat:N")
+    }
+}
+
+impl std::error::Error for InspectAudienceError {}
+
+/// The audience `inspect_audience_word` wrote.
+pub fn inspect_audience_from_word(text: &str) -> Result<InspectAudience, InspectAudienceError> {
+    match text {
+        "operator" => Ok(InspectAudience::Operator),
+        "host" => Ok(InspectAudience::Host),
+        other => other
+            .strip_prefix("seat:")
+            .and_then(|seat| seat.parse::<u64>().ok())
+            .map(|seat| InspectAudience::Seat {
+                seat: SeatId::new(seat),
+            })
+            .ok_or(InspectAudienceError),
+    }
+}
+
+/// An inspect audience in a query (`?audience=seat:2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct InspectAudienceParameter(pub InspectAudience);
+
+impl TryFrom<String> for InspectAudienceParameter {
+    type Error = InspectAudienceError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        inspect_audience_from_word(&text).map(Self)
+    }
+}
+
+/// The query of `inspect`: who the report is for. Left out, it is the operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspectQuery {
+    #[serde(default)]
+    pub audience: Option<InspectAudienceParameter>,
+}
+
+/// The query of `dump`: `table`, a machine's name, or nothing for the active machine and the
+/// table together.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DumpQuery {
+    #[serde(default)]
+    pub machine: Option<String>,
+}
+
+/// What the plain form of `dump` names instead of a machine: the table's shared facts.
+pub const DUMP_TABLE_WORD: &str = "table";
+
+/// The body of a change of the event level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EventLevelRequest {
+    pub level: EventLevel,
 }
 
 /// The query of `viable`: the seat asking.

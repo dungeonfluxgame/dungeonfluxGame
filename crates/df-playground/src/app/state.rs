@@ -18,7 +18,9 @@ use crate::draw_plan::Snapshot;
 use crate::fixture::{ElementSource, Fixture, FixtureError, FixtureTitle, StageElement};
 use crate::frame::LiveCanvas;
 use crate::net::NetError;
+use crate::page_log;
 use crate::scene::SceneOverlay;
+use crate::timeline::{ErrorSource, FixtureLoadCause};
 
 pub const ROOT_ID: &str = "playground";
 pub const THEME_ID: &str = "playground-theme";
@@ -110,6 +112,16 @@ impl fmt::Display for FixtureLoadError {
 
 impl std::error::Error for FixtureLoadError {}
 
+impl FixtureLoadError {
+    /// The closed cause the report carries.
+    pub fn cause(&self) -> FixtureLoadCause {
+        match self {
+            Self::Fetch(_) => FixtureLoadCause::FetchFailed,
+            Self::Invalid { .. } => FixtureLoadCause::Invalid,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct App {
     /// The fixture files and the titles of the scenarios in them, for the scenario menu.
@@ -163,8 +175,17 @@ pub fn with_app_mut<R>(change: impl FnOnce(&mut App) -> R) -> R {
     APP.with(|app| change(&mut app.borrow_mut()))
 }
 
-pub fn log_error(message: &str) {
+/// Like `with_app`, or `None` when the state is in use (a panic in the middle of a change leaves
+/// it so), for the paths that must not panic again.
+pub fn try_with_app<R>(read: impl FnOnce(&App) -> R) -> Option<R> {
+    APP.with(|app| app.try_borrow().ok().map(|app| read(&app)))
+}
+
+/// Writes an error to the console and notes it for the report, with where it came from. Returns
+/// whether it should be reported at once.
+pub fn log_error(source: ErrorSource, message: &str) -> bool {
     web_sys::console::error_1(&JsValue::from_str(message));
+    page_log::note_error(source, message)
 }
 
 /// Shows a problem in the notes until the next good answer.

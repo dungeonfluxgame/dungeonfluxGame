@@ -274,6 +274,8 @@ impl LookaheadWorker {
                         expectation,
                         likelihood_permille,
                         epoch: run.request_epoch().get(),
+                        in_flight: self.runs.len().saturating_add(1),
+                        book: self.planner.booked(),
                     });
                     self.drive(scene, run, now_ms, snapshot);
                 }
@@ -347,6 +349,7 @@ impl LookaheadWorker {
                 token: run.token.get(),
                 stage: *stage,
                 cause: *cause,
+                duration_ms: now_ms.saturating_sub(run.started_ms),
             },
         };
         if self

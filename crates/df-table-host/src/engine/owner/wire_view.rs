@@ -13,20 +13,23 @@
 //! player's name, narration, notice or offer is read, so none can reach the guest, whatever a
 //! machine writes for a seated audience. A guest view is never saved.
 //!
-//! Like every read it is of the committed world, one audited `projection` line.
+//! Like every read it is of the committed world. A view served to a TV or a phone is one audited
+//! `wire_view` line with its size on the wire; the read a wire intent's route makes to fill the
+//! intent is part of that intent's own `wire_intent` line and writes none.
 
 use df_protocol::common as wire;
 use df_table::identity::SeatId;
 use df_table::pipeline::PipelineTable;
 use df_table::ports::Audience;
 use df_table::projection::ProjectionError;
+use prost::Message;
 
 use crate::engine::audit::EngineAudit;
 use crate::engine::projection_adapter::{ViewError, project_machine_view};
 use crate::engine::report::{EngineError, ViewCause};
 use crate::engine::request::AudienceSpec;
 
-use super::Owner;
+use super::{Owner, ViewUse};
 
 /// The hero name of a seat that has not sat down.
 fn guest_name(seat: SeatId) -> String {
@@ -62,7 +65,11 @@ fn unavailable(error: impl ToString) -> EngineError {
 
 impl Owner {
     /// The committed table's `MachineView` for `spec`.
-    pub(super) fn wire_view(&self, spec: AudienceSpec) -> Result<wire::MachineView, EngineError> {
+    pub(super) fn wire_view(
+        &self,
+        spec: AudienceSpec,
+        view_use: ViewUse,
+    ) -> Result<wire::MachineView, EngineError> {
         let audience = spec.audience();
         if let AudienceSpec::Seat { seat } = spec {
             self.seat_is_at_the_table(seat)?;
@@ -74,10 +81,13 @@ impl Owner {
             }
             Err(error) => return Err(unavailable(error)),
         };
-        self.audit(EngineAudit::Projection {
-            audience,
-            revision: self.revision(),
-        });
+        if view_use == ViewUse::Served {
+            self.audit(EngineAudit::WireView {
+                audience,
+                revision: self.revision(),
+                bytes: view.encoded_len(),
+            });
+        }
         Ok(view)
     }
 

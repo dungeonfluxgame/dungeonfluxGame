@@ -19,11 +19,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use super::limits::{MAXIMUM_SPOOL_BYTES, MAXIMUM_SPOOL_QUEUE_BYTES};
-use super::outlet::{Losses, OutletError, OutletStatus, RecordOutlet};
+use super::outlet::{DegradedNotice, LossCause, Losses, OutletError, OutletStatus, RecordOutlet};
 use super::record::{ObservedRecord, RecordClass};
 
 /// Why the spool could not be opened.
@@ -55,6 +55,19 @@ impl fmt::Display for SpoolError {
 
 impl std::error::Error for SpoolError {}
 
+impl SpoolError {
+    /// The closed key of the failure, for `HOST spool failed cause=<key>`: never the path.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Open { .. } => "open_failed",
+            Self::Thread { .. } => "writer_not_started",
+        }
+    }
+}
+
+/// The spool's name among a sink's outlets.
+const SPOOL_OUTLET: &str = "spool";
+
 struct Queued {
     line: Vec<u8>,
     class: RecordClass,
@@ -83,6 +96,8 @@ struct Shared {
     refused: AtomicU64,
     losses: Losses,
     maximum_queue_bytes: usize,
+    /// The sink's `HOST sink_degraded` line, written by the writer when it loses a class A record.
+    notice: OnceLock<Arc<DegradedNotice>>,
 }
 
 impl Shared {
@@ -110,6 +125,8 @@ impl Drop for CloseOnExit {
 /// The durable JSON-lines outlet.
 pub struct FileSpool {
     shared: Arc<Shared>,
+    /// Bytes the file held when it was opened.
+    opened_bytes: u64,
 }
 
 impl FileSpool {
@@ -143,6 +160,7 @@ impl FileSpool {
             refused: AtomicU64::new(0),
             losses: Losses::default(),
             maximum_queue_bytes,
+            notice: OnceLock::new(),
         });
         let writer_shared = Arc::clone(&shared);
         std::thread::Builder::new()
@@ -152,7 +170,15 @@ impl FileSpool {
                 write_loop(&writer_shared, file, existing, maximum_spool_bytes);
             })
             .map_err(|error| SpoolError::Thread { kind: error.kind() })?;
-        Ok(Self { shared })
+        Ok(Self {
+            shared,
+            opened_bytes: existing,
+        })
+    }
+
+    /// Bytes the file held when it was opened, which count toward its size bound.
+    pub fn opened_bytes(&self) -> u64 {
+        self.opened_bytes
     }
 
     /// A spool whose writer never runs, so a test can read what waiting looks like.
@@ -168,7 +194,9 @@ impl FileSpool {
                 refused: AtomicU64::new(0),
                 losses: Losses::default(),
                 maximum_queue_bytes,
+                notice: OnceLock::new(),
             }),
+            opened_bytes: 0,
         }
     }
 
@@ -215,11 +243,21 @@ fn write_loop(shared: &Shared, file: File, existing_bytes: u64, maximum_spool_by
         let bytes: usize = batch.iter().map(|item| item.line.len()).sum();
         let mut written_classes = Vec::with_capacity(count);
         let mut lost_classes = Vec::new();
+        // Why the first class A record of this batch was lost, for the `sink_degraded` line.
+        let mut always_lost: Option<LossCause> = None;
         for item in batch {
             let length = u64::try_from(item.line.len()).unwrap_or(u64::MAX);
-            if on_disk.saturating_add(length) > maximum_spool_bytes
-                || out.write_all(&item.line).is_err()
-            {
+            let lost = if on_disk.saturating_add(length) > maximum_spool_bytes {
+                Some(LossCause::SizeBound)
+            } else if out.write_all(&item.line).is_err() {
+                Some(LossCause::WriteFailed)
+            } else {
+                None
+            };
+            if let Some(cause) = lost {
+                if item.class == RecordClass::Always {
+                    always_lost.get_or_insert(cause);
+                }
                 lost_classes.push(item.class);
                 continue;
             }
@@ -229,6 +267,9 @@ fn write_loop(shared: &Shared, file: File, existing_bytes: u64, maximum_spool_by
         let flushed = out.flush().is_ok();
         if !flushed {
             // What was buffered cannot be said to be on disk, so none of this batch is confirmed.
+            if written_classes.contains(&RecordClass::Always) {
+                always_lost.get_or_insert(LossCause::WriteFailed);
+            }
             lost_classes.append(&mut written_classes);
         }
         let mut state = shared.locked();
@@ -244,6 +285,13 @@ fn write_loop(shared: &Shared, file: File, existing_bytes: u64, maximum_spool_by
             .pending
             .saturating_sub(u64::try_from(count).unwrap_or(u64::MAX));
         state.in_flight_oldest_ms = None;
+        // Written before the batch counts as settled, so a caller that waited for the spool to
+        // settle finds the line. The log never takes the spool's lock, so holding it is safe.
+        if let Some(cause) = always_lost
+            && let Some(notice) = shared.notice.get()
+        {
+            notice.first_loss(SPOOL_OUTLET, cause, shared.losses.always());
+        }
         drop(state);
         shared.settled.notify_all();
     }
@@ -251,7 +299,7 @@ fn write_loop(shared: &Shared, file: File, existing_bytes: u64, maximum_spool_by
 
 impl RecordOutlet for FileSpool {
     fn name(&self) -> &'static str {
-        "spool"
+        SPOOL_OUTLET
     }
 
     fn accept(&self, record: &ObservedRecord) -> Result<(), OutletError> {
@@ -289,6 +337,11 @@ impl RecordOutlet for FileSpool {
 
     fn status(&self, now_ms: u64) -> OutletStatus {
         self.status_with_refusals(now_ms).0
+    }
+
+    fn watch_losses(&self, notice: Arc<DegradedNotice>) {
+        // A spool belongs to one sink; a second sink's notice is not kept.
+        let _ = self.shared.notice.set(notice);
     }
 }
 

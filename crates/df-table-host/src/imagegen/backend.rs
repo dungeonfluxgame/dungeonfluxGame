@@ -266,6 +266,11 @@ pub trait ImageBackend: Send + Sync {
     /// Looks at every precondition without starting any work.
     fn check(&self) -> Result<(), BackendError>;
 
+    /// Whether the backend was given a Codex home. Only a Codex backend has one.
+    fn codex_home_set(&self) -> bool {
+        false
+    }
+
     /// Makes one picture within `deadline`. It may take minutes; dropping it stops the attempt.
     fn generate<'a>(
         &'a self,
@@ -439,6 +444,10 @@ impl ImageBackend for CodexBackend {
         Ok(())
     }
 
+    fn codex_home_set(&self) -> bool {
+        self.settings.codex_home.is_some()
+    }
+
     fn generate<'a>(
         &'a self,
         request: &'a BackendRequest,
@@ -466,6 +475,7 @@ impl ImageBackend for CodexBackend {
                 duration: image.elapsed,
                 input_tokens: image.input_tokens,
                 output_tokens: image.output_tokens,
+                cleanup: image.cleanup.err().map(|failure| failure.cause),
             })
         })
     }

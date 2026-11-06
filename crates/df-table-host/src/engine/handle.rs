@@ -15,10 +15,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 
+use df_table::inspect::InspectAudience;
 use tokio::sync::{oneshot, watch};
 
-use crate::broker::report::{LedgerReport, QueuesReport};
+use crate::broker::report::LedgerReport;
 use crate::event_log::EventLog;
+use crate::observe::{EventLevel, HostEventSink};
 
 use super::adapters::Adapters;
 use super::audit::EngineAudit;
@@ -26,15 +28,16 @@ use super::audit_fields::record_engine;
 use super::commit::CommitStore;
 use super::extras::Extras;
 use super::limits::{COMMAND_MAILBOX_CAPACITY, LOST_ANSWER_WAIT};
-use super::owner::{Command, Owner, Reply};
+use super::owner::{Command, Owner, Reply, ViewUse};
 use super::report::observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
+use super::report::reach::{BrokerQueuesReport, DumpReport, InspectReport};
 use super::report::{
     BrokerRequested, ChaosReport, ClockReport, Description, DiceReport, EngineDump, EngineError,
     ForceReport, HealthReport, QueueReport, ServedReply, SubmitReply, ViableReport,
 };
 use super::request::{
     AudienceSpec, ChaosRequest, ClockControl, ConfigControl, DiceControl, ForceRequest,
-    HistoryRequest, InputRequest, QueueControl, ReplayRequest, TraceOperation,
+    HistoryRequest, InputRequest, InspectName, QueueControl, ReplayRequest, TraceOperation,
 };
 use super::setup::{EngineConfig, EngineStartError};
 
@@ -48,6 +51,9 @@ enum Ended {
 pub struct EngineHandle {
     sender: Option<SyncSender<Box<Command>>>,
     ended: watch::Receiver<Option<Ended>>,
+    /// The owner's event sink, for the lines a call writes outside the owner thread (a wire
+    /// intent's answer) and for the event level, which is an atomic of the sink.
+    observer: Arc<HostEventSink>,
 }
 
 impl EngineHandle {
@@ -87,6 +93,7 @@ impl EngineHandle {
         mailbox_capacity: usize,
     ) -> Result<Self, EngineStartError> {
         let observer = Arc::clone(&extras.sink);
+        let panic_observer = Arc::clone(&observer);
         let owner = Owner::new(config, adapters, store, extras)?;
         let (sender, mailbox) = sync_channel(mailbox_capacity);
         let (ended_sender, ended) = watch::channel(None);
@@ -95,7 +102,7 @@ impl EngineHandle {
             .spawn(move || {
                 let outcome = catch_unwind(AssertUnwindSafe(move || owner.run(mailbox)));
                 if outcome.is_err() {
-                    record_engine(&observer, &EngineAudit::Panicked);
+                    record_engine(&panic_observer, &EngineAudit::Panicked);
                     ended_sender.send_replace(Some(Ended::Panicked));
                 }
             })
@@ -103,7 +110,23 @@ impl EngineHandle {
         Ok(Self {
             sender: Some(sender),
             ended,
+            observer,
         })
+    }
+
+    /// Records one engine line through the owner's sink, from the caller's thread.
+    pub(super) fn record(&self, audit: &EngineAudit) {
+        record_engine(&self.observer, audit);
+    }
+
+    /// The level of the owner's event sink.
+    pub fn event_level(&self) -> EventLevel {
+        self.observer.level()
+    }
+
+    /// Sets the level of the owner's event sink; class A is recorded either way.
+    pub fn set_event_level(&self, level: EventLevel) {
+        self.observer.set_level(level);
     }
 
     /// What a call that lost its owner reports: `OwnerPanicked` once the owner's thread says it
@@ -140,6 +163,26 @@ impl EngineHandle {
         self.call(Command::Dump).await
     }
 
+    /// `dump table` or `dump <machine>`.
+    pub async fn dump_named(&self, target: String) -> Result<DumpReport, EngineError> {
+        self.call(|reply| Command::DumpOf(target, reply)).await
+    }
+
+    /// One module's inspect report, as `audience` may see it.
+    pub async fn inspect(
+        &self,
+        report: InspectName,
+        audience: InspectAudience,
+    ) -> Result<InspectReport, EngineError> {
+        self.call(|reply| Command::Inspect(report, audience, reply))
+            .await
+    }
+
+    /// The faults in force, one per dev control the table has.
+    pub async fn chaos_show(&self) -> Result<Vec<ChaosReport>, EngineError> {
+        self.call(Command::ChaosShow).await
+    }
+
     pub async fn viable(&self, seat: u64) -> Result<ViableReport, EngineError> {
         self.call(|reply| Command::Viable(seat, reply)).await
     }
@@ -156,12 +199,23 @@ impl EngineHandle {
             .await
     }
 
-    /// What a TV (`Tv`) or one seat's phone is served now, as the wire's `MachineView`.
+    /// What a TV (`Tv`) or one seat's phone is served now, as the wire's `MachineView`: one
+    /// `wire_view` line.
     pub async fn machine_view(
         &self,
         audience: AudienceSpec,
     ) -> Result<df_protocol::common::MachineView, EngineError> {
-        self.call(|reply| Command::MachineView(audience, reply))
+        self.call(|reply| Command::MachineView(audience, ViewUse::Served, reply))
+            .await
+    }
+
+    /// The seat's `MachineView` read to fill a wire intent: the intent's own line covers it, so
+    /// it writes none.
+    pub(super) async fn intent_view(
+        &self,
+        audience: AudienceSpec,
+    ) -> Result<df_protocol::common::MachineView, EngineError> {
+        self.call(|reply| Command::MachineView(audience, ViewUse::Internal, reply))
             .await
     }
 
@@ -194,7 +248,7 @@ impl EngineHandle {
         self.call(|reply| Command::Chaos(request, reply)).await
     }
 
-    pub async fn broker_queues(&self) -> Result<QueuesReport, EngineError> {
+    pub async fn broker_queues(&self) -> Result<BrokerQueuesReport, EngineError> {
         self.call(Command::BrokerQueues).await
     }
 

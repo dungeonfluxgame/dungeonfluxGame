@@ -121,7 +121,15 @@ async fn a_waited_generation_is_stored_and_the_media_command_lists_it() {
         vec!["hall.png".to_owned()]
     );
     let lines = imagegen_lines(&running);
-    assert_eq!(lines.len(), 2, "{lines:?}");
+    let verbs: Vec<&str> = lines
+        .iter()
+        .filter_map(|line| line.split(' ').nth(1))
+        .collect();
+    assert_eq!(
+        verbs,
+        ["check", "requested", "started", "stored"],
+        "{lines:?}"
+    );
 }
 
 #[tokio::test]
@@ -178,12 +186,16 @@ async fn each_refusal_has_its_typed_error_and_status() {
             backend: BackendError::NoLogin { home }
         }
     );
+    let lines = imagegen_lines(&running);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(
+        lines[0].starts_with("IMAGEGEN check backend=fake duration_ms=")
+            && lines[0].ends_with(" result=no_login"),
+        "{lines:?}"
+    );
     assert_eq!(
-        imagegen_lines(&running),
-        vec![
-            "IMAGEGEN refused verb=generate name=hall error=backend cause=no_login backend=fake"
-                .to_owned()
-        ]
+        lines[1],
+        "IMAGEGEN refused verb=generate name=hall error=backend cause=no_login backend=fake"
     );
 
     let timed_out = serve_route(

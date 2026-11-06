@@ -40,7 +40,7 @@ use df_table::ports::{PurposeName, ResourceHandle};
 mod lifecycle;
 mod reads;
 
-use super::events::{AbandonReason, BrokerAudit, BrokerEvent, RefusalKind, StaleReason};
+use super::events::{AbandonReason, BrokerAudit, BrokerEvent, HubName, RefusalKind, StaleReason};
 use super::ledger::{CostLedger, LedgerEnd};
 use super::limits::{
     DEFAULT_IMAGE_SLOTS, DEFAULT_TEXT_SLOTS, LEASE_MS, MAXIMUM_KEPT_SETTLED,
@@ -230,6 +230,10 @@ struct Request {
     epoch: Epoch,
     correlation: Correlation,
     requested_ms: u64,
+    /// When the request last became claimable: when it was asked for, or when it was put back
+    /// (a retry's backoff ending, a preemption, an expired lease). `claimed waited_ms` counts
+    /// from here, so it is the queue wait of that claim alone.
+    claimable_ms: u64,
     deadline_ms: u64,
     status: RequestStatus,
     retries: u8,
@@ -269,6 +273,7 @@ impl AbandonedAttempts {
 
 /// The scheduler of one table's resource requests.
 pub struct BrokerCore {
+    hub: HubName,
     purposes: PurposeTable,
     limits: BrokerLimits,
     audit: Arc<dyn BrokerAudit>,
@@ -290,8 +295,10 @@ pub struct BrokerCore {
 }
 
 impl BrokerCore {
+    /// The engine's broker; `with_hub` names another.
     pub fn new(purposes: PurposeTable, limits: BrokerLimits, audit: Arc<dyn BrokerAudit>) -> Self {
         Self {
+            hub: HubName::Engine,
             purposes,
             limits,
             audit,
@@ -311,6 +318,15 @@ impl BrokerCore {
             dropped_completions: 0,
             ledger: CostLedger::default(),
         }
+    }
+
+    /// This broker under the name `hub`, which every line it writes carries.
+    pub fn with_hub(self, hub: HubName) -> Self {
+        Self { hub, ..self }
+    }
+
+    pub fn hub(&self) -> HubName {
+        self.hub
     }
 
     /// Every broker change goes through here: the one place a request's life is recorded.
@@ -347,6 +363,7 @@ impl BrokerCore {
     ) -> Result<ResourceHandle, RequestError> {
         if self.closed {
             self.record(BrokerEvent::Refused {
+                hub: self.hub,
                 purpose: new.purpose,
                 kind: RefusalKind::Closed,
             });
@@ -354,6 +371,7 @@ impl BrokerCore {
         }
         let Some(spec) = self.purposes.get(&new.purpose).cloned() else {
             self.record(BrokerEvent::Refused {
+                hub: self.hub,
                 purpose: new.purpose.clone(),
                 kind: RefusalKind::UnknownPurpose,
             });
@@ -363,6 +381,7 @@ impl BrokerCore {
         };
         if new.epoch < self.epoch {
             self.record(BrokerEvent::Stale {
+                hub: self.hub,
                 handle: None,
                 purpose: new.purpose,
                 epoch: new.epoch,
@@ -380,6 +399,7 @@ impl BrokerCore {
         let class = spec.class();
         if self.queues.refuses(class) {
             self.record(BrokerEvent::Refused {
+                hub: self.hub,
                 purpose: new.purpose,
                 kind: RefusalKind::QueueFull,
             });
@@ -390,15 +410,18 @@ impl BrokerCore {
         if let Ok(Pushed::DroppedOldest(oldest)) = self.queues.push_back(class, handle) {
             self.drop_waiting(oldest, class);
         }
+        let depth = self.queues.depth(class);
         self.ledger
             .record_request(handle, &new.purpose, class, spec.price(), now_ms);
         self.record(BrokerEvent::Requested {
+            hub: self.hub,
             handle,
             purpose: new.purpose.clone(),
             class,
             epoch: new.epoch,
             key: new.key,
             operation: new.correlation.operation_id,
+            depth,
         });
         self.requests.insert(
             handle.get(),
@@ -409,6 +432,7 @@ impl BrokerCore {
                 epoch: new.epoch,
                 correlation: new.correlation,
                 requested_ms: now_ms,
+                claimable_ms: now_ms,
                 status: RequestStatus::Queued { class },
                 retries: 0,
                 attempts: 0,
@@ -431,6 +455,7 @@ impl BrokerCore {
         request.holders += 1;
         let holders = request.holders;
         self.record(BrokerEvent::Joined {
+            hub: self.hub,
             handle,
             purpose: new.purpose.clone(),
             holders,
@@ -447,6 +472,7 @@ impl BrokerCore {
             return;
         };
         self.record(BrokerEvent::Dropped {
+            hub: self.hub,
             handle,
             purpose,
             class,
@@ -467,7 +493,7 @@ impl BrokerCore {
         let (class, handle) = self.best_waiting(kind, now_ms)?;
         if !self.has_room(kind, class) {
             let victim = self.preemption_victim(kind, class)?;
-            self.preempt(victim, handle);
+            self.preempt(victim, handle, now_ms);
         }
         self.queues.remove(class, handle);
         self.next_attempt += 1;
@@ -488,6 +514,7 @@ impl BrokerCore {
             },
         );
         let request = self.requests.get(&handle.get())?;
+        let waited_ms = now_ms.saturating_sub(request.claimable_ms);
         let call = ClaimedCall {
             attempt,
             handle,
@@ -500,11 +527,13 @@ impl BrokerCore {
             number,
         };
         self.record(BrokerEvent::Claimed {
+            hub: self.hub,
             handle,
             purpose: call.purpose.clone(),
             attempt,
             worker,
             number,
+            waited_ms,
         });
         Some(call)
     }
@@ -562,7 +591,7 @@ impl BrokerCore {
             .map(|(id, _)| *id)
     }
 
-    fn preempt(&mut self, victim: AttemptId, by: ResourceHandle) {
+    fn preempt(&mut self, victim: AttemptId, by: ResourceHandle, now_ms: u64) {
         let Some(attempt) = self.abandon(victim, AbandonReason::Preempted) else {
             return;
         };
@@ -572,8 +601,10 @@ impl BrokerCore {
         let class = request.spec.class();
         let purpose = request.spec.name().clone();
         request.status = RequestStatus::Queued { class };
+        request.claimable_ms = now_ms;
         self.queues.push_front(class, attempt.handle);
         self.record(BrokerEvent::Preempted {
+            hub: self.hub,
             handle: attempt.handle,
             purpose,
             by,
@@ -589,6 +620,7 @@ impl BrokerCore {
             self.to_cancel.pop_front();
         }
         self.record(BrokerEvent::Abandoned {
+            hub: self.hub,
             handle: removed.handle,
             attempt,
             reason,
@@ -609,6 +641,7 @@ impl BrokerCore {
         let (purpose, price) = (request.spec.name().clone(), request.spec.price());
         self.ledger.record_call_sent(handle, &purpose, price);
         self.record(BrokerEvent::Spent {
+            hub: self.hub,
             handle,
             purpose,
             attempt,
@@ -674,6 +707,7 @@ impl BrokerCore {
         };
         if let Some(request) = self.requests.get(&handle.get()) {
             self.record(BrokerEvent::Stale {
+                hub: self.hub,
                 handle: Some(handle),
                 purpose: request.spec.name().clone(),
                 epoch: request.epoch,
@@ -695,6 +729,7 @@ impl BrokerCore {
         );
         self.settle(handle, RequestStatus::Ready, LedgerEnd::Ready, true);
         self.record(BrokerEvent::Ready {
+            hub: self.hub,
             handle,
             purpose,
             ms,
@@ -716,12 +751,13 @@ impl BrokerCore {
             return;
         }
         request.retries = retry;
-        request.status = RequestStatus::BackingOff {
-            until_ms: now_ms.saturating_add(backoff_ms),
-        };
+        let until_ms = now_ms.saturating_add(backoff_ms);
+        request.status = RequestStatus::BackingOff { until_ms };
+        request.claimable_ms = until_ms;
         let (class, purpose) = (request.spec.class(), request.spec.name().clone());
         self.queues.push_front(class, handle);
         self.record(BrokerEvent::Retrying {
+            hub: self.hub,
             handle,
             purpose,
             retry,
@@ -751,6 +787,7 @@ impl BrokerCore {
             true,
         );
         self.record(BrokerEvent::Failed {
+            hub: self.hub,
             handle,
             purpose,
             cause,

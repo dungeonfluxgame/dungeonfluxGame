@@ -1240,3 +1240,84 @@ fn minted_wire_operation_ids_are_wide_distinct_and_never_zero() {
         "the ids use the high 64 bits too"
     );
 }
+
+// ---- The wire_intent and wire_view lines (wave 3, U2) ----
+
+/// The `ENGINE wire_*` lines of the rig's log, oldest first.
+fn wire_lines(rig: &Rig) -> Vec<String> {
+    super::fixtures::lines(&rig.log)
+        .into_iter()
+        .filter(|line| line.starts_with("ENGINE wire_"))
+        .collect()
+}
+
+#[tokio::test]
+async fn every_wire_intent_writes_one_line_with_its_outcome_and_code() {
+    let rig = story_rig(&[10, 20]);
+    start_story(&rig).await;
+    let observed = revision_of(&rig, 1).await;
+    let hand_off = intent_for("explore", 1, tap_kind("pick_lock"), 600, observed);
+    rig.handle
+        .machine_intent(1, &hand_off)
+        .await
+        .expect("a receipt");
+    let observed = revision_of(&rig, 1).await;
+    let stale = intent_for("explore", 1, tap_kind("persuade_guard"), 601, observed);
+    let mut malformed = intent(1, tap_kind("join"), 602, observed);
+    malformed.operation_id = None;
+    let before = wire_lines(&rig).len();
+
+    rig.handle
+        .machine_intent(1, &stale)
+        .await
+        .expect("a receipt");
+    let refused = rig.handle.machine_intent(1, &malformed).await;
+
+    assert!(
+        matches!(refused, Err(WireIntentError::Refused(_))),
+        "{refused:?}"
+    );
+    let all = wire_lines(&rig);
+    assert!(
+        all.contains(&format!(
+            "ENGINE wire_intent seat=1 operation={:032x} outcome=accepted code=-",
+            600
+        )),
+        "{all:?}"
+    );
+    assert_eq!(
+        all[before..],
+        [
+            format!(
+                "ENGINE wire_intent seat=1 operation={:032x} outcome=declined code=window_closed",
+                601
+            ),
+            "ENGINE wire_intent seat=1 operation=- outcome=refused code=refused_at_the_edge"
+                .to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_served_view_is_one_wire_view_line_and_an_intents_own_read_writes_none() {
+    let rig = story_rig(&[]);
+
+    let served = rig
+        .handle
+        .machine_view(AudienceSpec::Tv)
+        .await
+        .expect("a view");
+    rig.handle
+        .intent_view(AudienceSpec::Seat { seat: 1 })
+        .await
+        .expect("a view");
+
+    assert_eq!(
+        wire_lines(&rig),
+        [format!(
+            "ENGINE wire_view audience=tv revision=0 bytes={}",
+            served.encoded_len()
+        )]
+    );
+    assert_eq!(count_lines(&rig.log, "ENGINE projection "), 0);
+}

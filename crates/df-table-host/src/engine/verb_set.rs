@@ -8,8 +8,11 @@
 //! here until someone says whether the host has it. The family verbs that machines register with
 //! their owners (combat, sheet, camera) are not in C7's set; they are listed beside it as waiting.
 //!
-//! Verbs the host adds beyond C7's set (`history`, `config`, `rules check`) are listed in the
-//! usage lines of `describe` and are not in this table: they are the host's, not the engine's.
+//! Verbs the host adds beyond C7's set (`history`, `config`, `rules check`, `inspect`) are listed
+//! in the usage lines of `describe` and are not in this table: they are the host's, not the
+//! engine's. C7's `pending list|show` and `rulings list|show` are served by `inspect pending` and
+//! `inspect rulings`, the one surface over every report, so they are `HostSupport::Inspect`: built,
+//! without verbs of their own.
 
 use df_table::inspect::{Verb, VerbAccess, VerbEffect, VerbSpec};
 use serde::{Deserialize, Serialize};
@@ -27,10 +30,12 @@ pub enum HostSupport {
     Seam,
     /// The host has no such verb yet.
     NotBuilt,
+    /// What the verb reads is served by an `inspect` report; the verb has no words of its own.
+    Inspect,
 }
 
 impl HostSupport {
-    pub const ALL: [Self; 3] = [Self::Built, Self::Seam, Self::NotBuilt];
+    pub const ALL: [Self; 4] = [Self::Built, Self::Seam, Self::NotBuilt, Self::Inspect];
 
     /// The serde name of the support.
     pub fn key(self) -> &'static str {
@@ -38,6 +43,7 @@ impl HostSupport {
             Self::Built => "built",
             Self::Seam => "seam",
             Self::NotBuilt => "not_built",
+            Self::Inspect => "inspect",
         }
     }
 
@@ -51,6 +57,7 @@ impl HostSupport {
             Self::Built => "built",
             Self::Seam => "seam only",
             Self::NotBuilt => "not built",
+            Self::Inspect => "built as an inspect report",
         }
     }
 }
@@ -66,12 +73,10 @@ pub struct VerbLine {
     /// `operator`, or `host` for a verb a hosted build offers.
     pub access: String,
     pub host: HostSupport,
-    /// What an unbuilt verb or a seam waits for.
+    /// What an unbuilt verb or a seam waits for, or the `inspect` verb that serves a verb that is
+    /// `HostSupport::Inspect`.
     pub needs: Option<String>,
 }
-
-const PENDING_BOOKS_NEED: &str = "the pipeline's pending books and rulings served by a host route \
-     (C7's PendingReport and RulingsReport exist)";
 
 /// What the host has of `verb`. Exhaustive: a verb added to C7's set must be placed here.
 fn host_support(verb: Verb) -> (HostSupport, Option<&'static str>) {
@@ -90,6 +95,8 @@ fn host_support(verb: Verb) -> (HostSupport, Option<&'static str>) {
         | Verb::ProjectionShow
         | Verb::Queue
         | Verb::Broker => (HostSupport::Built, None),
+        Verb::PendingList | Verb::PendingShow => (HostSupport::Inspect, Some("inspect pending")),
+        Verb::RulingsList | Verb::RulingsShow => (HostSupport::Inspect, Some("inspect rulings")),
         Verb::Replay => (HostSupport::Seam, Some(REPLAY_NEEDS)),
         Verb::FixtureLoad => (
             HostSupport::NotBuilt,
@@ -101,9 +108,6 @@ fn host_support(verb: Verb) -> (HostSupport, Option<&'static str>) {
             HostSupport::NotBuilt,
             Some("the property-test driver of H.17"),
         ),
-        Verb::PendingList | Verb::PendingShow | Verb::RulingsList | Verb::RulingsShow => {
-            (HostSupport::NotBuilt, Some(PENDING_BOOKS_NEED))
-        }
     }
 }
 
@@ -141,7 +145,7 @@ pub fn verb_lines(specs: &[VerbSpec]) -> Vec<VerbLine> {
 }
 
 /// The verbs machines register with their owners, which H.16 names and no machine has yet.
-const FAMILY_VERBS_WAITING: [(&str, &str); 4] = [
+const FAMILY_VERBS_WAITING: [(&str, &str); 3] = [
     (
         "combat choices | combat anchors show | spatial query | effects list | check show",
         "the combat and exploration machines and their rules (M2, rules readiness)",
@@ -157,11 +161,6 @@ const FAMILY_VERBS_WAITING: [(&str, &str); 4] = [
          state reads what the machines put on the screen (G2). `camera focus|wide` and \
          `director show|pause|resume|auto camera|advance|end|start|view` are built (G1)",
     ),
-    (
-        "dump <machine|table> naming a machine or the table",
-        "per-machine dumps: `dump` today takes no name and prints the active machine and the \
-         table, as JSON",
-    ),
 ];
 
 /// What `describe` says is not built: the verbs of C7's set the host lacks or only has a seam for,
@@ -169,7 +168,7 @@ const FAMILY_VERBS_WAITING: [(&str, &str); 4] = [
 pub fn not_built(lines: &[VerbLine]) -> Vec<NotBuiltVerb> {
     lines
         .iter()
-        .filter(|line| line.host != HostSupport::Built)
+        .filter(|line| matches!(line.host, HostSupport::Seam | HostSupport::NotBuilt))
         .map(|line| NotBuiltVerb {
             verb: if line.host == HostSupport::Seam {
                 format!("{} (seam only)", line.words)

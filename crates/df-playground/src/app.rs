@@ -23,13 +23,22 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::Event;
 
 use crate::dom::{append, document, element};
+use crate::timeline::ErrorSource;
 use events::{note_gesture, on_animation_ended, on_change, on_click, on_media_event};
 use state::{ROOT_ID, THEME_ID, log_error, with_app_mut};
+
+thread_local! {
+    /// Set by the first panic, so a panic while reporting one does not report again for ever.
+    static PANICKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Builds the page's skeleton, wires its listeners and starts the loop.
 pub fn start() -> Result<(), JsValue> {
     std::panic::set_hook(Box::new(|info| {
-        log_error(&format!("playground panic: {info}"))
+        let forced = log_error(ErrorSource::Panic, &format!("playground panic: {info}"));
+        if forced && !PANICKED.with(|panicked| panicked.replace(true)) {
+            spawn_local(report::send_report(true));
+        }
     }));
     let document = document()?;
     let body = document
@@ -66,12 +75,12 @@ pub fn start() -> Result<(), JsValue> {
     root.add_event_listener_with_callback_and_bool("error", failed.as_ref().unchecked_ref(), true)?;
     failed.forget();
 
-    with_app_mut(|app| {
-        app.client_id = format!(
-            "page-{:08x}",
-            (js_sys::Math::random() * 4_294_967_295.0) as u32
-        );
-    });
+    let client_id = format!(
+        "page-{:08x}",
+        (js_sys::Math::random() * 4_294_967_295.0) as u32
+    );
+    crate::net::set_client(&client_id);
+    with_app_mut(|app| app.client_id = client_id);
     spawn_local(frames::run());
     Ok(())
 }

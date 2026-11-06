@@ -254,6 +254,34 @@ const MAXIMUM_FAILURE_BODY_CHARACTERS: usize = 400;
 /// A run of this many token characters is opaque data (a key, a data URI) and is not kept.
 const OPAQUE_RUN_CHARACTERS: usize = 32;
 
+/// One fal queue call: it fixes the method and the `operation=` label of its audit line.
+#[derive(Clone, Copy)]
+enum QueueCall {
+    Submit,
+    Status,
+    Cancel,
+    Result,
+}
+
+impl QueueCall {
+    const fn method(self) -> HttpMethod {
+        match self {
+            Self::Submit => HttpMethod::Post,
+            Self::Status | Self::Result => HttpMethod::Get,
+            Self::Cancel => HttpMethod::Put,
+        }
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Submit => "submit",
+            Self::Status => "status",
+            Self::Cancel => "cancel",
+            Self::Result => "result",
+        }
+    }
+}
+
 fn http_facts(response: &NativeHttpResponse, credential: &str) -> FalHttpFacts {
     let mut text = String::from_utf8_lossy(&response.body).into_owned();
     if !credential.is_empty() {
@@ -501,7 +529,7 @@ impl NativeFalMediaProvider {
         let path = format!("/{}", self.config.model());
         let response = self
             .execute(
-                HttpMethod::Post,
+                QueueCall::Submit,
                 &path,
                 serialized,
                 request.binding().deadline.saturating_sub(owner.elapsed),
@@ -567,7 +595,8 @@ impl NativeFalMediaProvider {
             &format!("{origin}/v1/models/pricing?endpoint_id={model}"),
             &self.credential,
             Vec::new(),
-        );
+        )
+        .with_operation("pricing");
         let response = self
             .http
             .execute(request, deadline, cancellation)
@@ -592,7 +621,7 @@ impl NativeFalMediaProvider {
 
     async fn execute(
         &self,
-        method: HttpMethod,
+        call: QueueCall,
         path: &str,
         body: Vec<u8>,
         deadline: Duration,
@@ -603,8 +632,13 @@ impl NativeFalMediaProvider {
             || "https://queue.fal.run".to_owned(),
             |a| format!("http://{a}"),
         );
-        let request =
-            HttpRequest::fal_native(method, &format!("{origin}{path}"), &self.credential, body);
+        let request = HttpRequest::fal_native(
+            call.method(),
+            &format!("{origin}{path}"),
+            &self.credential,
+            body,
+        )
+        .with_operation(call.key());
         self.http
             .execute(request, deadline, cancellation)
             .await
@@ -678,7 +712,7 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
         let response = self
             .provider
             .execute(
-                HttpMethod::Get,
+                QueueCall::Status,
                 queue_path(&self.status)?,
                 Vec::new(),
                 deadline,
@@ -736,7 +770,7 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
         let response = self
             .provider
             .execute(
-                HttpMethod::Put,
+                QueueCall::Cancel,
                 queue_path(&self.cancel)?,
                 Vec::new(),
                 deadline,
@@ -778,7 +812,7 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
         let response = self
             .provider
             .execute(
-                HttpMethod::Get,
+                QueueCall::Result,
                 queue_path(&self.result)?,
                 Vec::new(),
                 deadline,

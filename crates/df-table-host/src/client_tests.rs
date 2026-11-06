@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use tokio::io::AsyncReadExt;
 
-use crate::client::{ClientError, StreamedPost, get, get_with_limit, post_json};
+use crate::client::{ClientError, StreamedPost, get, get_with_limit, head, post_json};
 use crate::limits::{STREAM_ANSWER_TIMEOUT, STREAM_STEP_TIMEOUT};
 use crate::test_support::{STARTER_FILES, canned_server, closed_port, start};
 
@@ -152,4 +152,90 @@ async fn a_streamed_upload_waits_for_its_answer_up_to_the_answer_bound() {
     let waited = started.elapsed();
     assert!(STREAM_ANSWER_TIMEOUT > STREAM_STEP_TIMEOUT);
     assert!(waited >= STREAM_ANSWER_TIMEOUT, "gave up after {waited:?}");
+}
+
+/// Answers one request with `answer` and returns the request head it received.
+async fn capturing_server(answer: &'static [u8]) -> (u16, tokio::task::JoinHandle<String>) {
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("binds");
+    let port = listener.local_addr().expect("has an address").port();
+    let seen = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accepts");
+        let mut head = Vec::new();
+        let mut chunk = [0_u8; 512];
+        while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+            let count = stream.read(&mut chunk).await.expect("reads");
+            if count == 0 {
+                break;
+            }
+            head.extend_from_slice(&chunk[..count]);
+        }
+        stream.write_all(answer).await.expect("answers");
+        stream.shutdown().await.expect("closes");
+        String::from_utf8_lossy(&head).into_owned()
+    });
+    (port, seen)
+}
+
+#[tokio::test]
+async fn every_request_names_the_command_line_in_the_client_header() {
+    const OK: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let (port, seen) = capturing_server(OK).await;
+    get(port, "/canvas.json").await.expect("answers");
+    let request = seen.await.expect("captured").to_ascii_lowercase();
+    assert!(request.contains("\r\nx-df-client: cli\r\n"), "{request}");
+    let (port, seen) = capturing_server(OK).await;
+    post_json(port, "/dev/effect", "{}").await.expect("answers");
+    assert!(
+        seen.await
+            .expect("captured")
+            .to_ascii_lowercase()
+            .contains("\r\nx-df-client: cli\r\n")
+    );
+    let (port, seen) = capturing_server(OK).await;
+    head(port, "/playground/media/x.png")
+        .await
+        .expect("answers");
+    let request = seen.await.expect("captured").to_ascii_lowercase();
+    assert!(
+        request.starts_with("head /playground/media/x.png "),
+        "{request}"
+    );
+    assert!(request.contains("\r\nx-df-client: cli\r\n"), "{request}");
+}
+
+#[tokio::test]
+async fn a_head_answer_is_read_by_its_headers_though_it_has_no_body() {
+    let port = canned_server(http(
+        "Content-Type: image/png\r\nContent-Length: 2048\r\nETag: \"abc\"\r\n",
+        "",
+    ))
+    .await;
+    let answer = head(port, "/x").await.expect("answers");
+    assert_eq!(answer.status, StatusCode::OK);
+    assert_eq!(answer.content_type.as_deref(), Some("image/png"));
+    assert_eq!(answer.content_length, Some(2048));
+    assert_eq!(answer.entity_tag.as_deref(), Some("\"abc\""));
+}
+
+#[tokio::test]
+async fn a_head_answer_without_headers_of_interest_has_none() {
+    let port = canned_server(http("Connection: close\r\n", "")).await;
+    let answer = head(port, "/x").await.expect("answers");
+    assert_eq!(
+        (
+            answer.content_type,
+            answer.content_length,
+            answer.entity_tag
+        ),
+        (None, None, None)
+    );
+}
+
+#[tokio::test]
+async fn text_that_is_not_http_is_an_invalid_head_answer() {
+    let port = canned_server(b"nonsense".to_vec()).await;
+    assert_eq!(head(port, "/x").await, Err(ClientError::InvalidResponse));
 }

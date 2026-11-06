@@ -6,11 +6,16 @@
 //! areas pattern 7 names: `RESOURCE` for the life of a request and `SPEND` for a charge. An event
 //! holds ids, closed keys and counts only: never a prompt, a result or any player text.
 //!
+//! Every line ends with `hub=<key>`: which broker of the process it came from (`HubName`), since
+//! the engine and the scene workbench each run one and their lines share a log.
+//!
 //! These are host events because `df_table::event::TableEvent` is a closed enum of the pure crate.
 //! A failure is recorded once, here; the pipeline records the `BoundaryFailed` of the port call
 //! that sees it, which is the boundary that handles it.
 
 use std::fmt::{self, Write};
+
+use serde::{Deserialize, Serialize};
 
 use df_table::event::FailureCause;
 use df_table::identity::OperationId;
@@ -18,6 +23,29 @@ use df_table::ports::{PurposeName, ResourceHandle};
 
 use super::purpose::{Price, QueueClass};
 use super::request::{AttemptId, Epoch, RequestKey, WorkerId};
+
+/// Which broker of the process an event came from: the dev engine's or the scene workbench's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HubName {
+    Engine,
+    Workbench,
+}
+
+impl HubName {
+    pub const ALL: [Self; 2] = [Self::Engine, Self::Workbench];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Engine => "engine",
+            Self::Workbench => "workbench",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|hub| hub.key() == key)
+    }
+}
 
 /// Why a result or a request was found stale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,38 +112,50 @@ impl RefusalKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrokerEvent {
     Requested {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         class: QueueClass,
         epoch: Epoch,
         key: RequestKey,
         operation: OperationId,
+        /// How many requests of its class wait in the queue once it has joined it.
+        depth: usize,
     },
     /// A second request for a key already in flight joined it.
     Joined {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         holders: u32,
     },
     Refused {
+        hub: HubName,
         purpose: PurposeName,
         kind: RefusalKind,
     },
     Claimed {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         attempt: AttemptId,
         worker: WorkerId,
         number: u32,
+        /// How long this claim waited in the queue, by the hub's clock: from when the request
+        /// was asked for, or, for a later claim, from when it was put back (a retry from the end
+        /// of its backoff). Earlier attempts and backoff are not in it.
+        waited_ms: u64,
     },
     /// The provider call for an attempt was sent, so its price is spent and never refunded.
     Spent {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         attempt: AttemptId,
         price: Price,
     },
     Retrying {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         retry: u8,
@@ -123,11 +163,13 @@ pub enum BrokerEvent {
         cause: FailureCause,
     },
     Ready {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         ms: u64,
     },
     Failed {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         cause: FailureCause,
@@ -137,20 +179,24 @@ pub enum BrokerEvent {
         unknown_dispatch: bool,
     },
     Cancelled {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
     },
     Preempted {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         by: ResourceHandle,
     },
     Dropped {
+        hub: HubName,
         handle: ResourceHandle,
         purpose: PurposeName,
         class: QueueClass,
     },
     Stale {
+        hub: HubName,
         handle: Option<ResourceHandle>,
         purpose: PurposeName,
         epoch: Epoch,
@@ -158,21 +204,26 @@ pub enum BrokerEvent {
         reason: StaleReason,
     },
     Abandoned {
+        hub: HubName,
         handle: ResourceHandle,
         attempt: AttemptId,
         reason: AbandonReason,
     },
     LeaseExpired {
+        hub: HubName,
         handle: ResourceHandle,
         attempt: AttemptId,
         sent: bool,
         requeued: bool,
     },
     EpochAdvanced {
+        hub: HubName,
         from: Epoch,
         to: Epoch,
         superseded: usize,
     },
+    /// The broker closed with its table: every open request was cancelled.
+    Closed { hub: HubName, cancelled: usize },
 }
 
 impl BrokerEvent {
@@ -183,7 +234,29 @@ impl BrokerEvent {
         }
     }
 
-    /// The whole line, `AREA verb key=value ...`.
+    /// The broker the event came from.
+    pub fn hub(&self) -> HubName {
+        match self {
+            Self::Requested { hub, .. }
+            | Self::Joined { hub, .. }
+            | Self::Refused { hub, .. }
+            | Self::Claimed { hub, .. }
+            | Self::Spent { hub, .. }
+            | Self::Retrying { hub, .. }
+            | Self::Ready { hub, .. }
+            | Self::Failed { hub, .. }
+            | Self::Cancelled { hub, .. }
+            | Self::Preempted { hub, .. }
+            | Self::Dropped { hub, .. }
+            | Self::Stale { hub, .. }
+            | Self::Abandoned { hub, .. }
+            | Self::LeaseExpired { hub, .. }
+            | Self::EpochAdvanced { hub, .. }
+            | Self::Closed { hub, .. } => *hub,
+        }
+    }
+
+    /// The whole line, `AREA verb key=value ... hub=<key>`.
     pub fn render_audit_line(&self) -> String {
         let mut line = String::with_capacity(160);
         // Writing into a String cannot fail, so the result carries no information.
@@ -193,6 +266,11 @@ impl BrokerEvent {
 
     fn write_audit_line(&self, out: &mut String) -> fmt::Result {
         write!(out, "{} ", self.area())?;
+        self.write_change(out)?;
+        write!(out, " hub={}", self.hub().key())
+    }
+
+    fn write_change(&self, out: &mut String) -> fmt::Result {
         match self {
             Self::Requested {
                 handle,
@@ -201,9 +279,12 @@ impl BrokerEvent {
                 epoch,
                 key,
                 operation,
+                depth,
+                ..
             } => write!(
                 out,
-                "request purpose={purpose} class={} handle={} epoch={} key={:016x} operation_id={operation}",
+                "request purpose={purpose} class={} handle={} epoch={} key={:016x} \
+                 operation_id={operation} depth={depth}",
                 class.key(),
                 handle.get(),
                 epoch.get(),
@@ -213,12 +294,13 @@ impl BrokerEvent {
                 handle,
                 purpose,
                 holders,
+                ..
             } => write!(
                 out,
                 "joined purpose={purpose} handle={} holders={holders}",
                 handle.get()
             ),
-            Self::Refused { purpose, kind } => {
+            Self::Refused { purpose, kind, .. } => {
                 write!(out, "refused purpose={purpose} cause={}", kind.key())
             }
             Self::Claimed {
@@ -227,9 +309,12 @@ impl BrokerEvent {
                 attempt,
                 worker,
                 number,
+                waited_ms,
+                ..
             } => write!(
                 out,
-                "claimed purpose={purpose} handle={} attempt={} worker={} number={number}",
+                "claimed purpose={purpose} handle={} attempt={} worker={} number={number} \
+                 waited_ms={waited_ms}",
                 handle.get(),
                 attempt.get(),
                 worker.get()
@@ -239,6 +324,7 @@ impl BrokerEvent {
                 purpose,
                 attempt,
                 price,
+                ..
             } => {
                 write!(
                     out,
@@ -257,6 +343,7 @@ impl BrokerEvent {
                 retry,
                 backoff_ms,
                 cause,
+                ..
             } => write!(
                 out,
                 "retry purpose={purpose} handle={} retry={retry} backoff_ms={backoff_ms} cause={}",
@@ -267,6 +354,7 @@ impl BrokerEvent {
                 handle,
                 purpose,
                 ms,
+                ..
             } => write!(
                 out,
                 "ready purpose={purpose} handle={} ms={ms}",
@@ -278,6 +366,7 @@ impl BrokerEvent {
                 cause,
                 ms,
                 unknown_dispatch,
+                ..
             } => {
                 write!(
                     out,
@@ -290,13 +379,16 @@ impl BrokerEvent {
                 }
                 Ok(())
             }
-            Self::Cancelled { handle, purpose } => {
+            Self::Cancelled {
+                handle, purpose, ..
+            } => {
                 write!(out, "cancelled purpose={purpose} handle={}", handle.get())
             }
             Self::Preempted {
                 handle,
                 purpose,
                 by,
+                ..
             } => write!(
                 out,
                 "preempted purpose={purpose} handle={} by={}",
@@ -307,6 +399,7 @@ impl BrokerEvent {
                 handle,
                 purpose,
                 class,
+                ..
             } => write!(
                 out,
                 "dropped purpose={purpose} handle={} class={}",
@@ -319,6 +412,7 @@ impl BrokerEvent {
                 epoch,
                 current,
                 reason,
+                ..
             } => {
                 write!(out, "stale purpose={purpose} ")?;
                 if let Some(handle) = handle {
@@ -336,6 +430,7 @@ impl BrokerEvent {
                 handle,
                 attempt,
                 reason,
+                ..
             } => write!(
                 out,
                 "abandoned handle={} attempt={} reason={}",
@@ -348,6 +443,7 @@ impl BrokerEvent {
                 attempt,
                 sent,
                 requeued,
+                ..
             } => write!(
                 out,
                 "lease_expired handle={} attempt={} sent={sent} requeued={requeued}",
@@ -358,12 +454,14 @@ impl BrokerEvent {
                 from,
                 to,
                 superseded,
+                ..
             } => write!(
                 out,
                 "epoch_advanced from={} to={} superseded={superseded}",
                 from.get(),
                 to.get()
             ),
+            Self::Closed { cancelled, .. } => write!(out, "closed cancelled={cancelled}"),
         }
     }
 }

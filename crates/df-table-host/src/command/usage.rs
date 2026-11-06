@@ -10,6 +10,7 @@ use df_playground::limits::{
 use super::media_generate::MEDIA_GENERATE_USAGE;
 use crate::cast::cli::{CAMERA_ON_USAGE, CAST_USAGE, CUE_USAGE};
 use crate::locate::cli::MEDIA_LOCATE_USAGE;
+use crate::services::SERVICES_USAGE;
 
 pub(super) const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
 pub(super) const SET_USAGE: &str = "set <id> <field>=<value> [<field>=<value> ...]";
@@ -18,7 +19,10 @@ pub(super) const TRAVEL_USAGE: &str = "travel <id> <x> <y> [speed=N]";
 pub(super) const STOP_USAGE: &str = "stop <id> [<id> ...]";
 pub(super) const ROTATE_USAGE: &str = "rotate <id> <degrees> [pivot=X,Y]";
 pub(super) const DESPAWN_USAGE: &str = "despawn <id> [<id> ...]";
-pub(super) const EVENTS_USAGE: &str = "events [after]";
+pub(super) const EVENTS_USAGE: &str =
+    "events [after] [area=AREA] [limit=N] | events level [always|verbose]";
+pub(super) const HOST_USAGE: &str = "host status";
+pub(super) const FRAME_USAGE: &str = "frame [after=N]";
 pub(super) const SCRIPT_USAGE: &str = "script <file>";
 pub(super) const PLAYGROUND_USAGE: &str = concat!(
     "playground [set <key>=<value> ... | go <fixture> [transition=cut|fade|wipe] [ms=N] | cycle ",
@@ -31,7 +35,7 @@ pub(super) const SCENE_USAGE: &str = concat!(
     "image-clear <slot> | slide ... | camera ... | camera-reset ... | camera-on ... | cast | ",
     "cue ... | music ... | music-stop | sound ... | reset | narration ... | seat ... | seats ... ",
     "| logo ... | lobby ... | loading ... | roleplay ... | pill ... | home ... | start ... | ",
-    "build ... | show | lookahead ..."
+    "build ... | show | lookahead ... | timing ..."
 );
 pub(super) const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
 pub(super) const PARTY_USAGE: &str = concat!(
@@ -60,7 +64,8 @@ pub(super) const SEAT_USAGE: &str = concat!(
 );
 pub(super) const SEATS_USAGE: &str = "scene seats open <N> | clear";
 pub(super) const LOGO_USAGE: &str = "scene logo on|off";
-pub(super) const MEDIA_USAGE: &str = "media | media add <file> [as=NAME] | media remove <name>";
+pub(super) const MEDIA_USAGE: &str =
+    "media | media head <name> | media add <file> [as=NAME] | media remove <name>";
 pub(super) const CHOICES_USAGE: &str = concat!(
     "scene choices suggested [<label>[=<explanation>] ...] | group <name> [<label> ...] | ",
     "unavailable [<label>=<reason> ...] | clear",
@@ -68,7 +73,10 @@ pub(super) const CHOICES_USAGE: &str = concat!(
 pub(super) const FIXTURE_USAGE: &str =
     "fixture show <name> | fixture write <name> <file> | fixture remove <name>";
 pub(super) const REPL_USAGE: &str = "repl";
-pub(super) const CLIENTS_USAGE: &str = "clients";
+pub(super) const CLIENTS_USAGE: &str = concat!(
+    "clients [<client>] | clients timeline <client> ",
+    "[kind=line|plate|figure|clip|scene|sound|music|draw|camera|error] [after=SEQ]",
+);
 pub(super) const FIXTURES_USAGE: &str = "fixtures";
 
 /// The keys `playground set` accepts and what each takes.
@@ -117,7 +125,18 @@ pub fn usage_text() -> String {
          \n  clear\n      remove every element\n\
          \n  canvas\n      print the canvas as JSON\n\
          \n  kinds\n      list the kinds and their fields\n\
-         \n  {EVENTS_USAGE}\n      print the newest events, or those after a sequence\n\
+         \n  {EVENTS_USAGE}\n      print the newest events, or those after a sequence, each \
+         with the time it was recorded (at_ms);\n      area= keeps one area (the first word of a \
+         line, such as LOCATE) and limit= the newest N;\n      a forgotten=N header says how \
+         many lines the log dropped to keep its bounds; `events level`\n      reads the event \
+         level of the host's sinks and `events level verbose` also records the class B\n      \
+         detail (STEP, PROJECTION), `events level always` goes back to class A only\n\
+         \n  {HOST_USAGE}\n      the audit log (lines kept, forgotten, echo), the event sinks \
+         (level, counts, lag and loss,\n      the shared path to the telemetry store) and the \
+         clock\n\
+         \n  {FRAME_USAGE}\n      the playground's frame: its count, the run of the host, its size \
+         and top-level keys; with\n      after=N it waits for the frame after N (or says nothing \
+         changed)\n\
          \n  reload\n      re-read the kind files without a restart\n\
          \n  {PLAYGROUND_USAGE}\n      show or change what the playground page shows; keys: \
          {playground_keys}\n      go and cycle change the scene and the transition together or \
@@ -165,7 +184,9 @@ pub fn usage_text() -> String {
          \n  {LOGO_USAGE}\n      the DungeonFlux logo at the top left of the shared screen\n\
          \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove \
          pictures, sounds and videos;\n      {video_limits}; a video's size is in the listing; \
-         videos are not placed on a screen yet\n\
+         videos are not placed on a screen yet;\n      the listing ends with the library's \
+         limits; head asks for a file without fetching it and\n      prints its status, type, \
+         length and ETag\n\
          \n  {MEDIA_GENERATE_USAGE}\n      make one picture from a prompt through the image \
          service (the Codex CLI backend) and store it in\n      the library as NAME.png; the host \
          needs DF_IMAGERY_MODE=live, DF_IMAGERY_BACKEND=codex-cli \
@@ -189,7 +210,12 @@ pub fn usage_text() -> String {
          with DF_TEXT_CODEX_EXECUTABLE (the signed-in Codex CLI)\n\
          \n  {CLIENTS_USAGE}\n      what each open page says it is showing and playing, and \
          whether its sound is\n      locked (a browser plays sound only after someone clicks the \
-         page)\n\
+         page); each page also shows its frame\n      against the host's, its link, the revision \
+         and fixture it loaded; `clients <client>` is one\n      page; `clients timeline` lists \
+         when the page started and ended each line, picture, figure,\n      clip, scene, sound, \
+         camera framing and draw, why, and how long it was meant to last\n\
+         \n  {SERVICES_USAGE}\n      how the text, image and locate services are set up and stand \
+         (backend, model, whether a key is\n      present, never the key)\n\
          \n  {WAIT_USAGE}\n      pause here; stage scenes over time in a script or a session\n\
          \n  {FIXTURES_USAGE}\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\

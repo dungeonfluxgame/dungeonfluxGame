@@ -3,7 +3,7 @@ use df_table::ports::{Readiness, ResourceHandle};
 use df_table::private_data::Narration;
 
 use super::events::{AbandonReason, BrokerEvent, RefusalKind, StaleReason};
-use super::fixtures::{core_over, core_with, facts, name, request_for};
+use super::fixtures::{RecordingAudit, core_over, core_with, facts, name, request_for};
 use super::ledger::LedgerEnd;
 use super::purpose::{Price, PurposeFacts, PurposeSpec, PurposeTable, QueueClass, ResourceKind};
 use super::queues::QueueBounds;
@@ -189,6 +189,61 @@ fn a_preempted_request_runs_again_when_the_slot_frees_and_keeps_its_deadline() {
             cause: FailureCause::TimedOut
         })
     );
+}
+
+/// The `waited_ms` of every claim of `handle`, in order.
+fn waits_of(audit: &RecordingAudit, handle: ResourceHandle) -> Vec<(u32, u64)> {
+    audit
+        .events()
+        .into_iter()
+        .filter_map(|event| match event {
+            BrokerEvent::Claimed {
+                handle: claimed,
+                number,
+                waited_ms,
+                ..
+            } if claimed == handle => Some((number, waited_ms)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_retried_claim_waits_from_the_end_of_its_backoff_not_from_the_first_request() {
+    let (mut core, audit) = core_with(BrokerLimits::default());
+    let handle = core
+        .request(request_for("text_live", 1, 1), 0)
+        .expect("accepted");
+    let first = core.claim(ResourceKind::Text, WORKER, 30).expect("claimed");
+    core.complete(first.attempt, Err(ProviderCause::Unavailable), 40);
+    let RequestStatus::BackingOff { until_ms } = core.status(handle).expect("known") else {
+        panic!("the failure should back off");
+    };
+
+    core.claim(ResourceKind::Text, WORKER, until_ms + 7)
+        .expect("claimed again");
+
+    assert_eq!(waits_of(&audit, handle), [(1, 30), (2, 7)]);
+}
+
+#[test]
+fn a_preempted_claim_waits_from_when_it_was_put_back() {
+    let (mut core, audit) = core_with(one_image_slot());
+    let background = core
+        .request(request_for("image_background", 1, 1), 0)
+        .expect("accepted");
+    core.claim(ResourceKind::Image, WORKER, 5).expect("claimed");
+    core.request(request_for("image_plate", 2, 1), 10)
+        .expect("accepted");
+    let urgent = core
+        .claim(ResourceKind::Image, WORKER, 20)
+        .expect("preempts");
+    core.complete(urgent.attempt, image_ok(), 50);
+
+    core.claim(ResourceKind::Image, WORKER, 50)
+        .expect("runs again");
+
+    assert_eq!(waits_of(&audit, background), [(1, 5), (2, 30)]);
 }
 
 #[test]
@@ -1073,17 +1128,19 @@ fn every_change_is_recorded_as_one_line_in_the_resource_or_spend_area() {
         lines[0]
             .starts_with("RESOURCE request purpose=image_plate class=plate handle=1 epoch=1 key=")
     );
+    assert!(lines[0].ends_with(" depth=1 hub=engine"));
     assert_eq!(
         lines[1],
-        "RESOURCE claimed purpose=image_plate handle=1 attempt=1 worker=1 number=1"
+        "RESOURCE claimed purpose=image_plate handle=1 attempt=1 worker=1 number=1 waited_ms=0 \
+         hub=engine"
     );
     assert_eq!(
         lines[2],
-        "SPEND commit purpose=image_plate handle=1 attempt=1 price=unpriced"
+        "SPEND commit purpose=image_plate handle=1 attempt=1 price=unpriced hub=engine"
     );
     assert_eq!(
         lines[3],
-        "RESOURCE ready purpose=image_plate handle=1 ms=30"
+        "RESOURCE ready purpose=image_plate handle=1 ms=30 hub=engine"
     );
     assert!(lines.iter().all(|line| !line.contains('\n')));
 }

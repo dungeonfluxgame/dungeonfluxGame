@@ -10,6 +10,11 @@
 //! A file is never held whole: an answer opens the file once, takes its length and entity tag from
 //! that handle and streams the bytes from it in `SERVE_CHUNK_BYTES` chunks (a `HEAD` reads none),
 //! and an add is decoded to a staged file as the request arrives (`media_upload`, `media_store`).
+//!
+//! Its audit lines carry a name only when it is a plain media name: `media_add` (with its kind,
+//! size and duration), `media_remove`, `media_refused verb=add|remove cause=..` for every refused
+//! add or remove, `media_missing` for a file a page asked for that is not there, and
+//! `media_unreadable` for one that could not be read.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -379,6 +384,36 @@ fn served_response(served: Served, content: &'static str) -> Response {
     response
 }
 
+/// `name` when it is a media name the library could hold, otherwise `-`: a name a caller chose
+/// is written only once it is known to be plain.
+fn checked_media_name(name: &str) -> String {
+    if media_kind(name).is_some() {
+        name.to_owned()
+    } else {
+        "-".to_owned()
+    }
+}
+
+/// Records a media file a page asked for and did not get: `media_missing` for a 404, and
+/// `media_unreadable` with the reason for a file that is there and could not be read.
+fn record_media_refusal(state: &AppState, name: &str, error: FileError) {
+    let status = error.status();
+    if status == StatusCode::NOT_FOUND {
+        state.record_line(playground_line(
+            "media_missing",
+            &[("name", checked_media_name(name))],
+        ));
+    } else if status.is_server_error() {
+        state.record_line(playground_line(
+            "media_unreadable",
+            &[
+                ("name", checked_media_name(name)),
+                ("reason", error.key().to_owned()),
+            ],
+        ));
+    }
+}
+
 async fn media_file(
     State(state): State<Arc<AppState>>,
     UrlPath(name): UrlPath<String>,
@@ -395,12 +430,7 @@ async fn media_file(
     match served {
         Ok(served) => served_response(served, content_type(&name)),
         Err(error) => {
-            if error.status().is_server_error() {
-                state.record_line(playground_line(
-                    "media_unreadable",
-                    &[("name", name.clone())],
-                ));
-            }
+            record_media_refusal(&state, &name, error);
             refuse_file(error)
         }
     }
@@ -410,7 +440,13 @@ async fn media_list(State(state): State<Arc<AppState>>) -> Response {
     let directory = media_directory(state.playground().files());
     match run_file_task(move || media_entries(&directory)).await {
         Ok(entries) => Json(entries).into_response(),
-        Err(error) => refuse_file(error),
+        Err(error) => {
+            state.record_line(playground_line(
+                "media_unreadable",
+                &[("name", "-".to_owned()), ("reason", error.key().to_owned())],
+            ));
+            refuse_file(error)
+        }
     }
 }
 
@@ -432,10 +468,52 @@ fn record_malformed(state: &AppState) {
     ));
 }
 
-fn refuse_add(state: &AppState, error: &AddError) -> Response {
+/// Which media command was refused, in the `media_refused` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MediaVerb {
+    Add,
+    Remove,
+}
+
+impl MediaVerb {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Add => "add",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+/// Records `PLAYGROUND media_refused verb= name= cause= received_bytes=` for a refused add or
+/// remove. `name` is `-` unless it is a plain media name.
+fn record_media_refused(
+    state: &AppState,
+    verb: MediaVerb,
+    name: Option<&str>,
+    cause: &'static str,
+    received_bytes: u64,
+) {
+    state.record_line(playground_line(
+        "media_refused",
+        &[
+            ("verb", verb.key().to_owned()),
+            (
+                "name",
+                name.map_or_else(|| "-".to_owned(), checked_media_name),
+            ),
+            ("cause", cause.to_owned()),
+            ("received_bytes", received_bytes.to_string()),
+        ],
+    ));
+}
+
+/// Records and answers a refused add. The name of a refused add is not known to be plain until
+/// the file is published, so it is never written.
+fn refuse_add(state: &AppState, error: &AddError, received_bytes: u64) -> Response {
     if matches!(error, AddError::Ingest(IngestError::InvalidRequest(_))) {
         record_malformed(state);
     }
+    record_media_refused(state, MediaVerb::Add, None, error.key(), received_bytes);
     refused(error.status(), error.to_string())
 }
 
@@ -443,12 +521,13 @@ fn refuse_add(state: &AppState, error: &AddError) -> Response {
 /// the thread gives up (a refusal) the rest of the body is read and dropped, up to the limit, so
 /// the page gets its answer rather than a closed connection.
 async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body) -> Response {
+    let started = tokio::time::Instant::now();
     let limits = MediaLimits::DEFAULT;
     if declared_length(&headers).is_some_and(|length| length > limits.maximum_upload_body_bytes()) {
         let error = AddError::Ingest(IngestError::TooLarge {
             maximum_bytes: limits.maximum_file_bytes,
         });
-        return refuse_add(&state, &error);
+        return refuse_add(&state, &error, 0);
     }
     let directory = media_directory(state.playground().files());
     let (sender, worker) = start_staging(directory, limits);
@@ -467,16 +546,22 @@ async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body:
     drop(sender);
     match finish_staging(worker).await {
         Ok(added) => {
+            // A published file has a media name, so it has a kind; `-` only keeps this total.
+            let kind = media_kind(&added.name).map_or("-", MediaKind::key);
+            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             state.record_line(playground_line(
                 "media_add",
                 &[
                     ("name", added.name),
                     ("bytes", added.file_bytes.to_string()),
+                    ("kind", kind.to_owned()),
+                    ("received_bytes", received.to_string()),
+                    ("duration_ms", duration_ms.to_string()),
                 ],
             ));
             done(&state)
         }
-        Err(error) => refuse_add(&state, &error),
+        Err(error) => refuse_add(&state, &error, received),
     }
 }
 
@@ -528,11 +613,19 @@ pub(crate) async fn store_bytes(
 }
 
 async fn remove_media(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let received = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    let refuse = |name: Option<&str>, cause: &'static str| {
+        record_media_refused(&state, MediaVerb::Remove, name, cause, received);
+    };
     let request: MediaRemove = match parse_body(&body) {
         Ok(request) => request,
-        Err(error) => return reject_body(&state, &error),
+        Err(error) => {
+            refuse(None, "invalid_body");
+            return reject_body(&state, &error);
+        }
     };
     if media_kind(&request.name).is_none() {
+        refuse(None, "invalid_media_name");
         return refused(
             StatusCode::BAD_REQUEST,
             format!("'{}' is not a media name", request.name),
@@ -546,11 +639,17 @@ async fn remove_media(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
             state.record_line(playground_line("media_remove", &[("name", request.name)]));
             done(&state)
         }
-        Err(FileError::NotFound) => refused(
-            StatusCode::BAD_REQUEST,
-            format!("there is no media '{}'", request.name),
-        ),
-        Err(error) => refuse_file(error),
+        Err(FileError::NotFound) => {
+            refuse(Some(&request.name), FileError::NotFound.key());
+            refused(
+                StatusCode::BAD_REQUEST,
+                format!("there is no media '{}'", request.name),
+            )
+        }
+        Err(error) => {
+            refuse(Some(&request.name), error.key());
+            refuse_file(error)
+        }
     }
 }
 

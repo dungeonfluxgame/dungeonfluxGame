@@ -7,6 +7,7 @@
 //! The verbs about elements are here; the `scene` verbs are in `scene`, the `playground`, `media`
 //! and `fixture` verbs in `playground`, and the usage lines and the help in `usage`.
 
+mod host;
 mod media_generate;
 mod playground;
 mod scene;
@@ -22,15 +23,17 @@ use df_table::element::{Degrees, Percent};
 
 use crate::wire::{EffectRequest, PivotRequest, ValueForm};
 
+pub use self::host::{EventsRead, TimelineRead};
 pub use self::media_generate::MediaGenerate;
 pub use self::playground::{DEFAULT_CYCLES, DEFAULT_HOLD_MS};
 pub use self::scene::{DEFAULT_CAMERA_MS, DEFAULT_SLIDE, DEFAULT_VOLUME, DEFAULT_ZOOM_PERCENT};
 pub use self::usage::usage_text;
 use self::usage::{
-    CLIENTS_USAGE, DESPAWN_USAGE, EVENTS_USAGE, FIXTURES_USAGE, MOVE_USAGE, REPL_USAGE,
-    ROTATE_USAGE, SCRIPT_USAGE, SET_USAGE, SPAWN_USAGE, STOP_USAGE, TRAVEL_USAGE, WAIT_USAGE,
+    DESPAWN_USAGE, FIXTURES_USAGE, MOVE_USAGE, REPL_USAGE, ROTATE_USAGE, SCRIPT_USAGE, SET_USAGE,
+    SPAWN_USAGE, STOP_USAGE, TRAVEL_USAGE, WAIT_USAGE,
 };
 pub use crate::locate::MediaLocate;
+use crate::observe::EventLevel;
 
 /// Canvas units per second when `travel` is given no speed: the canvas in about five seconds.
 pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
@@ -38,7 +41,7 @@ pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
 /// The top-level verbs `parse` matches by name. The verbs of `engine::VERBS`,
 /// `scene_builder::cli::VERBS` and `director::cli::VERBS` are matched after these, so no verb may
 /// be in two of the tables.
-pub const VERBS: [&str; 22] = [
+pub const VERBS: [&str; 25] = [
     "spawn",
     "set",
     "move",
@@ -57,6 +60,9 @@ pub const VERBS: [&str; 22] = [
     "wait",
     "media",
     "clients",
+    "host",
+    "frame",
+    "services",
     "fixtures",
     "fixture",
     "script",
@@ -70,8 +76,16 @@ pub enum Command {
     Effects(Vec<EffectRequest>),
     Canvas,
     Kinds,
-    /// Events newer than the sequence, or the newest page when none is given.
-    Events {
+    /// Events newer than the sequence, of one area, at most a number; the newest page when no
+    /// sequence is given.
+    Events(EventsRead),
+    /// Read the level of the host's event sinks, or set it.
+    EventsLevel(Option<EventLevel>),
+    /// What the host's log, event sinks and clock are doing.
+    HostStatus,
+    /// The playground's frame: its count, run, size and top-level keys. With `after`, wait for the
+    /// frame after that count.
+    Frame {
         after: Option<u64>,
     },
     Reload,
@@ -107,6 +121,8 @@ pub enum Command {
         name: Option<String>,
     },
     MediaRemove(String),
+    /// The status and headers the media file's route answers a HEAD with.
+    MediaHead(String),
     /// Make one picture from a prompt through the image service, or list the generations.
     MediaGenerate(MediaGenerate),
     /// Scan a picture with SAM through the imagery API, show its layout or name a region.
@@ -115,6 +131,12 @@ pub enum Command {
     Cast(crate::cast::CastCommand),
     /// What each open page says it is showing and playing.
     Clients,
+    /// What one open page says it is showing and playing.
+    ClientShow(String),
+    /// What one page showed and played, and when.
+    ClientsTimeline(TimelineRead),
+    /// How the media and text services are set up and how they stand.
+    Services(crate::services::Services),
     /// The names of the fixture files.
     Fixtures,
     FixtureShow(String),
@@ -375,18 +397,9 @@ fn pivot_request(value: &str) -> Result<PivotRequest, CommandError> {
     })
 }
 
-fn events(words: &[String]) -> Result<Command, CommandError> {
-    match words {
-        [] => Ok(Command::Events { after: None }),
-        [after] => after
-            .parse::<u64>()
-            .map(|after| Command::Events { after: Some(after) })
-            .map_err(|_| CommandError::BadNumber {
-                what: "the events sequence",
-                text: after.clone(),
-            }),
-        _ => Err(CommandError::Usage(EVENTS_USAGE)),
-    }
+/// Splits `words` into those without an `=` (positional) and those with one (`key=value`).
+fn split_pair_words(words: &[String]) -> (Vec<String>, Vec<String>) {
+    words.iter().cloned().partition(|word| !word.contains('='))
 }
 
 fn count(what: &'static str, text: &str) -> Result<u32, CommandError> {
@@ -478,7 +491,10 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "clear" => Ok(Command::Effects(vec![EffectRequest::Clear {}])),
         "canvas" => Ok(Command::Canvas),
         "kinds" => Ok(Command::Kinds),
-        "events" => events(rest),
+        "events" => host::events(rest),
+        "host" => host::host(rest),
+        "frame" => host::frame(rest),
+        "services" => crate::services::parse(rest).map(Command::Services),
         "reload" => Ok(Command::Reload),
         "playground" => playground::playground(rest),
         "scene" => scene::scene(rest),
@@ -487,7 +503,7 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
             _ => Err(CommandError::Usage(WAIT_USAGE)),
         },
         "media" => playground::media(rest),
-        "clients" => without_words(rest, CLIENTS_USAGE, Command::Clients),
+        "clients" => host::clients(rest),
         "fixtures" => without_words(rest, FIXTURES_USAGE, Command::Fixtures),
         "fixture" => playground::fixture(rest),
         "script" => match rest {

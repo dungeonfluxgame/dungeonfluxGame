@@ -117,7 +117,7 @@ async fn an_unconfigured_runtime_settles_unavailable_without_a_send_and_logs_one
     );
     assert_eq!(runtime.identity_profile().as_str(), "responses:gpt-6-luna");
     let key = TextRuntime::key("locate", "identify:test").unwrap();
-    let submission = runtime.service().submit(&key, &request()).await.unwrap();
+    let submission = runtime.submit(&key, &request()).await.unwrap();
     assert!(matches!(
         submission,
         Submission::Settled {
@@ -130,6 +130,23 @@ async fn an_unconfigured_runtime_settles_unavailable_without_a_send_and_logs_one
         && line.contains("purpose=character_identity")
         && line.contains("scope=locate")));
     assert!(lines.iter().all(|line| !line.contains("Match the people")));
+    assert!(
+        lines.contains(
+            &concat!(
+                "TEXT started purpose=character_identity profile=responses:gpt-6-luna ",
+                "scope=locate operation=identify:test deadline_ms=30000"
+            )
+            .to_owned()
+        )
+    );
+    let settled = lines
+        .iter()
+        .find(|line| line.starts_with("TEXT unavailable "))
+        .expect("the settled event is one line");
+    assert!(settled.contains(" duration_ms="), "{settled}");
+    assert!(!settled.contains("elapsed_ms"), "{settled}");
+    assert_eq!(runtime.status().attempts_kept, 1);
+    assert_eq!(runtime.status().in_flight, 0);
 }
 
 #[test]
@@ -213,12 +230,100 @@ async fn a_codex_backend_with_no_executable_is_unconfigured_and_sends_nothing() 
         missing.complete(&request()).await.outcome,
         TextOutcome::Unavailable(UnavailableReason::Configuration)
     );
-    // The spawn failure is recorded by its error kind, and the attempt's folder is removed.
+    // The spawn failure is recorded by its closed error kind, never a Debug form, and the
+    // attempt's folder is removed.
+    let lines = lines.lock().unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("TEXT codex_step step=spawn outcome=failed duration_ms=")
+            && lines[0].ends_with(" error_kind=not_found"),
+        "{lines:?}"
+    );
+    assert!(!lines[0].contains("NotFound"), "{lines:?}");
+    assert_eq!(std::fs::read_dir(work_root.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_codex_step_line_holds_closed_keys_and_milliseconds_only() {
+    use super::codex_text::{RunStep, StepCause, step_line};
+    assert_eq!(
+        step_line(RunStep::Wait, 1200, None),
+        "TEXT codex_step step=wait outcome=ok duration_ms=1200"
+    );
+    assert_eq!(
+        step_line(RunStep::Read, 3, Some(StepCause::PermissionDenied)),
+        "TEXT codex_step step=read outcome=failed duration_ms=3 error_kind=permission_denied"
+    );
+    let kinds = [
+        (std::io::ErrorKind::NotFound, "not_found"),
+        (std::io::ErrorKind::PermissionDenied, "permission_denied"),
+        (std::io::ErrorKind::TimedOut, "timed_out"),
+        (std::io::ErrorKind::Interrupted, "interrupted"),
+        (std::io::ErrorKind::StorageFull, "storage_full"),
+        (std::io::ErrorKind::InvalidData, "invalid_data"),
+        (std::io::ErrorKind::AddrInUse, "other"),
+    ];
+    for (kind, key) in kinds {
+        assert_eq!(StepCause::from_kind(kind).key(), key);
+    }
+}
+
+#[test]
+fn building_a_runtime_writes_its_backend_profile_and_the_variable_it_misses() {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&lines);
+    let record: Arc<dyn Fn(String) + Send + Sync> =
+        Arc::new(move |line| sink.lock().unwrap().push(line));
+    TextRuntime::new(BackendChoice::Responses(None), Arc::clone(&record));
+    TextRuntime::new(BackendChoice::Codex(None), Arc::clone(&record));
+    let route = super::responses_text::ResponsesRoute {
+        model: "gpt-6-luna".to_owned(),
+        key: "sk-test-never-logged".to_owned(),
+    };
+    TextRuntime::new(BackendChoice::Responses(Some(route)), record);
+
     assert_eq!(
         lines.lock().unwrap().as_slice(),
-        ["TEXT codex_failed step=spawn error_kind=NotFound"]
+        [
+            concat!(
+                "TEXT runtime backend=responses profile=responses:gpt-6-luna configured=false ",
+                "missing=OPENAI_API_KEY"
+            ),
+            "TEXT runtime backend=codex profile=codex configured=false \
+             missing=DF_TEXT_CODEX_EXECUTABLE",
+            "TEXT runtime backend=responses profile=responses:gpt-6-luna configured=true missing=-",
+        ]
     );
-    assert_eq!(std::fs::read_dir(work_root.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn the_status_names_the_backend_and_never_its_key() {
+    let silent: Arc<dyn Fn(String) + Send + Sync> = Arc::new(|_line: String| {});
+    let route = super::responses_text::ResponsesRoute {
+        model: "gpt-6-luna".to_owned(),
+        key: "sk-test-never-shown".to_owned(),
+    };
+    let configured = TextRuntime::new(BackendChoice::Responses(Some(route)), Arc::clone(&silent));
+    let status = configured.status();
+    assert_eq!(status.backend, super::BackendKind::Responses);
+    assert_eq!(status.identity_model.as_deref(), Some("gpt-6-luna"));
+    assert_eq!((status.configured, status.missing), (true, None));
+    assert_eq!((status.attempts_kept, status.in_flight), (0, 0));
+    assert!(!format!("{status:?}").contains("sk-test"));
+
+    let codex = TextRuntime::new(BackendChoice::Codex(None), silent).status();
+    assert_eq!(codex.backend.key(), "codex");
+    assert_eq!(codex.identity_model, None);
+    assert_eq!(codex.missing, Some("DF_TEXT_CODEX_EXECUTABLE"));
+}
+
+#[test]
+fn every_backend_kind_key_is_its_serde_name() {
+    for kind in super::BackendKind::ALL {
+        let serde_name = serde_json::to_value(kind).unwrap();
+        assert_eq!(serde_name, json!(kind.key()));
+        assert_eq!(super::BackendKind::from_key(kind.key()), Some(kind));
+    }
 }
 
 #[tokio::test]
@@ -304,4 +409,53 @@ async fn a_failed_codex_cleanup_is_reported_and_still_returns_the_runs_message()
         .collect();
     assert_eq!(steps, [RunStep::Cleanup]);
     let _ = std::fs::remove_dir_all(&folder);
+}
+
+fn event(usage: Option<df_ai::text::TextUsage>, attempt: u32) -> df_ai::text::TextEvent {
+    df_ai::text::TextEvent {
+        purpose: TextPurpose::CharacterIdentity,
+        profile: TextProfile::new("responses:gpt-6-luna").unwrap(),
+        scope: Some("locate".to_owned()),
+        operation: Some("identify:0123".to_owned()),
+        output_name: "character_matches".to_owned(),
+        kind: df_ai::text::TextEventKind::Answered,
+        elapsed: Duration::from_millis(1500),
+        usage,
+        attempt,
+    }
+}
+
+#[test]
+fn an_event_line_carries_its_attempt_and_the_tokens_its_call_reported() {
+    let usage = usage_from(None, Some(900), Some(40), Some(300), None);
+    assert_eq!(
+        super::event_line(&event(usage, 2)),
+        concat!(
+            "TEXT answered purpose=character_identity profile=responses:gpt-6-luna ",
+            "output=character_matches duration_ms=1500 attempt=2 tokens_in=900 tokens_out=40 ",
+            "tokens_cached=300 scope=locate operation=identify:0123"
+        )
+    );
+}
+
+#[test]
+fn an_event_line_without_usage_writes_dashes_never_zero_tokens() {
+    let line = super::event_line(&event(None, 1));
+    assert!(
+        line.contains(" attempt=1 tokens_in=- tokens_out=- tokens_cached=- "),
+        "{line}"
+    );
+    assert!(!line.contains("elapsed_ms"), "{line}");
+}
+
+#[test]
+fn the_responses_exchange_is_named_for_its_provider_line() {
+    let label = super::responses_text::EXCHANGE_OPERATION;
+    assert!(
+        !label.is_empty()
+            && label
+                .bytes()
+                .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_')),
+        "{label}"
+    );
 }

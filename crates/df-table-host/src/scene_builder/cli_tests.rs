@@ -1,9 +1,16 @@
 use crate::command::{Command, CommandError, parse, split_words};
 
-use super::cli::{BUFFER_USAGE, BUILD_USAGE, PLATES_USAGE, SHOW_USAGE, SceneBuilderCommand};
+use super::cli::{
+    BUFFER_USAGE, BUILD_USAGE, PLATES_USAGE, SHOW_USAGE, SceneBuilderCommand, TIMING_USAGE,
+    parse_scene,
+};
 use super::fixtures::name;
-use super::format::{format_buffer, format_build, format_plates, format_run, format_show};
-use super::request::{BuildRequest, DevMoment, DevStage, RunRequest, SlowStage};
+use super::format::{
+    format_buffer, format_build, format_plates, format_run, format_show, format_timing,
+};
+use super::request::{
+    BuildRequest, DevMoment, DevStage, PlateTimingSetting, RunRequest, SlowStage, TimingRequest,
+};
 use super::workbench::Workbench;
 use df_table::plate::timing::PlateTiming;
 
@@ -120,9 +127,108 @@ fn the_playground_scene_verbs_still_parse_as_before() {
 #[test]
 fn help_lists_the_scene_builder_verbs() {
     let help = crate::command::usage_text();
-    for usage in [BUILD_USAGE, SHOW_USAGE, PLATES_USAGE, BUFFER_USAGE] {
+    for usage in [
+        BUILD_USAGE,
+        SHOW_USAGE,
+        PLATES_USAGE,
+        TIMING_USAGE,
+        BUFFER_USAGE,
+    ] {
         assert!(help.contains(usage), "help is missing {usage}");
     }
+}
+
+/// `scene timing ...` as `command::scene` hands it over: the words after `timing`.
+fn timing(line: &str) -> Result<SceneBuilderCommand, CommandError> {
+    let words = split_words(line).expect("the line splits");
+    parse_scene("timing", &words)
+}
+
+#[test]
+fn scene_timing_set_takes_a_closed_setting_and_a_whole_number() {
+    assert_eq!(
+        timing("set interval_s 5").expect("parses"),
+        SceneBuilderCommand::Timing(TimingRequest {
+            setting: PlateTimingSetting::IntervalS,
+            value: 5,
+        })
+    );
+    assert_eq!(
+        timing("set minimum_on_screen_ms 4500").expect("parses"),
+        SceneBuilderCommand::Timing(TimingRequest {
+            setting: PlateTimingSetting::MinimumOnScreenMs,
+            value: 4_500,
+        })
+    );
+    for line in [
+        "",
+        "set",
+        "set interval_s",
+        "show interval_s 5",
+        "set interval_s 5 6",
+    ] {
+        assert!(
+            matches!(timing(line), Err(CommandError::Usage(TIMING_USAGE))),
+            "'{line}'"
+        );
+    }
+    assert!(matches!(
+        timing("set dissolve_ms 900"),
+        Err(CommandError::BadChoice { .. })
+    ));
+    assert!(matches!(
+        timing("set interval_s soon"),
+        Err(CommandError::BadCount { .. })
+    ));
+    for setting in PlateTimingSetting::ALL {
+        let serde_name = serde_json::to_value(setting).expect("serializes");
+        assert_eq!(serde_name, serde_json::json!(setting.key()));
+        assert_eq!(PlateTimingSetting::from_key(setting.key()), Some(setting));
+    }
+}
+
+#[test]
+fn the_timing_answer_names_the_change_and_numbers_its_line() {
+    let mut bench = Workbench::new(PlateTiming::default(), None).expect("a workbench");
+    let reply = bench
+        .set_timing(&TimingRequest {
+            setting: PlateTimingSetting::MinimumOnScreenMs,
+            value: 4_500,
+        })
+        .expect("sets");
+    let text = format_timing(&reply);
+    assert_eq!(
+        text,
+        concat!(
+            "1: minimum_on_screen_ms was 3000; timing: interval 15 s, a plate up at least 4.5 s,",
+            " dissolve not seen yet, catching up after 90.0 s\n",
+            "2: [0.0 s] PLATE timing name=minimum_on_screen_ms value=4500 previous=3000",
+            " driven=true"
+        )
+    );
+}
+
+#[test]
+fn the_timing_answer_says_when_the_scene_on_screen_keeps_its_entry_interval() {
+    let mut bench = Workbench::new(PlateTiming::default(), None).expect("a workbench");
+    bench
+        .build(&BuildRequest {
+            place: name("Harbor market"),
+            fail: None,
+            slow: None,
+        })
+        .expect("builds");
+    let reply = bench
+        .set_timing(&TimingRequest {
+            setting: PlateTimingSetting::IntervalS,
+            value: 5,
+        })
+        .expect("sets");
+    let text = format_timing(&reply);
+    assert!(
+        text.contains("interval 5 s (the scene on screen swaps every 15 s until the next scene)"),
+        "{text}"
+    );
 }
 
 #[test]

@@ -46,3 +46,18 @@ pub fn fixture_file(file_name: &str) -> String {
 pub fn media_file(name: &str) -> String {
     MEDIA_FILE.replace(NAME_PLACEHOLDER, name)
 }
+
+/// One page's timeline, `CLIENT_PLACEHOLDER` standing for the page's name (GET, with the
+/// parameters of `timeline::TimelineQuery`). `client_timeline` fills it.
+pub const CLIENT_TIMELINE: &str = "/playground/clients/{client}/timeline.json";
+/// The part of `CLIENT_TIMELINE` that names the page, as the host's router writes a path
+/// parameter.
+pub const CLIENT_PLACEHOLDER: &str = "{client}";
+/// The header every request of a page (`page-xxxxxxxx`) or of the dev CLI (`cli`) carries, so the
+/// host can say who asked.
+pub const CLIENT_HEADER: &str = "x-df-client";
+
+/// The address of the timeline of the page `client`.
+pub fn client_timeline(client: &str) -> String {
+    CLIENT_TIMELINE.replace(CLIENT_PLACEHOLDER, client)
+}

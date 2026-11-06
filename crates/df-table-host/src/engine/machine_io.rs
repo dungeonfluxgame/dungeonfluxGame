@@ -22,6 +22,11 @@
 //! retried under the same operation id; a seat the table does not know and a refusal this file has
 //! no answer for are errors of their own, so none is told to a phone as "that cannot be done".
 //!
+//! Every intent is one `ENGINE wire_intent` line, whatever its answer: `accepted` with a receipt
+//! that took it, `declined` with the decline code, or `refused` with the key of the error that
+//! left it without a receipt (an edge refusal included). The line names the seat and the
+//! operation, never what the intent said.
+//!
 //! The dev forms (`WireViewReport`, `WireIntentBody`, `WireReceiptReport`) are the JSON the dev
 //! routes and the command line speak for the same messages: a summary a person reads, and for a
 //! view the real protobuf bytes as base64, so a test can decode them and compare.
@@ -43,6 +48,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::machine_wire::{WireDecline, wire_decline, wire_revision};
 
+use super::audit::{EngineAudit, WireIntentOutcome};
 use super::handle::EngineHandle;
 use super::owner::{STATUS_IN_PROGRESS, STATUS_QUEUED};
 use super::report::{
@@ -96,6 +102,22 @@ pub enum WireIntentError {
 }
 
 impl WireIntentError {
+    /// The closed key of the error, for the `wire_intent` line.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Refused(_) => WireIntentCause::RefusedAtTheEdge.key(),
+            Self::Engine(error) => error.key(),
+            Self::Receipt(_) => WireIntentCause::ReceiptInvalid.key(),
+            Self::TooFast { .. } => "too_fast",
+            Self::Stalled => "stalled",
+            Self::UnknownSeat { .. } => "unknown_seat",
+            Self::NotServedYet => "not_served_yet",
+            Self::UnknownRefusal { .. } => WireIntentCause::UnknownRefusal.key(),
+            Self::MissingDeclineCode => WireIntentCause::MissingDeclineCode.key(),
+            Self::Decline(_) => WireIntentCause::DeclineInvalid.key(),
+        }
+    }
+
     pub fn status(&self) -> CallStatus {
         match self {
             Self::Refused(_) => CallStatus::InvalidArgument,
@@ -290,6 +312,43 @@ fn result_of(
     result_of_turn(turn, observed).map(|(result, sequence)| (result, sequence, turn.replayed))
 }
 
+/// The decline code behind an answer the owner gave: the queue's, or the turn's.
+fn decline_code_of(reply: &SubmitReply) -> Option<DeclineCode> {
+    match &reply.submission.refusal {
+        Some(RefusalReport {
+            cause: RefusalCause::Declined(code),
+            ..
+        }) => Some(*code),
+        Some(_) => None,
+        None => reply.turns.first().and_then(|turn| turn.decline),
+    }
+}
+
+/// An answer to an admitted intent, with the decline code behind it when it declined.
+type Answered = Result<(wire::SubmitMachineIntentResponse, Option<DeclineCode>), WireIntentError>;
+
+/// How the `wire_intent` line names an answer: the outcome and its code.
+fn line_of(answered: &Answered) -> (WireIntentOutcome, Option<&'static str>) {
+    use wire::submit_machine_intent_response::Outcome as Response;
+    let (response, decline) = match answered {
+        Err(error) => return (WireIntentOutcome::Refused, Some(error.key())),
+        Ok(answer) => answer,
+    };
+    match &response.outcome {
+        Some(Response::OperationObservation(_)) => {
+            (WireIntentOutcome::Refused, Some(OPERATION_EXPIRED))
+        }
+        Some(Response::Receipt(wire::MachineReceipt {
+            result: Some(wire::machine_receipt::Result::Declined(_)),
+            ..
+        })) => (WireIntentOutcome::Declined, decline.map(DeclineCode::key)),
+        Some(Response::Receipt(_)) | None => (WireIntentOutcome::Accepted, None),
+    }
+}
+
+/// The key of the observation that a repeated operation is not remembered.
+const OPERATION_EXPIRED: &str = "operation_expired";
+
 /// The one result of the receipt for a turn the owner ran, and the revision it ended at.
 pub(super) fn result_of_turn(
     turn: &TurnReport,
@@ -338,16 +397,49 @@ impl EngineHandle {
         seat: u64,
         request: &wire::SubmitMachineIntentRequest,
     ) -> Result<wire::SubmitMachineIntentResponse, WireIntentError> {
-        let intent = admit_machine_intent(request).map_err(WireIntentError::Refused)?;
+        let intent = match admit_machine_intent(request) {
+            Ok(intent) => intent,
+            Err(error) => {
+                let error = WireIntentError::Refused(error);
+                self.record_wire_intent(seat, None, WireIntentOutcome::Refused, Some(error.key()));
+                return Err(error);
+            }
+        };
+        let answered = self.answer_intent(seat, &intent).await;
+        let (outcome, code) = line_of(&answered);
+        let operation = OperationId::from_bytes(intent.operation.as_bytes()).ok();
+        self.record_wire_intent(seat, operation, outcome, code);
+        answered.map(|(response, _)| response)
+    }
+
+    /// The `wire_intent` line of one intent.
+    pub(super) fn record_wire_intent(
+        &self,
+        seat: u64,
+        operation: Option<OperationId>,
+        outcome: WireIntentOutcome,
+        code: Option<&'static str>,
+    ) {
+        self.record(&EngineAudit::WireIntent {
+            seat,
+            operation,
+            outcome,
+            code,
+        });
+    }
+
+    /// The checked answer to an admitted intent.
+    async fn answer_intent(&self, seat: u64, intent: &AdmittedMachineIntent) -> Answered {
         let observed = intent.observed_revision.sequence();
-        let response = match input_for(seat, &intent) {
+        let (response, decline) = match input_for(seat, intent) {
             None => {
+                let code = DeclineCode::NotSupportedYet;
                 let result = declined(
-                    DeclineCode::NotSupportedYet,
+                    code,
                     "That answer is not supported on this table yet.",
                     None,
                 )?;
-                receipt_for(&intent, observed, false, result)
+                (receipt_for(intent, observed, false, result), Some(code))
             }
             Some(input) => {
                 let reply = self
@@ -366,15 +458,18 @@ impl EngineHandle {
                     .as_ref()
                     .filter(|refusal| refusal.cause == DUPLICATE_CAUSE);
                 if let Some(first) = repeat {
-                    self.repeat_answer(seat, &intent, observed, first).await?
+                    self.repeat_answer(seat, intent, observed, first).await?
                 } else {
                     let (result, sequence, replayed) = result_of(&reply, observed, seat)?;
-                    receipt_for(&intent, sequence, replayed, result)
+                    (
+                        receipt_for(intent, sequence, replayed, result),
+                        decline_code_of(&reply),
+                    )
                 }
             }
         };
-        check_machine_response(&response, &intent).map_err(WireIntentError::Receipt)?;
-        Ok(response)
+        check_machine_response(&response, intent).map_err(WireIntentError::Receipt)?;
+        Ok((response, decline))
     }
 }
 
@@ -391,7 +486,7 @@ impl EngineHandle {
         intent: &AdmittedMachineIntent,
         observed: u64,
         first: &RefusalReport,
-    ) -> Result<wire::SubmitMachineIntentResponse, WireIntentError> {
+    ) -> Answered {
         let unfinished = first.first_status.as_deref().is_some_and(|status| {
             status.starts_with(STATUS_QUEUED) || status.starts_with(STATUS_IN_PROGRESS)
         });
@@ -407,10 +502,10 @@ impl EngineHandle {
             .map_err(WireIntentError::Engine)?;
         let sender = format!("seat:{seat}");
         let Some(turn) = trace.turns.iter().find(|turn| turn.sender == sender) else {
-            return Ok(forgotten());
+            return Ok((forgotten(), None));
         };
         let (result, sequence) = result_of_turn(turn, observed)?;
-        Ok(receipt_for(intent, sequence, true, result))
+        Ok((receipt_for(intent, sequence, true, result), turn.decline))
     }
 }
 

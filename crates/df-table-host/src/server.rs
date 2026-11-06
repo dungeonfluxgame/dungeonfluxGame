@@ -7,14 +7,20 @@
 //! the ones that happen before a request becomes an effect, is recorded as an event. The audit
 //! lines a request records are echoed to the terminal once, after it is answered, by the guard
 //! middleware, so no route echoes on its own.
+//!
+//! Every answer of a `/dev/` route that changes something or refuses is one `HTTP served` line
+//! with its route template, status and duration (`record_served`); a successful read is not, and
+//! neither is a page's report. The clock records when it wakes, idles, stalls and stops.
+
+pub mod request;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::rejection::BytesRejection;
-use axum::extract::{DefaultBodyLimit, Query, Request, State};
-use axum::http::{HeaderValue, Method, StatusCode, header};
+use axum::extract::rejection::{BytesRejection, QueryRejection};
+use axum::extract::{DefaultBodyLimit, MatchedPath, Query, Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -25,9 +31,13 @@ use df_table::event::{EffectKind, RejectionCause, TableEvent};
 use df_table::ports::EventSink;
 use serde::Deserialize;
 
+use self::request::{EventsQuery, HostError, QueriedRoute, RequestMethod};
+use crate::dev_http;
 use crate::guard;
 use crate::kind_files::load_kind_files_async;
-use crate::limits::{FRAME_WAIT, MAXIMUM_EVENTS_PER_ANSWER, MAXIMUM_REQUEST_BYTES, TICK_INTERVAL};
+use crate::limits::{
+    FRAME_WAIT, MAXIMUM_EVENTS_PER_ANSWER, MAXIMUM_REQUEST_BYTES, TICK_INTERVAL, TRAVEL_TICK_CUT,
+};
 use crate::media_library;
 use crate::playground;
 use crate::render;
@@ -35,6 +45,17 @@ use crate::request::RequestError;
 use crate::state::AppState;
 use crate::view::{CanvasView, ViewError};
 use crate::wire::{EffectRequest, EventsReply, FRAME_IDLE_NO_CONTENT, Reply, capped, route};
+
+/// The addresses of the host's own dev routes.
+pub mod path {
+    /// What the host's log, event sink and clock are doing (GET, a `HostReply<HostStatus>`).
+    pub const HOST_STATUS: &str = "/dev/host/status";
+}
+
+/// A span as whole milliseconds.
+fn whole_ms(span: Duration) -> u64 {
+    u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
+}
 
 fn answer(status: StatusCode, reply: Reply) -> Response {
     (status, Json(reply)).into_response()
@@ -62,6 +83,13 @@ async fn guard_requests(
         Ok(()) => next.run(request).await,
         Err(error) => {
             state.record_rejection(None, None, RejectionCause::ForbiddenRequest);
+            // The guard runs before routing, so there is no route template; the raw path is never
+            // written (it carries names a caller chose).
+            state.record_line(format!(
+                "HTTP refused method={} route=unmatched cause={}",
+                RequestMethod::of(request.method()).key(),
+                RejectionCause::ForbiddenRequest.key()
+            ));
             rejected(
                 error.status(),
                 Some(RejectionCause::ForbiddenRequest),
@@ -71,6 +99,53 @@ async fn guard_requests(
     };
     state.echo_new_lines();
     response
+}
+
+/// Whether an answer of `route` gets an `HTTP served` line: a `/dev/` route but a page's report,
+/// unless it is a read that succeeded.
+fn logs_served(route: &str, method: RequestMethod, status: StatusCode) -> bool {
+    let quiet_read = method.reads() && !status.is_client_error() && !status.is_server_error();
+    route.starts_with("/dev/") && route != route::DEV_CLIENT_REPORT && !quiet_read
+}
+
+/// Records `HTTP served method= route= status= duration_ms=` for a `/dev/` route's answer,
+/// including the 400 and 413 answers of the body and query readers. It runs as a route layer, so
+/// the route is the matched template, never the raw path.
+async fn record_served(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let method = RequestMethod::of(request.method());
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_owned());
+    let started = tokio::time::Instant::now();
+    let response = next.run(request).await;
+    let status = response.status();
+    if let Some(route) = route.filter(|route| logs_served(route, method, status)) {
+        state.record_line(format!(
+            "HTTP served method={} route={route} status={} duration_ms={}",
+            method.key(),
+            status.as_u16(),
+            whole_ms(started.elapsed())
+        ));
+    }
+    response
+}
+
+/// Records and answers a query a host route cannot read.
+fn refuse_query(state: &AppState, route: QueriedRoute, rejection: &QueryRejection) -> Response {
+    let error = HostError::InvalidQuery {
+        detail: rejection.body_text(),
+    };
+    state.record_line(format!(
+        "HOST refused route={} error={}",
+        route.key(),
+        error.key()
+    ));
+    dev_http::reply::<(), HostError>(Err(error))
 }
 
 /// Tells readers waiting for news that a change was made. Every POST is a change attempt, so
@@ -141,13 +216,28 @@ pub(crate) struct FrameQuery {
 /// The frame is built once for each change count and every page is sent the same bytes.
 async fn frame_json(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<FrameQuery>,
+    headers: HeaderMap,
+    query: Result<Query<FrameQuery>, QueryRejection>,
 ) -> Response {
-    frame_answer(&state, &query, FRAME_WAIT).await
+    let origin = playground::ChangeOrigin::from_headers(&headers);
+    match query {
+        Ok(Query(query)) => frame_answer(&state, &query, &origin, FRAME_WAIT).await,
+        Err(rejection) => refuse_query(&state, QueriedRoute::Frame, &rejection),
+    }
 }
 
-/// `frame_json` with the wait as a parameter, so a test need not wait twenty-five seconds.
-async fn frame_answer(state: &Arc<AppState>, query: &FrameQuery, patience: Duration) -> Response {
+/// `frame_json` with the wait as a parameter, so a test need not wait twenty-five seconds. The
+/// first answer to a page (any reader but the dev command line) of a frame that holds a change
+/// not yet logged writes `FRAME served frame= after= bytes= waited_ms= source= client=`, so the
+/// line says when a page got the change. The clock's steps of a travel, an idle 204, later
+/// answers of the same change and the command line's reads write nothing.
+async fn frame_answer(
+    state: &Arc<AppState>,
+    query: &FrameQuery,
+    origin: &playground::ChangeOrigin,
+    patience: Duration,
+) -> Response {
+    let started = tokio::time::Instant::now();
     let same_run = query
         .boot
         .as_deref()
@@ -166,6 +256,18 @@ async fn frame_answer(state: &Arc<AppState>, query: &FrameQuery, patience: Durat
         Ok(built) => {
             let chunks = built.chunks();
             let length: usize = chunks.iter().map(Bytes::len).sum();
+            if !origin.is_cli() && state.first_to_serve_frame(built.count()) {
+                let after = query
+                    .after
+                    .map_or_else(|| "-".to_owned(), |after| after.to_string());
+                let [(_, source), (_, client)] = origin.pairs();
+                state.record_line(format!(
+                    "FRAME served frame={} after={after} bytes={length} waited_ms={} \
+                     source={source} client={client}",
+                    built.count(),
+                    whole_ms(started.elapsed())
+                ));
+            }
             let pieces = futures_util::stream::iter(
                 chunks
                     .into_iter()
@@ -184,25 +286,41 @@ async fn frame_answer(state: &Arc<AppState>, query: &FrameQuery, patience: Durat
     }
 }
 
-/// The query of `route::EVENTS`; the field is named like `wire::EVENTS_AFTER_PARAMETER`.
-#[derive(Debug, Deserialize)]
-struct EventsQuery {
-    after: Option<u64>,
-}
-
 /// Events newer than `after`, or the newest page when `after` is absent or beyond the newest
-/// sequence (which means the host restarted since the reader last looked).
+/// sequence (which means the host restarted since the reader last looked); only the lines of
+/// `area` when it is given, and at most `limit` (never more than `MAXIMUM_EVENTS_PER_ANSWER`). A
+/// query that does not read is refused and recorded.
 async fn events_json(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<EventsQuery>,
-) -> Json<EventsReply> {
+    query: Result<Query<EventsQuery>, QueryRejection>,
+) -> Response {
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(rejection) => return refuse_query(&state, QueriedRoute::Events, &rejection),
+    };
     let log = state.log();
     let latest = log.latest_sequence();
-    let events = match query.after {
-        Some(after) if after <= latest => log.after_sequence(after, MAXIMUM_EVENTS_PER_ANSWER),
-        Some(_) | None => log.newest(MAXIMUM_EVENTS_PER_ANSWER),
+    let limit = query.limit.map_or(MAXIMUM_EVENTS_PER_ANSWER, |limit| {
+        limit.min(MAXIMUM_EVENTS_PER_ANSWER)
+    });
+    let after = query.after.filter(|after| *after <= latest);
+    let events = match (after, &query.area) {
+        (Some(after), None) => log.after_sequence(after, limit),
+        (Some(after), Some(area)) => log.after_sequence_in(after, limit, area.as_str()),
+        (None, None) => log.newest(limit),
+        (None, Some(area)) => log.newest_in(limit, area.as_str()),
     };
-    Json(EventsReply { events, latest })
+    Json(EventsReply {
+        events,
+        latest,
+        forgotten: log.forgotten(),
+    })
+    .into_response()
+}
+
+/// What the host's log, event sink and clock are doing.
+async fn host_status(State(state): State<Arc<AppState>>) -> Response {
+    dev_http::reply::<_, HostError>(Ok(state.host_status()))
 }
 
 async fn apply_effect(
@@ -400,15 +518,19 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(route::PLAYGROUND_FRAME, get(frame_json))
         .route(route::EFFECT, post(apply_effect))
         .route(route::RELOAD, post(reload))
+        .route(path::HOST_STATUS, get(host_status))
         .with_state(state.clone());
     api.merge(playground::router(state.clone()))
         .merge(media_library::router(state.clone()))
         .merge(crate::engine::router(state.clone()))
         .merge(crate::scene_builder::router(state.clone()))
         .merge(crate::director::router(state.clone()))
-        .merge(crate::imagegen::router(state.clone()))
-        .merge(crate::locate::routes::router(state.clone()))
+        // The services router holds the imagegen and locate routes over one text runtime and one
+        // picture generator.
+        .merge(crate::services::routes::router(state.clone()))
         .merge(crate::cast::routes::router(state.clone()))
+        // A route layer sees the matched route, and the answers of the body and query readers.
+        .route_layer(middleware::from_fn_with_state(state.clone(), record_served))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -417,29 +539,67 @@ pub fn router(state: Arc<AppState>) -> Router {
         .layer(middleware::from_fn_with_state(state, guard_requests))
 }
 
+/// Writes `HOST clock_stopped` when the clock's task ends (it is aborted, or its runtime stops).
+struct ClockStopped(Arc<AppState>);
+
+impl Drop for ClockStopped {
+    fn drop(&mut self) {
+        self.0.record_line_and_echo("HOST clock_stopped".to_owned());
+    }
+}
+
 /// Starts the host's clock: every `TICK_INTERVAL` while something travels it advances travelling
 /// elements by the time that really passed, which the canvas cuts to a sane length if the host
 /// stalled. With nothing travelling it sleeps until an effect wakes it, so an idle host has no
 /// timer running. It reads tokio's clock, so a test with paused time drives it. Abort the handle
 /// to stop it.
+///
+/// It records `HOST clock_woken moving=` when it wakes to move something, `HOST clock_idle ticks=
+/// ran_ms=` when everything has stopped, `HOST clock_stall gap_ms= cut_to_ms=` for a gap between
+/// ticks longer than the canvas travels in one step, and `HOST clock_stopped` when it ends.
 pub fn spawn_clock(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let _stopped = ClockStopped(Arc::clone(&state));
         let mut interval = tokio::time::interval(TICK_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last = tokio::time::Instant::now();
+        let mut woken_at = last;
+        let mut ticks_since_woken = 0_u64;
         loop {
             if !state.is_moving() {
+                if ticks_since_woken > 0 {
+                    state.record_line_and_echo(format!(
+                        "HOST clock_idle ticks={ticks_since_woken} ran_ms={}",
+                        whole_ms(woken_at.elapsed())
+                    ));
+                    ticks_since_woken = 0;
+                }
                 state.clock_woken().await;
                 // Time spent asleep is not travel: start counting again from the wake-up.
                 interval.reset();
                 last = tokio::time::Instant::now();
+                woken_at = last;
+                // A signal kept from an effect that has already stopped moving wakes the clock
+                // for nothing; that is not recorded.
+                let moving = state.moving_count();
+                if moving > 0 {
+                    state.record_line_and_echo(format!("HOST clock_woken moving={moving}"));
+                }
                 continue;
             }
             interval.tick().await;
             let now = tokio::time::Instant::now();
-            let seconds = now.duration_since(last).as_secs_f32();
+            let gap = now.duration_since(last);
+            if gap > TRAVEL_TICK_CUT {
+                state.record_line_and_echo(format!(
+                    "HOST clock_stall gap_ms={} cut_to_ms={}",
+                    whole_ms(gap),
+                    whole_ms(TRAVEL_TICK_CUT)
+                ));
+            }
             last = now;
-            state.tick(seconds);
+            state.tick(gap.as_secs_f32());
+            ticks_since_woken = ticks_since_woken.saturating_add(1);
         }
     })
 }
@@ -485,5 +645,5 @@ pub(crate) async fn frame_answer_for_test(
     query: &FrameQuery,
     patience: Duration,
 ) -> Response {
-    frame_answer(state, query, patience).await
+    frame_answer(state, query, &playground::ChangeOrigin::default(), patience).await
 }

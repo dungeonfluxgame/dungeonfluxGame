@@ -1,7 +1,8 @@
 use axum::http::StatusCode;
 
 use super::request::{
-    IdentityOutcome, IoCause, LocateError, QuestionCause, ScanCause, ScanPrompt, TextServiceCause,
+    IdentityOutcome, IoCause, LocateError, QuestionCause, ScanCause, ScanPrompt, ScanSendState,
+    TextServiceCause,
 };
 use crate::dev_http::{BodyCause, BodyError, RouteError};
 
@@ -55,7 +56,8 @@ fn every_error() -> Vec<LocateError> {
         LocateError::LayoutChanged { picture: picture() },
         LocateError::FalKeyMissing,
         LocateError::ScanFailed {
-            cause: ScanCause::Timeout,
+            cause: ScanCause::Expired,
+            send_state: ScanSendState::PossiblySent,
         },
         LocateError::QuestionInvalid {
             cause: QuestionCause::Request,
@@ -94,6 +96,7 @@ fn the_closed_causes_keys_are_their_serde_names() {
     check(&ScanPrompt::ALL, ScanPrompt::key);
     check(&IoCause::ALL, IoCause::key);
     check(&ScanCause::ALL, ScanCause::key);
+    check(&ScanSendState::ALL, ScanSendState::key);
     check(&QuestionCause::ALL, QuestionCause::key);
     check(&TextServiceCause::ALL, TextServiceCause::key);
     check(&IdentityOutcome::ALL, IdentityOutcome::key);
@@ -124,7 +127,8 @@ fn each_locate_error_answers_the_status_of_its_kind() {
     );
     assert_eq!(
         status(LocateError::ScanFailed {
-            cause: ScanCause::Supplier
+            cause: ScanCause::RateLimited,
+            send_state: ScanSendState::KnownSent,
         }),
         StatusCode::BAD_GATEWAY
     );
@@ -132,4 +136,18 @@ fn each_locate_error_answers_the_status_of_its_kind() {
         status(LocateError::Stopped),
         StatusCode::INTERNAL_SERVER_ERROR
     );
+}
+
+#[test]
+fn every_segmentation_cause_keeps_its_own_key_on_the_wire() {
+    use df_imagery::oneshot_segment::SegmentCause;
+    for &cause in SegmentCause::ALL {
+        assert_eq!(ScanCause::from(cause).key(), cause.key());
+    }
+    for state in df_providers::SendState::ALL {
+        assert_eq!(ScanSendState::from(state).key(), state.key());
+    }
+    for state in ScanSendState::ALL {
+        assert_eq!(ScanSendState::from_key(state.key()), Some(state));
+    }
 }

@@ -10,9 +10,12 @@
 //! status type; it never decides which records an outlet gets.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
+
+use crate::event_log::EventLog;
 
 use super::record::{ObservedRecord, RecordClass};
 
@@ -88,6 +91,63 @@ pub trait RecordOutlet: Send + Sync {
 
     /// The outlet's counters as of `now_ms`, in milliseconds since the Unix epoch.
     fn status(&self, now_ms: u64) -> OutletStatus;
+
+    /// Keeps the sink's `notice`, so an outlet that can lose a record after taking it (a writer
+    /// that cannot write, a receipt that fails) says so when it finds the loss. An outlet that
+    /// only loses at `accept` (where the sink sees the refusal) keeps nothing.
+    fn watch_losses(&self, _notice: Arc<DegradedNotice>) {}
+}
+
+/// Why an outlet first lost a record, in the `HOST sink_degraded` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LossCause {
+    /// The outlet refused the record at `accept`.
+    Refused(OutletError),
+    /// The spool was at its size bound when its writer came to the record.
+    SizeBound,
+    /// The spool's writer could not write the record, or could not flush its batch.
+    WriteFailed,
+    /// The shared path took the record but its receipt failed, so it may be lost.
+    ReceiptFailed,
+}
+
+impl LossCause {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Refused(error) => error.key(),
+            Self::SizeBound => "size_bound",
+            Self::WriteFailed => "write_failed",
+            Self::ReceiptFailed => "receipt_failed",
+        }
+    }
+}
+
+/// The one `HOST sink_degraded` line of a sink, written when the first loss is found, by the sink
+/// (a refusal at `accept`) or by the outlet that found it (its writer or its receipts), so the
+/// line's time is when the loss was found, not when someone next read the health.
+pub struct DegradedNotice {
+    log: Arc<EventLog>,
+    written: AtomicBool,
+}
+
+impl DegradedNotice {
+    pub fn new(log: Arc<EventLog>) -> Self {
+        Self {
+            log,
+            written: AtomicBool::new(false),
+        }
+    }
+
+    /// Writes `HOST sink_degraded outlet=<name> cause=<key> lost_always=<n>` the first time it is
+    /// called; every later call writes nothing (later losses are counts in `health`).
+    pub fn first_loss(&self, outlet: &str, cause: LossCause, lost_always: u64) {
+        if !self.written.swap(true, Ordering::Relaxed) {
+            self.log.push(format!(
+                "HOST sink_degraded outlet={outlet} cause={} lost_always={lost_always}",
+                cause.key()
+            ));
+        }
+    }
 }
 
 /// Counts of lost records by class, shared by outlets.

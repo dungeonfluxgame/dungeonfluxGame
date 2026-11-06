@@ -232,6 +232,45 @@ impl ImageGenerator {
         self.jobs.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Whether stored pictures get a provenance sidecar.
+    pub fn provenance_directory_set(&self) -> bool {
+        self.provenance_directory.is_some()
+    }
+
+    /// Whether the backend runs with a Codex home (its path is never shown).
+    pub fn codex_home_set(&self) -> bool {
+        self.backend.codex_home_set()
+    }
+
+    /// How many jobs are running now.
+    pub fn running(&self) -> usize {
+        self.jobs()
+            .iter()
+            .filter(|record| record.is_running())
+            .count()
+    }
+
+    /// How the job that ended last ended: `stored`, or its error's key. `None` before any ended.
+    pub fn last_outcome(&self) -> Option<&'static str> {
+        let jobs = self.jobs();
+        let ended = jobs
+            .iter()
+            .filter_map(|record| {
+                let elapsed_ms = record.elapsed_ms?;
+                Some((
+                    record.started_ms.saturating_add(elapsed_ms),
+                    record.job,
+                    record,
+                ))
+            })
+            .max_by_key(|(ended_ms, job, _)| (*ended_ms, *job))?;
+        match &ended.2.state {
+            JobState::Stored { .. } => Some("stored"),
+            JobState::Failed { error, .. } => Some(error.key()),
+            JobState::Running => None,
+        }
+    }
+
     /// Every job remembered, oldest first.
     pub fn views(&self) -> Vec<JobView> {
         let now_ms = self.clock.now_ms();
@@ -248,12 +287,9 @@ impl ImageGenerator {
         app: &Arc<AppState>,
         request: ImageRequest,
     ) -> Result<Started, GenerateError> {
-        let backend = Arc::clone(&self.backend);
-        tokio::task::spawn_blocking(move || backend.check())
-            .await
-            .map_err(|_| GenerateError::Stopped { job: None })?
-            .map_err(|backend| GenerateError::Backend { job: None, backend })?;
-        let view = self.open_job(request.name())?;
+        let asked_ms = self.clock.now_ms();
+        self.check(app, asked_ms).await?;
+        let (view, running) = self.open_job(request.name())?;
         app.record_line(
             ImageGenEvent::Requested {
                 job: view.job,
@@ -263,6 +299,7 @@ impl ImageGenerator {
                 prompt_chars: request.prompt().chars().count(),
                 deadline: self.deadline,
                 backend: self.backend.name(),
+                running,
             }
             .line(),
         );
@@ -271,12 +308,39 @@ impl ImageGenerator {
         let job = view.job;
         let (end, finished) = oneshot::channel();
         let task = tokio::spawn(async move {
+            let wait_ms = generator.clock.now_ms().saturating_sub(asked_ms);
+            app.record_line_and_echo(
+                ImageGenEvent::Started {
+                    job,
+                    wait: Duration::from_millis(wait_ms),
+                }
+                .line(),
+            );
             let outcome = generator.run(&app, job, request).await;
             // A waiter that went away stopped only waiting; the record holds the job's end.
             let _ = end.send(outcome);
         });
         self.keep_task(job, task);
         Ok(Started { view, finished })
+    }
+
+    /// Looks at the backend's preconditions on the blocking pool and records how long that took
+    /// and what it found. A check task that stopped without an answer found nothing to record.
+    async fn check(&self, app: &AppState, asked_ms: u64) -> Result<(), GenerateError> {
+        let backend = Arc::clone(&self.backend);
+        let checked = tokio::task::spawn_blocking(move || backend.check())
+            .await
+            .map_err(|_| GenerateError::Stopped { job: None })?;
+        let checked_ms = self.clock.now_ms().saturating_sub(asked_ms);
+        app.record_line(
+            ImageGenEvent::Check {
+                backend: self.backend.name(),
+                duration: Duration::from_millis(checked_ms),
+                failed: checked.as_ref().err().cloned(),
+            }
+            .line(),
+        );
+        checked.map_err(|backend| GenerateError::Backend { job: None, backend })
     }
 
     /// Hands the job's task to its record. The record is there: a running job is never
@@ -287,8 +351,9 @@ impl ImageGenerator {
         }
     }
 
-    /// Adds a running job named `name`, unless one of that name is running.
-    fn open_job(&self, name: &str) -> Result<JobView, GenerateError> {
+    /// Adds a running job named `name`, unless one of that name is running. Gives its view and how
+    /// many jobs are running now, this one included.
+    fn open_job(&self, name: &str) -> Result<(JobView, usize), GenerateError> {
         let mut jobs = self.jobs();
         if jobs
             .iter()
@@ -311,7 +376,8 @@ impl ImageGenerator {
         };
         let view = record.view(now_ms);
         jobs.push(record);
-        Ok(view)
+        let running = jobs.iter().filter(|record| record.is_running()).count();
+        Ok((view, running))
     }
 
     async fn run(
@@ -382,6 +448,9 @@ impl ImageGenerator {
             height_px,
         };
         let image = self.generate(job, backend_request).await?;
+        if let Some(cause) = image.cleanup {
+            app.record_line_and_echo(ImageGenEvent::CleanupFailed { job, cause }.line());
+        }
         check_picture(&image).map_err(|cause| GenerateError::InvalidPicture { job, cause })?;
         let file = format!("{}.{}", request.name(), extension_of(&image.mime));
         let directory = media_directory(app.playground().files());
@@ -422,6 +491,8 @@ impl ImageGenerator {
                 duration: image.duration,
                 backend: self.backend.name(),
                 sha256_prefix: image.sha256_hex.chars().take(16).collect(),
+                tokens_in: image.input_tokens,
+                tokens_out: image.output_tokens,
             }
             .line(),
         );

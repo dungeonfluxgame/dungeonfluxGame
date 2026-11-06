@@ -12,6 +12,9 @@ pub const MAXIMUM_KEPT_EVENTS: usize = 1_000_000;
 /// milliseconds: an hour, far past every deadline in the broker, so only a pipeline that cannot
 /// finish reaches it.
 pub const MAXIMUM_DEV_VIRTUAL_MS: u64 = 3_600_000;
+/// The longest reading time `scene timing set minimum_on_screen_ms` takes, in milliseconds: an
+/// hour, far past any line a table reads.
+pub const MAXIMUM_MINIMUM_ON_SCREEN_MS: u64 = 3_600_000;
 /// How long one segmentation request may take. The S2 median was 1.5 s and the slowest 3 s, so
 /// 30 s is about twenty times the median: a candidate, to be tuned from measurement (the plan
 /// gives none).

@@ -9,6 +9,12 @@
 //!
 //! A GET never changes anything. When a fixture file is written or removed, and at startup, the
 //! host reconciles what is shown with the files, as a recorded change that wakes the pages.
+//!
+//! Every refusal a route makes of a change is one `PLAYGROUND reject cause=.. reason=..` line with
+//! closed words only; a change of the controls also names who asked (`source=page|cli client=..`,
+//! from the `X-Df-Client` header). A scene or fixture body larger than the request limit is
+//! refused by the body reader before the route runs, so only its `HTTP served status=413` line
+//! records it; the controls routes read their body themselves and write `reason=too_large`.
 
 mod audit;
 mod clients;
@@ -24,7 +30,8 @@ use std::sync::Arc;
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::rejection::BytesRejection;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -33,18 +40,20 @@ use df_playground::fixture::{ElementSource, Fixture, FixtureError};
 use df_playground::scene::{ImageSlot, SceneChange};
 use df_table::event::RejectionCause;
 
-pub(crate) use self::audit::playground_line;
-use self::audit::{controls_pairs, reject_line, scene_line};
-pub use self::clients::{ClientNameError, check_client_name};
+pub use self::audit::ChangeSource;
+pub(crate) use self::audit::{ChangeOrigin, playground_line};
+use self::audit::{controls_pairs, file_reject_line, reject_line, scene_line};
+pub use self::clients::{ClientNameError, ClientTimelineReply, ClientsError, check_client_name};
 pub use self::controls_state::{
     ControlsChangeError, ControlsRefusal, PlaygroundState, SceneChangeError,
 };
 pub(crate) use self::files::run_file_task;
 use self::files::{FIXTURE_DIRECTORY, FIXTURE_EXTENSIONS, current_fixture_names};
 pub use self::files::{
-    FileError, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
-    revision,
+    FileError, PlaygroundFiles, ServedFileKind, content_type, fixture_names, is_plain_file_name,
+    read_file, revision,
 };
+pub use self::request::BodyReadCause;
 pub(crate) use self::request::{ChangeReply, PlaygroundChangeError};
 use crate::dev_http::{BodyError, parse_body, reply};
 use crate::limits::MAXIMUM_FIXTURE_NAME_LENGTH;
@@ -74,7 +83,10 @@ pub(crate) fn done(state: &AppState) -> Response {
 
 /// Records and answers a body that is not the JSON the route reads, with its typed cause.
 pub(crate) fn reject_body(state: &AppState, error: &BodyError) -> Response {
-    state.record_line(reject_line(RejectionCause::MalformedRequest, &[]));
+    state.record_line(reject_line(
+        RejectionCause::MalformedRequest,
+        &[("reason", error.cause.key().to_owned())],
+    ));
     (
         StatusCode::BAD_REQUEST,
         Json(Reply::Rejected {
@@ -185,51 +197,106 @@ fn with_fixture_files(
 
 /// Records the refusal of a body that is not the change a route reads.
 fn reject_change_body(state: &AppState, error: BodyError) -> PlaygroundChangeError {
-    state.record_line(reject_line(RejectionCause::MalformedRequest, &[]));
+    state.record_line(reject_line(
+        RejectionCause::MalformedRequest,
+        &[("reason", error.cause.key().to_owned())],
+    ));
     PlaygroundChangeError::InvalidBody(error)
 }
 
+/// Records why a change of the controls was refused, with who asked, and gives the route's error.
+/// Every refusal of a change of the controls goes through here, so each writes one line.
+fn refuse_controls(
+    state: &AppState,
+    origin: &ChangeOrigin,
+    cause: RejectionCause,
+    reason: &'static str,
+    error: impl Into<PlaygroundChangeError>,
+) -> PlaygroundChangeError {
+    let mut pairs = vec![("reason", reason.to_owned())];
+    pairs.extend(origin.pairs());
+    state.record_line(reject_line(cause, &pairs));
+    error.into()
+}
+
+/// The change of the controls in a body, or its refusal (recorded): a body too large or broken
+/// off, or one that is not the JSON the route reads.
+fn read_controls_body<T: serde::de::DeserializeOwned>(
+    state: &AppState,
+    origin: &ChangeOrigin,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<T, PlaygroundChangeError> {
+    let malformed = RejectionCause::MalformedRequest;
+    let bytes = body.map_err(|rejection| {
+        let cause = BodyReadCause::of(&rejection);
+        refuse_controls(
+            state,
+            origin,
+            malformed,
+            cause.key(),
+            PlaygroundChangeError::UnreadableBody { cause },
+        )
+    })?;
+    parse_body::<T>(&bytes).map_err(|error| {
+        let reason = error.cause.key();
+        refuse_controls(state, origin, malformed, reason, error)
+    })
+}
+
 /// Applies the changes together or not at all. A change that counts writes one `PLAYGROUND set`
-/// line naming each part, with the playground's lock held so the log is in revision order; one
-/// that alters nothing writes none; a refusal writes a reject line with its reason.
+/// line naming each part and who asked, with the playground's lock held so the log is in revision
+/// order; one that alters nothing writes none; a refusal writes a reject line with its reason.
 async fn apply_controls(
     state: &Arc<AppState>,
+    origin: &ChangeOrigin,
     changes: Vec<ControlsChange>,
 ) -> Result<ControlsReply, PlaygroundChangeError> {
-    let changes = with_fixture_files(changes)?;
+    let invalid = RejectionCause::InvalidValue;
+    let changes = with_fixture_files(changes)
+        .map_err(|error| refuse_controls(state, origin, invalid, "invalid_fixture_name", error))?;
     // The generation is read before the names: a fixture written or removed after this makes the
     // choice of a fixture refuse as changed instead of applying to a list that is out of date.
     let generation = state.playground().generation();
-    let names = current_fixture_names(state.playground().files().clone()).await?;
+    let names = current_fixture_names(state.playground().files().clone())
+        .await
+        .map_err(|error| {
+            state.record_line(file_reject_line(error.key(), &origin.pairs()));
+            PlaygroundChangeError::from(error)
+        })?;
     state
         .playground()
         .change_all(changes.clone(), &names, generation, |reply| {
             let mut pairs = controls_pairs(&changes);
             pairs.push(("revision", reply.revision.to_string()));
+            pairs.extend(origin.pairs());
             state.record_line(playground_line("set", &pairs));
         })
-        .map_err(|refusal| {
-            state.record_line(reject_line(
-                RejectionCause::InvalidValue,
-                &[("reason", refusal.key().to_owned())],
-            ));
-            PlaygroundChangeError::from(refusal)
-        })
+        .map_err(|refusal| refuse_controls(state, origin, invalid, refusal.key(), refusal))
 }
 
-async fn change_controls(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    let result = match parse_body::<ControlsChange>(&body) {
-        Ok(change) => apply_controls(&state, vec![change]).await,
-        Err(error) => Err(reject_change_body(&state, error)),
+async fn change_controls(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let origin = ChangeOrigin::from_headers(&headers);
+    let result = match read_controls_body::<ControlsChange>(&state, &origin, body) {
+        Ok(change) => apply_controls(&state, &origin, vec![change]).await,
+        Err(error) => Err(error),
     };
     reply(result)
 }
 
 /// Several changes of the controls as one: all are applied, or none is.
-async fn change_controls_batch(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    let result = match parse_body::<ControlsBatch>(&body) {
-        Ok(batch) => apply_controls(&state, batch.changes).await,
-        Err(error) => Err(reject_change_body(&state, error)),
+async fn change_controls_batch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Response {
+    let origin = ChangeOrigin::from_headers(&headers);
+    let result = match read_controls_body::<ControlsBatch>(&state, &origin, body) {
+        Ok(batch) => apply_controls(&state, &origin, batch.changes).await,
+        Err(error) => Err(error),
     };
     reply(result)
 }
@@ -316,17 +383,58 @@ fn refuse_scene_change(state: &AppState, reason: &'static str, message: String) 
     }
 }
 
-/// Reads the fixture the live scene is drawn on, with the generation it was read at.
-pub(crate) async fn shown_fixture(state: &AppState) -> Result<(Fixture, u64), SceneApplyError> {
+/// Why the fixture the live scene is drawn on could not be had.
+enum ShownFixtureError {
+    /// No fixture is shown.
+    NoneShown,
+    /// The fixture `name` is shown, and its file does not read as a fixture.
+    Unreadable {
+        name: String,
+        error: SceneApplyError,
+    },
+}
+
+impl From<ShownFixtureError> for SceneApplyError {
+    fn from(error: ShownFixtureError) -> Self {
+        match error {
+            ShownFixtureError::NoneShown => Self {
+                status: StatusCode::BAD_REQUEST,
+                message: "no fixture is shown; write one with `fixture write` first".to_owned(),
+            },
+            ShownFixtureError::Unreadable { error, .. } => error,
+        }
+    }
+}
+
+/// Reads the fixture the live scene is drawn on, with the generation it was read at and its name.
+async fn read_shown_fixture(state: &AppState) -> Result<(Fixture, u64, String), ShownFixtureError> {
     let Some((name, generation)) = state.playground().scene_target() else {
-        return Err(SceneApplyError {
-            status: StatusCode::BAD_REQUEST,
-            message: "no fixture is shown; write one with `fixture write` first".to_owned(),
-        });
+        return Err(ShownFixtureError::NoneShown);
     };
     let directory = state.playground().files().assets().join(FIXTURE_DIRECTORY);
-    let base = read_fixture(directory, name).await?;
+    match read_fixture(directory, name.clone()).await {
+        Ok(base) => Ok((base, generation, name)),
+        Err(error) => Err(ShownFixtureError::Unreadable { name, error }),
+    }
+}
+
+/// Reads the fixture the live scene is drawn on, with the generation it was read at.
+pub(crate) async fn shown_fixture(state: &AppState) -> Result<(Fixture, u64), SceneApplyError> {
+    let (base, generation, _) = read_shown_fixture(state).await?;
     Ok((base, generation))
+}
+
+/// Records why a scene change found no fixture to draw on.
+fn record_shown_fixture_refusal(state: &AppState, error: &ShownFixtureError) {
+    state.record_line(match error {
+        ShownFixtureError::NoneShown => reject_line(
+            RejectionCause::InvalidValue,
+            &[("reason", "no_fixture_shown".to_owned())],
+        ),
+        ShownFixtureError::Unreadable { name, .. } => {
+            file_reject_line("fixture_unreadable", &[("fixture", name.clone())])
+        }
+    });
 }
 
 /// The ids of the elements on the stage the live scene is drawn on now.
@@ -337,15 +445,30 @@ pub(crate) async fn current_stage_ids(state: &AppState) -> Result<Vec<String>, S
 
 /// Applies one change to the live scene, checked against the media library and the stage, and
 /// records it. This is the one path of `POST /dev/playground/scene` and of the Director, so a
-/// dev verb and the engine make a camera move with the same checks and the same audit line.
+/// dev verb and the engine make a camera move with the same checks and the same audit line, and
+/// every refusal of it, here, writes one reject line.
 pub(crate) async fn apply_scene_change(
     state: &AppState,
     change: SceneChange,
 ) -> Result<ControlsReply, SceneApplyError> {
-    let (base, generation) = shown_fixture(state).await?;
+    let (base, generation, fixture) = match read_shown_fixture(state).await {
+        Ok(shown) => shown,
+        Err(error) => {
+            record_shown_fixture_refusal(state, &error);
+            return Err(error.into());
+        }
+    };
     let change = with_backdrop_layout(state, change).await;
     let media_directory = media_directory(state.playground().files());
-    let library = run_file_task(move || media_entries(&media_directory)).await?;
+    let library = run_file_task(move || media_entries(&media_directory))
+        .await
+        .map_err(|error| {
+            state.record_line(file_reject_line(
+                "media_unreadable",
+                &[("fixture", fixture.clone())],
+            ));
+            SceneApplyError::from(error)
+        })?;
     if let Some(message) = media_problem(&change, &library) {
         return Err(refuse_scene_change(state, "no_such_media", message));
     }
@@ -430,19 +553,44 @@ fn write_fixture_file(directory: &Path, file_name: &str, text: &str) -> Result<(
         .map_err(FileError::from)
 }
 
+/// Records and answers a fixture name that is not one (the name itself is not written).
+fn refuse_fixture_name(state: &AppState, error: &FixtureNameError) -> Response {
+    state.record_line(reject_line(
+        RejectionCause::InvalidValue,
+        &[
+            ("reason", "invalid_fixture_name".to_owned()),
+            ("fixture", "-".to_owned()),
+        ],
+    ));
+    refused(StatusCode::BAD_REQUEST, error.to_string())
+}
+
+/// Records and answers a fixture file that could not be written, removed or listed.
+fn refuse_fixture_file(state: &AppState, file_name: &str, error: FileError) -> Response {
+    state.record_line(file_reject_line(
+        error.key(),
+        &[("fixture", file_name.to_owned())],
+    ));
+    refuse_file(error)
+}
+
 async fn write_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
+    let started = tokio::time::Instant::now();
     let request: FixtureWrite = match parse_body(&body) {
         Ok(request) => request,
         Err(error) => return reject_body(&state, &error),
     };
     let file_name = match fixture_file_name(&request.name) {
         Ok(file_name) => file_name,
-        Err(error) => return refused(StatusCode::BAD_REQUEST, error.to_string()),
+        Err(error) => return refuse_fixture_name(&state, &error),
     };
     if let Err(error) = Fixture::parse(&request.text) {
         state.record_line(reject_line(
             RejectionCause::InvalidValue,
-            &[("fixture", file_name.clone())],
+            &[
+                ("reason", "invalid_fixture_text".to_owned()),
+                ("fixture", file_name.clone()),
+            ],
         ));
         return refused(
             StatusCode::BAD_REQUEST,
@@ -454,15 +602,20 @@ async fn write_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Respo
     let name = file_name.clone();
     let written = run_file_task(move || write_fixture_file(&directory, &name, &request.text)).await;
     if let Err(error) = written {
-        return refuse_file(error);
+        return refuse_fixture_file(&state, &file_name, error);
     }
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     state.record_line(playground_line(
         "fixture_write",
-        &[("name", file_name), ("bytes", bytes.to_string())],
+        &[
+            ("name", file_name.clone()),
+            ("bytes", bytes.to_string()),
+            ("duration_ms", duration_ms.to_string()),
+        ],
     ));
     match reconcile_after_files_changed(&state).await {
         Ok(()) => done(&state),
-        Err(error) => refuse_file(error),
+        Err(error) => refuse_fixture_file(&state, &file_name, error),
     }
 }
 
@@ -473,7 +626,7 @@ async fn remove_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Resp
     };
     let file_name = match fixture_file_name(&request.name) {
         Ok(file_name) => file_name,
-        Err(error) => return refused(StatusCode::BAD_REQUEST, error.to_string()),
+        Err(error) => return refuse_fixture_name(&state, &error),
     };
     let fixture_path = state
         .playground()
@@ -486,17 +639,27 @@ async fn remove_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Resp
     match removed {
         Ok(()) => {}
         Err(FileError::NotFound) => {
+            state.record_line(reject_line(
+                RejectionCause::InvalidValue,
+                &[
+                    ("reason", "no_such_fixture".to_owned()),
+                    ("fixture", file_name.clone()),
+                ],
+            ));
             return refused(
                 StatusCode::BAD_REQUEST,
                 format!("there is no fixture '{file_name}'"),
             );
         }
-        Err(error) => return refuse_file(error),
+        Err(error) => return refuse_fixture_file(&state, &file_name, error),
     }
-    state.record_line(playground_line("fixture_remove", &[("name", file_name)]));
+    state.record_line(playground_line(
+        "fixture_remove",
+        &[("name", file_name.clone())],
+    ));
     match reconcile_after_files_changed(&state).await {
         Ok(()) => done(&state),
-        Err(error) => refuse_file(error),
+        Err(error) => refuse_fixture_file(&state, &file_name, error),
     }
 }
 
@@ -520,6 +683,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(path::DEV_PLAYGROUND_SCENE, post(change_scene))
         .route(path::PLAYGROUND_CLIENTS, get(clients::clients_json))
         .route(path::DEV_CLIENT_REPORT, post(clients::receive_report))
+        .route(
+            df_playground::path::CLIENT_TIMELINE,
+            get(clients::timeline_json),
+        )
         .route(path::DEV_FIXTURE_WRITE, post(write_fixture))
         .route(path::DEV_FIXTURE_REMOVE, post(remove_fixture))
         .with_state(state)

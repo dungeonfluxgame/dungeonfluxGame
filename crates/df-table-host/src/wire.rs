@@ -252,6 +252,9 @@ pub struct EventsReply {
     /// The newest sequence logged, so a reader can tell the host restarted when it falls below the
     /// last sequence the reader saw.
     pub latest: u64,
+    /// Lines the log forgot to keep its bounds since the host started.
+    #[serde(default)]
+    pub forgotten: u64,
 }
 
 /// Keeps at most `MAXIMUM_LISTED_PROBLEMS` entries, replacing the rest with a count.

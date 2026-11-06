@@ -4,6 +4,11 @@ use df_table::event::FailureCause;
 use df_table::ports::{Broker, Clock, PortName, Readiness};
 use df_table::testkit::{ManualClock, correlation};
 
+use crate::engine::SinkBrokerAudit;
+use crate::event_log::EventLog;
+use crate::observe::{AttributeValue, HistoryFilter, HostEventSink, ObservedRecord};
+
+use super::events::HubName;
 use super::fixtures::{RecordingAudit, name, test_table};
 use super::hub::BrokerHub;
 use super::providers::{FakeProvider, FakeWorker, ScriptedCall};
@@ -28,6 +33,15 @@ fn rig(limits: BrokerLimits) -> Rig {
         clock.clone(),
     ));
     Rig { hub, clock, audit }
+}
+
+/// The rig's lines that start with `prefix`.
+fn lines_starting(rig: &Rig, prefix: &str) -> Vec<String> {
+    rig.audit
+        .lines()
+        .into_iter()
+        .filter(|line| line.starts_with(prefix))
+        .collect()
 }
 
 fn worker(rig: &Rig, text: FakeProvider, image: FakeProvider) -> FakeWorker {
@@ -285,4 +299,192 @@ fn the_queue_report_shows_depth_oldest_age_and_what_is_running() {
     assert_eq!(report.running.len(), 1);
     assert!(report.running[0].sent);
     assert_eq!(report.epoch, 1);
+}
+
+#[test]
+fn an_epoch_advance_with_two_waiting_writes_one_line_that_says_both_were_superseded() {
+    let rig = rig(BrokerLimits::default());
+    for turn in 1..=2 {
+        rig.hub
+            .request(correlation(turn), &name("text_background"))
+            .expect("accepted");
+    }
+
+    assert_eq!(rig.hub.advance_epoch(Epoch::new(2)), Ok(2));
+
+    assert_eq!(
+        lines_starting(&rig, "RESOURCE epoch_advanced"),
+        ["RESOURCE epoch_advanced from=1 to=2 superseded=2 hub=engine"]
+    );
+}
+
+#[test]
+fn a_claim_says_how_long_its_request_waited_by_the_hubs_clock() {
+    let rig = rig(BrokerLimits::default());
+    rig.hub
+        .request(correlation(1), &name("text_live"))
+        .expect("accepted");
+    rig.clock.advance_ms(250);
+
+    rig.hub
+        .claim(ResourceKind::Text, WorkerId::new(1))
+        .expect("claimed");
+
+    assert_eq!(
+        lines_starting(&rig, "RESOURCE claimed"),
+        [
+            "RESOURCE claimed purpose=text_live handle=1 attempt=1 worker=1 number=1 \
+             waited_ms=250 hub=engine"
+        ]
+    );
+}
+
+#[test]
+fn a_request_line_says_how_many_wait_in_its_class_queue() {
+    let rig = rig(BrokerLimits::default());
+    for turn in 1..=2 {
+        rig.hub
+            .request(correlation(turn), &name("text_background"))
+            .expect("accepted");
+    }
+
+    let requests = lines_starting(&rig, "RESOURCE request");
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0].ends_with(" depth=1 hub=engine"),
+        "{}",
+        requests[0]
+    );
+    assert!(
+        requests[1].ends_with(" depth=2 hub=engine"),
+        "{}",
+        requests[1]
+    );
+}
+
+#[test]
+fn closing_writes_one_line_with_how_many_requests_it_cancelled() {
+    let rig = rig(BrokerLimits::default());
+    for turn in 1..=3 {
+        rig.hub
+            .request(correlation(turn), &name("text_plate"))
+            .expect("accepted");
+    }
+
+    assert_eq!(rig.hub.close(), 3);
+
+    assert_eq!(
+        lines_starting(&rig, "RESOURCE closed"),
+        ["RESOURCE closed cancelled=3 hub=engine"]
+    );
+}
+
+#[test]
+fn a_hub_named_for_the_workbench_puts_its_name_on_every_line() {
+    let clock = Arc::new(ManualClock::default());
+    let audit = Arc::new(RecordingAudit::default());
+    let hub = BrokerHub::new(
+        test_table(),
+        BrokerLimits::default(),
+        audit.clone(),
+        clock.clone(),
+    )
+    .with_hub(HubName::Workbench);
+    assert_eq!(hub.hub(), HubName::Workbench);
+
+    hub.request(correlation(1), &name("image_plate"))
+        .expect("accepted");
+    let call = hub
+        .claim(ResourceKind::Image, WorkerId::new(1))
+        .expect("claimed");
+    hub.mark_sent(call.attempt).expect("known");
+    hub.close();
+
+    let lines = audit.lines();
+    assert!(lines.iter().any(|line| line.starts_with("SPEND commit")));
+    assert!(
+        lines.iter().all(|line| line.ends_with(" hub=workbench")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn every_hub_key_is_its_serde_name_and_reads_back() {
+    for hub in HubName::ALL {
+        let serde = serde_json::to_value(hub).expect("serializes");
+        assert_eq!(serde, serde_json::Value::from(hub.key()));
+        assert_eq!(HubName::from_key(hub.key()), Some(hub));
+    }
+    assert_eq!(HubName::from_key("canvas"), None);
+}
+
+/// The value of the attribute `name` of `record`.
+fn attribute<'a>(record: &'a ObservedRecord, name: &str) -> Option<&'a AttributeValue> {
+    record
+        .attributes
+        .iter()
+        .find(|(attribute, _)| attribute == name)
+        .map(|(_, value)| value)
+}
+
+#[test]
+fn the_structured_records_carry_the_hub_depth_wait_and_the_close() {
+    let clock = Arc::new(ManualClock::default());
+    let log = Arc::new(EventLog::default());
+    let sink = Arc::new(HostEventSink::new(log, clock.clone()));
+    let hub = BrokerHub::new(
+        test_table(),
+        BrokerLimits::default(),
+        Arc::new(SinkBrokerAudit::new(Arc::clone(&sink))),
+        clock.clone(),
+    )
+    .with_hub(HubName::Workbench);
+    hub.request(correlation(1), &name("text_live"))
+        .expect("accepted");
+    hub.request(correlation(2), &name("text_live"))
+        .expect("accepted");
+    clock.advance_ms(40);
+    hub.claim(ResourceKind::Text, WorkerId::new(1))
+        .expect("claimed");
+    hub.close();
+
+    let records = sink.query(&HistoryFilter::default(), 100).records;
+    let named = |event: &str| -> Vec<&ObservedRecord> {
+        records
+            .iter()
+            .filter(|record| record.event_name == event)
+            .collect()
+    };
+    assert!(records.iter().all(|record| {
+        attribute(record, "hub") == Some(&AttributeValue::Text("workbench".to_owned()))
+    }));
+    let depths: Vec<_> = named("broker.requested")
+        .into_iter()
+        .map(|record| attribute(record, "depth").cloned())
+        .collect();
+    assert_eq!(
+        depths,
+        [
+            Some(AttributeValue::Whole(1)),
+            Some(AttributeValue::Whole(2))
+        ]
+    );
+    let claimed = named("broker.claimed");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(
+        attribute(claimed[0], "waited_ms"),
+        Some(&AttributeValue::Whole(40))
+    );
+    let closed = named("broker.closed");
+    assert_eq!(closed.len(), 1);
+    assert_eq!(closed[0].kind, "closed");
+    assert_eq!(
+        attribute(closed[0], "cancelled"),
+        Some(&AttributeValue::Whole(2))
+    );
+    assert!(
+        closed[0]
+            .audit_line
+            .starts_with("RESOURCE closed cancelled=2")
+    );
 }

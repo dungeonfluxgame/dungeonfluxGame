@@ -158,6 +158,17 @@ pub(super) fn media(words: &[String]) -> Result<Command, CommandError> {
     match words {
         [] => Ok(Command::Media),
         [verb, name] if verb == "remove" => Ok(Command::MediaRemove(name.clone())),
+        [verb, name] if verb == "head" => {
+            if df_playground::media::is_plain_file_name(name) {
+                Ok(Command::MediaHead(name.clone()))
+            } else {
+                Err(bad_choice(
+                    "name",
+                    name,
+                    "a plain file name: letters, digits, '_', '-' and '.'",
+                ))
+            }
+        }
         [verb, path, rest @ ..] if verb == "add" => {
             let mut name = None;
             for (_, value) in keyed(rest, "as=NAME", &["as"])? {

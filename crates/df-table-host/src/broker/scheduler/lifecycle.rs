@@ -82,8 +82,10 @@ impl BrokerCore {
         if requeue {
             request.lease_requeues += 1;
             request.status = RequestStatus::Queued { class };
+            request.claimable_ms = now_ms;
         }
         self.record(BrokerEvent::LeaseExpired {
+            hub: self.hub,
             handle,
             attempt,
             sent: abandoned.sent,
@@ -123,6 +125,7 @@ impl BrokerCore {
             self.supersede(*handle);
         }
         self.record(BrokerEvent::EpochAdvanced {
+            hub: self.hub,
             from,
             to,
             superseded: stale.len(),
@@ -151,6 +154,7 @@ impl BrokerCore {
             true,
         );
         self.record(BrokerEvent::Stale {
+            hub: self.hub,
             handle: Some(handle),
             purpose,
             epoch,
@@ -194,7 +198,11 @@ impl BrokerCore {
             LedgerEnd::Cancelled,
             false,
         );
-        self.record(BrokerEvent::Cancelled { handle, purpose });
+        self.record(BrokerEvent::Cancelled {
+            hub: self.hub,
+            handle,
+            purpose,
+        });
     }
 
     /// Closes the broker with its table: every request is cancelled whoever holds it, and no new
@@ -209,6 +217,10 @@ impl BrokerCore {
         for handle in &open {
             self.cancel_flight(*handle);
         }
+        self.record(BrokerEvent::Closed {
+            hub: self.hub,
+            cancelled: open.len(),
+        });
         open.len()
     }
 }

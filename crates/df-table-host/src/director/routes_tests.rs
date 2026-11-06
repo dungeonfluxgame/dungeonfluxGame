@@ -14,8 +14,8 @@ use df_table::testkit::ManualClock;
 
 use super::fixtures::{CAMERA_DEMO, camera_of, lines_starting, said, with_three_avatars};
 use super::limits::HOST_TICK_MS;
-use super::request::DirectorAct;
-use super::routes::{DirectorRoutes, runtime_clock};
+use super::request::{ApplyCause, DirectorAct, DirectorError};
+use super::routes::{DirectorRoutes, router_for, runtime_clock, tick_failed_line};
 use super::workbench::Workbench;
 use crate::test_support::{Running, STARTER_FILES, start};
 
@@ -173,7 +173,17 @@ async fn a_pull_back_that_failed_to_apply_is_made_again_and_the_camera_ends_wide
     assert_eq!(camera_target(&running), None);
     let lines = logged(&running);
     let count = |text: &str| lines.iter().filter(|line| line.contains(text)).count();
-    assert_eq!(count("CAMERA apply_failed status=409"), 1, "{lines:?}");
+    assert_eq!(
+        count("CAMERA apply_failed kind=wide target=- error=fixture_changed"),
+        1,
+        "the failure is a typed key, never a status number: {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("CAMERA") && line.contains("status=")),
+        "{lines:?}"
+    );
     assert_eq!(count("CAMERA wide reason=timeout serial=2"), 1, "{lines:?}");
     assert_eq!(count("CAMERA wide reason=timeout serial=3"), 1, "{lines:?}");
 }
@@ -296,4 +306,89 @@ async fn the_host_tick_returns_the_camera_when_its_hold_ends_with_nobody_asking(
         .filter(|line| line.starts_with("CAMERA wide"))
         .collect();
     assert_eq!(wide, ["CAMERA wide reason=timeout serial=2 over=1200"]);
+}
+
+#[tokio::test]
+async fn every_move_the_playground_applies_writes_what_it_drew_and_how_long_it_took() {
+    let running = with_inline_stage(&["finn"]).await;
+    let routes = manual_routes(&running);
+    routes
+        .act(DirectorAct::Focus {
+            element: ElementId::new("finn").expect("an element name"),
+            reason: Some(Reason::Reveal),
+            zoom_percent: Some(150),
+            over_ms: None,
+            hold_ms: Some(1_000),
+        })
+        .await
+        .expect("applies");
+    routes
+        .act(DirectorAct::Advance { by_ms: 1_000 })
+        .await
+        .expect("advances");
+    let applied: Vec<String> = logged(&running)
+        .into_iter()
+        .filter(|line| line.starts_with("CAMERA applied"))
+        .collect();
+    assert_eq!(applied.len(), 2, "{applied:?}");
+    let without_duration = |line: &str| {
+        let (head, duration) = line.rsplit_once(" duration_ms=").expect("a duration");
+        assert!(duration.parse::<u64>().is_ok(), "{line}");
+        head.to_owned()
+    };
+    assert_eq!(
+        without_duration(&applied[0]),
+        "CAMERA applied kind=focus target=finn zoom=150 over_ms=1500"
+    );
+    assert_eq!(
+        without_duration(&applied[1]),
+        "CAMERA applied kind=wide target=- zoom=100 over_ms=1200"
+    );
+}
+
+#[test]
+fn a_refused_tick_writes_the_error_s_key_and_no_sentence() {
+    let error = DirectorError::InvalidAdvance { by_ms: 7 };
+    assert_eq!(
+        tick_failed_line(&error),
+        "CAMERA tick_failed error=invalid_advance"
+    );
+}
+
+#[test]
+fn every_apply_cause_key_is_its_serde_name() {
+    for cause in ApplyCause::ALL {
+        assert_eq!(
+            serde_json::to_value(cause).expect("serializes"),
+            serde_json::json!(cause.key())
+        );
+        assert_eq!(ApplyCause::from_key(cause.key()), Some(cause));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_host_tick_says_when_it_starts_and_when_it_stops() {
+    let running = start(&STARTER_FILES).await;
+    // The server builds its router in its own task: one answer means the router is built.
+    crate::client::get(running.port, crate::wire::route::EVENTS)
+        .await
+        .expect("the host answers");
+    let count = |text: &str| {
+        logged(&running)
+            .iter()
+            .filter(|line| line.as_str() == text)
+            .count()
+    };
+    let started = format!("DIRECTOR tick_started interval_ms={HOST_TICK_MS}");
+    let before = count(&started);
+    assert_eq!(before, 1, "the host's own Director started its tick");
+    let router = router_for(Arc::clone(&running.state), InspectAudience::Operator);
+    assert_eq!(count(&started), before + 1);
+    drop(router);
+    tokio::time::sleep(Duration::from_millis(HOST_TICK_MS * 2)).await;
+    assert_eq!(
+        count("DIRECTOR tick_stopped"),
+        1,
+        "only the dropped routes' tick stopped"
+    );
 }

@@ -184,3 +184,115 @@ async fn a_file_cut_short_in_place_after_it_was_measured_ends_the_answer_with_an
     writer.flush().expect("flushes");
     assert!(body_of(payload).await.is_err());
 }
+
+/// The media lines of the playground, oldest first.
+fn media_lines(running: &crate::test_support::Running) -> Vec<String> {
+    running
+        .state
+        .log()
+        .newest(100)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("PLAYGROUND media_"))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_media_file_a_page_asks_for_that_is_not_there_is_recorded_by_checked_name() {
+    let running = crate::test_support::start(&crate::test_support::STARTER_FILES).await;
+    for path in ["/playground/media/ghost.png", "/playground/media/notes.txt"] {
+        let answer = crate::client::get(running.port, path)
+            .await
+            .expect("answers");
+        assert_eq!(answer.status, axum::http::StatusCode::NOT_FOUND, "{path}");
+    }
+    assert_eq!(
+        media_lines(&running),
+        vec![
+            "PLAYGROUND media_missing name=ghost.png".to_owned(),
+            "PLAYGROUND media_missing name=-".to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn every_refused_remove_writes_one_media_refused_line_with_its_cause() {
+    let running = crate::test_support::start(&crate::test_support::STARTER_FILES).await;
+    let path = "/dev/playground/media/remove";
+    for body in [r#"{"name": "ghost.png"}"#, r#"{"name": "notes.txt"}"#, "{"] {
+        let answer = crate::client::post_json(running.port, path, body)
+            .await
+            .expect("answers");
+        assert_eq!(answer.status, axum::http::StatusCode::BAD_REQUEST, "{body}");
+    }
+    assert_eq!(
+        media_lines(&running),
+        vec![
+            "PLAYGROUND media_refused verb=remove name=ghost.png cause=not_found received_bytes=21"
+                .to_owned(),
+            "PLAYGROUND media_refused verb=remove name=- cause=invalid_media_name \
+             received_bytes=21"
+                .to_owned(),
+            "PLAYGROUND media_refused verb=remove name=- cause=invalid_body received_bytes=1"
+                .to_owned(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_add_records_its_kind_the_bytes_received_and_its_duration() {
+    let running = crate::test_support::start(&crate::test_support::STARTER_FILES).await;
+    let body = r#"{"name": "dot.png", "data_base64": "AAAA"}"#;
+    let answer = crate::client::post_json(running.port, "/dev/playground/media", body)
+        .await
+        .expect("answers");
+    assert_eq!(answer.status, axum::http::StatusCode::OK, "{}", answer.body);
+    let lines = media_lines(&running);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let (head, duration) = lines[0].rsplit_once(" duration_ms=").expect("a duration");
+    assert_eq!(
+        head,
+        format!(
+            "PLAYGROUND media_add name=dot.png bytes=3 kind=image received_bytes={}",
+            body.len()
+        )
+    );
+    assert!(duration.parse::<u64>().is_ok(), "{lines:?}");
+}
+
+#[tokio::test]
+async fn a_media_file_a_page_did_not_get_is_recorded_as_missing_or_unreadable() {
+    use crate::test_support::{STARTER_FILES, start};
+    let running = start(&STARTER_FILES).await;
+    super::record_media_refusal(&running.state, "hall.png", FileError::NotFound);
+    super::record_media_refusal(
+        &running.state,
+        "hall.png",
+        FileError::Io(std::io::ErrorKind::PermissionDenied),
+    );
+    super::record_media_refusal(&running.state, "../up.png", FileError::Stopped);
+    // A refusal that is neither (a name that is not media is a 404 too) says only `-`.
+    super::record_media_refusal(&running.state, "notes.txt", FileError::InvalidName);
+    super::record_media_refusal(
+        &running.state,
+        "hall.png",
+        FileError::TooLarge { maximum_bytes: 1 },
+    );
+    let lines: Vec<String> = running
+        .state
+        .log()
+        .newest(100)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("PLAYGROUND "))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "PLAYGROUND media_missing name=hall.png",
+            "PLAYGROUND media_unreadable name=hall.png reason=io",
+            "PLAYGROUND media_unreadable name=- reason=stopped",
+            "PLAYGROUND media_missing name=-",
+        ]
+    );
+}

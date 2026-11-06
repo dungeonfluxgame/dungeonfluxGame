@@ -12,9 +12,9 @@
 //!
 //! What is wired, and what is not, is stated in `planning/gameplay-engine-redesign.md` (O.12 and
 //! H.16): the dev engine keeps the history and, when `DF_TABLE_EVENT_SPOOL` names a directory, the
-//! spool; the shared path is built and tested against the real df-telemetry store, but a process
-//! composes it (the producer identity, the ingress and the store are the composition's), which
-//! the dev host does not yet do.
+//! spool; the shared path is tested against the real df-telemetry store, and a process composes
+//! it (the producer identity, the ingress and the store are the composition's): `serve` does,
+//! onto the canvas sink, when `--telemetry DIR` names a store root (`ComposedSharedPath`).
 
 mod limits;
 mod memory;
@@ -27,15 +27,21 @@ mod spool;
 pub use self::limits::{
     DEFAULT_HISTORY_RECORDS, EVENT_SPOOL_VARIABLE, MAXIMUM_ATTRIBUTE_DEPTH,
     MAXIMUM_RECORDS_PER_HISTORY_ANSWER, MAXIMUM_RETAINED_BYTES, MAXIMUM_RETAINED_RECORDS,
-    MAXIMUM_SPOOL_BYTES, MAXIMUM_SPOOL_QUEUE_BYTES, RECORD_OVERHEAD_BYTES, SPOOL_FILE_NAME,
+    MAXIMUM_SHARED_PATH_PENDING_RECEIPTS, MAXIMUM_SPOOL_BYTES, MAXIMUM_SPOOL_QUEUE_BYTES,
+    RECORD_OVERHEAD_BYTES, SPOOL_FILE_NAME,
 };
 pub use self::memory::{HistoryFilter, HistoryPage, MemoryOutlet, Retention};
-pub use self::outlet::{Losses, OutletError, OutletStatus, RecordOutlet};
+pub use self::outlet::{
+    DegradedNotice, LossCause, Losses, OutletError, OutletStatus, RecordOutlet,
+};
 pub use self::record::{
     AttributeValue, ObservedRecord, RecordClass, RecordCorrelation, RecordDraft, RecordError,
     RecordScope, RecordSeverity,
 };
-pub use self::shared_path::{SharedPathOutlet, diagnostic_record};
+pub use self::shared_path::{
+    ComposedSharedPath, SHARED_PATH_OUTLET, SharedPathCause, SharedPathError, SharedPathHealth,
+    SharedPathOutlet, compose_shared_path, diagnostic_record, shared_path_line,
+};
 pub use self::sink::{EventLevel, HostEventSink, SinkHealth, WallClock};
 pub use self::spool::{FileSpool, SpoolError};
 

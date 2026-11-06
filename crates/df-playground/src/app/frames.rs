@@ -12,7 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use super::assets::{load_selected_fixture, refresh_assets};
 use super::page::{render, update_stage};
-use super::report::send_report;
+use super::report::{schedule_forced_report, send_report};
 use super::sound::sync_audio;
 use super::state::{PageError, log_error, set_problem, with_app, with_app_mut};
 use crate::audio;
@@ -26,6 +26,7 @@ use crate::frame::{FrameReply, LiveCanvas, LiveFrame, frame_address, parse_frame
 use crate::limits::{HEARTBEAT_POLLS, LONGEST_BROWSER_TIMER_MS, POLL_MS};
 use crate::net::{NetError, fetch_text, post_json};
 use crate::path;
+use crate::timeline::ErrorSource;
 
 /// What a look at the host's controls found.
 #[derive(Debug, Clone, Copy, Default)]
@@ -168,7 +169,10 @@ pub async fn send_change(change: ControlsChange) {
     let body = match serde_json::to_string(&change) {
         Ok(body) => body,
         Err(error) => {
-            log_error(&format!("could not write the change: {error}"));
+            log_error(
+                ErrorSource::Net,
+                &format!("could not write the change: {error}"),
+            );
             return;
         }
     };
@@ -203,6 +207,8 @@ async fn apply_frame(frame: LiveFrame) {
     with_app_mut(|app| app.frame = Some(frame.frame));
     if was_down {
         with_app_mut(|app| app.connection_problem = None);
+        // The link is back: the host hears it at once.
+        schedule_forced_report();
     }
     let mut reloaded = false;
     if with_app(|app| {
@@ -261,6 +267,7 @@ async fn follow_frames() {
                 });
                 if was_down {
                     render();
+                    schedule_forced_report();
                 }
             }
             Err(error) => {
@@ -272,6 +279,9 @@ async fn follow_frames() {
                 set_problem(error);
                 if first_failure {
                     render();
+                    // The link went down: the report may still reach the host if only the frame
+                    // poll failed.
+                    schedule_forced_report();
                 }
                 wait_ms(retry_delay_ms(failures)).await;
             }
@@ -300,10 +310,10 @@ async fn poll() {
     });
     if package_changed {
         if let Some(Err(error)) = web_sys::window().map(|window| window.location().reload()) {
-            log_error(&format!(
-                "could not reload the page: {}",
-                js_message(&error)
-            ));
+            log_error(
+                ErrorSource::Asset,
+                &format!("could not reload the page: {}", js_message(&error)),
+            );
         }
         return;
     }
@@ -329,7 +339,8 @@ async fn poll() {
             false
         }
     });
-    send_report(beat).await;
+    // A change of the files is a change of the page's revision, which the host hears at once.
+    send_report(beat || files_changed).await;
 }
 
 pub async fn run() {

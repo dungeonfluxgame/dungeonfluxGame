@@ -190,8 +190,12 @@ fn media_and_clients_commands_parse_and_the_help_lists_every_new_verb() {
     ));
     assert_eq!(
         parse(&words("clients now")),
-        Err(CommandError::Usage("clients"))
+        Ok(Command::ClientShow("now".into()))
     );
+    assert!(matches!(
+        parse(&words("clients a b")),
+        Err(CommandError::Usage(_))
+    ));
     let help = usage_text();
     for text in [
         "scene image",
@@ -500,13 +504,23 @@ async fn choosing_another_fixture_drops_pictures_but_cues_keep_counting() {
 
 // ---- what a page reports
 
+fn page_error(seq: u64, message: String) -> df_playground::timeline::ClientError {
+    df_playground::timeline::ClientError {
+        seq,
+        source: df_playground::timeline::ErrorSource::Asset,
+        page_ms: 0,
+        message,
+    }
+}
+
 fn report(audio: AudioState, last_cue: u64) -> ClientReport {
     ClientReport {
         audio,
         last_cue,
         music: Some("bell.wav".into()),
         images_shown: vec!["tavern.png".into()],
-        errors: vec!["could not load ghost.png".into()],
+        errors: vec![page_error(1, "could not load ghost.png".into())],
+        ..ClientReport::default()
     }
 }
 
@@ -561,7 +575,7 @@ async fn a_pages_report_is_kept_and_shown_by_clients_and_playground() {
 }
 
 #[tokio::test]
-async fn a_report_does_not_wake_pages_and_is_not_an_audit_line() {
+async fn a_report_does_not_wake_pages_and_writes_only_what_changed() {
     let running = start(&STARTER_FILES).await;
     let before = running.state.change_count();
     send_report(&running, "page-1", &report(AudioState::Locked, 0)).await;
@@ -570,7 +584,18 @@ async fn a_report_does_not_wake_pages_and_is_not_an_audit_line() {
         .await
         .expect("answers")
         .body;
-    assert!(!events.contains("page-1"));
+    assert!(events.contains("CLIENT seen client=page-1"), "{events}");
+    assert!(
+        !events.contains("ghost.png"),
+        "an error's words stay in the table"
+    );
+    let latest = running.state.log().latest_sequence();
+    send_report(&running, "page-1", &report(AudioState::Locked, 0)).await;
+    assert_eq!(
+        running.state.log().latest_sequence(),
+        latest,
+        "a report that says nothing new writes nothing"
+    );
 }
 
 #[tokio::test]
@@ -625,7 +650,7 @@ async fn a_report_keeps_only_its_newest_errors() {
     let mut noisy = report(AudioState::Locked, 0);
     let kept = df_playground::limits::MAXIMUM_REPORTED_ERRORS;
     noisy.errors = (0..kept + 12)
-        .map(|index| format!("error {index}"))
+        .map(|index| page_error(index as u64 + 1, format!("error {index}")))
         .collect();
     send_report(&running, "page-1", &noisy).await;
     let body = get(running.port, "/playground/clients.json")
@@ -635,7 +660,7 @@ async fn a_report_keeps_only_its_newest_errors() {
     let clients: Vec<ClientView> = serde_json::from_str(&body).expect("clients");
     assert_eq!(clients[0].report.errors.len(), kept);
     assert_eq!(
-        clients[0].report.errors[kept - 1],
+        clients[0].report.errors[kept - 1].message,
         format!("error {}", kept + 11)
     );
 }

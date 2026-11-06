@@ -20,6 +20,7 @@ fn an_audit_line_never_holds_the_prompt() {
         prompt_chars: request.prompt().chars().count(),
         deadline: Duration::from_secs(900),
         backend: "fake",
+        running: 2,
     }
     .line();
     assert_eq!(
@@ -27,7 +28,7 @@ fn an_audit_line_never_holds_the_prompt() {
         format!(
             concat!(
                 "IMAGEGEN requested job=1 name=hall purpose=background aspect=16:9 ",
-                "prompt_chars={} deadline_ms=900000 backend=fake"
+                "prompt_chars={} deadline_ms=900000 backend=fake running=2"
             ),
             secret.chars().count()
         )
@@ -97,12 +98,14 @@ fn the_stored_and_failed_lines_carry_ids_sizes_and_milliseconds() {
         duration: Duration::from_millis(1500),
         backend: "fake",
         sha256_prefix: "0123456789abcdef".to_owned(),
+        tokens_in: Some(10),
+        tokens_out: None,
     };
     assert_eq!(
         stored.line(),
         concat!(
             "IMAGEGEN stored job=2 name=hall file=hall.png bytes=99 size=1672x941 ",
-            "duration_ms=1500 backend=fake sha256=0123456789abcdef"
+            "duration_ms=1500 backend=fake sha256=0123456789abcdef tokens_in=10 tokens_out=-"
         )
     );
     let failed = ImageGenEvent::Failed {
@@ -132,4 +135,48 @@ fn a_setting_that_does_not_read_names_its_variable_and_the_default_in_millisecon
         line,
         "IMAGEGEN setting variable=DF_IMAGEGEN_DEADLINE_SECS status=invalid default_ms=900000"
     );
+}
+
+#[test]
+fn a_check_line_names_the_backend_its_time_and_the_failed_precondition_by_key() {
+    let held = ImageGenEvent::Check {
+        backend: "codex-cli",
+        duration: Duration::from_millis(12),
+        failed: None,
+    };
+    assert_eq!(
+        held.line(),
+        "IMAGEGEN check backend=codex-cli duration_ms=12 result=ok"
+    );
+    let failed = ImageGenEvent::Check {
+        backend: "codex-cli",
+        duration: Duration::from_millis(3),
+        failed: Some(BackendError::NoLogin {
+            home: PathBuf::from("C:/secret/codex-home"),
+        }),
+    };
+    assert_eq!(
+        failed.line(),
+        "IMAGEGEN check backend=codex-cli duration_ms=3 result=no_login"
+    );
+}
+
+#[test]
+fn a_started_line_carries_the_job_and_its_wait_in_milliseconds() {
+    let line = ImageGenEvent::Started {
+        job: 4,
+        wait: Duration::from_millis(250),
+    }
+    .line();
+    assert_eq!(line, "IMAGEGEN started job=4 wait_ms=250");
+}
+
+#[test]
+fn a_scratch_folder_left_behind_is_named_by_its_cleanup_key() {
+    let line = ImageGenEvent::CleanupFailed {
+        job: 3,
+        cause: df_imagery::oneshot::CleanupCause::PermissionDenied,
+    }
+    .line();
+    assert_eq!(line, "IMAGEGEN cleanup_failed job=3 kind=permission_denied");
 }

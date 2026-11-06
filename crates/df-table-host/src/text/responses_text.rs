@@ -21,6 +21,9 @@ use super::{facts_text, usage_from};
 
 /// OpenAI's Responses endpoint.
 const RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
+/// The operation the transport's `PROVIDER exchange` line names for a text call, which carries
+/// the exchange's status, cause and supplier request id.
+pub const EXCHANGE_OPERATION: &str = "text_responses";
 
 /// The model and key a Responses backend sends with.
 #[derive(Clone)]
@@ -182,7 +185,8 @@ impl TextBackend for ResponsesTextBackend {
             &route.key,
             "application/json".to_owned(),
             bytes,
-        );
+        )
+        .with_operation(EXCHANGE_OPERATION);
         match http.execute(call, deadline, std::future::pending()).await {
             Ok(response) => receipt(response.status, &response.body),
             Err(error) => failure(error.cause).into(),

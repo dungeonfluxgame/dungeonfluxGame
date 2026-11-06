@@ -102,3 +102,59 @@ fn a_log_installed_as_the_audit_sink_takes_the_audit_lines_of_the_libraries() {
         "the first log keeps the lines"
     );
 }
+
+#[test]
+fn each_line_is_stamped_with_the_time_of_the_injected_clock() {
+    let clock = std::sync::Arc::new(df_table::testkit::ManualClock::starting_at(5_000));
+    let log = EventLog::default().with_clock(clock.clone());
+    log.push("HOST first".to_owned());
+    clock.advance_ms(250);
+    log.push("HOST second".to_owned());
+    let stamps: Vec<u64> = log.newest(10).iter().map(|line| line.at_ms).collect();
+    assert_eq!(stamps, vec![5_000, 5_250]);
+}
+
+#[test]
+fn lines_pushed_out_by_the_line_or_byte_bound_are_counted_as_forgotten() {
+    let by_lines = EventLog::with_bounds(2, usize::MAX);
+    for index in 1..=5 {
+        by_lines.push(format!("line {index}"));
+    }
+    assert_eq!(by_lines.forgotten(), 3);
+    let by_bytes = EventLog::with_bounds(100, 10);
+    for _ in 0..3 {
+        by_bytes.push("12345678".to_owned());
+    }
+    let counts = by_bytes.counts();
+    assert_eq!(counts.forgotten, 2, "{counts:?}");
+    assert_eq!((counts.latest, counts.kept, counts.bytes), (3, 1, 8));
+}
+
+#[test]
+fn an_area_filter_keeps_only_lines_whose_first_word_is_the_area() {
+    let log = EventLog::default();
+    for text in [
+        "HOST a",
+        "CANVAS b",
+        "HOST c",
+        "HOSTILE d",
+        "HOST e",
+        "CANVAS f",
+    ] {
+        log.push(text.to_owned());
+    }
+    let texts = |lines: Vec<crate::event_log::LoggedLine>| -> Vec<String> {
+        lines.into_iter().map(|line| line.text).collect()
+    };
+    assert_eq!(
+        texts(log.after_sequence_in(1, 10, "HOST")),
+        vec!["HOST c", "HOST e"]
+    );
+    assert_eq!(texts(log.after_sequence_in(0, 1, "HOST")), vec!["HOST a"]);
+    assert_eq!(
+        texts(log.newest_in(2, "CANVAS")),
+        vec!["CANVAS b", "CANVAS f"]
+    );
+    assert_eq!(texts(log.newest_in(1, "HOST")), vec!["HOST e"]);
+    assert!(log.newest_in(10, "ENGINE").is_empty());
+}

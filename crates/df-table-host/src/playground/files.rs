@@ -3,7 +3,9 @@
 //!
 //! Names that reach the disk are checked first (a plain file name with an allowed extension), the
 //! size is bounded, and blocking file work runs off the async threads. Nothing here reads the
-//! canvas or interprets a file.
+//! canvas or interprets a file. A file that cannot be read (a 5xx), and a package file that is
+//! missing, is recorded as `PLAYGROUND file_unreadable kind= name= status=`; a successful read
+//! is not recorded.
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
@@ -17,7 +19,9 @@ use axum::body::Body;
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use serde::{Deserialize, Serialize};
 
+use super::audit::playground_line;
 use crate::limits::{MAXIMUM_ASSET_FILE_BYTES, MAXIMUM_PACKAGE_FILE_BYTES};
 use crate::media_library::read_in_chunks;
 use crate::state::AppState;
@@ -77,6 +81,18 @@ impl FileError {
             Self::Io(_) | Self::ModifiedBeforeEpoch | Self::Stopped => {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
+        }
+    }
+
+    /// A closed word for the audit line, so a log says why without carrying free text.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::InvalidName => "invalid_name",
+            Self::NotFound => "not_found",
+            Self::TooLarge { .. } => "too_large",
+            Self::Io(_) => "io",
+            Self::ModifiedBeforeEpoch => "modified_before_epoch",
+            Self::Stopped => "stopped",
         }
     }
 
@@ -266,14 +282,81 @@ pub fn revision(files: &PlaygroundFiles) -> Result<String, FileError> {
     ))
 }
 
-fn respond(result: Result<(Vec<u8>, &'static str), FileError>) -> Response {
+/// Which playground file a read was for, in its audit line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServedFileKind {
+    /// The page itself.
+    Asset,
+    Theme,
+    Revision,
+    FixtureList,
+    Fixture,
+    Package,
+}
+
+impl ServedFileKind {
+    pub const ALL: [Self; 6] = [
+        Self::Asset,
+        Self::Theme,
+        Self::Revision,
+        Self::FixtureList,
+        Self::Fixture,
+        Self::Package,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Asset => "asset",
+            Self::Theme => "theme",
+            Self::Revision => "revision",
+            Self::FixtureList => "fixture_list",
+            Self::Fixture => "fixture",
+            Self::Package => "package",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.key() == key)
+    }
+}
+
+/// Records a read the page needed and did not get: any 5xx, and a missing package file (the page
+/// cannot start without it). `name` is written only when it is a plain file name.
+fn record_unreadable(state: &AppState, kind: ServedFileKind, name: Option<&str>, error: FileError) {
+    let status = error.status();
+    let missing_package = kind == ServedFileKind::Package && status == StatusCode::NOT_FOUND;
+    if !status.is_server_error() && !missing_package {
+        return;
+    }
+    let name = name.filter(|name| is_plain_file_name(name)).unwrap_or("-");
+    state.record_line(playground_line(
+        "file_unreadable",
+        &[
+            ("kind", kind.key().to_owned()),
+            ("name", name.to_owned()),
+            ("status", status.as_u16().to_string()),
+        ],
+    ));
+}
+
+/// Answers a read of a playground file: its bytes, or its refusal, recorded when it matters.
+fn respond(
+    state: &AppState,
+    kind: ServedFileKind,
+    name: Option<&str>,
+    result: Result<(Vec<u8>, &'static str), FileError>,
+) -> Response {
     let (status, content_type, body) = match result {
         Ok((body, content_type)) => (StatusCode::OK, content_type, body),
-        Err(error) => (
-            error.status(),
-            "text/plain; charset=utf-8",
-            error.to_string().into_bytes(),
-        ),
+        Err(error) => {
+            record_unreadable(state, kind, name, error);
+            (
+                error.status(),
+                "text/plain; charset=utf-8",
+                error.to_string().into_bytes(),
+            )
+        }
     };
     let mut response = (status, body).into_response();
     let headers = response.headers_mut();
@@ -284,24 +367,28 @@ fn respond(result: Result<(Vec<u8>, &'static str), FileError>) -> Response {
 
 /// Runs blocking file work off the async threads.
 async fn blocking(
+    state: &AppState,
+    kind: ServedFileKind,
+    name: Option<&str>,
     work: impl FnOnce() -> Result<(Vec<u8>, &'static str), FileError> + Send + 'static,
 ) -> Response {
-    respond(run_file_task(work).await)
+    respond(state, kind, name, run_file_task(work).await)
 }
 
-async fn asset(files: PlaygroundFiles, name: &'static str) -> Response {
-    blocking(move || {
+async fn asset(state: &AppState, kind: ServedFileKind, name: &'static str) -> Response {
+    let files = state.playground().files().clone();
+    blocking(state, kind, Some(name), move || {
         read_file(&files.assets, name, &ASSET_EXTENSIONS).map(|bytes| (bytes, content_type(name)))
     })
     .await
 }
 
 pub(super) async fn page(State(state): State<Arc<AppState>>) -> Response {
-    asset(state.playground().files().clone(), INDEX_FILE).await
+    asset(&state, ServedFileKind::Asset, INDEX_FILE).await
 }
 
 pub(super) async fn theme(State(state): State<Arc<AppState>>) -> Response {
-    asset(state.playground().files().clone(), THEME_FILE).await
+    asset(&state, ServedFileKind::Theme, THEME_FILE).await
 }
 
 pub(super) async fn fixture(
@@ -309,7 +396,9 @@ pub(super) async fn fixture(
     UrlPath(name): UrlPath<String>,
 ) -> Response {
     let files = state.playground().files().clone();
-    blocking(move || {
+    let read_name = name.clone();
+    blocking(&state, ServedFileKind::Fixture, Some(&name), move || {
+        let name = read_name;
         read_file(
             &files.assets.join(FIXTURE_DIRECTORY),
             &name,
@@ -349,7 +438,7 @@ pub(super) async fn package_file(
             headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
             response
         }
-        Err(error) => respond(Err(error)),
+        Err(error) => respond(&state, ServedFileKind::Package, Some(&name), Err(error)),
     }
 }
 
@@ -366,7 +455,7 @@ fn open_package_file(directory: &Path, name: &str) -> Result<(std::fs::File, u64
 
 pub(super) async fn fixture_list(State(state): State<Arc<AppState>>) -> Response {
     let files = state.playground().files().clone();
-    blocking(move || {
+    blocking(&state, ServedFileKind::FixtureList, None, move || {
         let names = fixture_names(&files)?;
         // A list of strings always writes as JSON; the mapping only keeps the path panic-free.
         let text =
@@ -378,8 +467,10 @@ pub(super) async fn fixture_list(State(state): State<Arc<AppState>>) -> Response
 
 pub(super) async fn revision_text(State(state): State<Arc<AppState>>) -> Response {
     let files = state.playground().files().clone();
-    blocking(move || revision(&files).map(|text| (text.into_bytes(), "text/plain; charset=utf-8")))
-        .await
+    blocking(&state, ServedFileKind::Revision, None, move || {
+        revision(&files).map(|text| (text.into_bytes(), "text/plain; charset=utf-8"))
+    })
+    .await
 }
 
 /// The fixture names, read off the async threads.
@@ -388,3 +479,6 @@ pub(super) async fn current_fixture_names(
 ) -> Result<Vec<String>, FileError> {
     run_file_task(move || fixture_names(&files)).await
 }
+
+#[cfg(test)]
+mod files_tests;
