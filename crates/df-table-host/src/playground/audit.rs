@@ -176,6 +176,7 @@ pub(crate) fn controls_pairs(changes: &[ControlsChange]) -> Vec<(&'static str, S
             ControlsChange::ShowSam(shown) => ("show_sam", shown.to_string()),
             ControlsChange::TransitionStyle(style) => ("transition_style", style.key().to_owned()),
             ControlsChange::TransitionMs(ms) => ("transition_ms", ms.to_string()),
+            ControlsChange::ZoomLimit(limit) => ("zoom_limit", limit.key().to_owned()),
         })
         .collect()
 }

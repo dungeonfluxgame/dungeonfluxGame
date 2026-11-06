@@ -374,3 +374,18 @@ mod ceiling {
         );
     }
 }
+
+#[test]
+fn the_model_limit_ignores_the_plates_pixels_and_the_pixel_limit_keeps_them() {
+    use crate::camera::zoom_ceiling_under;
+    use crate::controls::ZoomLimit;
+    assert_eq!(
+        zoom_ceiling_under(ZoomLimit::Model, Some(1_672), 1_672),
+        crate::limits::MAXIMUM_ZOOM_PERCENT
+    );
+    assert_eq!(
+        zoom_ceiling_under(ZoomLimit::Pixels, Some(1_672), 1_672),
+        100
+    );
+    assert_eq!(zoom_ceiling_under(ZoomLimit::Pixels, Some(1_672), 836), 200);
+}

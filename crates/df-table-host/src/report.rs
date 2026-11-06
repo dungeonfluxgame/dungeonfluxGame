@@ -139,6 +139,7 @@ status: {}
 unavailable: {}
 grid: {}
 sam: {}
+zoom_limit: {}
 transition: {} {} ms
 scene: {scene}
 revision: {}
@@ -147,6 +148,7 @@ fixtures: {listed}",
         controls.show_unavailable,
         controls.show_grid,
         controls.show_sam,
+        controls.zoom_limit.key(),
         controls.transition.style.key(),
         controls.transition.duration_ms,
         reply.revision

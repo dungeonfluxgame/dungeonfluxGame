@@ -125,6 +125,7 @@ fn build_devices(document: &Document, app: &App) -> Result<Devices, JsValue> {
             app.stage_elements(),
             fixture.tv.camera.as_ref(),
             fixture.tv.backdrop_layout(),
+            app.controls.zoom_limit,
         )?;
         slots.extend(shell.slots);
         append(&stage, &shell.section)?;
@@ -460,6 +461,7 @@ fn draw(document: &Document, root: &Element, app: &mut App) -> Result<(), JsValu
     let Some(mut page) = app.page.take() else {
         app.page = Some(build_page(document, root, app)?);
         app.drawn = Some(now);
+        place_bubbles_of(app);
         let change = DrawnChange {
             devices: true,
             ..DrawnChange::default()
@@ -473,6 +475,9 @@ fn draw(document: &Document, root: &Element, app: &mut App) -> Result<(), JsValu
     app.page = Some(page);
     app.drawn = Some(now);
     let change = result?;
+    if change.devices || !change.parts.is_empty() {
+        place_bubbles_of(app);
+    }
     note_draw(app, &change);
     observe_shown(app, change.transition);
     Ok(())
@@ -507,13 +512,30 @@ fn apply_plan(
         {
             let camera = shown_fixture(app).and_then(|fixture| fixture.tv.camera.as_ref());
             let layout = shown_fixture(app).and_then(|fixture| fixture.tv.backdrop_layout());
-            tv.sync(document, app.stage_elements(), camera, layout)?;
+            let zoom_limit = app.controls.zoom_limit;
+            tv.sync(document, app.stage_elements(), camera, layout, zoom_limit)?;
         }
     }
     if plan.notes {
         fill_notes(document, &page.notes, app)?;
     }
     Ok(change)
+}
+
+/// Places the anchored bubbles of the shared screen clear of the chrome and of each other. The
+/// page was just drawn or laid out again, so the bubbles are measured as they stand.
+fn place_bubbles_of(app: &mut App) {
+    if let Some(tv) = app.page.as_mut().and_then(|page| page.tv.as_mut())
+        && let Err(error) = tv.place_bubbles()
+    {
+        view::bubble_layout::log_failure(&error);
+    }
+}
+
+/// Places the anchored bubbles again after the stage's size or a picture's size changed. A
+/// placement that did not change writes nothing.
+pub fn place_bubbles() {
+    with_app_mut(place_bubbles_of);
 }
 
 /// Draws what changed since the last draw.
@@ -538,7 +560,11 @@ pub fn update_stage() {
     let moved = document().and_then(|document| {
         with_app_mut(|app| {
             let App {
-                shown, live, page, ..
+                shown,
+                live,
+                page,
+                controls,
+                ..
             } = app;
             let (camera, layout) = match shown.as_deref() {
                 Some(Ok(fixture)) => (fixture.tv.camera.as_ref(), fixture.tv.backdrop_layout()),
@@ -546,7 +572,7 @@ pub fn update_stage() {
             };
             let elements = stage_elements_of(shown.as_deref(), live.as_ref());
             match page.as_mut().and_then(|page| page.tv.as_mut()) {
-                Some(tv) => tv.sync(&document, elements, camera, layout),
+                Some(tv) => tv.sync(&document, elements, camera, layout, controls.zoom_limit),
                 None => Ok(()),
             }
         })

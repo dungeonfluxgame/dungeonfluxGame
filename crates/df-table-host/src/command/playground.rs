@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use df_playground::controls::{ControlsChange, Device, TransitionStyle};
+use df_playground::controls::{ControlsChange, Device, TransitionStyle, ZoomLimit};
 use df_playground::copy::ReadingPace;
 use df_playground::limits::MAXIMUM_TRANSITION_MS;
 
@@ -52,6 +52,9 @@ fn playground_change(key: &str, value: &str) -> Result<ControlsChange, CommandEr
         "unavailable" => truth(key, value).map(ControlsChange::ShowUnavailable),
         "grid" => truth(key, value).map(ControlsChange::ShowGrid),
         "sam" => truth(key, value).map(ControlsChange::ShowSam),
+        "zoom_limit" => ZoomLimit::from_key(value)
+            .map(ControlsChange::ZoomLimit)
+            .ok_or_else(|| bad_choice(key, value, "model or pixels")),
         _ => Err(bad_choice("playground set", key, playground_keys())),
     }
 }

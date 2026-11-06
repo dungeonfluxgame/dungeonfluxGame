@@ -155,7 +155,8 @@ impl DrawPlan {
         // The camera can aim at a character of the backdrop's layout, so a new layout reframes.
         self.stage |= before.tv.elements != after.tv.elements
             || !same_camera(before.tv.camera.as_ref(), after.tv.camera.as_ref())
-            || before.tv.backdrop_layout() != after.tv.backdrop_layout();
+            || before.tv.backdrop_layout() != after.tv.backdrop_layout()
+            || before_controls.zoom_limit != after_controls.zoom_limit;
         let words_differ = (&before.name, &before.description) != (&after.name, &after.description);
         // The notes list where the scenario breaks the choice rules, so they follow the choices.
         let warnings_differ =

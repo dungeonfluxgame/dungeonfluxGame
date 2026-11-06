@@ -238,6 +238,12 @@ fn playground_alone_shows_and_set_reads_each_key_by_its_choices() {
             ControlsChange::ShowGrid(false),
         ]
     );
+    assert_eq!(
+        playground_changes("playground set zoom_limit=pixels"),
+        vec![ControlsChange::ZoomLimit(
+            df_playground::controls::ZoomLimit::Pixels
+        )]
+    );
 }
 
 #[test]
@@ -247,6 +253,7 @@ fn a_playground_value_that_is_not_a_choice_names_the_key_and_the_choices() {
         ("playground set pace=sleepy", "pace"),
         ("playground set grid=maybe", "grid"),
         ("playground set unavailable=2", "unavailable"),
+        ("playground set zoom_limit=sharp", "zoom_limit"),
     ] {
         let error = parse(&words(line)).expect_err("refused");
         assert!(

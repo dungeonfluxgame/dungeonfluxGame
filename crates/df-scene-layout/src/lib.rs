@@ -719,6 +719,51 @@ pub fn point_of(region: &SceneRegion, point: CharacterPoint) -> (u16, u16) {
     }
 }
 
+/// Where a character's face is, in thousandths of the picture: a box from the top of the head
+/// down to the chin (twice the drop from the head to the face point), as wide as a face that tall
+/// in this picture's proportions, kept inside the region's box. A bubble may never cover it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FaceBox {
+    pub left_permille: u16,
+    pub top_permille: u16,
+    pub right_permille: u16,
+    pub bottom_permille: u16,
+}
+
+/// A face is this wide for its height (chin to the top of the head), in thousandths.
+const FACE_WIDTH_PER_HEIGHT_PERMILLE: u32 = 820;
+
+/// The face box of `region` in a picture `width_px` by `height_px`.
+pub fn face_box(region: &SceneRegion, width_px: u32, height_px: u32) -> FaceBox {
+    let (_, face_y) = point_of(region, CharacterPoint::Face);
+    let top = region.head_y_permille;
+    let drop = face_y.saturating_sub(top);
+    let bottom = top
+        .saturating_add(drop.saturating_mul(2))
+        .min(region.bottom_permille)
+        .max(top.saturating_add(1));
+    let height_px_of_face = u64::from(bottom - top) * u64::from(height_px) / 1000;
+    let width_px_of_face = height_px_of_face * u64::from(FACE_WIDTH_PER_HEIGHT_PERMILLE) / 1000;
+    let half_permille = u16::try_from(width_px_of_face * 1000 / u64::from(width_px.max(1)) / 2)
+        .unwrap_or(FULL_PERMILLE)
+        .min(FULL_PERMILLE);
+    let left = region
+        .head_x_permille
+        .saturating_sub(half_permille)
+        .max(region.left_permille);
+    let right = region
+        .head_x_permille
+        .saturating_add(half_permille)
+        .min(region.right_permille)
+        .max(left.saturating_add(1));
+    FaceBox {
+        left_permille: left,
+        top_permille: top,
+        right_permille: right,
+        bottom_permille: bottom,
+    }
+}
+
 /// Where the camera looks for `shot` of the character in `region`, in thousandths of the screen.
 pub fn shot_focus(region: &SceneRegion, shot: Shot) -> (u16, u16) {
     (

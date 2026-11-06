@@ -1,3 +1,4 @@
+use crate::bubble_place::BubbleSide;
 use crate::controls::TransitionStyle;
 use crate::copy::{ReadingPace, caption_dwell_ms, word_count};
 use crate::fixture::Fixture;
@@ -241,6 +242,24 @@ fn a_draw_record_carries_the_stage_moves_since_the_last_one() {
             ..
         })
     ));
+}
+
+#[test]
+fn a_bubble_placement_is_a_draw_record_of_the_character_with_its_side_and_whether_it_moved() {
+    let mut log = PageLog::default();
+    log.note_bubble("warrior", BubbleSide::AboveHead, false, 700);
+    log.note_bubble("warrior", BubbleSide::BelowHead, true, 900);
+    let draws = of_kind(&log, TimelineKind::Draw);
+    assert_eq!(draws.len(), 2);
+    assert_eq!(draws[0].id, "warrior");
+    assert_eq!(draws[1].start_page_ms, 900);
+    assert_eq!(
+        draws[1].detail,
+        Some(TimelineDetail::Bubble {
+            side: BubbleSide::BelowHead,
+            moved: true,
+        })
+    );
 }
 
 #[test]

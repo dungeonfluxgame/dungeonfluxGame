@@ -331,3 +331,18 @@ fn every_key_is_its_serde_name_and_reads_back() {
         assert_eq!(Shot::from_key(shot.key()), Some(shot));
     }
 }
+
+#[test]
+fn a_face_box_runs_from_the_head_to_the_chin_inside_the_region() {
+    let layout = layout();
+    let region = layout.region("elf").expect("named");
+    let face = face_box(region, 1672, 941);
+    assert_eq!(face.top_permille, region.head_y_permille());
+    let (_, face_y) = point_of(region, CharacterPoint::Face);
+    assert!(face.bottom_permille > face_y, "{face:?}");
+    assert!(face.left_permille >= region.left_permille());
+    assert!(face.right_permille <= region.right_permille());
+    assert!(face.left_permille < region.head_x_permille());
+    assert!(face.right_permille > region.head_x_permille());
+    // TODO(DEV-12): cover a region whose box is narrower than its face and a cut-off figure.
+}

@@ -119,6 +119,9 @@ fn detail_text(detail: &TimelineDetail) -> String {
             let allowed = allowed_percent.map_or_else(|| "-".to_owned(), |zoom| zoom.to_string());
             format!("zoom={zoom_percent} allowed={allowed}")
         }
+        TimelineDetail::Bubble { side, moved } => {
+            format!("side={} moved={moved}", side.key())
+        }
         TimelineDetail::Scene { from, transition } => format!(
             "from={} transition={}",
             optional(from.as_deref()),

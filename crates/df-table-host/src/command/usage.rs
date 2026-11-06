@@ -84,7 +84,7 @@ pub(super) fn playground_keys() -> String {
     format!(
         "fixture=<name>, device=both|tv|phone, pace=slow|normal|fast, status=fixture|<status>, \
          unavailable=true|false, grid=true|false, sam=true|false, transition=cut|fade|wipe, \
-         ms=0-{MAXIMUM_TRANSITION_MS}"
+         ms=0-{MAXIMUM_TRANSITION_MS}, zoom_limit=model|pixels"
     )
 }
 

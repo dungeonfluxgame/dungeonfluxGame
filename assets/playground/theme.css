@@ -599,6 +599,10 @@ body {
 @keyframes camera-move { from { transform: var(--cam-from); --cam-scale: var(--cam-scale-from); } to { transform: var(--cam-to); --cam-scale: var(--cam-scale-to); } }
 .tv-anchors { position: absolute; inset: 0; pointer-events: none; }
 .tv-anchors .rp-bubble { transform-origin: var(--tail-tip) 100%; transform: scale(calc(1 / var(--cam-scale, 1))); }
+/* A bubble below its character's head hangs from the tail's tip at its top edge (`bubble_place`). */
+.tv-anchors .rp-bubble.rp-above { transform-origin: var(--tail-tip) 0; }
+.tv-anchors .rp-bubble.rp-tail-left { transform-origin: 0 var(--tail-tip-y); }
+.tv-anchors .rp-bubble.rp-tail-right { transform-origin: 100% var(--tail-tip-y); }
 .tv-anchors .rp-marker { transform: translate(-50%, -50%) scale(calc(1 / var(--cam-scale, 1))); }
 /* SAM tags and head dots are labels on the picture: they keep their size while the camera zooms. */
 .sam-tag, .sam-head { scale: calc(1 / var(--cam-scale, 1)); }
@@ -721,6 +725,12 @@ body {
 .rp-below { --shape: polygon(var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% calc(100% - var(--tail-h) - var(--cut)), calc(100% - var(--cut)) calc(100% - var(--tail-h)), calc(var(--tail-root) + var(--tail-w)) calc(100% - var(--tail-h)), var(--tail-tip) 100%, calc(var(--tail-root) - var(--tail-w)) calc(100% - var(--tail-h)), var(--cut) calc(100% - var(--tail-h)), 0 calc(100% - var(--tail-h) - var(--cut)), 0 var(--cut)); }
 .rp-above { --shape: polygon(var(--cut) var(--tail-h), calc(var(--tail-root) - var(--tail-w)) var(--tail-h), var(--tail-tip) 0, calc(var(--tail-root) + var(--tail-w)) var(--tail-h), calc(100% - var(--cut)) var(--tail-h), 100% calc(var(--tail-h) + var(--cut)), 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 calc(var(--tail-h) + var(--cut))); }
 .rp-body { position: relative; z-index: 1; }
+/* A tail on a side edge, for a bubble beside the speaker's face (the page picks it so a bubble never
+   covers a face): the tip is `--tail-tip-y` down the box, the root `--tail-root-y`. */
+.rp-tail-left { --shape: polygon(calc(var(--tail-h) + var(--cut)) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, calc(var(--tail-h) + var(--cut)) 100%, var(--tail-h) calc(100% - var(--cut)), var(--tail-h) calc(var(--tail-root-y) + var(--tail-w)), 0 var(--tail-tip-y), var(--tail-h) calc(var(--tail-root-y) - var(--tail-w)), var(--tail-h) var(--cut)); }
+.rp-tail-right { --shape: polygon(var(--cut) 0, calc(100% - var(--tail-h) - var(--cut)) 0, calc(100% - var(--tail-h)) var(--cut), calc(100% - var(--tail-h)) calc(var(--tail-root-y) - var(--tail-w)), 100% var(--tail-tip-y), calc(100% - var(--tail-h)) calc(var(--tail-root-y) + var(--tail-w)), calc(100% - var(--tail-h)) calc(100% - var(--cut)), calc(100% - var(--tail-h) - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut)); }
+.rp-tail-left .rp-body { padding: 1.1cqw 1.6cqw 1.1cqw calc(1.6cqw + var(--tail-h)); }
+.rp-tail-right .rp-body { padding: 1.1cqw calc(1.6cqw + var(--tail-h)) 1.1cqw 1.6cqw; }
 .rp-below .rp-body { padding: 1.1cqw 1.6cqw calc(1.1cqw + var(--tail-h)); }
 .rp-above .rp-body { padding: calc(1.1cqw + var(--tail-h)) 1.6cqw 1.1cqw; }
 .rp-tone-ally { --rim: #cfe2ff; --glow: #6aa3ff88; }

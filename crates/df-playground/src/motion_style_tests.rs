@@ -7,8 +7,8 @@ use crate::camera::Framing;
 use crate::continuity::CameraPlan;
 use crate::fixture::Slide;
 use crate::motion_style::{
-    CameraAction, CameraDrawn, camera_action, camera_style, frozen_card_style, frozen_world_style,
-    resting_camera_style, slide_style,
+    CAMERA_EASING, CameraAction, CameraDrawn, camera_action, camera_style, frozen_card_style,
+    frozen_world_style, resting_camera_style, slide_style,
 };
 
 fn slide(duration_ms: u64) -> Slide {
@@ -84,12 +84,23 @@ fn a_slide_never_writes_a_negative_elapsed_that_the_browser_would_refuse() {
 fn a_camera_at_rest_glides_to_its_framing_and_a_move_runs_between_two_framings() {
     assert_eq!(
         resting_camera_style(&zoomed()),
-        "transform: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale: 2.0000; transition: transform 90ms linear, --cam-scale 90ms linear;"
+        concat!(
+            "transform: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale: 2.0000; ",
+            "transition: transform 90ms cubic-bezier(.45, 0, .25, 1), ",
+            "--cam-scale 90ms cubic-bezier(.45, 0, .25, 1);"
+        )
     );
     let style = camera_style(&moving(2, zoomed()));
     assert_eq!(
         style,
-        "transform: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale: 2.0000; --cam-from: translate(0.000%, 0.000%) scale(1.0000); --cam-to: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale-from: 1.0000; --cam-scale-to: 2.0000; animation: camera-move 1000ms linear forwards; animation-delay: -250ms;"
+        concat!(
+            "transform: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale: 2.0000; ",
+            "--cam-from: translate(0.000%, 0.000%) scale(1.0000); ",
+            "--cam-to: translate(-50.000%, -20.000%) scale(2.0000); ",
+            "--cam-scale-from: 1.0000; --cam-scale-to: 2.0000; ",
+            "animation: camera-move 1000ms cubic-bezier(.45, 0, .25, 1) forwards; ",
+            "animation-delay: -250ms;"
+        )
     );
     assert_eq!(
         camera_style(&resting(2, zoomed())),
@@ -195,4 +206,16 @@ fn a_computed_value_that_is_not_plainly_a_number_is_not_trusted_and_the_copy_is_
     for hostile in ["auto", "", "12px;color:red", "50%"] {
         assert_eq!(frozen_card_style(hostile), "animation: none;", "{hostile}");
     }
+}
+
+#[test]
+fn a_camera_glide_and_its_zoom_number_share_one_ease_and_a_card_slide_stays_linear() {
+    let resting = resting_camera_style(&Framing::WHOLE_STAGE);
+    assert_eq!(
+        resting.matches(CAMERA_EASING).count(),
+        2,
+        "the transform and --cam-scale ease alike: {resting}"
+    );
+    assert!(!resting.contains("linear"));
+    assert!(CAMERA_EASING.starts_with("cubic-bezier("));
 }

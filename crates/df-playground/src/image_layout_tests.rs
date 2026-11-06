@@ -74,6 +74,7 @@ fn an_anchored_bubble_sits_over_the_head_with_its_tip_just_above_it() {
     assert_eq!((place.width_permille, place.left_permille), (80, 805));
     // The tip stops HEAD_GAP above the head at 420: 1000 - 405.
     assert_eq!(place.bottom_permille, 595);
+    assert_eq!((place.tip_x_permille, place.tip_y_permille), (845, 405));
     assert_eq!((place.root_percent, place.tip_percent), (50, 50));
 }
 

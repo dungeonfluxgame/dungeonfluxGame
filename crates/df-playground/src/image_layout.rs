@@ -86,11 +86,15 @@ pub fn marker_place(marker: &CharacterMarker, layout: Option<&ImageLayout>) -> O
 
 /// Where an anchored bubble is drawn: its box's left edge, the height of its bottom edge (the tip
 /// of its tail) from the bottom of the screen, its width, and where its tail's root and tip sit
-/// along the box.
+/// along the box, and the point its tip touches. The page moves the box from this first place when
+/// it would cover the screen's chrome or another bubble (`bubble_place`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnchoredPlace {
     pub left_permille: u16,
     pub bottom_permille: u16,
+    /// Where the tail's tip touches, in thousandths of the screen from its left and top.
+    pub tip_x_permille: u16,
+    pub tip_y_permille: u16,
     pub width_permille: u16,
     pub root_percent: u8,
     pub tip_percent: u8,
@@ -119,6 +123,8 @@ pub fn anchored_place(bubble: &Bubble, layout: Option<&ImageLayout>) -> Option<A
     Some(AnchoredPlace {
         left_permille: u16::try_from(left).unwrap_or(0),
         bottom_permille: FULL_PERMILLE - tip_y,
+        tip_x_permille: head_x,
+        tip_y_permille: tip_y,
         width_permille: width,
         root_percent: u8::try_from(along.clamp(inset, 100 - inset)).unwrap_or(TAIL_INSET_PERCENT),
         tip_percent: u8::try_from(along.clamp(0, 100)).unwrap_or(TAIL_INSET_PERCENT),

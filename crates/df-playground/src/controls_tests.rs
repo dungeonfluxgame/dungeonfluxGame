@@ -1,6 +1,6 @@
 use crate::controls::{
     Controls, ControlsChange, ControlsChangeReply, ControlsError, ControlsReply, Device,
-    FIXTURE_STATUS_KEY, Transition, TransitionStyle,
+    FIXTURE_STATUS_KEY, Transition, TransitionStyle, ZoomLimit,
 };
 use crate::copy::ReadingPace;
 use crate::fixture::Status;
@@ -98,6 +98,7 @@ fn each_change_sets_its_own_control() {
             show_grid: true,
             show_sam: true,
             transition: Transition::default(),
+            zoom_limit: ZoomLimit::default(),
         }
     );
 }
@@ -213,7 +214,10 @@ fn transition_styles_round_trip_by_key_and_by_json() {
     let text = serde_json::to_string(&ControlsChange::TransitionStyle(TransitionStyle::Wipe))
         .expect("writes");
     assert_eq!(text, r#"{"change":"transition_style","value":"wipe"}"#);
-    let old = r#"{"fixture":null,"device":"both","pace":"normal","status_key":"fixture","show_unavailable":false,"show_grid":false}"#;
+    let old = concat!(
+        r#"{"fixture":null,"device":"both","pace":"normal","status_key":"fixture","#,
+        r#""show_unavailable":false,"show_grid":false}"#
+    );
     assert_eq!(
         serde_json::from_str::<Controls>(old)
             .expect("an older controls text still reads")
@@ -229,6 +233,31 @@ fn the_keys_of_a_device_and_a_transition_style_are_their_serde_names() {
         &TransitionStyle::ALL,
         TransitionStyle::key,
         TransitionStyle::from_key,
+    );
+    assert_keys_are_serde_names(&ZoomLimit::ALL, ZoomLimit::key, ZoomLimit::from_key);
+}
+
+#[test]
+fn the_zoom_limit_is_the_model_by_default_is_set_on_its_own_and_reads_from_older_records() {
+    let mut controls = Controls::default();
+    assert_eq!(controls.zoom_limit, ZoomLimit::Model);
+    controls
+        .apply(ControlsChange::ZoomLimit(ZoomLimit::Pixels))
+        .expect("applies");
+    assert_eq!(controls.zoom_limit, ZoomLimit::Pixels);
+    assert_eq!(ZoomLimit::from_key("sharp"), None);
+    let text =
+        serde_json::to_string(&ControlsChange::ZoomLimit(ZoomLimit::Pixels)).expect("writes");
+    assert_eq!(text, r#"{"change":"zoom_limit","value":"pixels"}"#);
+    let old = concat!(
+        r#"{"fixture":null,"device":"both","pace":"normal","status_key":"fixture","#,
+        r#""show_unavailable":false,"show_grid":false}"#
+    );
+    assert_eq!(
+        serde_json::from_str::<Controls>(old)
+            .expect("reads")
+            .zoom_limit,
+        ZoomLimit::Model
     );
 }
 

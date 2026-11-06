@@ -5,6 +5,7 @@
 //! held so the picture always covers the screen: a target near an edge is as near the middle as the
 //! edge allows. It never draws; `view::tv` puts these numbers into a style.
 
+use crate::controls::ZoomLimit;
 use crate::fixture::{Camera, StageElement};
 use crate::layout::stage_percent;
 use crate::limits::{MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
@@ -76,6 +77,19 @@ pub fn zoom_ceiling_percent(plate_width_px: Option<u32>, stage_width_px: u32) ->
     let floor = u64::from(MINIMUM_ZOOM_PERCENT);
     let ceiling = u64::from(MAXIMUM_ZOOM_PERCENT);
     u16::try_from(bearable.clamp(floor, ceiling)).unwrap_or(MAXIMUM_ZOOM_PERCENT)
+}
+
+/// The zoom ceiling under `limit`: the model's largest, or the picture's own pixels
+/// (`zoom_ceiling_percent`).
+pub fn zoom_ceiling_under(
+    limit: ZoomLimit,
+    plate_width_px: Option<u32>,
+    stage_width_px: u32,
+) -> u16 {
+    match limit {
+        ZoomLimit::Model => MAXIMUM_ZOOM_PERCENT,
+        ZoomLimit::Pixels => zoom_ceiling_percent(plate_width_px, stage_width_px),
+    }
 }
 
 /// The zoom that is drawn when `requested` is asked for under `ceiling`, and the ceiling itself

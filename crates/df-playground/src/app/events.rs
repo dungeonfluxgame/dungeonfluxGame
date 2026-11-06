@@ -6,7 +6,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{Element, Event, HtmlImageElement, HtmlSelectElement};
 
 use super::frames::send_change;
-use super::page::{on_animation_end, render};
+use super::page::{on_animation_end, place_bubbles, render};
 use super::report::schedule_report;
 use super::state::with_app;
 use crate::audio;
@@ -46,6 +46,9 @@ pub fn on_media_event(event: &Event, failed: bool) {
             ErrorSource::Asset,
             &format!("picture '{name}' did not load"),
         );
+    } else {
+        // A speaker's portrait can change the size of the bubble that holds it.
+        place_bubbles();
     }
     schedule_report();
 }

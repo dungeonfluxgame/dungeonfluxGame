@@ -25,6 +25,7 @@ use web_sys::Event;
 use crate::dom::{append, document, element};
 use crate::timeline::ErrorSource;
 use events::{note_gesture, on_animation_ended, on_change, on_click, on_media_event};
+use page::place_bubbles;
 use state::{ROOT_ID, THEME_ID, log_error, with_app_mut};
 
 thread_local! {
@@ -74,6 +75,12 @@ pub fn start() -> Result<(), JsValue> {
     let failed = Closure::<dyn FnMut(Event)>::new(|event: Event| on_media_event(&event, true));
     root.add_event_listener_with_callback_and_bool("error", failed.as_ref().unchecked_ref(), true)?;
     failed.forget();
+
+    // A window that changes size changes the stage's, and the bubbles are placed for its size.
+    let window = web_sys::window().ok_or_else(|| JsValue::from_str("the page has no window"))?;
+    let resized = Closure::<dyn FnMut(Event)>::new(|_: Event| place_bubbles());
+    window.add_event_listener_with_callback("resize", resized.as_ref().unchecked_ref())?;
+    resized.forget();
 
     let client_id = format!(
         "page-{:08x}",

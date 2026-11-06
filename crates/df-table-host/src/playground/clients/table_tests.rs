@@ -263,6 +263,30 @@ fn a_scene_a_camera_and_a_draw_write_their_lines() {
 }
 
 #[test]
+fn a_bubble_placement_writes_its_character_side_and_whether_it_moved() {
+    let (table, _) = heard();
+    let mut placed = closed(
+        record(4, TimelineKind::Draw, "warrior", 20),
+        20,
+        EndReason::Ended,
+    );
+    placed.end_reason = None;
+    placed.detail = Some(TimelineDetail::Bubble {
+        side: df_playground::bubble_place::BubbleSide::BelowHead,
+        moved: true,
+    });
+    let report = ClientReport {
+        timeline: vec![placed],
+        ..report()
+    };
+    let lines = table.record("page-1".to_owned(), report, 0).lines;
+    assert_eq!(
+        lines,
+        ["CLIENT bubble client=page-1 seq=4 at_ms=20 character=warrior side=below_head moved=true"]
+    );
+}
+
+#[test]
 fn an_id_that_is_not_a_plain_name_is_written_as_a_dash() {
     let (table, _) = heard();
     let figure = closed(

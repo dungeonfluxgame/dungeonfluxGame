@@ -10,6 +10,7 @@
 
 mod audit_fields;
 pub mod backoff;
+pub mod bubble_place;
 pub mod camera;
 pub mod checks;
 pub mod choices;
@@ -56,6 +57,8 @@ mod fixtures;
 
 #[cfg(test)]
 mod backoff_tests;
+#[cfg(test)]
+mod bubble_place_tests;
 #[cfg(test)]
 mod camera_tests;
 #[cfg(test)]

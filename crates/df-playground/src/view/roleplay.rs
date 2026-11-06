@@ -61,6 +61,14 @@ pub fn anchored(document: &Document, scene: &TvScene) -> Result<Option<Element>,
         return Ok(None);
     };
     let root = element(document, "div", "tv-anchors")?;
+    // Every named face, so the page keeps every bubble off every face (`view::bubble_layout`).
+    let faces: Vec<String> = layout
+        .regions()
+        .iter()
+        .filter(|region| region.label().is_some())
+        .map(|region| face_text(layout, region))
+        .collect();
+    root.set_attribute("data-faces", &faces.join(";"))?;
     let mut any = false;
     for bubble in &card.bubbles {
         if anchored_place(bubble, Some(layout)).is_some() {
@@ -96,8 +104,11 @@ fn bubble_element(
     bubble: &Bubble,
     layout: Option<&ImageLayout>,
 ) -> Result<Element, JsValue> {
-    let (side, style) = match anchored_place(bubble, layout) {
+    let placed = anchored_place(bubble, layout);
+    let (side, style) = match placed {
         // Anchored: the box's bottom edge is the tail's tip, just above the scanned head point.
+        // This is the first place; the page moves it clear of the chrome and the other bubbles
+        // (`view::bubble_layout`).
         Some(place) => (
             "rp-below rp-anchored",
             format!(
@@ -130,6 +141,20 @@ fn bubble_element(
         &format!("rp-bubble rp-tone-{} {side}", bubble.tone.key()),
     )?;
     set_style(&wrapper, &style)?;
+    if let (Some(place), Some(anchor)) = (placed, &bubble.anchor) {
+        // What the page needs to place the bubble again without the layout: the character, the
+        // point the tip touches and the tail's first place, in thousandths of the screen.
+        wrapper.set_attribute("data-character", &anchor.region)?;
+        wrapper.set_attribute("data-tip-x", &place.tip_x_permille.to_string())?;
+        wrapper.set_attribute("data-tip-y", &place.tip_y_permille.to_string())?;
+        wrapper.set_attribute("data-width", &place.width_permille.to_string())?;
+        wrapper.set_attribute("data-lean", &place.tip_percent.to_string())?;
+        if let Some(layout) = layout
+            && let Some(region) = layout.region(&anchor.region)
+        {
+            wrapper.set_attribute("data-face", &face_text(layout, region))?;
+        }
+    }
     let body = element(document, "div", "rp-body")?;
     if bubble.tone == BubbleTone::Thought {
         // A thinking indicator shows no words: three pulsing dots, named for a screen reader.
@@ -174,4 +199,14 @@ fn bubble_element(
     }
     append(&wrapper, &body)?;
     Ok(wrapper)
+}
+
+/// A character's face box as `left,top,right,bottom` in thousandths of the picture.
+fn face_text(layout: &ImageLayout, region: &df_scene_layout::SceneRegion) -> String {
+    let picture = layout.picture();
+    let face = df_scene_layout::face_box(region, picture.width_px, picture.height_px);
+    format!(
+        "{},{},{},{}",
+        face.left_permille, face.top_permille, face.right_permille, face.bottom_permille
+    )
 }

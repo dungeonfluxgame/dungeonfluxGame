@@ -78,6 +78,33 @@ impl TransitionStyle {
     }
 }
 
+/// What bounds the shared screen's camera zoom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZoomLimit {
+    /// Only the model's largest zoom applies, so the camera may draw a plate larger than its own
+    /// pixels.
+    #[default]
+    Model,
+    /// The camera never draws the plate larger than its own pixels.
+    Pixels,
+}
+
+impl ZoomLimit {
+    pub const ALL: [Self; 2] = [Self::Model, Self::Pixels];
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Pixels => "pixels",
+        }
+    }
+}
+
 /// The style and length of the transition used the next time the scene changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +139,9 @@ pub struct Controls {
     /// How the next change of scene is drawn.
     #[serde(default)]
     pub transition: Transition,
+    /// What bounds the camera's zoom.
+    #[serde(default)]
+    pub zoom_limit: ZoomLimit,
 }
 
 fn shown_by_default() -> bool {
@@ -129,6 +159,7 @@ impl Default for Controls {
             show_grid: false,
             show_sam: true,
             transition: Transition::default(),
+            zoom_limit: ZoomLimit::default(),
         }
     }
 }
@@ -203,6 +234,8 @@ pub enum ControlsChange {
     TransitionStyle(TransitionStyle),
     /// Sets how long the next change of scene takes, up to `MAXIMUM_TRANSITION_MS`.
     TransitionMs(u64),
+    /// Sets what bounds the camera's zoom.
+    ZoomLimit(ZoomLimit),
 }
 
 /// Why a change was refused.
@@ -265,6 +298,7 @@ impl Controls {
                 }
                 self.transition.duration_ms = ms;
             }
+            ControlsChange::ZoomLimit(limit) => self.zoom_limit = limit,
         }
         Ok(())
     }

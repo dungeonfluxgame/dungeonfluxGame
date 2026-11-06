@@ -153,7 +153,7 @@ fn format_camera(moved: &CameraMoved) -> String {
     format!(
         concat!(
             "ok (revision {}) camera on {} at {}% over {} ms ",
-            "(the page holds the zoom to what the plate's pixels bear)"
+            "(the page draws it under the playground's zoom_limit: model or pixels)"
         ),
         moved.revision, moved.target, moved.zoom_percent, moved.duration_ms
     )

@@ -14,9 +14,9 @@ use std::collections::HashMap;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, Element, HtmlElement, HtmlImageElement};
 
-use crate::camera::{clamped_zoom, zoom_ceiling_percent};
+use crate::camera::{Framing, clamped_zoom, zoom_ceiling_under};
 use crate::continuity::CameraPlan;
-use crate::controls::Controls;
+use crate::controls::{Controls, ZoomLimit};
 use crate::copy::{status_blocks_input, status_copy};
 use crate::dom::{
     append, element, js_message, now_ms, picture, set_style, text_element, with_continuity,
@@ -29,6 +29,7 @@ use crate::limits::MAXIMUM_ZOOM_PERCENT;
 use crate::media::{MediaKind, media_kind};
 use crate::motion_style::{CameraAction, CameraDrawn, camera_action, camera_style};
 use crate::path::media_file;
+use crate::view::bubble_layout::BubbleLayout;
 use crate::view::kit::dwell_note;
 
 /// The parts of the shared screen, in the order they are drawn.
@@ -220,6 +221,10 @@ pub struct TvHandles {
     ceiling: Option<ZoomCeiling>,
     /// The move whose cut zoom was last logged, so it is said once.
     clamp_logged: u64,
+    /// The stage, which the anchored bubbles are measured in.
+    stage: Element,
+    /// Where the anchored bubbles were placed, so they move only when they must.
+    bubbles: BubbleLayout,
 }
 
 /// A zoom ceiling and what it was worked out from.
@@ -227,6 +232,7 @@ pub struct TvHandles {
 struct ZoomCeiling {
     serial: u64,
     plate_width_px: Option<u32>,
+    limit: ZoomLimit,
     percent: u16,
 }
 
@@ -240,12 +246,13 @@ impl TvHandles {
         elements: Option<&[StageElement]>,
         camera: Option<&Camera>,
         layout: Option<&ImageLayout>,
+        zoom_limit: ZoomLimit,
     ) -> Result<(), JsValue> {
         if let Some(elements) = elements {
             self.figures.sync(document, &self.layer, elements)?;
         }
         let ceiling = match camera {
-            Some(camera) => self.zoom_ceiling(camera),
+            Some(camera) => self.zoom_ceiling(camera, zoom_limit),
             None => MAXIMUM_ZOOM_PERCENT,
         };
         // The camera can also aim at a character of the backdrop's layout (`region:<label>`): its
@@ -280,20 +287,21 @@ impl TvHandles {
     /// noted once on the camera's timeline record, not cut silently. The stage is measured only
     /// when the move or the plate changes, because reading its width makes the browser lay the
     /// page out.
-    fn zoom_ceiling(&mut self, camera: &Camera) -> u16 {
+    fn zoom_ceiling(&mut self, camera: &Camera, limit: ZoomLimit) -> u16 {
         let plate = self.plate_width_px();
-        let known = self
-            .ceiling
-            .filter(|known| known.serial == camera.serial && known.plate_width_px == plate);
+        let known = self.ceiling.filter(|known| {
+            known.serial == camera.serial && known.plate_width_px == plate && known.limit == limit
+        });
         let percent = match known {
             Some(known) => known.percent,
             None => {
                 let ratio = web_sys::window().map_or(1.0, |window| window.device_pixel_ratio());
                 let stage_px = (f64::from(self.world.client_width()) * ratio).round() as u32;
-                let percent = zoom_ceiling_percent(plate, stage_px);
+                let percent = zoom_ceiling_under(limit, plate, stage_px);
                 self.ceiling = Some(ZoomCeiling {
                     serial: camera.serial,
                     plate_width_px: plate,
+                    limit,
                     percent,
                 });
                 percent
@@ -330,7 +338,22 @@ impl TvHandles {
             CameraAction::Restyle => set_style(&self.world, &camera_style(plan))?,
         }
         self.camera_drawn = Some(CameraDrawn::of(plan));
+        if self.bubbles.framing_moved(&plan.to) {
+            self.place_bubbles()?;
+        }
         Ok(())
+    }
+
+    /// Places the anchored bubbles clear of the screen's chrome and of each other, for the camera
+    /// as it rests (or will rest, when it is moving). The page calls it when the bubbles, the
+    /// stage's layout or the camera's framing changed; a placement that did not change writes
+    /// nothing.
+    pub fn place_bubbles(&mut self) -> Result<(), JsValue> {
+        let framing = self
+            .camera_drawn
+            .as_ref()
+            .map_or(Framing::WHOLE_STAGE, |drawn| drawn.to);
+        self.bubbles.place(&self.stage, &framing)
     }
 }
 
@@ -389,6 +412,8 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
                 .ok_or_else(|| JsValue::from_str("the shared screen has no backdrop slot"))?,
             ceiling: None,
             clamp_logged: 0,
+            stage,
+            bubbles: BubbleLayout::default(),
         },
         slots,
     })

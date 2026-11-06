@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
+use crate::bubble_place::BubbleSide;
 use crate::controls::TransitionStyle;
 use crate::copy::{ReadingPace, caption_dwell_ms, result_card_dwell_ms, word_count};
 use crate::fixture::{Fixture, StageElement};
@@ -223,6 +224,9 @@ pub enum TimelineDetail {
         zoom_percent: u16,
         allowed_percent: Option<u16>,
     },
+    /// An anchored bubble placed: the side of its character's head it went to, and whether it
+    /// moved from a place it had (a bubble shown for the first time did not move).
+    Bubble { side: BubbleSide, moved: bool },
     /// A scene shown: the scene before it and how the page left that one.
     Scene {
         from: Option<String>,
@@ -625,6 +629,22 @@ impl PageLog {
             end_reason: None,
             planned_ms: None,
             detail: Some(detail),
+        });
+    }
+
+    /// An anchored bubble of `character` was placed on `side` of its head. `moved` is true when
+    /// it had another place before. Only a change is noted, never a redraw that kept the place.
+    pub fn note_bubble(&mut self, character: &str, side: BubbleSide, moved: bool, now_ms: u64) {
+        let seq = self.next_seq();
+        self.push(TimelineRecord {
+            seq,
+            kind: TimelineKind::Draw,
+            id: character.to_owned(),
+            start_page_ms: now_ms,
+            end_page_ms: Some(now_ms),
+            end_reason: None,
+            planned_ms: None,
+            detail: Some(TimelineDetail::Bubble { side, moved }),
         });
     }
 

@@ -245,6 +245,13 @@ fn arrival_line(client: &str, entry: &TimelineEntry) -> Option<String> {
                 transition.map_or("none", |style| style.key()),
             ))
         }
+        (TimelineKind::Draw, Some(TimelineDetail::Bubble { side, moved })) => Some(format!(
+            "CLIENT bubble client={client} seq={} at_ms={} character={} side={} moved={moved}",
+            entry.seq,
+            entry.start_ms,
+            checked(&entry.id),
+            side.key(),
+        )),
         _ => None,
     }
 }

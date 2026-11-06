@@ -9,6 +9,11 @@ use crate::continuity::CameraPlan;
 use crate::fixture::Slide;
 use crate::limits::CAMERA_GLIDE_MS;
 
+/// The easing of every camera glide: slow out of the start, quick through the middle, slow into
+/// the end. One curve for the transform and the zoom number so the anchors counter-scaled by the
+/// zoom stay in step with the picture.
+pub const CAMERA_EASING: &str = "cubic-bezier(.45, 0, .25, 1)";
+
 /// The inline style that makes a card slide: its place at the end, and an animation that starts
 /// part-way through when the slide is already `elapsed_ms` under way.
 pub fn slide_style(slide: &Slide, elapsed_ms: f64) -> String {
@@ -27,9 +32,14 @@ pub fn slide_style(slide: &Slide, elapsed_ms: f64) -> String {
 /// The style that frames the world layer at rest: the framing, reached with a short glide.
 pub fn resting_camera_style(to: &Framing) -> String {
     format!(
-        "transform: {}; --cam-scale: {:.4}; transition: transform {CAMERA_GLIDE_MS}ms linear, --cam-scale {CAMERA_GLIDE_MS}ms linear;",
+        concat!(
+            "transform: {}; --cam-scale: {:.4}; ",
+            "transition: transform {glide}ms {easing}, --cam-scale {glide}ms {easing};"
+        ),
         to.transform(),
-        to.scale
+        to.scale,
+        glide = CAMERA_GLIDE_MS,
+        easing = CAMERA_EASING
     )
 }
 
@@ -40,7 +50,13 @@ pub fn camera_style(plan: &CameraPlan) -> String {
         return resting_camera_style(&plan.to);
     }
     format!(
-        "transform: {to}; --cam-scale: {to_scale:.4}; --cam-from: {from}; --cam-to: {to}; --cam-scale-from: {from_scale:.4}; --cam-scale-to: {to_scale:.4}; animation: camera-move {duration}ms linear forwards; animation-delay: -{elapsed:.0}ms;",
+        concat!(
+            "transform: {to}; --cam-scale: {to_scale:.4}; --cam-from: {from}; --cam-to: {to}; ",
+            "--cam-scale-from: {from_scale:.4}; --cam-scale-to: {to_scale:.4}; ",
+            "animation: camera-move {duration}ms {easing} forwards; ",
+            "animation-delay: -{elapsed:.0}ms;"
+        ),
+        easing = CAMERA_EASING,
         from = plan.from.transform(),
         to = plan.to.transform(),
         from_scale = plan.from.scale,
