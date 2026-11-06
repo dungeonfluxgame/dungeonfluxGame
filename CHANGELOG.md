@@ -14,6 +14,14 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-03T13:01:12-05:00 to 2026-11-06T12:32:12-05:00
+
+Range: d0eba878..490ba5906d3beb4f96e5f7861ddcbe9b551a07a0
+
+- 490ba5906d3beb4f96e5f7861ddcbe9b551a07a0 - Cleanup pass: one surface per service, one interface convention, SAM scene layouts, testing studio
+
+This one integration commit holds the SAM scene-layout work and the cleanup pass. The block starts at the baseline commit d0eba878 because the work session's start time was not recorded. Verification and follow-ups are recorded in development/cleanup-2026-11-06.md. Commits from d0eba878 back to the 2026-10-27 block were not recorded by their coordinator and are not covered here.
+
 ## 2026-10-27T20:50:26-04:00 to 2026-10-27T22:14:33-04:00
 
 Range: 703267289d580d933e07b623fbea6fbba4ec4578..6d0ce07e1d775d8bff9f569b23826a0503e13035
