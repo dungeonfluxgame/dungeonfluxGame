@@ -25,6 +25,20 @@ Before implementing:
   requirements or conflicting contracts, name the uncertainty and seek a decision
   while continuing work that does not depend on it.
 
+**Read the code before you write it.** Before adding a type, function, constant, route, CLI
+verb, error, module or file:
+- Search the workspace for the thing you need (`rg` by concept, not just by your planned name).
+  Read the owning module and its callers, the governing design document, and the style guide's
+  "Interface shape" section.
+- If it exists, use it. If something close exists, extend it in place. Never write a parallel
+  copy (a second client, parser, reply shape, error enum, limit or helper). One concern has one
+  surface.
+- Never invent an API, field, crate, path, setting or behaviour the code and the design do not
+  call for. If the task seems to need one, say so in the report and use the closest existing
+  surface.
+- Name things the way the surrounding code already names them, and match its existing patterns.
+  Duplicated code and parallel interfaces are defects, even when they pass the tests.
+
 ## 2. Simplicity First
 
 **Minimum code that solves the problem. Nothing speculative.**
@@ -303,18 +317,40 @@ contains the observation, with optional retained evidence/link. Same-ID retries
 are idempotent and changed observations use new linked rows. This local role
 contract does not replace the future runner's trusted identity/access binding.
 
-## Generated files and artifacts
+## Workspace hygiene
 
-Use `artifacts/` for all project-controlled caches, generated build output, scratch
-files, and temporary staging files that do not need to be saved in Git. Point tool
-cache and temporary-output settings there; do not scatter generated files through
-source directories or the project root. Use subfolders such as `artifacts/cache/`,
-`artifacts/build/`, and `artifacts/tmp/<attempt-id>/`.
+Leave the repository as you found it plus your task's change, and nothing else. Before handoff,
+run `py -3 development/hygiene-check.py` and fix what it reports. `RESULT PASS` is required, or
+name each remaining item and why it stays.
 
-The entire `artifacts/` folder is gitignored. Source files, ADRs, the changelog,
-and durable workflow records must not depend on disposable files there. Ignored
-files are not automatically stale: preserve active output and retained devlog
-evidence according to ADR 0002 and ADR 0003.
+- **Files.** Scratch files, logs and evidence go in `artifacts/tmp/<task-or-attempt-id>/`. Never
+  put them in the top level of `artifacts/tmp/`, the repository root, a crate or the system temp.
+  Delete them at handoff unless the handoff lists them as retained evidence. All of `artifacts/`
+  is gitignored, so nothing durable may depend on it (ADR 0002, ADR 0003).
+- **Builds.** Each lane reuses one warm `artifacts/build/<lane>` directory. Never make a fresh
+  target directory per attempt, review or fix: a cold host build costs minutes. Never delete a
+  build directory another agent or a running process uses. Build output, caches and tool settings
+  stay under `artifacts/`.
+- **Edits.** Change files with exact edits. Never rewrite a whole file you did not create. Keep LF
+  line endings and the file's encoding; a Python or shell write on Windows must set `newline="
+"`.
+  Run a formatter only on files you changed. Move or rename files only when the task is that move.
+- **No leftovers.** At handoff there are no temporary tests or debug output, no commented-out
+  code, and no `#[allow]` "for later". There are no shims, aliases or transitional variants either,
+  unless the same task removes them. A migration finishes its own migration.
+- **Scope.** Touch only the paths the brief gives you. Add no new docs, READMEs, crates, modules or
+  abstractions unless the task needs them. Make no drive-by refactors. List anything else you notice
+  in the handoff.
+- **Processes.** Track every process you start (hosts, watchers, browsers, dev servers) and use
+  your own port. Stop them before handoff. Never stop a process you did not start.
+- **Git.** Only the coordinator stages, commits, stashes, resets, checks out or pushes. Never leave
+  conflict markers. Before handoff, check `git status` and `git diff --stat`: every changed path
+  must trace to the task.
+- **Reports.** Keep them short: what changed, commands and results, gaps. Put long logs in your
+  `artifacts/tmp/<id>/` folder and give the path; never paste them.
+- **Gameplay refinement mode.** When the owner asks for speed over depth, make small direct edits
+  with one warm build and one browser check. Mark every test still owed with
+  `TODO(DEV-12): <test>` (tracked in `planning/issue-triage.md`).
 
 ## Changelog
 

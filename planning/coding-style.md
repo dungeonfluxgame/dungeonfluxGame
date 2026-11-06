@@ -25,6 +25,18 @@ a pattern to copy, and it is not a licence to rewrite unrelated code (`AGENTS.md
    async, owned and timed out (section 7).
 5. **Measure before claiming.** A speed-up shows its numbers, or it plainly removes work (section 7).
 6. **Smallest correct change.** Nothing speculative, no drive-by edits (`AGENTS.md` sections 2-3).
+7. **Reuse before you write; never invent.** Search first, then extend what exists. Every concept has
+   one home: one client, one parser, one reply shape, one error enum per boundary, one limit, one
+   helper. A second copy is a defect even when it passes its tests.
+   - Before adding a type, function, constant, route, verb, setting or file, search the workspace
+     for it by concept. Read the owning module and the design document that governs it.
+   - Never invent an API, field, crate, path or behaviour that the code and the design do not call
+     for. If one seems needed, report it and use the closest existing surface meanwhile.
+   - Bad: three copied envelopes (`EngineReply`, `DirectorReply`, `SceneReply`) for one reply
+     shape, and eight copies of the dev client's read and post code, before the 2026-11-06 cleanup
+     made them `DevReply` and `dev_client`.
+   - Bad: a second region type for SAM masks beside `df_scene_layout::SceneRegion`, or a one-off
+     identify service beside the durable text service.
 
 ## 2. Formatting, lints and tooling
 
@@ -441,6 +453,10 @@ A change is not approved while any answer is "no" without a stated, accepted rea
 
 **Scope and style**
 - [ ] Only the task's files; no drive-by rewrites; `gate.sh` says `RESULT PASS`; clippy clean on touched crates.
+- [ ] `development/hygiene-check.py` says `RESULT PASS`: no stray files, CRLF, debug output, bare
+      `#[allow]`, untracked TODOs or leftover shims.
+- [ ] Nothing duplicated or invented: every new type, function, route, verb and setting was
+      searched for first, and no parallel copy of an existing surface was added (principle 7).
 - [ ] Names state the outcome; booleans read true; units in names; domain vocabulary; no `utils` or `helper`.
 - [ ] Comments are why, invariant, citation or dated owner decision; none restate code; no commented-out
       code; every TODO has a tracked ID; no stale or misplaced doc comment.

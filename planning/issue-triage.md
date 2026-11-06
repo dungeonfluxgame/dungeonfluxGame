@@ -260,6 +260,7 @@ Nobody but the owner has heard the game this evening; the recordings are silent.
 | DEV-04 | 3 | The command line's back, forward and restore are written and unit-tested but have no verified transcript; direct edits (`override`) are disabled. | this session | (#291) |
 | DEV-05 | 4 | The recording method used this evening (hidden browser with WebGPU, TV and one phone recorded) lives in the coordinator's scratch folder. Worth making a repository check so every fight change comes with a video. | SR | Fixed `0a9436f` (#292) |
 | DEV-06 | 4 | Work in the tree since commit `c400f95` is uncommitted: the stopped workers' changes and this evening's roadmap sections. | this session | (#293) |
+| DEV-12 | 4 | Gameplay refinement favours speed over test depth (owner, 2026-11-06). Code shipped with light checks carries `TODO(DEV-12)` comments that name the unit tests still owed; grep `TODO(DEV-12)` to find them. | OWNER | Open: write the named tests when the feature settles |
 
 ## 16. Found by reading the code
 
