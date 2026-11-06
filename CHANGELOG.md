@@ -14,6 +14,13 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-06T12:32:12-05:00 to 2026-11-06T14:25:21-05:00
+
+Range: a3304bdc..7003ce990186e2ac4abbb5927af47c127ec44d0e
+
+- a3304bdc - CHANGELOG: record the cleanup integration block (bookkeeping carried from the prior block)
+- 7003ce990186e2ac4abbb5927af47c127ec44d0e - Cleanup wave 3: typed CLI refusals, StatusCode, key() everywhere, typed errors across crates
+
 ## 2026-11-03T13:01:12-05:00 to 2026-11-06T12:32:12-05:00
 
 Range: d0eba878..490ba5906d3beb4f96e5f7861ddcbe9b551a07a0
