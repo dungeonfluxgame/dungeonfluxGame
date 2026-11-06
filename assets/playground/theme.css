@@ -505,6 +505,11 @@ body {
   background: radial-gradient(ellipse at 50% 100%, #080d14ee, #080d1400 74%);
 }
 .tv-stage:not(:has(.tv-party)) .tv-caption { bottom: 5%; }
+/* A roleplay card's own caption bar holds the bottom of the screen: a spoken caption sits above it,
+   not on top of it. The bar starts where `.rp-caption` does and is about 9.5cqw tall at most. */
+.tv-stage:has(.rp-caption) .tv-caption:not(.tv-narration) {
+  bottom: calc(max(4%, calc(var(--ui-reserved-bottom) - 6%)) + 10.5cqw);
+}
 /* A speaker between rules and an italic line, as in render 14. */
 .tv-speaker {
   display: flex; align-items: center; justify-content: center; gap: var(--ui-space-3);
