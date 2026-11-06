@@ -124,7 +124,7 @@ fn enqueue_command(job: u8, stage: u8, now_ms: i64) -> EnqueueCommand {
             asset: id(0x41),
             attempt: id(0x42),
         },
-        CapacityScope::new("live/generation".to_owned()).expect("scope"),
+        CapacityScope::new("live/generation").expect("scope"),
         false,
         now_ms,
     )
@@ -1710,7 +1710,7 @@ fn local_work_resolves_to_its_checkpoint_with_no_finance_tuple() {
         let mut local = enqueue_command(0x11, 0x21, at(0));
         local.kind = StageKind::LocalTransform;
         local.local_accounting = true;
-        local.capacity = CapacityScope::new("local/transform".to_owned()).expect("scope");
+        local.capacity = CapacityScope::new("local/transform").expect("scope");
         let tx = client.transaction().await.expect("tx");
         accept_with_execution_in(
             &tx,
@@ -2049,7 +2049,7 @@ fn restart_keeps_the_committed_local_checkpoint() {
         let mut local = enqueue_command(0x11, 0x21, at(0));
         local.kind = StageKind::LocalTransform;
         local.local_accounting = true;
-        local.capacity = CapacityScope::new("local/transform".to_owned()).expect("scope");
+        local.capacity = CapacityScope::new("local/transform").expect("scope");
         let tx = client.transaction().await.expect("tx");
         accept_with_execution_in(
             &tx,
@@ -4311,7 +4311,7 @@ fn expired_candidate_local_recovery_waits_for_sent_and_replays_one_canonical_chi
         let mut forged=lease.clone();forged.lease_until_ms=at(900_000);
         let command=ReconciliationCommand {candidate_dispatch:candidate.scope.dispatch,child:stage_id(0x22),
             dispatch:dispatch_id(0x82),claim:ClaimToken::from_bytes(&id(0x72)).expect("child claim"),
-            capacity:CapacityScope::new("local/transform".to_owned()).expect("local scope"),
+            capacity:CapacityScope::new("local/transform").expect("local scope"),
             recipe_revision:4,recipe_digest:[0xa7;32],now_ms:at(60_002)};
         let child=prepare_reconciliation_in(&tx,&forged,&command).await.expect("local child");
         assert_eq!(child.current.state,DispatchState::Prepared);assert!(child.current.local_accounting);
@@ -4368,7 +4368,7 @@ fn expired_recovery_proof_cannot_mark_prepared_local_child_or_create_paid_child(
             child: stage_id(0x22),
             dispatch: dispatch_id(0x82),
             claim: ClaimToken::from_bytes(&id(0x72)).expect("claim"),
-            capacity: CapacityScope::new("local/transform".to_owned()).expect("scope"),
+            capacity: CapacityScope::new("local/transform").expect("scope"),
             recipe_revision: 1,
             recipe_digest: [0xa7; 32],
             now_ms: at(60_002),
@@ -4589,7 +4589,7 @@ fn direct_winning_inspection_recovery_finalizes_exact_candidate_without_reopenin
         let tx=client.transaction().await.expect("inspection recovery");
         let lease=claim_recovery_in(&tx,&recovery_command(0x11,0x22,0x82,0x92,at(60_001))).await.expect("direct inspection recovery");
         let command=ReconciliationCommand{candidate_dispatch:candidate.scope.dispatch,child:stage_id(0x23),dispatch:dispatch_id(0x83),
-            claim:ClaimToken::from_bytes(&id(0x73)).expect("claim"),capacity:CapacityScope::new("local/transform".to_owned()).expect("scope"),
+            claim:ClaimToken::from_bytes(&id(0x73)).expect("claim"),capacity:CapacityScope::new("local/transform").expect("scope"),
             recipe_revision:4,recipe_digest:[0xa8;32],now_ms:at(60_002)};
         let child=prepare_reconciliation_in(&tx,&lease,&command).await.expect("one-hop local child");
         assert_eq!(df_persistence::imagery_execution::finish_recovery_in(&tx,

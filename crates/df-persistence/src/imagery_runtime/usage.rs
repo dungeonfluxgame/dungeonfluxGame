@@ -221,7 +221,7 @@ impl ImageUsageJournal for PostgresImageUsage {
         tx.execute("INSERT INTO imagery.image_dispatch_usage(dispatch_id,owner_scope,job_id,stage_id,revision,provider,model,cause,detail,maxima,evidence,units,usable,observed_at_ms,raw_output) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::jsonb,$11,$12::text::jsonb,$13,$14,$15)",
             &[&usage.dispatch.as_bytes().as_slice(), &owner_scope_bytes(&usage.owner), &usage.job.as_bytes().as_slice(),
             &usage.stage.as_bytes().as_slice(), &revision, &usage.route.provider, &usage.route.model, &usage.route.cause,
-            &usage.route.detail, &maxima, &usage.evidence.label(), &units, &usage.usable, &at_ms, &usage.raw_output]).await.map_err(storage)?;
+            &usage.route.detail, &maxima, &usage.evidence.key(), &units, &usage.usable, &at_ms, &usage.raw_output]).await.map_err(storage)?;
         tx.commit()
             .await
             .map_err(|_| RuntimeError::Execution(df_imagery::execution::ExecutionError::Unknown))

@@ -44,7 +44,7 @@ async fn canonical_analysis_admission_has_no_publication_and_refuses_mixed_media
     let mut client = connect(&scratch.config).await;
     let transport = PostgresTransport::PlaintextLoopbackOnly;
     let ids = TestIds(Arc::new(AtomicU64::new(20_000)));
-    let scope = CapacityScope::new("runtime/standalone-analysis".to_owned()).unwrap();
+    let scope = CapacityScope::new("runtime/standalone-analysis").unwrap();
     let execution = PostgresImageExecution::open(scratch.config.clone(), transport.clone(), 2)
         .await
         .unwrap();

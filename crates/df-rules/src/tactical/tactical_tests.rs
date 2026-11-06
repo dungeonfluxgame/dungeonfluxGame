@@ -1708,11 +1708,11 @@ fn thrown_javelin_lands_at_target_cell_on_miss_and_snapshot_keeps_repeated_drops
 
     let mut snapshot: serde_json::Value =
         serde_json::from_slice(&thrown.snapshot().unwrap()).unwrap();
-    snapshot["actors"][0]["weapon_counts"]["Javelin"] = 6.into();
+    snapshot["actors"][0]["weapon_counts"]["javelin"] = 6.into();
     snapshot["actors"][0]["dropped"]
         .as_array_mut()
         .unwrap()
-        .push(serde_json::json!(["Javelin", [3, 1]]));
+        .push(serde_json::json!(["javelin", [3, 1]]));
     let restored = Battle::from_snapshot(
         thrown.map().clone(),
         &serde_json::to_vec(&snapshot).unwrap(),
@@ -1767,6 +1767,20 @@ fn tactical_snapshot_refuses_incompatible_source_map_order_health_and_overlappin
             "{field}"
         );
     }
+}
+
+#[test]
+fn a_version_two_snapshot_from_before_snake_case_keys_is_refused() {
+    let before = battle(vec![
+        melee(1, Cell(1, 1)),
+        CombatantSpec::creature(3, "bandit", Cell(2, 1), 0).unwrap(),
+    ]);
+    let mut json: serde_json::Value = serde_json::from_slice(&before.snapshot().unwrap()).unwrap();
+    json["version"] = 2.into();
+    assert_eq!(
+        Battle::from_snapshot(map("open-court"), &serde_json::to_vec(&json).unwrap()),
+        Err(RuleError::SnapshotData)
+    );
 }
 
 #[test]

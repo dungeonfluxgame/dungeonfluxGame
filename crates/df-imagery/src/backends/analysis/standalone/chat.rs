@@ -8,9 +8,7 @@ use crate::{
     service::analysis_types::*,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use df_providers::{
-    HttpRequest, NativeHttp, NativeHttpRefusal, NativeHttpResponse, ProviderLimits,
-};
+use df_providers::{HttpRequest, NativeHttp, NativeHttpCause, NativeHttpResponse, ProviderLimits};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
@@ -40,8 +38,9 @@ pub(crate) struct PreparedStandaloneChat {
     pub(crate) picture_count: u64,
 }
 impl std::fmt::Debug for PreparedStandaloneChat {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreparedStandaloneChat")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedStandaloneChat")
             .field("body_bytes", &self.body_bytes)
             .field("text_bytes", &self.text_bytes)
             .field("picture_count", &self.picture_count)
@@ -383,8 +382,8 @@ impl PreparedStandaloneChat {
             .build(),
             allow_http,
         )
-        .map_err(|reason| {
-            if reason == NativeHttpRefusal::InvalidLimits {
+        .map_err(|failure| {
+            if failure.cause == NativeHttpCause::InvalidLimits {
                 RuntimeError::UnsupportedCapability
             } else {
                 RuntimeError::InvalidConfiguration
@@ -413,10 +412,10 @@ impl PreparedStandaloneChat {
         self.http
             .execute(self.request, remaining, std::future::pending())
             .await
-            .map_err(|failure| match failure.reason {
-                NativeHttpRefusal::Deadline => RuntimeError::Expired,
-                NativeHttpRefusal::Cancelled => RuntimeError::Cancelled,
-                NativeHttpRefusal::ProviderDisabled => RuntimeError::Disabled,
+            .map_err(|failure| match failure.cause {
+                NativeHttpCause::Deadline => RuntimeError::Expired,
+                NativeHttpCause::Cancelled => RuntimeError::Cancelled,
+                NativeHttpCause::ProviderDisabled => RuntimeError::Disabled,
                 _ => RuntimeError::ProviderUnknown,
             })
     }

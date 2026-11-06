@@ -101,15 +101,15 @@ pub fn retained_campaign_artifact_recipe(
     };
     let key = MediaRequestKey::derive_recipe(&MediaRecipeRequest {
         operation_kind,
-        purpose: intent.purpose.purpose.label(),
+        purpose: intent.purpose.purpose.key(),
         owner_scope: &scope,
-        backend_profile: basis.backend.label(),
+        backend_profile: basis.backend.key(),
         model: &basis.model,
         quality: "frozen-config",
         rating,
         width_px: dimensions.width_px(),
         height_px: dimensions.height_px(),
-        output_format: delivered.encoding().format().label(),
+        output_format: delivered.encoding().format().key(),
         alpha_policy: "frozen-output",
         template_revision,
         route_revision: 1,

@@ -95,6 +95,57 @@ pub(crate) enum RasterError {
     Cancelled,
 }
 
+impl std::fmt::Display for RasterError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TransformsDisabled => formatter.write_str("local transforms are disabled"),
+            Self::InvalidRecipe(error) => {
+                write!(formatter, "the transform recipe is invalid: {error}")
+            }
+            Self::InvalidOutput(error) => {
+                write!(formatter, "the output contract is invalid: {error}")
+            }
+            Self::UnsupportedFormat => formatter.write_str("the input is not png, jpeg or webp"),
+            Self::UnsupportedColorProfile => {
+                formatter.write_str("the input color profile is not supported")
+            }
+            Self::DecodeFailed => formatter.write_str("the input could not be decoded"),
+            Self::EncodeFailed => formatter.write_str("the output could not be encoded"),
+            Self::DigestMismatch => formatter.write_str("the input digest does not match"),
+            Self::ResolveFailed => formatter.write_str("an input could not be resolved"),
+            Self::InputTooLarge { len_bytes } => {
+                write!(formatter, "the input is too large at {len_bytes} bytes")
+            }
+            Self::DecodedTooLarge { pixels } => write!(
+                formatter,
+                "the decoded input has too many pixels ({pixels})"
+            ),
+            Self::LiveBudgetExceeded { needed_bytes } => write!(
+                formatter,
+                "the memory budget cannot hold {needed_bytes} more bytes"
+            ),
+            Self::OutputTooLarge { len_bytes } => {
+                write!(formatter, "the output is too large at {len_bytes} bytes")
+            }
+            Self::CropOutOfBounds => formatter.write_str("the crop is out of bounds"),
+            Self::DimensionMismatch { .. } => {
+                formatter.write_str("the output dimensions do not match")
+            }
+            Self::Cancelled => formatter.write_str("the transform was cancelled"),
+        }
+    }
+}
+
+impl std::error::Error for RasterError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidRecipe(error) => Some(error),
+            Self::InvalidOutput(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 /// Runs the ordered recipe against authorized bytes and encodes one variant.
 /// Pure CPU on the calling thread; the later bounded worker owns placement.
 pub(crate) fn execute_transform(

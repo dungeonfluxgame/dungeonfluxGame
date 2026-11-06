@@ -10,12 +10,12 @@ use std::collections::VecDeque;
 
 use serde::Serialize;
 
+use super::limits::NARRATION_LIMIT;
+
 /// Players at the table.
 pub const SEAT_COUNT: usize = 6;
 /// The six phones and the TV.
 pub const AUDIENCE_COUNT: usize = SEAT_COUNT + 1;
-/// The most narration lines the state keeps.
-const NARRATION_LIMIT: usize = 200;
 /// Effects one `step` applies: two moves, a damage, a condition toggle, a fact, a narration line
 /// and a hide or reveal.
 pub const EFFECTS_PER_STEP: usize = 7;

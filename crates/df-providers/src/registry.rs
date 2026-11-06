@@ -147,24 +147,24 @@ pub enum GateStatus {
 
 /// The first non-qualified gate that prevents route dispatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DispatchBlock {
+pub struct DispatchBlockError {
     gate: Gate,
     status: GateStatus,
 }
 
 /// Capability with no selected route in this bounded registry.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct UnsupportedCapability {
+pub struct UnsupportedCapabilityError {
     capability: Capability,
 }
 
-impl UnsupportedCapability {
+impl UnsupportedCapabilityError {
     pub const fn capability(self) -> Capability {
         self.capability
     }
 }
 
-impl DispatchBlock {
+impl DispatchBlockError {
     pub const fn gate(self) -> Gate {
         self.gate
     }
@@ -173,6 +173,26 @@ impl DispatchBlock {
         self.status
     }
 }
+
+impl fmt::Display for DispatchBlockError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "dispatch is blocked by the {:?} gate ({:?})",
+            self.gate, self.status
+        )
+    }
+}
+
+impl std::error::Error for DispatchBlockError {}
+
+impl fmt::Display for UnsupportedCapabilityError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "no route is selected for {:?}", self.capability)
+    }
+}
+
+impl std::error::Error for UnsupportedCapabilityError {}
 
 /// Evidence for a selected supplier candidate, not a transport request or grant.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -244,7 +264,7 @@ impl CandidateRoute {
     }
 
     /// Returns the first unresolved gate in stable policy order.
-    pub const fn dispatch_block(self) -> Result<(), DispatchBlock> {
+    pub const fn dispatch_block(self) -> Result<(), DispatchBlockError> {
         assess_dispatch_gates(self.gates)
     }
 }
@@ -253,7 +273,7 @@ impl CandidateRoute {
 ///
 /// Only the owner of current account, capacity, price and rights evidence can
 /// provide qualified observations. This function neither authorizes nor dispatches.
-pub const fn assess_dispatch_gates(statuses: [GateStatus; 5]) -> Result<(), DispatchBlock> {
+pub const fn assess_dispatch_gates(statuses: [GateStatus; 5]) -> Result<(), DispatchBlockError> {
     let gates = [
         Gate::AccountEntitlement,
         Gate::RegionAvailability,
@@ -264,7 +284,7 @@ pub const fn assess_dispatch_gates(statuses: [GateStatus; 5]) -> Result<(), Disp
     let mut index = 0;
     while index < gates.len() {
         if !matches!(statuses[index], GateStatus::Qualified) {
-            return Err(DispatchBlock {
+            return Err(DispatchBlockError {
                 gate: gates[index],
                 status: statuses[index],
             });
@@ -375,11 +395,11 @@ pub const fn candidate_routes() -> &'static [CandidateRoute; 2] {
 /// Looks up the selected route for a capability or returns an explicit refusal.
 pub const fn candidate_for(
     capability: Capability,
-) -> Result<&'static CandidateRoute, UnsupportedCapability> {
+) -> Result<&'static CandidateRoute, UnsupportedCapabilityError> {
     match capability {
         Capability::TextToSpeech => Ok(&CANDIDATES[0]),
         Capability::DisposableImage => Ok(&CANDIDATES[1]),
-        _ => Err(UnsupportedCapability { capability }),
+        _ => Err(UnsupportedCapabilityError { capability }),
     }
 }
 

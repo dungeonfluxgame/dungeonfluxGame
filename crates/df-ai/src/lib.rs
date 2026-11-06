@@ -1,3 +1,6 @@
+//! The unified AI service boundary: text requests with durable attempts and their telemetry,
+//! listener-safe expression requests, recording-stream admission and read-only artifact lookup.
+//! Provider backends live elsewhere; this crate sends no network or process call itself.
 pub mod admission;
 pub mod expression;
 pub mod lookup;

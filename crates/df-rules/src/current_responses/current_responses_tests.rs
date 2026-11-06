@@ -1,8 +1,10 @@
+use super::fixtures::*;
 use super::{ResponseError, current_responses, validate_current_submission};
+use df_model::checkpoint::*;
 use df_model::commands::{CommandError, CommandLimits};
-include!("fixtures.rs");
+use df_types::{OperationId, RunId, SessionId};
 
-fn command_limits() -> CommandLimits {
+pub(super) fn command_limits() -> CommandLimits {
     CommandLimits {
         maximum_records: 8,
         maximum_text_bytes: 32,
@@ -10,7 +12,7 @@ fn command_limits() -> CommandLimits {
     }
 }
 
-fn request(reaction: bool) -> CommandInput {
+pub(super) fn request(reaction: bool) -> CommandInput {
     let pending = pending();
     let command = if reaction {
         GameCommand::SelectReaction {
@@ -36,7 +38,7 @@ fn request(reaction: bool) -> CommandInput {
     }
 }
 
-fn waiting(reaction: bool, change: impl FnOnce(&mut GameState)) -> Checkpoint {
+pub(super) fn waiting(reaction: bool, change: impl FnOnce(&mut GameState)) -> Checkpoint {
     let mut supplied = state();
     supplied.facts.push(fact(7, 0));
     let mut pending = pending();
@@ -388,5 +390,3 @@ fn wrong_client_session_and_run_fail_both_paths() {
         );
     }
 }
-
-include!("cross_consumer.rs");

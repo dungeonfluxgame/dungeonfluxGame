@@ -28,8 +28,8 @@ pub enum FixtureError {
     Worker,
 }
 impl std::fmt::Display for FixtureError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "transform fixture failed: {self:?}")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "transform fixture failed: {self:?}")
     }
 }
 impl std::error::Error for FixtureError {}
@@ -114,6 +114,7 @@ impl<P: Sync + 'static> TransformFixture<P> {
                 active_config_revision: 1,
                 capacity: store.scope.clone(),
                 poll_interval: Duration::from_millis(1),
+                codex_home: None,
             },
         };
         let (stop, future) = runtime.start();

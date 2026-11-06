@@ -22,8 +22,9 @@ pub struct AnalysisCheckpoint {
     pub dependencies: Vec<AnalysisDependencyRef>,
 }
 impl fmt::Debug for AnalysisCheckpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AnalysisCheckpoint")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AnalysisCheckpoint")
             .field("kind", &self.kind)
             .field("checkpoint_version", &self.checkpoint_version)
             .field("schema_revision", &self.schema_revision)
@@ -63,8 +64,9 @@ impl AnalysisCheckpointReference {
     }
 }
 impl fmt::Debug for AnalysisCheckpointReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AnalysisCheckpointReference")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AnalysisCheckpointReference")
             .field("kind", &self.kind)
             .field("checkpoint_version", &self.checkpoint_version)
             .finish_non_exhaustive()
@@ -78,8 +80,9 @@ pub struct AnalysisDependencyRef {
     pub checkpoint: AnalysisCheckpointReference,
 }
 impl fmt::Debug for AnalysisDependencyRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AnalysisDependencyRef")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AnalysisDependencyRef")
             .field("checkpoint", &self.checkpoint)
             .finish_non_exhaustive()
     }
@@ -110,8 +113,9 @@ pub struct LocalAnalysisCheckpoint {
     pub dependencies: Vec<AnalysisDependencyRef>,
 }
 impl fmt::Debug for LocalAnalysisCheckpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalAnalysisCheckpoint")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalAnalysisCheckpoint")
             .field("kind", &self.kind)
             .field("checkpoint_version", &self.checkpoint_version)
             .field("schema_revision", &self.schema_revision)
@@ -152,8 +156,9 @@ impl LocalAnalysisReference {
     }
 }
 impl fmt::Debug for LocalAnalysisReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalAnalysisReference")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalAnalysisReference")
             .field("kind", &self.kind)
             .field("checkpoint_version", &self.checkpoint_version)
             .finish_non_exhaustive()

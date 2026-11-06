@@ -2,6 +2,7 @@
 //! Events never carry prompts, reference bytes, paths, supplier prose or money authority.
 
 use crate::execution::{DispatchId, ExecutionStageId, StageKind, StageView};
+use crate::listed::listed_enum;
 use crate::{AssetId, BackendId, ImageInterestId, ImageJob, ImageJobId, ImageOwner, Purpose};
 use df_observe::{AnyValue, DiagnosticRecord, DiagnosticSink, LogInput, Severity};
 use df_types::{OperationId, RunId};
@@ -190,29 +191,32 @@ impl EventKind {
     }
 }
 
-/// Diagnostic classification only; none of these codes authorizes retry or money movement.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FailureKind {
-    Authorization,
-    Validation,
-    Conflict,
-    Capacity,
-    Disabled,
-    Expired,
-    Cancelled,
-    ProviderRefused,
-    ProviderUnknown,
-    Decode,
-    Transform,
-    Publication,
-    Storage,
-    Journal,
-    UsageProjection,
-    Worker,
+listed_enum! {
+    keyed
+    /// Diagnostic classification only; none of these codes authorizes retry or money movement.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum FailureKind {
+        Authorization,
+        Validation,
+        Conflict,
+        Capacity,
+        Disabled,
+        Expired,
+        Cancelled,
+        ProviderRefused,
+        ProviderUnknown,
+        Decode,
+        Transform,
+        Publication,
+        Storage,
+        Journal,
+        UsageProjection,
+        Worker,
+    }
 }
 
 impl FailureKind {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Authorization => "authorization",
             Self::Validation => "validation",
@@ -234,19 +238,22 @@ impl FailureKind {
     }
 }
 
-/// Closed supplier protocol position; neither supplier URLs nor raw errors are accepted.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProviderStep {
-    Submit,
-    Poll,
-    Delivery,
-    Download,
-    Validate,
-    Unknown,
+listed_enum! {
+    keyed
+    /// Closed supplier protocol position; neither supplier URLs nor raw errors are accepted.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum ProviderStep {
+        Submit,
+        Poll,
+        Delivery,
+        Download,
+        Validate,
+        Unknown,
+    }
 }
 
 impl ProviderStep {
-    fn label(self) -> &'static str {
+    fn key(self) -> &'static str {
         match self {
             Self::Submit => "submit",
             Self::Poll => "poll",
@@ -258,20 +265,23 @@ impl ProviderStep {
     }
 }
 
-/// Closed semantic operation names; private targets, instructions and decisions stay out.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AnalysisKind {
-    CreatorClassification,
-    Inspection,
-    PhotoInspection,
-    HeadLocations,
-    Segmentation,
-    StagingIdentity,
-    StagingFacing,
+listed_enum! {
+    keyed
+    /// Closed semantic operation names; private targets, instructions and decisions stay out.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum AnalysisKind {
+        CreatorClassification,
+        Inspection,
+        PhotoInspection,
+        HeadLocations,
+        Segmentation,
+        StagingIdentity,
+        StagingFacing,
+    }
 }
 
 impl AnalysisKind {
-    fn label(self) -> &'static str {
+    fn key(self) -> &'static str {
         match self {
             Self::CreatorClassification => "creator_classification",
             Self::Inspection => "inspection",
@@ -284,17 +294,20 @@ impl AnalysisKind {
     }
 }
 
-/// Diagnostic verdict only; it neither stores private decision payloads nor qualifies billing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AnalysisVerdict {
-    Accepted,
-    Rejected,
-    Unjudged,
-    Empty,
+listed_enum! {
+    keyed
+    /// Diagnostic verdict only; it neither stores private decision payloads nor qualifies billing.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum AnalysisVerdict {
+        Accepted,
+        Rejected,
+        Unjudged,
+        Empty,
+    }
 }
 
 impl AnalysisVerdict {
-    fn label(self) -> &'static str {
+    fn key(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
             Self::Rejected => "rejected",
@@ -304,19 +317,22 @@ impl AnalysisVerdict {
     }
 }
 
-/// An acknowledged durable dispatch outcome, separate from whole-job publication or settlement.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StageOutcome {
-    OutputStored,
-    Decision,
-    Candidate,
-    Unusable,
-    Failed,
-    Unknown,
+listed_enum! {
+    keyed
+    /// An acknowledged durable dispatch outcome, separate from whole-job publication or settlement.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum StageOutcome {
+        OutputStored,
+        Decision,
+        Candidate,
+        Unusable,
+        Failed,
+        Unknown,
+    }
 }
 
 impl StageOutcome {
-    fn label(self) -> &'static str {
+    fn key(self) -> &'static str {
         match self {
             Self::OutputStored => "output_stored",
             Self::Decision => "decision",
@@ -357,7 +373,7 @@ pub struct Measurements {
     pub retry_after_ms: Option<u64>,
     pub stage_outcome: Option<StageOutcome>,
     pub quota_deferral: Option<crate::execution::QuotaDeferralReason>,
-    pub preflight_rejection: Option<crate::runtime::PreflightRejection>,
+    pub preflight_rejection: Option<crate::runtime::PreflightCause>,
 }
 
 /// Owned event with a local monotonic duration, never a subtraction of different wall clocks.
@@ -399,7 +415,7 @@ impl ImageEvent {
             .attributes(self.measurements.supplier_dispatched != Some(false));
         self.measurements.append_attributes(&mut attributes);
         if let Some(failure) = self.failure {
-            attributes.push(("image.failure".into(), text(failure.label())));
+            attributes.push(("image.failure".into(), text(failure.key())));
         }
         if let Some(elapsed) = self.elapsed {
             attributes.push(("image.clock_domain".into(), text("native_monotonic")));
@@ -456,12 +472,12 @@ impl EventContext {
             }
         }
         for (name, value) in [
-            ("image.backend", self.backend.map(BackendId::label)),
-            ("image.stage_kind", self.kind.map(StageKind::label)),
-            ("image.purpose", self.purpose.map(Purpose::label)),
+            ("image.backend", self.backend.map(BackendId::key)),
+            ("image.stage_kind", self.kind.map(StageKind::key)),
+            ("image.purpose", self.purpose.map(Purpose::key)),
             (
                 "image.analysis_kind",
-                self.analysis_kind.map(AnalysisKind::label),
+                self.analysis_kind.map(AnalysisKind::key),
             ),
         ] {
             if let Some(value) = value {
@@ -492,25 +508,25 @@ impl EventContext {
 impl Measurements {
     fn append_attributes(&self, attributes: &mut Vec<(String, AnyValue)>) {
         if let Some(evidence) = self.usage_evidence {
-            attributes.push(("image.usage_evidence".into(), text(evidence.label())));
+            attributes.push(("image.usage_evidence".into(), text(evidence.key())));
         }
         if let Some(step) = self.provider_step {
-            attributes.push(("image.provider_step".into(), text(step.label())));
+            attributes.push(("image.provider_step".into(), text(step.key())));
         }
         if let Some(verdict) = self.analysis_verdict {
-            attributes.push(("image.analysis_verdict".into(), text(verdict.label())));
+            attributes.push(("image.analysis_verdict".into(), text(verdict.key())));
         }
         if let Some(settlement) = self.settlement {
-            attributes.push(("image.settlement".into(), text(settlement.label())));
+            attributes.push(("image.settlement".into(), text(settlement.key())));
         }
         if let Some(outcome) = self.stage_outcome {
-            attributes.push(("image.stage_outcome".into(), text(outcome.label())));
+            attributes.push(("image.stage_outcome".into(), text(outcome.key())));
         }
         if let Some(reason) = self.quota_deferral {
-            attributes.push(("image.quota_deferral".into(), text(reason.label())));
+            attributes.push(("image.quota_deferral".into(), text(reason.key())));
         }
         if let Some(reason) = self.preflight_rejection {
-            attributes.push(("image.preflight_reason".into(), text(reason.label())));
+            attributes.push(("image.preflight_reason".into(), text(reason.key())));
         }
         for (name, value) in [
             ("image.delivery_identified", self.delivery_identified),
@@ -674,7 +690,7 @@ impl SharedImageObserver {
             at_unix_ms,
             name: event.kind.name(),
             level,
-            failure: event.failure.map(FailureKind::label),
+            failure: event.failure.map(FailureKind::key),
             job: event
                 .context
                 .job

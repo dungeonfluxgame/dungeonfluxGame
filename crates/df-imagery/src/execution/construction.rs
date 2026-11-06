@@ -26,8 +26,9 @@ pub struct OutputObject {
     pub sha256: [u8; 32],
 }
 impl fmt::Debug for OutputObject {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OutputObject")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OutputObject")
             .field("byte_len", &self.byte_len)
             .finish_non_exhaustive()
     }
@@ -49,8 +50,9 @@ pub struct SupplierResume {
     pub checkpoint_bytes: Vec<u8>,
 }
 impl fmt::Debug for SupplierResume {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SupplierResume")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SupplierResume")
             .field("checkpoint_version", &self.checkpoint_version)
             .field("len_bytes", &self.checkpoint_bytes.len())
             .finish_non_exhaustive()

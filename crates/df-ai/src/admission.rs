@@ -2,6 +2,8 @@
 //! declaration, exact length and digest, and the end of the stream have all been seen. This
 //! module starts no task, provider or network call, never retries, and refuses on any mismatch.
 
+use std::fmt;
+
 use df_types::OperationId;
 use sha2::{Digest, Sha256};
 
@@ -25,7 +27,15 @@ pub struct RecordLimits {
 
 /// A zero bound, or a chunk bound larger than the record bound.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct InvalidRecordLimits;
+pub struct RecordLimitsError;
+
+impl fmt::Display for RecordLimitsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a record bound is zero or the chunk bound is above the record bound")
+    }
+}
+
+impl std::error::Error for RecordLimitsError {}
 
 impl RecordLimits {
     /// Zero bounds or a chunk bound larger than the record bound are invalid.
@@ -33,13 +43,13 @@ impl RecordLimits {
         maximum_record_bytes: usize,
         maximum_chunk_bytes: usize,
         maximum_chunks: usize,
-    ) -> Result<Self, InvalidRecordLimits> {
+    ) -> Result<Self, RecordLimitsError> {
         if maximum_record_bytes == 0
             || maximum_chunk_bytes == 0
             || maximum_chunks == 0
             || maximum_chunk_bytes > maximum_record_bytes
         {
-            return Err(InvalidRecordLimits);
+            return Err(RecordLimitsError);
         }
         Ok(Self {
             maximum_record_bytes,
@@ -55,6 +65,17 @@ pub enum RecordInputError {
     Cancelled,
     Failed,
 }
+
+impl fmt::Display for RecordInputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Cancelled => "the record stream was cancelled",
+            Self::Failed => "the record stream failed",
+        })
+    }
+}
+
+impl std::error::Error for RecordInputError {}
 
 /// Candidate stream input. A terminal declaration alone does not admit a record.
 pub enum RecordEvent<Key, Basis> {
@@ -94,6 +115,55 @@ pub enum RecordAdmissionError<PublicationError> {
     DigestMismatch,
     AllocationUnavailable,
     Publication(PublicationError),
+}
+
+impl<PublicationError: fmt::Display> fmt::Display for RecordAdmissionError<PublicationError> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input(error) => write!(formatter, "the record was not admitted: {error}"),
+            Self::MissingCompletion => {
+                formatter.write_str("the record stream ended without a completion")
+            }
+            Self::TrailingEvent => {
+                formatter.write_str("the record stream continued after completion")
+            }
+            Self::IdentityMismatch(field) => formatter.write_str(match field {
+                RecordIdentityField::Key => "the record key differs from the expected key",
+                RecordIdentityField::Basis => "the record basis differs from the expected basis",
+                RecordIdentityField::Operation => {
+                    "the record operation differs from the expected operation"
+                }
+            }),
+            Self::LimitExceeded(limit) => formatter.write_str(match limit {
+                RecordLimit::ChunkBytes => "a record chunk is above its byte bound",
+                RecordLimit::RecordBytes => "the record is above its byte bound",
+                RecordLimit::ChunkCount => "the record has more chunks than its bound",
+            }),
+            Self::LengthMismatch => {
+                formatter.write_str("the record length differs from its completion")
+            }
+            Self::DigestMismatch => {
+                formatter.write_str("the record digest differs from its completion")
+            }
+            Self::AllocationUnavailable => {
+                formatter.write_str("the record bytes could not be allocated")
+            }
+            Self::Publication(error) => write!(formatter, "the record was not published: {error}"),
+        }
+    }
+}
+
+impl<PublicationError> std::error::Error for RecordAdmissionError<PublicationError>
+where
+    PublicationError: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Input(error) => Some(error),
+            Self::Publication(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 /// Verified complete bytes; only stream admission can construct this value.

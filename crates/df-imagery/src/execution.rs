@@ -19,6 +19,7 @@
 //! The provider executor and the demand journal live elsewhere; this module
 //! never dispatches bytes and never invents proof of live provider execution.
 
+use crate::listed::listed_enum;
 use std::fmt;
 
 pub use crate::journal::ImageJobId;
@@ -184,33 +185,58 @@ pub enum ExecutionSetupError {
     ZeroId,
     Empty,
     TooLong { max_bytes: usize },
-    BadTime,
-    BadLease,
-    BadRevision,
+    InvalidTime,
+    InvalidLease,
+    InvalidRevision,
     ZeroDimension,
     ZeroBytes,
     PublicationIdentityMismatch,
 }
 
-/// What one logical stage produces. Closed so a new kind needs a contract change.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StageKind {
-    Classification,
-    Generation,
-    Edit,
-    Extraction,
-    Inspection,
-    Correction,
-    LocalTransform,
-    PhotoInspection,
-    HeadLocations,
-    Segmentation,
-    StagingIdentity,
-    StagingFacing,
+impl std::fmt::Display for ExecutionSetupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroId => formatter.write_str("an id is zero"),
+            Self::Empty => formatter.write_str("a required value is empty"),
+            Self::TooLong { max_bytes } => {
+                write!(formatter, "a value is longer than {max_bytes} bytes")
+            }
+            Self::InvalidTime => formatter.write_str("a time is invalid"),
+            Self::InvalidLease => formatter.write_str("a lease is invalid"),
+            Self::InvalidRevision => formatter.write_str("a revision is invalid"),
+            Self::ZeroDimension => formatter.write_str("a dimension is zero"),
+            Self::ZeroBytes => formatter.write_str("an output has zero bytes"),
+            Self::PublicationIdentityMismatch => {
+                formatter.write_str("the publication identity does not match")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ExecutionSetupError {}
+
+listed_enum! {
+    keyed
+    /// What one logical stage produces. Closed so a new kind needs a contract change.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum StageKind {
+        Classification,
+        Generation,
+        Edit,
+        Extraction,
+        Inspection,
+        Correction,
+        LocalTransform,
+        PhotoInspection,
+        HeadLocations,
+        Segmentation,
+        StagingIdentity,
+        StagingFacing,
+    }
 }
 
 impl StageKind {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Classification => "classification",
             Self::Generation => "generation",
@@ -237,68 +263,47 @@ impl StageKind {
                 | Self::StagingFacing
         )
     }
+}
 
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "classification" => Some(Self::Classification),
-            "generation" => Some(Self::Generation),
-            "edit" => Some(Self::Edit),
-            "extraction" => Some(Self::Extraction),
-            "inspection" => Some(Self::Inspection),
-            "correction" => Some(Self::Correction),
-            "local_transform" => Some(Self::LocalTransform),
-            "photo_inspection" => Some(Self::PhotoInspection),
-            "head_locations" => Some(Self::HeadLocations),
-            "segmentation" => Some(Self::Segmentation),
-            "staging_identity" => Some(Self::StagingIdentity),
-            "staging_facing" => Some(Self::StagingFacing),
-            _ => None,
-        }
+listed_enum! {
+    keyed
+    /// Claim lifecycle of a stage. Send and outcome state live on dispatch rows.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum StageState {
+        Planned,
+        Admitted,
+        Released,
     }
 }
 
-/// Claim lifecycle of a stage. Send and outcome state live on dispatch rows.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum StageState {
-    Planned,
-    Admitted,
-    Released,
-}
-
 impl StageState {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Planned => "planned",
             Self::Admitted => "admitted",
             Self::Released => "released",
         }
     }
+}
 
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "planned" => Some(Self::Planned),
-            "admitted" => Some(Self::Admitted),
-            "released" => Some(Self::Released),
-            _ => None,
-        }
+listed_enum! {
+    keyed
+    /// Send and outcome lifecycle of one dispatch attempt. `Released` is the
+    /// cancelled-before-send marker; only a dispatch proven unsent may cancel.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum DispatchState {
+        Declined,
+        Prepared,
+        Sent,
+        Succeeded,
+        Failed,
+        Unknown,
+        Released,
     }
 }
 
-/// Send and outcome lifecycle of one dispatch attempt. `Released` is the
-/// cancelled-before-send marker; only a dispatch proven unsent may cancel.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DispatchState {
-    Declined,
-    Prepared,
-    Sent,
-    Succeeded,
-    Failed,
-    Unknown,
-    Released,
-}
-
 impl DispatchState {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Declined => "declined",
             Self::Prepared => "prepared",
@@ -309,34 +314,24 @@ impl DispatchState {
             Self::Released => "released",
         }
     }
+}
 
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "declined" => Some(Self::Declined),
-            "prepared" => Some(Self::Prepared),
-            "sent" => Some(Self::Sent),
-            "succeeded" => Some(Self::Succeeded),
-            "failed" => Some(Self::Failed),
-            "unknown" => Some(Self::Unknown),
-            "released" => Some(Self::Released),
-            _ => None,
-        }
+listed_enum! {
+    keyed
+    /// Finance settlement of one dispatch attempt. The finance rows stay
+    /// authoritative; this column only mirrors what the worker proved.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum DispatchSettlement {
+        Held,
+        Settled,
+        UnusableSettled,
+        UnknownOutstanding,
+        Released,
     }
 }
 
-/// Finance settlement of one dispatch attempt. The finance rows stay
-/// authoritative; this column only mirrors what the worker proved.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DispatchSettlement {
-    Held,
-    Settled,
-    UnusableSettled,
-    UnknownOutstanding,
-    Released,
-}
-
 impl DispatchSettlement {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Held => "held",
             Self::Settled => "settled",
@@ -345,33 +340,25 @@ impl DispatchSettlement {
             Self::Released => "released",
         }
     }
+}
 
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "held" => Some(Self::Held),
-            "settled" => Some(Self::Settled),
-            "unusable_settled" => Some(Self::UnusableSettled),
-            "unknown_outstanding" => Some(Self::UnknownOutstanding),
-            "released" => Some(Self::Released),
-            _ => None,
-        }
+listed_enum! {
+    keyed
+    /// Why a dispatch failed. Closed: a new cause is a contract change.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum FailureCause {
+        Refused,
+        InvalidOutput,
+        TransportLost,
+        RateLimited,
+        QuotaExhausted,
+        DeadlineExceeded,
+        Provider,
     }
 }
 
-/// Why a dispatch failed. Closed: a new cause is a contract change.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FailureCause {
-    Refused,
-    InvalidOutput,
-    TransportLost,
-    RateLimited,
-    QuotaExhausted,
-    DeadlineExceeded,
-    Provider,
-}
-
 impl FailureCause {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Refused => "refused",
             Self::InvalidOutput => "invalid_output",
@@ -380,19 +367,6 @@ impl FailureCause {
             Self::QuotaExhausted => "quota_exhausted",
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::Provider => "provider",
-        }
-    }
-
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "refused" => Some(Self::Refused),
-            "invalid_output" => Some(Self::InvalidOutput),
-            "transport_lost" => Some(Self::TransportLost),
-            "rate_limited" => Some(Self::RateLimited),
-            "quota_exhausted" => Some(Self::QuotaExhausted),
-            "deadline_exceeded" => Some(Self::DeadlineExceeded),
-            "provider" => Some(Self::Provider),
-            _ => None,
         }
     }
 }
@@ -461,7 +435,7 @@ fn check_text(value: &str, max_bytes: usize, required: bool) -> Result<(), Execu
 
 fn check_time(now_ms: i64) -> Result<(), ExecutionSetupError> {
     if now_ms <= 0 {
-        return Err(ExecutionSetupError::BadTime);
+        return Err(ExecutionSetupError::InvalidTime);
     }
     Ok(())
 }
@@ -472,9 +446,9 @@ fn check_time(now_ms: i64) -> Result<(), ExecutionSetupError> {
 pub struct CapacityScope(String);
 
 impl CapacityScope {
-    pub fn new(scope: String) -> Result<Self, ExecutionSetupError> {
-        check_text(&scope, MAX_CAPACITY_SCOPE_BYTES, true)?;
-        Ok(Self(scope))
+    pub fn new(scope: &str) -> Result<Self, ExecutionSetupError> {
+        check_text(scope, MAX_CAPACITY_SCOPE_BYTES, true)?;
+        Ok(Self(scope.to_owned()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -522,7 +496,7 @@ impl EnqueueCommand {
         } = basis;
         let planned_publication = publication.into();
         if input_revision == 0 || config_revision == 0 {
-            return Err(ExecutionSetupError::BadRevision);
+            return Err(ExecutionSetupError::InvalidRevision);
         }
         if kind.is_standalone() != planned_publication.is_none() {
             return Err(ExecutionSetupError::PublicationIdentityMismatch);
@@ -584,10 +558,10 @@ impl ClaimCommand {
         now_ms: i64,
     ) -> Result<Self, ExecutionSetupError> {
         if expected_config_revision == 0 {
-            return Err(ExecutionSetupError::BadRevision);
+            return Err(ExecutionSetupError::InvalidRevision);
         }
         if lease_ms <= 0 {
-            return Err(ExecutionSetupError::BadLease);
+            return Err(ExecutionSetupError::InvalidLease);
         }
         check_time(now_ms)?;
         Ok(Self {
@@ -722,28 +696,23 @@ pub fn book_call_id_for(dispatch: &DispatchId) -> String {
     format!("img-{}", dispatch.to_hex())
 }
 
-/// Validated alpha fact bound into an output checkpoint. Closed so a new
-/// handling needs a contract change; the publication seam reads this, never
-/// a freeform caller string.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CheckpointAlpha {
-    Opaque,
-    Transparent,
+listed_enum! {
+    keyed
+    /// Validated alpha fact bound into an output checkpoint. Closed so a new
+    /// handling needs a contract change; the publication seam reads this, never
+    /// a freeform caller string.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum CheckpointAlpha {
+        Opaque,
+        Transparent,
+    }
 }
 
 impl CheckpointAlpha {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Opaque => "opaque",
             Self::Transparent => "transparent",
-        }
-    }
-
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "opaque" => Some(Self::Opaque),
-            "transparent" => Some(Self::Transparent),
-            _ => None,
         }
     }
 }
@@ -841,8 +810,9 @@ pub struct SupplierCheckpoint {
 }
 
 impl fmt::Debug for SupplierCheckpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SupplierCheckpoint")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SupplierCheckpoint")
             .field("checkpoint_version", &self.checkpoint_version)
             .field("len_bytes", &self.checkpoint_bytes.len())
             .finish_non_exhaustive()
@@ -869,7 +839,7 @@ impl SupplierCheckpoint {
         } = resume;
 
         if checkpoint_version == 0 {
-            return Err(ExecutionSetupError::BadRevision);
+            return Err(ExecutionSetupError::InvalidRevision);
         }
         check_text(&origin, MAX_SUPPLIER_ORIGIN_BYTES, true)?;
         check_text(&model, MAX_SUPPLIER_MODEL_BYTES, true)?;
@@ -1201,6 +1171,56 @@ pub enum ExecutionError {
     /// superseded silently: the current attempt stands.
     Superseded,
 }
+
+impl std::fmt::Display for ExecutionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => formatter.write_str("the execution store is unavailable"),
+            Self::Unknown => formatter.write_str("the execution commit outcome is unknown"),
+            Self::NotFound => formatter.write_str("no such owned job, stage or dispatch"),
+            Self::InvalidRecord => formatter.write_str("a stored execution row is invalid"),
+            Self::SourceDenied => formatter.write_str("the source authority was refused"),
+            Self::DemandLapsed => formatter.write_str("the job demand lapsed"),
+            Self::IdentityConflict => formatter.write_str("the id is bound to different data"),
+            Self::OperationConflict => {
+                formatter.write_str("the operation returned under a different fingerprint")
+            }
+            Self::BasisConflict => {
+                formatter.write_str("the stage was enqueued under a different basis")
+            }
+            Self::PlannedIdentityConflict => {
+                formatter.write_str("the job planned another publication identity")
+            }
+            Self::Stale { current_revision } => {
+                write!(formatter, "the job moved on to revision {current_revision}")
+            }
+            Self::LostClaim => formatter.write_str("the lease moved on"),
+            Self::Expired => formatter.write_str("the job deadline passed"),
+            Self::Retired => formatter.write_str("the job retired"),
+            Self::CapacityFull => formatter.write_str("no capacity slot was free"),
+            Self::Deferred { not_before_ms } => {
+                write!(formatter, "the stage is deferred until {not_before_ms} ms")
+            }
+            Self::OutputSealed => formatter.write_str("a no-delivery seal forbids further output"),
+            Self::ConfigFenced { current_revision } => write!(
+                formatter,
+                "the config moved on to revision {current_revision}"
+            ),
+            Self::Disabled => formatter.write_str("the execution gate is disabled"),
+            Self::DecisionPayloadTooLarge { maximum_bytes } => write!(
+                formatter,
+                "the decision payload is larger than {maximum_bytes} bytes"
+            ),
+            Self::ObservationMissing => formatter.write_str("the usage observation is not durable"),
+            Self::SupplierConflict => {
+                formatter.write_str("the dispatch is bound to another supplier id")
+            }
+            Self::Superseded => formatter.write_str("the dispatch was superseded"),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionError {}
 
 /// Resolves planned or publication identity to its job and stage for
 /// recovery: the planned pair reaches the stage, the published pair reaches

@@ -3,6 +3,7 @@
 use std::io::Cursor;
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use df_playground::media::MediaEntry;
@@ -12,7 +13,7 @@ use tempfile::TempDir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::client::post_json;
-use crate::dev::{DevError, checked_file_size, run_dev};
+use crate::dev::{DevError, ReplyError, checked_file_size, run_dev};
 use crate::media_ingest::{
     IngestError, MAXIMUM_MEDIA_BYTES, MAXIMUM_MEDIA_FILES, MAXIMUM_UPLOAD_BODY_BYTES,
     MAXIMUM_VIDEO_DURATION, MediaLimits, UploadKind, check_content, check_room,
@@ -37,7 +38,7 @@ fn check(name: &str, bytes: &[u8]) -> Result<(), IngestError> {
     check_content(&mut Cursor::new(bytes), upload, &MediaLimits::DEFAULT)
 }
 
-async fn add(running: &Running, name: &str, bytes: &[u8]) -> (u16, String) {
+async fn add(running: &Running, name: &str, bytes: &[u8]) -> (StatusCode, String) {
     let body = json!({"name": name, "data_base64": STANDARD.encode(bytes)}).to_string();
     let response = post_json(running.port, "/dev/playground/media", &body)
         .await
@@ -153,8 +154,15 @@ fn a_text_file_named_mp4_an_svg_and_a_mismatched_type_are_refused_naming_what_wa
         "{}",
         text.to_string()
     );
-    assert_eq!(text.status(), 400);
+    assert_eq!(text.status(), StatusCode::BAD_REQUEST);
     let svg = check("a.mp4", b"<svg onload='x()'/>").expect_err("refused");
+    assert_eq!(
+        svg,
+        IngestError::NotThatVideoType {
+            claimed: VideoFormat::Mp4,
+            found: FoundContent::SvgOrXml
+        }
+    );
     assert!(svg.to_string().contains("SVG"), "{}", svg.to_string());
     let mp4_as_webm = check("a.webm", &mp4_of_seconds(2)).expect_err("refused");
     assert_eq!(
@@ -171,6 +179,13 @@ fn a_text_file_named_mp4_an_svg_and_a_mismatched_type_are_refused_naming_what_wa
         mp4_as_webm.to_string()
     );
     let webm_as_mp4 = check("a.mp4", &webm_of_seconds(2)).expect_err("refused");
+    assert_eq!(
+        webm_as_mp4,
+        IngestError::NotThatVideoType {
+            claimed: VideoFormat::Mp4,
+            found: FoundContent::WebmVideo
+        }
+    );
     assert!(webm_as_mp4.to_string().contains("a webm video"));
 }
 
@@ -205,7 +220,7 @@ fn a_file_of_exactly_the_size_limit_passes_and_one_byte_more_is_refused_for_ever
                 maximum_bytes: limit
             }
         );
-        assert_eq!(refusal.status(), 413);
+        assert_eq!(refusal.status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert!(
             refusal.to_string().contains("2 GiB"),
             "{}",
@@ -362,8 +377,14 @@ fn videos_have_no_count_limit_of_their_own() {
 #[tokio::test]
 async fn a_real_mp4_and_webm_are_added_listed_as_video_and_served_with_their_type() {
     let running = start(&STARTER_FILES).await;
-    assert_eq!(add(&running, "hearth.mp4", &mp4_of_seconds(3)).await.0, 200);
-    assert_eq!(add(&running, "rain.webm", &webm_of_seconds(4)).await.0, 200);
+    assert_eq!(
+        add(&running, "hearth.mp4", &mp4_of_seconds(3)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        add(&running, "rain.webm", &webm_of_seconds(4)).await.0,
+        StatusCode::OK
+    );
     let listed = run_dev(running.port, &words("media")).await.expect("lists");
     assert!(
         listed.contains("hearth.mp4") && listed.contains("rain.webm") && listed.contains("video"),
@@ -393,7 +414,7 @@ async fn refused_uploads_say_why_and_write_nothing() {
         ("blind.mp4", mp4_without_movie_header(), "cannot be read"),
     ] {
         let (status, body) = add(&running, name, &bytes).await;
-        assert_eq!(status, 400, "{name}: {body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {body}");
         assert!(body.contains(reason), "{name}: {body}");
     }
     assert_eq!(
@@ -410,7 +431,10 @@ async fn refused_uploads_say_why_and_write_nothing() {
 async fn a_video_larger_than_the_old_limits_is_accepted_through_the_route_and_ranges_into_it() {
     let running = start(&STARTER_FILES).await;
     let bytes = mp4_of_size(80 * MIB);
-    assert_eq!(add(&running, "long-take.mp4", &bytes).await.0, 200);
+    assert_eq!(
+        add(&running, "long-take.mp4", &bytes).await.0,
+        StatusCode::OK
+    );
     let served = fetch(
         &running,
         "long-take.mp4",
@@ -426,7 +450,7 @@ async fn more_than_sixteen_videos_are_accepted() {
     let running = start(&STARTER_FILES).await;
     for index in 0..20 {
         let (status, body) = add(&running, &format!("clip{index}.mp4"), &mp4_of_seconds(1)).await;
-        assert_eq!(status, 200, "{index}: {body}");
+        assert_eq!(status, StatusCode::OK, "{index}: {body}");
     }
 }
 
@@ -459,7 +483,7 @@ async fn a_request_that_is_not_the_add_object_is_refused_and_recorded() {
         let response = post_json(running.port, "/dev/playground/media", body)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{body}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
         assert!(response.body.contains("not valid"), "{}", response.body);
     }
 }
@@ -483,7 +507,7 @@ async fn the_raised_body_limit_belongs_to_the_add_route_alone() {
         add(&running, "wider-than-the-router-limit.png", &bytes)
             .await
             .0,
-        200
+        StatusCode::OK
     );
 }
 
@@ -495,9 +519,12 @@ async fn the_library_holds_ten_thousand_files_and_refuses_the_next_but_allows_a_
         std::fs::write(directory.join(format!("f{index}.png")), b"a picture").expect("writes");
     }
     let (status, body) = add(&running, "fourth.mp4", &mp4_of_seconds(1)).await;
-    assert_eq!(status, 400);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("10000 files"), "{body}");
-    assert_eq!(add(&running, "f0.png", b"another picture").await.0, 200);
+    assert_eq!(
+        add(&running, "f0.png", b"another picture").await.0,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]
@@ -527,9 +554,16 @@ async fn media_add_takes_a_video_path_and_refuses_a_fake_one() {
         fake.to_string_lossy().into_owned(),
     ];
     let error = run_dev(running.port, &line).await.expect_err("refused");
+    // The library's refusals carry no cause yet; the sentence says what the bytes are.
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("plain text")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas { cause: None, .. },
+                message,
+            } if message.contains("plain text")
+        ),
+        "{error:?}"
     );
 }
 
@@ -636,7 +670,7 @@ async fn a_range_that_starts_past_the_end_gives_416_with_the_length() {
 async fn a_range_that_starts_past_the_end_of_a_video_gives_416_with_the_length() {
     let running = start(&STARTER_FILES).await;
     let bytes = mp4_of_seconds(2);
-    assert_eq!(add(&running, "hearth.mp4", &bytes).await.0, 200);
+    assert_eq!(add(&running, "hearth.mp4", &bytes).await.0, StatusCode::OK);
     let length = bytes.len();
     for range in [
         format!("bytes={length}-"),

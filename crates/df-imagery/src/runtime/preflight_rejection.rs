@@ -1,5 +1,5 @@
 //! Live unsent jobs close through protected preflight evidence and their real claim.
-use super::{PreflightRejection, QualifiedPreflightRejected, ports::*, worker::NativeImageRuntime};
+use super::{PreflightCause, QualifiedPreflightRejected, ports::*, worker::NativeImageRuntime};
 use crate::cost::ImageCostProjection;
 use crate::execution::*;
 use crate::{ImageJob, ImageJournal, ServiceClock};
@@ -23,7 +23,7 @@ where
         &self,
         job: &ImageJob,
         stage: &StageView,
-        reason: PreflightRejection,
+        reason: PreflightCause,
     ) -> Result<(), RuntimeError> {
         if self
             .execution

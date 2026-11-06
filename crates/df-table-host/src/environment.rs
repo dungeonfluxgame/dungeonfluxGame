@@ -12,6 +12,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+/// The system's list of directories searched for an executable that is not named by path.
+pub const PATH_VARIABLE: &str = "PATH";
+
 /// A variable that is set to something that is not Unicode text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NotTextError {

@@ -1,7 +1,7 @@
 //! Synthetic canonical records prove current-window and source-dependency binding, not D&D.
 #[path = "../src/offer_expiry_contract.rs"]
 mod contract;
-include!("../src/tests/fixtures.rs");
+include!("../src/current_responses/fixtures.rs");
 
 use df_content::catalog::{CatalogEntry, CatalogLimits, CatalogSnapshot};
 use df_model::commands::{CommandError, CommandLimits};

@@ -1,7 +1,7 @@
 //! Provider-neutral historical image request and accounting records.
 //! Native image execution belongs exclusively to df-imagery.
 
-use crate::NativeHttpRefusal;
+use crate::NativeHttpCause;
 use std::fmt;
 
 const MAXIMUM_REFERENCES: usize = 4;
@@ -152,10 +152,26 @@ pub enum ImageEditError {
     /// The supplier answered 429 with a structured reason that waiting does not clear: the
     /// account is out of credit or quota. Never retried.
     QuotaExhausted,
-    Transport(NativeHttpRefusal),
+    Transport(NativeHttpCause),
     /// A success answer whose image was absent, undecodable, of another size or not complete.
     Output,
 }
+
+impl fmt::Display for ImageEditError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRequest => formatter.write_str("the image edit request is invalid"),
+            Self::Refused => formatter.write_str("the image edit was declined by moderation"),
+            Self::Unauthorized => formatter.write_str("the image credential was rejected"),
+            Self::Provider(status) => write!(formatter, "the image service answered {status}"),
+            Self::QuotaExhausted => formatter.write_str("the image account is out of quota"),
+            Self::Transport(cause) => write!(formatter, "the image call failed: {cause}"),
+            Self::Output => formatter.write_str("the image answer was not a usable image"),
+        }
+    }
+}
+
+impl std::error::Error for ImageEditError {}
 
 fn validate(edit: &ImageEdit<'_>) -> Result<(), ImageEditError> {
     let pixels = u64::from(edit.width) * u64::from(edit.height);

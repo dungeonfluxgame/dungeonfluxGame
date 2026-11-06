@@ -11,9 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::event_log::EventLog;
-use crate::observe::{
-    EVENT_SPOOL_ENVIRONMENT_VARIABLE, FileSpool, HostEventSink, SPOOL_FILE_NAME, WallClock,
-};
+use crate::observe::{EVENT_SPOOL_VARIABLE, FileSpool, HostEventSink, SPOOL_FILE_NAME, WallClock};
 
 use super::replay::{PendingReplay, Replayer};
 use super::setup::EngineStartError;
@@ -68,5 +66,5 @@ impl Extras {
 
 /// The directory `DF_TABLE_EVENT_SPOOL` names, if it is set to something.
 fn spool_directory_from_environment() -> Option<PathBuf> {
-    crate::environment::path(EVENT_SPOOL_ENVIRONMENT_VARIABLE)
+    crate::environment::path(EVENT_SPOOL_VARIABLE)
 }

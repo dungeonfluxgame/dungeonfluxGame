@@ -156,7 +156,7 @@ impl Pipeline {
         let key = MediaRequestKey::from_bytes([6; 32]);
         let now = SystemClock.now_ms();
         let deadline = now + 600_000;
-        let capacity = CapacityScope::new("funded-stages".into()).unwrap();
+        let capacity = CapacityScope::new("funded-stages").unwrap();
         let mut admin = world.scratch.connect().await;
         let tx = admin.transaction().await.unwrap();
         execution::set_capacity_bounds_in(
@@ -318,7 +318,7 @@ impl Pipeline {
             .scope
             .routes
             .iter()
-            .find(|route| route.kind.label() == kind.label())
+            .find(|route| route.kind.label() == kind.key())
             .unwrap()
             .clone();
         let call = StageCall {

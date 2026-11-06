@@ -126,7 +126,7 @@ fn best_effort_preflight_checkpoint_replays_after_restart_without_dispatch_usage
             PostgresTransport::PlaintextLoopbackOnly,
             2,
             Arc::new(ids.clone()),
-            CapacityScope::new("live/generation".into()).unwrap(),
+            CapacityScope::new("live/generation").unwrap(),
             GATE_REVISION,
             true,
         )
@@ -277,7 +277,7 @@ fn best_effort_preflight_checkpoint_replays_after_restart_without_dispatch_usage
                 parent_dispatch: Some(scope.dispatch),
             },
             planned,
-            CapacityScope::new("live/generation".into()).unwrap(),
+            CapacityScope::new("live/generation").unwrap(),
             true,
             at(6),
         )

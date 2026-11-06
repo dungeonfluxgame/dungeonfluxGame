@@ -138,7 +138,7 @@ pub enum PresentationComponent {
 }
 
 impl PresentationComponent {
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Subtitle => "subtitle",
             Self::SpeechBubble => "speech_bubble",
@@ -160,33 +160,33 @@ impl PresentationComponent {
         }
     }
 
-    pub const fn all() -> &'static [Self] {
-        &[
-            Self::Subtitle,
-            Self::SpeechBubble,
-            Self::ThinkingLoader,
-            Self::IntentLoader,
-            Self::CheckCard,
-            Self::Dice,
-            Self::RollCard,
-            Self::Die,
-            Self::CombatBanner,
-            Self::TurnChange,
-            Self::Battlefield,
-            Self::ItemCard,
-            Self::TitleCard,
-            Self::SceneCard,
-            Self::PlateIncoming,
-            Self::PlateOutgoing,
-            Self::PartyHud,
-        ]
-    }
+    /// Every component, in declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::Subtitle,
+        Self::SpeechBubble,
+        Self::ThinkingLoader,
+        Self::IntentLoader,
+        Self::CheckCard,
+        Self::Dice,
+        Self::RollCard,
+        Self::Die,
+        Self::CombatBanner,
+        Self::TurnChange,
+        Self::Battlefield,
+        Self::ItemCard,
+        Self::TitleCard,
+        Self::SceneCard,
+        Self::PlateIncoming,
+        Self::PlateOutgoing,
+        Self::PartyHud,
+    ];
 
-    pub fn from_label(label: &str) -> Option<Self> {
-        Self::all()
+    /// The component whose `key()` is `key`, if any.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
             .iter()
             .copied()
-            .find(|component| component.label() == label)
+            .find(|component| component.key() == key)
     }
 }
 
@@ -205,7 +205,7 @@ pub enum ComponentPhase {
 }
 
 impl ComponentPhase {
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Requested => "requested",
             Self::Queued => "queued",
@@ -218,18 +218,24 @@ impl ComponentPhase {
         }
     }
 
-    fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "requested" => Some(Self::Requested),
-            "queued" => Some(Self::Queued),
-            "opened" => Some(Self::Opened),
-            "readable" => Some(Self::Readable),
-            "closing" => Some(Self::Closing),
-            "activated" => Some(Self::Activated),
-            "hidden" => Some(Self::Hidden),
-            "failed" => Some(Self::Failed),
-            _ => None,
-        }
+    /// Every variant, in declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::Requested,
+        Self::Queued,
+        Self::Opened,
+        Self::Readable,
+        Self::Closing,
+        Self::Activated,
+        Self::Hidden,
+        Self::Failed,
+    ];
+
+    /// The variant whose `key()` is `key`, if any.
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.key() == key)
     }
 }
 
@@ -245,7 +251,7 @@ pub enum EffectiveVisibility {
 }
 
 impl EffectiveVisibility {
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Visible => "visible",
             Self::Hidden => "hidden",
@@ -256,16 +262,22 @@ impl EffectiveVisibility {
         }
     }
 
-    fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "visible" => Some(Self::Visible),
-            "hidden" => Some(Self::Hidden),
-            "occluded" => Some(Self::Occluded),
-            "offscreen" => Some(Self::Offscreen),
-            "transparent" => Some(Self::Transparent),
-            "unknown" => Some(Self::Unknown),
-            _ => None,
-        }
+    /// Every variant, in declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::Visible,
+        Self::Hidden,
+        Self::Occluded,
+        Self::Offscreen,
+        Self::Transparent,
+        Self::Unknown,
+    ];
+
+    /// The variant whose `key()` is `key`, if any.
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.key() == key)
     }
 }
 
@@ -340,7 +352,7 @@ pub enum VisualSource {
 }
 
 impl VisualSource {
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Other => "other",
             Self::ScenePlate => "scene_plate",
@@ -350,15 +362,21 @@ impl VisualSource {
         }
     }
 
-    fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "other" => Some(Self::Other),
-            "scene_plate" => Some(Self::ScenePlate),
-            "live_backdrop" => Some(Self::LiveBackdrop),
-            "scene_artwork" => Some(Self::SceneArtwork),
-            "establishing_photo" => Some(Self::EstablishingPhoto),
-            _ => None,
-        }
+    /// Every variant, in declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::Other,
+        Self::ScenePlate,
+        Self::LiveBackdrop,
+        Self::SceneArtwork,
+        Self::EstablishingPhoto,
+    ];
+
+    /// The variant whose `key()` is `key`, if any.
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.key() == key)
     }
 }
 
@@ -372,7 +390,7 @@ pub enum VisualShot {
 }
 
 impl VisualShot {
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Other => "other",
             Self::Plate => "plate",
@@ -381,14 +399,15 @@ impl VisualShot {
         }
     }
 
-    fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "other" => Some(Self::Other),
-            "plate" => Some(Self::Plate),
-            "establishing" => Some(Self::Establishing),
-            "stage" => Some(Self::Stage),
-            _ => None,
-        }
+    /// Every variant, in declaration order.
+    pub const ALL: &'static [Self] = &[Self::Other, Self::Plate, Self::Establishing, Self::Stage];
+
+    /// The variant whose `key()` is `key`, if any.
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.key() == key)
     }
 }
 
@@ -403,7 +422,7 @@ pub enum VisualPlateState {
 }
 
 impl VisualPlateState {
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Pending => "pending",
@@ -413,15 +432,21 @@ impl VisualPlateState {
         }
     }
 
-    fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "none" => Some(Self::None),
-            "pending" => Some(Self::Pending),
-            "ready" => Some(Self::Ready),
-            "failed" => Some(Self::Failed),
-            "unavailable" => Some(Self::Unavailable),
-            _ => None,
-        }
+    /// Every variant, in declaration order.
+    pub const ALL: &'static [Self] = &[
+        Self::None,
+        Self::Pending,
+        Self::Ready,
+        Self::Failed,
+        Self::Unavailable,
+    ];
+
+    /// The variant whose `key()` is `key`, if any.
+    fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|variant| variant.key() == key)
     }
 }
 
@@ -475,6 +500,20 @@ pub enum TimingError {
     Oversized,
     SequenceExhausted,
 }
+
+impl std::fmt::Display for TimingError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "there are no timing events to upload",
+            Self::Invalid => "the timing event or batch is not in the catalogue",
+            Self::Capacity => "the timing buffer is full",
+            Self::Oversized => "the timing batch is larger than its bound",
+            Self::SequenceExhausted => "the timing batch sequence is exhausted",
+        })
+    }
+}
+
+impl std::error::Error for TimingError {}
 
 impl TimingEvent {
     pub fn lifecycle(
@@ -637,10 +676,10 @@ impl TimingEvent {
                     " requested_source={} effective_source={} shot={} plate_state={} ",
                     "requested_asset_id={} effective_asset_id={}",
                 ),
-                details.requested.label(),
-                details.effective.label(),
-                details.shot.label(),
-                details.plate_state.label(),
+                details.requested.key(),
+                details.effective.key(),
+                details.shot.key(),
+                details.plate_state.key(),
                 optional(details.requested_asset),
                 optional(details.effective_asset),
             ));
@@ -650,9 +689,9 @@ impl TimingEvent {
         {
             line.push_str(&format!(
                 " component={} component_phase={} visibility={} visible_held_ms={} lag_ms={}",
-                component.label(),
-                phase.label(),
-                visibility.label(),
+                component.key(),
+                phase.key(),
+                visibility.key(),
                 optional(self.visible_held_ms),
                 optional(self.lag_ms),
             ));
@@ -704,16 +743,16 @@ pub fn encode(events: &[TimingEvent]) -> Result<Vec<u8>, TimingError> {
             attributes.extend([
                 attribute(
                     "requested_source",
-                    Value::StringValue(details.requested.label().into()),
+                    Value::StringValue(details.requested.key().into()),
                 ),
                 attribute(
                     "effective_source",
-                    Value::StringValue(details.effective.label().into()),
+                    Value::StringValue(details.effective.key().into()),
                 ),
-                attribute("shot", Value::StringValue(details.shot.label().into())),
+                attribute("shot", Value::StringValue(details.shot.key().into())),
                 attribute(
                     "plate_state",
-                    Value::StringValue(details.plate_state.label().into()),
+                    Value::StringValue(details.plate_state.key().into()),
                 ),
             ]);
             for (name, value) in [
@@ -729,9 +768,9 @@ pub fn encode(events: &[TimingEvent]) -> Result<Vec<u8>, TimingError> {
             (event.component, event.component_phase, event.visibility)
         {
             attributes.extend([
-                attribute("component", Value::StringValue(component.label().into())),
-                attribute("component_phase", Value::StringValue(phase.label().into())),
-                attribute("visibility", Value::StringValue(visibility.label().into())),
+                attribute("component", Value::StringValue(component.key().into())),
+                attribute("component_phase", Value::StringValue(phase.key().into())),
+                attribute("visibility", Value::StringValue(visibility.key().into())),
             ]);
         }
         if let Some(visible_held_ms) = event.visible_held_ms {
@@ -765,9 +804,9 @@ pub fn encode(events: &[TimingEvent]) -> Result<Vec<u8>, TimingError> {
     Ok(bytes)
 }
 
-/// Fill a closed-label slot from one string attribute; a repeat, a non-string or an
-/// uncatalogued label is invalid.
-fn set_label<T>(
+/// Fill a closed-key slot from one string attribute; a repeat, a non-string or an
+/// uncatalogued key is invalid.
+fn set_key<T>(
     slot: &mut Option<T>,
     value: &Value,
     parse: impl Fn(&str) -> Option<T>,
@@ -827,39 +866,39 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<TimingEvent>, TimingError> {
                 .and_then(|attribute_value| attribute_value.value.as_ref())
                 .ok_or(TimingError::Invalid)?;
             match field.key.as_str() {
-                "reason" => set_label(&mut reason, attribute_value, |text| {
+                "reason" => set_key(&mut reason, attribute_value, |text| {
                     REASONS.iter().copied().find(|reason| *reason == text)
                 })?,
-                "requested_source" => set_label(
+                "requested_source" => set_key(
                     &mut requested_source,
                     attribute_value,
-                    VisualSource::from_label,
+                    VisualSource::from_key,
                 )?,
-                "effective_source" => set_label(
+                "effective_source" => set_key(
                     &mut effective_source,
                     attribute_value,
-                    VisualSource::from_label,
+                    VisualSource::from_key,
                 )?,
-                "plate_state" => set_label(
+                "plate_state" => set_key(
                     &mut plate_state,
                     attribute_value,
-                    VisualPlateState::from_label,
+                    VisualPlateState::from_key,
                 )?,
-                "shot" => set_label(&mut shot, attribute_value, VisualShot::from_label)?,
-                "component" => set_label(
+                "shot" => set_key(&mut shot, attribute_value, VisualShot::from_key)?,
+                "component" => set_key(
                     &mut component,
                     attribute_value,
-                    PresentationComponent::from_label,
+                    PresentationComponent::from_key,
                 )?,
-                "component_phase" => set_label(
+                "component_phase" => set_key(
                     &mut component_phase,
                     attribute_value,
-                    ComponentPhase::from_label,
+                    ComponentPhase::from_key,
                 )?,
-                "visibility" => set_label(
+                "visibility" => set_key(
                     &mut visibility,
                     attribute_value,
-                    EffectiveVisibility::from_label,
+                    EffectiveVisibility::from_key,
                 )?,
                 numeric => {
                     let Value::IntValue(measurement) = attribute_value else {

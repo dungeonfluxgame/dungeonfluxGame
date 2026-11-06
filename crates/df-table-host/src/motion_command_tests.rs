@@ -3,9 +3,12 @@
 
 use std::time::{Duration, Instant};
 
+use axum::http::StatusCode;
+use df_table::event::RejectionCause;
+
 use crate::client::get;
 use crate::command::{Command, CommandError, DEFAULT_TRAVEL_SPEED, parse, split_words, usage_text};
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::view::CanvasView;
 use crate::wire::{EffectRequest, EventsReply, Frame};
@@ -156,8 +159,17 @@ async fn a_speed_that_is_not_allowed_is_refused_with_the_limits_and_recorded() {
         .await
         .expect_err("refused");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("canvas units per second")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas {
+                    cause: Some(RejectionCause::InvalidSpeed),
+                    ..
+                },
+                ..
+            }
+        ),
+        "{error:?}"
     );
     let events = get(running.port, "/events.json").await.expect("answers");
     let events: EventsReply = serde_json::from_str(&events.body).expect("events");
@@ -193,7 +205,7 @@ async fn frame(running: &Running, query: &str) -> Frame {
     let response = get(running.port, &format!("/playground/frame{query}"))
         .await
         .expect("answers");
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, StatusCode::OK);
     serde_json::from_str(&response.body).expect("a frame")
 }
 

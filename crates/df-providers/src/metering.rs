@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use crate::NativeHttpRefusal;
+use crate::NativeHttpCause;
 
 /// Which client sent the call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,15 +89,15 @@ pub const fn status_may_be_billed(status: u16) -> bool {
 
 /// Whether a call that failed in transport with this refusal may have been billed: a request
 /// refused before it was sent was not; a deadline, a dropped connection or a cancel may have been.
-pub const fn refusal_may_be_billed(refusal: NativeHttpRefusal) -> bool {
+pub const fn refusal_may_be_billed(cause: NativeHttpCause) -> bool {
     !matches!(
-        refusal,
-        NativeHttpRefusal::InvalidLimits
-            | NativeHttpRefusal::InvalidConfiguration
-            | NativeHttpRefusal::InvalidEndpoint
-            | NativeHttpRefusal::InvalidCredential
-            | NativeHttpRefusal::ProviderDisabled
-            | NativeHttpRefusal::RequestTooLarge
+        cause,
+        NativeHttpCause::InvalidLimits
+            | NativeHttpCause::InvalidConfiguration
+            | NativeHttpCause::InvalidEndpoint
+            | NativeHttpCause::InvalidCredential
+            | NativeHttpCause::ProviderDisabled
+            | NativeHttpCause::RequestTooLarge
     )
 }
 
@@ -111,8 +111,8 @@ pub fn settle_status(ticket: Option<Box<dyn CallTicket>>, status: u16) {
 
 /// Settles `ticket`, if any, for a transport failure: a request refused before it was sent is
 /// refused, any other failure is left unsettled (of unknown outcome).
-pub fn settle_refusal(ticket: Option<Box<dyn CallTicket>>, refusal: NativeHttpRefusal) {
-    if let Some(ticket) = ticket.filter(|_| !refusal_may_be_billed(refusal)) {
+pub fn settle_refusal(ticket: Option<Box<dyn CallTicket>>, cause: NativeHttpCause) {
+    if let Some(ticket) = ticket.filter(|_| !refusal_may_be_billed(cause)) {
         ticket.refused();
     }
 }
@@ -187,21 +187,21 @@ mod tests {
             );
             assert!(!seen.contains(&"answered"));
         }
-        for (refusal, refused) in [
-            (NativeHttpRefusal::InvalidEndpoint, true),
-            (NativeHttpRefusal::ProviderDisabled, true),
-            (NativeHttpRefusal::RequestTooLarge, true),
-            (NativeHttpRefusal::Deadline, false),
-            (NativeHttpRefusal::Unknown, false),
-            (NativeHttpRefusal::Cancelled, false),
+        for (cause, refused) in [
+            (NativeHttpCause::InvalidEndpoint, true),
+            (NativeHttpCause::ProviderDisabled, true),
+            (NativeHttpCause::RequestTooLarge, true),
+            (NativeHttpCause::Deadline, false),
+            (NativeHttpCause::Unknown, false),
+            (NativeHttpCause::Cancelled, false),
         ] {
             let record = Arc::new(Record::default());
             let slot = MeterSlot::new(Arc::new(Meter(Arc::clone(&record))));
-            settle_refusal(slot.sent(call()), refusal);
+            settle_refusal(slot.sent(call()), cause);
             assert_eq!(
                 record.0.lock().unwrap().contains(&"refused"),
                 refused,
-                "{refusal:?}"
+                "{cause:?}"
             );
         }
     }

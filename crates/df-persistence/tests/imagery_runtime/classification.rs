@@ -124,7 +124,7 @@ async fn run_classification(late_cancelled: Option<bool>) {
     let execution = PostgresImageExecution::open(config.clone(), transport.clone(), 2)
         .await
         .unwrap();
-    let scope = CapacityScope::new("runtime/classification".to_owned()).unwrap();
+    let scope = CapacityScope::new("runtime/classification").unwrap();
     execution
         .set_capacity_bounds(
             scope.as_str(),
@@ -262,6 +262,7 @@ async fn run_classification(late_cancelled: Option<bool>) {
             active_config_revision: 1,
             capacity: scope.clone(),
             poll_interval: Duration::from_millis(10),
+            codex_home: None,
         },
     };
     let next = runtime.run_next();
@@ -306,6 +307,7 @@ async fn run_classification(late_cancelled: Option<bool>) {
             active_config_revision: 1,
             capacity: scope,
             poll_interval: Duration::from_millis(10),
+            codex_home: None,
         },
     };
     assert!(restarted.run_next().await.unwrap().is_none());

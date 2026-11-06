@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use super::format::{format_ended, format_job, format_jobs, format_refusal};
+use super::format::{format_job, format_jobs};
 use super::limits::{MAXIMUM_ASPECT_PART, MAXIMUM_ASPECT_RATIO, MAXIMUM_NAME_CHARS};
 use super::model::{Aspect, GenerateRequestError, ImageRequest, Purpose};
 use super::request::{GenerateError, GenerateReply, GenerateRequest, JobState, JobView};
@@ -128,57 +128,51 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
     Ok(MediaGenerate::Generate(request))
 }
 
-/// The value of a reply, or its refusal as the line to print.
-///
-/// Transitional: a refusal becomes `DevError::Rejected` with its line, because `DevError` has no
-/// typed refusal yet; the typed error is matched on the route's reply.
-fn reply_value<T>(reply: GenerateReply<T>) -> Result<T, DevError> {
-    match reply {
-        DevReply::Done { value } => Ok(value),
-        DevReply::Rejected { error, message } => {
-            Err(DevError::Rejected(format_refusal(&error, &message)))
-        }
-    }
-}
-
 /// Runs one `media generate` command against the host on `port`.
 pub async fn run(port: u16, command: MediaGenerate) -> Result<String, DevError> {
     match command {
         MediaGenerate::Status => {
             let jobs: GenerateReply<Vec<JobView>> =
                 dev_client::get_json(port, path::GENERATE).await?;
-            Ok(format_jobs(&reply_value(jobs)?))
+            Ok(format_jobs(&dev_client::reply_value(jobs)?))
         }
         MediaGenerate::Generate(request) => {
             let job: GenerateReply<JobView> =
                 dev_client::post_json(port, path::GENERATE, &request).await?;
             match job {
                 DevReply::Done { value } => Ok(format_job(&value)),
-                DevReply::Rejected { error, message } => Err(DevError::Rejected(
-                    refusal_text(port, &error, &message).await,
-                )),
+                DevReply::Rejected { error, message } => {
+                    Err(refused_generation(port, error, message).await)
+                }
             }
         }
     }
 }
 
-/// The line for a refused generation. A job that ran and ended without a picture is printed
-/// with its name and how long it ran, read from the status; when the status cannot say (it does
-/// not answer, or no longer holds the job), the refusal line is printed as it came.
-async fn refusal_text(port: u16, error: &GenerateError, message: &str) -> String {
-    let Some(number) = error.job() else {
-        return format_refusal(error, message);
-    };
-    let jobs: Result<GenerateReply<Vec<JobView>>, DevError> =
-        dev_client::get_json(port, path::GENERATE).await;
-    let ended = match jobs {
-        Ok(DevReply::Done { value }) => value.into_iter().find(|job| job.job == number),
-        Ok(DevReply::Rejected { .. }) | Err(_) => None,
+/// The failure of a refused generation. A job that ran and ended without a picture is
+/// `GenerationEnded`, with its name and how long it ran read from the status; when the status
+/// cannot say (it does not answer, or no longer holds the job), it is the refusal as it came.
+async fn refused_generation(port: u16, error: GenerateError, message: String) -> DevError {
+    let ended = match error.job() {
+        Some(number) => {
+            let jobs: Result<GenerateReply<Vec<JobView>>, DevError> =
+                dev_client::get_json(port, path::GENERATE).await;
+            match jobs {
+                Ok(DevReply::Done { value }) => value.into_iter().find(|job| job.job == number),
+                Ok(DevReply::Rejected { .. }) | Err(_) => None,
+            }
+        }
+        None => None,
     };
     match ended {
-        Some(job) if matches!(job.state, JobState::Failed { .. }) => {
-            format_ended(&job, error, message)
-        }
-        _ => format_refusal(error, message),
+        Some(job) if matches!(job.state, JobState::Failed { .. }) => DevError::GenerationEnded {
+            job: Box::new(job),
+            error,
+            message,
+        },
+        _ => DevError::Rejected {
+            error: error.into(),
+            message,
+        },
     }
 }

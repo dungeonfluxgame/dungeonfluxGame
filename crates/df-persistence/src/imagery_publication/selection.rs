@@ -101,7 +101,7 @@ pub(super) fn candidate_binding(candidate: &CandidateReceipt) -> Result<Vec<u8>,
     append(&mut bytes, candidate.scope.job.as_bytes())?;
     append(&mut bytes, candidate.scope.stage.as_bytes())?;
     append(&mut bytes, candidate.scope.dispatch.as_bytes())?;
-    append(&mut bytes, candidate.basis.kind.label().as_bytes())?;
+    append(&mut bytes, candidate.basis.kind.key().as_bytes())?;
     bytes.extend_from_slice(&candidate.basis.input_revision.to_be_bytes());
     bytes.extend_from_slice(&candidate.basis.input_digest);
     bytes.extend_from_slice(&candidate.basis.config_revision.to_be_bytes());

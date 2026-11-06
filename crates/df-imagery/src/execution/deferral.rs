@@ -1,22 +1,19 @@
 //! Operational queue notices do not assert a supplier failure or financial outcome.
 use super::{ExecutionSetupError, StageScope};
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum QuotaDeferralReason {
-    Cooldown,
-    Probing,
+use crate::listed::listed_enum;
+listed_enum! {
+    keyed
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum QuotaDeferralReason {
+        Cooldown,
+        Probing,
+    }
 }
 impl QuotaDeferralReason {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Cooldown => "cooldown",
             Self::Probing => "probing",
-        }
-    }
-    pub fn parse_label(value: &str) -> Option<Self> {
-        match value {
-            "cooldown" => Some(Self::Cooldown),
-            "probing" => Some(Self::Probing),
-            _ => None,
         }
     }
 }
@@ -40,7 +37,7 @@ impl DeferQueuedCommand {
         now_ms: i64,
     ) -> Result<Self, ExecutionSetupError> {
         if now_ms <= 0 || not_before_ms <= now_ms {
-            return Err(ExecutionSetupError::BadTime);
+            return Err(ExecutionSetupError::InvalidTime);
         }
         Ok(Self {
             scope,

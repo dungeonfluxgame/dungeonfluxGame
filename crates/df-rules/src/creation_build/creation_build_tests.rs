@@ -28,7 +28,7 @@ fn sample(species: HeroSpecies, tested: Option<(&str, &str)>) -> Build {
         .take(2)
         .collect();
     let mut build: Build = [
-        ("species", species.choice_id()),
+        ("species", species.key()),
         ("class", CLASS_OFFER),
         ("background", BACKGROUND_OFFER),
         ("array", "stalwart"),
@@ -78,17 +78,17 @@ fn set(build: &mut Build, key: &str, value: &str) {
     }
 }
 
-fn rejected(report: BuildReport) -> Vec<BuildRejection> {
+fn rejected(report: BuildReport) -> Vec<BuildProblem> {
     match report {
-        BuildReport::Rejected { reasons } => reasons,
+        BuildReport::Rejected { problems } => problems,
         BuildReport::Accepted(character) => panic!("expected a rejection, got {character:?}"),
     }
 }
 
-fn keys(reasons: &[BuildRejection]) -> Vec<Option<&str>> {
-    reasons
+fn keys(problems: &[BuildProblem]) -> Vec<Option<&str>> {
+    problems
         .iter()
-        .map(|reason| reason.group.as_deref())
+        .map(|problem| problem.group.as_deref())
         .collect()
 }
 
@@ -195,14 +195,14 @@ fn check_equivalence(
             assert_eq!(built, character, "accepted build differs: {build:?}");
             tally.0 += 1;
         }
-        (Err(error), BuildReport::Rejected { reasons }) => {
-            assert!(!reasons.is_empty(), "no reason for {build:?}");
-            assert_eq!(reasons[0].error, error, "first reason differs: {build:?}");
-            for (index, reason) in reasons.iter().enumerate() {
-                assert!(!reason.sentence.is_empty(), "empty sentence: {build:?}");
+        (Err(error), BuildReport::Rejected { problems }) => {
+            assert!(!problems.is_empty(), "no problem for {build:?}");
+            assert_eq!(problems[0].error, error, "first problem differs: {build:?}");
+            for (index, problem) in problems.iter().enumerate() {
+                assert!(!problem.sentence.is_empty(), "empty sentence: {build:?}");
                 assert!(
-                    !reasons[..index].contains(reason),
-                    "repeated reason: {build:?}"
+                    !problems[..index].contains(problem),
+                    "repeated problem: {build:?}"
                 );
             }
             tally.1 += 1;
@@ -245,7 +245,7 @@ fn listing_has_every_build_choice_once_with_unique_ids() {
     assert_eq!(offered.len(), 9);
     for offer in &listing.species {
         let expected: Vec<&str> = choice_groups(
-            HeroSpecies::from_choice(&offer.id).expect("listed species is a known species"),
+            HeroSpecies::from_key(&offer.id).expect("listed species is a known species"),
         )
         .iter()
         .map(|group| group.id)
@@ -270,11 +270,8 @@ fn species_list_names_every_hero_species_and_its_label_is_plain() {
             HeroSpecies::Tiefling => 8,
         }
     }
-    for species in HeroSpecies::ALL {
-        assert_eq!(
-            HeroSpecies::ALL[position(species)].choice_id(),
-            species.choice_id()
-        );
+    for &species in HeroSpecies::ALL {
+        assert_eq!(HeroSpecies::ALL[position(species)].key(), species.key());
     }
     assert_eq!(option_label("high-elf"), "High Elf");
     assert_eq!(option_label("sleight-of-hand"), "Sleight of Hand");
@@ -301,10 +298,10 @@ fn listing_ids_match_the_golden_list() {
             goblin halfling orc",
         "alignment [alignment]: lawful-good neutral-good chaotic-good lawful-neutral neutral \
             chaotic-neutral",
-        "gaming-set [gaming-set]: dice dragonchess playing-cards three-dragon-ante",
+        "gaming_set [gaming-set]: dice dragonchess playing-cards three-dragon-ante",
         "equipment [equipment]: fighter-a-soldier-a",
-        "style-masteries [style-masteries]: defense-greatsword-flail-javelin",
-        "allied-ties [allied-ties]: join-order",
+        "style_masteries [style-masteries]: defense-greatsword-flail-javelin",
+        "allied_ties [allied-ties]: join-order",
         "dragonborn > draconic-ancestry [draconic-ancestry]: black blue brass bronze copper gold \
             green red silver white",
         "elf > elven-lineage [elven-lineage]: drow high-elf wood-elf",
@@ -357,11 +354,11 @@ fn every_listed_option_is_accepted_in_some_build() {
             }
         }
     }
-    for species in HeroSpecies::ALL {
+    for &species in HeroSpecies::ALL {
         let offer = listing
             .species
             .iter()
-            .find(|offer| offer.id == species.choice_id())
+            .find(|offer| offer.id == species.key())
             .expect("every species has an offer");
         let plain = sample(species, None);
         assert!(matches!(
@@ -389,7 +386,7 @@ fn every_listed_option_is_accepted_in_some_build() {
 #[test]
 fn accepted_build_equals_validate_character_output() {
     let rules = CreationRules::srd_521();
-    for species in HeroSpecies::ALL {
+    for &species in HeroSpecies::ALL {
         let build = sample(species, None);
         let refs = pairs(&build);
         let expected = validate_character(&rules, "Brynn", &refs).expect("sample is admitted");
@@ -402,13 +399,19 @@ fn accepted_build_equals_validate_character_output() {
 
 #[test]
 fn validate_build_accepts_exactly_what_validate_character_accepts() {
-    let broken = CreationRules {
-        background_bonus: BackgroundBonus {
-            strength: 9,
-            constitution: 1,
+    let baseline = CreationRules::srd_521();
+    let changed = CreationRules::new(
+        baseline.ability_arrays(),
+        BackgroundBonus {
+            strength: 1,
+            constitution: 2,
         },
-        ..CreationRules::srd_521()
-    };
+        baseline.base_hit_points(),
+        baseline.armor_class(),
+        baseline.proficiency_bonus(),
+        baseline.second_wind_uses_max(),
+    )
+    .expect("a changed background bonus inside its bounds is valid");
     let long_name = "A".repeat(33);
     let names = ["Brynn", "", "B@d", "Jean-Luc", long_name.as_str()];
     let edits = edits();
@@ -430,7 +433,7 @@ fn validate_build_accepts_exactly_what_validate_character_accepts() {
             for name in names {
                 check_equivalence(&CreationRules::srd_521(), name, &once, &mut tally);
             }
-            check_equivalence(&broken, "Brynn", &once, &mut tally);
+            check_equivalence(&changed, "Brynn", &once, &mut tally);
             for second in &edits {
                 let mut twice = once.clone();
                 second.apply(&mut twice);
@@ -443,45 +446,85 @@ fn validate_build_accepts_exactly_what_validate_character_accepts() {
 }
 
 #[test]
-fn invalid_creation_rules_are_reported_alone() {
-    let broken = CreationRules {
-        background_bonus: BackgroundBonus {
-            strength: 9,
-            constitution: 1,
-        },
-        ..CreationRules::srd_521()
-    };
-    let build = sample(HeroSpecies::Dwarf, None);
-    let reasons = rejected(validate_build(&broken, "Brynn", &pairs(&build)));
-    assert_eq!(reasons.len(), 1);
-    assert_eq!(reasons[0].error, JourneyRuleError::InvalidRules);
-    assert_eq!(reasons[0].group, None);
+fn invalid_creation_rules_cannot_be_built_so_no_build_is_judged_against_them() {
+    let baseline = CreationRules::srd_521();
+    assert_eq!(
+        CreationRules::new(
+            baseline.ability_arrays(),
+            BackgroundBonus {
+                strength: 9,
+                constitution: 1,
+            },
+            baseline.base_hit_points(),
+            baseline.armor_class(),
+            baseline.proficiency_bonus(),
+            baseline.second_wind_uses_max(),
+        ),
+        Err(JourneyRuleError::InvalidRules)
+    );
 }
 
 #[test]
-fn three_independent_mistakes_yield_three_reasons_in_check_order() {
+fn group_keys_are_distinct_snake_case_and_differ_from_slots_only_in_spelling() {
+    let keys: Vec<&str> = Group::ALL.iter().map(|group| group.key()).collect();
+    for key in &keys {
+        assert!(
+            key.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+            "{key} is not snake_case"
+        );
+    }
+    let mut unique = keys.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), keys.len());
+    for group in Group::ALL {
+        if let [slot] = group.slots() {
+            assert_eq!(slot.replace('-', "_"), group.key());
+        }
+    }
+}
+
+#[test]
+fn a_build_problem_serializes_its_error_by_key() {
+    let build = sample(HeroSpecies::Dwarf, Some(("gaming-set", "chess")));
+    let problems = rejected(validate_build(
+        &CreationRules::srd_521(),
+        "Brynn",
+        &pairs(&build),
+    ));
+    let json = serde_json::to_value(&problems[0]).expect("a problem serializes");
+    assert_eq!(json["error"], "invalid_choice");
+    assert_eq!(json["group"], "gaming-set");
+    assert_eq!(json["option_id"], "chess");
+}
+
+#[test]
+fn three_independent_mistakes_yield_three_problems_in_check_order() {
     let rules = CreationRules::srd_521();
     let mut build = sample(HeroSpecies::Dwarf, None);
     set(&mut build, "class", "wizard-1");
     set(&mut build, "alignment", "chaotic-evil");
     set(&mut build, "skill-2", "acrobatics");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
     assert_eq!(
-        keys(&reasons),
+        keys(&problems),
         [Some("class"), Some("alignment"), Some("skill-2")]
     );
     assert_eq!(
-        reasons.iter().map(|r| r.error).collect::<Vec<_>>(),
+        problems
+            .iter()
+            .map(|problem| problem.error)
+            .collect::<Vec<_>>(),
         [
             JourneyRuleError::InvalidChoice,
             JourneyRuleError::InvalidChoice,
             JourneyRuleError::InvalidChoice,
         ]
     );
-    assert_eq!(reasons[0].option_id.as_deref(), Some("wizard-1"));
-    assert_eq!(reasons[1].option_id.as_deref(), Some("chaotic-evil"));
-    assert_eq!(reasons[2].option_id.as_deref(), Some("acrobatics"));
-    assert!(reasons[0].sentence.contains("SRD p.47"));
+    assert_eq!(problems[0].option_id.as_deref(), Some("wizard-1"));
+    assert_eq!(problems[1].option_id.as_deref(), Some("chaotic-evil"));
+    assert_eq!(problems[2].option_id.as_deref(), Some("acrobatics"));
+    assert!(problems[0].sentence.contains("SRD p.47"));
 }
 
 #[test]
@@ -490,22 +533,22 @@ fn unknown_option_ids_are_named_and_refused() {
     let mut build = sample(HeroSpecies::Dwarf, None);
     set(&mut build, "gaming-set", "chess");
     set(&mut build, "array", "dexterous");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
-    assert_eq!(keys(&reasons), [Some("array"), Some("gaming-set")]);
-    assert_eq!(reasons[1].option_id.as_deref(), Some("chess"));
-    assert!(reasons[1].sentence.contains("chess"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
+    assert_eq!(keys(&problems), [Some("array"), Some("gaming-set")]);
+    assert_eq!(problems[1].option_id.as_deref(), Some("chess"));
+    assert!(problems[1].sentence.contains("chess"));
 }
 
 #[test]
-fn empty_and_invalid_names_are_their_own_reason() {
+fn empty_and_invalid_names_are_their_own_problem() {
     let rules = CreationRules::srd_521();
     let build = sample(HeroSpecies::Dwarf, None);
     for name in ["", "B@d", "1st"] {
-        let reasons = rejected(validate_build(&rules, name, &pairs(&build)));
-        assert_eq!(reasons.len(), 1, "name {name:?}");
-        assert_eq!(reasons[0].error, JourneyRuleError::InvalidName);
-        assert_eq!(reasons[0].group, None);
-        assert!(reasons[0].sentence.contains("32 characters"));
+        let problems = rejected(validate_build(&rules, name, &pairs(&build)));
+        assert_eq!(problems.len(), 1, "name {name:?}");
+        assert_eq!(problems[0].error, JourneyRuleError::InvalidName);
+        assert_eq!(problems[0].group, None);
+        assert!(problems[0].sentence.contains("32 characters"));
     }
 }
 
@@ -515,10 +558,10 @@ fn duplicate_group_keys_are_reported_once() {
     let mut build = sample(HeroSpecies::Dwarf, None);
     build.push(("class".to_owned(), CLASS_OFFER.to_owned()));
     build.push(("class".to_owned(), CLASS_OFFER.to_owned()));
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
-    assert_eq!(reasons.len(), 1);
-    assert_eq!(reasons[0].error, JourneyRuleError::DuplicateChoice);
-    assert_eq!(reasons[0].group.as_deref(), Some("class"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].error, JourneyRuleError::DuplicateChoice);
+    assert_eq!(problems[0].group.as_deref(), Some("class"));
 }
 
 #[test]
@@ -526,11 +569,11 @@ fn duplicate_skill_pick_names_the_repeated_option() {
     let rules = CreationRules::srd_521();
     let mut build = sample(HeroSpecies::Dwarf, None);
     set(&mut build, "skill-2", "acrobatics");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
-    assert_eq!(reasons.len(), 1);
-    assert_eq!(reasons[0].error, JourneyRuleError::InvalidChoice);
-    assert_eq!(reasons[0].group.as_deref(), Some("skill-2"));
-    assert_eq!(reasons[0].option_id.as_deref(), Some("acrobatics"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].error, JourneyRuleError::InvalidChoice);
+    assert_eq!(problems[0].group.as_deref(), Some("skill-2"));
+    assert_eq!(problems[0].option_id.as_deref(), Some("acrobatics"));
 }
 
 #[test]
@@ -538,15 +581,15 @@ fn species_skill_cannot_repeat_a_class_skill_or_a_soldier_skill() {
     let rules = CreationRules::srd_521();
     let mut human = sample(HeroSpecies::Human, None);
     set(&mut human, "human-skill", "acrobatics");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&human)));
-    assert_eq!(reasons.len(), 1);
-    assert_eq!(reasons[0].group.as_deref(), Some("human-skill"));
-    assert_eq!(reasons[0].option_id.as_deref(), Some("acrobatics"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&human)));
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].group.as_deref(), Some("human-skill"));
+    assert_eq!(problems[0].option_id.as_deref(), Some("acrobatics"));
 
     set(&mut human, "human-skill", "athletics");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&human)));
-    assert_eq!(reasons.len(), 1);
-    assert!(reasons[0].sentence.contains("SRD p.83"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&human)));
+    assert_eq!(problems.len(), 1);
+    assert!(problems[0].sentence.contains("SRD p.83"));
 }
 
 #[test]
@@ -560,17 +603,17 @@ fn skill_count_boundaries_two_is_admitted_one_and_three_are_refused() {
 
     let mut one = two.clone();
     one.retain(|(key, _)| key != "skill-2");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&one)));
-    assert_eq!(reasons[0].error, JourneyRuleError::MissingChoice);
-    assert_eq!(reasons[0].group.as_deref(), Some("skill-2"));
-    assert_eq!(reasons[0].sentence, "No second skill was picked.");
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&one)));
+    assert_eq!(problems[0].error, JourneyRuleError::MissingChoice);
+    assert_eq!(problems[0].group.as_deref(), Some("skill-2"));
+    assert_eq!(problems[0].sentence, "No second skill was picked.");
 
     let mut three = two.clone();
     three.push(("skill-3".to_owned(), "history".to_owned()));
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&three)));
-    assert_eq!(reasons.len(), 1);
-    assert_eq!(reasons[0].group.as_deref(), Some("skill-3"));
-    assert_eq!(reasons[0].error, JourneyRuleError::InvalidChoice);
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&three)));
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].group.as_deref(), Some("skill-3"));
+    assert_eq!(problems[0].error, JourneyRuleError::InvalidChoice);
 }
 
 #[test]
@@ -579,17 +622,17 @@ fn language_count_boundaries_and_repeated_language() {
     let two = sample(HeroSpecies::Dwarf, None);
     let mut none = two.clone();
     none.retain(|(key, _)| !key.starts_with("language-"));
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&none)));
-    assert_eq!(reasons[0].error, JourneyRuleError::MissingChoice);
-    assert_eq!(keys(&reasons), [Some("language-1"), Some("language-2")]);
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&none)));
+    assert_eq!(problems[0].error, JourneyRuleError::MissingChoice);
+    assert_eq!(keys(&problems), [Some("language-1"), Some("language-2")]);
 
     let mut repeated = two.clone();
     set(&mut repeated, "language-2", "common-sign");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&repeated)));
-    assert_eq!(reasons.len(), 1);
-    assert_eq!(reasons[0].error, JourneyRuleError::InvalidChoice);
-    assert_eq!(reasons[0].group.as_deref(), Some("language-2"));
-    assert!(reasons[0].sentence.contains("different"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&repeated)));
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].error, JourneyRuleError::InvalidChoice);
+    assert_eq!(problems[0].group.as_deref(), Some("language-2"));
+    assert!(problems[0].sentence.contains("different"));
 }
 
 #[test]
@@ -597,10 +640,10 @@ fn unknown_species_is_named() {
     let rules = CreationRules::srd_521();
     let mut build = sample(HeroSpecies::Dwarf, None);
     set(&mut build, "species", "wizard");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
-    assert_eq!(reasons.len(), 1);
-    assert_eq!(reasons[0].group.as_deref(), Some("species"));
-    assert_eq!(reasons[0].option_id.as_deref(), Some("wizard"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
+    assert_eq!(problems.len(), 1);
+    assert_eq!(problems[0].group.as_deref(), Some("species"));
+    assert_eq!(problems[0].option_id.as_deref(), Some("wizard"));
 }
 
 #[test]
@@ -608,7 +651,7 @@ fn first_release_offers_only_fighter_one_and_soldier() {
     let rules = CreationRules::srd_521();
     let mut build = sample(HeroSpecies::Dwarf, None);
     set(&mut build, "background", "acolyte");
-    let reasons = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
-    assert_eq!(reasons.len(), 1);
-    assert!(reasons[0].sentence.contains("SRD p.83"));
+    let problems = rejected(validate_build(&rules, "Brynn", &pairs(&build)));
+    assert_eq!(problems.len(), 1);
+    assert!(problems[0].sentence.contains("SRD p.83"));
 }

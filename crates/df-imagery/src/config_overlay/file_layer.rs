@@ -14,8 +14,8 @@ use crate::config::{
 use crate::request::Purpose;
 
 use super::parse::{
-    parse_accounting_mode, parse_backend_id, parse_backend_section, parse_file_values,
-    parse_global_mode, parse_purpose, take_count, take_flag, take_text,
+    parse_backend_id, parse_backend_section, parse_file_values, parse_global_mode, take_count,
+    take_flag, take_text,
 };
 use super::shared::{
     BodyField, Pick, ProfileEdit, apply_u32_pick, apply_u64_pick, apply_usize_pick, invalid,
@@ -362,7 +362,7 @@ pub(super) fn apply_file_layer(
             }
             ["imagery", "accounting", "mode"] => {
                 let text = take_text(path, value)?;
-                let Some(mode) = parse_accounting_mode(text) else {
+                let Some(mode) = AccountingMode::from_key(text) else {
                     return Err(invalid(path, "unknown accounting mode"));
                 };
                 new_accounting_mode = Some(Pick::named(mode, OverlaySource::FileImagery, path));
@@ -415,7 +415,7 @@ pub(super) fn apply_file_layer(
                 };
                 match *key {
                     "enabled" => {
-                        let field = format!("backends.{}.enabled", backend.label());
+                        let field = format!("backends.{}.enabled", backend.key());
                         let pick =
                             Pick::named(take_flag(path, value)?, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
@@ -432,7 +432,7 @@ pub(super) fn apply_file_layer(
                                 invalid(path, reason)
                             }
                         })?;
-                        let field = format!("backends.{}.account", backend.label());
+                        let field = format!("backends.{}.account", backend.key());
                         let pick = Pick::named(account, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
                             &field,
@@ -442,7 +442,7 @@ pub(super) fn apply_file_layer(
                         new_backend_account[backend.index()] = merged;
                     }
                     "max_concurrent_jobs" => {
-                        let field = format!("backends.{}.max_concurrent_jobs", backend.label());
+                        let field = format!("backends.{}.max_concurrent_jobs", backend.key());
                         let pick =
                             Pick::named(take_count(path, value)?, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
@@ -459,7 +459,7 @@ pub(super) fn apply_file_layer(
                                 invalid(path, reason)
                             }
                         })?;
-                        let field = format!("backends.{}.model", backend.label());
+                        let field = format!("backends.{}.model", backend.key());
                         let pick = Pick::named(model, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
                             &field,
@@ -475,7 +475,7 @@ pub(super) fn apply_file_layer(
                                 invalid(path, reason)
                             }
                         })?;
-                        let field = format!("backends.{}.generation_model", backend.label());
+                        let field = format!("backends.{}.generation_model", backend.key());
                         let pick = Pick::named(model, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
                             &field,
@@ -491,7 +491,7 @@ pub(super) fn apply_file_layer(
                                 invalid(path, reason)
                             }
                         })?;
-                        let field = format!("backends.{}.edit_model", backend.label());
+                        let field = format!("backends.{}.edit_model", backend.key());
                         let pick = Pick::named(model, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
                             &field,
@@ -507,7 +507,7 @@ pub(super) fn apply_file_layer(
                                 invalid(path, reason)
                             }
                         })?;
-                        let field = format!("backends.{}.alpha_model", backend.label());
+                        let field = format!("backends.{}.alpha_model", backend.key());
                         let pick = Pick::named(model, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
                             &field,
@@ -523,7 +523,7 @@ pub(super) fn apply_file_layer(
                                 invalid(path, reason)
                             }
                         })?;
-                        let field = format!("backends.{}.endpoint", backend.label());
+                        let field = format!("backends.{}.endpoint", backend.key());
                         let pick = Pick::named(endpoint, OverlaySource::FileImagery, path);
                         let merged = merge_pick(
                             &field,
@@ -543,7 +543,7 @@ pub(super) fn apply_file_layer(
                 }
             }
             ["imagery", "purposes", purpose_name, key] => {
-                let Some(purpose) = parse_purpose(purpose_name) else {
+                let Some(purpose) = Purpose::from_key(purpose_name) else {
                     return Err(OverlayError::UnknownField {
                         field: path.clone(),
                     });
@@ -764,14 +764,14 @@ pub(super) fn apply_file_layer(
         provenance,
         Purpose::ScenePlate,
         new_purpose_enabled[Purpose::ScenePlate.index()].take(),
-        combine_scene_plate(&leg_pictures, &leg_plates),
+        combine_scene_plate(leg_pictures.as_ref(), leg_plates.as_ref()),
     )?;
     apply_file_purpose(
         config,
         provenance,
         Purpose::SceneEdit,
         new_purpose_enabled[Purpose::SceneEdit.index()].take(),
-        combine_scene_plate(&leg_pictures, &leg_plates),
+        combine_scene_plate(leg_pictures.as_ref(), leg_plates.as_ref()),
     )?;
     apply_file_purpose(
         config,
@@ -816,7 +816,7 @@ pub(super) fn apply_file_layer(
             continue;
         };
         if let Some(pick) = new_purpose_backend[index].take() {
-            let field = format!("purposes.{}.backend_override", purpose.label());
+            let field = format!("purposes.{}.backend_override", purpose.key());
             config.purposes[index].backend_override = pick.value;
             note(provenance, &field, pick.source);
         }
@@ -824,7 +824,7 @@ pub(super) fn apply_file_layer(
             config.purposes[index].moderation_override = pick.value;
             note(
                 provenance,
-                &format!("purposes.{}.moderation_override", purpose.label()),
+                &format!("purposes.{}.moderation_override", purpose.key()),
                 pick.source,
             );
         }
@@ -832,7 +832,7 @@ pub(super) fn apply_file_layer(
             config.purposes[index].quality_override = pick.value;
             note(
                 provenance,
-                &format!("purposes.{}.quality_override", purpose.label()),
+                &format!("purposes.{}.quality_override", purpose.key()),
                 pick.source,
             );
         }
@@ -840,7 +840,7 @@ pub(super) fn apply_file_layer(
             config.purposes[index].model_override = pick.value;
             note(
                 provenance,
-                &format!("purposes.{}.model_override", purpose.label()),
+                &format!("purposes.{}.model_override", purpose.key()),
                 pick.source,
             );
         }
@@ -848,12 +848,12 @@ pub(super) fn apply_file_layer(
             config.purposes[index].account_override = pick.value;
             note(
                 provenance,
-                &format!("purposes.{}.account_override", purpose.label()),
+                &format!("purposes.{}.account_override", purpose.key()),
                 pick.source,
             );
         }
         if let Some(pick) = new_purpose_profile[index].take() {
-            let field = format!("purposes.{}.output_profile", purpose.label());
+            let field = format!("purposes.{}.output_profile", purpose.key());
             config.purposes[index].output_profile = pick.value;
             note(provenance, &field, pick.source);
         }
@@ -1212,8 +1212,8 @@ pub(super) fn apply_file_layer(
 }
 
 fn combine_scene_plate(
-    pictures: &Option<Pick<bool>>,
-    plates: &Option<Pick<bool>>,
+    pictures: Option<&Pick<bool>>,
+    plates: Option<&Pick<bool>>,
 ) -> Option<Pick<bool>> {
     match (pictures, plates) {
         (Some(pictures_pick), Some(plates_pick)) => {
@@ -1266,7 +1266,7 @@ fn apply_file_purpose(
     updated: Option<Pick<bool>>,
     legacy: Option<Pick<bool>>,
 ) -> Result<(), OverlayError> {
-    let field = format!("purposes.{}.enabled", purpose.label());
+    let field = format!("purposes.{}.enabled", purpose.key());
     if let Some(pick) = merge_pick(&field, updated, legacy)? {
         config.purposes[purpose.index()].enabled = pick.value;
         note(provenance, &field, pick.source);

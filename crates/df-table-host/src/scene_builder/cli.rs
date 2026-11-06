@@ -18,8 +18,7 @@ use super::request::{
 use super::routes::path;
 use crate::command::CommandError;
 use crate::dev::DevError;
-use crate::dev_client::{get_json, post_json};
-use crate::dev_http::DevReply;
+use crate::dev_client::{self, get_json, post_json};
 
 pub const BUILD_USAGE: &str = concat!(
     "scene build <place> [fail=<stage>] [slow=<stage>:<seconds>]",
@@ -221,19 +220,10 @@ pub fn parse(verb: &str, words: &[String]) -> Result<SceneBuilderCommand, Comman
     }
 }
 
-/// The value of a scene builder reply, or its refusal as the command's failure.
-///
-/// Transitional: the refusal becomes text until `DevError` carries a route's typed error
-/// (`dev_client::get_value` / `post_value` then replace this); the route tests match the typed
-/// `SceneBuilderError` on the reply itself.
+/// The value of a scene builder reply, or its refusal (the typed `SceneBuilderError`) as the
+/// command's failure.
 pub(super) fn reply_value<T>(reply: SceneReply<T>) -> Result<T, DevError> {
-    match reply {
-        DevReply::Done { value } => Ok(value),
-        DevReply::Rejected { error, message } => Err(DevError::Rejected(format!(
-            "refused ({}): {message}",
-            error.key()
-        ))),
-    }
+    dev_client::reply_value(reply)
 }
 
 /// Runs one scene builder command against the host on `port` and returns the text to print.

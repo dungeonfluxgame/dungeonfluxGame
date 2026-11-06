@@ -5,7 +5,7 @@ use df_imagery::owner_scope_bytes;
 use serde_json::{Value, json};
 use tokio_postgres::{Row, Transaction};
 fn metadata(receipt: &DeclineReceipt) -> String {
-    json!({"schema_revision":2,"contract":receipt.contract.label(),"status":receipt.status,"body_sha256":receipt.body_sha256,"body_bytes":receipt.body_bytes,"transport_request_id_sha256":receipt.transport_request_id_sha256,"retry_after_values":receipt.retry_after_values,"backoff_ms":receipt.retry.backoff_ms}).to_string()
+    json!({"schema_revision":2,"contract":receipt.contract.key(),"status":receipt.status,"body_sha256":receipt.body_sha256,"body_bytes":receipt.body_bytes,"transport_request_id_sha256":receipt.transport_request_id_sha256,"retry_after_values":receipt.retry_after_values,"backoff_ms":receipt.retry.backoff_ms}).to_string()
 }
 fn digest(value: &Value) -> Result<[u8; 32], ExecutionError> {
     let bytes: Vec<u8> =
@@ -28,7 +28,7 @@ fn parse(row: &Row, scope: ExecutionScope) -> Result<DeclineReceipt, ExecutionEr
             usage_revision: invalid(u32::try_from(row.get::<_, i32>("selected_usage_revision")))?,
             observed_at_ms: row.get("observed_at_ms"),
         },
-        contract: SubmitDeclineContract::parse_label(
+        contract: SubmitDeclineContract::from_key(
             value["contract"]
                 .as_str()
                 .ok_or(ExecutionError::InvalidRecord)?,

@@ -31,7 +31,7 @@ use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 
 use crate::dev_http::parse_body;
-use crate::limits::UPLOAD_PIECE_BYTES;
+use crate::limits::{SERVE_CHUNK_BYTES, UPLOAD_PIECE_BYTES, UPLOAD_QUEUE_PIECES};
 use crate::media_ingest::{IngestError, MediaLimits};
 pub use crate::media_ingest::{
     MAXIMUM_MEDIA_BYTES, MAXIMUM_MEDIA_FILES, MAXIMUM_UPLOAD_BODY_BYTES, MAXIMUM_VIDEO_DURATION,
@@ -47,11 +47,6 @@ use crate::state::AppState;
 use crate::wire::{MediaAdd, MediaRemove, path};
 
 const MEDIA_DIRECTORY: &str = "media";
-/// Bytes of a file read and sent at a time: the most of a file the host holds for one answer.
-const SERVE_CHUNK_BYTES: u64 = 256 * 1024;
-/// Pieces of an upload waiting for the thread that decodes them; a full queue holds the sender
-/// back, so an upload in flight holds a few pieces, not the file.
-const UPLOAD_QUEUE_PIECES: usize = 4;
 
 /// Where the library is on disk.
 pub fn media_directory(files: &PlaygroundFiles) -> PathBuf {

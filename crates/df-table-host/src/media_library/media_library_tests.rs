@@ -6,10 +6,11 @@ use std::io::Write;
 use tempfile::TempDir;
 
 use super::{Conditions, Payload, Served, entity_tag, serve_file};
+use crate::limits::SERVE_CHUNK_BYTES;
 use crate::media_ingest::MediaLimits;
 use crate::playground::FileError;
 
-const CHUNK_BYTES: usize = 256 * 1024;
+const CHUNK_BYTES: usize = SERVE_CHUNK_BYTES as usize;
 
 fn write_file(directory: &TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let path = directory.path().join(name);

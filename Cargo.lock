@@ -404,6 +404,7 @@ dependencies = [
  "df-observe",
  "df-provider-api",
  "df-types",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
 ]
@@ -679,6 +680,7 @@ dependencies = [
  "image",
  "libc",
  "libwebp-sys2 0.2.0",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tokio",

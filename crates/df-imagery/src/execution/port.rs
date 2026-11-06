@@ -66,7 +66,7 @@ impl CapacityBounds {
         max_pending_bytes: i64,
     ) -> Result<Self, ExecutionSetupError> {
         if max_active <= 0 || max_pending_jobs <= 0 || max_pending_bytes <= 0 {
-            return Err(ExecutionSetupError::BadRevision);
+            return Err(ExecutionSetupError::InvalidRevision);
         }
         Ok(Self {
             max_active,
@@ -82,7 +82,7 @@ impl CapacityBounds {
         promotion_ms: i64,
     ) -> Result<Self, ExecutionSetupError> {
         if promotion_ms <= 0 {
-            return Err(ExecutionSetupError::BadTime);
+            return Err(ExecutionSetupError::InvalidTime);
         }
         self.urgency_promotion_ms = promotion_ms;
         Ok(self)

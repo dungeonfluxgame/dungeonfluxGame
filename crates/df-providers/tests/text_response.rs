@@ -14,10 +14,9 @@ use df_provider_api::{
     RequestOwnerState, RequestUsage, TextEventKind, TextRequest, TextSemantics,
 };
 use df_providers::{
-    CandidateRouteId, NativeHttpLimits, NativeHttpRefusal, NativeTextProvider,
-    ProviderFailureClass, ReasoningEffort, TextOutputSchema, TextProviderConfig,
-    TextResponseContract, TextResponseError, TextSchemaError, TextSchemaLimits,
-    registered_text_provider,
+    CandidateRouteId, NativeHttpCause, NativeHttpLimits, NativeTextProvider, ProviderFailureClass,
+    ReasoningEffort, TextContractCause, TextOutputSchema, TextProviderConfig, TextResponseError,
+    TextSchemaError, TextSchemaLimits, registered_text_provider,
 };
 use df_types::{
     LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
@@ -341,9 +340,10 @@ async fn refusal_incomplete_tools_foreign_metadata_model_schema_and_invalid_outp
             .await
             .unwrap_err();
         assert_eq!(error.failure_class(), ProviderFailureClass::Contract);
-        assert!(
-            matches!(error.reason(),TextResponseError::Contract { usage:Some(usage),.. } if usage.total_tokens == 20)
-        );
+        assert!(matches!(
+            error.failure(),
+            TextResponseError::Contract { usage: Some(usage), .. } if usage.total_tokens == 20
+        ));
         assert!(!format!("{error:?}").contains("private-error"));
         assert!(
             !tokio::task::spawn_blocking(move || server.join().unwrap())
@@ -409,14 +409,16 @@ async fn all_invalid_usage_forms_reject_and_valid_overrun_retains_exact_actual_c
             .await
             .unwrap_err();
         if case == 9 {
-            assert!(
-                matches!(error.reason(),TextResponseError::UsageExceeded(usage) if usage.total_tokens == 208 && usage.input_tokens == 200)
-            );
+            assert!(matches!(
+                error.failure(),
+                TextResponseError::UsageExceeded(usage)
+                    if usage.total_tokens == 208 && usage.input_tokens == 200
+            ));
         } else {
             assert!(matches!(
-                error.reason(),
+                error.failure(),
                 TextResponseError::Contract {
-                    reason: TextResponseContract::Usage,
+                    cause: TextContractCause::Usage,
                     usage: None
                 }
             ));
@@ -464,7 +466,7 @@ async fn malformed_trailing_duplicate_keys_and_schema_mismatch_do_not_publish_ra
                 .submit(&request, owner(&current), future::pending())
                 .await
                 .unwrap_err()
-                .reason(),
+                .failure(),
             TextResponseError::Contract { .. }
         ));
         assert!(
@@ -517,7 +519,7 @@ async fn final_consumption_rechecks_generation_source_rights_schema_mode_basis_a
             final_owner.elapsed = replacement.deadline;
         }
         let refusal = response.complete(final_owner).err().unwrap();
-        assert!(matches!(refusal.reason(), TextResponseError::Owner(_)));
+        assert!(matches!(refusal.failure(), TextResponseError::Owner(_)));
         assert_eq!(refusal.supplier_usage().unwrap().total_tokens, 20);
         assert_eq!(
             refusal.provider_request_id().map(|id| id.as_str()),
@@ -567,8 +569,8 @@ async fn prepared_replay_wrong_schema_and_cancelled_owner_do_not_egress() {
             .submit(&request, owner(&current), future::ready(()))
             .await
             .unwrap_err()
-            .reason(),
-        TextResponseError::Transport(NativeHttpRefusal::Cancelled)
+            .failure(),
+        TextResponseError::Transport(NativeHttpCause::Cancelled)
     ));
     let wrong_schema = TextOutputSchema::new(
         "foreign",
@@ -631,7 +633,7 @@ async fn prepared_replay_wrong_schema_and_cancelled_owner_do_not_egress() {
             .submit(&request, owner(&current), future::pending())
             .await,
         Err(TextResponseError::Transport(
-            NativeHttpRefusal::RequestTooLarge
+            NativeHttpCause::RequestTooLarge
         ))
     ));
     listener.set_nonblocking(true).unwrap();
@@ -791,8 +793,8 @@ async fn redirects_do_not_follow_foreign_endpoint_or_create_a_second_submission(
         .await
         .unwrap_err();
     assert!(matches!(
-        error.reason(),
-        TextResponseError::Transport(NativeHttpRefusal::Redirect)
+        error.failure(),
+        TextResponseError::Transport(NativeHttpCause::Redirect)
     ));
     foreign.set_nonblocking(true).unwrap();
     assert!(foreign.accept().is_err());
@@ -841,15 +843,15 @@ async fn header_content_length_type_truncation_body_and_chunk_bounds_are_enforce
             .await
             .unwrap_err();
         let expected = match case {
-            0 | 4 => NativeHttpRefusal::ResponseTooLarge,
-            1 | 6 => NativeHttpRefusal::ContentType,
-            2 => NativeHttpRefusal::HeadersTooLarge,
-            3 => NativeHttpRefusal::Unknown,
-            5 => NativeHttpRefusal::TooManyChunks,
+            0 | 4 => NativeHttpCause::ResponseTooLarge,
+            1 | 6 => NativeHttpCause::ContentType,
+            2 => NativeHttpCause::HeadersTooLarge,
+            3 => NativeHttpCause::Unknown,
+            5 => NativeHttpCause::TooManyChunks,
             _ => unreachable!(),
         };
         assert!(
-            matches!(error.reason(),TextResponseError::Transport(reason) if *reason == expected),
+            matches!(error.failure(),TextResponseError::Transport(cause) if *cause == expected),
             "case {case}: {error:?}"
         );
         if case == 3 {

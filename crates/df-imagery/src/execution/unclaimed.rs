@@ -31,8 +31,8 @@ macro_rules! private_proof_debug {
     ($($name:ident),*) => {
         $(
             impl fmt::Debug for $name {
-                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    f.debug_struct(stringify!($name))
+                fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    formatter.debug_struct(stringify!($name))
                         .field("job_revision", &self.job_revision)
                         .finish_non_exhaustive()
                 }

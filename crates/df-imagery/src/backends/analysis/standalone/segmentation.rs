@@ -9,7 +9,7 @@ use crate::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use df_providers::{
-    HttpMethod, HttpRequest, NativeHttp, NativeHttpRefusal, NativeHttpResponse, ProviderLimits,
+    HttpMethod, HttpRequest, NativeHttp, NativeHttpCause, NativeHttpResponse, ProviderLimits,
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -46,8 +46,9 @@ pub(crate) struct SegmentationCheckpoint {
     digest: [u8; 32],
 }
 impl std::fmt::Debug for SegmentationCheckpoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SegmentationCheckpoint")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SegmentationCheckpoint")
             .field("prompt", &self.prompt)
             .field("width_px", &self.width_px)
             .field("height_px", &self.height_px)
@@ -67,7 +68,7 @@ impl SegmentationCheckpoint {
             "request_id": self.request_id,
             "status_url": self.status_url,
             "result_url": self.result_url,
-            "prompt": self.prompt.label(),
+            "prompt": self.prompt.key(),
             "width_px": self.width_px,
             "height_px": self.height_px,
             "maximum_masks": self.maximum_masks,
@@ -191,8 +192,9 @@ pub(crate) struct PreparedSegmentation {
     pub(crate) picture_count: u64,
 }
 impl std::fmt::Debug for PreparedSegmentation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreparedSegmentation")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedSegmentation")
             .field("prompt", &self.prompt)
             .field("width_px", &self.width_px)
             .field("height_px", &self.height_px)
@@ -256,7 +258,7 @@ impl PreparedSegmentation {
         }
         let body = serde_json::to_vec(&json!({
             "image_url": format!("data:image/jpeg;base64,{}", STANDARD.encode(jpeg)),
-            "prompt": input.prompt.label(),
+            "prompt": input.prompt.key(),
             "include_scores": true,
             "include_boxes": true,
             "return_multiple_masks": true,
@@ -288,8 +290,8 @@ impl PreparedSegmentation {
             .build(),
             allow_http,
         )
-        .map_err(|reason| {
-            if reason == NativeHttpRefusal::InvalidLimits {
+        .map_err(|failure| {
+            if failure.cause == NativeHttpCause::InvalidLimits {
                 RuntimeError::UnsupportedCapability
             } else {
                 RuntimeError::InvalidConfiguration
@@ -337,7 +339,7 @@ impl PreparedSegmentation {
         self.http
             .execute(request, remaining, std::future::pending())
             .await
-            .map_err(|failure| transport(failure.reason))
+            .map_err(|failure| transport(failure.cause))
     }
     pub(crate) fn checkpoint(
         &self,
@@ -413,7 +415,7 @@ impl PreparedSegmentation {
                     std::future::pending(),
                 )
                 .await
-                .map_err(|failure| transport(failure.reason))?;
+                .map_err(|failure| transport(failure.cause))?;
             if !matches!(status.status, 200 | 202) {
                 return Ok(status);
             }
@@ -438,7 +440,7 @@ impl PreparedSegmentation {
                             std::future::pending(),
                         )
                         .await
-                        .map_err(|failure| transport(failure.reason));
+                        .map_err(|failure| transport(failure.cause));
                 }
                 Some("IN_QUEUE" | "IN_PROGRESS") => {
                     tokio::time::sleep(POLL_INTERVAL.min(self.remaining()?)).await
@@ -448,11 +450,11 @@ impl PreparedSegmentation {
         }
     }
 }
-fn transport(reason: NativeHttpRefusal) -> RuntimeError {
+fn transport(reason: NativeHttpCause) -> RuntimeError {
     match reason {
-        NativeHttpRefusal::Deadline => RuntimeError::Expired,
-        NativeHttpRefusal::Cancelled => RuntimeError::Cancelled,
-        NativeHttpRefusal::ProviderDisabled => RuntimeError::Disabled,
+        NativeHttpCause::Deadline => RuntimeError::Expired,
+        NativeHttpCause::Cancelled => RuntimeError::Cancelled,
+        NativeHttpCause::ProviderDisabled => RuntimeError::Disabled,
         _ => RuntimeError::ProviderUnknown,
     }
 }

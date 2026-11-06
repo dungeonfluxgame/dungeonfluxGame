@@ -85,7 +85,7 @@ pub fn validate_archer(name: &str, choices: &[(&str, &str)]) -> Result<ArcherBui
     .map_err(|_| RuleError::InvalidBuild)?;
     character.abilities = [13, 17, 15, 10, 12, 8];
     character.armor_class = 15;
-    let species = HeroSpecies::from_choice(
+    let species = HeroSpecies::from_key(
         choices
             .iter()
             .find(|(group, _)| *group == "species")

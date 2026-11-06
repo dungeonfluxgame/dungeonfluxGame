@@ -15,7 +15,7 @@ pub(crate) mod bfl;
 pub(crate) mod codec;
 mod failure;
 pub(crate) mod fal;
-pub(crate) use failure::{ApiExchange, ApiFailure, DeclineContract, SubmissionEvidence};
+pub(crate) use failure::{ApiCallError, ApiExchange, DeclineContract, SubmissionEvidence};
 pub(crate) mod openai;
 
 #[cfg(test)]
@@ -32,7 +32,7 @@ use std::time::Duration;
 /// Reused supplier prompt ceiling; kept as a single choke point.
 pub(crate) use df_providers::IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS;
 /// Shared transport refusal; callers branch on variants, never on text.
-pub(crate) use df_providers::NativeHttpRefusal;
+pub(crate) use df_providers::NativeHttpCause;
 
 /// Why a private API stage produced no image. Never carries a prompt, bytes
 /// or supplier text; refusal and quota outcomes are terminal by contract.
@@ -44,9 +44,28 @@ pub(crate) enum ApiError {
     Provider(u16),
     QuotaExhausted,
     RateLimited,
-    Transport(NativeHttpRefusal),
+    Transport(NativeHttpCause),
     Output,
 }
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRequest => formatter.write_str("the supplier request was invalid"),
+            Self::Refused => formatter.write_str("the supplier refused the request"),
+            Self::Unauthorized => formatter.write_str("the supplier refused the credential"),
+            Self::Provider(status) => {
+                write!(formatter, "the supplier answered http status {status}")
+            }
+            Self::QuotaExhausted => formatter.write_str("the supplier quota is exhausted"),
+            Self::RateLimited => formatter.write_str("the supplier rate limit was reached"),
+            Self::Transport(cause) => write!(formatter, "the supplier transport failed: {cause}"),
+            Self::Output => formatter.write_str("the supplier output was unusable"),
+        }
+    }
+}
+
+impl std::error::Error for ApiError {}
 
 /// `NativeHttp` refuses a total timeout above this. A stage budget can be longer, because every
 /// exchange is bounded by the transport and the budget is spent across exchanges.

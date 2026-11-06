@@ -12,7 +12,10 @@ use std::{
     time::Duration,
 };
 
-use df_providers::{AnsweredUsage, CallMeter, CallTicket, SentCall, SystemOneChoiceProvider};
+use df_providers::{
+    AnsweredUsage, CallMeter, CallTicket, NativeHttpCause, SentCall, SystemOneChoiceProvider,
+    SystemOneError,
+};
 use serde_json::json;
 
 /// What the meter was told, in order.
@@ -139,7 +142,7 @@ async fn the_choice_client_tells_its_meter_what_the_supplier_answered() {
     ]);
     let record = Arc::new(Record::default());
     let client = SystemOneChoiceProvider::new(
-        "key".to_owned(),
+        "key",
         &format!("http://{address}"),
         Arc::new(Meter(Arc::clone(&record))),
     )
@@ -148,10 +151,10 @@ async fn the_choice_client_tells_its_meter_what_the_supplier_answered() {
     let state = json!({"moment": "a"});
     let ask = || client.choose(&state, "Pick one.", &criteria);
     assert_eq!(ask().await, Ok(1));
-    assert!(ask().await.is_err());
-    assert!(ask().await.is_err());
-    assert!(ask().await.is_err());
-    assert!(ask().await.is_err());
+    assert_eq!(ask().await, Err(SystemOneError::InvalidAnswer));
+    assert_eq!(ask().await, Err(SystemOneError::InvalidAnswer));
+    assert_eq!(ask().await, Err(SystemOneError::Provider(429)));
+    assert_eq!(ask().await, Err(SystemOneError::Provider(500)));
     assert_eq!(
         lines(&record),
         [
@@ -170,12 +173,34 @@ async fn the_choice_client_tells_its_meter_what_the_supplier_answered() {
     );
 }
 
+#[test]
+fn a_refused_choice_configuration_names_its_cause() {
+    let meter = || Arc::new(Meter(Arc::new(Record::default())));
+    let refused = |credential: &str, base_url: &str| {
+        SystemOneChoiceProvider::new(credential, base_url, meter()).err()
+    };
+    assert_eq!(
+        refused("has space", "https://example.com"),
+        Some(SystemOneError::Transport(
+            NativeHttpCause::InvalidCredential
+        ))
+    );
+    assert_eq!(
+        refused("key", "ftp://example.com"),
+        Some(SystemOneError::Transport(NativeHttpCause::InvalidEndpoint))
+    );
+    assert_eq!(
+        SystemOneError::Provider(500).to_string(),
+        "the choice service answered 500"
+    );
+}
+
 #[tokio::test]
 async fn a_required_meter_does_not_change_the_choice_request() {
     let valid = json!({"answers": {"q1": {"type": "choice", "choice": "o1"}}}).to_string();
     let address = supplier(vec![(200, valid)]);
     let client = SystemOneChoiceProvider::new(
-        "key".to_owned(),
+        "key",
         &format!("http://{address}"),
         Arc::new(Meter(Arc::new(Record::default()))),
     )

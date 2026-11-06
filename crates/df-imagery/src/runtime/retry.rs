@@ -72,7 +72,7 @@ where
     pub(super) async fn retain_decline(
         &self,
         context: &PublicationContext,
-        failure: &crate::backends::api::ApiFailure,
+        failure: &crate::backends::api::ApiCallError,
         raw: &RuntimeUsage,
         mode: DispatchMode,
     ) -> Result<crate::execution::DeclineReceipt, RuntimeError> {

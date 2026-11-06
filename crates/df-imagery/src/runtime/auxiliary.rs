@@ -7,9 +7,7 @@ use crate::cost::{ImageCostProjection, UsageEvidence, UsageRevision};
 use crate::execution::*;
 use crate::intent_codec::DecodedIntent;
 use crate::{ImageConfig, ImageJob, ImageJournal, ServiceClock};
-use inspection_policy::{
-    InspectionAssessment, InspectionVerdict, PhotoCheckFailure, UnjudgedReason,
-};
+use inspection_policy::{InspectionAssessment, InspectionVerdict, PhotoCheckCause, UnjudgedReason};
 
 struct AuxiliaryAdmission<'a> {
     job: ImageJob,
@@ -301,6 +299,7 @@ where
                 context: &context,
                 intent,
                 config,
+                codex_home: self.settings.codex_home.as_deref(),
                 timeout,
                 resume: false,
                 telemetry: &self.telemetry,
@@ -773,7 +772,7 @@ where
                 && spec.requirement == crate::request::InspectionRequirement::BestEffort
             || matches!(
                 assessment.verdict,
-                InspectionVerdict::Failed(PhotoCheckFailure::VisibleText)
+                InspectionVerdict::Failed(PhotoCheckCause::VisibleText)
             ) && candidate.basis.kind == StageKind::Correction
                 && spec.maximum_corrections == 1;
         if accepted {

@@ -43,7 +43,7 @@ pub use self::ports::{
 pub use self::types::{
     CancelOutcome, CancelReceipt, CreatorAssessment, CreatorCategory, CreatorRoute,
     ImageDemandView, ImageExecutionState, ImageInspectionObservation, ImageProgress,
-    ImageServiceError, ImageUsageObservation, OperationHandle, RequestOutcome, RequestProblem,
+    ImageServiceError, ImageUsageObservation, OperationHandle, RequestCause, RequestOutcome,
     RevokeReport, WatchObservation,
 };
 
@@ -217,8 +217,8 @@ where
     ) -> Result<[u8; 32], ImageServiceError> {
         request
             .validate(&PROTOCOL_LIMITS)
-            .map_err(RequestProblem::from_request)
-            .map_err(ImageServiceError::InvalidRequest)?;
+            .map_err(RequestCause::from_request)
+            .map_err(|cause| ImageServiceError::InvalidRequest { cause })?;
         let encoded = encode_intent(request, &PROTOCOL_LIMITS, PROTOCOL_MAX_SNAPSHOT_BYTES)
             .map_err(map_encode_error)?;
         Ok(*encoded.fingerprint())
@@ -275,8 +275,8 @@ where
     ) -> Result<RequestOutcome, ImageServiceError> {
         request
             .validate(&PROTOCOL_LIMITS)
-            .map_err(RequestProblem::from_request)
-            .map_err(ImageServiceError::InvalidRequest)?;
+            .map_err(RequestCause::from_request)
+            .map_err(|cause| ImageServiceError::InvalidRequest { cause })?;
         self.authorizer
             .authorize_request(principal, request)
             .map_err(|_| ImageServiceError::NotAuthorizedOrNotFound)?;
@@ -286,9 +286,9 @@ where
         let encoded = encode_intent(request, &PROTOCOL_LIMITS, PROTOCOL_MAX_SNAPSHOT_BYTES)
             .map_err(map_encode_error)?;
         if encoded.fingerprint() != &request.identity.fingerprint {
-            return Err(ImageServiceError::InvalidRequest(
-                RequestProblem::FingerprintMismatch,
-            ));
+            return Err(ImageServiceError::InvalidRequest {
+                cause: RequestCause::FingerprintMismatch,
+            });
         }
         let handle = OperationHandle {
             owner: request.identity.owner.clone(),
@@ -560,8 +560,8 @@ where
             .map_err(|_| ImageServiceError::Unavailable)?;
         request
             .validate(&self.config.request_limits)
-            .map_err(RequestProblem::from_request)
-            .map_err(ImageServiceError::InvalidRequest)?;
+            .map_err(RequestCause::from_request)
+            .map_err(|cause| ImageServiceError::InvalidRequest { cause })?;
         if let Some(pipeline) = request.operation.pipeline()
             && (pipeline.creator.as_ref().is_some_and(|creator| {
                 self.config.analysis.classification.as_ref() != Some(&creator.route)
@@ -574,9 +574,9 @@ where
                     != Some(moderation)
             }))
         {
-            return Err(ImageServiceError::InvalidRequest(
-                RequestProblem::InvalidPipeline,
-            ));
+            return Err(ImageServiceError::InvalidRequest {
+                cause: RequestCause::InvalidPipeline,
+            });
         }
         let intent = VersionedSnapshot::new(
             u32::from(crate::intent_codec::intent_version(intent_bytes).map_err(map_encode_error)?),
@@ -1184,11 +1184,13 @@ fn checked_deadline(now_ms: i64, scheduler: &SchedulerBounds) -> Result<i64, Ima
 /// New-request encoding failures are caller problems; the store was untouched.
 fn map_encode_error(error: CodecError) -> ImageServiceError {
     match error {
-        CodecError::Request(request) => {
-            ImageServiceError::InvalidRequest(RequestProblem::from_request(request))
-        }
-        CodecError::TooLong => ImageServiceError::InvalidRequest(RequestProblem::SnapshotTooLarge),
-        CodecError::BadVersion { .. }
+        CodecError::Request(request) => ImageServiceError::InvalidRequest {
+            cause: RequestCause::from_request(request),
+        },
+        CodecError::TooLong => ImageServiceError::InvalidRequest {
+            cause: RequestCause::SnapshotTooLarge,
+        },
+        CodecError::InvalidVersion { .. }
         | CodecError::Truncated
         | CodecError::Trailing { .. }
         | CodecError::Malformed
@@ -1196,7 +1198,9 @@ fn map_encode_error(error: CodecError) -> ImageServiceError {
         | CodecError::InvalidId
         | CodecError::NonFinite { .. }
         | CodecError::Output(_)
-        | CodecError::Config(_) => ImageServiceError::InvalidRequest(RequestProblem::Malformed),
+        | CodecError::Config(_) => ImageServiceError::InvalidRequest {
+            cause: RequestCause::Malformed,
+        },
     }
 }
 

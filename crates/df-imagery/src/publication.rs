@@ -363,6 +363,34 @@ pub enum PublicationError {
     Execution(crate::execution::ExecutionError),
 }
 
+impl std::fmt::Display for PublicationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => formatter.write_str("the publication store is unavailable"),
+            Self::Unknown => formatter.write_str("the publication outcome is unknown"),
+            Self::NotFound => formatter.write_str("no such publication"),
+            Self::InvalidRecord => formatter.write_str("a publication record is invalid"),
+            Self::InvalidRecipe => formatter.write_str("the publication recipe is invalid"),
+            Self::BindingConflict => formatter.write_str("the publication binding conflicts"),
+            Self::SourceDenied(denial) => write!(formatter, "the source was denied: {denial:?}"),
+            Self::StaleClaim => formatter.write_str("the publication claim is stale"),
+            Self::CheckpointMismatch => formatter.write_str("the output checkpoint does not match"),
+            Self::Proof(error) => write!(formatter, "the image proof failed: {error:?}"),
+            Self::Catalog(error) => write!(formatter, "the catalog refused the asset: {error:?}"),
+            Self::Execution(error) => write!(formatter, "the execution store failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for PublicationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Execution(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 /// The caller authorizes this owner before reading; implementations cannot widen the scope.
 pub trait ImageResults: Send + Sync {
     /// Resolves a typed shared artifact read target using the current caller's authority.

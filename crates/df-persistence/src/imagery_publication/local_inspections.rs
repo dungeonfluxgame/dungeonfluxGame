@@ -14,13 +14,13 @@ pub(super) fn encode(values: &[LocalInspectionCheckpoint]) -> Result<String, Pub
     }
     let value=Value::Array(values.iter().map(|value|json!({
         "owner":owner_scope_bytes(&value.scope.owner),"job":value.scope.job.as_bytes(),
-        "stage":value.scope.stage.as_bytes(),"kind":value.basis.kind.label(),
+        "stage":value.scope.stage.as_bytes(),"kind":value.basis.kind.key(),
         "input_revision":value.basis.input_revision,"input_digest":value.basis.input_digest,
         "config_revision":value.basis.config_revision,"config_digest":value.basis.config_digest,
         "parent":value.basis.parent_dispatch.map(|parent|*parent.as_bytes()),
         "candidate_stage":value.candidate_scope.stage.as_bytes(),"candidate_dispatch":value.candidate_scope.dispatch.as_bytes(),
         "candidate_version":value.candidate_observation_version,"candidate_usage":value.candidate_usage_revision,
-        "source_digest":value.source_digest,"reason":value.reason.label(),"observed_at_ms":value.observed_at_ms,
+        "source_digest":value.source_digest,"reason":value.reason.key(),"observed_at_ms":value.observed_at_ms,
         "schema":value.schema_revision,"validator":value.validator_revision,
     })).collect()).to_string();
     if value.len() > MAXIMUM_RECIPE_BYTES {

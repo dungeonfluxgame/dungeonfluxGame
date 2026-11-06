@@ -7,6 +7,7 @@
 use std::fmt;
 use std::io::ErrorKind;
 
+use axum::http::StatusCode;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -16,7 +17,7 @@ use crate::limits::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
-    pub status: u16,
+    pub status: StatusCode,
     pub body: String,
 }
 
@@ -134,7 +135,7 @@ fn parse_response(answer: &[u8]) -> Result<Response, ClientError> {
         .lines()
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
+        .and_then(|code| StatusCode::from_bytes(code.as_bytes()).ok())
         .ok_or(ClientError::InvalidResponse)?;
     if is_chunked(&head) {
         return Err(ClientError::InvalidResponse);

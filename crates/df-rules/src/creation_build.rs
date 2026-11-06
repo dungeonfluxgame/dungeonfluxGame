@@ -1,13 +1,14 @@
-//! Creation options and every-reason build validation for the selected SRD 5.2.1 creation subset.
+//! Creation options and every-problem build validation for the selected SRD 5.2.1 creation subset.
 //! Owns: `creation_options`, the typed listing of every choice a creator may make, read from the
 //! existing constants and the rules' ability arrays; and `validate_build`, which accepts exactly
 //! the builds `local_journey::validate_character` accepts and otherwise lists every rule the build
-//! breaks. The first reason of a rejection carries the `JourneyRuleError` that `validate_character`
-//! returns. Never does: admit a build, add a choice, change a rule or a constant, read content
-//! packs, or panic. Fails by typed value only. Invalid creation rules are reported alone, because
-//! the ability arrays and background bonus that the other checks read cannot be trusted; a refusal
-//! that names no rule gets one reason that says so, rather than an empty list.
+//! breaks. The first problem of a rejection carries the `JourneyRuleError` that
+//! `validate_character` returns. Never does: admit a build, add a choice, change a rule or a
+//! constant, read content packs, or panic. Fails by typed value only. The creation rules are valid
+//! by construction (`CreationRules::new`); a refusal that names no rule gets one problem that says
+//! so, rather than an empty list.
 //! First release: class Fighter 1 and background Soldier only (SRD pp.47, 83).
+use crate::listed::listed_enum;
 use crate::local_journey::{
     ALIGNMENTS, AbilityArray, BACKGROUND_OFFER, BUILD_GROUPS, CLASS_OFFER, CreationRules,
     EQUIPMENT_OFFER, FIGHTER_SKILLS, GAMING_SETS, HeroSpecies, JourneyRuleError, LegalCharacter,
@@ -99,13 +100,11 @@ pub struct SpeciesOffer {
 }
 
 /// One refused rule of a build. `error` is the same typed error `validate_character` returns for
-/// it.
+/// it, serialized by its key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct BuildRejection {
-    #[serde(serialize_with = "serialize_error")]
+pub struct BuildProblem {
     pub error: JourneyRuleError,
-    /// The choice key the reason is about; `None` for the name, the creation rules and the pick
-    /// count.
+    /// The choice key the problem is about; `None` for the name and the pick count.
     pub group: Option<String>,
     /// The value the creator picked that is refused, when a value was picked.
     pub option_id: Option<String>,
@@ -117,7 +116,7 @@ pub struct BuildRejection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BuildReport {
     Accepted(LegalCharacter),
-    Rejected { reasons: Vec<BuildRejection> },
+    Rejected { problems: Vec<BuildProblem> },
 }
 
 /// Every choice a creator may make, read from the existing creation constants.
@@ -125,7 +124,7 @@ pub fn creation_options(rules: &CreationRules<'_>) -> CreationOptions {
     let groups = Group::ALL
         .iter()
         .map(|group| OptionGroup {
-            id: group.id().to_owned(),
+            id: group.key().to_owned(),
             label: group.label().to_owned(),
             slots: group
                 .slots()
@@ -145,8 +144,8 @@ pub fn creation_options(rules: &CreationRules<'_>) -> CreationOptions {
     let species = HeroSpecies::ALL
         .iter()
         .map(|species| SpeciesOffer {
-            id: species.choice_id().to_owned(),
-            label: option_label(species.choice_id()),
+            id: species.key().to_owned(),
+            label: option_label(species.key()),
             groups: choice_groups(*species).iter().map(species_group).collect(),
         })
         .collect();
@@ -155,7 +154,7 @@ pub fn creation_options(rules: &CreationRules<'_>) -> CreationOptions {
 
 /// Check a build. Accepted exactly when `validate_character` returns `Ok`, with the same character.
 /// Rejected otherwise, with every refused rule in `validate_character`'s check order, so that the
-/// first reason carries the error `validate_character` returns.
+/// first problem carries the error `validate_character` returns.
 pub fn validate_build(
     rules: &CreationRules<'_>,
     name: &str,
@@ -164,9 +163,9 @@ pub fn validate_build(
     match validate_character(rules, name, choices) {
         Ok(character) => BuildReport::Accepted(character),
         Err(error) => {
-            let mut reasons = rejections(rules, name, choices);
-            if reasons.is_empty() {
-                reasons.push(BuildRejection {
+            let mut problems = problems(rules, name, choices);
+            if problems.is_empty() {
+                problems.push(BuildProblem {
                     error,
                     group: None,
                     option_id: None,
@@ -174,51 +173,33 @@ pub fn validate_build(
                         .to_owned(),
                 });
             }
-            BuildReport::Rejected { reasons }
+            BuildReport::Rejected { problems }
         }
     }
 }
 
-/// Serialise a refused error by its variant name, so the reason list is stable JSON.
-fn serialize_error<S>(error: &JourneyRuleError, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    serializer.serialize_str(&format!("{error:?}"))
-}
-
-/// The build groups in the order a creator meets them. Each group owns the choice keys in `slots`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Group {
-    Species,
-    Class,
-    Background,
-    Array,
-    Skills,
-    Languages,
-    Alignment,
-    GamingSet,
-    Equipment,
-    StyleMasteries,
-    AlliedTies,
+listed_enum! {
+    /// The build groups in the order a creator meets them. Each group owns the choice keys in
+    /// `slots`; its own key names the listing group, not a choice key.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Group {
+        Species,
+        Class,
+        Background,
+        Array,
+        Skills,
+        Languages,
+        Alignment,
+        GamingSet,
+        Equipment,
+        StyleMasteries,
+        AlliedTies,
+    }
 }
 
 impl Group {
-    const ALL: [Group; 11] = [
-        Group::Species,
-        Group::Class,
-        Group::Background,
-        Group::Array,
-        Group::Skills,
-        Group::Languages,
-        Group::Alignment,
-        Group::GamingSet,
-        Group::Equipment,
-        Group::StyleMasteries,
-        Group::AlliedTies,
-    ];
-
-    const fn id(self) -> &'static str {
+    /// The stable key of this group, as `OptionGroup::id` carries it.
+    const fn key(self) -> &'static str {
         match self {
             Group::Species => "species",
             Group::Class => "class",
@@ -227,10 +208,10 @@ impl Group {
             Group::Skills => "skills",
             Group::Languages => "languages",
             Group::Alignment => "alignment",
-            Group::GamingSet => "gaming-set",
+            Group::GamingSet => "gaming_set",
             Group::Equipment => "equipment",
-            Group::StyleMasteries => "style-masteries",
-            Group::AlliedTies => "allied-ties",
+            Group::StyleMasteries => "style_masteries",
+            Group::AlliedTies => "allied_ties",
         }
     }
 
@@ -270,12 +251,12 @@ impl Group {
         match self {
             Group::Species => HeroSpecies::ALL
                 .iter()
-                .map(|species| species.choice_id())
+                .map(|species| species.key())
                 .collect(),
             Group::Class => vec![CLASS_OFFER],
             Group::Background => vec![BACKGROUND_OFFER],
             Group::Array => rules
-                .ability_arrays
+                .ability_arrays()
                 .iter()
                 .map(|array: &AbilityArray<'r>| array.id)
                 .collect(),
@@ -335,10 +316,10 @@ fn capitalise(word: &str) -> String {
     }
 }
 
-/// Collects refused rules in check order. Identical reasons are kept once.
+/// Collects refused rules in check order. Identical problems are kept once.
 struct Collector<'a> {
     choices: &'a [(&'a str, &'a str)],
-    reasons: Vec<BuildRejection>,
+    problems: Vec<BuildProblem>,
     missing: Vec<&'static str>,
 }
 
@@ -362,13 +343,13 @@ impl<'a> Collector<'a> {
         option_id: Option<&str>,
         sentence: String,
     ) {
-        let repeated = self.reasons.iter().any(|reason| {
-            reason.error == error
-                && reason.group.as_deref() == group
-                && reason.option_id.as_deref() == option_id
+        let repeated = self.problems.iter().any(|problem| {
+            problem.error == error
+                && problem.group.as_deref() == group
+                && problem.option_id.as_deref() == option_id
         });
         if !repeated {
-            self.reasons.push(BuildRejection {
+            self.problems.push(BuildProblem {
                 error,
                 group: group.map(str::to_owned),
                 option_id: option_id.map(str::to_owned),
@@ -393,23 +374,10 @@ impl<'a> Collector<'a> {
 }
 
 /// Every refused rule, in the order `validate_character` checks them.
-fn rejections(
-    rules: &CreationRules<'_>,
-    name: &str,
-    choices: &[(&str, &str)],
-) -> Vec<BuildRejection> {
-    if rules.validate().is_err() {
-        return vec![BuildRejection {
-            error: JourneyRuleError::InvalidRules,
-            group: None,
-            option_id: None,
-            sentence: "The creation rules are not valid, so no build can be judged against them."
-                .to_owned(),
-        }];
-    }
+fn problems(rules: &CreationRules<'_>, name: &str, choices: &[(&str, &str)]) -> Vec<BuildProblem> {
     let mut collector = Collector {
         choices,
-        reasons: Vec::new(),
+        problems: Vec::new(),
         missing: Vec::new(),
     };
     if !valid_character_name(name) {
@@ -477,7 +445,7 @@ fn rejections(
         ("first skill", "second skill"),
         " (SRD p.47)",
     );
-    collector.reasons
+    collector.problems
 }
 
 /// The species pick, then the choice groups that species asks for and the skill rules they share.
@@ -487,7 +455,7 @@ fn species_pick(collector: &mut Collector<'_>) {
             collector.missing("species", "species");
             None
         }
-        Some(value) => match HeroSpecies::from_choice(value) {
+        Some(value) => match HeroSpecies::from_key(value) {
             Some(species) => Some(species),
             None => {
                 collector.push(
@@ -584,7 +552,7 @@ fn fixed_picks(collector: &mut Collector<'_>) {
 fn array_pick(collector: &mut Collector<'_>, rules: &CreationRules<'_>) {
     match collector.value("array") {
         None => collector.missing("array", "ability scores"),
-        Some(value) if !rules.ability_arrays.iter().any(|array| array.id == value) => collector
+        Some(value) if !rules.ability_arrays().iter().any(|array| array.id == value) => collector
             .push(
                 JourneyRuleError::InvalidChoice,
                 Some("array"),
@@ -662,5 +630,4 @@ fn pair_picks(
 }
 
 #[cfg(test)]
-#[path = "creation_build_tests.rs"]
-mod tests;
+mod creation_build_tests;

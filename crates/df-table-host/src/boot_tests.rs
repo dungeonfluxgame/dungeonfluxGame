@@ -1,6 +1,7 @@
 //! Which run of the host an answer is from, and how long ago a move began, so a page that keeps
 //! running across a host restart or opens mid-move can carry on correctly.
 
+use axum::http::StatusCode;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use df_playground::fixture::Camera;
@@ -153,7 +154,7 @@ async fn a_slide_is_stamped_the_same_way() {
     let added = post_json(running.port, "/dev/playground/media", &body)
         .await
         .expect("answers");
-    assert_eq!(added.status, 200, "{}", added.body);
+    assert_eq!(added.status, StatusCode::OK, "{}", added.body);
     run(&running, "scene slide tv-card map.png over=60000")
         .await
         .expect("slides");
@@ -195,11 +196,11 @@ async fn a_frame_request_reads_the_query_the_page_writes_and_refuses_an_unknown_
     );
     assert_eq!(
         get(running.port, &address).await.expect("answers").status,
-        200
+        StatusCode::OK
     );
     let unknown = format!("{}?after=0&bot=x", df_playground::path::FRAME);
     assert_eq!(
         get(running.port, &unknown).await.expect("answers").status,
-        400
+        StatusCode::BAD_REQUEST
     );
 }

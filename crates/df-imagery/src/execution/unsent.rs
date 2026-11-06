@@ -14,8 +14,9 @@ pub struct UnsentPrepared {
     pub sealed: bool,
 }
 impl fmt::Debug for UnsentPrepared {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UnsentPrepared")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("UnsentPrepared")
             .field("state", &self.current.state)
             .field("terminal_condition", &self.terminal_condition)
             .field("sealed", &self.sealed)

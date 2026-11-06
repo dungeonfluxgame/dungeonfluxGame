@@ -41,7 +41,7 @@ pub use speech_adapter::{
     ELEVEN_STT_LANGUAGE, ELEVEN_STT_MODEL, ELEVEN_TTS_LANGUAGE, ELEVEN_TTS_MODEL,
     ElevenSpeechBasis, ElevenSpeechRequest, ElevenSttBasis, ElevenSttRequest, EncodedSpeechAudio,
     NativeSpeechObservation, NativeSpeechProvider, PreparedSpeechResponse, PreparedSttResponse,
-    SpeechAdapterError, SpeechAdapterReason, SpeechInputFormat, SpeechOutputFormat,
+    SpeechAdapterCause, SpeechAdapterError, SpeechInputFormat, SpeechOutputFormat,
     SpeechResponseMetadata, SpeechTranscriptProfile, TranscriptWord, TranscriptWordKind,
     ValidatedTranscript,
 };
@@ -49,15 +49,15 @@ pub use speech_adapter::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_http::{
     MAXIMUM_BODY_BYTES, MAXIMUM_CHUNKS, MAXIMUM_EXCHANGE_TIME, MAXIMUM_HEADER_BYTES, NativeHttp,
-    NativeHttpFailure, NativeHttpLimits, NativeHttpMetadata, NativeHttpRefusal, NativeHttpResponse,
+    NativeHttpCause, NativeHttpError, NativeHttpLimits, NativeHttpMetadata, NativeHttpResponse,
     NativeRetryAfter, NativeRetryAfterValue, ProviderLimits,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_text_provider;
 #[cfg(not(target_arch = "wasm32"))]
 pub use text_response::{
-    NativeTextProvider, PreparedTextResponse, ReasoningEffort, TextProviderConfig,
-    TextResponseContract, TextResponseError, TextResponseObservation, TextTokenUsage,
+    NativeTextProvider, PreparedTextResponse, ReasoningEffort, TextContractCause,
+    TextProviderConfig, TextResponseError, TextResponseObservation, TextTokenUsage,
     ValidatedTextOutput,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -76,14 +76,14 @@ pub use reconciliation::{
     reconcile_provider_attempt, reconciliation_capability,
 };
 pub use registry::{
-    BillingUnit, CandidateRoute, CandidateRouteId, Capability, DispatchBlock, EvidenceReference,
-    Gate, GateStatus, LicenseEvidence, PublishedRate, RoundingRule, UnsupportedCapability,
-    assess_dispatch_gates, candidate_for, candidate_routes,
+    BillingUnit, CandidateRoute, CandidateRouteId, Capability, DispatchBlockError,
+    EvidenceReference, Gate, GateStatus, LicenseEvidence, PublishedRate, RoundingRule,
+    UnsupportedCapabilityError, assess_dispatch_gates, candidate_for, candidate_routes,
 };
 
 pub use output_fetch::{
     DecodedImageFacts, DecoderPolicy, DecoderRequirements, DnsInspection, FetchResponseFacts,
-    OutputFetchPlan, OutputFetchRefusal, decode_output, fetch_output, inspect_decoded_image,
+    OutputFetchError, OutputFetchPlan, decode_output, fetch_output, inspect_decoded_image,
     inspect_dns_answers, inspect_fetch_response, prepare_output_fetch_plan,
 };
 
@@ -95,18 +95,22 @@ mod media_container;
 mod native_media_fetch;
 #[cfg(not(target_arch = "wasm32"))]
 pub use fal_media::{
-    EncodedFalMedia, FalCancellationObservation, FalHttpFacts, FalLoopFrames, FalMediaCompletion,
-    FalMediaConfig, FalMediaError, FalMediaFamily, FalMediaJob, FalMediaReason, FalReferenceFrame,
-    FalSoundBasis, FalSoundJob, FalSoundProfile, FalSoundRequest, FalSoundSemantics, FalVideoBasis,
-    FalVideoCompletionEvent, FalVideoJob, FalVideoProfile, FalVideoRequest, FalVideoSemantics,
-    KLING_O1_IMAGE_TO_VIDEO, NativeFalMediaProvider, PreparedFalMediaResponse,
+    EncodedFalMedia, FalCancellationObservation, FalHttpFacts, FalLoopFrames, FalMediaCause,
+    FalMediaCompletion, FalMediaConfig, FalMediaError, FalMediaFamily, FalMediaJob,
+    FalReferenceFrame, FalSoundBasis, FalSoundJob, FalSoundProfile, FalSoundRequest,
+    FalSoundSemantics, FalVideoBasis, FalVideoCompletionEvent, FalVideoJob, FalVideoProfile,
+    FalVideoRequest, FalVideoSemantics, KLING_O1_IMAGE_TO_VIDEO, NativeFalMediaProvider,
+    PreparedFalMediaResponse,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use media_container::{
-    EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_png_off_worker,
+    EncodedMediaFacts, MediaContainerCause, MediaContainerError, MediaTimebase,
+    inspect_png_off_worker,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use native_media_fetch::{BflDeliveryFailure, FalCdnPin, fetch_bfl_delivery};
+pub use native_media_fetch::{
+    BflDeliveryCause, BflDeliveryError, FalCdnPin, FalCdnPinError, fetch_bfl_delivery,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_fal_media_provider;
 #[cfg(not(target_arch = "wasm32"))]

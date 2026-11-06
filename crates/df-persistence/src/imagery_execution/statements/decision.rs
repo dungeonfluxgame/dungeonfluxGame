@@ -48,7 +48,7 @@ fn parse_observation(
     row: &Row,
     scope: DecisionScope,
 ) -> Result<DecisionObservation, ExecutionError> {
-    let kind = DecisionKind::parse_label(&row.get::<_, String>("decision_kind"))
+    let kind = DecisionKind::from_key(&row.get::<_, String>("decision_kind"))
         .ok_or(ExecutionError::InvalidRecord)?;
     let stage = parse_basis(row)?;
     DecisionObservation::new(
@@ -195,7 +195,7 @@ pub(crate) async fn record_decision_observation_in(
         config_revision,config_digest,parent_dispatch,payload,usage_revision,observed_at_ms,payload_sha256) \
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
         &[&scope.dispatch.as_bytes().as_slice(),&i64::from(observation.observation_version),&owner_scope_bytes(&scope.owner),
-        &scope.job.as_bytes().as_slice(),&scope.stage.as_bytes().as_slice(),&observation.kind.label(),
+        &scope.job.as_bytes().as_slice(),&scope.stage.as_bytes().as_slice(),&observation.kind.key(),
         &i64::from(observation.basis.schema_revision),&i64::from(observation.basis.validator_revision),
         &i64::from(stage.input_revision),&stage.input_digest.as_slice(),&invalid(i64::try_from(stage.config_revision))?,
         &stage.config_digest.as_slice(),&stage.parent_dispatch.map(|parent|parent.as_bytes().to_vec()),
@@ -291,7 +291,7 @@ pub(crate) async fn read_decision_reference_unlocked_in(
             stage: *stage,
             dispatch: *dispatch,
         },
-        kind: DecisionKind::parse_label(&row.get::<_, String>("decision_kind"))
+        kind: DecisionKind::from_key(&row.get::<_, String>("decision_kind"))
             .ok_or(ExecutionError::InvalidRecord)?,
         observation_version: invalid(u32::try_from(row.get::<_, i64>("observation_version")))?,
         basis: DecisionBasis {

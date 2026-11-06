@@ -470,7 +470,7 @@ fn encode_step(
                     interpolation,
                 } => {
                     out.push(1)?;
-                    out.float(*degrees, TransformField::Rotation.label())?;
+                    out.float(*degrees, TransformField::Rotation.key())?;
                     out.boolean(*expand_canvas)?;
                     encode_rgb(out, *fill)?;
                     out.push(interpolation_tag(*interpolation))?;
@@ -486,34 +486,34 @@ fn encode_step(
         }
         ImageTransform::Brighten(offset) => {
             out.push(5)?;
-            out.float(offset.value(), TransformField::Brightness.label())?;
+            out.float(offset.value(), TransformField::Brightness.key())?;
         }
         ImageTransform::Expose(stops) => {
             out.push(6)?;
-            out.float(stops.value(), TransformField::Exposure.label())?;
+            out.float(stops.value(), TransformField::Exposure.key())?;
         }
         ImageTransform::Color(effect) => {
             out.push(7)?;
             match effect {
                 ColorEffect::Contrast { gain, pivot } => {
                     out.push(0)?;
-                    out.float(*gain, TransformField::Contrast.label())?;
-                    out.float(*pivot, TransformField::Contrast.label())?;
+                    out.float(*gain, TransformField::Contrast.key())?;
+                    out.float(*pivot, TransformField::Contrast.key())?;
                 }
                 ColorEffect::Saturation { factor } => {
                     out.push(1)?;
-                    out.float(*factor, TransformField::Saturation.label())?;
+                    out.float(*factor, TransformField::Saturation.key())?;
                 }
                 ColorEffect::HueShift { degrees } => {
                     out.push(2)?;
-                    out.float(*degrees, TransformField::Hue.label())?;
+                    out.float(*degrees, TransformField::Hue.key())?;
                 }
                 ColorEffect::Grayscale => out.push(3)?,
             }
         }
         ImageTransform::Blur(spec) => {
             out.push(8)?;
-            out.float(spec.radius_px(), TransformField::Blur.label())?;
+            out.float(spec.radius_px(), TransformField::Blur.key())?;
             out.push(match spec.algorithm() {
                 BlurAlgorithm::Box => 0,
                 BlurAlgorithm::Gaussian => 1,
@@ -521,8 +521,8 @@ fn encode_step(
         }
         ImageTransform::Sharpen(spec) => {
             out.push(9)?;
-            out.float(spec.radius_px(), TransformField::Sharpen.label())?;
-            out.float(spec.amount_factor(), TransformField::Sharpen.label())?;
+            out.float(spec.radius_px(), TransformField::Sharpen.key())?;
+            out.float(spec.amount_factor(), TransformField::Sharpen.key())?;
             out.push(spec.threshold_0_255())?;
         }
         ImageTransform::Mask(spec) => {
@@ -616,7 +616,7 @@ fn encode_mask(out: &mut Writer, spec: &MaskSpec) -> Result<(), CodecError> {
         MaskChannel::Luminance => 1,
     })?;
     out.boolean(spec.invert())?;
-    out.float(spec.feather_radius_px(), TransformField::Mask.label())?;
+    out.float(spec.feather_radius_px(), TransformField::Mask.key())?;
     out.push(match spec.mode() {
         MaskMode::Multiply => 0,
         MaskMode::Replace => 1,

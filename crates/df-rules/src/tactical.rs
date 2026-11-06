@@ -97,4 +97,4 @@ pub enum RuleError {
 }
 
 #[cfg(test)]
-mod tests;
+mod tactical_tests;

@@ -1,37 +1,34 @@
 //! The playground's own placement over a scene layout. The record, points, shots, targets and cast
 //! are tested in `df-scene-layout`.
 
+use df_scene_layout::{RegionGeometry, RegionId};
+
 use crate::image_layout::*;
 use crate::lobby::model::{Bubble, BubbleTone, TAIL_INSET_PERCENT};
 
 fn region(label: Option<&str>, head_x: u16, head_y: u16) -> LayoutRegion {
-    LayoutRegion {
-        id: format!("r{head_x:08x}"),
-        label: label.map(str::to_owned),
+    let geometry = RegionGeometry {
         left_permille: head_x.saturating_sub(80),
         top_permille: head_y,
         right_permille: (head_x + 80).min(1000),
         bottom_permille: 1000,
         head_x_permille: head_x,
         head_y_permille: head_y,
-        score_permille: 950,
-        mask: None,
-    }
+    };
+    let id = RegionId::new(&format!("r{head_x:08x}")).unwrap();
+    LayoutRegion::new(id, geometry, 950)
+        .unwrap()
+        .with_label(label.map(str::to_owned))
 }
 
 fn layout(regions: Vec<LayoutRegion>) -> ImageLayout {
-    ImageLayout {
-        schema: SCHEMA_VERSION,
-        picture: PictureBinding {
-            name: "plate.webp".to_owned(),
-            sha256: "ab".repeat(32),
-            width_px: 1672,
-            height_px: 941,
-        },
-        model: "sam-3.1".to_owned(),
-        prompt: "person".to_owned(),
-        regions,
-    }
+    let picture = PictureBinding {
+        name: "plate.webp".to_owned(),
+        sha256: "ab".repeat(32),
+        width_px: 1672,
+        height_px: 941,
+    };
+    ImageLayout::new(picture, "sam-3.1", "person", regions)
 }
 
 fn scene() -> ImageLayout {

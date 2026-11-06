@@ -1,3 +1,4 @@
+use axum::http::StatusCode;
 use tokio::io::AsyncReadExt;
 
 use crate::client::{ClientError, StreamedPost, get, get_with_limit, post_json};
@@ -12,7 +13,10 @@ fn http(head_lines: &str, body: &str) -> Vec<u8> {
 async fn a_complete_answer_is_returned_with_its_status_and_body() {
     let port = canned_server(http("Content-Length: 5\r\nConnection: close\r\n", "hello")).await;
     let response = get(port, "/").await.expect("answers");
-    assert_eq!((response.status, response.body.as_str()), (200, "hello"));
+    assert_eq!(
+        (response.status, response.body.as_str()),
+        (StatusCode::OK, "hello")
+    );
 }
 
 #[tokio::test]
@@ -66,6 +70,19 @@ async fn text_that_is_not_http_is_an_invalid_response() {
 }
 
 #[tokio::test]
+async fn a_status_outside_the_three_digit_http_range_is_an_invalid_response() {
+    for line in ["HTTP/1.1 0 Zero", "HTTP/1.1 99 Low", "HTTP/1.1 1000 High"] {
+        let answer = format!("{line}\r\nContent-Length: 0\r\n\r\n");
+        let port = canned_server(answer.into_bytes()).await;
+        assert_eq!(
+            get(port, "/").await,
+            Err(ClientError::InvalidResponse),
+            "{line}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn an_answer_over_the_cap_is_too_large() {
     let port = canned_server(http("Connection: close\r\n", &"x".repeat(500))).await;
     assert_eq!(
@@ -103,11 +120,11 @@ async fn a_port_nothing_listens_on_is_not_serving() {
 async fn a_real_host_answers_a_get_and_a_post() {
     let running = start(&STARTER_FILES).await;
     let canvas = get(running.port, "/canvas.json").await.expect("answers");
-    assert_eq!(canvas.status, 200);
+    assert_eq!(canvas.status, StatusCode::OK);
     let rejected = post_json(running.port, "/dev/effect", "{}")
         .await
         .expect("answers");
-    assert_eq!(rejected.status, 400);
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
 }
 
 /// The host answers an upload only after it has stored the file, and nothing arrives meanwhile, so

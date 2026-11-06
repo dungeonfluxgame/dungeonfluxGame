@@ -24,6 +24,8 @@
 //! plain data. The tools-side adapter (`df-tools` gameplay cost owner) implements
 //! [`ImageCostProjection`] over the real book.
 
+use crate::listed::listed_enum;
+
 /// The prefix of every stable book call id derived from a dispatch id.
 pub const PINNED_CALL_PREFIX: &str = "img-";
 
@@ -59,21 +61,24 @@ impl DispatchId {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct UsageRevision(pub u64);
 
-/// Where the quantities of one usage report came from. `Unknown` is outstanding exposure at
-/// the call's maxima, never a zero.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UsageEvidence {
-    /// The supplier's own usage report.
-    Reported,
-    /// What the server counted or estimated.
-    Estimated,
-    /// The call was sent and its outcome is unknown; the quantities are the call's maxima.
-    Unknown,
+listed_enum! {
+    keyed
+    /// Where the quantities of one usage report came from. `Unknown` is outstanding exposure at
+    /// the call's maxima, never a zero.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum UsageEvidence {
+        /// The supplier's own usage report.
+        Reported,
+        /// What the server counted or estimated.
+        Estimated,
+        /// The call was sent and its outcome is unknown; the quantities are the call's maxima.
+        Unknown,
+    }
 }
 
 impl UsageEvidence {
     /// The word the book and the audit line use for this evidence.
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Reported => "reported",
             Self::Estimated => "estimated",
@@ -172,8 +177,9 @@ pub struct PinnedCostReceipt {
 }
 
 impl std::fmt::Debug for PinnedCostReceipt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PinnedCostReceipt")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PinnedCostReceipt")
             .field("revision", &self.revision)
             .field("evidence", &self.evidence)
             .field("unit_lines", &self.units.len())
@@ -199,8 +205,9 @@ pub struct PinnedUnsentSeal {
     pub durability: UnsentDurability,
 }
 impl std::fmt::Debug for PinnedUnsentSeal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PinnedUnsentSeal")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PinnedUnsentSeal")
             .field("durability", &self.durability)
             .finish_non_exhaustive()
     }
@@ -234,8 +241,9 @@ impl DurableUnsentReceipt {
     }
 }
 impl std::fmt::Debug for DurableUnsentReceipt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DurableUnsentReceipt")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DurableUnsentReceipt")
             .field("call_id", &self.call_id)
             .finish()
     }
@@ -281,6 +289,44 @@ pub enum CostError {
     /// Recorded cost data exceeds recovery bounds or fails its stored consistency checks.
     CorruptLog,
 }
+
+impl std::fmt::Display for CostError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsentSealUnavailable => {
+                formatter.write_str("no authoritative unsent sealer is installed")
+            }
+            Self::UnknownProvider => {
+                formatter.write_str("the cost book does not know the provider")
+            }
+            Self::UnknownCause => formatter.write_str("the cost book does not know the cause"),
+            Self::UnknownCategory => {
+                formatter.write_str("the cost book does not know the unit category")
+            }
+            Self::UnknownCall => formatter.write_str("no call was started under this id"),
+            Self::RouteConflict => formatter.write_str("the call id names a different route"),
+            Self::StaleRevision { stored, got } => write!(
+                formatter,
+                "usage revision {} is older than the stored {}",
+                got.0, stored.0
+            ),
+            Self::RevisionConflict { revision } => write!(
+                formatter,
+                "usage revision {} carries different evidence",
+                revision.0
+            ),
+            Self::AlreadySettled => formatter.write_str("the call already settled"),
+            Self::BookNotOpen => formatter.write_str("the cost book is not open"),
+            Self::ProjectionFull => formatter.write_str("the cost projection window is full"),
+            Self::PriceBasisUnavailable => {
+                formatter.write_str("the historical price basis is unavailable")
+            }
+            Self::CorruptLog => formatter.write_str("the recorded cost data is corrupt"),
+        }
+    }
+}
+
+impl std::error::Error for CostError {}
 
 /// An owned Send future for the projection's bounded storage worker.
 pub type CostFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;

@@ -5,6 +5,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use df_table::testkit::ManualClock;
 use tempfile::TempDir;
 
@@ -287,7 +288,12 @@ async fn a_bad_query_to_the_new_routes_is_a_typed_invalid_query_in_the_envelope(
         format!("{}?operation=zero", path::TRACE),
     ] {
         let answer = client::get(host.port, &address).await.expect("answered");
-        assert_eq!(answer.status, 400, "{address}: {}", answer.body);
+        assert_eq!(
+            answer.status,
+            StatusCode::BAD_REQUEST,
+            "{address}: {}",
+            answer.body
+        );
         let reply: EngineReply<serde_json::Value> =
             serde_json::from_str(&answer.body).expect("the envelope");
         assert!(

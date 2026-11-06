@@ -12,6 +12,9 @@ const GIBIBYTE: u64 = 1024 * 1024 * 1024;
 pub const MAXIMUM_RETAINED_RECORDS: usize = 1_000_000;
 /// Most bytes the in-memory history keeps, whatever the number of records: the memory bound.
 pub const MAXIMUM_RETAINED_BYTES: usize = 256 * MEBIBYTE;
+/// Most records kept by a history nobody queries (the canvas workbench's sink, which is read
+/// through its log lines only). A history always keeps its newest record, so this is the least.
+pub const UNQUERIED_HISTORY_RECORDS: usize = 1;
 /// What a retained record costs besides its text: the struct, the strings' headers and the queue
 /// node, so the byte bound is not undercounted.
 pub const RECORD_OVERHEAD_BYTES: usize = 256;
@@ -36,6 +39,6 @@ pub const MAXIMUM_ATTRIBUTE_DEPTH: usize = 32;
 
 /// The environment variable that names a directory for the file spool of the dev engine. Left
 /// unset, the dev engine keeps its history in memory only.
-pub const EVENT_SPOOL_ENVIRONMENT_VARIABLE: &str = "DF_TABLE_EVENT_SPOOL";
+pub const EVENT_SPOOL_VARIABLE: &str = "DF_TABLE_EVENT_SPOOL";
 /// The spool's file inside that directory: one JSON record per line.
 pub const SPOOL_FILE_NAME: &str = "table-events.jsonl";

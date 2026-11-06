@@ -2,15 +2,17 @@
 //! scene change is applied only to the fixture it was checked against; and every scene change
 //! writes one audit line that names what it did.
 
+use axum::http::StatusCode;
 use df_playground::controls::{ControlsChange, Device, TransitionStyle};
 use df_playground::fixture::Fixture;
 use df_playground::scene::SceneChange;
 
 use crate::client::{get, post_json};
 use crate::command::split_words;
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::playground::{
-    ControlsChangeError, PlaygroundFiles, PlaygroundState, SceneChangeError, reconcile_fixtures,
+    ControlsChangeError, PlaygroundChangeError, PlaygroundFiles, PlaygroundState, SceneChangeError,
+    reconcile_fixtures,
 };
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::{ControlsBatch, ControlsReply, EventsReply, Frame};
@@ -52,11 +54,16 @@ async fn go_to_a_scene_that_does_not_exist_with_a_transition_changes_nothing() {
     let error = run(&running, "playground go castle transition=wipe ms=2000")
         .await
         .expect_err("refused");
-    let DevError::Rejected(text) = &error else {
-        panic!("{error}");
+    let DevError::Rejected {
+        error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { detail }),
+        ..
+    } = &error
+    else {
+        panic!("{error:?}");
     };
+    // The sentence says which scenes there are.
     assert!(
-        text.contains("castle.json") && text.contains("quay.json"),
+        detail.contains("castle.json") && detail.contains("quay.json"),
         "{error}"
     );
     let after = shown(&running).await;
@@ -114,7 +121,7 @@ async fn a_batch_with_one_refused_part_applies_none_of_it() {
     )
     .await
     .expect("answers");
-    assert_eq!(response.status, 400);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert_eq!(shown(&running).await, before, "the device did not change");
 }
 

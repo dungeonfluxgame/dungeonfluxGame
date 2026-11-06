@@ -5,13 +5,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use df_playground::controls::ControlsChange;
 use df_playground::fixture::StageElement;
 use serde_json::json;
 
 use crate::client::{get, post_json};
 use crate::command::split_words;
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::event_log::EventLog;
 use crate::limits::{
     ECHO_LINE_OVERHEAD_BYTES, FIGURE_GLIDE_MS, MAXIMUM_BATCH_CHANGES, MAXIMUM_REPORT_BYTES,
@@ -120,7 +121,7 @@ async fn sixteen_writes_of_one_fixture_at_once_each_succeed_and_leave_one_whole_
         async move { post_json(port, "/dev/playground/fixture", &body).await }
     });
     for answer in futures_util::future::join_all(writes).await {
-        assert_eq!(answer.expect("answers").status, 200);
+        assert_eq!(answer.expect("answers").status, StatusCode::OK);
     }
     let landed = std::fs::read_to_string(running.playground_path("assets/fixtures/tavern.json"))
         .expect("the file is there");
@@ -191,7 +192,7 @@ async fn a_change_that_alters_nothing_and_an_empty_batch_write_no_set_line() {
     )
     .await
     .expect("answers");
-    assert_eq!(response.status, 400);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(
         response.body.contains("at least one change"),
         "{}",
@@ -242,7 +243,7 @@ async fn a_batch_of_too_many_changes_is_refused_and_one_at_the_most_makes_a_boun
     )
     .await
     .expect("answers");
-    assert_eq!(too_many.status, 400);
+    assert_eq!(too_many.status, StatusCode::BAD_REQUEST);
     assert!(too_many.body.contains("at most"), "{}", too_many.body);
     let allowed = post_json(
         running.port,
@@ -251,7 +252,7 @@ async fn a_batch_of_too_many_changes_is_refused_and_one_at_the_most_makes_a_boun
     )
     .await
     .expect("answers");
-    assert_eq!(allowed.status, 200);
+    assert_eq!(allowed.status, StatusCode::OK);
     let lines = log_lines(&running).await;
     let longest = lines.iter().map(String::len).max().expect("a line");
     // Each change writes one short pair (` transition_ms=100000`), well under 64 bytes.
@@ -394,7 +395,7 @@ async fn a_report_larger_than_the_most_a_page_may_send_is_refused() {
     let response = post_json(running.port, "/dev/playground/report", &body)
         .await
         .expect("answers");
-    assert_eq!(response.status, 413);
+    assert_eq!(response.status, StatusCode::PAYLOAD_TOO_LARGE);
     assert!(running.state.playground().clients().is_empty());
 }
 
@@ -432,7 +433,7 @@ async fn the_package_is_streamed_whole_and_a_page_file_over_its_bound_is_refused
     let refused = get(running.port, "/playground/theme.css")
         .await
         .expect("answers");
-    assert_eq!(refused.status, 413);
+    assert_eq!(refused.status, StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 // 1678: the glide of a turn.
@@ -448,8 +449,18 @@ async fn a_pivot_given_during_the_glide_of_the_turn_back_is_refused_and_after_it
         .await
         .expect_err("still gliding");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("try again in")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas {
+                    cause: Some(df_table::event::RejectionCause::InvalidTransform),
+                    ..
+                },
+                // The cause does not tell a glide from a turned element yet; the sentence does.
+                message,
+            } if message.contains("try again in")
+        ),
+        "{error:?}"
     );
     assert!(
         log_lines(&running).await.contains(
@@ -514,7 +525,7 @@ async fn a_turned_element_that_travels_keeps_its_turn_and_pivot_and_arrives() {
     let answer = post_json(running.port, "/dev/effect", &body.to_string())
         .await
         .expect("answers");
-    assert_eq!(answer.status, 200);
+    assert_eq!(answer.status, StatusCode::OK);
     for _ in 0..100 {
         tokio::time::sleep(Duration::from_millis(50)).await;
         if !running.state.is_moving() {

@@ -505,17 +505,17 @@ fn decode_step(
             _ => return Err(CodecError::Malformed),
         })),
         5 => Ok(ImageTransform::Brighten(
-            BrightnessOffset::new(input.float(TransformField::Brightness.label())?)
+            BrightnessOffset::new(input.float(TransformField::Brightness.key())?)
                 .map_err(transform_error)?,
         )),
         6 => Ok(ImageTransform::Expose(
-            ExposureStops::new(input.float(TransformField::Exposure.label())?)
+            ExposureStops::new(input.float(TransformField::Exposure.key())?)
                 .map_err(transform_error)?,
         )),
         7 => Ok(ImageTransform::Color(decode_color(input)?)),
         8 => Ok(ImageTransform::Blur(
             BlurSpec::new(
-                input.float(TransformField::Blur.label())?,
+                input.float(TransformField::Blur.key())?,
                 match input.byte()? {
                     0 => BlurAlgorithm::Box,
                     1 => BlurAlgorithm::Gaussian,
@@ -526,8 +526,8 @@ fn decode_step(
         )),
         9 => Ok(ImageTransform::Sharpen(
             SharpenSpec::new(
-                input.float(TransformField::Sharpen.label())?,
-                input.float(TransformField::Sharpen.label())?,
+                input.float(TransformField::Sharpen.key())?,
+                input.float(TransformField::Sharpen.key())?,
                 input.byte()?,
             )
             .map_err(transform_error)?,
@@ -637,7 +637,7 @@ fn decode_rotate(input: &mut Reader<'_>) -> Result<RotateSpec, CodecError> {
             Ok(spec)
         }
         1 => {
-            let degrees = input.float(TransformField::Rotation.label())?;
+            let degrees = input.float(TransformField::Rotation.key())?;
             let expand_canvas = input.boolean()?;
             let fill = decode_rgb(input)?;
             let interpolation = decode_interpolation(input.byte()?)?;
@@ -657,13 +657,13 @@ fn decode_rotate(input: &mut Reader<'_>) -> Result<RotateSpec, CodecError> {
 fn decode_color(input: &mut Reader<'_>) -> Result<ColorEffect, CodecError> {
     let effect = match input.byte()? {
         0 => ColorEffect::contrast(
-            input.float(TransformField::Contrast.label())?,
-            input.float(TransformField::Contrast.label())?,
+            input.float(TransformField::Contrast.key())?,
+            input.float(TransformField::Contrast.key())?,
         )
         .map_err(transform_error)?,
-        1 => ColorEffect::saturation(input.float(TransformField::Saturation.label())?)
+        1 => ColorEffect::saturation(input.float(TransformField::Saturation.key())?)
             .map_err(transform_error)?,
-        2 => ColorEffect::hue_shift(input.float(TransformField::Hue.label())?)
+        2 => ColorEffect::hue_shift(input.float(TransformField::Hue.key())?)
             .map_err(transform_error)?,
         3 => ColorEffect::Grayscale,
         _ => return Err(CodecError::Malformed),
@@ -687,7 +687,7 @@ fn decode_mask(input: &mut Reader<'_>) -> Result<MaskSpec, CodecError> {
         _ => return Err(CodecError::Malformed),
     };
     let invert = input.boolean()?;
-    let feather_radius_px = input.float(TransformField::Mask.label())?;
+    let feather_radius_px = input.float(TransformField::Mask.key())?;
     let mode = match input.byte()? {
         0 => MaskMode::Multiply,
         1 => MaskMode::Replace,
@@ -734,7 +734,7 @@ pub(crate) fn decode_config(bytes: &[u8], max_bytes: usize) -> Result<ImageConfi
     let mut input = Reader::new(bytes);
     let version = input.byte()?;
     if !(1..=CONFIG_CODEC_VERSION).contains(&version) {
-        return Err(CodecError::BadVersion { actual: version });
+        return Err(CodecError::InvalidVersion { actual: version });
     }
     let mode = decode_mode(input.byte()?)?;
     let default_backend = decode_backend(input.byte()?)?;

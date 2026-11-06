@@ -1,7 +1,9 @@
 use df_imagery::oneshot_segment::{
     AnalysisMask, AnalysisMaskRun, AnalysisMaskSet, AnalysisUnit, picture_sha256,
 };
-use df_scene_layout::{PictureBinding, RegionRef, SCHEMA_VERSION, SceneLayout, SceneRegion};
+use df_scene_layout::{
+    PictureBinding, RegionGeometry, RegionRef, SCHEMA_VERSION, SceneLayout, SceneRegion,
+};
 
 use super::*;
 use crate::dev_http::RouteError;
@@ -46,28 +48,27 @@ fn binding(name: &str, sha256: &str) -> PictureBinding {
 }
 
 fn region(label: Option<&str>, left: u16, right: u16) -> SceneRegion {
-    SceneRegion {
-        id: df_scene_layout::region_id(&[left as u8, right as u8]),
-        label: label.map(str::to_owned),
+    let geometry = RegionGeometry {
         left_permille: left,
         top_permille: 200,
         right_permille: right,
         bottom_permille: 1000,
         head_x_permille: (left + right) / 2,
         head_y_permille: 200,
-        score_permille: 900,
-        mask: None,
-    }
+    };
+    let id = df_scene_layout::region_id(&[left as u8, right as u8]);
+    SceneRegion::new(id, geometry, 900)
+        .unwrap()
+        .with_label(label.map(str::to_owned))
+}
+
+/// A layout of `regions` bound to `picture`.
+fn bound(picture: PictureBinding, regions: Vec<SceneRegion>) -> SceneLayout {
+    SceneLayout::new(picture, "sam-3.1", "person", regions)
 }
 
 fn layout(regions: Vec<SceneRegion>) -> SceneLayout {
-    SceneLayout {
-        schema: SCHEMA_VERSION,
-        picture: binding("plate.webp", &"ab".repeat(32)),
-        model: "sam-3.1".to_owned(),
-        prompt: "person".to_owned(),
-        regions,
-    }
+    bound(binding("plate.webp", &"ab".repeat(32)), regions)
 }
 
 fn words(text: &str) -> Vec<String> {
@@ -76,49 +77,97 @@ fn words(text: &str) -> Vec<String> {
 
 #[test]
 fn a_mask_set_becomes_a_bound_versioned_layout_with_stable_ids() {
-    let built = layout_from(
+    let (built, left_out) = layout_from(
         &two_people(),
         "sam-3.1",
         ScanPrompt::Person,
         binding("plate.webp", &"cd".repeat(32)),
     );
-    assert_eq!(built.schema, SCHEMA_VERSION);
+    assert_eq!(left_out, 0);
     assert!(built.is_for("plate.webp", &"cd".repeat(32)));
-    assert_eq!((built.picture.width_px, built.picture.height_px), (100, 50));
+    assert_eq!(
+        (built.picture().width_px, built.picture().height_px),
+        (100, 50)
+    );
     let boxes: Vec<_> = built
-        .regions
+        .regions()
         .iter()
         .map(|r| {
             (
-                r.left_permille,
-                r.top_permille,
-                r.right_permille,
-                r.bottom_permille,
+                r.left_permille(),
+                r.top_permille(),
+                r.right_permille(),
+                r.bottom_permille(),
             )
         })
         .collect();
     assert_eq!(boxes, vec![(100, 400, 300, 1000), (600, 200, 800, 1000)]);
     let heads: Vec<_> = built
-        .regions
+        .regions()
         .iter()
-        .map(|r| (r.head_x_permille, r.head_y_permille, r.score_permille))
+        .map(|r| (r.head_x_permille(), r.head_y_permille(), r.score_permille()))
         .collect();
     assert_eq!(heads, vec![(200, 400, 810), (700, 200, 930)]);
     // The same masks give the same ids on another scan, and different masks different ids.
-    let again = layout_from(
+    let (again, _) = layout_from(
         &two_people(),
         "sam-3.1",
         ScanPrompt::Person,
         binding("plate.webp", &"cd".repeat(32)),
     );
-    assert_eq!(built.regions[0].id, again.regions[0].id);
-    assert_ne!(built.regions[0].id, built.regions[1].id);
+    assert_eq!(built.regions()[0].id(), again.regions()[0].id());
+    assert_ne!(built.regions()[0].id(), built.regions()[1].id());
     assert!(
         built
-            .regions
+            .regions()
             .iter()
-            .all(|r| r.mask.is_some() && r.label.is_none())
+            .all(|r| r.mask().is_some() && r.label().is_none())
     );
+}
+
+#[test]
+fn an_instance_too_thin_for_a_box_in_thousandths_is_left_out_so_the_layout_reads_back() {
+    // A 3000 by 10 picture: column 2 rounds to left 1 and right 1 in thousandths, no width.
+    let column = |left: u32, right: u32| {
+        (0..10)
+            .map(|row| AnalysisMaskRun {
+                start: row * 3000 + left,
+                length: right - left,
+            })
+            .collect::<Vec<_>>()
+    };
+    let set = AnalysisMaskSet {
+        prompt: df_imagery::oneshot_segment::SegmentationPrompt::Person,
+        width_px: 3000,
+        height_px: 10,
+        instances: vec![
+            AnalysisMask {
+                index: 0,
+                score: AnalysisUnit::new(0.9).unwrap(),
+                runs: column(2, 3),
+            },
+            AnalysisMask {
+                index: 1,
+                score: AnalysisUnit::new(0.9).unwrap(),
+                runs: column(600, 900),
+            },
+        ],
+    };
+    let (built, left_out) = layout_from(
+        &set,
+        "sam-3.1",
+        ScanPrompt::Person,
+        binding("plate.webp", &"cd".repeat(32)),
+    );
+    let boxes: Vec<_> = built
+        .regions()
+        .iter()
+        .map(|r| (r.left_permille(), r.right_permille()))
+        .collect();
+    assert_eq!(boxes, vec![(200, 300)]);
+    assert_eq!(left_out, 1);
+    let text = serde_json::to_string(&built).unwrap();
+    assert_eq!(serde_json::from_str::<SceneLayout>(&text).unwrap(), built);
 }
 
 #[test]
@@ -129,8 +178,8 @@ fn a_new_scan_keeps_the_names_of_regions_it_finds_again() {
     ]);
     let mut new = layout(vec![region(None, 400, 500), region(None, 620, 820)]);
     assert_eq!(keep_labels(&old, &mut new), 1);
-    assert_eq!(new.regions[0].label, None);
-    assert_eq!(new.regions[1].label.as_deref(), Some("innkeeper"));
+    assert_eq!(new.regions()[0].label(), None);
+    assert_eq!(new.regions()[1].label(), Some("innkeeper"));
 }
 
 #[test]
@@ -139,14 +188,14 @@ fn a_label_reaches_its_region_by_number_id_or_name_and_moves_off_others() {
         region(Some("innkeeper"), 100, 300),
         region(None, 600, 800),
     ]);
-    let id = named.regions[1].id.clone();
+    let id = named.regions()[1].id().to_string();
     relabel(&mut named, RegionRef::parse(&id), Some("innkeeper")).unwrap();
-    assert_eq!(named.regions[0].label, None);
-    assert_eq!(named.regions[1].label.as_deref(), Some("innkeeper"));
+    assert_eq!(named.regions()[0].label(), None);
+    assert_eq!(named.regions()[1].label(), Some("innkeeper"));
     relabel(&mut named, RegionRef::parse("innkeeper"), Some("host")).unwrap();
-    assert_eq!(named.regions[1].label.as_deref(), Some("host"));
+    assert_eq!(named.regions()[1].label(), Some("host"));
     relabel(&mut named, RegionRef::parse("1"), None).unwrap();
-    assert_eq!(named.regions[1].label, None);
+    assert_eq!(named.regions()[1].label(), None);
     for reference in ["2", "bard"] {
         let refused = relabel(&mut named, RegionRef::parse(reference), Some("x")).unwrap_err();
         assert_eq!(
@@ -196,8 +245,10 @@ fn only_a_layout_bound_to_the_picture_as_it_is_now_is_read_or_attached() {
     let (media, layouts) = (folder.path().join("media"), folder.path().join("layouts"));
     std::fs::create_dir_all(&media).unwrap();
     std::fs::write(media.join("plate.webp"), b"picture one").unwrap();
-    let mut stored = layout(vec![region(Some("innkeeper"), 600, 800)]);
-    stored.picture = binding("plate.webp", &picture_sha256(b"picture one"));
+    let stored = bound(
+        binding("plate.webp", &picture_sha256(b"picture one")),
+        vec![region(Some("innkeeper"), 600, 800)],
+    );
     write_layout(&layouts, "plate.webp", &stored).unwrap();
     assert_eq!(
         current_layout(&media, &layouts, "plate.webp").unwrap(),
@@ -237,21 +288,60 @@ fn only_a_layout_bound_to_the_picture_as_it_is_now_is_read_or_attached() {
 }
 
 #[test]
-fn a_scan_without_a_picture_or_with_a_bad_mask_count_is_refused_before_any_call() {
+fn a_layout_in_another_schema_version_is_stale_and_a_damaged_one_is_invalid() {
+    let folder = tempfile::tempdir().unwrap();
+    let (media, layouts) = (folder.path().join("media"), folder.path().join("layouts"));
+    std::fs::create_dir_all(&media).unwrap();
+    std::fs::write(media.join("plate.webp"), b"picture one").unwrap();
+    let stored = bound(
+        binding("plate.webp", &picture_sha256(b"picture one")),
+        vec![region(Some("innkeeper"), 600, 800)],
+    );
+    let mut wire = serde_json::to_value(&stored).unwrap();
+    wire["schema"] = serde_json::Value::from(SCHEMA_VERSION + 1);
+    std::fs::create_dir_all(&layouts).unwrap();
+    let file = layouts.join(layout_file_name("plate.webp"));
+    std::fs::write(&file, wire.to_string()).unwrap();
+    let stale = LocateError::StaleLayout {
+        picture: "plate.webp".to_owned(),
+    };
+    assert_eq!(read_layout(&layouts, "plate.webp").unwrap_err(), stale);
+    assert_eq!(
+        current_layout(&media, &layouts, "plate.webp").unwrap_err(),
+        stale
+    );
+    assert_eq!(stale.status(), axum::http::StatusCode::CONFLICT);
+    // In this version but with a region that does not read: damaged, not out of date.
+    wire["schema"] = serde_json::Value::from(SCHEMA_VERSION);
+    wire["regions"][0]["right_permille"] = serde_json::Value::from(1001);
+    std::fs::write(&file, wire.to_string()).unwrap();
+    let damaged = read_layout(&layouts, "plate.webp").unwrap_err();
+    assert!(
+        matches!(&damaged, LocateError::LayoutInvalid { picture, .. } if picture == "plate.webp"),
+        "{damaged:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_scan_without_a_picture_or_with_a_bad_mask_count_is_refused_before_any_call() {
     let folder = tempfile::tempdir().unwrap();
     let request = |masks: Option<u32>| LocateRequest {
         picture: "absent.webp".to_owned(),
         prompt: None,
         masks,
     };
-    let missing = scan_blocking(folder.path(), folder.path(), &request(None)).unwrap_err();
+    let missing = scan_picture(folder.path(), folder.path(), &request(None))
+        .await
+        .unwrap_err();
     assert_eq!(
         missing,
         LocateError::PictureMissing {
             picture: "absent.webp".to_owned()
         }
     );
-    let bad = scan_blocking(folder.path(), folder.path(), &request(Some(0))).unwrap_err();
+    let bad = scan_picture(folder.path(), folder.path(), &request(Some(0)))
+        .await
+        .unwrap_err();
     assert_eq!(bad, LocateError::InvalidMaskCount { masks: 0 });
     let unknown_prompt =
         serde_json::from_str::<LocateRequest>(r#"{"picture":"a.png","prompt":"table"}"#);
@@ -297,7 +387,7 @@ fn an_identification_names_only_sure_unshared_matches_and_keeps_hand_names() {
             ("cook", None, "conflict"),
         ]
     );
-    let labels: Vec<_> = named.regions.iter().map(|r| r.label.as_deref()).collect();
+    let labels: Vec<_> = named.regions().iter().map(SceneRegion::label).collect();
     assert_eq!(labels, vec![Some("bard"), None, Some("innkeeper")]);
 }
 
@@ -393,8 +483,7 @@ fn the_longest_accepted_picture_name_still_stores_its_layout() {
     assert!(check_picture_name(&longest).is_ok());
     assert!(check_picture_name(&format!("a{longest}")).is_err());
     let folder = tempfile::tempdir().unwrap();
-    let mut stored = layout(Vec::new());
-    stored.picture = binding(&longest, &"ab".repeat(32));
+    let stored = bound(binding(&longest, &"ab".repeat(32)), Vec::new());
     write_layout(folder.path(), &longest, &stored).unwrap();
     assert_eq!(read_layout(folder.path(), &longest).unwrap(), Some(stored));
 }
@@ -421,8 +510,10 @@ fn a_picture_that_is_there_but_does_not_read_is_a_storage_refusal() {
     let folder = tempfile::tempdir().unwrap();
     let (media, layouts) = (folder.path().join("media"), folder.path().join("layouts"));
     std::fs::create_dir_all(media.join("plate.webp")).unwrap();
-    let mut stored = layout(vec![region(Some("innkeeper"), 600, 800)]);
-    stored.picture = binding("plate.webp", &picture_sha256(b"picture one"));
+    let stored = bound(
+        binding("plate.webp", &picture_sha256(b"picture one")),
+        vec![region(Some("innkeeper"), 600, 800)],
+    );
     write_layout(&layouts, "plate.webp", &stored).unwrap();
     let refused = current_layout(&media, &layouts, "plate.webp").unwrap_err();
     let LocateError::PictureUnreadable { picture, .. } = &refused else {
@@ -442,11 +533,14 @@ fn an_identification_is_stored_on_the_layout_as_it_is_now() {
     let (media, layouts) = (folder.path().join("media"), folder.path().join("layouts"));
     std::fs::create_dir_all(&media).unwrap();
     std::fs::write(media.join("plate.webp"), b"picture one").unwrap();
-    let mut asked = layout(vec![region(None, 100, 300), region(None, 600, 800)]);
-    asked.picture = binding("plate.webp", &picture_sha256(b"picture one"));
+    let picture = binding("plate.webp", &picture_sha256(b"picture one"));
+    let asked = bound(
+        picture.clone(),
+        vec![region(None, 100, 300), region(None, 600, 800)],
+    );
     // A label stored while the question was asked is kept beside the answer.
     let mut labelled = asked.clone();
-    labelled.regions[0].label = Some("bard".to_owned());
+    labelled.regions_mut()[0].set_label(Some("bard".to_owned()));
     write_layout(&layouts, "plate.webp", &labelled).unwrap();
     let answers = [Identified {
         name: "innkeeper".to_owned(),
@@ -464,8 +558,7 @@ fn an_identification_is_stored_on_the_layout_as_it_is_now() {
     );
 
     // A rescan stored meanwhile has other regions: the answer is refused, the scan is kept.
-    let mut rescanned = asked.clone();
-    rescanned.regions = vec![region(None, 200, 400)];
+    let rescanned = bound(picture, vec![region(None, 200, 400)]);
     write_layout(&layouts, "plate.webp", &rescanned).unwrap();
     let refused =
         store_identification(&media, &layouts, "plate.webp", &asked, &answers, 600).unwrap_err();

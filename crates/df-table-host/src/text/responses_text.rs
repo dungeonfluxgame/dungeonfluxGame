@@ -13,7 +13,7 @@ use df_ai::text::{
     TextBackend, TextOutcome, TextReceipt, TextRequest, TextUsage, UnavailableReason,
 };
 
-use df_providers::{HttpRequest, NativeHttp, NativeHttpRefusal, ProviderLimits};
+use df_providers::{HttpRequest, NativeHttp, NativeHttpCause, ProviderLimits};
 use serde_json::{Value, json};
 
 use super::limits::MAXIMUM_RESPONSES_OUTPUT_TOKENS;
@@ -140,16 +140,16 @@ pub fn receipt(status: u16, body: &[u8]) -> TextReceipt {
     }
 }
 
-fn failure(reason: NativeHttpRefusal) -> TextOutcome {
-    match reason {
-        NativeHttpRefusal::Deadline => TextOutcome::Deadline,
-        NativeHttpRefusal::Cancelled => TextOutcome::Unavailable(UnavailableReason::Interrupted),
-        NativeHttpRefusal::InvalidLimits
-        | NativeHttpRefusal::InvalidConfiguration
-        | NativeHttpRefusal::InvalidEndpoint
-        | NativeHttpRefusal::InvalidCredential
-        | NativeHttpRefusal::ProviderDisabled
-        | NativeHttpRefusal::RequestTooLarge => {
+fn failure(cause: NativeHttpCause) -> TextOutcome {
+    match cause {
+        NativeHttpCause::Deadline => TextOutcome::Deadline,
+        NativeHttpCause::Cancelled => TextOutcome::Unavailable(UnavailableReason::Interrupted),
+        NativeHttpCause::InvalidLimits
+        | NativeHttpCause::InvalidConfiguration
+        | NativeHttpCause::InvalidEndpoint
+        | NativeHttpCause::InvalidCredential
+        | NativeHttpCause::ProviderDisabled
+        | NativeHttpCause::RequestTooLarge => {
             TextOutcome::Unavailable(UnavailableReason::Configuration)
         }
         // The request may have been served: the result is unknown and is never resent.
@@ -185,7 +185,7 @@ impl TextBackend for ResponsesTextBackend {
         );
         match http.execute(call, deadline, std::future::pending()).await {
             Ok(response) => receipt(response.status, &response.body),
-            Err(error) => failure(error.reason).into(),
+            Err(error) => failure(error.cause).into(),
         }
     }
 }

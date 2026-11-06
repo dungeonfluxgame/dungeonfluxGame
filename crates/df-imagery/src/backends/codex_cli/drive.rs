@@ -27,7 +27,7 @@ use super::protocol::{
 };
 use super::settle::settle_turn;
 use super::{
-    CodexCliConfig, CodexError, CodexImageRequest, CodexOutcome, ConfigError, UnknownReason,
+    CodexCliConfig, CodexConfigError, CodexError, CodexImageRequest, CodexOutcome, UnknownReason,
 };
 
 /// Request ids used on one connection: initialize, then thread open, then
@@ -101,6 +101,7 @@ where
                 context.request,
                 context.image_paths,
                 context.outputs_root,
+                context.config.codex_home(),
                 context.config.max_artifact_bytes,
                 context.deadline_at,
             )
@@ -255,7 +256,7 @@ where
             WireEvent::Line(line) => line,
             WireEvent::Eof | WireEvent::StreamFailed(_) => return Err(lost_output()),
             WireEvent::Cancelled => {
-                interrupt_best_effort(session, thread_id, &correlated_turn.as_deref()).await;
+                interrupt_best_effort(session, thread_id, correlated_turn.as_deref()).await;
                 return Err(Decided::Unknown(UnknownReason::Cancelled));
             }
             WireEvent::Expired => return Err(Decided::Unknown(UnknownReason::Deadline)),
@@ -483,7 +484,7 @@ fn bind_turn_id(bound: &mut Option<String>, candidate: String) -> bool {
 pub(crate) async fn interrupt_best_effort<S>(
     session: &mut S,
     thread_id: &str,
-    turn_id: &Option<&str>,
+    turn_id: Option<&str>,
 ) where
     S: ProcessSession,
 {
@@ -507,7 +508,7 @@ pub(crate) async fn interrupt_best_effort<S>(
 /// broken pipe is a transport failure rather than lost output.
 fn map_handshake_stream_error(error: ProcessError) -> CodexError {
     match error {
-        ProcessError::Configuration => CodexError::Configuration(ConfigError::InvalidField {
+        ProcessError::Configuration => CodexError::Configuration(CodexConfigError::InvalidField {
             field: "process",
             reason: "the child session was not drivable",
         }),

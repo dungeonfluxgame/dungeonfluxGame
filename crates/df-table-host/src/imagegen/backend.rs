@@ -2,9 +2,9 @@
 //! (through the image service's one-shot door in `df-imagery`) and the backend that says it is not
 //! switched on, with the typed reasons a backend gives no picture.
 //!
-//! A backend is blocking: the service runs it in a blocking task, because the Codex turn takes
-//! minutes and its future cannot be moved between runtime threads. Every precondition is checked
-//! before a job starts and names what to do: the executable on `PATH`, a Codex home that is
+//! A backend is async: the service awaits it on the job's task, under the deadline and a grace
+//! period, and the Codex backend looks at its files on the blocking pool. Every precondition is
+//! checked before a job starts and names what to do: the executable on `PATH`, a Codex home that is
 //! signed in (its login file is only looked for, never opened), no `config.toml` in that home, and
 //! a scratch folder outside any git repository and any folder with an `AGENTS.md`.
 //!
@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use df_imagery::oneshot::{self, OneShotConfig, OneShotError, OneShotRequest};
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use super::model::{BackendRequest, GeneratedImage};
@@ -40,8 +41,6 @@ pub const WORK_DIRECTORY_VARIABLE: &str = "DF_IMAGERY_CODEX_WORKDIR";
 pub const AGENT_MODEL_VARIABLE: &str = "DF_IMAGEGEN_AGENT_MODEL";
 /// The dedicated, signed-in Codex home the Codex child runs with.
 pub const CODEX_HOME_VARIABLE: &str = "CODEX_HOME";
-/// The directories searched for the executable when none is named.
-const PATH_VARIABLE: &str = "PATH";
 
 /// The value of `MODE_VARIABLE` that switches generation on.
 const LIVE_MODE: &str = "live";
@@ -267,12 +266,12 @@ pub trait ImageBackend: Send + Sync {
     /// Looks at every precondition without starting any work.
     fn check(&self) -> Result<(), BackendError>;
 
-    /// Makes one picture within `deadline`. It may block for minutes.
-    fn generate_blocking(
-        &self,
-        request: &BackendRequest,
+    /// Makes one picture within `deadline`. It may take minutes; dropping it stops the attempt.
+    fn generate<'a>(
+        &'a self,
+        request: &'a BackendRequest,
         deadline: Duration,
-    ) -> Result<GeneratedImage, BackendError>;
+    ) -> BoxFuture<'a, Result<GeneratedImage, BackendError>>;
 }
 
 /// The backend of a host that was not told to generate pictures.
@@ -288,12 +287,12 @@ impl ImageBackend for SwitchedOff {
         Err(BackendError::NotSwitchedOn)
     }
 
-    fn generate_blocking(
-        &self,
-        _request: &BackendRequest,
+    fn generate<'a>(
+        &'a self,
+        _request: &'a BackendRequest,
         _deadline: Duration,
-    ) -> Result<GeneratedImage, BackendError> {
-        Err(BackendError::NotSwitchedOn)
+    ) -> BoxFuture<'a, Result<GeneratedImage, BackendError>> {
+        Box::pin(std::future::ready(Err(BackendError::NotSwitchedOn)))
     }
 }
 
@@ -321,7 +320,7 @@ impl CodexSettings {
     pub fn from_process_environment() -> Self {
         Self {
             executable: crate::environment::path(EXECUTABLE_VARIABLE),
-            path_directories: crate::environment::path(PATH_VARIABLE)
+            path_directories: crate::environment::path(crate::environment::PATH_VARIABLE)
                 .map(|path| std::env::split_paths(&path).collect())
                 .unwrap_or_default(),
             codex_home: crate::environment::path(CODEX_HOME_VARIABLE),
@@ -411,6 +410,21 @@ impl CodexBackend {
         }
         Ok(root)
     }
+
+    /// The one-shot setup for an attempt within `deadline`, after every precondition. It looks at
+    /// files and may create the work folder: call it on the blocking pool.
+    fn one_shot_config(&self, deadline: Duration) -> Result<OneShotConfig, BackendError> {
+        let executable = self.executable()?;
+        let work_root = self.work_root()?.to_path_buf();
+        let codex_home = self.signed_in_home()?.to_path_buf();
+        Ok(OneShotConfig {
+            executable,
+            work_root,
+            agent_model: self.settings.agent_model.clone(),
+            codex_home: Some(codex_home),
+            deadline,
+        })
+    }
 }
 
 impl ImageBackend for CodexBackend {
@@ -425,33 +439,34 @@ impl ImageBackend for CodexBackend {
         Ok(())
     }
 
-    fn generate_blocking(
-        &self,
-        request: &BackendRequest,
+    fn generate<'a>(
+        &'a self,
+        request: &'a BackendRequest,
         deadline: Duration,
-    ) -> Result<GeneratedImage, BackendError> {
-        let config = OneShotConfig {
-            executable: self.executable()?,
-            work_root: self.work_root()?.to_path_buf(),
-            agent_model: self.settings.agent_model.clone(),
-            deadline,
-        };
-        self.signed_in_home()?;
-        let one_shot = OneShotRequest {
-            prompt: request.text.clone(),
-            width_px: request.width_px,
-            height_px: request.height_px,
-        };
-        let image = oneshot::generate_blocking(&config, &one_shot).map_err(backend_error)?;
-        Ok(GeneratedImage {
-            bytes: image.bytes,
-            mime: image.mime.to_owned(),
-            width_px: image.width_px,
-            height_px: image.height_px,
-            sha256_hex: image.sha256_hex,
-            duration: image.elapsed,
-            input_tokens: image.input_tokens,
-            output_tokens: image.output_tokens,
+    ) -> BoxFuture<'a, Result<GeneratedImage, BackendError>> {
+        Box::pin(async move {
+            let backend = self.clone();
+            let config = tokio::task::spawn_blocking(move || backend.one_shot_config(deadline))
+                .await
+                .map_err(|_| BackendError::Internal)??;
+            let one_shot = OneShotRequest {
+                prompt: request.text.clone(),
+                width_px: request.width_px,
+                height_px: request.height_px,
+            };
+            let image = oneshot::generate(&config, &one_shot)
+                .await
+                .map_err(backend_error)?;
+            Ok(GeneratedImage {
+                bytes: image.bytes,
+                mime: image.mime.to_owned(),
+                width_px: image.width_px,
+                height_px: image.height_px,
+                sha256_hex: image.sha256_hex,
+                duration: image.elapsed,
+                input_tokens: image.input_tokens,
+                output_tokens: image.output_tokens,
+            })
         })
     }
 }

@@ -1,5 +1,6 @@
 //! Pictures and sound: the library, the scene commands and what a page reports back.
 
+use axum::http::StatusCode;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use df_playground::media::{AudioState, ClientReport};
@@ -9,8 +10,9 @@ use tempfile::TempDir;
 
 use crate::client::{get, post_json};
 use crate::command::{Command, CommandError, DEFAULT_VOLUME, parse, split_words, usage_text};
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::media_library::media_problem;
+use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, raw_exchange, start};
 use crate::wire::{ClientView, ControlsReply};
 
@@ -32,7 +34,7 @@ async fn run(running: &Running, line: &str) -> Result<String, DevError> {
     run_dev(running.port, &words(line)).await
 }
 
-async fn add(running: &Running, name: &str, bytes: &[u8]) -> (u16, String) {
+async fn add(running: &Running, name: &str, bytes: &[u8]) -> (StatusCode, String) {
     let body = json!({"name": name, "data_base64": STANDARD.encode(bytes)}).to_string();
     let response = post_json(running.port, "/dev/playground/media", &body)
         .await
@@ -207,7 +209,7 @@ fn media_and_clients_commands_parse_and_the_help_lists_every_new_verb() {
 #[tokio::test]
 async fn a_file_is_added_listed_served_with_its_type_and_removed() {
     let running = start(&STARTER_FILES).await;
-    assert_eq!(add(&running, "tavern.png", PNG).await.0, 200);
+    assert_eq!(add(&running, "tavern.png", PNG).await.0, StatusCode::OK);
     let listed = run(&running, "media").await.expect("lists");
     assert!(
         listed.contains("tavern.png") && listed.contains("image"),
@@ -292,7 +294,7 @@ async fn a_name_that_is_not_a_picture_or_sound_is_refused_and_nothing_is_written
         "",
     ] {
         let (status, _) = add(&running, name, PNG).await;
-        assert_eq!(status, 400, "{name:?}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name:?}");
     }
     assert_eq!(
         run(&running, "media").await.expect("lists"),
@@ -303,12 +305,12 @@ async fn a_name_that_is_not_a_picture_or_sound_is_refused_and_nothing_is_written
 #[tokio::test]
 async fn an_empty_file_and_data_that_is_not_base64_are_refused() {
     let running = start(&STARTER_FILES).await;
-    assert_eq!(add(&running, "a.png", b"").await.0, 400);
+    assert_eq!(add(&running, "a.png", b"").await.0, StatusCode::BAD_REQUEST);
     let body = json!({"name": "a.png", "data_base64": "not base64 !!"}).to_string();
     let response = post_json(running.port, "/dev/playground/media", &body)
         .await
         .expect("answers");
-    assert_eq!(response.status, 400);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(response.body.contains("base64"));
 }
 
@@ -318,9 +320,16 @@ async fn removing_a_file_that_is_not_there_says_so() {
     let error = run(&running, "media remove ghost.png")
         .await
         .expect_err("refused");
+    // The library's refusals carry no cause yet; the sentence names the file.
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("ghost.png")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas { cause: None, .. },
+                message,
+            } if message.contains("ghost.png")
+        ),
+        "{error:?}"
     );
 }
 
@@ -393,9 +402,7 @@ async fn a_media_name_that_is_missing_or_the_wrong_kind_is_refused_and_says_what
     let missing = run(&running, "scene image tv-card ghost.png")
         .await
         .expect_err("refused");
-    let DevError::Rejected(text) = &missing else {
-        panic!("{missing}");
-    };
+    let text = refused_change(&missing);
     assert!(
         text.contains("there is no picture 'ghost.png'") && text.contains("tavern.png"),
         "{missing}"
@@ -404,17 +411,29 @@ async fn a_media_name_that_is_missing_or_the_wrong_kind_is_refused_and_says_what
         .await
         .expect_err("refused");
     assert!(
-        matches!(&wrong, DevError::Rejected(text) if text.contains("is a sound, not a picture")),
+        refused_change(&wrong).contains("is a sound, not a picture"),
         "{wrong}"
     );
     let wrong = run(&running, "scene sound tavern.png")
         .await
         .expect_err("refused");
     assert!(
-        matches!(&wrong, DevError::Rejected(text) if text.contains("is a picture, not a sound")),
+        refused_change(&wrong).contains("is a picture, not a sound"),
         "{wrong}"
     );
     assert!(shown(&running).await.scene.is_empty());
+}
+
+/// The sentence of a scene change the playground's checks refused; the sentence is what these
+/// tests are about (it names what exists).
+fn refused_change(error: &DevError) -> &str {
+    match error {
+        DevError::Rejected {
+            error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { detail }),
+            ..
+        } => detail,
+        other => panic!("not a refused change: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -433,10 +452,7 @@ async fn with_an_empty_library_the_refusal_says_how_to_add_one() {
     let error = run(&running, "scene sound bell.wav")
         .await
         .expect_err("refused");
-    assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("media add FILE")),
-        "{error}"
-    );
+    assert!(refused_change(&error).contains("media add FILE"), "{error}");
 }
 
 #[test]
@@ -494,7 +510,7 @@ fn report(audio: AudioState, last_cue: u64) -> ClientReport {
     }
 }
 
-async fn send_report(running: &Running, client: &str, report: &ClientReport) -> u16 {
+async fn send_report(running: &Running, client: &str, report: &ClientReport) -> StatusCode {
     let body = json!({"client": client, "report": report}).to_string();
     post_json(running.port, "/dev/playground/report", &body)
         .await
@@ -513,7 +529,7 @@ async fn a_pages_report_is_kept_and_shown_by_clients_and_playground() {
     );
     assert_eq!(
         send_report(&running, "page-1", &report(AudioState::Locked, 2)).await,
-        200
+        StatusCode::OK
     );
     let text = run(&running, "clients").await.expect("reads");
     assert!(
@@ -527,7 +543,7 @@ async fn a_pages_report_is_kept_and_shown_by_clients_and_playground() {
     );
     assert_eq!(
         send_report(&running, "page-1", &report(AudioState::Unlocked, 3)).await,
-        200
+        StatusCode::OK
     );
     let text = run(&running, "clients").await.expect("reads");
     assert!(text.contains("audio unlocked") && text.contains("last sound cue 3"));
@@ -568,14 +584,14 @@ async fn a_report_with_a_bad_client_name_or_body_is_refused() {
     ] {
         assert_eq!(
             send_report(&running, name, &report(AudioState::Locked, 0)).await,
-            400,
+            StatusCode::BAD_REQUEST,
             "{name:?}"
         );
     }
     let response = post_json(running.port, "/dev/playground/report", "nope")
         .await
         .expect("answers");
-    assert_eq!(response.status, 400);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

@@ -22,7 +22,7 @@ use crate::native_http::{
 };
 use crate::text_schema::parse_unique_json;
 use crate::{
-    CandidateRouteId, HttpRequest, NativeHttpLimits, NativeHttpRefusal, ProviderFailureClass,
+    CandidateRouteId, HttpRequest, NativeHttpCause, NativeHttpLimits, ProviderFailureClass,
     ProviderRequestId, TextSchemaLimits,
 };
 
@@ -98,7 +98,7 @@ pub type ElevenSpeechBasis =
     RequestBasis<TtsSemantics<String, String, SpeechOutputFormat, Option<()>, Option<()>>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SpeechAdapterReason {
+pub enum SpeechAdapterCause {
     UnregisteredRoute,
     InvalidCredential,
     InvalidProfile,
@@ -109,9 +109,30 @@ pub enum SpeechAdapterReason {
     Transcript,
     EmptyAudio,
     Owner(RequestError),
-    Transport(NativeHttpRefusal),
+    Transport(NativeHttpCause),
     Supplier(ProviderFailureClass),
 }
+
+impl fmt::Display for SpeechAdapterCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnregisteredRoute => formatter.write_str("the speech route is not registered"),
+            Self::InvalidCredential => formatter.write_str("the speech credential is invalid"),
+            Self::InvalidProfile => formatter.write_str("the speech profile is invalid"),
+            Self::InvalidInput => formatter.write_str("the speech input is invalid"),
+            Self::UnsupportedLocale => formatter.write_str("the speech locale is not supported"),
+            Self::ModeDoesNotDispatch => formatter.write_str("this mode does not dispatch speech"),
+            Self::Json => formatter.write_str("the speech answer is not valid JSON"),
+            Self::Transcript => formatter.write_str("the transcript is unusable"),
+            Self::EmptyAudio => formatter.write_str("the speech answer carried no audio"),
+            Self::Owner(cause) => write!(formatter, "the request owner refused it ({cause:?})"),
+            Self::Transport(cause) => write!(formatter, "the speech call failed: {cause}"),
+            Self::Supplier(class) => write!(formatter, "the speech supplier failed ({class:?})"),
+        }
+    }
+}
+
+impl std::error::Error for SpeechAdapterCause {}
 
 /// Explicitly accessed supplier metadata; Debug never prints identifiers or meters.
 #[derive(Clone, Default)]
@@ -134,14 +155,14 @@ impl SpeechResponseMetadata {
 }
 
 impl fmt::Debug for SpeechResponseMetadata {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("SpeechResponseMetadata([REDACTED])")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SpeechResponseMetadata([REDACTED])")
     }
 }
 
 /// Failure retains facts captured before body cancellation, truncation or refusal.
 pub struct SpeechAdapterError {
-    reason: SpeechAdapterReason,
+    cause: SpeechAdapterCause,
     metadata: Box<SpeechResponseMetadata>,
     transcription_id: Option<ProviderRequestId>,
     audio_duration_secs: Option<f64>,
@@ -149,8 +170,8 @@ pub struct SpeechAdapterError {
 }
 
 impl SpeechAdapterError {
-    pub fn reason(&self) -> SpeechAdapterReason {
-        self.reason
+    pub fn cause(&self) -> SpeechAdapterCause {
+        self.cause
     }
     pub fn metadata(&self) -> &SpeechResponseMetadata {
         &self.metadata
@@ -165,33 +186,43 @@ impl SpeechAdapterError {
         self.error_request_id.as_ref()
     }
     pub fn failure_class(&self) -> ProviderFailureClass {
-        match self.reason {
-            SpeechAdapterReason::Owner(RequestError::Cancelled) => ProviderFailureClass::Cancelled,
-            SpeechAdapterReason::Owner(RequestError::DeadlineExceeded) => {
+        match self.cause {
+            SpeechAdapterCause::Owner(RequestError::Cancelled) => ProviderFailureClass::Cancelled,
+            SpeechAdapterCause::Owner(RequestError::DeadlineExceeded) => {
                 ProviderFailureClass::Deadline
             }
-            SpeechAdapterReason::Owner(_)
-            | SpeechAdapterReason::Json
-            | SpeechAdapterReason::Transcript
-            | SpeechAdapterReason::EmptyAudio => ProviderFailureClass::Contract,
-            SpeechAdapterReason::Transport(reason) => reason.failure_class(),
-            SpeechAdapterReason::Supplier(reason) => reason,
+            SpeechAdapterCause::Owner(_)
+            | SpeechAdapterCause::Json
+            | SpeechAdapterCause::Transcript
+            | SpeechAdapterCause::EmptyAudio => ProviderFailureClass::Contract,
+            SpeechAdapterCause::Transport(cause) => cause.failure_class(),
+            SpeechAdapterCause::Supplier(class) => class,
             _ => ProviderFailureClass::InvalidRequest,
         }
     }
 }
 
 impl fmt::Debug for SpeechAdapterError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SpeechAdapterError")
-            .field("reason", &self.reason)
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SpeechAdapterError")
+            .field("cause", &self.cause)
             .finish_non_exhaustive()
     }
 }
 
-fn error(reason: SpeechAdapterReason) -> SpeechAdapterError {
+impl fmt::Display for SpeechAdapterError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(formatter)
+    }
+}
+
+/// The message is the cause's own, so the cause is not repeated as a source.
+impl std::error::Error for SpeechAdapterError {}
+
+fn error(cause: SpeechAdapterCause) -> SpeechAdapterError {
     SpeechAdapterError {
-        reason,
+        cause,
         metadata: Box::default(),
         transcription_id: None,
         audio_duration_secs: None,
@@ -214,8 +245,9 @@ pub struct TranscriptWord {
 }
 
 impl fmt::Debug for TranscriptWord {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TranscriptWord")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TranscriptWord")
             .field("kind", &self.kind)
             .finish_non_exhaustive()
     }
@@ -249,8 +281,8 @@ impl ValidatedTranscript {
 }
 
 impl fmt::Debug for ValidatedTranscript {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("ValidatedTranscript([REDACTED])")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ValidatedTranscript([REDACTED])")
     }
 }
 
@@ -281,8 +313,8 @@ impl EncodedSpeechAudio {
 }
 
 impl fmt::Debug for EncodedSpeechAudio {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("EncodedSpeechAudio([REDACTED])")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("EncodedSpeechAudio([REDACTED])")
     }
 }
 
@@ -359,9 +391,9 @@ impl NativeSpeechObservation {
             && self.request_usage == request.usage()
             && self.request_limits == request.limits()
     }
-    fn refused(&self, reason: SpeechAdapterReason) -> SpeechAdapterError {
+    fn refused(&self, cause: SpeechAdapterCause) -> SpeechAdapterError {
         SpeechAdapterError {
-            reason,
+            cause,
             metadata: Box::new(self.metadata.clone()),
             transcription_id: self.transcription_id.clone(),
             audio_duration_secs: self.audio_duration_secs,
@@ -371,8 +403,8 @@ impl NativeSpeechObservation {
 }
 
 impl fmt::Debug for NativeSpeechObservation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("NativeSpeechObservation([REDACTED])")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("NativeSpeechObservation([REDACTED])")
     }
 }
 
@@ -388,13 +420,13 @@ pub struct PreparedSpeechResponse<'a> {
 }
 
 impl fmt::Debug for PreparedSttResponse<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("PreparedSttResponse([REDACTED])")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PreparedSttResponse([REDACTED])")
     }
 }
 impl fmt::Debug for PreparedSpeechResponse<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("PreparedSpeechResponse([REDACTED])")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("PreparedSpeechResponse([REDACTED])")
     }
 }
 
@@ -411,7 +443,7 @@ impl PreparedSttResponse<'_> {
         self.request
             .checked()
             .validate_current(owner)
-            .map_err(|e| self.observation.refused(SpeechAdapterReason::Owner(e)))?;
+            .map_err(|e| self.observation.refused(SpeechAdapterCause::Owner(e)))?;
         let id = self.observation.metadata.0.request_id.clone();
         let usage = self.observation.workload;
         Ok([
@@ -445,7 +477,7 @@ impl PreparedSpeechResponse<'_> {
         self.request
             .checked()
             .validate_current(owner)
-            .map_err(|e| self.observation.refused(SpeechAdapterReason::Owner(e)))?;
+            .map_err(|e| self.observation.refused(SpeechAdapterCause::Owner(e)))?;
         let id = self.observation.metadata.0.request_id.clone();
         let usage = self.observation.workload;
         Ok([
@@ -478,8 +510,8 @@ pub struct NativeSpeechProvider {
 }
 
 impl fmt::Debug for NativeSpeechProvider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("NativeSpeechProvider([REDACTED])")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("NativeSpeechProvider([REDACTED])")
     }
 }
 
@@ -493,13 +525,13 @@ impl NativeSpeechProvider {
             route,
             CandidateRouteId::ElevenScribeV2Stt | CandidateRouteId::ElevenFlashV25Tts
         ) {
-            return Err(error(SpeechAdapterReason::UnregisteredRoute));
+            return Err(error(SpeechAdapterCause::UnregisteredRoute));
         }
         if !is_valid_credential(credential) {
-            return Err(error(SpeechAdapterReason::InvalidCredential));
+            return Err(error(SpeechAdapterCause::InvalidCredential));
         }
-        let http =
-            NativeHttp::new(limits, false).map_err(|e| error(SpeechAdapterReason::Transport(e)))?;
+        let http = NativeHttp::new(limits, false)
+            .map_err(|failure| error(SpeechAdapterCause::Transport(failure.cause)))?;
         Ok(Self {
             route,
             credential: credential.to_owned(),
@@ -512,12 +544,12 @@ impl NativeSpeechProvider {
     /// and no DNS/production fallback. It does not change production factories.
     pub fn for_loopback_fixture(mut self, address: SocketAddr) -> Result<Self, SpeechAdapterError> {
         if !is_literal_localhost(address) {
-            return Err(error(SpeechAdapterReason::Transport(
-                NativeHttpRefusal::InvalidEndpoint,
+            return Err(error(SpeechAdapterCause::Transport(
+                NativeHttpCause::InvalidEndpoint,
             )));
         }
         self.http = NativeHttp::new(self.http.limits(), true)
-            .map_err(|e| error(SpeechAdapterReason::Transport(e)))?;
+            .map_err(|failure| error(SpeechAdapterCause::Transport(failure.cause)))?;
         self.base = format!("http://{address}");
         Ok(self)
     }
@@ -532,20 +564,20 @@ impl NativeSpeechProvider {
         request
             .checked()
             .validate_current(owner)
-            .map_err(|e| error(SpeechAdapterReason::Owner(e)))?;
+            .map_err(|e| error(SpeechAdapterCause::Owner(e)))?;
         if self.route != CandidateRouteId::ElevenScribeV2Stt {
-            return Err(error(SpeechAdapterReason::UnregisteredRoute));
+            return Err(error(SpeechAdapterCause::UnregisteredRoute));
         }
         let checked = request.checked();
         let binding = checked.binding();
         if binding.mode != ExecutionMode::Live {
-            return Err(error(SpeechAdapterReason::ModeDoesNotDispatch));
+            return Err(error(SpeechAdapterCause::ModeDoesNotDispatch));
         }
         let semantic = &binding.semantic_basis.semantic;
         if semantic.audio_format != SpeechInputFormat::PcmS16Le16Mono
             || semantic.transcript_profile != SpeechTranscriptProfile::FinalWords
         {
-            return Err(error(SpeechAdapterReason::InvalidProfile));
+            return Err(error(SpeechAdapterCause::InvalidProfile));
         }
         english_locale(&semantic.locale)?;
         validate_keyterms(&semantic.keyterms)?;
@@ -553,7 +585,7 @@ impl NativeSpeechProvider {
         if !(MINIMUM_PCM_BYTES..=MAXIMUM_PCM_BYTES).contains(&bytes.len())
             || !bytes.len().is_multiple_of(2)
         {
-            return Err(error(SpeechAdapterReason::InvalidInput));
+            return Err(error(SpeechAdapterCause::InvalidInput));
         }
         let duration = Duration::from_nanos((bytes.len() as u64 / 2) * NANOSECONDS_PER_SAMPLE);
         let milliseconds = duration.as_nanos().div_ceil(1_000_000);
@@ -561,7 +593,7 @@ impl NativeSpeechProvider {
             || checked.usage().duration() != duration
             || checked.usage().usage() != Usage::new(milliseconds, UsageUnit::AudioMillisecond)
         {
-            return Err(error(SpeechAdapterReason::InvalidInput));
+            return Err(error(SpeechAdapterCause::InvalidInput));
         }
         let body = multipart(
             bytes,
@@ -585,15 +617,15 @@ impl NativeSpeechProvider {
             )
             .await
             .map_err(|e| SpeechAdapterError {
-                reason: SpeechAdapterReason::Transport(e.reason),
+                cause: SpeechAdapterCause::Transport(e.cause),
                 metadata: Box::new(SpeechResponseMetadata(*e.metadata)),
                 transcription_id: None,
                 audio_duration_secs: None,
                 error_request_id: None,
             })?;
         let metadata = SpeechResponseMetadata(response.metadata);
-        let json = decode_json(&response.body).map_err(|reason| SpeechAdapterError {
-            reason,
+        let json = decode_json(&response.body).map_err(|cause| SpeechAdapterError {
+            cause,
             metadata: Box::new(metadata.clone()),
             transcription_id: None,
             audio_duration_secs: None,
@@ -628,7 +660,7 @@ impl NativeSpeechProvider {
             duration,
             checked.limits().max_duration(),
         )
-        .map_err(|reason| observation.refused(reason))?;
+        .map_err(|cause| observation.refused(cause))?;
         Ok(PreparedSttResponse {
             request,
             transcript,
@@ -646,25 +678,25 @@ impl NativeSpeechProvider {
         request
             .checked()
             .validate_current(owner)
-            .map_err(|e| error(SpeechAdapterReason::Owner(e)))?;
+            .map_err(|e| error(SpeechAdapterCause::Owner(e)))?;
         if self.route != CandidateRouteId::ElevenFlashV25Tts {
-            return Err(error(SpeechAdapterReason::UnregisteredRoute));
+            return Err(error(SpeechAdapterCause::UnregisteredRoute));
         }
         let checked = request.checked();
         let binding = checked.binding();
         if binding.mode != ExecutionMode::Live {
-            return Err(error(SpeechAdapterReason::ModeDoesNotDispatch));
+            return Err(error(SpeechAdapterCause::ModeDoesNotDispatch));
         }
         let semantic = &binding.semantic_basis.semantic;
         if semantic.output_format != SpeechOutputFormat::Mp3At22050Hz32Kbps
             || semantic.pcm_format.is_some()
             || semantic.timebase.is_some()
         {
-            return Err(error(SpeechAdapterReason::InvalidProfile));
+            return Err(error(SpeechAdapterCause::InvalidProfile));
         }
         english_locale(&semantic.locale)?;
         let text = std::str::from_utf8(checked.payload())
-            .map_err(|_| error(SpeechAdapterReason::InvalidInput))?;
+            .map_err(|_| error(SpeechAdapterCause::InvalidInput))?;
         let characters = text.chars().count();
         if text != semantic.text
             || text.trim().is_empty()
@@ -675,7 +707,7 @@ impl NativeSpeechProvider {
             || !checked.usage().duration().is_zero()
             || checked.usage().usage() != Usage::new(characters as u128, UsageUnit::Character)
         {
-            return Err(error(SpeechAdapterReason::InvalidInput));
+            return Err(error(SpeechAdapterCause::InvalidInput));
         }
         let mut body = BoundedRequestBody::new(self.http.limits().maximum_request_bytes);
         serde_json::to_writer(
@@ -687,8 +719,8 @@ impl NativeSpeechProvider {
             }),
         )
         .map_err(|_| {
-            error(SpeechAdapterReason::Transport(
-                NativeHttpRefusal::RequestTooLarge,
+            error(SpeechAdapterCause::Transport(
+                NativeHttpCause::RequestTooLarge,
             ))
         })?;
         let endpoint = format!(
@@ -713,7 +745,7 @@ impl NativeSpeechProvider {
             )
             .await
             .map_err(|e| SpeechAdapterError {
-                reason: SpeechAdapterReason::Transport(e.reason),
+                cause: SpeechAdapterCause::Transport(e.cause),
                 metadata: Box::new(SpeechResponseMetadata(*e.metadata)),
                 transcription_id: None,
                 audio_duration_secs: None,
@@ -734,11 +766,11 @@ impl NativeSpeechProvider {
             request_limits: checked.limits(),
         };
         if response.status != 200 {
-            let json = decode_json(&response.body).map_err(|reason| observation.refused(reason))?;
+            let json = decode_json(&response.body).map_err(|cause| observation.refused(cause))?;
             return Err(supplier_error(response.status, &json, &observation));
         }
         if response.body.is_empty() {
-            return Err(observation.refused(SpeechAdapterReason::EmptyAudio));
+            return Err(observation.refused(SpeechAdapterCause::EmptyAudio));
         }
         let audio = EncodedSpeechAudio {
             bytes: response.body,
@@ -763,7 +795,7 @@ fn english_locale(locale: &LocaleTag) -> Result<(), SpeechAdapterError> {
     {
         Ok(())
     } else {
-        Err(error(SpeechAdapterReason::UnsupportedLocale))
+        Err(error(SpeechAdapterCause::UnsupportedLocale))
     }
 }
 
@@ -777,11 +809,11 @@ fn multipart(
     let boundary = (0..8)
         .map(|n| format!("df-scribe-v2-{operation}-{n}"))
         .find(|b| !payload.windows(b.len()).any(|w| w == b.as_bytes()))
-        .ok_or_else(|| error(SpeechAdapterReason::InvalidInput))?;
+        .ok_or_else(|| error(SpeechAdapterCause::InvalidInput))?;
     let mut body = BoundedRequestBody::new(limit);
     let append_error = |_| {
-        error(SpeechAdapterReason::Transport(
-            NativeHttpRefusal::RequestTooLarge,
+        error(SpeechAdapterCause::Transport(
+            NativeHttpCause::RequestTooLarge,
         ))
     };
     for (name, value) in [
@@ -803,8 +835,8 @@ fn multipart(
         body.write_all(part.as_bytes()).map_err(append_error)?;
     }
     if !keyterms.is_empty() {
-        let serialized = serde_json::to_string(keyterms)
-            .map_err(|_| error(SpeechAdapterReason::InvalidInput))?;
+        let serialized =
+            serde_json::to_string(keyterms).map_err(|_| error(SpeechAdapterCause::InvalidInput))?;
         let part = format!(
             concat!(
                 "--{boundary}\r\nContent-Disposition: form-data; name=\"keyterms\"\r\n\r\n",
@@ -845,19 +877,19 @@ fn validate_keyterms(keyterms: &[String]) -> Result<(), SpeechAdapterError> {
                 })
         })
     {
-        return Err(error(SpeechAdapterReason::InvalidInput));
+        return Err(error(SpeechAdapterCause::InvalidInput));
     }
     Ok(())
 }
 
-fn decode_json(bytes: &[u8]) -> Result<Value, SpeechAdapterReason> {
+fn decode_json(bytes: &[u8]) -> Result<Value, SpeechAdapterCause> {
     if bytes.len() > JSON_LIMITS.maximum_schema_bytes {
-        return Err(SpeechAdapterReason::Json);
+        return Err(SpeechAdapterCause::Json);
     }
-    parse_unique_json(bytes, JSON_LIMITS).map_err(|_| SpeechAdapterReason::Json)
+    parse_unique_json(bytes, JSON_LIMITS).map_err(|_| SpeechAdapterCause::Json)
 }
 
-fn optional_id(value: Option<&Value>) -> Result<Option<ProviderRequestId>, SpeechAdapterReason> {
+fn optional_id(value: Option<&Value>) -> Result<Option<ProviderRequestId>, SpeechAdapterCause> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s))
@@ -865,30 +897,30 @@ fn optional_id(value: Option<&Value>) -> Result<Option<ProviderRequestId>, Speec
         {
             ProviderRequestId::new(s)
                 .map(Some)
-                .map_err(|_| SpeechAdapterReason::Transcript)
+                .map_err(|_| SpeechAdapterCause::Transcript)
         }
-        _ => Err(SpeechAdapterReason::Transcript),
+        _ => Err(SpeechAdapterCause::Transcript),
     }
 }
 
-fn optional_time(value: Option<&Value>, maximum: f64) -> Result<Option<f64>, SpeechAdapterReason> {
+fn optional_time(value: Option<&Value>, maximum: f64) -> Result<Option<f64>, SpeechAdapterCause> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value
             .as_f64()
             .filter(|n| n.is_finite() && *n >= 0.0 && *n <= maximum)
             .map(Some)
-            .ok_or(SpeechAdapterReason::Transcript),
+            .ok_or(SpeechAdapterCause::Transcript),
     }
 }
 
 fn closed_object<'a>(
     value: &'a Value,
     allowed: &[&str],
-) -> Result<&'a Map<String, Value>, SpeechAdapterReason> {
-    let object = value.as_object().ok_or(SpeechAdapterReason::Transcript)?;
+) -> Result<&'a Map<String, Value>, SpeechAdapterCause> {
+    let object = value.as_object().ok_or(SpeechAdapterCause::Transcript)?;
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err(SpeechAdapterReason::Transcript);
+        return Err(SpeechAdapterCause::Transcript);
     }
     Ok(object)
 }
@@ -903,7 +935,7 @@ fn parse_transcript(
     locale: &LocaleTag,
     duration: Duration,
     maximum: Duration,
-) -> Result<ValidatedTranscript, SpeechAdapterReason> {
+) -> Result<ValidatedTranscript, SpeechAdapterCause> {
     let o = closed_object(
         json,
         &[
@@ -924,7 +956,7 @@ fn parse_transcript(
         || !absent_or_empty(o.get("entities"))
         || !absent_or_empty(o.get("additional_formats"))
     {
-        return Err(SpeechAdapterReason::Transcript);
+        return Err(SpeechAdapterCause::Transcript);
     }
     optional_id(o.get("transcription_id"))?;
     optional_time(o.get("audio_duration_secs"), maximum.as_secs_f64())?;
@@ -932,26 +964,26 @@ fn parse_transcript(
         .get("language_code")
         .and_then(Value::as_str)
         .filter(|s| (2..=3).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphabetic()))
-        .ok_or(SpeechAdapterReason::Transcript)?;
+        .ok_or(SpeechAdapterCause::Transcript)?;
     let probability = o
         .get("language_probability")
         .and_then(Value::as_f64)
         .filter(|n| n.is_finite() && (0.0..=1.0).contains(n))
-        .ok_or(SpeechAdapterReason::Transcript)?;
+        .ok_or(SpeechAdapterCause::Transcript)?;
     let text = o
         .get("text")
         .and_then(Value::as_str)
         .filter(|s| s.len() <= MAXIMUM_TRANSCRIPT_BYTES)
-        .ok_or(SpeechAdapterReason::Transcript)?;
+        .ok_or(SpeechAdapterCause::Transcript)?;
     let values = o
         .get("words")
         .and_then(Value::as_array)
         .filter(|w| w.len() <= MAXIMUM_TRANSCRIPT_WORDS)
-        .ok_or(SpeechAdapterReason::Transcript)?;
+        .ok_or(SpeechAdapterCause::Transcript)?;
     let mut words = Vec::new();
     words
         .try_reserve(values.len())
-        .map_err(|_| SpeechAdapterReason::Transcript)?;
+        .map_err(|_| SpeechAdapterCause::Transcript)?;
     let mut bytes = 0usize;
     let mut last_start = 0.0;
     for value in values {
@@ -972,33 +1004,33 @@ fn parse_transcript(
             || !matches!(w.get("speaker_id"), None | Some(Value::Null))
             || !absent_or_empty(w.get("characters"))
         {
-            return Err(SpeechAdapterReason::Transcript);
+            return Err(SpeechAdapterCause::Transcript);
         }
         let word = w
             .get("text")
             .and_then(Value::as_str)
-            .ok_or(SpeechAdapterReason::Transcript)?;
+            .ok_or(SpeechAdapterCause::Transcript)?;
         bytes = bytes
             .checked_add(word.len())
             .filter(|n| *n <= MAXIMUM_TRANSCRIPT_BYTES)
-            .ok_or(SpeechAdapterReason::Transcript)?;
+            .ok_or(SpeechAdapterCause::Transcript)?;
         let kind = match w.get("type").and_then(Value::as_str) {
             Some("word") => TranscriptWordKind::Word,
             Some("spacing") => TranscriptWordKind::Spacing,
-            _ => return Err(SpeechAdapterReason::Transcript),
+            _ => return Err(SpeechAdapterCause::Transcript),
         };
         let log_probability = w
             .get("logprob")
             .and_then(Value::as_f64)
             .filter(|n| n.is_finite() && *n <= 0.0)
-            .ok_or(SpeechAdapterReason::Transcript)?;
+            .ok_or(SpeechAdapterCause::Transcript)?;
         let start = optional_time(w.get("start"), duration.as_secs_f64())?;
         let end = optional_time(w.get("end"), duration.as_secs_f64())?;
         if kind == TranscriptWordKind::Word && (start.is_none() || end.is_none()) {
-            return Err(SpeechAdapterReason::Transcript);
+            return Err(SpeechAdapterCause::Transcript);
         }
         if start.zip(end).is_some_and(|(s, e)| s > e) || start.is_some_and(|s| s < last_start) {
-            return Err(SpeechAdapterReason::Transcript);
+            return Err(SpeechAdapterCause::Transcript);
         }
         if let Some(start) = start {
             last_start = start;
@@ -1045,7 +1077,7 @@ fn supplier_error(
         }
         _ => ProviderFailureClass::Unknown,
     };
-    let mut refused = observation.refused(SpeechAdapterReason::Supplier(class));
+    let mut refused = observation.refused(SpeechAdapterCause::Supplier(class));
     // The error's request id is a diagnostic extra: a malformed one is dropped, the failure stands.
     refused.error_request_id = optional_id(detail.and_then(|d| d.get("request_id")))
         .ok()

@@ -14,6 +14,7 @@
 //! executors consume the frozen snapshot through these typed nonsecret
 //! fields; credentials never appear here and stay at deployment composition.
 
+use crate::listed::listed_enum;
 use crate::output::{DEFAULT_JPEG_QUALITY_0_100, LossyQuality, OutputProfile};
 use crate::request::{Purpose, RequestError, RequestLimits};
 
@@ -35,13 +36,16 @@ pub enum GlobalMode {
     Off,
 }
 
-/// Selectable image backends; Codex CLI is a normal backend here.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum BackendId {
-    OpenAi,
-    Fal,
-    Bfl,
-    CodexCli,
+listed_enum! {
+    keyed
+    /// Selectable image backends; Codex CLI is a normal backend here.
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    pub enum BackendId {
+        OpenAi,
+        Fal,
+        Bfl,
+        CodexCli,
+    }
 }
 
 impl BackendId {
@@ -56,7 +60,7 @@ impl BackendId {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::OpenAi => "openai",
             Self::Fal => "fal",
@@ -551,16 +555,19 @@ pub struct RetryPolicy {
     pub backoff_secs: u64,
 }
 
-/// How usage is accounted. `RecordOnly` keeps local record-only projections
-/// with no hosted spend; `Hosted` admits through the finance authority.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AccountingMode {
-    RecordOnly,
-    Hosted,
+listed_enum! {
+    keyed
+    /// How usage is accounted. `RecordOnly` keeps local record-only projections
+    /// with no hosted spend; `Hosted` admits through the finance authority.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum AccountingMode {
+        RecordOnly,
+        Hosted,
+    }
 }
 
 impl AccountingMode {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::RecordOnly => "record-only",
             Self::Hosted => "hosted",
@@ -1106,3 +1113,15 @@ pub enum ConfigError {
         reason: &'static str,
     },
 }
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidField { field, reason } => {
+                write!(formatter, "the image setting {field} is invalid: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}

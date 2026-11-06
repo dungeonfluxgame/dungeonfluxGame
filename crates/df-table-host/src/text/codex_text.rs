@@ -29,7 +29,7 @@ use crate::environment;
 /// The environment variable that names the Codex executable.
 pub const EXECUTABLE_VARIABLE: &str = "DF_TEXT_CODEX_EXECUTABLE";
 /// The environment variable that names the folder Codex attempts run in.
-pub const WORKDIR_VARIABLE: &str = "DF_TEXT_CODEX_WORKDIR";
+pub const WORK_DIRECTORY_VARIABLE: &str = "DF_TEXT_CODEX_WORKDIR";
 /// The file in an attempt's folder that `codex exec -o` writes the run's last message to.
 pub(super) const LAST_MESSAGE_FILE: &str = "last-message.txt";
 
@@ -49,13 +49,13 @@ pub struct CodexRoute {
 
 impl CodexRoute {
     /// The route this process's environment gives: the executable named by
-    /// `EXECUTABLE_VARIABLE` (or `codex` on the path) and the folder named by `WORKDIR_VARIABLE`
-    /// (or `df-codex-text` in the system's temporary folder). `None` when no executable is named
-    /// and none is on the path.
+    /// `EXECUTABLE_VARIABLE` (or `codex` on the path) and the folder named by
+    /// `WORK_DIRECTORY_VARIABLE` (or `df-codex-text` in the system's temporary folder). `None`
+    /// when no executable is named and none is on the path.
     pub fn from_environment(model: Option<String>) -> Option<Self> {
         let named = environment::path(EXECUTABLE_VARIABLE).filter(|path| path.is_file());
         let executable = named.or_else(|| on_path("codex"))?;
-        let work_root = environment::path(WORKDIR_VARIABLE)
+        let work_root = environment::path(WORK_DIRECTORY_VARIABLE)
             .unwrap_or_else(|| std::env::temp_dir().join("df-codex-text"));
         Some(Self {
             executable,
@@ -66,7 +66,7 @@ impl CodexRoute {
 }
 
 fn on_path(name: &str) -> Option<PathBuf> {
-    let paths = environment::path("PATH")?;
+    let paths = environment::path(environment::PATH_VARIABLE)?;
     std::env::split_paths(&paths).find_map(|folder| {
         [format!("{name}.exe"), name.to_owned()]
             .into_iter()

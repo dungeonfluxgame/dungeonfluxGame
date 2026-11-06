@@ -17,6 +17,7 @@
 
 pub mod commit;
 pub mod error;
+mod limits;
 pub mod producers;
 pub mod projection;
 pub mod real;

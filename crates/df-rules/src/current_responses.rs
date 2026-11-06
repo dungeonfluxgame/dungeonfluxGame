@@ -401,5 +401,8 @@ pub fn current_pending_source<'a>(
 }
 
 #[cfg(test)]
-#[path = "tests/current_responses.rs"]
-mod tests;
+mod cross_consumer_tests;
+#[cfg(test)]
+mod current_responses_tests;
+#[cfg(test)]
+mod fixtures;

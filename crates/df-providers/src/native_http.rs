@@ -22,6 +22,11 @@ pub const MAXIMUM_CHUNKS: usize = 1_048_576;
 pub(crate) const MAXIMUM_CREDENTIAL_BYTES: usize = 8192;
 /// The longest supplier request or trace id kept from a response header, in bytes.
 const MAXIMUM_SUPPLIER_ID_BYTES: usize = 256;
+/// Safety kill switch (`on` or `off`): refuses every OpenAI API call before it is sent. Read here,
+/// not by the binary, so no caller can build a transport that skips it.
+const DISABLE_OPENAI_API_VARIABLE: &str = "DF_GAMEPLAY_DISABLE_OPENAI_API";
+/// Codex mode (`on` or `off`): when on, OpenAI API calls are refused like the kill switch above.
+const CODEX_MODE_VARIABLE: &str = "DF_GAMEPLAY_CODEX_MODE";
 
 /// Whether `credential` can travel as a header value: 1 to [`MAXIMUM_CREDENTIAL_BYTES`] bytes of
 /// printable ASCII with no space. Every native adapter constructor gates its credential here;
@@ -150,7 +155,7 @@ impl From<ProviderLimits> for NativeHttpLimits {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NativeHttpRefusal {
+pub enum NativeHttpCause {
     InvalidLimits,
     InvalidConfiguration,
     InvalidEndpoint,
@@ -168,7 +173,7 @@ pub enum NativeHttpRefusal {
     Unknown,
 }
 
-impl NativeHttpRefusal {
+impl NativeHttpCause {
     pub const fn failure_class(self) -> ProviderFailureClass {
         match self {
             Self::Cancelled => ProviderFailureClass::Cancelled,
@@ -184,6 +189,29 @@ impl NativeHttpRefusal {
         }
     }
 }
+
+impl std::fmt::Display for NativeHttpCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidLimits => "the transport limits are invalid",
+            Self::InvalidConfiguration => "the transport configuration is invalid",
+            Self::InvalidEndpoint => "the endpoint is not allowed",
+            Self::InvalidCredential => "the credential is not a valid header value",
+            Self::ProviderDisabled => "the provider is disabled by policy",
+            Self::RequestTooLarge => "the request is too large",
+            Self::ResponseTooLarge => "the response is too large",
+            Self::HeadersTooLarge => "the response headers are too large",
+            Self::TooManyChunks => "the response arrived in too many chunks",
+            Self::ContentType => "the response has the wrong content type",
+            Self::Redirect => "the server answered with a redirect",
+            Self::Cancelled => "the call was cancelled",
+            Self::Deadline => "the call ran out of time",
+            Self::Unknown => "the exchange failed",
+        })
+    }
+}
+
+impl std::error::Error for NativeHttpCause {}
 
 /// Owned native HTTPS transport for provider calls.
 pub struct NativeHttp {
@@ -201,11 +229,30 @@ pub struct NativeHttpResponse {
 }
 
 /// Typed transport failure with supplier facts for diagnosis.
-pub struct NativeHttpFailure {
-    pub reason: NativeHttpRefusal,
+pub struct NativeHttpError {
+    pub cause: NativeHttpCause,
     pub transport_request_id: Option<ProviderRequestId>,
     pub metadata: Box<NativeHttpMetadata>,
 }
+
+/// Debug prints only the cause: supplier ids and meters stay out of logs.
+impl std::fmt::Debug for NativeHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeHttpError")
+            .field("cause", &self.cause)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for NativeHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "the provider call failed: {}", self.cause)
+    }
+}
+
+/// The cause is already in the message, so it is not repeated as a source.
+impl std::error::Error for NativeHttpError {}
 
 /// Exact bounded Retry-After field values exposed by the HTTP response parser.
 /// This observation alone never grants billing or resend authority.
@@ -305,10 +352,16 @@ impl NativeHttp {
     }
     /// Builds a bounded transport; `loopback_fixture` only allows plain HTTP.
     /// It does not restrict endpoints to loopback; the wrapper must enforce that.
-    pub fn new(
-        limits: NativeHttpLimits,
-        loopback_fixture: bool,
-    ) -> Result<Self, NativeHttpRefusal> {
+    /// A refusal happens before any request, so it carries no supplier facts.
+    pub fn new(limits: NativeHttpLimits, loopback_fixture: bool) -> Result<Self, NativeHttpError> {
+        Self::build(limits, loopback_fixture).map_err(|cause| NativeHttpError {
+            cause,
+            transport_request_id: None,
+            metadata: Box::default(),
+        })
+    }
+
+    fn build(limits: NativeHttpLimits, loopback_fixture: bool) -> Result<Self, NativeHttpCause> {
         if [
             limits.connect_timeout,
             limits.read_timeout,
@@ -325,16 +378,16 @@ impl NativeHttp {
             || limits.maximum_chunks == 0
             || limits.maximum_chunks > MAXIMUM_CHUNKS
         {
-            return Err(NativeHttpRefusal::InvalidLimits);
+            return Err(NativeHttpCause::InvalidLimits);
         }
         let client = hardened_client_builder(&limits, !loopback_fixture)
             .build()
-            .map_err(|_| NativeHttpRefusal::Unknown)?;
+            .map_err(|_| NativeHttpCause::Unknown)?;
         Ok(Self {
             client,
             limits,
-            openai_api_disabled: openai_api_block(std::env::var("DF_GAMEPLAY_DISABLE_OPENAI_API"))?
-                | openai_api_block(std::env::var("DF_GAMEPLAY_CODEX_MODE"))?,
+            openai_api_disabled: openai_api_block(std::env::var(DISABLE_OPENAI_API_VARIABLE))?
+                | openai_api_block(std::env::var(CODEX_MODE_VARIABLE))?,
         })
     }
 
@@ -344,7 +397,7 @@ impl NativeHttp {
         request: HttpRequest,
         remaining_deadline: Duration,
         cancellation: impl Future<Output = ()>,
-    ) -> Result<NativeHttpResponse, NativeHttpFailure> {
+    ) -> Result<NativeHttpResponse, NativeHttpError> {
         self.execute_profile(
             request,
             remaining_deadline,
@@ -360,7 +413,7 @@ impl NativeHttp {
         remaining_deadline: Duration,
         cancellation: impl Future<Output = ()>,
         profile: NativeResponseProfile,
-    ) -> Result<NativeHttpResponse, NativeHttpFailure> {
+    ) -> Result<NativeHttpResponse, NativeHttpError> {
         let mut captured = NativeHttpMetadata::default();
         let result = self
             .execute_owned(
@@ -371,8 +424,8 @@ impl NativeHttp {
                 &mut captured,
             )
             .await;
-        result.map_err(|reason| NativeHttpFailure {
-            reason,
+        result.map_err(|cause| NativeHttpError {
+            cause,
             transport_request_id: captured.transport_request_id.clone(),
             metadata: Box::new(captured),
         })
@@ -385,25 +438,25 @@ impl NativeHttp {
         cancellation: impl Future<Output = ()>,
         profile: NativeResponseProfile,
         captured: &mut NativeHttpMetadata,
-    ) -> Result<NativeHttpResponse, NativeHttpRefusal> {
+    ) -> Result<NativeHttpResponse, NativeHttpCause> {
         if self.openai_api_disabled && is_openai_api(request.url()) {
-            return Err(NativeHttpRefusal::ProviderDisabled);
+            return Err(NativeHttpCause::ProviderDisabled);
         }
         if request.body().len() > self.limits.maximum_request_bytes {
-            return Err(NativeHttpRefusal::RequestTooLarge);
+            return Err(NativeHttpCause::RequestTooLarge);
         }
         let duration = remaining_deadline.min(self.limits.total_timeout);
         if duration.is_zero() {
-            return Err(NativeHttpRefusal::Deadline);
+            return Err(NativeHttpCause::Deadline);
         }
         // This single future owns send and body. Dropping it on cancellation,
         // deadline or caller drop releases the response and its network work.
         let exchange = self.send_and_read(request, profile, captured);
         tokio::select! {
             biased;
-            () = cancellation => Err(NativeHttpRefusal::Cancelled),
+            () = cancellation => Err(NativeHttpCause::Cancelled),
             result = tokio::time::timeout(duration, exchange) => {
-                result.map_err(|_| NativeHttpRefusal::Deadline)?
+                result.map_err(|_| NativeHttpCause::Deadline)?
             }
         }
     }
@@ -413,7 +466,7 @@ impl NativeHttp {
         request: HttpRequest,
         profile: NativeResponseProfile,
         captured: &mut NativeHttpMetadata,
-    ) -> Result<NativeHttpResponse, NativeHttpRefusal> {
+    ) -> Result<NativeHttpResponse, NativeHttpCause> {
         let method = match request.method() {
             HttpMethod::Get => reqwest::Method::GET,
             HttpMethod::Post => reqwest::Method::POST,
@@ -431,38 +484,38 @@ impl NativeHttp {
         if matches!(profile, NativeResponseProfile::Json) {
             // Preserve the existing Responses transport's selected-header contract.
             if let Some(value) = response.headers().get("x-request-id") {
-                let value = value.to_str().map_err(|_| NativeHttpRefusal::Unknown)?;
+                let value = value.to_str().map_err(|_| NativeHttpCause::Unknown)?;
                 if value.len() > MAXIMUM_SUPPLIER_ID_BYTES {
-                    return Err(NativeHttpRefusal::HeadersTooLarge);
+                    return Err(NativeHttpCause::HeadersTooLarge);
                 }
                 captured.transport_request_id =
-                    Some(ProviderRequestId::new(value).map_err(|_| NativeHttpRefusal::Unknown)?);
+                    Some(ProviderRequestId::new(value).map_err(|_| NativeHttpCause::Unknown)?);
             }
         } else {
             for name in ["x-request-id", "request-id", "x-trace-id", "character-cost"] {
                 let mut values = response.headers().get_all(name).iter();
                 if let Some(value) = values.next() {
                     if values.next().is_some() {
-                        return Err(NativeHttpRefusal::HeadersTooLarge);
+                        return Err(NativeHttpCause::HeadersTooLarge);
                     }
-                    let value = value.to_str().map_err(|_| NativeHttpRefusal::Unknown)?;
+                    let value = value.to_str().map_err(|_| NativeHttpCause::Unknown)?;
                     if value.is_empty()
                         || value.len() > MAXIMUM_SUPPLIER_ID_BYTES
                         || !value.bytes().all(is_visible_ascii)
                     {
-                        return Err(NativeHttpRefusal::HeadersTooLarge);
+                        return Err(NativeHttpCause::HeadersTooLarge);
                     }
                     match name {
                         "x-request-id" => {
                             captured.transport_request_id = Some(
                                 ProviderRequestId::new(value)
-                                    .map_err(|_| NativeHttpRefusal::Unknown)?,
+                                    .map_err(|_| NativeHttpCause::Unknown)?,
                             )
                         }
                         "request-id" => {
                             captured.request_id = Some(
                                 ProviderRequestId::new(value)
-                                    .map_err(|_| NativeHttpRefusal::Unknown)?,
+                                    .map_err(|_| NativeHttpCause::Unknown)?,
                             )
                         }
                         "x-trace-id" => captured.trace_id = Some(value.to_owned()),
@@ -473,12 +526,12 @@ impl NativeHttp {
         }
         let status = response.status().as_u16();
         if response.status().is_redirection() {
-            return Err(NativeHttpRefusal::Redirect);
+            return Err(NativeHttpCause::Redirect);
         }
         if header_block_bytes(response.headers())
             .is_none_or(|bytes| bytes > self.limits.maximum_header_bytes)
         {
-            return Err(NativeHttpRefusal::HeadersTooLarge);
+            return Err(NativeHttpCause::HeadersTooLarge);
         }
         captured.retry_after = NativeRetryAfter::from_raw_values(
             response
@@ -495,7 +548,7 @@ impl NativeHttp {
         let content_type = content_types
             .next()
             .and_then(|value| value.to_str().ok())
-            .ok_or(NativeHttpRefusal::ContentType)?;
+            .ok_or(NativeHttpCause::ContentType)?;
         let expected_type = match (profile, status) {
             (NativeResponseProfile::AudioMpeg, 200) => "audio/mpeg",
             _ => "application/json",
@@ -506,13 +559,13 @@ impl NativeHttp {
                 .next()
                 .is_some_and(|media| media.trim().eq_ignore_ascii_case(expected_type))
         {
-            return Err(NativeHttpRefusal::ContentType);
+            return Err(NativeHttpCause::ContentType);
         }
         if response
             .content_length()
             .is_some_and(|length| length > self.limits.maximum_response_bytes as u64)
         {
-            return Err(NativeHttpRefusal::ResponseTooLarge);
+            return Err(NativeHttpCause::ResponseTooLarge);
         }
         let body = read_bounded_body(
             &mut response,
@@ -564,23 +617,23 @@ pub(crate) async fn read_bounded_body(
     response: &mut reqwest::Response,
     maximum_bytes: usize,
     maximum_chunks: usize,
-) -> Result<Vec<u8>, NativeHttpRefusal> {
+) -> Result<Vec<u8>, NativeHttpCause> {
     let mut body = Vec::new();
     let mut chunks = 0usize;
     while let Some(chunk) = response.chunk().await.map_err(classify_transport_error)? {
         chunks += 1;
         if chunks > maximum_chunks {
-            return Err(NativeHttpRefusal::TooManyChunks);
+            return Err(NativeHttpCause::TooManyChunks);
         }
         if body
             .len()
             .checked_add(chunk.len())
             .is_none_or(|length| length > maximum_bytes)
         {
-            return Err(NativeHttpRefusal::ResponseTooLarge);
+            return Err(NativeHttpCause::ResponseTooLarge);
         }
         body.try_reserve(chunk.len())
-            .map_err(|_| NativeHttpRefusal::ResponseTooLarge)?;
+            .map_err(|_| NativeHttpCause::ResponseTooLarge)?;
         body.extend_from_slice(&chunk);
     }
     Ok(body)
@@ -628,12 +681,12 @@ impl std::io::Write for BoundedRequestBody {
     }
 }
 
-fn openai_api_block(value: Result<String, std::env::VarError>) -> Result<bool, NativeHttpRefusal> {
+fn openai_api_block(value: Result<String, std::env::VarError>) -> Result<bool, NativeHttpCause> {
     match value {
         Ok(value) if value == "on" => Ok(true),
         Ok(value) if value == "off" => Ok(false),
         Err(std::env::VarError::NotPresent) => Ok(false),
-        _ => Err(NativeHttpRefusal::InvalidConfiguration),
+        _ => Err(NativeHttpCause::InvalidConfiguration),
     }
 }
 
@@ -648,11 +701,11 @@ fn is_openai_api(url: &str) -> bool {
 }
 
 /// A transport timeout is a deadline; every other `reqwest` failure is of unknown outcome.
-pub(crate) fn classify_transport_error(error: reqwest::Error) -> NativeHttpRefusal {
+pub(crate) fn classify_transport_error(error: reqwest::Error) -> NativeHttpCause {
     if error.is_timeout() {
-        NativeHttpRefusal::Deadline
+        NativeHttpCause::Deadline
     } else {
-        NativeHttpRefusal::Unknown
+        NativeHttpCause::Unknown
     }
 }
 
@@ -682,7 +735,7 @@ mod tests {
         );
         assert_eq!(
             openai_api_block(Ok("enabled".into())),
-            Err(NativeHttpRefusal::InvalidConfiguration)
+            Err(NativeHttpCause::InvalidConfiguration)
         );
     }
 
@@ -696,7 +749,10 @@ mod tests {
                 "off" => assert!(!result.unwrap().openai_api_disabled),
                 "invalid" => assert!(matches!(
                     result,
-                    Err(NativeHttpRefusal::InvalidConfiguration)
+                    Err(NativeHttpError {
+                        cause: NativeHttpCause::InvalidConfiguration,
+                        ..
+                    })
                 )),
                 _ => panic!("unexpected test mode"),
             }
@@ -709,7 +765,7 @@ mod tests {
                     "native_http::tests::configured_process_mode_is_applied_to_new_transports",
                 ])
                 .env("DF_TEST_HTTP_BLOCK_MODE", mode)
-                .env("DF_GAMEPLAY_DISABLE_OPENAI_API", mode)
+                .env(DISABLE_OPENAI_API_VARIABLE, mode)
                 .status()
                 .unwrap();
             assert!(status.success(), "child failed for {mode}");
@@ -729,8 +785,8 @@ mod tests {
                 "native_http::tests::codex_mode_alone_still_blocks_openai",
             ])
             .env("DF_TEST_CODEX_GUARD_CHILD", "1")
-            .env("DF_GAMEPLAY_CODEX_MODE", "on")
-            .env_remove("DF_GAMEPLAY_DISABLE_OPENAI_API")
+            .env(CODEX_MODE_VARIABLE, "on")
+            .env_remove(DISABLE_OPENAI_API_VARIABLE)
             .status()
             .unwrap();
         assert!(status.success());
@@ -759,7 +815,7 @@ mod tests {
                 .await
                 .err()
                 .expect("policy must reject before attempting a connection");
-            assert_eq!(failure.reason, NativeHttpRefusal::ProviderDisabled);
+            assert_eq!(failure.cause, NativeHttpCause::ProviderDisabled);
         }
     }
 }

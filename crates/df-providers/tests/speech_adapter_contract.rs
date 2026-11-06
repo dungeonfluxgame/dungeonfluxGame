@@ -18,8 +18,8 @@ use df_provider_api::{
 };
 use df_providers::{
     CandidateRouteId, ElevenSpeechBasis, ElevenSpeechRequest, ElevenSttBasis, ElevenSttRequest,
-    NativeHttpLimits, NativeHttpRefusal, NativeSpeechProvider, ProviderAttemptIdentity,
-    ProviderRequestId, SpeechAdapterReason, SpeechInputFormat, SpeechOutputFormat,
+    NativeHttpCause, NativeHttpLimits, NativeSpeechProvider, ProviderAttemptIdentity,
+    ProviderRequestId, SpeechAdapterCause, SpeechInputFormat, SpeechOutputFormat,
     SpeechTranscriptProfile, TranscriptWordKind, candidate_for, candidate_routes,
     reconcile_speech_attempt, reconcile_stt_attempt, registered_speech_provider,
 };
@@ -366,7 +366,7 @@ async fn scribe_refuses_unbounded_keyterms_before_opening_a_provider_connection(
         .await
         .unwrap_err();
 
-    assert_eq!(error.reason(), SpeechAdapterReason::InvalidInput);
+    assert_eq!(error.cause(), SpeechAdapterCause::InvalidInput);
     assert!(listener.accept().is_err());
 
     binding.semantic_basis.semantic.keyterms = vec!["M".repeat(50)];
@@ -375,7 +375,7 @@ async fn scribe_refuses_unbounded_keyterms_before_opening_a_provider_connection(
         .transcribe(&request, owner(&binding), future::pending())
         .await
         .unwrap_err();
-    assert_eq!(error.reason(), SpeechAdapterReason::InvalidInput);
+    assert_eq!(error.cause(), SpeechAdapterCause::InvalidInput);
     assert!(listener.accept().is_err());
 }
 
@@ -493,8 +493,8 @@ async fn unsupported_profiles_modes_cancelled_and_stale_owners_never_egress() {
         stt.transcribe(&request, owner(&b), future::ready(()))
             .await
             .unwrap_err()
-            .reason(),
-        SpeechAdapterReason::Transport(NativeHttpRefusal::Cancelled)
+            .cause(),
+        SpeechAdapterCause::Transport(NativeHttpCause::Cancelled)
     );
     let b = speech_binding();
     let request = speech_request(&b);
@@ -503,8 +503,8 @@ async fn unsupported_profiles_modes_cancelled_and_stale_owners_never_egress() {
             .speak(&request, owner(&b), future::ready(()))
             .await
             .unwrap_err()
-            .reason(),
-        SpeechAdapterReason::Transport(NativeHttpRefusal::Cancelled)
+            .cause(),
+        SpeechAdapterCause::Transport(NativeHttpCause::Cancelled)
     );
     assert!(listener.accept().is_err());
 }
@@ -554,7 +554,7 @@ async fn complete_rechecks_every_current_binding_field_before_any_event() {
             Err(error) => error,
             Ok(_) => panic!("stale completion emitted an event"),
         };
-        assert!(matches!(error.reason(), SpeechAdapterReason::Owner(_)));
+        assert!(matches!(error.cause(), SpeechAdapterCause::Owner(_)));
         assert_eq!(
             error.metadata().request_id().unwrap().as_str(),
             "supplier_private"
@@ -590,7 +590,7 @@ async fn complete_rechecks_every_current_binding_field_before_any_event() {
             Err(error) => error,
             Ok(_) => panic!("stale STT completion emitted an event"),
         };
-        assert!(matches!(error.reason(), SpeechAdapterReason::Owner(_)));
+        assert!(matches!(error.cause(), SpeechAdapterCause::Owner(_)));
         assert_eq!(
             error.transcription_id().unwrap().as_str(),
             "transcription_private"
@@ -690,8 +690,8 @@ async fn malformed_duplicate_and_unselected_transcript_shapes_never_emit_final()
             .await
             .unwrap_err();
         assert!(matches!(
-            error.reason(),
-            SpeechAdapterReason::Json | SpeechAdapterReason::Transcript
+            error.cause(),
+            SpeechAdapterCause::Json | SpeechAdapterCause::Transcript
         ));
         assert_eq!(
             error.metadata().request_id().unwrap().as_str(),
@@ -770,8 +770,8 @@ async fn canonical_workload_text_and_duration_mismatch_refuse_without_send() {
             .transcribe(&request, owner(&b), future::pending())
             .await
             .unwrap_err()
-            .reason(),
-        SpeechAdapterReason::InvalidInput
+            .cause(),
+        SpeechAdapterCause::InvalidInput
     );
     let b = speech_binding();
     let request = ElevenSpeechRequest::new(
@@ -793,8 +793,8 @@ async fn canonical_workload_text_and_duration_mismatch_refuse_without_send() {
             .speak(&request, owner(&b), future::pending())
             .await
             .unwrap_err()
-            .reason(),
-        SpeechAdapterReason::InvalidInput
+            .cause(),
+        SpeechAdapterCause::InvalidInput
     );
     assert!(listener.accept().is_err());
 }
@@ -817,8 +817,8 @@ async fn multipart_boundary_collision_scan_and_complete_body_overhead_are_bounde
         p.transcribe(&request, owner(&b), future::pending())
             .await
             .unwrap_err()
-            .reason(),
-        SpeechAdapterReason::InvalidInput
+            .cause(),
+        SpeechAdapterCause::InvalidInput
     );
     let request = stt_request(&b, &vec![0; 3200]);
     let mut cap = limits();
@@ -828,8 +828,8 @@ async fn multipart_boundary_collision_scan_and_complete_body_overhead_are_bounde
             .transcribe(&request, owner(&b), future::pending())
             .await
             .unwrap_err()
-            .reason(),
-        SpeechAdapterReason::Transport(NativeHttpRefusal::RequestTooLarge)
+            .cause(),
+        SpeechAdapterCause::Transport(NativeHttpCause::RequestTooLarge)
     );
     assert!(listener.accept().is_err());
 }
@@ -850,9 +850,9 @@ async fn eof_is_required_and_truncated_or_empty_audio_never_completes() {
             .await
             .unwrap_err();
         if case == 2 {
-            assert_eq!(error.reason(), SpeechAdapterReason::EmptyAudio);
+            assert_eq!(error.cause(), SpeechAdapterCause::EmptyAudio);
         } else {
-            assert!(matches!(error.reason(), SpeechAdapterReason::Transport(_)));
+            assert!(matches!(error.cause(), SpeechAdapterCause::Transport(_)));
         }
         assert!(!joined(task).await.extra_connection);
     }
@@ -922,8 +922,8 @@ async fn actual_terminal_chunk_holds_output_until_eof() {
     release_tx.send(()).unwrap();
     let error = submission.await.unwrap_err();
     assert_eq!(
-        error.reason(),
-        SpeechAdapterReason::Transport(NativeHttpRefusal::TooManyChunks)
+        error.cause(),
+        SpeechAdapterCause::Transport(NativeHttpCause::TooManyChunks)
     );
     assert_eq!(
         error.metadata().request_id().unwrap().as_str(),
@@ -993,8 +993,8 @@ async fn response_type_selected_headers_and_exact_body_bounds_fail_closed() {
             assert!(result.is_ok());
         } else {
             assert!(matches!(
-                result.unwrap_err().reason(),
-                SpeechAdapterReason::Transport(_)
+                result.unwrap_err().cause(),
+                SpeechAdapterCause::Transport(_)
             ));
         }
         assert!(!joined(task).await.extra_connection);
@@ -1043,8 +1043,8 @@ async fn cancellation_deadline_and_future_drop_close_owned_socket_once_without_r
                 .await
                 .unwrap_err();
             assert_eq!(
-                error.reason(),
-                SpeechAdapterReason::Transport(NativeHttpRefusal::Cancelled)
+                error.cause(),
+                SpeechAdapterCause::Transport(NativeHttpCause::Cancelled)
             );
             assert_eq!(
                 error.metadata().request_id().unwrap().as_str(),
@@ -1057,8 +1057,8 @@ async fn cancellation_deadline_and_future_drop_close_owned_socket_once_without_r
                 .await
                 .unwrap_err();
             assert_eq!(
-                error.reason(),
-                SpeechAdapterReason::Transport(NativeHttpRefusal::Deadline)
+                error.cause(),
+                SpeechAdapterCause::Transport(NativeHttpCause::Deadline)
             );
             assert_eq!(
                 error.metadata().request_id().unwrap().as_str(),

@@ -8,8 +8,9 @@ use crate::client::get;
 use crate::command::{
     Command, CommandError, DEFAULT_CYCLES, DEFAULT_HOLD_MS, parse, split_words, usage_text,
 };
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::limits::{MAXIMUM_CYCLES, MAXIMUM_WAIT_MS};
+use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::ControlsReply;
 
@@ -218,9 +219,16 @@ async fn going_to_a_scene_that_does_not_exist_says_which_do() {
     let error = run(&running, "playground go castle")
         .await
         .expect_err("refused");
+    // The sentence says which scenes there are.
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("quay.json") && text.contains("tavern.json")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { detail }),
+                ..
+            } if detail.contains("quay.json") && detail.contains("tavern.json")
+        ),
+        "{error:?}"
     );
 }
 
@@ -310,16 +318,31 @@ async fn a_cycle_that_cannot_reach_a_scene_stops_there_and_says_which_step() {
     let error = run(&running, "playground cycle quay castle times=3 hold=0")
         .await
         .expect_err("stops");
-    let DevError::Rejected(text) = error else {
-        panic!("expected a rejection");
+    let DevError::CycleStopped {
+        done,
+        step,
+        scene,
+        error: why,
+    } = &error
+    else {
+        panic!("expected a stopped cycle: {error:?}");
     };
-    assert!(text.contains("1: quay ok"), "{text}");
-    assert!(text.contains("2: castle failed"), "{text}");
-    assert_eq!(
-        text.lines().count(),
-        2,
-        "it stopped at the failing step: {text}"
+    assert_eq!((*step, scene.as_str()), (2, "castle"));
+    assert_eq!(done.len(), 1, "it stopped at the failing step: {error:?}");
+    assert!(done[0].starts_with("1: quay ok"), "{error:?}");
+    assert!(
+        matches!(
+            why.as_ref(),
+            DevError::Rejected {
+                error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { .. }),
+                ..
+            }
+        ),
+        "{error:?}"
     );
+    let text = error.to_string();
+    assert!(text.contains("2: castle failed"), "{text}");
+    assert_eq!(text.lines().count(), 2, "{text}");
 }
 
 #[tokio::test]

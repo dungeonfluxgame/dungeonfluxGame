@@ -347,7 +347,7 @@ fn simulate(layout: &str, enemies: &[&str], seed: u64) -> (u32, String) {
                 "{}>{} {} {}ft {:?} d{:?}{} dmg{}{}",
                 actor,
                 attack.target,
-                attack.weapon.id(),
+                attack.weapon.key(),
                 attack.distance_ft,
                 attack.cover,
                 attack.faces,

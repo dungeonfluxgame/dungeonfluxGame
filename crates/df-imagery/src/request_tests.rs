@@ -183,17 +183,25 @@ fn a_larger_configured_ceiling_admits_a_longer_prompt() {
 }
 
 #[test]
-fn a_zero_prompt_bound_refuses_every_request() {
-    let request = generate_request();
-    let empty = RequestLimits {
-        max_prompt_chars: 0,
-        ..limits()
-    };
+fn a_zero_bound_is_refused_when_the_limits_are_made() {
+    let cases = [
+        (RequestLimits::new(0, 1, 1, 1), "max_prompt_chars"),
+        (RequestLimits::new(1, 0, 1, 1), "max_references"),
+        (RequestLimits::new(1, 1, 0, 1), "max_transform_steps"),
+        (RequestLimits::new(1, 1, 1, 0), "max_composite_layers"),
+    ];
+    for (made, field) in cases {
+        assert_eq!(made.unwrap_err(), RequestError::InvalidLimit { field });
+    }
+    let made = RequestLimits::new(7, 2, 3, 4).unwrap();
     assert_eq!(
-        request.validate(&empty).unwrap_err(),
-        RequestError::InvalidLimit {
-            field: "max_prompt_chars",
-        }
+        (
+            made.max_prompt_chars(),
+            made.max_references(),
+            made.max_transform_steps(),
+            made.max_composite_layers()
+        ),
+        (7, 2, 3, 4)
     );
 }
 

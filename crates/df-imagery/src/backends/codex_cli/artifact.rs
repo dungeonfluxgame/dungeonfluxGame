@@ -47,6 +47,35 @@ pub(crate) enum ArtifactError {
     DigestMismatch,
 }
 
+impl std::fmt::Display for ArtifactError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotAbsolute => formatter.write_str("the artifact path is not absolute"),
+            Self::ForeignPath => formatter.write_str("the artifact path is outside the job folder"),
+            Self::InvalidRoot => formatter.write_str("the artifact root is invalid"),
+            Self::Missing => formatter.write_str("the artifact is missing"),
+            Self::TooLarge { bytes } => write!(
+                formatter,
+                "the artifact is at least {bytes} bytes, too large"
+            ),
+            Self::Unreadable => formatter.write_str("the artifact could not be read"),
+            Self::UnknownExtension => formatter.write_str("the artifact has an unknown extension"),
+            Self::Rejected(rejection) => {
+                write!(formatter, "the artifact image was rejected: {rejection:?}")
+            }
+            Self::AlphaMismatch => {
+                formatter.write_str("the artifact alpha does not match the request")
+            }
+            Self::FormatMismatch => {
+                formatter.write_str("the artifact format does not match the request")
+            }
+            Self::DigestMismatch => formatter.write_str("the artifact digest does not match"),
+        }
+    }
+}
+
+impl std::error::Error for ArtifactError {}
+
 /// Bytes the asset owner decoded and measured, with their recorded digest.
 /// Carrying the bytes lets publication import without a second trusting read.
 #[derive(Clone, PartialEq)]
@@ -65,8 +94,9 @@ pub(crate) struct VerifiedArtifact {
 /// is the verified-data boundary, so a format here must not dump raster
 /// content into logs or diagnostics.
 impl fmt::Debug for VerifiedArtifact {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("VerifiedArtifact")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedArtifact")
             .field("path", &self.path)
             .field("digest_sha256_hex", &self.digest_sha256_hex)
             .field("mime", &self.mime)

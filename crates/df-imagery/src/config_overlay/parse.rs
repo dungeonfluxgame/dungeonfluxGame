@@ -47,16 +47,6 @@ pub(super) fn parse_backend_id(text: &str, legacy_flux: bool) -> Option<BackendI
     }
 }
 
-pub(super) fn parse_purpose(text: &str) -> Option<Purpose> {
-    for index in 0..Purpose::COUNT {
-        let purpose = Purpose::from_index(index)?;
-        if purpose.label() == text {
-            return Some(purpose);
-        }
-    }
-    None
-}
-
 pub(super) fn parse_backend_section(text: &str) -> Option<BackendId> {
     parse_backend_id(text, false)
 }
@@ -90,11 +80,11 @@ pub(super) fn parse_count(value: &str) -> Result<Option<u64>, ()> {
 }
 
 pub(super) fn purpose_env_tag(purpose: Purpose) -> String {
-    purpose.label().to_ascii_uppercase()
+    purpose.key().to_ascii_uppercase()
 }
 
 pub(super) fn backend_env_tag(backend: BackendId) -> String {
-    backend.label().replace('-', "_").to_ascii_uppercase()
+    backend.key().replace('-', "_").to_ascii_uppercase()
 }
 
 /// Environment tag for a profile name: uppercase with hyphens as
@@ -112,23 +102,6 @@ pub(super) fn profile_name_from_tag(tag: &str) -> Option<String> {
         return None;
     }
     Some(tag.replace('_', "-").to_ascii_lowercase())
-}
-
-pub(super) fn parse_accounting_mode(text: &str) -> Option<crate::config::AccountingMode> {
-    match text {
-        "record-only" => Some(crate::config::AccountingMode::RecordOnly),
-        "hosted" => Some(crate::config::AccountingMode::Hosted),
-        _ => None,
-    }
-}
-
-pub(super) fn parse_output_format(text: &str) -> Option<crate::output::OutputFormat> {
-    match text {
-        "png" => Some(crate::output::OutputFormat::Png),
-        "jpeg" => Some(crate::output::OutputFormat::Jpeg),
-        "webp" => Some(crate::output::OutputFormat::WebP),
-        _ => None,
-    }
 }
 
 /// Alpha selection for a profile body: opaque, preserved alpha, or a matte
@@ -384,7 +357,7 @@ fn flatten_owned(
         if let Some(rest) = section.strip_prefix("imagery.purposes.")
             && !rest.is_empty()
             && !rest.contains('.')
-            && parse_purpose(rest).is_none()
+            && Purpose::from_key(rest).is_none()
         {
             return Err(OverlayError::UnknownField {
                 field: section.to_owned(),

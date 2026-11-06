@@ -5,6 +5,7 @@
 //! and exposure are separate operations with separate units and neutrals.
 //! An empty step list is a valid encode-only transform.
 
+use crate::listed::listed_enum;
 use crate::output::{Dimensions, PixelBoundError, Rgb, check_pixel_bound};
 use crate::request::{RequestLimits, SourceRef};
 
@@ -797,25 +798,52 @@ pub enum TransformError {
     UnexpectedPadFill,
 }
 
-/// Which recipe value a refusal names; never the value itself.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TransformField {
-    Rotation,
-    Brightness,
-    Exposure,
-    Contrast,
-    Saturation,
-    Hue,
-    Blur,
-    Sharpen,
-    Mask,
-    Opacity,
-    SegmentationMaskRevision,
+impl std::fmt::Display for TransformError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooManySteps => formatter.write_str("the transform has too many steps"),
+            Self::EmptyLayers => formatter.write_str("the composite has no layers"),
+            Self::TooManyLayers => formatter.write_str("the composite has too many layers"),
+            Self::ZeroSize => formatter.write_str("a transform size is zero"),
+            Self::TooManyPixels { pixels } => {
+                write!(formatter, "the transform makes too many pixels ({pixels})")
+            }
+            Self::NonFinite { field } => {
+                write!(formatter, "the transform {} is not finite", field.key())
+            }
+            Self::OutOfRange { field } => {
+                write!(formatter, "the transform {} is out of range", field.key())
+            }
+            Self::MissingPadFill => formatter.write_str("the pad has no fill"),
+            Self::UnexpectedPadFill => formatter.write_str("the pad has an unexpected fill"),
+        }
+    }
+}
+
+impl std::error::Error for TransformError {}
+
+listed_enum! {
+    keyed
+    /// Which recipe value a refusal names; never the value itself.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum TransformField {
+        Rotation,
+        Brightness,
+        Exposure,
+        Contrast,
+        Saturation,
+        Hue,
+        Blur,
+        Sharpen,
+        Mask,
+        Opacity,
+        SegmentationMaskRevision,
+    }
 }
 
 impl TransformField {
     /// Stable snake_case name for diagnostics.
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Rotation => "rotation",
             Self::Brightness => "brightness",

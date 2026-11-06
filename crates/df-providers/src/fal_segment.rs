@@ -1,6 +1,8 @@
 //! Provider-neutral mask geometry and historical segmentation accounting labels.
 
-use crate::NativeHttpRefusal;
+use std::fmt;
+
+use crate::NativeHttpCause;
 use crate::output_fetch::MAXIMUM_IMAGE_SIDE_PX;
 
 /// The most instances one segmentation answer may carry.
@@ -24,8 +26,8 @@ impl SegmentModel {
         }
     }
 
-    /// A short stable name for audit lines and cache keys.
-    pub const fn label(self) -> &'static str {
+    /// A short stable name for audit lines and cache keys (the published model spelling).
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Sam31 => "sam-3.1",
             Self::Sam3 => "sam-3",
@@ -61,6 +63,19 @@ pub enum MaskError {
     /// More runs than a picture of this height can plausibly need.
     TooManyRuns,
 }
+
+impl fmt::Display for MaskError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Size => "the mask picture size is out of bounds",
+            Self::Syntax => "the mask text is not start and length pairs",
+            Self::Runs => "the mask runs are empty, overlapping or outside the picture",
+            Self::TooManyRuns => "the mask has too many runs",
+        })
+    }
+}
+
+impl std::error::Error for MaskError {}
 
 /// A segmentation mask as the sorted, disjoint runs of its set pixels over a picture of `width`
 /// by `height`. fal's `rle` strings are `start length` pairs over the flattened picture in row
@@ -248,7 +263,7 @@ pub enum FalSegmentError {
     Unauthorized,
     /// fal answered this HTTP status (a refused body is 422).
     Provider(u16),
-    Transport(NativeHttpRefusal),
+    Transport(NativeHttpCause),
     /// The queue reply named no usable request id or URLs.
     Queue,
     /// fal reported the request failed.
@@ -267,23 +282,22 @@ impl FalSegmentError {
     /// server fault. A refused body, a bad key and a malformed answer are permanent.
     pub const fn is_transient(self) -> bool {
         match self {
-            Self::Transport(refusal) => matches!(
-                refusal,
-                NativeHttpRefusal::Deadline | NativeHttpRefusal::Unknown
-            ),
+            Self::Transport(cause) => {
+                matches!(cause, NativeHttpCause::Deadline | NativeHttpCause::Unknown)
+            }
             Self::Provider(status) => status == 429 || status >= 500,
             Self::Failed => true,
             Self::InvalidRequest | Self::Unauthorized | Self::Queue | Self::Output => false,
         }
     }
 
-    /// A short stable label for audit lines.
-    pub const fn label(self) -> &'static str {
+    /// A short stable key for audit lines.
+    pub const fn key(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
             Self::Unauthorized => "unauthorized",
             Self::Provider(_) => "provider_status",
-            Self::Transport(NativeHttpRefusal::Deadline) => "deadline",
+            Self::Transport(NativeHttpCause::Deadline) => "deadline",
             Self::Transport(_) => "transport",
             Self::Queue => "queue_identity",
             Self::Failed => "provider_failed",
@@ -292,9 +306,47 @@ impl FalSegmentError {
     }
 }
 
+impl fmt::Display for FalSegmentError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.key())
+    }
+}
+
+impl std::error::Error for FalSegmentError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_keys_keep_their_published_spelling() {
+        assert_eq!(SegmentModel::Sam31.key(), "sam-3.1");
+        assert_eq!(SegmentModel::Sam3.key(), "sam-3");
+    }
+
+    #[test]
+    fn error_keys_are_stable_and_display_prints_the_key() {
+        let keys = [
+            (FalSegmentError::InvalidRequest, "invalid_request"),
+            (FalSegmentError::Unauthorized, "unauthorized"),
+            (FalSegmentError::Provider(422), "provider_status"),
+            (
+                FalSegmentError::Transport(NativeHttpCause::Deadline),
+                "deadline",
+            ),
+            (
+                FalSegmentError::Transport(NativeHttpCause::Unknown),
+                "transport",
+            ),
+            (FalSegmentError::Queue, "queue_identity"),
+            (FalSegmentError::Failed, "provider_failed"),
+            (FalSegmentError::Output, "bad_output"),
+        ];
+        for (error, key) in keys {
+            assert_eq!(error.key(), key);
+            assert_eq!(error.to_string(), key);
+        }
+    }
 
     fn rectangle(width: u32, left: u32, top: u32, right: u32, bottom: u32) -> Vec<MaskRun> {
         (top..bottom)
@@ -416,8 +468,8 @@ mod tests {
         assert!(FalSegmentError::Provider(429).is_transient());
         assert!(!FalSegmentError::Provider(422).is_transient());
         assert!(!FalSegmentError::Unauthorized.is_transient());
-        assert!(FalSegmentError::Transport(NativeHttpRefusal::Deadline).is_transient());
-        assert!(!FalSegmentError::Transport(NativeHttpRefusal::ResponseTooLarge).is_transient());
+        assert!(FalSegmentError::Transport(NativeHttpCause::Deadline).is_transient());
+        assert!(!FalSegmentError::Transport(NativeHttpCause::ResponseTooLarge).is_transient());
         assert!(!FalSegmentError::Output.is_transient());
     }
 }

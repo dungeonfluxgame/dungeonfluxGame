@@ -1,26 +1,23 @@
 //! Durable pre-egress Unjudged inspection evidence, with retained BestEffort policy proof.
 use super::{DispatchId, ExecutionScope, StageBasis, StageClaim, StageScope};
+use crate::listed::listed_enum;
 use crate::{ImageJob, InspectionRequirement};
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum LocalInspectionReason {
-    Preparation,
-    Disabled,
+listed_enum! {
+    keyed
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum LocalInspectionReason {
+        Preparation,
+        Disabled,
+    }
 }
 impl LocalInspectionReason {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Preparation => "preparation",
             Self::Disabled => "disabled",
-        }
-    }
-    pub fn parse_label(text: &str) -> Option<Self> {
-        match text {
-            "preparation" => Some(Self::Preparation),
-            "disabled" => Some(Self::Disabled),
-            _ => None,
         }
     }
 }
@@ -29,6 +26,19 @@ pub enum LocalInspectionError {
     InvalidRecord,
     NotBestEffort,
 }
+
+impl std::fmt::Display for LocalInspectionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRecord => formatter.write_str("the local inspection record is invalid"),
+            Self::NotBestEffort => {
+                formatter.write_str("the local inspection policy is not best effort")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LocalInspectionError {}
 
 /// Only bounded canonical intent/config decoding can construct the recording policy proof.
 #[derive(Clone, Eq, PartialEq)]
@@ -120,8 +130,9 @@ impl LocalInspectionCommand {
     }
 }
 impl fmt::Debug for LocalInspectionCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalInspectionCommand")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalInspectionCommand")
             .field("reason", &self.reason)
             .finish_non_exhaustive()
     }
@@ -141,8 +152,9 @@ pub struct LocalInspectionCheckpoint {
     pub validator_revision: u32,
 }
 impl fmt::Debug for LocalInspectionCheckpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalInspectionCheckpoint")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalInspectionCheckpoint")
             .field("reason", &self.reason)
             .field("schema_revision", &self.schema_revision)
             .field("validator_revision", &self.validator_revision)

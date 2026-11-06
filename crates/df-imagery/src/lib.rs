@@ -11,6 +11,7 @@ pub use artwork::{
 
 mod config;
 mod journal;
+mod listed;
 mod output;
 mod policy;
 mod request;
@@ -55,6 +56,8 @@ pub use transform::{
 
 #[cfg(test)]
 mod config_tests;
+#[cfg(test)]
+mod key_tests;
 #[cfg(test)]
 mod output_tests;
 #[cfg(test)]
@@ -112,9 +115,9 @@ pub use service::{
     ImageDemandView, ImageExecutionState, ImageInspectionObservation, ImageObservations,
     ImageProgress, ImageService, ImageServiceApi, ImageServiceError, ImageServiceFuture,
     ImageUsageObservation, NoImageObservations, NormalizedImageBox, OperationHandle,
-    PhotoFeatureBinding, PhotoInspectionAssessment, PhotoInspectionFailure, PhotoInspectionSpec,
-    PhotoInspectionUnjudgedReason, PhotoInspectionVerdict, PhotoVisibleFeature, RequestOutcome,
-    RequestProblem, SegmentationPreparation, SegmentationPrompt, SegmentationSpec, ServiceAction,
+    PhotoFeatureBinding, PhotoInspectionAssessment, PhotoInspectionCause, PhotoInspectionSpec,
+    PhotoInspectionUnjudgedReason, PhotoInspectionVerdict, PhotoVisibleFeature, RequestCause,
+    RequestOutcome, SegmentationPreparation, SegmentationPrompt, SegmentationSpec, ServiceAction,
     ServiceClock, ServiceIdError, ServiceIds, StagingFacingSpec, StagingIdentitySpec,
     StoredAnalysisAuthorization, StoredImageAuthorization, WatchObservation,
 };

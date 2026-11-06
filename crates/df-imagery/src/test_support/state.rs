@@ -156,8 +156,8 @@ impl State {
 }
 impl Store {
     pub(super) fn new(owner: ImageOwner, ids: FixtureIds) -> Result<Self, RuntimeError> {
-        let scope = CapacityScope::new("transform-fixture".to_owned())
-            .map_err(|_| RuntimeError::InvalidRecord)?;
+        let scope =
+            CapacityScope::new("transform-fixture").map_err(|_| RuntimeError::InvalidRecord)?;
         let bounds = CapacityBounds::new(1, 256, 2 * 1024 * 1024)
             .map_err(|_| RuntimeError::InvalidRecord)?;
         Ok(Self {

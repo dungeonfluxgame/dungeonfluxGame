@@ -20,8 +20,9 @@ pub struct CandidateDescriptor {
     pub validator_revision: u32,
 }
 impl fmt::Debug for CandidateDescriptor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CandidateDescriptor")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CandidateDescriptor")
             .field("byte_len", &self.byte_len)
             .field("validator_revision", &self.validator_revision)
             .finish_non_exhaustive()
@@ -38,8 +39,9 @@ pub struct CandidateReceipt {
     pub descriptor: CandidateDescriptor,
 }
 impl fmt::Debug for CandidateReceipt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("CandidateReceipt")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CandidateReceipt")
             .field("kind", &self.basis.kind)
             .field("observation_version", &self.observation_version)
             .field("receipt", &self.receipt)
@@ -55,6 +57,21 @@ pub enum CandidateError {
     WrongStage,
     Validation(ImageProofError),
 }
+
+impl std::fmt::Display for CandidateError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRecord => formatter.write_str("the candidate record is invalid"),
+            Self::WrongStage => formatter.write_str("the candidate belongs to another stage"),
+            Self::Validation(error) => write!(
+                formatter,
+                "the candidate image failed validation: {error:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CandidateError {}
 
 /// Recordable evidence can only be constructed through real bounded image inspection.
 #[derive(Clone, Debug, Eq, PartialEq)]

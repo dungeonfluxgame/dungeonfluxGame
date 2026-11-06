@@ -6,9 +6,11 @@
 //! retry policy; a backend returns one outcome. Logging goes through `TextObserver`, so the
 //! composition root decides where events land (the shared telemetry path), not this crate.
 
+use std::fmt;
 use std::io;
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::text_attempts::{AttemptStoreError, OperationKey};
@@ -42,6 +44,17 @@ pub enum TextLimitsError {
     ZeroBudget,
     AboveCeiling,
 }
+
+impl fmt::Display for TextLimitsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ZeroBudget => "a text budget or deadline is zero",
+            Self::AboveCeiling => "a text budget or deadline is above its built-in ceiling",
+        })
+    }
+}
+
+impl std::error::Error for TextLimitsError {}
 
 impl TextLimits {
     /// Zero budgets and budgets above the built-in ceilings are refused.
@@ -92,7 +105,8 @@ impl Default for TextLimits {
 
 /// Which caller asked for text. Feature owners keep their prompt wording; this names the slot.
 /// New purposes are added here as features adopt the service.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TextPurpose {
     /// The storyteller: wording and creation for the game.
     Storyteller,
@@ -120,8 +134,8 @@ impl TextPurpose {
         Self::CharacterIdentity,
     ];
 
-    /// A stable label for logs and metrics; never prompt text.
-    pub fn label(self) -> &'static str {
+    /// The stable key for logs, metrics and stores; never prompt text.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Storyteller => "storyteller",
             Self::SemanticJudgment => "semantic_judgment",
@@ -132,11 +146,9 @@ impl TextPurpose {
         }
     }
 
-    /// The inverse of [`Self::label`], for stores that persist the purpose.
-    pub fn parse(label: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|purpose| purpose.label() == label)
+    /// The inverse of [`Self::key`], for stores that persist the purpose.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|purpose| purpose.key() == key)
     }
 }
 
@@ -150,6 +162,18 @@ pub enum LabelError {
     TooLong,
     ControlCharacter,
 }
+
+impl fmt::Display for LabelError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "the label is empty",
+            Self::TooLong => "the label is longer than its byte limit",
+            Self::ControlCharacter => "the label holds a control character",
+        })
+    }
+}
+
+impl std::error::Error for LabelError {}
 
 /// A label is non-empty, at most [`MAXIMUM_LABEL_BYTES`] and free of control characters. The
 /// PostgreSQL attempt table bounds its label columns at 128 *characters*; a label within 128
@@ -243,7 +267,8 @@ impl std::fmt::Debug for TextImage {
 }
 
 /// Why a request could not be served. Labels are stable and carry no request content.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum UnavailableReason {
     Configuration,
     Authentication,
@@ -259,8 +284,8 @@ impl UnavailableReason {
         Self::Interrupted,
     ];
 
-    /// A stable label for logs and stores; never request content.
-    pub fn label(self) -> &'static str {
+    /// The stable key for logs and stores; never request content.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Configuration => "configuration",
             Self::Authentication => "authentication",
@@ -269,9 +294,9 @@ impl UnavailableReason {
         }
     }
 
-    /// The inverse of [`Self::label`], for stores that persist the reason.
-    pub fn parse(label: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|reason| reason.label() == label)
+    /// The inverse of [`Self::key`], for stores that persist the reason.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|reason| reason.key() == key)
     }
 }
 
@@ -324,8 +349,8 @@ pub enum TextRequestError {
 }
 
 impl TextRequestError {
-    /// A stable label for logs; carries no request content.
-    pub fn label(self) -> &'static str {
+    /// The stable key for logs; carries no request content.
+    pub fn key(self) -> &'static str {
         match self {
             Self::EmptyInstructions => "empty_instructions",
             Self::InstructionsTooLarge => "instructions_too_large",
@@ -336,6 +361,21 @@ impl TextRequestError {
         }
     }
 }
+
+impl fmt::Display for TextRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptyInstructions => "the text request has no instructions",
+            Self::InstructionsTooLarge => "the text request instructions are over their budget",
+            Self::FactsTooLarge => "the text request facts are over their budget",
+            Self::InvalidDeadline => "the text request deadline is zero or above the ceiling",
+            Self::InvalidSchema => "the text request output schema or output name is invalid",
+            Self::InvalidImages => "the text request pictures are invalid",
+        })
+    }
+}
+
+impl std::error::Error for TextRequestError {}
 
 /// Token evidence for one supplier attempt, as the supplier reported it. `total_tokens` is the
 /// supplier total. Every other category is optional: a supplier that does not report it leaves it
@@ -408,10 +448,10 @@ pub enum TextEventKind {
 }
 
 impl TextEventKind {
-    /// A stable label for logs and metrics; never prompt or answer text.
-    pub fn label(self) -> &'static str {
+    /// The stable key for logs and metrics; never prompt or answer text.
+    pub fn key(self) -> &'static str {
         match self {
-            Self::Refused(error) => error.label(),
+            Self::Refused(error) => error.key(),
             Self::Answered => "answered",
             Self::Invalid => "invalid",
             Self::Unavailable(_) => "unavailable",
@@ -431,12 +471,12 @@ impl TextEventKind {
         }
     }
 
-    /// A closed reason label for logs, when the event has one. Never prompt or answer text.
+    /// A closed reason key for logs, when the event has one. Never prompt or answer text.
     pub fn reason(self) -> Option<&'static str> {
         match self {
-            Self::Refused(error) => Some(error.label()),
-            Self::Unavailable(reason) => Some(reason.label()),
-            Self::StoreFailed(error) => Some(error.label()),
+            Self::Refused(error) => Some(error.key()),
+            Self::Unavailable(reason) => Some(reason.key()),
+            Self::StoreFailed(error) => Some(error.key()),
             _ => None,
         }
     }
@@ -650,5 +690,4 @@ pub(crate) fn kind_of(outcome: &TextOutcome) -> TextEventKind {
 }
 
 #[cfg(test)]
-#[path = "text_tests.rs"]
-mod tests;
+mod text_tests;

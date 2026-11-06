@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event_log::EventLog;
 
+use super::limits::{MAXIMUM_RETAINED_BYTES, UNQUERIED_HISTORY_RECORDS};
 use super::memory::{HistoryFilter, HistoryPage, MemoryOutlet};
 use super::outlet::{OutletStatus, RecordOutlet};
 use super::record::{ObservedRecord, RecordClass, RecordDraft};
@@ -128,6 +129,15 @@ impl HostEventSink {
         }
     }
 
+    /// A sink whose history nobody queries (the canvas workbench's): every line reaches `log` as
+    /// with `new`, and the history keeps only the newest record, so it holds no memory.
+    pub fn without_history(log: Arc<EventLog>, clock: Arc<dyn Clock>) -> Self {
+        Self::new(log, clock).with_memory(Arc::new(MemoryOutlet::with_bounds(
+            UNQUERIED_HISTORY_RECORDS,
+            MAXIMUM_RETAINED_BYTES,
+        )))
+    }
+
     /// Replaces the history, so a test can give it small bounds.
     pub fn with_memory(mut self, memory: Arc<MemoryOutlet>) -> Self {
         self.memory = memory;
@@ -156,6 +166,11 @@ impl HostEventSink {
         } else {
             EventLevel::Always
         }
+    }
+
+    /// The log the sink writes its audit lines to.
+    pub fn log(&self) -> &Arc<EventLog> {
+        &self.log
     }
 
     /// The newest `limit` retained records that match `filter`, oldest first.

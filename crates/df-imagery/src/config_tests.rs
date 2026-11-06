@@ -206,7 +206,7 @@ fn nonsecret_names_accept_their_documented_shapes() {
     assert!(PriceFileRef::new("content/pricing.json").is_ok());
     assert!(PriceFileRef::new("/absolute/pricing.json").is_err());
     assert!(PriceFileRef::new("content/pricing.toml").is_err());
-    assert!(AccountingMode::RecordOnly.label().contains("record"));
+    assert!(AccountingMode::RecordOnly.key().contains("record"));
 }
 
 #[test]

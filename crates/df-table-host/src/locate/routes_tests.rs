@@ -1,4 +1,5 @@
-use df_scene_layout::{PictureBinding, SCHEMA_VERSION, SceneLayout, SceneRegion};
+use axum::http::StatusCode;
+use df_scene_layout::{PictureBinding, RegionGeometry, SceneLayout, SceneRegion};
 
 use super::request::{LocateError, LocateReply, StoredLayout};
 use super::routes::path;
@@ -7,29 +8,24 @@ use crate::dev_http::{BodyCause, DevReply};
 use crate::test_support::{STARTER_FILES, start};
 
 fn one_region_layout(picture: &str, bytes: &[u8]) -> SceneLayout {
-    SceneLayout {
-        schema: SCHEMA_VERSION,
-        picture: PictureBinding {
-            name: picture.to_owned(),
-            sha256: df_imagery::oneshot_segment::picture_sha256(bytes),
-            width_px: 100,
-            height_px: 50,
-        },
-        model: "sam-3.1".to_owned(),
-        prompt: "person".to_owned(),
-        regions: vec![SceneRegion {
-            id: df_scene_layout::region_id(b"elf"),
-            label: Some("elf".to_owned()),
-            left_permille: 300,
-            top_permille: 200,
-            right_permille: 600,
-            bottom_permille: 1000,
-            head_x_permille: 450,
-            head_y_permille: 200,
-            score_permille: 900,
-            mask: None,
-        }],
-    }
+    let binding = PictureBinding {
+        name: picture.to_owned(),
+        sha256: df_imagery::oneshot_segment::picture_sha256(bytes),
+        width_px: 100,
+        height_px: 50,
+    };
+    let geometry = RegionGeometry {
+        left_permille: 300,
+        top_permille: 200,
+        right_permille: 600,
+        bottom_permille: 1000,
+        head_x_permille: 450,
+        head_y_permille: 200,
+    };
+    let elf = SceneRegion::new(df_scene_layout::region_id(b"elf"), geometry, 900)
+        .unwrap()
+        .with_label(Some("elf".to_owned()));
+    SceneLayout::new(binding, "sam-3.1", "person", vec![elf])
 }
 
 fn rejected<T: std::fmt::Debug>(reply: LocateReply<T>) -> LocateError {
@@ -86,7 +82,7 @@ async fn show_is_a_get_whose_answer_is_the_envelope_with_a_typed_error() {
     let response = dev_client::get(port, &format!("{}?picture=x.png", path::LOCATE_SHOW))
         .await
         .unwrap();
-    assert_eq!(response.status, 404);
+    assert_eq!(response.status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -142,8 +138,34 @@ async fn the_cli_shows_a_layout_and_reports_a_refusal() {
     let refused = crate::dev::run_dev(running.port, &words("media locate show missing.png"))
         .await
         .unwrap_err();
-    let crate::dev::DevError::Rejected(text) = &refused else {
-        panic!("{refused:?}");
-    };
-    assert!(text.starts_with("refused (no_layout)"), "{text}");
+    assert!(
+        matches!(
+            &refused,
+            crate::dev::DevError::Rejected {
+                error: crate::dev::ReplyError::Locate(LocateError::NoLayout { picture }),
+                ..
+            } if picture == "missing.png"
+        ),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_scan_whose_request_is_dropped_still_runs_to_the_end() {
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let (stored, stored_seen) = tokio::sync::oneshot::channel::<&str>();
+    let scan = super::routes::run_scan_task(async move {
+        released.await.expect("the test releases the scan");
+        stored.send("layout stored").expect("the test waits for it");
+        Ok::<_, LocateError>(())
+    });
+    // One poll starts the scan; the elapsed deadline then drops the request, as a client that
+    // leaves does.
+    let dropped = tokio::time::timeout(std::time::Duration::ZERO, scan).await;
+    assert!(
+        dropped.is_err(),
+        "the scan was still running when its request was dropped"
+    );
+    release.send(()).expect("the scan is still waiting");
+    assert_eq!(stored_seen.await, Ok("layout stored"));
 }

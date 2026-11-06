@@ -70,8 +70,9 @@ pub struct ReconciliationCommand {
     pub now_ms: i64,
 }
 impl std::fmt::Debug for ReconciliationCommand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReconciliationCommand")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReconciliationCommand")
             .field("recipe_revision", &self.recipe_revision)
             .finish_non_exhaustive()
     }

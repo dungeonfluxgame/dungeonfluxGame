@@ -43,10 +43,10 @@ impl TextObserver for TextTelemetry {
             ("schema".into(), text(SCHEMA)),
             ("event_version".into(), AnyValue::Int(EVENT_VERSION)),
             ("operation_class".into(), text("text")),
-            ("purpose".into(), text(event.purpose.label())),
+            ("purpose".into(), text(event.purpose.key())),
             ("profile".into(), text(event.profile.as_str())),
             ("output".into(), text(&event.output_name)),
-            ("outcome".into(), text(event.kind.label())),
+            ("outcome".into(), text(event.kind.key())),
             ("duration_ns".into(), AnyValue::Int(elapsed_ns)),
             ("clock_domain".into(), text("process_monotonic")),
             ("measurement_state".into(), text("measured")),
@@ -70,7 +70,7 @@ impl TextObserver for TextTelemetry {
                 timestamp: now,
                 observed_timestamp: now,
                 severity: severity(event.kind),
-                body: text(event.kind.label()),
+                body: text(event.kind.key()),
                 attributes,
                 trace: None,
             },
@@ -164,5 +164,4 @@ fn text(value: &str) -> AnyValue {
 }
 
 #[cfg(test)]
-#[path = "text_telemetry_tests.rs"]
-mod tests;
+mod text_telemetry_tests;

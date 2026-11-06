@@ -20,8 +20,19 @@ pub(crate) enum InspectionError {
     InvalidAnswer,
 }
 
+impl std::fmt::Display for InspectionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRequest => formatter.write_str("the inspection request is invalid"),
+            Self::InvalidAnswer => formatter.write_str("the inspection answer is invalid"),
+        }
+    }
+}
+
+impl std::error::Error for InspectionError {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PhotoCheckFailure {
+pub(crate) enum PhotoCheckCause {
     GridOrCollage,
     CutoutComposite,
     NotPhotograph,
@@ -35,8 +46,8 @@ pub(crate) enum PhotoCheckFailure {
     UnexpectedDrawnWeapon,
 }
 
-impl PhotoCheckFailure {
-    pub(crate) const fn label(self) -> &'static str {
+impl PhotoCheckCause {
+    pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::GridOrCollage => "grid_or_collage",
             Self::CutoutComposite => "cutout_composite",
@@ -122,7 +133,7 @@ pub(crate) enum UnjudgedReason {
 }
 
 impl UnjudgedReason {
-    pub(crate) const fn label(self) -> &'static str {
+    pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::Preparation => "preparation",
             Self::Transport => "transport",
@@ -138,7 +149,7 @@ impl UnjudgedReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InspectionVerdict {
     Pass,
-    Failed(PhotoCheckFailure),
+    Failed(PhotoCheckCause),
     Unjudged(UnjudgedReason),
 }
 
@@ -150,8 +161,9 @@ pub(crate) struct VisibleFeature {
     pub(crate) recorded_id: Option<String>,
 }
 impl std::fmt::Debug for VisibleFeature {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VisibleFeature")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VisibleFeature")
             .field("region", &self.region)
             .field("has_recorded_id", &self.recorded_id.is_some())
             .finish_non_exhaustive()
@@ -163,8 +175,10 @@ pub(crate) struct FeatureBinding {
     pub(crate) source_hash: String,
 }
 impl std::fmt::Debug for FeatureBinding {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FeatureBinding").finish_non_exhaustive()
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FeatureBinding")
+            .finish_non_exhaustive()
     }
 }
 
@@ -339,7 +353,7 @@ fn parse_scene_photo_answer(
                 .ok_or(InspectionError::InvalidRequest)?,
         )
     {
-        return Ok(InspectionVerdict::Failed(PhotoCheckFailure::HeroCount {
+        return Ok(InspectionVerdict::Failed(PhotoCheckCause::HeroCount {
             expected: spec
                 .expected_heroes
                 .ok_or(InspectionError::InvalidRequest)?,
@@ -390,7 +404,7 @@ fn parse_scene_photo_answer(
     };
     if unexpected_drawn_weapon {
         return Ok(InspectionVerdict::Failed(
-            PhotoCheckFailure::UnexpectedDrawnWeapon,
+            PhotoCheckCause::UnexpectedDrawnWeapon,
         ));
     }
     Ok(classify(PhotoCheckJudgement {
@@ -428,44 +442,44 @@ fn classify(judgement: PhotoCheckJudgement) -> InspectionVerdict {
         people_present,
     } = judgement;
     let failure = match frame {
-        PhotoFrame::GridOrCollage => Some(PhotoCheckFailure::GridOrCollage),
-        PhotoFrame::CutoutComposite => Some(PhotoCheckFailure::CutoutComposite),
+        PhotoFrame::GridOrCollage => Some(PhotoCheckCause::GridOrCollage),
+        PhotoFrame::CutoutComposite => Some(PhotoCheckCause::CutoutComposite),
         PhotoFrame::SinglePhotograph => None,
     }
     .or(match medium {
         PhotoMedium::Photograph => None,
         PhotoMedium::PaintingOrIllustration | PhotoMedium::CgiOrRender => {
-            Some(PhotoCheckFailure::NotPhotograph)
+            Some(PhotoCheckCause::NotPhotograph)
         }
     })
     .or(match setting {
         PhotoSetting::Period => None,
-        PhotoSetting::Modern => Some(PhotoCheckFailure::ModernSetting),
+        PhotoSetting::Modern => Some(PhotoCheckCause::ModernSetting),
     })
     .or(match text {
         PhotoText::None => None,
-        PhotoText::VisibleText => Some(PhotoCheckFailure::VisibleText),
+        PhotoText::VisibleText => Some(PhotoCheckCause::VisibleText),
     })
     .or(match (kind, people_present) {
         (InspectionKind::CanonicalRoom, Some(false)) => None,
-        (InspectionKind::CanonicalRoom, Some(true)) => Some(PhotoCheckFailure::PeopleInEmptyRoom),
-        (InspectionKind::CanonicalRoom, None) => Some(PhotoCheckFailure::PeopleInEmptyRoom),
+        (InspectionKind::CanonicalRoom, Some(true)) => Some(PhotoCheckCause::PeopleInEmptyRoom),
+        (InspectionKind::CanonicalRoom, None) => Some(PhotoCheckCause::PeopleInEmptyRoom),
         _ => None,
     })
     .or(match dress {
-        PhotoDress::ModernClothing => Some(PhotoCheckFailure::ModernClothing),
+        PhotoDress::ModernClothing => Some(PhotoCheckCause::ModernClothing),
         PhotoDress::Period | PhotoDress::NoPeople => None,
     })
     .or(match (kind, dress, people_count) {
         (InspectionKind::CanonicalCharacter, PhotoDress::NoPeople, _) => {
-            Some(PhotoCheckFailure::CharacterHasNoPeople)
+            Some(PhotoCheckCause::CharacterHasNoPeople)
         }
         (InspectionKind::CanonicalCharacter, _, Some(PhotoPeopleCount::ExactlyOne)) => None,
         (InspectionKind::CanonicalCharacter, _, Some(PhotoPeopleCount::NotOne)) => {
-            Some(PhotoCheckFailure::CharacterCountNotOne)
+            Some(PhotoCheckCause::CharacterCountNotOne)
         }
         (InspectionKind::CanonicalCharacter, _, None) => {
-            Some(PhotoCheckFailure::CharacterCountNotOne)
+            Some(PhotoCheckCause::CharacterCountNotOne)
         }
         (InspectionKind::CanonicalRoom, _, _) => None,
         (InspectionKind::ScenePlate, _, _) => None,
@@ -490,22 +504,20 @@ impl InspectionAssessment {
             InspectionVerdict::Pass => ("pass", Value::Null, Value::Null),
             InspectionVerdict::Failed(failure) => {
                 let (expected, seen) = match failure {
-                    PhotoCheckFailure::HeroCount { expected, seen } => {
-                        (json!(expected), json!(seen))
-                    }
+                    PhotoCheckCause::HeroCount { expected, seen } => (json!(expected), json!(seen)),
                     _ => (Value::Null, Value::Null),
                 };
                 (
                     "failed",
                     json!({
-                        "reason":failure.label(),
+                        "reason":failure.key(),
                         "expected":expected,
                         "seen":seen
                     }),
                     Value::Null,
                 )
             }
-            InspectionVerdict::Unjudged(reason) => ("unjudged", Value::Null, json!(reason.label())),
+            InspectionVerdict::Unjudged(reason) => ("unjudged", Value::Null, json!(reason.key())),
         };
         let visible_features = self
             .visible_features
@@ -627,7 +639,7 @@ impl InspectionAssessment {
 fn parse_failure(
     value: &Value,
     spec: &ImageInspection,
-) -> Result<PhotoCheckFailure, InspectionError> {
+) -> Result<PhotoCheckCause, InspectionError> {
     let fields = value
         .as_object()
         .filter(|fields| {
@@ -639,25 +651,25 @@ fn parse_failure(
         .ok_or(InspectionError::InvalidAnswer)?;
     // All three required failure keys were checked above.
     let failure = match fields["reason"].as_str() {
-        Some("grid_or_collage") => PhotoCheckFailure::GridOrCollage,
-        Some("cutout_composite") => PhotoCheckFailure::CutoutComposite,
-        Some("not_photograph") => PhotoCheckFailure::NotPhotograph,
-        Some("modern_setting") => PhotoCheckFailure::ModernSetting,
-        Some("visible_text") => PhotoCheckFailure::VisibleText,
-        Some("modern_clothing") => PhotoCheckFailure::ModernClothing,
+        Some("grid_or_collage") => PhotoCheckCause::GridOrCollage,
+        Some("cutout_composite") => PhotoCheckCause::CutoutComposite,
+        Some("not_photograph") => PhotoCheckCause::NotPhotograph,
+        Some("modern_setting") => PhotoCheckCause::ModernSetting,
+        Some("visible_text") => PhotoCheckCause::VisibleText,
+        Some("modern_clothing") => PhotoCheckCause::ModernClothing,
         Some("people_in_empty_room") if spec.kind == InspectionKind::CanonicalRoom => {
-            PhotoCheckFailure::PeopleInEmptyRoom
+            PhotoCheckCause::PeopleInEmptyRoom
         }
         Some("character_count_not_one") if spec.kind == InspectionKind::CanonicalCharacter => {
-            PhotoCheckFailure::CharacterCountNotOne
+            PhotoCheckCause::CharacterCountNotOne
         }
         Some("character_has_no_people") if spec.kind == InspectionKind::CanonicalCharacter => {
-            PhotoCheckFailure::CharacterHasNoPeople
+            PhotoCheckCause::CharacterHasNoPeople
         }
         Some("unexpected_drawn_weapon")
             if spec.kind == InspectionKind::ScenePlate && spec.expected_heroes.is_some() =>
         {
-            PhotoCheckFailure::UnexpectedDrawnWeapon
+            PhotoCheckCause::UnexpectedDrawnWeapon
         }
         Some("hero_count") if spec.kind == InspectionKind::ScenePlate => {
             let expected = fields["expected"]
@@ -670,7 +682,7 @@ fn parse_failure(
             if Some(expected) != spec.expected_heroes || u64::from(expected) == seen {
                 return Err(InspectionError::InvalidAnswer);
             }
-            return Ok(PhotoCheckFailure::HeroCount { expected, seen });
+            return Ok(PhotoCheckCause::HeroCount { expected, seen });
         }
         _ => return Err(InspectionError::InvalidAnswer),
     };

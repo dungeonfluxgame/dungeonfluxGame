@@ -6,7 +6,7 @@
 use super::openai::{OpenAiConfig, OpenAiExecutor};
 use super::{ApiError, ImageBackground, ImageEdit, ImageFormat, ImageModeration, ImageQuality};
 use super::{ImageEditModel, ImageUsage, OperationalBounds};
-use df_providers::NativeHttpRefusal;
+use df_providers::NativeHttpCause;
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -341,7 +341,7 @@ async fn a_slow_supplier_hits_the_deadline_and_stays_unknown() {
                 Duration::from_millis(50)
             )
             .await,
-        Err(ApiError::Transport(NativeHttpRefusal::Deadline))
+        Err(ApiError::Transport(NativeHttpCause::Deadline))
     );
     server.join().expect("server");
 }
@@ -734,7 +734,7 @@ async fn observed_declines_keep_exact_response_and_only_closed_submit_proof() {
             .await
             .expect_err("decline");
         assert_eq!(failure.error, error);
-        assert_eq!(failure.retryable_submit_decline(), proof);
+        assert_eq!(failure.retryable_submit_decline(1_700_000_000_000), proof);
         assert_eq!(
             failure.submission,
             proof

@@ -12,7 +12,7 @@ async fn usage_projection_reads_scoped_latest_bounded_metadata_without_supplier_
     let execution = PostgresImageExecution::open(config.clone(), transport.clone(), 1)
         .await
         .unwrap();
-    let scope = CapacityScope::new("runtime/raw-receipts".to_owned()).unwrap();
+    let scope = CapacityScope::new("runtime/raw-receipts").unwrap();
     execution
         .set_capacity_bounds(
             scope.as_str(),

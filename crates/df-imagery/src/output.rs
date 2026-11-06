@@ -3,16 +3,30 @@
 //! Provider-native generation size and delivered variant size are independent
 //! facts; a local upscale never claims additional generated detail.
 
+use crate::listed::listed_enum;
+
 /// Pixel bound shared with the `df-assets` upload admission ceiling.
 pub use df_assets::MAX_IMAGE_PIXELS as MAXIMUM_OUTPUT_PIXELS;
 /// Neutral JPEG quality when the caller selects no explicit value.
 pub const DEFAULT_JPEG_QUALITY_0_100: u8 = 85;
 
 /// Why a size failed the shared pixel check; each contract maps it to its own error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PixelBoundError {
     ZeroDimension,
     TooManyPixels { pixels: u64 },
 }
+
+impl std::fmt::Display for PixelBoundError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroDimension => formatter.write_str("a dimension is zero"),
+            Self::TooManyPixels { pixels } => write!(formatter, "{pixels} pixels are too many"),
+        }
+    }
+}
+
+impl std::error::Error for PixelBoundError {}
 
 /// The one pixel check for output and transform sizes: nonzero dimensions within the asset
 /// ceiling. `u64` widening keeps the product overflow-free.
@@ -27,17 +41,20 @@ pub(crate) fn check_pixel_bound(width_px: u32, height_px: u32) -> Result<(), Pix
     Ok(())
 }
 
-/// Initial output formats; each must be verified in the chosen encoder.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutputFormat {
-    Png,
-    Jpeg,
-    WebP,
+listed_enum! {
+    keyed
+    /// Initial output formats; each must be verified in the chosen encoder.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum OutputFormat {
+        Png,
+        Jpeg,
+        WebP,
+    }
 }
 
 impl OutputFormat {
     /// Short lowercase format name for diagnostics.
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Png => "png",
             Self::Jpeg => "jpeg",
@@ -262,3 +279,22 @@ pub enum OutputError {
     QualityOutOfRange { value: u8 },
     AlphaWithoutMatte,
 }
+
+impl std::fmt::Display for OutputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroDimension => formatter.write_str("an output dimension is zero"),
+            Self::TooManyPixels { pixels } => {
+                write!(formatter, "the output has too many pixels ({pixels})")
+            }
+            Self::QualityOutOfRange { value } => {
+                write!(formatter, "the quality {value} is out of range")
+            }
+            Self::AlphaWithoutMatte => {
+                formatter.write_str("an opaque format needs a matte for alpha")
+            }
+        }
+    }
+}
+
+impl std::error::Error for OutputError {}

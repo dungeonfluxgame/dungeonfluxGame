@@ -12,6 +12,9 @@
 //! It never prices anything, never retries and never falls back to another provider: a refusal,
 //! a timeout or a malformed answer comes back as a typed `SegmentError` and the caller decides.
 //! The credential is passed in by the caller and never logged; nothing here reads the environment.
+//!
+//! `segment` is `Send`, so a host awaits it on its own task; hashing, decoding and preparing the
+//! picture run on a blocking thread.
 
 use std::time::Duration;
 
@@ -21,6 +24,7 @@ use crate::backends::analysis::standalone::{
     PreparedSegmentation, SegmentationInput, parse_segmentation,
 };
 use crate::config::{AnalysisPreparationLimits, SegmentationProvider, SegmentationRoute};
+use crate::listed::listed_enum;
 use crate::request::{AssetDigest, SourceRef};
 use crate::runtime::RuntimeError;
 use crate::service::analysis_types::SegmentationPreparation;
@@ -82,21 +86,24 @@ pub struct SegmentRequest {
     pub maximum_masks: u32,
 }
 
-/// Why a scan did not give masks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SegmentError {
-    /// The endpoint, model, key or limits are not usable.
-    Configuration,
-    /// The picture could not be read or prepared within the limits.
-    Picture,
-    /// The supplier refused the request.
-    Refused,
-    /// The supplier failed, ran out of quota or rate-limited the key.
-    Supplier,
-    /// The time limit passed before the answer.
-    Timeout,
-    /// The answer did not have the contract's shape.
-    Malformed,
+listed_enum! {
+    keyed
+    /// Why a scan did not give masks.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum SegmentError {
+        /// The endpoint, model, key or limits are not usable.
+        Configuration,
+        /// The picture could not be read or prepared within the limits.
+        Picture,
+        /// The supplier refused the request.
+        Refused,
+        /// The supplier failed, ran out of quota or rate-limited the key.
+        Supplier,
+        /// The time limit passed before the answer.
+        Timeout,
+        /// The answer did not have the contract's shape.
+        Malformed,
+    }
 }
 
 impl SegmentError {
@@ -141,7 +148,7 @@ impl std::error::Error for SegmentError {}
 /// Scans one picture and returns its masks at the prepared picture's size.
 pub async fn segment(
     config: &SegmentConfig,
-    request: &SegmentRequest,
+    request: SegmentRequest,
 ) -> Result<AnalysisMaskSet, SegmentError> {
     if !(1..=MAXIMUM_MASKS).contains(&request.maximum_masks)
         || config.timeout.is_zero()
@@ -155,39 +162,13 @@ pub async fn segment(
         model: ModelName::new(&config.model).map_err(|_| SegmentError::Configuration)?,
         endpoint: ApiEndpoint::new(&config.endpoint).map_err(|_| SegmentError::Configuration)?,
     };
-    let source_digest: [u8; 32] = Sha256::digest(&request.source).into();
-    let pin = SourceRef {
-        asset: df_assets::AssetId::from_bytes(&source_digest[..16])
-            .map_err(|_| SegmentError::Picture)?,
-        digest: AssetDigest::from_bytes(source_digest),
-        audience: df_assets::Audience::PublicStatic,
-    };
-    let preparation = AnalysisPreparationLimits {
-        max_picture_bytes: MAXIMUM_PICTURE_BYTES,
-        max_request_bytes: MAXIMUM_REQUEST_BYTES,
-        ..Default::default()
-    };
-    let mut prepared = PreparedSegmentation::prepare(
-        SegmentationInput {
-            source: &request.source,
-            source_pin: &pin,
-            prompt: request.prompt,
-            preparation_recipe: SegmentationPreparation::ScenePlate,
-            maximum_masks: request.maximum_masks,
-            route: &route,
-            preparation: &preparation,
-            max_decoded_bytes: MAXIMUM_DECODED_BYTES,
-            timeout: config.timeout,
-            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-        },
-        &config.credential,
-    )
-    .map_err(|error| match error {
-        RuntimeError::InvalidRecord | RuntimeError::SourceDenied => SegmentError::Picture,
-        // Preparation refuses limits the HTTP client cannot take as an unsupported capability.
-        RuntimeError::UnsupportedCapability => SegmentError::Configuration,
-        other => SegmentError::from_runtime(&other),
-    })?;
+    let (prompt, maximum_masks) = (request.prompt, request.maximum_masks);
+    let (timeout, credential) = (config.timeout, config.credential.clone());
+    let mut prepared =
+        tokio::task::spawn_blocking(move || prepare(&request, &route, timeout, &credential))
+            .await
+            // A preparation that panicked never produced a picture to send.
+            .map_err(|_| SegmentError::Picture)??;
     let (width_px, height_px) = (prepared.width_px, prepared.height_px);
     let raw = prepared
         .submit()
@@ -202,14 +183,50 @@ pub async fn segment(
         .map_err(|error| SegmentError::from_runtime(&error))?;
     let value: serde_json::Value =
         serde_json::from_slice(&answer.body).map_err(|_| SegmentError::Malformed)?;
-    parse_segmentation(
-        &value,
-        request.prompt,
-        width_px,
-        height_px,
-        request.maximum_masks,
+    parse_segmentation(&value, prompt, width_px, height_px, maximum_masks)
+        .map_err(|_| SegmentError::Malformed)
+}
+
+/// Hashes, decodes and prepares the picture as a scene plate, on a blocking thread.
+fn prepare(
+    request: &SegmentRequest,
+    route: &SegmentationRoute,
+    timeout: Duration,
+    credential: &str,
+) -> Result<PreparedSegmentation, SegmentError> {
+    let source_digest: [u8; 32] = Sha256::digest(&request.source).into();
+    let pin = SourceRef {
+        asset: df_assets::AssetId::from_bytes(&source_digest[..16])
+            .map_err(|_| SegmentError::Picture)?,
+        digest: AssetDigest::from_bytes(source_digest),
+        audience: df_assets::Audience::PublicStatic,
+    };
+    let preparation = AnalysisPreparationLimits {
+        max_picture_bytes: MAXIMUM_PICTURE_BYTES,
+        max_request_bytes: MAXIMUM_REQUEST_BYTES,
+        ..Default::default()
+    };
+    PreparedSegmentation::prepare(
+        SegmentationInput {
+            source: &request.source,
+            source_pin: &pin,
+            prompt: request.prompt,
+            preparation_recipe: SegmentationPreparation::ScenePlate,
+            maximum_masks: request.maximum_masks,
+            route,
+            preparation: &preparation,
+            max_decoded_bytes: MAXIMUM_DECODED_BYTES,
+            timeout,
+            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+        },
+        credential,
     )
-    .map_err(|_| SegmentError::Malformed)
+    .map_err(|error| match error {
+        RuntimeError::InvalidRecord | RuntimeError::SourceDenied => SegmentError::Picture,
+        // Preparation refuses limits the HTTP client cannot take as an unsupported capability.
+        RuntimeError::UnsupportedCapability => SegmentError::Configuration,
+        other => SegmentError::from_runtime(&other),
+    })
 }
 
 /// The SHA-256 of a picture's bytes as lowercase hex: the identity a layout is bound to.
@@ -291,19 +308,6 @@ pub fn mask_data_url(set: &AnalysisMaskSet, mask: &AnalysisMask) -> Option<Strin
     ))
 }
 
-/// Scans one picture on the calling thread, which may block for a minute: call it from a blocking
-/// task, never from an async worker.
-pub fn segment_blocking(
-    config: &SegmentConfig,
-    request: &SegmentRequest,
-) -> Result<AnalysisMaskSet, SegmentError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| SegmentError::Configuration)?;
-    runtime.block_on(segment(config, request))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,27 +338,35 @@ mod tests {
         out.into_inner()
     }
 
-    #[test]
-    fn a_mask_count_outside_the_contract_is_refused_before_any_call() {
+    #[tokio::test]
+    async fn a_mask_count_outside_the_contract_is_refused_before_any_call() {
         for count in [0, MAXIMUM_MASKS + 1] {
-            let result = segment_blocking(&config(DEFAULT_MODEL, "key"), &request(png(), count));
+            let result = segment(&config(DEFAULT_MODEL, "key"), request(png(), count)).await;
             assert_eq!(result, Err(SegmentError::Configuration));
         }
     }
 
-    #[test]
-    fn an_empty_key_is_refused_before_any_call() {
-        let result = segment_blocking(&config(DEFAULT_MODEL, ""), &request(png(), 8));
+    #[tokio::test]
+    async fn an_empty_key_is_refused_before_any_call() {
+        let result = segment(&config(DEFAULT_MODEL, ""), request(png(), 8)).await;
         assert_eq!(result, Err(SegmentError::Configuration));
     }
 
-    #[test]
-    fn bytes_that_are_not_a_picture_are_refused_before_any_call() {
-        let result = segment_blocking(
+    #[tokio::test]
+    async fn bytes_that_are_not_a_picture_are_refused_before_any_call() {
+        let result = segment(
             &config(DEFAULT_MODEL, "key"),
-            &request(b"not a picture".to_vec(), 8),
-        );
+            request(b"not a picture".to_vec(), 8),
+        )
+        .await;
         assert_eq!(result, Err(SegmentError::Picture));
+    }
+
+    #[test]
+    fn the_scan_future_can_move_between_worker_threads() {
+        fn assert_send<T: Send>(_: &T) {}
+        let config = config(DEFAULT_MODEL, "key");
+        assert_send(&segment(&config, request(png(), 8)));
     }
 
     #[test]

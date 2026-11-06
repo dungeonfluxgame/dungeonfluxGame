@@ -26,6 +26,7 @@ use df_table::ports::PurposeName;
 use df_table::scene_plan::SceneStage;
 use df_table::scene_plan::brief::SceneBrief;
 
+use super::limits::LOCATE_DEADLINE_MS;
 use super::request::DevStage;
 use crate::broker::limits::MAXIMUM_TEXT_ANSWER_CHARACTERS;
 use crate::broker::purpose::{
@@ -33,10 +34,6 @@ use crate::broker::purpose::{
     QueueClass, ResourceKind, RetryPolicy, SizeRule,
 };
 
-/// How long one segmentation request may take. The S2 median was 1.5 s and the slowest 3 s, so
-/// 30 s is about twenty times the median: a candidate, to be tuned from measurement (the plan
-/// gives none).
-pub const LOCATE_DEADLINE_MS: u64 = 30_000;
 /// The fal list price of one SAM 3.1 request, in micro-dollars (USD 0.01, `content/pricing.json`).
 pub const LOCATE_PRICE_MICRO_DOLLARS: u64 = 10_000;
 /// J.4: SAM retries are one call retry. The backoff is the broker's short one for a text-lane call.

@@ -51,6 +51,37 @@ pub enum UsageProjectionError {
     CurrencyMismatch,
 }
 
+impl std::fmt::Display for UsageProjectionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLimits => formatter.write_str("the usage projection limits are invalid"),
+            Self::BoundExceeded(bound) => write!(
+                formatter,
+                "the usage projection bound {bound:?} is exceeded"
+            ),
+            Self::ScopeMismatch => formatter.write_str("the usage scope does not match"),
+            Self::AttemptConflict => formatter.write_str("the usage attempt conflicts"),
+            Self::UnknownAttempt => formatter.write_str("the usage attempt is unknown"),
+            Self::RouteConflict => formatter.write_str("the usage route conflicts"),
+            Self::RevisionConflict => formatter.write_str("the usage revision conflicts"),
+            Self::InvalidUnits => formatter.write_str("the usage units are invalid"),
+            Self::AccountingConflict => formatter.write_str("the usage accounting conflicts"),
+            Self::ReceiptCallMismatch => formatter.write_str("the receipt names another call"),
+            Self::ReceiptRevisionMismatch => {
+                formatter.write_str("the receipt names another revision")
+            }
+            Self::ReceiptObservationMismatch => {
+                formatter.write_str("the receipt names another observation")
+            }
+            Self::ReceiptConflict => formatter.write_str("the receipt conflicts"),
+            Self::ReceiptWithoutUsage => formatter.write_str("the receipt has no usage"),
+            Self::CurrencyMismatch => formatter.write_str("the currency does not match"),
+        }
+    }
+}
+
+impl std::error::Error for UsageProjectionError {}
+
 /// One stored execution attempt. Retries retain their own dispatch entry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UsageAttempt {
@@ -70,8 +101,9 @@ pub struct ActualCostReceipt {
 }
 
 impl std::fmt::Debug for ActualCostReceipt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ActualCostReceipt")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ActualCostReceipt")
             .field("revision", &self.record.revision)
             .field("durable", &self.record.durable)
             .finish_non_exhaustive()
@@ -140,8 +172,9 @@ pub struct RecordedStageUsage {
 }
 
 impl std::fmt::Debug for RecordedStageUsage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RecordedStageUsage")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RecordedStageUsage")
             .field("revision", &self.revision)
             .field("unit_lines", &self.units.len())
             .field("evidence", &self.evidence)

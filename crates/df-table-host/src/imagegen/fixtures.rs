@@ -4,6 +4,8 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use futures_util::future::BoxFuture;
+
 use super::backend::{BackendError, ImageBackend};
 use super::model::{BackendRequest, GeneratedImage};
 
@@ -66,20 +68,22 @@ impl ImageBackend for FakeBackend {
         self.check.clone()
     }
 
-    fn generate_blocking(
-        &self,
-        request: &BackendRequest,
+    fn generate<'a>(
+        &'a self,
+        request: &'a BackendRequest,
         deadline: Duration,
-    ) -> Result<GeneratedImage, BackendError> {
-        self.asked
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push((request.clone(), deadline));
-        std::thread::sleep(self.delay);
-        match &self.script {
-            Script::Picture(image) => Ok(image.clone()),
-            Script::Fail(error) => Err(error.clone()),
-        }
+    ) -> BoxFuture<'a, Result<GeneratedImage, BackendError>> {
+        Box::pin(async move {
+            self.asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((request.clone(), deadline));
+            tokio::time::sleep(self.delay).await;
+            match &self.script {
+                Script::Picture(image) => Ok(image.clone()),
+                Script::Fail(error) => Err(error.clone()),
+            }
+        })
     }
 }
 

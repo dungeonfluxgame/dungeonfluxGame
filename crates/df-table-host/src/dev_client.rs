@@ -10,8 +10,21 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::client::{self, Response};
-use crate::dev::DevError;
+use crate::dev::{DevError, ReplyError};
+use crate::dev_http::DevReply;
 use crate::limits::MAXIMUM_ECHOED_ANSWER_CHARACTERS;
+
+/// The value of a dev route's reply, or its refusal as `DevError::Rejected` carrying the route's
+/// typed error and the host's sentence.
+pub(crate) fn reply_value<T, E: Into<ReplyError>>(reply: DevReply<T, E>) -> Result<T, DevError> {
+    match reply {
+        DevReply::Done { value } => Ok(value),
+        DevReply::Rejected { error, message } => Err(DevError::Rejected {
+            error: error.into(),
+            message,
+        }),
+    }
+}
 
 /// The answer as an unexpected one: its status, the start of its body and, when it was text that
 /// should have been JSON of a known shape, why it did not read.

@@ -125,8 +125,9 @@ pub struct LocalIngress {
     limits: TelemetryLimits,
 }
 impl fmt::Debug for LocalIngress {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("LocalIngress")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LocalIngress")
             .field("limits", &self.limits)
             .finish_non_exhaustive()
     }

@@ -16,8 +16,8 @@ use crate::config::{
 use crate::request::Purpose;
 
 use super::parse::{
-    backend_env_tag, parse_accounting_mode, parse_backend_id, parse_count, parse_global_mode,
-    parse_legacy_switch, parse_overlay_bool, profile_name_from_tag, purpose_env_tag,
+    backend_env_tag, parse_backend_id, parse_count, parse_global_mode, parse_legacy_switch,
+    parse_overlay_bool, profile_name_from_tag, purpose_env_tag,
 };
 use super::shared::{
     BodyField, Pick, ProfileEdit, apply_u32_pick, apply_u64_pick, apply_usize_pick, invalid,
@@ -297,8 +297,8 @@ pub(super) fn apply_env_layer(
     let new_plate = purpose_env_enabled(&table, &mut consumed, Purpose::ScenePlate)?;
     let new_edit = purpose_env_enabled(&table, &mut consumed, Purpose::SceneEdit)?;
     let new_creator = purpose_env_enabled(&table, &mut consumed, Purpose::CreatorPortrait)?;
-    let mut legacy_plate = combine_env_plate(&leg_pictures, &leg_plates);
-    let mut legacy_edit = combine_env_plate(&leg_pictures, &leg_plates);
+    let mut legacy_plate = combine_env_plate(leg_pictures.as_ref(), leg_plates.as_ref());
+    let mut legacy_edit = combine_env_plate(leg_pictures.as_ref(), leg_plates.as_ref());
     // A lower-layer master off is sticky for legacy plates alone: a legacy
     // plates-only enable must not re-enable a plate the file master turned
     // off. A higher-layer master on, or a new per-purpose on, still wins.
@@ -344,13 +344,13 @@ pub(super) fn apply_env_layer(
             continue;
         }
         if let Some(pick) = purpose_env_enabled(&table, &mut consumed, purpose)? {
-            let field = format!("purposes.{}.enabled", purpose.label());
+            let field = format!("purposes.{}.enabled", purpose.key());
             config.purposes[index].enabled = pick.value;
             note(provenance, &field, pick.source);
         } else if let Some(legacy) = leg_pictures.clone() {
             // The legacy master switch is a lower layer: it applies only when
             // no new per-purpose value is present.
-            let field = format!("purposes.{}.enabled", purpose.label());
+            let field = format!("purposes.{}.enabled", purpose.key());
             config.purposes[index].enabled = legacy.value;
             note(provenance, &field, legacy.source);
         }
@@ -381,7 +381,7 @@ pub(super) fn apply_env_layer(
             continue;
         }
         if let Some(pick) = purpose_env_enabled(&table, &mut consumed, purpose)? {
-            let field = format!("purposes.{}.enabled", purpose.label());
+            let field = format!("purposes.{}.enabled", purpose.key());
             config.purposes[index].enabled = pick.value;
             note(provenance, &field, pick.source);
         }
@@ -391,7 +391,7 @@ pub(super) fn apply_env_layer(
             continue;
         };
         if let Some(pick) = purpose_env_backend(&table, &mut consumed, purpose)? {
-            let field = format!("purposes.{}.backend_override", purpose.label());
+            let field = format!("purposes.{}.backend_override", purpose.key());
             config.purposes[index].backend_override = pick.value;
             note(provenance, &field, pick.source);
         }
@@ -409,7 +409,7 @@ pub(super) fn apply_env_layer(
             };
             note(
                 provenance,
-                &format!("purposes.{}.account_override", purpose.label()),
+                &format!("purposes.{}.account_override", purpose.key()),
                 OverlaySource::NewEnv(account_name),
             );
         }
@@ -428,7 +428,7 @@ pub(super) fn apply_env_layer(
             config.purposes[index].model_override = selected;
             note(
                 provenance,
-                &format!("purposes.{}.model_override", purpose.label()),
+                &format!("purposes.{}.model_override", purpose.key()),
                 OverlaySource::NewEnv(model_name),
             );
         }
@@ -450,7 +450,7 @@ pub(super) fn apply_env_layer(
             config.purposes[index].moderation_override = selected;
             note(
                 provenance,
-                &format!("purposes.{}.moderation_override", purpose.label()),
+                &format!("purposes.{}.moderation_override", purpose.key()),
                 OverlaySource::NewEnv(moderation_name),
             );
         }
@@ -471,12 +471,12 @@ pub(super) fn apply_env_layer(
             config.purposes[index].quality_override = selected;
             note(
                 provenance,
-                &format!("purposes.{}.quality_override", purpose.label()),
+                &format!("purposes.{}.quality_override", purpose.key()),
                 OverlaySource::NewEnv(quality_name),
             );
         }
         if let Some(pick) = purpose_env_output_profile(&table, &mut consumed, purpose)? {
-            let field = format!("purposes.{}.output_profile", purpose.label());
+            let field = format!("purposes.{}.output_profile", purpose.key());
             config.purposes[index].output_profile = pick.value;
             note(provenance, &field, pick.source);
         }
@@ -857,8 +857,8 @@ pub(super) fn apply_env_layer(
 }
 
 fn combine_env_plate(
-    pictures: &Option<Pick<bool>>,
-    plates: &Option<Pick<bool>>,
+    pictures: Option<&Pick<bool>>,
+    plates: Option<&Pick<bool>>,
 ) -> Option<Pick<bool>> {
     match (pictures, plates) {
         (Some(pictures_pick), Some(plates_pick)) => {
@@ -1116,7 +1116,7 @@ fn apply_accounting_env(
     if let Some(raw) = take_env(table, consumed, "DF_IMAGERY_ACCOUNTING_MODE")
         && !raw.is_empty()
     {
-        let Some(mode) = parse_accounting_mode(raw) else {
+        let Some(mode) = crate::config::AccountingMode::from_key(raw) else {
             return Err(invalid(
                 "DF_IMAGERY_ACCOUNTING_MODE",
                 "unknown accounting mode",

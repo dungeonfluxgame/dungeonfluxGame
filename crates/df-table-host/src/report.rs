@@ -3,28 +3,16 @@
 //! It owns wording and layout only. It never sends a request and never reads a file.
 
 use crate::view::CanvasView;
-use crate::wire::{ClientView, ControlsReply, EventsReply, Reply};
+use crate::wire::{ClientView, ControlsReply, EventsReply};
 
-/// The text of an answer to a change: `Ok` when the change was made, `Err` when it was not.
-pub fn describe_reply(reply: &Reply) -> Result<String, String> {
-    match reply {
-        Reply::Done { revision, notices } => {
-            let mut text = format!("ok (revision {revision})");
-            for notice in notices {
-                text.push_str(&format!("\n  {notice}"));
-            }
-            Ok(text)
-        }
-        Reply::Rejected {
-            message, problems, ..
-        } => {
-            let mut text = message.clone();
-            for problem in problems {
-                text.push_str(&format!("\n  {problem}"));
-            }
-            Err(text)
-        }
+/// The text of a change that was made (`Reply::Done`): its revision and its notices. A refusal
+/// prints as its `DevError::Rejected`.
+pub fn describe_done(revision: u64, notices: &[String]) -> String {
+    let mut text = format!("ok (revision {revision})");
+    for notice in notices {
+        text.push_str(&format!("\n  {notice}"));
     }
+    text
 }
 
 /// The canvas as readable JSON.

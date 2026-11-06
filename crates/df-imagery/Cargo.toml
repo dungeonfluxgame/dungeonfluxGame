@@ -18,6 +18,7 @@ toml = { version = "=0.9.12", default-features = false, features = ["std", "pars
 df-providers = { path = "../df-providers" }
 base64 = "=0.22.1"
 url = "=2.5.8"
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
 libwebp-sys2 = { version = "=0.2.0", features = ["static"] }

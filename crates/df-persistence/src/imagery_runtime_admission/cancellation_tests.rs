@@ -39,7 +39,7 @@ fn terminal_unused_release_is_exact_atomic_and_never_releases_sent_or_unknown() 
                 job,
                 stage,
             };
-            let capacity = CapacityScope::new("funded-adapter".into()).unwrap();
+            let capacity = CapacityScope::new("funded-adapter").unwrap();
             let token = ClaimToken::from_bytes(&[31; 16]).unwrap();
             let basis = StageBasis {
                 kind: StageKind::Classification,

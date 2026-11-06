@@ -121,7 +121,7 @@ fn bad_requests_never_reach_the_backend_and_are_each_reported_once() {
         events[0].kind,
         TextEventKind::Refused(TextRequestError::EmptyInstructions)
     );
-    assert_eq!(events[1].kind.label(), "invalid_deadline");
+    assert_eq!(events[1].kind.key(), "invalid_deadline");
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn every_answered_request_reports_one_event_with_purpose_and_outcome() {
     block_on(service.submit(&request())).unwrap();
     let events = recorder.0.lock().unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].purpose.label(), "storyteller");
+    assert_eq!(events[0].purpose.key(), "storyteller");
     assert_eq!(events[0].output_name, "narration");
     assert_eq!(events[0].kind, TextEventKind::Answered);
 }
@@ -181,6 +181,87 @@ fn an_output_name_the_attempt_store_cannot_hold_is_refused_before_admission() {
     let mut longest = request();
     longest.output_name = "n".repeat(MAXIMUM_LABEL_BYTES);
     assert!(service.check(&longest).is_ok());
+}
+
+/// The keys are persisted in the attempt store and logged; their spelling never drifts.
+#[test]
+fn purpose_and_reason_keys_keep_their_stored_spelling_and_round_trip() {
+    let purposes: Vec<_> = TextPurpose::ALL.into_iter().map(TextPurpose::key).collect();
+    assert_eq!(
+        purposes,
+        [
+            "storyteller",
+            "semantic_judgment",
+            "support_judgment",
+            "support_draft",
+            "dev_probe",
+            "character_identity",
+        ]
+    );
+    for purpose in TextPurpose::ALL {
+        assert_eq!(TextPurpose::from_key(purpose.key()), Some(purpose));
+    }
+    let reasons: Vec<_> = UnavailableReason::ALL
+        .into_iter()
+        .map(UnavailableReason::key)
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "configuration",
+            "authentication",
+            "unsafe_tools",
+            "interrupted"
+        ]
+    );
+    for reason in UnavailableReason::ALL {
+        assert_eq!(UnavailableReason::from_key(reason.key()), Some(reason));
+    }
+    assert_eq!(TextPurpose::from_key("Storyteller"), None);
+}
+
+#[test]
+fn purpose_and_reason_keys_equal_their_serde_names() {
+    for purpose in TextPurpose::ALL {
+        assert_eq!(serde_json::to_value(purpose).unwrap(), json!(purpose.key()));
+        assert_eq!(
+            serde_json::from_value::<TextPurpose>(json!(purpose.key())).unwrap(),
+            purpose
+        );
+    }
+    for reason in UnavailableReason::ALL {
+        assert_eq!(serde_json::to_value(reason).unwrap(), json!(reason.key()));
+        assert_eq!(
+            serde_json::from_value::<UnavailableReason>(json!(reason.key())).unwrap(),
+            reason
+        );
+    }
+}
+
+#[test]
+fn request_error_keys_are_snake_case_and_errors_display_lowercase_sentences() {
+    let errors = [
+        (TextRequestError::EmptyInstructions, "empty_instructions"),
+        (
+            TextRequestError::InstructionsTooLarge,
+            "instructions_too_large",
+        ),
+        (TextRequestError::FactsTooLarge, "facts_too_large"),
+        (TextRequestError::InvalidDeadline, "invalid_deadline"),
+        (TextRequestError::InvalidSchema, "invalid_schema"),
+        (TextRequestError::InvalidImages, "invalid_images"),
+    ];
+    for (error, key) in errors {
+        assert_eq!(error.key(), key);
+        assert_eq!(TextEventKind::Refused(error).key(), key);
+        assert!(error.to_string().starts_with("the text request"));
+    }
+    let limits: &dyn std::error::Error = &TextLimitsError::ZeroBudget;
+    assert_eq!(limits.to_string(), "a text budget or deadline is zero");
+    assert_eq!(
+        LabelError::TooLong.to_string(),
+        "the label is longer than its byte limit"
+    );
 }
 
 #[test]

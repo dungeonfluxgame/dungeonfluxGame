@@ -11,7 +11,7 @@ use crate::native_http::{
     header_block_bytes, is_loopback_socket, read_bounded_body,
 };
 use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, strict_fal_locator};
-use crate::{NativeHttpLimits, NativeHttpRefusal, inspect_dns_answers};
+use crate::{NativeHttpCause, NativeHttpLimits, inspect_dns_answers};
 
 /// The largest response header block a media fetcher accepts, in bytes.
 pub(crate) const MAXIMUM_MEDIA_HEADER_BYTES: usize = 16_384;
@@ -32,20 +32,40 @@ impl std::fmt::Debug for FalCdnPin {
     }
 }
 
+/// Why a fal CDN pin was refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FalCdnPinError {
+    /// The host is not a fal media host.
+    InvalidHost,
+    /// An address is not public, repeats, or the answer holds too many.
+    InvalidAddresses,
+}
+
+impl std::fmt::Display for FalCdnPinError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidHost => "the pin host is not a fal media host",
+            Self::InvalidAddresses => "the pin addresses are not distinct public addresses",
+        })
+    }
+}
+
+impl std::error::Error for FalCdnPinError {}
+
 impl FalCdnPin {
     /// Public, finite DNS observations are caller-supplied. No resolver fallback is enabled.
-    pub fn new(host: &str, addresses: &[IpAddr]) -> Result<Self, NativeHttpRefusal> {
+    pub fn new(host: &str, addresses: &[IpAddr]) -> Result<Self, FalCdnPinError> {
         if !strict_fal_locator(&format!("https://{host}/pin")) {
-            return Err(NativeHttpRefusal::InvalidEndpoint);
+            return Err(FalCdnPinError::InvalidHost);
         }
         let inspected =
-            inspect_dns_answers(addresses).map_err(|_| NativeHttpRefusal::InvalidEndpoint)?;
+            inspect_dns_answers(addresses).map_err(|_| FalCdnPinError::InvalidAddresses)?;
         if addresses.iter().enumerate().any(|(i, value)| {
             addresses
                 .get(..i)
                 .is_some_and(|earlier| earlier.contains(value))
         }) {
-            return Err(NativeHttpRefusal::InvalidEndpoint);
+            return Err(FalCdnPinError::InvalidAddresses);
         }
         Ok(Self {
             host: host.to_owned(),
@@ -81,7 +101,7 @@ struct PinnedTransport {
 fn build_pinned(
     limits: NativeHttpLimits,
     pins: Vec<FalCdnPin>,
-) -> Result<Vec<PinnedTransport>, NativeHttpRefusal> {
+) -> Result<Vec<PinnedTransport>, NativeHttpCause> {
     pins.into_iter()
         .map(|pin| {
             let addresses = pinned_socket_addresses(&pin);
@@ -102,14 +122,14 @@ fn media_client(
     limits: NativeHttpLimits,
     https_only: bool,
     resolve: Option<(&str, &[SocketAddr])>,
-) -> Result<reqwest::Client, NativeHttpRefusal> {
+) -> Result<reqwest::Client, NativeHttpCause> {
     let mut builder = hardened_client_builder(&limits, https_only)
         .pool_max_idle_per_host(MEDIA_POOL_IDLE_PER_HOST)
         .pool_idle_timeout(MEDIA_POOL_IDLE_TIMEOUT);
     if let Some((host, addresses)) = resolve {
         builder = builder.resolve_to_addrs(host, addresses);
     }
-    builder.build().map_err(|_| NativeHttpRefusal::Unknown)
+    builder.build().map_err(|_| NativeHttpCause::Unknown)
 }
 
 impl NativeMediaFetch {
@@ -117,7 +137,7 @@ impl NativeMediaFetch {
         limits: NativeHttpLimits,
         pins: Vec<FalCdnPin>,
         fixture: Option<SocketAddr>,
-    ) -> Result<Self, NativeHttpRefusal> {
+    ) -> Result<Self, NativeHttpCause> {
         if limits.maximum_header_bytes > MAXIMUM_MEDIA_HEADER_BYTES
             || pins.len() > MAXIMUM_PINNED
             || pins.iter().map(|pin| pin.addresses.len()).sum::<usize>() > MAXIMUM_PINNED
@@ -128,10 +148,10 @@ impl NativeMediaFetch {
             || fixture.is_some_and(|address| !is_loopback_socket(address))
             || (fixture.is_none() && pins.is_empty())
         {
-            return Err(NativeHttpRefusal::InvalidLimits);
+            return Err(NativeHttpCause::InvalidLimits);
         }
         // Reuse the validated finite native transport bounds without any network operation.
-        NativeHttp::new(limits, fixture.is_some())?;
+        NativeHttp::new(limits, fixture.is_some()).map_err(|error| error.cause)?;
         let fixture_client = match fixture {
             Some(_) => Some(media_client(limits, false, None)?),
             None => None,
@@ -166,25 +186,22 @@ impl NativeMediaFetch {
         limits: NativeHttpLimits,
         locator: &str,
         fixture: Option<SocketAddr>,
-    ) -> Result<Self, (NativeHttpRefusal, &'static str)> {
+    ) -> Result<Self, BflDeliveryCause> {
         if let Some(fixture_address) = fixture {
             if !is_loopback_socket(fixture_address) {
-                return Err((NativeHttpRefusal::InvalidEndpoint, "fixture_invalid"));
+                return Err(BflDeliveryCause::FixtureInvalid);
             }
             if !(strict_bfl_delivery(locator) || is_fixture_locator(fixture_address, locator)) {
-                return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+                return Err(BflDeliveryCause::UrlContract);
             }
         } else if !strict_bfl_delivery(locator) {
-            return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+            return Err(BflDeliveryCause::UrlContract);
         }
-        let url = reqwest::Url::parse(locator)
-            .map_err(|_| (NativeHttpRefusal::InvalidEndpoint, "url_parse"))?;
-        let host = url
-            .host_str()
-            .ok_or((NativeHttpRefusal::InvalidEndpoint, "missing_host"))?;
+        let url = reqwest::Url::parse(locator).map_err(|_| BflDeliveryCause::UrlParse)?;
+        let host = url.host_str().ok_or(BflDeliveryCause::MissingHost)?;
         // Validate transport bounds before DNS so unsupported limits never cause network I/O.
         NativeHttp::new(limits, fixture.is_some())
-            .map_err(|error| (error, "transport_configuration"))?;
+            .map_err(|error| BflDeliveryCause::TransportConfiguration(error.cause))?;
         let addresses = if fixture.is_some() {
             vec![]
         } else {
@@ -193,7 +210,7 @@ impl NativeMediaFetch {
         let fixture_client = match fixture {
             Some(_) => Some(
                 media_client(limits, false, None)
-                    .map_err(|error| (error, "transport_configuration"))?,
+                    .map_err(BflDeliveryCause::TransportConfiguration)?,
             ),
             None => None,
         };
@@ -207,7 +224,7 @@ impl NativeMediaFetch {
                     addresses,
                 }],
             )
-            .map_err(|error| (error, "transport_configuration"))?
+            .map_err(BflDeliveryCause::TransportConfiguration)?
         };
         Ok(Self {
             limits,
@@ -246,7 +263,7 @@ impl NativeMediaFetch {
         remaining_bytes: usize,
         deadline: Duration,
         cancellation: impl Future<Output = ()>,
-    ) -> Result<Vec<u8>, NativeHttpRefusal> {
+    ) -> Result<Vec<u8>, NativeHttpCause> {
         self.fetch_checked(locator, mime, remaining_bytes, deadline, cancellation)
             .await
             .map(|(bytes, _)| bytes)
@@ -257,9 +274,9 @@ impl NativeMediaFetch {
         locator: &str,
         remaining_bytes: usize,
         deadline: Duration,
-    ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
+    ) -> Result<(Vec<u8>, String), NativeHttpCause> {
         if !self.bfl {
-            return Err(NativeHttpRefusal::InvalidEndpoint);
+            return Err(NativeHttpCause::InvalidEndpoint);
         }
         self.fetch_checked(
             locator,
@@ -278,22 +295,22 @@ impl NativeMediaFetch {
         remaining_bytes: usize,
         deadline: Duration,
         cancellation: impl Future<Output = ()>,
-    ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
+    ) -> Result<(Vec<u8>, String), NativeHttpCause> {
         if !self.allows_locator(locator)
             || locator.len() > MAXIMUM_LOCATOR_BYTES
             || remaining_bytes == 0
         {
-            return Err(NativeHttpRefusal::InvalidEndpoint);
+            return Err(NativeHttpCause::InvalidEndpoint);
         }
-        let url = reqwest::Url::parse(locator).map_err(|_| NativeHttpRefusal::InvalidEndpoint)?;
-        let host = url.host_str().ok_or(NativeHttpRefusal::InvalidEndpoint)?;
+        let url = reqwest::Url::parse(locator).map_err(|_| NativeHttpCause::InvalidEndpoint)?;
+        let host = url.host_str().ok_or(NativeHttpCause::InvalidEndpoint)?;
         let (target, addresses, client) = if let Some(address) = self.fixture {
             // An explicit operator fixture redirects only the transport socket, never the
             // returned public locator.
             let client = self
                 .fixture_client
                 .as_ref()
-                .ok_or(NativeHttpRefusal::InvalidEndpoint)?;
+                .ok_or(NativeHttpCause::InvalidEndpoint)?;
             (
                 format!("http://{address}{}", url.path()),
                 vec![address],
@@ -302,7 +319,7 @@ impl NativeMediaFetch {
         } else {
             let transport = self
                 .pinned_transport(host)
-                .ok_or(NativeHttpRefusal::InvalidEndpoint)?;
+                .ok_or(NativeHttpCause::InvalidEndpoint)?;
             (
                 locator.to_owned(),
                 pinned_socket_addresses(&transport.pin),
@@ -311,14 +328,14 @@ impl NativeMediaFetch {
         };
         let duration = deadline.min(self.limits.total_timeout);
         if duration.is_zero() {
-            return Err(NativeHttpRefusal::Deadline);
+            return Err(NativeHttpCause::Deadline);
         }
         tokio::select! {
             biased;
-            () = cancellation => Err(NativeHttpRefusal::Cancelled),
+            () = cancellation => Err(NativeHttpCause::Cancelled),
             response = tokio::time::timeout(duration,
                 self.read(client, &target, &addresses, mime, remaining_bytes)) => {
-                response.map_err(|_| NativeHttpRefusal::Deadline)?
+                response.map_err(|_| NativeHttpCause::Deadline)?
             }
         }
     }
@@ -330,7 +347,7 @@ impl NativeMediaFetch {
         addresses: &[SocketAddr],
         mime: &str,
         remaining_bytes: usize,
-    ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
+    ) -> Result<(Vec<u8>, String), NativeHttpCause> {
         let mut response = client
             .get(target)
             .send()
@@ -346,24 +363,24 @@ impl NativeMediaFetch {
             .remote_addr()
             .is_some_and(|address| addresses.contains(&address))
         {
-            return Err(NativeHttpRefusal::InvalidEndpoint);
+            return Err(NativeHttpCause::InvalidEndpoint);
         }
         if response.status().is_redirection() {
-            return Err(NativeHttpRefusal::Redirect);
+            return Err(NativeHttpCause::Redirect);
         }
         if response.status().as_u16() != 200 {
-            return Err(NativeHttpRefusal::Unknown);
+            return Err(NativeHttpCause::Unknown);
         }
         if header_block_bytes(response.headers())
             .is_none_or(|bytes| bytes > self.limits.maximum_header_bytes)
         {
-            return Err(NativeHttpRefusal::HeadersTooLarge);
+            return Err(NativeHttpCause::HeadersTooLarge);
         }
         if response
             .headers()
             .contains_key(reqwest::header::CONTENT_ENCODING)
         {
-            return Err(NativeHttpRefusal::ContentType);
+            return Err(NativeHttpCause::ContentType);
         }
         let mut types = response
             .headers()
@@ -372,7 +389,7 @@ impl NativeMediaFetch {
         let observed = types
             .next()
             .and_then(|v| v.to_str().ok())
-            .ok_or(NativeHttpRefusal::ContentType)?;
+            .ok_or(NativeHttpCause::ContentType)?;
         let observed = observed
             .split(';')
             .next()
@@ -384,7 +401,7 @@ impl NativeMediaFetch {
                 && mime == BFL_IMAGE_TYPES
                 && matches!(observed.as_str(), "image/png" | "image/jpeg"));
         if types.next().is_some() || !allowed {
-            return Err(NativeHttpRefusal::ContentType);
+            return Err(NativeHttpCause::ContentType);
         }
         let mut lengths = response
             .headers()
@@ -396,38 +413,151 @@ impl NativeMediaFetch {
                     .to_str()
                     .ok()
                     .and_then(|s| s.parse::<u64>().ok())
-                    .ok_or(NativeHttpRefusal::Unknown)?,
+                    .ok_or(NativeHttpCause::Unknown)?,
             ),
             None => None,
         };
         if lengths.next().is_some() {
-            return Err(NativeHttpRefusal::Unknown);
+            return Err(NativeHttpCause::Unknown);
         }
         let maximum = remaining_bytes.min(self.limits.maximum_response_bytes);
         if declared.is_some_and(|length| length == 0 || length > maximum as u64) {
-            return Err(NativeHttpRefusal::ResponseTooLarge);
+            return Err(NativeHttpCause::ResponseTooLarge);
         }
         let body = read_bounded_body(&mut response, maximum, self.limits.maximum_chunks).await?;
         if body.is_empty() || declared.is_some_and(|length| length != body.len() as u64) {
-            return Err(NativeHttpRefusal::Unknown);
+            return Err(NativeHttpCause::Unknown);
         }
         Ok((body, observed))
     }
 }
 
-/// Credential-free delivery failure; closed refusal, static reason, observed status.
+/// Why a BFL delivery failed. Closed and payload-free apart from the transport's own cause.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BflDeliveryCause {
+    /// The fixture socket is not a loopback address.
+    FixtureInvalid,
+    /// The locator is not an allowlisted delivery URL.
+    UrlContract,
+    UrlParse,
+    MissingHost,
+    /// The transport refused its own limits or configuration; the transport cause says which.
+    TransportConfiguration(NativeHttpCause),
+    DnsDeadline,
+    DnsFailure,
+    /// The delivery host resolved to more addresses than one pin holds.
+    DnsAnswerLimit,
+    /// The delivery host resolved to an address that is not public.
+    DnsTargetRefused,
+    /// The requested delivery size is zero or above the transport ceiling.
+    RequestBounds,
+    Deadline,
+    Cancelled,
+    RedirectRefused,
+    ContentType,
+    ResponseTooLarge,
+    HeadersTooLarge,
+    TooManyChunks,
+    RequestTooLarge,
+    /// The exchange failed, including any status other than 200.
+    FetchFailed,
+}
+
+impl BflDeliveryCause {
+    /// The audit spelling of this cause.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::FixtureInvalid => "fixture_invalid",
+            Self::UrlContract => "url_contract",
+            Self::UrlParse => "url_parse",
+            Self::MissingHost => "missing_host",
+            Self::TransportConfiguration(_) => "transport_configuration",
+            Self::DnsDeadline => "dns_deadline",
+            Self::DnsFailure => "dns_failure",
+            Self::DnsAnswerLimit => "dns_answer_limit",
+            Self::DnsTargetRefused => "dns_target_refused",
+            Self::RequestBounds => "request_bounds",
+            Self::Deadline => "deadline",
+            Self::Cancelled => "cancelled",
+            Self::RedirectRefused => "redirect_refused",
+            Self::ContentType => "content_type",
+            Self::ResponseTooLarge => "response_too_large",
+            Self::HeadersTooLarge => "headers_too_large",
+            Self::TooManyChunks => "too_many_chunks",
+            Self::RequestTooLarge => "request_too_large",
+            Self::FetchFailed => "fetch_failed",
+        }
+    }
+
+    /// The transport class this failure falls in, for callers that branch on transport causes.
+    pub const fn transport(self) -> NativeHttpCause {
+        match self {
+            Self::FixtureInvalid
+            | Self::UrlContract
+            | Self::UrlParse
+            | Self::MissingHost
+            | Self::DnsAnswerLimit
+            | Self::DnsTargetRefused => NativeHttpCause::InvalidEndpoint,
+            Self::TransportConfiguration(cause) => cause,
+            Self::DnsDeadline | Self::Deadline => NativeHttpCause::Deadline,
+            Self::DnsFailure | Self::FetchFailed => NativeHttpCause::Unknown,
+            Self::RequestBounds => NativeHttpCause::InvalidLimits,
+            Self::Cancelled => NativeHttpCause::Cancelled,
+            Self::RedirectRefused => NativeHttpCause::Redirect,
+            Self::ContentType => NativeHttpCause::ContentType,
+            Self::ResponseTooLarge => NativeHttpCause::ResponseTooLarge,
+            Self::HeadersTooLarge => NativeHttpCause::HeadersTooLarge,
+            Self::TooManyChunks => NativeHttpCause::TooManyChunks,
+            Self::RequestTooLarge => NativeHttpCause::RequestTooLarge,
+        }
+    }
+
+    /// The cause of a failed delivery fetch, from the transport's cause.
+    const fn of_fetch(cause: NativeHttpCause) -> Self {
+        match cause {
+            NativeHttpCause::Deadline => Self::Deadline,
+            NativeHttpCause::Cancelled => Self::Cancelled,
+            NativeHttpCause::InvalidEndpoint => Self::UrlContract,
+            NativeHttpCause::Redirect => Self::RedirectRefused,
+            NativeHttpCause::ContentType => Self::ContentType,
+            NativeHttpCause::ResponseTooLarge => Self::ResponseTooLarge,
+            NativeHttpCause::HeadersTooLarge => Self::HeadersTooLarge,
+            NativeHttpCause::TooManyChunks => Self::TooManyChunks,
+            NativeHttpCause::RequestTooLarge => Self::RequestTooLarge,
+            NativeHttpCause::InvalidLimits
+            | NativeHttpCause::InvalidConfiguration
+            | NativeHttpCause::InvalidCredential
+            | NativeHttpCause::ProviderDisabled => Self::TransportConfiguration(cause),
+            NativeHttpCause::Unknown => Self::FetchFailed,
+        }
+    }
+}
+
+impl std::fmt::Display for BflDeliveryCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.key())
+    }
+}
+
+/// Credential-free delivery failure: its closed cause and the observed supplier status.
 /// Carries no locator, credential, or body bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BflDeliveryFailure {
-    pub refusal: NativeHttpRefusal,
-    pub reason: &'static str,
+pub struct BflDeliveryError {
+    pub cause: BflDeliveryCause,
     pub http_status: Option<u16>,
 }
 
+impl std::fmt::Display for BflDeliveryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "the image delivery failed ({})", self.cause)
+    }
+}
+
+impl std::error::Error for BflDeliveryError {}
+
 /// The delivery ran out of its one total deadline.
-const DELIVERY_DEADLINE: BflDeliveryFailure = BflDeliveryFailure {
-    refusal: NativeHttpRefusal::Deadline,
-    reason: "deadline",
+const DELIVERY_DEADLINE: BflDeliveryError = BflDeliveryError {
+    cause: BflDeliveryCause::Deadline,
     http_status: None,
 };
 
@@ -442,14 +572,13 @@ pub async fn fetch_bfl_delivery(
     max_bytes: usize,
     remaining: Duration,
     fixture: Option<SocketAddr>,
-) -> Result<(Vec<u8>, String, Option<u16>), BflDeliveryFailure> {
+) -> Result<(Vec<u8>, String, Option<u16>), BflDeliveryError> {
     if remaining.is_zero() {
         return Err(DELIVERY_DEADLINE);
     }
     if max_bytes == 0 || max_bytes > MAXIMUM_BODY_BYTES {
-        return Err(BflDeliveryFailure {
-            refusal: NativeHttpRefusal::InvalidLimits,
-            reason: "request_bounds",
+        return Err(BflDeliveryError {
+            cause: BflDeliveryCause::RequestBounds,
             http_status: None,
         });
     }
@@ -464,9 +593,8 @@ pub async fn fetch_bfl_delivery(
     )
     .await
     .map_err(|_| DELIVERY_DEADLINE)?
-    .map_err(|(refusal, reason)| BflDeliveryFailure {
-        refusal,
-        reason,
+    .map_err(|cause| BflDeliveryError {
+        cause,
         http_status: None,
     })?;
     let left = remaining
@@ -476,33 +604,12 @@ pub async fn fetch_bfl_delivery(
     let (bytes, mime) = constructed
         .fetch_bfl_image(locator, max_bytes, left)
         .await
-        .map_err(|refusal| BflDeliveryFailure {
-            refusal,
-            reason: fetch_reason(refusal),
+        .map_err(|cause| BflDeliveryError {
+            cause: BflDeliveryCause::of_fetch(cause),
             http_status: constructed.observed_status(),
         })?;
     let observed = constructed.observed_status();
     Ok((bytes, mime, observed))
-}
-
-/// Closed static reason for a delivery fetch refusal; no payload is carried.
-fn fetch_reason(reason: NativeHttpRefusal) -> &'static str {
-    match reason {
-        NativeHttpRefusal::Deadline => "deadline",
-        NativeHttpRefusal::Cancelled => "cancelled",
-        NativeHttpRefusal::InvalidEndpoint => "url_contract",
-        NativeHttpRefusal::Redirect => "redirect_refused",
-        NativeHttpRefusal::ContentType => "content_type",
-        NativeHttpRefusal::ResponseTooLarge => "response_too_large",
-        NativeHttpRefusal::HeadersTooLarge => "headers_too_large",
-        NativeHttpRefusal::TooManyChunks => "too_many_chunks",
-        NativeHttpRefusal::RequestTooLarge => "request_too_large",
-        NativeHttpRefusal::InvalidLimits
-        | NativeHttpRefusal::InvalidConfiguration
-        | NativeHttpRefusal::InvalidCredential
-        | NativeHttpRefusal::ProviderDisabled => "transport_configuration",
-        NativeHttpRefusal::Unknown => "fetch_failed",
-    }
 }
 
 fn strict_bfl_delivery(locator: &str) -> bool {
@@ -540,22 +647,21 @@ fn is_fixture_locator(address: SocketAddr, locator: &str) -> bool {
 async fn resolve_public_addresses(
     host: &str,
     timeout: Duration,
-) -> Result<Vec<IpAddr>, (NativeHttpRefusal, &'static str)> {
+) -> Result<Vec<IpAddr>, BflDeliveryCause> {
     let resolved = tokio::time::timeout(timeout, tokio::net::lookup_host((host, 443)))
         .await
-        .map_err(|_| (NativeHttpRefusal::Deadline, "dns_deadline"))?
-        .map_err(|_| (NativeHttpRefusal::Unknown, "dns_failure"))?;
+        .map_err(|_| BflDeliveryCause::DnsDeadline)?
+        .map_err(|_| BflDeliveryCause::DnsFailure)?;
     let mut addresses = Vec::new();
     for socket in resolved {
         if !addresses.contains(&socket.ip()) {
             addresses.push(socket.ip());
         }
         if addresses.len() > MAXIMUM_PINNED {
-            return Err((NativeHttpRefusal::InvalidEndpoint, "dns_answer_limit"));
+            return Err(BflDeliveryCause::DnsAnswerLimit);
         }
     }
-    inspect_dns_answers(&addresses)
-        .map_err(|_| (NativeHttpRefusal::InvalidEndpoint, "dns_target_refused"))?;
+    inspect_dns_answers(&addresses).map_err(|_| BflDeliveryCause::DnsTargetRefused)?;
     Ok(addresses)
 }
 

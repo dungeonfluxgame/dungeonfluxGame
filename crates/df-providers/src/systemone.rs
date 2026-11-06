@@ -1,7 +1,7 @@
 //! Bounded System One choice calls using the shared native HTTP transport.
 //! Wire contract: SchemaFlux `systemone.go` and `decision_wire_contract_test.go`.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
 
@@ -9,7 +9,7 @@ use crate::metering::{
     AnsweredUsage, CallMeter, MeterSlot, MeteredClient, SentCall, settle_refusal, settle_status,
 };
 use crate::native_http::{NativeHttp, is_valid_credential};
-use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
+use crate::{HttpRequest, NativeHttpCause, NativeHttpLimits};
 
 // 800 ms and 32 KiB failed every free-roam judgement (larger generated-place context) as a
 // transport error, which silenced every stranger (2026-10-24, owner: remove the limits).
@@ -32,8 +32,25 @@ pub enum SystemOneError {
     Timeout,
     InvalidAnswer,
     UnknownOption,
-    Transport,
+    /// The service answered this HTTP status instead of 200.
+    Provider(u16),
+    /// The configuration or the exchange failed; the cause says which.
+    Transport(NativeHttpCause),
 }
+
+impl fmt::Display for SystemOneError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Timeout => formatter.write_str("the choice call ran out of time"),
+            Self::InvalidAnswer => formatter.write_str("the choice answer was not usable"),
+            Self::UnknownOption => formatter.write_str("the choice answer named no offered option"),
+            Self::Provider(status) => write!(formatter, "the choice service answered {status}"),
+            Self::Transport(cause) => write!(formatter, "the choice call failed: {cause}"),
+        }
+    }
+}
+
+impl std::error::Error for SystemOneError {}
 
 /// One-attempt Jev choice client. The credential is retained privately and never formatted.
 pub struct SystemOneChoiceProvider {
@@ -50,17 +67,20 @@ impl SystemOneChoiceProvider {
     ///
     /// ```compile_fail
     /// use df_providers::SystemOneChoiceProvider as Choice;
-    /// let _client = Choice::new("key".to_owned(), "https://example.com");
+    /// let _client = Choice::new("key", "https://example.com");
     /// ```
     pub fn new(
-        credential: String,
+        credential: &str,
         base_url: &str,
         meter: Arc<dyn CallMeter>,
     ) -> Result<Self, SystemOneError> {
-        if !is_valid_credential(&credential) {
-            return Err(SystemOneError::Transport);
+        if !is_valid_credential(credential) {
+            return Err(SystemOneError::Transport(
+                NativeHttpCause::InvalidCredential,
+            ));
         }
-        let url = reqwest::Url::parse(base_url).map_err(|_| SystemOneError::Transport)?;
+        let url = reqwest::Url::parse(base_url)
+            .map_err(|_| SystemOneError::Transport(NativeHttpCause::InvalidEndpoint))?;
         let loopback = url.scheme() == "http"
             && url.host_str().is_some_and(|host| {
                 host.trim_matches(['[', ']'])
@@ -74,7 +94,7 @@ impl SystemOneChoiceProvider {
             || url.query().is_some()
             || url.fragment().is_some()
         {
-            return Err(SystemOneError::Transport);
+            return Err(SystemOneError::Transport(NativeHttpCause::InvalidEndpoint));
         }
         let http = NativeHttp::new(
             NativeHttpLimits {
@@ -88,11 +108,11 @@ impl SystemOneChoiceProvider {
             },
             loopback,
         )
-        .map_err(|_| SystemOneError::Transport)?;
+        .map_err(|failure| SystemOneError::Transport(failure.cause))?;
         Ok(Self {
             http,
             endpoint: format!("{}/v1/systemone", base_url.trim_end_matches('/')),
-            credential,
+            credential: credential.to_owned(),
             meter: MeterSlot::new(meter),
         })
     }
@@ -142,16 +162,16 @@ impl SystemOneChoiceProvider {
         {
             Ok(response) => response,
             Err(failure) => {
-                settle_refusal(ticket, failure.reason);
-                return Err(match failure.reason {
-                    NativeHttpRefusal::Deadline => SystemOneError::Timeout,
-                    _ => SystemOneError::Transport,
+                settle_refusal(ticket, failure.cause);
+                return Err(match failure.cause {
+                    NativeHttpCause::Deadline => SystemOneError::Timeout,
+                    cause => SystemOneError::Transport(cause),
                 });
             }
         };
         if response.status != 200 {
             settle_status(ticket, response.status);
-            return Err(SystemOneError::Transport);
+            return Err(SystemOneError::Provider(response.status));
         }
         let response: Result<Value, _> = serde_json::from_slice(&response.body);
         // An answer that does not parse reports no usage; it is still settled below as unusable.

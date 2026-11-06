@@ -701,17 +701,18 @@ fn creation_numbers_and_array_subset_change_the_character() {
         id: "stalwart",
         scores: [16, 13, 16, 10, 12, 8],
     }];
-    let rules = CreationRules {
-        ability_arrays: &arrays,
-        background_bonus: BackgroundBonus {
+    let rules = CreationRules::new(
+        &arrays,
+        BackgroundBonus {
             strength: 1,
             constitution: 2,
         },
-        base_hit_points: 20,
-        armor_class: 19,
-        proficiency_bonus: 4,
-        second_wind_uses_max: 3,
-    };
+        20,
+        19,
+        4,
+        3,
+    )
+    .unwrap();
     let mut selected = choices();
     let built = validate_character(&rules, "Brynn", &selected).unwrap();
     assert_eq!(built.abilities, [17, 13, 18, 10, 12, 8]);
@@ -730,9 +731,21 @@ fn creation_numbers_and_array_subset_change_the_character() {
         Err(JourneyRuleError::InvalidChoice)
     );
 }
+/// `rules` passed through the public constructor, which is the only way a caller makes a table.
+fn rebuilt(rules: CreationRules<'_>) -> Result<CreationRules<'_>, JourneyRuleError> {
+    CreationRules::new(
+        rules.ability_arrays,
+        rules.background_bonus,
+        rules.base_hit_points,
+        rules.armor_class,
+        rules.proficiency_bonus,
+        rules.second_wind_uses_max,
+    )
+}
 #[test]
 fn creation_rejects_invalid_parameter_bounds_and_array_ids() {
     let baseline = CreationRules::srd_521();
+    assert_eq!(rebuilt(baseline), Ok(baseline));
     for rules in [
         CreationRules {
             base_hit_points: 0,
@@ -781,10 +794,7 @@ fn creation_rejects_invalid_parameter_bounds_and_array_ids() {
             ..baseline
         },
     ] {
-        assert_eq!(
-            validate_character(&rules, "Brynn", &choices()),
-            Err(JourneyRuleError::InvalidRules)
-        );
+        assert_eq!(rebuilt(rules), Err(JourneyRuleError::InvalidRules));
     }
     for arrays in [
         vec![AbilityArray {
@@ -823,19 +833,18 @@ fn creation_rejects_invalid_parameter_bounds_and_array_ids() {
             },
             ..baseline
         };
-        assert_eq!(rules.validate(), Err(JourneyRuleError::InvalidRules));
+        assert_eq!(rebuilt(rules), Err(JourneyRuleError::InvalidRules));
     }
     let low_constitution = [AbilityArray {
         id: "stalwart",
         scores: [10, 10, 3, 10, 10, 10],
     }];
     assert_eq!(
-        CreationRules {
+        rebuilt(CreationRules {
             ability_arrays: &low_constitution,
             base_hit_points: 1,
             ..baseline
-        }
-        .validate(),
+        }),
         Err(JourneyRuleError::InvalidRules)
     );
 }
@@ -1035,11 +1044,13 @@ fn configured_weapon_faces_counts_and_critical_threshold_change_damage() {
 #[test]
 fn second_wind_die_bonus_and_boundaries_are_explicit() {
     let baseline = SecondWindRules::srd_521();
-    let changed = SecondWindRules {
-        die_sides: 6,
-        flat_bonus: 4,
-        ..baseline
-    };
+    let changed = SecondWindRules::new(
+        baseline.uses_max(),
+        6,
+        4,
+        baseline.recharge_per_short_rest(),
+    )
+    .unwrap();
     assert_eq!(heal_second_wind(&baseline, 6, 1, 20, 2), Ok((8, 1)));
     assert_eq!(heal_second_wind(&changed, 6, 1, 20, 2), Ok((11, 1)));
     assert_eq!(
@@ -1065,7 +1076,12 @@ fn second_wind_die_bonus_and_boundaries_are_explicit() {
         },
     ] {
         assert_eq!(
-            heal_second_wind(&rules, 1, 1, 20, 2),
+            SecondWindRules::new(
+                rules.uses_max,
+                rules.die_sides,
+                rules.flat_bonus,
+                rules.recharge_per_short_rest
+            ),
             Err(JourneyRuleError::InvalidRules)
         );
     }
@@ -1189,9 +1205,48 @@ fn combat_configuration_rejects_each_out_of_bounds_field() {
             ..baseline
         },
     ] {
-        assert_eq!(rules.validate(), Err(JourneyRuleError::InvalidRules));
+        assert_eq!(
+            CombatRules::new(
+                rules.critical_threshold,
+                rules.round_ticks,
+                rules.combat_log_entries
+            ),
+            Err(JourneyRuleError::InvalidRules)
+        );
     }
-    assert_eq!(baseline.validate(), Ok(()));
-    assert_eq!(SecondWindRules::srd_521().validate(), Ok(()));
-    assert_eq!(RestRules::srd_521().validate(), Ok(()));
+    assert_eq!(
+        CombatRules::new(
+            baseline.critical_threshold(),
+            baseline.round_ticks(),
+            baseline.combat_log_entries()
+        ),
+        Ok(baseline)
+    );
+    let second_wind = SecondWindRules::srd_521();
+    assert_eq!(
+        SecondWindRules::new(
+            second_wind.uses_max(),
+            second_wind.die_sides(),
+            second_wind.flat_bonus(),
+            second_wind.recharge_per_short_rest()
+        ),
+        Ok(second_wind)
+    );
+    let rest = RestRules::srd_521();
+    assert_eq!(RestRules::new(rest.short_rest_seconds()), Ok(rest));
+    for short_rest_seconds in [59, 86_401] {
+        assert_eq!(
+            RestRules::new(short_rest_seconds),
+            Err(JourneyRuleError::InvalidRules)
+        );
+    }
+}
+#[test]
+fn every_journey_rule_error_reads_as_a_lowercase_sentence_and_is_an_error() {
+    for &error in JourneyRuleError::ALL {
+        let text = error.to_string();
+        assert!(text.starts_with(char::is_lowercase), "{error:?}: {text}");
+        assert!(!text.ends_with('.'), "{error:?}: {text}");
+        let _: &dyn std::error::Error = &error;
+    }
 }

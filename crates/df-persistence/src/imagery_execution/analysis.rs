@@ -56,7 +56,7 @@ async fn insert_final(
         schema_revision,validator_revision,result_revision,result,result_sha256,intent_digest,config_digest,source_digest, \
         stages,dependencies,selected_at_ms) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::text::jsonb,$15::text::jsonb,$16)",
         &[&c.scope.job.as_bytes().as_slice(),&c.scope.stage.as_bytes().as_slice(),&owner_scope_bytes(&c.scope.owner),
-        &c.kind.label(),&i64::from(c.checkpoint_version),&i64::from(c.schema_revision),&i64::from(c.validator_revision),
+        &c.kind.key(),&i64::from(c.checkpoint_version),&i64::from(c.schema_revision),&i64::from(c.validator_revision),
         &i64::from(c.result.revision()),&c.result.bytes(),&c.result_sha256.as_slice(),&c.intent_digest.as_slice(),
         &c.config_digest.as_slice(),&c.source_digest.as_slice(),&encoding::stages(&c.stages),
         &encoding::dependencies(&c.dependencies),&now_ms]).await.map_err(map_db)?;
@@ -141,7 +141,7 @@ async fn insert_local(
         source_digest,result_revision,result,result_sha256,dependencies,claim_token,claim_generation,recorded_at_ms) \
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::text::jsonb,$19,$20,$21)",
         &[&c.scope.job.as_bytes().as_slice(),&c.scope.stage.as_bytes().as_slice(),&owner_scope_bytes(&c.scope.owner),
-        &c.kind.label(),&i64::from(c.checkpoint_version),&i64::from(c.schema_revision),&i64::from(c.validator_revision),
+        &c.kind.key(),&i64::from(c.checkpoint_version),&i64::from(c.schema_revision),&i64::from(c.validator_revision),
         &i64::from(b.input_revision),&b.input_digest.as_slice(),&invalid(i64::try_from(b.config_revision))?,&c.config_digest.as_slice(),
         &b.parent_dispatch.map(|d|d.as_bytes().to_vec()),&c.intent_digest.as_slice(),&c.source_digest.as_slice(),
         &i64::from(c.result.revision()),&c.result.bytes(),&c.result_sha256.as_slice(),&encoding::dependencies(&c.dependencies),

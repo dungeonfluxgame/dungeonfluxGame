@@ -268,7 +268,7 @@ fn campaign_unused_release_matches_draft_atomicity_replay_and_send_refusal() {
                 job,
                 stage,
             };
-            let capacity = CapacityScope::new("funded-adapter".into()).unwrap();
+            let capacity = CapacityScope::new("funded-adapter").unwrap();
             let token = ClaimToken::from_bytes(&[31; 16]).unwrap();
             let basis = StageBasis {
                 kind: StageKind::Classification,

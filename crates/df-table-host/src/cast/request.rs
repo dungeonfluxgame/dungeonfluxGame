@@ -54,7 +54,7 @@ pub struct CameraMoved {
 /// Why a cast request was refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
-pub(crate) enum CastError {
+pub enum CastError {
     /// The request body is not the JSON the route reads.
     InvalidBody(BodyError),
     /// The shown scene could not be read, or refused the change.

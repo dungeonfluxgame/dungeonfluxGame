@@ -30,7 +30,7 @@ pub(super) struct ExecutedImage {
 pub(super) struct DispatchFailure {
     pub error: RuntimeError,
     pub usage: Option<ObservedDispatchUsage>,
-    pub api: Option<Box<api::ApiFailure>>,
+    pub api: Option<Box<api::ApiCallError>>,
 }
 
 pub(super) struct ObservedDispatchUsage {
@@ -388,6 +388,8 @@ pub(super) struct DispatchInput<'a> {
     pub context: &'a PublicationContext,
     pub intent: &'a DecodedIntent,
     pub config: &'a ImageConfig,
+    /// The Codex home the host composed the runtime with (`RuntimeSettings::codex_home`).
+    pub codex_home: Option<&'a std::path::Path>,
     pub timeout: Duration,
     pub resume: bool,
     pub telemetry: &'a dyn ImageRuntimeTelemetry,
@@ -406,16 +408,7 @@ pub(super) async fn execute<E: ImageExecutionJournal, K: ImageCredentials>(
         if input.resume {
             return Err(RuntimeError::ProviderUnknown.into());
         }
-        return codex(
-            input.context,
-            input.intent,
-            input.config,
-            retained.images,
-            input.timeout,
-            input.telemetry,
-            input.event_context.clone(),
-        )
-        .await;
+        return codex(input, retained.images).await;
     }
     execute_api(input, journal, retained, credentials).await
 }
@@ -432,6 +425,7 @@ async fn execute_api<E: ImageExecutionJournal, K: ImageCredentials>(
         context,
         intent,
         config,
+        codex_home: _,
         timeout,
         resume,
         telemetry,
@@ -890,7 +884,7 @@ fn unit(category: &str, quantity: u64) -> crate::cost::CostUnits {
     }
 }
 
-fn api_failure(failure: api::ApiFailure) -> DispatchFailure {
+fn api_failure(failure: api::ApiCallError) -> DispatchFailure {
     DispatchFailure {
         error: api_error(failure.error),
         usage: None,
@@ -898,7 +892,7 @@ fn api_failure(failure: api::ApiFailure) -> DispatchFailure {
     }
 }
 
-fn openai_failure(failure: api::ApiFailure) -> DispatchFailure {
+fn openai_failure(failure: api::ApiCallError) -> DispatchFailure {
     let mut observed = retain_api_failure(&failure);
     if let Some(usage) = failure
         .response
@@ -919,7 +913,7 @@ fn openai_failure(failure: api::ApiFailure) -> DispatchFailure {
     }
 }
 
-pub(super) fn retain_api_failure(failure: &api::ApiFailure) -> ObservedDispatchUsage {
+pub(super) fn retain_api_failure(failure: &api::ApiCallError) -> ObservedDispatchUsage {
     let contract = match failure.submission {
         api::SubmissionEvidence::RejectedSubmit(api::DeclineContract::OpenAiImages429V1) => {
             Some("openai-images-429-v1")
@@ -979,7 +973,7 @@ fn api_error(error: ApiError) -> RuntimeError {
         ApiError::Provider(_) => {
             RuntimeError::SupplierFailure(crate::execution::FailureCause::Provider)
         }
-        ApiError::Transport(api::NativeHttpRefusal::Deadline) => {
+        ApiError::Transport(api::NativeHttpCause::Deadline) => {
             RuntimeError::SupplierFailure(crate::execution::FailureCause::DeadlineExceeded)
         }
         ApiError::Transport(_) => {
@@ -1100,31 +1094,28 @@ pub(super) async fn normalize_output(
 }
 
 async fn codex(
-    context: &PublicationContext,
-    intent: &DecodedIntent,
-    config: &ImageConfig,
+    input: DispatchInput<'_>,
     references: Vec<(SourceRef, Vec<u8>)>,
-    timeout: Duration,
-    telemetry: &dyn ImageRuntimeTelemetry,
-    event_context: crate::telemetry::EventContext,
 ) -> Result<ExecutedImage, DispatchFailure> {
+    let DispatchInput {
+        context,
+        intent,
+        config,
+        codex_home,
+        timeout,
+        resume: _,
+        telemetry,
+        event_context,
+    } = input;
     let directory =
         std::path::PathBuf::from(config.codex.workdir.as_str()).join(context.dispatch.to_hex());
-    let scratch = directory.join("scratch");
-    let inputs = directory.join("inputs");
-    let outputs = directory.join("outputs");
-    for path in [&scratch, &inputs, &outputs] {
-        tokio::fs::create_dir_all(path)
+    let (dirs, references) =
+        tokio::task::spawn_blocking(move || stage_codex_attempt(&directory, references))
             .await
+            .map_err(|_| RuntimeError::WorkerFailed)?
             .map_err(|_| RuntimeError::StorageUnavailable)?;
-    }
     let mut staged = Vec::with_capacity(references.len());
-    for (index, (pin, bytes)) in references.into_iter().enumerate() {
-        let path = inputs.join(format!("reference-{index}.png"));
-        tokio::fs::write(&path, bytes)
-            .await
-            .map_err(|_| RuntimeError::StorageUnavailable)?;
-        let digest = crate::lower_hex(pin.digest.as_bytes());
+    for (path, digest) in references {
         staged.push(
             codex_cli::StagedReference::new(path, &digest)
                 .map_err(|_| RuntimeError::InvalidConfiguration)?,
@@ -1147,6 +1138,9 @@ async fn codex(
         cli = cli
             .with_agent_model(agent.as_str())
             .map_err(|_| RuntimeError::InvalidConfiguration)?;
+    }
+    if let Some(home) = codex_home {
+        cli = cli.with_codex_home(home.to_owned());
     }
     let request = codex_cli::CodexImageRequest::new(
         prompt(intent)?.clone(),
@@ -1174,7 +1168,7 @@ async fn codex(
     let outcome = codex_cli::execute(
         &cli,
         &request,
-        &codex_cli::AttemptDirs::new(scratch, inputs, outputs),
+        &dirs,
         &codex_cli::process::TokioProcessRunner,
         timeout,
         None,
@@ -1184,13 +1178,16 @@ async fn codex(
     match outcome {
         codex_cli::CodexOutcome::Ready { receipt, usage } => {
             let observed = codex_usage(usage);
-            let bytes = tokio::fs::read(receipt.path())
+            let path = receipt.path().to_owned();
+            let unread = |error| DispatchFailure {
+                error,
+                usage: Some(codex_usage(usage)),
+                api: None,
+            };
+            let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
                 .await
-                .map_err(|_| DispatchFailure {
-                    error: RuntimeError::StorageUnavailable,
-                    usage: Some(codex_usage(usage)),
-                    api: None,
-                })?;
+                .map_err(|_| unread(RuntimeError::WorkerFailed))?
+                .map_err(|_| unread(RuntimeError::StorageUnavailable))?;
             Ok(ExecutedImage {
                 bytes,
                 units: observed.units,
@@ -1238,6 +1235,31 @@ async fn codex(
             api: None,
         }),
     }
+}
+
+/// Creates one Codex attempt's folders under `directory` and writes its reference pictures into
+/// the inputs folder, on a blocking thread. Returns the folders and each staged reference's path
+/// and lowercase hex digest, in order.
+fn stage_codex_attempt(
+    directory: &std::path::Path,
+    references: Vec<(SourceRef, Vec<u8>)>,
+) -> std::io::Result<(codex_cli::AttemptDirs, Vec<(std::path::PathBuf, String)>)> {
+    let scratch = directory.join("scratch");
+    let inputs = directory.join("inputs");
+    let outputs = directory.join("outputs");
+    for path in [&scratch, &inputs, &outputs] {
+        std::fs::create_dir_all(path)?;
+    }
+    let mut staged = Vec::with_capacity(references.len());
+    for (index, (pin, bytes)) in references.into_iter().enumerate() {
+        let path = inputs.join(format!("reference-{index}.png"));
+        std::fs::write(&path, bytes)?;
+        staged.push((path, crate::lower_hex(pin.digest.as_bytes())));
+    }
+    Ok((
+        codex_cli::AttemptDirs::new(scratch, inputs, outputs),
+        staged,
+    ))
 }
 
 fn codex_usage(usage: codex_cli::ObservedUsage) -> ObservedDispatchUsage {

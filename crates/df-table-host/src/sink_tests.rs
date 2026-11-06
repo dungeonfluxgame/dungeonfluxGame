@@ -5,7 +5,8 @@ use df_table::event::TableEvent;
 use df_table::ports::EventSink;
 
 use crate::event_log::EventLog;
-use crate::sink::{HostSink, LineEcho};
+use crate::observe::{EventLevel, HostEventSink, WallClock};
+use crate::sink::LineEcho;
 
 fn moved() -> TableEvent {
     TableEvent::ElementMoved {
@@ -25,22 +26,31 @@ fn texts(log: &EventLog) -> Vec<String> {
     log.newest(100).into_iter().map(|line| line.text).collect()
 }
 
+/// The canvas's sink as `serve` builds it, at `level`.
+fn canvas_sink(log: &Arc<EventLog>, level: EventLevel) -> HostEventSink {
+    HostEventSink::new(Arc::clone(log), Arc::new(WallClock)).with_level(level)
+}
+
 #[test]
 fn an_event_is_kept_as_its_rendered_audit_line() {
     let log = Arc::new(EventLog::default());
-    let sink = HostSink::new(Arc::clone(&log), false);
+    let sink = canvas_sink(&log, EventLevel::Always);
     sink.record(&cleared());
     assert_eq!(texts(&log), vec!["CANVAS clear removed=3 revision=4"]);
 }
 
 #[test]
-fn moves_are_dropped_unless_the_host_was_asked_to_record_them() {
+fn moves_are_left_out_and_counted_unless_the_host_was_asked_to_record_them() {
     let quiet_log = Arc::new(EventLog::default());
-    HostSink::new(Arc::clone(&quiet_log), false).record(&moved());
+    let quiet = canvas_sink(&quiet_log, EventLevel::Always);
+    quiet.record(&moved());
     assert!(texts(&quiet_log).is_empty());
+    assert_eq!(quiet.health().filtered_verbose, 1);
     let loud_log = Arc::new(EventLog::default());
-    HostSink::new(Arc::clone(&loud_log), true).record(&moved());
+    let loud = canvas_sink(&loud_log, EventLevel::Verbose);
+    loud.record(&moved());
     assert_eq!(texts(&loud_log), vec!["CANVAS move element=pip revision=2"]);
+    assert_eq!(loud.health().filtered_verbose, 0);
 }
 
 fn collecting_echo(log: &EventLog) -> (LineEcho, Arc<Mutex<Vec<String>>>) {
@@ -67,7 +77,7 @@ fn written(printed: &Arc<Mutex<Vec<String>>>, count: usize) -> Vec<String> {
 #[test]
 fn the_echo_prints_each_new_line_once_and_in_order() {
     let log = Arc::new(EventLog::default());
-    let sink = HostSink::new(Arc::clone(&log), true);
+    let sink = canvas_sink(&log, EventLevel::Verbose);
     let (echo, printed) = collecting_echo(&log);
     sink.record(&cleared());
     sink.record(&moved());
@@ -88,7 +98,7 @@ fn the_echo_prints_each_new_line_once_and_in_order() {
 #[test]
 fn the_echo_skips_lines_logged_before_it_was_made() {
     let log = Arc::new(EventLog::default());
-    let sink = HostSink::new(Arc::clone(&log), true);
+    let sink = canvas_sink(&log, EventLevel::Verbose);
     sink.record(&cleared());
     let (echo, printed) = collecting_echo(&log);
     echo.echo_new(&log);

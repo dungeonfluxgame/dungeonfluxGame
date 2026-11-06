@@ -193,17 +193,37 @@ fn done_operation() -> Value {
 }
 
 #[test]
-fn model_and_resolution_strings_are_the_api_names() {
-    assert_eq!(MarbleModel::Draft.as_str(), "marble-1.0-draft");
-    assert_eq!(MarbleModel::Marble11.as_str(), "marble-1.1");
-    assert_eq!(PlyResolution::K100.as_str(), "100k");
-    assert_eq!(PlyResolution::K500.as_str(), "500k");
-    assert_eq!(PlyResolution::FullRes.as_str(), "full_res");
-    assert_eq!(
-        WorldLabsError::InsufficientCredits.label(),
-        "insufficient_credits"
-    );
-    assert_eq!(WorldLabsError::Http(500).label(), "http_status");
+fn model_and_resolution_keys_are_the_api_names() {
+    assert_eq!(MarbleModel::Draft.key(), "marble-1.0-draft");
+    assert_eq!(MarbleModel::Marble11.key(), "marble-1.1");
+    assert_eq!(MarbleModel::Marble11.to_string(), "marble-1.1");
+    assert_eq!(PlyResolution::K100.key(), "100k");
+    assert_eq!(PlyResolution::K500.key(), "500k");
+    assert_eq!(PlyResolution::FullRes.key(), "full_res");
+}
+
+#[test]
+fn error_keys_are_stable_and_display_prints_the_key() {
+    let keys = [
+        (WorldLabsError::InvalidRequest, "invalid_request"),
+        (WorldLabsError::Unauthorized, "unauthorized"),
+        (WorldLabsError::InsufficientCredits, "insufficient_credits"),
+        (WorldLabsError::RateLimited, "rate_limited"),
+        (WorldLabsError::ContentPolicy, "content_policy"),
+        (WorldLabsError::Timeout, "timeout"),
+        (WorldLabsError::Provider(500), "http_status"),
+        (WorldLabsError::Output, "bad_output"),
+        (
+            WorldLabsError::Transport(NativeHttpCause::Unknown),
+            "transport",
+        ),
+    ];
+    for (error, key) in keys {
+        assert_eq!(error.key(), key);
+        assert_eq!(error.to_string(), key);
+    }
+    assert!(WorldLabsError::Provider(503).is_transient());
+    assert!(!WorldLabsError::Provider(404).is_transient());
 }
 
 #[test]
@@ -380,7 +400,7 @@ async fn download_is_bounded_and_sends_no_key() {
     assert_eq!(client.download(&url, 1024).await.unwrap(), b"PLYDATA");
     assert_eq!(
         client.download(&url, 4).await.unwrap_err(),
-        WorldLabsError::Transport
+        WorldLabsError::Transport(NativeHttpCause::ResponseTooLarge)
     );
     let seen = fixture.finish();
     assert!(
@@ -473,7 +493,7 @@ async fn returned_download_redirect_is_refused() {
     let url = format!("http://{}/asset.ply", fixture.address);
     assert_eq!(
         client.download(&url, 1024).await.unwrap_err(),
-        WorldLabsError::Transport
+        WorldLabsError::Transport(NativeHttpCause::Redirect)
     );
     assert_eq!(fixture.finish().len(), 1);
 }

@@ -1,12 +1,14 @@
 //! The `scene` commands: parsed, sent, applied by the host and drawn on top of the fixture.
 
+use axum::http::StatusCode;
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
 use df_playground::overlay::Edit;
 use df_playground::scene::SceneChange;
 
 use crate::client::{get, post_json};
 use crate::command::{Command, CommandError, parse, split_words, usage_text};
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
+use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::{ControlsReply, EventsReply};
 
@@ -294,17 +296,29 @@ async fn a_refused_scene_change_says_why_and_changes_nothing() {
         .await
         .expect_err("refused");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("'Ghost' is not in the party")),
+        refused_change(&error).contains("'Ghost' is not in the party"),
         "{error}"
     );
     let error = run(&running, "scene party add Pip hp=1")
         .await
         .expect_err("refused");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("already in the party")),
+        refused_change(&error).contains("already in the party"),
         "{error}"
     );
     assert_eq!(shown(&running).await, before);
+}
+
+/// The sentence of a scene change the playground's checks refused; what it says is what these
+/// tests are about.
+fn refused_change(error: &DevError) -> &str {
+    match error {
+        DevError::Rejected {
+            error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { detail }),
+            ..
+        } => detail,
+        other => panic!("not a refused change: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -313,10 +327,7 @@ async fn with_no_fixture_shown_a_scene_change_says_to_write_one() {
     let error = run(&running, "scene caption Hi")
         .await
         .expect_err("refused");
-    assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("fixture write")),
-        "{error}"
-    );
+    assert!(refused_change(&error).contains("fixture write"), "{error}");
 }
 
 #[tokio::test]
@@ -327,7 +338,7 @@ async fn a_body_that_is_not_a_scene_change_is_a_400_and_recorded() {
         let response = post_json(running.port, "/dev/playground/scene", body)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{body}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
     }
 }
 

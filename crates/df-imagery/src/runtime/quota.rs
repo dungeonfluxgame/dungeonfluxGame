@@ -24,12 +24,11 @@ impl QuotaAccount {
         endpoint: &str,
         secret: &str,
         trusted_identity: Option<&[u8; 32]>,
-    ) -> Result<Self, QuotaRefusal> {
-        crate::backends::api::check_credential(secret)
-            .map_err(|_| QuotaRefusal::InvalidIdentity)?;
+    ) -> Result<Self, QuotaError> {
+        crate::backends::api::check_credential(secret).map_err(|_| QuotaError::InvalidIdentity)?;
         crate::backends::api::check_endpoint_url(endpoint)
-            .map_err(|_| QuotaRefusal::InvalidIdentity)?;
-        let endpoint = url::Url::parse(endpoint).map_err(|_| QuotaRefusal::InvalidIdentity)?;
+            .map_err(|_| QuotaError::InvalidIdentity)?;
+        let endpoint = url::Url::parse(endpoint).map_err(|_| QuotaError::InvalidIdentity)?;
         let origin = endpoint.origin().ascii_serialization();
         let mut hash = Sha256::new();
         hash.update(b"df-imagery-quota-account-v1\0");
@@ -49,7 +48,7 @@ impl QuotaAccount {
 
 /// Closed quota admission and diagnostic failures; no private account facts are carried.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum QuotaRefusal {
+pub enum QuotaError {
     Cooldown { retry_at_ms: i64 },
     Probing,
     AdmissionChanged,
@@ -59,6 +58,26 @@ pub enum QuotaRefusal {
     InvalidTime,
     StateUnavailable,
 }
+
+impl std::fmt::Display for QuotaError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cooldown { retry_at_ms } => write!(
+                formatter,
+                "the supplier quota cools down until {retry_at_ms} ms"
+            ),
+            Self::Probing => formatter.write_str("the supplier quota is being probed"),
+            Self::AdmissionChanged => formatter.write_str("the quota admission changed"),
+            Self::RegistryFull => formatter.write_str("the quota registry is full"),
+            Self::InvalidIdentity => formatter.write_str("the quota identity is invalid"),
+            Self::InvalidPolicy => formatter.write_str("the quota policy is invalid"),
+            Self::InvalidTime => formatter.write_str("the quota time is invalid"),
+            Self::StateUnavailable => formatter.write_str("the quota state is unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for QuotaError {}
 
 /// Bounded account-state counters for existing developer diagnostics; never an admission decision.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -130,7 +149,7 @@ impl QuotaRegistry {
     }
 
     /// Reads aggregate state without revealing account identities or changing cooldown/probe state.
-    pub fn summary(&self) -> Result<QuotaSummary, QuotaRefusal> {
+    pub fn summary(&self) -> Result<QuotaSummary, QuotaError> {
         let entries = locked(&self.entries)?;
         let mut summary = QuotaSummary::default();
         for entry in entries.iter() {
@@ -139,7 +158,7 @@ impl QuotaRegistry {
                 Condition::Open { .. } => &mut summary.open_accounts,
                 Condition::Probing { .. } => &mut summary.probing_accounts,
             };
-            *count = count.checked_add(1).ok_or(QuotaRefusal::StateUnavailable)?;
+            *count = count.checked_add(1).ok_or(QuotaError::StateUnavailable)?;
         }
         Ok(summary)
     }
@@ -148,9 +167,9 @@ impl QuotaRegistry {
         &self,
         account: &QuotaAccount,
         settings: QuotaSettings,
-    ) -> Result<QuotaAdmission, QuotaRefusal> {
+    ) -> Result<QuotaAdmission, QuotaError> {
         if settings.cooldown_ms == 0 || settings.maximum_accounts == 0 {
-            return Err(QuotaRefusal::InvalidPolicy);
+            return Err(QuotaError::InvalidPolicy);
         }
         if !settings.enabled {
             return Ok(QuotaAdmission {
@@ -165,14 +184,12 @@ impl QuotaRegistry {
         let mut entries = locked(&self.entries)?;
         let entry = if let Some(index) = entries.iter().position(|entry| entry.account == *account)
         {
-            let entry = entries
-                .remove(index)
-                .ok_or(QuotaRefusal::StateUnavailable)?;
+            let entry = entries.remove(index).ok_or(QuotaError::StateUnavailable)?;
             entries.push_back(entry.clone());
             entry
         } else {
             let maximum = usize::try_from(settings.maximum_accounts)
-                .map_err(|_| QuotaRefusal::InvalidPolicy)?;
+                .map_err(|_| QuotaError::InvalidPolicy)?;
             while entries.len() >= maximum {
                 let mut unused = None;
                 for (index, entry) in entries.iter().enumerate() {
@@ -183,10 +200,8 @@ impl QuotaRegistry {
                         break;
                     }
                 }
-                let index = unused.ok_or(QuotaRefusal::RegistryFull)?;
-                entries
-                    .remove(index)
-                    .ok_or(QuotaRefusal::StateUnavailable)?;
+                let index = unused.ok_or(QuotaError::RegistryFull)?;
+                entries.remove(index).ok_or(QuotaError::StateUnavailable)?;
             }
             let entry = Arc::new(Entry {
                 account: *account,
@@ -202,11 +217,11 @@ impl QuotaRegistry {
             Condition::Closed => ObservedAdmission::Closed,
             Condition::Open { until_ms } if now >= until_ms => ObservedAdmission::MayProbe,
             Condition::Open { until_ms } => {
-                return Err(QuotaRefusal::Cooldown {
+                return Err(QuotaError::Cooldown {
                     retry_at_ms: until_ms,
                 });
             }
-            Condition::Probing { .. } => return Err(QuotaRefusal::Probing),
+            Condition::Probing { .. } => return Err(QuotaError::Probing),
         };
         Ok(QuotaAdmission {
             entry: Some(entry),
@@ -219,7 +234,7 @@ impl QuotaRegistry {
 }
 
 impl QuotaAdmission {
-    pub(crate) fn claim(self) -> Result<QuotaPermit, QuotaRefusal> {
+    pub(crate) fn claim(self) -> Result<QuotaPermit, QuotaError> {
         let mut probe_generation = None;
         let now = if self.entry.is_some() {
             checked_now(self.clock.as_ref())?.max(self.observed_at_ms)
@@ -231,23 +246,23 @@ impl QuotaAdmission {
             match (state.condition, self.observed) {
                 (Condition::Closed, ObservedAdmission::Closed) => {}
                 (Condition::Closed, ObservedAdmission::MayProbe) => {
-                    return Err(QuotaRefusal::AdmissionChanged);
+                    return Err(QuotaError::AdmissionChanged);
                 }
                 (Condition::Open { until_ms }, ObservedAdmission::MayProbe) if now >= until_ms => {
                     let generation = state
                         .probe_generation
                         .checked_add(1)
-                        .ok_or(QuotaRefusal::StateUnavailable)?;
+                        .ok_or(QuotaError::StateUnavailable)?;
                     state.probe_generation = generation;
                     state.condition = Condition::Probing { generation };
                     probe_generation = Some(generation);
                 }
                 (Condition::Open { until_ms }, _) => {
-                    return Err(QuotaRefusal::Cooldown {
+                    return Err(QuotaError::Cooldown {
                         retry_at_ms: until_ms,
                     });
                 }
-                (Condition::Probing { .. }, _) => return Err(QuotaRefusal::Probing),
+                (Condition::Probing { .. }, _) => return Err(QuotaError::Probing),
             }
         }
         Ok(QuotaPermit {
@@ -265,7 +280,7 @@ impl QuotaPermit {
     pub(crate) fn finish(
         mut self,
         answer: QuotaAnswer,
-    ) -> Result<Option<QuotaTransition>, QuotaRefusal> {
+    ) -> Result<Option<QuotaTransition>, QuotaError> {
         let transition = if let Some(entry) = &self.entry {
             let now = checked_now(self.clock.as_ref())?.max(self.claimed_at_ms);
             let mut state = locked(&entry.state)?;
@@ -330,16 +345,16 @@ fn rearm_probe(state: &mut State, generation: Option<u64>, now: i64, cooldown_ms
 fn cooldown_end(now: i64, cooldown_ms: u64) -> i64 {
     i64::try_from(i128::from(now) + i128::from(cooldown_ms)).unwrap_or(i64::MAX)
 }
-fn checked_now(clock: &dyn ServiceClock) -> Result<i64, QuotaRefusal> {
+fn checked_now(clock: &dyn ServiceClock) -> Result<i64, QuotaError> {
     let now = clock.now_ms();
     if now > 0 {
         Ok(now)
     } else {
-        Err(QuotaRefusal::InvalidTime)
+        Err(QuotaError::InvalidTime)
     }
 }
-fn locked<T>(value: &Mutex<T>) -> Result<MutexGuard<'_, T>, QuotaRefusal> {
-    value.lock().map_err(|_| QuotaRefusal::StateUnavailable)
+fn locked<T>(value: &Mutex<T>) -> Result<MutexGuard<'_, T>, QuotaError> {
+    value.lock().map_err(|_| QuotaError::StateUnavailable)
 }
 
 #[cfg(test)]

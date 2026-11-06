@@ -35,6 +35,53 @@ pub enum RuntimeError {
     TelemetryUnavailable,
 }
 
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Journal(error) => write!(formatter, "the journal failed: {error}"),
+            Self::Execution(error) => write!(formatter, "the execution store failed: {error}"),
+            Self::Publication(error) => write!(formatter, "publication failed: {error}"),
+            Self::Cost(error) => write!(formatter, "the cost book failed: {error}"),
+            Self::InvalidConfiguration => formatter.write_str("the image configuration is invalid"),
+            Self::CredentialUnavailable => {
+                formatter.write_str("the supplier credential is unavailable")
+            }
+            Self::InvalidRecord => formatter.write_str("a stored record is invalid"),
+            Self::SourceDenied => formatter.write_str("the source was denied"),
+            Self::UnsupportedCapability => {
+                formatter.write_str("the backend does not support this operation")
+            }
+            Self::Disabled => formatter.write_str("the image runtime is disabled"),
+            Self::Expired => formatter.write_str("the job deadline passed"),
+            Self::Cancelled => formatter.write_str("the job was cancelled"),
+            Self::ProviderRefused => formatter.write_str("the supplier refused the request"),
+            Self::SupplierFailure(cause) => {
+                write!(formatter, "the supplier failed: {}", cause.key())
+            }
+            Self::SupplierQuotaExhausted => formatter.write_str("the supplier quota is exhausted"),
+            Self::SupplierRateLimited => formatter.write_str("the supplier rate limit was reached"),
+            Self::QuotaBlocked { .. } => formatter.write_str("the supplier quota blocks dispatch"),
+            Self::ProviderUnknown => formatter.write_str("the supplier outcome is unknown"),
+            Self::StorageUnavailable => formatter.write_str("storage is unavailable"),
+            Self::CostProjectionPending => formatter.write_str("the cost projection is pending"),
+            Self::WorkerFailed => formatter.write_str("the image worker failed"),
+            Self::TelemetryUnavailable => formatter.write_str("telemetry is unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Journal(error) => Some(error),
+            Self::Execution(error) => Some(error),
+            Self::Publication(error) => Some(error),
+            Self::Cost(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 impl RuntimeError {
     /// Supplier evidence remains independent of whether billing or output is still uncertain.
     pub fn failure_cause(&self) -> Option<crate::execution::FailureCause> {
@@ -60,8 +107,9 @@ pub struct SourceReceipt {
     pub retention: df_assets::RetentionClass,
 }
 impl std::fmt::Debug for SourceReceipt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SourceReceipt")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SourceReceipt")
             .field("asset", &self.pin.asset)
             .field("suppression_generation", &self.suppression_generation)
             .finish_non_exhaustive()
@@ -427,8 +475,9 @@ pub trait ImageUsageJournal: Send + Sync {
 }
 
 impl std::fmt::Debug for RuntimeUsage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RuntimeUsage")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeUsage")
             .field("job", &self.job)
             .field("stage", &self.stage)
             .field("dispatch", &self.dispatch)

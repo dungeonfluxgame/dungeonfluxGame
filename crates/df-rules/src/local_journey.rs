@@ -1,5 +1,6 @@
 //! Selected SRD 5.2.1 creation and normal adjacent melee mechanics.
 //! This is an explicitly bounded playable subset, not full 2024 rules coverage.
+use crate::listed::listed_enum;
 use serde::{Deserialize, Serialize};
 
 /// Most heroes in one party; encounter staging admits up to this many heroes plus one foe.
@@ -28,44 +29,112 @@ pub const SOURCE: &str = "Wizards of the Coast LLC SRD 5.2.1 English; \
     encounter; uninterrupted after-combat ShortRest without HitPointDice; no full-rest or general \
     rest catalog.";
 
-/// Why a creation, melee, healing or rest request was refused.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum JourneyRuleError {
-    MissingChoice,
-    DuplicateChoice,
-    InvalidChoice,
-    InvalidName,
-    InvalidDie,
-    InvalidDamageDice,
-    InvalidTarget,
-    ActionSpent,
-    BonusActionSpent,
-    ResourceMissing,
-    InvalidRules,
-    InvalidRest,
-    RestIncomplete,
-    RestInterrupted,
+listed_enum! {
+    keyed
+    /// Why a creation, melee, healing or rest request was refused.
+    #[derive(Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum JourneyRuleError {
+        MissingChoice,
+        DuplicateChoice,
+        InvalidChoice,
+        InvalidName,
+        InvalidDie,
+        InvalidDamageDice,
+        InvalidTarget,
+        ActionSpent,
+        BonusActionSpent,
+        ResourceMissing,
+        InvalidRules,
+        InvalidRest,
+        RestIncomplete,
+        RestInterrupted,
+    }
 }
 
-/// The nine SRD 5.2.1 species a hero may have (pp. 84-86).
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HeroSpecies {
-    Dragonborn,
-    Dwarf,
-    Elf,
-    Gnome,
-    Goliath,
-    Halfling,
-    Human,
-    Orc,
-    Tiefling,
+impl JourneyRuleError {
+    /// The stable key of this refusal, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::MissingChoice => "missing_choice",
+            Self::DuplicateChoice => "duplicate_choice",
+            Self::InvalidChoice => "invalid_choice",
+            Self::InvalidName => "invalid_name",
+            Self::InvalidDie => "invalid_die",
+            Self::InvalidDamageDice => "invalid_damage_dice",
+            Self::InvalidTarget => "invalid_target",
+            Self::ActionSpent => "action_spent",
+            Self::BonusActionSpent => "bonus_action_spent",
+            Self::ResourceMissing => "resource_missing",
+            Self::InvalidRules => "invalid_rules",
+            Self::InvalidRest => "invalid_rest",
+            Self::RestIncomplete => "rest_incomplete",
+            Self::RestInterrupted => "rest_interrupted",
+        }
+    }
 }
 
-/// The size a species grants or a Human or Tiefling chooses.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SpeciesSize {
-    Small,
-    Medium,
+impl std::fmt::Display for JourneyRuleError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::MissingChoice => "a required choice is missing",
+            Self::DuplicateChoice => "a choice was given more than once",
+            Self::InvalidChoice => "a choice is not one the rules offer",
+            Self::InvalidName => "the hero name is not a valid name",
+            Self::InvalidDie => "a die result is outside its die",
+            Self::InvalidDamageDice => "the damage dice do not match the weapon's dice",
+            Self::InvalidTarget => "the target is not valid for this request",
+            Self::ActionSpent => "the action for this turn is already spent",
+            Self::BonusActionSpent => "the bonus action for this turn is already spent",
+            Self::ResourceMissing => "the needed use or resource is not available",
+            Self::InvalidRules => "the rules table is inconsistent",
+            Self::InvalidRest => "the rest request is not valid",
+            Self::RestIncomplete => "the rest did not last long enough",
+            Self::RestInterrupted => "the rest was interrupted",
+        })
+    }
+}
+
+impl std::error::Error for JourneyRuleError {}
+
+listed_enum! {
+    keyed
+    /// The nine SRD 5.2.1 species a hero may have (pp. 84-86), in listing order. The key is also
+    /// the creation choice id of the species.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum HeroSpecies {
+        Dragonborn,
+        Dwarf,
+        Elf,
+        Gnome,
+        Goliath,
+        Halfling,
+        Human,
+        Orc,
+        Tiefling,
+    }
+}
+
+listed_enum! {
+    keyed
+    /// The size a species grants or a Human or Tiefling chooses.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SpeciesSize {
+        Small,
+        Medium,
+    }
+}
+
+impl SpeciesSize {
+    /// The stable key of this size, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+        }
+    }
 }
 
 /// The species traits combat reads, after any lineage or size choice.
@@ -81,37 +150,8 @@ pub struct SpeciesCombatTraits {
 }
 
 impl HeroSpecies {
-    /// Every species a creator may pick, in listing order.
-    pub(crate) const ALL: [HeroSpecies; 9] = [
-        Self::Dragonborn,
-        Self::Dwarf,
-        Self::Elf,
-        Self::Gnome,
-        Self::Goliath,
-        Self::Halfling,
-        Self::Human,
-        Self::Orc,
-        Self::Tiefling,
-    ];
-
-    /// The species a creation choice id names, if any.
-    pub fn from_choice(choice_id: &str) -> Option<Self> {
-        Some(match choice_id {
-            "dragonborn" => Self::Dragonborn,
-            "dwarf" => Self::Dwarf,
-            "elf" => Self::Elf,
-            "gnome" => Self::Gnome,
-            "goliath" => Self::Goliath,
-            "halfling" => Self::Halfling,
-            "human" => Self::Human,
-            "orc" => Self::Orc,
-            "tiefling" => Self::Tiefling,
-            _ => return None,
-        })
-    }
-
-    /// The creation choice id of this species.
-    pub fn choice_id(self) -> &'static str {
+    /// The stable key of this species, as it is serialized and as a creation choice names it.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Dragonborn => "dragonborn",
             Self::Dwarf => "dwarf",
@@ -242,6 +282,7 @@ pub fn background_origin_feat(background: &str) -> Option<OriginFeat> {
 
 /// A monster Challenge Rating: the three fractions or a whole number.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum ChallengeRating {
     Zero,
     Eighth,
@@ -329,7 +370,7 @@ impl FighterProgression {
             .choices
             .iter()
             .find(|(key, _)| key == "species")
-            .and_then(|(_, species_id)| HeroSpecies::from_choice(species_id))
+            .and_then(|(_, species_id)| HeroSpecies::from_key(species_id))
             .ok_or(JourneyRuleError::InvalidChoice)?;
         let archer = character
             .choices
@@ -468,22 +509,62 @@ pub struct BackgroundBonus {
     pub strength: u8,
     pub constitution: u8,
 }
-/// Creation numbers; array IDs remain within the compiled supported offer set.
+/// Creation numbers; array IDs remain within the compiled supported offer set. Valid by
+/// construction: `srd_521` or `new`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreationRules<'a> {
-    pub ability_arrays: &'a [AbilityArray<'a>],
-    pub background_bonus: BackgroundBonus,
-    pub base_hit_points: u8,
-    pub armor_class: u8,
-    pub proficiency_bonus: u8,
-    pub second_wind_uses_max: u8,
+    ability_arrays: &'a [AbilityArray<'a>],
+    background_bonus: BackgroundBonus,
+    base_hit_points: u8,
+    armor_class: u8,
+    proficiency_bonus: u8,
+    second_wind_uses_max: u8,
 }
-impl CreationRules<'_> {
+impl<'a> CreationRules<'a> {
     pub const fn srd_521() -> Self {
         SRD_521_BASELINE.creation
     }
+    /// Creation numbers other than the SRD baseline; refuses out-of-bounds numbers,
+    /// unsupported or duplicate array ids and nonpositive derived hit points.
+    pub fn new(
+        ability_arrays: &'a [AbilityArray<'a>],
+        background_bonus: BackgroundBonus,
+        base_hit_points: u8,
+        armor_class: u8,
+        proficiency_bonus: u8,
+        second_wind_uses_max: u8,
+    ) -> Result<Self, JourneyRuleError> {
+        let rules = Self {
+            ability_arrays,
+            background_bonus,
+            base_hit_points,
+            armor_class,
+            proficiency_bonus,
+            second_wind_uses_max,
+        };
+        rules.validate()?;
+        Ok(rules)
+    }
+    pub fn ability_arrays(&self) -> &'a [AbilityArray<'a>] {
+        self.ability_arrays
+    }
+    pub fn background_bonus(&self) -> BackgroundBonus {
+        self.background_bonus
+    }
+    pub fn base_hit_points(&self) -> u8 {
+        self.base_hit_points
+    }
+    pub fn armor_class(&self) -> u8 {
+        self.armor_class
+    }
+    pub fn proficiency_bonus(&self) -> u8 {
+        self.proficiency_bonus
+    }
+    pub fn second_wind_uses_max(&self) -> u8 {
+        self.second_wind_uses_max
+    }
     /// Reject out-of-bounds numbers, unsupported/duplicate IDs and nonpositive derived HP.
-    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+    fn validate(&self) -> Result<(), JourneyRuleError> {
         if !(1..=60).contains(&self.base_hit_points)
             || !(10..=30).contains(&self.armor_class)
             || !(2..=6).contains(&self.proficiency_bonus)
@@ -513,17 +594,41 @@ impl CreationRules<'_> {
     }
 }
 /// Combat numbers shared with the native caller; d20 and dice-doubling mechanics stay fixed.
+/// Valid by construction: `srd_521` or `new`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CombatRules {
-    pub critical_threshold: u8,
-    pub round_ticks: u32,
-    pub combat_log_entries: u8,
+    critical_threshold: u8,
+    round_ticks: u32,
+    combat_log_entries: u8,
 }
 impl CombatRules {
     pub const fn srd_521() -> Self {
         SRD_521_BASELINE.combat
     }
-    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+    /// Combat numbers other than the SRD baseline; refuses any number out of its bounds.
+    pub fn new(
+        critical_threshold: u8,
+        round_ticks: u32,
+        combat_log_entries: u8,
+    ) -> Result<Self, JourneyRuleError> {
+        let rules = Self {
+            critical_threshold,
+            round_ticks,
+            combat_log_entries,
+        };
+        rules.validate()?;
+        Ok(rules)
+    }
+    pub fn critical_threshold(&self) -> u8 {
+        self.critical_threshold
+    }
+    pub fn round_ticks(&self) -> u32 {
+        self.round_ticks
+    }
+    pub fn combat_log_entries(&self) -> u8 {
+        self.combat_log_entries
+    }
+    fn validate(&self) -> Result<(), JourneyRuleError> {
         if !(15..=20).contains(&self.critical_threshold)
             || !(1..=600).contains(&self.round_ticks)
             || !(1..=32).contains(&self.combat_log_entries)
@@ -533,19 +638,48 @@ impl CombatRules {
         Ok(())
     }
 }
-/// Second Wind numbers shared with the native caller.
+/// Second Wind numbers shared with the native caller. Valid by construction: `srd_521` or `new`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SecondWindRules {
-    pub uses_max: u8,
-    pub die_sides: u8,
-    pub flat_bonus: u8,
-    pub recharge_per_short_rest: u8,
+    uses_max: u8,
+    die_sides: u8,
+    flat_bonus: u8,
+    recharge_per_short_rest: u8,
 }
 impl SecondWindRules {
     pub const fn srd_521() -> Self {
         SRD_521_BASELINE.second_wind
     }
-    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+    /// Second Wind numbers other than the SRD baseline; refuses more than five uses, a die that
+    /// is not d4 to d12, a flat bonus over 10 and a recharge above the uses.
+    pub fn new(
+        uses_max: u8,
+        die_sides: u8,
+        flat_bonus: u8,
+        recharge_per_short_rest: u8,
+    ) -> Result<Self, JourneyRuleError> {
+        let rules = Self {
+            uses_max,
+            die_sides,
+            flat_bonus,
+            recharge_per_short_rest,
+        };
+        rules.validate()?;
+        Ok(rules)
+    }
+    pub fn uses_max(&self) -> u8 {
+        self.uses_max
+    }
+    pub fn die_sides(&self) -> u8 {
+        self.die_sides
+    }
+    pub fn flat_bonus(&self) -> u8 {
+        self.flat_bonus
+    }
+    pub fn recharge_per_short_rest(&self) -> u8 {
+        self.recharge_per_short_rest
+    }
+    fn validate(&self) -> Result<(), JourneyRuleError> {
         if self.uses_max > 5
             || !permitted_damage_sides(self.die_sides)
             || self.flat_bonus > 10
@@ -556,16 +690,27 @@ impl SecondWindRules {
         Ok(())
     }
 }
-/// Rest duration in seconds of admitted campaign time, never wall-clock time.
+/// Rest duration in seconds of admitted campaign time, never wall-clock time. Valid by
+/// construction: `srd_521` or `new`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RestRules {
-    pub short_rest_seconds: u32,
+    short_rest_seconds: u32,
 }
 impl RestRules {
     pub const fn srd_521() -> Self {
         SRD_521_BASELINE.rest
     }
-    pub fn validate(&self) -> Result<(), JourneyRuleError> {
+    /// A Short Rest length other than the SRD baseline; refuses less than a minute or more than
+    /// a day.
+    pub fn new(short_rest_seconds: u32) -> Result<Self, JourneyRuleError> {
+        let rules = Self { short_rest_seconds };
+        rules.validate()?;
+        Ok(rules)
+    }
+    pub fn short_rest_seconds(&self) -> u32 {
+        self.short_rest_seconds
+    }
+    fn validate(&self) -> Result<(), JourneyRuleError> {
         if !(60..=86400).contains(&self.short_rest_seconds) {
             return Err(JourneyRuleError::InvalidRules);
         }
@@ -742,7 +887,6 @@ pub fn validate_character(
     name: &str,
     choices: &[(&str, &str)],
 ) -> Result<LegalCharacter, JourneyRuleError> {
-    rules.validate()?;
     if !valid_character_name(name) {
         return Err(JourneyRuleError::InvalidName);
     }
@@ -768,7 +912,7 @@ pub fn validate_character(
             .ok_or(JourneyRuleError::MissingChoice)
     };
     let species =
-        HeroSpecies::from_choice(choice("species")?).ok_or(JourneyRuleError::InvalidChoice)?;
+        HeroSpecies::from_key(choice("species")?).ok_or(JourneyRuleError::InvalidChoice)?;
     let species_options = crate::species::SpeciesOptions::from_choices(species, choices)?;
     for (group, expected) in FIXED_OFFERS {
         if choice(group)? != expected {
@@ -1008,7 +1152,6 @@ pub fn heal_second_wind(
     maximum: u32,
     uses: u32,
 ) -> Result<(u32, u32), JourneyRuleError> {
-    rules.validate()?;
     if !(1..=u32::from(rules.die_sides)).contains(&die) {
         return Err(JourneyRuleError::InvalidDie);
     }
@@ -1029,7 +1172,7 @@ pub fn short_rest_due(
     ticks_per_second: u32,
     short_rest_seconds: u32,
 ) -> Result<u64, JourneyRuleError> {
-    RestRules { short_rest_seconds }.validate()?;
+    RestRules::new(short_rest_seconds)?;
     if ticks_per_second == 0 {
         return Err(JourneyRuleError::InvalidRest);
     }
@@ -1063,7 +1206,6 @@ pub fn complete_no_hit_dice_short_rest(
     uses_max: u8,
     recharge: u8,
 ) -> Result<ShortRestBenefits, JourneyRuleError> {
-    rules.validate()?;
     if uses_max > 5 || recharge > uses_max {
         return Err(JourneyRuleError::InvalidRules);
     }
@@ -1096,5 +1238,4 @@ pub fn complete_no_hit_dice_short_rest(
 }
 
 #[cfg(test)]
-#[path = "local_journey_tests.rs"]
-mod tests;
+mod local_journey_tests;

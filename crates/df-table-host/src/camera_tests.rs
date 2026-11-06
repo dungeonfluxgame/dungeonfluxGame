@@ -1,6 +1,7 @@
 //! The camera: `scene camera` and `scene camera-reset`, parsed, checked against the stage, applied by
 //! the host, and run back to back from a script with two avatars on the canvas.
 
+use axum::http::StatusCode;
 use df_playground::fixture::Camera;
 use df_playground::limits::{MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
 use df_playground::scene::SceneChange;
@@ -266,7 +267,7 @@ async fn a_zoom_out_of_range_that_slips_past_the_command_line_is_refused_by_the_
         crate::client::post_json(running.port, "/dev/playground/scene", &body.to_string())
             .await
             .expect("answers");
-    assert_eq!(response.status, 400);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     let range = format!("{MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT}");
     assert!(response.body.contains(&range), "{}", response.body);
     assert_eq!(camera_of(&running).await, None);

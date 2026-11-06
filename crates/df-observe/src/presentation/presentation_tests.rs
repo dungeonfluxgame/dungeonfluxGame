@@ -162,44 +162,44 @@ fn component_lifecycle_round_trips_closed_visibility_and_duration() {
     assert!(line.contains("read_ms=5500"));
     assert!(line.contains("visible_held_ms=4125"));
     assert_eq!(
-        PresentationComponent::from_label("check_card"),
+        PresentationComponent::from_key("check_card"),
         Some(PresentationComponent::CheckCard)
     );
     assert_eq!(
-        PresentationComponent::from_label("dice"),
+        PresentationComponent::from_key("dice"),
         Some(PresentationComponent::Dice)
     );
     assert_eq!(
-        PresentationComponent::from_label("party_hud"),
+        PresentationComponent::from_key("party_hud"),
         Some(PresentationComponent::PartyHud)
     );
     assert_eq!(
-        PresentationComponent::from_label("roll_card"),
+        PresentationComponent::from_key("roll_card"),
         Some(PresentationComponent::RollCard)
     );
     assert_eq!(
-        PresentationComponent::from_label("die"),
+        PresentationComponent::from_key("die"),
         Some(PresentationComponent::Die)
     );
     assert_eq!(
-        PresentationComponent::from_label("combat_banner"),
+        PresentationComponent::from_key("combat_banner"),
         Some(PresentationComponent::CombatBanner)
     );
     assert_eq!(
-        PresentationComponent::from_label("turn_change"),
+        PresentationComponent::from_key("turn_change"),
         Some(PresentationComponent::TurnChange)
     );
     assert_eq!(
-        PresentationComponent::from_label("battlefield"),
+        PresentationComponent::from_key("battlefield"),
         Some(PresentationComponent::Battlefield)
     );
-    assert_eq!(PresentationComponent::from_label("secret-component"), None);
+    assert_eq!(PresentationComponent::from_key("secret-component"), None);
     assert_eq!(
-        ComponentPhase::from_label("readable"),
+        ComponentPhase::from_key("readable"),
         Some(ComponentPhase::Readable)
     );
     assert_eq!(
-        EffectiveVisibility::from_label("hidden"),
+        EffectiveVisibility::from_key("hidden"),
         Some(EffectiveVisibility::Hidden)
     );
 }
@@ -236,7 +236,7 @@ fn battle_component_kinds_build_valid_lifecycle_events() {
         ),
     ];
 
-    for (component, label, phases) in components {
+    for (component, key, phases) in components {
         for phase in phases {
             let hidden = *phase == Hidden;
             let event = TimingEvent::component_lifecycle(
@@ -254,7 +254,7 @@ fn battle_component_kinds_build_valid_lifecycle_events() {
             );
 
             assert_eq!(event.component, Some(component));
-            assert_eq!(event.component.unwrap().label(), label);
+            assert_eq!(event.component.unwrap().key(), key);
             assert_eq!(event.component_phase, Some(*phase));
             assert_eq!(event.at_ms, 8_250);
             assert!(encode(&[event]).is_ok());
@@ -436,4 +436,53 @@ fn hs48_capture_rejects_uncatalogued_close_causes_and_backdated_voice_reports() 
     assert_eq!(decoded[0].opened_ms, Some(1000));
     assert_eq!(decoded[0].table_sequence, Some(42));
     assert_eq!(batch.dropped, 0);
+}
+
+/// Asserts each variant's key parses back to it, no two variants share a key and every key is
+/// snake_case, so the wire keys cannot drift from the closed sets.
+fn assert_keys_round_trip<T: Copy + Eq + std::fmt::Debug>(
+    all: &[T],
+    key: fn(T) -> &'static str,
+    from_key: fn(&str) -> Option<T>,
+) {
+    let mut seen = std::collections::BTreeSet::new();
+    for variant in all.iter().copied() {
+        let text = key(variant);
+        assert_eq!(from_key(text), Some(variant), "{text}");
+        assert!(seen.insert(text), "duplicate key {text}");
+        assert!(
+            !text.is_empty()
+                && text
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_'),
+            "{text} is not snake_case"
+        );
+    }
+    assert_eq!(from_key("not_a_key"), None);
+}
+
+#[test]
+fn every_closed_key_round_trips_and_is_unique() {
+    assert_keys_round_trip(
+        PresentationComponent::ALL,
+        PresentationComponent::key,
+        PresentationComponent::from_key,
+    );
+    assert_keys_round_trip(
+        ComponentPhase::ALL,
+        ComponentPhase::key,
+        ComponentPhase::from_key,
+    );
+    assert_keys_round_trip(
+        EffectiveVisibility::ALL,
+        EffectiveVisibility::key,
+        EffectiveVisibility::from_key,
+    );
+    assert_keys_round_trip(VisualSource::ALL, VisualSource::key, VisualSource::from_key);
+    assert_keys_round_trip(VisualShot::ALL, VisualShot::key, VisualShot::from_key);
+    assert_keys_round_trip(
+        VisualPlateState::ALL,
+        VisualPlateState::key,
+        VisualPlateState::from_key,
+    );
 }

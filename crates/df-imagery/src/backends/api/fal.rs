@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use super::codec::{jpeg_size, webp_facts};
 use super::{
-    ApiError, ApiExchange, ApiFailure, DeclineContract, ImageBackground, ImageEdit, ImageFormat,
+    ApiCallError, ApiError, ApiExchange, DeclineContract, ImageBackground, ImageEdit, ImageFormat,
     ImageModeration, OperationalBounds, check_credential, check_credentialed_origin,
     check_endpoint_url, check_model_slug,
 };
@@ -28,7 +28,7 @@ use super::{GeneratedImage, ImageUsage};
 #[cfg(test)]
 use df_providers::{EncodedMediaFacts, inspect_png_off_worker};
 use df_providers::{
-    HttpMethod, HttpRequest, NativeHttp, NativeHttpLimits, NativeHttpRefusal, TextSchemaLimits,
+    HttpMethod, HttpRequest, NativeHttp, NativeHttpCause, NativeHttpLimits, TextSchemaLimits,
     parse_unique_json,
 };
 
@@ -415,8 +415,8 @@ impl FalExecutor {
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
-    ) -> Result<FalGenerationCheckpoint, ApiFailure> {
-        validate_generation(edit).map_err(ApiFailure::before_transport)?;
+    ) -> Result<FalGenerationCheckpoint, ApiCallError> {
+        validate_generation(edit).map_err(ApiCallError::before_transport)?;
         let opaque = if edit.output == ImageFormat::Jpeg {
             ImageFormat::Jpeg
         } else {
@@ -450,9 +450,9 @@ impl FalExecutor {
         &self,
         checkpoint: &FalGenerationCheckpoint,
         deadline: Duration,
-    ) -> Result<(Vec<u8>, ImageFormat, FalGenerationReceipt), ApiFailure> {
+    ) -> Result<(Vec<u8>, ImageFormat, FalGenerationReceipt), ApiCallError> {
         self.check_generation_checkpoint(checkpoint)
-            .map_err(|error| ApiFailure::unknown(error, ApiExchange::Poll))?;
+            .map_err(|error| ApiCallError::unknown(error, ApiExchange::Poll))?;
         let started = std::time::Instant::now();
         let remaining = || deadline.saturating_sub(started.elapsed());
         self.poll_result(
@@ -473,9 +473,9 @@ impl FalExecutor {
         generated: &[u8],
         format: ImageFormat,
         deadline: Duration,
-    ) -> Result<FalAlphaCheckpoint, ApiFailure> {
+    ) -> Result<FalAlphaCheckpoint, ApiCallError> {
         if generated.is_empty() || generated.len() > self.bounds.fal_max_image_bytes {
-            return Err(ApiFailure::before_transport(ApiError::InvalidRequest));
+            return Err(ApiCallError::before_transport(ApiError::InvalidRequest));
         }
         let body = json!({
             "image_url": data_uri(format, generated),
@@ -507,9 +507,9 @@ impl FalExecutor {
         &self,
         checkpoint: &FalAlphaCheckpoint,
         deadline: Duration,
-    ) -> Result<(Vec<u8>, ImageFormat, FalAlphaReceipt), ApiFailure> {
+    ) -> Result<(Vec<u8>, ImageFormat, FalAlphaReceipt), ApiCallError> {
         self.check_alpha_checkpoint(checkpoint)
-            .map_err(|error| ApiFailure::unknown(error, ApiExchange::Poll))?;
+            .map_err(|error| ApiCallError::unknown(error, ApiExchange::Poll))?;
         let started = std::time::Instant::now();
         let remaining = || deadline.saturating_sub(started.elapsed());
         self.poll_result(
@@ -602,8 +602,8 @@ impl FalExecutor {
         endpoint: &str,
         body: &Value,
         deadline: Duration,
-    ) -> Result<QueueReply, ApiFailure> {
-        check_model_slug(endpoint).map_err(ApiFailure::before_transport)?;
+    ) -> Result<QueueReply, ApiCallError> {
+        check_model_slug(endpoint).map_err(ApiCallError::before_transport)?;
         let started = std::time::Instant::now();
         let submitted = self
             .exchange(
@@ -622,7 +622,7 @@ impl FalExecutor {
             self.bounds.fal_max_response_bytes,
         )
         .map_err(|error| {
-            ApiFailure::response(
+            ApiCallError::response(
                 error,
                 ApiExchange::Submit,
                 DeclineContract::FalQueue429V1,
@@ -637,7 +637,7 @@ impl FalExecutor {
         status_path: String,
         result_path: String,
         deadline: Duration,
-    ) -> Result<(Vec<u8>, ImageFormat, FalStageReceipt), ApiFailure> {
+    ) -> Result<(Vec<u8>, ImageFormat, FalStageReceipt), ApiCallError> {
         let started = std::time::Instant::now();
         let remaining = || deadline.saturating_sub(started.elapsed());
         loop {
@@ -653,7 +653,7 @@ impl FalExecutor {
             let state = json_body(&response, self.bounds.fal_max_response_bytes)
                 .and_then(|value| status_of(&value))
                 .map_err(|error| {
-                    ApiFailure::response(
+                    ApiCallError::response(
                         error,
                         ApiExchange::Poll,
                         DeclineContract::FalQueue429V1,
@@ -665,8 +665,8 @@ impl FalExecutor {
                 Status::Waiting => {
                     let pause = self.bounds.poll_interval.min(remaining());
                     if pause.is_zero() {
-                        return Err(ApiFailure::accepted(
-                            ApiError::Transport(NativeHttpRefusal::Deadline),
+                        return Err(ApiCallError::accepted(
+                            ApiError::Transport(NativeHttpCause::Deadline),
                             ApiExchange::Poll,
                         ));
                     }
@@ -691,7 +691,7 @@ impl FalExecutor {
         let decoded = json_body(&result, self.bounds.fal_max_response_bytes)
             .and_then(|value| first_image(&value, self.bounds.fal_max_image_bytes))
             .map_err(|error| {
-                ApiFailure::response(
+                ApiCallError::response(
                     error,
                     ApiExchange::Result,
                     DeclineContract::FalQueue429V1,
@@ -747,7 +747,7 @@ impl FalExecutor {
         body: Vec<u8>,
         remaining: Duration,
         exchange: ApiExchange,
-    ) -> Result<df_providers::NativeHttpResponse, ApiFailure> {
+    ) -> Result<df_providers::NativeHttpResponse, ApiCallError> {
         let request = HttpRequest::fal_native(
             method,
             &format!("{}{path}", self.origin),
@@ -758,7 +758,7 @@ impl FalExecutor {
             .http
             .execute(request, remaining, std::future::pending())
             .await
-            .map_err(|failure| ApiFailure::transport(failure.reason, exchange))?;
+            .map_err(|failure| ApiCallError::transport(failure.cause, exchange))?;
         let error = match response.status {
             200 | 202 => None,
             401 | 403 => Some(ApiError::Unauthorized),
@@ -767,7 +767,7 @@ impl FalExecutor {
             status => Some(ApiError::Provider(status)),
         };
         match error {
-            Some(error) => Err(ApiFailure::response(
+            Some(error) => Err(ApiCallError::response(
                 error,
                 exchange,
                 DeclineContract::FalQueue429V1,

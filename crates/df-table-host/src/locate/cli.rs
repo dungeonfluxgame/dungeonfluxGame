@@ -15,8 +15,7 @@ use super::request::{
 use super::routes::path;
 use crate::command::{Command, CommandError, bad_choice};
 use crate::dev::DevError;
-use crate::dev_client::{get_json, post_json};
-use crate::dev_http::DevReply;
+use crate::dev_client::{self, get_json, post_json};
 
 pub const MEDIA_LOCATE_USAGE: &str = concat!(
     "media locate <picture> [prompt=person|head] [masks=1-32]",
@@ -203,19 +202,9 @@ fn query_value(text: &str) -> String {
         .collect()
 }
 
-/// The value of a locate reply, or its refusal as the command's failure.
-///
-/// Transitional: the refusal becomes text until `DevError` carries a route's typed error
-/// (`dev_client::get_value` / `post_value` then replace this); the route tests match the typed
-/// `LocateError` on the reply itself.
+/// The value of a locate reply, or its refusal (the typed `LocateError`) as the command's failure.
 fn reply_value<T>(reply: LocateReply<T>) -> Result<T, DevError> {
-    match reply {
-        DevReply::Done { value } => Ok(value),
-        DevReply::Rejected { error, message } => Err(DevError::Rejected(format!(
-            "refused ({}): {message}",
-            error.key()
-        ))),
-    }
+    dev_client::reply_value(reply)
 }
 
 async fn show(port: u16, picture: &str) -> Result<StoredLayout, DevError> {
@@ -282,12 +271,12 @@ fn format_located(located: &LocatedLayout) -> String {
     format!(
         "ok stored {}: {} {} region(s) of {} ({}x{}) by {} in {}{}\n{}",
         located.layout_file,
-        layout.regions.len(),
-        layout.prompt,
+        layout.regions().len(),
+        layout.prompt(),
         located.picture,
-        layout.picture.width_px,
-        layout.picture.height_px,
-        layout.model,
+        layout.picture().width_px,
+        layout.picture().height_px,
+        layout.model(),
         seconds_text(located.duration_ms),
         if located.kept_labels > 0 {
             format!("; kept {} name(s)", located.kept_labels)
@@ -303,11 +292,11 @@ fn format_stored(stored: &StoredLayout) -> String {
     format!(
         "{} ({} of {}, prompt {}, {}x{})\n{}",
         stored.layout_file,
-        layout.model,
+        layout.model(),
         stored.picture,
-        layout.prompt,
-        layout.picture.width_px,
-        layout.picture.height_px,
+        layout.prompt(),
+        layout.picture().width_px,
+        layout.picture().height_px,
         format_regions(layout)
     )
 }
@@ -362,25 +351,25 @@ fn format_identified(identified: &IdentifiedLayout) -> String {
 
 /// One line per region: number, name, box, head point and score, in percent of the picture.
 pub fn format_regions(layout: &SceneLayout) -> String {
-    if layout.regions.is_empty() {
-        return format!("  no {} found", layout.prompt);
+    if layout.regions().is_empty() {
+        return format!("  no {} found", layout.prompt());
     }
     layout
-        .regions
+        .regions()
         .iter()
         .enumerate()
         .map(|(number, region)| {
             format!(
                 "  {number}: {} [{}] box {}..{} x {}..{} % head {},{} % score {}",
-                region.label.as_deref().unwrap_or("(unnamed)"),
-                region.id,
-                percent_text(region.left_permille),
-                percent_text(region.right_permille),
-                percent_text(region.top_permille),
-                percent_text(region.bottom_permille),
-                percent_text(region.head_x_permille),
-                percent_text(region.head_y_permille),
-                percent_text(region.score_permille)
+                region.label().unwrap_or("(unnamed)"),
+                region.id(),
+                percent_text(region.left_permille()),
+                percent_text(region.right_permille()),
+                percent_text(region.top_permille()),
+                percent_text(region.bottom_permille()),
+                percent_text(region.head_x_permille()),
+                percent_text(region.head_y_permille()),
+                percent_text(region.score_permille())
             )
         })
         .collect::<Vec<_>>()
@@ -393,15 +382,18 @@ pub fn format_points(layout: &SceneLayout) -> String {
     use df_scene_layout::{
         CharacterPoint, Shot, point_of, region_target, shot_focus, shot_zoom_percent,
     };
-    let named = layout.regions.iter().any(|region| region.label.is_some());
+    let named = layout
+        .regions()
+        .iter()
+        .any(|region| region.label().is_some());
     let mut lines = Vec::new();
-    for (number, region) in layout.regions.iter().enumerate() {
-        if named && region.label.is_none() {
+    for (number, region) in layout.regions().iter().enumerate() {
+        if named && region.label().is_none() {
             continue;
         }
         let name = region
-            .label
-            .clone()
+            .label()
+            .map(str::to_owned)
             .unwrap_or_else(|| format!("region {number} (unnamed)"));
         lines.push(format!("{name}:"));
         let points = CharacterPoint::ALL
@@ -415,7 +407,7 @@ pub fn format_points(layout: &SceneLayout) -> String {
         lines.push(format!("  points (%): {points}"));
         for shot in Shot::ALL {
             let (x, y) = shot_focus(region, shot);
-            let target = region.label.as_deref().map_or_else(
+            let target = region.label().map_or_else(
                 || "(name it to aim the camera)".to_owned(),
                 |label| region_target(label, Some(shot)),
             );
@@ -429,7 +421,7 @@ pub fn format_points(layout: &SceneLayout) -> String {
         }
     }
     if lines.is_empty() {
-        format!("no {} in the layout", layout.prompt)
+        format!("no {} in the layout", layout.prompt())
     } else {
         lines.join("\n")
     }

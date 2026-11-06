@@ -1,5 +1,6 @@
 //! The playground's controls and fixture commands, through the running host.
 
+use axum::http::StatusCode;
 use df_playground::controls::{ControlsChange, Device};
 use serde_json::json;
 
@@ -19,11 +20,11 @@ async fn controls(running: &Running) -> ControlsReply {
     let response = get(running.port, "/playground/controls.json")
         .await
         .expect("answers");
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, StatusCode::OK);
     serde_json::from_str(&response.body).expect("controls")
 }
 
-async fn change(running: &Running, change: &ControlsChange) -> (u16, String) {
+async fn change(running: &Running, change: &ControlsChange) -> (StatusCode, String) {
     let response = post_json(
         running.port,
         "/dev/playground/controls",
@@ -90,7 +91,7 @@ async fn a_change_is_applied_numbered_and_recorded() {
     running.write_asset("fixtures/a.json", MINIMAL_FIXTURE);
     controls(&running).await;
     let (status, body) = change(&running, &ControlsChange::Device(Device::Tv)).await;
-    assert_eq!(status, 200);
+    assert_eq!(status, StatusCode::OK);
     let reply: ChangeReply = serde_json::from_str(&body).expect("a change reply");
     let DevReply::Done { value: reply } = reply else {
         panic!("applied: {body}");
@@ -119,7 +120,7 @@ async fn a_refused_change_is_a_400_that_says_why_and_leaves_the_controls_alone()
     running.write_asset("fixtures/a.json", MINIMAL_FIXTURE);
     let before = controls(&running).await;
     let (status, body) = change(&running, &ControlsChange::Status("sleepy".into())).await;
-    assert_eq!(status, 400);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("waiting_for"));
     let reply: ChangeReply = serde_json::from_str(&body).expect("a change reply");
     assert!(
@@ -133,7 +134,7 @@ async fn a_refused_change_is_a_400_that_says_why_and_leaves_the_controls_alone()
         "{body}"
     );
     let (status, body) = change(&running, &ControlsChange::Fixture("ghost.json".into())).await;
-    assert_eq!(status, 400);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("a.json"), "{body}");
     assert_eq!(controls(&running).await, before);
     assert!(
@@ -151,7 +152,7 @@ async fn a_body_that_is_not_a_change_is_a_400_and_recorded() {
         let response = post_json(running.port, "/dev/playground/controls", body)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{body}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
         let reply: ChangeReply = serde_json::from_str(&response.body).expect("a change reply");
         assert!(
             matches!(
@@ -186,7 +187,7 @@ async fn a_removed_fixture_that_was_chosen_is_replaced_by_the_first_left() {
     )
     .await
     .expect("answers");
-    assert_eq!(removed.status, 200);
+    assert_eq!(removed.status, StatusCode::OK);
     assert_eq!(
         controls(&running).await.controls.fixture.as_deref(),
         Some("a.json")
@@ -200,7 +201,7 @@ async fn a_fixture_that_reads_is_written_listed_shown_and_removed() {
     let response = post_json(running.port, "/dev/playground/fixture", &body)
         .await
         .expect("answers");
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, StatusCode::OK);
     assert!(matches!(
         serde_json::from_str::<Reply>(&response.body),
         Ok(Reply::Done { .. })
@@ -227,7 +228,7 @@ async fn a_fixture_that_reads_is_written_listed_shown_and_removed() {
     )
     .await
     .expect("answers");
-    assert_eq!(removed.status, 200);
+    assert_eq!(removed.status, StatusCode::OK);
     assert_eq!(
         get(running.port, "/playground/fixtures.json")
             .await
@@ -242,7 +243,7 @@ async fn a_fixture_that_reads_is_written_listed_shown_and_removed() {
     )
     .await
     .expect("answers");
-    assert_eq!(again.status, 400);
+    assert_eq!(again.status, StatusCode::BAD_REQUEST);
     assert!(again.body.contains("no fixture"));
 }
 
@@ -254,7 +255,7 @@ async fn a_fixture_that_does_not_read_is_refused_with_its_position_and_nothing_i
     let response = post_json(running.port, "/dev/playground/fixture", &body)
         .await
         .expect("answers");
-    assert_eq!(response.status, 400);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     assert!(
         response.body.contains("bad.json, line"),
         "{}",
@@ -277,7 +278,7 @@ async fn a_fixture_name_that_leaves_the_directory_is_refused_before_anything_is_
         let response = post_json(running.port, "/dev/playground/fixture", &body)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{name:?}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{name:?}");
     }
     assert!(!running.playground_path("escape.json").exists());
 }

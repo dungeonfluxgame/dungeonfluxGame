@@ -46,7 +46,7 @@ fn enqueue_command() -> EnqueueCommand {
             asset: [0x41; 16],
             attempt: [0x42; 16],
         },
-        CapacityScope::new("live/generation".to_owned()).expect("scope"),
+        CapacityScope::new("live/generation").expect("scope"),
         false,
         1_700_000_000_000,
     )
@@ -80,15 +80,15 @@ fn kind_state_settlement_and_cause_labels_round_trip() {
         StageKind::Correction,
         StageKind::LocalTransform,
     ] {
-        assert_eq!(StageKind::parse_label(kind.label()), Some(kind));
+        assert_eq!(StageKind::from_key(kind.key()), Some(kind));
     }
-    assert_eq!(StageKind::parse_label("backdrop"), None);
+    assert_eq!(StageKind::from_key("backdrop"), None);
     for state in [
         StageState::Planned,
         StageState::Admitted,
         StageState::Released,
     ] {
-        assert_eq!(StageState::parse_label(state.label()), Some(state));
+        assert_eq!(StageState::from_key(state.key()), Some(state));
     }
     for state in [
         DispatchState::Prepared,
@@ -98,7 +98,7 @@ fn kind_state_settlement_and_cause_labels_round_trip() {
         DispatchState::Unknown,
         DispatchState::Released,
     ] {
-        assert_eq!(DispatchState::parse_label(state.label()), Some(state));
+        assert_eq!(DispatchState::from_key(state.key()), Some(state));
     }
     for settlement in [
         DispatchSettlement::Held,
@@ -108,7 +108,7 @@ fn kind_state_settlement_and_cause_labels_round_trip() {
         DispatchSettlement::Released,
     ] {
         assert_eq!(
-            DispatchSettlement::parse_label(settlement.label()),
+            DispatchSettlement::from_key(settlement.key()),
             Some(settlement)
         );
     }
@@ -117,7 +117,7 @@ fn kind_state_settlement_and_cause_labels_round_trip() {
         FailureCause::InvalidOutput,
         FailureCause::TransportLost,
     ] {
-        assert_eq!(FailureCause::parse_label(cause.label()), Some(cause));
+        assert_eq!(FailureCause::from_key(cause.key()), Some(cause));
     }
 }
 
@@ -166,7 +166,7 @@ fn enqueue_command_refuses_zero_revisions_zero_identity_and_bad_time() {
         valid.local_accounting,
         valid.now_ms,
     );
-    assert_eq!(zero_input, Err(ExecutionSetupError::BadRevision));
+    assert_eq!(zero_input, Err(ExecutionSetupError::InvalidRevision));
     let zero_asset = EnqueueCommand::new(
         crate::execution::StageScope {
             owner: valid.owner.clone(),
@@ -212,7 +212,7 @@ fn enqueue_command_refuses_zero_revisions_zero_identity_and_bad_time() {
         valid.local_accounting,
         0,
     );
-    assert_eq!(bad_time, Err(ExecutionSetupError::BadTime));
+    assert_eq!(bad_time, Err(ExecutionSetupError::InvalidTime));
 }
 
 #[test]
@@ -228,7 +228,7 @@ fn claim_command_needs_a_positive_lease_and_a_real_revision() {
             0,
             1_700_000_000_000,
         ),
-        Err(ExecutionSetupError::BadLease)
+        Err(ExecutionSetupError::InvalidLease)
     );
     assert_eq!(
         ClaimCommand::new(
@@ -240,7 +240,7 @@ fn claim_command_needs_a_positive_lease_and_a_real_revision() {
             -5_000,
             1_700_000_000_000,
         ),
-        Err(ExecutionSetupError::BadLease)
+        Err(ExecutionSetupError::InvalidLease)
     );
     assert_eq!(
         ClaimCommand::new(
@@ -252,7 +252,7 @@ fn claim_command_needs_a_positive_lease_and_a_real_revision() {
             60_000,
             1_700_000_000_000,
         ),
-        Err(ExecutionSetupError::BadRevision)
+        Err(ExecutionSetupError::InvalidRevision)
     );
     let short = ClaimCommand::new(
         owner.clone(),
@@ -322,14 +322,14 @@ fn only_the_current_dispatch_completes_and_terminal_states_release_capacity() {
 #[test]
 fn checkpoint_alpha_labels_round_trip() {
     assert_eq!(
-        CheckpointAlpha::parse_label(CheckpointAlpha::Opaque.label()),
+        CheckpointAlpha::from_key(CheckpointAlpha::Opaque.key()),
         Some(CheckpointAlpha::Opaque)
     );
     assert_eq!(
-        CheckpointAlpha::parse_label(CheckpointAlpha::Transparent.label()),
+        CheckpointAlpha::from_key(CheckpointAlpha::Transparent.key()),
         Some(CheckpointAlpha::Transparent)
     );
-    assert_eq!(CheckpointAlpha::parse_label("glossy"), None);
+    assert_eq!(CheckpointAlpha::from_key("glossy"), None);
 }
 
 #[test]
@@ -485,7 +485,7 @@ fn supplier_checkpoint_needs_version_origin_model_bounded_bytes_and_time() {
             },
             1_700_000_000_000
         ),
-        Err(ExecutionSetupError::BadRevision)
+        Err(ExecutionSetupError::InvalidRevision)
     );
     assert_eq!(
         SupplierCheckpoint::new(
@@ -550,15 +550,15 @@ fn capacity_bounds_need_positive_limits_and_pending_admits_checks_both() {
     assert!(CapacityBounds::new(4, 16, 1 << 20).is_ok());
     assert_eq!(
         CapacityBounds::new(0, 16, 1 << 20),
-        Err(ExecutionSetupError::BadRevision)
+        Err(ExecutionSetupError::InvalidRevision)
     );
     assert_eq!(
         CapacityBounds::new(4, 0, 1 << 20),
-        Err(ExecutionSetupError::BadRevision)
+        Err(ExecutionSetupError::InvalidRevision)
     );
     assert_eq!(
         CapacityBounds::new(4, 16, 0),
-        Err(ExecutionSetupError::BadRevision)
+        Err(ExecutionSetupError::InvalidRevision)
     );
     assert!(pending_admits(0, 0, 16, 1 << 20, 128));
     assert!(pending_admits(15, 0, 16, 1 << 20, 128));
@@ -623,18 +623,15 @@ fn execution_identity_needs_both_planned_ids() {
 
 #[test]
 fn capacity_scope_refuses_empty_and_oversized_names() {
+    assert_eq!(CapacityScope::new(""), Err(ExecutionSetupError::Empty));
     assert_eq!(
-        CapacityScope::new(String::new()),
-        Err(ExecutionSetupError::Empty)
-    );
-    assert_eq!(
-        CapacityScope::new("s".repeat(MAX_CAPACITY_SCOPE_BYTES + 1)),
+        CapacityScope::new(&"s".repeat(MAX_CAPACITY_SCOPE_BYTES + 1)),
         Err(ExecutionSetupError::TooLong {
             max_bytes: MAX_CAPACITY_SCOPE_BYTES
         })
     );
     assert_eq!(
-        CapacityScope::new("live/generation".to_owned())
+        CapacityScope::new("live/generation")
             .expect("scope")
             .as_str(),
         "live/generation"

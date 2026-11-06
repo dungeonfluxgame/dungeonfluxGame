@@ -32,6 +32,20 @@ pub enum TextSchemaError {
     OutputMismatch,
 }
 
+impl fmt::Display for TextSchemaError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidLimits => "the schema limits are invalid",
+            Self::InvalidName => "the schema name is invalid",
+            Self::InvalidJson => "the schema or output is not valid JSON",
+            Self::UnsupportedSchema => "the schema uses an unsupported form",
+            Self::OutputMismatch => "the output does not match the schema",
+        })
+    }
+}
+
+impl std::error::Error for TextSchemaError {}
+
 /// Checked caller-owned schema. Supported forms are closed objects with every
 /// property required, arrays, string/integer/number/boolean/null, and typed enums.
 /// Unsupported JSON Schema keywords are refused before network dispatch.

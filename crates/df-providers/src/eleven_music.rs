@@ -16,7 +16,7 @@ use serde_json::json;
 use crate::native_http::{
     NativeHttp, NativeResponseProfile, is_loopback_socket, is_valid_credential,
 };
-use crate::{HttpRequest, NativeHttpRefusal, ProviderLimits};
+use crate::{HttpRequest, NativeHttpCause, ProviderLimits};
 
 const LIVE_BASE: &str = "https://api.elevenlabs.io";
 /// The model `/v1/music` is asked for.
@@ -52,10 +52,24 @@ pub enum ElevenMusicError {
     /// The supplier answered with another failure status, or was rate limited.
     Provider(u16),
     /// The transport refused or failed the exchange.
-    Transport(NativeHttpRefusal),
+    Transport(NativeHttpCause),
     /// A success answer with no audio in it.
     Output,
 }
+
+impl fmt::Display for ElevenMusicError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidRequest => formatter.write_str("the music request is invalid"),
+            Self::Unauthorized => formatter.write_str("the music credential was rejected"),
+            Self::Provider(status) => write!(formatter, "the music service answered {status}"),
+            Self::Transport(cause) => write!(formatter, "the music call failed: {cause}"),
+            Self::Output => formatter.write_str("the music answer carried no audio"),
+        }
+    }
+}
+
+impl std::error::Error for ElevenMusicError {}
 
 /// Where the adapter sends calls.
 pub struct ElevenMusicConfig {
@@ -201,7 +215,7 @@ impl NativeElevenMusicProvider {
                 NativeResponseProfile::AudioMpeg,
             )
             .await
-            .map_err(|failure| ElevenMusicError::Transport(failure.reason))?;
+            .map_err(|failure| ElevenMusicError::Transport(failure.cause))?;
         match response.status {
             200 => {}
             401 | 403 => return Err(ElevenMusicError::Unauthorized),

@@ -1535,12 +1535,12 @@ async fn interrupt_send_is_bounded_when_stdin_is_blocked() {
     // blocked stdin pipe; the owned tree kill that follows is the guarantee.
     let mut session = BlockedStdinSession;
     let started = Instant::now();
-    drive::interrupt_best_effort(&mut session, "thread-1", &Some("turn-9")).await;
+    drive::interrupt_best_effort(&mut session, "thread-1", Some("turn-9")).await;
     assert!(
         started.elapsed() < Duration::from_secs(5),
         "the blocked interrupt send must not hang the cancellation"
     );
-    drive::interrupt_best_effort(&mut session, "thread-1", &None).await;
+    drive::interrupt_best_effort(&mut session, "thread-1", None).await;
 }
 
 #[tokio::test]
@@ -1661,6 +1661,7 @@ async fn ready_receipt_binds_the_imported_artifact_not_the_mutable_original() {
         &request(Vec::new()),
         &[],
         &outputs,
+        None,
         1024 * 1024,
         Instant::now() + Duration::from_secs(10),
     )
@@ -1696,6 +1697,7 @@ async fn existing_oversized_import_target_gets_a_suffixed_name() {
         &request(Vec::new()),
         &[],
         &outputs,
+        None,
         65_536,
         Instant::now() + Duration::from_secs(10),
     )
@@ -1727,6 +1729,7 @@ async fn hostile_item_id_stays_inside_outputs() {
         &request(Vec::new()),
         &[],
         &outputs,
+        None,
         1024 * 1024,
         Instant::now() + Duration::from_secs(10),
     )
@@ -1756,6 +1759,7 @@ async fn existing_symlink_import_target_is_not_followed() {
         &request(Vec::new()),
         &[],
         &outputs,
+        None,
         1024 * 1024,
         Instant::now() + Duration::from_secs(10),
     )
@@ -1939,4 +1943,20 @@ async fn actual_helper_foreign_completion_cannot_overwrite_correlated_counter_ba
     assert_eq!(usage.cumulative_usage().output_tokens, Some(90));
     assert_eq!(usage.cumulative_usage().total_tokens, Some(190));
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn codex_error_source_is_the_wrapped_error() {
+    use std::error::Error;
+    let artifact = CodexError::Artifact(ArtifactError::Missing);
+    assert_eq!(
+        artifact.source().map(ToString::to_string),
+        Some(ArtifactError::Missing.to_string())
+    );
+    let protocol = CodexError::Protocol(protocol::ProtocolError::InvalidJson);
+    assert_eq!(
+        protocol.source().map(ToString::to_string),
+        Some(protocol::ProtocolError::InvalidJson.to_string())
+    );
+    assert!(CodexError::NoArtifact.source().is_none());
 }

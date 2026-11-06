@@ -122,20 +122,20 @@ fn expiry_boundary_is_exact_and_states_round_trip() {
     assert!(!is_expired(1_000, 999));
     assert!(is_expired(1_000, 1_000));
     assert!(is_expired(1_000, 1_001));
-    assert_eq!(JobState::parse_label("planning"), Some(JobState::Planning));
+    assert_eq!(JobState::from_key("planning"), Some(JobState::Planning));
     assert_eq!(
-        JobState::parse_label("recipe_frozen"),
+        JobState::from_key("recipe_frozen"),
         Some(JobState::RecipeFrozen)
     );
-    assert_eq!(JobState::parse_label("retired"), Some(JobState::Retired));
-    assert_eq!(JobState::parse_label("ready"), None);
+    assert_eq!(JobState::from_key("retired"), Some(JobState::Retired));
+    assert_eq!(JobState::from_key("ready"), None);
     assert_eq!(
-        InterestState::parse_label("attached"),
+        InterestState::from_key("attached"),
         Some(InterestState::Attached)
     );
     assert_eq!(
-        InterestState::parse_label("withdrawn"),
+        InterestState::from_key("withdrawn"),
         Some(InterestState::Withdrawn)
     );
-    assert_eq!(InterestState::parse_label("gone"), None);
+    assert_eq!(InterestState::from_key("gone"), None);
 }

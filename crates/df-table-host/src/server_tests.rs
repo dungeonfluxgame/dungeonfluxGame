@@ -1,3 +1,4 @@
+use axum::http::StatusCode;
 use serde_json::json;
 
 use crate::client::{get, post_json};
@@ -6,7 +7,7 @@ use crate::test_support::{Running, STARTER_FILES, post_request, raw_exchange, st
 use crate::view::CanvasView;
 use crate::wire::{EventsReply, Reply};
 
-async fn post(running: &Running, body: serde_json::Value) -> (u16, Reply) {
+async fn post(running: &Running, body: serde_json::Value) -> (StatusCode, Reply) {
     let response = post_json(running.port, "/dev/effect", &body.to_string())
         .await
         .expect("answers");
@@ -18,7 +19,7 @@ async fn events(running: &Running, query: &str) -> EventsReply {
     let response = get(running.port, &format!("/events.json{query}"))
         .await
         .expect("answers");
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, StatusCode::OK);
     serde_json::from_str(&response.body).expect("the answer is an events reply")
 }
 
@@ -40,7 +41,7 @@ async fn the_viewer_page_is_served_with_the_canvas_in_it() {
     let running = start(&STARTER_FILES).await;
     post(&running, spawn_marker("m1")).await;
     let page = get(running.port, "/").await.expect("answers");
-    assert_eq!(page.status, 200);
+    assert_eq!(page.status, StatusCode::OK);
     assert!(page.body.contains("Blank canvas") && page.body.contains("m1"));
 }
 
@@ -48,7 +49,7 @@ async fn the_viewer_page_is_served_with_the_canvas_in_it() {
 async fn a_spawn_is_answered_with_the_new_revision_and_shows_in_the_canvas() {
     let running = start(&STARTER_FILES).await;
     let (status, reply) = post(&running, spawn_marker("m1")).await;
-    assert_eq!(status, 200);
+    assert_eq!(status, StatusCode::OK);
     assert_eq!(
         reply,
         Reply::Done {
@@ -67,7 +68,7 @@ async fn a_refused_change_is_a_400_with_its_cause_and_is_recorded_with_effect_an
         json!({"op": "spawn", "id": "x", "kind": "dragon"}),
     )
     .await;
-    assert_eq!(status, 400);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(matches!(reply, Reply::Rejected { cause: Some(_), .. }));
     let log = events(&running, "").await;
     assert!(
@@ -96,7 +97,7 @@ async fn a_body_that_is_not_an_effect_is_a_400_and_is_recorded() {
         let response = post_json(running.port, "/dev/effect", body)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{body}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
     }
     let log = events(&running, "").await;
     assert_eq!(
@@ -234,7 +235,7 @@ async fn a_reload_reports_the_new_revision_and_records_it() {
     let response = post_json(running.port, "/dev/reload", "")
         .await
         .expect("answers");
-    assert_eq!(response.status, 200);
+    assert_eq!(response.status, StatusCode::OK);
     assert_eq!(canvas(&running).await.kinds.len(), 3);
     assert!(
         texts(&events(&running, "").await)
@@ -268,7 +269,7 @@ async fn a_reload_with_a_broken_file_is_refused_and_the_old_kinds_stay() {
     let response = post_json(running.port, "/dev/reload", "")
         .await
         .expect("answers");
-    assert_eq!(response.status, 400);
+    assert_eq!(response.status, StatusCode::BAD_REQUEST);
     let Reply::Rejected { problems, .. } = serde_json::from_str(&response.body).expect("a reply")
     else {
         panic!("expected a rejection");
@@ -291,7 +292,7 @@ async fn an_unknown_route_is_a_404() {
     let running = start(&STARTER_FILES).await;
     assert_eq!(
         get(running.port, "/nowhere").await.expect("answers").status,
-        404
+        StatusCode::NOT_FOUND
     );
 }
 
@@ -302,7 +303,7 @@ fn state_with_a_travelling_marker() -> (tempfile::TempDir, std::sync::Arc<crate:
     let log = std::sync::Arc::new(crate::event_log::EventLog::default());
     let state = std::sync::Arc::new(crate::state::AppState::new(
         df_table::canvas::Canvas::new(registry_from(&[MARKER_KIND])),
-        crate::sink::HostSink::new(log, true),
+        crate::observe::HostEventSink::new(log, std::sync::Arc::new(crate::observe::WallClock)),
         None,
         directory.path().to_path_buf(),
         crate::playground::PlaygroundFiles::new(

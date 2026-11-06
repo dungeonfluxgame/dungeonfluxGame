@@ -1,5 +1,7 @@
 //! Finite encoded-container inspection; no pixel, video-bitstream or audio playback decoding.
 
+use std::fmt;
+
 use crate::output_fetch::is_bounded_image_size;
 
 /// The most chunks, boxes, table entries or frames one container may hold: a bound on inspection
@@ -8,7 +10,7 @@ use crate::output_fetch::is_bounded_image_size;
 const MAXIMUM_CONTAINER_ENTRIES: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MediaContainerRefusal {
+pub enum MediaContainerCause {
     Malformed,
     Unsupported,
     Bounds,
@@ -19,6 +21,36 @@ pub enum MediaContainerRefusal {
     Interrupted,
 }
 
+impl fmt::Display for MediaContainerCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Malformed => "the media container is malformed",
+            Self::Unsupported => "the media container is not supported",
+            Self::Bounds => "the media container breaks an inspection bound",
+            Self::Dimensions => "the media has unusable dimensions",
+            Self::Timebase => "the media has an unusable timebase",
+            Self::SampleRange => "the media has an unusable sample range",
+            Self::Interrupted => "the media inspection ended without a result",
+        })
+    }
+}
+
+impl std::error::Error for MediaContainerCause {}
+
+/// Encoded media failed inspection; the cause says why.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaContainerError {
+    pub cause: MediaContainerCause,
+}
+
+impl fmt::Display for MediaContainerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(formatter)
+    }
+}
+
+impl std::error::Error for MediaContainerError {}
+
 /// Actual container clock; values are never copied from requested duration.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MediaTimebase {
@@ -27,9 +59,11 @@ pub struct MediaTimebase {
 }
 
 impl MediaTimebase {
-    pub fn milliseconds_ceil(self) -> Result<u128, MediaContainerRefusal> {
+    pub fn milliseconds_ceil(self) -> Result<u128, MediaContainerError> {
         if self.ticks_per_second == 0 {
-            return Err(MediaContainerRefusal::Timebase);
+            return Err(MediaContainerError {
+                cause: MediaContainerCause::Timebase,
+            });
         }
         let numerator = u128::from(self.ticks) * 1000;
         Ok(numerator.div_ceil(u128::from(self.ticks_per_second)))
@@ -57,51 +91,51 @@ pub enum EncodedMediaFacts {
     },
 }
 
-fn bytes(data: &[u8], start: usize, length: usize) -> Result<&[u8], MediaContainerRefusal> {
+fn bytes(data: &[u8], start: usize, length: usize) -> Result<&[u8], MediaContainerCause> {
     data.get(
         start
             ..start
                 .checked_add(length)
-                .ok_or(MediaContainerRefusal::Bounds)?,
+                .ok_or(MediaContainerCause::Bounds)?,
     )
-    .ok_or(MediaContainerRefusal::Malformed)
+    .ok_or(MediaContainerCause::Malformed)
 }
 
-fn be32(data: &[u8], offset: usize) -> Result<u32, MediaContainerRefusal> {
+fn be32(data: &[u8], offset: usize) -> Result<u32, MediaContainerCause> {
     Ok(u32::from_be_bytes(
         bytes(data, offset, 4)?
             .try_into()
-            .map_err(|_| MediaContainerRefusal::Malformed)?,
+            .map_err(|_| MediaContainerCause::Malformed)?,
     ))
 }
 
-fn be64(data: &[u8], offset: usize) -> Result<u64, MediaContainerRefusal> {
+fn be64(data: &[u8], offset: usize) -> Result<u64, MediaContainerCause> {
     Ok(u64::from_be_bytes(
         bytes(data, offset, 8)?
             .try_into()
-            .map_err(|_| MediaContainerRefusal::Malformed)?,
+            .map_err(|_| MediaContainerCause::Malformed)?,
     ))
 }
 
-fn le16(data: &[u8], offset: usize) -> Result<u16, MediaContainerRefusal> {
+fn le16(data: &[u8], offset: usize) -> Result<u16, MediaContainerCause> {
     Ok(u16::from_le_bytes(
         bytes(data, offset, 2)?
             .try_into()
-            .map_err(|_| MediaContainerRefusal::Malformed)?,
+            .map_err(|_| MediaContainerCause::Malformed)?,
     ))
 }
 
-fn le32(data: &[u8], offset: usize) -> Result<u32, MediaContainerRefusal> {
+fn le32(data: &[u8], offset: usize) -> Result<u32, MediaContainerCause> {
     Ok(u32::from_le_bytes(
         bytes(data, offset, 4)?
             .try_into()
-            .map_err(|_| MediaContainerRefusal::Malformed)?,
+            .map_err(|_| MediaContainerCause::Malformed)?,
     ))
 }
 
-fn dimensions(width: u32, height: u32) -> Result<(), MediaContainerRefusal> {
+fn dimensions(width: u32, height: u32) -> Result<(), MediaContainerCause> {
     if !is_bounded_image_size(width, height) {
-        return Err(MediaContainerRefusal::Dimensions);
+        return Err(MediaContainerCause::Dimensions);
     }
     Ok(())
 }
@@ -139,9 +173,9 @@ fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerRefusal> {
+pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerCause> {
     if bytes(data, 0, 8)? != b"\x89PNG\r\n\x1a\n" {
-        return Err(MediaContainerRefusal::Malformed);
+        return Err(MediaContainerCause::Malformed);
     }
     let mut position = 8usize;
     let mut size = None;
@@ -149,26 +183,26 @@ pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     let mut data_ended = false;
     for count in 0..MAXIMUM_CONTAINER_ENTRIES {
         let length =
-            usize::try_from(be32(data, position)?).map_err(|_| MediaContainerRefusal::Bounds)?;
+            usize::try_from(be32(data, position)?).map_err(|_| MediaContainerCause::Bounds)?;
         let kind = bytes(data, position + 4, 4)?;
         if !kind.iter().all(u8::is_ascii_alphabetic) || kind[2].is_ascii_lowercase() {
-            return Err(MediaContainerRefusal::Malformed);
+            return Err(MediaContainerCause::Malformed);
         }
         let chunk = bytes(data, position + 8, length)?;
         let crc_offset = position
             .checked_add(8)
             .and_then(|v| v.checked_add(length))
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
         if crc32(bytes(data, position + 4, length + 4)?) != be32(data, crc_offset)? {
-            return Err(MediaContainerRefusal::Malformed);
+            return Err(MediaContainerCause::Malformed);
         }
         position = crc_offset
             .checked_add(4)
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
         match kind {
             b"IHDR" => {
                 if count != 0 || size.is_some() || length != 13 {
-                    return Err(MediaContainerRefusal::Malformed);
+                    return Err(MediaContainerCause::Malformed);
                 }
                 let width = be32(chunk, 0)?;
                 let height = be32(chunk, 4)?;
@@ -179,29 +213,29 @@ pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
                     || chunk[11] != 0
                     || chunk[12] != 0
                 {
-                    return Err(MediaContainerRefusal::Unsupported);
+                    return Err(MediaContainerCause::Unsupported);
                 }
                 size = Some((width, height));
             }
             b"IDAT" => {
                 if size.is_none() || data_ended {
-                    return Err(MediaContainerRefusal::Malformed);
+                    return Err(MediaContainerCause::Malformed);
                 }
                 image_data = image_data
                     .checked_add(length)
-                    .ok_or(MediaContainerRefusal::Bounds)?;
+                    .ok_or(MediaContainerCause::Bounds)?;
             }
             b"IEND" => {
                 if length != 0 || image_data == 0 || position != data.len() {
-                    return Err(MediaContainerRefusal::Malformed);
+                    return Err(MediaContainerCause::Malformed);
                 }
-                let (width, height) = size.ok_or(MediaContainerRefusal::Malformed)?;
+                let (width, height) = size.ok_or(MediaContainerCause::Malformed)?;
                 return Ok(EncodedMediaFacts::Png { width, height });
             }
-            b"acTL" | b"fcTL" | b"fdAT" => return Err(MediaContainerRefusal::Unsupported),
+            b"acTL" | b"fcTL" | b"fdAT" => return Err(MediaContainerCause::Unsupported),
             _ => {
                 if kind[0].is_ascii_uppercase() {
-                    return Err(MediaContainerRefusal::Unsupported);
+                    return Err(MediaContainerCause::Unsupported);
                 }
                 if image_data > 0 {
                     data_ended = true;
@@ -209,7 +243,7 @@ pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
             }
         }
     }
-    Err(MediaContainerRefusal::Bounds)
+    Err(MediaContainerCause::Bounds)
 }
 
 /// Runs the PNG chunk scan on tokio's blocking pool. Its CRC pass is linear in the image size
@@ -218,28 +252,30 @@ pub(crate) fn inspect_png(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
 /// job starts it runs to completion, which is bounded and touches no sockets or game state.
 pub async fn inspect_png_off_worker(
     bytes: Vec<u8>,
-) -> Result<(Vec<u8>, EncodedMediaFacts), MediaContainerRefusal> {
+) -> Result<(Vec<u8>, EncodedMediaFacts), MediaContainerError> {
     match tokio::task::spawn_blocking(move || {
         let facts = inspect_png(&bytes)?;
         Ok((bytes, facts))
     })
     .await
     {
-        Ok(result) => result,
+        Ok(result) => result.map_err(|cause| MediaContainerError { cause }),
         // A panic in the scan is a bug in this module, so it propagates instead of becoming a
         // refusal of the provider's output.
         Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
         // Only runtime shutdown cancels a blocking job, so the bytes were never judged.
-        Err(_) => Err(MediaContainerRefusal::Interrupted),
+        Err(_) => Err(MediaContainerError {
+            cause: MediaContainerCause::Interrupted,
+        }),
     }
 }
 
-pub(crate) fn inspect_wave(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerRefusal> {
+pub(crate) fn inspect_wave(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerCause> {
     if bytes(data, 0, 4)? != b"RIFF"
         || bytes(data, 8, 4)? != b"WAVE"
         || u64::from(le32(data, 4)?) + 8 != data.len() as u64
     {
-        return Err(MediaContainerRefusal::Malformed);
+        return Err(MediaContainerCause::Malformed);
     }
     let mut position = 12usize;
     let mut format = None;
@@ -248,16 +284,16 @@ pub(crate) fn inspect_wave(data: &[u8]) -> Result<EncodedMediaFacts, MediaContai
     while position < data.len() {
         chunks += 1;
         if chunks > MAXIMUM_CONTAINER_ENTRIES {
-            return Err(MediaContainerRefusal::Bounds);
+            return Err(MediaContainerCause::Bounds);
         }
         let kind = bytes(data, position, 4)?;
-        let length = usize::try_from(le32(data, position + 4)?)
-            .map_err(|_| MediaContainerRefusal::Bounds)?;
+        let length =
+            usize::try_from(le32(data, position + 4)?).map_err(|_| MediaContainerCause::Bounds)?;
         let chunk = bytes(data, position + 8, length)?;
         match kind {
             b"fmt " => {
                 if format.is_some() || length != 16 || le16(chunk, 0)? != 1 {
-                    return Err(MediaContainerRefusal::Unsupported);
+                    return Err(MediaContainerCause::Unsupported);
                 }
                 let channels = le16(chunk, 2)?;
                 let rate = le32(chunk, 4)?;
@@ -271,40 +307,40 @@ pub(crate) fn inspect_wave(data: &[u8]) -> Result<EncodedMediaFacts, MediaContai
                     || byte_rate
                         != rate
                             .checked_mul(u32::from(alignment))
-                            .ok_or(MediaContainerRefusal::Bounds)?
+                            .ok_or(MediaContainerCause::Bounds)?
                 {
-                    return Err(MediaContainerRefusal::Timebase);
+                    return Err(MediaContainerCause::Timebase);
                 }
                 format = Some((channels, rate, bits, alignment));
             }
             b"data" => {
                 if data_length.is_some() || format.is_none() || length == 0 {
-                    return Err(MediaContainerRefusal::Malformed);
+                    return Err(MediaContainerCause::Malformed);
                 }
                 data_length = Some(length);
             }
             b"JUNK" | b"LIST" => {}
-            _ => return Err(MediaContainerRefusal::Unsupported),
+            _ => return Err(MediaContainerCause::Unsupported),
         }
         position = position
             .checked_add(8)
             .and_then(|v| v.checked_add(length))
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
         if length % 2 != 0 {
             if bytes(data, position, 1)? != [0] {
-                return Err(MediaContainerRefusal::Malformed);
+                return Err(MediaContainerCause::Malformed);
             }
             position += 1;
         }
     }
     let (channels, sample_rate, bits_per_sample, alignment) =
-        format.ok_or(MediaContainerRefusal::Malformed)?;
-    let length = data_length.ok_or(MediaContainerRefusal::Malformed)?;
+        format.ok_or(MediaContainerCause::Malformed)?;
+    let length = data_length.ok_or(MediaContainerCause::Malformed)?;
     if position != data.len() || length % usize::from(alignment) != 0 {
-        return Err(MediaContainerRefusal::Malformed);
+        return Err(MediaContainerCause::Malformed);
     }
-    let frames = u64::try_from(length / usize::from(alignment))
-        .map_err(|_| MediaContainerRefusal::Bounds)?;
+    let frames =
+        u64::try_from(length / usize::from(alignment)).map_err(|_| MediaContainerCause::Bounds)?;
     Ok(EncodedMediaFacts::PcmWave {
         sample_rate,
         channels,
@@ -324,43 +360,43 @@ struct IsoBox<'a> {
     end: usize,
 }
 
-fn boxes(data: &[u8], absolute: usize) -> Result<Vec<IsoBox<'_>>, MediaContainerRefusal> {
+fn boxes(data: &[u8], absolute: usize) -> Result<Vec<IsoBox<'_>>, MediaContainerCause> {
     let mut found = Vec::new();
     let mut position = 0usize;
     while position < data.len() {
         if found.len() == MAXIMUM_CONTAINER_ENTRIES {
-            return Err(MediaContainerRefusal::Bounds);
+            return Err(MediaContainerCause::Bounds);
         }
         let short = be32(data, position)?;
         let kind = bytes(data, position + 4, 4)?;
         let (length, header) = match short {
-            0 => return Err(MediaContainerRefusal::Unsupported),
+            0 => return Err(MediaContainerCause::Unsupported),
             1 => (
                 usize::try_from(be64(data, position + 8)?)
-                    .map_err(|_| MediaContainerRefusal::Bounds)?,
+                    .map_err(|_| MediaContainerCause::Bounds)?,
                 16,
             ),
             v => (
-                usize::try_from(v).map_err(|_| MediaContainerRefusal::Bounds)?,
+                usize::try_from(v).map_err(|_| MediaContainerCause::Bounds)?,
                 8,
             ),
         };
         if length < header {
-            return Err(MediaContainerRefusal::Malformed);
+            return Err(MediaContainerCause::Malformed);
         }
         let end = position
             .checked_add(length)
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
         let payload = bytes(data, position + header, length - header)?;
         found.push(IsoBox {
             kind,
             payload,
             start: absolute
                 .checked_add(position + header)
-                .ok_or(MediaContainerRefusal::Bounds)?,
+                .ok_or(MediaContainerCause::Bounds)?,
             end: absolute
                 .checked_add(end)
-                .ok_or(MediaContainerRefusal::Bounds)?,
+                .ok_or(MediaContainerCause::Bounds)?,
         });
         position = end;
     }
@@ -370,30 +406,30 @@ fn boxes(data: &[u8], absolute: usize) -> Result<Vec<IsoBox<'_>>, MediaContainer
 fn one<'a, 'b>(
     children: &'b [IsoBox<'a>],
     kind: &[u8],
-) -> Result<&'b IsoBox<'a>, MediaContainerRefusal> {
+) -> Result<&'b IsoBox<'a>, MediaContainerCause> {
     let mut selected = children.iter().filter(|child| child.kind == kind);
-    let value = selected.next().ok_or(MediaContainerRefusal::Malformed)?;
+    let value = selected.next().ok_or(MediaContainerCause::Malformed)?;
     if selected.next().is_some() {
-        return Err(MediaContainerRefusal::Malformed);
+        return Err(MediaContainerCause::Malformed);
     }
     Ok(value)
 }
 
-fn only(children: &[IsoBox<'_>], allowed: &[&[u8]]) -> Result<(), MediaContainerRefusal> {
+fn only(children: &[IsoBox<'_>], allowed: &[&[u8]]) -> Result<(), MediaContainerCause> {
     if children.iter().any(|child| !allowed.contains(&child.kind)) {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     Ok(())
 }
 
-fn full_zero(data: &[u8]) -> Result<(), MediaContainerRefusal> {
+fn full_zero(data: &[u8]) -> Result<(), MediaContainerCause> {
     if bytes(data, 0, 4)? != [0, 0, 0, 0] {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     Ok(())
 }
 
-pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerRefusal> {
+pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContainerCause> {
     let top = boxes(data, 0)?;
     // `udta` at the top level is user metadata (the provider's clips carry one); it has no media,
     // so it is allowed beside the boxes that do. Every sample and track is still checked below.
@@ -404,12 +440,12 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         || ![b"isom".as_slice(), b"iso2", b"avc1", b"mp41", b"mp42"]
             .contains(&bytes(file_type, 0, 4)?)
     {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let movie = one(&top, b"moov")?;
     let media = one(&top, b"mdat")?;
     if media.payload.is_empty() {
-        return Err(MediaContainerRefusal::Malformed);
+        return Err(MediaContainerCause::Malformed);
     }
     let movie_children = boxes(movie.payload, movie.start)?;
     only(&movie_children, &[b"mvhd", b"trak", b"udta"])?;
@@ -423,10 +459,10 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
             ticks: be64(movie_header, 24)?,
             ticks_per_second: be32(movie_header, 20)?,
         },
-        _ => return Err(MediaContainerRefusal::Unsupported),
+        _ => return Err(MediaContainerCause::Unsupported),
     };
     if movie_time.ticks == 0 || movie_time.ticks_per_second == 0 {
-        return Err(MediaContainerRefusal::Timebase);
+        return Err(MediaContainerCause::Timebase);
     }
     let track = one(&movie_children, b"trak")?;
     let track_children = boxes(track.payload, track.start)?;
@@ -440,36 +476,36 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         let count = u32::from_be_bytes(
             bytes(list, 4, 4)?
                 .try_into()
-                .map_err(|_| MediaContainerRefusal::Malformed)?,
+                .map_err(|_| MediaContainerCause::Malformed)?,
         );
         // One entry at normal speed: its media time is the encoder's composition offset, which
         // only moves the first presented frame, so it is accepted; a changed rate is not.
         if bytes(list, 0, 1)? != [0] || count != 1 || list.len() != 8 + 12 {
-            return Err(MediaContainerRefusal::Unsupported);
+            return Err(MediaContainerCause::Unsupported);
         }
         let entry = &list[8..20];
         let media_time = i32::from_be_bytes([entry[4], entry[5], entry[6], entry[7]]);
         let rate = [entry[8], entry[9], entry[10], entry[11]];
         if media_time < -1 || rate != [0, 1, 0, 0] {
-            return Err(MediaContainerRefusal::Unsupported);
+            return Err(MediaContainerCause::Unsupported);
         }
     }
     let header = one(&track_children, b"tkhd")?.payload;
     let (matrix_offset, width_offset) = match bytes(header, 0, 1)? {
         [0] if header.len() == 84 => (40, 76),
         [1] if header.len() == 96 => (52, 88),
-        _ => return Err(MediaContainerRefusal::Unsupported),
+        _ => return Err(MediaContainerCause::Unsupported),
     };
     let matrix = [65536u32, 0, 0, 0, 65536, 0, 0, 0, 0x4000_0000];
     for (index, expected) in matrix.into_iter().enumerate() {
         if be32(header, matrix_offset + index * 4)? != expected {
-            return Err(MediaContainerRefusal::Unsupported);
+            return Err(MediaContainerCause::Unsupported);
         }
     }
     let width_fixed = be32(header, width_offset)?;
     let height_fixed = be32(header, width_offset + 4)?;
     if width_fixed & 0xffff != 0 || height_fixed & 0xffff != 0 {
-        return Err(MediaContainerRefusal::Dimensions);
+        return Err(MediaContainerCause::Dimensions);
     }
     let width = width_fixed >> 16;
     let height = height_fixed >> 16;
@@ -487,10 +523,10 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
             ticks: be64(timing, 24)?,
             ticks_per_second: be32(timing, 20)?,
         },
-        _ => return Err(MediaContainerRefusal::Unsupported),
+        _ => return Err(MediaContainerCause::Unsupported),
     };
     if timebase.ticks == 0 || timebase.ticks_per_second == 0 {
-        return Err(MediaContainerRefusal::Timebase);
+        return Err(MediaContainerCause::Timebase);
     }
     let track_duration = if header[0] == 0 {
         u64::from(be32(header, 20)?)
@@ -504,19 +540,19 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     let tolerance =
         2 * u128::from(movie_time.ticks_per_second) * u128::from(timebase.ticks_per_second) / 1000;
     if movie_scaled.abs_diff(media_scaled) > tolerance || track_duration != movie_time.ticks {
-        return Err(MediaContainerRefusal::Timebase);
+        return Err(MediaContainerCause::Timebase);
     }
     let handler = one(&mdia_children, b"hdlr")?.payload;
     full_zero(handler)?;
     if bytes(handler, 8, 4)? != b"vide" {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let minf = one(&mdia_children, b"minf")?;
     let minf_children = boxes(minf.payload, minf.start)?;
     only(&minf_children, &[b"vmhd", b"dinf", b"stbl"])?;
     let vmhd = one(&minf_children, b"vmhd")?.payload;
     if vmhd.len() != 12 || bytes(vmhd, 0, 4)? != [0, 0, 0, 1] {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let dinf = one(&minf_children, b"dinf")?;
     let dinf_children = boxes(dinf.payload, dinf.start)?;
@@ -524,7 +560,7 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     let dref = one(&dinf_children, b"dref")?;
     full_zero(dref.payload)?;
     if be32(dref.payload, 4)? != 1 {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let refs = boxes(
         bytes(dref.payload, 8, dref.payload.len().saturating_sub(8))?,
@@ -532,7 +568,7 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     )?;
     let reference = one(&refs, b"url ")?;
     if refs.len() != 1 || reference.payload != [0, 0, 0, 1] {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let stbl = one(&minf_children, b"stbl")?;
     let tables = boxes(stbl.payload, stbl.start)?;
@@ -545,7 +581,7 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     let description = one(&tables, b"stsd")?;
     full_zero(description.payload)?;
     if be32(description.payload, 4)? != 1 {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let entries = boxes(
         bytes(
@@ -563,15 +599,15 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         || u32::from(u16::from_be_bytes(
             bytes(codec.payload, 24, 2)?
                 .try_into()
-                .map_err(|_| MediaContainerRefusal::Malformed)?,
+                .map_err(|_| MediaContainerCause::Malformed)?,
         )) != width
         || u32::from(u16::from_be_bytes(
             bytes(codec.payload, 26, 2)?
                 .try_into()
-                .map_err(|_| MediaContainerRefusal::Malformed)?,
+                .map_err(|_| MediaContainerCause::Malformed)?,
         )) != height
     {
-        return Err(MediaContainerRefusal::Dimensions);
+        return Err(MediaContainerCause::Dimensions);
     }
     let codec_children = boxes(
         bytes(codec.payload, 78, codec.payload.len() - 78)?,
@@ -584,17 +620,17 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         c.kind == b"pasp"
             && (c.payload.len() != 8 || be32(c.payload, 0).ok() != be32(c.payload, 4).ok())
     }) {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let stsz = one(&tables, b"stsz")?.payload;
     full_zero(stsz)?;
     let common_size = be32(stsz, 4)?;
-    let frames = usize::try_from(be32(stsz, 8)?).map_err(|_| MediaContainerRefusal::Bounds)?;
+    let frames = usize::try_from(be32(stsz, 8)?).map_err(|_| MediaContainerCause::Bounds)?;
     if frames == 0
         || frames > MAXIMUM_CONTAINER_ENTRIES
         || stsz.len() != 12 + if common_size == 0 { frames * 4 } else { 0 }
     {
-        return Err(MediaContainerRefusal::Bounds);
+        return Err(MediaContainerCause::Bounds);
     }
     let mut sizes = Vec::with_capacity(frames);
     for i in 0..frames {
@@ -604,7 +640,7 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
             common_size
         };
         if size == 0 {
-            return Err(MediaContainerRefusal::SampleRange);
+            return Err(MediaContainerCause::SampleRange);
         }
         sizes.push(u64::from(size));
     }
@@ -616,21 +652,21 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         let count = u64::from(be32(stts, 8 + i * 8)?);
         let delta = u64::from(be32(stts, 12 + i * 8)?);
         if count == 0 || delta == 0 {
-            return Err(MediaContainerRefusal::Timebase);
+            return Err(MediaContainerCause::Timebase);
         }
         counted_frames = counted_frames
             .checked_add(count)
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
         counted_ticks = counted_ticks
             .checked_add(
                 count
                     .checked_mul(delta)
-                    .ok_or(MediaContainerRefusal::Bounds)?,
+                    .ok_or(MediaContainerCause::Bounds)?,
             )
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
     }
     if counted_frames != frames as u64 || counted_ticks != timebase.ticks {
-        return Err(MediaContainerRefusal::Timebase);
+        return Err(MediaContainerCause::Timebase);
     }
     if let Some(ctts) = tables.iter().find(|c| c.kind == b"ctts") {
         one(&tables, b"ctts")?;
@@ -639,13 +675,13 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         for i in 0..count {
             samples = samples
                 .checked_add(u64::from(be32(ctts.payload, 8 + i * 8)?))
-                .ok_or(MediaContainerRefusal::Bounds)?;
+                .ok_or(MediaContainerCause::Bounds)?;
             // Composition offsets reorder presentation (B-frames); they change neither the sample
             // count nor the media clock, which are what this inspection checks.
             be32(ctts.payload, 12 + i * 8)?;
         }
         if samples != frames as u64 {
-            return Err(MediaContainerRefusal::Timebase);
+            return Err(MediaContainerCause::Timebase);
         }
     }
     if let Some(stss) = tables.iter().find(|c| c.kind == b"stss") {
@@ -655,7 +691,7 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         for i in 0..count {
             let sample = be32(stss.payload, 8 + i * 4)?;
             if sample <= previous || sample as usize > frames {
-                return Err(MediaContainerRefusal::SampleRange);
+                return Err(MediaContainerCause::SampleRange);
             }
             previous = sample;
         }
@@ -672,7 +708,7 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
             one(&tables, b"co64")?;
             value
         }
-        _ => return Err(MediaContainerRefusal::Malformed),
+        _ => return Err(MediaContainerCause::Malformed),
     };
     let offset_width = if offsets_box.kind == b"stco" { 4 } else { 8 };
     let chunks = table_count(offsets_box.payload, offset_width)?;
@@ -691,12 +727,12 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
                 .last()
                 .is_some_and(|(previous, _)| *previous >= first)
         {
-            return Err(MediaContainerRefusal::SampleRange);
+            return Err(MediaContainerCause::SampleRange);
         }
         mappings.push((first, per_chunk));
     }
     if mappings.first().map(|(first, _)| *first) != Some(1) {
-        return Err(MediaContainerRefusal::SampleRange);
+        return Err(MediaContainerCause::SampleRange);
     }
     let mut sample_index = 0usize;
     let mut mapping_index = 0usize;
@@ -717,24 +753,24 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
         let per_chunk = mappings[mapping_index].1;
         let end_index = sample_index
             .checked_add(per_chunk)
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
         let chunk_sizes = sizes
             .get(sample_index..end_index)
-            .ok_or(MediaContainerRefusal::SampleRange)?;
+            .ok_or(MediaContainerCause::SampleRange)?;
         let length = chunk_sizes.iter().try_fold(0u64, |sum, size| {
-            sum.checked_add(*size).ok_or(MediaContainerRefusal::Bounds)
+            sum.checked_add(*size).ok_or(MediaContainerCause::Bounds)
         })?;
         let end = offset
             .checked_add(length)
-            .ok_or(MediaContainerRefusal::Bounds)?;
+            .ok_or(MediaContainerCause::Bounds)?;
         if offset < previous_end || offset < media.start as u64 || end > media.end as u64 {
-            return Err(MediaContainerRefusal::SampleRange);
+            return Err(MediaContainerCause::SampleRange);
         }
         previous_end = end;
         sample_index = end_index;
     }
     if sample_index != frames {
-        return Err(MediaContainerRefusal::SampleRange);
+        return Err(MediaContainerCause::SampleRange);
     }
     Ok(EncodedMediaFacts::Mp4 {
         width,
@@ -744,16 +780,16 @@ pub(crate) fn inspect_mp4(data: &[u8]) -> Result<EncodedMediaFacts, MediaContain
     })
 }
 
-fn table_count(data: &[u8], width: usize) -> Result<usize, MediaContainerRefusal> {
+fn table_count(data: &[u8], width: usize) -> Result<usize, MediaContainerCause> {
     full_zero(data)?;
-    let count = usize::try_from(be32(data, 4)?).map_err(|_| MediaContainerRefusal::Bounds)?;
+    let count = usize::try_from(be32(data, 4)?).map_err(|_| MediaContainerCause::Bounds)?;
     if count == 0 || count > MAXIMUM_CONTAINER_ENTRIES || data.len() != 8 + count * width {
-        return Err(MediaContainerRefusal::Bounds);
+        return Err(MediaContainerCause::Bounds);
     }
     Ok(count)
 }
 
-fn validate_avcc(data: &[u8]) -> Result<(), MediaContainerRefusal> {
+fn validate_avcc(data: &[u8]) -> Result<(), MediaContainerCause> {
     if data.len() < 7
         || data[0] != 1
         || data[4] & 0xfc != 0xfc
@@ -761,40 +797,40 @@ fn validate_avcc(data: &[u8]) -> Result<(), MediaContainerRefusal> {
         || data[5] & 0xe0 != 0xe0
         || data[5] & 0x1f == 0
     {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     let mut position = 6usize;
     for _ in 0..data[5] & 0x1f {
         let length = u16::from_be_bytes(
             bytes(data, position, 2)?
                 .try_into()
-                .map_err(|_| MediaContainerRefusal::Malformed)?,
+                .map_err(|_| MediaContainerCause::Malformed)?,
         ) as usize;
         position += 2;
         if length == 0 || bytes(data, position, length)?[0] & 0x1f != 7 {
-            return Err(MediaContainerRefusal::Malformed);
+            return Err(MediaContainerCause::Malformed);
         }
         position += length;
     }
     let count = bytes(data, position, 1)?[0];
     position += 1;
     if count == 0 {
-        return Err(MediaContainerRefusal::Malformed);
+        return Err(MediaContainerCause::Malformed);
     }
     for _ in 0..count {
         let length = u16::from_be_bytes(
             bytes(data, position, 2)?
                 .try_into()
-                .map_err(|_| MediaContainerRefusal::Malformed)?,
+                .map_err(|_| MediaContainerCause::Malformed)?,
         ) as usize;
         position += 2;
         if length == 0 || bytes(data, position, length)?[0] & 0x1f != 8 {
-            return Err(MediaContainerRefusal::Malformed);
+            return Err(MediaContainerCause::Malformed);
         }
         position += length;
     }
     if position != data.len() {
-        return Err(MediaContainerRefusal::Unsupported);
+        return Err(MediaContainerCause::Unsupported);
     }
     Ok(())
 }

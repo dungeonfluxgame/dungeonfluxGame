@@ -1,5 +1,5 @@
 //! Private bounded protocol observations; rejection never asserts zero supplier liability.
-use super::{ApiError, NativeHttpRefusal};
+use super::{ApiError, NativeHttpCause};
 use df_providers::{NativeHttpResponse, ProviderRequestId, TextSchemaLimits, parse_unique_json};
 use serde_json::Value;
 
@@ -9,6 +9,16 @@ pub(crate) enum ApiExchange {
     Poll,
     Result,
     Delivery,
+}
+impl ApiExchange {
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Submit => "submit",
+            Self::Poll => "poll",
+            Self::Result => "result",
+            Self::Delivery => "delivery",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DeclineContract {
@@ -31,8 +41,9 @@ pub(crate) struct ApiResponseReceipt {
     pub(crate) retry_after: df_providers::NativeRetryAfter,
 }
 impl std::fmt::Debug for ApiResponseReceipt {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ApiResponseReceipt")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiResponseReceipt")
             .field("status", &self.status)
             .field("body_bytes", &self.body.len())
             .field(
@@ -42,14 +53,30 @@ impl std::fmt::Debug for ApiResponseReceipt {
             .finish()
     }
 }
+/// One failed supplier call: why, at which exchange, and what the submission evidence proves.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ApiFailure {
+pub(crate) struct ApiCallError {
     pub(crate) error: ApiError,
     pub(crate) exchange: ApiExchange,
     pub(crate) submission: SubmissionEvidence,
     pub(crate) response: Option<ApiResponseReceipt>,
 }
-impl ApiFailure {
+impl std::fmt::Display for ApiCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the supplier call failed at the {} exchange: {}",
+            self.exchange.key(),
+            self.error
+        )
+    }
+}
+impl std::error::Error for ApiCallError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+impl ApiCallError {
     pub(super) fn before_transport(error: ApiError) -> Self {
         Self {
             error,
@@ -74,17 +101,17 @@ impl ApiFailure {
             response: None,
         }
     }
-    pub(super) fn transport(reason: NativeHttpRefusal, exchange: ApiExchange) -> Self {
+    pub(super) fn transport(reason: NativeHttpCause, exchange: ApiExchange) -> Self {
         let submission = if exchange != ApiExchange::Submit {
             SubmissionEvidence::AcceptedJob
         } else if matches!(
             reason,
-            NativeHttpRefusal::InvalidLimits
-                | NativeHttpRefusal::InvalidConfiguration
-                | NativeHttpRefusal::InvalidEndpoint
-                | NativeHttpRefusal::InvalidCredential
-                | NativeHttpRefusal::ProviderDisabled
-                | NativeHttpRefusal::RequestTooLarge
+            NativeHttpCause::InvalidLimits
+                | NativeHttpCause::InvalidConfiguration
+                | NativeHttpCause::InvalidEndpoint
+                | NativeHttpCause::InvalidCredential
+                | NativeHttpCause::ProviderDisabled
+                | NativeHttpCause::RequestTooLarge
         ) {
             SubmissionEvidence::BeforeTransport
         } else {
@@ -124,17 +151,17 @@ impl ApiFailure {
             }),
         }
     }
-    pub(crate) fn retryable_submit_decline(&self) -> Option<DeclineContract> {
+    /// The documented submit decline this failure proves, judged at `now_ms` (milliseconds since
+    /// the Unix epoch, the time the failure was observed): its retry-after must still schedule.
+    pub(crate) fn retryable_submit_decline(&self, now_ms: u64) -> Option<DeclineContract> {
         let SubmissionEvidence::RejectedSubmit(contract) = self.submission else {
             return None;
         };
         let response = self.response.as_ref()?;
+        let now = std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(now_ms))?;
         (self.error == ApiError::RateLimited
             && self.exchange == ApiExchange::Submit
-            && response
-                .retry_after
-                .minimum_delay(std::time::SystemTime::now())
-                .is_some()
+            && response.retry_after.minimum_delay(now).is_some()
             && validate_submit_decline(contract, response.status, &response.body))
         .then_some(contract)
     }
@@ -202,6 +229,8 @@ pub(crate) fn validate_submit_decline(contract: DeclineContract, status: u16, bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const OBSERVED_AT_MS: u64 = 1_700_000_000_000;
     #[test]
     fn documented_declines_are_distinct_protocol_shapes_and_never_zero_charge_claims() {
         assert!(validate_submit_decline(
@@ -256,15 +285,15 @@ mod tests {
     #[test]
     fn transport_unknown_deadline_and_accepted_poll_have_no_fresh_submit_authority() {
         for reason in [
-            NativeHttpRefusal::Unknown,
-            NativeHttpRefusal::Deadline,
-            NativeHttpRefusal::Cancelled,
+            NativeHttpCause::Unknown,
+            NativeHttpCause::Deadline,
+            NativeHttpCause::Cancelled,
         ] {
-            let failure = ApiFailure::transport(reason, ApiExchange::Submit);
+            let failure = ApiCallError::transport(reason, ApiExchange::Submit);
             assert_eq!(failure.submission, SubmissionEvidence::Unknown);
-            assert_eq!(failure.retryable_submit_decline(), None);
+            assert_eq!(failure.retryable_submit_decline(OBSERVED_AT_MS), None);
         }
-        let failure = ApiFailure::accepted(ApiError::RateLimited, ApiExchange::Poll);
-        assert_eq!(failure.retryable_submit_decline(), None);
+        let failure = ApiCallError::accepted(ApiError::RateLimited, ApiExchange::Poll);
+        assert_eq!(failure.retryable_submit_decline(OBSERVED_AT_MS), None);
     }
 }

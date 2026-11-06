@@ -6,7 +6,7 @@ use df_imagery::{ImageJobId, ImageOwner, VersionedSnapshot, owner_scope_bytes};
 use tokio_postgres::{Row, Transaction};
 
 fn kind(row: &Row) -> Result<DecisionKind, ExecutionError> {
-    DecisionKind::parse_label(&row.get::<_, String>("decision_kind"))
+    DecisionKind::from_key(&row.get::<_, String>("decision_kind"))
         .ok_or(ExecutionError::InvalidRecord)
 }
 fn scope(row: &Row, owner: &ImageOwner) -> Result<StageScope, ExecutionError> {

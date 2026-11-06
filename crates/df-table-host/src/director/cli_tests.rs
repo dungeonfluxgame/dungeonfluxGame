@@ -373,7 +373,7 @@ async fn a_body_that_is_not_a_verb_or_names_no_element_is_refused_as_an_invalid_
         let response = post_json(running.port, path::ACT, body)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{body}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{body}");
         let reply: DirectorReply<ActReply> =
             serde_json::from_str(&response.body).expect("the envelope");
         assert!(

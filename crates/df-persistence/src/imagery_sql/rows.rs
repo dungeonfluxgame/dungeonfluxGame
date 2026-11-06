@@ -58,7 +58,7 @@ pub(super) fn parse_job(row: &Row) -> Result<ImageJob, JournalError> {
     let recipe_revision: Option<i64> = row.get("recipe_revision");
     let recipe_bytes: Option<Vec<u8>> = row.get("recipe_bytes");
     let owner = invalid(owner_of_bytes(&scope_bytes).ok_or(()))?;
-    let state = invalid(JobState::parse_label(&state_text).ok_or(()))?;
+    let state = invalid(JobState::from_key(&state_text).ok_or(()))?;
     let resolved_key = key_bytes
         .map(|bytes| {
             let array: [u8; 32] = invalid(bytes.as_slice().try_into())?;
@@ -232,7 +232,7 @@ fn parse_interest_parts(
         owner: owner.clone(),
         job,
         operation,
-        state: invalid(InterestState::parse_label(&state_text).ok_or(()))?,
+        state: invalid(InterestState::from_key(&state_text).ok_or(()))?,
         created_at_ms: row.get(columns.created),
         withdrawn_at_ms: row.get(columns.withdrawn),
     })

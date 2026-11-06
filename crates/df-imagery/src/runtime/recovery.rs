@@ -478,6 +478,7 @@ where
                         context: &context,
                         intent: &intent,
                         config: &config,
+                        codex_home: self.settings.codex_home.as_deref(),
                         timeout,
                         resume: true,
                         telemetry: &self.telemetry,

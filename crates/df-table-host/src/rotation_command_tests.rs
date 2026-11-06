@@ -1,9 +1,12 @@
 //! Rotating an element from the command line, the wire and a script to the canvas, the log and
 //! the frame a page waits on (O.13 T0).
 
+use axum::http::StatusCode;
+use df_table::event::RejectionCause;
+
 use crate::client::{get, post_json};
 use crate::command::{Command, CommandError, parse, split_words, usage_text};
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::repl::{LineResult, run_line};
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::view::{CanvasView, ElementView, PivotView};
@@ -204,15 +207,24 @@ async fn rotating_an_element_that_is_not_there_is_refused_and_recorded() {
     let running = start(&STARTER_FILES).await;
     let error = run(&running, "rotate ghost 90").await.expect_err("refused");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("ghost")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas {
+                    cause: Some(RejectionCause::UnknownElement),
+                    ..
+                },
+                ..
+            }
+        ),
+        "{error:?}"
     );
     assert!(log_lines(&running).await.contains(
         &"CANVAS reject effect=transform cause=unknown_element element=ghost".to_owned()
     ));
 }
 
-async fn post_effect(running: &Running, body: &str) -> (u16, Reply) {
+async fn post_effect(running: &Running, body: &str) -> (StatusCode, Reply) {
     let response = post_json(running.port, "/dev/effect", body)
         .await
         .expect("answers");
@@ -231,7 +243,7 @@ async fn the_wire_form_refuses_360_with_the_range_records_it_and_changes_nothing
         r#"{"op":"transform","id":"m1","rotation_degrees":360}"#,
     )
     .await;
-    assert_eq!(status, 400);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(matches!(
         &reply,
         Reply::Rejected { message, .. } if message.contains("0 to 359")
@@ -253,7 +265,7 @@ async fn a_wire_request_with_a_good_rotation_and_a_bad_pivot_applies_neither() {
         r#"{"op":"transform","id":"m1","rotation_degrees":45,"pivot":{"x_percent":101,"y_percent":0}}"#,
     )
     .await;
-    assert_eq!(status, 400);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(matches!(
         &reply,
         Reply::Rejected { message, .. } if message.contains("pivot") && message.contains("0 to 100")
@@ -276,7 +288,7 @@ async fn the_wire_form_accepts_the_edges_zero_and_359() {
     for degrees in [359, 0] {
         let body = format!(r#"{{"op":"transform","id":"m1","rotation_degrees":{degrees}}}"#);
         let (status, reply) = post_effect(&running, &body).await;
-        assert_eq!(status, 200);
+        assert_eq!(status, StatusCode::OK);
         assert!(matches!(reply, Reply::Done { .. }));
         assert_eq!(element(&running, "m1").await.rotation_degrees, degrees);
     }
@@ -378,7 +390,7 @@ async fn a_script_with_a_bad_rotation_on_a_late_line_runs_nothing() {
 /// must name.
 async fn refused_with_the_range(running: &Running, body: &str, range: &str) {
     let (status, reply) = post_effect(running, body).await;
-    assert_eq!(status, 400, "{body}");
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(
         matches!(&reply, Reply::Rejected { message, cause, .. }
             if message.contains(range) && *cause == Some(df_table::event::RejectionCause::InvalidTransform)),
@@ -425,7 +437,7 @@ async fn a_missing_rotation_or_a_rotation_that_is_text_is_a_malformed_request() 
         r#"{"op":"transform","id":"m1","rotation_degrees":null}"#,
     ] {
         let (status, reply) = post_effect(&running, body).await;
-        assert_eq!(status, 400, "{body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
         assert!(
             matches!(
                 reply,
@@ -449,8 +461,17 @@ async fn a_pivot_change_on_a_turned_element_is_refused_once_and_the_log_says_why
         .await
         .expect_err("refused");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("rotate m1 0")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas {
+                    cause: Some(RejectionCause::InvalidTransform),
+                    ..
+                },
+                ..
+            }
+        ),
+        "{error:?}"
     );
     let lines = log_lines(&running).await;
     assert_eq!(

@@ -1,8 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use df_providers::{
-    CandidateRouteId, NativeHttpLimits, NativeHttpRefusal, ProviderFailureClass, TextOutputSchema,
-    TextProviderConfig, TextResponseError, TextSchemaLimits, registered_text_provider,
+    CandidateRouteId, NativeHttp, NativeHttpCause, NativeHttpLimits, ProviderFailureClass,
+    TextOutputSchema, TextProviderConfig, TextResponseError, TextSchemaLimits,
+    registered_text_provider,
 };
 use std::{net::SocketAddr, time::Duration};
 
@@ -64,9 +65,7 @@ fn native_factory_refuses_foreign_route_invalid_credentials_and_unbounded_transp
             "owned-key",
             invalid
         ),
-        Err(TextResponseError::Transport(
-            NativeHttpRefusal::InvalidLimits
-        ))
+        Err(TextResponseError::Transport(NativeHttpCause::InvalidLimits))
     ));
     invalid = limits();
     invalid.total_timeout = df_providers::MAXIMUM_EXCHANGE_TIME + Duration::from_secs(1);
@@ -77,9 +76,7 @@ fn native_factory_refuses_foreign_route_invalid_credentials_and_unbounded_transp
             "owned-key",
             invalid
         ),
-        Err(TextResponseError::Transport(
-            NativeHttpRefusal::InvalidLimits
-        ))
+        Err(TextResponseError::Transport(NativeHttpCause::InvalidLimits))
     ));
 }
 
@@ -102,7 +99,7 @@ fn explicit_fixture_policy_accepts_only_literal_localhost_and_nonzero_owned_port
         assert!(matches!(
             provider.for_loopback_fixture(address.parse::<SocketAddr>().unwrap()),
             Err(TextResponseError::Transport(
-                NativeHttpRefusal::InvalidEndpoint
+                NativeHttpCause::InvalidEndpoint
             ))
         ));
     }
@@ -125,19 +122,37 @@ fn explicit_fixture_policy_accepts_only_literal_localhost_and_nonzero_owned_port
 #[test]
 fn canonical_failure_categories_preserve_cancellation_deadline_and_unknown_liability() {
     assert_eq!(
-        NativeHttpRefusal::Cancelled.failure_class(),
+        NativeHttpCause::Cancelled.failure_class(),
         ProviderFailureClass::Cancelled
     );
     assert_eq!(
-        NativeHttpRefusal::Deadline.failure_class(),
+        NativeHttpCause::Deadline.failure_class(),
         ProviderFailureClass::Deadline
     );
     assert_eq!(
-        NativeHttpRefusal::Unknown.failure_class(),
+        NativeHttpCause::Unknown.failure_class(),
         ProviderFailureClass::Unknown
     );
     assert_eq!(
-        NativeHttpRefusal::ResponseTooLarge.failure_class(),
+        NativeHttpCause::ResponseTooLarge.failure_class(),
         ProviderFailureClass::Contract
     );
+}
+
+/// A transport that refuses its limits answers an error, not a bare cause, and an error-chain
+/// reporter prints the cause once: the message carries it and it is not repeated as a source.
+#[test]
+fn transport_refusal_is_an_error_that_prints_its_cause_once() {
+    let mut invalid = limits();
+    invalid.maximum_chunks = 0;
+    let Err(error) = NativeHttp::new(invalid, false) else {
+        panic!("zero chunks are refused");
+    };
+    assert_eq!(error.cause, NativeHttpCause::InvalidLimits);
+    assert!(
+        error
+            .to_string()
+            .contains(&NativeHttpCause::InvalidLimits.to_string())
+    );
+    assert!(std::error::Error::source(&error).is_none());
 }

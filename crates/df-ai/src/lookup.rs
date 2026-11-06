@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// Borrowed identity, approved basis, and artifact from one immutable stored entry.
 ///
 /// This is a lookup view, not a recording-admission or artifact-publication contract.
@@ -37,6 +39,25 @@ pub enum LookupError<Failure> {
     Missing,
     Stale,
     Unavailable(Failure),
+}
+
+impl<Failure: fmt::Display> fmt::Display for LookupError<Failure> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => formatter.write_str("no stored artifact exists for this key"),
+            Self::Stale => formatter.write_str("the stored artifact has another key or basis"),
+            Self::Unavailable(error) => write!(formatter, "the artifact store failed: {error}"),
+        }
+    }
+}
+
+impl<Failure: std::error::Error + 'static> std::error::Error for LookupError<Failure> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Unavailable(error) => Some(error),
+            Self::Missing | Self::Stale => None,
+        }
+    }
 }
 
 /// Reads a prepared artifact only when its entire canonical key and basis match.
@@ -106,6 +127,34 @@ pub trait ReadAuthority: PreparedRead {
 pub enum AuthorizedLookupError<Failure, AuthorizationFailure> {
     Authority(AuthorizationFailure),
     Lookup(LookupError<Failure>),
+}
+
+impl<Failure, AuthorizationFailure> fmt::Display
+    for AuthorizedLookupError<Failure, AuthorizationFailure>
+where
+    Failure: fmt::Display,
+    AuthorizationFailure: fmt::Display,
+{
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Authority(error) => write!(formatter, "the read is not authorized: {error}"),
+            Self::Lookup(error) => write!(formatter, "the authorized lookup failed: {error}"),
+        }
+    }
+}
+
+impl<Failure, AuthorizationFailure> std::error::Error
+    for AuthorizedLookupError<Failure, AuthorizationFailure>
+where
+    Failure: std::error::Error + 'static,
+    AuthorizationFailure: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Authority(error) => Some(error),
+            Self::Lookup(error) => Some(error),
+        }
+    }
 }
 
 /// The artifact, or the authorization or lookup refusal, for one authorized read of `Store`.

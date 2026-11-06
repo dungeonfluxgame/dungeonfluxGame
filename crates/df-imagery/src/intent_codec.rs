@@ -53,7 +53,7 @@ pub(crate) fn intent_version(bytes: &[u8]) -> Result<u8, CodecError> {
             | PIPELINE_INTENT_CODEC_VERSION
             | ARTWORK_INTENT_CODEC_VERSION),
         ) => Ok(version),
-        Some(actual) => Err(CodecError::BadVersion { actual }),
+        Some(actual) => Err(CodecError::InvalidVersion { actual }),
         None => Err(CodecError::Truncated),
     }
 }
@@ -69,7 +69,7 @@ pub(crate) enum CodecError {
     Request(RequestError),
     Output(OutputError),
     Config(ConfigError),
-    BadVersion { actual: u8 },
+    InvalidVersion { actual: u8 },
     Truncated,
     Trailing { extra_bytes: usize },
     TooLong,
@@ -80,21 +80,23 @@ pub(crate) enum CodecError {
 }
 
 impl fmt::Display for CodecError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Request(error) => write!(f, "intent rejected: {error:?}"),
-            Self::Output(error) => write!(f, "output rejected: {error:?}"),
-            Self::Config(error) => write!(f, "config rejected: {error:?}"),
-            Self::BadVersion { actual } => write!(f, "unsupported codec version {actual}"),
-            Self::Truncated => write!(f, "bytes end before the value does"),
-            Self::Trailing { extra_bytes } => {
-                write!(f, "{extra_bytes} trailing bytes after the value")
+            Self::Request(error) => write!(formatter, "intent rejected: {error:?}"),
+            Self::Output(error) => write!(formatter, "output rejected: {error:?}"),
+            Self::Config(error) => write!(formatter, "config rejected: {error:?}"),
+            Self::InvalidVersion { actual } => {
+                write!(formatter, "unsupported codec version {actual}")
             }
-            Self::TooLong => write!(f, "value does not fit the byte bound"),
-            Self::Malformed => write!(f, "bytes do not form a known shape"),
-            Self::InvalidText => write!(f, "bytes are not valid text"),
-            Self::InvalidId => write!(f, "bytes are not a valid identity"),
-            Self::NonFinite { field } => write!(f, "{field} is not finite"),
+            Self::Truncated => write!(formatter, "bytes end before the value does"),
+            Self::Trailing { extra_bytes } => {
+                write!(formatter, "{extra_bytes} trailing bytes after the value")
+            }
+            Self::TooLong => write!(formatter, "value does not fit the byte bound"),
+            Self::Malformed => write!(formatter, "bytes do not form a known shape"),
+            Self::InvalidText => write!(formatter, "bytes are not valid text"),
+            Self::InvalidId => write!(formatter, "bytes are not a valid identity"),
+            Self::NonFinite { field } => write!(formatter, "{field} is not finite"),
         }
     }
 }
@@ -125,8 +127,9 @@ impl EncodedIntent {
 }
 
 impl fmt::Debug for EncodedIntent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EncodedIntent")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EncodedIntent")
             .field("version", &self.version)
             .field("len_bytes", &self.bytes.len())
             .field("fingerprint", &crate::lower_hex(&self.fingerprint))
@@ -157,8 +160,9 @@ impl EncodedConfig {
 }
 
 impl fmt::Debug for EncodedConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("EncodedConfig")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("EncodedConfig")
             .field("version", &self.version)
             .field("len_bytes", &self.bytes.len())
             .field("fingerprint", &crate::lower_hex(&self.fingerprint))
@@ -181,30 +185,30 @@ pub(crate) struct DecodedIntent {
 }
 
 impl fmt::Debug for DecodedIntent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.operation {
-            ImageOperation::Generate(spec) => f
+            ImageOperation::Generate(spec) => formatter
                 .debug_struct("DecodedIntent")
                 .field("kind", &"generate")
-                .field("purpose", &self.purpose.purpose.label())
+                .field("purpose", &self.purpose.purpose.key())
                 .field("template_version", &spec.prompt.template_version)
                 .field("prompt_chars", &spec.prompt.len_chars())
                 .field("references", &spec.references.len())
                 .field("expected_source_revision", &self.expected_source_revision)
                 .finish(),
-            ImageOperation::Edit(spec) => f
+            ImageOperation::Edit(spec) => formatter
                 .debug_struct("DecodedIntent")
                 .field("kind", &"edit")
-                .field("purpose", &self.purpose.purpose.label())
+                .field("purpose", &self.purpose.purpose.key())
                 .field("template_version", &spec.prompt.template_version)
                 .field("prompt_chars", &spec.prompt.len_chars())
                 .field("references", &spec.references.len())
                 .field("expected_source_revision", &self.expected_source_revision)
                 .finish(),
-            ImageOperation::Transform(spec) => f
+            ImageOperation::Transform(spec) => formatter
                 .debug_struct("DecodedIntent")
                 .field("kind", &"transform")
-                .field("purpose", &self.purpose.purpose.label())
+                .field("purpose", &self.purpose.purpose.key())
                 .field("steps", &spec.steps.len())
                 .field("expected_source_revision", &self.expected_source_revision)
                 .finish(),

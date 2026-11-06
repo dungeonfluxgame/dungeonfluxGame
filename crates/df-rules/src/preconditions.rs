@@ -576,5 +576,4 @@ impl<H: RulesCommandHandler> RulesCommandHandler for PreconditionedCommandHandle
 }
 
 #[cfg(test)]
-#[path = "preconditions_tests.rs"]
-mod tests;
+mod preconditions_tests;

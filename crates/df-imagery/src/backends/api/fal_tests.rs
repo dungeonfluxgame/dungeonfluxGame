@@ -9,7 +9,7 @@
 use super::fal::{FalConfig, FalExecutor};
 use super::{ApiError, ImageBackground, ImageEdit, ImageFormat, ImageModeration, ImageQuality};
 use super::{ImageEditModel, OperationalBounds};
-use df_providers::NativeHttpRefusal;
+use df_providers::NativeHttpCause;
 use std::{
     io::{Read, Write},
     net::TcpListener,
@@ -380,7 +380,7 @@ async fn an_endless_queue_is_an_unknown_deadline_without_resubmission() {
             )
             .await
             .map(|_| ()),
-        Err(ApiError::Transport(NativeHttpRefusal::Deadline))
+        Err(ApiError::Transport(NativeHttpCause::Deadline))
     );
     assert_eq!(submits.load(Ordering::SeqCst), 1);
     join_bounded(server, Duration::from_secs(10));
@@ -661,7 +661,7 @@ async fn a_deadline_during_resume_never_resubmits() {
             .resume_generation(&checkpoint, Duration::from_millis(60))
             .await
             .map(|_| ()),
-        Err(ApiError::Transport(NativeHttpRefusal::Deadline))
+        Err(ApiError::Transport(NativeHttpCause::Deadline))
     );
     assert_eq!(posts.load(Ordering::SeqCst), 1);
     join_bounded(server, Duration::from_secs(10));
@@ -1284,7 +1284,7 @@ async fn observed_queue_decline_is_closed_and_accepted_poll_never_reauthorizes_s
             }
         );
         assert_eq!(
-            failure.retryable_submit_decline(),
+            failure.retryable_submit_decline(1_700_000_000_000),
             if accepted {
                 None
             } else {

@@ -35,6 +35,9 @@ thread_local! {
     static AUDIT_FORWARDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 static AUDIT_SINK: std::sync::OnceLock<fn(&'static str, String)> = std::sync::OnceLock::new();
+/// Audit lines that reached no sink: recorded before one was installed, or re-entered from
+/// inside the sink itself.
+static UNDELIVERED_AUDIT_LINES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Restore correlation even when an owner returns early or unwinds.
 pub struct AuditScope(AuditContext, std::marker::PhantomData<std::rc::Rc<()>>);
@@ -59,11 +62,17 @@ pub fn audit_scope(context: AuditContext) -> AuditScope {
     )
 }
 
-/// Install the application audit/timeline bridge once, before admission.
-pub fn install_audit_sink(sink: fn(&'static str, String)) {
-    // The sink is process-wide and set once; a later install keeps the first sink, which is
-    // the documented contract, so the refusal carries nothing to handle.
-    let _already_installed = AUDIT_SINK.set(sink);
+/// Install the application audit/timeline bridge once, before admission. The sink is
+/// process-wide and set once: `true` when `sink` became it, `false` when an earlier sink already
+/// is and keeps the lines.
+pub fn install_audit_sink(sink: fn(&'static str, String)) -> bool {
+    AUDIT_SINK.set(sink).is_ok()
+}
+
+/// How many audit lines reached no sink since the process started. Such a line is counted, never
+/// printed: one recorded before a sink was installed, or one recorded from inside the sink.
+pub fn undelivered_audit_lines() -> u64 {
+    UNDELIVERED_AUDIT_LINES.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Add explicit missing-context markers rather than silently attaching stale identities.
@@ -103,26 +112,33 @@ pub fn audit_line(mut line: String) -> String {
     line
 }
 
-/// Audit delivery is independent of whether OTEL has a provider or samples the span.
+/// Audit delivery is independent of whether OTEL has a provider or samples the span. A line that
+/// finds no sink is counted in `undelivered_audit_lines`.
 pub fn record_audit_line(event: &'static str, line: String) {
     let line = audit_line(line);
-    if let Some(sink) = AUDIT_SINK.get() {
-        AUDIT_FORWARDING.with(|forwarding| {
-            if forwarding.replace(true) {
-                return;
+    let Some(sink) = AUDIT_SINK.get() else {
+        count_undelivered_audit_line();
+        return;
+    };
+    AUDIT_FORWARDING.with(|forwarding| {
+        if forwarding.replace(true) {
+            // The sink itself recorded a line; forwarding it would recurse.
+            count_undelivered_audit_line();
+            return;
+        }
+        struct ForwardingReset<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for ForwardingReset<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
             }
-            struct ForwardingReset<'a>(&'a std::cell::Cell<bool>);
-            impl Drop for ForwardingReset<'_> {
-                fn drop(&mut self) {
-                    self.0.set(false);
-                }
-            }
-            let _reset = ForwardingReset(forwarding);
-            sink(event, line);
-        });
-    } else {
-        println!("{line}");
-    }
+        }
+        let _reset = ForwardingReset(forwarding);
+        sink(event, line);
+    });
+}
+
+fn count_undelivered_audit_line() {
+    UNDELIVERED_AUDIT_LINES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Correlation is diagnostic provenance, never authorization.
@@ -314,7 +330,7 @@ pub use capture::{CaptureKey, ProducerId, RecordId, Signal, SourceSequence, Tele
 mod browser;
 pub mod presentation;
 pub use browser::{
-    BrowserBuffer, BrowserLog, BufferError, BufferSnapshot, UploadFailure, UploadLease,
+    BrowserBuffer, BrowserLog, BufferError, BufferSnapshot, UploadCause, UploadLease,
 };
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -333,7 +349,7 @@ mod audit_tests {
     }
     #[test]
     fn terminal_audit_survives_no_sdk_and_keeps_dispatch_correlation_without_recursion() {
-        install_audit_sink(sink);
+        assert!(install_audit_sink(sink));
         let context = OperationContext {
             trace_parent: String::new(),
             build: "test".to_owned(),

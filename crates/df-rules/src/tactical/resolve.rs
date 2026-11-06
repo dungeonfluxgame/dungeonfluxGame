@@ -750,20 +750,20 @@ pub fn resolve(
                             return Err(RuleError::BonusActionSpent);
                         }
                         let die = draws.take(10)?;
+                        let progression = combatant
+                            .spec
+                            .fighter_level()
+                            .ok_or(RuleError::InvalidBuild)?;
+                        let baseline = crate::local_journey::SecondWindRules::srd_521();
+                        let rules = crate::local_journey::SecondWindRules::new(
+                            progression.second_wind_maximum(),
+                            baseline.die_sides(),
+                            progression.level(),
+                            baseline.recharge_per_short_rest(),
+                        )
+                        .map_err(|_| RuleError::InvalidCombatant)?;
                         let (hp, uses) = crate::local_journey::heal_second_wind(
-                            &crate::local_journey::SecondWindRules {
-                                flat_bonus: combatant
-                                    .spec
-                                    .fighter_level()
-                                    .ok_or(RuleError::InvalidBuild)?
-                                    .level(),
-                                uses_max: combatant
-                                    .spec
-                                    .fighter_level()
-                                    .ok_or(RuleError::InvalidBuild)?
-                                    .second_wind_maximum(),
-                                ..crate::local_journey::SecondWindRules::srd_521()
-                            },
+                            &rules,
                             die,
                             u32::from(combatant.health.hit_points),
                             u32::from(combatant.health.maximum),

@@ -180,7 +180,7 @@ fn decode_row(
             .map_err(|_| JournalError::InvalidRecord)?,
     )
     .map_err(|_| JournalError::InvalidRecord)?;
-    let kind = StageKind::parse_label(
+    let kind = StageKind::from_key(
         &row.try_get::<_, String>("stage_kind")
             .map_err(|_| JournalError::InvalidRecord)?,
     )

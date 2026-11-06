@@ -1,6 +1,7 @@
 use df_ai::admission::{
     CompleteRecord, RecordAdmissionError, RecordEvent, RecordIdentity, RecordIdentityField,
-    RecordInputError, RecordLimit, RecordLimits, RecordingPublisher, admit_complete_record,
+    RecordInputError, RecordLimit, RecordLimits, RecordLimitsError, RecordingPublisher,
+    admit_complete_record,
 };
 use df_types::{LocaleTag, OperationId, RevisionLabel};
 use sha2::{Digest, Sha256};
@@ -310,8 +311,32 @@ fn byte_and_chunk_count_limits_refuse_without_replacing_cache() {
         assert_eq!(store.published, b"previous accepted record");
     }
     for invalid in [(0, 1, 1), (1, 0, 1), (1, 1, 0), (1, 2, 1)] {
-        assert!(RecordLimits::new(invalid.0, invalid.1, invalid.2).is_err());
+        assert_eq!(
+            RecordLimits::new(invalid.0, invalid.1, invalid.2),
+            Err(RecordLimitsError)
+        );
     }
+}
+
+#[test]
+fn admission_errors_display_lowercase_sentences_and_keep_their_source() {
+    let limits: &dyn std::error::Error = &RecordLimitsError;
+    assert_eq!(
+        limits.to_string(),
+        "a record bound is zero or the chunk bound is above the record bound"
+    );
+    let input = RecordAdmissionError::<RecordInputError>::Input(RecordInputError::Cancelled);
+    assert_eq!(
+        input.to_string(),
+        "the record was not admitted: the record stream was cancelled"
+    );
+    let source = std::error::Error::source(&input).map(ToString::to_string);
+    assert_eq!(source.as_deref(), Some("the record stream was cancelled"));
+    let bound = RecordAdmissionError::<RecordInputError>::LimitExceeded(RecordLimit::ChunkCount);
+    assert_eq!(
+        bound.to_string(),
+        "the record has more chunks than its bound"
+    );
 }
 
 #[test]

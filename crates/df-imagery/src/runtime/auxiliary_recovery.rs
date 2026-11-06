@@ -95,6 +95,7 @@ where
                 context,
                 intent,
                 config,
+                codex_home: self.settings.codex_home.as_deref(),
                 timeout,
                 resume: true,
                 telemetry: &self.telemetry,

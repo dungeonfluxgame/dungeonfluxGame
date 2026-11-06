@@ -5,6 +5,7 @@
 //! so their `Debug` forms are safe for diagnostics.
 
 use crate::journal::{ImageInterestId, ImageJobId, InterestState, JobState};
+use crate::listed::listed_enum;
 use crate::policy::Refusal;
 use crate::request::{ImageOwner, RequestError};
 use df_types::OperationId;
@@ -117,7 +118,7 @@ pub enum CancelOutcome {
 /// Closed reason a request was refused before any mutation. Variants carry no
 /// prompt text, snapshots or counts that could leak private input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RequestProblem {
+pub enum RequestCause {
     /// The prompt was empty.
     EmptyPrompt,
     /// The prompt exceeds the applicable bound.
@@ -144,7 +145,7 @@ pub enum RequestProblem {
     InvalidArtwork,
 }
 
-impl RequestProblem {
+impl RequestCause {
     /// Projects request validation failures onto the closed service reason set.
     pub(crate) fn from_request(error: RequestError) -> Self {
         match error {
@@ -161,12 +162,31 @@ impl RequestProblem {
     }
 }
 
+impl std::fmt::Display for RequestCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptyPrompt => "the prompt is empty",
+            Self::PromptTooLong => "the prompt is too long",
+            Self::TooManyReferences => "there are too many references",
+            Self::WithheldAudience => "nobody may see the output",
+            Self::InvalidLimit => "a bound admits no items",
+            Self::ProfileMismatch => "the output profile does not fit the operation",
+            Self::InvalidTransform => "the transform recipe is invalid",
+            Self::FingerprintMismatch => "the fingerprint is not the canonical intent hash",
+            Self::SnapshotTooLarge => "the canonical snapshot is too large",
+            Self::Malformed => "the canonical bytes are malformed",
+            Self::InvalidPipeline => "the analysis metadata is invalid",
+            Self::InvalidArtwork => "the artwork identity does not match the run",
+        })
+    }
+}
+
 /// Every way a service call can fail. Denial and absence share one variant so a
 /// wrong owner learns nothing; `Unknown` keeps its handle for lookup recovery.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ImageServiceError {
     /// The request or its fingerprint was invalid; nothing was mutated.
-    InvalidRequest(RequestProblem),
+    InvalidRequest { cause: RequestCause },
     /// The principal may not see this, or it does not exist. No details.
     NotAuthorizedOrNotFound,
     /// The scoped operation already exists under different canonical intent.
@@ -178,6 +198,23 @@ pub enum ImageServiceError {
     /// The commit may have happened; reread the handle before any retry.
     Unknown { handle: OperationHandle },
 }
+
+impl std::fmt::Display for ImageServiceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidRequest { cause } => write!(formatter, "the request is invalid: {cause}"),
+            Self::NotAuthorizedOrNotFound => formatter.write_str("not authorized or not found"),
+            Self::Conflict => formatter.write_str("the operation exists under different intent"),
+            Self::InvalidRecord => formatter.write_str("a stored record is invalid"),
+            Self::Unavailable => formatter.write_str("the image service is unavailable"),
+            Self::Unknown { .. } => {
+                formatter.write_str("the outcome is unknown; reread the handle")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ImageServiceError {}
 
 /// Safe execution outcomes without supplier identities, prompts or private aggregate counts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,19 +253,22 @@ pub struct CreatorAssessment {
     pub contract_revision: u32,
 }
 
-/// The closed creator-content categories a classification answer may choose.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CreatorCategory {
-    General,
-    AdultNonsexualAnatomyDetail,
-    AdultNudity,
-    AdultViolence,
-    AdultNudityAndViolence,
-    Unsupported,
-    Uncertain,
+listed_enum! {
+    keyed
+    /// The closed creator-content categories a classification answer may choose.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum CreatorCategory {
+        General,
+        AdultNonsexualAnatomyDetail,
+        AdultNudity,
+        AdultViolence,
+        AdultNudityAndViolence,
+        Unsupported,
+        Uncertain,
+    }
 }
 impl CreatorCategory {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::General => "general",
             Self::AdultNonsexualAnatomyDetail => "adult_nonsexual_anatomy_detail",
@@ -239,46 +279,28 @@ impl CreatorCategory {
             Self::Uncertain => "uncertain",
         }
     }
-    pub fn parse_label(label: &str) -> Option<Self> {
-        Some(match label {
-            "general" => Self::General,
-            "adult_nonsexual_anatomy_detail" => Self::AdultNonsexualAnatomyDetail,
-            "adult_nudity" => Self::AdultNudity,
-            "adult_violence" => Self::AdultViolence,
-            "adult_nudity_and_violence" => Self::AdultNudityAndViolence,
-            "unsupported" => Self::Unsupported,
-            "uncertain" => Self::Uncertain,
-            _ => return None,
-        })
-    }
 }
 
-/// Where a classified creator request goes next: the general route, the BFL route, back for
-/// revision, or held as uncertain.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CreatorRoute {
-    General,
-    Bfl,
-    Revise,
-    Uncertain,
+listed_enum! {
+    keyed
+    /// Where a classified creator request goes next: the general route, the BFL route, back for
+    /// revision, or held as uncertain.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum CreatorRoute {
+        General,
+        Bfl,
+        Revise,
+        Uncertain,
+    }
 }
 impl CreatorRoute {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::General => "general",
             Self::Bfl => "bfl",
             Self::Revise => "revise",
             Self::Uncertain => "uncertain",
         }
-    }
-    pub fn parse_label(label: &str) -> Option<Self> {
-        Some(match label {
-            "general" => Self::General,
-            "bfl" => Self::Bfl,
-            "revise" => Self::Revise,
-            "uncertain" => Self::Uncertain,
-            _ => return None,
-        })
     }
 }
 

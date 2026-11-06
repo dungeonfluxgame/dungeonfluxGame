@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use df_providers::{
     CandidateRouteId, DecodedImageFacts, DecoderPolicy, FalQueueObservation, FetchResponseFacts,
-    OutputFetchRefusal, ProviderAttemptIdentity, ProviderImageMetadata, ProviderRequestId,
+    OutputFetchError, ProviderAttemptIdentity, ProviderImageMetadata, ProviderRequestId,
     decode_output, fetch_output, inspect_decoded_image, inspect_dns_answers,
     inspect_fetch_response, prepare_output_fetch_plan,
 };
@@ -94,7 +94,7 @@ fn refuses_incomplete_foreign_attempt_and_malformed_locator() {
             100
         )
         .unwrap_err(),
-        OutputFetchRefusal::RequestNotCompleted
+        OutputFetchError::RequestNotCompleted
     );
     assert_eq!(
         prepare_output_fetch_plan(
@@ -106,7 +106,7 @@ fn refuses_incomplete_foreign_attempt_and_malformed_locator() {
             100
         )
         .unwrap_err(),
-        OutputFetchRefusal::RequestIdentityMismatch
+        OutputFetchError::RequestIdentityMismatch
     );
     for url in [
         "https://cdn.fal.media/x.jpg?token=x",
@@ -130,7 +130,7 @@ fn refuses_incomplete_foreign_attempt_and_malformed_locator() {
                 100
             )
             .unwrap_err(),
-            OutputFetchRefusal::OutputUrlRefused,
+            OutputFetchError::OutputUrlRefused,
             "{url}"
         );
     }
@@ -155,7 +155,7 @@ fn refuses_missing_foreign_supplier_id_and_wrong_route_before_planning() {
         assert_eq!(
             prepare_output_fetch_plan(&identity, operation_id, &id, &observation, &good, 100)
                 .unwrap_err(),
-            OutputFetchRefusal::RequestIdentityMismatch
+            OutputFetchError::RequestIdentityMismatch
         );
     }
     assert_eq!(
@@ -168,7 +168,7 @@ fn refuses_missing_foreign_supplier_id_and_wrong_route_before_planning() {
             100,
         )
         .unwrap_err(),
-        OutputFetchRefusal::RequestNotCompleted
+        OutputFetchError::RequestNotCompleted
     );
 }
 
@@ -188,7 +188,7 @@ fn refuses_invalid_dimensions_mime_and_empty_byte_budget() {
             100
         )
         .unwrap_err(),
-        OutputFetchRefusal::MimeMismatch
+        OutputFetchError::MimeMismatch
     );
     assert_eq!(
         prepare_output_fetch_plan(
@@ -200,7 +200,7 @@ fn refuses_invalid_dimensions_mime_and_empty_byte_budget() {
             100
         )
         .unwrap_err(),
-        OutputFetchRefusal::DimensionsMismatch
+        OutputFetchError::DimensionsMismatch
     );
     assert_eq!(
         prepare_output_fetch_plan(
@@ -212,7 +212,7 @@ fn refuses_invalid_dimensions_mime_and_empty_byte_budget() {
             0
         )
         .unwrap_err(),
-        OutputFetchRefusal::BodyTooLarge
+        OutputFetchError::BodyTooLarge
     );
 }
 
@@ -268,7 +268,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::Cancelled)
+        Err(OutputFetchError::Cancelled)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -278,7 +278,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::ProxyRefused)
+        Err(OutputFetchError::ProxyRefused)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -288,7 +288,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::DeadlineExceeded)
+        Err(OutputFetchError::DeadlineExceeded)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -298,7 +298,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::TransportOutcomeUnknown)
+        Err(OutputFetchError::TransportOutcomeUnknown)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -308,7 +308,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::RedirectRefused)
+        Err(OutputFetchError::RedirectRefused)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -318,7 +318,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::HttpStatusRefused)
+        Err(OutputFetchError::HttpStatusRefused)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -328,7 +328,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::DeadlineExceeded)
+        Err(OutputFetchError::DeadlineExceeded)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -338,7 +338,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::HeadersTooLarge)
+        Err(OutputFetchError::HeadersTooLarge)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -348,7 +348,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::BodyTooLarge)
+        Err(OutputFetchError::BodyTooLarge)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -358,7 +358,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::TransportOutcomeUnknown)
+        Err(OutputFetchError::TransportOutcomeUnknown)
     );
     assert_eq!(
         inspect_fetch_response(
@@ -368,7 +368,7 @@ fn response_inspection_refuses_unbounded_or_ambiguous_transport_facts() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::MimeMismatch)
+        Err(OutputFetchError::MimeMismatch)
     );
 }
 
@@ -406,11 +406,11 @@ fn decode_fact_inspection_rejects_mismatch_incomplete_and_unsafe_features() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::BodyTooLarge)
+        Err(OutputFetchError::BodyTooLarge)
     );
     assert_eq!(
         inspect_decoded_image(&plan, DecodedImageFacts { width: 31, ..good }),
-        Err(OutputFetchRefusal::DimensionsMismatch)
+        Err(OutputFetchError::DimensionsMismatch)
     );
     assert_eq!(
         inspect_decoded_image(
@@ -420,7 +420,7 @@ fn decode_fact_inspection_rejects_mismatch_incomplete_and_unsafe_features() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::DecodeRejected)
+        Err(OutputFetchError::DecodeRejected)
     );
     assert_eq!(
         inspect_decoded_image(
@@ -431,7 +431,7 @@ fn decode_fact_inspection_rejects_mismatch_incomplete_and_unsafe_features() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::DecodeRejected)
+        Err(OutputFetchError::DecodeRejected)
     );
     assert_eq!(
         inspect_decoded_image(
@@ -441,7 +441,7 @@ fn decode_fact_inspection_rejects_mismatch_incomplete_and_unsafe_features() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::DecodeRejected)
+        Err(OutputFetchError::DecodeRejected)
     );
     assert_eq!(
         inspect_decoded_image(
@@ -451,15 +451,15 @@ fn decode_fact_inspection_rejects_mismatch_incomplete_and_unsafe_features() {
                 ..good
             }
         ),
-        Err(OutputFetchRefusal::DecodeRejected)
+        Err(OutputFetchError::DecodeRejected)
     );
     assert_eq!(
         fetch_output(&plan),
-        Err(OutputFetchRefusal::TransportOutcomeUnknown)
+        Err(OutputFetchError::TransportOutcomeUnknown)
     );
     assert_eq!(
         decode_output(&plan),
-        Err(OutputFetchRefusal::DecoderUnavailable)
+        Err(OutputFetchError::DecoderUnavailable)
     );
     assert!(!format!("{plan:?}").contains("cdn.fal.media"));
 }
@@ -478,7 +478,7 @@ fn dns_inspection_denies_special_global_looking_ranges() {
     ] {
         assert_eq!(
             inspect_dns_answers(&[address]),
-            Err(OutputFetchRefusal::DnsTargetRefused)
+            Err(OutputFetchError::DnsTargetRefused)
         );
     }
 }

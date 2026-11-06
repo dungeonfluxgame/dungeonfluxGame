@@ -30,8 +30,8 @@ impl TerminalActor {
     }
 }
 impl fmt::Debug for TerminalActor {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
             Self::Dispatch(_) => "Dispatch { .. }",
             Self::UnsentStage(_) => "UnsentStage { .. }",
             Self::UnclaimedStage(_) => "UnclaimedStage { .. }",
@@ -51,8 +51,8 @@ pub enum TerminalAuthority {
     Released(super::ReleasedTerminal),
 }
 impl fmt::Debug for TerminalAuthority {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
             Self::Claim(_) => "Claim { .. }",
             Self::Recovery(_) => "Recovery { .. }",
             Self::Unclaimed(_) => "Unclaimed { .. }",
@@ -72,8 +72,9 @@ pub struct TerminalCommand {
     pub now_ms: i64,
 }
 impl fmt::Debug for TerminalCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TerminalCommand")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TerminalCommand")
             .field("actor", &self.actor)
             .field("tail", &self.tail)
             .field("expected_job_revision", &self.expected_job_revision)
@@ -87,8 +88,9 @@ pub struct TerminalStageSnapshot {
     pub dispatch: Option<DispatchView>,
 }
 impl fmt::Debug for TerminalStageSnapshot {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TerminalStageSnapshot")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TerminalStageSnapshot")
             .field("kind", &self.basis.kind)
             .finish_non_exhaustive()
     }
@@ -104,8 +106,8 @@ pub enum TerminalAllocation {
     },
 }
 impl fmt::Debug for TerminalAllocation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
             Self::NoAllocation => "NoAllocation",
             Self::Existing { .. } => "Existing { .. }",
         })

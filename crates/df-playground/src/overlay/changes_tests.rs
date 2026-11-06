@@ -53,18 +53,18 @@ fn a_new_layout_redraws_the_panels_and_the_character_items() {
     }
     let mut with_layout = before.clone();
     if let Some(backdrop) = with_layout.tv.backdrop.as_mut() {
-        backdrop.layout = Some(df_scene_layout::SceneLayout {
-            schema: df_scene_layout::SCHEMA_VERSION,
-            picture: df_scene_layout::PictureBinding {
-                name: backdrop.media.clone(),
-                sha256: "ab".repeat(32),
-                width_px: 1672,
-                height_px: 941,
-            },
-            model: "sam-3.1".to_owned(),
-            prompt: "person".to_owned(),
-            regions: Vec::new(),
-        });
+        let picture = df_scene_layout::PictureBinding {
+            name: backdrop.media.clone(),
+            sha256: "ab".repeat(32),
+            width_px: 1672,
+            height_px: 941,
+        };
+        backdrop.layout = Some(df_scene_layout::SceneLayout::new(
+            picture,
+            "sam-3.1",
+            "person",
+            Vec::new(),
+        ));
     }
     assert!(panels_differ(&after.tv, &with_layout.tv));
     assert!(anchors_differ(&after.tv, &with_layout.tv));

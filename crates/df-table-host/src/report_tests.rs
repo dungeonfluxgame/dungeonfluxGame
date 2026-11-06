@@ -1,10 +1,9 @@
-use df_table::event::RejectionCause;
 use df_table::kind::Shape;
 
 use crate::event_log::LoggedLine;
-use crate::report::{describe_reply, format_events, format_kinds};
+use crate::report::{describe_done, format_events, format_kinds};
 use crate::view::{CanvasView, FieldKind, FieldView, KindView};
-use crate::wire::{EventsReply, Reply};
+use crate::wire::EventsReply;
 
 fn view_with_a_kind() -> CanvasView {
     CanvasView {
@@ -36,28 +35,12 @@ fn view_with_a_kind() -> CanvasView {
     }
 }
 
+// A refused `Reply` prints as its `DevError::Rejected` (dev_tests).
 #[test]
 fn a_done_reply_reads_as_ok_with_its_revision_and_notices() {
-    let reply = Reply::Done {
-        revision: 4,
-        notices: vec!["element 'pip': it no longer fits".into()],
-    };
     assert_eq!(
-        describe_reply(&reply),
-        Ok("ok (revision 4)\n  element 'pip': it no longer fits".to_owned())
-    );
-}
-
-#[test]
-fn a_rejected_reply_is_an_error_with_its_message_and_problems() {
-    let reply = Reply::Rejected {
-        cause: Some(RejectionCause::UnknownKind),
-        message: "there is no kind 'dragon'".into(),
-        problems: vec!["a".into(), "b".into()],
-    };
-    assert_eq!(
-        describe_reply(&reply),
-        Err("there is no kind 'dragon'\n  a\n  b".to_owned())
+        describe_done(4, &["element 'pip': it no longer fits".to_owned()]),
+        "ok (revision 4)\n  element 'pip': it no longer fits"
     );
 }
 

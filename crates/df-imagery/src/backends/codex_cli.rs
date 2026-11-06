@@ -58,12 +58,24 @@ pub const ADAPTER_REVISION: u32 = 2;
 
 /// Why backend configuration was refused; the prior snapshot stays live.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConfigError {
+pub enum CodexConfigError {
     InvalidField {
         field: &'static str,
         reason: &'static str,
     },
 }
+
+impl std::fmt::Display for CodexConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidField { field, reason } => {
+                write!(formatter, "the codex setting {field} is invalid: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CodexConfigError {}
 
 /// Normal selectable backend configuration: an absolute executable, an
 /// optional agent-model override, and operator-tunable bounds. No exact
@@ -78,13 +90,17 @@ pub struct CodexCliConfig {
     max_stdout_bytes: u64,
     max_stderr_bytes: u64,
     max_artifact_bytes: u64,
+    /// The Codex home the child uses (`CODEX_HOME`, or `.codex` in the user's home), where the
+    /// image tool saves pictures in its read-only sandbox. `None` looks only in the outputs
+    /// directory. The host fills it; the library never reads the environment for it.
+    codex_home: Option<PathBuf>,
 }
 
 impl CodexCliConfig {
     /// Defaults align with the request vocabulary, the image configuration's
     /// Codex stream defaults and the asset admission ceiling; the launcher
     /// replaces them with operator values.
-    pub fn new(executable: PathBuf) -> Result<Self, ConfigError> {
+    pub fn new(executable: PathBuf) -> Result<Self, CodexConfigError> {
         let config = Self {
             executable,
             agent_model: None,
@@ -94,16 +110,17 @@ impl CodexCliConfig {
             max_stdout_bytes: CODEX_MAX_STDOUT_BYTES_DEFAULT,
             max_stderr_bytes: CODEX_MAX_STDERR_BYTES_DEFAULT,
             max_artifact_bytes: MAX_UPLOAD_BYTES as u64,
+            codex_home: None,
         };
         config.validate()?;
         Ok(config)
     }
 
-    pub fn with_agent_model(mut self, model: &str) -> Result<Self, ConfigError> {
+    pub fn with_agent_model(mut self, model: &str) -> Result<Self, CodexConfigError> {
         // The agent selector is not evidence of which image model generates
         // the artifact; the receipt records identity only when observed.
         if model.trim().is_empty() {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "agent_model",
                 reason: "an explicit model must not be blank",
             });
@@ -112,21 +129,29 @@ impl CodexCliConfig {
         Ok(self)
     }
 
+    /// Names the Codex home whose `generated_images/<thread>` folder may hold the turn's picture.
+    pub fn with_codex_home(mut self, home: PathBuf) -> Self {
+        self.codex_home = Some(home);
+        self
+    }
+
     pub fn with_request_limits(
         self,
         limits: &crate::request::RequestLimits,
-    ) -> Result<Self, ConfigError> {
-        limits.validate().map_err(|_| ConfigError::InvalidField {
-            field: "request_limits",
-            reason: "central request limits must admit at least one item",
-        })?;
+    ) -> Result<Self, CodexConfigError> {
+        limits
+            .validate()
+            .map_err(|_| CodexConfigError::InvalidField {
+                field: "request_limits",
+                reason: "central request limits must admit at least one item",
+            })?;
         self.with_max_prompt_chars(limits.max_prompt_chars)?
             .with_max_references(limits.max_references)
     }
 
-    pub fn with_max_prompt_chars(mut self, max_chars: usize) -> Result<Self, ConfigError> {
+    pub fn with_max_prompt_chars(mut self, max_chars: usize) -> Result<Self, CodexConfigError> {
         if max_chars == 0 {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "max_prompt_chars",
                 reason: "a zero bound refuses all work",
             });
@@ -136,9 +161,9 @@ impl CodexCliConfig {
         Ok(self)
     }
 
-    pub fn with_max_references(mut self, max: usize) -> Result<Self, ConfigError> {
+    pub fn with_max_references(mut self, max: usize) -> Result<Self, CodexConfigError> {
         if max == 0 {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "max_references",
                 reason: "a zero bound refuses all work",
             });
@@ -148,32 +173,32 @@ impl CodexCliConfig {
         Ok(self)
     }
 
-    pub fn with_max_message_bytes(mut self, max_bytes: u64) -> Result<Self, ConfigError> {
+    pub fn with_max_message_bytes(mut self, max_bytes: u64) -> Result<Self, CodexConfigError> {
         nonzero("max_message_bytes", max_bytes)?;
         self.max_message_bytes = max_bytes;
         self.validate()?;
         Ok(self)
     }
 
-    pub fn with_max_stdout_bytes(mut self, max_bytes: u64) -> Result<Self, ConfigError> {
+    pub fn with_max_stdout_bytes(mut self, max_bytes: u64) -> Result<Self, CodexConfigError> {
         nonzero("max_stdout_bytes", max_bytes)?;
         self.max_stdout_bytes = max_bytes;
         self.validate()?;
         Ok(self)
     }
 
-    pub fn with_max_stderr_bytes(mut self, max_bytes: u64) -> Result<Self, ConfigError> {
+    pub fn with_max_stderr_bytes(mut self, max_bytes: u64) -> Result<Self, CodexConfigError> {
         nonzero("max_stderr_bytes", max_bytes)?;
         self.max_stderr_bytes = max_bytes;
         self.validate()?;
         Ok(self)
     }
 
-    pub fn with_max_artifact_bytes(mut self, max_bytes: u64) -> Result<Self, ConfigError> {
+    pub fn with_max_artifact_bytes(mut self, max_bytes: u64) -> Result<Self, CodexConfigError> {
         nonzero("max_artifact_bytes", max_bytes)?;
         let max_bytesize = usize::MAX as u64;
         if max_bytes > max_bytesize {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "max_artifact_bytes",
                 reason: "the artifact bound must fit addressable memory",
             });
@@ -183,9 +208,9 @@ impl CodexCliConfig {
         Ok(self)
     }
 
-    pub fn validate(&self) -> Result<(), ConfigError> {
+    pub fn validate(&self) -> Result<(), CodexConfigError> {
         if self.executable.as_os_str().is_empty() || !self.executable.is_absolute() {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "executable",
                 reason: "the CLI executable must be an absolute path",
             });
@@ -206,11 +231,15 @@ impl CodexCliConfig {
     pub fn agent_model(&self) -> Option<&str> {
         self.agent_model.as_deref()
     }
+
+    pub fn codex_home(&self) -> Option<&Path> {
+        self.codex_home.as_deref()
+    }
 }
 
-fn nonzero(field: &'static str, value: u64) -> Result<(), ConfigError> {
+fn nonzero(field: &'static str, value: u64) -> Result<(), CodexConfigError> {
     if value == 0 {
-        return Err(ConfigError::InvalidField {
+        return Err(CodexConfigError::InvalidField {
             field,
             reason: "a zero bound refuses all work",
         });
@@ -227,9 +256,9 @@ pub struct StagedReference {
 }
 
 impl StagedReference {
-    pub fn new(path: PathBuf, sha256_hex: &str) -> Result<Self, ConfigError> {
+    pub fn new(path: PathBuf, sha256_hex: &str) -> Result<Self, CodexConfigError> {
         if !path.is_absolute() || path.to_str().is_none() {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "reference.path",
                 reason: "staged references must be absolute representable paths",
             });
@@ -237,7 +266,7 @@ impl StagedReference {
         if sha256_hex.len() != artifact::SHA256_HEX_CHARS
             || !sha256_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "reference.sha256_hex",
                 reason: "staged references carry a hex SHA-256",
             });
@@ -279,6 +308,26 @@ pub enum CodexRequestError {
     TooManyReferences { count: usize },
     MissingBase,
 }
+
+impl std::fmt::Display for CodexRequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PromptTooLong {
+                len_chars,
+                max_chars,
+            } => write!(
+                formatter,
+                "the prompt has {len_chars} characters, more than {max_chars}"
+            ),
+            Self::TooManyReferences { count } => {
+                write!(formatter, "{count} references are too many")
+            }
+            Self::MissingBase => formatter.write_str("the edit has no base picture"),
+        }
+    }
+}
+
+impl std::error::Error for CodexRequestError {}
 
 /// The one backend request: private prompt text, ordered staged references,
 /// and the explicit output contract the service froze.
@@ -363,21 +412,21 @@ impl AttemptDirs {
 }
 
 impl AttemptDirs {
-    pub fn check(&self) -> Result<(), ConfigError> {
+    pub fn check(&self) -> Result<(), CodexConfigError> {
         for (field, dir) in [
             ("scratch", &self.scratch),
             ("inputs", &self.inputs),
             ("outputs", &self.outputs),
         ] {
             if !dir.is_absolute() {
-                return Err(ConfigError::InvalidField {
+                return Err(CodexConfigError::InvalidField {
                     field,
                     reason: "attempt directories must be absolute",
                 });
             }
         }
         if self.inputs == self.outputs {
-            return Err(ConfigError::InvalidField {
+            return Err(CodexConfigError::InvalidField {
                 field: "outputs",
                 reason: "verified outputs must not share the staged input directory",
             });
@@ -450,7 +499,7 @@ impl ArtifactReceipt {
 /// How generation was refused or failed with evidence.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodexError {
-    Configuration(ConfigError),
+    Configuration(CodexConfigError),
     Request(CodexRequestError),
     Transport { kind: std::io::ErrorKind },
     Refused { code: String },
@@ -462,6 +511,41 @@ pub enum CodexError {
     Protocol(ProtocolError),
     LostOutput,
     Internal,
+}
+
+impl std::fmt::Display for CodexError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Configuration(error) => {
+                write!(formatter, "the codex configuration was refused: {error}")
+            }
+            Self::Request(error) => write!(formatter, "the codex request was refused: {error}"),
+            Self::Transport { kind } => write!(formatter, "the codex transport failed: {kind}"),
+            Self::Refused { .. } => formatter.write_str("codex refused the request"),
+            Self::TurnFailed { .. } => formatter.write_str("the codex turn failed"),
+            Self::GenerationFailed { .. } => formatter.write_str("the codex generation failed"),
+            Self::NoArtifact => formatter.write_str("codex returned no picture"),
+            Self::Unsupported { kind } => {
+                write!(formatter, "codex returned an unsupported receipt: {kind:?}")
+            }
+            Self::Artifact(error) => write!(formatter, "the codex picture was refused: {error}"),
+            Self::Protocol(error) => write!(formatter, "the codex protocol failed: {error}"),
+            Self::LostOutput => formatter.write_str("the codex output was lost"),
+            Self::Internal => formatter.write_str("the codex backend failed inside this process"),
+        }
+    }
+}
+
+impl std::error::Error for CodexError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Configuration(error) => Some(error),
+            Self::Request(error) => Some(error),
+            Self::Artifact(error) => Some(error),
+            Self::Protocol(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 /// Evidenced failure detail: usage limits are proven, anything else is not.
@@ -539,7 +623,7 @@ where
     R: ProcessRunner,
 {
     let Some(deadline_at) = Instant::now().checked_add(deadline) else {
-        return CodexOutcome::failed(CodexError::Configuration(ConfigError::InvalidField {
+        return CodexOutcome::failed(CodexError::Configuration(CodexConfigError::InvalidField {
             field: "deadline",
             reason: "the deadline must be representable",
         }));
@@ -554,7 +638,7 @@ where
         return CodexOutcome::failed(CodexError::Configuration(error));
     }
     if deadline.is_zero() {
-        return CodexOutcome::failed(CodexError::Configuration(ConfigError::InvalidField {
+        return CodexOutcome::failed(CodexError::Configuration(CodexConfigError::InvalidField {
             field: "deadline",
             reason: "provider work needs a nonzero absolute deadline",
         }));
@@ -612,7 +696,7 @@ where
         operation_label(request),
         request.dimensions.width_px(),
         request.dimensions.height_px(),
-        request.format.label(),
+        request.format.key(),
         alpha_label(request),
         &outputs_root.to_string_lossy(),
         request.prompt.text(),
@@ -684,24 +768,24 @@ fn canonicalize_attempt(
     let scratch_text =
         scratch
             .to_str()
-            .ok_or(CodexError::Configuration(ConfigError::InvalidField {
+            .ok_or(CodexError::Configuration(CodexConfigError::InvalidField {
                 field: "scratch",
                 reason: "scratch must be representable before launch",
             }))?;
     let scratch_canonical = std::fs::canonicalize(scratch).map_err(|_| {
-        CodexError::Configuration(ConfigError::InvalidField {
+        CodexError::Configuration(CodexConfigError::InvalidField {
             field: "attempt",
             reason: "scratch and outputs must exist before launch",
         })
     })?;
     let inputs_canonical = std::fs::canonicalize(inputs).map_err(|_| {
-        CodexError::Configuration(ConfigError::InvalidField {
+        CodexError::Configuration(CodexConfigError::InvalidField {
             field: "attempt",
             reason: "staged inputs must exist before launch",
         })
     })?;
     let outputs_canonical = std::fs::canonicalize(outputs).map_err(|_| {
-        CodexError::Configuration(ConfigError::InvalidField {
+        CodexError::Configuration(CodexConfigError::InvalidField {
             field: "attempt",
             reason: "scratch and outputs must exist before launch",
         })
@@ -712,7 +796,7 @@ fn canonicalize_attempt(
         || scratch_canonical == inputs_canonical
         || scratch_canonical == outputs_canonical
     {
-        return Err(CodexError::Configuration(ConfigError::InvalidField {
+        return Err(CodexError::Configuration(CodexConfigError::InvalidField {
             field: "outputs",
             reason: "verified outputs must not overlap the staged input directory",
         }));
@@ -735,7 +819,7 @@ pub(crate) fn message_bound(config: &CodexCliConfig) -> usize {
 
 fn map_spawn_error(error: ProcessError) -> CodexError {
     match error {
-        ProcessError::Configuration => CodexError::Configuration(ConfigError::InvalidField {
+        ProcessError::Configuration => CodexError::Configuration(CodexConfigError::InvalidField {
             field: "process",
             reason: "the child spec was not launchable",
         }),

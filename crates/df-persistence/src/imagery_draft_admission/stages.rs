@@ -131,7 +131,7 @@ impl<A: StageAuthority> CanonicalStagePort<A> {
         )
         .await
         .map_err(execution_error)?;
-        if basis.kind.label() != call.kind.label()
+        if basis.kind.key() != call.kind.label()
             || basis.input_revision != call.input_revision
             || basis.input_digest != call.input_digest
             || basis.config_revision != call.config_revision

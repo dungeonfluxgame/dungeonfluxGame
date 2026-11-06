@@ -1,17 +1,21 @@
 //! Actual pre-egress request failures close their own claimed job without supplier identities.
 use super::RuntimeError;
 use crate::execution::*;
+use crate::listed::listed_enum;
 use crate::{ImageJob, ImageOwner};
 use sha2::{Digest, Sha256};
 
-/// The actual failure occurred before any supplier or finance dispatch existed.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PreflightRejection {
-    MissingCredential,
-    UnsupportedProfile,
+listed_enum! {
+    keyed
+    /// The actual failure occurred before any supplier or finance dispatch existed.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum PreflightCause {
+        MissingCredential,
+        UnsupportedProfile,
+    }
 }
-impl PreflightRejection {
-    pub fn label(self) -> &'static str {
+impl PreflightCause {
+    pub fn key(self) -> &'static str {
         match self {
             Self::MissingCredential => "missing_credential",
             Self::UnsupportedProfile => "unsupported_profile",
@@ -29,12 +33,13 @@ pub struct QualifiedPreflightRejected {
     config_digest: [u8; 32],
     claim: StageClaim,
     basis: StageBasis,
-    reason: PreflightRejection,
+    reason: PreflightCause,
     candidate: Option<CandidateReceipt>,
 }
 impl std::fmt::Debug for QualifiedPreflightRejected {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QualifiedPreflightRejected")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QualifiedPreflightRejected")
             .field("reason", &self.reason)
             .finish_non_exhaustive()
     }
@@ -44,7 +49,7 @@ impl QualifiedPreflightRejected {
         job: &ImageJob,
         claim: StageClaim,
         basis: StageBasis,
-        reason: PreflightRejection,
+        reason: PreflightCause,
         candidate: Option<CandidateReceipt>,
     ) -> Result<Self, RuntimeError> {
         if claim.scope.owner != job.owner
@@ -89,7 +94,7 @@ impl QualifiedPreflightRejected {
     pub fn basis(&self) -> &StageBasis {
         &self.basis
     }
-    pub fn reason(&self) -> PreflightRejection {
+    pub fn reason(&self) -> PreflightCause {
         self.reason
     }
     pub fn candidate(&self) -> Option<&CandidateReceipt> {

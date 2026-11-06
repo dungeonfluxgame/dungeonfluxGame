@@ -23,7 +23,7 @@ use df_imagery::{
     AuthDenied, CancelOutcome, ExecutionMode, GlobalMode, ImageAuthorizer, ImageConfig,
     ImageInterestId, ImageJobId, ImageJournal, ImageOwner, ImageRequest, ImageService,
     ImageServiceError, InterestState, JobState, JournalError, OperationHandle, Purpose,
-    PurposedUse, RequestOutcome, RequestProblem, ServiceAction, ServiceClock, ServiceIdError,
+    PurposedUse, RequestCause, RequestOutcome, ServiceAction, ServiceClock, ServiceIdError,
     ServiceIds, StoredImageAuthorization, VariantRole, WatchObservation,
 };
 use df_imagery::{Freshness, ImageOperation};
@@ -1440,7 +1440,9 @@ fn refusals_and_mismatches_fail_before_any_mutation() {
             .await
             .expect("bounded")
             .unwrap_err(),
-            ImageServiceError::InvalidRequest(RequestProblem::WithheldAudience)
+            ImageServiceError::InvalidRequest {
+                cause: RequestCause::WithheldAudience
+            }
         );
 
         let tampered = generate_request(owner.clone(), operation_id(0x42));
@@ -1452,7 +1454,9 @@ fn refusals_and_mismatches_fail_before_any_mutation() {
             .await
             .expect("bounded")
             .unwrap_err(),
-            ImageServiceError::InvalidRequest(RequestProblem::FingerprintMismatch)
+            ImageServiceError::InvalidRequest {
+                cause: RequestCause::FingerprintMismatch
+            }
         );
 
         let forged = stamp(

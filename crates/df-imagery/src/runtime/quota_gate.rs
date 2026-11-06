@@ -1,7 +1,7 @@
 //! Account-wide guard for an actual new supplier attempt, independent of image identity.
 use super::ports::{ImageCredentials, ImageRuntimeTelemetry, RuntimeError};
 use super::quota::{
-    QuotaAccount, QuotaAdmission, QuotaAnswer, QuotaPermit, QuotaRefusal, QuotaTransition,
+    QuotaAccount, QuotaAdmission, QuotaAnswer, QuotaError, QuotaPermit, QuotaTransition,
 };
 use crate::config::QuotaSettings;
 
@@ -75,23 +75,23 @@ pub(crate) fn raw_answer(status: u16, body: &[u8], useful: bool) -> QuotaAnswer 
     }
 }
 
-fn refusal(error: QuotaRefusal) -> RuntimeError {
+fn refusal(error: QuotaError) -> RuntimeError {
     match error {
-        QuotaRefusal::Cooldown { retry_at_ms } => RuntimeError::QuotaBlocked {
+        QuotaError::Cooldown { retry_at_ms } => RuntimeError::QuotaBlocked {
             retry_at_ms: Some(retry_at_ms),
             notice: Some(crate::execution::QuotaDeferralReason::Cooldown),
         },
-        QuotaRefusal::Probing => RuntimeError::QuotaBlocked {
+        QuotaError::Probing => RuntimeError::QuotaBlocked {
             retry_at_ms: None,
             notice: Some(crate::execution::QuotaDeferralReason::Probing),
         },
-        QuotaRefusal::AdmissionChanged | QuotaRefusal::RegistryFull => RuntimeError::QuotaBlocked {
+        QuotaError::AdmissionChanged | QuotaError::RegistryFull => RuntimeError::QuotaBlocked {
             retry_at_ms: None,
             notice: None,
         },
-        QuotaRefusal::InvalidIdentity | QuotaRefusal::InvalidPolicy => {
+        QuotaError::InvalidIdentity | QuotaError::InvalidPolicy => {
             RuntimeError::InvalidConfiguration
         }
-        QuotaRefusal::InvalidTime | QuotaRefusal::StateUnavailable => RuntimeError::WorkerFailed,
+        QuotaError::InvalidTime | QuotaError::StateUnavailable => RuntimeError::WorkerFailed,
     }
 }

@@ -85,7 +85,7 @@ async fn expired_import_creates_no_file_and_keeps_collisions() {
     let deadline_at = Instant::now();
     std::thread::sleep(std::time::Duration::from_millis(1));
     let error = import_verified_bytes(
-        &verified,
+        verified,
         &outputs,
         &item("item-1"),
         1024 * 1024,
@@ -123,7 +123,7 @@ async fn reread_failure_removes_only_the_owned_import() {
     let collision = outputs.join("item-1.png");
     std::fs::write(&collision, b"unrelated collision bytes").unwrap();
     let error = import_verified_bytes(
-        &verified,
+        verified,
         &outputs,
         &item("item-1"),
         10,
@@ -179,7 +179,7 @@ fn late_open_does_not_leave_an_orphan_after_deadline() {
         let deadline_at = Instant::now() + std::time::Duration::from_millis(50);
         let outputs_clone = outputs.clone();
         let import = tokio::spawn(async move {
-            import_verified_bytes(&verified, &outputs_clone, &item, 1024 * 1024, deadline_at).await
+            import_verified_bytes(verified, &outputs_clone, &item, 1024 * 1024, deadline_at).await
         });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let _ = release_tx.send(());
@@ -197,4 +197,16 @@ fn late_open_does_not_leave_an_orphan_after_deadline() {
         );
         let _ = std::fs::remove_dir_all(&root);
     });
+}
+
+#[test]
+fn generated_images_live_under_the_configured_codex_home_only() {
+    let home = std::env::temp_dir().join("df-codex-settle-home");
+    assert_eq!(
+        generated_images_root(Some(&home), "thread-1"),
+        Some(home.join("generated_images").join("thread-1"))
+    );
+    assert_eq!(generated_images_root(None, "thread-1"), None);
+    assert_eq!(generated_images_root(Some(&home), "../thread"), None);
+    assert_eq!(generated_images_root(Some(&home), ""), None);
 }

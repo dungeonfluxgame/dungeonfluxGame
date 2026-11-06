@@ -587,7 +587,7 @@ impl<S: ObjectStore + 'static, I: RuntimeIds, C: Clock> ImageDispatchAdmission
             .await
             .map_err(|error| publication_error(rows::database_error(error)))?;
         let stored=tx.query_opt("SELECT s.stage_kind,s.stage_id,d.dispatch_state,EXISTS(SELECT 1 FROM imagery.image_candidate_checkpoint c WHERE c.dispatch_id=d.dispatch_id) AS has_candidate,EXISTS(SELECT 1 FROM imagery.image_job_result r WHERE r.owner_scope=s.owner_scope AND r.job_id=d.job_id AND r.stage_id=d.stage_id AND r.dispatch_id=d.dispatch_id AND NOT EXISTS(SELECT 1 FROM imagery.image_final_selection f WHERE f.job_id=r.job_id)) AS has_legacy_ready,EXISTS(SELECT 1 FROM imagery.image_no_delivery n WHERE n.owner_scope=s.owner_scope AND n.job_id=d.job_id AND n.actor_stage_id=d.stage_id AND n.actor_dispatch_id=d.dispatch_id AND n.reason='source_denied' AND n.legacy_output_write_id IS NOT NULL) AS has_legacy_undelivered FROM imagery.image_execution_stage s JOIN imagery.image_dispatch_attempt d USING(job_id,stage_id) WHERE s.owner_scope=$1 AND s.job_id=$2 AND d.dispatch_id=$3", &[&owner_scope_bytes(&job.owner),&job.job.as_bytes().as_slice(),&dispatch.as_bytes().as_slice()]).await.map_err(|error|publication_error(rows::database_error(error)))?.ok_or(RuntimeError::InvalidRecord)?;
-        let kind = StageKind::parse_label(&stored.get::<_, String>("stage_kind"))
+        let kind = StageKind::from_key(&stored.get::<_, String>("stage_kind"))
             .ok_or(RuntimeError::InvalidRecord)?;
         if stored.get::<_, String>("dispatch_state") == "declined" {
             if usable.is_some() {

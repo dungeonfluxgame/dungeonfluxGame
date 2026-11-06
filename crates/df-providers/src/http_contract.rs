@@ -26,7 +26,8 @@ pub enum HttpMethod {
 }
 
 impl HttpMethod {
-    pub const fn as_str(self) -> &'static str {
+    /// The method's wire spelling.
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Get => "GET",
             Self::Post => "POST",
@@ -182,6 +183,30 @@ pub enum HttpRequestError {
     IncompleteAudioStream,
     EmptyAudioBody,
 }
+
+impl fmt::Display for HttpRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::EmptyCredential => "the credential is empty",
+            Self::EmptyVoiceId => "the voice id is empty",
+            Self::EmptyText => "the text is empty",
+            Self::EmptyPrompt => "the prompt is empty",
+            Self::EmptyProviderRequestId => "the provider request id is empty or padded",
+            Self::InvalidSupplierUrl => "the supplier URL is not allowed",
+            Self::ResultBeforeCompletion => "the result was asked for before completion",
+            Self::EmptyImages => "the answer carries no images",
+            Self::InvalidImageUrl => "an image URL is not allowed",
+            Self::InvalidImageContentType => "an image has the wrong content type",
+            Self::InvalidImageDimensions => "an image has the wrong dimensions",
+            Self::UnsuccessfulAudioStatus => "the audio answer has a failure status",
+            Self::InvalidAudioContentType => "the audio answer has the wrong content type",
+            Self::IncompleteAudioStream => "the audio stream is incomplete",
+            Self::EmptyAudioBody => "the audio answer is empty",
+        })
+    }
+}
+
+impl std::error::Error for HttpRequestError {}
 
 /// Supplier-generated request identity. This is intentionally distinct from
 /// the application-owned OperationId and is never used as one.

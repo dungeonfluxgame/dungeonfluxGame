@@ -258,7 +258,7 @@ impl ImageObservations for PostgresImageObservations {
         let failure = row
             .get::<_, Option<String>>("failure_cause")
             .map(|label| {
-                df_imagery::execution::FailureCause::parse_label(&label)
+                df_imagery::execution::FailureCause::from_key(&label)
                     .ok_or(JournalError::InvalidRecord)
             })
             .transpose()?
@@ -334,7 +334,7 @@ impl ImageObservations for PostgresImageObservations {
         let operational_notice = if state == ImageExecutionState::Queued && dispatch.is_none() {
             row.get::<_, Option<String>>("queued_notice")
                 .map(|label| {
-                    let reason = df_imagery::execution::QuotaDeferralReason::parse_label(&label)
+                    let reason = df_imagery::execution::QuotaDeferralReason::from_key(&label)
                         .ok_or(JournalError::InvalidRecord)?;
                     let retry_at_ms = row
                         .get::<_, Option<i64>>("queued_not_before_ms")
@@ -362,7 +362,7 @@ impl ImageObservations for PostgresImageObservations {
 }
 fn failure(label: Option<&str>) -> Result<df_imagery::execution::FailureCause, JournalError> {
     label
-        .and_then(df_imagery::execution::FailureCause::parse_label)
+        .and_then(df_imagery::execution::FailureCause::from_key)
         .ok_or(JournalError::InvalidRecord)
 }
 
@@ -383,12 +383,12 @@ fn parse_assessment(bytes: &[u8]) -> Result<CreatorAssessment, JournalError> {
     let category = object
         .get("category")
         .and_then(serde_json::Value::as_str)
-        .and_then(CreatorCategory::parse_label)
+        .and_then(CreatorCategory::from_key)
         .ok_or(JournalError::InvalidRecord)?;
     let route = object
         .get("route")
         .and_then(serde_json::Value::as_str)
-        .and_then(CreatorRoute::parse_label)
+        .and_then(CreatorRoute::from_key)
         .ok_or(JournalError::InvalidRecord)?;
     let contract_revision = object
         .get("contract_revision")

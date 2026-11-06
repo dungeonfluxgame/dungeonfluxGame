@@ -135,7 +135,7 @@ fn parse(
         tail: stage(row, owner, job, "tail")?,
         candidate,
         allocation: allocation(row)?,
-        reason: df_imagery::runtime::NoDeliveryReason::parse_label(&row.get::<_, String>("reason"))
+        reason: df_imagery::runtime::NoDeliveryReason::from_key(&row.get::<_, String>("reason"))
             .ok_or(PublicationError::InvalidRecord)?,
         expected_job_revision: u64::try_from(row.get::<_, i64>("expected_job_revision"))
             .map_err(|_| PublicationError::InvalidRecord)?,
@@ -237,7 +237,7 @@ pub(super) async fn insert_in(
         .map(|output| output.recipe_digest.to_vec());
     tx.execute("INSERT INTO imagery.image_no_delivery(job_id,owner_scope,actor_kind,actor_stage_id,actor_dispatch_id,actor_usage_revision,tail_kind,tail_stage_id,tail_dispatch_id,tail_usage_revision,candidate_stage_id,candidate_dispatch_id,allocation_kind,allocation_stage_id,asset_id,publication_attempt,expected_job_revision,sealed_job_revision,reason,evidence_binding,decision_binding,candidates_binding,local_inspection_binding,sealed_at_ms,no_output_raw_sha256,legacy_output_write_id,legacy_output_version,legacy_output_sha256,legacy_output_recipe_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)", &[
         &scope.job.as_bytes().as_slice(),&owner_scope_bytes(&scope.owner),&actor.kind,&actor.stage,&actor.dispatch,&actor.usage,&tail.kind,&tail.stage,&tail.dispatch,&tail.usage,
-        &candidate_stage,&candidate_dispatch,&allocation_kind,&allocation_stage,&asset,&attempt,&expected,&revision,&retained.reason.label(),&binding,&decisions,&candidates,&locals,&command.now_ms,&no_output_raw,&legacy_write,&legacy_version,&legacy_sha,&legacy_recipe,
+        &candidate_stage,&candidate_dispatch,&allocation_kind,&allocation_stage,&asset,&attempt,&expected,&revision,&retained.reason.key(),&binding,&decisions,&candidates,&locals,&command.now_ms,&no_output_raw,&legacy_write,&legacy_version,&legacy_sha,&legacy_recipe,
     ]).await.map_err(database_error)?;
     read_in(tx, &scope.owner, &scope.job)
         .await?

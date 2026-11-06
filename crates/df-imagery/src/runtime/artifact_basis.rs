@@ -14,7 +14,7 @@ pub(crate) fn artifact_executor_basis(
     let account = dispatch::account(config, intent);
     let mut encoded = b"df-imagery/artifact-executor-v1".to_vec();
     for field in [
-        backend.label().as_bytes(),
+        backend.key().as_bytes(),
         model.as_bytes(),
         account.as_str().as_bytes(),
         crate::raster::webp_lossy::WEBP_ENCODER_SOURCE.as_bytes(),

@@ -5,32 +5,32 @@ use df_types::{
     SessionRevision,
 };
 
-fn label(value: &str) -> RevisionLabel {
+pub(crate) fn label(value: &str) -> RevisionLabel {
     RevisionLabel::new(Some(value)).unwrap()
 }
-fn entity(value: u8) -> EntityId {
+pub(crate) fn entity(value: u8) -> EntityId {
     EntityId::from_bytes(&[value; 16]).unwrap()
 }
-fn member(value: u8) -> MemberId {
+pub(crate) fn member(value: u8) -> MemberId {
     MemberId::from_bytes(&[value; 16]).unwrap()
 }
-fn revision(epoch: u64, sequence: u64) -> SessionRevision {
+pub(crate) fn revision(epoch: u64, sequence: u64) -> SessionRevision {
     SessionRevision::new(RecoveryEpoch::new(epoch).unwrap(), sequence)
 }
-fn basis() -> Basis {
+pub(crate) fn basis() -> Basis {
     Basis {
         session: SessionId::from_bytes(&[1; 16]).unwrap(),
         run: RunId::from_bytes(&[2; 16]).unwrap(),
         revision: revision(2, 8),
     }
 }
-fn content() -> ContentReference {
+pub(crate) fn content() -> ContentReference {
     ContentReference {
         package: label("fixture-package-1"),
         entry: label("fixture-entry-1"),
     }
 }
-fn rule() -> RuleReference {
+pub(crate) fn rule() -> RuleReference {
     RuleReference {
         catalog: label("fixture-catalog-1"),
         source: label("fixture-source-1"),
@@ -38,7 +38,7 @@ fn rule() -> RuleReference {
         clause: label("fixture-clause-1"),
     }
 }
-fn pins() -> CheckpointPins {
+pub(crate) fn pins() -> CheckpointPins {
     CheckpointPins {
         rules: RulesPins {
             mode: RulesMode::Standard2024,
@@ -66,7 +66,7 @@ fn pins() -> CheckpointPins {
         .unwrap(),
     }
 }
-fn resource_constraints() -> Vec<ResourceConstraint> {
+pub(crate) fn resource_constraints() -> Vec<ResourceConstraint> {
     vec![ResourceConstraint {
         owner: entity(4),
         resource: label("fixture-resource-1"),
@@ -75,7 +75,7 @@ fn resource_constraints() -> Vec<ResourceConstraint> {
         source: rule(),
     }]
 }
-fn limits() -> CheckpointLimits {
+pub(crate) fn limits() -> CheckpointLimits {
     CheckpointLimits {
         maximum_records: 100,
         maximum_text_bytes: 256,
@@ -83,7 +83,7 @@ fn limits() -> CheckpointLimits {
         maximum_retained_bytes: 1024 * 1024,
     }
 }
-fn state() -> GameState {
+pub(crate) fn state() -> GameState {
     GameState {
         mode: ExecutionMode::Replay,
         logical_time: LogicalTime {
@@ -152,7 +152,7 @@ fn state() -> GameState {
         continuity: continuity(),
     }
 }
-fn checkpoint(state: GameState) -> Result<Checkpoint, CheckpointError> {
+pub(crate) fn checkpoint(state: GameState) -> Result<Checkpoint, CheckpointError> {
     let rules = vec![rule()];
     let content_entries = vec![content()];
     let resource_constraints = resource_constraints();
@@ -170,7 +170,7 @@ fn checkpoint(state: GameState) -> Result<Checkpoint, CheckpointError> {
         limits(),
     )
 }
-fn fact(value: u8, ordinal: u32) -> GameFact {
+pub(crate) fn fact(value: u8, ordinal: u32) -> GameFact {
     GameFact {
         id: FactId::from_bytes(&[value; 16]).unwrap(),
         revision: basis().revision,
@@ -185,7 +185,7 @@ fn fact(value: u8, ordinal: u32) -> GameFact {
     }
 }
 
-fn pending() -> PendingResolution {
+pub(crate) fn pending() -> PendingResolution {
     PendingResolution {
         id: ResolutionId::from_bytes(&[9; 16]).unwrap(),
         basis: basis(),
@@ -216,7 +216,7 @@ fn pending() -> PendingResolution {
         rulings: vec![],
     }
 }
-fn continuity() -> ContinuityState {
+pub(crate) fn continuity() -> ContinuityState {
     ContinuityState {
         creation: vec![],
         simulation: vec![],

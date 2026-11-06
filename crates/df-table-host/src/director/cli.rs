@@ -22,8 +22,7 @@ use super::request::{ActReply, DirectorAct, DirectorReply, ShowReply, StartKind,
 use super::routes::path;
 use crate::command::CommandError;
 use crate::dev::DevError;
-use crate::dev_client::{get_json, post_json};
-use crate::dev_http::DevReply;
+use crate::dev_client::{self, get_json, post_json};
 
 pub const CAMERA_USAGE: &str = concat!(
     "camera focus <element> [reason=<reason>] [zoom=N] [over=MS] [hold=MS]",
@@ -283,19 +282,10 @@ pub fn parse(verb: &str, words: &[String]) -> Result<DirectorCommand, CommandErr
     }
 }
 
-/// The value of a Director reply, or its refusal as the command's failure.
-///
-/// Transitional: the refusal becomes text until `DevError` carries a route's typed error
-/// (`dev_client::get_value` / `post_value` then replace this); the route tests match the typed
-/// `DirectorError` on the reply itself.
+/// The value of a Director reply, or its refusal (the typed `DirectorError`) as the command's
+/// failure.
 fn reply_value<T>(reply: DirectorReply<T>) -> Result<T, DevError> {
-    match reply {
-        DevReply::Done { value } => Ok(value),
-        DevReply::Rejected { error, message } => Err(DevError::Rejected(format!(
-            "refused ({}): {message}",
-            error.key()
-        ))),
-    }
+    dev_client::reply_value(reply)
 }
 
 /// Runs one Director command against the host on `port` and returns the text to print.

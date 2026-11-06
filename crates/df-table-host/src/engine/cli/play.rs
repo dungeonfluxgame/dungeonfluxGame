@@ -12,11 +12,10 @@
 //! projections as a fixture the playground's TV and phone panes already show (the K0 contract),
 //! so a person can look at the engine's own state on the pages the host serves.
 
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::command::CommandError;
-use crate::dev::DevError;
+use crate::dev::{DevError, read_canvas_reply};
 use crate::dev_client::{self, request_body};
 use crate::engine::format::format_submit;
 use crate::engine::machine_io::{
@@ -60,6 +59,69 @@ pub enum PlayCommand {
     WireSend(WireIntentBody),
     Publish { seat: Option<u64> },
     Remove,
+}
+
+/// Why a command of the first playable path stopped on what the owner answered, before asking it
+/// for anything more.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlayError {
+    /// The lobby's saved state has no readable `ready` list.
+    InvalidReadyList { cause: ReadyListCause },
+    /// The projection for `audience` has no `field`, or it is null.
+    MissingField {
+        audience: AudienceSpec,
+        field: &'static str,
+    },
+    /// The shared screen's `readout` is not text.
+    InvalidReadout,
+    /// `scene start` with the table in `machine`, `state` rather than the gathering lobby.
+    NotGathering { machine: String, state: String },
+    /// Nobody is at the table.
+    NobodySeated,
+}
+
+impl std::fmt::Display for PlayError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidReadyList { cause } => {
+                formatter.write_str("the lobby's saved state has no readable 'ready' list: ")?;
+                formatter.write_str(match cause {
+                    ReadyListCause::Missing => "missing field `ready`",
+                    ReadyListCause::NotSeatNumbers => "`ready` is not a list of seat numbers",
+                })
+            }
+            Self::MissingField {
+                audience: AudienceSpec::Tv,
+                field,
+            } => write!(formatter, "the shared screen's projection has no '{field}'"),
+            Self::MissingField {
+                audience: AudienceSpec::Seat { seat },
+                field,
+            } => write!(formatter, "the projection of seat {seat} has no '{field}'"),
+            Self::InvalidReadout => {
+                formatter.write_str("the shared screen's 'readout' is not text")
+            }
+            Self::NotGathering { machine, state } => write!(
+                formatter,
+                "the lobby is not gathering (the table is in {machine}, {state}); there is no \
+                 scene to start"
+            ),
+            Self::NobodySeated => {
+                formatter.write_str("nobody is at the table; use `lobby join <seat>` first")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PlayError {}
+
+/// Why the lobby's saved state has no readable `ready` list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadyListCause {
+    /// The saved state has no `ready` (or is not an object).
+    Missing,
+    /// `ready` is not a list of whole seat numbers.
+    NotSeatNumbers,
 }
 
 const LOBBY_ACTIONS: [&str; 5] = ["join", "leave", "ready", "unready", "start"];
@@ -170,35 +232,35 @@ pub fn parse(verb: &str, words: &[String]) -> Result<PlayCommand, CommandError> 
 const LOBBY_MACHINE: &str = df_table::lobby::MACHINE_ID;
 const GATHERING_STATE: &str = "gathering";
 
-/// What the verbs read of a gathering lobby's saved state: who said they are ready. The field is
-/// required, so a lobby whose saved state changed shape fails by name and does not read as "nobody
-/// is ready".
-#[derive(Debug, Deserialize)]
-struct GatheringSlot {
-    ready: Vec<u64>,
-}
-
 fn is_gathering(dump: &EngineDump) -> bool {
     dump.machine == LOBBY_MACHINE && dump.state == GATHERING_STATE
 }
 
-/// The seats of the lobby that said they are ready, from the lobby's saved state.
+/// The seats of the lobby that said they are ready, from the lobby's saved state. The `ready`
+/// list is required, so a lobby whose saved state changed shape fails by name and does not read
+/// as "nobody is ready".
 fn ready_seats(dump: &EngineDump) -> Result<Vec<u64>, DevError> {
-    serde_json::from_value::<GatheringSlot>(dump.slot.clone())
-        .map(|slot| slot.ready)
-        .map_err(|error| {
-            rejected(format!(
-                "the lobby's saved state has no readable 'ready' list: {error}"
-            ))
-        })
+    let invalid = |cause| DevError::Play(PlayError::InvalidReadyList { cause });
+    dump.slot
+        .get("ready")
+        .ok_or(invalid(ReadyListCause::Missing))?
+        .as_array()
+        .ok_or(invalid(ReadyListCause::NotSeatNumbers))?
+        .iter()
+        .map(|seat| seat.as_u64().ok_or(invalid(ReadyListCause::NotSeatNumbers)))
+        .collect()
 }
 
-/// A field a projection must carry, or the rejection that names it.
-fn required<'a>(projection: &'a Value, field: &str, whose: &str) -> Result<&'a Value, DevError> {
+/// A field the projection for `audience` must carry, or the error that names it.
+fn required<'a>(
+    projection: &'a Value,
+    field: &'static str,
+    audience: AudienceSpec,
+) -> Result<&'a Value, DevError> {
     projection
         .get(field)
         .filter(|value| !value.is_null())
-        .ok_or_else(|| rejected(format!("{whose} has no '{field}'")))
+        .ok_or(DevError::Play(PlayError::MissingField { audience, field }))
 }
 
 fn seats_text(seats: &[u64]) -> String {
@@ -258,30 +320,24 @@ async fn lobby(port: u16, command: LobbyCommand) -> Result<String, DevError> {
         LobbyCommand::Show => {
             let dump: EngineDump = fetch(port, path::DUMP).await?;
             let tv = audience_view(port, AudienceSpec::Tv).await?;
-            let readout = required(&tv, "readout", "the shared screen's projection")?
+            let readout = required(&tv, "readout", AudienceSpec::Tv)?
                 .as_str()
-                .ok_or_else(|| rejected("the shared screen's 'readout' is not text".to_owned()))?;
+                .ok_or(DevError::Play(PlayError::InvalidReadout))?;
             format_lobby(&dump, readout)
         }
     }
 }
 
-fn rejected(message: String) -> DevError {
-    DevError::Rejected(message)
-}
-
 async fn scene_start(port: u16, starter: Option<u64>) -> Result<String, DevError> {
     let dump: EngineDump = fetch(port, path::DUMP).await?;
     if !is_gathering(&dump) {
-        return Err(rejected(format!(
-            "the lobby is not gathering (the table is in {}, {}); there is no scene to start",
-            dump.machine, dump.state
-        )));
+        return Err(DevError::Play(PlayError::NotGathering {
+            machine: dump.machine,
+            state: dump.state,
+        }));
     }
     let Some(first) = dump.table.seats.first().copied() else {
-        return Err(rejected(
-            "nobody is at the table; use `lobby join <seat>` first".to_owned(),
-        ));
+        return Err(DevError::Play(PlayError::NobodySeated));
     };
     let ready = ready_seats(&dump)?;
     let mut lines = Vec::new();
@@ -389,12 +445,8 @@ fn format_receipt(report: &WireReceiptReport) -> String {
 
 /// The fixture text of the real projections of `tv` and one seat, as the K0 contract defines it.
 fn fixture_text(tv: &Value, seat: &Value, seat_number: u64) -> Result<String, DevError> {
-    let tv_view = required(tv, "view", "the shared screen's projection")?;
-    let phone_view = required(
-        seat,
-        "view",
-        &format!("the projection of seat {seat_number}"),
-    )?;
+    let tv_view = required(tv, "view", AudienceSpec::Tv)?;
+    let phone_view = required(seat, "view", AudienceSpec::Seat { seat: seat_number })?;
     Ok(json!({
         "name": LIVE_FIXTURE,
         "description": format!(
@@ -411,9 +463,11 @@ async fn publish(port: u16, seat: Option<u64>) -> Result<String, DevError> {
         Some(seat) => seat,
         None => {
             let dump: EngineDump = fetch(port, path::DUMP).await?;
-            dump.table.seats.first().copied().ok_or_else(|| {
-                rejected("nobody is at the table; use `lobby join <seat>` first".to_owned())
-            })?
+            dump.table
+                .seats
+                .first()
+                .copied()
+                .ok_or(DevError::Play(PlayError::NobodySeated))?
         }
     };
     let tv = audience_view(port, AudienceSpec::Tv).await?;
@@ -424,12 +478,7 @@ async fn publish(port: u16, seat: Option<u64>) -> Result<String, DevError> {
     };
     let text = request_body(&body)?;
     let response = dev_client::post(port, route::DEV_FIXTURE_WRITE, &text).await?;
-    if response.status != 200 {
-        return Err(rejected(format!(
-            "the playground refused the fixture ({}): {}",
-            response.status, response.body
-        )));
-    }
+    read_canvas_reply(&response)?;
     Ok(format!(
         "1: wrote the fixture {LIVE_FIXTURE} (the shared screen and the phone of seat {seat}); \
          show it with `playground go {LIVE_FIXTURE}`"
@@ -441,12 +490,7 @@ async fn remove(port: u16) -> Result<String, DevError> {
         name: format!("{LIVE_FIXTURE}.json"),
     })?;
     let response = dev_client::post(port, route::DEV_FIXTURE_REMOVE, &text).await?;
-    if response.status != 200 {
-        return Err(rejected(format!(
-            "the playground refused to remove the fixture ({}): {}",
-            response.status, response.body
-        )));
-    }
+    read_canvas_reply(&response)?;
     Ok(format!("1: removed the fixture {LIVE_FIXTURE}"))
 }
 

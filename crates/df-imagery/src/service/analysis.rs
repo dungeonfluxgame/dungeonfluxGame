@@ -88,9 +88,9 @@ where
         if analysis_codec::fingerprint(&decoded).map_err(map_encode_error)?
             != request.identity.fingerprint
         {
-            return Err(ImageServiceError::InvalidRequest(
-                RequestProblem::FingerprintMismatch,
-            ));
+            return Err(ImageServiceError::InvalidRequest {
+                cause: RequestCause::FingerprintMismatch,
+            });
         }
         let handle = OperationHandle {
             owner: request.identity.owner.clone(),

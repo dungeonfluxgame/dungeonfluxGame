@@ -7,7 +7,7 @@ use crate::{
         RuntimeError,
         inspection_policy::{
             self, FeatureBinding, InspectionAssessment, InspectionError, InspectionVerdict,
-            PhotoCheckFailure, UnjudgedReason, VisibleFeature,
+            PhotoCheckCause, UnjudgedReason, VisibleFeature,
         },
     },
     service::analysis_types::*,
@@ -34,8 +34,9 @@ pub(crate) struct PreparedPhotoInspection {
     pub(crate) picture_count: u64,
 }
 impl std::fmt::Debug for PreparedPhotoInspection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreparedPhotoInspection")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedPhotoInspection")
             .field("body_bytes", &self.body_bytes)
             .field("text_bytes", &self.text_bytes)
             .field("picture_count", &self.picture_count)
@@ -173,38 +174,38 @@ pub(crate) fn interpret_photo(
     Ok(project_photo_assessment(&assessment))
 }
 
-fn project_failure(failure: PhotoCheckFailure) -> PhotoInspectionFailure {
+fn project_failure(failure: PhotoCheckCause) -> PhotoInspectionCause {
     match failure {
-        PhotoCheckFailure::GridOrCollage => PhotoInspectionFailure::GridOrCollage,
-        PhotoCheckFailure::CutoutComposite => PhotoInspectionFailure::CutoutComposite,
-        PhotoCheckFailure::NotPhotograph => PhotoInspectionFailure::NotPhotograph,
-        PhotoCheckFailure::ModernSetting => PhotoInspectionFailure::ModernSetting,
-        PhotoCheckFailure::VisibleText => PhotoInspectionFailure::VisibleText,
-        PhotoCheckFailure::ModernClothing => PhotoInspectionFailure::ModernClothing,
-        PhotoCheckFailure::PeopleInEmptyRoom => PhotoInspectionFailure::PeopleInEmptyRoom,
-        PhotoCheckFailure::CharacterCountNotOne => PhotoInspectionFailure::CharacterCountNotOne,
-        PhotoCheckFailure::CharacterHasNoPeople => PhotoInspectionFailure::CharacterHasNoPeople,
-        PhotoCheckFailure::UnexpectedDrawnWeapon => PhotoInspectionFailure::UnexpectedDrawnWeapon,
-        PhotoCheckFailure::HeroCount { expected, seen } => {
-            PhotoInspectionFailure::HeroCount { expected, seen }
+        PhotoCheckCause::GridOrCollage => PhotoInspectionCause::GridOrCollage,
+        PhotoCheckCause::CutoutComposite => PhotoInspectionCause::CutoutComposite,
+        PhotoCheckCause::NotPhotograph => PhotoInspectionCause::NotPhotograph,
+        PhotoCheckCause::ModernSetting => PhotoInspectionCause::ModernSetting,
+        PhotoCheckCause::VisibleText => PhotoInspectionCause::VisibleText,
+        PhotoCheckCause::ModernClothing => PhotoInspectionCause::ModernClothing,
+        PhotoCheckCause::PeopleInEmptyRoom => PhotoInspectionCause::PeopleInEmptyRoom,
+        PhotoCheckCause::CharacterCountNotOne => PhotoInspectionCause::CharacterCountNotOne,
+        PhotoCheckCause::CharacterHasNoPeople => PhotoInspectionCause::CharacterHasNoPeople,
+        PhotoCheckCause::UnexpectedDrawnWeapon => PhotoInspectionCause::UnexpectedDrawnWeapon,
+        PhotoCheckCause::HeroCount { expected, seen } => {
+            PhotoInspectionCause::HeroCount { expected, seen }
         }
     }
 }
 
-fn restore_failure(failure: PhotoInspectionFailure) -> PhotoCheckFailure {
+fn restore_failure(failure: PhotoInspectionCause) -> PhotoCheckCause {
     match failure {
-        PhotoInspectionFailure::GridOrCollage => PhotoCheckFailure::GridOrCollage,
-        PhotoInspectionFailure::CutoutComposite => PhotoCheckFailure::CutoutComposite,
-        PhotoInspectionFailure::NotPhotograph => PhotoCheckFailure::NotPhotograph,
-        PhotoInspectionFailure::ModernSetting => PhotoCheckFailure::ModernSetting,
-        PhotoInspectionFailure::VisibleText => PhotoCheckFailure::VisibleText,
-        PhotoInspectionFailure::ModernClothing => PhotoCheckFailure::ModernClothing,
-        PhotoInspectionFailure::PeopleInEmptyRoom => PhotoCheckFailure::PeopleInEmptyRoom,
-        PhotoInspectionFailure::CharacterCountNotOne => PhotoCheckFailure::CharacterCountNotOne,
-        PhotoInspectionFailure::CharacterHasNoPeople => PhotoCheckFailure::CharacterHasNoPeople,
-        PhotoInspectionFailure::UnexpectedDrawnWeapon => PhotoCheckFailure::UnexpectedDrawnWeapon,
-        PhotoInspectionFailure::HeroCount { expected, seen } => {
-            PhotoCheckFailure::HeroCount { expected, seen }
+        PhotoInspectionCause::GridOrCollage => PhotoCheckCause::GridOrCollage,
+        PhotoInspectionCause::CutoutComposite => PhotoCheckCause::CutoutComposite,
+        PhotoInspectionCause::NotPhotograph => PhotoCheckCause::NotPhotograph,
+        PhotoInspectionCause::ModernSetting => PhotoCheckCause::ModernSetting,
+        PhotoInspectionCause::VisibleText => PhotoCheckCause::VisibleText,
+        PhotoInspectionCause::ModernClothing => PhotoCheckCause::ModernClothing,
+        PhotoInspectionCause::PeopleInEmptyRoom => PhotoCheckCause::PeopleInEmptyRoom,
+        PhotoInspectionCause::CharacterCountNotOne => PhotoCheckCause::CharacterCountNotOne,
+        PhotoInspectionCause::CharacterHasNoPeople => PhotoCheckCause::CharacterHasNoPeople,
+        PhotoInspectionCause::UnexpectedDrawnWeapon => PhotoCheckCause::UnexpectedDrawnWeapon,
+        PhotoInspectionCause::HeroCount { expected, seen } => {
+            PhotoCheckCause::HeroCount { expected, seen }
         }
     }
 }
@@ -240,33 +241,34 @@ mod tests {
     #[test]
     fn every_closed_photo_failure_and_unjudged_reason_roundtrips_neutral_schema() {
         let failures = [
-            PhotoCheckFailure::GridOrCollage,
-            PhotoCheckFailure::CutoutComposite,
-            PhotoCheckFailure::NotPhotograph,
-            PhotoCheckFailure::ModernSetting,
-            PhotoCheckFailure::VisibleText,
-            PhotoCheckFailure::ModernClothing,
-            PhotoCheckFailure::PeopleInEmptyRoom,
-            PhotoCheckFailure::CharacterCountNotOne,
-            PhotoCheckFailure::CharacterHasNoPeople,
-            PhotoCheckFailure::HeroCount {
+            PhotoCheckCause::GridOrCollage,
+            PhotoCheckCause::CutoutComposite,
+            PhotoCheckCause::NotPhotograph,
+            PhotoCheckCause::ModernSetting,
+            PhotoCheckCause::VisibleText,
+            PhotoCheckCause::ModernClothing,
+            PhotoCheckCause::PeopleInEmptyRoom,
+            PhotoCheckCause::CharacterCountNotOne,
+            PhotoCheckCause::CharacterHasNoPeople,
+            PhotoCheckCause::HeroCount {
                 expected: 2,
                 seen: 3,
             },
-            PhotoCheckFailure::UnexpectedDrawnWeapon,
+            PhotoCheckCause::UnexpectedDrawnWeapon,
         ];
         for failure in failures {
             let kind = match failure {
-                PhotoCheckFailure::PeopleInEmptyRoom => InspectionKind::CanonicalRoom,
-                PhotoCheckFailure::CharacterCountNotOne
-                | PhotoCheckFailure::CharacterHasNoPeople => InspectionKind::CanonicalCharacter,
+                PhotoCheckCause::PeopleInEmptyRoom => InspectionKind::CanonicalRoom,
+                PhotoCheckCause::CharacterCountNotOne | PhotoCheckCause::CharacterHasNoPeople => {
+                    InspectionKind::CanonicalCharacter
+                }
                 _ => InspectionKind::ScenePlate,
             };
             let spec = testing::spec(
                 kind,
                 matches!(
                     failure,
-                    PhotoCheckFailure::HeroCount { .. } | PhotoCheckFailure::UnexpectedDrawnWeapon
+                    PhotoCheckCause::HeroCount { .. } | PhotoCheckCause::UnexpectedDrawnWeapon
                 ),
             );
             let assessment = InspectionAssessment {

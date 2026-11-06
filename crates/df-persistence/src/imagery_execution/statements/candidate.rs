@@ -154,10 +154,10 @@ pub(crate) async fn record_candidate_observation_in(
         mime,width_px,height_px,alpha,byte_len,sha256,validator_revision,usage_revision,observed_at_ms) \
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
         &[&scope.dispatch.as_bytes().as_slice(),&i64::from(observed.observation_version),&owner_scope_bytes(&scope.owner),
-        &scope.job.as_bytes().as_slice(),&scope.stage.as_bytes().as_slice(),&basis.kind.label(),&i64::from(basis.input_revision),
+        &scope.job.as_bytes().as_slice(),&scope.stage.as_bytes().as_slice(),&basis.kind.key(),&i64::from(basis.input_revision),
         &basis.input_digest.as_slice(),&invalid(i64::try_from(basis.config_revision))?,&basis.config_digest.as_slice(),
         &basis.parent_dispatch.map(|parent|parent.as_bytes().to_vec()),&d.mime,&invalid(i32::try_from(d.width_px))?,
-        &invalid(i32::try_from(d.height_px))?,&d.alpha.label(),&invalid(i64::try_from(d.byte_len))?,&d.sha256.as_slice(),
+        &invalid(i32::try_from(d.height_px))?,&d.alpha.key(),&invalid(i64::try_from(d.byte_len))?,&d.sha256.as_slice(),
         &i64::from(d.validator_revision),&invalid(i32::try_from(observed.receipt.usage_revision))?,&observed.receipt.observed_at_ms])
         .await.map_err(map_db)?;
     bump_job_revision(tx, &scope.job, observed.receipt.observed_at_ms).await?;

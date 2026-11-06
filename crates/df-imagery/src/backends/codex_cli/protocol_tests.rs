@@ -154,16 +154,16 @@ fn input_observations_must_match_staged_order() {
         path: "/tmp/in/a.png".to_owned(),
         sha256_hex: "AB".to_owned(),
     }]);
-    assert!(match_inputs(&observed, &[("/tmp/in/a.png", "ab")]).is_ok());
+    assert!(match_inputs(observed.as_deref(), &[("/tmp/in/a.png", "ab")]).is_ok());
     assert_eq!(
-        match_inputs(&observed, &[("/tmp/in/a.png", "cd")]).unwrap_err(),
+        match_inputs(observed.as_deref(), &[("/tmp/in/a.png", "cd")]).unwrap_err(),
         ProtocolError::InputMismatch
     );
     assert_eq!(
-        match_inputs(&observed, &[]).unwrap_err(),
+        match_inputs(observed.as_deref(), &[]).unwrap_err(),
         ProtocolError::InputMismatch
     );
-    assert!(match_inputs(&None, &[("/tmp/in/a.png", "ab")]).is_ok());
+    assert!(match_inputs(None, &[("/tmp/in/a.png", "ab")]).is_ok());
 }
 
 #[test]

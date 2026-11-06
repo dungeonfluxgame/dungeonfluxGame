@@ -162,7 +162,7 @@ pub(super) fn request_binding(
                 "[]".into(),
                 None,
                 json!({"raw_sha256":proof.raw_sha256(),"usage_revision":proof.usage_revision(),
-                    "kind":basis.kind.label(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,
+                    "kind":basis.kind.key(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,
                     "config_revision":basis.config_revision,"config_digest":basis.config_digest,"parent":basis.parent_dispatch.map(|value|*value.as_bytes())}),
             )
         }
@@ -195,7 +195,7 @@ pub(super) fn request_binding(
                     .candidate()
                     .map(selection::candidate_binding)
                     .transpose()?,
-                json!({"reason":proof.reason().label(),"kind":basis.kind.label(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,"config_revision":basis.config_revision,"config_digest":basis.config_digest,"parent":basis.parent_dispatch.map(|value|*value.as_bytes())}),
+                json!({"reason":proof.reason().key(),"kind":basis.kind.key(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,"config_revision":basis.config_revision,"config_digest":basis.config_digest,"parent":basis.parent_dispatch.map(|value|*value.as_bytes())}),
             )
         }
         NoDeliveryCause::SubmitDeclined(proof) => {
@@ -217,7 +217,7 @@ pub(super) fn request_binding(
     };
     let authority = authority_value(&command.authority);
     let bytes=json!({"domain":"df-imagery/no-delivery-v1","actor":actor_value(&command.actor),"tail":actor_value(&command.tail),"authority":authority,
-        "expected_revision":command.expected_job_revision,"candidate_dispatch":command.candidate_dispatch.map(|value|*value.as_bytes()),"reason":reason.label(),
+        "expected_revision":command.expected_job_revision,"candidate_dispatch":command.candidate_dispatch.map(|value|*value.as_bytes()),"reason":reason.key(),
         "intent_revision":job.intent.revision(),"intent_digest":<[u8;32]>::from(Sha256::digest(job.intent.bytes())),
         "config_revision":job.config.revision(),"config_digest":<[u8;32]>::from(Sha256::digest(job.config.bytes())),
         "recipe_digest":job.recipe.as_ref().map(df_imagery::publication::recipe_digest),
@@ -410,12 +410,12 @@ pub(super) async fn verify_in(
     }
 }
 
-fn preflight_reason(reason: df_imagery::runtime::PreflightRejection) -> NoDeliveryReason {
+fn preflight_reason(reason: df_imagery::runtime::PreflightCause) -> NoDeliveryReason {
     match reason {
-        df_imagery::runtime::PreflightRejection::MissingCredential => {
+        df_imagery::runtime::PreflightCause::MissingCredential => {
             NoDeliveryReason::MissingCredential
         }
-        df_imagery::runtime::PreflightRejection::UnsupportedProfile => {
+        df_imagery::runtime::PreflightCause::UnsupportedProfile => {
             NoDeliveryReason::UnsupportedProfile
         }
     }
@@ -423,10 +423,10 @@ fn preflight_reason(reason: df_imagery::runtime::PreflightRejection) -> NoDelive
 
 fn decline_value(proof: &df_imagery::execution::DeclineReceipt) -> Value {
     let basis = &proof.basis;
-    json!({"scope":actor_value(&TerminalActor::Dispatch(proof.scope.clone())),"kind":basis.kind.label(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,"config_revision":basis.config_revision,"config_digest":basis.config_digest,"parent":basis.parent_dispatch.map(|value|*value.as_bytes()),
+    json!({"scope":actor_value(&TerminalActor::Dispatch(proof.scope.clone())),"kind":basis.kind.key(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,"config_revision":basis.config_revision,"config_digest":basis.config_digest,"parent":basis.parent_dispatch.map(|value|*value.as_bytes()),
         "finance":proof.finance.map(|finance|json!({"attempt":finance.attempt,"operation":finance.operation,"effect":finance.effect})),
         "observation_version":proof.observation_version,"usage_revision":proof.receipt.usage_revision,"observed_at_ms":proof.receipt.observed_at_ms,
-        "contract":proof.contract.label(),"status":proof.status,"body_sha256":proof.body_sha256,"body_bytes":proof.body_bytes,"raw_sha256":proof.raw_sha256,"raw_bytes":proof.raw_bytes,
+        "contract":proof.contract.key(),"status":proof.status,"body_sha256":proof.body_sha256,"body_bytes":proof.body_bytes,"raw_sha256":proof.raw_sha256,"raw_bytes":proof.raw_bytes,
         "provider":proof.route.provider,"model":proof.route.model,"cause":proof.route.cause,"detail":proof.route.detail,"retry_not_before_ms":proof.retry_not_before_ms,
         "transport_request_id_sha256":proof.transport_request_id_sha256,"retry_after_values":proof.retry_after_values,
         "max_attempts":proof.retry.max_attempts,"retry_deadline_ms":proof.retry.retry_deadline_ms,"backoff_ms":proof.retry.backoff_ms,"config_snapshot_revision":proof.retry.config_snapshot_revision})

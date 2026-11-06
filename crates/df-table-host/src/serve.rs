@@ -17,10 +17,11 @@ use tokio::sync::Notify;
 use crate::event_log::{EventLog, install_as_audit_sink};
 use crate::kind_files::load_kind_files_async;
 use crate::limits::SHUTDOWN_GRACE;
+use crate::observe::{EventLevel, HostEventSink, WallClock};
 use crate::options::ServeOptions;
 use crate::playground::PlaygroundFiles;
 use crate::server;
-use crate::sink::{HostSink, LineEcho};
+use crate::sink::LineEcho;
 use crate::state::AppState;
 
 /// Stops a background task when serving ends by any route, including an early return.
@@ -70,7 +71,15 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
     if !install_as_audit_sink(&log) {
         announce("another log already takes the libraries' audit lines in this process");
     }
-    let sink = HostSink::new(Arc::clone(&log), options.records_moves);
+    // Moves are verbose events: left out unless asked for, and then counted as filtered.
+    let level = if options.records_moves {
+        EventLevel::Verbose
+    } else {
+        EventLevel::Always
+    };
+    // Nothing queries the canvas's history (its lines are read), so it keeps none.
+    let sink =
+        HostEventSink::without_history(Arc::clone(&log), Arc::new(WallClock)).with_level(level);
     let registry = match load_kind_files_async(options.kind_directory.clone()).await {
         Ok(registry) => registry,
         Err(problems) => {

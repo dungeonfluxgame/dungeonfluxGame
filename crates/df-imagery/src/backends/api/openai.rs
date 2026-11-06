@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use super::codec::{jpeg_size, webp_facts};
 use super::{
-    ApiError, ApiExchange, ApiFailure, DeclineContract, GeneratedImage,
+    ApiCallError, ApiError, ApiExchange, DeclineContract, GeneratedImage,
     IMAGE_EDIT_MAXIMUM_PROMPT_CHARACTERS, ImageBackground, ImageEdit, ImageFormat, ImageModeration,
     ImageUsage, OperationalBounds, check_credential, check_credentialed_origin, check_model_id,
 };
@@ -150,8 +150,8 @@ impl OpenAiExecutor {
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
-    ) -> Result<GeneratedImage, ApiFailure> {
-        validate(edit).map_err(ApiFailure::before_transport)?;
+    ) -> Result<GeneratedImage, ApiCallError> {
+        validate(edit).map_err(ApiCallError::before_transport)?;
         let (endpoint, content_type, body) = if edit.references.is_empty() {
             (
                 &self.generations_endpoint,
@@ -167,7 +167,7 @@ impl OpenAiExecutor {
             .http
             .execute(request, deadline, std::future::pending())
             .await
-            .map_err(|failure| ApiFailure::transport(failure.reason, ApiExchange::Submit))?;
+            .map_err(|failure| ApiCallError::transport(failure.cause, ApiExchange::Submit))?;
         let error = match response.status {
             200 => None,
             401 | 403 => Some(ApiError::Unauthorized),
@@ -177,7 +177,7 @@ impl OpenAiExecutor {
             status => Some(ApiError::Provider(status)),
         };
         if let Some(error) = error {
-            return Err(ApiFailure::response(
+            return Err(ApiCallError::response(
                 error,
                 ApiExchange::Submit,
                 DeclineContract::OpenAiImages429V1,
@@ -194,7 +194,7 @@ impl OpenAiExecutor {
         ) {
             Ok(value) => value,
             Err(_) => {
-                return Err(ApiFailure::response(
+                return Err(ApiCallError::response(
                     ApiError::Output,
                     ApiExchange::Submit,
                     DeclineContract::OpenAiImages429V1,
@@ -203,7 +203,7 @@ impl OpenAiExecutor {
             }
         };
         decode(&value, edit).await.map_err(|error| {
-            ApiFailure::response(
+            ApiCallError::response(
                 error,
                 ApiExchange::Submit,
                 DeclineContract::OpenAiImages429V1,

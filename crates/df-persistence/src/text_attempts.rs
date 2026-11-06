@@ -158,7 +158,7 @@ impl PostgresTextAttempts {
              ORDER BY updated_at DESC, scope, operation_key LIMIT $3"
         );
         let scope = scope.map(AttemptScope::as_str);
-        let phase = phase.map(AttemptPhase::label);
+        let phase = phase.map(AttemptPhase::key);
         let limit = i64::from(limit);
         self.many(&sql, &[&scope, &phase, &limit])
             .await?
@@ -257,7 +257,7 @@ impl TextAttemptStore for PostgresTextAttempts {
             &key.scope().as_str(),
             &key.operation(),
             &meta.fingerprint.as_slice(),
-            &meta.purpose.label(),
+            &meta.purpose.key(),
             &meta.profile.as_str(),
             &meta.output_name,
         ];
@@ -317,7 +317,7 @@ impl TextAttemptStore for PostgresTextAttempts {
             &[
                 &key.scope().as_str(),
                 &key.operation(),
-                &kind.label(),
+                &kind.key(),
                 &reason,
                 &usage,
             ],
@@ -469,7 +469,7 @@ fn stored_from_row(row: &Row) -> Result<StoredAttempt, AttemptStoreError> {
     let fingerprint: Fingerprint = fingerprint.try_into().map_err(|_| invalid())?;
     let phase: String = row.try_get("phase").map_err(|_| invalid())?;
     let owner: Option<Vec<u8>> = row.try_get("owner").map_err(|_| invalid())?;
-    let state = match AttemptPhase::parse(&phase).ok_or_else(invalid)? {
+    let state = match AttemptPhase::from_key(&phase).ok_or_else(invalid)? {
         AttemptPhase::Accepted => AttemptState::Accepted,
         AttemptPhase::Dispatched => AttemptState::Dispatched {
             owner: owner_of(owner)?,
@@ -517,13 +517,13 @@ fn outcome_of(row: &Row) -> Result<TextOutcome, AttemptStoreError> {
     let reason: Option<String> = row.try_get("outcome_reason").map_err(|_| invalid())?;
     let kind = kind
         .as_deref()
-        .and_then(OutcomeKind::parse)
+        .and_then(OutcomeKind::from_key)
         .ok_or_else(invalid)?;
     match kind {
         OutcomeKind::Answered => Ok(TextOutcome::Answered(answer_of(row)?.ok_or_else(invalid)?)),
         OutcomeKind::Unavailable => reason
             .as_deref()
-            .and_then(UnavailableReason::parse)
+            .and_then(UnavailableReason::from_key)
             .map(TextOutcome::Unavailable)
             .ok_or_else(invalid),
         OutcomeKind::Deadline => Ok(TextOutcome::Deadline),
@@ -538,7 +538,7 @@ fn encode_outcome(
     outcome: &TextOutcome,
 ) -> Result<(OutcomeKind, Option<&'static str>), AttemptStoreError> {
     match outcome {
-        TextOutcome::Unavailable(reason) => Ok((OutcomeKind::Unavailable, Some(reason.label()))),
+        TextOutcome::Unavailable(reason) => Ok((OutcomeKind::Unavailable, Some(reason.key()))),
         TextOutcome::Deadline => Ok((OutcomeKind::Deadline, None)),
         TextOutcome::Invalid => Ok((OutcomeKind::Invalid, None)),
         TextOutcome::Stale => Ok((OutcomeKind::Stale, None)),
@@ -583,8 +583,8 @@ fn summary_from_row(row: &Row) -> Result<AttemptSummary, AttemptStoreError> {
     let text = |column: &str| -> Result<String, AttemptStoreError> {
         row.try_get(column).map_err(|_| invalid())
     };
-    let purpose = TextPurpose::parse(&text("purpose")?).ok_or_else(invalid)?;
-    let phase = AttemptPhase::parse(&text("phase")?).ok_or_else(invalid)?;
+    let purpose = TextPurpose::from_key(&text("purpose")?).ok_or_else(invalid)?;
+    let phase = AttemptPhase::from_key(&text("phase")?).ok_or_else(invalid)?;
     let outcome: Option<String> = row.try_get("outcome_kind").map_err(|_| invalid())?;
     let reason: Option<String> = row.try_get("outcome_reason").map_err(|_| invalid())?;
     let answer_bytes: Option<i32> = row.try_get("answer_bytes").map_err(|_| invalid())?;
@@ -596,10 +596,10 @@ fn summary_from_row(row: &Row) -> Result<AttemptSummary, AttemptStoreError> {
         output_name: text("output_name")?,
         phase,
         outcome: outcome
-            .map(|label| OutcomeKind::parse(&label).ok_or_else(invalid))
+            .map(|label| OutcomeKind::from_key(&label).ok_or_else(invalid))
             .transpose()?,
         reason: reason
-            .map(|label| UnavailableReason::parse(&label).ok_or_else(invalid))
+            .map(|label| UnavailableReason::from_key(&label).ok_or_else(invalid))
             .transpose()?,
         answer_bytes: answer_bytes
             .map(|bytes| usize::try_from(bytes).map_err(|_| invalid()))

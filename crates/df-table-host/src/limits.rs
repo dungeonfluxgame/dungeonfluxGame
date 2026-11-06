@@ -42,6 +42,17 @@ pub const MAXIMUM_ECHOED_ANSWER_CHARACTERS: usize = MEBIBYTE;
 /// a multiple of three, so every piece but the last encodes to base64 without padding. A size
 /// that bounds memory per piece, not the file.
 pub const UPLOAD_PIECE_BYTES: usize = 3 * 64 * KIBIBYTE;
+/// Bytes a media add request carries besides the file's base64: the JSON braces, the two keys,
+/// the name (with escapes) and whitespace. It is added to the largest file's base64 to give the
+/// largest add request (`media_ingest`).
+pub const UPLOAD_ENVELOPE_BYTES: u64 = 4 * KIBIBYTE as u64;
+/// Pieces of an upload waiting for the thread that decodes them, `UPLOAD_PIECE_BYTES` each at
+/// most; a full queue holds the sender back, so an upload in flight holds a few pieces, not the
+/// file. A size that bounds memory per upload, not the file.
+pub const UPLOAD_QUEUE_PIECES: usize = 4;
+/// Bytes of a media file read and sent at a time: the most of a file the host holds for one
+/// answer. A size that bounds memory per answer, not the file.
+pub const SERVE_CHUNK_BYTES: u64 = 256 * KIBIBYTE as u64;
 /// Largest compiled package file served, in bytes. It is streamed, never held whole, so this
 /// bounds a response and not memory.
 pub const MAXIMUM_PACKAGE_FILE_BYTES: u64 = GIBIBYTE;

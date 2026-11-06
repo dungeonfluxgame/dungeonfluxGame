@@ -190,6 +190,23 @@ fn the_history_forgets_the_oldest_when_it_is_full_and_counts_what_it_forgot() {
 }
 
 #[test]
+fn a_sink_without_history_writes_every_line_but_keeps_only_the_newest_record() {
+    let log = Arc::new(EventLog::default());
+    let sink = HostEventSink::without_history(Arc::clone(&log), Arc::new(ManualClock::default()));
+
+    for turn in 1..=5 {
+        sink.record(&received(turn));
+    }
+
+    assert_eq!(log.newest(10).len(), 5, "every event is still a line");
+    let page = sink.query(&HistoryFilter::default(), 10);
+    let ids: Vec<u64> = page.records.iter().map(|record| record.audit_id).collect();
+    assert_eq!(ids, vec![5]);
+    let health = sink.health();
+    assert_eq!((health.retained, health.evicted), (1, 4));
+}
+
+#[test]
 fn the_history_stays_within_its_byte_bound_but_always_keeps_the_newest_record() {
     let log = Arc::new(EventLog::default());
     let sink = HostEventSink::new(log, Arc::new(ManualClock::default()))

@@ -17,6 +17,13 @@
 //! A layout is bound to its picture by name and SHA-256 digest: a reader must not use a layout
 //! whose binding does not match the picture it shows ([`SceneLayout::is_for`]). Regions carry a
 //! stable id derived from their mask, a position number (left to right) and an optional name.
+//!
+//! A layout and its regions are built and read only through their checks, so every one that exists
+//! is valid: a reader refuses another schema version, a region id that is not `r` and 8 hex digits,
+//! a region box outside the picture or turned inside out, a head point outside its box and a score
+//! over the whole ([`SceneRegion::new`]).
+
+use std::fmt::{self, Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
@@ -50,32 +57,54 @@ pub struct PictureBinding {
     pub height_px: u32,
 }
 
-/// The regions a scan found in one picture.
+/// The regions a scan found in one picture. It is always in [`SCHEMA_VERSION`] and reads only in
+/// it; each of its regions is valid ([`SceneRegion::new`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "SceneLayoutRecord")]
 pub struct SceneLayout {
-    /// Always [`SCHEMA_VERSION`].
-    pub schema: u32,
+    /// Always [`SCHEMA_VERSION`]; written so a reader can refuse another.
+    schema: u32,
     /// The picture the regions were found in; see [`SceneLayout::is_for`].
-    pub picture: PictureBinding,
+    picture: PictureBinding,
     /// The model that made the layout, such as `sam-3.1`.
-    pub model: String,
+    model: String,
     /// The noun prompt the scan was asked with, such as `person`.
-    pub prompt: String,
+    prompt: String,
     /// The instances, left to right; their position in this list is their number.
-    pub regions: Vec<SceneRegion>,
+    regions: Vec<SceneRegion>,
 }
 
 /// One instance of a scan: its id, its name if it has one, its box, its head point, its score and
-/// its mask.
+/// its mask. Its box, head point and score are always valid ([`SceneRegion::new`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "SceneRegionRecord")]
 pub struct SceneRegion {
-    /// Stable for the same mask: `r` and 8 hex digits ([`region_id`]).
-    pub id: String,
+    /// Stable for the same mask ([`region_id`]).
+    id: RegionId,
     /// The character this region is, such as `innkeeper`.
-    #[serde(default)]
-    pub label: Option<String>,
+    label: Option<String>,
+    /// The box's left edge, in thousandths of the picture's width.
+    left_permille: u16,
+    /// The box's top edge, in thousandths of the picture's height.
+    top_permille: u16,
+    /// The box's right edge, in thousandths of the picture's width.
+    right_permille: u16,
+    /// The box's bottom edge, in thousandths of the picture's height.
+    bottom_permille: u16,
+    /// The middle of the mask's topmost rows: where the top of the head is, across.
+    head_x_permille: u16,
+    /// Where the top of the head is, down.
+    head_y_permille: u16,
+    /// How sure the scan is of this instance, in thousandths.
+    score_permille: u16,
+    /// The mask as a PNG data URL the size of the picture, opaque where the instance is.
+    mask: Option<String>,
+}
+
+/// A region's box and head point as a scan measures them, in thousandths of the picture; checked
+/// when a region is made of it ([`SceneRegion::new`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegionGeometry {
     /// The box's left edge, in thousandths of the picture's width.
     pub left_permille: u16,
     /// The box's top edge, in thousandths of the picture's height.
@@ -84,16 +113,331 @@ pub struct SceneRegion {
     pub right_permille: u16,
     /// The box's bottom edge, in thousandths of the picture's height.
     pub bottom_permille: u16,
-    /// The middle of the mask's topmost rows: where the top of the head is, across.
+    /// Where the top of the head is, across.
     pub head_x_permille: u16,
     /// Where the top of the head is, down.
     pub head_y_permille: u16,
-    /// How sure the scan is of this instance, in thousandths.
-    pub score_permille: u16,
-    /// The mask as a PNG data URL the size of the picture, opaque where the instance is.
-    #[serde(default)]
-    pub mask: Option<String>,
 }
+
+/// A region's id: `r` and 8 lowercase or uppercase hex digits, stable for the same mask
+/// ([`region_id`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct RegionId(String);
+
+impl RegionId {
+    /// The id `text`, when it is `r` and 8 hex digits.
+    pub fn new(text: &str) -> Result<Self, RegionIdError> {
+        if is_region_id(text) {
+            Ok(Self(text.to_owned()))
+        } else {
+            Err(RegionIdError::InvalidText {
+                text: text.to_owned(),
+            })
+        }
+    }
+
+    /// The id as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for RegionId {
+    type Error = RegionIdError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::new(&text)
+    }
+}
+
+impl Display for RegionId {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Why a region id does not read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegionIdError {
+    /// The text is not `r` and 8 hex digits.
+    InvalidText { text: String },
+}
+
+impl Display for RegionIdError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidText { text } => {
+                write!(formatter, "region id {text:?} is not r and 8 hex digits")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RegionIdError {}
+
+/// Whether `text` is `r` and 8 hex digits.
+fn is_region_id(text: &str) -> bool {
+    text.len() == 9
+        && text.starts_with('r')
+        && text[1..].bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// A layout as it is written, before its version is checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SceneLayoutRecord {
+    schema: u32,
+    picture: PictureBinding,
+    model: String,
+    prompt: String,
+    regions: Vec<SceneRegion>,
+}
+
+impl TryFrom<SceneLayoutRecord> for SceneLayout {
+    type Error = SceneLayoutError;
+
+    fn try_from(record: SceneLayoutRecord) -> Result<Self, Self::Error> {
+        if record.schema != SCHEMA_VERSION {
+            return Err(SceneLayoutError::InvalidSchema {
+                schema: record.schema,
+            });
+        }
+        Ok(Self {
+            schema: record.schema,
+            picture: record.picture,
+            model: record.model,
+            prompt: record.prompt,
+            regions: record.regions,
+        })
+    }
+}
+
+/// Why a layout does not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneLayoutError {
+    /// The layout is written in a schema version this reader does not understand.
+    InvalidSchema { schema: u32 },
+}
+
+impl Display for SceneLayoutError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidSchema { schema } => write!(
+                formatter,
+                "scene layout schema {schema} is not the supported schema {SCHEMA_VERSION}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SceneLayoutError {}
+
+/// A region as it is written, before its box, head point and score are checked.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SceneRegionRecord {
+    id: RegionId,
+    #[serde(default)]
+    label: Option<String>,
+    left_permille: u16,
+    top_permille: u16,
+    right_permille: u16,
+    bottom_permille: u16,
+    head_x_permille: u16,
+    head_y_permille: u16,
+    score_permille: u16,
+    #[serde(default)]
+    mask: Option<String>,
+}
+
+impl TryFrom<SceneRegionRecord> for SceneRegion {
+    type Error = SceneRegionError;
+
+    fn try_from(record: SceneRegionRecord) -> Result<Self, Self::Error> {
+        let geometry = RegionGeometry {
+            left_permille: record.left_permille,
+            top_permille: record.top_permille,
+            right_permille: record.right_permille,
+            bottom_permille: record.bottom_permille,
+            head_x_permille: record.head_x_permille,
+            head_y_permille: record.head_y_permille,
+        };
+        Ok(Self::new(record.id, geometry, record.score_permille)?
+            .with_label(record.label)
+            .with_mask(record.mask))
+    }
+}
+
+impl SceneRegion {
+    /// An unnamed, maskless region, when it can be drawn and pointed at: its box lies inside the
+    /// picture with `left < right <= 1000` and `top < bottom <= 1000`, its head point lies within
+    /// the box's edges, and its score is at most the whole.
+    pub fn new(
+        id: RegionId,
+        geometry: RegionGeometry,
+        score_permille: u16,
+    ) -> Result<Self, SceneRegionError> {
+        let RegionGeometry {
+            left_permille,
+            top_permille,
+            right_permille,
+            bottom_permille,
+            head_x_permille,
+            head_y_permille,
+        } = geometry;
+        let across = left_permille < right_permille && right_permille <= FULL_PERMILLE;
+        let down = top_permille < bottom_permille && bottom_permille <= FULL_PERMILLE;
+        if !(across && down) {
+            return Err(SceneRegionError::InvalidBox {
+                left_permille,
+                top_permille,
+                right_permille,
+                bottom_permille,
+            });
+        }
+        let head_inside = (left_permille..=right_permille).contains(&head_x_permille)
+            && (top_permille..=bottom_permille).contains(&head_y_permille);
+        if !head_inside {
+            return Err(SceneRegionError::InvalidHead {
+                head_x_permille,
+                head_y_permille,
+            });
+        }
+        if score_permille > FULL_PERMILLE {
+            return Err(SceneRegionError::InvalidScore { score_permille });
+        }
+        Ok(Self {
+            id,
+            label: None,
+            left_permille,
+            top_permille,
+            right_permille,
+            bottom_permille,
+            head_x_permille,
+            head_y_permille,
+            score_permille,
+            mask: None,
+        })
+    }
+
+    /// This region named `label`, or unnamed.
+    pub fn with_label(mut self, label: Option<String>) -> Self {
+        self.label = label;
+        self
+    }
+
+    /// This region with the mask `mask` (a PNG data URL), or none.
+    pub fn with_mask(mut self, mask: Option<String>) -> Self {
+        self.mask = mask;
+        self
+    }
+
+    /// Names this region `label`, or clears its name.
+    pub fn set_label(&mut self, label: Option<String>) {
+        self.label = label;
+    }
+
+    /// The region's id, stable for the same mask.
+    pub fn id(&self) -> &RegionId {
+        &self.id
+    }
+
+    /// The character this region is, such as `innkeeper`, if it is named.
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    /// The box's left edge, in thousandths of the picture's width.
+    pub fn left_permille(&self) -> u16 {
+        self.left_permille
+    }
+
+    /// The box's top edge, in thousandths of the picture's height.
+    pub fn top_permille(&self) -> u16 {
+        self.top_permille
+    }
+
+    /// The box's right edge, in thousandths of the picture's width; always past the left edge.
+    pub fn right_permille(&self) -> u16 {
+        self.right_permille
+    }
+
+    /// The box's bottom edge, in thousandths of the picture's height; always below the top edge.
+    pub fn bottom_permille(&self) -> u16 {
+        self.bottom_permille
+    }
+
+    /// Where the top of the head is, across, in thousandths of the picture's width.
+    pub fn head_x_permille(&self) -> u16 {
+        self.head_x_permille
+    }
+
+    /// Where the top of the head is, down, in thousandths of the picture's height.
+    pub fn head_y_permille(&self) -> u16 {
+        self.head_y_permille
+    }
+
+    /// How sure the scan is of this instance, in thousandths.
+    pub fn score_permille(&self) -> u16 {
+        self.score_permille
+    }
+
+    /// The mask as a PNG data URL the size of the picture, if the region has one.
+    pub fn mask(&self) -> Option<&str> {
+        self.mask.as_deref()
+    }
+}
+
+/// Why a region cannot be made or read ([`SceneRegion::new`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SceneRegionError {
+    /// The box is not inside the picture, or its left edge is not before its right edge or its
+    /// top edge not above its bottom edge.
+    InvalidBox {
+        left_permille: u16,
+        top_permille: u16,
+        right_permille: u16,
+        bottom_permille: u16,
+    },
+    /// The head point is outside the box.
+    InvalidHead {
+        head_x_permille: u16,
+        head_y_permille: u16,
+    },
+    /// The score is more than the whole.
+    InvalidScore { score_permille: u16 },
+}
+
+impl Display for SceneRegionError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidBox {
+                left_permille,
+                top_permille,
+                right_permille,
+                bottom_permille,
+            } => write!(
+                formatter,
+                "scene region box left {left_permille} top {top_permille} right {right_permille} \
+                 bottom {bottom_permille} is not a box inside the picture, in thousandths"
+            ),
+            Self::InvalidHead {
+                head_x_permille,
+                head_y_permille,
+            } => write!(
+                formatter,
+                "scene region head point {head_x_permille}, {head_y_permille} is outside its box"
+            ),
+            Self::InvalidScore { score_permille } => write!(
+                formatter,
+                "scene region score {score_permille} is more than {FULL_PERMILLE} thousandths"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SceneRegionError {}
 
 /// The 64-bit FNV-1a offset basis.
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -103,13 +447,14 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// The stable id of a region whose mask is described by `bytes` (for example its run lengths):
 /// `r` and the first 8 hex digits of an FNV-1a hash, so the same mask gets the same id on every
 /// machine and every scan.
-pub fn region_id(bytes: &[u8]) -> String {
+pub fn region_id(bytes: &[u8]) -> RegionId {
     let mut hash = FNV_OFFSET_BASIS;
     for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(FNV_PRIME);
     }
-    format!("r{:08x}", hash >> 32)
+    // `r` and the 8 hex digits of a 32-bit value: always a region id.
+    RegionId(format!("r{:08x}", hash >> 32))
 }
 
 /// A reference to one region: its number (from 0, left to right), its id or its name.
@@ -130,10 +475,7 @@ impl<'a> RegionRef<'a> {
         if let Ok(number) = text.parse::<usize>() {
             return Self::Number(number);
         }
-        let is_id = text.len() == 9
-            && text.starts_with('r')
-            && text[1..].bytes().all(|byte| byte.is_ascii_hexdigit());
-        if is_id {
+        if is_region_id(text) {
             Self::Id(text)
         } else {
             Self::Name(text)
@@ -142,12 +484,53 @@ impl<'a> RegionRef<'a> {
 }
 
 impl SceneLayout {
-    /// Whether this layout belongs to the picture `name` with the digest `sha256`, in a version
-    /// this reader understands.
+    /// A layout in [`SCHEMA_VERSION`] of `regions` (left to right), found in `picture` by `model`
+    /// asked with `prompt`. Each region is already valid, so a layout always can be made.
+    pub fn new(
+        picture: PictureBinding,
+        model: &str,
+        prompt: &str,
+        regions: Vec<SceneRegion>,
+    ) -> Self {
+        Self {
+            schema: SCHEMA_VERSION,
+            picture,
+            model: model.to_owned(),
+            prompt: prompt.to_owned(),
+            regions,
+        }
+    }
+
+    /// Whether this layout belongs to the picture `name` with the digest `sha256`. Its version is
+    /// always this reader's: a layout in another one does not read.
     pub fn is_for(&self, name: &str, sha256: &str) -> bool {
-        self.schema == SCHEMA_VERSION
-            && self.picture.name == name
-            && self.picture.sha256.eq_ignore_ascii_case(sha256)
+        self.picture.name == name && self.picture.sha256.eq_ignore_ascii_case(sha256)
+    }
+
+    /// The picture the regions were found in.
+    pub fn picture(&self) -> &PictureBinding {
+        &self.picture
+    }
+
+    /// The model that made the layout, such as `sam-3.1`.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// The noun prompt the scan was asked with, such as `person`.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// The regions, left to right; a region's position here is its number.
+    pub fn regions(&self) -> &[SceneRegion] {
+        &self.regions
+    }
+
+    /// The regions, to name or reorder; each stays valid, since a region's checked values cannot
+    /// be changed.
+    pub fn regions_mut(&mut self) -> &mut [SceneRegion] {
+        &mut self.regions
     }
 
     /// The region named `label`, if any.
@@ -160,7 +543,10 @@ impl SceneLayout {
     pub fn find(&self, reference: RegionRef<'_>) -> Option<usize> {
         match reference {
             RegionRef::Number(number) => (number < self.regions.len()).then_some(number),
-            RegionRef::Id(id) => self.regions.iter().position(|region| region.id == id),
+            RegionRef::Id(id) => self
+                .regions
+                .iter()
+                .position(|region| region.id.as_str() == id),
             RegionRef::Name(name) => self
                 .regions
                 .iter()
@@ -265,7 +651,7 @@ impl Shot {
     }
 
     /// The share of the character's height the shot shows, in thousandths.
-    fn span_permille(self) -> u32 {
+    fn span_permille(self) -> u16 {
         match self {
             Self::Face => 300,
             Self::Upper => 550,
@@ -275,27 +661,26 @@ impl Shot {
 }
 
 /// The share of the screen's height a shot fills, in thousandths.
-const SHOT_FILL_PERMILLE: u32 = 900;
+const SHOT_FILL_PERMILLE: u16 = 900;
 /// Where the face is below the top of the head, in thousandths of the character's height.
-const FACE_DROP_PERMILLE: u32 = 110;
+const FACE_DROP_PERMILLE: u16 = 110;
 /// Where the chest is below the top of the head, in thousandths of the character's height.
-const CHEST_DROP_PERMILLE: u32 = 300;
+const CHEST_DROP_PERMILLE: u16 = 300;
 
 /// The character's height from the top of the head to the bottom of the box, at least 1, in
 /// thousandths of the screen's height.
-fn figure_height_permille(region: &SceneRegion) -> u32 {
-    u32::from(
-        region
-            .bottom_permille
-            .saturating_sub(region.head_y_permille),
-    )
-    .max(1)
+fn figure_height_permille(region: &SceneRegion) -> u16 {
+    region
+        .bottom_permille
+        .saturating_sub(region.head_y_permille)
+        .max(1)
 }
 
 /// The height `share_permille` of the character's height below the top of the head, held to the
 /// picture.
-fn y_below_head_permille(region: &SceneRegion, share_permille: u32) -> u16 {
-    let drop_permille = figure_height_permille(region) * share_permille / 1000;
+fn y_below_head_permille(region: &SceneRegion, share_permille: u16) -> u16 {
+    let drop_permille =
+        u32::from(figure_height_permille(region)) * u32::from(share_permille) / 1000;
     let y_permille = u32::from(region.head_y_permille) + drop_permille;
     // Saturates: a point past the bottom edge is drawn on it.
     u16::try_from(y_permille)
@@ -345,8 +730,9 @@ pub fn shot_focus(region: &SceneRegion, shot: Shot) -> (u16, u16) {
 /// The zoom, in percent, at which `shot` of the character in `region` fills most of the screen's
 /// height, within the camera's range. The page still holds it to what the picture's pixels bear.
 pub fn shot_zoom_percent(region: &SceneRegion, shot: Shot) -> u16 {
-    let span_permille = (figure_height_permille(region) * shot.span_permille() / 1000).max(1);
-    u16::try_from(100 * SHOT_FILL_PERMILLE / span_permille)
+    let span_permille =
+        (u32::from(figure_height_permille(region)) * u32::from(shot.span_permille()) / 1000).max(1);
+    u16::try_from(100 * u32::from(SHOT_FILL_PERMILLE) / span_permille)
         .unwrap_or(MAXIMUM_ZOOM_PERCENT)
         .clamp(MINIMUM_ZOOM_PERCENT, MAXIMUM_ZOOM_PERCENT)
 }
@@ -386,7 +772,7 @@ pub struct CastMember {
     /// The region's label.
     pub name: String,
     /// The region's id ([`region_id`]).
-    pub region_id: String,
+    pub region_id: RegionId,
     /// The region's position number (from 0, left to right).
     pub number: usize,
     /// The top of the head, in thousandths of the screen (x, y).

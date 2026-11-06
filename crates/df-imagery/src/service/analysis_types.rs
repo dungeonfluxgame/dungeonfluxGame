@@ -1,5 +1,6 @@
 //! Non-raster analysis requests and audience-safe typed results; no asset is fabricated.
 use super::types::OperationHandle;
+use crate::listed::listed_enum;
 use crate::{
     Audience, ExecutionMode, Freshness, OperationIdentity, PrivateImageText, PurposedUse,
     SourceRef, Urgency,
@@ -46,14 +47,17 @@ pub struct HeadLocationsSpec {
     pub targets: Vec<AnalysisTarget>,
     pub contract_revision: u32,
 }
-/// The one noun a segmentation looks for.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SegmentationPrompt {
-    Person,
-    Head,
+listed_enum! {
+    keyed
+    /// The one noun a segmentation looks for.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum SegmentationPrompt {
+        Person,
+        Head,
+    }
 }
 impl SegmentationPrompt {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Person => "person",
             Self::Head => "head",
@@ -109,8 +113,8 @@ impl AnalysisUnit {
     }
 }
 impl std::fmt::Debug for AnalysisUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.get().fmt(f)
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.get().fmt(formatter)
     }
 }
 /// Why an analysis value was refused: a coordinate, a box or a mask out of contract.
@@ -120,6 +124,18 @@ pub enum AnalysisValueError {
     Box,
     Mask,
 }
+
+impl std::fmt::Display for AnalysisValueError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Coordinate => formatter.write_str("an analysis coordinate is out of contract"),
+            Self::Box => formatter.write_str("an analysis box is out of contract"),
+            Self::Mask => formatter.write_str("an analysis mask is out of contract"),
+        }
+    }
+}
+
+impl std::error::Error for AnalysisValueError {}
 /// A box in unit coordinates of its picture: `left < right` and `top < bottom`, each 0 to 1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NormalizedImageBox {
@@ -281,7 +297,7 @@ pub struct PhotoInspectionSpec {
 }
 /// The closed photographic defects an inspection can find.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PhotoInspectionFailure {
+pub enum PhotoInspectionCause {
     GridOrCollage,
     CutoutComposite,
     NotPhotograph,
@@ -309,7 +325,7 @@ pub enum PhotoInspectionUnjudgedReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhotoInspectionVerdict {
     Pass,
-    Failed(PhotoInspectionFailure),
+    Failed(PhotoInspectionCause),
     Unjudged(PhotoInspectionUnjudgedReason),
 }
 /// One visible feature the inspection recorded, with its region in permille of the picture.

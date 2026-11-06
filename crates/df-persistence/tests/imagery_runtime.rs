@@ -369,7 +369,7 @@ async fn run_local_pipeline(older_supplier: bool) {
     let execution = PostgresImageExecution::open(config.clone(), transport.clone(), 2)
         .await
         .unwrap();
-    let scope = CapacityScope::new("runtime/local".to_owned()).unwrap();
+    let scope = CapacityScope::new("runtime/local").unwrap();
     execution
         .set_capacity_bounds(
             scope.as_str(),
@@ -502,6 +502,7 @@ async fn run_local_pipeline(older_supplier: bool) {
             active_config_revision: 1,
             capacity: scope,
             poll_interval: Duration::from_millis(10),
+            codex_home: None,
         },
     };
     let result = runtime
@@ -660,7 +661,7 @@ async fn raw_usage_and_output_survive_before_projection_and_restart_under_restri
     let execution = PostgresImageExecution::open(config.clone(), transport.clone(), 1)
         .await
         .unwrap();
-    let scope = CapacityScope::new("runtime/raw-receipts".to_owned()).unwrap();
+    let scope = CapacityScope::new("runtime/raw-receipts").unwrap();
     execution
         .set_capacity_bounds(
             scope.as_str(),
@@ -1439,7 +1440,7 @@ async fn private_api_receipt_recovers_each_durable_boundary_without_a_second_sen
         let execution = PostgresImageExecution::open(config.clone(), transport.clone(), 2)
             .await
             .unwrap();
-        let scope = CapacityScope::new("runtime/http-fixture".to_owned()).unwrap();
+        let scope = CapacityScope::new("runtime/http-fixture").unwrap();
         execution
             .set_capacity_bounds(
                 scope.as_str(),
@@ -1557,6 +1558,7 @@ async fn private_api_receipt_recovers_each_durable_boundary_without_a_second_sen
                 active_config_revision: 1,
                 capacity: scope.clone(),
                 poll_interval: Duration::from_millis(10),
+                codex_home: None,
             },
         };
         assert!(
@@ -1620,6 +1622,7 @@ async fn private_api_receipt_recovers_each_durable_boundary_without_a_second_sen
                 active_config_revision: 1,
                 capacity: scope.clone(),
                 poll_interval: Duration::from_millis(10),
+                codex_home: None,
             },
         };
         let result = restarted
@@ -1703,7 +1706,7 @@ async fn live_codex_generation_publishes_through_the_service() {
     let execution = PostgresImageExecution::open(config.clone(), transport.clone(), 2)
         .await
         .unwrap();
-    let scope = CapacityScope::new("runtime/live-codex".to_owned()).unwrap();
+    let scope = CapacityScope::new("runtime/live-codex").unwrap();
     execution
         .set_capacity_bounds(
             scope.as_str(),
@@ -1830,6 +1833,7 @@ async fn live_codex_generation_publishes_through_the_service() {
             active_config_revision: 1,
             capacity: scope.clone(),
             poll_interval: Duration::from_millis(10),
+            codex_home: None,
         },
     };
     let mut published = None;

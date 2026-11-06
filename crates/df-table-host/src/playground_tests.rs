@@ -1,3 +1,4 @@
+use axum::http::StatusCode;
 use tempfile::TempDir;
 
 use crate::client::get;
@@ -194,7 +195,7 @@ async fn the_host_serves_the_page_theme_fixtures_and_package_with_their_media_ty
         let page = get(running.port, path).await.expect("answers");
         assert_eq!(
             (page.status, page.body.as_str()),
-            (200, "<!doctype html><p>page</p>")
+            (StatusCode::OK, "<!doctype html><p>page</p>")
         );
     }
     assert_eq!(
@@ -223,7 +224,7 @@ async fn the_host_serves_the_page_theme_fixtures_and_package_with_their_media_ty
             .await
             .expect("answers")
             .status,
-        200
+        StatusCode::OK
     );
 
     let raw = raw_exchange(
@@ -241,7 +242,7 @@ async fn the_host_serves_the_page_theme_fixtures_and_package_with_their_media_ty
 async fn a_missing_page_is_a_404_that_says_where_to_look() {
     let running = start(&STARTER_FILES).await;
     let page = get(running.port, "/playground").await.expect("answers");
-    assert_eq!(page.status, 404);
+    assert_eq!(page.status, StatusCode::NOT_FOUND);
     assert!(page.body.contains("missing"));
 }
 
@@ -256,7 +257,7 @@ async fn names_that_try_to_leave_the_directory_are_refused() {
         "/playground/fixtures/one.txt",
     ] {
         let answer = get(running.port, path).await.expect("answers");
-        assert_eq!(answer.status, 404, "{path}");
+        assert_eq!(answer.status, StatusCode::NOT_FOUND, "{path}");
     }
 }
 
@@ -303,7 +304,7 @@ async fn a_fixture_body_that_is_not_json_is_refused_with_its_typed_cause() {
         let response = crate::client::post_json(running.port, route, r#"{"name": 5}"#)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{route}");
+        assert_eq!(response.status, StatusCode::BAD_REQUEST, "{route}");
         let reply: Reply = serde_json::from_str(&response.body).expect("a reply");
         let Reply::Rejected { cause, .. } = reply else {
             panic!("{route}: a body that is not the request is refused");

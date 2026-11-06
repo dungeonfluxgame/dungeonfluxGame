@@ -6,7 +6,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use df_imagery::oneshot_segment;
 use df_playground::fixture::Fixture;
-use df_scene_layout::SceneLayout;
+use df_scene_layout::{SCHEMA_VERSION, SceneLayout};
+use serde::Deserialize;
 
 use super::request::{IoCause, LocateError};
 use super::validate::check_picture_name;
@@ -48,7 +49,16 @@ pub(super) fn read_picture(media: &Path, picture: &str) -> Result<Vec<u8>, Locat
     })
 }
 
-/// The stored layout of `picture` in the `layouts` folder, or `None` when it has none.
+/// The schema version a stored layout file says it is in, read apart from the rest of the file
+/// (whose other fields are not looked at), to tell an outdated layout from a damaged one.
+#[derive(Deserialize)]
+struct WrittenSchema {
+    schema: u32,
+}
+
+/// The stored layout of `picture` in the `layouts` folder, or `None` when it has none. A layout in
+/// another schema version does not read and is refused as stale (scan again); any other file that
+/// does not read is `LayoutInvalid`.
 pub fn read_layout(layouts: &Path, picture: &str) -> Result<Option<SceneLayout>, LocateError> {
     let path = layouts.join(layout_file_name(picture));
     let text = match std::fs::read_to_string(&path) {
@@ -61,12 +71,17 @@ pub fn read_layout(layouts: &Path, picture: &str) -> Result<Option<SceneLayout>,
             });
         }
     };
-    serde_json::from_str(&text)
-        .map(Some)
-        .map_err(|error| LocateError::LayoutInvalid {
-            picture: picture.to_owned(),
-            detail: error.to_string(),
-        })
+    serde_json::from_str(&text).map(Some).map_err(|error| {
+        match serde_json::from_str::<WrittenSchema>(&text) {
+            Ok(written) if written.schema != SCHEMA_VERSION => LocateError::StaleLayout {
+                picture: picture.to_owned(),
+            },
+            _ => LocateError::LayoutInvalid {
+                picture: picture.to_owned(),
+                detail: error.to_string(),
+            },
+        }
+    })
 }
 
 /// Writes `layout` as the layout file of `picture` in the `layouts` folder (made if missing),
@@ -126,8 +141,9 @@ pub fn attach_layout(bytes: Vec<u8>, media: &Path, layouts: &Path) -> Vec<u8> {
 }
 
 /// The stored layout of `picture`, only if it is bound to the picture as it is now: same name,
-/// same digest, this schema. `Ok(None)` when there is none; a layout of another picture or version
-/// is refused as stale (scan again), never used.
+/// same digest, this schema. `Ok(None)` when there is none; a layout of another picture (by its
+/// binding) or another schema version (on read, [`read_layout`]) is refused as stale (scan again),
+/// never used.
 pub fn current_layout(
     media: &Path,
     layouts: &Path,

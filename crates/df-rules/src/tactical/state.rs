@@ -1,4 +1,5 @@
 use super::{BattleMap, Cell, RuleError, SpeciesReaction, Weapon};
+use crate::listed::listed_enum;
 use crate::local_journey::{ChallengeRating, HeroSpecies, SpeciesCombatTraits, SpeciesSize};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,42 +12,74 @@ pub(super) const MAXIMUM_OCCUPIED_CELLS: usize = MAXIMUM_COMBATANTS * 9;
 /// Most outstanding Help effects one battle retains; Help refuses a new one beyond this.
 pub(super) const MAXIMUM_HELP_EFFECTS: usize = 64;
 
-/// The two sides of a battle.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Side {
-    Heroes,
-    Enemies,
+listed_enum! {
+    keyed
+    /// The two sides of a battle.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Side {
+        Heroes,
+        Enemies,
+    }
 }
-/// A creature size; Large and Huge occupy 2 by 2 and 3 by 3 cells (SRD p. 14).
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Size {
-    Small,
-    Medium,
-    Large,
-    Huge,
+impl Side {
+    /// The stable key of this side, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Heroes => "heroes",
+            Self::Enemies => "enemies",
+        }
+    }
 }
-/// Source stat blocks; departures in the old adjacent journey are not imported here.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CreatureKind {
-    Hero,
-    Bandit,
-    Cultist,
-    Guard,
-    Goblin,
-    Kobold,
-    Skeleton,
-    Zombie,
-    Wolf,
-    GiantRat,
-    GiantWeasel,
-    Mastiff,
-    Scout,
-    Commoner,
-    Ogre,
-    Owlbear,
-    Wight,
-    HillGiant,
-    Troll,
+listed_enum! {
+    keyed
+    /// A creature size; Large and Huge occupy 2 by 2 and 3 by 3 cells (SRD p. 14).
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Size {
+        Small,
+        Medium,
+        Large,
+        Huge,
+    }
+}
+impl Size {
+    /// The stable key of this size, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Small => "small",
+            Self::Medium => "medium",
+            Self::Large => "large",
+            Self::Huge => "huge",
+        }
+    }
+}
+listed_enum! {
+    keyed
+    /// Source stat blocks; departures in the old adjacent journey are not imported here.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum CreatureKind {
+        Hero,
+        Bandit,
+        Cultist,
+        Guard,
+        Goblin,
+        Kobold,
+        Skeleton,
+        Zombie,
+        Wolf,
+        GiantRat,
+        GiantWeasel,
+        Mastiff,
+        Scout,
+        Commoner,
+        Ogre,
+        Owlbear,
+        Wight,
+        HillGiant,
+        Troll,
+    }
 }
 
 /// Caller-owned combatant data. Construction validates the bounded supported subset.
@@ -82,7 +115,33 @@ pub struct CombatantSpec {
     pub shield: bool,
 }
 impl CreatureKind {
-    /// The compiled SRD 5.2.1 creature id, none for a hero.
+    /// The stable key of this kind, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Hero => "hero",
+            Self::Bandit => "bandit",
+            Self::Cultist => "cultist",
+            Self::Guard => "guard",
+            Self::Goblin => "goblin",
+            Self::Kobold => "kobold",
+            Self::Skeleton => "skeleton",
+            Self::Zombie => "zombie",
+            Self::Wolf => "wolf",
+            Self::GiantRat => "giant_rat",
+            Self::GiantWeasel => "giant_weasel",
+            Self::Mastiff => "mastiff",
+            Self::Scout => "scout",
+            Self::Commoner => "commoner",
+            Self::Ogre => "ogre",
+            Self::Owlbear => "owlbear",
+            Self::Wight => "wight",
+            Self::HillGiant => "hill_giant",
+            Self::Troll => "troll",
+        }
+    }
+
+    /// The compiled SRD 5.2.1 creature id, none for a hero. This is a content id of the creature
+    /// catalog ("goblin-warrior"), not the key.
     pub fn srd_id(self) -> Option<&'static str> {
         Some(match self {
             Self::Hero => return None,
@@ -325,7 +384,7 @@ impl CombatantSpec {
             .choices
             .iter()
             .find(|(key, _)| key == "species")
-            .and_then(|(_, value)| HeroSpecies::from_choice(value))
+            .and_then(|(_, value)| HeroSpecies::from_key(value))
             .ok_or(RuleError::InvalidBuild)?;
         let species_options = crate::species::SpeciesOptions::from_choices(species, &choices)
             .map_err(|_| RuleError::InvalidBuild)?;

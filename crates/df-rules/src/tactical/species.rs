@@ -1,6 +1,7 @@
 //! SRD 5.2.1 Species: optional ancestry triggers and Dragonborn saving-throw area damage.
 use super::resolve::{D20Reroll, D20Test, Draws, take_d20};
 use super::{Battle, Cell, DamageType, RuleError, Size};
+use crate::listed::listed_enum;
 use crate::species::{Ancestry, GiantAncestry};
 use serde::{Deserialize, Serialize};
 
@@ -30,11 +31,24 @@ pub struct SavingThrowSummary {
     pub damage: u16,
     pub damage_type: DamageType,
 }
-/// A species reaction a battle may wait on.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SpeciesReaction {
-    StoneEndurance,
-    StormThunder,
+listed_enum! {
+    keyed
+    /// A species reaction a battle may wait on.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum SpeciesReaction {
+        StoneEndurance,
+        StormThunder,
+    }
+}
+impl SpeciesReaction {
+    /// The stable key of this reaction, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::StoneEndurance => "stone_endurance",
+            Self::StormThunder => "storm_thunder",
+        }
+    }
 }
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]

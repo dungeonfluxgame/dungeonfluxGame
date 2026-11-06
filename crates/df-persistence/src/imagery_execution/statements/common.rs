@@ -81,34 +81,34 @@ pub(crate) fn parse_owner(scope: &[u8]) -> Result<ImageOwner, ExecutionError> {
 }
 
 pub(crate) fn stage_kind_of(label: &str) -> Result<StageKind, ExecutionError> {
-    invalid(StageKind::parse_label(label).ok_or(()))
+    invalid(StageKind::from_key(label).ok_or(()))
 }
 
 pub(crate) fn stage_state_of(label: &str) -> Result<StageState, ExecutionError> {
-    invalid(StageState::parse_label(label).ok_or(()))
+    invalid(StageState::from_key(label).ok_or(()))
 }
 
 pub(crate) fn dispatch_state_of(
     label: &str,
 ) -> Result<df_imagery::execution::DispatchState, ExecutionError> {
-    invalid(df_imagery::execution::DispatchState::parse_label(label).ok_or(()))
+    invalid(df_imagery::execution::DispatchState::from_key(label).ok_or(()))
 }
 
 pub(crate) fn settlement_of(
     label: &str,
 ) -> Result<df_imagery::execution::DispatchSettlement, ExecutionError> {
-    invalid(df_imagery::execution::DispatchSettlement::parse_label(label).ok_or(()))
+    invalid(df_imagery::execution::DispatchSettlement::from_key(label).ok_or(()))
 }
 
 pub(crate) fn alpha_of(label: &str) -> Result<CheckpointAlpha, ExecutionError> {
-    invalid(CheckpointAlpha::parse_label(label).ok_or(()))
+    invalid(CheckpointAlpha::from_key(label).ok_or(()))
 }
 
 pub(crate) fn cause_of(
     value: Option<String>,
 ) -> Result<Option<df_imagery::execution::FailureCause>, ExecutionError> {
     value
-        .map(|text| invalid(df_imagery::execution::FailureCause::parse_label(&text).ok_or(())))
+        .map(|text| invalid(df_imagery::execution::FailureCause::from_key(&text).ok_or(())))
         .transpose()
 }
 

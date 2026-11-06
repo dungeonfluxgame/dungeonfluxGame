@@ -1,4 +1,5 @@
 use super::{RuleError, Size};
+use crate::listed::listed_enum;
 use serde::{Deserialize, Serialize, de::IgnoredAny};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -24,27 +25,56 @@ impl Cell {
     }
 }
 
-/// Whether the fight is in sunlight. SRD 5.2.1 p302 Kobold Warrior: while in sunlight it has
-/// Disadvantage on ability checks and attack rolls. The painted scenes are night or interior;
-/// the photographic scan scenes are daylight. The fact is typed and carried by the map, never
-/// inferred from a scene name inside the rules.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
-pub enum Lighting {
-    Sunlight,
-    NightOrInterior,
-    Darkness,
+listed_enum! {
+    keyed
+    /// Whether the fight is in sunlight. SRD 5.2.1 p302 Kobold Warrior: while in sunlight it has
+    /// Disadvantage on ability checks and attack rolls. The painted scenes are night or interior;
+    /// the photographic scan scenes are daylight. The fact is typed and carried by the map, never
+    /// inferred from a scene name inside the rules.
+    #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Lighting {
+        Sunlight,
+        NightOrInterior,
+        Darkness,
+    }
+}
+impl Lighting {
+    /// The stable key of this lighting, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Sunlight => "sunlight",
+            Self::NightOrInterior => "night_or_interior",
+            Self::Darkness => "darkness",
+        }
+    }
 }
 
-/// Authored obstacle coverage, interpreted by the disclosed centre-line convention.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd)]
-#[serde(rename_all = "kebab-case")]
-pub enum Cover {
-    None,
-    Half,
-    ThreeQuarters,
-    Total,
+listed_enum! {
+    keyed
+    /// Authored obstacle coverage, interpreted by the disclosed centre-line convention. The
+    /// authored scene files spell three-quarters cover "three-quarters" (the renderer reads the
+    /// same files), so that spelling is still read.
+    #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Cover {
+        None,
+        Half,
+        #[serde(alias = "three-quarters")]
+        ThreeQuarters,
+        Total,
+    }
 }
 impl Cover {
+    /// The stable key of this cover, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Half => "half",
+            Self::ThreeQuarters => "three_quarters",
+            Self::Total => "total",
+        }
+    }
     /// SRD Cover: both AC and Dexterity saving throw bonus; total forbids direct targeting.
     pub fn bonus(self) -> i16 {
         match self {
@@ -579,5 +609,4 @@ fn intersects(from: Cell, to: Cell, cell: Cell) -> bool {
 }
 
 #[cfg(test)]
-#[path = "map_tests.rs"]
-mod collision_tests;
+mod map_tests;

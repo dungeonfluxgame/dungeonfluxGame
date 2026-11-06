@@ -45,6 +45,7 @@ use crate::engine::setup::{EngineConfig, EngineStartError, machines_for};
 use crate::event_log::EventLog;
 
 use super::commit::{CommitMode, MODELLED_POSTGRES_MS};
+use super::limits::COMMIT_DEADLINE_MS;
 use super::sha256::sha256;
 use super::statistics::{Summary, nanoseconds, summarise};
 
@@ -52,8 +53,6 @@ use super::statistics::{Summary, nanoseconds, summarise};
 pub const SEATS: u64 = 6;
 /// The seed of the recorded dice, so a run can be repeated.
 const SEED: u64 = 20_261_103;
-/// The ms the commit may take before the owner gives the batch up: far above any figure here.
-const COMMIT_DEADLINE_MS: u64 = 60_000;
 
 /// Why a measurement could not run.
 #[derive(Debug)]

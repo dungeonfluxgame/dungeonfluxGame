@@ -66,14 +66,14 @@ fn unknown_mode_is_refused_in_file_and_env() {
 fn every_purpose_toggles_from_file_with_provenance() {
     for index in 0..Purpose::COUNT {
         let purpose = Purpose::from_index(index).unwrap();
-        let file = format!("[imagery.purposes.{}]\nenabled = false\n", purpose.label());
+        let file = format!("[imagery.purposes.{}]\nenabled = false\n", purpose.key());
         let resolved = resolve_text(&file);
         assert!(
             !resolved.config.purpose(purpose).enabled,
             "{}",
-            purpose.label()
+            purpose.key()
         );
-        let field = format!("purposes.{}.enabled", purpose.label());
+        let field = format!("purposes.{}.enabled", purpose.key());
         assert_eq!(
             resolved.provenance.source_of(&field),
             Some(OverlaySource::FileImagery),
@@ -86,14 +86,14 @@ fn every_purpose_toggles_from_file_with_provenance() {
 fn every_purpose_toggles_from_new_env() {
     for index in 0..Purpose::COUNT {
         let purpose = Purpose::from_index(index).unwrap();
-        let tag = purpose.label().to_ascii_uppercase();
+        let tag = purpose.key().to_ascii_uppercase();
         let name = format!("DF_IMAGERY_PURPOSE_{tag}_ENABLED");
         let pairs = vec![(name.as_str(), "off")];
         let resolved = resolve("", &pairs, &empty_patch(), 1).unwrap();
         assert!(
             !resolved.config.purpose(purpose).enabled,
             "{}",
-            purpose.label()
+            purpose.key()
         );
     }
 }
@@ -102,7 +102,7 @@ fn every_purpose_toggles_from_new_env() {
 fn every_purpose_backend_override_sets_and_clears() {
     for index in 0..Purpose::COUNT {
         let purpose = Purpose::from_index(index).unwrap();
-        let tag = purpose.label().to_ascii_uppercase();
+        let tag = purpose.key().to_ascii_uppercase();
         let name = format!("DF_IMAGERY_PURPOSE_{tag}_BACKEND");
         let pairs = vec![(name.as_str(), "bfl")];
         let resolved = resolve("", &pairs, &empty_patch(), 1).unwrap();
@@ -808,7 +808,7 @@ fn legacy_master_env_off_gates_canonical_items_mural_and_expression() {
         assert!(
             !resolved.config.purpose(purpose).enabled,
             "{}",
-            purpose.label()
+            purpose.key()
         );
     }
     assert!(resolved.config.purpose(Purpose::CreatorPortrait).enabled);

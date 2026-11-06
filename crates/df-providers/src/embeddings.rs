@@ -9,7 +9,7 @@ use std::{fmt, net::SocketAddr, time::Duration};
 use serde_json::{Value, json};
 
 use crate::native_http::{NativeHttp, is_loopback_socket, is_valid_credential};
-use crate::{HttpRequest, NativeHttpRefusal, ProviderLimits, refusal_may_be_billed};
+use crate::{HttpRequest, NativeHttpCause, ProviderLimits, refusal_may_be_billed};
 
 const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/embeddings";
 /// The width of every vector this adapter returns.
@@ -58,7 +58,7 @@ pub enum EmbeddingError {
     Unauthorized,
     RateLimited,
     Provider(u16),
-    Transport(NativeHttpRefusal),
+    Transport(NativeHttpCause),
     /// The answer was not one finite vector of the right width per text.
     Output,
 }
@@ -70,12 +70,12 @@ impl EmbeddingError {
     pub const fn was_sent(self) -> bool {
         match self {
             Self::InvalidRequest => false,
-            Self::Transport(refusal) => refusal_may_be_billed(refusal),
+            Self::Transport(cause) => refusal_may_be_billed(cause),
             _ => true,
         }
     }
 
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
             Self::Unauthorized => "unauthorized",
@@ -86,6 +86,14 @@ impl EmbeddingError {
         }
     }
 }
+
+impl fmt::Display for EmbeddingError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.key())
+    }
+}
+
+impl std::error::Error for EmbeddingError {}
 
 /// One answered batch.
 #[derive(Clone, PartialEq)]
@@ -171,7 +179,7 @@ impl NativeEmbeddingProvider {
             .http
             .execute(request, deadline, std::future::pending())
             .await
-            .map_err(|failure| EmbeddingError::Transport(failure.reason))?;
+            .map_err(|failure| EmbeddingError::Transport(failure.cause))?;
         match response.status {
             200 => {}
             401 | 403 => return Err(EmbeddingError::Unauthorized),
@@ -260,15 +268,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn error_keys_are_stable_and_display_prints_the_key() {
+        let keys = [
+            (EmbeddingError::InvalidRequest, "invalid_request"),
+            (EmbeddingError::Unauthorized, "unauthorized"),
+            (EmbeddingError::RateLimited, "rate_limited"),
+            (EmbeddingError::Provider(500), "provider_error"),
+            (
+                EmbeddingError::Transport(NativeHttpCause::Unknown),
+                "transport",
+            ),
+            (EmbeddingError::Output, "bad_output"),
+        ];
+        for (error, key) in keys {
+            assert_eq!(error.key(), key);
+            assert_eq!(error.to_string(), key);
+        }
+    }
+
+    #[test]
     fn disabled_provider_is_not_sent() {
-        assert!(!EmbeddingError::Transport(NativeHttpRefusal::ProviderDisabled).was_sent());
-        assert!(EmbeddingError::Transport(NativeHttpRefusal::Deadline).was_sent());
+        assert!(!EmbeddingError::Transport(NativeHttpCause::ProviderDisabled).was_sent());
+        assert!(EmbeddingError::Transport(NativeHttpCause::Deadline).was_sent());
     }
 
     #[test]
     fn a_body_the_transport_refused_before_sending_was_not_sent() {
-        assert!(!EmbeddingError::Transport(NativeHttpRefusal::RequestTooLarge).was_sent());
-        assert!(!EmbeddingError::Transport(NativeHttpRefusal::InvalidLimits).was_sent());
+        assert!(!EmbeddingError::Transport(NativeHttpCause::RequestTooLarge).was_sent());
+        assert!(!EmbeddingError::Transport(NativeHttpCause::InvalidLimits).was_sent());
     }
 
     #[test]

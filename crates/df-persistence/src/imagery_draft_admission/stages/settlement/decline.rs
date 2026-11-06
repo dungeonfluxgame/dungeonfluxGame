@@ -47,7 +47,7 @@ impl CanonicalStageSettlement {
             || receipt.route.model != usage.route.model
             || receipt.route.cause != usage.route.cause
             || receipt.route.detail != usage.route.detail
-            || basis.kind.label() != call.kind.label()
+            || basis.kind.key() != call.kind.label()
             || basis.input_revision != call.input_revision
             || basis.input_digest != call.input_digest
             || basis.config_revision != call.config_revision

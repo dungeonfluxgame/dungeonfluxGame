@@ -12,12 +12,12 @@ use serde_json::{Value, json};
 
 use super::codec::jpeg_size;
 use super::{
-    ApiError, ApiExchange, ApiFailure, DeclineContract, GeneratedImage, ImageBackground, ImageEdit,
-    ImageFormat, ImageUsage, OperationalBounds, check_credential, check_credentialed_origin,
-    check_endpoint_url, check_model_slug,
+    ApiCallError, ApiError, ApiExchange, DeclineContract, GeneratedImage, ImageBackground,
+    ImageEdit, ImageFormat, ImageUsage, OperationalBounds, check_credential,
+    check_credentialed_origin, check_endpoint_url, check_model_slug,
 };
 use df_providers::{
-    EncodedMediaFacts, HttpMethod, HttpRequest, NativeHttp, NativeHttpRefusal, TextSchemaLimits,
+    EncodedMediaFacts, HttpMethod, HttpRequest, NativeHttp, NativeHttpCause, TextSchemaLimits,
     inspect_png_off_worker, parse_unique_json,
 };
 
@@ -192,12 +192,28 @@ impl BflPortraitCheckpoint {
 /// Closed diagnostics: stage, terminal HTTP status, delivery host and the
 /// admission reason when one applies. No bodies, URLs or credentials.
 #[derive(Debug)]
-pub(crate) struct BflFailure {
+pub(crate) struct BflError {
     pub(crate) stage: &'static str,
     pub(crate) http_status: Option<u16>,
     pub(crate) delivery_host: Option<String>,
     pub(crate) admission_reason: Option<&'static str>,
-    pub(crate) observation: Box<ApiFailure>,
+    pub(crate) observation: Box<ApiCallError>,
+}
+
+impl std::fmt::Display for BflError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "the bfl call failed at the {} stage: {}",
+            self.stage, self.observation
+        )
+    }
+}
+
+impl std::error::Error for BflError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.observation.as_ref())
+    }
 }
 
 struct BflDiagnostics {
@@ -217,8 +233,8 @@ impl BflDiagnostics {
         }
     }
 
-    fn failure(self, observation: ApiFailure) -> BflFailure {
-        BflFailure {
+    fn failure(self, observation: ApiCallError) -> BflError {
+        BflError {
             stage: self.stage,
             http_status: observation
                 .response
@@ -321,8 +337,8 @@ impl BflExecutor {
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
-    ) -> Result<BflPortraitCheckpoint, ApiFailure> {
-        validate_portrait(edit).map_err(ApiFailure::before_transport)?;
+    ) -> Result<BflPortraitCheckpoint, ApiCallError> {
+        validate_portrait(edit).map_err(ApiCallError::before_transport)?;
         let started = std::time::Instant::now();
         let body = generation_body(edit.prompt);
         let submit = self
@@ -373,7 +389,7 @@ impl BflExecutor {
             })
         })();
         parsed.map_err(|error| {
-            ApiFailure::response(
+            ApiCallError::response(
                 error,
                 ApiExchange::Submit,
                 DeclineContract::BflImages429V1,
@@ -425,9 +441,10 @@ impl BflExecutor {
         &self,
         checkpoint: &BflPortraitCheckpoint,
         deadline: Duration,
-    ) -> Result<BflSuccess, BflFailure> {
+    ) -> Result<BflSuccess, BflError> {
         self.check_checkpoint(checkpoint).map_err(|error| {
-            BflDiagnostics::new("checkpoint").failure(ApiFailure::unknown(error, ApiExchange::Poll))
+            BflDiagnostics::new("checkpoint")
+                .failure(ApiCallError::unknown(error, ApiExchange::Poll))
         })?;
         let mut diagnostics = BflDiagnostics::new("poll");
         self.poll_and_download_inner(
@@ -456,7 +473,7 @@ impl BflExecutor {
         &self,
         edit: &ImageEdit<'_>,
         deadline: Duration,
-    ) -> Result<BflSuccess, BflFailure> {
+    ) -> Result<BflSuccess, BflError> {
         let mut diagnostics = BflDiagnostics::new("validation");
         self.edit_inner(edit, deadline, &mut diagnostics)
             .await
@@ -469,8 +486,8 @@ impl BflExecutor {
         edit: &ImageEdit<'_>,
         deadline: Duration,
         diagnostics: &mut BflDiagnostics,
-    ) -> Result<BflSuccess, ApiFailure> {
-        validate_portrait(edit).map_err(ApiFailure::before_transport)?;
+    ) -> Result<BflSuccess, ApiCallError> {
+        validate_portrait(edit).map_err(ApiCallError::before_transport)?;
         let started = std::time::Instant::now();
         diagnostics.stage = "submit";
         let checkpoint = self
@@ -496,7 +513,7 @@ impl BflExecutor {
         credits: Option<String>,
         deadline: Duration,
         diagnostics: &mut BflDiagnostics,
-    ) -> Result<BflSuccess, ApiFailure> {
+    ) -> Result<BflSuccess, ApiCallError> {
         let started = std::time::Instant::now();
         let remaining = || deadline.saturating_sub(started.elapsed());
         loop {
@@ -524,7 +541,7 @@ impl BflExecutor {
                 }
             })()
             .map_err(|error| {
-                ApiFailure::response(
+                ApiCallError::response(
                     error,
                     ApiExchange::Poll,
                     DeclineContract::BflImages429V1,
@@ -535,8 +552,8 @@ impl BflExecutor {
                 None => {
                     let pause = self.bounds.poll_interval.min(remaining());
                     if pause.is_zero() {
-                        return Err(ApiFailure::accepted(
-                            ApiError::Transport(NativeHttpRefusal::Deadline),
+                        return Err(ApiCallError::accepted(
+                            ApiError::Transport(NativeHttpCause::Deadline),
                             ApiExchange::Poll,
                         ));
                     }
@@ -556,21 +573,21 @@ impl BflExecutor {
                     .await
                     .map_err(|(error, reason)| {
                         diagnostics.admission_reason = Some(reason);
-                        ApiFailure::accepted(ApiError::Transport(error), ApiExchange::Delivery)
+                        ApiCallError::accepted(ApiError::Transport(error), ApiExchange::Delivery)
                     })?;
                     diagnostics.stage = "download";
                     let (bytes, mime) = fetch;
                     diagnostics.stage = "image_validation";
                     let (bytes, width, height, format, has_alpha_channel) =
-                        check_delivery(bytes, &mime)
-                            .await
-                            .map_err(|error| ApiFailure::accepted(error, ApiExchange::Delivery))?;
+                        check_delivery(bytes, &mime).await.map_err(|error| {
+                            ApiCallError::accepted(error, ApiExchange::Delivery)
+                        })?;
                     if width > 4096
                         || height > 4096
                         || u64::from(width) * u64::from(height) > 4_194_304
                         || width * 3 != height * 2
                     {
-                        return Err(ApiFailure::accepted(
+                        return Err(ApiCallError::accepted(
                             ApiError::Output,
                             ApiExchange::Delivery,
                         ));
@@ -603,7 +620,7 @@ impl BflExecutor {
         body: Vec<u8>,
         remaining: Duration,
         exchange: ApiExchange,
-    ) -> Result<df_providers::NativeHttpResponse, ApiFailure> {
+    ) -> Result<df_providers::NativeHttpResponse, ApiCallError> {
         let response = self
             .http
             .execute(
@@ -612,7 +629,7 @@ impl BflExecutor {
                 std::future::pending(),
             )
             .await
-            .map_err(|failure| ApiFailure::transport(failure.reason, exchange))?;
+            .map_err(|failure| ApiCallError::transport(failure.cause, exchange))?;
         let error = if matches!(response.status, 401 | 403) {
             Some(ApiError::Unauthorized)
         } else if matches!(response.status, 200 | 503)
@@ -632,7 +649,7 @@ impl BflExecutor {
             None
         };
         match error {
-            Some(error) => Err(ApiFailure::response(
+            Some(error) => Err(ApiCallError::response(
                 error,
                 exchange,
                 DeclineContract::BflImages429V1,
@@ -850,22 +867,22 @@ async fn credential_free_fetch(
     remaining: Duration,
     fixture: Option<SocketAddr>,
     http_status: &mut Option<u16>,
-) -> Result<(Vec<u8>, String), (NativeHttpRefusal, &'static str)> {
+) -> Result<(Vec<u8>, String), (NativeHttpCause, &'static str)> {
     if let Some(address) = fixture {
         if !locator.starts_with(&format!("http://{address}/")) {
-            return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+            return Err((NativeHttpCause::InvalidEndpoint, "url_contract"));
         }
     } else if delivery_host_of(locator).is_none() {
-        return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+        return Err((NativeHttpCause::InvalidEndpoint, "url_contract"));
     }
     let (bytes, mime, observed) =
         df_providers::fetch_bfl_delivery(http, locator, max_bytes, remaining, fixture)
             .await
-            .map_err(|failure: df_providers::BflDeliveryFailure| {
+            .map_err(|failure: df_providers::BflDeliveryError| {
                 if let Some(status) = failure.http_status {
                     *http_status = Some(status);
                 }
-                (failure.refusal, failure.reason)
+                (failure.cause.transport(), failure.cause.key())
             })?;
     if let Some(status) = observed {
         *http_status = Some(status);

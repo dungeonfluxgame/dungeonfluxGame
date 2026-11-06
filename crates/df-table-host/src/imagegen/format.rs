@@ -63,7 +63,7 @@ pub(super) fn format_job(job: &JobView) -> String {
 
 /// A job that ended without a picture: its number, name, keys, how long it ran and the host's
 /// sentence.
-pub(super) fn format_ended(job: &JobView, error: &GenerateError, message: &str) -> String {
+pub(crate) fn format_ended(job: &JobView, error: &GenerateError, message: &str) -> String {
     format!(
         "generation {} of {} ended without a picture ({}) after {}\n  {message}",
         job.job,
@@ -114,7 +114,7 @@ fn error_keys(error: &GenerateError) -> String {
 }
 
 /// The refusal of a generation: its job when one started, its keys and the host's sentence.
-pub(super) fn format_refusal(error: &GenerateError, message: &str) -> String {
+pub(crate) fn format_refusal(error: &GenerateError, message: &str) -> String {
     let number = error
         .job()
         .map_or(String::new(), |job| format!("generation {job} "));

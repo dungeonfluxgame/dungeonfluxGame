@@ -15,7 +15,7 @@ pub(crate) async fn defer_queued_in(
     let now_ms = command.now_ms;
     let notice = command
         .notice
-        .map(df_imagery::execution::QuotaDeferralReason::label);
+        .map(df_imagery::execution::QuotaDeferralReason::key);
     require_read_committed(tx).await?;
     if now_ms <= 0 || not_before_ms <= now_ms {
         return Err(ExecutionError::InvalidRecord);

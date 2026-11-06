@@ -1453,9 +1453,9 @@ fn an_unused_surge_extra_carried_into_the_next_turn_is_flagged() {
 fn with_dropped_javelins(initial: &Battle) -> Battle {
     let mut snapshot: serde_json::Value =
         serde_json::from_slice(&initial.snapshot().unwrap()).unwrap();
-    snapshot["actors"][0]["weapon_counts"]["Javelin"] = serde_json::json!(6);
+    snapshot["actors"][0]["weapon_counts"]["javelin"] = serde_json::json!(6);
     snapshot["actors"][0]["dropped"] =
-        serde_json::json!([["Javelin", [0, 1]], ["Javelin", [0, 1]]]);
+        serde_json::json!([["javelin", [0, 1]], ["javelin", [0, 1]]]);
     let map = BattleMap::from_json(SURGE_MAP, "flat").unwrap();
     Battle::from_snapshot(map, &serde_json::to_vec(&snapshot).unwrap()).unwrap()
 }

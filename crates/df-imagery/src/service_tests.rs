@@ -33,8 +33,8 @@ use crate::service::ports::{
     StoredImageAuthorization,
 };
 use crate::service::types::{
-    CancelOutcome, ImageDemandView, ImageServiceError, OperationHandle, RequestOutcome,
-    RequestProblem, WatchObservation,
+    CancelOutcome, ImageDemandView, ImageServiceError, OperationHandle, RequestCause,
+    RequestOutcome, WatchObservation,
 };
 use crate::service::{ImageService, PROTOCOL_LIMITS, PROTOCOL_MAX_SNAPSHOT_BYTES};
 use crate::transform::{FlipAxis, ImageTransform, TransformSource, TransformSpec};
@@ -873,7 +873,9 @@ async fn denial_before_mutation() {
             .request(&handles.principal, &withheld)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::WithheldAudience)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::WithheldAudience
+        }
     );
 
     let mut profile = stamp(generate_request(owner.clone(), operation_id(0x22)));
@@ -883,7 +885,9 @@ async fn denial_before_mutation() {
             .request(&handles.principal, &profile)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::ProfileMismatch)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::ProfileMismatch
+        }
     );
 
     let mut tampered = generate_request(owner.clone(), operation_id(0x23));
@@ -893,7 +897,9 @@ async fn denial_before_mutation() {
             .request(&handles.principal, &tampered)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::FingerprintMismatch)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::FingerprintMismatch
+        }
     );
 
     let forged = stamp(generate_request(other_draft_owner(), operation_id(0x24)));
@@ -917,7 +923,9 @@ async fn denial_before_mutation() {
             .request(&tight_handles.principal, &prompt)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::PromptTooLong)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::PromptTooLong
+        }
     );
     assert_eq!(tight_handles.journal.calls(), vec!["lookup".to_owned()]);
 
@@ -931,7 +939,9 @@ async fn denial_before_mutation() {
             .request(&tight_handles.principal, &layered)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::InvalidTransform)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::InvalidTransform
+        }
     );
     assert!(
         tight_handles
@@ -1131,7 +1141,9 @@ async fn changed_intent_conflicts_and_stale_fingerprint_is_invalid() {
             .request(&handles.principal, &stale_print)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::FingerprintMismatch)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::FingerprintMismatch
+        }
     );
 }
 
@@ -1237,7 +1249,9 @@ async fn current_limit_tightening_applies_to_new_work_only() {
             .request(&handles.principal, &fresh)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::TooManyReferences)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::TooManyReferences
+        }
     );
 }
 
@@ -1421,7 +1435,9 @@ async fn diagnostics_never_carry_prompt_text() {
         RequestOutcome::Refused(Refusal::ServiceOff)
     ));
     for error in [
-        ImageServiceError::InvalidRequest(RequestProblem::FingerprintMismatch),
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::FingerprintMismatch,
+        },
         ImageServiceError::NotAuthorizedOrNotFound,
         ImageServiceError::Conflict,
         ImageServiceError::InvalidRecord,
@@ -2044,7 +2060,9 @@ async fn canonical_fingerprint_stamps_record_and_replay_without_duplicate_encodi
             .request(&handles.principal, &tampered)
             .await
             .unwrap_err(),
-        ImageServiceError::InvalidRequest(RequestProblem::FingerprintMismatch)
+        ImageServiceError::InvalidRequest {
+            cause: RequestCause::FingerprintMismatch
+        }
     );
     tampered.identity.fingerprint = service.canonical_fingerprint(&tampered).unwrap();
     assert_eq!(
@@ -2494,9 +2512,9 @@ async fn explicit_provider_moderation_requires_the_current_trusted_purpose_overr
         } else {
             assert_eq!(
                 outcome,
-                Err(ImageServiceError::InvalidRequest(
-                    RequestProblem::InvalidPipeline
-                ))
+                Err(ImageServiceError::InvalidRequest {
+                    cause: RequestCause::InvalidPipeline
+                })
             );
         }
     }
@@ -2547,4 +2565,32 @@ async fn generate_permission_alone_records_new_demand() {
         service.request(&TestPrincipal, &request).await.unwrap(),
         RequestOutcome::Recorded(_)
     ));
+}
+
+#[test]
+fn invalid_request_display_is_a_lowercase_sentence_without_variant_names() {
+    let error = ImageServiceError::InvalidRequest {
+        cause: RequestCause::FingerprintMismatch,
+    };
+    assert_eq!(
+        error.to_string(),
+        "the request is invalid: the fingerprint is not the canonical intent hash"
+    );
+    for cause in [
+        RequestCause::EmptyPrompt,
+        RequestCause::PromptTooLong,
+        RequestCause::TooManyReferences,
+        RequestCause::WithheldAudience,
+        RequestCause::InvalidLimit,
+        RequestCause::ProfileMismatch,
+        RequestCause::InvalidTransform,
+        RequestCause::FingerprintMismatch,
+        RequestCause::SnapshotTooLarge,
+        RequestCause::Malformed,
+        RequestCause::InvalidPipeline,
+        RequestCause::InvalidArtwork,
+    ] {
+        let text = ImageServiceError::InvalidRequest { cause }.to_string();
+        assert!(!text.chars().any(char::is_uppercase), "{text}");
+    }
 }

@@ -119,7 +119,7 @@ fn native_cleanup_preserves_missing_book_ack_after_exact_money_release_and_resta
             job,
             stage,
         };
-        let capacity = CapacityScope::new("funded-adapter".into()).unwrap();
+        let capacity = CapacityScope::new("funded-adapter").unwrap();
         let token = ClaimToken::from_bytes(&[31; 16]).unwrap();
         let basis = StageBasis {
             kind: StageKind::Classification,
@@ -390,6 +390,7 @@ fn native_cleanup_preserves_missing_book_ack_after_exact_money_release_and_resta
                     active_config_revision: 1,
                     capacity: capacity.clone(),
                     poll_interval: Duration::from_millis(5),
+                    codex_home: None,
                 },
             };
             assert!(matches!(

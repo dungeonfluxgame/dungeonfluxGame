@@ -11,6 +11,7 @@
 //! compare-and-set freeze, and to `Retired` when its last interest withdraws. Receipts and
 //! frozen facts are never deleted or rewritten.
 
+use crate::listed::listed_enum;
 use std::fmt;
 use std::future::Future;
 
@@ -37,6 +38,18 @@ pub enum JournalIdError {
     InvalidHex,
     Zero,
 }
+
+impl std::fmt::Display for JournalIdError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLength { actual } => write!(formatter, "the id has {actual} bytes"),
+            Self::InvalidHex => formatter.write_str("the id is not lowercase hex"),
+            Self::Zero => formatter.write_str("the id is zero"),
+        }
+    }
+}
+
+impl std::error::Error for JournalIdError {}
 
 macro_rules! journal_id {
     ($(#[$doc:meta])* $name:ident) => {
@@ -122,6 +135,24 @@ pub enum SnapshotError {
     Empty,
     TooLarge { len_bytes: usize, max_bytes: usize },
 }
+
+impl std::fmt::Display for SnapshotError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroRevision => formatter.write_str("the snapshot revision is zero"),
+            Self::Empty => formatter.write_str("the snapshot is empty"),
+            Self::TooLarge {
+                len_bytes,
+                max_bytes,
+            } => write!(
+                formatter,
+                "the snapshot has {len_bytes} bytes, more than {max_bytes}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SnapshotError {}
 
 /// One exact opaque canonical payload at a nonzero format revision: the intent the service
 /// hashed into the fingerprint, or the configuration the job ran under. The bytes are opaque
@@ -236,59 +267,46 @@ pub fn owner_of_bytes(bytes: &[u8]) -> Option<ImageOwner> {
     }
 }
 
-/// A job is planned until the first recipe freeze, then frozen; the last withdrawal retires it
-/// while preserving every frozen fact. There is no ready, publication or finance state here.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum JobState {
-    Planning,
-    RecipeFrozen,
-    Retired,
+listed_enum! {
+    keyed
+    /// A job is planned until the first recipe freeze, then frozen; the last withdrawal retires it
+    /// while preserving every frozen fact. There is no ready, publication or finance state here.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum JobState {
+        Planning,
+        RecipeFrozen,
+        Retired,
+    }
 }
 
 impl JobState {
     /// The stored spelling of this state.
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Planning => "planning",
             Self::RecipeFrozen => "recipe_frozen",
             Self::Retired => "retired",
         }
     }
-
-    /// Reads a stored spelling back; anything else is an invalid record.
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "planning" => Some(Self::Planning),
-            "recipe_frozen" => Some(Self::RecipeFrozen),
-            "retired" => Some(Self::Retired),
-            _ => None,
-        }
-    }
 }
 
-/// A caller's stake in a job: attached until withdrawn. A withdrawn row stays recorded; replay
-/// of its operation returns it as-is and never re-attaches it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InterestState {
-    Attached,
-    Withdrawn,
+listed_enum! {
+    keyed
+    /// A caller's stake in a job: attached until withdrawn. A withdrawn row stays recorded; replay
+    /// of its operation returns it as-is and never re-attaches it.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum InterestState {
+        Attached,
+        Withdrawn,
+    }
 }
 
 impl InterestState {
     /// The stored spelling of this state.
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Attached => "attached",
             Self::Withdrawn => "withdrawn",
-        }
-    }
-
-    /// Reads a stored spelling back; anything else is an invalid record.
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "attached" => Some(Self::Attached),
-            "withdrawn" => Some(Self::Withdrawn),
-            _ => None,
         }
     }
 }
@@ -464,6 +482,30 @@ pub enum JournalError {
     /// The job deadline passed; only an identical freeze replay still succeeds.
     Expired,
 }
+
+impl std::fmt::Display for JournalError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unavailable => formatter.write_str("the journal is unavailable"),
+            Self::Unknown => formatter.write_str("the journal commit outcome is unknown"),
+            Self::InvalidRecord => formatter.write_str("a journal record is invalid"),
+            Self::OperationConflict => {
+                formatter.write_str("the operation returned under a different fingerprint")
+            }
+            Self::IdentityConflict => formatter.write_str("the id is bound to different data"),
+            Self::JoinRefused(refusal) => write!(formatter, "the join was refused: {refusal:?}"),
+            Self::NotFound => formatter.write_str("no such owned job, interest or operation"),
+            Self::RecipeConflict => formatter.write_str("the job already froze a different recipe"),
+            Self::Stale { current_revision } => {
+                write!(formatter, "the job moved on to revision {current_revision}")
+            }
+            Self::Retired => formatter.write_str("the job retired"),
+            Self::Expired => formatter.write_str("the job deadline passed"),
+        }
+    }
+}
+
+impl std::error::Error for JournalError {}
 
 /// True once `now_ms` reaches the deadline: only instants strictly before it may use the job.
 pub fn is_expired(absolute_deadline_ms: i64, now_ms: i64) -> bool {

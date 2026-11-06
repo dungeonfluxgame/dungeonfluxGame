@@ -7,7 +7,7 @@
 //!
 //! It is also where the audit lines of the libraries the host runs arrive: `install_as_audit_sink`
 //! makes a log the df-observe audit sink, so `df_observe::record_audit_line` lands here instead of
-//! on stdout.
+//! only being counted as undelivered.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -115,10 +115,10 @@ fn record_observe_line(_event: &'static str, line: String) {
 
 /// Makes `log` the df-observe audit sink of this process: every `df_observe::record_audit_line`
 /// from then on is pushed to it (and echoed with the host's next echo). The sink is process-wide
-/// and set once: `true` when `log` became it, `false` when an earlier log already is and keeps
-/// the lines.
+/// and set once: `true` when `log` became it, `false` when an earlier log or another df-observe
+/// sink already is and keeps the lines.
 pub fn install_as_audit_sink(log: &Arc<EventLog>) -> bool {
     let installed = AUDIT_SINK_LOG.set(Arc::clone(log)).is_ok();
-    df_observe::install_audit_sink(record_observe_line);
-    installed
+    let observe_installed = df_observe::install_audit_sink(record_observe_line);
+    installed && observe_installed
 }

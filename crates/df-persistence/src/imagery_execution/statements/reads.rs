@@ -118,7 +118,7 @@ pub(crate) async fn read_child_stage_in(
                 &df_imagery::owner_scope_bytes(owner),
                 &job.as_bytes().as_slice(),
                 &parent_dispatch.as_bytes().as_slice(),
-                &kind.label(),
+                &kind.key(),
             ],
         )
         .await

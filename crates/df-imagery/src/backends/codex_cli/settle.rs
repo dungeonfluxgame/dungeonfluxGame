@@ -7,10 +7,11 @@
 //! step runs under the turn deadline, and the blocking decode stays owned so
 //! a late result is never treated as a completed verification.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use super::artifact::{ArtifactError, VerifiedArtifact, sha256_hex, verify_artifact};
+use super::artifact::{ArtifactError, VerifiedArtifact, read_bounded, sha256_hex, verify_artifact};
 use super::protocol::{ImageItem, TurnCompletedView, match_inputs};
 use super::{
     AlphaRequirement, ArtifactReceipt, CodexError, CodexImageRequest, CodexOutcome,
@@ -27,6 +28,7 @@ pub(crate) async fn settle_turn(
     request: &CodexImageRequest,
     image_paths: &[String],
     outputs_root: &Path,
+    codex_home: Option<&Path>,
     max_artifact_bytes: u64,
     deadline_at: Instant,
 ) -> CodexOutcome {
@@ -56,14 +58,14 @@ pub(crate) async fn settle_turn(
         .zip(image_paths.iter())
         .map(|(reference, sent)| (sent.as_str(), reference.sha256_hex()))
         .collect();
-    let source_roots = source_roots(outputs_root, &view.thread_id);
+    let source_roots = source_roots(outputs_root, codex_home, &view.thread_id);
     let mut first_artifact_error: Option<ArtifactError> = None;
     let mut first_failure: Option<CodexError> = None;
     let mut saw_file_id = false;
     let mut saw_result = false;
     let mut saw_nonterminal = false;
     for item in &view.items {
-        if let Err(error) = match_inputs(&item.input_images, &staged) {
+        if let Err(error) = match_inputs(item.input_images.as_deref(), &staged) {
             return CodexOutcome::Failed {
                 error: CodexError::Protocol(error),
                 usage: view.usage,
@@ -186,17 +188,17 @@ pub(crate) async fn settle_turn(
 /// model was asked to write, and Codex's own generated-image folder for this thread, where the
 /// image tool saves in the read-only sandbox. Either way the bytes are verified in place and
 /// then imported into the outputs directory, so the receipt never names a source path.
-fn source_roots(outputs_root: &Path, thread_id: &str) -> Vec<PathBuf> {
+fn source_roots(outputs_root: &Path, codex_home: Option<&Path>, thread_id: &str) -> Vec<PathBuf> {
     let mut roots = vec![outputs_root.to_owned()];
-    if let Some(generated) = generated_images_root(thread_id) {
+    if let Some(generated) = generated_images_root(codex_home, thread_id) {
         roots.push(generated);
     }
     roots
 }
 
 /// `<codex home>/generated_images/<thread id>`, or `None` when the thread id is not a plain
-/// identifier or no home directory is known. `CODEX_HOME` wins, as it does for the CLI.
-pub(crate) fn generated_images_root(thread_id: &str) -> Option<PathBuf> {
+/// identifier or no Codex home was configured.
+pub(crate) fn generated_images_root(codex_home: Option<&Path>, thread_id: &str) -> Option<PathBuf> {
     let plain = !thread_id.is_empty()
         && thread_id
             .bytes()
@@ -204,11 +206,7 @@ pub(crate) fn generated_images_root(thread_id: &str) -> Option<PathBuf> {
     if !plain {
         return None;
     }
-    let home = std::env::var_os("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".codex")))
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))?;
-    Some(home.join("generated_images").join(thread_id))
+    Some(codex_home?.join("generated_images").join(thread_id))
 }
 
 /// Tries each source root in order. A path outside one root is not a failure yet; the next
@@ -274,7 +272,7 @@ async fn verify_candidate(
     if require_alpha && !verified.has_alpha() {
         return Err(ArtifactError::AlphaMismatch);
     }
-    import_verified_bytes(&verified, outputs_root, item, max_bytes, deadline_at).await
+    import_verified_bytes(verified, outputs_root, item, max_bytes, deadline_at).await
 }
 
 /// Awaits owned blocking filesystem work under the turn deadline without ever
@@ -316,52 +314,42 @@ fn import_stem(item_id: &str) -> String {
     stem
 }
 
-/// Bounded async read matching the owned-output bound: at most max_bytes + 1
-/// are observed, and anything beyond max_bytes refuses with the observed
-/// prefix length instead of allocating the whole file.
-async fn read_bounded_async(path: &Path, max_bytes: u64) -> Result<Vec<u8>, ArtifactError> {
-    use tokio::io::AsyncReadExt;
-
-    let file = tokio::fs::File::open(path)
-        .await
-        .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => ArtifactError::Missing,
-            _ => ArtifactError::Unreadable,
-        })?;
-    let metadata = file
-        .metadata()
-        .await
-        .map_err(|_| ArtifactError::Unreadable)?;
-    if !metadata.is_file() {
-        return Err(ArtifactError::Unreadable);
-    }
-    let limit = max_bytes.checked_add(1).ok_or(ArtifactError::Unreadable)?;
-    let mut take = file.take(limit);
-    let mut bytes = Vec::new();
-    take.read_to_end(&mut bytes)
-        .await
-        .map_err(|_| ArtifactError::Unreadable)?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(ArtifactError::TooLarge {
-            bytes: bytes.len() as u64,
-        });
-    }
-    Ok(bytes)
-}
-
 /// Imports the exact verified bytes into the owned outputs directory and
 /// returns the imported artifact: the receipt path and digest identify the
-/// import, never the original mutable helper path. The import uses
-/// create-new writes so an existing link or directory is never followed, and
-/// revalidates the written object with bounded reads. The deadline only
-/// prevents starting new work: every in-progress filesystem operation runs to
-/// completion, and only a destination this attempt created is ever removed.
-/// Cleanup may therefore finish after the deadline, and the expired outcome
-/// is returned only after that owned cleanup.
+/// import, never the original mutable helper path. The filesystem steps run as
+/// one owned blocking task under the turn deadline (`import_blocking`). An
+/// expired turn never starts it; one still queued when the deadline passes is
+/// aborted before it touches the disk; one already running finishes its
+/// in-progress step and its owned cleanup before the expired outcome returns.
 async fn import_verified_bytes(
-    verified: &VerifiedArtifact,
+    verified: VerifiedArtifact,
     outputs_root: &Path,
     item: &ImageItem,
+    max_bytes: u64,
+    deadline_at: Instant,
+) -> Result<VerifiedArtifact, ArtifactError> {
+    if Instant::now() >= deadline_at {
+        return Err(ArtifactError::Unreadable);
+    }
+    let outputs_root = outputs_root.to_owned();
+    let stem = import_stem(&item.id);
+    let handle = tokio::task::spawn_blocking(move || {
+        import_blocking(&verified, &outputs_root, &stem, max_bytes, deadline_at)
+    });
+    let mut slot = Some(handle);
+    join_blocking(&mut slot, deadline_at)
+        .await
+        .unwrap_or(Err(ArtifactError::Unreadable))
+}
+
+/// The import's filesystem steps, on a blocking thread. Create-new writes never follow an
+/// existing link or directory, and the written object is revalidated with bounded reads. The
+/// deadline only prevents starting new work: every in-progress filesystem operation runs to
+/// completion, and only a destination this attempt created is ever removed.
+fn import_blocking(
+    verified: &VerifiedArtifact,
+    outputs_root: &Path,
+    stem: &str,
     max_bytes: u64,
     deadline_at: Instant,
 ) -> Result<VerifiedArtifact, ArtifactError> {
@@ -371,8 +359,7 @@ async fn import_verified_bytes(
         "image/webp" => "webp",
         _ => return Err(ArtifactError::Unreadable),
     };
-    let stem = import_stem(&item.id);
-    let expected_digest = verified.digest_sha256_hex().to_owned();
+    let expected_digest = verified.digest_sha256_hex();
     let expected_len = verified.byte_len();
     let mut attempt: u32 = 0;
     loop {
@@ -394,20 +381,22 @@ async fn import_verified_bytes(
         if !destination.starts_with(outputs_root) {
             return Err(ArtifactError::Unreadable);
         }
-        match tokio::fs::OpenOptions::new()
+        match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&destination)
-            .await
         {
             Ok(file) => {
                 // This destination was just created by this attempt, so a
                 // failure removes exactly this file and never a pre-existing
                 // collision.
-                if write_and_confirm(file, &destination, verified, max_bytes, deadline_at).await {
+                if write_and_confirm(file, &destination, verified, max_bytes, deadline_at) {
                     return Ok(verified.imported_at(destination));
                 }
-                remove_failed_import(&destination).await;
+                // A leftover file is harmless: it is never named by a receipt,
+                // the import has already failed, and the next attempt never
+                // reuses an unverified file.
+                let _ = std::fs::remove_file(&destination);
                 return Err(ArtifactError::Unreadable);
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -417,13 +406,12 @@ async fn import_verified_bytes(
                 // Never follow an existing link or directory: only a
                 // regular file with the exact verified digest is reused, and
                 // a pre-existing collision is never removed.
-                let metadata = tokio::fs::symlink_metadata(&destination)
-                    .await
+                let metadata = std::fs::symlink_metadata(&destination)
                     .map_err(|_| ArtifactError::Unreadable)?;
                 if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
                     continue;
                 }
-                match read_bounded_async(&destination, max_bytes).await {
+                match read_bounded(&destination, max_bytes) {
                     Ok(current)
                         if sha256_hex(&current) == expected_digest
                             && current.len() == expected_len
@@ -449,18 +437,16 @@ async fn import_verified_bytes(
 /// rereads them with a bounded read. True only when the reread bytes match
 /// the verified digest and length before the deadline. The file handle is
 /// closed before returning so a failed import can be removed.
-async fn write_and_confirm(
-    mut file: tokio::fs::File,
+fn write_and_confirm(
+    mut file: std::fs::File,
     destination: &Path,
     verified: &VerifiedArtifact,
     max_bytes: u64,
     deadline_at: Instant,
 ) -> bool {
-    use tokio::io::AsyncWriteExt;
-
     if Instant::now() >= deadline_at
-        || file.write_all(verified.bytes()).await.is_err()
-        || file.flush().await.is_err()
+        || file.write_all(verified.bytes()).is_err()
+        || file.flush().is_err()
     {
         return false;
     }
@@ -469,18 +455,11 @@ async fn write_and_confirm(
         return false;
     }
     matches!(
-        read_bounded_async(destination, max_bytes).await,
+        read_bounded(destination, max_bytes),
         Ok(reread) if sha256_hex(&reread) == verified.digest_sha256_hex()
             && reread.len() == verified.byte_len()
             && Instant::now() < deadline_at
     )
-}
-
-/// Removes a destination this attempt created but could not confirm.
-async fn remove_failed_import(destination: &Path) {
-    // A leftover file is harmless: it is never named by a receipt, the import
-    // has already failed, and the next attempt never reuses an unverified file.
-    let _ = tokio::fs::remove_file(destination).await;
 }
 
 #[cfg(test)]

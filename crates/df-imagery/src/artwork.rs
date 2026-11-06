@@ -25,6 +25,29 @@ pub enum ArtworkError {
     PurposeMismatch,
 }
 
+impl std::fmt::Display for ArtworkError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptySubject => formatter.write_str("the artwork subject is empty"),
+            Self::UnsupportedVersion { actual } => write!(
+                formatter,
+                "the artwork spec version {actual} is not supported"
+            ),
+            Self::SubjectTooLong { actual_bytes } => write!(
+                formatter,
+                "the artwork subject is too long at {actual_bytes} bytes"
+            ),
+            Self::OwnerScopeMismatch => {
+                formatter.write_str("the artwork owner scope does not match the run")
+            }
+            Self::AudienceMismatch => formatter.write_str("the artwork audience does not match"),
+            Self::PurposeMismatch => formatter.write_str("the artwork purpose does not match"),
+        }
+    }
+}
+
+impl std::error::Error for ArtworkError {}
+
 /// A stable public definition key or content address, never a run-local entity identity.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ArtworkSubjectKey {

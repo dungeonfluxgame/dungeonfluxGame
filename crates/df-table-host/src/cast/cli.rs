@@ -7,8 +7,7 @@ use super::request::{CameraMoved, CameraRequest, CastList, CastReply, Cued};
 use super::routes::path;
 use crate::command::CommandError;
 use crate::dev::DevError;
-use crate::dev_client::{get_json, post_json};
-use crate::dev_http::DevReply;
+use crate::dev_client::{self, get_json, post_json};
 
 pub const CAST_USAGE: &str = "scene cast";
 pub const CUE_USAGE: &str = "scene cue <character> think | speak <line...> | quiet";
@@ -79,19 +78,9 @@ pub fn parse_camera_on(words: &[String]) -> Result<CastCommand, CommandError> {
     })
 }
 
-/// The value of a cast reply, or its refusal as the command's failure.
-///
-/// Transitional: the refusal becomes text until `DevError` carries a route's typed error
-/// (`dev_client::get_value` / `post_value` then replace this); the route tests match the typed
-/// `CastError` on the reply itself.
+/// The value of a cast reply, or its refusal (the typed `CastError`) as the command's failure.
 fn reply_value<T>(reply: CastReply<T>) -> Result<T, DevError> {
-    match reply {
-        DevReply::Done { value } => Ok(value),
-        DevReply::Rejected { error, message } => Err(DevError::Rejected(format!(
-            "refused ({}): {message}",
-            error.key()
-        ))),
-    }
+    dev_client::reply_value(reply)
 }
 
 /// Runs one cast command against the host on `port`.

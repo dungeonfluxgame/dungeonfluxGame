@@ -15,7 +15,7 @@ use crate::output::{
 };
 use crate::request::Purpose;
 
-use super::parse::{parse_alpha, parse_matte_hex, parse_output_format};
+use super::parse::{parse_alpha, parse_matte_hex};
 use super::{FieldProvenance, OverlayError, OverlaySource, Provenance};
 
 pub(super) fn invalid(field: &str, reason: &'static str) -> OverlayError {
@@ -77,10 +77,10 @@ where
 
 pub(super) fn backend_label_from_index(index: usize) -> &'static str {
     match index {
-        0 => BackendId::OpenAi.label(),
-        1 => BackendId::Fal.label(),
-        2 => BackendId::Bfl.label(),
-        _ => BackendId::CodexCli.label(),
+        0 => BackendId::OpenAi.key(),
+        1 => BackendId::Fal.key(),
+        2 => BackendId::Bfl.key(),
+        _ => BackendId::CodexCli.key(),
     }
 }
 
@@ -109,7 +109,7 @@ pub(super) fn tracked_fields() -> Vec<FieldProvenance> {
             "model_override",
         ] {
             fields.push(FieldProvenance {
-                field: format!("purposes.{}.{suffix}", purpose.label()),
+                field: format!("purposes.{}.{suffix}", purpose.key()),
                 source: OverlaySource::Default,
             });
         }
@@ -365,7 +365,7 @@ pub(super) fn profile_body(
             }
             "format" => {
                 let text = take_profile_text(&field_path(key), value)?;
-                format = parse_output_format(text)
+                format = crate::output::OutputFormat::from_key(text)
                     .ok_or_else(|| invalid(&field_path(key), "unknown format"))?;
             }
             "quality" => match value {

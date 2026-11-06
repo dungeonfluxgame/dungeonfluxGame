@@ -4,11 +4,12 @@
 //! keeps a turned figure from jumping.
 
 use df_playground::fixture::{ElementShape, StageElement};
+use df_table::event::RejectionCause;
 use df_table::kind::Shape;
 
 use crate::client::get;
 use crate::command::split_words;
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::view::{ElementView, PivotView};
 
@@ -161,8 +162,17 @@ async fn a_new_pivot_on_a_turned_figure_would_jump_so_it_is_refused_and_nothing_
         .await
         .expect_err("refused");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("rotate m1 0")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas {
+                    cause: Some(RejectionCause::InvalidTransform),
+                    ..
+                },
+                ..
+            }
+        ),
+        "{error:?}"
     );
     let after = frame_elements(&running).await;
     assert_eq!(after, before, "the frame is exactly as it was");

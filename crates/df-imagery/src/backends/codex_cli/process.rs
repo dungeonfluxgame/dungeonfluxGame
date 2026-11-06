@@ -33,6 +33,23 @@ pub(crate) enum ProcessError {
     OutputTooLarge,
 }
 
+impl std::fmt::Display for ProcessError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Configuration => formatter.write_str("the codex child configuration is invalid"),
+            Self::SpawnFailed { kind } => {
+                write!(formatter, "the codex child could not start: {kind}")
+            }
+            Self::StreamFailed { kind } => {
+                write!(formatter, "the codex child stream failed: {kind}")
+            }
+            Self::OutputTooLarge => formatter.write_str("the codex child output is too large"),
+        }
+    }
+}
+
+impl std::error::Error for ProcessError {}
+
 /// Bounds on everything the child may emit; the caller sets them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct StreamLimits {

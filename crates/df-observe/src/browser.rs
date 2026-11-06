@@ -49,9 +49,27 @@ pub enum BufferError {
     InvalidMeasurement,
 }
 
+impl std::fmt::Display for BufferError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "there is no record or upload to act on",
+            Self::Oversized => "the browser record is larger than its bound",
+            Self::Capacity => "the browser buffer is full or already uploading",
+            Self::IdentityExhausted => "the browser buffer ran out of record or attempt identities",
+            Self::StaleLease => "the upload lease is not the buffer's active lease",
+            Self::Deadline => "the upload lease passed its deadline",
+            Self::NotExpired => "the upload lease has not reached its deadline",
+            Self::ClockOverflow => "the upload deadline does not fit the clock",
+            Self::InvalidMeasurement => "the browser record has an invalid byte measurement",
+        })
+    }
+}
+
+impl std::error::Error for BufferError {}
+
 /// Classified upload termination; none asserts that server-owned work was cancelled.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum UploadFailure {
+pub enum UploadCause {
     Transport,
     Cancelled,
     PartialOrRejected,
@@ -292,11 +310,11 @@ impl BrowserBuffer {
     pub fn fail_upload(
         &mut self,
         lease: &UploadLease,
-        reason: UploadFailure,
-    ) -> Result<UploadFailure, BufferError> {
+        cause: UploadCause,
+    ) -> Result<UploadCause, BufferError> {
         self.check_lease(lease)?;
         self.lease = None;
-        Ok(reason)
+        Ok(cause)
     }
     /// End the active upload once `now` reaches its deadline; its records stay retained.
     pub fn expire_upload(&mut self, now: Duration) -> Result<(), BufferError> {

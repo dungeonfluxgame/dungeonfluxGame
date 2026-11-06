@@ -3,10 +3,10 @@
 use std::ffi::OsString;
 
 use crate::environment::{NotTextError, read_text};
-use crate::options::{DEFAULT_PORT, PORT_ENVIRONMENT_VARIABLE, parse_dev_arguments};
+use crate::options::{DEFAULT_PORT, PORT_VARIABLE, parse_dev_arguments};
 
 fn port_value(value: &str) -> Option<String> {
-    read_text(PORT_ENVIRONMENT_VARIABLE, Some(OsString::from(value))).expect("Unicode")
+    read_text(PORT_VARIABLE, Some(OsString::from(value))).expect("Unicode")
 }
 
 #[test]

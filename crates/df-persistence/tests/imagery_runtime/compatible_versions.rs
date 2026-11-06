@@ -173,7 +173,7 @@ async fn real_v10_and_v11_ready_reuse_v12_after_restart_with_no_new_work_or_writ
         let execution = PostgresImageExecution::open(config.clone(), transport.clone(), 2)
             .await
             .unwrap();
-        let capacity = CapacityScope::new("runtime/compatible-versions".to_owned()).unwrap();
+        let capacity = CapacityScope::new("runtime/compatible-versions").unwrap();
         execution
             .set_capacity_bounds(
                 capacity.as_str(),
@@ -272,6 +272,7 @@ async fn real_v10_and_v11_ready_reuse_v12_after_restart_with_no_new_work_or_writ
                 active_config_revision: 1,
                 capacity: capacity.clone(),
                 poll_interval: Duration::from_millis(10),
+                codex_home: None,
             },
         };
         let actual = runtime.run_next().await.unwrap().unwrap();

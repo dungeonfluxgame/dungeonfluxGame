@@ -19,7 +19,7 @@ use crate::native_http::{
 };
 use crate::text_schema::parse_unique_json;
 use crate::{
-    HttpRequest, NativeHttpLimits, NativeHttpRefusal, ProviderFailureClass, ProviderRequestId,
+    HttpRequest, NativeHttpCause, NativeHttpLimits, ProviderFailureClass, ProviderRequestId,
     TextOutputSchema, TextSchemaError,
 };
 
@@ -116,10 +116,10 @@ pub enum TextResponseError {
     ModeDoesNotDispatch,
     SchemaConfigurationMismatch,
     Owner(RequestError),
-    Transport(NativeHttpRefusal),
+    Transport(NativeHttpCause),
     Supplier(ProviderFailureClass),
     Contract {
-        reason: TextResponseContract,
+        cause: TextContractCause,
         usage: Option<Box<TextTokenUsage>>,
     },
     UsageExceeded(Box<TextTokenUsage>),
@@ -133,8 +133,34 @@ pub enum TextResponseError {
     },
 }
 
+impl fmt::Display for TextResponseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnregisteredRoute => formatter.write_str("the text route is not registered"),
+            Self::InvalidConfiguration => formatter.write_str("the text provider is misconfigured"),
+            Self::InvalidCredential => formatter.write_str("the text credential is invalid"),
+            Self::InvalidInput => formatter.write_str("the text input is invalid"),
+            Self::ModeDoesNotDispatch => formatter.write_str("this mode does not dispatch text"),
+            Self::SchemaConfigurationMismatch => {
+                formatter.write_str("the output schema does not match the configuration")
+            }
+            Self::Owner(cause) => write!(formatter, "the request owner refused it ({cause:?})"),
+            Self::Transport(cause) => write!(formatter, "the text call failed: {cause}"),
+            Self::Supplier(class) => write!(formatter, "the text supplier failed ({class:?})"),
+            Self::Contract { cause, .. } => {
+                write!(formatter, "the text answer broke its contract ({cause:?})")
+            }
+            Self::UsageExceeded(_) => formatter.write_str("the text usage exceeded its bound"),
+            Self::Observed { failure, .. } => failure.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for TextResponseError {}
+
+/// Why a supplier answer broke the text response contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TextResponseContract {
+pub enum TextContractCause {
     Json,
     Usage,
     Identity,
@@ -145,9 +171,10 @@ pub enum TextResponseContract {
 }
 
 impl TextResponseError {
-    pub fn reason(&self) -> &Self {
+    /// The failure itself, without the supplier facts an `Observed` wrapper adds.
+    pub fn failure(&self) -> &Self {
         match self {
-            Self::Observed { failure, .. } => failure.reason(),
+            Self::Observed { failure, .. } => failure.failure(),
             _ => self,
         }
     }
@@ -364,11 +391,11 @@ impl NativeTextProvider {
     pub fn for_loopback_fixture(mut self, address: SocketAddr) -> Result<Self, TextResponseError> {
         if !is_literal_localhost(address) {
             return Err(TextResponseError::Transport(
-                NativeHttpRefusal::InvalidEndpoint,
+                NativeHttpCause::InvalidEndpoint,
             ));
         }
-        self.http =
-            NativeHttp::new(self.http.limits(), true).map_err(TextResponseError::Transport)?;
+        self.http = NativeHttp::new(self.http.limits(), true)
+            .map_err(|failure| TextResponseError::Transport(failure.cause))?;
         self.endpoint = format!("http://{address}/v1/responses");
         Ok(self)
     }
@@ -383,7 +410,8 @@ impl NativeTextProvider {
         if !is_valid_credential(credential) {
             return Err(TextResponseError::InvalidCredential);
         }
-        let http = NativeHttp::new(limits, fixture).map_err(TextResponseError::Transport)?;
+        let http = NativeHttp::new(limits, fixture)
+            .map_err(|failure| TextResponseError::Transport(failure.cause))?;
         Ok(Self {
             config,
             credential: credential.to_owned(),
@@ -428,7 +456,7 @@ impl NativeTextProvider {
         let maximum_body_bytes = self.http.limits().maximum_request_bytes;
         if input.len() > maximum_body_bytes {
             return Err(TextResponseError::Transport(
-                NativeHttpRefusal::RequestTooLarge,
+                NativeHttpCause::RequestTooLarge,
             ));
         }
         let metadata = request_metadata(binding.identity);
@@ -451,7 +479,7 @@ impl NativeTextProvider {
             );
         }
         serde_json::to_writer(&mut body, &wire_body)
-            .map_err(|_| TextResponseError::Transport(NativeHttpRefusal::RequestTooLarge))?;
+            .map_err(|_| TextResponseError::Transport(NativeHttpCause::RequestTooLarge))?;
         let mapped = HttpRequest::responses(&self.endpoint, &self.credential, body.into_bytes());
         let response = self
             .http
@@ -463,7 +491,7 @@ impl NativeTextProvider {
             .await
             .map_err(|failure| {
                 observed(
-                    TextResponseError::Transport(failure.reason),
+                    TextResponseError::Transport(failure.cause),
                     None,
                     failure.transport_request_id,
                 )
@@ -471,16 +499,16 @@ impl NativeTextProvider {
         let json =
             parse_unique_json(&response.body, self.config.schema.limits()).map_err(|_| {
                 observed(
-                    contract(TextResponseContract::Json, None),
+                    contract(TextContractCause::Json, None),
                     None,
                     response.transport_request_id.clone(),
                 )
             })?;
         let captured_response_id =
             response_id(&json).and_then(|id| ProviderRequestId::new(id).ok());
-        let failure = |reason| {
+        let failure = |error| {
             observed(
-                reason,
+                error,
                 captured_response_id.clone(),
                 response.transport_request_id.clone(),
             )
@@ -490,8 +518,8 @@ impl NativeTextProvider {
                 classify_supplier_status(response.status, &json),
             )));
         }
-        let usage = parse_usage(&json)
-            .ok_or_else(|| failure(contract(TextResponseContract::Usage, None)))?;
+        let usage =
+            parse_usage(&json).ok_or_else(|| failure(contract(TextContractCause::Usage, None)))?;
         if usage.total_tokens > limits.max_tokens()
             || usage.total_tokens > limits.max_usage().quantity()
             || usage.output_tokens > u128::from(self.config.maximum_output_tokens)
@@ -502,22 +530,19 @@ impl NativeTextProvider {
             || json.get("model").and_then(Value::as_str) != Some(self.config.model.as_str())
             || json.get("metadata") != Some(&metadata)
         {
-            return Err(failure(contract(
-                TextResponseContract::Identity,
-                Some(usage),
-            )));
+            return Err(failure(contract(TextContractCause::Identity, Some(usage))));
         }
         let id = response_id(&json)
-            .ok_or_else(|| failure(contract(TextResponseContract::Identity, Some(usage))))?;
+            .ok_or_else(|| failure(contract(TextContractCause::Identity, Some(usage))))?;
         let provider_request_id = ProviderRequestId::new(id)
-            .map_err(|_| failure(contract(TextResponseContract::Identity, Some(usage))))?;
+            .map_err(|_| failure(contract(TextContractCause::Identity, Some(usage))))?;
         if json.get("status").and_then(Value::as_str) != Some("completed")
             || json.get("error").is_some_and(|value| !value.is_null())
             || json
                 .get("incomplete_details")
                 .is_some_and(|value| !value.is_null())
         {
-            return Err(failure(contract(TextResponseContract::Status, Some(usage))));
+            return Err(failure(contract(TextContractCause::Status, Some(usage))));
         }
         if json
             .get("text")
@@ -525,10 +550,10 @@ impl NativeTextProvider {
             .map(without_null_description)
             != Some(self.config.schema.format())
         {
-            return Err(failure(contract(TextResponseContract::Schema, Some(usage))));
+            return Err(failure(contract(TextContractCause::Schema, Some(usage))));
         }
         let output = parse_output(&json, &self.config.schema)
-            .map_err(|reason| failure(contract(reason, Some(usage))))?;
+            .map_err(|cause| failure(contract(cause, Some(usage))))?;
         Ok(PreparedTextResponse {
             request,
             provider_request_id,
@@ -576,9 +601,9 @@ fn observed(
     }
 }
 
-fn contract(reason: TextResponseContract, usage: Option<TextTokenUsage>) -> TextResponseError {
+fn contract(cause: TextContractCause, usage: Option<TextTokenUsage>) -> TextResponseError {
     TextResponseError::Contract {
-        reason,
+        cause,
         usage: usage.map(Box::new),
     }
 }
@@ -640,11 +665,11 @@ fn parse_usage(json: &Value) -> Option<TextTokenUsage> {
     })
 }
 
-fn parse_output(json: &Value, schema: &TextOutputSchema) -> Result<Value, TextResponseContract> {
+fn parse_output(json: &Value, schema: &TextOutputSchema) -> Result<Value, TextContractCause> {
     let items = json
         .get("output")
         .and_then(Value::as_array)
-        .ok_or(TextResponseContract::Output)?;
+        .ok_or(TextContractCause::Output)?;
     let mut text = None;
     for item in items {
         match item.get("type").and_then(Value::as_str) {
@@ -655,22 +680,22 @@ fn parse_output(json: &Value, schema: &TextOutputSchema) -> Result<Value, TextRe
                 let content = item
                     .get("content")
                     .and_then(Value::as_array)
-                    .ok_or(TextResponseContract::Output)?;
+                    .ok_or(TextContractCause::Output)?;
                 for part in content {
                     match part.get("type").and_then(Value::as_str) {
-                        Some("refusal") => return Err(TextResponseContract::Refusal),
+                        Some("refusal") => return Err(TextContractCause::Refusal),
                         Some("output_text") if text.is_none() => {
                             if part.get("annotations").is_some_and(|value| {
                                 value.as_array().is_none_or(|values| !values.is_empty())
                             }) {
-                                return Err(TextResponseContract::Output);
+                                return Err(TextContractCause::Output);
                             }
                             text = part.get("text").and_then(Value::as_str);
                             if text.is_none() {
-                                return Err(TextResponseContract::Output);
+                                return Err(TextContractCause::Output);
                             }
                         }
-                        _ => return Err(TextResponseContract::Output),
+                        _ => return Err(TextContractCause::Output),
                     }
                 }
             }
@@ -684,19 +709,19 @@ fn parse_output(json: &Value, schema: &TextOutputSchema) -> Result<Value, TextRe
                     && item
                         .get("status")
                         .is_none_or(|status| status.as_str() == Some("completed")) => {}
-            _ => return Err(TextResponseContract::Output),
+            _ => return Err(TextContractCause::Output),
         }
     }
     let output = parse_unique_json(
-        text.ok_or(TextResponseContract::Output)?.as_bytes(),
+        text.ok_or(TextContractCause::Output)?.as_bytes(),
         schema.limits(),
     )
-    .map_err(|_| TextResponseContract::Json)?;
+    .map_err(|_| TextContractCause::Json)?;
     schema
         .validate_output(&output)
         .map_err(|error| match error {
-            TextSchemaError::OutputMismatch => TextResponseContract::Schema,
-            _ => TextResponseContract::Json,
+            TextSchemaError::OutputMismatch => TextContractCause::Schema,
+            _ => TextContractCause::Json,
         })?;
     Ok(output)
 }

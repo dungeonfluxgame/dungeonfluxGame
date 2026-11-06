@@ -11,8 +11,8 @@ use std::{
     time::Duration,
 };
 
-use crate::native_media_fetch::BflDeliveryFailure;
-use crate::{NativeHttp, NativeHttpRefusal, ProviderLimits, fetch_bfl_delivery};
+use crate::native_media_fetch::{BflDeliveryCause, BflDeliveryError};
+use crate::{NativeHttp, NativeHttpCause, ProviderLimits, fetch_bfl_delivery};
 
 fn limits() -> crate::NativeHttpLimits {
     ProviderLimits::new(Duration::from_secs(5), 1024, 16_384).build()
@@ -95,8 +95,8 @@ async fn rejected_locator_never_reaches_network() {
     )
     .await
     .expect_err("untrusted host is refused");
-    assert_eq!(error.refusal, NativeHttpRefusal::InvalidEndpoint);
-    assert_eq!(error.reason, "url_contract");
+    assert_eq!(error.cause, BflDeliveryCause::UrlContract);
+    assert_eq!(error.cause.transport(), NativeHttpCause::InvalidEndpoint);
     assert_eq!(error.http_status, None);
 }
 
@@ -108,8 +108,8 @@ async fn rejected_fixture_address_is_invalid_before_fetch() {
     let error = fetch_bfl_delivery(&http, &locator, 1024, Duration::from_secs(1), Some(outside))
         .await
         .expect_err("non-loopback fixture is refused");
-    assert_eq!(error.refusal, NativeHttpRefusal::InvalidEndpoint);
-    assert_eq!(error.reason, "fixture_invalid");
+    assert_eq!(error.cause, BflDeliveryCause::FixtureInvalid);
+    assert_eq!(error.cause.transport(), NativeHttpCause::InvalidEndpoint);
     assert_eq!(error.http_status, None);
 }
 
@@ -124,9 +124,8 @@ async fn zero_remaining_deadline_covers_the_whole_operation() {
         .expect_err("zero deadline is refused");
     assert_eq!(
         error,
-        BflDeliveryFailure {
-            refusal: NativeHttpRefusal::Deadline,
-            reason: "deadline",
+        BflDeliveryError {
+            cause: BflDeliveryCause::Deadline,
             http_status: None,
         }
     );
@@ -153,7 +152,7 @@ async fn slow_fixture_hits_the_single_total_deadline() {
     )
     .await
     .expect_err("slow fixture exceeds the total deadline");
-    assert_eq!(error.refusal, NativeHttpRefusal::Deadline);
+    assert_eq!(error.cause, BflDeliveryCause::Deadline);
     server.join().expect("server");
 }
 
@@ -231,8 +230,8 @@ async fn small_delivery_cap_refuses_larger_sized_body() {
     let error = fetch_bfl_delivery(&http, &locator, 1024, Duration::from_secs(5), Some(address))
         .await
         .expect_err("2 KiB body exceeds 1 KiB delivery cap");
-    assert_eq!(error.refusal, NativeHttpRefusal::ResponseTooLarge);
-    assert_eq!(error.reason, "response_too_large");
+    assert_eq!(error.cause, BflDeliveryCause::ResponseTooLarge);
+    assert_eq!(error.cause.transport(), NativeHttpCause::ResponseTooLarge);
     assert_eq!(error.http_status, Some(200));
     server.join().expect("server");
 }
@@ -252,8 +251,8 @@ async fn small_delivery_cap_refuses_larger_chunked_body() {
     let error = fetch_bfl_delivery(&http, &locator, 1024, Duration::from_secs(5), Some(address))
         .await
         .expect_err("chunked 2 KiB body exceeds 1 KiB delivery cap");
-    assert_eq!(error.refusal, NativeHttpRefusal::ResponseTooLarge);
-    assert_eq!(error.reason, "response_too_large");
+    assert_eq!(error.cause, BflDeliveryCause::ResponseTooLarge);
+    assert_eq!(error.cause.transport(), NativeHttpCause::ResponseTooLarge);
     assert_eq!(error.http_status, Some(200));
     server.join().expect("server");
 }
@@ -278,8 +277,8 @@ async fn delivery_403_retains_observed_status_without_payload() {
     )
     .await
     .expect_err("403 delivery is refused with its status");
-    assert_eq!(error.refusal, NativeHttpRefusal::Unknown);
-    assert_eq!(error.reason, "fetch_failed");
+    assert_eq!(error.cause, BflDeliveryCause::FetchFailed);
+    assert_eq!(error.cause.transport(), NativeHttpCause::Unknown);
     assert_eq!(error.http_status, Some(403));
     server.join().expect("server");
 }
@@ -304,8 +303,8 @@ async fn redirect_fixture_is_refused_without_following() {
     )
     .await
     .expect_err("redirect is refused");
-    assert_eq!(error.refusal, NativeHttpRefusal::Redirect);
-    assert_eq!(error.reason, "redirect_refused");
+    assert_eq!(error.cause, BflDeliveryCause::RedirectRefused);
+    assert_eq!(error.cause.transport(), NativeHttpCause::Redirect);
     server.join().expect("server");
 }
 
@@ -343,8 +342,8 @@ async fn unsupported_delivery_bounds_are_refused_before_dns() {
         let error = fetch_bfl_delivery(&http, locator, max_bytes, Duration::from_secs(1), None)
             .await
             .expect_err("unsupported delivery bound is refused");
-        assert_eq!(error.refusal, NativeHttpRefusal::InvalidLimits);
-        assert_eq!(error.reason, "request_bounds");
+        assert_eq!(error.cause, BflDeliveryCause::RequestBounds);
+        assert_eq!(error.cause.transport(), NativeHttpCause::InvalidLimits);
         assert_eq!(error.http_status, None);
     }
 }
@@ -429,7 +428,7 @@ async fn retry_after_evidence_preserves_absent_invalid_duplicate_seconds_and_dat
                 std::future::pending(),
             )
             .await
-            .unwrap_or_else(|failure| panic!("transport refused: {:?}", failure.reason));
+            .unwrap_or_else(|failure| panic!("transport refused: {:?}", failure.cause));
         assert_eq!(response.status, 429);
         assert_eq!(response.body, b"{}");
         assert_eq!(response.metadata.retry_after.raw_values(), raw);

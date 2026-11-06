@@ -46,7 +46,7 @@ fn every_closed_failure_cause_survives_unknown_restart_without_usage_or_fresh_se
             assert_eq!(stored.settlement, DispatchSettlement::UnknownOutstanding);
             assert_eq!(stored.cause, Some(cause));
             assert_eq!(stored.usage_revision, 0);
-            assert_eq!(FailureCause::parse_label(cause.label()), Some(cause));
+            assert_eq!(FailureCause::from_key(cause.key()), Some(cause));
             let replay = complete_dispatch_in(
                 &tx,
                 &finish_command(
@@ -64,7 +64,7 @@ fn every_closed_failure_cause_survives_unknown_restart_without_usage_or_fresh_se
             assert_eq!(replay, stored);
         }
         assert_eq!(
-            FailureCause::parse_label("untrusted arbitrary provider body"),
+            FailureCause::from_key("untrusted arbitrary provider body"),
             None
         );
         tx.commit().await.unwrap();

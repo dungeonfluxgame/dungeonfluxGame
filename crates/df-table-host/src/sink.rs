@@ -1,7 +1,8 @@
-//! The host's event sink and the echo of audit lines to the terminal.
+//! The echo of audit lines to the terminal.
 //!
-//! The sink only appends to the log, so it never blocks the canvas it is called under. The echo
-//! never blocks anything either: it only queues lines for one dedicated writer thread, and that
+//! The canvas records its events through the host's one event sink (`observe::HostEventSink`),
+//! which writes each line to the log and counts the verbose events its level leaves out. The echo
+//! never blocks anything: it only queues lines for one dedicated writer thread, and that
 //! thread alone writes to the terminal. A terminal that stops accepting output (a console in
 //! selection mode, a paused pipe) blocks that thread and nothing else; lines pile up in the queue
 //! up to a very large byte bound, then are dropped and counted, and the writer says how many when
@@ -15,40 +16,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
-use df_table::event::{EventClass, TableEvent};
-use df_table::ports::EventSink;
-
 use crate::event_log::EventLog;
 use crate::limits::{
     ECHO_LINE_OVERHEAD_BYTES, ECHO_NOTICE_AFTER, MAXIMUM_LOGGED_LINES, MAXIMUM_PENDING_ECHO_BYTES,
 };
-
-/// Appends events to the log. Events of class `Verbose` (moves) are kept only when asked for, so
-/// a log without them shows gaps in the revision numbers.
-#[derive(Debug)]
-pub struct HostSink {
-    log: Arc<EventLog>,
-    records_moves: bool,
-}
-
-impl HostSink {
-    pub fn new(log: Arc<EventLog>, records_moves: bool) -> Self {
-        Self { log, records_moves }
-    }
-
-    pub fn log(&self) -> &Arc<EventLog> {
-        &self.log
-    }
-}
-
-impl EventSink for HostSink {
-    fn record(&self, event: &TableEvent) {
-        if event.class() == EventClass::Verbose && !self.records_moves {
-            return;
-        }
-        self.log.push(event.render_audit_line());
-    }
-}
 
 /// What a queued line counts for against the bound: its text and what holding it costs.
 fn cost(text: &str) -> usize {

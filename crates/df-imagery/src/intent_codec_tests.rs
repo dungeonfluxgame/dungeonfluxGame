@@ -1771,7 +1771,7 @@ fn config_rejects_bounds_versions_and_trailing_bytes() {
     versioned[0] = 255;
     assert!(matches!(
         decode_config(&versioned, MAX_BYTES),
-        Err(CodecError::BadVersion { actual: 255 })
+        Err(CodecError::InvalidVersion { actual: 255 })
     ));
     let mut tagged = snapshot.bytes().to_vec();
     tagged[1] = 9;
@@ -1921,7 +1921,7 @@ fn trailing_bytes_are_rejected_with_the_extra_count() {
 fn version_mismatch_names_the_bad_version() {
     assert!(matches!(
         decode_intent(&patched(GENERATE_GOLDEN, 0, &[255]), &limits(), MAX_BYTES),
-        Err(CodecError::BadVersion { actual: 255 })
+        Err(CodecError::InvalidVersion { actual: 255 })
     ));
     assert!(decode_intent(&[], &limits(), MAX_BYTES).is_err());
 }

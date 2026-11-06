@@ -39,7 +39,7 @@ fn parse(
             row.get::<_, i32>("candidate_usage_revision"),
         ))?,
         source_digest: bytes32(&row.get::<_, Vec<u8>>("source_digest"))?,
-        reason: LocalInspectionReason::parse_label(&row.get::<_, String>("reason"))
+        reason: LocalInspectionReason::from_key(&row.get::<_, String>("reason"))
             .ok_or(ExecutionError::InvalidRecord)?,
         observed_at_ms: row.get("observed_at_ms"),
         schema_revision: invalid(u32::try_from(row.get::<_, i64>("schema_revision")))?,
@@ -93,7 +93,7 @@ fn replay_matches(row: &Row, command: &LocalInspectionCommand) -> Result<bool, E
             && row.get::<_, Vec<u8>>("candidate_dispatch_id")
                 == command.candidate_dispatch().as_bytes()
             && row.get::<_, Vec<u8>>("source_digest") == command.source_digest().as_slice()
-            && row.get::<_, String>("reason") == command.reason().label()
+            && row.get::<_, String>("reason") == command.reason().key()
             && row.get::<_, i64>("observed_at_ms") == command.observed_at_ms(),
     )
 }
@@ -206,7 +206,7 @@ async fn insert_checkpoint(
         &[&s.job.as_bytes().as_slice(),&s.stage.as_bytes().as_slice(),&owner_scope_bytes(&s.owner),&i64::from(b.input_revision),
         &b.input_digest.as_slice(),&invalid(i64::try_from(b.config_revision))?,&b.config_digest.as_slice(),&c.dispatch.as_bytes().as_slice(),
         &c.stage.as_bytes().as_slice(),&c.dispatch.as_bytes().as_slice(),&i64::from(checkpoint.candidate_observation_version),
-        &invalid(i32::try_from(checkpoint.candidate_usage_revision))?,&checkpoint.source_digest.as_slice(),&checkpoint.reason.label(),
+        &invalid(i32::try_from(checkpoint.candidate_usage_revision))?,&checkpoint.source_digest.as_slice(),&checkpoint.reason.key(),
         &checkpoint.observed_at_ms,&command.claim().token.as_bytes().as_slice(),&invalid(i64::try_from(command.claim().generation))?,
         &i64::from(command.intent_snapshot_revision()),&command.intent_digest().as_slice(),&i64::from(command.config_snapshot_revision())])
         .await.map_err(map_db)?;

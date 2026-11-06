@@ -293,7 +293,7 @@ fn sealed_record_only_supplier_remains_discoverable_until_cost_ack_but_cpu_never
             (0x31,0x41,0x30,0x32,0x72,0x82,StageKind::LocalTransform,"local/transform"),
         ] {
             let mut enqueue=enqueue_command(job,stage,at(0));
-            enqueue.kind=kind;enqueue.local_accounting=true;enqueue.capacity=CapacityScope::new(capacity.to_owned()).unwrap();
+            enqueue.kind=kind;enqueue.local_accounting=true;enqueue.capacity=CapacityScope::new(capacity).unwrap();
             let tx=client.transaction().await.unwrap();
             accept_with_execution_in(&tx,&accept_command(operation,job,interest,DEADLINE_MS,at(0)),&enqueue).await.unwrap();
             tx.commit().await.unwrap();

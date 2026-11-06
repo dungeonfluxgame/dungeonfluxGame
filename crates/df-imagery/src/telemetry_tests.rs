@@ -256,13 +256,10 @@ fn supplier_failure_fields_preserve_classification_without_urls_or_prose() {
 #[test]
 fn preflight_and_quota_reasons_remain_closed_without_inventing_supplier_identity() {
     use crate::execution::QuotaDeferralReason;
-    use crate::runtime::PreflightRejection;
+    use crate::runtime::PreflightCause;
     for (reason, label) in [
-        (PreflightRejection::MissingCredential, "missing_credential"),
-        (
-            PreflightRejection::UnsupportedProfile,
-            "unsupported_profile",
-        ),
+        (PreflightCause::MissingCredential, "missing_credential"),
+        (PreflightCause::UnsupportedProfile, "unsupported_profile"),
     ] {
         let mut event = ImageEvent::new(EventKind::Refused, EventContext::default());
         event.measurements.preflight_rejection = Some(reason);
@@ -304,4 +301,39 @@ fn the_recent_event_buffer_keeps_only_the_newest_capacity_events_in_order() {
         Some(u64::try_from(RECENT_EVENT_CAPACITY).unwrap() + 3)
     );
     assert_eq!(observer.recent(2).len(), 2);
+}
+
+#[test]
+fn telemetry_keys_are_snake_case_and_read_back() {
+    use crate::key_tests::assert_keys;
+    assert_keys(
+        FailureKind::ALL,
+        FailureKind::key,
+        FailureKind::from_key,
+        &[],
+    );
+    assert_keys(
+        ProviderStep::ALL,
+        ProviderStep::key,
+        ProviderStep::from_key,
+        &[],
+    );
+    assert_keys(
+        AnalysisKind::ALL,
+        AnalysisKind::key,
+        AnalysisKind::from_key,
+        &[],
+    );
+    assert_keys(
+        AnalysisVerdict::ALL,
+        AnalysisVerdict::key,
+        AnalysisVerdict::from_key,
+        &[],
+    );
+    assert_keys(
+        StageOutcome::ALL,
+        StageOutcome::key,
+        StageOutcome::from_key,
+        &[],
+    );
 }

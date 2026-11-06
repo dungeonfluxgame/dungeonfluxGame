@@ -11,9 +11,9 @@ use tokio::task::JoinHandle;
 
 use crate::event_log::EventLog;
 use crate::kind_files::load_kind_files;
+use crate::observe::{HostEventSink, WallClock};
 use crate::playground::PlaygroundFiles;
 use crate::server;
-use crate::sink::HostSink;
 use crate::state::AppState;
 
 /// The kind files most tests start with: a character and a marker.
@@ -98,7 +98,7 @@ pub async fn start(files: &[(&str, &str)]) -> Running {
     }
     let registry = load_kind_files(directory.path()).expect("the test kinds are valid");
     let log = Arc::new(EventLog::default());
-    let sink = HostSink::new(Arc::clone(&log), true);
+    let sink = HostEventSink::new(Arc::clone(&log), Arc::new(WallClock));
     let playground = TempDir::new().expect("makes a temporary directory");
     let playground_files = PlaygroundFiles::new(
         playground.path().join("assets"),

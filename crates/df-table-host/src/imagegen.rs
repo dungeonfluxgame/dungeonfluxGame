@@ -20,7 +20,7 @@
 pub mod backend;
 pub mod cli;
 pub mod events;
-mod format;
+pub(crate) mod format;
 pub mod limits;
 pub mod model;
 pub mod request;

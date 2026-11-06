@@ -20,7 +20,7 @@ const HUE_STEP_DEGREES: usize = 137;
 const NAMED_HUE_DEGREES: usize = 45;
 
 fn hue(number: usize, region: &LayoutRegion) -> usize {
-    if region.label.is_some() {
+    if region.label().is_some() {
         NAMED_HUE_DEGREES
     } else {
         (170 + number * HUE_STEP_DEGREES) % 360
@@ -30,10 +30,18 @@ fn hue(number: usize, region: &LayoutRegion) -> usize {
 fn box_style(region: &LayoutRegion) -> String {
     format!(
         "left:{}%;top:{}%;width:{}%;height:{}%;",
-        percent_text(region.left_permille),
-        percent_text(region.top_permille),
-        percent_text(region.right_permille.saturating_sub(region.left_permille)),
-        percent_text(region.bottom_permille.saturating_sub(region.top_permille)),
+        percent_text(region.left_permille()),
+        percent_text(region.top_permille()),
+        percent_text(
+            region
+                .right_permille()
+                .saturating_sub(region.left_permille())
+        ),
+        percent_text(
+            region
+                .bottom_permille()
+                .saturating_sub(region.top_permille())
+        ),
     )
 }
 
@@ -41,14 +49,14 @@ fn box_style(region: &LayoutRegion) -> String {
 pub fn layer(document: &Document, layout: &ImageLayout) -> Result<Element, JsValue> {
     let root = element(document, "div", "sam-layer")?;
     root.set_attribute("aria-hidden", "true")?;
-    for (number, region) in layout.regions.iter().enumerate() {
+    for (number, region) in layout.regions().iter().enumerate() {
         let colour = format!("--sam-hue:{};", hue(number, region));
-        let named = if region.label.is_some() {
+        let named = if region.label().is_some() {
             " sam-labelled"
         } else {
             ""
         };
-        match &region.mask {
+        match region.mask() {
             Some(mask) => {
                 let paint = element(document, "div", &format!("sam-mask{named}"))?;
                 set_style(
@@ -65,14 +73,14 @@ pub fn layer(document: &Document, layout: &ImageLayout) -> Result<Element, JsVal
                 append(&root, &frame)?;
             }
         }
-        let name = match &region.label {
+        let name = match region.label() {
             Some(label) => format!("{number} {label}"),
             None => number.to_string(),
         };
         let score = format!(
             "{}.{:02}",
-            region.score_permille / 1000,
-            (region.score_permille % 1000) / 10
+            region.score_permille() / 1000,
+            (region.score_permille() % 1000) / 10
         );
         let tag = text_element(
             document,
@@ -97,8 +105,8 @@ pub fn layer(document: &Document, layout: &ImageLayout) -> Result<Element, JsVal
             &head,
             &format!(
                 "left:{}%;top:{}%;",
-                percent_text(region.head_x_permille),
-                percent_text(region.head_y_permille)
+                percent_text(region.head_x_permille()),
+                percent_text(region.head_y_permille())
             ),
         )?;
         append(&root, &head)?;
@@ -111,11 +119,11 @@ pub fn layer(document: &Document, layout: &ImageLayout) -> Result<Element, JsVal
             "sam-legend",
             &format!(
                 "{} · prompt \"{}\" · {} masks · {}x{}",
-                layout.model,
-                layout.prompt,
-                layout.regions.len(),
-                layout.picture.width_px,
-                layout.picture.height_px
+                layout.model(),
+                layout.prompt(),
+                layout.regions().len(),
+                layout.picture().width_px,
+                layout.picture().height_px
             ),
         )?,
     )?;

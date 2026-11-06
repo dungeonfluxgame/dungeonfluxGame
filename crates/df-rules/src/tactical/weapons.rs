@@ -1,55 +1,80 @@
+use crate::listed::listed_enum;
 use serde::{Deserialize, Serialize};
-/// SRD Weapons table (p91); only carried weapons and the admitted stat block actions.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum Weapon {
-    Greatsword,
-    Flail,
-    Javelin,
-    Spear,
-    Longbow,
-    Shortbow,
-    Scimitar,
-    Shortsword,
-    LightCrossbow,
-    Dagger,
-    Sickle,
-    Club,
-    Bite,
-    Slam,
-    UnarmedStrike,
-    Greatclub,
-    Rend,
-    TreeClub,
-    NecroticSword,
-    NecroticBow,
+listed_enum! {
+    keyed
+    /// SRD Weapons table (p91); only carried weapons and the admitted stat block actions.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Weapon {
+        Greatsword,
+        Flail,
+        Javelin,
+        Spear,
+        Longbow,
+        Shortbow,
+        Scimitar,
+        Shortsword,
+        LightCrossbow,
+        Dagger,
+        Sickle,
+        Club,
+        Bite,
+        Slam,
+        UnarmedStrike,
+        Greatclub,
+        Rend,
+        TreeClub,
+        NecroticSword,
+        NecroticBow,
+    }
 }
-/// A weapon mastery property (SRD p. 90).
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Mastery {
-    Graze,
-    Sap,
-    Slow,
-    Vex,
-    Nick,
+listed_enum! {
+    keyed
+    /// A weapon mastery property (SRD p. 90).
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Mastery {
+        Graze,
+        Sap,
+        Slow,
+        Vex,
+        Nick,
+    }
 }
-/// A damage type (SRD p. 16).
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DamageType {
-    Slashing,
-    Piercing,
-    Bludgeoning,
-    Necrotic,
-    Poison,
-    Acid,
-    Cold,
-    Fire,
-    Lightning,
-    Thunder,
+impl Mastery {
+    /// The stable key of this mastery property, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Graze => "graze",
+            Self::Sap => "sap",
+            Self::Slow => "slow",
+            Self::Vex => "vex",
+            Self::Nick => "nick",
+        }
+    }
+}
+listed_enum! {
+    keyed
+    /// A damage type (SRD p. 16).
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum DamageType {
+        Slashing,
+        Piercing,
+        Bludgeoning,
+        Necrotic,
+        Poison,
+        Acid,
+        Cold,
+        Fire,
+        Lightning,
+        Thunder,
+    }
 }
 
 impl DamageType {
-    /// The 2024 rules' name of the type, lower case.
-    pub fn id(self) -> &'static str {
+    /// The stable key of this type, as it is serialized: the 2024 rules' name, lower case.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Slashing => "slashing",
             Self::Piercing => "piercing",
@@ -66,8 +91,8 @@ impl DamageType {
 }
 
 impl Weapon {
-    /// The stable id of this weapon.
-    pub fn id(self) -> &'static str {
+    /// The stable key of this weapon, as it is serialized.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Greatsword => "greatsword",
             Self::Flail => "flail",
@@ -77,18 +102,18 @@ impl Weapon {
             Self::Shortbow => "shortbow",
             Self::Scimitar => "scimitar",
             Self::Shortsword => "shortsword",
-            Self::LightCrossbow => "light-crossbow",
+            Self::LightCrossbow => "light_crossbow",
             Self::Dagger => "dagger",
-            Self::Sickle => "ritual-sickle",
+            Self::Sickle => "sickle",
             Self::Club => "club",
             Self::Bite => "bite",
             Self::Slam => "slam",
-            Self::UnarmedStrike => "unarmed-strike",
+            Self::UnarmedStrike => "unarmed_strike",
             Self::Greatclub => "greatclub",
             Self::Rend => "rend",
-            Self::TreeClub => "tree-club",
-            Self::NecroticSword => "necrotic-sword",
-            Self::NecroticBow => "necrotic-bow",
+            Self::TreeClub => "tree_club",
+            Self::NecroticSword => "necrotic_sword",
+            Self::NecroticBow => "necrotic_bow",
         }
     }
     pub fn mastery(self) -> Option<Mastery> {

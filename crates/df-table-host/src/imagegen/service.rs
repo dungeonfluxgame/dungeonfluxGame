@@ -429,26 +429,21 @@ impl ImageGenerator {
         Ok((provenance, sidecar))
     }
 
-    /// Runs the backend in a blocking task. The backend enforces the deadline itself; the host
-    /// adds a grace period and then calls the attempt timed out, so a stuck task cannot hold a
-    /// job open forever.
+    /// Awaits the backend on the job's task. The backend enforces the deadline itself; the host
+    /// adds a grace period and then calls the attempt timed out and drops it, which stops the
+    /// attempt, so a stuck backend cannot hold a job open forever.
     async fn generate(
         &self,
         job: u64,
         backend_request: BackendRequest,
     ) -> Result<GeneratedImage, GenerateError> {
-        let backend = Arc::clone(&self.backend);
-        let deadline = self.deadline;
-        let task = tokio::task::spawn_blocking(move || {
-            backend.generate_blocking(&backend_request, deadline)
-        });
-        let limit = deadline.saturating_add(self.grace);
-        match tokio::time::timeout(limit, task).await {
-            Ok(Ok(generated)) => generated.map_err(|backend| GenerateError::Backend {
+        let limit = self.deadline.saturating_add(self.grace);
+        let attempt = self.backend.generate(&backend_request, self.deadline);
+        match tokio::time::timeout(limit, attempt).await {
+            Ok(generated) => generated.map_err(|backend| GenerateError::Backend {
                 job: Some(job),
                 backend,
             }),
-            Ok(Err(_)) => Err(GenerateError::Stopped { job: Some(job) }),
             Err(_) => Err(GenerateError::Backend {
                 job: Some(job),
                 backend: BackendError::Timeout,

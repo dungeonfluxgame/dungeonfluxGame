@@ -401,7 +401,7 @@ pub(super) fn apply_patch(
             config.purposes[index].enabled = enabled;
             shared::note(
                 provenance,
-                &format!("purposes.{}.enabled", purpose.label()),
+                &format!("purposes.{}.enabled", purpose.key()),
                 OverlaySource::Runtime,
             );
         }
@@ -409,7 +409,7 @@ pub(super) fn apply_patch(
             config.purposes[index].backend_override = backend;
             shared::note(
                 provenance,
-                &format!("purposes.{}.backend_override", purpose.label()),
+                &format!("purposes.{}.backend_override", purpose.key()),
                 OverlaySource::Runtime,
             );
         }
@@ -559,7 +559,7 @@ pub(super) fn apply_patch(
             config.purposes[index].moderation_override = value;
             shared::note(
                 provenance,
-                &format!("purposes.{}.moderation_override", purpose.label()),
+                &format!("purposes.{}.moderation_override", purpose.key()),
                 OverlaySource::Runtime,
             );
         }
@@ -567,7 +567,7 @@ pub(super) fn apply_patch(
             config.purposes[index].account_override = value;
             shared::note(
                 provenance,
-                &format!("purposes.{}.account_override", purpose.label()),
+                &format!("purposes.{}.account_override", purpose.key()),
                 OverlaySource::Runtime,
             );
         }
@@ -575,7 +575,7 @@ pub(super) fn apply_patch(
             config.purposes[index].quality_override = value;
             shared::note(
                 provenance,
-                &format!("purposes.{}.quality_override", purpose.label()),
+                &format!("purposes.{}.quality_override", purpose.key()),
                 OverlaySource::Runtime,
             );
         }
@@ -583,7 +583,7 @@ pub(super) fn apply_patch(
             config.purposes[index].model_override = value;
             shared::note(
                 provenance,
-                &format!("purposes.{}.model_override", purpose.label()),
+                &format!("purposes.{}.model_override", purpose.key()),
                 OverlaySource::Runtime,
             );
         }
@@ -591,7 +591,7 @@ pub(super) fn apply_patch(
             config.purposes[index].output_profile = selected;
             shared::note(
                 provenance,
-                &format!("purposes.{}.output_profile", purpose.label()),
+                &format!("purposes.{}.output_profile", purpose.key()),
                 OverlaySource::Runtime,
             );
         }
@@ -917,7 +917,7 @@ pub fn parse_runtime_value(
             patch.default_backend = Some(backend);
         }
         ["purposes", purpose_name, "enabled"] => {
-            let Some(purpose) = parse::parse_purpose(purpose_name) else {
+            let Some(purpose) = Purpose::from_key(purpose_name) else {
                 return Err(OverlayError::UnknownField {
                     field: dotted.to_owned(),
                 });
@@ -925,7 +925,7 @@ pub fn parse_runtime_value(
             patch.purpose_enabled[purpose.index()] = Some(need_bool(dotted, value)?);
         }
         ["purposes", purpose_name, "backend"] => {
-            let Some(purpose) = parse::parse_purpose(purpose_name) else {
+            let Some(purpose) = Purpose::from_key(purpose_name) else {
                 return Err(OverlayError::UnknownField {
                     field: dotted.to_owned(),
                 });
@@ -941,7 +941,7 @@ pub fn parse_runtime_value(
         }
         ["purposes", purpose_name, "moderation_override"] => {
             let purpose =
-                parse::parse_purpose(purpose_name).ok_or_else(|| OverlayError::UnknownField {
+                Purpose::from_key(purpose_name).ok_or_else(|| OverlayError::UnknownField {
                     field: dotted.to_owned(),
                 })?;
             let selected = if value == "none" {
@@ -956,7 +956,7 @@ pub fn parse_runtime_value(
         }
         ["purposes", purpose_name, "account_override"] => {
             let purpose =
-                parse::parse_purpose(purpose_name).ok_or_else(|| OverlayError::UnknownField {
+                Purpose::from_key(purpose_name).ok_or_else(|| OverlayError::UnknownField {
                     field: dotted.to_owned(),
                 })?;
             patch.purpose_account_override[purpose.index()] = Some(if value == "none" {
@@ -967,7 +967,7 @@ pub fn parse_runtime_value(
         }
         ["purposes", purpose_name, "quality_override"] => {
             let purpose =
-                parse::parse_purpose(purpose_name).ok_or_else(|| OverlayError::UnknownField {
+                Purpose::from_key(purpose_name).ok_or_else(|| OverlayError::UnknownField {
                     field: dotted.to_owned(),
                 })?;
             let selected = if value == "none" {
@@ -981,7 +981,7 @@ pub fn parse_runtime_value(
         }
         ["purposes", purpose_name, "model_override"] => {
             let purpose =
-                parse::parse_purpose(purpose_name).ok_or_else(|| OverlayError::UnknownField {
+                Purpose::from_key(purpose_name).ok_or_else(|| OverlayError::UnknownField {
                     field: dotted.to_owned(),
                 })?;
             let selected = if value == "none" {
@@ -992,7 +992,7 @@ pub fn parse_runtime_value(
             patch.purpose_model_override[purpose.index()] = Some(selected);
         }
         ["purposes", purpose_name, "output_profile"] => {
-            let Some(purpose) = parse::parse_purpose(purpose_name) else {
+            let Some(purpose) = Purpose::from_key(purpose_name) else {
                 return Err(OverlayError::UnknownField {
                     field: dotted.to_owned(),
                 });
@@ -1224,7 +1224,7 @@ pub fn parse_runtime_value(
             });
         }
         ["accounting", "mode"] => {
-            let Some(mode) = parse::parse_accounting_mode(value) else {
+            let Some(mode) = AccountingMode::from_key(value) else {
                 return Err(shared::invalid(dotted, "unknown accounting mode"));
             };
             patch.accounting_mode = Some(mode);

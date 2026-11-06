@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use df_scene_layout::{RegionRef, SceneLayout};
+use df_scene_layout::{RegionRef, SceneLayout, SceneRegion};
 
 use super::request::{
     IdentifyRequest, IdentityOutcome, IdentityRow, LocateError, QuestionCause, TextServiceCause,
@@ -70,11 +70,11 @@ pub fn store_identification(
     };
     let mut layout = current_layout(media, layouts, picture)?.ok_or_else(changed)?;
     let same_regions = layout
-        .regions
+        .regions()
         .iter()
-        .map(|region| &region.id)
-        .eq(asked.regions.iter().map(|region| &region.id));
-    if layout.picture.sha256 != asked.picture.sha256 || !same_regions {
+        .map(SceneRegion::id)
+        .eq(asked.regions().iter().map(SceneRegion::id));
+    if layout.picture().sha256 != asked.picture().sha256 || !same_regions {
         return Err(changed());
     }
     let rows = apply_identification(&mut layout, answers, min_confidence)?;
@@ -132,13 +132,13 @@ pub fn prepare_identity(
     let question_request = identity_question::IdentifyRequest {
         picture: read_media(&request.picture)?,
         candidates: layout
-            .regions
+            .regions()
             .iter()
             .map(|region| CandidateBox {
-                left_permille: region.left_permille,
-                top_permille: region.top_permille,
-                right_permille: region.right_permille.max(region.left_permille + 1),
-                bottom_permille: region.bottom_permille.max(region.top_permille + 1),
+                left_permille: region.left_permille(),
+                top_permille: region.top_permille(),
+                right_permille: region.right_permille(),
+                bottom_permille: region.bottom_permille(),
             })
             .collect(),
         characters,

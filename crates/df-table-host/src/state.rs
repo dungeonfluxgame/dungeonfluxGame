@@ -24,8 +24,9 @@ use df_table::ports::EventSink;
 
 use crate::event_log::EventLog;
 use crate::limits::TURN_SETTLE;
+use crate::observe::HostEventSink;
 use crate::playground::{PlaygroundFiles, PlaygroundState};
-use crate::sink::{HostSink, LineEcho};
+use crate::sink::LineEcho;
 use crate::view::{FrameCanvas, ViewError};
 
 /// A frame as the pieces of its JSON: the canvas half is built once for a change count and shared
@@ -113,7 +114,7 @@ pub(crate) fn new_boot_id() -> String {
 /// Everything the handlers share.
 pub struct AppState {
     canvas: Mutex<Canvas>,
-    sink: HostSink,
+    sink: HostEventSink,
     echo: Option<LineEcho>,
     kind_directory: PathBuf,
     playground: PlaygroundState,
@@ -136,7 +137,7 @@ impl AppState {
     /// `echo` prints new audit lines to the terminal; `None` keeps the log quiet.
     pub fn new(
         canvas: Canvas,
-        sink: HostSink,
+        sink: HostEventSink,
         echo: Option<LineEcho>,
         kind_directory: PathBuf,
         playground_files: PlaygroundFiles,
@@ -291,7 +292,7 @@ impl AppState {
         self.canvas.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn sink(&self) -> &HostSink {
+    pub(crate) fn sink(&self) -> &HostEventSink {
         &self.sink
     }
 

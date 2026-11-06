@@ -25,7 +25,6 @@ use crate::adapters::dev_check::{
 use crate::command::CommandError;
 use crate::dev::DevError;
 use crate::dev_client;
-use crate::dev_http::DevReply;
 
 use self::observe::{
     CONFIG_USAGE, HISTORY_USAGE, REPLAY_USAGE, TRACE_USAGE, parse_config, parse_history,
@@ -594,19 +593,10 @@ fn chaos(words: &[String]) -> Result<EngineCommand, CommandError> {
     Ok(EngineCommand::Chaos(request))
 }
 
-/// The value of the owner's reply, or its refusal as the command's failure.
-///
-/// Transitional: the refusal becomes text until `DevError` carries a route's typed error
-/// (`dev_client::get_value` / `post_value` then replace this); the route tests match the typed
-/// `EngineError` on the reply itself.
+/// The value of the owner's reply, or its refusal (the typed `EngineError`) as the command's
+/// failure.
 fn reply_value<T>(reply: EngineReply<T>) -> Result<T, DevError> {
-    match reply {
-        DevReply::Done { value } => Ok(value),
-        DevReply::Rejected { error, message } => Err(DevError::Rejected(format!(
-            "refused ({}): {message}",
-            error.key()
-        ))),
-    }
+    dev_client::reply_value(reply)
 }
 
 /// GETs an engine route and reads its value.

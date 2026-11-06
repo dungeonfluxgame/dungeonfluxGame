@@ -784,7 +784,7 @@ where
 fn dependency_digest(candidate: &CandidateReceipt, kind: StageKind) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"df-imagery/candidate-child-v1");
-    digest.update(kind.label());
+    digest.update(kind.key());
     digest.update(candidate.scope.dispatch.as_bytes());
     digest.update(candidate.descriptor.sha256);
     digest.update(candidate.basis.input_digest);
@@ -799,7 +799,7 @@ fn candidate_value(candidate: &CandidateReceipt) -> serde_json::Value {
     serde_json::json!({
         "stage": candidate.scope.stage.as_bytes(),
         "dispatch": candidate.scope.dispatch.as_bytes(),
-        "kind": candidate.basis.kind.label(),
+        "kind": candidate.basis.kind.key(),
         "input_digest": candidate.basis.input_digest,
         "config_revision": candidate.basis.config_revision,
         "config_digest": candidate.basis.config_digest,
@@ -819,7 +819,7 @@ fn decision_value(decision: &DecisionObservation) -> serde_json::Value {
     serde_json::json!({
         "stage": decision.scope.stage.as_bytes(),
         "dispatch": decision.scope.dispatch.as_bytes(),
-        "kind": decision.kind.label(),
+        "kind": decision.kind.key(),
         "observation_version": decision.observation_version,
         "usage_revision": decision.receipt.usage_revision,
         "schema_revision": decision.basis.schema_revision,
@@ -837,7 +837,7 @@ fn local_inspection_value(local: &LocalInspectionCheckpoint) -> serde_json::Valu
         "candidate_usage_revision": local.candidate_usage_revision,
         "schema_revision": local.schema_revision,
         "validator_revision": local.validator_revision,
-        "reason": local.reason.label(),
+        "reason": local.reason.key(),
         "observed_at_ms": local.observed_at_ms,
         "input_revision": local.basis.input_revision,
         "input_digest": local.basis.input_digest,

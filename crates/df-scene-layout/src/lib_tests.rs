@@ -1,57 +1,57 @@
 use super::*;
 
-fn region(label: Option<&str>, left: u16, right: u16, head_y: u16) -> SceneRegion {
-    SceneRegion {
-        id: region_id(&[left as u8, right as u8]),
-        label: label.map(str::to_owned),
+/// A box from `left` to `right` and from `top` to the bottom edge, with its head at the top middle.
+fn geometry(left: u16, right: u16, top: u16) -> RegionGeometry {
+    RegionGeometry {
         left_permille: left,
-        top_permille: head_y,
+        top_permille: top,
         right_permille: right,
         bottom_permille: 1000,
         head_x_permille: (left + right) / 2,
-        head_y_permille: head_y,
-        score_permille: 950,
-        mask: None,
+        head_y_permille: top,
     }
 }
 
+fn region(label: Option<&str>, left: u16, right: u16, head_y: u16) -> SceneRegion {
+    let id = region_id(&[left as u8, right as u8]);
+    SceneRegion::new(id, geometry(left, right, head_y), 950)
+        .unwrap()
+        .with_label(label.map(str::to_owned))
+}
+
 fn layout() -> SceneLayout {
-    SceneLayout {
-        schema: SCHEMA_VERSION,
-        picture: PictureBinding {
+    SceneLayout::new(
+        PictureBinding {
             name: "plate.webp".to_owned(),
             sha256: "ab".repeat(32),
             width_px: 1672,
             height_px: 941,
         },
-        model: "sam-3.1".to_owned(),
-        prompt: "person".to_owned(),
-        regions: vec![
+        "sam-3.1",
+        "person",
+        vec![
             region(None, 0, 200, 300),
             region(Some("elf"), 400, 600, 200),
             region(Some("innkeeper"), 700, 1000, 300),
         ],
-    }
+    )
 }
 
 #[test]
-fn a_layout_is_for_its_own_picture_and_version_only() {
+fn a_layout_is_for_its_own_picture_only() {
     let scene = layout();
     assert!(scene.is_for("plate.webp", &"AB".repeat(32)));
     assert!(!scene.is_for("plate.webp", &"cd".repeat(32)));
     assert!(!scene.is_for("other.webp", &"ab".repeat(32)));
-    let mut old = scene;
-    old.schema = 0;
-    assert!(!old.is_for("plate.webp", &"ab".repeat(32)));
 }
 
 #[test]
 fn region_ids_are_stable_and_references_find_by_number_id_or_name() {
     assert_eq!(region_id(b"runs"), region_id(b"runs"));
     assert_ne!(region_id(b"runs"), region_id(b"other"));
-    assert!(region_id(b"x").starts_with('r') && region_id(b"x").len() == 9);
+    assert_eq!(RegionId::new(region_id(b"x").as_str()), Ok(region_id(b"x")));
     let scene = layout();
-    let id = scene.regions[2].id.clone();
+    let id = scene.regions()[2].id().to_string();
     assert_eq!(scene.find(RegionRef::parse("1")), Some(1));
     assert_eq!(scene.find(RegionRef::parse(&id)), Some(2));
     assert_eq!(scene.find(RegionRef::parse("elf")), Some(1));
@@ -82,16 +82,9 @@ fn points_shots_and_targets_come_from_the_region() {
 }
 
 #[test]
-fn the_centre_of_a_box_with_edges_past_half_of_u16_does_not_overflow() {
-    let mut oversized = region(Some("giant"), 0, 0, 200);
-    oversized.left_permille = 40_000;
-    oversized.right_permille = 60_000;
-    oversized.top_permille = 50_000;
-    oversized.bottom_permille = 65_535;
-    assert_eq!(
-        point_of(&oversized, CharacterPoint::Centre),
-        (50_000, 57_767)
-    );
+fn the_midpoint_of_edges_past_half_of_u16_does_not_overflow() {
+    assert_eq!(midpoint_permille(40_000, 60_000), 50_000);
+    assert_eq!(midpoint_permille(50_000, 65_535), 57_767);
 }
 
 #[test]
@@ -128,6 +121,201 @@ fn a_layout_reads_from_json_and_refuses_unknown_fields() {
     let back: SceneLayout = serde_json::from_str(&text).unwrap();
     assert_eq!(back, layout());
     assert!(serde_json::from_str::<SceneLayout>(&text.replace("\"prompt\"", "\"other\"")).is_err());
+    let unknown_region_field = text.replacen("\"mask\"", "\"outline\"", 1);
+    assert!(serde_json::from_str::<SceneLayout>(&unknown_region_field).is_err());
+}
+
+#[test]
+fn a_region_without_a_label_or_mask_field_reads_as_unnamed_and_maskless() {
+    let text = r#"{"id":"r00000000","left_permille":100,"top_permille":200,"right_permille":300,
+        "bottom_permille":1000,"head_x_permille":200,"head_y_permille":200,"score_permille":900}"#;
+    let read: SceneRegion = serde_json::from_str(text).unwrap();
+    assert_eq!((read.label(), read.mask()), (None, None));
+}
+
+/// The committed playground layout, as the host serves it and the page draws it.
+const COMMITTED_LAYOUT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../assets/playground/layouts/innkeeper-table-plate-clean.webp.layout.json"
+);
+
+#[test]
+fn the_committed_playground_layout_still_reads_and_writes_back_the_same_json() {
+    let text = std::fs::read_to_string(COMMITTED_LAYOUT).unwrap();
+    let read: SceneLayout = serde_json::from_str(&text).unwrap();
+    assert!(read.is_for(
+        "innkeeper-table-plate-clean.webp",
+        "41ee9287026cb0a55a8f57919f6124eba1950e51bc275168ffaa04f59038336c"
+    ));
+    assert_eq!(read.regions().len(), 16);
+    assert_eq!(
+        read.names(),
+        vec!["warrior", "elf", "braided_woman", "wizard", "innkeeper"]
+    );
+    let written = serde_json::to_value(&read).unwrap();
+    let committed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(written, committed);
+}
+
+/// `layout()` as written, with its second region's `field` written as `value`.
+fn with_field(field: &str, value: u16) -> serde_json::Value {
+    let mut wire = serde_json::to_value(layout()).unwrap();
+    wire["regions"][1][field] = serde_json::Value::from(value);
+    wire
+}
+
+/// What reading the second region of `wire` through its record gives: the typed outcome of the
+/// read, which a whole layout's read reports as its own failure.
+fn read_second_region(wire: &serde_json::Value) -> Result<SceneRegion, SceneRegionError> {
+    let record: SceneRegionRecord = serde_json::from_value(wire["regions"][1].clone()).unwrap();
+    SceneRegion::try_from(record)
+}
+
+/// The box of the second region of `layout()`, with `field` set to `value`.
+fn second_box_with(field: &str, value: u16) -> SceneRegionError {
+    let mut edges = [400, 200, 600, 1000];
+    let at = [
+        "left_permille",
+        "top_permille",
+        "right_permille",
+        "bottom_permille",
+    ]
+    .iter()
+    .position(|name| *name == field)
+    .unwrap();
+    edges[at] = value;
+    SceneRegionError::InvalidBox {
+        left_permille: edges[0],
+        top_permille: edges[1],
+        right_permille: edges[2],
+        bottom_permille: edges[3],
+    }
+}
+
+#[test]
+fn a_layout_in_another_schema_does_not_read() {
+    let mut wire = serde_json::to_value(layout()).unwrap();
+    wire["schema"] = serde_json::Value::from(SCHEMA_VERSION + 1);
+    assert!(serde_json::from_value::<SceneLayout>(wire.clone()).is_err());
+    let record: SceneLayoutRecord = serde_json::from_value(wire).unwrap();
+    assert_eq!(
+        SceneLayout::try_from(record),
+        Err(SceneLayoutError::InvalidSchema {
+            schema: SCHEMA_VERSION + 1,
+        })
+    );
+}
+
+#[test]
+fn a_region_id_that_is_not_r_and_8_hex_digits_does_not_read() {
+    for text in ["r1234567", "x12345678", "r1234567g", "r123456789"] {
+        assert_eq!(
+            RegionId::new(text),
+            Err(RegionIdError::InvalidText {
+                text: text.to_owned()
+            })
+        );
+        let mut wire = serde_json::to_value(layout()).unwrap();
+        wire["regions"][1]["id"] = serde_json::Value::from(text);
+        assert!(
+            serde_json::from_value::<SceneLayout>(wire).is_err(),
+            "{text}"
+        );
+    }
+    assert!(RegionId::new("rABCDEF01").is_ok());
+}
+
+#[test]
+fn a_region_box_outside_the_picture_or_inside_out_does_not_read() {
+    // The second region is left 400, top 200, right 600, bottom 1000, head (500, 200).
+    for (field, value) in [
+        ("right_permille", 400),
+        ("right_permille", 1001),
+        ("left_permille", 700),
+        ("bottom_permille", 200),
+        ("bottom_permille", 1001),
+        ("top_permille", 1000),
+    ] {
+        let wire = with_field(field, value);
+        assert!(serde_json::from_value::<SceneLayout>(wire.clone()).is_err());
+        assert_eq!(
+            read_second_region(&wire),
+            Err(second_box_with(field, value)),
+            "{field} {value}"
+        );
+    }
+}
+
+#[test]
+fn a_head_point_outside_its_box_does_not_read_and_one_on_its_edge_does() {
+    for (field, value, head) in [
+        ("head_x_permille", 399, (399, 200)),
+        ("head_x_permille", 601, (601, 200)),
+        ("head_y_permille", 199, (500, 199)),
+    ] {
+        let wire = with_field(field, value);
+        assert!(serde_json::from_value::<SceneLayout>(wire.clone()).is_err());
+        assert_eq!(
+            read_second_region(&wire),
+            Err(SceneRegionError::InvalidHead {
+                head_x_permille: head.0,
+                head_y_permille: head.1,
+            }),
+            "{field} {value}"
+        );
+    }
+    for (field, value) in [
+        ("head_x_permille", 400),
+        ("head_x_permille", 600),
+        ("head_y_permille", 1000),
+    ] {
+        assert!(serde_json::from_value::<SceneLayout>(with_field(field, value)).is_ok());
+    }
+}
+
+#[test]
+fn a_score_over_the_whole_does_not_read_and_the_whole_does() {
+    let wire = with_field("score_permille", 1001);
+    assert!(serde_json::from_value::<SceneLayout>(wire.clone()).is_err());
+    assert_eq!(
+        read_second_region(&wire),
+        Err(SceneRegionError::InvalidScore {
+            score_permille: 1001
+        })
+    );
+    assert!(serde_json::from_value::<SceneLayout>(with_field("score_permille", 1000)).is_ok());
+}
+
+#[test]
+fn a_region_is_made_only_when_valid_and_its_error_names_what_is_wrong() {
+    let id = || region_id(b"elf");
+    assert!(SceneRegion::new(id(), geometry(400, 600, 200), 950).is_ok());
+    assert_eq!(
+        SceneRegion::new(id(), geometry(400, 400, 200), 950),
+        Err(SceneRegionError::InvalidBox {
+            left_permille: 400,
+            top_permille: 200,
+            right_permille: 400,
+            bottom_permille: 1000,
+        })
+    );
+    let floating = RegionGeometry {
+        head_y_permille: 100,
+        ..geometry(400, 600, 200)
+    };
+    assert_eq!(
+        SceneRegion::new(id(), floating, 950),
+        Err(SceneRegionError::InvalidHead {
+            head_x_permille: 500,
+            head_y_permille: 100,
+        })
+    );
+    assert_eq!(
+        SceneRegion::new(id(), geometry(400, 600, 200), 1001),
+        Err(SceneRegionError::InvalidScore {
+            score_permille: 1001
+        })
+    );
 }
 
 #[test]

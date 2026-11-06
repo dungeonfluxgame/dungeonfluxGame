@@ -982,5 +982,4 @@ pub fn missing_features(creature: &str) -> impl Iterator<Item = &'static Creatur
         .filter(move |row| row.creature == creature && row.status == Missing)
 }
 #[cfg(test)]
-#[path = "srd_creatures_tests.rs"]
-mod tests;
+mod srd_creatures_tests;

@@ -225,7 +225,7 @@ fn checkpoint(
     let (attack_die, damage_dice) = die_values.split_first().expect("fixture attack die");
     let prestate = selected_prestate();
     let outcome = local_journey::resolve_melee(NormalMeleeAttack {
-        critical_threshold: local_journey::CombatRules::srd_521().critical_threshold,
+        critical_threshold: local_journey::CombatRules::srd_521().critical_threshold(),
         damage_sides: local_journey::SRD_521_BASELINE.hero_weapon.damage_sides,
         die: *attack_die,
         modifier: prestate.attack_modifier,
@@ -482,7 +482,7 @@ fn replay_selected(
         .map(|draw| draw.value)
         .collect::<Vec<_>>();
     let outcome = local_journey::resolve_melee(NormalMeleeAttack {
-        critical_threshold: local_journey::CombatRules::srd_521().critical_threshold,
+        critical_threshold: local_journey::CombatRules::srd_521().critical_threshold(),
         damage_sides: local_journey::SRD_521_BASELINE.hero_weapon.damage_sides,
         die: attack_die,
         modifier: prestate.attack_modifier,

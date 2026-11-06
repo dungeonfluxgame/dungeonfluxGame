@@ -251,7 +251,7 @@ fn standalone_known_no_output_releases_customer_and_records_actual_supplier_loss
                 job,
                 stage,
             };
-            let capacity = CapacityScope::new("funded-no-output".into()).unwrap();
+            let capacity = CapacityScope::new("funded-no-output").unwrap();
             let mut client = world.scratch.connect().await;
             let tx = client.transaction().await.unwrap();
             execution::set_capacity_bounds_in(

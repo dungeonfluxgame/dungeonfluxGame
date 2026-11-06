@@ -13,10 +13,11 @@
 //!
 //! The child process inherits the ambient environment, so the signed-in Codex home is chosen by
 //! `CODEX_HOME` in the environment of the process that calls this. The caller checks that before
-//! calling; nothing here reads or copies a credential file.
+//! calling and names the same home in `OneShotConfig::codex_home`, where the image tool saves its
+//! pictures; nothing here reads the environment or a credential file.
 //!
-//! `generate_blocking` is the entry point for a host: the backend future is not `Send`, so it is
-//! driven to completion on the calling (blocking) thread by a runtime of its own.
+//! `generate` is `Send`, so a host awaits it on its own task; only the attempt folder and the
+//! delivered file are touched on blocking threads.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -58,6 +59,9 @@ pub struct OneShotConfig {
     pub work_root: PathBuf,
     /// An explicit agent model, when the owner wants one.
     pub agent_model: Option<String>,
+    /// The signed-in Codex home the child runs with (its `CODEX_HOME`), whose
+    /// `generated_images` folder may hold the picture. `None` looks only in the attempt folder.
+    pub codex_home: Option<PathBuf>,
     /// The absolute limit for the whole attempt.
     pub deadline: Duration,
 }
@@ -128,6 +132,24 @@ impl OneShotError {
     }
 }
 
+impl std::fmt::Display for OneShotError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidConfig(reason) => write!(formatter, "invalid config: {reason}"),
+            Self::InvalidRequest(reason) => write!(formatter, "invalid request: {reason}"),
+            Self::Timeout => formatter.write_str("the attempt timed out"),
+            Self::Interrupted => formatter.write_str("the attempt was interrupted"),
+            Self::UsageLimited => formatter.write_str("the account usage limit was reached"),
+            Self::Transport { kind } => write!(formatter, "the cli could not start: {kind}"),
+            Self::Refused { detail } => write!(formatter, "the turn was refused: {detail}"),
+            Self::Unreadable { kind } => write!(formatter, "the picture was unreadable: {kind}"),
+            Self::Internal => formatter.write_str("the attempt failed inside this process"),
+        }
+    }
+}
+
+impl std::error::Error for OneShotError {}
+
 fn map_failure(error: CodexError) -> OneShotError {
     match error {
         CodexError::Configuration(_) => {
@@ -153,7 +175,8 @@ fn dimensions(request: &OneShotRequest) -> Result<Dimensions, OneShotError> {
 }
 
 /// A folder of its own for one attempt. `remove` deletes it off the async thread; dropping it
-/// unremoved (a cancelled attempt) deletes it on the spot.
+/// unremoved (a cancelled attempt) deletes it on the blocking pool, or on the spot outside a
+/// runtime.
 struct AttemptFolder {
     root: Option<PathBuf>,
 }
@@ -218,9 +241,19 @@ fn map_work_folder_failure(kind: std::io::ErrorKind) -> OneShotError {
 
 impl Drop for AttemptFolder {
     fn drop(&mut self) {
-        if let Some(root) = self.root.take() {
-            // The folder is ours and holds only this attempt; leftovers are only disk space.
-            let _ = std::fs::remove_dir_all(root);
+        let Some(root) = self.root.take() else {
+            return;
+        };
+        // The folder is ours and holds only this attempt; leftovers are only disk space. A
+        // cancelled attempt is dropped on an async worker, so inside a runtime the delete goes to
+        // the blocking pool; outside one there is no worker to keep free.
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                runtime.spawn_blocking(move || std::fs::remove_dir_all(root));
+            }
+            Err(_) => {
+                let _ = std::fs::remove_dir_all(root);
+            }
         }
     }
 }
@@ -262,6 +295,9 @@ pub async fn generate(
         backend = backend
             .with_agent_model(model)
             .map_err(|_| OneShotError::InvalidConfig("the agent model is blank"))?;
+    }
+    if let Some(home) = &config.codex_home {
+        backend = backend.with_codex_home(home.clone());
     }
     if request.prompt.chars().count() > MAXIMUM_PROMPT_CHARS {
         return Err(OneShotError::InvalidRequest("the prompt is too long"));
@@ -336,22 +372,27 @@ fn map_unknown(reason: UnknownReason) -> OneShotError {
     }
 }
 
-/// Makes one picture on the calling thread, which may block for minutes: call it from a blocking
-/// task, never from an async worker.
-pub fn generate_blocking(
-    config: &OneShotConfig,
-    request: &OneShotRequest,
-) -> Result<OneShotImage, OneShotError> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|_| OneShotError::Internal)?;
-    runtime.block_on(generate(config, request))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_attempt_future_can_move_between_worker_threads() {
+        fn assert_send<T: Send>(_: &T) {}
+        let config = OneShotConfig {
+            executable: PathBuf::from("codex"),
+            work_root: std::env::temp_dir(),
+            agent_model: None,
+            codex_home: None,
+            deadline: Duration::from_secs(1),
+        };
+        let request = OneShotRequest {
+            prompt: "a lake".to_owned(),
+            width_px: 16,
+            height_px: 9,
+        };
+        assert_send(&generate(&config, &request));
+    }
 
     #[test]
     fn a_png_header_gives_its_real_size() {
@@ -368,12 +409,13 @@ mod tests {
         assert_eq!(describe(b"not a picture at all, just text"), None);
     }
 
-    #[test]
-    fn an_unusable_request_is_refused_before_any_work() {
+    #[tokio::test]
+    async fn an_unusable_request_is_refused_before_any_work() {
         let config = OneShotConfig {
             executable: PathBuf::from("codex"),
             work_root: std::env::temp_dir(),
             agent_model: None,
+            codex_home: None,
             deadline: Duration::from_secs(1),
         };
         let request = OneShotRequest {
@@ -381,17 +423,20 @@ mod tests {
             width_px: 16,
             height_px: 9,
         };
-        let error = generate_blocking(&config, &request).expect_err("a relative path is refused");
+        let error = generate(&config, &request)
+            .await
+            .expect_err("a relative path is refused");
         assert_eq!(error.key(), "invalid_config");
     }
 
-    #[test]
-    fn a_missing_executable_is_a_transport_failure() {
+    #[tokio::test]
+    async fn a_missing_executable_is_a_transport_failure() {
         let work = std::env::temp_dir();
         let config = OneShotConfig {
             executable: work.join("no-such-codex-executable.exe"),
             work_root: work,
             agent_model: None,
+            codex_home: None,
             deadline: Duration::from_secs(5),
         };
         let request = OneShotRequest {
@@ -399,12 +444,14 @@ mod tests {
             width_px: 16,
             height_px: 9,
         };
-        let error = generate_blocking(&config, &request).expect_err("nothing to run");
+        let error = generate(&config, &request)
+            .await
+            .expect_err("nothing to run");
         assert_eq!(error.key(), "transport", "{error:?}");
     }
 
-    #[test]
-    fn a_work_root_that_cannot_hold_folders_is_a_configuration_failure_not_an_unreadable_picture() {
+    #[tokio::test]
+    async fn a_work_root_that_cannot_hold_folders_is_invalid_config_not_an_unreadable_picture() {
         let blocker = std::env::temp_dir().join(format!(
             "df-imagery-oneshot-blocker-{}-{}",
             std::process::id(),
@@ -415,6 +462,7 @@ mod tests {
             executable: std::env::temp_dir().join("no-such-codex-executable.exe"),
             work_root: blocker.clone(),
             agent_model: None,
+            codex_home: None,
             deadline: Duration::from_secs(5),
         };
         let request = OneShotRequest {
@@ -422,9 +470,50 @@ mod tests {
             width_px: 16,
             height_px: 9,
         };
-        let error = generate_blocking(&config, &request).expect_err("no folder can be made");
+        let error = generate(&config, &request)
+            .await
+            .expect_err("no folder can be made");
         std::fs::remove_file(&blocker).unwrap();
         assert_eq!(error.key(), "invalid_config", "{error:?}");
+    }
+
+    fn attempt_work_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "df-imagery-oneshot-{name}-{}-{}",
+            std::process::id(),
+            NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_attempt_folder_dropped_on_a_worker_is_removed_on_the_blocking_pool() {
+        let work_root = attempt_work_root("cancelled");
+        let (folder, _attempt) = AttemptFolder::create(&work_root).await.unwrap();
+        let root = folder.root.clone().expect("a new folder has its root");
+        assert!(root.is_dir());
+        drop(folder);
+        // The delete runs detached on the blocking pool: wait for it, bounded.
+        for _ in 0..500 {
+            if !root.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let removed = !root.exists();
+        let _ = std::fs::remove_dir_all(&work_root);
+        assert!(removed, "the cancelled attempt's folder was left behind");
+    }
+
+    #[test]
+    fn an_attempt_folder_dropped_outside_a_runtime_is_removed_on_the_spot() {
+        let work_root = attempt_work_root("unscheduled");
+        let (folder, _attempt) = AttemptFolder::create_blocking(&work_root).unwrap();
+        let root = folder.root.clone().expect("a new folder has its root");
+        assert!(root.is_dir());
+        drop(folder);
+        let removed = !root.exists();
+        let _ = std::fs::remove_dir_all(&work_root);
+        assert!(removed, "the attempt's folder was left behind");
     }
 
     #[test]

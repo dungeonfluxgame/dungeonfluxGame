@@ -21,7 +21,138 @@ async fn rejected_delivery_has_closed_admission_reason_without_network() {
     .await
     .err()
     .unwrap();
-    assert_eq!(error, (NativeHttpRefusal::InvalidEndpoint, "url_contract"));
+    assert_eq!(error, BflDeliveryCause::UrlContract);
+}
+
+/// Every delivery cause keeps the audit spelling the string reasons had, and maps to the
+/// transport cause the old pair carried.
+#[test]
+fn delivery_cause_keys_and_transport_classes_are_stable() {
+    let cases = [
+        (
+            BflDeliveryCause::FixtureInvalid,
+            "fixture_invalid",
+            NativeHttpCause::InvalidEndpoint,
+        ),
+        (
+            BflDeliveryCause::UrlContract,
+            "url_contract",
+            NativeHttpCause::InvalidEndpoint,
+        ),
+        (
+            BflDeliveryCause::UrlParse,
+            "url_parse",
+            NativeHttpCause::InvalidEndpoint,
+        ),
+        (
+            BflDeliveryCause::MissingHost,
+            "missing_host",
+            NativeHttpCause::InvalidEndpoint,
+        ),
+        (
+            BflDeliveryCause::TransportConfiguration(NativeHttpCause::Unknown),
+            "transport_configuration",
+            NativeHttpCause::Unknown,
+        ),
+        (
+            BflDeliveryCause::DnsDeadline,
+            "dns_deadline",
+            NativeHttpCause::Deadline,
+        ),
+        (
+            BflDeliveryCause::DnsFailure,
+            "dns_failure",
+            NativeHttpCause::Unknown,
+        ),
+        (
+            BflDeliveryCause::DnsAnswerLimit,
+            "dns_answer_limit",
+            NativeHttpCause::InvalidEndpoint,
+        ),
+        (
+            BflDeliveryCause::DnsTargetRefused,
+            "dns_target_refused",
+            NativeHttpCause::InvalidEndpoint,
+        ),
+        (
+            BflDeliveryCause::RequestBounds,
+            "request_bounds",
+            NativeHttpCause::InvalidLimits,
+        ),
+        (
+            BflDeliveryCause::Deadline,
+            "deadline",
+            NativeHttpCause::Deadline,
+        ),
+        (
+            BflDeliveryCause::Cancelled,
+            "cancelled",
+            NativeHttpCause::Cancelled,
+        ),
+        (
+            BflDeliveryCause::RedirectRefused,
+            "redirect_refused",
+            NativeHttpCause::Redirect,
+        ),
+        (
+            BflDeliveryCause::ContentType,
+            "content_type",
+            NativeHttpCause::ContentType,
+        ),
+        (
+            BflDeliveryCause::ResponseTooLarge,
+            "response_too_large",
+            NativeHttpCause::ResponseTooLarge,
+        ),
+        (
+            BflDeliveryCause::HeadersTooLarge,
+            "headers_too_large",
+            NativeHttpCause::HeadersTooLarge,
+        ),
+        (
+            BflDeliveryCause::TooManyChunks,
+            "too_many_chunks",
+            NativeHttpCause::TooManyChunks,
+        ),
+        (
+            BflDeliveryCause::RequestTooLarge,
+            "request_too_large",
+            NativeHttpCause::RequestTooLarge,
+        ),
+        (
+            BflDeliveryCause::FetchFailed,
+            "fetch_failed",
+            NativeHttpCause::Unknown,
+        ),
+    ];
+    for (cause, key, transport) in cases {
+        assert_eq!(cause.key(), key);
+        assert_eq!(cause.transport(), transport, "{key}");
+    }
+}
+
+/// A fetch failure keeps the transport cause it came from, so a caller that branches on the
+/// transport class sees the same cause as before the delivery cause was typed.
+#[test]
+fn fetch_failures_round_trip_their_transport_cause() {
+    for cause in [
+        NativeHttpCause::InvalidLimits,
+        NativeHttpCause::InvalidConfiguration,
+        NativeHttpCause::InvalidEndpoint,
+        NativeHttpCause::InvalidCredential,
+        NativeHttpCause::ProviderDisabled,
+        NativeHttpCause::RequestTooLarge,
+        NativeHttpCause::ResponseTooLarge,
+        NativeHttpCause::HeadersTooLarge,
+        NativeHttpCause::TooManyChunks,
+        NativeHttpCause::ContentType,
+        NativeHttpCause::Redirect,
+        NativeHttpCause::Cancelled,
+        NativeHttpCause::Deadline,
+        NativeHttpCause::Unknown,
+    ] {
+        assert_eq!(BflDeliveryCause::of_fetch(cause).transport(), cause);
+    }
 }
 
 #[test]

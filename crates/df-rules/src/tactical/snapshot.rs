@@ -8,7 +8,10 @@ use super::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-const VERSION: u16 = 2;
+/// 3 writes every closed key in snake_case. Version 2 wrote them in PascalCase; no version-2
+/// snapshot was ever persisted (only tests round-trip snapshots), so it is refused by version
+/// rather than read through aliases.
+const VERSION: u16 = 3;
 /// Largest snapshot `Battle::snapshot` emits and `Battle::from_snapshot` accepts, in bytes.
 const MAXIMUM_SNAPSHOT_BYTES: usize = 1024 * 1024;
 

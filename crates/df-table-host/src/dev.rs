@@ -7,34 +7,202 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use axum::http::StatusCode;
 use base64::Engine;
+use df_table::event::RejectionCause;
 
+use crate::adapters::RulesCheckError;
+use crate::cast::request::CastError;
 use crate::client::{self, ClientError, Response};
 use crate::command::{self, Command, CommandError, usage_text};
 use crate::dev_client::{self, read_answer, request_body, unexpected_answer};
+use crate::director::DirectorError;
+use crate::engine::cli::play::PlayError;
+use crate::engine::report::EngineError;
+use crate::imagegen::format::{format_ended, format_refusal};
+use crate::imagegen::request::{GenerateError, JobView};
 use crate::limits::UPLOAD_PIECE_BYTES;
-use crate::playground::{ChangeReply, fixture_file_name};
+use crate::locate::request::LocateError;
+use crate::playground::{ChangeReply, FixtureNameError, PlaygroundChangeError, fixture_file_name};
 use crate::report::{
-    describe_reply, format_canvas, format_clients, format_events, format_kinds, format_media,
+    describe_done, format_canvas, format_clients, format_events, format_kinds, format_media,
     format_playground,
 };
+use crate::scene_builder::SceneBuilderError;
 use crate::view::CanvasView;
 use crate::wire::{
     ClientView, ControlsBatch, ControlsReply, EVENTS_AFTER_PARAMETER, EventsReply, FixtureRemove,
     FixtureWrite, MediaRemove, Reply, route,
 };
 
+/// The typed error of a route's refusal, by the routes that refused.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReplyError {
+    /// A canvas or playground route answering `wire::Reply`: its cause, when the refusal has one
+    /// (a rejected reload has none), and the problems it lists.
+    Canvas {
+        cause: Option<RejectionCause>,
+        problems: Vec<String>,
+    },
+    /// A change of what the playground shows.
+    Playground(PlaygroundChangeError),
+    Engine(EngineError),
+    Director(DirectorError),
+    SceneBuilder(SceneBuilderError),
+    Locate(LocateError),
+    Generate(GenerateError),
+    Cast(CastError),
+    RulesCheck(RulesCheckError),
+}
+
+impl fmt::Display for ReplyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Canvas {
+                cause: Some(cause), ..
+            } => write!(formatter, "the canvas refused the request: {}", cause.key()),
+            Self::Canvas { cause: None, .. } => {
+                formatter.write_str("the canvas refused the request")
+            }
+            Self::Playground(error) => write!(formatter, "{error}"),
+            Self::Engine(error) => write!(formatter, "{error}"),
+            Self::Director(error) => write!(formatter, "{error}"),
+            Self::SceneBuilder(error) => write!(formatter, "{error}"),
+            Self::Locate(error) => write!(formatter, "{error}"),
+            Self::Generate(error) => write!(formatter, "{error}"),
+            Self::Cast(error) => write!(formatter, "{error}"),
+            Self::RulesCheck(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for ReplyError {}
+
+impl From<PlaygroundChangeError> for ReplyError {
+    fn from(error: PlaygroundChangeError) -> Self {
+        Self::Playground(error)
+    }
+}
+
+impl From<EngineError> for ReplyError {
+    fn from(error: EngineError) -> Self {
+        Self::Engine(error)
+    }
+}
+
+impl From<DirectorError> for ReplyError {
+    fn from(error: DirectorError) -> Self {
+        Self::Director(error)
+    }
+}
+
+impl From<SceneBuilderError> for ReplyError {
+    fn from(error: SceneBuilderError) -> Self {
+        Self::SceneBuilder(error)
+    }
+}
+
+impl From<LocateError> for ReplyError {
+    fn from(error: LocateError) -> Self {
+        Self::Locate(error)
+    }
+}
+
+impl From<GenerateError> for ReplyError {
+    fn from(error: GenerateError) -> Self {
+        Self::Generate(error)
+    }
+}
+
+impl From<CastError> for ReplyError {
+    fn from(error: CastError) -> Self {
+        Self::Cast(error)
+    }
+}
+
+impl From<RulesCheckError> for ReplyError {
+    fn from(error: RulesCheckError) -> Self {
+        Self::RulesCheck(error)
+    }
+}
+
+/// Writes the line a refusal prints: the host's sentence, with the error's key where the routes'
+/// CLI shows one and the problems a canvas refusal lists.
+fn write_refusal(
+    formatter: &mut fmt::Formatter<'_>,
+    error: &ReplyError,
+    message: &str,
+) -> fmt::Result {
+    let key = match error {
+        ReplyError::Canvas { problems, .. } => {
+            formatter.write_str(message)?;
+            return problems
+                .iter()
+                .try_for_each(|problem| write!(formatter, "\n  {problem}"));
+        }
+        ReplyError::Playground(_) | ReplyError::RulesCheck(_) => {
+            return formatter.write_str(message);
+        }
+        ReplyError::Generate(error) => {
+            return formatter.write_str(&format_refusal(error, message));
+        }
+        ReplyError::Engine(error) => error.key(),
+        ReplyError::Director(error) => error.key(),
+        ReplyError::SceneBuilder(error) => error.key(),
+        ReplyError::Locate(error) => error.key(),
+        ReplyError::Cast(error) => error.key(),
+    };
+    write!(formatter, "refused ({key}): {message}")
+}
+
 /// Why a `dev` command failed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DevError {
     Command(CommandError),
     Client(ClientError),
-    /// The canvas refused the request and said why in text only.
-    Rejected(String),
+    /// A route refused the request: its typed error, and `message`, the host's sentence for it.
+    Rejected {
+        error: ReplyError,
+        message: String,
+    },
+    /// A command that sent several requests, at least one of them refused: every answer in order,
+    /// a refusal as its `Rejected`, numbered with `label`. The refusals did not stop the rest.
+    SomeRejected {
+        label: &'static str,
+        answers: Vec<Result<String, DevError>>,
+    },
+    /// A waited generation that ran and ended without a picture: the job as the status shows it,
+    /// and the refusal's typed error and sentence.
+    GenerationEnded {
+        job: Box<JobView>,
+        error: GenerateError,
+        message: String,
+    },
+    /// `playground cycle` could not reach `scene` at `step`: the lines of the steps before it, and
+    /// why. The steps before it ran.
+    CycleStopped {
+        done: Vec<String>,
+        step: u64,
+        scene: String,
+        error: Box<DevError>,
+    },
+    /// `media add` of a path with no file name and no name given.
+    InvalidMediaPath {
+        path: PathBuf,
+    },
+    InvalidFixtureName(FixtureNameError),
+    /// `fixture show` of a fixture that is not there.
+    FixtureMissing {
+        file_name: String,
+    },
+    /// `repl` run as a command: the repl is started from the command line only.
+    ReplOutsideCommandLine,
+    /// A command of the first playable path refused by the command line itself.
+    Play(PlayError),
     /// The canvas answered with something this program does not understand. `reason` is why the
     /// answer did not read, when it was text that should have been JSON of a known shape.
     UnexpectedAnswer {
-        status: u16,
+        status: StatusCode,
         body: String,
         reason: Option<String>,
     },
@@ -66,19 +234,64 @@ impl fmt::Display for DevError {
         match self {
             Self::Command(error) => write!(formatter, "{error}"),
             Self::Client(error) => write!(formatter, "{error}"),
-            Self::Rejected(text) => formatter.write_str(text),
+            Self::Rejected { error, message } => write_refusal(formatter, error, message),
+            Self::SomeRejected { label, answers } => {
+                for (index, answer) in answers.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str("\n")?;
+                    }
+                    let number = index + 1;
+                    match answer {
+                        Ok(text) => write!(formatter, "{label} {number}: {text}")?,
+                        Err(error) => write!(formatter, "{label} {number}: {error}")?,
+                    }
+                }
+                Ok(())
+            }
+            Self::GenerationEnded {
+                job,
+                error,
+                message,
+            } => formatter.write_str(&format_ended(job, error, message)),
+            Self::CycleStopped {
+                done,
+                step,
+                scene,
+                error,
+            } => {
+                for line in done {
+                    writeln!(formatter, "{line}")?;
+                }
+                write!(formatter, "{step}: {scene} failed: {error}")
+            }
+            Self::InvalidMediaPath { path } => {
+                write!(formatter, "{} has no file name", path.display())
+            }
+            Self::InvalidFixtureName(error) => write!(formatter, "{error}"),
+            Self::FixtureMissing { file_name } => {
+                write!(formatter, "there is no fixture '{file_name}'")
+            }
+            Self::ReplOutsideCommandLine => {
+                formatter.write_str("repl is started from the command line: df-table dev repl")
+            }
+            Self::Play(error) => write!(formatter, "{error}"),
             Self::UnexpectedAnswer {
                 status,
                 body,
                 reason: None,
-            } => write!(formatter, "unexpected answer (status {status}): {body}"),
+            } => write!(
+                formatter,
+                "unexpected answer (status {}): {body}",
+                status.as_u16()
+            ),
             Self::UnexpectedAnswer {
                 status,
                 body,
                 reason: Some(reason),
             } => write!(
                 formatter,
-                "unexpected answer (status {status}, {reason}): {body}"
+                "unexpected answer (status {}, {reason}): {body}",
+                status.as_u16()
             ),
             Self::Unwritable { what, reason } => {
                 write!(formatter, "could not write the {what}: {reason}")
@@ -100,7 +313,7 @@ impl std::error::Error for DevError {}
 
 /// Reads an answer that must be a success carrying `T`.
 fn read_json<T: serde::de::DeserializeOwned>(response: &Response) -> Result<T, DevError> {
-    if response.status != 200 {
+    if response.status != StatusCode::OK {
         return Err(unexpected_answer(response, None));
     }
     read_answer(response)
@@ -111,75 +324,90 @@ async fn get_success<T: serde::de::DeserializeOwned>(port: u16, path: &str) -> R
     read_json(&dev_client::get(port, path).await?)
 }
 
-fn read_reply(response: &Response) -> Result<Result<String, String>, DevError> {
+/// The text of a canvas `Reply`: its success, or its refusal as `DevError::Rejected`.
+fn canvas_answer(reply: Reply) -> Result<String, DevError> {
+    match reply {
+        Reply::Rejected {
+            cause,
+            message,
+            problems,
+        } => Err(DevError::Rejected {
+            error: ReplyError::Canvas { cause, problems },
+            message,
+        }),
+        Reply::Done { revision, notices } => Ok(describe_done(revision, &notices)),
+    }
+}
+
+/// Reads a canvas route's answer. The outer error is an answer that does not read; the inner one
+/// is the route's refusal.
+fn read_reply(response: &Response) -> Result<Result<String, DevError>, DevError> {
     let reply: Reply = read_answer(response)?;
-    Ok(describe_reply(&reply))
+    Ok(canvas_answer(reply))
+}
+
+/// Reads a canvas route's answer: the text of its success, or why it was refused or does not read.
+pub(crate) fn read_canvas_reply(response: &Response) -> Result<String, DevError> {
+    read_reply(response)?
 }
 
 /// Reads an answer to a change of the playground: a `ChangeReply` with the new controls or the
 /// route's refusal. A refusal by the guard in front of every route is the host's `Reply`; an
 /// answer that is neither is reported with the reason it does not read.
-fn read_controls_reply(response: &Response) -> Result<Result<String, String>, DevError> {
+fn read_controls_reply(response: &Response) -> Result<Result<String, DevError>, DevError> {
     match read_answer::<ChangeReply>(response) {
-        Ok(crate::dev_http::DevReply::Done { value }) => {
-            Ok(Ok(format!("ok (revision {})", value.revision)))
+        Ok(reply) => {
+            Ok(dev_client::reply_value(reply)
+                .map(|value| format!("ok (revision {})", value.revision)))
         }
-        Ok(crate::dev_http::DevReply::Rejected { message, .. }) => Ok(Err(message)),
         // The reason reported is why the answer is not a `ChangeReply`, not why it is not the
         // guard's `Reply`.
         Err(not_a_change_reply) => match serde_json::from_str::<Reply>(&response.body) {
-            Ok(refusal @ Reply::Rejected { .. }) => Ok(describe_reply(&refusal)),
+            Ok(refusal @ Reply::Rejected { .. }) => Ok(canvas_answer(refusal)),
             Ok(Reply::Done { .. }) | Err(_) => Err(not_a_change_reply),
         },
     }
 }
 
-/// How a route's answer is read: the text of a success, or the text of a refusal.
-type ReadAnswer = fn(&Response) -> Result<Result<String, String>, DevError>;
+/// How a route's answer is read. The outer error is an answer that does not read, which stops a
+/// command; the inner one is the route's refusal, which does not stop the requests after it.
+type ReadAnswer = fn(&Response) -> Result<Result<String, DevError>, DevError>;
 
 /// Posts each body to `path` in order and reports every answer. A command with several bodies
 /// numbers them; one refusal does not stop the rest, and any refusal makes the command fail.
 async fn send_each(
     port: u16,
     path: &str,
-    label: &str,
+    label: &'static str,
     bodies: &[String],
     read: ReadAnswer,
 ) -> Result<String, DevError> {
-    let mut lines = Vec::new();
-    let mut any_rejected = false;
+    let mut answers = Vec::new();
     for body in bodies {
         let response = dev_client::post(port, path, body).await?;
-        match read(&response)? {
-            Ok(text) => lines.push(text),
-            Err(text) => {
-                any_rejected = true;
-                lines.push(text);
-            }
-        }
+        answers.push(read(&response)?);
     }
-    let text = if let [only] = lines.as_slice() {
-        only.clone()
-    } else {
-        lines
-            .iter()
-            .enumerate()
-            .map(|(index, text)| format!("{label} {}: {text}", index + 1))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    if any_rejected {
-        Err(DevError::Rejected(text))
-    } else {
-        Ok(text)
+    if answers.len() == 1 {
+        // Just checked: there is exactly one answer, printed without a number.
+        return answers.remove(0);
     }
+    if answers.iter().any(Result::is_err) {
+        return Err(DevError::SomeRejected { label, answers });
+    }
+    Ok(answers
+        .iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, text)| format!("{label} {}: {text}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 /// Sends each of `requests` to `path` as its own body, in order (see `send_each`).
 async fn send_requests<R: serde::Serialize>(
     port: u16,
     path: &str,
-    label: &str,
+    label: &'static str,
     requests: &[R],
     read: ReadAnswer,
 ) -> Result<String, DevError> {
@@ -278,7 +506,7 @@ async fn upload_media(port: u16, name: String, path: &Path) -> Result<String, De
             });
         }
     };
-    read_reply(&response)?.map_err(DevError::Rejected)
+    read_canvas_reply(&response)
 }
 
 /// Why sending a file stopped before its end.
@@ -322,7 +550,9 @@ fn media_name(path: &Path, name: Option<String>) -> Result<String, DevError> {
         None => path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
-            .ok_or_else(|| DevError::Rejected(format!("{} has no file name", path.display()))),
+            .ok_or_else(|| DevError::InvalidMediaPath {
+                path: path.to_path_buf(),
+            }),
     }
 }
 
@@ -360,8 +590,12 @@ async fn cycle(
             match go(port, changes).await {
                 Ok(text) => lines.push(format!("{step}: {scene} {}", last_line(&text))),
                 Err(error) => {
-                    lines.push(format!("{step}: {scene} failed: {error}"));
-                    return Err(DevError::Rejected(lines.join("\n")));
+                    return Err(DevError::CycleStopped {
+                        done: lines,
+                        step,
+                        scene: scene.clone(),
+                        error: Box::new(error),
+                    });
                 }
             }
             if step < total_steps {
@@ -381,15 +615,12 @@ fn last_line(text: &str) -> &str {
 }
 
 async fn show_fixture(port: u16, name: &str) -> Result<String, DevError> {
-    let file_name =
-        fixture_file_name(name).map_err(|error| DevError::Rejected(error.to_string()))?;
+    let file_name = fixture_file_name(name).map_err(DevError::InvalidFixtureName)?;
     let path = route::PLAYGROUND_FIXTURE.replace("{name}", &file_name);
     let response = dev_client::get(port, &path).await?;
     match response.status {
-        200 => Ok(response.body),
-        404 => Err(DevError::Rejected(format!(
-            "there is no fixture '{file_name}'"
-        ))),
+        StatusCode::OK => Ok(response.body),
+        StatusCode::NOT_FOUND => Err(DevError::FixtureMissing { file_name }),
         _ => Err(unexpected_answer(&response, None)),
     }
 }
@@ -509,15 +740,13 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::Events { after } => show_events(port, after).await,
         Command::Reload => {
             let response = dev_client::post(port, route::RELOAD, "").await?;
-            read_reply(&response)?.map_err(DevError::Rejected)
+            read_canvas_reply(&response)
         }
         Command::Help => Ok(usage_text()),
         Command::Engine(command) => crate::engine::run(port, command).await,
         Command::SceneBuilder(command) => crate::scene_builder::execute(port, command).await,
         Command::Director(command) => crate::director::execute(port, command).await,
-        Command::Repl => Err(DevError::Rejected(
-            "repl is started from the command line: df-table dev repl".to_owned(),
-        )),
+        Command::Repl => Err(DevError::ReplOutsideCommandLine),
         Command::Script(path) => run_script(port, &path).await,
     }
 }

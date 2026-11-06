@@ -38,7 +38,7 @@ pub use self::request::{
 pub use self::routes::router;
 pub use self::scan::{
     FAL_KEY_VARIABLES, KEEP_LABEL_OVERLAP_PERMILLE, Scanned, keep_labels, layout_from, relabel,
-    scan_blocking,
+    scan_picture,
 };
 pub use self::storage::{
     LAYOUT_DIRECTORY, LAYOUT_SUFFIX, attach_layout, current_layout, layout_file_name, read_layout,

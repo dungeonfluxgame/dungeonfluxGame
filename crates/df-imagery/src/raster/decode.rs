@@ -62,6 +62,21 @@ pub enum SourceHeaderError {
     InvalidDimensions,
 }
 
+impl std::fmt::Display for SourceHeaderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedFormat => formatter.write_str("the source format is not supported"),
+            Self::UnsupportedColorProfile => {
+                formatter.write_str("the source color profile is not supported")
+            }
+            Self::DecodeFailed => formatter.write_str("the source header could not be decoded"),
+            Self::InvalidDimensions => formatter.write_str("the source dimensions are invalid"),
+        }
+    }
+}
+
+impl std::error::Error for SourceHeaderError {}
+
 /// Inspects bounded container headers without decoding pixels or granting source authority.
 pub fn source_header(bytes: &[u8]) -> Result<SourceHeader, SourceHeaderError> {
     let format = sniff_format(bytes).map_err(|_| SourceHeaderError::UnsupportedFormat)?;

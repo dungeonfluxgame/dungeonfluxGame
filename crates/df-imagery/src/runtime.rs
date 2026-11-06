@@ -35,14 +35,14 @@ pub(crate) use artifact_basis::artifact_executor_basis;
 pub use inspection_projection::{project_inspection_decision, project_local_inspection};
 pub use no_output::{QualifiedNoOutput, qualify_no_output};
 pub use ports::*;
-pub use preflight::{PreflightRejection, QualifiedPreflightRejected};
+pub use preflight::{PreflightCause, QualifiedPreflightRejected};
 pub use qualification::{
     DecisionValidity, NoDeliveryReason, PublicationDecisionEvidence, PublicationEvidence,
     QualifiedDecision, QualifiedDemandEnded, QualifiedNoDelivery, QualifiedPipeline,
     QualifiedRequiredPreflight, qualify_demand_ended, qualify_economic_decision,
     qualify_no_delivery, qualify_publication, qualify_required_preflight,
 };
-pub use quota::{QuotaRefusal, QuotaRegistry, QuotaSummary};
+pub use quota::{QuotaError, QuotaRegistry, QuotaSummary};
 pub use standalone::{QualifiedAnalysis, QualifiedLocalAnalysis, analysis_result};
 #[cfg(feature = "test-support")]
 pub use standalone::{StandaloneUsageCapture, capture_standalone_usage};

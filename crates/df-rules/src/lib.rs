@@ -2,6 +2,9 @@
 mod command_handler;
 mod dispatch;
 mod explanation;
+mod listed;
+#[cfg(test)]
+mod listed_tests;
 
 pub use command_handler::{InvocationError, RulesCommandHandler, RulesCommandInput, stage_handler};
 pub use dispatch::{DispatchError, DispatchRegistry, HandlerRegistration, RegistryError};

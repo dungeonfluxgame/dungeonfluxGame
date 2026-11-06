@@ -452,9 +452,7 @@ async fn a_deadline_during_resume_never_resubmits() {
             .resume_portrait(&checkpoint, Duration::from_millis(60))
             .await
             .map(|_| ()),
-        Err(ApiError::Transport(
-            df_providers::NativeHttpRefusal::Deadline
-        ))
+        Err(ApiError::Transport(df_providers::NativeHttpCause::Deadline))
     );
     assert_eq!(posts.load(Ordering::SeqCst), 1);
     server.join().expect("server");
@@ -1101,7 +1099,7 @@ async fn undocumented_bfl_429_keeps_exact_response_without_retry_authority() {
         .expect_err("429");
     assert_eq!(failure.error, ApiError::RateLimited);
     assert_eq!(failure.submission, super::SubmissionEvidence::Unknown);
-    assert_eq!(failure.retryable_submit_decline(), None);
+    assert_eq!(failure.retryable_submit_decline(1_700_000_000_000), None);
     assert_eq!(failure.response.expect("exact response").body, body);
     server.join().expect("fixture");
 }

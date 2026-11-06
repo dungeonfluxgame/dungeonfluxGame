@@ -581,7 +581,7 @@ pub(crate) async fn withdraw_in(
     tx.execute(
         "UPDATE imagery.image_job SET state = $2, revision = revision + 1, updated_at_ms = $3 \
          WHERE job_id = $1",
-        &[&job_id.as_bytes().as_slice(), &state.label(), &now_ms],
+        &[&job_id.as_bytes().as_slice(), &state.key(), &now_ms],
     )
     .await
     .map_err(unavailable)?;

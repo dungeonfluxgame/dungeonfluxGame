@@ -11,6 +11,7 @@
 
 use std::{fmt, future::Future, sync::Arc, time::Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -90,7 +91,7 @@ pub type Fingerprint = [u8; 32];
 /// The fingerprint of a request. Changing any field, including the profile, changes it.
 pub fn fingerprint(request: &TextRequest) -> Fingerprint {
     let mut hasher = Sha256::new();
-    absorb(&mut hasher, request.purpose.label().as_bytes());
+    absorb(&mut hasher, request.purpose.key().as_bytes());
     absorb(&mut hasher, request.profile.as_str().as_bytes());
     absorb(&mut hasher, request.output_name.as_bytes());
     absorb(&mut hasher, request.instructions.as_bytes());
@@ -127,7 +128,8 @@ fn length_prefix(length: usize) -> [u8; 8] {
 pub type Basis = [u8; 32];
 
 /// The stored phase of an attempt, without its payload. Used by inspection surfaces.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AttemptPhase {
     Accepted,
     Dispatched,
@@ -150,8 +152,8 @@ impl AttemptPhase {
         Self::Cancelled,
     ];
 
-    /// The stored label; the PostgreSQL `phase` CHECK lists the same values.
-    pub fn label(self) -> &'static str {
+    /// The stored key; the PostgreSQL `phase` CHECK lists the same values.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
             Self::Dispatched => "dispatched",
@@ -163,14 +165,15 @@ impl AttemptPhase {
         }
     }
 
-    /// The inverse of [`Self::label`].
-    pub fn parse(label: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|phase| phase.label() == label)
+    /// The inverse of [`Self::key`].
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|phase| phase.key() == key)
     }
 }
 
 /// The kind of a settled outcome, without its payload.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum OutcomeKind {
     Answered,
     Unavailable,
@@ -189,8 +192,8 @@ impl OutcomeKind {
         Self::Stale,
     ];
 
-    /// The stored label; the PostgreSQL `outcome_kind` CHECK lists the same values.
-    pub fn label(self) -> &'static str {
+    /// The stored key; the PostgreSQL `outcome_kind` CHECK lists the same values.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Answered => "answered",
             Self::Unavailable => "unavailable",
@@ -200,9 +203,9 @@ impl OutcomeKind {
         }
     }
 
-    /// The inverse of [`Self::label`].
-    pub fn parse(label: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|kind| kind.label() == label)
+    /// The inverse of [`Self::key`].
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.key() == key)
     }
 }
 
@@ -289,8 +292,8 @@ pub enum AttemptStoreError {
 }
 
 impl AttemptStoreError {
-    /// A closed cause label for logs; carries no connection or query detail.
-    pub fn label(self) -> &'static str {
+    /// The closed cause key for logs; carries no connection or query detail.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Unreachable => "unreachable",
             Self::TimedOut => "timed_out",
@@ -299,6 +302,19 @@ impl AttemptStoreError {
         }
     }
 }
+
+impl fmt::Display for AttemptStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Unreachable => "the text attempt store could not be reached",
+            Self::TimedOut => "the text attempt store did not answer in time",
+            Self::Rejected => "the text attempt store rejected the statement",
+            Self::Invalid => "a stored text attempt does not match what this code allows",
+        })
+    }
+}
+
+impl std::error::Error for AttemptStoreError {}
 
 /// The facts an attempt is admitted with. The fingerprint decides replay versus conflict.
 pub struct AttemptMeta<'a> {
@@ -551,6 +567,30 @@ pub enum DurableTextError {
     Unauthorized,
     /// No attempt exists under this key.
     UnknownOperation,
+}
+
+impl fmt::Display for DurableTextError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refused(error) => write!(formatter, "the text request was refused: {error}"),
+            Self::Conflict => formatter.write_str("the operation key was used for another request"),
+            Self::Store(error) => write!(formatter, "the text attempt store failed: {error}"),
+            Self::Unauthorized => {
+                formatter.write_str("the owner does not hold this operation's basis")
+            }
+            Self::UnknownOperation => formatter.write_str("no text attempt exists under this key"),
+        }
+    }
+}
+
+impl std::error::Error for DurableTextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Refused(error) => Some(error),
+            Self::Store(error) => Some(error),
+            Self::Conflict | Self::Unauthorized | Self::UnknownOperation => None,
+        }
+    }
 }
 
 /// The owner's authority over one operation. The owner, not the feature, decides whether the
@@ -886,5 +926,4 @@ impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
 }
 
 #[cfg(test)]
-#[path = "text_attempts_tests.rs"]
-mod tests;
+mod text_attempts_tests;

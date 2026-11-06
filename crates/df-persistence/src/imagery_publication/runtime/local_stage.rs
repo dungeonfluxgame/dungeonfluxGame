@@ -29,7 +29,7 @@ pub(super) async fn check_claim_in(
         || job.get::<_, i64>("config_revision") != i64::from(input.job.config.revision())
         || job.get::<_, String>("state") == "retired"
         || job.get::<_, i64>("absolute_deadline_ms") <= now_ms
-        || stage.get::<_, String>("stage_kind") != input.stage.kind.label()
+        || stage.get::<_, String>("stage_kind") != input.stage.kind.key()
         || stage.get::<_, Vec<u8>>("config_digest")
             != <[u8; 32]>::from(Sha256::digest(input.job.config.bytes()))
         || !stage.get::<_, bool>("local_accounting")

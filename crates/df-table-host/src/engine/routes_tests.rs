@@ -1,6 +1,8 @@
 //! The dev engine through a running host: the routes, the guard, the command line, the repl and a
 //! script, on an ephemeral port.
 
+use axum::http::StatusCode;
+
 use crate::client;
 use crate::command::split_words;
 use crate::dev::run_dev;
@@ -254,7 +256,7 @@ async fn a_bad_body_or_query_is_a_typed_refusal_not_a_failure() {
     let bad_body = client::post_json(host.port, path::INPUT, r#"{"input":{"kind":"tap"}}"#)
         .await
         .expect("answered");
-    assert_eq!(bad_body.status, 400);
+    assert_eq!(bad_body.status, StatusCode::BAD_REQUEST);
     let error = rejected_with(&bad_body.body);
     assert!(
         matches!(&error, EngineError::InvalidBody(body) if body.cause == BodyCause::Data),
@@ -268,13 +270,13 @@ async fn a_bad_body_or_query_is_a_typed_refusal_not_a_failure() {
     )
     .await
     .expect("answered");
-    assert_eq!(zero.status, 400);
+    assert_eq!(zero.status, StatusCode::BAD_REQUEST);
     assert_eq!(rejected_with(&zero.body), EngineError::ZeroOperation);
 
     let no_seat = client::get(host.port, path::VIABLE)
         .await
         .expect("answered");
-    assert_eq!(no_seat.status, 400);
+    assert_eq!(no_seat.status, StatusCode::BAD_REQUEST);
     let error = rejected_with(&no_seat.body);
     assert!(matches!(error, EngineError::InvalidQuery(_)), "{error:?}");
     let unknown = client::get(host.port, &format!("{}?seat=99", path::VIABLE))
@@ -290,7 +292,7 @@ async fn a_bad_body_or_query_is_a_typed_refusal_not_a_failure() {
     )
     .await
     .expect("answered");
-    assert_eq!(audience.status, 400);
+    assert_eq!(audience.status, StatusCode::BAD_REQUEST);
     let error = rejected_with(&audience.body);
     assert!(matches!(error, EngineError::InvalidQuery(_)), "{error:?}");
 }
@@ -442,7 +444,7 @@ async fn a_body_with_an_unknown_field_is_refused_typed() {
     .await
     .expect("answered");
 
-    assert_eq!(answer.status, 400);
+    assert_eq!(answer.status, StatusCode::BAD_REQUEST);
     let error = rejected_with(&answer.body);
     assert!(
         matches!(&error, EngineError::InvalidBody(body) if body.cause == BodyCause::Data),

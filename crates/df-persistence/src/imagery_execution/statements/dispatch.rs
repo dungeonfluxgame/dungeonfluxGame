@@ -113,7 +113,7 @@ async fn write_winning_checkpoint(
             &checkpoint.mime,
             &width_px,
             &height_px,
-            &checkpoint.alpha.label(),
+            &checkpoint.alpha.key(),
             &revision,
             &checkpoint.book_call_id,
             &now_ms,
@@ -614,7 +614,7 @@ async fn complete_unknown_in(
 ) -> Result<DispatchView, ExecutionError> {
     let wanted = match &command.outcome {
         CompletionOutcome::Unknown => None,
-        CompletionOutcome::UnknownWithCause { cause } => Some(cause.label()),
+        CompletionOutcome::UnknownWithCause { cause } => Some(cause.key()),
         _ => return Err(ExecutionError::InvalidRecord),
     };
     let state: String = row.get("dispatch_state");
@@ -797,7 +797,7 @@ pub(crate) async fn complete_dispatch_in(
             }
             CompletionOutcome::Failed { cause } => {
                 let stored: Option<String> = row.get("failure_cause");
-                if stored.as_deref() == Some(cause.label()) {
+                if stored.as_deref() == Some(cause.key()) {
                     read_dispatch_view(tx, &command.owner, &command.dispatch).await
                 } else {
                     Err(ExecutionError::OperationConflict)
@@ -897,7 +897,7 @@ pub(crate) async fn complete_dispatch_in(
                      failure_cause = $2, updated_at_ms = $3 WHERE dispatch_id = $1",
                     &[
                         &command.dispatch.as_bytes().as_slice(),
-                        &cause.label(),
+                        &cause.key(),
                         &command.now_ms,
                     ],
                 )
@@ -999,7 +999,7 @@ pub(crate) async fn complete_dispatch_in(
                      failure_cause = $2, updated_at_ms = $3 WHERE dispatch_id = $1",
                     &[
                         &command.dispatch.as_bytes().as_slice(),
-                        &cause.label(),
+                        &cause.key(),
                         &command.now_ms,
                     ],
                 )
@@ -1040,7 +1040,7 @@ pub(crate) async fn mirror_settlement_in(
     locked_job(tx, owner, job).await?;
     let row = locked_dispatch(tx, job, stage, dispatch).await?;
     let stored: String = row.get("settlement");
-    if stored == settlement.label() {
+    if stored == settlement.key() {
         return read_dispatch_view(tx, owner, dispatch).await;
     }
     let may_advance = matches!(stored.as_str(), "held" | "unknown_outstanding")
@@ -1080,11 +1080,7 @@ pub(crate) async fn mirror_settlement_in(
     tx.execute(
         "UPDATE imagery.image_dispatch_attempt SET settlement = $2, updated_at_ms = $3 \
          WHERE dispatch_id = $1",
-        &[
-            &dispatch.as_bytes().as_slice(),
-            &settlement.label(),
-            &now_ms,
-        ],
+        &[&dispatch.as_bytes().as_slice(), &settlement.key(), &now_ms],
     )
     .await
     .map_err(map_db)?;

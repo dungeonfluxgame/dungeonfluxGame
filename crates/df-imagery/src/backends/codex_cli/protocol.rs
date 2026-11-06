@@ -73,6 +73,36 @@ pub(crate) enum ProtocolError {
     InputMismatch,
 }
 
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MessageTooLong { len_bytes } => write!(
+                formatter,
+                "a protocol message is too long at {len_bytes} bytes"
+            ),
+            Self::InvalidJson => formatter.write_str("a protocol message is not json"),
+            Self::NotAnObject => formatter.write_str("a protocol message is not an object"),
+            Self::MissingField { field } => write!(formatter, "a protocol message lacks {field}"),
+            Self::WrongType { field } => write!(
+                formatter,
+                "a protocol message has the wrong type for {field}"
+            ),
+            Self::FieldTooLong { field } => {
+                write!(formatter, "the protocol field {field} is too long")
+            }
+            Self::MissingThreadId => formatter.write_str("the protocol thread id is missing"),
+            Self::MissingTurnId => formatter.write_str("the protocol turn id is missing"),
+            Self::UnexpectedResponse { .. } => {
+                formatter.write_str("a protocol response answers no pending request")
+            }
+            Self::TooManyMessages => formatter.write_str("the protocol sent too many messages"),
+            Self::InputMismatch => formatter.write_str("the protocol echoed a different input"),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {}
+
 /// One inbound JSON-RPC message; server text stays inside `params` and never
 /// reaches `Debug`: the redacted form keeps only routing shapes.
 #[derive(Clone, PartialEq)]
@@ -82,16 +112,16 @@ pub(crate) enum Inbound {
 }
 
 impl fmt::Debug for Inbound {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Response(view) => f
+            Self::Response(view) => formatter
                 .debug_struct("Response")
                 .field("id", &view.id)
                 .field("has_result", &view.result.is_some())
                 .field("result_len", &view.result_len())
                 .field("error", &view.error)
                 .finish(),
-            Self::Notification { method, params } => f
+            Self::Notification { method, params } => formatter
                 .debug_struct("Notification")
                 .field("method", method)
                 .field("params_shape", &params_shape(params))
@@ -110,8 +140,9 @@ pub(crate) struct ResponseView {
 }
 
 impl fmt::Debug for ResponseView {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ResponseView")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResponseView")
             .field("id", &self.id)
             .field("has_result", &self.result.is_some())
             .field("result_len", &self.result_len())
@@ -791,12 +822,11 @@ pub(crate) fn observe_usage(turn: &Value) -> ObservedUsage {
 /// Compares the CLI-reported inputs against the staged references in order;
 /// absent observations on older items skip the check instead of failing it.
 pub(crate) fn match_inputs(
-    observed: &Option<Vec<ObservedInput>>,
+    observed: Option<&[ObservedInput]>,
     staged: &[(&str, &str)],
 ) -> Result<(), ProtocolError> {
-    let observed = match observed {
-        None => return Ok(()),
-        Some(observed) => observed,
+    let Some(observed) = observed else {
+        return Ok(());
     };
     if observed.len() != staged.len() {
         return Err(ProtocolError::InputMismatch);

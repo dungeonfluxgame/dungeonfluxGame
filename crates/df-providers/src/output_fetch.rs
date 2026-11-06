@@ -34,7 +34,7 @@ const MAXIMUM_DNS_ANSWERS: usize = 16;
 
 /// Stable, non-sensitive refusal classifications for a future bounded executor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutputFetchRefusal {
+pub enum OutputFetchError {
     RequestNotCompleted,
     RequestIdentityMismatch,
     OutputUrlRefused,
@@ -52,6 +52,31 @@ pub enum OutputFetchRefusal {
     TransportOutcomeUnknown,
     HeadersTooLarge,
 }
+
+impl fmt::Display for OutputFetchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::RequestNotCompleted => "the provider request has not completed",
+            Self::RequestIdentityMismatch => "the provider request identity does not match",
+            Self::OutputUrlRefused => "the output URL is not allowed",
+            Self::DnsTargetRefused => "the output host resolves to a refused address",
+            Self::RedirectRefused => "the output fetch was redirected",
+            Self::ProxyRefused => "the output fetch went through a proxy",
+            Self::HttpStatusRefused => "the output fetch answered a refused status",
+            Self::DeadlineExceeded => "the output fetch ran out of time",
+            Self::BodyTooLarge => "the output is too large",
+            Self::MimeMismatch => "the output has the wrong media type",
+            Self::DimensionsMismatch => "the output has the wrong dimensions",
+            Self::DecodeRejected => "the output did not decode",
+            Self::DecoderUnavailable => "no output decoder is available",
+            Self::Cancelled => "the output fetch was cancelled",
+            Self::TransportOutcomeUnknown => "the output fetch outcome is unknown",
+            Self::HeadersTooLarge => "the output response headers are too large",
+        })
+    }
+}
+
+impl std::error::Error for OutputFetchError {}
 
 /// Network and resource controls a future fetch executor must enforce.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,19 +223,19 @@ pub fn prepare_output_fetch_plan(
     observation: &FalQueueObservation,
     image: &ProviderImageMetadata,
     maximum_bytes: u64,
-) -> Result<OutputFetchPlan, OutputFetchRefusal> {
+) -> Result<OutputFetchPlan, OutputFetchError> {
     if attempt.operation() != expected_operation
         || attempt.route() != CandidateRouteId::FalFluxSchnellDisposableImage
         || attempt.supplier_request_id() != Some(expected_request_id)
     {
-        return Err(OutputFetchRefusal::RequestIdentityMismatch);
+        return Err(OutputFetchError::RequestIdentityMismatch);
     }
     let completed = matches!(
         observation,
         FalQueueObservation::Completed { request_id, .. } if request_id == expected_request_id
     );
     if !completed {
-        return Err(OutputFetchRefusal::RequestNotCompleted);
+        return Err(OutputFetchError::RequestNotCompleted);
     }
     validate_fal_images(
         observation,
@@ -218,29 +243,29 @@ pub fn prepare_output_fetch_plan(
         std::slice::from_ref(image),
     )
     .map_err(|error| match error {
-        crate::HttpRequestError::InvalidImageContentType => OutputFetchRefusal::MimeMismatch,
-        crate::HttpRequestError::InvalidImageDimensions => OutputFetchRefusal::DimensionsMismatch,
-        crate::HttpRequestError::ResultBeforeCompletion => OutputFetchRefusal::RequestNotCompleted,
-        _ => OutputFetchRefusal::OutputUrlRefused,
+        crate::HttpRequestError::InvalidImageContentType => OutputFetchError::MimeMismatch,
+        crate::HttpRequestError::InvalidImageDimensions => OutputFetchError::DimensionsMismatch,
+        crate::HttpRequestError::ResultBeforeCompletion => OutputFetchError::RequestNotCompleted,
+        _ => OutputFetchError::OutputUrlRefused,
     })?;
     if !strict_fal_locator(&image.url) {
-        return Err(OutputFetchRefusal::OutputUrlRefused);
+        return Err(OutputFetchError::OutputUrlRefused);
     }
     let pixels = u64::from(image.width)
         .checked_mul(u64::from(image.height))
-        .ok_or(OutputFetchRefusal::DimensionsMismatch)?;
+        .ok_or(OutputFetchError::DimensionsMismatch)?;
     let rgba_bytes = pixels
         .checked_mul(4)
-        .ok_or(OutputFetchRefusal::DimensionsMismatch)?;
+        .ok_or(OutputFetchError::DimensionsMismatch)?;
     if image.width > MAXIMUM_IMAGE_SIDE_PX
         || image.height > MAXIMUM_IMAGE_SIDE_PX
         || pixels > MAXIMUM_IMAGE_PIXELS
         || rgba_bytes > MAXIMUM_RGBA_BYTES
     {
-        return Err(OutputFetchRefusal::DimensionsMismatch);
+        return Err(OutputFetchError::DimensionsMismatch);
     }
     if maximum_bytes == 0 {
-        return Err(OutputFetchRefusal::BodyTooLarge);
+        return Err(OutputFetchError::BodyTooLarge);
     }
 
     Ok(OutputFetchPlan {
@@ -278,38 +303,38 @@ pub fn prepare_output_fetch_plan(
 pub fn inspect_fetch_response(
     plan: &OutputFetchPlan,
     facts: FetchResponseFacts<'_>,
-) -> Result<(), OutputFetchRefusal> {
+) -> Result<(), OutputFetchError> {
     if facts.cancelled {
-        return Err(OutputFetchRefusal::Cancelled);
+        return Err(OutputFetchError::Cancelled);
     }
     if facts.used_proxy {
-        return Err(OutputFetchRefusal::ProxyRefused);
+        return Err(OutputFetchError::ProxyRefused);
     }
     if facts.redirected || (300..400).contains(&facts.status) {
-        return Err(OutputFetchRefusal::RedirectRefused);
+        return Err(OutputFetchError::RedirectRefused);
     }
     if facts.status != 200 {
-        return Err(OutputFetchRefusal::HttpStatusRefused);
+        return Err(OutputFetchError::HttpStatusRefused);
     }
     if facts.connect_elapsed_seconds > facts.elapsed_seconds {
-        return Err(OutputFetchRefusal::TransportOutcomeUnknown);
+        return Err(OutputFetchError::TransportOutcomeUnknown);
     }
     if facts.connect_elapsed_seconds > u64::from(plan.fetch.connect_timeout_seconds)
         || facts.elapsed_seconds > u64::from(plan.fetch.total_timeout_seconds)
     {
-        return Err(OutputFetchRefusal::DeadlineExceeded);
+        return Err(OutputFetchError::DeadlineExceeded);
     }
     if facts.header_bytes > plan.fetch.max_header_bytes {
-        return Err(OutputFetchRefusal::HeadersTooLarge);
+        return Err(OutputFetchError::HeadersTooLarge);
     }
     if facts.body_bytes == 0 || facts.body_bytes > plan.fetch.max_encoded_bytes {
-        return Err(OutputFetchRefusal::BodyTooLarge);
+        return Err(OutputFetchError::BodyTooLarge);
     }
     if !facts.body_complete {
-        return Err(OutputFetchRefusal::TransportOutcomeUnknown);
+        return Err(OutputFetchError::TransportOutcomeUnknown);
     }
     if facts.content_type != plan.content_type {
-        return Err(OutputFetchRefusal::MimeMismatch);
+        return Err(OutputFetchError::MimeMismatch);
     }
     Ok(())
 }
@@ -322,24 +347,24 @@ pub fn inspect_fetch_response(
 pub fn inspect_decoded_image(
     plan: &OutputFetchPlan,
     facts: DecodedImageFacts<'_>,
-) -> Result<(), OutputFetchRefusal> {
+) -> Result<(), OutputFetchError> {
     let expected_format = match plan.content_type.as_str() {
         "image/jpeg" => "image/jpeg",
         "image/png" => "image/png",
-        _ => return Err(OutputFetchRefusal::MimeMismatch),
+        _ => return Err(OutputFetchError::MimeMismatch),
     };
     if facts.format != expected_format {
-        return Err(OutputFetchRefusal::MimeMismatch);
+        return Err(OutputFetchError::MimeMismatch);
     }
     if (facts.width, facts.height) != (plan.width, plan.height) {
-        return Err(OutputFetchRefusal::DimensionsMismatch);
+        return Err(OutputFetchError::DimensionsMismatch);
     }
     let pixels = u64::from(facts.width)
         .checked_mul(u64::from(facts.height))
-        .ok_or(OutputFetchRefusal::DecodeRejected)?;
+        .ok_or(OutputFetchError::DecodeRejected)?;
     let rgba = pixels
         .checked_mul(4)
-        .ok_or(OutputFetchRefusal::DecodeRejected)?;
+        .ok_or(OutputFetchError::DecodeRejected)?;
     if pixels > MAXIMUM_IMAGE_PIXELS
         || facts.width > MAXIMUM_IMAGE_SIDE_PX
         || facts.height > MAXIMUM_IMAGE_SIDE_PX
@@ -351,34 +376,34 @@ pub fn inspect_decoded_image(
         || facts.input_bytes == 0
         || facts.consumed_bytes != facts.input_bytes
     {
-        return Err(OutputFetchRefusal::DecodeRejected);
+        return Err(OutputFetchError::DecodeRejected);
     }
     if facts.input_bytes > plan.fetch.max_encoded_bytes {
-        return Err(OutputFetchRefusal::BodyTooLarge);
+        return Err(OutputFetchError::BodyTooLarge);
     }
     Ok(())
 }
 
 /// Operational acquisition entrypoint, deliberately fail-closed until a bounded
 /// HTTP client with DNS pinning and redirect/proxy controls exists.
-pub fn fetch_output(_plan: &OutputFetchPlan) -> Result<(), OutputFetchRefusal> {
-    Err(OutputFetchRefusal::TransportOutcomeUnknown)
+pub fn fetch_output(_plan: &OutputFetchPlan) -> Result<(), OutputFetchError> {
+    Err(OutputFetchError::TransportOutcomeUnknown)
 }
 
 /// Operational decoder entrypoint, deliberately fail-closed until an enforced
 /// one-shot OS sandbox and resource limits are available on this target.
-pub fn decode_output(_plan: &OutputFetchPlan) -> Result<(), OutputFetchRefusal> {
-    Err(OutputFetchRefusal::DecoderUnavailable)
+pub fn decode_output(_plan: &OutputFetchPlan) -> Result<(), OutputFetchError> {
+    Err(OutputFetchError::DecoderUnavailable)
 }
 
 /// Validate already-resolved DNS candidates without performing resolution.
 /// Empty, excessive, or mixed/private answers fail closed.
-pub fn inspect_dns_answers(candidates: &[IpAddr]) -> Result<DnsInspection, OutputFetchRefusal> {
+pub fn inspect_dns_answers(candidates: &[IpAddr]) -> Result<DnsInspection, OutputFetchError> {
     if candidates.is_empty()
         || candidates.len() > MAXIMUM_DNS_ANSWERS
         || candidates.iter().any(|address| !is_public(*address))
     {
-        return Err(OutputFetchRefusal::DnsTargetRefused);
+        return Err(OutputFetchError::DnsTargetRefused);
     }
     Ok(DnsInspection {
         candidates: candidates.to_vec(),

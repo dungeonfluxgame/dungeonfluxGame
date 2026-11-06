@@ -12,7 +12,7 @@ use df_types::{Usage, UsageUnit};
 use serde_json::{Value, json};
 
 use crate::media_container::{
-    EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_mp4, inspect_wave,
+    EncodedMediaFacts, MediaContainerCause, MediaTimebase, inspect_mp4, inspect_wave,
 };
 use crate::native_http::{
     MAXIMUM_BODY_BYTES, NativeHttp, NativeHttpResponse, is_loopback_socket, is_valid_credential,
@@ -21,7 +21,7 @@ use crate::native_media_fetch::{FalCdnPin, MAXIMUM_MEDIA_HEADER_BYTES, NativeMed
 use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, is_bounded_image_size, strict_fal_locator};
 use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{
-    FalQueueObservation, HttpMethod, HttpRequest, NativeHttpLimits, NativeHttpRefusal,
+    FalQueueObservation, HttpMethod, HttpRequest, NativeHttpCause, NativeHttpLimits,
     ProviderFailureClass, ProviderRequestId, classify_fal_status_response,
 };
 
@@ -145,11 +145,11 @@ impl FalMediaConfig {
 
     /// Selects the video endpoint. Only the endpoints this adapter has a body and checks for are
     /// accepted; anything else refuses before a request is built.
-    pub fn with_video_model(mut self, model: &str) -> Result<Self, FalMediaReason> {
+    pub fn with_video_model(mut self, model: &str) -> Result<Self, FalMediaError> {
         if self.family != FalMediaFamily::Video
             || (model != FalMediaFamily::Video.model() && model != KLING_O1_IMAGE_TO_VIDEO)
         {
-            return Err(FalMediaReason::Profile);
+            return Err(error(FalMediaCause::Profile, None));
         }
         self.video_model = Some(model.to_owned());
         Ok(self)
@@ -165,9 +165,9 @@ impl FalMediaConfig {
         family: FalMediaFamily,
         api: SocketAddr,
         media: SocketAddr,
-    ) -> Result<Self, FalMediaReason> {
+    ) -> Result<Self, FalMediaError> {
         if !is_loopback_socket(api) || !is_loopback_socket(media) {
-            return Err(FalMediaReason::Profile);
+            return Err(error(FalMediaCause::Profile, None));
         }
         Ok(Self {
             family,
@@ -180,7 +180,7 @@ impl FalMediaConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FalMediaReason {
+pub enum FalMediaCause {
     Profile,
     Payload,
     Reference,
@@ -190,23 +190,55 @@ pub enum FalMediaReason {
     Status,
     NotCompleted,
     Owner(RequestError),
-    Transport(NativeHttpRefusal),
-    Container(MediaContainerRefusal),
+    Transport(NativeHttpCause),
+    Container(MediaContainerCause),
     Metadata,
     UsageOverrun,
     /// The live price lookup failed or answered something unusable; nothing was submitted.
     Pricing,
 }
 
+impl fmt::Display for FalMediaCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Profile => formatter.write_str("the media profile is invalid"),
+            Self::Payload => formatter.write_str("the media request payload is invalid"),
+            Self::Reference => formatter.write_str("a reference frame is invalid"),
+            Self::QueueIdentity => formatter.write_str("the queue answer named no request id"),
+            Self::QueueUrls => formatter.write_str("the queue answer named no usable URLs"),
+            Self::Json => formatter.write_str("the answer is not valid JSON"),
+            Self::Status => formatter.write_str("the supplier answered a failure status"),
+            Self::NotCompleted => formatter.write_str("the media request has not completed"),
+            Self::Owner(cause) => write!(formatter, "the request owner refused it ({cause:?})"),
+            Self::Transport(cause) => write!(formatter, "the media call failed: {cause}"),
+            Self::Container(cause) => write!(formatter, "the media output is unusable: {cause}"),
+            Self::Metadata => formatter.write_str("the media output metadata is unusable"),
+            Self::UsageOverrun => formatter.write_str("the media usage exceeded its bound"),
+            Self::Pricing => formatter.write_str("the media price lookup failed"),
+        }
+    }
+}
+
+impl std::error::Error for FalMediaCause {}
+
 /// Safe retained facts on rejection. Supplier identity and observed usage survive failure.
 #[derive(Debug)]
 pub struct FalMediaError {
-    pub reason: FalMediaReason,
+    pub cause: FalMediaCause,
     pub request_id: Option<ProviderRequestId>,
     pub observed_usage: Option<Usage>,
     /// What the supplier answered, when the failure came with an HTTP response.
     pub http: Option<FalHttpFacts>,
 }
+
+impl fmt::Display for FalMediaError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(formatter)
+    }
+}
+
+/// The message is the cause's own, so the cause is not repeated as a source.
+impl std::error::Error for FalMediaError {}
 
 /// The supplier's HTTP answer to a failed call: the status and a bounded excerpt of the body with
 /// the credential, long opaque tokens (an echoed image) and control characters removed. It is safe
@@ -263,15 +295,15 @@ impl FalMediaError {
     }
 
     pub fn failure_class(&self) -> ProviderFailureClass {
-        match self.reason {
-            FalMediaReason::Owner(RequestError::Cancelled) => ProviderFailureClass::Cancelled,
-            FalMediaReason::Owner(RequestError::DeadlineExceeded) => ProviderFailureClass::Deadline,
-            FalMediaReason::Transport(reason) => reason.failure_class(),
-            FalMediaReason::Profile
-            | FalMediaReason::Payload
-            | FalMediaReason::Reference
-            | FalMediaReason::Owner(_) => ProviderFailureClass::InvalidRequest,
-            FalMediaReason::Status | FalMediaReason::QueueIdentity | FalMediaReason::QueueUrls => {
+        match self.cause {
+            FalMediaCause::Owner(RequestError::Cancelled) => ProviderFailureClass::Cancelled,
+            FalMediaCause::Owner(RequestError::DeadlineExceeded) => ProviderFailureClass::Deadline,
+            FalMediaCause::Transport(cause) => cause.failure_class(),
+            FalMediaCause::Profile
+            | FalMediaCause::Payload
+            | FalMediaCause::Reference
+            | FalMediaCause::Owner(_) => ProviderFailureClass::InvalidRequest,
+            FalMediaCause::Status | FalMediaCause::QueueIdentity | FalMediaCause::QueueUrls => {
                 ProviderFailureClass::Unknown
             }
             _ => ProviderFailureClass::Contract,
@@ -297,7 +329,7 @@ impl NativeFalMediaProvider {
     /// Inspect a retained video with the same bounded container checks as acquired outputs.
     /// This does not decode frames, contact the supplier or mint an asset reference.
     pub fn inspect_video(bytes: &[u8]) -> Result<EncodedMediaFacts, FalMediaError> {
-        inspect_mp4(bytes).map_err(|reason| error(FalMediaReason::Container(reason), None))
+        inspect_mp4(bytes).map_err(|cause| error(FalMediaCause::Container(cause), None))
     }
 
     pub(crate) fn new(
@@ -308,12 +340,12 @@ impl NativeFalMediaProvider {
         if !is_valid_credential(credential)
             || limits.maximum_header_bytes > MAXIMUM_MEDIA_HEADER_BYTES
         {
-            return Err(error(FalMediaReason::Profile, None));
+            return Err(error(FalMediaCause::Profile, None));
         }
         let http = NativeHttp::new(limits, config.fixture_api.is_some())
-            .map_err(|r| error(FalMediaReason::Transport(r), None))?;
+            .map_err(|failure| error(FalMediaCause::Transport(failure.cause), None))?;
         let fetch = NativeMediaFetch::new(limits, config.pins.clone(), config.fixture_media)
-            .map_err(|r| error(FalMediaReason::Transport(r), None))?;
+            .map_err(|cause| error(FalMediaCause::Transport(cause), None))?;
         Ok(Self {
             config,
             credential: credential.to_owned(),
@@ -344,11 +376,11 @@ impl NativeFalMediaProvider {
             || !is_bounded_image_size(p.width, p.height)
             || !valid_interval(p.accepted_duration_min, p.accepted_duration_max)
         {
-            return Err(error(FalMediaReason::Profile, None));
+            return Err(error(FalMediaCause::Profile, None));
         }
         let frames = semantic.reference_frames.as_slice();
         let Some(frame) = frames.first() else {
-            return Err(error(FalMediaReason::Reference, None));
+            return Err(error(FalMediaCause::Reference, None));
         };
         if frames.len() > 2
             || (frames.len() == 2 && p.model != KLING_O1_IMAGE_TO_VIDEO)
@@ -359,7 +391,7 @@ impl NativeFalMediaProvider {
                     || !reference_locator_ok(&frame.locator)
             })
         {
-            return Err(error(FalMediaReason::Reference, None));
+            return Err(error(FalMediaCause::Reference, None));
         }
         validate_prompt(&semantic.prompt, MAXIMUM_VIDEO_PROMPT_CHARACTERS)?;
         validate_declared(
@@ -372,7 +404,7 @@ impl NativeFalMediaProvider {
         let body = if p.model == KLING_O1_IMAGE_TO_VIDEO {
             let end = frames
                 .last()
-                .ok_or_else(|| error(FalMediaReason::Reference, None))?;
+                .ok_or_else(|| error(FalMediaCause::Reference, None))?;
             json!({
                 "prompt": semantic.prompt,
                 "start_image_url": frame.locator,
@@ -422,7 +454,7 @@ impl NativeFalMediaProvider {
                 .loop_metadata
                 .is_some_and(|v| v.first >= v.end_exclusive)
         {
-            return Err(error(FalMediaReason::Profile, None));
+            return Err(error(FalMediaCause::Profile, None));
         }
         validate_prompt(&semantic.intent, MAXIMUM_SOUND_PROMPT_CHARACTERS)?;
         validate_declared(
@@ -456,15 +488,15 @@ impl NativeFalMediaProvider {
                 elapsed: owner.elapsed,
                 cancelled: owner.cancelled,
             })
-            .map_err(|r| error(FalMediaReason::Owner(r), None))?;
+            .map_err(|r| error(FalMediaCause::Owner(r), None))?;
         if request.binding().mode != ExecutionMode::Live {
-            return Err(error(FalMediaReason::Profile, None));
+            return Err(error(FalMediaCause::Profile, None));
         }
         let serialized =
-            serde_json::to_vec(&body).map_err(|_| error(FalMediaReason::Payload, None))?;
+            serde_json::to_vec(&body).map_err(|_| error(FalMediaCause::Payload, None))?;
         // The checked payload must be exactly the admitted typed request serialization.
         if !request.payload().is_empty() && request.payload() != serialized {
-            return Err(error(FalMediaReason::Payload, None));
+            return Err(error(FalMediaCause::Payload, None));
         }
         let path = format!("/{}", self.config.model());
         let response = self
@@ -486,7 +518,7 @@ impl NativeFalMediaProvider {
                 .ok()
                 .and_then(|value| request_id_of(&value));
             return Err(error(
-                FalMediaReason::Status,
+                FalMediaCause::Status,
                 named.as_ref().or(response.transport_request_id.as_ref()),
             )
             .with_http(&http));
@@ -494,7 +526,7 @@ impl NativeFalMediaProvider {
         let value = parse_json(&response, None).map_err(|failure| failure.with_http(&http))?;
         let id = request_id_of(&value).ok_or_else(|| {
             error(
-                FalMediaReason::QueueIdentity,
+                FalMediaCause::QueueIdentity,
                 response.transport_request_id.as_ref(),
             )
             .with_http(&http)
@@ -540,7 +572,7 @@ impl NativeFalMediaProvider {
             .http
             .execute(request, deadline, cancellation)
             .await
-            .map_err(|failure| error(FalMediaReason::Transport(failure.reason), None))?;
+            .map_err(|failure| error(FalMediaCause::Transport(failure.cause), None))?;
         let value = parse_json(&response, None)?;
         let price = value
             .get("prices")
@@ -555,7 +587,7 @@ impl NativeFalMediaProvider {
             .and_then(|entry| entry.get("unit_price"))
             .and_then(Value::as_f64)
             .filter(|price| price.is_finite() && *price > 0.0);
-        price.ok_or_else(|| error(FalMediaReason::Pricing, None))
+        price.ok_or_else(|| error(FalMediaCause::Pricing, None))
     }
 
     async fn execute(
@@ -577,7 +609,7 @@ impl NativeFalMediaProvider {
             .execute(request, deadline, cancellation)
             .await
             .map_err(|failure| {
-                let mut value = error(FalMediaReason::Transport(failure.reason), id);
+                let mut value = error(FalMediaCause::Transport(failure.cause), id);
                 if value.request_id.is_none() {
                     value.request_id = failure.transport_request_id;
                 }
@@ -628,7 +660,7 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
                 elapsed: owner.elapsed,
                 cancelled: owner.cancelled,
             })
-            .map_err(|r| error(FalMediaReason::Owner(r), Some(&self.id)))?;
+            .map_err(|r| error(FalMediaCause::Owner(r), Some(&self.id)))?;
         Ok(self
             .request
             .binding()
@@ -661,18 +693,18 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
             .get("response_url")
             .is_some_and(|v| v.as_str() != Some(self.result.as_str()))
         {
-            return Err(error(FalMediaReason::QueueUrls, Some(&self.id)));
+            return Err(error(FalMediaCause::QueueUrls, Some(&self.id)));
         }
         let metric = value.get("metrics").and_then(|v| v.get("inference_time"));
         if metric.is_some_and(|v| !v.is_number()) {
-            return Err(error(FalMediaReason::Json, Some(&self.id)));
+            return Err(error(FalMediaCause::Json, Some(&self.id)));
         }
         for field in ["error", "error_type"] {
             if value
                 .get(field)
                 .is_some_and(|v| !v.is_null() && !v.is_string())
             {
-                return Err(error(FalMediaReason::Json, Some(&self.id)));
+                return Err(error(FalMediaCause::Json, Some(&self.id)));
             }
         }
         // A status body may omit the request id; the status URL is already confined to this
@@ -690,7 +722,7 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
             value.get("error").and_then(Value::as_str),
             metric.and_then(Value::as_f64),
         )
-        .map_err(|_| error(FalMediaReason::Status, Some(&self.id)).with_http(&http))?;
+        .map_err(|_| error(FalMediaCause::Status, Some(&self.id)).with_http(&http))?;
         self.completed = matches!(observation, FalQueueObservation::Completed { .. });
         Ok(observation)
     }
@@ -717,7 +749,7 @@ impl<Semantic: Eq> FalMediaJob<'_, Semantic> {
             .get("request_id")
             .is_some_and(|v| v.as_str() != Some(self.id.as_str()))
         {
-            return Err(error(FalMediaReason::QueueIdentity, Some(&self.id)));
+            return Err(error(FalMediaCause::QueueIdentity, Some(&self.id)));
         }
         let observation = match (response.status, value.get("status").and_then(Value::as_str)) {
             (202, Some("CANCELLATION_REQUESTED")) => FalCancellationObservation::Requested,
@@ -739,7 +771,7 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
     ) -> Result<PreparedFalMediaResponse<'a, Semantic>, FalMediaError> {
         let deadline = self.validate(&owner)?;
         if !self.completed {
-            return Err(error(FalMediaReason::NotCompleted, Some(&self.id)));
+            return Err(error(FalMediaCause::NotCompleted, Some(&self.id)));
         }
         let start = tokio::time::Instant::now();
         tokio::pin!(cancellation);
@@ -756,7 +788,7 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
             .await?;
         let http = http_facts(&response, &self.provider.credential);
         if response.status != 200 {
-            return Err(error(FalMediaReason::Status, Some(&self.id)).with_http(&http));
+            return Err(error(FalMediaCause::Status, Some(&self.id)).with_http(&http));
         }
         let value =
             parse_json(&response, Some(&self.id)).map_err(|failure| failure.with_http(&http))?;
@@ -766,7 +798,7 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
             || value.get("error").is_some()
             || value.get("error_type").is_some()
         {
-            return Err(error(FalMediaReason::QueueIdentity, Some(&self.id)).with_http(&http));
+            return Err(error(FalMediaCause::QueueIdentity, Some(&self.id)).with_http(&http));
         }
         let files = output_files(&value, &self.expected, &self.id)?;
         let maximum = self.provider.http.limits().maximum_response_bytes;
@@ -776,7 +808,7 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
         for file in files {
             let elapsed = owner.elapsed.checked_add(start.elapsed()).ok_or_else(|| {
                 error(
-                    FalMediaReason::Owner(RequestError::DeadlineExceeded),
+                    FalMediaCause::Owner(RequestError::DeadlineExceeded),
                     Some(&self.id),
                 )
             })?;
@@ -786,10 +818,10 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
                     elapsed,
                     cancelled: owner.cancelled,
                 })
-                .map_err(|r| error(FalMediaReason::Owner(r), Some(&self.id)))?;
+                .map_err(|r| error(FalMediaCause::Owner(r), Some(&self.id)))?;
             let remaining = maximum.checked_sub(retained).ok_or_else(|| {
                 error(
-                    FalMediaReason::Transport(NativeHttpRefusal::ResponseTooLarge),
+                    FalMediaCause::Transport(NativeHttpCause::ResponseTooLarge),
                     Some(&self.id),
                 )
             })?;
@@ -804,17 +836,17 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
                     cancellation.as_mut(),
                 )
                 .await
-                .map_err(|r| error(FalMediaReason::Transport(r), Some(&self.id)))?;
+                .map_err(|cause| error(FalMediaCause::Transport(cause), Some(&self.id)))?;
             if file
                 .metadata
                 .get("file_size")
                 .is_some_and(|v| v.as_u64() != Some(body.len() as u64))
             {
-                return Err(error(FalMediaReason::Metadata, Some(&self.id)));
+                return Err(error(FalMediaCause::Metadata, Some(&self.id)));
             }
             retained = retained.checked_add(body.len()).ok_or_else(|| {
                 error(
-                    FalMediaReason::Transport(NativeHttpRefusal::ResponseTooLarge),
+                    FalMediaCause::Transport(NativeHttpCause::ResponseTooLarge),
                     Some(&self.id),
                 )
             })?;
@@ -822,17 +854,17 @@ impl<'a, Semantic: Eq> FalMediaJob<'a, Semantic> {
                 ExpectedMedia::Video(_) => inspect_mp4(&body).map(|facts| (body, facts)),
                 ExpectedMedia::Sound(_, _) => inspect_wave(&body).map(|facts| (body, facts)),
             }
-            .map_err(|r| error(FalMediaReason::Container(r), Some(&self.id)))?;
+            .map_err(|cause| error(FalMediaCause::Container(cause), Some(&self.id)))?;
             let units = validate_output(&self.expected, &file.metadata, facts, &self.id)?;
             quantity = quantity
                 .checked_add(units)
-                .ok_or_else(|| error(FalMediaReason::UsageOverrun, Some(&self.id)))?;
+                .ok_or_else(|| error(FalMediaCause::UsageOverrun, Some(&self.id)))?;
             outputs.push(EncodedFalMedia { bytes: body, facts });
         }
         let usage = Usage::new(quantity, self.provider.config.family.unit());
         if quantity > self.request.limits().max_usage().quantity() {
             return Err(FalMediaError {
-                reason: FalMediaReason::UsageOverrun,
+                cause: FalMediaCause::UsageOverrun,
                 request_id: Some(self.id),
                 observed_usage: Some(usage),
                 http: None,
@@ -900,8 +932,8 @@ impl<Semantic: Eq> PreparedFalMediaResponse<'_, Semantic> {
     ) -> Result<FalMediaCompletion, FalMediaError> {
         self.request
             .validate_current(owner)
-            .map_err(|reason| FalMediaError {
-                reason: FalMediaReason::Owner(reason),
+            .map_err(|cause| FalMediaError {
+                cause: FalMediaCause::Owner(cause),
                 request_id: Some(self.id.clone()),
                 observed_usage: Some(self.usage),
                 http: None,
@@ -942,12 +974,12 @@ fn output_files(
         ExpectedMedia::Video(_) => vec![
             value
                 .get("video")
-                .ok_or_else(|| error(FalMediaReason::Metadata, Some(id)))?,
+                .ok_or_else(|| error(FalMediaCause::Metadata, Some(id)))?,
         ],
         ExpectedMedia::Sound(_, _) => vec![
             value
                 .get("audio")
-                .ok_or_else(|| error(FalMediaReason::Metadata, Some(id)))?,
+                .ok_or_else(|| error(FalMediaCause::Metadata, Some(id)))?,
         ],
     };
     let mut files = Vec::with_capacity(items.len());
@@ -955,7 +987,7 @@ fn output_files(
         let locator = item
             .get("url")
             .and_then(Value::as_str)
-            .ok_or_else(|| error(FalMediaReason::Metadata, Some(id)))?;
+            .ok_or_else(|| error(FalMediaCause::Metadata, Some(id)))?;
         if !item.is_object()
             || locator.len() > MAXIMUM_LOCATOR_BYTES
             || !strict_fal_locator(locator)
@@ -964,7 +996,7 @@ fn output_files(
                 .iter()
                 .any(|file: &OutputFile| file.locator == locator)
         {
-            return Err(error(FalMediaReason::Metadata, Some(id)));
+            return Err(error(FalMediaCause::Metadata, Some(id)));
         }
         files.push(OutputFile {
             locator: locator.to_owned(),
@@ -994,7 +1026,7 @@ fn validate_output(
     facts: EncodedMediaFacts,
     id: &ProviderRequestId,
 ) -> Result<u128, FalMediaError> {
-    let mismatch = || error(FalMediaReason::Metadata, Some(id));
+    let mismatch = || error(FalMediaCause::Metadata, Some(id));
     match (expected, facts) {
         (
             ExpectedMedia::Video(p),
@@ -1027,7 +1059,7 @@ fn validate_output(
             }
             timebase
                 .milliseconds_ceil()
-                .map_err(|r| error(FalMediaReason::Container(r), Some(id)))
+                .map_err(|failure| error(FalMediaCause::Container(failure.cause), Some(id)))
         }
         (
             ExpectedMedia::Sound(p, loops),
@@ -1053,7 +1085,7 @@ fn validate_output(
             }
             timebase
                 .milliseconds_ceil()
-                .map_err(|r| error(FalMediaReason::Container(r), Some(id)))
+                .map_err(|failure| error(FalMediaCause::Container(failure.cause), Some(id)))
         }
         _ => Err(mismatch()),
     }
@@ -1099,7 +1131,7 @@ fn duration_in(time: MediaTimebase, minimum: Duration, maximum: Duration) -> boo
 }
 fn validate_prompt(prompt: &str, maximum: usize) -> Result<(), FalMediaError> {
     if prompt.trim().is_empty() || prompt.len() > maximum * 4 || prompt.chars().count() > maximum {
-        return Err(error(FalMediaReason::Payload, None));
+        return Err(error(FalMediaCause::Payload, None));
     }
     Ok(())
 }
@@ -1115,13 +1147,13 @@ fn validate_declared<Semantic>(
         || usage.usage().quantity() != duration.as_millis()
         || request.limits().max_usage().unit() != unit
     {
-        return Err(error(FalMediaReason::Profile, None));
+        return Err(error(FalMediaCause::Profile, None));
     }
     Ok(())
 }
-fn error(reason: FalMediaReason, id: Option<&ProviderRequestId>) -> FalMediaError {
+fn error(cause: FalMediaCause, id: Option<&ProviderRequestId>) -> FalMediaError {
     FalMediaError {
-        reason,
+        cause,
         request_id: id.cloned(),
         observed_usage: None,
         http: None,
@@ -1179,15 +1211,15 @@ fn confined_url(
     let url = value
         .get(field)
         .and_then(Value::as_str)
-        .ok_or_else(|| error(FalMediaReason::QueueUrls, Some(id)))?;
+        .ok_or_else(|| error(FalMediaCause::QueueUrls, Some(id)))?;
     if !queue_url_confined(url, id, suffix) {
-        return Err(error(FalMediaReason::QueueUrls, Some(id)));
+        return Err(error(FalMediaCause::QueueUrls, Some(id)));
     }
     Ok(url.to_owned())
 }
 fn queue_path(url: &str) -> Result<&str, FalMediaError> {
     url.strip_prefix("https://queue.fal.run")
-        .ok_or_else(|| error(FalMediaReason::QueueUrls, None))
+        .ok_or_else(|| error(FalMediaCause::QueueUrls, None))
 }
 fn parse_json(
     response: &NativeHttpResponse,
@@ -1203,7 +1235,7 @@ fn parse_json(
     )
     .map_err(|_| {
         error(
-            FalMediaReason::Json,
+            FalMediaCause::Json,
             id.or(response.transport_request_id.as_ref()),
         )
     })
@@ -1211,7 +1243,7 @@ fn parse_json(
 impl FalMediaCompletion {
     pub fn into_video_event(self) -> Result<FalVideoCompletionEvent, FalMediaError> {
         if self.usage.unit() != UsageUnit::VideoMillisecond {
-            return Err(error(FalMediaReason::Profile, Some(&self.request_id)));
+            return Err(error(FalMediaCause::Profile, Some(&self.request_id)));
         }
         Ok(df_provider_api::ProviderEvent {
             provider_request_id: df_provider_api::ProviderRequestId(self.request_id),
@@ -1227,7 +1259,7 @@ impl FalMediaCompletion {
     ) -> Result<df_provider_api::SoundEvent<ProviderRequestId, Vec<EncodedFalMedia>>, FalMediaError>
     {
         if self.usage.unit() != UsageUnit::AudioMillisecond {
-            return Err(error(FalMediaReason::Profile, Some(&self.request_id)));
+            return Err(error(FalMediaCause::Profile, Some(&self.request_id)));
         }
         Ok(df_provider_api::ProviderEvent {
             provider_request_id: df_provider_api::ProviderRequestId(self.request_id),

@@ -125,7 +125,7 @@ pub(crate) async fn create(world: &World, owner: &ImageOwner) -> SourceReceipt {
     let transport = crate::postgres_tls::PostgresTransport::PlaintextLoopbackOnly;
     let now = df_finance::ports::Clock::now_ms(&SystemClock);
     let ids = Ids(Arc::new(AtomicU64::new(90_000)));
-    let capacity = CapacityScope::new("funding-native-source".to_owned()).unwrap();
+    let capacity = CapacityScope::new("funding-native-source").unwrap();
     let execution = crate::imagery_execution::PostgresImageExecution::open_existing(
         config.clone(),
         transport.clone(),
@@ -276,6 +276,7 @@ pub(crate) async fn create(world: &World, owner: &ImageOwner) -> SourceReceipt {
             active_config_revision: 1,
             capacity,
             poll_interval: Duration::from_millis(5),
+            codex_home: None,
         },
     };
     let ready = Box::pin(runtime.run_next())

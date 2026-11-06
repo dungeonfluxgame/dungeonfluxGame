@@ -19,10 +19,10 @@ use df_provider_api::{
     VideoSemantics,
 };
 use df_providers::{
-    EncodedMediaFacts, FalCancellationObservation, FalCdnPin, FalLoopFrames, FalMediaConfig,
-    FalMediaFamily, FalMediaReason, FalQueueObservation, FalReferenceFrame, FalSoundProfile,
+    EncodedMediaFacts, FalCancellationObservation, FalCdnPin, FalLoopFrames, FalMediaCause,
+    FalMediaConfig, FalMediaFamily, FalQueueObservation, FalReferenceFrame, FalSoundProfile,
     FalSoundRequest, FalVideoProfile, FalVideoRequest, MediaTimebase, NativeFalMediaProvider,
-    NativeHttpLimits, NativeHttpRefusal, registered_fal_media_provider,
+    NativeHttpCause, NativeHttpLimits, registered_fal_media_provider,
 };
 use df_types::{
     OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage, UsageUnit,
@@ -689,7 +689,7 @@ async fn character_clip_second_reference_is_rejected_on_models_without_bookends(
         .await
         .err()
         .unwrap();
-    assert_eq!(error.reason, FalMediaReason::Reference);
+    assert_eq!(error.cause, FalMediaCause::Reference);
     assert!(fixture.finish().is_empty());
 }
 
@@ -798,8 +798,8 @@ async fn invalid_profiles_payloads_and_modes_refuse_before_send() {
             .submit_sound(&request, owner(&current), future::pending())
             .await
             .unwrap_err()
-            .reason,
-        FalMediaReason::Profile
+            .cause,
+        FalMediaCause::Profile
     ));
     assert!(fixture.finish().is_empty());
 }
@@ -840,8 +840,8 @@ async fn canonical_reference_count_kind_locator_and_current_digest_are_fenced() 
                 .submit_video(&request, owner(&current), future::pending())
                 .await
                 .unwrap_err()
-                .reason,
-            FalMediaReason::Reference
+                .cause,
+            FalMediaCause::Reference
         ));
     }
     let mut current = video_basis();
@@ -854,8 +854,8 @@ async fn canonical_reference_count_kind_locator_and_current_digest_are_fenced() 
             .submit_video(&request, owner(&current), future::pending())
             .await
             .unwrap_err()
-            .reason,
-        FalMediaReason::Owner(df_provider_api::RequestError::SemanticBasisMismatch)
+            .cause,
+        FalMediaCause::Owner(df_provider_api::RequestError::SemanticBasisMismatch)
     ));
     assert!(fixture.finish().is_empty());
 }
@@ -880,8 +880,8 @@ async fn owner_identity_cancel_and_deadline_fence_each_action_and_final_consume(
         job.status(owner(&current), future::pending())
             .await
             .unwrap_err()
-            .reason,
-        FalMediaReason::Owner(_)
+            .cause,
+        FalMediaCause::Owner(_)
     ));
     current.identity.generation -= 1;
     job.status(owner(&current), future::pending())
@@ -906,8 +906,8 @@ async fn owner_identity_cancel_and_deadline_fence_each_action_and_final_consume(
             .submit_sound(&request, expired, future::pending())
             .await
             .unwrap_err()
-            .reason,
-        FalMediaReason::Owner(_)
+            .cause,
+        FalMediaCause::Owner(_)
     ));
     assert_eq!(fixture.finish().len(), 4);
 }
@@ -976,8 +976,8 @@ async fn pending_failed_unknown_status_never_publishes_result() {
             job.result(owner(&current), future::pending())
                 .await
                 .unwrap_err()
-                .reason,
-            FalMediaReason::NotCompleted
+                .cause,
+            FalMediaCause::NotCompleted
         ));
         assert_eq!(fixture.finish().len(), 2);
     }
@@ -1272,7 +1272,7 @@ async fn actual_usage_ceil_and_overrun_are_retained_without_clipping() {
         .result(owner(&current), future::pending())
         .await
         .unwrap_err();
-    assert_eq!(failure.reason, FalMediaReason::UsageOverrun);
+    assert_eq!(failure.cause, FalMediaCause::UsageOverrun);
     assert_eq!(
         failure.observed_usage,
         Some(Usage::new(1001, UsageUnit::AudioMillisecond))
@@ -1298,8 +1298,8 @@ async fn dropped_job_and_cancelled_future_never_resubmit_or_fetch() {
         .await
         .unwrap_err();
     assert_eq!(
-        failed.reason,
-        FalMediaReason::Transport(NativeHttpRefusal::Cancelled)
+        failed.cause,
+        FalMediaCause::Transport(NativeHttpCause::Cancelled)
     );
     assert_eq!(fixture.finish().len(), 1);
 }
@@ -1343,8 +1343,8 @@ async fn a_refused_submit_keeps_the_http_status_and_a_redacted_bounded_body() {
         .expect_err("a 422 answer is a refusal");
 
     assert_eq!(
-        error.reason,
-        FalMediaReason::Status,
+        error.cause,
+        FalMediaCause::Status,
         "a refused submit is a status failure, not a queue reply that lost its identity"
     );
     let http = error.http.expect("the supplier's answer is kept");

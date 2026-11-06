@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::Request;
+use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
@@ -18,7 +19,7 @@ use super::request::{GenerateError, GenerateReply, JobState, JobView};
 use super::routes::{path, router_with};
 use super::service::ImageGenerator;
 use crate::client::{get, post_json};
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::dev_http::{BodyCause, DevReply};
 use crate::guard;
 use crate::server;
@@ -105,7 +106,7 @@ async fn a_waited_generation_is_stored_and_the_media_command_lists_it() {
     let response = post_json(port, path::GENERATE, &body("hall", r#","wait":true"#))
         .await
         .expect("answers");
-    assert_eq!(response.status, 200, "{}", response.body);
+    assert_eq!(response.status, StatusCode::OK, "{}", response.body);
     let job: JobView = done(&response.body);
     assert!(matches!(job.state, JobState::Stored { .. }), "{job:?}");
     assert_eq!(job.job, 1);
@@ -137,7 +138,7 @@ async fn a_generation_that_is_not_waited_for_runs_on_and_status_shows_it() {
     let started = post_json(port, path::GENERATE, &body("hall", ""))
         .await
         .expect("answers");
-    assert_eq!(started.status, 200);
+    assert_eq!(started.status, StatusCode::OK);
     let job: JobView = done(&started.body);
     assert_eq!((job.job, &job.state), (1, &JobState::Running));
     let mut finished = false;
@@ -169,7 +170,7 @@ async fn each_refusal_has_its_typed_error_and_status() {
     let refused = post_json(signed_out, path::GENERATE, &body("hall", ""))
         .await
         .expect("answers");
-    assert_eq!(refused.status, 503);
+    assert_eq!(refused.status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         rejected(&refused.body),
         GenerateError::Backend {
@@ -193,7 +194,7 @@ async fn each_refusal_has_its_typed_error_and_status() {
     let response = post_json(timed_out, path::GENERATE, &body("hall", r#","wait":true"#))
         .await
         .expect("answers");
-    assert_eq!(response.status, 504);
+    assert_eq!(response.status, StatusCode::GATEWAY_TIMEOUT);
     assert_eq!(
         rejected(&response.body),
         GenerateError::Backend {
@@ -216,7 +217,7 @@ async fn each_refusal_has_its_typed_error_and_status() {
     )
     .await
     .expect("answers");
-    assert_eq!(response.status, 502);
+    assert_eq!(response.status, StatusCode::BAD_GATEWAY);
     assert!(matches!(
         rejected(&response.body),
         GenerateError::Backend {
@@ -245,7 +246,12 @@ async fn a_body_that_cannot_start_a_generation_is_a_typed_400() {
         let response = post_json(port, path::GENERATE, &text)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{text}: {}", response.body);
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{text}: {}",
+            response.body
+        );
         let error = rejected(&response.body);
         assert!(
             matches!(&error, GenerateError::InvalidBody(body) if body.cause == cause),
@@ -268,7 +274,12 @@ async fn a_body_that_cannot_start_a_generation_is_a_typed_400() {
         let response = post_json(port, path::GENERATE, &text)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{text}: {}", response.body);
+        assert_eq!(
+            response.status,
+            StatusCode::BAD_REQUEST,
+            "{text}: {}",
+            response.body
+        );
         assert_eq!(
             rejected(&response.body),
             GenerateError::InvalidRequest(expected)
@@ -343,10 +354,15 @@ async fn the_hosts_real_router_registers_the_route_behind_its_guard() {
     let bad = post_json(running.port, path::GENERATE, "not json")
         .await
         .expect("answers");
-    assert_eq!(bad.status, 400, "the route exists: {}", bad.body);
+    assert_eq!(
+        bad.status,
+        StatusCode::BAD_REQUEST,
+        "the route exists: {}",
+        bad.body
+    );
     assert!(matches!(rejected(&bad.body), GenerateError::InvalidBody(_)));
     let status = get(running.port, path::GENERATE).await.expect("answers");
-    assert_eq!(status.status, 200);
+    assert_eq!(status.status, StatusCode::OK);
     let _: Vec<JobView> = done(&status.body);
 }
 
@@ -396,7 +412,16 @@ async fn the_verb_numbers_its_answer_and_reports_refusals() {
     )
     .await
     .expect_err("refused");
-    assert!(matches!(error, DevError::Rejected(_)), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            DevError::Rejected {
+                error: ReplyError::Generate(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 
     let bad = run_dev(port, &words("media generate a hall as=hall.png"))
         .await
@@ -415,9 +440,24 @@ async fn a_waited_generation_without_a_picture_prints_its_name_and_how_long_it_r
     let error = run_dev(port, &words("media generate a hall as=hall wait=true"))
         .await
         .expect_err("no picture");
-    let DevError::Rejected(text) = error else {
-        panic!("not a refusal: {error:?}");
+    let DevError::GenerationEnded {
+        job,
+        error: ended_by,
+        ..
+    } = &error
+    else {
+        panic!("not an ended generation: {error:?}");
     };
+    assert_eq!((job.job, job.name.as_str()), (1, "hall"));
+    assert_eq!(
+        *ended_by,
+        GenerateError::Backend {
+            job: Some(1),
+            backend: BackendError::Timeout,
+        }
+    );
+    // The line it prints names the job and how long it ran, then the host's sentence.
+    let text = error.to_string();
     assert!(
         text.starts_with("generation 1 of hall ended without a picture (backend: timeout) after "),
         "{text}"

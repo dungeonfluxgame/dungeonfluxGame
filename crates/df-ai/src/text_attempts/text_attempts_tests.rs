@@ -40,7 +40,7 @@ impl Recorder {
             .lock()
             .unwrap()
             .iter()
-            .map(|event| event.kind.label())
+            .map(|event| event.kind.key())
             .collect()
     }
 }
@@ -631,4 +631,80 @@ fn debug_output_never_prints_the_answer() {
     assert!(!format!("{submission:?}").contains("tide"));
     assert!(!format!("{state:?}").contains("tide"));
     assert!(!format!("{:?}", answer()).contains("tide"));
+}
+
+/// The phase and outcome keys are the PostgreSQL CHECK values; their spelling never drifts.
+#[test]
+fn stored_keys_keep_their_check_spelling_and_round_trip() {
+    let phases: Vec<_> = AttemptPhase::ALL
+        .into_iter()
+        .map(AttemptPhase::key)
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            "accepted",
+            "dispatched",
+            "candidate",
+            "settled",
+            "rejected",
+            "unknown",
+            "cancelled",
+        ]
+    );
+    for phase in AttemptPhase::ALL {
+        assert_eq!(AttemptPhase::from_key(phase.key()), Some(phase));
+    }
+    let kinds: Vec<_> = OutcomeKind::ALL.into_iter().map(OutcomeKind::key).collect();
+    assert_eq!(
+        kinds,
+        ["answered", "unavailable", "deadline", "invalid", "stale"]
+    );
+    for kind in OutcomeKind::ALL {
+        assert_eq!(OutcomeKind::from_key(kind.key()), Some(kind));
+    }
+    assert_eq!(AttemptPhase::from_key("Accepted"), None);
+}
+
+#[test]
+fn stored_keys_equal_their_serde_names() {
+    for phase in AttemptPhase::ALL {
+        assert_eq!(serde_json::to_value(phase).unwrap(), json!(phase.key()));
+        assert_eq!(
+            serde_json::from_value::<AttemptPhase>(json!(phase.key())).unwrap(),
+            phase
+        );
+    }
+    for kind in OutcomeKind::ALL {
+        assert_eq!(serde_json::to_value(kind).unwrap(), json!(kind.key()));
+        assert_eq!(
+            serde_json::from_value::<OutcomeKind>(json!(kind.key())).unwrap(),
+            kind
+        );
+    }
+}
+
+#[test]
+fn store_errors_have_snake_case_keys_and_durable_errors_keep_their_source() {
+    let keys = [
+        (AttemptStoreError::Unreachable, "unreachable"),
+        (AttemptStoreError::TimedOut, "timed_out"),
+        (AttemptStoreError::Rejected, "rejected"),
+        (AttemptStoreError::Invalid, "invalid"),
+    ];
+    for (error, key) in keys {
+        assert_eq!(error.key(), key);
+        assert_eq!(TextEventKind::StoreFailed(error).reason(), Some(key));
+    }
+    let durable = DurableTextError::Store(AttemptStoreError::TimedOut);
+    assert_eq!(
+        durable.to_string(),
+        "the text attempt store failed: the text attempt store did not answer in time"
+    );
+    let source = std::error::Error::source(&durable).map(ToString::to_string);
+    assert_eq!(
+        source.as_deref(),
+        Some("the text attempt store did not answer in time")
+    );
+    assert!(std::error::Error::source(&DurableTextError::Conflict).is_none());
 }

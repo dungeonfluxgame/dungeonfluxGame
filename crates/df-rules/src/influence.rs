@@ -556,5 +556,4 @@ pub fn skill_for_approach(approach: Approach) -> InfluenceSkill {
 }
 
 #[cfg(test)]
-#[path = "influence_tests.rs"]
-mod tests;
+mod influence_tests;

@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 use crate::command::split_words;
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
+use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, start};
 
 const FIXTURE: &str = r#"{
@@ -77,9 +78,24 @@ async fn one_refused_setting_is_reported_and_the_others_still_apply() {
     let error = run(&running, "playground set status=sleepy device=tv")
         .await
         .expect_err("one is refused");
-    let DevError::Rejected(text) = error else {
-        panic!("expected a rejection");
+    let DevError::SomeRejected { label, answers } = &error else {
+        panic!("expected some rejected: {error:?}");
     };
+    assert_eq!(*label, "change");
+    assert!(
+        matches!(
+            answers.as_slice(),
+            [
+                Err(DevError::Rejected {
+                    error: ReplyError::Playground(PlaygroundChangeError::InvalidChange { .. }),
+                    ..
+                }),
+                Ok(_),
+            ]
+        ),
+        "{error:?}"
+    );
+    let text = error.to_string();
     assert!(
         text.contains("change 1:") && text.contains("change 2: ok"),
         "{text}"
@@ -108,13 +124,29 @@ async fn a_fixture_is_written_from_a_file_listed_shown_and_removed() {
 #[tokio::test]
 async fn showing_or_removing_a_fixture_that_is_not_there_says_so() {
     let running = start(&STARTER_FILES).await;
-    for line in ["fixture show ghost", "fixture remove ghost"] {
-        let error = run(&running, line).await.expect_err("refused");
-        assert!(
-            matches!(&error, DevError::Rejected(text) if text.contains("ghost.json")),
-            "{line}"
-        );
-    }
+    let shown = run(&running, "fixture show ghost")
+        .await
+        .expect_err("refused");
+    assert_eq!(
+        shown,
+        DevError::FixtureMissing {
+            file_name: "ghost.json".to_owned()
+        }
+    );
+    let removed = run(&running, "fixture remove ghost")
+        .await
+        .expect_err("refused");
+    // The playground's refusals carry no cause yet; the sentence names the file.
+    assert!(
+        matches!(
+            &removed,
+            DevError::Rejected {
+                error: ReplyError::Canvas { cause: None, .. },
+                message,
+            } if message.contains("ghost.json")
+        ),
+        "{removed:?}"
+    );
 }
 
 #[tokio::test]
@@ -128,9 +160,16 @@ async fn a_fixture_file_that_does_not_read_is_refused_with_its_position() {
         path.to_string_lossy().into_owned(),
     ];
     let error = run_dev(running.port, &words).await.expect_err("refused");
+    // The playground's refusals carry no cause yet; the sentence names the file and the line.
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("bad.json, line")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas { cause: None, .. },
+                message,
+            } if message.contains("bad.json, line")
+        ),
+        "{error:?}"
     );
     assert_eq!(run(&running, "fixtures").await.expect("lists"), "");
 }

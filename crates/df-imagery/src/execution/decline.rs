@@ -4,28 +4,25 @@ use super::{
     ObservationReceipt, StageBasis, StageClaim, StageKind,
 };
 use crate::ImageJob;
-use crate::backends::api::{ApiFailure, DeclineContract};
+use crate::backends::api::{ApiCallError, DeclineContract};
+use crate::listed::listed_enum;
 use crate::runtime::RuntimeUsage;
 use sha2::{Digest, Sha256};
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SubmitDeclineContract {
-    OpenAiImages429V1,
-    FalQueue429V1,
+listed_enum! {
+    keyed
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum SubmitDeclineContract {
+        OpenAiImages429V1,
+        FalQueue429V1,
+    }
 }
 impl SubmitDeclineContract {
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::OpenAiImages429V1 => "openai-images-429-v1",
             Self::FalQueue429V1 => "fal-queue-429-v1",
-        }
-    }
-    pub fn parse_label(value: &str) -> Option<Self> {
-        match value {
-            "openai-images-429-v1" => Some(Self::OpenAiImages429V1),
-            "fal-queue-429-v1" => Some(Self::FalQueue429V1),
-            _ => None,
         }
     }
 }
@@ -37,8 +34,8 @@ pub struct DeclineRoute {
     pub detail: String,
 }
 impl fmt::Debug for DeclineRoute {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("DeclineRoute { .. }")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DeclineRoute { .. }")
     }
 }
 /// Retained retry policy is decoded before locks and bound to the immutable job configuration.
@@ -69,8 +66,9 @@ pub struct DeclineReceipt {
     pub retry: DeclineRetryPolicy,
 }
 impl fmt::Debug for DeclineReceipt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DeclineReceipt")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeclineReceipt")
             .field("contract", &self.contract)
             .field("observation_version", &self.observation_version)
             .finish_non_exhaustive()
@@ -89,11 +87,11 @@ impl DeclineObservation {
         job: &ImageJob,
         dispatch: &DispatchView,
         basis: StageBasis,
-        failure: &ApiFailure,
+        failure: &ApiCallError,
         usage: &RuntimeUsage,
     ) -> Result<Self, ExecutionError> {
         let contract = match failure
-            .retryable_submit_decline()
+            .retryable_submit_decline(usage.at_ms)
             .ok_or(ExecutionError::InvalidRecord)?
         {
             DeclineContract::OpenAiImages429V1 => SubmitDeclineContract::OpenAiImages429V1,
@@ -176,7 +174,7 @@ impl DeclineObservation {
             "kind": "image-api-failure",
             "exchange": "submit",
             "submission": "rejected_submit",
-            "decline_contract": contract.label(),
+            "decline_contract": contract.key(),
             "status": response.status,
             "body": response.body,
             "transport_request_id": response.transport_request_id.as_ref().map(|id| id.as_str()),
@@ -244,7 +242,7 @@ pub struct DeclineRetryCommand {
     pub now_ms: i64,
 }
 impl fmt::Debug for DeclineRetryCommand {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("DeclineRetryCommand { .. }")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DeclineRetryCommand { .. }")
     }
 }

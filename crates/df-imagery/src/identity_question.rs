@@ -17,9 +17,11 @@
 //! This crate does not depend on the text crate: the caller turns an [`IdentityQuestion`] into a
 //! text request.
 
+use crate::listed::listed_enum;
 use std::io::Cursor;
 
 use image::{DynamicImage, GenericImageView, imageops::FilterType};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 /// The most regions one question carries.
@@ -128,16 +130,19 @@ pub struct Identified {
     pub conflict: bool,
 }
 
-/// Why a question could not be made or an answer was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IdentifyError {
-    /// No candidates or characters, too many, a bad box, or a name that is empty, too long or
-    /// repeated.
-    Request,
-    /// A picture could not be read.
-    Picture,
-    /// The answer did not have the asked shape or named what was not asked.
-    Malformed,
+listed_enum! {
+    keyed
+    /// Why a question could not be made or an answer was refused.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum IdentifyError {
+        /// No candidates or characters, too many, a bad box, or a name that is empty, too long or
+        /// repeated.
+        Request,
+        /// A picture could not be read.
+        Picture,
+        /// The answer did not have the asked shape or named what was not asked.
+        Malformed,
+    }
 }
 
 impl IdentifyError {
@@ -255,6 +260,22 @@ fn schema(names: &[String], candidates: usize) -> Value {
     })
 }
 
+/// A model's answer in the shape [`schema`] allows; any other field makes it malformed.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnswerRecord {
+    assignments: Vec<AssignmentRecord>,
+}
+
+/// One answered name: its candidate number (none when no candidate is them) and confidence.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AssignmentRecord {
+    name: String,
+    candidate: Option<u64>,
+    confidence: f64,
+}
+
 /// Prepares the question for `request`: the pictures, the instructions, the facts and the schema.
 pub fn ask(request: &IdentifyRequest) -> Result<IdentityQuestion, IdentifyError> {
     validate_request(request)?;
@@ -314,10 +335,7 @@ pub fn read_answer(
     answer: &Value,
     question: &IdentityQuestion,
 ) -> Result<Vec<Identified>, IdentifyError> {
-    let rows = answer
-        .get("assignments")
-        .and_then(Value::as_array)
-        .ok_or(IdentifyError::Malformed)?;
+    let answer = AnswerRecord::deserialize(answer).map_err(|_| IdentifyError::Malformed)?;
     let mut found: Vec<Identified> = question
         .names
         .iter()
@@ -329,37 +347,29 @@ pub fn read_answer(
         })
         .collect();
     let mut answered = vec![false; question.names.len()];
-    for row in rows {
-        let name = row
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or(IdentifyError::Malformed)?;
+    for row in answer.assignments {
         let index = question
             .names
             .iter()
-            .position(|asked| asked == name.trim())
+            .position(|asked| asked == row.name.trim())
             .ok_or(IdentifyError::Malformed)?;
         if std::mem::replace(&mut answered[index], true) {
             return Err(IdentifyError::Malformed);
         }
-        let candidate = match row.get("candidate") {
-            Some(Value::Null) | None => None,
+        let candidate = match row.candidate {
+            None => None,
             Some(number) => {
-                let number = number
-                    .as_u64()
-                    .and_then(|number| usize::try_from(number).ok())
-                    .ok_or(IdentifyError::Malformed)?;
+                let number = usize::try_from(number).map_err(|_| IdentifyError::Malformed)?;
                 if !(1..=question.candidates).contains(&number) {
                     return Err(IdentifyError::Malformed);
                 }
                 Some(number)
             }
         };
-        let confidence = row
-            .get("confidence")
-            .and_then(Value::as_f64)
-            .filter(|value| (0.0..=1.0).contains(value))
-            .ok_or(IdentifyError::Malformed)?;
+        let confidence = row.confidence;
+        if !(0.0..=1.0).contains(&confidence) {
+            return Err(IdentifyError::Malformed);
+        }
         found[index].candidate = candidate;
         // The confidence was checked to lie in 0 to 1, so the rounded value fits 0 to 1000.
         found[index].confidence_permille = (confidence * 1000.0).round() as u16;
@@ -507,6 +517,10 @@ mod tests {
             json!({"assignments":[{"name":"bard","candidate":9,"confidence":0.9}]}),
             json!({"assignments":[{"name":"bard","candidate":0,"confidence":0.9}]}),
             json!({"assignments":[{"name":"bard","candidate":1,"confidence":1.5}]}),
+            json!({"assignments":[{"name":"bard","candidate":1}]}),
+            json!({"assignments":[{"name":"bard","candidate":1.5,"confidence":0.5}]}),
+            json!({"assignments":[{"name":"bard","candidate":1,"confidence":0.5,"why":"x"}]}),
+            json!({"assignments":[],"note":"extra"}),
             json!({"assignments": [
                 {"name": "bard", "candidate": 1, "confidence": 0.5},
                 {"name": "bard", "candidate": 2, "confidence": 0.5},

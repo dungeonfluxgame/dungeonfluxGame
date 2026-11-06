@@ -17,13 +17,11 @@ use df_playground::media::{
     AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MediaEntry, MediaKind, VIDEO_EXTENSIONS, media_kind,
 };
 
+use crate::limits::UPLOAD_ENVELOPE_BYTES;
 use crate::media_upload::EnvelopeCause;
 use crate::video_container::{DurationCause, FoundContent, VideoError, VideoFormat, inspect_video};
 
 const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
-/// Bytes the request carries besides the file's base64: the JSON braces, the two keys, the name
-/// (with escapes) and whitespace.
-const UPLOAD_ENVELOPE_BYTES: u64 = 4096;
 
 /// The limits of the media library, all in one place.
 #[derive(Debug, Clone, Copy)]

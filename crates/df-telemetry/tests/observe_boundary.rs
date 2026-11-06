@@ -3,7 +3,7 @@
 use df_observe::{
     AnyValue, BrowserBuffer, BrowserLog, BufferError, CaptureKey, Durability, LogInput,
     NativeProducer, ProducerId, RecordId, Severity, Signal, SourceSequence, SpanInput,
-    TelemetryError, TelemetryLimits, UploadFailure,
+    TelemetryError, TelemetryLimits, UploadCause,
 };
 use df_telemetry::{DiagnosticReader, QueryFilter, Store};
 use df_types::{BuildIdentity, OperationId, SessionId};
@@ -166,7 +166,7 @@ fn current_producers_store_reader_preserve_identity_gaps_retry_and_owned_shutdow
         .to_vec();
     assert!(browser_bytes.len() <= 8192);
     browser
-        .fail_upload(&first_lease, UploadFailure::Transport)
+        .fail_upload(&first_lease, UploadCause::Transport)
         .unwrap();
     assert_eq!(browser.snapshot().retained_records, 1);
     let retry_lease = browser.begin_upload(Duration::from_secs(1)).unwrap();

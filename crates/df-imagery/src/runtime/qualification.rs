@@ -4,13 +4,12 @@ use crate::execution::{
     CandidateReceipt, DecisionKind, DecisionObservation, ExecutionScope, LocalInspectionCheckpoint,
     StageKind,
 };
+use crate::listed::listed_enum;
 use crate::publication::FinalDecisionRef;
 use crate::request::InspectionRequirement;
 use crate::service::types::{CreatorAssessment, CreatorRoute};
 use crate::{ImageJob, ImageOwner};
-use inspection_policy::{
-    InspectionAssessment, InspectionVerdict, PhotoCheckFailure, UnjudgedReason,
-};
+use inspection_policy::{InspectionAssessment, InspectionVerdict, PhotoCheckCause, UnjudgedReason};
 use sha2::{Digest, Sha256};
 
 /// The selected interpretation and exact raw revision, with its real source candidate.
@@ -63,8 +62,9 @@ pub struct QualifiedPipeline {
     candidate: CandidateReceipt,
 }
 impl std::fmt::Debug for QualifiedPipeline {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QualifiedPipeline")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QualifiedPipeline")
             .field("job", &self.binding.job)
             .finish_non_exhaustive()
     }
@@ -115,8 +115,9 @@ pub struct QualifiedDecision {
     classification_route: Option<CreatorRoute>,
 }
 impl std::fmt::Debug for QualifiedDecision {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QualifiedDecision")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QualifiedDecision")
             .field("validity", &self.validity)
             .finish_non_exhaustive()
     }
@@ -171,43 +172,28 @@ impl QualifiedDecision {
     }
 }
 
-/// The closed reasons a job ends without delivering an image; each has a stable label.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NoDeliveryReason {
-    InspectionRejected,
-    RequiredInspectionUnjudged,
-    CreatorNeedsRevision,
-    CreatorUncertain,
-    Retired,
-    Expired,
-    RequiredInspectionPreparation,
-    RequiredInspectionDisabled,
-    SupplierNoOutput,
-    SupplierDeclined,
-    SourceDenied,
-    MissingCredential,
-    UnsupportedProfile,
+listed_enum! {
+    keyed
+    /// The closed reasons a job ends without delivering an image; each has a stable label.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum NoDeliveryReason {
+        InspectionRejected,
+        RequiredInspectionUnjudged,
+        CreatorNeedsRevision,
+        CreatorUncertain,
+        Retired,
+        Expired,
+        RequiredInspectionPreparation,
+        RequiredInspectionDisabled,
+        SupplierNoOutput,
+        SupplierDeclined,
+        SourceDenied,
+        MissingCredential,
+        UnsupportedProfile,
+    }
 }
 impl NoDeliveryReason {
-    pub fn parse_label(label: &str) -> Option<Self> {
-        Some(match label {
-            "inspection_rejected" => Self::InspectionRejected,
-            "required_inspection_unjudged" => Self::RequiredInspectionUnjudged,
-            "creator_needs_revision" => Self::CreatorNeedsRevision,
-            "creator_uncertain" => Self::CreatorUncertain,
-            "retired" => Self::Retired,
-            "expired" => Self::Expired,
-            "required_inspection_preparation" => Self::RequiredInspectionPreparation,
-            "required_inspection_disabled" => Self::RequiredInspectionDisabled,
-            "supplier_no_output" => Self::SupplierNoOutput,
-            "supplier_declined" => Self::SupplierDeclined,
-            "source_denied" => Self::SourceDenied,
-            "missing_credential" => Self::MissingCredential,
-            "unsupported_profile" => Self::UnsupportedProfile,
-            _ => return None,
-        })
-    }
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::InspectionRejected => "inspection_rejected",
             Self::RequiredInspectionUnjudged => "required_inspection_unjudged",
@@ -235,8 +221,9 @@ pub struct QualifiedNoDelivery {
     expected_revision: u64,
 }
 impl std::fmt::Debug for QualifiedNoDelivery {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QualifiedNoDelivery")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QualifiedNoDelivery")
             .field("reason", &self.reason)
             .finish_non_exhaustive()
     }
@@ -518,7 +505,7 @@ pub fn qualify_publication(
                 InspectionVerdict::Pass => {}
                 InspectionVerdict::Unjudged(_)
                     if spec.requirement == InspectionRequirement::BestEffort => {}
-                InspectionVerdict::Failed(PhotoCheckFailure::VisibleText)
+                InspectionVerdict::Failed(PhotoCheckCause::VisibleText)
                     if visible_text_exception(&facts, &selected.1, spec) => {}
                 _ => return Err(RuntimeError::ProviderRefused),
             }
@@ -576,7 +563,7 @@ pub fn qualify_no_delivery(
             .ok_or(RuntimeError::InvalidRecord)?;
         let selected = inspection_for(&facts, candidate).ok_or(RuntimeError::InvalidRecord)?;
         let reason = match selected.2.verdict {
-            InspectionVerdict::Failed(PhotoCheckFailure::VisibleText)
+            InspectionVerdict::Failed(PhotoCheckCause::VisibleText)
                 if visible_text_exception(&facts, &selected.1, spec) =>
             {
                 return Err(RuntimeError::InvalidRecord);
@@ -855,7 +842,7 @@ fn digest(bytes: &[u8]) -> [u8; 32] {
 }
 
 pub(super) fn retain_inspection_failure(reason: UnjudgedReason) -> Vec<u8> {
-    serde_json::json!({"schema_revision":1,"failure":reason.label()})
+    serde_json::json!({"schema_revision":1,"failure":reason.key()})
         .to_string()
         .into_bytes()
 }

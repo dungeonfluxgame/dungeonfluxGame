@@ -19,7 +19,7 @@ pub(super) async fn complete_unusable_in(
     let stored_usage: i32 = row.get("usage_revision");
     if state == "failed" {
         let stored_cause: Option<String> = row.get("failure_cause");
-        if stored_cause.as_deref() != Some(cause.label()) {
+        if stored_cause.as_deref() != Some(cause.key()) {
             return Err(ExecutionError::OperationConflict);
         }
         if stored_usage == invalid(i32::try_from(usage_revision))? {
@@ -55,7 +55,7 @@ pub(super) async fn complete_unusable_in(
         usage_revision=$3,updated_at_ms=$4 WHERE dispatch_id=$1",
         &[
             &command.dispatch.as_bytes().as_slice(),
-            &cause.label(),
+            &cause.key(),
             &invalid(i32::try_from(usage_revision))?,
             &command.now_ms,
         ],

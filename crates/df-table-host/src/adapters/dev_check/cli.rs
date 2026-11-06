@@ -5,7 +5,6 @@ use crate::adapters::hero_profile::Skill;
 use crate::command::CommandError;
 use crate::dev::DevError;
 use crate::dev_client;
-use crate::dev_http::DevReply;
 use crate::engine::routes::path;
 
 use super::format::format_rules_check;
@@ -54,8 +53,5 @@ pub async fn ask(port: u16, request: &RulesCheckRequest) -> Result<RulesCheckRep
 
 /// Runs one check against the host on `port` and returns the text to print.
 pub async fn run(port: u16, request: &RulesCheckRequest) -> Result<String, DevError> {
-    match ask(port, request).await? {
-        DevReply::Done { value } => Ok(format_rules_check(&value)),
-        DevReply::Rejected { message, .. } => Err(DevError::Rejected(message)),
-    }
+    dev_client::reply_value(ask(port, request).await?).map(|value| format_rules_check(&value))
 }

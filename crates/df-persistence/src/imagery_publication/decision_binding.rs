@@ -30,7 +30,7 @@ pub(super) fn encode(refs: &[FinalDecisionRef]) -> Result<String, PublicationErr
     let value=Value::Array(refs.iter().map(|value|json!({
         "owner":owner_scope_bytes(&value.scope.owner),"job":value.scope.job.as_bytes(),
         "stage":value.scope.stage.as_bytes(),"dispatch":value.scope.dispatch.as_bytes(),
-        "kind":value.kind.label(),"version":value.observation_version,"usage":value.usage_revision,
+        "kind":value.kind.key(),"version":value.observation_version,"usage":value.usage_revision,
         "schema":value.basis.schema_revision,"validator":value.basis.validator_revision,
         "input_revision":value.basis.stage.input_revision,"input_digest":value.basis.stage.input_digest,
         "config_revision":value.basis.stage.config_revision,"config_digest":value.basis.stage.config_digest,
@@ -191,8 +191,7 @@ async fn read_ancestor(
         }
         ReadAuthority::Snapshot => {
             let row = tx.query_one("SELECT stage_kind FROM imagery.image_execution_stage WHERE owner_scope=$1 AND job_id=$2 AND stage_id=$3", &[&owner_scope_bytes(&job.owner),&job.job.as_bytes().as_slice(),&view.stage.as_bytes().as_slice()]).await.map_err(database_error)?;
-            StageKind::parse_label(&row.get::<_, String>(0))
-                .ok_or(PublicationError::InvalidRecord)?
+            StageKind::from_key(&row.get::<_, String>(0)).ok_or(PublicationError::InvalidRecord)?
         }
     };
     match kind {

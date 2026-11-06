@@ -124,10 +124,11 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use crate::dev::DevError;
+use crate::dev::{DevError, ReplyError};
 
-use super::play::{LIVE_FIXTURE, run};
+use super::play::{LIVE_FIXTURE, PlayError, ReadyListCause, run};
 use crate::engine::routes::{AUDIENCE_PARAMETER, path};
+use crate::wire::route;
 
 /// A host that answers each request target with a fixed body and everything else with `{}`, so a
 /// verb can be shown what a real engine never serves.
@@ -187,10 +188,10 @@ fn projection_address(who: &str) -> String {
     format!("{}?{AUDIENCE_PARAMETER}={who}", path::PROJECTION)
 }
 
-fn rejection(result: Result<String, DevError>) -> String {
+fn rejection(result: Result<String, DevError>) -> PlayError {
     match result {
-        Err(DevError::Rejected(message)) => message,
-        other => panic!("a rejection naming the missing field, got {other:?}"),
+        Err(DevError::Play(error)) => error,
+        other => panic!("a play error naming what is missing, got {other:?}"),
     }
 }
 
@@ -208,10 +209,36 @@ async fn scene_start_and_lobby_show_fail_naming_the_ready_list_a_dump_lacks() {
     ])
     .await;
 
+    let missing = PlayError::InvalidReadyList {
+        cause: ReadyListCause::Missing,
+    };
     let started = rejection(run(port, PlayCommand::SceneStart { seat: None }).await);
-    assert!(started.contains("ready"), "{started}");
+    assert_eq!(started, missing);
+    assert_eq!(
+        started.to_string(),
+        "the lobby's saved state has no readable 'ready' list: missing field `ready`"
+    );
     let shown = rejection(run(port, PlayCommand::Lobby(LobbyCommand::Show)).await);
-    assert!(shown.contains("ready"), "{shown}");
+    assert_eq!(shown, missing);
+}
+
+#[tokio::test]
+async fn a_ready_list_that_is_not_whole_seat_numbers_is_refused_by_name() {
+    for ready in [json!(null), json!(["one"]), json!([1, -2]), json!([1.5])] {
+        let port = serve(vec![(
+            path::DUMP.to_owned(),
+            dump("lobby", "gathering", &json!({"ready": ready})),
+        )])
+        .await;
+        let started = rejection(run(port, PlayCommand::SceneStart { seat: None }).await);
+        assert_eq!(
+            started,
+            PlayError::InvalidReadyList {
+                cause: ReadyListCause::NotSeatNumbers
+            },
+            "{ready}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -229,7 +256,13 @@ async fn lobby_show_fails_naming_the_readout_a_projection_lacks_and_reads_a_star
     ])
     .await;
     let shown = rejection(run(port, PlayCommand::Lobby(LobbyCommand::Show)).await);
-    assert!(shown.contains("readout"), "{shown}");
+    assert_eq!(
+        shown,
+        PlayError::MissingField {
+            audience: AudienceSpec::Tv,
+            field: "readout"
+        }
+    );
 
     let started = serve(vec![
         (
@@ -268,10 +301,17 @@ async fn play_publish_fails_naming_the_view_a_projection_lacks_and_never_writes_
         ),
     ])
     .await;
-    let message = rejection(run(broken_tv, PlayCommand::Publish { seat: None }).await);
-    assert!(
-        message.contains("shared screen") && message.contains("view"),
-        "{message}"
+    let error = rejection(run(broken_tv, PlayCommand::Publish { seat: None }).await);
+    assert_eq!(
+        error,
+        PlayError::MissingField {
+            audience: AudienceSpec::Tv,
+            field: "view"
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "the shared screen's projection has no 'view'"
     );
 
     let broken_phone = serve(vec![
@@ -283,13 +323,36 @@ async fn play_publish_fails_naming_the_view_a_projection_lacks_and_never_writes_
         (projection_address("1"), done(&json!({"readout": "y"}))),
     ])
     .await;
-    let message = rejection(run(broken_phone, PlayCommand::Publish { seat: None }).await);
-    assert!(
-        message.contains("seat 1") && message.contains("view"),
-        "{message}"
+    let error = rejection(run(broken_phone, PlayCommand::Publish { seat: None }).await);
+    assert_eq!(
+        error,
+        PlayError::MissingField {
+            audience: AudienceSpec::Seat { seat: 1 },
+            field: "view"
+        }
     );
+    assert_eq!(error.to_string(), "the projection of seat 1 has no 'view'");
 
     let whole = serve(vec![
+        dumped.clone(),
+        (
+            projection_address("tv"),
+            done(&json!({"view": {"place": "gate"}})),
+        ),
+        (
+            projection_address("1"),
+            done(&json!({"view": {"hero": "A"}})),
+        ),
+        (route::DEV_FIXTURE_WRITE.to_owned(), written_reply()),
+    ])
+    .await;
+    let written = run(whole, PlayCommand::Publish { seat: None })
+        .await
+        .expect("two real views are published");
+    assert!(written.contains(LIVE_FIXTURE), "{written}");
+
+    // The playground's refusal of the write is its typed refusal, not the raw answer.
+    let refused = serve(vec![
         dumped,
         (
             projection_address("tv"),
@@ -299,10 +362,29 @@ async fn play_publish_fails_naming_the_view_a_projection_lacks_and_never_writes_
             projection_address("1"),
             done(&json!({"view": {"hero": "A"}})),
         ),
+        (
+            route::DEV_FIXTURE_WRITE.to_owned(),
+            json!({
+                "outcome": "rejected", "cause": null,
+                "message": "the fixture does not read", "problems": []
+            })
+            .to_string(),
+        ),
     ])
     .await;
-    let written = run(whole, PlayCommand::Publish { seat: None })
-        .await
-        .expect("two real views are published");
-    assert!(written.contains(LIVE_FIXTURE), "{written}");
+    assert_eq!(
+        run(refused, PlayCommand::Publish { seat: None }).await,
+        Err(DevError::Rejected {
+            error: ReplyError::Canvas {
+                cause: None,
+                problems: Vec::new()
+            },
+            message: "the fixture does not read".to_owned(),
+        })
+    );
+}
+
+/// The playground's answer to a fixture it wrote.
+fn written_reply() -> String {
+    json!({"outcome": "done", "revision": 1, "notices": []}).to_string()
 }

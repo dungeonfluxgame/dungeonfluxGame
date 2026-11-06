@@ -19,8 +19,10 @@ pub struct QualifiedNoOutput {
     raw_sha256: Option<[u8; 32]>,
 }
 impl std::fmt::Debug for QualifiedNoOutput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("QualifiedNoOutput").finish_non_exhaustive()
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("QualifiedNoOutput")
+            .finish_non_exhaustive()
     }
 }
 impl QualifiedNoOutput {

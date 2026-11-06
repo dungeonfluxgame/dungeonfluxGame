@@ -20,6 +20,9 @@ pub struct RuntimeSettings {
     pub active_config_revision: u64,
     pub capacity: CapacityScope,
     pub poll_interval: Duration,
+    /// The Codex home the Codex CLI child uses, where its image tool saves pictures; filled by
+    /// the host. `None` looks for a Codex picture only in the attempt's outputs folder.
+    pub codex_home: Option<std::path::PathBuf>,
 }
 
 /// Infrastructure-only composition; consumer requests continue through ImageService.
@@ -329,9 +332,9 @@ where
                     | RuntimeError::UnsupportedCapability),
                 ) => {
                     let reason = if error == RuntimeError::CredentialUnavailable {
-                        super::PreflightRejection::MissingCredential
+                        super::PreflightCause::MissingCredential
                     } else {
-                        super::PreflightRejection::UnsupportedProfile
+                        super::PreflightCause::UnsupportedProfile
                     };
                     match Box::pin(self.finish_preflight_rejection(&job, &stage, reason)).await {
                         Ok(()) => {}
@@ -947,6 +950,7 @@ where
                 context: &context,
                 intent: &intent,
                 config: &resolved_config,
+                codex_home: self.settings.codex_home.as_deref(),
                 timeout,
                 resume,
                 telemetry: &self.telemetry,
@@ -1105,7 +1109,7 @@ where
                     )
                 };
                 if let (Some(failure), Some(raw)) = (&failure.api, &raw)
-                    && failure.retryable_submit_decline().is_some()
+                    && failure.retryable_submit_decline(raw.at_ms).is_some()
                     && raw.evidence == UsageEvidence::Unknown
                 {
                     let receipt = self.retain_decline(&context, failure, raw, mode).await?;
@@ -1325,7 +1329,7 @@ where
         }
         let resolved_model = dispatch::model(config, intent)?;
         for bytes in [
-            dispatch::backend(config, intent).label().as_bytes(),
+            dispatch::backend(config, intent).key().as_bytes(),
             resolved_model.as_bytes(),
             crate::raster::webp_lossy::WEBP_ENCODER_SOURCE.as_bytes(),
         ] {
@@ -1389,15 +1393,15 @@ where
         let model = dispatch::model(config, intent)?;
         let key = MediaRequestKey::derive_recipe(&MediaRecipeRequest {
             operation_kind: "native",
-            purpose: intent.purpose.purpose.label(),
+            purpose: intent.purpose.purpose.key(),
             owner_scope: &owner,
-            backend_profile: dispatch::backend(config, intent).label(),
+            backend_profile: dispatch::backend(config, intent).key(),
             model: &model,
             quality: "frozen-config",
             rating: "auto",
             width_px: dimensions.width_px(),
             height_px: dimensions.height_px(),
-            output_format: delivered.encoding().format().label(),
+            output_format: delivered.encoding().format().key(),
             alpha_policy: "frozen-output",
             template_revision: 1,
             route_revision: 1,

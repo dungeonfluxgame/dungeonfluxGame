@@ -69,7 +69,7 @@ where
         let route = value
             .get("route")
             .and_then(serde_json::Value::as_str)
-            .and_then(CreatorRoute::parse_label)
+            .and_then(CreatorRoute::from_key)
             .ok_or(RuntimeError::InvalidRecord)?;
         let mut resolved = config.clone();
         match route {
@@ -111,7 +111,7 @@ where
             let category = payload
                 .get("category")
                 .and_then(serde_json::Value::as_str)
-                .and_then(crate::CreatorCategory::parse_label)
+                .and_then(crate::CreatorCategory::from_key)
                 .ok_or(RuntimeError::InvalidRecord)?;
             if matches!(
                 category,

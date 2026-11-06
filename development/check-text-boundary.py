@@ -135,7 +135,7 @@ ALLOWLIST = _allow([
     ("crates/df-providers/src/systemone.rs", "literal", "/v1/systemone", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/src/text_response.rs", "call", "NativeTextProvider", 3, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/src/text_response.rs", "literal", "/v1/responses", 2, "provider-crate", PHASE_REASONS["provider-crate"]),
-    ("crates/df-providers/tests/metering.rs", "call", "SystemOneChoiceProvider", 2, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/metering.rs", "call", "SystemOneChoiceProvider", 5, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/tests/metering.rs", "import", "SystemOneChoiceProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/tests/native_http.rs", "call", "registered_text_provider", 6, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/tests/native_http.rs", "import", "registered_text_provider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),

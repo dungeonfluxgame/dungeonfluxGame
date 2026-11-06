@@ -5,13 +5,15 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use df_table::canvas::Canvas;
 use df_table::testkit::{CHARACTER_KIND, MARKER_KIND, registry_from};
 
 use crate::event_log::EventLog;
+use crate::observe::{HostEventSink, WallClock};
 use crate::playground::PlaygroundFiles;
 use crate::request::RequestError;
-use crate::sink::{HostSink, LineEcho};
+use crate::sink::LineEcho;
 use crate::state::AppState;
 use crate::wire::EffectRequest;
 
@@ -131,7 +133,7 @@ fn state_with_a_blocked_terminal() -> (Arc<AppState>, Terminal) {
     let echo = LineEcho::starting_after(&log, writer);
     let state = Arc::new(AppState::new(
         Canvas::new(registry_from(&[CHARACTER_KIND, MARKER_KIND])),
-        HostSink::new(Arc::clone(&log), true),
+        HostEventSink::new(Arc::clone(&log), Arc::new(WallClock)),
         Some(echo),
         directory.path().to_path_buf(),
         PlaygroundFiles::new(
@@ -202,7 +204,7 @@ async fn effects_keep_being_applied_over_http_while_the_terminal_is_blocked() {
         .await
         .expect("the host answered while the terminal was blocked")
         .expect("answers");
-        assert_eq!(response.status, 200);
+        assert_eq!(response.status, StatusCode::OK);
     }
     terminal.release.send(()).expect("lets go");
     server.abort();

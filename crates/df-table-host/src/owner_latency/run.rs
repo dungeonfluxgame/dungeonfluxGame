@@ -29,15 +29,11 @@ use serde::{Deserialize, Serialize};
 
 use super::commit::{CommitMode, Committer};
 use super::error::HarnessError;
+use super::limits::{SEAT_PENDING_LIMIT, UNLIMITED_RATE};
 use super::producers::{self, Arrival, ProducerContext, SendLimit, Submission};
 use super::projection::project_all;
 use super::state::{AUDIENCE_COUNT, SEAT_COUNT, TableState, WorkloadProfile};
 use super::statistics::nanoseconds;
-
-/// The pending bound per seat (J.4's default of 3), so the queue is as deep as the design allows.
-const SEAT_PENDING_LIMIT: u32 = 3;
-/// A rate so high that the token bucket never refuses; admission refusals are not what is measured.
-const UNLIMITED_RATE: u32 = 1_000_000;
 
 /// Whether a reader still holds the previous snapshot when `step` runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

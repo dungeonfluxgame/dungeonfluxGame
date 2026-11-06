@@ -275,8 +275,8 @@ pub(super) fn assessment_payload(assessment: CreatorAssessment) -> Vec<u8> {
     json!({
         "schema_revision": 1,
         "contract_revision": assessment.contract_revision,
-        "category": assessment.category.label(),
-        "route": assessment.route.label(),
+        "category": assessment.category.key(),
+        "route": assessment.route.key(),
     })
     .to_string()
     .into_bytes()

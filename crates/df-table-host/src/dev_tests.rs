@@ -1,10 +1,14 @@
 use std::path::{Path, PathBuf};
 
+use axum::http::StatusCode;
+use df_table::event::RejectionCause;
 use tempfile::TempDir;
 
+use crate::cast::request::CastError;
 use crate::client::ClientError;
 use crate::command::{CommandError, split_words};
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
+use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, canned_server, closed_port, start};
 
 async fn run(running: &Running, line: &str) -> Result<String, DevError> {
@@ -47,8 +51,17 @@ async fn a_refused_change_comes_back_as_a_rejection_with_the_reason() {
         .await
         .expect_err("refused");
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("dragon")),
-        "{error}"
+        matches!(
+            &error,
+            DevError::Rejected {
+                error: ReplyError::Canvas {
+                    cause: Some(RejectionCause::UnknownKind),
+                    ..
+                },
+                ..
+            }
+        ),
+        "{error:?}"
     );
 }
 
@@ -61,9 +74,27 @@ async fn a_command_that_sends_several_effects_applies_each_in_order_and_reports_
     let error = run(&running, "set pip hit_points=5000 name=Pippin")
         .await
         .expect_err("the first is refused");
-    let DevError::Rejected(text) = error else {
-        panic!("expected a rejection");
+    let DevError::SomeRejected { label, answers } = &error else {
+        panic!("expected some rejected: {error:?}");
     };
+    assert_eq!(*label, "effect");
+    assert!(
+        matches!(
+            answers.as_slice(),
+            [
+                Err(DevError::Rejected {
+                    error: ReplyError::Canvas {
+                        cause: Some(RejectionCause::InvalidValue),
+                        ..
+                    },
+                    ..
+                }),
+                Ok(_),
+            ]
+        ),
+        "{error:?}"
+    );
+    let text = error.to_string();
     assert!(
         text.contains("effect 1:") && text.contains("effect 2: ok"),
         "{text}"
@@ -136,12 +167,22 @@ async fn reload_picks_up_a_new_kind_file_and_a_broken_one_leaves_the_kinds_alone
     );
     running.write_file("broken.json", "{ not json");
     let error = run(&running, "reload").await.expect_err("refused");
-    let DevError::Rejected(text) = &error else {
-        panic!("expected a rejection, got {error:?}");
+    // A rejected reload has no single cause; its problems name each file that does not read.
+    let DevError::Rejected {
+        error: ReplyError::Canvas {
+            cause: None,
+            problems,
+        },
+        ..
+    } = &error
+    else {
+        panic!("expected a rejected reload, got {error:?}");
     };
     assert!(
-        text.contains("unchanged") && text.contains("broken.json"),
-        "{text}"
+        problems
+            .iter()
+            .any(|problem| problem.contains("broken.json")),
+        "{error:?}"
     );
     assert!(
         run(&running, "kinds")
@@ -232,10 +273,16 @@ async fn an_answer_the_program_does_not_understand_is_reported_with_its_status_a
     let error = run_dev(port, &split_words("canvas").expect("splits"))
         .await
         .expect_err("fails");
+    assert!(
+        error
+            .to_string()
+            .starts_with("unexpected answer (status 500): "),
+        "{error}"
+    );
     let DevError::UnexpectedAnswer { status, body, .. } = error else {
         panic!("expected an unexpected answer");
     };
-    assert_eq!(status, 500);
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(
         body.chars().count(),
         crate::limits::MAXIMUM_ECHOED_ANSWER_CHARACTERS
@@ -256,10 +303,16 @@ async fn a_changed_controls_answer_that_does_not_read_says_why() {
     )
     .await
     .expect_err("fails");
+    assert!(
+        error
+            .to_string()
+            .starts_with("unexpected answer (status 200, missing field"),
+        "{error}"
+    );
     let DevError::UnexpectedAnswer { status, reason, .. } = error else {
         panic!("expected an unexpected answer");
     };
-    assert_eq!(status, 200);
+    assert_eq!(status, StatusCode::OK);
     let reason = reason.expect("a reason");
     assert!(reason.contains("missing field `controls`"), "{reason}");
 }
@@ -284,8 +337,89 @@ async fn a_guard_refusal_of_a_controls_change_is_reported_as_its_sentence() {
     )
     .await
     .expect_err("refused");
-    let DevError::Rejected(text) = error else {
-        panic!("expected a refusal, got {error:?}");
+    assert_eq!(
+        error,
+        DevError::Rejected {
+            error: ReplyError::Canvas {
+                cause: Some(RejectionCause::ForbiddenRequest),
+                problems: Vec::new(),
+            },
+            message: "requests are not accepted from another site".to_owned(),
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "requests are not accepted from another site"
+    );
+}
+
+#[tokio::test]
+async fn the_command_line_refuses_its_own_mistakes_by_type_before_asking_the_canvas() {
+    let running = start(&STARTER_FILES).await;
+    assert_eq!(
+        run(&running, "repl").await,
+        Err(DevError::ReplOutsideCommandLine)
+    );
+    assert!(
+        matches!(
+            run(&running, "fixture show ../escape").await,
+            Err(DevError::InvalidFixtureName(_))
+        ),
+        "a name that leaves the fixture directory is refused here"
+    );
+    let words = ["media".to_owned(), "add".to_owned(), "..".to_owned()];
+    assert_eq!(
+        run_dev(running.port, &words).await,
+        Err(DevError::InvalidMediaPath {
+            path: PathBuf::from("..")
+        })
+    );
+}
+
+#[test]
+fn a_refusal_prints_the_hosts_sentence_with_the_key_its_routes_show() {
+    let cast = DevError::Rejected {
+        error: ReplyError::Cast(CastError::NoBackdrop),
+        message: "the shown scene has no backdrop picture".to_owned(),
     };
-    assert!(text.contains("not accepted from another site"), "{text}");
+    assert_eq!(
+        cast.to_string(),
+        "refused (no_backdrop): the shown scene has no backdrop picture"
+    );
+    let canvas = DevError::Rejected {
+        error: ReplyError::Canvas {
+            cause: None,
+            problems: vec!["broken.json: not json".to_owned()],
+        },
+        message: "kinds unchanged".to_owned(),
+    };
+    assert_eq!(
+        canvas.to_string(),
+        "kinds unchanged\n  broken.json: not json"
+    );
+    let playground = DevError::Rejected {
+        error: ReplyError::Playground(PlaygroundChangeError::InvalidChange {
+            detail: "no fixture is shown".to_owned(),
+        }),
+        message: "no fixture is shown".to_owned(),
+    };
+    assert_eq!(playground.to_string(), "no fixture is shown");
+    let some = DevError::SomeRejected {
+        label: "effect",
+        answers: vec![Err(canvas.clone()), Ok("ok (revision 2)".to_owned())],
+    };
+    assert_eq!(
+        some.to_string(),
+        "effect 1: kinds unchanged\n  broken.json: not json\neffect 2: ok (revision 2)"
+    );
+    let cycle = DevError::CycleStopped {
+        done: vec!["1: quay ok (revision 1)".to_owned()],
+        step: 2,
+        scene: "castle".to_owned(),
+        error: Box::new(playground),
+    };
+    assert_eq!(
+        cycle.to_string(),
+        "1: quay ok (revision 1)\n2: castle failed: no fixture is shown"
+    );
 }

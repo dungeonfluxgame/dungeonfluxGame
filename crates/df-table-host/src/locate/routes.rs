@@ -23,7 +23,7 @@ use super::request::{
     ShowQuery, StoredLayout,
 };
 use super::storage::lock_layout_writes;
-use super::{check_picture_name, layout_file_name, relabel, scan_blocking, write_layout};
+use super::{check_picture_name, layout_file_name, relabel, scan_picture, write_layout};
 use crate::dev_http::{parse_body, reply};
 use crate::media_library::media_directory;
 use crate::state::AppState;
@@ -83,6 +83,17 @@ async fn run_locate_task<T: Send + 'static>(
         .unwrap_or(Err(LocateError::Stopped))
 }
 
+/// Runs a paid scan on a task of its own and waits for it, so the scan and the layout it stores
+/// run to the end even when the request is dropped (the client left, or shutdown's grace ended).
+/// A task that stopped without an answer is `Stopped`.
+pub(super) async fn run_scan_task<T: Send + 'static>(
+    scan: impl Future<Output = Result<T, LocateError>> + Send + 'static,
+) -> Result<T, LocateError> {
+    tokio::spawn(scan)
+        .await
+        .unwrap_or(Err(LocateError::Stopped))
+}
+
 async fn locate(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
     let request: LocateRequest = match parse_body(&bytes) {
         Ok(request) => request,
@@ -104,25 +115,27 @@ async fn scan(app: &AppState, request: LocateRequest) -> Result<LocatedLayout, L
         request.prompt.unwrap_or_default().key()
     ));
     let (directory, stored_in) = (media(app), layouts(app));
-    let scanned = run_locate_task(move || scan_blocking(&directory, &stored_in, &request)).await?;
+    let scanned =
+        run_scan_task(async move { scan_picture(&directory, &stored_in, &request).await }).await?;
     app.record_line(format!(
         concat!(
-            "LOCATE stored picture={} file={} model={} prompt={} regions={} ",
+            "LOCATE stored picture={} file={} model={} prompt={} regions={} left_out={} ",
             "kept_labels={} old_layout={} size={}x{} duration_ms={}"
         ),
         picture,
         layout_file_name(&picture),
-        scanned.layout.model,
-        scanned.layout.prompt,
-        scanned.layout.regions.len(),
+        scanned.layout.model(),
+        scanned.layout.prompt(),
+        scanned.layout.regions().len(),
+        scanned.left_out,
         scanned.kept_labels,
         if scanned.old_layout_unreadable {
             "unreadable"
         } else {
             "read"
         },
-        scanned.layout.picture.width_px,
-        scanned.layout.picture.height_px,
+        scanned.layout.picture().width_px,
+        scanned.layout.picture().height_px,
         scanned.duration_ms
     ));
     Ok(LocatedLayout {

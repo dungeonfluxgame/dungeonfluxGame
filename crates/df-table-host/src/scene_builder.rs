@@ -63,8 +63,8 @@ pub use self::lookahead::{LookaheadBench, LookaheadCommand, LookaheadWorker};
 pub use self::pacer::{PacerError, Pumped, ScenePacer};
 pub use self::playout::Playout;
 pub use self::purposes::{
-    BuildPriority, LOCATE_DEADLINE_MS, LOCATE_PRICE_MICRO_DOLLARS, StagePurposes, cost_view,
-    scene_purpose_table, scene_purposes, stage_uses,
+    BuildPriority, LOCATE_PRICE_MICRO_DOLLARS, StagePurposes, cost_view, scene_purpose_table,
+    scene_purposes, stage_uses,
 };
 pub use self::report::{
     AnchorReport, CardReport, FailureReport, JobReport, LocateReport, PointReport, SceneReport,

@@ -34,7 +34,7 @@ fn open(registry: &QuotaRegistry, account: &QuotaAccount, settings: QuotaSetting
         Ok(Some(QuotaTransition::Opened))
     );
 }
-fn refusal<T>(result: Result<T, QuotaRefusal>) -> QuotaRefusal {
+fn refusal<T>(result: Result<T, QuotaError>) -> QuotaError {
     match result {
         Ok(_) => panic!("admission unexpectedly succeeded"),
         Err(error) => error,
@@ -50,7 +50,7 @@ fn aliases_and_image_analysis_paths_share_one_actual_credential_account() {
     let another_worker = registry.clone();
     assert_eq!(
         refusal(another_worker.admit(&analysis, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_060 }
+        QuotaError::Cooldown { retry_at_ms: 1_060 }
     );
     clock.set(1_060);
     assert_eq!(
@@ -98,7 +98,7 @@ fn trusted_custody_can_identify_one_account_across_separate_keys() {
     open(&registry, &first, settings);
     assert_eq!(
         refusal(registry.admit(&second, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_060 }
+        QuotaError::Cooldown { retry_at_ms: 1_060 }
     );
     assert!(registry.admit(&dedicated, settings).is_ok());
 }
@@ -120,7 +120,7 @@ fn distinct_new_work_is_refused_without_sending_until_the_full_cooldown() {
         clock.set(now);
         assert_eq!(
             dispatch(QuotaAnswer::Succeeded),
-            Err(QuotaRefusal::Cooldown { retry_at_ms: 1_060 })
+            Err(QuotaError::Cooldown { retry_at_ms: 1_060 })
         );
     }
     clock.set(1_060);
@@ -138,7 +138,7 @@ fn waiting_admission_revalidates_when_another_call_exhausts_quota() {
     open(&registry, &account, settings);
     assert_eq!(
         refusal(waiting.claim()),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_060 }
+        QuotaError::Cooldown { retry_at_ms: 1_060 }
     );
 }
 
@@ -150,10 +150,10 @@ fn exactly_one_waiting_call_claims_the_probe_after_cooldown() {
     let first = registry.admit(&account, settings).unwrap();
     let second = registry.admit(&account, settings).unwrap();
     let probe = first.claim().unwrap();
-    assert_eq!(refusal(second.claim()), QuotaRefusal::Probing);
+    assert_eq!(refusal(second.claim()), QuotaError::Probing);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Probing
+        QuotaError::Probing
     );
     assert_eq!(
         probe.finish(QuotaAnswer::Succeeded),
@@ -175,7 +175,7 @@ fn a_safe_rate_limit_retry_keeps_the_same_exclusive_probe_until_actual_success()
     clock.set(1_100);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Probing
+        QuotaError::Probing
     );
     assert_eq!(
         probe.finish(QuotaAnswer::Succeeded),
@@ -195,7 +195,7 @@ fn a_probe_exhausting_quota_rearms_without_a_second_open_transition() {
     );
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_120 }
+        QuotaError::Cooldown { retry_at_ms: 1_120 }
     );
 }
 
@@ -210,7 +210,7 @@ fn an_inconclusive_probe_waits_a_full_cooldown_without_claiming_recovery() {
     );
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_120 }
+        QuotaError::Cooldown { retry_at_ms: 1_120 }
     );
     clock.set(1_120);
     assert!(registry.admit(&account, settings).is_ok());
@@ -226,7 +226,7 @@ fn cancelled_probe_rearms_from_injected_cancellation_time() {
     drop(probe);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_260 }
+        QuotaError::Cooldown { retry_at_ms: 1_260 }
     );
     clock.set(1_260);
     assert!(registry.admit(&account, settings).is_ok());
@@ -246,7 +246,7 @@ fn unrelated_inconclusive_work_never_opens_or_displaces_a_probe() {
     assert_eq!(concurrent.finish(QuotaAnswer::Inconclusive), Ok(None));
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Probing
+        QuotaError::Probing
     );
     assert_eq!(
         probe.finish(QuotaAnswer::Succeeded),
@@ -275,7 +275,7 @@ fn dropping_an_old_probe_does_not_overwrite_a_new_quota_episode() {
     drop(old_probe);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Probing
+        QuotaError::Probing
     );
     current_probe.finish(QuotaAnswer::Succeeded).unwrap();
 }
@@ -294,7 +294,7 @@ fn disabled_developer_policy_bypasses_without_erasing_account_quota() {
     );
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_060 }
+        QuotaError::Cooldown { retry_at_ms: 1_060 }
     );
 }
 
@@ -309,7 +309,7 @@ fn a_stale_probe_admission_cannot_claim_after_an_actual_inflight_success_recover
         actual_inflight.finish(QuotaAnswer::Succeeded),
         Ok(Some(QuotaTransition::Recovered))
     );
-    assert_eq!(refusal(waiting.claim()), QuotaRefusal::AdmissionChanged);
+    assert_eq!(refusal(waiting.claim()), QuotaError::AdmissionChanged);
     assert!(registry.admit(&account, settings).is_ok());
 }
 
@@ -324,7 +324,7 @@ fn a_backwards_clock_cannot_shorten_a_cancelled_probe_cooldown() {
     clock.set(1_060);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_120 }
+        QuotaError::Cooldown { retry_at_ms: 1_120 }
     );
 }
 
@@ -339,7 +339,7 @@ fn changing_cooldown_settings_does_not_rewrite_a_retained_open_interval() {
     clock.set(1_059);
     assert_eq!(
         refusal(registry.admit(&account, faster)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_060 }
+        QuotaError::Cooldown { retry_at_ms: 1_060 }
     );
     clock.set(1_060);
     claim(&registry, &account, faster)
@@ -347,7 +347,7 @@ fn changing_cooldown_settings_does_not_rewrite_a_retained_open_interval() {
         .unwrap();
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_061 }
+        QuotaError::Cooldown { retry_at_ms: 1_061 }
     );
 }
 
@@ -362,18 +362,18 @@ fn bound_evicts_only_closed_unused_accounts_and_never_forgets_open_quota() {
     let waiting = registry.admit(&first, settings).unwrap();
     assert_eq!(
         refusal(registry.admit(&second, settings)),
-        QuotaRefusal::RegistryFull
+        QuotaError::RegistryFull
     );
     drop(waiting);
     assert!(registry.admit(&second, settings).is_ok());
     open(&registry, &second, settings);
     assert_eq!(
         refusal(registry.admit(&first, settings)),
-        QuotaRefusal::RegistryFull
+        QuotaError::RegistryFull
     );
     assert_eq!(
         refusal(registry.admit(&second, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_060 }
+        QuotaError::Cooldown { retry_at_ms: 1_060 }
     );
 }
 
@@ -386,7 +386,7 @@ fn invalid_identity_time_and_policy_fail_closed_without_leaking_credentials() {
             "private-key",
             None
         )),
-        QuotaRefusal::InvalidIdentity
+        QuotaError::InvalidIdentity
     );
     for invalid in [
         QuotaSettings {
@@ -400,13 +400,13 @@ fn invalid_identity_time_and_policy_fail_closed_without_leaking_credentials() {
     ] {
         assert_eq!(
             refusal(registry.admit(&account, invalid)),
-            QuotaRefusal::InvalidPolicy
+            QuotaError::InvalidPolicy
         );
     }
     clock.set(0);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::InvalidTime
+        QuotaError::InvalidTime
     );
 }
 
@@ -421,7 +421,7 @@ fn operator_large_cooldown_cannot_overflow_into_early_admission() {
     clock.set(i64::MAX - 1);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown {
+        QuotaError::Cooldown {
             retry_at_ms: i64::MAX
         }
     );
@@ -440,7 +440,7 @@ fn developer_summary_is_bounded_read_only_and_contains_no_account_identities() {
     assert_eq!(registry.summary().unwrap(), open);
     assert_eq!(
         refusal(registry.admit(&account, settings)),
-        QuotaRefusal::Cooldown { retry_at_ms: 1_060 }
+        QuotaError::Cooldown { retry_at_ms: 1_060 }
     );
     clock.set(1_060);
     let probe = claim(&registry, &account, settings);

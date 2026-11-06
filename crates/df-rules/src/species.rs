@@ -1,4 +1,5 @@
 //! SRD 5.2.1 pp.84-87: source choices and the implemented species combat subset.
+use crate::listed::listed_enum;
 use crate::local_journey::{
     HeroSpecies, JourneyRuleError, SOLDIER_SKILLS, SpeciesCombatTraits, SpeciesSize,
 };
@@ -113,33 +114,54 @@ pub fn choice_groups(species: HeroSpecies) -> Vec<SpeciesChoiceGroup> {
 /// Recognizes the source catalog only; applicability and completeness are checked separately.
 pub fn choice_option_is_known(id: &str, option: &str) -> bool {
     HeroSpecies::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .flat_map(choice_groups)
         .any(|group| group.id == id && group.options.contains(&option))
 }
 /// Whether `id` names a species choice group of any species.
 pub fn is_choice_group(id: &str) -> bool {
     HeroSpecies::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .flat_map(choice_groups)
         .any(|group| group.id == id)
 }
 
-/// Dragonborn Draconic Ancestry.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DraconicAncestry {
-    Black,
-    Blue,
-    Brass,
-    Bronze,
-    Copper,
-    Gold,
-    Green,
-    Red,
-    Silver,
-    White,
+listed_enum! {
+    keyed
+    /// Dragonborn Draconic Ancestry. The key is also the creation choice option of the ancestry.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum DraconicAncestry {
+        Black,
+        Blue,
+        Brass,
+        Bronze,
+        Copper,
+        Gold,
+        Green,
+        Red,
+        Silver,
+        White,
+    }
 }
 impl DraconicAncestry {
+    /// The stable key of this ancestry, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Black => "black",
+            Self::Blue => "blue",
+            Self::Brass => "brass",
+            Self::Bronze => "bronze",
+            Self::Copper => "copper",
+            Self::Gold => "gold",
+            Self::Green => "green",
+            Self::Red => "red",
+            Self::Silver => "silver",
+            Self::White => "white",
+        }
+    }
     /// The damage type this ancestry's breath deals and resists.
     pub fn damage_type(self) -> DamageType {
         use DraconicAncestry::*;
@@ -152,38 +174,99 @@ impl DraconicAncestry {
         }
     }
 }
-/// Elf lineage.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ElvenLineage {
-    Drow,
-    HighElf,
-    WoodElf,
+listed_enum! {
+    keyed
+    /// Elf lineage. The creation choice options ("high-elf", "wood-elf") are content ids, not
+    /// these keys.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum ElvenLineage {
+        Drow,
+        HighElf,
+        WoodElf,
+    }
 }
-/// Gnome lineage.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GnomishLineage {
-    Forest,
-    Rock,
+impl ElvenLineage {
+    /// The stable key of this lineage, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Drow => "drow",
+            Self::HighElf => "high_elf",
+            Self::WoodElf => "wood_elf",
+        }
+    }
 }
-/// Goliath Giant Ancestry.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GiantAncestry {
-    Cloud,
-    Fire,
-    Frost,
-    Hill,
-    Stone,
-    Storm,
+listed_enum! {
+    keyed
+    /// Gnome lineage. The creation choice options ("forest-gnome", "rock-gnome") are content ids,
+    /// not these keys.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum GnomishLineage {
+        Forest,
+        Rock,
+    }
 }
-/// Tiefling Fiendish Legacy.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FiendishLegacy {
-    Abyssal,
-    Chthonic,
-    Infernal,
+impl GnomishLineage {
+    /// The stable key of this lineage, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Forest => "forest",
+            Self::Rock => "rock",
+        }
+    }
+}
+listed_enum! {
+    keyed
+    /// Goliath Giant Ancestry. The key is also the creation choice option of the ancestry.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum GiantAncestry {
+        Cloud,
+        Fire,
+        Frost,
+        Hill,
+        Stone,
+        Storm,
+    }
+}
+impl GiantAncestry {
+    /// The stable key of this ancestry, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Cloud => "cloud",
+            Self::Fire => "fire",
+            Self::Frost => "frost",
+            Self::Hill => "hill",
+            Self::Stone => "stone",
+            Self::Storm => "storm",
+        }
+    }
+}
+listed_enum! {
+    keyed
+    /// Tiefling Fiendish Legacy. The key is also the creation choice option of the legacy.
+    #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    pub enum FiendishLegacy {
+        Abyssal,
+        Chthonic,
+        Infernal,
+    }
+}
+impl FiendishLegacy {
+    /// The stable key of this legacy, as it is serialized.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Abyssal => "abyssal",
+            Self::Chthonic => "chthonic",
+            Self::Infernal => "infernal",
+        }
+    }
 }
 /// The one lineage or ancestry choice a species makes, if it makes one.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum Ancestry {
     Draconic(DraconicAncestry),
     Elven(ElvenLineage),
@@ -244,19 +327,9 @@ impl SpeciesOptions {
         }
         let ancestry = match species {
             HeroSpecies::Dragonborn => Some(Ancestry::Draconic(
-                match choice_value("draconic-ancestry") {
-                    Some("black") => DraconicAncestry::Black,
-                    Some("blue") => DraconicAncestry::Blue,
-                    Some("brass") => DraconicAncestry::Brass,
-                    Some("bronze") => DraconicAncestry::Bronze,
-                    Some("copper") => DraconicAncestry::Copper,
-                    Some("gold") => DraconicAncestry::Gold,
-                    Some("green") => DraconicAncestry::Green,
-                    Some("red") => DraconicAncestry::Red,
-                    Some("silver") => DraconicAncestry::Silver,
-                    Some("white") => DraconicAncestry::White,
-                    _ => return Err(JourneyRuleError::InvalidChoice),
-                },
+                choice_value("draconic-ancestry")
+                    .and_then(DraconicAncestry::from_key)
+                    .ok_or(JourneyRuleError::InvalidChoice)?,
             )),
             HeroSpecies::Elf => Some(Ancestry::Elven(match choice_value("elven-lineage") {
                 Some("drow") => ElvenLineage::Drow,
@@ -269,23 +342,16 @@ impl SpeciesOptions {
                 Some("rock-gnome") => GnomishLineage::Rock,
                 _ => return Err(JourneyRuleError::InvalidChoice),
             })),
-            HeroSpecies::Goliath => Some(Ancestry::Giant(match choice_value("giant-ancestry") {
-                Some("cloud") => GiantAncestry::Cloud,
-                Some("fire") => GiantAncestry::Fire,
-                Some("frost") => GiantAncestry::Frost,
-                Some("hill") => GiantAncestry::Hill,
-                Some("stone") => GiantAncestry::Stone,
-                Some("storm") => GiantAncestry::Storm,
-                _ => return Err(JourneyRuleError::InvalidChoice),
-            })),
-            HeroSpecies::Tiefling => {
-                Some(Ancestry::Fiendish(match choice_value("fiendish-legacy") {
-                    Some("abyssal") => FiendishLegacy::Abyssal,
-                    Some("chthonic") => FiendishLegacy::Chthonic,
-                    Some("infernal") => FiendishLegacy::Infernal,
-                    _ => return Err(JourneyRuleError::InvalidChoice),
-                }))
-            }
+            HeroSpecies::Goliath => Some(Ancestry::Giant(
+                choice_value("giant-ancestry")
+                    .and_then(GiantAncestry::from_key)
+                    .ok_or(JourneyRuleError::InvalidChoice)?,
+            )),
+            HeroSpecies::Tiefling => Some(Ancestry::Fiendish(
+                choice_value("fiendish-legacy")
+                    .and_then(FiendishLegacy::from_key)
+                    .ok_or(JourneyRuleError::InvalidChoice)?,
+            )),
             _ => None,
         };
         Ok(Self {
@@ -423,7 +489,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(HeroSpecies::from_choice("aasimar").is_none());
+        assert!(HeroSpecies::from_key("aasimar").is_none());
     }
     #[test]
     fn srd_521_draconic_ancestry_and_fiendish_legacy_resistances_match_source_tables() {

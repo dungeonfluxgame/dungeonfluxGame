@@ -3,6 +3,7 @@
 
 use super::{DispatchId, ExecutionSetupError, ExecutionStageId, ImageJobId, StageKind};
 use crate::ImageOwner;
+use crate::listed::listed_enum;
 use sha2::{Digest, Sha256};
 use std::fmt;
 
@@ -22,8 +23,9 @@ pub struct StageBasis {
     pub parent_dispatch: Option<DispatchId>,
 }
 impl fmt::Debug for StageBasis {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StageBasis")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StageBasis")
             .field("kind", &self.kind)
             .field("input_revision", &self.input_revision)
             .field("config_revision", &self.config_revision)
@@ -32,16 +34,19 @@ impl fmt::Debug for StageBasis {
     }
 }
 
-/// The two actual JSON-producing stages; final images retain OutputCheckpoint instead.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DecisionKind {
-    Classification,
-    Inspection,
-    PhotoInspection,
-    HeadLocations,
-    Segmentation,
-    StagingIdentity,
-    StagingFacing,
+listed_enum! {
+    keyed
+    /// The two actual JSON-producing stages; final images retain OutputCheckpoint instead.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum DecisionKind {
+        Classification,
+        Inspection,
+        PhotoInspection,
+        HeadLocations,
+        Segmentation,
+        StagingIdentity,
+        StagingFacing,
+    }
 }
 impl DecisionKind {
     pub fn stage_kind(self) -> StageKind {
@@ -55,7 +60,7 @@ impl DecisionKind {
             Self::PhotoInspection => StageKind::PhotoInspection,
         }
     }
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Classification => "classification",
             Self::Inspection => "inspection",
@@ -64,18 +69,6 @@ impl DecisionKind {
             Self::Segmentation => "segmentation",
             Self::HeadLocations => "head_locations",
             Self::PhotoInspection => "photo_inspection",
-        }
-    }
-    pub fn parse_label(label: &str) -> Option<Self> {
-        match label {
-            "classification" => Some(Self::Classification),
-            "inspection" => Some(Self::Inspection),
-            "staging_facing" => Some(Self::StagingFacing),
-            "staging_identity" => Some(Self::StagingIdentity),
-            "segmentation" => Some(Self::Segmentation),
-            "head_locations" => Some(Self::HeadLocations),
-            "photo_inspection" => Some(Self::PhotoInspection),
-            _ => None,
         }
     }
 }
@@ -89,8 +82,8 @@ pub struct ExecutionScope {
     pub dispatch: DispatchId,
 }
 impl fmt::Debug for ExecutionScope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("ExecutionScope { .. }")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ExecutionScope { .. }")
     }
 }
 
@@ -145,7 +138,7 @@ impl DecisionObservation {
             || receipt.usage_revision == 0
             || basis.stage.kind != kind.stage_kind()
         {
-            return Err(ExecutionSetupError::BadRevision);
+            return Err(ExecutionSetupError::InvalidRevision);
         }
         if maximum_payload_bytes == 0 {
             return Err(ExecutionSetupError::ZeroBytes);
@@ -169,7 +162,7 @@ impl DecisionObservation {
             });
         }
         if receipt.observed_at_ms <= 0 {
-            return Err(ExecutionSetupError::BadTime);
+            return Err(ExecutionSetupError::InvalidTime);
         }
         Ok(Self {
             scope,
@@ -189,8 +182,9 @@ impl DecisionObservation {
     }
 }
 impl fmt::Debug for DecisionObservation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DecisionObservation")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DecisionObservation")
             .field("kind", &self.kind)
             .field("observation_version", &self.observation_version)
             .field("schema_revision", &self.basis.schema_revision)
@@ -213,8 +207,9 @@ pub struct DecisionReference {
     pub payload_sha256: [u8; 32],
 }
 impl fmt::Debug for DecisionReference {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DecisionReference")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DecisionReference")
             .field("kind", &self.kind)
             .field("observation_version", &self.observation_version)
             .field("receipt", &self.receipt)

@@ -7,12 +7,12 @@ fn scope(scope: &StageScope) -> Value {
     json!({"owner":owner_scope_bytes(&scope.owner),"job":scope.job.as_bytes(),"stage":scope.stage.as_bytes()})
 }
 fn basis(basis: &StageBasis) -> Value {
-    json!({"kind":basis.kind.label(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,
+    json!({"kind":basis.kind.key(),"input_revision":basis.input_revision,"input_digest":basis.input_digest,
         "config_revision":basis.config_revision,"config_digest":basis.config_digest,
         "parent":basis.parent_dispatch.map(|id|*id.as_bytes())})
 }
 pub(super) fn checkpoint_reference(reference: &AnalysisCheckpointReference) -> Value {
-    json!({"scope":scope(&reference.scope),"kind":reference.kind.label(),"version":reference.checkpoint_version,
+    json!({"scope":scope(&reference.scope),"kind":reference.kind.key(),"version":reference.checkpoint_version,
         "schema":reference.schema_revision,"validator":reference.validator_revision,"result":reference.result_sha256,
         "intent":reference.intent_digest,"config":reference.config_digest,"sources":reference.source_digest})
 }
@@ -21,7 +21,7 @@ pub(super) fn dependencies(values: &[AnalysisDependencyRef]) -> String {
         "operation":value.handle.operation.as_bytes(),"checkpoint":checkpoint_reference(&value.checkpoint)})).collect()).to_string()
 }
 fn local(reference: &LocalAnalysisReference) -> Value {
-    json!({"scope":scope(&reference.scope),"kind":reference.kind.label(),"version":reference.checkpoint_version,
+    json!({"scope":scope(&reference.scope),"kind":reference.kind.key(),"version":reference.checkpoint_version,
         "schema":reference.schema_revision,"validator":reference.validator_revision,"basis":basis(&reference.basis),
         "result":reference.result_sha256,"intent":reference.intent_digest,"config":reference.config_digest,
         "sources":reference.source_digest})
@@ -32,7 +32,7 @@ fn decision(reference: &DecisionReference) -> Value {
         job: reference.scope.job,
         stage: reference.scope.stage,
     };
-    json!({"scope":scope(&stage),"dispatch":reference.scope.dispatch.as_bytes(),"kind":reference.kind.label(),
+    json!({"scope":scope(&stage),"dispatch":reference.scope.dispatch.as_bytes(),"kind":reference.kind.key(),
         "version":reference.observation_version,"schema":reference.basis.schema_revision,
         "validator":reference.basis.validator_revision,"basis":basis(&reference.basis.stage),
         "usage":reference.receipt.usage_revision,"observed":reference.receipt.observed_at_ms,
@@ -72,7 +72,7 @@ fn revision(value: &Value, key: &str) -> Result<u32, ExecutionError> {
 fn kind(value: &Value) -> Result<DecisionKind, ExecutionError> {
     field(value, "kind")?
         .as_str()
-        .and_then(DecisionKind::parse_label)
+        .and_then(DecisionKind::from_key)
         .ok_or(ExecutionError::InvalidRecord)
 }
 fn parse_scope(value: &Value) -> Result<StageScope, ExecutionError> {
@@ -91,7 +91,7 @@ fn parse_basis(value: &Value) -> Result<StageBasis, ExecutionError> {
     Ok(StageBasis {
         kind: field(value, "kind")?
             .as_str()
-            .and_then(StageKind::parse_label)
+            .and_then(StageKind::from_key)
             .ok_or(ExecutionError::InvalidRecord)?,
         input_revision: revision(value, "input_revision")?,
         input_digest: bytes(value, "input_digest")?,

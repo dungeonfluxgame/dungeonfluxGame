@@ -6,9 +6,7 @@ use crate::config::AnalysisPreparationLimits;
 use crate::request::{ImageInspection, SourceRef};
 use crate::runtime::RuntimeError;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use df_providers::{
-    HttpRequest, NativeHttp, NativeHttpRefusal, NativeHttpResponse, ProviderLimits,
-};
+use df_providers::{HttpRequest, NativeHttp, NativeHttpCause, NativeHttpResponse, ProviderLimits};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
@@ -41,8 +39,9 @@ pub(crate) struct PreparedInspection {
 }
 
 impl std::fmt::Debug for PreparedInspection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreparedInspection")
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedInspection")
             .field("body_bytes", &self.body_bytes)
             .field("text_bytes", &self.text_bytes)
             .field("picture_count", &self.picture_count)
@@ -227,10 +226,10 @@ impl PreparedInspection {
         self.http
             .execute(self.request, remaining, std::future::pending())
             .await
-            .map_err(|failure| match failure.reason {
-                NativeHttpRefusal::Deadline => RuntimeError::Expired,
-                NativeHttpRefusal::Cancelled => RuntimeError::Cancelled,
-                NativeHttpRefusal::ProviderDisabled => RuntimeError::Disabled,
+            .map_err(|failure| match failure.cause {
+                NativeHttpCause::Deadline => RuntimeError::Expired,
+                NativeHttpCause::Cancelled => RuntimeError::Cancelled,
+                NativeHttpCause::ProviderDisabled => RuntimeError::Disabled,
                 _ => RuntimeError::ProviderUnknown,
             })
     }

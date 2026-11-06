@@ -38,7 +38,7 @@ fn hero_count_and_custody_keep_legacy_priority_before_other_failures() {
     value.as_object_mut().unwrap().remove("weapon_custody");
     assert_eq!(
         interpret(value, &spec).unwrap().verdict,
-        InspectionVerdict::Failed(PhotoCheckFailure::HeroCount {
+        InspectionVerdict::Failed(PhotoCheckCause::HeroCount {
             expected: 2,
             seen: 3
         })
@@ -48,7 +48,7 @@ fn hero_count_and_custody_keep_legacy_priority_before_other_failures() {
     value["frame"] = json!("grid_or_collage");
     assert_eq!(
         interpret(value, &spec).unwrap().verdict,
-        InspectionVerdict::Failed(PhotoCheckFailure::UnexpectedDrawnWeapon)
+        InspectionVerdict::Failed(PhotoCheckCause::UnexpectedDrawnWeapon)
     );
     for count in [Value::Null, json!(-1), json!("2"), json!(2.5)] {
         let mut value = answer();
@@ -61,25 +61,21 @@ fn hero_count_and_custody_keep_legacy_priority_before_other_failures() {
 fn closed_quality_priority_and_room_character_requirements_are_preserved() {
     let spec = testing::spec(InspectionKind::ScenePlate, true);
     for (field, label, failure) in [
-        ("frame", "grid_or_collage", PhotoCheckFailure::GridOrCollage),
+        ("frame", "grid_or_collage", PhotoCheckCause::GridOrCollage),
         (
             "frame",
             "cutout_composite",
-            PhotoCheckFailure::CutoutComposite,
+            PhotoCheckCause::CutoutComposite,
         ),
-        ("medium", "cgi_or_render", PhotoCheckFailure::NotPhotograph),
+        ("medium", "cgi_or_render", PhotoCheckCause::NotPhotograph),
         (
             "medium",
             "painting_or_illustration",
-            PhotoCheckFailure::NotPhotograph,
+            PhotoCheckCause::NotPhotograph,
         ),
-        ("setting", "modern", PhotoCheckFailure::ModernSetting),
-        ("text", "visible_text", PhotoCheckFailure::VisibleText),
-        (
-            "dress",
-            "modern_clothing",
-            PhotoCheckFailure::ModernClothing,
-        ),
+        ("setting", "modern", PhotoCheckCause::ModernSetting),
+        ("text", "visible_text", PhotoCheckCause::VisibleText),
+        ("dress", "modern_clothing", PhotoCheckCause::ModernClothing),
     ] {
         let mut value = answer();
         value[field] = json!(label);
@@ -97,7 +93,7 @@ fn closed_quality_priority_and_room_character_requirements_are_preserved() {
     value["people_present"] = json!("some");
     assert_eq!(
         interpret(value, &room).unwrap().verdict,
-        InspectionVerdict::Failed(PhotoCheckFailure::PeopleInEmptyRoom)
+        InspectionVerdict::Failed(PhotoCheckCause::PeopleInEmptyRoom)
     );
     assert!(interpret(basic.clone(), &room).is_err());
     let character = testing::spec(InspectionKind::CanonicalCharacter, false);
@@ -105,13 +101,13 @@ fn closed_quality_priority_and_room_character_requirements_are_preserved() {
     value["people_count"] = json!("not_one");
     assert_eq!(
         interpret(value, &character).unwrap().verdict,
-        InspectionVerdict::Failed(PhotoCheckFailure::CharacterCountNotOne)
+        InspectionVerdict::Failed(PhotoCheckCause::CharacterCountNotOne)
     );
     basic["people_count"] = json!("exactly_one");
     basic["dress"] = json!("no_people");
     assert_eq!(
         interpret(basic, &character).unwrap().verdict,
-        InspectionVerdict::Failed(PhotoCheckFailure::CharacterHasNoPeople)
+        InspectionVerdict::Failed(PhotoCheckCause::CharacterHasNoPeople)
     );
 }
 
@@ -204,11 +200,11 @@ fn unjudged_is_explicit_and_roundtrips_without_claiming_pass_or_features() {
         );
     }
     assert_eq!(
-        PhotoCheckFailure::VisibleText.correction(),
+        PhotoCheckCause::VisibleText.correction(),
         "The previous result showed lettering; leave every sign, board, cloth and wall surface plain and blank."
     );
     assert!(
-        PhotoCheckFailure::UnexpectedDrawnWeapon
+        PhotoCheckCause::UnexpectedDrawnWeapon
             .correction()
             .contains("Reference poses never authorize a drawn weapon.")
     );

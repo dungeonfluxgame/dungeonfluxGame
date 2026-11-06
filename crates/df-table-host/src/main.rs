@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use df_table_host::command::usage_text;
 use df_table_host::dev::run_dev;
 use df_table_host::options::{
-    PORT_ENVIRONMENT_VARIABLE, SERVE_USAGE, parse_dev_arguments, parse_serve_options,
+    PORT_VARIABLE, SERVE_USAGE, parse_dev_arguments, parse_serve_options,
 };
 use df_table_host::repl::run_repl;
 use df_table_host::serve::{run_serve, write_terminal_line};
@@ -30,7 +30,7 @@ async fn main() -> ExitCode {
             }
         }
         Some((mode, rest)) if mode == "dev" => {
-            let environment_port = df_table_host::environment::text(PORT_ENVIRONMENT_VARIABLE);
+            let environment_port = df_table_host::environment::text(PORT_VARIABLE);
             let (port, words) = match parse_dev_arguments(rest, environment_port.as_deref()) {
                 Ok(parsed) => parsed,
                 Err(error) => return fail(&error.to_string()),

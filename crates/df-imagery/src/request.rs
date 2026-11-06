@@ -6,6 +6,7 @@
 //! pixel work. Nothing here touches a provider, the filesystem, or a
 //! credential.
 
+use crate::listed::listed_enum;
 use std::fmt;
 
 use df_assets::{AssetId, Audience};
@@ -33,13 +34,15 @@ const MAXIMUM_EXPECTED_HEROES: u8 = 6;
 const MAXIMUM_INSPECTION_CORRECTIONS: u32 = 1;
 
 /// Operational request-shape bounds. Injected and validated: a value above a
-/// default is valid when the injected configuration allows it.
+/// default is valid when the injected configuration allows it. Outside this
+/// crate a value exists only through [`RequestLimits::new`], so it is valid;
+/// the configuration overlay writes the fields and validates the whole config.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RequestLimits {
-    pub max_prompt_chars: usize,
-    pub max_references: usize,
-    pub max_transform_steps: usize,
-    pub max_composite_layers: usize,
+    pub(crate) max_prompt_chars: usize,
+    pub(crate) max_references: usize,
+    pub(crate) max_transform_steps: usize,
+    pub(crate) max_composite_layers: usize,
 }
 
 impl Default for RequestLimits {
@@ -54,8 +57,42 @@ impl Default for RequestLimits {
 }
 
 impl RequestLimits {
+    /// The bounds in order: prompt characters, references, transform steps and layers per
+    /// composite. Every bound must admit at least one item.
+    pub fn new(
+        max_prompt_chars: usize,
+        max_references: usize,
+        max_transform_steps: usize,
+        max_composite_layers: usize,
+    ) -> Result<Self, RequestError> {
+        let limits = Self {
+            max_prompt_chars,
+            max_references,
+            max_transform_steps,
+            max_composite_layers,
+        };
+        limits.validate()?;
+        Ok(limits)
+    }
+
+    pub fn max_prompt_chars(&self) -> usize {
+        self.max_prompt_chars
+    }
+
+    pub fn max_references(&self) -> usize {
+        self.max_references
+    }
+
+    pub fn max_transform_steps(&self) -> usize {
+        self.max_transform_steps
+    }
+
+    pub fn max_composite_layers(&self) -> usize {
+        self.max_composite_layers
+    }
+
     /// Every bound must admit at least one item; zero refuses all work.
-    pub fn validate(&self) -> Result<(), RequestError> {
+    pub(crate) fn validate(&self) -> Result<(), RequestError> {
         if self.max_prompt_chars == 0 {
             return Err(RequestError::InvalidLimit {
                 field: "max_prompt_chars",
@@ -106,22 +143,25 @@ impl OperationIdentity {
     }
 }
 
-/// Closed set of image purposes. Variants inherit the originating domain
-/// purpose plus a typed role rather than growing new purpose strings.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Purpose {
-    CreatorPortrait,
-    CanonicalPerson,
-    CanonicalRoom,
-    ScenePlate,
-    SceneEdit,
-    Expression,
-    ItemCloseUp,
-    PartyMural,
-    CombatStill,
-    AnimationFrame,
-    ReferencePrep,
-    ImportedDerivative,
+listed_enum! {
+    keyed
+    /// Closed set of image purposes. Variants inherit the originating domain
+    /// purpose plus a typed role rather than growing new purpose strings.
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+    pub enum Purpose {
+        CreatorPortrait,
+        CanonicalPerson,
+        CanonicalRoom,
+        ScenePlate,
+        SceneEdit,
+        Expression,
+        ItemCloseUp,
+        PartyMural,
+        CombatStill,
+        AnimationFrame,
+        ReferencePrep,
+        ImportedDerivative,
+    }
 }
 
 impl Purpose {
@@ -147,7 +187,7 @@ impl Purpose {
     }
 
     /// Stable snake_case name for diagnostics and configuration keys.
-    pub fn label(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::CreatorPortrait => "creator_portrait",
             Self::CanonicalPerson => "canonical_person",
@@ -368,6 +408,28 @@ pub enum PipelineError {
     TextTooLong { field: PipelineTextField },
 }
 
+impl std::fmt::Display for PipelineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroRevision => formatter.write_str("a pipeline revision is zero"),
+            Self::OutputTokens => formatter.write_str("the output token bound is invalid"),
+            Self::EmptyAppearance => formatter.write_str("the public appearance is empty"),
+            Self::EmptyGeneralPrompt => formatter.write_str("the general prompt is empty"),
+            Self::PartyMetadata => formatter.write_str("the party metadata is invalid"),
+            Self::Corrections => formatter.write_str("the correction metadata is invalid"),
+            Self::Staging => formatter.write_str("the staging metadata is invalid"),
+            Self::UnsupportedContract => {
+                formatter.write_str("the pipeline contract is not supported")
+            }
+            Self::TextTooLong { field } => {
+                write!(formatter, "the pipeline text {field:?} is too long")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PipelineError {}
+
 /// Which pipeline text exceeded its bound; never the text itself.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PipelineTextField {
@@ -532,8 +594,9 @@ impl TextPrompt {
 }
 
 impl fmt::Debug for TextPrompt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TextPrompt")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TextPrompt")
             .field("len_chars", &self.len_chars())
             .field("template_version", &self.template_version)
             .finish()
@@ -647,7 +710,6 @@ impl ImageRequest {
     /// output is the single delivered authority: provider work needs a
     /// provider profile, local work needs a local profile.
     pub fn validate(&self, limits: &RequestLimits) -> Result<(), RequestError> {
-        limits.validate()?;
         if matches!(self.audience, Audience::Withheld) {
             return Err(RequestError::WithheldAudience);
         }
@@ -718,4 +780,43 @@ pub enum RequestError {
     InvalidTransform(crate::transform::TransformError),
     InvalidPipeline(PipelineError),
     InvalidArtwork(crate::ArtworkError),
+}
+
+impl std::fmt::Display for RequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyPrompt => formatter.write_str("the prompt is empty"),
+            Self::PromptTooLong {
+                len_chars,
+                max_chars,
+            } => write!(
+                formatter,
+                "the prompt has {len_chars} characters, more than {max_chars}"
+            ),
+            Self::TooManyReferences { count } => {
+                write!(formatter, "{count} references are too many")
+            }
+            Self::WithheldAudience => formatter.write_str("nobody may see this output"),
+            Self::InvalidLimit { field } => {
+                write!(formatter, "the request limit {field} admits nothing")
+            }
+            Self::ProfileMismatch => {
+                formatter.write_str("the output profile does not suit the operation")
+            }
+            Self::InvalidTransform(error) => write!(formatter, "the transform is invalid: {error}"),
+            Self::InvalidPipeline(error) => write!(formatter, "the pipeline is invalid: {error}"),
+            Self::InvalidArtwork(error) => write!(formatter, "the artwork is invalid: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for RequestError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidTransform(error) => Some(error),
+            Self::InvalidPipeline(error) => Some(error),
+            Self::InvalidArtwork(error) => Some(error),
+            _ => None,
+        }
+    }
 }

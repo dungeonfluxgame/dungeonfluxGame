@@ -238,19 +238,19 @@ fn encode_photo(out: &mut Writer, value: &PhotoInspectionAssessment) -> Result<(
         PhotoInspectionVerdict::Failed(failure) => {
             out.push(1)?;
             out.push(match failure {
-                PhotoInspectionFailure::GridOrCollage => 0,
-                PhotoInspectionFailure::CutoutComposite => 1,
-                PhotoInspectionFailure::NotPhotograph => 2,
-                PhotoInspectionFailure::ModernSetting => 3,
-                PhotoInspectionFailure::VisibleText => 4,
-                PhotoInspectionFailure::ModernClothing => 5,
-                PhotoInspectionFailure::PeopleInEmptyRoom => 6,
-                PhotoInspectionFailure::CharacterCountNotOne => 7,
-                PhotoInspectionFailure::CharacterHasNoPeople => 8,
-                PhotoInspectionFailure::HeroCount { .. } => 9,
-                PhotoInspectionFailure::UnexpectedDrawnWeapon => 10,
+                PhotoInspectionCause::GridOrCollage => 0,
+                PhotoInspectionCause::CutoutComposite => 1,
+                PhotoInspectionCause::NotPhotograph => 2,
+                PhotoInspectionCause::ModernSetting => 3,
+                PhotoInspectionCause::VisibleText => 4,
+                PhotoInspectionCause::ModernClothing => 5,
+                PhotoInspectionCause::PeopleInEmptyRoom => 6,
+                PhotoInspectionCause::CharacterCountNotOne => 7,
+                PhotoInspectionCause::CharacterHasNoPeople => 8,
+                PhotoInspectionCause::HeroCount { .. } => 9,
+                PhotoInspectionCause::UnexpectedDrawnWeapon => 10,
             })?;
-            if let PhotoInspectionFailure::HeroCount { expected, seen } = failure {
+            if let PhotoInspectionCause::HeroCount { expected, seen } = failure {
                 out.push(expected)?;
                 out.u64_be(seen)?;
             }
@@ -298,20 +298,20 @@ fn decode_photo(
     let verdict = match input.byte()? {
         0 => PhotoInspectionVerdict::Pass,
         1 => PhotoInspectionVerdict::Failed(match input.byte()? {
-            0 => PhotoInspectionFailure::GridOrCollage,
-            1 => PhotoInspectionFailure::CutoutComposite,
-            2 => PhotoInspectionFailure::NotPhotograph,
-            3 => PhotoInspectionFailure::ModernSetting,
-            4 => PhotoInspectionFailure::VisibleText,
-            5 => PhotoInspectionFailure::ModernClothing,
-            6 => PhotoInspectionFailure::PeopleInEmptyRoom,
-            7 => PhotoInspectionFailure::CharacterCountNotOne,
-            8 => PhotoInspectionFailure::CharacterHasNoPeople,
-            9 => PhotoInspectionFailure::HeroCount {
+            0 => PhotoInspectionCause::GridOrCollage,
+            1 => PhotoInspectionCause::CutoutComposite,
+            2 => PhotoInspectionCause::NotPhotograph,
+            3 => PhotoInspectionCause::ModernSetting,
+            4 => PhotoInspectionCause::VisibleText,
+            5 => PhotoInspectionCause::ModernClothing,
+            6 => PhotoInspectionCause::PeopleInEmptyRoom,
+            7 => PhotoInspectionCause::CharacterCountNotOne,
+            8 => PhotoInspectionCause::CharacterHasNoPeople,
+            9 => PhotoInspectionCause::HeroCount {
                 expected: input.byte()?,
                 seen: input.u64_be()?,
             },
-            10 => PhotoInspectionFailure::UnexpectedDrawnWeapon,
+            10 => PhotoInspectionCause::UnexpectedDrawnWeapon,
             _ => return Err(CodecError::Malformed),
         }),
         2 => PhotoInspectionVerdict::Unjudged(match input.byte()? {

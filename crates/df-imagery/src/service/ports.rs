@@ -135,6 +135,16 @@ pub enum ServiceIdError {
     InvalidGeneratedId,
 }
 
+impl std::fmt::Display for ServiceIdError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidGeneratedId => formatter.write_str("the id source drew a zero id"),
+        }
+    }
+}
+
+impl std::error::Error for ServiceIdError {}
+
 /// Injected journal id factory; minted ids are never caller-chosen.
 pub trait ServiceIds: Send + Sync {
     /// The next fresh job identity, or a bounded typed failure.

@@ -2,7 +2,7 @@
 //! No public provider executor or consumer-side policy implementation is retained.
 use crate::backends::analysis::{InspectionInput, PreparedInspection, photo, testing};
 use crate::runtime::inspection_policy::{
-    self, InspectionAssessment, InspectionError, InspectionVerdict, PhotoCheckFailure,
+    self, InspectionAssessment, InspectionError, InspectionVerdict, PhotoCheckCause,
 };
 use crate::{
     InspectionKind,
@@ -190,7 +190,7 @@ async fn photo_failure(
     party: Option<(SceneParty, &ReferenceImage)>,
     custody: &str,
 ) -> (
-    Option<PhotoCheckFailure>,
+    Option<PhotoCheckCause>,
     Vec<inspection_policy::VisibleFeature>,
 ) {
     let Some((party, sheet)) = party else {
@@ -310,7 +310,7 @@ async fn fake_judgments_endpoint(
     });
     (address, request_receiver)
 }
-async fn rejected(kind: PhotoCheckKind, answer: Value, expected: PhotoCheckFailure) {
+async fn rejected(kind: PhotoCheckKind, answer: Value, expected: PhotoCheckCause) {
     let (judge, _) = fake_judge(answer).await;
     let result = check_photo(
         &judge,
@@ -390,7 +390,7 @@ async fn photo_check_rejects_invalid_regions_and_never_exports_rejected_picture_
             let reading = result.unwrap();
             assert!(matches!(
                 reading.outcome,
-                PhotoCheckOutcome::Failed(PhotoCheckFailure::HeroCount { .. })
+                PhotoCheckOutcome::Failed(PhotoCheckCause::HeroCount { .. })
             ));
             assert!(reading.visible_features.is_empty());
         }
@@ -418,7 +418,7 @@ async fn scene_photo_counts_against_the_sheet_and_requires_the_actual_count() {
                 if seen == expected {
                     PhotoCheckOutcome::Pass
                 } else {
-                    PhotoCheckOutcome::Failed(PhotoCheckFailure::HeroCount {
+                    PhotoCheckOutcome::Failed(PhotoCheckCause::HeroCount {
                         expected: expected as u8,
                         seen: seen as u64,
                     })
@@ -461,7 +461,7 @@ async fn scene_photo_does_not_allow_text_fallback_to_hide_a_count_failure() {
         .remove("weapon_custody");
     assert_eq!(
         parse_scene_photo_answer(&missing_with_wrong_count, SceneParty::new(6, 2).unwrap()),
-        Ok(PhotoCheckOutcome::Failed(PhotoCheckFailure::HeroCount {
+        Ok(PhotoCheckOutcome::Failed(PhotoCheckCause::HeroCount {
             expected: 6,
             seen: 7
         }))
@@ -480,7 +480,7 @@ async fn scene_photo_does_not_allow_text_fallback_to_hide_a_count_failure() {
         )
         .await
         .unwrap(),
-        PhotoCheckOutcome::Failed(PhotoCheckFailure::HeroCount {
+        PhotoCheckOutcome::Failed(PhotoCheckCause::HeroCount {
             expected: 6,
             seen: 7
         })
@@ -505,25 +505,21 @@ fn scene_photo_rejects_missing_or_invalid_counts_and_preserves_quality_failures(
         Err(InspectionError::InvalidAnswer)
     );
     for (field, value, failure) in [
-        ("frame", "grid_or_collage", PhotoCheckFailure::GridOrCollage),
+        ("frame", "grid_or_collage", PhotoCheckCause::GridOrCollage),
         (
             "frame",
             "cutout_composite",
-            PhotoCheckFailure::CutoutComposite,
+            PhotoCheckCause::CutoutComposite,
         ),
         (
             "medium",
             "painting_or_illustration",
-            PhotoCheckFailure::NotPhotograph,
+            PhotoCheckCause::NotPhotograph,
         ),
-        ("medium", "cgi_or_render", PhotoCheckFailure::NotPhotograph),
-        ("text", "visible_text", PhotoCheckFailure::VisibleText),
-        (
-            "dress",
-            "modern_clothing",
-            PhotoCheckFailure::ModernClothing,
-        ),
-        ("setting", "modern", PhotoCheckFailure::ModernSetting),
+        ("medium", "cgi_or_render", PhotoCheckCause::NotPhotograph),
+        ("text", "visible_text", PhotoCheckCause::VisibleText),
+        ("dress", "modern_clothing", PhotoCheckCause::ModernClothing),
+        ("setting", "modern", PhotoCheckCause::ModernSetting),
     ] {
         let mut answer = scene_answer(2);
         answer[field] = json!(value);
@@ -537,8 +533,8 @@ fn scene_photo_rejects_missing_or_invalid_counts_and_preserves_quality_failures(
 #[tokio::test]
 async fn rejects_contact_sheets_and_cutout_composites() {
     for (frame, expected) in [
-        ("grid_or_collage", PhotoCheckFailure::GridOrCollage),
-        ("cutout_composite", PhotoCheckFailure::CutoutComposite),
+        ("grid_or_collage", PhotoCheckCause::GridOrCollage),
+        ("cutout_composite", PhotoCheckCause::CutoutComposite),
     ] {
         rejected(
             PhotoCheckKind::ScenePlate,
@@ -555,7 +551,7 @@ async fn rejects_painterly_and_rendered_media() {
         rejected(
             PhotoCheckKind::ScenePlate,
             answer("single_photograph", medium, "none", "period", None),
-            PhotoCheckFailure::NotPhotograph,
+            PhotoCheckCause::NotPhotograph,
         )
         .await;
     }
@@ -572,7 +568,7 @@ async fn rejects_visible_text_and_modern_clothing() {
             "period",
             None,
         ),
-        PhotoCheckFailure::VisibleText,
+        PhotoCheckCause::VisibleText,
     )
     .await;
     rejected(
@@ -584,7 +580,7 @@ async fn rejects_visible_text_and_modern_clothing() {
             "modern_clothing",
             None,
         ),
-        PhotoCheckFailure::ModernClothing,
+        PhotoCheckCause::ModernClothing,
     )
     .await;
 }
@@ -596,7 +592,7 @@ async fn rejects_people_in_an_empty_canonical_room() {
     rejected(
         PhotoCheckKind::CanonicalRoom,
         room_answer,
-        PhotoCheckFailure::PeopleInEmptyRoom,
+        PhotoCheckCause::PeopleInEmptyRoom,
     )
     .await;
 }
@@ -612,7 +608,7 @@ async fn rejects_a_character_with_not_exactly_one_person() {
             "period",
             Some("not_one"),
         ),
-        PhotoCheckFailure::CharacterCountNotOne,
+        PhotoCheckCause::CharacterCountNotOne,
     )
     .await;
 }
@@ -628,7 +624,7 @@ async fn rejects_a_canonical_character_answered_as_having_no_people() {
             "no_people",
             Some("not_one"),
         ),
-        PhotoCheckFailure::CharacterHasNoPeople,
+        PhotoCheckCause::CharacterHasNoPeople,
     )
     .await;
 }
@@ -665,7 +661,7 @@ async fn rejects_a_modern_place_even_with_period_people() {
     rejected(
         PhotoCheckKind::CanonicalRoom,
         modern,
-        PhotoCheckFailure::ModernSetting,
+        PhotoCheckCause::ModernSetting,
     )
     .await;
 }
@@ -675,7 +671,7 @@ async fn canonical_room_uses_explicit_people_presence_and_high_detail() {
     for (people_present, expected) in [
         (
             "some",
-            PhotoCheckOutcome::Failed(PhotoCheckFailure::PeopleInEmptyRoom),
+            PhotoCheckOutcome::Failed(PhotoCheckCause::PeopleInEmptyRoom),
         ),
         ("none", PhotoCheckOutcome::Pass),
     ] {
@@ -750,7 +746,7 @@ async fn scene_photo_rejects_unrecorded_drawn_weapons_with_a_typed_reason() {
             if recorded_draw {
                 PhotoCheckOutcome::Pass
             } else {
-                PhotoCheckOutcome::Failed(PhotoCheckFailure::UnexpectedDrawnWeapon)
+                PhotoCheckOutcome::Failed(PhotoCheckCause::UnexpectedDrawnWeapon)
             }
         );
         let request = request.await.unwrap();
@@ -788,7 +784,7 @@ fn scene_photo_custody_is_required_and_count_failures_keep_priority_over_text() 
     value["weapon_custody"] = json!("unexpected_drawn_weapon");
     assert_eq!(
         parse_scene_photo_answer(&value, party),
-        Ok(PhotoCheckOutcome::Failed(PhotoCheckFailure::HeroCount {
+        Ok(PhotoCheckOutcome::Failed(PhotoCheckCause::HeroCount {
             expected: 6,
             seen: 7
         }))
@@ -797,7 +793,7 @@ fn scene_photo_custody_is_required_and_count_failures_keep_priority_over_text() 
     assert_eq!(
         parse_scene_photo_answer(&value, party),
         Ok(PhotoCheckOutcome::Failed(
-            PhotoCheckFailure::UnexpectedDrawnWeapon
+            PhotoCheckCause::UnexpectedDrawnWeapon
         ))
     );
 }

@@ -27,8 +27,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
 use crate::native_http::{
-    MAXIMUM_CHUNKS, NativeHttp, hardened_client_builder, header_block_bytes, is_loopback_socket,
-    is_valid_credential,
+    MAXIMUM_CHUNKS, NativeHttp, NativeHttpCause, hardened_client_builder, header_block_bytes,
+    is_loopback_socket, is_valid_credential,
 };
 use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, is_public};
 use crate::{HttpMethod, ProviderLimits};
@@ -59,15 +59,12 @@ pub enum MarbleModel {
 }
 
 impl MarbleModel {
-    pub const fn as_str(self) -> &'static str {
+    /// The published model name, sent as `model` in a generate request.
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Draft => "marble-1.0-draft",
             Self::Marble11 => "marble-1.1",
         }
-    }
-
-    pub const fn label(self) -> &'static str {
-        self.as_str()
     }
 
     /// World-step credits (research section 3); the pano step adds 80 for a
@@ -82,7 +79,7 @@ impl MarbleModel {
 
 impl fmt::Display for MarbleModel {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+        formatter.write_str(self.key())
     }
 }
 
@@ -95,16 +92,13 @@ pub enum PlyResolution {
 }
 
 impl PlyResolution {
-    pub const fn as_str(self) -> &'static str {
+    /// The `resolution` value of an export request.
+    pub const fn key(self) -> &'static str {
         match self {
             Self::K100 => "100k",
             Self::K500 => "500k",
             Self::FullRes => "full_res",
         }
-    }
-
-    pub const fn label(self) -> &'static str {
-        self.as_str()
     }
 }
 
@@ -113,12 +107,11 @@ impl PlyResolution {
 pub struct OperationId(String);
 
 impl OperationId {
-    pub fn new(value: impl Into<String>) -> Result<Self, WorldLabsError> {
-        let value = value.into();
-        if !valid_id(&value) {
+    pub fn new(value: &str) -> Result<Self, WorldLabsError> {
+        if !valid_id(value) {
             return Err(WorldLabsError::InvalidRequest);
         }
-        Ok(Self(value))
+        Ok(Self(value.to_owned()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -197,13 +190,15 @@ pub enum WorldLabsError {
     RateLimited,
     ContentPolicy,
     Timeout,
-    Http(u16),
+    /// The API answered this other HTTP status.
+    Provider(u16),
     Output,
-    Transport,
+    /// The exchange failed or broke a transport bound; the cause says which.
+    Transport(NativeHttpCause),
 }
 
 impl WorldLabsError {
-    pub const fn label(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::InvalidRequest => "invalid_request",
             Self::Unauthorized => "unauthorized",
@@ -211,23 +206,23 @@ impl WorldLabsError {
             Self::RateLimited => "rate_limited",
             Self::ContentPolicy => "content_policy",
             Self::Timeout => "timeout",
-            Self::Http(_) => "http_status",
+            Self::Provider(_) => "http_status",
             Self::Output => "bad_output",
-            Self::Transport => "transport",
+            Self::Transport(_) => "transport",
         }
     }
 
     pub const fn is_transient(self) -> bool {
         matches!(
             self,
-            Self::RateLimited | Self::Timeout | Self::Transport | Self::Http(500..=599)
+            Self::RateLimited | Self::Timeout | Self::Transport(_) | Self::Provider(500..=599)
         )
     }
 }
 
 impl fmt::Display for WorldLabsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.label())
+        formatter.write_str(self.key())
     }
 }
 
@@ -347,7 +342,7 @@ impl NativeWorldLabs {
         let body = json!({
             "asset_type": "splats",
             "format": "ply",
-            "resolution": resolution.as_str(),
+            "resolution": resolution.key(),
         });
         let mut value = self
             .api_json(
@@ -417,13 +412,15 @@ impl NativeWorldLabs {
             .map_err(|_| WorldLabsError::Timeout)?
             .map_err(map_reqwest_error)?;
         if let Some(accepted) = &pinned_addresses {
-            let connected = response.remote_addr().ok_or(WorldLabsError::Transport)?;
+            let connected = response
+                .remote_addr()
+                .ok_or(WorldLabsError::Transport(NativeHttpCause::Unknown))?;
             if !accepted.contains(&connected.ip()) {
-                return Err(WorldLabsError::Transport);
+                return Err(WorldLabsError::Transport(NativeHttpCause::InvalidEndpoint));
             }
         }
         if response.status().is_redirection() {
-            return Err(WorldLabsError::Transport);
+            return Err(WorldLabsError::Transport(NativeHttpCause::Redirect));
         }
         let status = response.status().as_u16();
         if status != 200 {
@@ -434,7 +431,7 @@ impl NativeWorldLabs {
             .content_length()
             .is_some_and(|length| length > maximum_bytes)
         {
-            return Err(WorldLabsError::Transport);
+            return Err(WorldLabsError::Transport(NativeHttpCause::ResponseTooLarge));
         }
         let mut body: Vec<u8> = Vec::new();
         let mut chunks = 0usize;
@@ -447,16 +444,16 @@ impl NativeWorldLabs {
             };
             chunks += 1;
             if chunks > MAXIMUM_CHUNKS {
-                return Err(WorldLabsError::Transport);
+                return Err(WorldLabsError::Transport(NativeHttpCause::TooManyChunks));
             }
             let length = (body.len() as u64)
                 .checked_add(chunk.len() as u64)
-                .ok_or(WorldLabsError::Transport)?;
+                .ok_or(WorldLabsError::Transport(NativeHttpCause::ResponseTooLarge))?;
             if length > maximum_bytes {
-                return Err(WorldLabsError::Transport);
+                return Err(WorldLabsError::Transport(NativeHttpCause::ResponseTooLarge));
             }
             body.try_reserve(chunk.len())
-                .map_err(|_| WorldLabsError::Transport)?;
+                .map_err(|_| WorldLabsError::Transport(NativeHttpCause::ResponseTooLarge))?;
             body.extend_from_slice(&chunk);
         }
         if body.is_empty() {
@@ -522,7 +519,7 @@ impl NativeWorldLabs {
             .map_err(|_| WorldLabsError::Timeout)?
             .map_err(map_reqwest_error)?;
         if response.status().is_redirection() {
-            return Err(WorldLabsError::Transport);
+            return Err(WorldLabsError::Transport(NativeHttpCause::Redirect));
         }
         check_header_bytes(&response)?;
         let status = response.status().as_u16();
@@ -536,13 +533,15 @@ impl NativeWorldLabs {
                 break;
             };
             chunks += 1;
-            if chunks > MAXIMUM_CHUNKS
-                || bytes
-                    .len()
-                    .checked_add(chunk.len())
-                    .is_none_or(|len| len > MAXIMUM_JSON_RESPONSE_BYTES)
+            if chunks > MAXIMUM_CHUNKS {
+                return Err(WorldLabsError::Transport(NativeHttpCause::TooManyChunks));
+            }
+            if bytes
+                .len()
+                .checked_add(chunk.len())
+                .is_none_or(|len| len > MAXIMUM_JSON_RESPONSE_BYTES)
             {
-                return Err(WorldLabsError::Transport);
+                return Err(WorldLabsError::Transport(NativeHttpCause::ResponseTooLarge));
             }
             bytes.extend_from_slice(&chunk);
         }
@@ -582,10 +581,10 @@ async fn pinned_download_client(
         tokio::time::timeout_at(deadline, tokio::net::lookup_host((host, port)))
             .await
             .map_err(|_| WorldLabsError::Timeout)?
-            .map_err(|_| WorldLabsError::Transport)?
+            .map_err(|_| WorldLabsError::Transport(NativeHttpCause::Unknown))?
             .collect();
     if resolved.is_empty() || resolved.iter().any(|address| !is_public(address.ip())) {
-        return Err(WorldLabsError::Transport);
+        return Err(WorldLabsError::Transport(NativeHttpCause::InvalidEndpoint));
     }
     // Only the timeouts shape the client; the download bound is enforced while reading.
     let limits = ProviderLimits::new(
@@ -597,7 +596,7 @@ async fn pinned_download_client(
     let client = hardened_client_builder(&limits, true)
         .resolve_to_addrs(host, &resolved)
         .build()
-        .map_err(|_| WorldLabsError::Transport)?;
+        .map_err(|_| WorldLabsError::Transport(NativeHttpCause::Unknown))?;
     Ok((
         client,
         resolved.into_iter().map(|address| address.ip()).collect(),
@@ -626,7 +625,7 @@ fn submit_body(request: &WorldRequest<'_>) -> Result<Vec<u8>, WorldLabsError> {
     }
     serde_json::to_vec(&json!({
         "display_name": request.display_name,
-        "model": request.model.as_str(),
+        "model": request.model.key(),
         "permission": {"public": false},
         "tags": ["dungeonflux-poc"],
         "world_prompt": world_prompt,
@@ -642,7 +641,7 @@ fn parse_json(bytes: &[u8]) -> Result<Value, WorldLabsError> {
 
 fn check_header_bytes(response: &reqwest::Response) -> Result<(), WorldLabsError> {
     if header_block_bytes(response.headers()).is_none_or(|bytes| bytes > MAXIMUM_HEADER_BYTES) {
-        return Err(WorldLabsError::Transport);
+        return Err(WorldLabsError::Transport(NativeHttpCause::HeadersTooLarge));
     }
     Ok(())
 }
@@ -651,7 +650,7 @@ fn map_reqwest_error(error: reqwest::Error) -> WorldLabsError {
     if error.is_timeout() {
         WorldLabsError::Timeout
     } else {
-        WorldLabsError::Transport
+        WorldLabsError::Transport(NativeHttpCause::Unknown)
     }
 }
 
@@ -680,7 +679,7 @@ fn map_status(status: u16, body: Option<&[u8]>) -> WorldLabsError {
             }
         }
         422 => WorldLabsError::InvalidRequest,
-        other => WorldLabsError::Http(other),
+        other => WorldLabsError::Provider(other),
     }
 }
 

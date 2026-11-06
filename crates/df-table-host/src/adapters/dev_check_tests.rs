@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 
 use crate::client;
 use crate::command::{CommandError, split_words};
-use crate::dev::{DevError, run_dev};
+use crate::dev::{DevError, ReplyError, run_dev};
 use crate::dev_http::{BodyCause, DevReply, RouteError};
 use crate::engine::routes::path;
 use crate::test_support::{STARTER_FILES, start};
@@ -317,7 +317,7 @@ async fn the_route_runs_a_check_through_the_kit_answers_json_and_audits_one_line
     .expect("answered");
 
     serving.abort();
-    assert_eq!(reply.status, 200, "{}", reply.body);
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     let parsed: RulesCheckReply = serde_json::from_str(&reply.body).expect("a reply");
     let DevReply::Done { value } = parsed else {
         panic!("rejected: {}", reply.body);
@@ -364,9 +364,9 @@ async fn the_route_with_no_kit_says_the_check_is_not_available_and_a_bad_body_is
         Ok(DevReply::Rejected { error, .. }) => error,
         other => panic!("not a refusal: {other:?}"),
     };
-    assert_eq!(unavailable.status, StatusCode::CONFLICT.as_u16());
+    assert_eq!(unavailable.status, StatusCode::CONFLICT);
     assert_eq!(refusal(&unavailable.body), RulesCheckError::ScriptedBackend);
-    assert_eq!(malformed.status, StatusCode::BAD_REQUEST.as_u16());
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST);
     let RulesCheckError::InvalidBody(body_error) = refusal(&malformed.body) else {
         panic!("not an invalid body: {}", malformed.body);
     };
@@ -398,14 +398,19 @@ async fn the_dev_command_line_reaches_the_verb_and_a_scripted_table_refuses_it_b
     };
     assert_eq!(error, RulesCheckError::ScriptedBackend);
     assert_eq!(message, error.to_string());
-    // The verb as typed at the dev command line reads the same refusal as its sentence.
+    // The verb as typed at the dev command line reads the same typed refusal and prints its
+    // sentence.
     let refused = run_dev(host.port, &words("rules check perception 1"))
         .await
         .expect_err("the scripted backend has no check");
-    let DevError::Rejected(sentence) = refused else {
-        panic!("not a rejection: {refused:?}");
-    };
-    assert!(sentence.contains("scripted rules backend"), "{sentence}");
+    assert_eq!(refused.to_string(), message);
+    assert_eq!(
+        refused,
+        DevError::Rejected {
+            error: ReplyError::RulesCheck(error),
+            message,
+        }
+    );
     let usage = run_dev(host.port, &words("rules check"))
         .await
         .expect_err("a usage error");

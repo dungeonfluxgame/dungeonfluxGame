@@ -38,9 +38,9 @@ fn a_pinned_call_id_is_prefixed_lowercase_hex_of_the_dispatch_bytes() {
 
 #[test]
 fn usage_evidence_labels_are_distinct_words() {
-    assert_eq!(UsageEvidence::Reported.label(), "reported");
-    assert_eq!(UsageEvidence::Estimated.label(), "estimated");
-    assert_eq!(UsageEvidence::Unknown.label(), "unknown");
+    assert_eq!(UsageEvidence::Reported.key(), "reported");
+    assert_eq!(UsageEvidence::Estimated.key(), "estimated");
+    assert_eq!(UsageEvidence::Unknown.key(), "unknown");
 }
 
 #[test]
@@ -78,7 +78,7 @@ impl ImageCostProjection for RecordingProjection {
             self.seen.lock().expect("recording").push(format!(
                 "correct {call_id} rev={} {} usable={}",
                 report.revision.0,
-                report.evidence.label(),
+                report.evidence.key(),
                 report.usable
             ));
             Ok(PinnedCorrection::Applied)

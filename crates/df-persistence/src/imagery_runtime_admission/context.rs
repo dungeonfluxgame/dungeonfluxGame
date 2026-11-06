@@ -96,7 +96,7 @@ pub(super) async fn call(
         .ok_or(RuntimeError::InvalidRecord)?;
     let input_digest = fixed(row.get("input_digest"))?;
     let config_digest = fixed(row.get("config_digest"))?;
-    if row.get::<_, String>("stage_kind") != input.stage.kind.label()
+    if row.get::<_, String>("stage_kind") != input.stage.kind.key()
         || config_digest != df_commerce::digest::sha256(input.job.config.bytes())
     {
         return Err(RuntimeError::InvalidRecord);

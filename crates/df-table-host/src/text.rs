@@ -190,8 +190,8 @@ impl TextObserver for LineObserver {
     fn observe(&self, event: &TextEvent) {
         let mut line = format!(
             "TEXT {} purpose={} profile={} output={} elapsed_ms={}",
-            event.kind.label(),
-            event.purpose.label(),
+            event.kind.key(),
+            event.purpose.key(),
             event.profile.as_str(),
             event.output_name,
             event.elapsed.as_millis()

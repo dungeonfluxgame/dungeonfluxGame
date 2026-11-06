@@ -30,11 +30,48 @@ pub enum ExpressionRequestError {
     Request(RequestError),
 }
 
+impl fmt::Display for ExpressionRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Speech(_) => "the speech permission changed or was refused",
+            Self::Empty => "the permitted selection holds no claim",
+            Self::Binding => "the request binding names another basis than the expression",
+            Self::Capacity => "the encoded expression input is above the request byte limit",
+            Self::Allocation => "the expression request could not be allocated",
+            Self::Request(_) => "the expression request was refused",
+        })
+    }
+}
+
+impl std::error::Error for ExpressionRequestError {}
+
 /// Why a conversation expression request could not be prepared or is no longer current.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConversationExpressionError {
     Conversation(ConversationError),
     Request(ExpressionRequestError),
+}
+
+impl fmt::Display for ConversationExpressionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Conversation(_) => {
+                formatter.write_str("the conversation permission changed or was refused")
+            }
+            Self::Request(error) => {
+                write!(formatter, "the conversation expression failed: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConversationExpressionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Conversation(_) => None,
+            Self::Request(error) => Some(error),
+        }
+    }
 }
 
 /// A checked request whose conversation permission remains bound for egress and output.
@@ -363,11 +400,67 @@ pub enum QualificationError {
     Allocation,
 }
 
+impl fmt::Display for QualificationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Current(error) => {
+                write!(formatter, "the expression is no longer current: {error}")
+            }
+            Self::Capacity => formatter.write_str("the expression envelope passed a bound"),
+            Self::ClauseCount => {
+                formatter.write_str("the expression envelope holds the wrong number of clauses")
+            }
+            Self::Rejected => formatter.write_str("an expression clause differs from its claim"),
+            Self::Uncertain => {
+                formatter.write_str("an expression clause is noncanonical open flavor")
+            }
+            Self::Allocation => formatter.write_str("the expression could not be allocated"),
+        }
+    }
+}
+
+impl std::error::Error for QualificationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Current(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 /// Why a conversation candidate envelope did not qualify.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConversationQualificationError {
     Current(ConversationExpressionError),
     Expression(QualificationError),
+}
+
+impl fmt::Display for ConversationQualificationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Current(error) => {
+                write!(
+                    formatter,
+                    "the conversation expression is no longer current: {error}"
+                )
+            }
+            Self::Expression(error) => {
+                write!(
+                    formatter,
+                    "the conversation expression did not qualify: {error}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ConversationQualificationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Current(error) => Some(error),
+            Self::Expression(error) => Some(error),
+        }
+    }
 }
 
 /// Source-exact grounded output only. This does not commit a reveal or publish captions/TTS.

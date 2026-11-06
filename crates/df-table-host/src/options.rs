@@ -12,7 +12,8 @@ pub const DEFAULT_KIND_DIRECTORY: &str = "assets/canvas/kinds";
 pub const DEFAULT_PLAYGROUND_DIRECTORY: &str = "assets/playground";
 /// The playground's compiled package when `--package` is not given (see `development/playground.sh`).
 pub const DEFAULT_PACKAGE_DIRECTORY: &str = "artifacts/playground/pkg";
-pub const PORT_ENVIRONMENT_VARIABLE: &str = "DF_TABLE_PORT";
+/// The environment variable that names the port of `dev` when `--port` is not given.
+pub const PORT_VARIABLE: &str = "DF_TABLE_PORT";
 
 pub const SERVE_USAGE: &str = "\
 df-table serve [--port N] [--kinds DIR] [--playground DIR] [--package DIR] [--moves] [--quiet]

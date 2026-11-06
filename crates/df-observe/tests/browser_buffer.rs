@@ -1,6 +1,6 @@
 use df_observe::{
     BrowserBuffer, BrowserLog, BufferError, CaptureKey, ProducerId, RecordId, SourceSequence,
-    UploadFailure,
+    UploadCause,
 };
 use df_types::{BuildIdentity, OperationId, SessionId};
 use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
@@ -177,9 +177,9 @@ fn deadline_failure_and_retry_preserve_original_bytes() {
     );
     buffer.expire_upload(Duration::from_secs(12)).unwrap();
     for outcome in [
-        UploadFailure::Transport,
-        UploadFailure::Cancelled,
-        UploadFailure::PartialOrRejected,
+        UploadCause::Transport,
+        UploadCause::Cancelled,
+        UploadCause::PartialOrRejected,
     ] {
         let lease = buffer.begin_upload(Duration::from_secs(12)).unwrap();
         assert_eq!(
@@ -267,7 +267,7 @@ fn rebind_reports_gap_and_same_generation_does_not_reuse_lease_identity() {
         .unwrap();
     let new = buffer.begin_upload(Duration::ZERO).unwrap();
     assert_eq!(
-        buffer.fail_upload(&old, UploadFailure::Transport),
+        buffer.fail_upload(&old, UploadCause::Transport),
         Err(BufferError::StaleLease)
     );
     buffer

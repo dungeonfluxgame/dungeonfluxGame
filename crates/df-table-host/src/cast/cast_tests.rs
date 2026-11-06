@@ -75,29 +75,25 @@ fn a_cue_is_the_same_json_an_engine_posts() {
 
 /// A one-region layout naming `name`, bound to `picture` whose bytes are its own name.
 fn layout_of(picture: &str, name: &str) -> df_scene_layout::SceneLayout {
-    df_scene_layout::SceneLayout {
-        schema: df_scene_layout::SCHEMA_VERSION,
-        picture: df_scene_layout::PictureBinding {
-            name: picture.to_owned(),
-            sha256: df_imagery::oneshot_segment::picture_sha256(picture.as_bytes()),
-            width_px: 100,
-            height_px: 50,
-        },
-        model: "sam-3.1".to_owned(),
-        prompt: "person".to_owned(),
-        regions: vec![df_scene_layout::SceneRegion {
-            id: df_scene_layout::region_id(name.as_bytes()),
-            label: Some(name.to_owned()),
-            left_permille: 300,
-            top_permille: 200,
-            right_permille: 600,
-            bottom_permille: 1000,
-            head_x_permille: 450,
-            head_y_permille: 200,
-            score_permille: 900,
-            mask: None,
-        }],
-    }
+    use df_scene_layout::{PictureBinding, RegionGeometry, SceneLayout, SceneRegion, region_id};
+    let binding = PictureBinding {
+        name: picture.to_owned(),
+        sha256: df_imagery::oneshot_segment::picture_sha256(picture.as_bytes()),
+        width_px: 100,
+        height_px: 50,
+    };
+    let geometry = RegionGeometry {
+        left_permille: 300,
+        top_permille: 200,
+        right_permille: 600,
+        bottom_permille: 1000,
+        head_x_permille: 450,
+        head_y_permille: 200,
+    };
+    let region = SceneRegion::new(region_id(name.as_bytes()), geometry, 900)
+        .unwrap()
+        .with_label(Some(name.to_owned()));
+    SceneLayout::new(binding, "sam-3.1", "person", vec![region])
 }
 
 #[tokio::test]
@@ -131,10 +127,16 @@ async fn the_cast_and_the_camera_follow_the_backdrop_the_scene_shows() {
     run("scene camera region:dwarf").await.unwrap();
     run("scene camera-on dwarf").await.unwrap();
     let refused = run("scene camera-on elf").await.unwrap_err();
-    let crate::dev::DevError::Rejected(text) = &refused else {
-        panic!("{refused:?}");
-    };
-    assert!(text.starts_with("refused (unknown_character)"), "{text}");
+    assert!(
+        matches!(
+            &refused,
+            crate::dev::DevError::Rejected {
+                error: crate::dev::ReplyError::Cast(CastError::UnknownCharacter { character, .. }),
+                ..
+            } if character == "elf"
+        ),
+        "{refused:?}"
+    );
 
     let reply: CastReply<CameraMoved> = crate::dev_client::post_json(
         port,

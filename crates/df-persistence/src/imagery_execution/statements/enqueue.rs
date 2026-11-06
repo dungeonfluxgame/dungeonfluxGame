@@ -188,7 +188,7 @@ async fn enqueue_with_authority_in(
                 &command
                     .parent_dispatch
                     .map(|parent| parent.as_bytes().to_vec()),
-                &command.kind.label(),
+                &command.kind.key(),
             ],
         )
         .await
@@ -253,7 +253,7 @@ async fn enqueue_with_authority_in(
     let capacity_scope = command.capacity.as_str();
     let config_revision = invalid(i64::try_from(command.config_revision))?;
     let input_revision = i64::from(command.input_revision);
-    let kind_label = command.kind.label();
+    let kind_label = command.kind.key();
     let owner_scope = df_imagery::owner_scope_bytes(&command.owner);
     let inserted = tx
         .execute(
