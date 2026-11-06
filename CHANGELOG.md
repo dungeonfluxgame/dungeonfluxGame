@@ -14,6 +14,15 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-06T14:25:21-05:00 to 2026-11-06T15:56:58-05:00
+
+Range: d0104f6a..3e8f1c7cb6f6497484db7d7ab453fe2117466c29
+
+- d0104f6a - CHANGELOG and handoff: record cleanup wave 3 (bookkeeping carried from the prior block)
+- 3e8f1c7cb6f6497484db7d7ab453fe2117466c29 - Logging and dev CLI reach: HTTP served lines, client and timing reports, read verbs
+
+At the owner's request this was stopped before every review and fix pass finished. The CLI-core unit was not independently reviewed. Integration checks passed.
+
 ## 2026-11-06T12:32:12-05:00 to 2026-11-06T14:25:21-05:00
 
 Range: a3304bdc..7003ce990186e2ac4abbb5927af47c127ec44d0e
