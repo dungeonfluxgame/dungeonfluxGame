@@ -1,10 +1,10 @@
 //! The stand-in table state and its stub `step`.
 //!
-//! It owns an in-memory state of the size the plan expects of a table (a few hundred elements, a few
-//! thousand facts), the audiences that read it, and a `step` that applies a handful of effects. The
-//! state is made up: nothing here is a rule. What it keeps from the real thing is the cost shape,
-//! which is a deep structure with strings, per-audience visibility that has to be filtered, and
-//! bounded growth. Generation and effects are deterministic, so two runs measure the same work.
+//! It owns an in-memory state of the size the plan expects of a table (a few hundred elements, a
+//! few thousand facts), the audiences that read it, and a `step` that applies a handful of effects.
+//! The state is made up: nothing here is a rule. What it keeps from the real thing is the cost
+//! shape, which is a deep structure with strings, per-audience visibility that has to be filtered,
+//! and bounded growth. Generation and effects are deterministic, so two runs measure the same work.
 
 use std::collections::VecDeque;
 

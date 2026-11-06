@@ -13,6 +13,7 @@ use df_table::owner_queue::Lane;
 use df_table::pipeline::PipelineTable;
 use df_table::ports::{Broker, Clock, PurposeName, Readiness};
 
+use crate::broker::report::{LedgerReport, QueuesReport};
 use crate::engine::audit::EngineAudit;
 use crate::engine::cli::verb_usages;
 use crate::engine::commit::{CommitId, ScriptedCommit};
@@ -20,9 +21,9 @@ use crate::engine::labels::sender_label;
 use crate::engine::limits::{MAXIMUM_LEDGER_ENTRIES_PER_ANSWER, MAXIMUM_LINES_PER_ANSWER};
 use crate::engine::projection_adapter::project_view;
 use crate::engine::report::{
-    BrokerRequested, BrokerView, ChaosReport, ClockReport, CommitReport, Description, DiceReport,
+    BrokerRequested, ChaosReport, ClockReport, CommitReport, Description, DevControl, DiceReport,
     EngineDump, EngineError, HandOffDump, HealthReport, InProgressReport, LaneDepth,
-    MachineDescription, QueueReport, SeatPending, TableDump, ViableReport,
+    MachineDescription, QueueReport, SeatPending, TableDump, ViableReport, ViewCause,
 };
 use crate::engine::request::{AudienceSpec, ChaosRequest, ClockControl, CommitFault, DiceControl};
 use crate::engine::setup::WIRED_PORTS;
@@ -31,16 +32,8 @@ use crate::engine::verb_set::{not_built, verb_lines};
 
 use super::Owner;
 
-fn unwritable(what: impl ToString) -> EngineError {
-    EngineError::Unwritable {
-        what: what.to_string(),
-    }
-}
-
-fn not_available(what: &str) -> EngineError {
-    EngineError::NotAvailable {
-        what: what.to_owned(),
-    }
+fn not_available(control: DevControl) -> EngineError {
+    EngineError::NotAvailable { control }
 }
 
 fn table_dump(table: &PipelineTable) -> TableDump {
@@ -151,7 +144,12 @@ impl Owner {
         if let AudienceSpec::Seat { seat } = spec {
             self.seat_is_at_the_table(seat)?;
         }
-        let view = project_view(&self.committed, audience).map_err(unwritable)?;
+        let view = project_view(&self.committed, audience).map_err(|error| {
+            EngineError::ViewUnavailable {
+                cause: ViewCause::Projection,
+                detail: error.to_string(),
+            }
+        })?;
         self.audit(EngineAudit::Projection {
             audience,
             revision: self.revision(),
@@ -305,7 +303,7 @@ impl Owner {
             .controls
             .clock
             .as_ref()
-            .ok_or_else(|| not_available("controllable clock"))?;
+            .ok_or_else(|| not_available(DevControl::Clock))?;
         let verb = match control {
             ClockControl::Now => "now",
             ClockControl::Advance { ms } => {
@@ -335,7 +333,7 @@ impl Owner {
             .controls
             .dice
             .as_ref()
-            .ok_or_else(|| not_available("controllable dice"))?;
+            .ok_or_else(|| not_available(DevControl::Dice))?;
         let (verb, values) = match control {
             DiceControl::Seed { seed } => {
                 dice.reseed(seed);
@@ -361,7 +359,7 @@ impl Owner {
                 let store = controls
                     .commit
                     .as_ref()
-                    .ok_or_else(|| not_available("scripted commit store"))?;
+                    .ok_or_else(|| not_available(DevControl::CommitStore))?;
                 let scripted = match fault {
                     CommitFault::Unavailable => {
                         ScriptedCommit::Fails(crate::engine::commit::CommitError::Unavailable)
@@ -373,14 +371,8 @@ impl Owner {
                         latency_ms: u64::MAX,
                     },
                 };
-                for _ in 0..count {
-                    store.push(scripted);
-                }
-                let fault_key = match fault {
-                    CommitFault::Unavailable => "unavailable",
-                    CommitFault::Refused => "refused",
-                    CommitFault::Deadline => "deadline",
-                };
+                store.push(scripted, u64::from(count));
+                let fault_key = fault.key();
                 self.audit(EngineAudit::Chaos {
                     dependency: "commit",
                     fault: fault_key,
@@ -395,7 +387,7 @@ impl Owner {
                 let interpreter = controls
                     .interpreter
                     .as_ref()
-                    .ok_or_else(|| not_available("interpreter switch"))?;
+                    .ok_or_else(|| not_available(DevControl::InterpreterSwitch))?;
                 interpreter.set_down(down);
                 self.audit(EngineAudit::Chaos {
                     dependency: "interpreter",
@@ -410,25 +402,23 @@ impl Owner {
         }
     }
 
-    pub(super) fn broker_queues(&self) -> BrokerView {
+    pub(super) fn broker_queues(&self) -> QueuesReport {
         self.audit(EngineAudit::Broker {
             verb: "queues",
             purpose: None,
         });
-        BrokerView::Queues(self.adapters.broker.hub.queues_report())
+        self.adapters.broker.hub.queues_report()
     }
 
-    pub(super) fn broker_ledger(&self) -> BrokerView {
+    pub(super) fn broker_ledger(&self) -> LedgerReport {
         self.audit(EngineAudit::Broker {
             verb: "ledger",
             purpose: None,
         });
-        BrokerView::Ledger(
-            self.adapters
-                .broker
-                .hub
-                .ledger_report(MAXIMUM_LEDGER_ENTRIES_PER_ANSWER),
-        )
+        self.adapters
+            .broker
+            .hub
+            .ledger_report(MAXIMUM_LEDGER_ENTRIES_PER_ANSWER)
     }
 
     /// A dev request for a resource, through the same port the machines use.
@@ -444,12 +434,8 @@ impl Owner {
         }
         let operation = self.mint_engine_operation();
         let correlation = self.correlation_for(operation);
-        let handle = hub
-            .request(correlation, &name)
-            .map_err(|error| EngineError::BadRequest {
-                reason: error.to_string(),
-            })?;
-        let readiness = hub.readiness(correlation, handle).map_err(unwritable)?;
+        let handle = hub.request(correlation, &name)?;
+        let readiness = hub.readiness(correlation, handle)?;
         self.audit(EngineAudit::Broker {
             verb: "request",
             purpose: Some(name),

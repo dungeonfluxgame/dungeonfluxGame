@@ -2,28 +2,29 @@
 //!
 //! They sit behind the same guard as every route of the host (loopback host names, JSON for any
 //! change, no foreign origin), because they are merged into the one router before its layers.
-//! A read is a GET and a change is a POST of JSON; every answer is an `EngineReply`, `done` with
-//! the value or `rejected` with a typed error and its message, and a refusal that is the owner's
-//! busy or stopped state is a 503 while any other refusal is a 400. The routes hold no state of
-//! their own beyond the handle to the owner thread, which they start with the router.
+//! A read is a GET and a change is a POST of JSON; every answer is an `EngineReply` (the host's
+//! one envelope), `done` with the value or `rejected` with a typed `EngineError`, whose `status()`
+//! is the answer's status. A body is read with `dev_http::parse_body` and a query with `query`, so
+//! a malformed one is a typed `invalid_body` or `invalid_query` refusal and never a bare 400. The
+//! routes hold no state of their own beyond the handle to the owner thread, which they start with
+//! the router, and they record nothing: the owner audits every call, and the host's middleware
+//! echoes its lines.
 
 mod observe;
 mod play;
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Bytes;
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::{get, post};
-use axum::{Json, Router};
-use serde::Deserialize;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 use crate::adapters::dev_route;
 use crate::adapters::{RulesBackend, RulesCheckKit, story_ports};
+use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
 
 use super::adapters::{
@@ -34,9 +35,10 @@ use super::commit::ScriptedCommitStore;
 use super::extras::Extras;
 use super::handle::EngineHandle;
 use super::limits::COMMAND_MAILBOX_CAPACITY;
-use super::report::{EngineError, EngineReply};
+use super::report::{EngineError, QueryError};
 use super::request::{
-    AudienceSpec, ChaosRequest, ClockControl, DiceControl, ForceRequest, InputRequest, QueueControl,
+    AudienceQuery, BrokerRequest, ChaosRequest, ClockControl, DiceControl, ForceRequest,
+    InputRequest, QueueControl, ViableQuery,
 };
 use super::setup::{EngineConfig, EngineStartError, machines_for};
 
@@ -67,9 +69,9 @@ pub mod path {
     pub const WIRE_INTENT: &str = "/dev/engine/wire/intent";
 }
 
-/// The query parameter of `path::VIABLE`.
+/// The query parameter of `path::VIABLE`: the field of `ViableQuery`.
 pub const SEAT_PARAMETER: &str = "seat";
-/// The query parameter of `path::PROJECTION`: `tv`, or a seat number.
+/// The query parameter of `path::PROJECTION` and `path::WIRE_VIEW`: `tv`, or a seat number.
 pub const AUDIENCE_PARAMETER: &str = "audience";
 /// The query parameters of `path::HISTORY`; they are the fields of `HistoryRequest`.
 pub const LIMIT_PARAMETER: &str = "limit";
@@ -78,16 +80,8 @@ pub const CLASS_PARAMETER: &str = "class";
 /// The query parameter of `path::TRACE`: a number or 32 hexadecimal digits.
 pub const OPERATION_PARAMETER: &str = "operation";
 
-/// The body of `path::BROKER_REQUEST`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BrokerRequestBody {
-    pub purpose: String,
-}
-
 #[derive(Clone)]
 struct EngineRoutes {
-    app: Arc<AppState>,
     engine: Arc<Result<EngineHandle, EngineStartError>>,
 }
 
@@ -135,180 +129,137 @@ fn start_dev_engine(
 /// The seed of the dev engine's dice, so a run is reproducible.
 const DEV_DICE_SEED: u64 = 20_261_102;
 
-fn status_of(error: &EngineError) -> StatusCode {
-    match error {
-        EngineError::MailboxFull
-        | EngineError::Stopped
-        | EngineError::NotStarted { .. }
-        | EngineError::Stalled
-        | EngineError::NotServedYet => StatusCode::SERVICE_UNAVAILABLE,
-        EngineError::TooFast { .. } => StatusCode::TOO_MANY_REQUESTS,
-        EngineError::NoAnswer
-        | EngineError::Unwritable { .. }
-        | EngineError::ViewUnavailable { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        EngineError::NotSupportedYet { .. } => StatusCode::NOT_IMPLEMENTED,
-        _ => StatusCode::BAD_REQUEST,
-    }
-}
-
-fn reply<T: Serialize>(routes: &EngineRoutes, result: Result<T, EngineError>) -> Response {
-    routes.app.echo_new_lines();
-    let status = result.as_ref().err().map_or(StatusCode::OK, status_of);
-    (status, Json(EngineReply::from_result(result))).into_response()
-}
-
+/// The owner, or why the routes have none.
 fn engine(routes: &EngineRoutes) -> Result<&EngineHandle, EngineError> {
-    match routes.engine.as_ref() {
-        Ok(handle) => Ok(handle),
-        Err(error) => Err(EngineError::NotStarted {
-            reason: error.to_string(),
-        }),
-    }
+    routes
+        .engine
+        .as_ref()
+        .as_ref()
+        .map_err(|error| EngineError::NotStarted {
+            cause: error.cause(),
+            detail: error.to_string(),
+        })
 }
 
-fn body<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, EngineError> {
-    serde_json::from_slice(bytes).map_err(|error| EngineError::BadRequest {
-        reason: format!("the request body is not valid: {error}"),
+/// The query of a GET, or the typed refusal of one that does not read (a missing or an unknown
+/// parameter, a value of the wrong kind).
+fn query<T>(query: Result<Query<T>, QueryRejection>) -> Result<T, EngineError> {
+    query.map(|Query(query)| query).map_err(|rejection| {
+        EngineError::from(QueryError {
+            detail: rejection.body_text(),
+        })
     })
 }
 
 async fn input(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let request: InputRequest = body(&bytes)?;
+        let request: InputRequest = parse_body(&bytes)?;
         engine(&routes)?.submit(request).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 async fn dump(State(routes): State<EngineRoutes>) -> Response {
-    let result = async { engine(&routes)?.dump().await }.await;
-    reply(&routes, result)
+    reply(async { engine(&routes)?.dump().await }.await)
 }
 
-#[derive(Debug, Deserialize)]
-struct ViableQuery {
-    seat: Option<u64>,
-}
-
-async fn viable(State(routes): State<EngineRoutes>, Query(query): Query<ViableQuery>) -> Response {
+async fn viable(
+    State(routes): State<EngineRoutes>,
+    viable_query: Result<Query<ViableQuery>, QueryRejection>,
+) -> Response {
     let result = async {
-        let seat = query.seat.ok_or_else(|| EngineError::BadRequest {
-            reason: format!("give ?{SEAT_PARAMETER}=N"),
-        })?;
+        let ViableQuery { seat } = query(viable_query)?;
         engine(&routes)?.viable(seat).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 async fn force(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let request: ForceRequest = body(&bytes)?;
+        let request: ForceRequest = parse_body(&bytes)?;
         engine(&routes)?.force(request).await
     }
     .await;
-    reply(&routes, result)
-}
-
-#[derive(Debug, Deserialize)]
-struct ProjectionQuery {
-    audience: Option<String>,
-}
-
-fn audience_of(text: Option<&str>) -> Result<AudienceSpec, EngineError> {
-    let bad = || EngineError::BadRequest {
-        reason: format!("give ?{AUDIENCE_PARAMETER}=tv or a seat number"),
-    };
-    match text.ok_or_else(bad)? {
-        "tv" => Ok(AudienceSpec::Tv),
-        seat => seat
-            .parse::<u64>()
-            .map(|seat| AudienceSpec::Seat { seat })
-            .map_err(|_| bad()),
-    }
+    reply(result)
 }
 
 async fn projection(
     State(routes): State<EngineRoutes>,
-    Query(query): Query<ProjectionQuery>,
+    audience_query: Result<Query<AudienceQuery>, QueryRejection>,
 ) -> Response {
     let result = async {
-        let audience = audience_of(query.audience.as_deref())?;
-        engine(&routes)?.projection(audience).await
+        let AudienceQuery { audience } = query(audience_query)?;
+        engine(&routes)?.projection(audience.0).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 async fn queue_show(State(routes): State<EngineRoutes>) -> Response {
-    let result = async { engine(&routes)?.queue_show().await }.await;
-    reply(&routes, result)
+    reply(async { engine(&routes)?.queue_show().await }.await)
 }
 
 async fn queue_control(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let control: QueueControl = body(&bytes)?;
+        let control: QueueControl = parse_body(&bytes)?;
         engine(&routes)?.queue_control(control).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 async fn describe(State(routes): State<EngineRoutes>) -> Response {
-    let result = async { engine(&routes)?.describe().await }.await;
-    reply(&routes, result)
+    reply(async { engine(&routes)?.describe().await }.await)
 }
 
 async fn health(State(routes): State<EngineRoutes>) -> Response {
-    let result = async { engine(&routes)?.health().await }.await;
-    reply(&routes, result)
+    reply(async { engine(&routes)?.health().await }.await)
 }
 
 async fn clock(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let control: ClockControl = body(&bytes)?;
+        let control: ClockControl = parse_body(&bytes)?;
         engine(&routes)?.clock(control).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 async fn dice(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let control: DiceControl = body(&bytes)?;
+        let control: DiceControl = parse_body(&bytes)?;
         engine(&routes)?.dice(control).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 async fn chaos(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let request: ChaosRequest = body(&bytes)?;
+        let request: ChaosRequest = parse_body(&bytes)?;
         engine(&routes)?.chaos(request).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 async fn broker_queues(State(routes): State<EngineRoutes>) -> Response {
-    let result = async { engine(&routes)?.broker_queues().await }.await;
-    reply(&routes, result)
+    reply(async { engine(&routes)?.broker_queues().await }.await)
 }
 
 async fn broker_ledger(State(routes): State<EngineRoutes>) -> Response {
-    let result = async { engine(&routes)?.broker_ledger().await }.await;
-    reply(&routes, result)
+    reply(async { engine(&routes)?.broker_ledger().await }.await)
 }
 
 async fn broker_request(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let request: BrokerRequestBody = body(&bytes)?;
+        let request: BrokerRequest = parse_body(&bytes)?;
         engine(&routes)?.broker_request(request.purpose).await
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 /// The routes of the dev engine, with the owner thread they talk to. The guard and the body limit
@@ -317,8 +268,8 @@ pub fn router(app: Arc<AppState>) -> Router {
     let started = start_dev_engine(&app);
     let check_kit = started.as_ref().ok().and_then(|(_, kit)| kit.clone());
     let engine = Arc::new(started.map(|(handle, _)| handle));
-    let rules_check = dev_route::router(Arc::clone(&app), check_kit);
-    let routes = EngineRoutes { app, engine };
+    let rules_check = dev_route::router(app, check_kit);
+    let routes = EngineRoutes { engine };
     Router::new()
         .route(path::INPUT, post(input))
         .route(path::DUMP, get(dump))

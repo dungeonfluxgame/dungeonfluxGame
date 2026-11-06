@@ -1,8 +1,12 @@
+mod media;
+mod overlay;
+mod slide;
+mod slots;
+
 use crate::fixture::{Caption, Choice, Fixture, PartyMember, UnavailableChoice};
-use crate::scene::{
-    CaptionOverride, MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CHOICES_PER_LIST, MAXIMUM_PARTY_MEMBERS,
-    SceneChange, SceneError, SceneOverlay,
-};
+use crate::limits::{MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CHOICES_PER_LIST, MAXIMUM_PARTY_MEMBERS};
+use crate::overlay::Edit;
+use crate::scene::{SceneChange, SceneError, SceneOverlay};
 
 const FIXTURE: &str = r##"{
     "name": "Base",
@@ -81,7 +85,7 @@ fn a_caption_replaces_the_fixtures_and_can_be_cleared() {
     overlay
         .apply(SceneChange::ClearCaption {}, &base())
         .expect("applies");
-    assert_eq!(overlay.caption, Some(CaptionOverride::Clear));
+    assert_eq!(overlay.caption, Edit::Clear);
     assert_eq!(drawn(&overlay).tv.caption, None);
 }
 
@@ -207,7 +211,7 @@ fn a_party_change_that_cannot_apply_is_refused_and_says_why() {
             },
             &base()
         ),
-        Err(SceneError::BadMaximum)
+        Err(SceneError::InvalidMaximum)
     );
     assert_eq!(
         overlay.apply(
@@ -219,7 +223,7 @@ fn a_party_change_that_cannot_apply_is_refused_and_says_why() {
             },
             &base()
         ),
-        Err(SceneError::BadMaximum)
+        Err(SceneError::InvalidMaximum)
     );
     assert!(overlay.is_empty());
 }

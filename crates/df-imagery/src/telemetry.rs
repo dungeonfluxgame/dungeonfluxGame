@@ -18,6 +18,7 @@ use std::{
 pub struct DeliveryId([u8; 16]);
 
 impl DeliveryId {
+    /// The identity for `bytes`, or `None` for the all-zero value, which names no delivery.
     pub fn from_bytes(bytes: [u8; 16]) -> Option<Self> {
         (bytes != [0; 16]).then_some(Self(bytes))
     }
@@ -451,7 +452,7 @@ impl EventContext {
             ),
         ] {
             if let Some(bytes) = bytes {
-                attributes.push((name.into(), text(&hex(&bytes))));
+                attributes.push((name.into(), text(&crate::lower_hex(&bytes))));
             }
         }
         for (name, value) in [
@@ -561,10 +562,6 @@ fn text(value: &str) -> AnyValue {
     AnyValue::String(value.to_owned().into())
 }
 
-fn hex(bytes: &[u8; 16]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
 /// Enabled levels are captured independently of whether any trace is sampled or installed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -613,8 +610,9 @@ pub struct SharedImageObserver {
     recent: Mutex<RecentEvents>,
 }
 
-/// How many enabled events the observer keeps for operator reads, oldest dropped first.
-pub const RECENT_EVENT_CAPACITY: usize = 256;
+/// How many enabled events the observer keeps for operator reads, oldest dropped first: room for
+/// a long development session, at a few hundred bytes per event.
+pub const RECENT_EVENT_CAPACITY: usize = 4_096;
 
 /// A safe, bounded view of one enabled event for operators and agents: names, labels, safe
 /// identifiers and measurements. It never carries prompts, paths, credentials or supplier bodies.
@@ -677,9 +675,18 @@ impl SharedImageObserver {
             name: event.kind.name(),
             level,
             failure: event.failure.map(FailureKind::label),
-            job: event.context.job.map(|job| hex(job.as_bytes())),
-            stage: event.context.stage.map(|stage| hex(stage.as_bytes())),
-            attempt: event.context.attempt.map(|attempt| hex(attempt.as_bytes())),
+            job: event
+                .context
+                .job
+                .map(|job| crate::lower_hex(job.as_bytes())),
+            stage: event
+                .context
+                .stage
+                .map(|stage| crate::lower_hex(stage.as_bytes())),
+            attempt: event
+                .context
+                .attempt
+                .map(|attempt| crate::lower_hex(attempt.as_bytes())),
             elapsed_ms: event
                 .elapsed
                 .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)),

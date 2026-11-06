@@ -2,18 +2,18 @@
 //! sleeps. Rules of focus, the view, the zoom ceiling, returns and the log (O.14 acceptance cases
 //! that need no engine events). Pace, priority and bursts are in `director_pace_tests`.
 
-use crate::director::{
-    DEFAULT_FOCUS_HOLD_MS, Director, DirectorSettings, Receipt, Request, StageDirection,
-    UNENDED_FOCUS_LIMIT_MS,
-};
-use crate::director_error::DirectorError;
-use crate::director_log::{Cause, DropReason, EndsReport, Outcome};
-use crate::director_reason::{
+use crate::director::error::DirectorError;
+use crate::director::log::{Cause, DropReason, EndsReport, Outcome};
+use crate::director::reason::{
     Ends, FOCUS_MOVE_MAXIMUM_MS, FOCUS_MOVE_MINIMUM_MS, MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT,
     Reason, ReasonSpec, ReasonTable, WideReason,
 };
-use crate::director_view::{
+use crate::director::view::{
     BeatHold, BeatKind, PlateView, StageView, TargetView, clamped_zoom, zoom_ceiling_percent,
+};
+use crate::director::{
+    DEFAULT_FOCUS_HOLD_MS, Director, DirectorSetting, DirectorSettings, Receipt, Request,
+    StageDirection, UNENDED_FOCUS_LIMIT_MS,
 };
 use crate::element::ElementId;
 use crate::inspect::InspectAudience;
@@ -46,7 +46,7 @@ pub(crate) fn tavern() -> StageView {
 }
 
 pub(crate) fn director() -> Director {
-    Director::new(DirectorSettings::defaults()).expect("default settings are valid")
+    Director::new(DirectorSettings::default())
 }
 
 /// Asks, ticks at the same time, and returns what the tick moved.
@@ -78,7 +78,7 @@ pub(crate) fn focus_of(direction: &StageDirection) -> (&str, Reason, u64) {
     }
 }
 
-pub(crate) fn wide_of(direction: &StageDirection) -> (WideReason, u32, u64) {
+pub(crate) fn wide_of(direction: &StageDirection) -> (WideReason, u64, u64) {
     match direction {
         StageDirection::Wide {
             reason,
@@ -118,10 +118,10 @@ fn the_reasons_are_ranked_in_the_order_of_the_plan_and_their_defaults_are_the_ta
             "requested"
         ]
     );
-    let table = ReasonTable::defaults();
+    let table = ReasonTable::default();
     let numbers = |reason| {
         let spec = table.spec(reason);
-        (spec.zoom_percent, spec.over_ms)
+        (spec.zoom_percent(), spec.over_ms())
     };
     assert_eq!(numbers(Reason::Speaker), (200, 1_200));
     assert_eq!(numbers(Reason::ActiveCreature), (160, 900));
@@ -131,8 +131,8 @@ fn the_reasons_are_ranked_in_the_order_of_the_plan_and_their_defaults_are_the_ta
     assert_eq!(numbers(Reason::Arrival), (180, 1_200));
     assert_eq!(numbers(Reason::Spotlight), (180, 1_500));
     assert_eq!(numbers(Reason::Requested), (180, 1_200));
-    assert_eq!(table.spec(Reason::Speaker).ends, Ends::WhenReasonEnds);
-    assert_eq!(table.spec(Reason::Reveal).ends, Ends::AfterHold);
+    assert_eq!(table.spec(Reason::Speaker).ends(), Ends::WhenReasonEnds);
+    assert_eq!(table.spec(Reason::Reveal).ends(), Ends::AfterHold);
     assert_eq!(DEFAULT_FOCUS_HOLD_MS, 8_000);
     assert_eq!(Reason::from_key("hit"), Some(Reason::Hit));
     assert_eq!(Reason::from_key("wide"), None);
@@ -179,8 +179,8 @@ fn a_driven_request_says_so_in_its_line_and_its_numbers_can_be_given() {
     let mut director = director();
     let view = tavern();
     let request = Request::focus(Reason::Speaker, id("finn"))
-        .zoom(250)
-        .over(1_500)
+        .with_zoom_percent(250)
+        .with_over_ms(1_500)
         .driven();
     let moves = ask(&mut director, 0, &view, request);
     assert!(matches!(
@@ -511,7 +511,7 @@ fn a_return_waits_for_a_result_card_that_is_not_about_the_target() {
         &mut director,
         0,
         &view,
-        Request::focus(Reason::Reveal, id("guard")).hold(1_000),
+        Request::focus(Reason::Reveal, id("guard")).with_hold_ms(1_000),
     );
     view.beat = Some(BeatHold {
         kind: BeatKind::ResultCard,
@@ -581,7 +581,7 @@ fn a_zoom_is_held_to_the_plates_ceiling_and_the_cut_is_logged_not_refused() {
         &mut director,
         0,
         &view,
-        Request::focus(Reason::Speaker, id("guard")).zoom(400),
+        Request::focus(Reason::Speaker, id("guard")).with_zoom_percent(400),
     );
     assert!(matches!(
         moves[0],
@@ -621,7 +621,7 @@ fn the_ceiling_is_the_least_of_the_models_largest_the_plate_and_never_below_the_
 fn a_request_or_setting_out_of_range_is_a_typed_error_naming_the_range() {
     let mut director = director();
     let view = tavern();
-    let focus = |zoom: Option<u16>, over: Option<u32>, hold: Option<u64>| {
+    let focus = |zoom: Option<u16>, over: Option<u64>, hold: Option<u64>| {
         let mut request = Request::focus(Reason::Speaker, id("guard"));
         request.zoom_percent = zoom;
         request.over_ms = over;
@@ -674,26 +674,21 @@ fn a_request_or_setting_out_of_range_is_a_typed_error_naming_the_range() {
     );
     let message = DirectorError::FocusMoveOutOfRange { over_ms: 3 }.to_string();
     assert!(message.contains("600 to 2500"), "{message}");
-    let mut settings = DirectorSettings::defaults();
-    settings.focus_hold_ms = 0;
-    assert!(matches!(
-        Director::new(settings),
-        Err(DirectorError::BadSetting {
-            name: "focus_hold_ms",
-            ..
-        })
-    ));
-    let mut table = ReasonTable::defaults();
-    let bad = ReasonSpec {
-        zoom_percent: 50,
-        over_ms: 900,
-        ends: Ends::AfterHold,
-    };
     assert_eq!(
-        table.set(Reason::Hit, bad),
+        DirectorSettings::default().with(DirectorSetting::FocusHoldMs, 0),
+        Err(DirectorError::InvalidSetting {
+            setting: DirectorSetting::FocusHoldMs,
+            value: 0,
+        })
+    );
+    assert_eq!(
+        ReasonSpec::new(50, 900, Ends::AfterHold),
         Err(DirectorError::ZoomOutOfRange { zoom_percent: 50 })
     );
-    assert_eq!(table.spec(Reason::Hit).zoom_percent, 220);
+    assert_eq!(
+        ReasonSpec::new(200, 3, Ends::AfterHold),
+        Err(DirectorError::FocusMoveOutOfRange { over_ms: 3 })
+    );
 }
 
 #[test]
@@ -799,7 +794,7 @@ fn director_show_matches_the_log_and_the_shared_audience_never_learns_what_is_hi
     );
     // The operator reads the ids; the shared audience reads `target_hidden` and no id, for the
     // hidden creature and for a name that is not on the stage alike.
-    let hidden_rows = |report: &crate::director_log::DirectorReport| {
+    let hidden_rows = |report: &crate::director::log::DirectorReport| {
         report
             .log
             .iter()
@@ -872,4 +867,49 @@ fn the_log_is_bounded_and_keeps_the_newest_entries() {
     assert_eq!(director.take_unread().len(), 50);
     let cause = Cause::Focus(Reason::Hit);
     assert_eq!(cause.key(), "hit");
+}
+
+#[test]
+fn default_specs_are_in_range() {
+    let table = ReasonTable::default();
+    for reason in Reason::ALL {
+        let spec = table.spec(*reason);
+        assert_eq!(
+            ReasonSpec::new(spec.zoom_percent(), spec.over_ms(), spec.ends()),
+            Ok(spec),
+            "{reason}"
+        );
+    }
+}
+
+#[test]
+fn a_reason_spec_is_read_through_its_checked_constructor() {
+    let spec = ReasonSpec::new(200, 900, Ends::AfterHold).expect("in range");
+    let written = serde_json::to_value(spec).expect("a spec serializes");
+    assert_eq!(
+        written,
+        serde_json::json!({"zoom_percent": 200, "over_ms": 900, "ends": "after_hold"})
+    );
+    assert_eq!(
+        serde_json::from_value::<ReasonSpec>(written).expect("a written spec reads back"),
+        spec
+    );
+    let out_of_range =
+        serde_json::json!({"zoom_percent": 50, "over_ms": 900, "ends": "after_hold"});
+    assert!(serde_json::from_value::<ReasonSpec>(out_of_range).is_err());
+    let unknown =
+        serde_json::json!({"zoom_percent": 200, "over_ms": 900, "ends": "after_hold", "x": 1});
+    assert!(serde_json::from_value::<ReasonSpec>(unknown).is_err());
+}
+
+#[test]
+fn every_director_setting_key_is_its_serde_name() {
+    for setting in DirectorSetting::ALL {
+        assert_eq!(
+            serde_json::to_value(setting).expect("a setting serializes"),
+            serde_json::Value::from(setting.key())
+        );
+        assert_eq!(DirectorSetting::from_key(setting.key()), Some(*setting));
+    }
+    assert_eq!(DirectorSetting::from_key("focus_hold_s"), None);
 }

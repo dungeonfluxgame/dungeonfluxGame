@@ -3,7 +3,7 @@
 //! It owns `TableEffect`, a versioned closed enum that machines and the engine use to change facts
 //! the whole table shares (RES18, RES32, O.5), `TableEffectKind` (its payload-free list, which
 //! carries the version each effect was introduced in), `EffectRecord` (an effect as saved, refused
-//! when it is newer than this engine, H.12), and the `EffectRefusal` and `EffectError` that say
+//! when it is newer than this engine, H.12), and the `EffectCause` and `EffectError` that say
 //! why a commit was refused. The applier and the state it changes are `table_state` (C6):
 //! `TableState::apply` is all or nothing, one `EffectApplied` event per effect, and idempotent
 //! per operation id (coding-style section 8, pattern 5). The names the machines import
@@ -26,7 +26,7 @@ use crate::element::{ElementId, name_type};
 use crate::event::TableEvent;
 use crate::identity::{Correlation, MachineId, SceneId, SeatId, TableId, TableScope};
 use crate::listed::listed_enum;
-use crate::machine_slot::{LoadFault, MachineSlot, RecordKind, SlotError};
+use crate::machine::slot::{LoadCause, MachineSlot, RecordKind, SlotError};
 use crate::table_state::{CastChange, CastEntry, MachineHome, Presence};
 
 pub use crate::table_state::{ApplyOutcome, HandOffRecord, TableState, TableStateError};
@@ -57,7 +57,7 @@ impl ConversationOutcome {
 }
 
 /// The newest effect schema this engine writes and reads. Raised when an effect is added.
-pub const TABLE_EFFECT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const TABLE_EFFECT_SCHEMA_VERSION: u32 = 1;
 
 listed_enum! {
     /// Every effect without its payload: the list tests walk and events name.
@@ -263,13 +263,13 @@ pub struct EffectRecord {
 
 /// A saved effect this engine cannot use, and why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RecordRefused {
+pub struct RecordLoadError {
     pub found: u32,
     pub expected: u32,
-    pub fault: LoadFault,
+    pub cause: LoadCause,
 }
 
-impl RecordRefused {
+impl RecordLoadError {
     /// The `load.refused` event of refusing this record when the host loads `table` (H.12).
     pub fn event(&self, table: TableId) -> TableEvent {
         TableEvent::LoadRefused {
@@ -278,24 +278,24 @@ impl RecordRefused {
             machine: None,
             version: u64::from(self.found),
             expected: u64::from(self.expected),
-            cause: self.fault,
+            cause: self.cause,
         }
     }
 }
 
-impl fmt::Display for RecordRefused {
+impl fmt::Display for RecordLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
             "an effect record at schema version {} was refused ({}); this engine reads up to {}",
             self.found,
-            self.fault.key(),
+            self.cause.key(),
             self.expected
         )
     }
 }
 
-impl std::error::Error for RecordRefused {}
+impl std::error::Error for RecordLoadError {}
 
 impl EffectRecord {
     /// The effect stamped with the current schema version.
@@ -319,19 +319,19 @@ impl EffectRecord {
 
     /// The effect, unless the record is newer than this engine, has no valid version, claims a
     /// version older than the one that introduced its effect, or does not hold an effect.
-    pub fn open(self) -> Result<TableEffect, RecordRefused> {
-        let refused = |fault| RecordRefused {
+    pub fn open(self) -> Result<TableEffect, RecordLoadError> {
+        let refused = |cause| RecordLoadError {
             found: self.schema_version,
             expected: TABLE_EFFECT_SCHEMA_VERSION,
-            fault,
+            cause,
         };
         if self.schema_version == 0 || self.schema_version > TABLE_EFFECT_SCHEMA_VERSION {
-            return Err(refused(LoadFault::UnsupportedVersion));
+            return Err(refused(LoadCause::UnsupportedVersion));
         }
         let effect =
-            TableEffect::deserialize(&self.effect).map_err(|_| refused(LoadFault::Malformed))?;
+            TableEffect::deserialize(&self.effect).map_err(|_| refused(LoadCause::Malformed))?;
         if self.schema_version < effect.kind().introduced_in() {
-            return Err(refused(LoadFault::UnsupportedVersion));
+            return Err(refused(LoadCause::UnsupportedVersion));
         }
         Ok(effect)
     }
@@ -341,7 +341,7 @@ listed_enum! {
     /// Why an effect was not applied.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
-    pub enum EffectRefusal {
+    pub enum EffectCause {
         SeatAlreadySeated,
         SeatNotSeated,
         TableFull,
@@ -383,7 +383,7 @@ listed_enum! {
     }
 }
 
-impl EffectRefusal {
+impl EffectCause {
     pub fn key(self) -> &'static str {
         match self {
             Self::SeatAlreadySeated => "seat_already_seated",
@@ -419,7 +419,7 @@ impl EffectRefusal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EffectError {
     pub effect: TableEffectKind,
-    pub cause: EffectRefusal,
+    pub cause: EffectCause,
 }
 
 impl EffectError {

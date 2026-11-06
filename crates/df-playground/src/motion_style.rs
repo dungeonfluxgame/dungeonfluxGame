@@ -12,7 +12,7 @@ use crate::limits::CAMERA_GLIDE_MS;
 /// The inline style that makes a card slide: its place at the end, and an animation that starts
 /// part-way through when the slide is already `elapsed_ms` under way.
 pub fn slide_style(slide: &Slide, elapsed_ms: f64) -> String {
-    if elapsed_ms >= f64::from(slide.duration_ms) {
+    if elapsed_ms >= slide.duration_ms as f64 {
         return format!("left: {}%;", slide.to_percent);
     }
     format!(
@@ -27,8 +27,9 @@ pub fn slide_style(slide: &Slide, elapsed_ms: f64) -> String {
 /// The style that frames the world layer at rest: the framing, reached with a short glide.
 pub fn resting_camera_style(to: &Framing) -> String {
     format!(
-        "transform: {}; transition: transform {CAMERA_GLIDE_MS}ms linear;",
-        to.transform()
+        "transform: {}; --cam-scale: {:.4}; transition: transform {CAMERA_GLIDE_MS}ms linear, --cam-scale {CAMERA_GLIDE_MS}ms linear;",
+        to.transform(),
+        to.scale
     )
 }
 
@@ -39,9 +40,11 @@ pub fn camera_style(plan: &CameraPlan) -> String {
         return resting_camera_style(&plan.to);
     }
     format!(
-        "transform: {to}; --cam-from: {from}; --cam-to: {to}; animation: camera-move {duration}ms linear forwards; animation-delay: -{elapsed:.0}ms;",
+        "transform: {to}; --cam-scale: {to_scale:.4}; --cam-from: {from}; --cam-to: {to}; --cam-scale-from: {from_scale:.4}; --cam-scale-to: {to_scale:.4}; animation: camera-move {duration}ms linear forwards; animation-delay: -{elapsed:.0}ms;",
         from = plan.from.transform(),
         to = plan.to.transform(),
+        from_scale = plan.from.scale,
+        to_scale = plan.to.scale,
         duration = plan.duration_ms,
         elapsed = plan.elapsed_ms.max(0.0),
     )

@@ -16,7 +16,7 @@ use super::events::BrokerAudit;
 use super::purpose::{PurposeTable, ResourceKind};
 use super::report::{LedgerReport, QueuesReport};
 use super::request::{
-    AttemptId, Completion, Epoch, EpochError, NewRequest, ProviderFault, RequestError, RequestKey,
+    AttemptId, Completion, Epoch, EpochError, NewRequest, ProviderCause, RequestError, RequestKey,
     RequestStatus, ResourceResult, ResultError, WorkerId,
 };
 use super::scheduler::{
@@ -75,7 +75,7 @@ impl BrokerHub {
     pub fn complete(
         &self,
         attempt: AttemptId,
-        answer: Result<ResourceResult, ProviderFault>,
+        answer: Result<ResourceResult, ProviderCause>,
     ) -> CompleteOutcome {
         self.core().complete(attempt, answer, self.now_ms())
     }

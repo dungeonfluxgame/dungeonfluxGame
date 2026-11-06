@@ -1,16 +1,16 @@
 use df_table::event::FailureCause;
-use df_table::plate_scheduler::JobEnd;
-use df_table::plate_timing::SceneBuildKind;
+use df_table::plate::scheduler::JobEnd;
+use df_table::plate::timing::SceneBuildKind;
 use df_table::private_data::Narration;
 use df_table::scene_plan::SceneStage;
-use df_table::scene_plan_card::CardState;
-use df_table::scene_plan_locate::{Anchor, UnlocatedReason};
+use df_table::scene_plan::card::CardState;
+use df_table::scene_plan::locate::{Anchor, UnlocatedReason};
 
 use super::builder::{BuilderError, BuilderOutput};
 use super::dev_world::dev_script;
 use super::events::{SceneBuilderEvent, StageSource};
+use super::fixtures::{Rig, plate_of, requested_stages};
 use super::purposes::BuildPriority;
-use super::tests_support::{Rig, plate_of, requested_stages};
 use crate::broker::BrokerEvent;
 use crate::broker::providers::ScriptedCall;
 use crate::broker::purpose::{Fallback, QueueClass};

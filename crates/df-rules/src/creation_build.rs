@@ -1,43 +1,21 @@
 //! Creation options and every-reason build validation for the selected SRD 5.2.1 creation subset.
 //! Owns: `creation_options`, the typed listing of every choice a creator may make, read from the
-//! existing constants and the rules' ability arrays; and `validate_build`, which accepts exactly the
-//! builds `local_journey::validate_character` accepts and otherwise lists every rule the build breaks.
-//! The first reason of a rejection carries the `JourneyRuleError` that `validate_character` returns.
-//! Never does: admit a build, add a choice, change a rule or a constant, read content packs, or
-//! panic. Fails by typed value only. Invalid creation rules are reported alone, because the ability
-//! arrays and background bonus that the other checks read cannot be trusted; a refusal that names no
-//! rule gets one reason that says so, rather than an empty list.
+//! existing constants and the rules' ability arrays; and `validate_build`, which accepts exactly
+//! the builds `local_journey::validate_character` accepts and otherwise lists every rule the build
+//! breaks. The first reason of a rejection carries the `JourneyRuleError` that `validate_character`
+//! returns. Never does: admit a build, add a choice, change a rule or a constant, read content
+//! packs, or panic. Fails by typed value only. Invalid creation rules are reported alone, because
+//! the ability arrays and background bonus that the other checks read cannot be trusted; a refusal
+//! that names no rule gets one reason that says so, rather than an empty list.
 //! First release: class Fighter 1 and background Soldier only (SRD pp.47, 83).
 use crate::local_journey::{
-    ALIGNMENTS, AbilityArray, BUILD_GROUPS, CreationRules, FIGHTER_SKILLS, GAMING_SETS,
-    HeroSpecies, JourneyRuleError, LegalCharacter, MAXIMUM_CHARACTER_NAME_CHARACTERS,
-    STANDARD_LANGUAGES, valid_character_name, validate_character,
+    ALIGNMENTS, AbilityArray, BACKGROUND_OFFER, BUILD_GROUPS, CLASS_OFFER, CreationRules,
+    EQUIPMENT_OFFER, FIGHTER_SKILLS, GAMING_SETS, HeroSpecies, JourneyRuleError, LegalCharacter,
+    MAXIMUM_CHARACTER_NAME_CHARACTERS, SOLDIER_SKILLS, STANDARD_LANGUAGES, STYLE_OFFER, TIES_OFFER,
+    valid_character_name, validate_character,
 };
 use crate::species::{SpeciesChoiceGroup, choice_groups, is_choice_group};
 use serde::{Deserialize, Serialize};
-
-/// Every species a creator may pick, in listing order.
-const SPECIES: [HeroSpecies; 9] = [
-    HeroSpecies::Dragonborn,
-    HeroSpecies::Dwarf,
-    HeroSpecies::Elf,
-    HeroSpecies::Gnome,
-    HeroSpecies::Goliath,
-    HeroSpecies::Halfling,
-    HeroSpecies::Human,
-    HeroSpecies::Orc,
-    HeroSpecies::Tiefling,
-];
-
-/// The single first-release offers; `validate_character` admits exactly these values.
-const CLASS_OFFER: &str = "fighter-1";
-const BACKGROUND_OFFER: &str = "soldier";
-const EQUIPMENT_OFFER: &str = "fighter-a-soldier-a";
-const STYLE_OFFER: &str = "defense-greatsword-flail-javelin";
-const TIES_OFFER: &str = "join-order";
-
-/// Skills the Soldier background already grants (SRD p.83); a second pick of either is refused.
-const SOLDIER_SKILLS: [&str; 2] = ["athletics", "intimidation"];
 
 /// The fixed single-option picks, as (choice key, the one value, plain noun, SRD citation).
 const FIXED_PICKS: [(&str, &str, &str, &str); 5] = [
@@ -89,7 +67,8 @@ const LABEL_OVERRIDES: [(&str, &str); 4] = [
 /// A typed listing of every choice a creator may make, grouped as the creator sees them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CreationOptions {
-    /// Build-wide groups, in the order a creator meets them. The species group lists the species ids.
+    /// Build-wide groups, in the order a creator meets them. The species group lists the species
+    /// ids.
     pub groups: Vec<OptionGroup>,
     /// Each species with the choice groups only that species asks for (SRD pp.84-86).
     pub species: Vec<SpeciesOffer>,
@@ -119,12 +98,14 @@ pub struct SpeciesOffer {
     pub groups: Vec<OptionGroup>,
 }
 
-/// One refused rule of a build. `error` is the same typed error `validate_character` returns for it.
+/// One refused rule of a build. `error` is the same typed error `validate_character` returns for
+/// it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct BuildRejection {
     #[serde(serialize_with = "serialize_error")]
     pub error: JourneyRuleError,
-    /// The choice key the reason is about; `None` for the name, the creation rules and the pick count.
+    /// The choice key the reason is about; `None` for the name, the creation rules and the pick
+    /// count.
     pub group: Option<String>,
     /// The value the creator picked that is refused, when a value was picked.
     pub option_id: Option<String>,
@@ -161,7 +142,7 @@ pub fn creation_options(rules: &CreationRules<'_>) -> CreationOptions {
                 .collect(),
         })
         .collect();
-    let species = SPECIES
+    let species = HeroSpecies::ALL
         .iter()
         .map(|species| SpeciesOffer {
             id: species.choice_id().to_owned(),
@@ -287,7 +268,10 @@ impl Group {
 
     fn options<'r>(self, rules: &CreationRules<'r>) -> Vec<&'r str> {
         match self {
-            Group::Species => SPECIES.iter().map(|species| species.choice_id()).collect(),
+            Group::Species => HeroSpecies::ALL
+                .iter()
+                .map(|species| species.choice_id())
+                .collect(),
             Group::Class => vec![CLASS_OFFER],
             Group::Background => vec![BACKGROUND_OFFER],
             Group::Array => rules
@@ -434,7 +418,9 @@ fn rejections(
             None,
             None,
             format!(
-                "The hero name must be 1 to {MAXIMUM_CHARACTER_NAME_CHARACTERS} characters: letters, joined by single spaces, apostrophes, hyphens, periods or underscores, starting with a letter and ending with a letter or period."
+                "The hero name must be 1 to {MAXIMUM_CHARACTER_NAME_CHARACTERS} characters: \
+                    letters, joined by single spaces, apostrophes, hyphens, periods or \
+                    underscores, starting with a letter and ending with a letter or period."
             ),
         );
     }
@@ -559,7 +545,8 @@ fn species_groups(collector: &mut Collector<'_>, species: HeroSpecies) {
                 Some(key),
                 Some(skill),
                 format!(
-                    "{skill} is already granted by the Soldier background (SRD p.83), so it cannot be picked again."
+                    "{skill} is already granted by the Soldier background (SRD p.83), so it cannot \
+                        be picked again."
                 ),
             );
         } else if collector.value("skill-1") == Some(skill)
@@ -585,7 +572,8 @@ fn fixed_picks(collector: &mut Collector<'_>) {
                 Some(group),
                 Some(value),
                 format!(
-                    "The {noun} must be \"{expected}\" in this first release{citation}, not \"{value}\"."
+                    "The {noun} must be \"{expected}\" in this first release{citation}, not \
+                        \"{value}\"."
                 ),
             ),
             Some(_) => {}

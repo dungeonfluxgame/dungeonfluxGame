@@ -7,8 +7,11 @@ use super::cli::{LOOKAHEAD_USAGE, LookaheadCommand};
 use super::request::{LookaheadReply, LookaheadRequest, LookaheadSettingName};
 use crate::command::{Command, CommandError, parse, split_words};
 use crate::dev::run_dev;
+use crate::dev_client;
+use crate::dev_http::DevReply;
 use crate::scene_builder::SceneBuilderCommand;
-use crate::scene_builder::request::{DevStage, SceneReply, SlowStage};
+use crate::scene_builder::fixtures::{name, refusal_of};
+use crate::scene_builder::request::{DevStage, SceneBuilderError, SceneReply, SlowStage};
 use crate::scene_builder::routes::path;
 use crate::test_support::{STARTER_FILES, post_request, raw_exchange, start};
 
@@ -48,7 +51,7 @@ fn the_verbs_have_the_shape_of_the_other_scene_verbs() {
     assert_eq!(
         command("scene lookahead target \"Harbor market\"").expect("parses"),
         LookaheadCommand::Change(LookaheadRequest::Target {
-            place: "Harbor market".to_owned(),
+            place: name("Harbor market"),
             kind: Expectation::AuthoredBeat,
             likelihood_permille: None,
             fail: None,
@@ -59,7 +62,7 @@ fn the_verbs_have_the_shape_of_the_other_scene_verbs() {
         command("scene lookahead target quay kind=exit_hint likelihood=700 fail=describe slow=background:12")
             .expect("parses"),
         LookaheadCommand::Change(LookaheadRequest::Target {
-            place: "quay".to_owned(),
+            place: name("quay"),
             kind: Expectation::ExitHint,
             likelihood_permille: Some(700),
             fail: Some(DevStage::Describe),
@@ -213,7 +216,10 @@ async fn the_route_refuses_a_bad_body_a_foreign_host_and_a_stage_that_is_not_bui
     )
     .await;
     assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
-    assert!(bad.contains("\"outcome\":\"rejected\""), "{bad}");
+    assert!(
+        matches!(refusal_of(&bad), SceneBuilderError::InvalidBody(_)),
+        "{bad}"
+    );
 
     let plate = raw_exchange(
         host.port,
@@ -225,9 +231,11 @@ async fn the_route_refuses_a_bad_body_a_foreign_host_and_a_stage_that_is_not_bui
     )
     .await;
     assert!(plate.starts_with("HTTP/1.1 400"), "{plate}");
-    assert!(
-        plate.contains("only describe and background are built ahead"),
-        "{plate}"
+    assert_eq!(
+        refusal_of(&plate),
+        SceneBuilderError::InvalidLookaheadStage {
+            stage: DevStage::Plate
+        }
     );
 
     let foreign = raw_exchange(
@@ -257,11 +265,17 @@ async fn a_reply_reads_back_as_the_typed_value() {
     assert!(value.report.paused && value.report.enabled);
 }
 
-async fn refused(port: u16, line: &str) -> String {
-    let words = split_words(line).expect("the line splits");
-    match run_dev(port, &words).await {
-        Err(error) => error.to_string(),
-        Ok(text) => panic!("'{line}' was not refused: {text}"),
+/// The scene builder's refusal of the change `line` makes, sent as the command line sends it.
+async fn refused(port: u16, line: &str) -> SceneBuilderError {
+    let Ok(LookaheadCommand::Change(request)) = command(line) else {
+        panic!("'{line}' is not a change");
+    };
+    let reply: SceneReply<LookaheadReply> = dev_client::post_json(port, path::LOOKAHEAD, &request)
+        .await
+        .expect("answers");
+    match reply {
+        DevReply::Rejected { error, .. } => error,
+        DevReply::Done { .. } => panic!("'{line}' was not refused"),
     }
 }
 
@@ -279,7 +293,14 @@ async fn the_settings_are_set_through_the_route_and_change_what_the_worker_does(
     let shown = dev(host.port, "scene lookahead show").await;
     assert!(shown.contains("depth 2,"), "{shown}");
     let wrong = refused(host.port, "scene lookahead set depth 0").await;
-    assert!(wrong.contains("lookahead_depth"), "{wrong}");
+    assert_eq!(
+        wrong,
+        SceneBuilderError::InvalidSetting {
+            setting: LookaheadSettingName::Depth,
+            value: 0
+        }
+    );
+    assert!(wrong.to_string().contains("lookahead_depth"), "{wrong}");
     let unchanged = dev(host.port, "scene lookahead show").await;
     assert!(unchanged.contains("depth 2,"), "{unchanged}");
 
@@ -293,7 +314,13 @@ async fn the_settings_are_set_through_the_route_and_change_what_the_worker_does(
     let on = dev(host.port, "scene lookahead set enabled on").await;
     assert!(on.contains("LOOKAHEAD started scene=2"), "{on}");
     let wrong = refused(host.port, "scene lookahead set book_age_s 2000000").await;
-    assert!(wrong.contains("lookahead_book_age_s"), "{wrong}");
+    assert_eq!(
+        wrong,
+        SceneBuilderError::InvalidSetting {
+            setting: LookaheadSettingName::BookAgeS,
+            value: 2_000_000
+        }
+    );
 
     dev(host.port, "scene lookahead clear").await;
     dev(host.port, "scene lookahead set deadline_s 1").await;

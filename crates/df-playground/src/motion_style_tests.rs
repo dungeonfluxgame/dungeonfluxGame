@@ -1,4 +1,7 @@
-//! The styles of a slide and a camera: numbers only, and when they must be written.
+//! The styles of a slide and a camera: numbers only, and when they must be written. `theme` checks
+//! the same motion in the page's style sheet.
+
+mod theme;
 
 use crate::camera::Framing;
 use crate::continuity::CameraPlan;
@@ -8,7 +11,7 @@ use crate::motion_style::{
     resting_camera_style, slide_style,
 };
 
-fn slide(duration_ms: u32) -> Slide {
+fn slide(duration_ms: u64) -> Slide {
     Slide {
         from_percent: 15,
         to_percent: 85,
@@ -81,12 +84,12 @@ fn a_slide_never_writes_a_negative_elapsed_that_the_browser_would_refuse() {
 fn a_camera_at_rest_glides_to_its_framing_and_a_move_runs_between_two_framings() {
     assert_eq!(
         resting_camera_style(&zoomed()),
-        "transform: translate(-50.000%, -20.000%) scale(2.0000); transition: transform 90ms linear;"
+        "transform: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale: 2.0000; transition: transform 90ms linear, --cam-scale 90ms linear;"
     );
     let style = camera_style(&moving(2, zoomed()));
     assert_eq!(
         style,
-        "transform: translate(-50.000%, -20.000%) scale(2.0000); --cam-from: translate(0.000%, 0.000%) scale(1.0000); --cam-to: translate(-50.000%, -20.000%) scale(2.0000); animation: camera-move 1000ms linear forwards; animation-delay: -250ms;"
+        "transform: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale: 2.0000; --cam-from: translate(0.000%, 0.000%) scale(1.0000); --cam-to: translate(-50.000%, -20.000%) scale(2.0000); --cam-scale-from: 1.0000; --cam-scale-to: 2.0000; animation: camera-move 1000ms linear forwards; animation-delay: -250ms;"
     );
     assert_eq!(
         camera_style(&resting(2, zoomed())),

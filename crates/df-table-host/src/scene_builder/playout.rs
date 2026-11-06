@@ -10,11 +10,11 @@
 use std::sync::Arc;
 
 use df_table::identity::SceneId;
-use df_table::plate_buffer::{
-    Delivery, GenerationRegression, PlayoutBuffer, StageMoment, Step, StepAction,
+use df_table::plate::buffer::{
+    Delivery, GenerationRegressionError, PlayoutBuffer, StageMoment, Step, StepAction,
 };
-use df_table::plate_job::{PlateJob, PlateJobId};
-use df_table::plate_timing::PlateTiming;
+use df_table::plate::job::{PlateJob, PlateJobId};
+use df_table::plate::timing::PlateTiming;
 use df_table::scene_plan::ReadyPlate;
 use df_table::table_state::SceneGeneration;
 
@@ -58,7 +58,7 @@ impl Playout {
         &mut self,
         scene: SceneId,
         generation: SceneGeneration,
-    ) -> Result<(), GenerationRegression> {
+    ) -> Result<(), GenerationRegressionError> {
         self.buffer.focus_changed(scene, generation)?;
         self.late_reported_for_slot = None;
         self.catching_up_reported = false;

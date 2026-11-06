@@ -48,11 +48,11 @@ pub(crate) enum ApiError {
     Output,
 }
 
-/// Default OpenAI edit models. Preserved constants; requests may also carry a
-/// validated configured identifier for a schema-compatible model.
 /// `NativeHttp` refuses a total timeout above this. A stage budget can be longer, because every
 /// exchange is bounded by the transport and the budget is spent across exchanges.
 pub(crate) const HTTP_TIMEOUT_CEILING: std::time::Duration = std::time::Duration::from_secs(180);
+/// Default OpenAI edit models. Preserved constants; requests may also carry a
+/// validated configured identifier for a schema-compatible model.
 pub(crate) const GPT_25_FLARE_MODEL_ID: &str = "gpt-image-2.5-flare";
 pub(crate) const GPT_25_SUNBURST_MODEL_ID: &str = "gpt-image-2.5-sunburst";
 /// Longest configured model identifier accepted; bounds a nonsecret string.
@@ -235,31 +235,10 @@ fn validate_endpoint_path(path: &str) -> Result<(), ApiError> {
                     return Err(ApiError::InvalidRequest);
                 }
                 decoded
-            } else {
-                if !byte.is_ascii_alphanumeric()
-                    && !matches!(
-                        byte,
-                        b'-' | b'.'
-                            | b'_'
-                            | b'~'
-                            | b'!'
-                            | b'$'
-                            | b'&'
-                            | b'\''
-                            | b'('
-                            | b')'
-                            | b'*'
-                            | b'+'
-                            | b','
-                            | b';'
-                            | b'='
-                            | b':'
-                            | b'@'
-                    )
-                {
-                    return Err(ApiError::InvalidRequest);
-                }
+            } else if crate::config::is_uri_path_segment_byte(byte) {
                 byte
+            } else {
+                return Err(ApiError::InvalidRequest);
             };
             decoded_length += 1;
             contains_only_dots &= decoded == b'.';

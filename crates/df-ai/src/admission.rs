@@ -1,3 +1,7 @@
+//! Admission of one complete recording stream: bytes stay private until a matching final
+//! declaration, exact length and digest, and the end of the stream have all been seen. This
+//! module starts no task, provider or network call, never retries, and refuses on any mismatch.
+
 use df_types::OperationId;
 use sha2::{Digest, Sha256};
 
@@ -14,32 +18,33 @@ pub struct RecordIdentity<Key, Basis> {
 /// Caller-selected positive byte and chunk bounds for one admitted stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RecordLimits {
-    max_record_bytes: usize,
-    max_chunk_bytes: usize,
-    max_chunks: usize,
+    maximum_record_bytes: usize,
+    maximum_chunk_bytes: usize,
+    maximum_chunks: usize,
 }
 
+/// A zero bound, or a chunk bound larger than the record bound.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidRecordLimits;
 
 impl RecordLimits {
     /// Zero bounds or a chunk bound larger than the record bound are invalid.
     pub fn new(
-        max_record_bytes: usize,
-        max_chunk_bytes: usize,
-        max_chunks: usize,
+        maximum_record_bytes: usize,
+        maximum_chunk_bytes: usize,
+        maximum_chunks: usize,
     ) -> Result<Self, InvalidRecordLimits> {
-        if max_record_bytes == 0
-            || max_chunk_bytes == 0
-            || max_chunks == 0
-            || max_chunk_bytes > max_record_bytes
+        if maximum_record_bytes == 0
+            || maximum_chunk_bytes == 0
+            || maximum_chunks == 0
+            || maximum_chunk_bytes > maximum_record_bytes
         {
             return Err(InvalidRecordLimits);
         }
         Ok(Self {
-            max_record_bytes,
-            max_chunk_bytes,
-            max_chunks,
+            maximum_record_bytes,
+            maximum_chunk_bytes,
+            maximum_chunks,
         })
     }
 }
@@ -61,6 +66,7 @@ pub enum RecordEvent<Key, Basis> {
     },
 }
 
+/// The first identity field that differs from the expected identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordIdentityField {
     Key,
@@ -68,6 +74,7 @@ pub enum RecordIdentityField {
     Operation,
 }
 
+/// The stream bound that was exceeded.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordLimit {
     ChunkBytes,
@@ -157,76 +164,103 @@ where
     >,
 {
     let mut events = events.into_iter();
-    let mut bytes = Vec::new();
-    let mut hasher = Sha256::new();
-    let mut chunks = 0usize;
-    loop {
+    let mut pending = PendingRecord {
+        bytes: Vec::new(),
+        hasher: Sha256::new(),
+        chunks: 0,
+    };
+    let (identity, byte_length, sha256) = loop {
         let event = events
             .next()
             .ok_or(RecordAdmissionError::MissingCompletion)?
             .map_err(RecordAdmissionError::Input)?;
         match event {
-            RecordEvent::Chunk(chunk) => {
-                if chunk.len() > limits.max_chunk_bytes {
-                    return Err(RecordAdmissionError::LimitExceeded(RecordLimit::ChunkBytes));
-                }
-                if chunks >= limits.max_chunks {
-                    return Err(RecordAdmissionError::LimitExceeded(RecordLimit::ChunkCount));
-                }
-                chunks += 1;
-                let Some(total) = bytes.len().checked_add(chunk.len()) else {
-                    return Err(RecordAdmissionError::LimitExceeded(
-                        RecordLimit::RecordBytes,
-                    ));
-                };
-                if total > limits.max_record_bytes {
-                    return Err(RecordAdmissionError::LimitExceeded(
-                        RecordLimit::RecordBytes,
-                    ));
-                }
-                bytes
-                    .try_reserve_exact(chunk.len())
-                    .map_err(|_| RecordAdmissionError::AllocationUnavailable)?;
-                hasher.update(&chunk);
-                bytes.extend_from_slice(&chunk);
-            }
+            RecordEvent::Chunk(chunk) => pending.append(&chunk, limits)?,
             RecordEvent::Complete {
                 identity,
                 byte_length,
                 sha256,
-            } => {
-                let mismatch = if identity.key != expected.key {
-                    Some(RecordIdentityField::Key)
-                } else if identity.basis != expected.basis {
-                    Some(RecordIdentityField::Basis)
-                } else if identity.operation != expected.operation {
-                    Some(RecordIdentityField::Operation)
-                } else {
-                    None
-                };
-                if let Some(field) = mismatch {
-                    return Err(RecordAdmissionError::IdentityMismatch(field));
-                }
-                if u64::try_from(bytes.len()).ok() != Some(byte_length) {
-                    return Err(RecordAdmissionError::LengthMismatch);
-                }
-                let actual_sha256: [u8; 32] = hasher.finalize().into();
-                if actual_sha256 != sha256 {
-                    return Err(RecordAdmissionError::DigestMismatch);
-                }
-                match events.next() {
-                    None => {}
-                    Some(Err(error)) => return Err(RecordAdmissionError::Input(error)),
-                    Some(Ok(_)) => return Err(RecordAdmissionError::TrailingEvent),
-                }
-                return publisher
-                    .publish_complete(CompleteRecord {
-                        identity: expected,
-                        bytes,
-                        sha256: actual_sha256,
-                    })
-                    .map_err(RecordAdmissionError::Publication);
-            }
+            } => break (identity, byte_length, sha256),
         }
+    };
+    if let Some(field) = first_identity_mismatch(&identity, &expected) {
+        return Err(RecordAdmissionError::IdentityMismatch(field));
+    }
+    let length_matches =
+        u64::try_from(pending.bytes.len()).is_ok_and(|length| length == byte_length);
+    if !length_matches {
+        return Err(RecordAdmissionError::LengthMismatch);
+    }
+    let actual_sha256: [u8; 32] = pending.hasher.finalize().into();
+    if actual_sha256 != sha256 {
+        return Err(RecordAdmissionError::DigestMismatch);
+    }
+    match events.next() {
+        None => {}
+        Some(Err(error)) => return Err(RecordAdmissionError::Input(error)),
+        Some(Ok(_)) => return Err(RecordAdmissionError::TrailingEvent),
+    }
+    publisher
+        .publish_complete(CompleteRecord {
+            identity: expected,
+            bytes: pending.bytes,
+            sha256: actual_sha256,
+        })
+        .map_err(RecordAdmissionError::Publication)
+}
+
+/// The bytes received so far, their running digest and how many chunks carried them.
+struct PendingRecord {
+    bytes: Vec<u8>,
+    hasher: Sha256,
+    chunks: usize,
+}
+
+impl PendingRecord {
+    /// Appends one chunk, refusing it whole when it would pass any bound.
+    fn append<PublicationError>(
+        &mut self,
+        chunk: &[u8],
+        limits: RecordLimits,
+    ) -> Result<(), RecordAdmissionError<PublicationError>> {
+        if chunk.len() > limits.maximum_chunk_bytes {
+            return Err(RecordAdmissionError::LimitExceeded(RecordLimit::ChunkBytes));
+        }
+        if self.chunks >= limits.maximum_chunks {
+            return Err(RecordAdmissionError::LimitExceeded(RecordLimit::ChunkCount));
+        }
+        self.chunks += 1;
+        let within_record = self
+            .bytes
+            .len()
+            .checked_add(chunk.len())
+            .is_some_and(|total| total <= limits.maximum_record_bytes);
+        if !within_record {
+            return Err(RecordAdmissionError::LimitExceeded(
+                RecordLimit::RecordBytes,
+            ));
+        }
+        self.bytes
+            .try_reserve_exact(chunk.len())
+            .map_err(|_| RecordAdmissionError::AllocationUnavailable)?;
+        self.hasher.update(chunk);
+        self.bytes.extend_from_slice(chunk);
+        Ok(())
+    }
+}
+
+/// The first field, in key, basis, operation order, where `actual` differs from `expected`.
+fn first_identity_mismatch<Key: Eq, Basis: Eq>(
+    actual: &RecordIdentity<Key, Basis>,
+    expected: &RecordIdentity<Key, Basis>,
+) -> Option<RecordIdentityField> {
+    if actual.key != expected.key {
+        Some(RecordIdentityField::Key)
+    } else if actual.basis != expected.basis {
+        Some(RecordIdentityField::Basis)
+    } else if actual.operation != expected.operation {
+        Some(RecordIdentityField::Operation)
+    } else {
+        None
     }
 }

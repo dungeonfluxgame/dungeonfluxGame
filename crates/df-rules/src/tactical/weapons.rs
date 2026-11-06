@@ -23,6 +23,7 @@ pub enum Weapon {
     NecroticSword,
     NecroticBow,
 }
+/// A weapon mastery property (SRD p. 90).
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mastery {
     Graze,
@@ -31,6 +32,7 @@ pub enum Mastery {
     Vex,
     Nick,
 }
+/// A damage type (SRD p. 16).
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DamageType {
     Slashing,
@@ -64,6 +66,7 @@ impl DamageType {
 }
 
 impl Weapon {
+    /// The stable id of this weapon.
     pub fn id(self) -> &'static str {
         match self {
             Self::Greatsword => "greatsword",
@@ -106,6 +109,7 @@ impl Weapon {
             | Self::NecroticBow => None,
         }
     }
+    /// Normal and long range in feet, for ranged and thrown weapons.
     pub fn range(self) -> Option<(u16, u16)> {
         match self {
             Self::Longbow | Self::NecroticBow => Some((150, 600)),

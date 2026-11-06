@@ -30,7 +30,7 @@ async fn main() -> ExitCode {
             }
         }
         Some((mode, rest)) if mode == "dev" => {
-            let environment_port = std::env::var(PORT_ENVIRONMENT_VARIABLE).ok();
+            let environment_port = df_table_host::environment::text(PORT_ENVIRONMENT_VARIABLE);
             let (port, words) = match parse_dev_arguments(rest, environment_port.as_deref()) {
                 Ok(parsed) => parsed,
                 Err(error) => return fail(&error.to_string()),

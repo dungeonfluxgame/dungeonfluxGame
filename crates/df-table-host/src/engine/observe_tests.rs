@@ -8,8 +8,9 @@ use std::time::Duration;
 use df_table::testkit::ManualClock;
 use tempfile::TempDir;
 
-use crate::command::split_words;
-use crate::dev::run_dev;
+use crate::client;
+use crate::command::{CommandError, split_words};
+use crate::dev::{DevError, run_dev};
 use crate::event_log::EventLog;
 use crate::observe::{FileSpool, HostEventSink, RecordOutlet};
 use crate::repl::{LineResult, run_line};
@@ -19,15 +20,15 @@ use super::adapters::BrokerSide;
 use super::broker_fields::SinkBrokerAudit;
 use super::commit::ScriptedCommitStore;
 use super::extras::Extras;
+use super::fixtures::{RigOptions, adapters, config, lines, rig, tap, with_operation};
 use super::handle::EngineHandle;
 use super::limits::COMMAND_MAILBOX_CAPACITY;
-use super::replay::{ReplayRefusal, Replayer};
-use super::report::EngineError;
-use super::report_observe::ReplayReport;
-use super::request::{ClassFilter, ConfigControl, HistoryRequest, ReplayRequest};
+use super::replay::{ReplayError, Replayer};
+use super::report::observe::ReplayReport;
+use super::report::{EngineError, EngineReply};
+use super::request::{ClassFilter, ConfigControl, HistoryRequest, ReplayRequest, TraceOperation};
 use super::routes::path;
 use super::setup::EngineStartError;
-use super::tests_support::{RigOptions, adapters, config, lines, rig, tap, with_operation};
 
 async fn dev(port: u16, line: &str) -> String {
     let words = split_words(line).expect("the line splits");
@@ -110,9 +111,10 @@ async fn trace_shows_every_event_of_one_input_and_what_the_queue_did_with_it() {
         unknown.contains("the queue remembers nothing of it"),
         "{unknown}"
     );
-    let bad = refused(host.port, "trace banana").await;
+    let words = split_words("trace banana").expect("the line splits");
+    let bad = run_dev(host.port, &words).await.expect_err("refused");
     assert!(
-        bad.contains("an operation is a number or 32 hexadecimal digits"),
+        matches!(bad, DevError::Command(CommandError::BadChoice { .. })),
         "{bad}"
     );
 }
@@ -124,7 +126,8 @@ async fn config_lists_every_setting_with_its_spec_and_set_changes_what_the_next_
     let shown = dev(host.port, "config show").await;
     assert!(
         shown.contains(
-            "narration_late_s = 8 (default 8, 1 to 1000000 seconds; launcher_settings; cost effect none; changes the next input)"
+            "narration_late_s = 8 (default 8, 1 to 1000000 seconds; launcher_settings; cost effect \
+             none; changes the next input)"
         ),
         "{shown}"
     );
@@ -274,18 +277,30 @@ async fn health_shows_the_event_stream_with_its_lag_and_its_loss() {
 }
 
 #[tokio::test]
-async fn a_bad_request_to_the_new_routes_is_a_typed_400() {
+async fn a_bad_query_to_the_new_routes_is_a_typed_invalid_query_in_the_envelope() {
     let host = start(&STARTER_FILES).await;
 
-    for (verb, address) in [
-        ("GET", format!("{}?limit=many", path::HISTORY)),
-        ("GET", path::TRACE.to_owned()),
-        ("GET", format!("{}?operation=zero", path::TRACE)),
+    for address in [
+        format!("{}?limit=many", path::HISTORY),
+        format!("{}?seat=1", path::HISTORY),
+        path::TRACE.to_owned(),
+        format!("{}?operation=zero", path::TRACE),
     ] {
-        let request =
-            format!("{verb} {address} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-        let raw = raw_exchange(host.port, &request).await;
-        assert!(raw.starts_with("HTTP/1.1 400"), "{address}: {raw}");
+        let answer = client::get(host.port, &address).await.expect("answered");
+        assert_eq!(answer.status, 400, "{address}: {}", answer.body);
+        let reply: EngineReply<serde_json::Value> =
+            serde_json::from_str(&answer.body).expect("the envelope");
+        assert!(
+            matches!(
+                reply,
+                EngineReply::Rejected {
+                    error: EngineError::InvalidQuery(_),
+                    ..
+                }
+            ),
+            "{address}: {}",
+            answer.body
+        );
     }
     let bad_body = post_request(
         path::CONFIG,
@@ -324,10 +339,10 @@ struct RecordingReplayer {
 }
 
 impl Replayer for RecordingReplayer {
-    fn replay(&self, request: &ReplayRequest) -> Result<ReplayReport, ReplayRefusal> {
+    fn replay(&self, request: &ReplayRequest) -> Result<ReplayReport, ReplayError> {
         self.asked.lock().expect("the lock").push(request.clone());
         if request.log != "demo" {
-            return Err(ReplayRefusal::UnknownLog {
+            return Err(ReplayError::UnknownLog {
                 log: request.log.clone(),
             });
         }
@@ -390,7 +405,7 @@ async fn a_replayer_behind_the_seam_is_called_with_the_request_and_audited() {
         })
         .await
         .expect_err("a replay names its log");
-    assert!(matches!(blank, EngineError::BadRequest { .. }), "{blank:?}");
+    assert_eq!(blank, EngineError::BlankLog);
     assert_eq!(
         replayer.asked.lock().expect("the lock").len(),
         2,
@@ -429,7 +444,11 @@ async fn the_line_log_and_the_history_are_made_from_the_same_events_and_correlat
         "ids run with no gap: {ids:?}"
     );
 
-    let trace = rig.handle.trace("5".to_owned()).await.expect("a trace");
+    let trace = rig
+        .handle
+        .trace(TraceOperation::new("5").expect("an operation"))
+        .await
+        .expect("a trace");
     assert!(trace.events.len() >= 3, "{:?}", trace.events);
     assert!(
         trace
@@ -517,10 +536,13 @@ fn a_spool_that_cannot_be_opened_stops_the_owner_from_starting_with_a_typed_erro
     let in_the_way = directory.path().join("file");
     std::fs::write(&in_the_way, b"x").expect("a file");
 
-    let result = Extras::with_spool_directory(Arc::new(EventLog::default()), Some(in_the_way));
+    let result =
+        Extras::with_spool_directory(Arc::new(EventLog::default()), Some(in_the_way.clone()));
 
     match result {
-        Err(EngineStartError::Spool { reason }) => assert!(!reason.is_empty()),
+        Err(EngineStartError::SpoolDirectory { directory, .. }) => {
+            assert_eq!(directory, in_the_way);
+        }
         Err(other) => panic!("a different error: {other}"),
         Ok(_) => panic!("the spool should not open"),
     }
@@ -606,7 +628,10 @@ async fn a_broker_request_is_a_record_with_its_operation_and_trace_finds_the_bro
         lines(&log).contains(&requested.line),
         "the same line is in the log"
     );
-    let trace = handle.trace(operation).await.expect("a trace");
+    let trace = handle
+        .trace(TraceOperation::new(&operation).expect("an operation"))
+        .await
+        .expect("a trace");
     assert!(
         trace
             .events

@@ -21,6 +21,7 @@ use df_table::pipeline::{PipelineTable, TurnResult};
 use df_table::private_data::LengthClass;
 
 use crate::engine::audit::EngineAudit;
+use crate::engine::commit::CommitError;
 use crate::engine::labels::sender_label;
 use crate::engine::limits::MAXIMUM_RECENT_TURNS;
 use crate::engine::projection_adapter::sender_view;
@@ -83,9 +84,7 @@ impl Owner {
             }
             QueueControl::Step { count } => {
                 if count == 0 {
-                    return Err(EngineError::BadRequest {
-                        reason: "a step serves at least one input".to_owned(),
-                    });
+                    return Err(EngineError::ZeroStep);
                 }
                 ("step", self.run_batch(count).0)
             }
@@ -228,10 +227,7 @@ impl Owner {
                 self.issue_committed_requests();
                 (reports, BatchEnd::Committed)
             }
-            Err(error) => (
-                self.fail_batch(pending, error.key().to_owned()),
-                BatchEnd::Failed,
-            ),
+            Err(error) => (self.fail_batch(pending, error), BatchEnd::Failed),
         }
     }
 
@@ -319,8 +315,8 @@ impl Owner {
     /// and started the backoff): its staged events, views and table are dropped, each input ends
     /// refused `table_busy`, and its operation id is released, so the same id sent again is a new
     /// operation (H.4).
-    fn fail_batch(&mut self, pending: Vec<PendingTurn>, cause: String) -> Vec<TurnReport> {
-        let disposition = CommitDisposition::Failed { cause };
+    fn fail_batch(&mut self, pending: Vec<PendingTurn>, error: CommitError) -> Vec<TurnReport> {
+        let disposition = CommitDisposition::Failed(error);
         let now_ms = self.now_ms();
         // The dice the refused inputs drew are provisional until a commit: they go back to the
         // source, newest input first, so the same ids sent again meet the same values (H.3).

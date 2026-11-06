@@ -2,15 +2,20 @@
 use super::{Question, ReadError, reference_label};
 use serde_json::{Value, json};
 const IDENTITY_INSTRUCTION: &str = concat!(
-    "The pictures ref-1 to ref-{references} are reference portraits of the people we expect in a film still. ",
-    "The pictures cand-1 to cand-{candidates} are crops of the people found in that still, one person each. ",
-    "For each reference portrait, answer the number of the candidate that shows the same person, matching face, hair and costume only, never a name, a role or where the candidate stands. ",
+    "The pictures ref-1 to ref-{references} are reference portraits of the people we expect in a ",
+    "film still. ",
+    "The pictures cand-1 to cand-{candidates} are crops of the people found in that still, one ",
+    "person each. ",
+    "For each reference portrait, answer the number of the candidate that shows the same person, ",
+    "matching face, hair and costume only, never a name, a role or where the candidate stands. ",
     "Answer 0 when no candidate is that person or you cannot tell. ",
     "A candidate can be the answer for at most one portrait.",
 );
 const FACING_INSTRUCTION: &str = concat!(
     "Each picture is a crop of one person from a film still, labelled cand-N. ",
-    "For each, answer which way the front of the person's body points as seen in the picture: left means toward the left edge of the picture, right toward the right edge, camera means facing the viewer, away means the back is turned to the viewer. ",
+    "For each, answer which way the front of the person's body points as seen in the picture: ",
+    "left means toward the left edge of the picture, right toward the right edge, camera means ",
+    "facing the viewer, away means the back is turned to the viewer. ",
     "A person in profile or three-quarter view faces the side their face or chest points to. ",
     "Answer unclear when the crop does not show enough to tell. ",
     "Judge only what the picture shows; ignore names and roles.",
@@ -145,7 +150,8 @@ const UNCLEAR: &str = "unclear";
 const LABELS: [&str; 5] = ["left", "right", "camera", "away", UNCLEAR];
 
 /// The question for the judge over the crops of `candidates` (candidate numbers counted from 1,
-/// pictures labelled `cand-<n>`). `None` when there are none or more than [`MAXIMUM_FACING_JUDGED`].
+/// pictures labelled `cand-<n>`). `None` when there are none or more than
+/// [`MAXIMUM_FACING_JUDGED`].
 pub(super) fn facing_request(candidates: &[usize]) -> Option<Question> {
     if candidates.is_empty() || candidates.len() > MAXIMUM_FACING_JUDGED {
         return None;

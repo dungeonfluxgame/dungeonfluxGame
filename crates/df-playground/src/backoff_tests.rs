@@ -1,4 +1,5 @@
-use crate::backoff::{FIRST_RETRY_MS, LONGEST_RETRY_MS, retry_delay_ms};
+use crate::backoff::retry_delay_ms;
+use crate::limits::{FIRST_RETRY_MS, LONGEST_RETRY_MS};
 
 #[test]
 fn the_wait_starts_short_and_doubles_with_each_failure() {

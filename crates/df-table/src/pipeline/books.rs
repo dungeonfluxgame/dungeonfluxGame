@@ -44,16 +44,16 @@ use crate::ports::{ActionId, NonActionKind, PurposeName};
 use crate::table_state::{ResultStamp, SceneGeneration};
 
 /// The schema version of the request and release records.
-pub const BOOK_SCHEMA_VERSION: u32 = 1;
+pub(crate) const BOOK_SCHEMA_VERSION: u32 = 1;
 
 /// The schema version of the result record: 2 keeps each result under its sender and the
 /// membership of that sender and records the input kind; version 1 had the operation id alone.
-pub const RESULT_SCHEMA_VERSION: u32 = 2;
+pub(crate) const RESULT_SCHEMA_VERSION: u32 = 2;
 
 /// A `ResultStamp` as saved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StoredStamp {
+pub(crate) struct StoredStamp {
     scene: u64,
     generation: u64,
     epoch: u64,
@@ -423,7 +423,7 @@ pub struct StoredOutcome {
 /// Who sent an operation, as saved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "from", rename_all = "snake_case", deny_unknown_fields)]
-pub enum StoredSender {
+pub(crate) enum StoredSender {
     Engine,
     Seat { seat: u64 },
 }
@@ -468,7 +468,7 @@ impl ResultKey {
 /// Who sent a result's operation, which membership of that sender and what kind of input it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StoredOrigin {
+pub(crate) struct StoredOrigin {
     sender: StoredSender,
     membership: u64,
     kind: InputKind,

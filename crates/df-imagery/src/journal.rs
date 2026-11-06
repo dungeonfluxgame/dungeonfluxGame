@@ -21,6 +21,14 @@ pub use crate::request::{ImageOwner, OperationIdentity};
 
 /// Version tag of the canonical owner-scope encoding below.
 pub const OWNER_SCOPE_VERSION: u8 = 1;
+/// Owner tag of a run scope in the canonical owner bytes.
+const RUN_OWNER_TAG: u8 = 0;
+/// Owner tag of a draft (account) scope in the canonical owner bytes.
+const DRAFT_OWNER_TAG: u8 = 1;
+/// Canonical run-owner length: version, tag, campaign id and run id.
+const RUN_OWNER_BYTES: usize = 2 + 16 + 16;
+/// Canonical draft-owner length: version, tag and account id.
+const DRAFT_OWNER_BYTES: usize = 2 + 16;
 
 /// Why supplied identity bytes were refused. Identities are caller-supplied, never minted here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,12 +86,7 @@ macro_rules! journal_id {
 
             /// Lowercase hexadecimal, the only text form used in diagnostics.
             pub fn to_hex(&self) -> String {
-                let mut text = String::with_capacity(32);
-                for byte in self.0 {
-                    text.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('?'));
-                    text.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('?'));
-                }
-                text
+                crate::lower_hex(&self.0)
             }
         }
 
@@ -177,6 +180,7 @@ impl fmt::Debug for VersionedSnapshot {
 pub struct SharingIdentity([u8; 32]);
 
 impl SharingIdentity {
+    /// Accepts exactly 32 bytes; any value, including all zeros, is a valid digest.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, JournalIdError> {
         let value: [u8; 32] = bytes
             .try_into()
@@ -196,17 +200,17 @@ impl SharingIdentity {
 pub fn owner_scope_bytes(owner: &ImageOwner) -> Vec<u8> {
     match owner {
         ImageOwner::Run { campaign, run } => {
-            let mut bytes = Vec::with_capacity(34);
+            let mut bytes = Vec::with_capacity(RUN_OWNER_BYTES);
             bytes.push(OWNER_SCOPE_VERSION);
-            bytes.push(0);
+            bytes.push(RUN_OWNER_TAG);
             bytes.extend_from_slice(campaign.as_bytes());
             bytes.extend_from_slice(run.as_bytes());
             bytes
         }
         ImageOwner::Draft { account } => {
-            let mut bytes = Vec::with_capacity(18);
+            let mut bytes = Vec::with_capacity(DRAFT_OWNER_BYTES);
             bytes.push(OWNER_SCOPE_VERSION);
-            bytes.push(1);
+            bytes.push(DRAFT_OWNER_TAG);
             bytes.extend_from_slice(account.as_bytes());
             bytes
         }
@@ -219,12 +223,12 @@ pub fn owner_of_bytes(bytes: &[u8]) -> Option<ImageOwner> {
         return None;
     }
     match (bytes[1], bytes.len()) {
-        (0, 34) => {
+        (RUN_OWNER_TAG, RUN_OWNER_BYTES) => {
             let campaign = CampaignId::from_bytes(&bytes[2..18]).ok()?;
             let run = RunId::from_bytes(&bytes[18..34]).ok()?;
             Some(ImageOwner::Run { campaign, run })
         }
-        (1, 18) => {
+        (DRAFT_OWNER_TAG, DRAFT_OWNER_BYTES) => {
             let account = AccountId::from_bytes(&bytes[2..18]).ok()?;
             Some(ImageOwner::Draft { account })
         }
@@ -242,6 +246,7 @@ pub enum JobState {
 }
 
 impl JobState {
+    /// The stored spelling of this state.
     pub fn label(self) -> &'static str {
         match self {
             Self::Planning => "planning",
@@ -250,6 +255,7 @@ impl JobState {
         }
     }
 
+    /// Reads a stored spelling back; anything else is an invalid record.
     pub fn parse_label(label: &str) -> Option<Self> {
         match label {
             "planning" => Some(Self::Planning),
@@ -269,6 +275,7 @@ pub enum InterestState {
 }
 
 impl InterestState {
+    /// The stored spelling of this state.
     pub fn label(self) -> &'static str {
         match self {
             Self::Attached => "attached",
@@ -276,6 +283,7 @@ impl InterestState {
         }
     }
 
+    /// Reads a stored spelling back; anything else is an invalid record.
     pub fn parse_label(label: &str) -> Option<Self> {
         match label {
             "attached" => Some(Self::Attached),
@@ -373,6 +381,7 @@ pub enum AcceptOutcome {
 }
 
 impl AcceptOutcome {
+    /// The stored view, whichever way the demand was accepted.
     pub fn view(&self) -> &OperationView {
         match self {
             Self::Replayed(view) | Self::Created(view) | Self::Joined(view) => view,
@@ -456,7 +465,7 @@ pub enum JournalError {
     Expired,
 }
 
-/// True while a demand instant may still use the job: valid instants precede the deadline.
+/// True once `now_ms` reaches the deadline: only instants strictly before it may use the job.
 pub fn is_expired(absolute_deadline_ms: i64, now_ms: i64) -> bool {
     now_ms >= absolute_deadline_ms
 }
@@ -465,6 +474,8 @@ pub fn is_expired(absolute_deadline_ms: i64, now_ms: i64) -> bool {
 /// one atomic transaction; queries are parameterized. Later catalog and finance composition may
 /// call the transaction-taking statements directly to share one transaction.
 pub trait ImageJournal: Send + Sync {
+    /// Exact-owner jobs whose intent and config snapshots are compatible, after the cursor.
+    /// A journal without this capability lists none, so the caller creates fresh demand.
     fn compatible_candidates(
         &self,
         _owner: &ImageOwner,
@@ -480,7 +491,8 @@ pub trait ImageJournal: Send + Sync {
         command: &AcceptCommand,
     ) -> impl Future<Output = Result<AcceptOutcome, JournalError>> + Send;
 
-    /// Scheduling is retained separately from canonical content and never changes an existing receipt.
+    /// Scheduling is retained separately from canonical content and never changes an existing
+    /// receipt.
     fn accept_scheduled(
         &self,
         command: &AcceptCommand,
@@ -531,5 +543,4 @@ pub trait ImageJournal: Send + Sync {
 }
 
 #[cfg(test)]
-#[path = "journal_tests.rs"]
 mod journal_tests;

@@ -48,8 +48,9 @@ pub use speech_adapter::{
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_http::{
-    NativeHttp, NativeHttpFailure, NativeHttpLimits, NativeHttpMetadata, NativeHttpRefusal,
-    NativeHttpResponse, NativeRetryAfter, NativeRetryAfterValue, ProviderLimits,
+    MAXIMUM_BODY_BYTES, MAXIMUM_CHUNKS, MAXIMUM_EXCHANGE_TIME, MAXIMUM_HEADER_BYTES, NativeHttp,
+    NativeHttpFailure, NativeHttpLimits, NativeHttpMetadata, NativeHttpRefusal, NativeHttpResponse,
+    NativeRetryAfter, NativeRetryAfterValue, ProviderLimits,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_text_provider;
@@ -140,8 +141,8 @@ mod eleven_music;
 #[cfg(not(target_arch = "wasm32"))]
 pub use eleven_music::{
     AMBIENCE_MAXIMUM_SECONDS, ElevenMusicConfig, ElevenMusicError, GeneratedAudio,
-    MUSIC_MAXIMUM_LENGTH_MILLIS, MUSIC_MAXIMUM_PROMPT_CHARACTERS, MUSIC_MINIMUM_LENGTH_MILLIS,
-    MUSIC_MODEL, NativeElevenMusicProvider, SOUND_MODEL,
+    MUSIC_MAXIMUM_LENGTH_MS, MUSIC_MAXIMUM_PROMPT_CHARACTERS, MUSIC_MINIMUM_LENGTH_MS, MUSIC_MODEL,
+    NativeElevenMusicProvider, SOUND_MODEL,
 };
 #[cfg(not(target_arch = "wasm32"))]
 mod fal_segment;

@@ -54,7 +54,7 @@ pub enum MusicChange {
     Keep,
     /// The same song with another volume or loop setting: change it where it plays, without
     /// starting the song again.
-    Update { volume: u8, looping: bool },
+    Update { volume_percent: u8, looping: bool },
     /// Another song: stop what plays and start the new one (or start one when none plays).
     Replace,
     /// No music is wanted: stop what plays.
@@ -71,11 +71,13 @@ pub fn music_change(playing: Option<&Track>, wanted: Option<&Track>) -> MusicCha
         (Some(playing), Some(wanted)) => {
             if playing.media != wanted.media || playing.target != wanted.target {
                 MusicChange::Replace
-            } else if playing.volume == wanted.volume && playing.looping == wanted.looping {
+            } else if playing.volume_percent == wanted.volume_percent
+                && playing.looping == wanted.looping
+            {
                 MusicChange::Keep
             } else {
                 MusicChange::Update {
-                    volume: wanted.volume,
+                    volume_percent: wanted.volume_percent,
                     looping: wanted.looping,
                 }
             }
@@ -86,5 +88,5 @@ pub fn music_change(playing: Option<&Track>, wanted: Option<&Track>) -> MusicCha
 /// The browser's volume, from 0 to 1, for a percent. A percent over 100 is held at full (the
 /// scene checks it before it gets here).
 pub fn volume_of(percent: u8) -> f64 {
-    f64::from(percent.min(crate::limits::MAXIMUM_VOLUME)) / 100.0
+    f64::from(percent.min(crate::limits::MAXIMUM_VOLUME_PERCENT)) / 100.0
 }

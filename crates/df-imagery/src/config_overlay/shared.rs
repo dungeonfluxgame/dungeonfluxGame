@@ -25,6 +25,13 @@ pub(super) fn invalid(field: &str, reason: &'static str) -> OverlayError {
     }
 }
 
+/// The overlay form of a snapshot validation refusal: same field, same reason.
+pub(crate) fn overlay_field_error(error: ConfigError) -> OverlayError {
+    match error {
+        ConfigError::InvalidField { field, reason } => invalid(field, reason),
+    }
+}
+
 /// One candidate value with its winning-layer source and display name.
 #[derive(Clone, Debug)]
 pub(super) struct Pick<T> {
@@ -557,12 +564,7 @@ pub(super) fn seed_profile_body(
     {
         return Ok(entry.profile);
     }
-    default_profile_body().map_err(|error| match error {
-        ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })
+    default_profile_body().map_err(overlay_field_error)
 }
 
 /// Merge one built profile body into the snapshot by name and record the

@@ -65,7 +65,11 @@ pub(crate) fn validate_name(text: &str) -> Result<(), NameError> {
 macro_rules! name_type {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
+        // Serialize is the derived newtype one (the bare string, no clone); Deserialize checks the
+        // name through `TryFrom<String>`.
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(::serde::Serialize, ::serde::Deserialize)]
+        #[serde(try_from = "String")]
         pub struct $name(String);
 
         impl $name {
@@ -88,22 +92,12 @@ macro_rules! name_type {
             }
         }
 
-        impl ::serde::Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: ::serde::Serializer,
-            {
-                serializer.serialize_str(&self.0)
-            }
-        }
+        impl ::std::convert::TryFrom<String> for $name {
+            type Error = $crate::element::NameError;
 
-        impl<'de> ::serde::Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: ::serde::Deserializer<'de>,
-            {
-                let text = <String as ::serde::Deserialize>::deserialize(deserializer)?;
-                Self::new(&text).map_err(::serde::de::Error::custom)
+            fn try_from(text: String) -> Result<Self, Self::Error> {
+                $crate::element::validate_name(&text)?;
+                Ok(Self(text))
             }
         }
     };
@@ -178,6 +172,8 @@ impl fmt::Display for DegreesError {
     }
 }
 
+impl std::error::Error for DegreesError {}
+
 impl Degrees {
     pub fn new(degrees: i64) -> Result<Self, DegreesError> {
         u16::try_from(degrees)
@@ -230,6 +226,8 @@ impl fmt::Display for PercentError {
         )
     }
 }
+
+impl std::error::Error for PercentError {}
 
 impl Percent {
     pub fn new(percent: i64) -> Result<Self, PercentError> {

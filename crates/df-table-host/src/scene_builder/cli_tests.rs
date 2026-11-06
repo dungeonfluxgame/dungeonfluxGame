@@ -1,10 +1,11 @@
 use crate::command::{Command, CommandError, parse, split_words};
 
 use super::cli::{BUFFER_USAGE, BUILD_USAGE, PLATES_USAGE, SHOW_USAGE, SceneBuilderCommand};
+use super::fixtures::name;
 use super::format::{format_buffer, format_build, format_plates, format_run, format_show};
 use super::request::{BuildRequest, DevMoment, DevStage, RunRequest, SlowStage};
 use super::workbench::Workbench;
-use df_table::plate_timing::PlateTiming;
+use df_table::plate::timing::PlateTiming;
 
 fn command(line: &str) -> Result<SceneBuilderCommand, CommandError> {
     let words = split_words(line).expect("the line splits");
@@ -19,7 +20,7 @@ fn scene_build_takes_a_place_and_the_two_dev_tweaks() {
     assert_eq!(
         command("scene build \"Harbor market\"").expect("parses"),
         SceneBuilderCommand::Build(BuildRequest {
-            place: "Harbor market".to_owned(),
+            place: name("Harbor market"),
             fail: None,
             slow: None,
         })
@@ -27,7 +28,7 @@ fn scene_build_takes_a_place_and_the_two_dev_tweaks() {
     assert_eq!(
         command("scene build quay fail=plate slow=background:12").expect("parses"),
         SceneBuilderCommand::Build(BuildRequest {
-            place: "quay".to_owned(),
+            place: name("quay"),
             fail: Some(DevStage::Plate),
             slow: Some(SlowStage {
                 stage: DevStage::Background,
@@ -126,10 +127,10 @@ fn help_lists_the_scene_builder_verbs() {
 
 #[test]
 fn every_list_in_an_answer_is_numbered_from_one() {
-    let mut bench = Workbench::new(PlateTiming::defaults(), None).expect("a workbench");
+    let mut bench = Workbench::new(PlateTiming::default(), None).expect("a workbench");
     let build = bench
         .build(&BuildRequest {
-            place: "Harbor market".to_owned(),
+            place: name("Harbor market"),
             fail: None,
             slow: None,
         })
@@ -167,10 +168,10 @@ fn every_list_in_an_answer_is_numbered_from_one() {
 
 #[test]
 fn the_plates_answer_states_the_estimate_where_a_stage_is_unpriced() {
-    let mut bench = Workbench::new(PlateTiming::defaults(), None).expect("a workbench");
+    let mut bench = Workbench::new(PlateTiming::default(), None).expect("a workbench");
     bench
         .build(&BuildRequest {
-            place: "Harbor market".to_owned(),
+            place: name("Harbor market"),
             fail: None,
             slow: None,
         })

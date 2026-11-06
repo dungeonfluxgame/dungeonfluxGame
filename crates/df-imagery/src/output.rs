@@ -8,15 +8,21 @@ pub use df_assets::MAX_IMAGE_PIXELS as MAXIMUM_OUTPUT_PIXELS;
 /// Neutral JPEG quality when the caller selects no explicit value.
 pub const DEFAULT_JPEG_QUALITY_0_100: u8 = 85;
 
-/// Shared pixel check: nonzero dimensions within the asset ceiling.
-/// `u64` widening keeps the product overflow-free.
-pub(crate) fn check_pixels(width_px: u32, height_px: u32) -> Result<(), OutputError> {
+/// Why a size failed the shared pixel check; each contract maps it to its own error.
+pub(crate) enum PixelBoundError {
+    ZeroDimension,
+    TooManyPixels { pixels: u64 },
+}
+
+/// The one pixel check for output and transform sizes: nonzero dimensions within the asset
+/// ceiling. `u64` widening keeps the product overflow-free.
+pub(crate) fn check_pixel_bound(width_px: u32, height_px: u32) -> Result<(), PixelBoundError> {
     if width_px == 0 || height_px == 0 {
-        return Err(OutputError::ZeroDimension);
+        return Err(PixelBoundError::ZeroDimension);
     }
     let pixels = u64::from(width_px) * u64::from(height_px);
     if pixels > MAXIMUM_OUTPUT_PIXELS {
-        return Err(OutputError::TooManyPixels { pixels });
+        return Err(PixelBoundError::TooManyPixels { pixels });
     }
     Ok(())
 }
@@ -30,6 +36,7 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
+    /// Short lowercase format name for diagnostics.
     pub fn label(self) -> &'static str {
         match self {
             Self::Png => "png",
@@ -38,6 +45,7 @@ impl OutputFormat {
         }
     }
 
+    /// The media type of encoded bytes in this format.
     pub fn mime(self) -> &'static str {
         match self {
             Self::Png => "image/png",
@@ -59,8 +67,12 @@ pub struct Dimensions {
 }
 
 impl Dimensions {
+    /// Refuses a zero axis or more than [`MAXIMUM_OUTPUT_PIXELS`] pixels.
     pub fn new(width_px: u32, height_px: u32) -> Result<Self, OutputError> {
-        check_pixels(width_px, height_px)?;
+        check_pixel_bound(width_px, height_px).map_err(|error| match error {
+            PixelBoundError::ZeroDimension => OutputError::ZeroDimension,
+            PixelBoundError::TooManyPixels { pixels } => OutputError::TooManyPixels { pixels },
+        })?;
         Ok(Self {
             width_px,
             height_px,
@@ -103,6 +115,7 @@ pub enum AlphaHandling {
 pub struct LossyQuality(u8);
 
 impl LossyQuality {
+    /// Refuses zero and values above 100.
     pub fn new(quality_0_100: u8) -> Result<Self, OutputError> {
         if quality_0_100 == 0 || quality_0_100 > 100 {
             return Err(OutputError::QualityOutOfRange {
@@ -150,6 +163,7 @@ pub struct RasterOutputSpec {
 }
 
 impl RasterOutputSpec {
+    /// Refuses JPEG with preserved alpha; see [`Self::validate`].
     pub fn new(
         dimensions: Dimensions,
         alpha: AlphaHandling,

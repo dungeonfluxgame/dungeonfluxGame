@@ -1129,6 +1129,38 @@ fn composite_clips_layers_outside_bounds() {
 }
 
 #[test]
+fn composite_layer_beside_the_resident_raster_is_refused_before_its_pixels_decode() {
+    // The base (16_384 working bytes) and the layer header (16_384) each fit 20_000 bytes, but
+    // not together. The layer's pixel data is corrupt, so a decode before the budget check
+    // would report DecodeFailed instead of the budget refusal.
+    let base = rgba_fixture(64, 64, |_, _| [0, 0, 0, 255]);
+    let base_bytes = png_bytes(&base);
+    let mut layer_bytes = png_bytes(&rgba_fixture(1, 1, |_, _| [255, 0, 0, 255]));
+    layer_bytes[16..20].copy_from_slice(&64_u32.to_be_bytes());
+    layer_bytes[20..24].copy_from_slice(&64_u32.to_be_bytes());
+    let checksum = png_crc32(&layer_bytes[12..29]);
+    layer_bytes[29..33].copy_from_slice(&checksum.to_be_bytes());
+    let mut map = HashMap::new();
+    map.insert([0x57; 16], base_bytes.clone());
+    map.insert([0x58; 16], layer_bytes.clone());
+    let layer =
+        CompositeLayer::new(pin(0x58, &layer_bytes), 0, 0, 1000, BlendMode::SourceOver).unwrap();
+    let spec = TransformSpec {
+        source: TransformSource::Image(pin(0x57, &base_bytes)),
+        steps: vec![ImageTransform::Composite(vec![layer])],
+    };
+    let (request, mut transform) = limits();
+    transform.max_decoded_bytes = 20_000;
+    let output = png_output(64, 64, AlphaHandling::Opaque);
+    assert_eq!(
+        run_transform(&spec, &output, &map, &request, &transform).unwrap_err(),
+        RasterError::LiveBudgetExceeded {
+            needed_bytes: 32_768
+        }
+    );
+}
+
+#[test]
 fn matte_png_flattens_transparency_onto_the_fill() {
     let base = rgba_fixture(1, 1, |_, _| [255, 0, 0, 0]);
     let bytes = png_bytes(&base);

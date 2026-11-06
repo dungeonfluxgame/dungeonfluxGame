@@ -1,10 +1,28 @@
 //! The grammar of `camera focus|wide` and `director ...`: parsed, refused with the choices, and
-//! listed in the help.
+//! listed in the help; and the verbs run against a host: a verb moves the playground's camera
+//! through the same path as the dev camera verbs, with the same numbers, the lines it writes are
+//! the lines `director show` prints, and a refusal comes back as the typed `DirectorError`.
 
-use crate::command::{Command, CommandError, parse, parse_script_line, split_words, usage_text};
+use axum::http::StatusCode;
+use df_table::director::error::DirectorError as DecisionError;
+use df_table::director::reason::Reason;
+use df_table::element::ElementId;
 
 use super::cli::{CAMERA_USAGE, DIRECTOR_USAGE, DirectorCommand, VIEW_USAGE};
-use super::request::{DirectorAct, StartKind, ViewEdit};
+use super::fixtures::{camera_of, lines_starting, run, said, with_three_avatars};
+use super::request::{ActReply, DirectorAct, DirectorError, DirectorReply, StartKind, ViewEdit};
+use super::routes::path;
+use crate::client::post_json;
+use crate::command::{Command, CommandError, parse, parse_script_line, split_words, usage_text};
+use crate::dev::{DevError, run_dev};
+use crate::dev_client;
+use crate::dev_http::{BodyCause, BodyError, DevReply, RouteError};
+
+const TOUR: &str = include_str!("../../../../development/playground-scripts/director-tour.txt");
+
+fn id(name: &str) -> ElementId {
+    ElementId::new(name).expect("an element name")
+}
 
 fn command(line: &str) -> Result<DirectorCommand, CommandError> {
     let words = split_words(line).expect("the line splits");
@@ -26,27 +44,27 @@ fn camera_focus_takes_an_element_and_the_four_keys() {
     assert_eq!(
         act("camera focus finn"),
         DirectorAct::Focus {
-            element: "finn".into(),
+            element: id("finn"),
             reason: None,
-            zoom: None,
-            over: None,
-            hold: None,
+            zoom_percent: None,
+            over_ms: None,
+            hold_ms: None,
         }
     );
     assert_eq!(
         act("camera focus sigrun reason=hit zoom=250 over=1500 hold=4000"),
         DirectorAct::Focus {
-            element: "sigrun".into(),
-            reason: Some("hit".into()),
-            zoom: Some(250),
-            over: Some(1_500),
-            hold: Some(4_000),
+            element: id("sigrun"),
+            reason: Some(Reason::Hit),
+            zoom_percent: Some(250),
+            over_ms: Some(1_500),
+            hold_ms: Some(4_000),
         }
     );
-    assert_eq!(act("camera wide"), DirectorAct::Wide { over: None });
+    assert_eq!(act("camera wide"), DirectorAct::Wide { over_ms: None });
     assert_eq!(
         act("camera wide over=300"),
-        DirectorAct::Wide { over: Some(300) }
+        DirectorAct::Wide { over_ms: Some(300) }
     );
 }
 
@@ -65,13 +83,13 @@ fn the_director_verbs_have_their_own_shapes() {
     );
     assert_eq!(
         act("director advance 8000"),
-        DirectorAct::Advance { ms: 8_000 }
+        DirectorAct::Advance { by_ms: 8_000 }
     );
     assert_eq!(
         act("director end speaker finn"),
         DirectorAct::End {
-            reason: "speaker".into(),
-            element: "finn".into()
+            reason: Reason::Speaker,
+            element: id("finn")
         }
     );
     assert_eq!(
@@ -91,19 +109,19 @@ fn director_view_edits_what_the_director_is_shown() {
     assert_eq!(
         view("director view hide lurker"),
         ViewEdit::Hide {
-            element: "lurker".into()
+            element: id("lurker")
         }
     );
     assert_eq!(
         view("director view unhide lurker"),
         ViewEdit::Unhide {
-            element: "lurker".into()
+            element: id("lurker")
         }
     );
     assert_eq!(
         view("director view hero finn"),
         ViewEdit::Hero {
-            element: "finn".into()
+            element: id("finn")
         }
     );
     assert_eq!(view("director view card"), ViewEdit::Card);
@@ -134,15 +152,15 @@ fn director_view_edits_what_the_director_is_shown() {
         view("director view beat result-card 3000 element=finn"),
         ViewEdit::Beat {
             reveal: false,
-            ms: 3_000,
-            element: Some("finn".into())
+            hold_ms: 3_000,
+            element: Some(id("finn"))
         }
     );
     assert_eq!(
         view("director view beat reveal-beat 1500"),
         ViewEdit::Beat {
             reveal: true,
-            ms: 1_500,
+            hold_ms: 1_500,
             element: None
         }
     );
@@ -225,4 +243,211 @@ fn the_verbs_work_in_a_script_and_the_help_lists_them() {
     ] {
         assert!(help.contains(text), "{text}");
     }
+}
+
+#[tokio::test]
+async fn camera_focus_moves_the_camera_with_the_dev_verbs_numbers_and_writes_a_reasoned_line() {
+    let running = with_three_avatars().await;
+    let answer = said(&running, "camera focus finn reason=speaker").await;
+    assert!(
+        answer.contains(
+            "CAMERA focus element=finn zoom=200 over=1200 reason=speaker serial=1 driven=true"
+        ),
+        "{answer}"
+    );
+    let camera = camera_of(&running).await.expect("a camera");
+    assert_eq!(
+        (
+            camera.target.as_deref(),
+            camera.zoom_percent,
+            camera.duration_ms,
+            camera.serial
+        ),
+        (Some("finn"), 200, 1_200, 1)
+    );
+    assert_eq!(
+        lines_starting(&running, "CAMERA focus").await,
+        ["CAMERA focus element=finn zoom=200 over=1200 reason=speaker serial=1 driven=true"]
+    );
+    assert_eq!(
+        lines_starting(&running, "PLAYGROUND camera").await.len(),
+        1,
+        "the playground's own audit line is written by the same change"
+    );
+}
+
+#[tokio::test]
+async fn a_second_focus_inside_the_spacing_waits_then_pans_on_without_pulling_out() {
+    let running = with_three_avatars().await;
+    said(&running, "camera focus finn reason=speaker").await;
+    let answer = said(&running, "camera focus sigrun reason=speaker").await;
+    assert!(answer.contains("CAMERA queued"), "{answer}");
+    assert_eq!(
+        camera_of(&running)
+            .await
+            .expect("a camera")
+            .target
+            .as_deref(),
+        Some("finn")
+    );
+    said(&running, "director advance 800").await;
+    let camera = camera_of(&running).await.expect("a camera");
+    assert_eq!(
+        (camera.target.as_deref(), camera.serial),
+        (Some("sigrun"), 2)
+    );
+    assert!(lines_starting(&running, "CAMERA wide").await.is_empty());
+}
+
+#[tokio::test]
+async fn a_creature_that_becomes_hidden_is_pulled_back_and_cannot_be_focused_while_hidden() {
+    let running = with_three_avatars().await;
+    said(&running, "camera focus lurker reason=speaker").await;
+    assert!(camera_of(&running).await.is_some());
+    said(&running, "director view hide lurker").await;
+    assert_eq!(camera_of(&running).await.expect("a camera").target, None);
+    assert_eq!(
+        lines_starting(&running, "CAMERA wide").await,
+        ["CAMERA wide reason=target_hidden serial=2 over=1200"]
+    );
+    said(&running, "director advance 1000").await;
+    let answer = said(&running, "camera focus lurker reason=speaker").await;
+    assert!(
+        answer.contains("CAMERA dropped reason=target_hidden direction=speaker element=lurker"),
+        "{answer}"
+    );
+    assert_eq!(camera_of(&running).await.expect("a camera").target, None);
+}
+#[tokio::test]
+async fn a_name_that_is_not_on_the_stage_and_a_number_out_of_range_are_refused() {
+    let running = with_three_avatars().await;
+    let answer = said(&running, "camera focus nobody").await;
+    assert!(answer.contains("reason=unknown_target"), "{answer}");
+    assert_eq!(camera_of(&running).await, None);
+    for (line, cause) in [
+        (
+            "camera focus finn zoom=99",
+            DecisionError::ZoomOutOfRange { zoom_percent: 99 },
+        ),
+        (
+            "camera focus finn over=100",
+            DecisionError::FocusMoveOutOfRange { over_ms: 100 },
+        ),
+        (
+            "camera focus finn hold=0",
+            DecisionError::HoldOutOfRange { hold_ms: 0 },
+        ),
+    ] {
+        let reply: DirectorReply<ActReply> =
+            dev_client::post_json(running.port, path::ACT, &act(line))
+                .await
+                .expect("answers");
+        let DevReply::Rejected { error, .. } = reply else {
+            panic!("'{line}' must be refused");
+        };
+        assert_eq!(error, DirectorError::Refused { cause }, "{line}");
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{line}");
+        assert!(
+            run(&running, line).await.is_err(),
+            "the command line fails too: {line}"
+        );
+    }
+    let Err(DevError::Command(CommandError::BadChoice { key, .. })) =
+        run(&running, "camera focus Finn").await
+    else {
+        panic!("a name that is not an element name is refused before it is sent");
+    };
+    assert_eq!(key, "element");
+    assert_eq!(camera_of(&running).await, None);
+}
+
+#[tokio::test]
+async fn a_body_that_is_not_a_verb_or_names_no_element_is_refused_as_an_invalid_body() {
+    let running = with_three_avatars().await;
+    for body in [
+        r#"{"verb":"dance"}"#,
+        r#"{"verb":"focus","element":"Finn"}"#,
+        r#"{"verb":"focus","element":"finn","reason":"zoom"}"#,
+        r#"{"verb":"focus","element":"finn","zoom":200}"#,
+    ] {
+        let response = post_json(running.port, path::ACT, body)
+            .await
+            .expect("answers");
+        assert_eq!(response.status, 400, "{body}");
+        let reply: DirectorReply<ActReply> =
+            serde_json::from_str(&response.body).expect("the envelope");
+        assert!(
+            matches!(
+                reply,
+                DevReply::Rejected {
+                    error: DirectorError::InvalidBody(BodyError {
+                        cause: BodyCause::Data,
+                        ..
+                    }),
+                    ..
+                }
+            ),
+            "{body}: {}",
+            response.body
+        );
+    }
+    assert_eq!(camera_of(&running).await, None);
+    assert_eq!(
+        lines_starting(&running, "DIRECTOR refused verb=act error=invalid_body")
+            .await
+            .len(),
+        4,
+        "one refusal line for each refused body"
+    );
+}
+
+#[tokio::test]
+async fn director_show_lists_what_was_queued_applied_and_dropped_and_matches_the_log() {
+    let running = with_three_avatars().await;
+    said(&running, "director view hide lurker").await;
+    said(&running, "camera focus finn reason=speaker").await;
+    said(&running, "camera focus lurker reason=hit").await;
+    said(&running, "camera focus sigrun reason=requested").await;
+    let text = said(&running, "director show").await;
+    assert!(text.contains("holding: finn for speaker"), "{text}");
+    assert!(text.contains("hidden lurker"), "{text}");
+    assert!(
+        text.contains("directions: 1 queued, 1 applied, 2 dropped"),
+        "{text}"
+    );
+    let written = lines_starting(&running, "CAMERA").await;
+    assert!(!written.is_empty());
+    for line in &written {
+        assert!(
+            text.contains(line.as_str()),
+            "{line} is in the log and not in show:\n{text}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_shipped_director_tour_runs_and_ends_with_the_camera_pulled_back() {
+    let running = with_three_avatars().await;
+    let directory = tempfile::TempDir::new().expect("makes a directory");
+    let path = directory.path().join("tour.txt");
+    std::fs::write(&path, TOUR).expect("writes the script");
+    let words = ["script".to_owned(), path.to_string_lossy().into_owned()];
+    let answer = run_dev(running.port, &words).await.expect("runs");
+    assert!(answer.ends_with("all ok"), "{answer}");
+    assert_eq!(camera_of(&running).await.expect("a camera").target, None);
+    let focus = lines_starting(&running, "CAMERA focus").await;
+    let wide = lines_starting(&running, "CAMERA wide").await;
+    assert!(focus.len() >= 5 && wide.len() >= 3, "{focus:?} {wide:?}");
+    assert!(
+        wide.iter()
+            .any(|line| line.contains("reason=target_hidden")),
+        "{wide:?}"
+    );
+    assert!(
+        lines_starting(&running, "CAMERA dropped reason=target_hidden")
+            .await
+            .iter()
+            .any(|line| line.contains("element=lurker")),
+        "the hidden lurker was refused"
+    );
 }

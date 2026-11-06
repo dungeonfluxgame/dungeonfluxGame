@@ -24,7 +24,6 @@ use std::fmt;
 pub use crate::journal::ImageJobId;
 use crate::request::ImageOwner;
 
-#[path = "execution/claims.rs"]
 mod claims;
 
 pub use claims::{
@@ -32,42 +31,34 @@ pub use claims::{
     pending_admits, sender_may_complete,
 };
 
-#[path = "execution/port.rs"]
 pub mod port;
 
 pub use port::{CapacityBounds, ExecutionGate, ImageExecutionJournal, QueuedStage};
 
-#[path = "execution/decline.rs"]
 mod decline;
 pub use decline::{
     DeclineObservation, DeclineReceipt, DeclineRetryCommand, DeclineRetryPolicy, DeclineRoute,
     SubmitDeclineContract,
 };
 
-#[path = "execution/deferral.rs"]
 mod deferral;
 pub use deferral::{DeferQueuedCommand, QueueDeferralNotice, QuotaDeferralReason};
 
-#[path = "execution/queue.rs"]
 mod queue;
 pub use queue::{QueueCursor, QueuePage};
 
-#[path = "execution/unclaimed.rs"]
 mod unclaimed;
 pub use unclaimed::{
     ClaimedTerminal, DeferredTerminal, ReleasedTerminal, TerminalCursor, UnclaimedTerminal,
     UnsentTerminal,
 };
 
-#[path = "execution/unsent_projection.rs"]
 mod unsent_projection;
 pub use unsent_projection::AcknowledgeUnsentProjection;
 
-#[path = "execution/unsent.rs"]
 mod unsent;
 pub use unsent::UnsentPrepared;
 
-#[path = "execution/recovery.rs"]
 mod recovery;
 
 pub use recovery::{
@@ -75,7 +66,6 @@ pub use recovery::{
     RecoveryDisposition, RecoveryLease, RecoveryStage,
 };
 
-#[path = "execution/decision.rs"]
 mod decision;
 pub use decision::{
     DEFAULT_DECISION_PAYLOAD_BYTES, DecisionBasis, DecisionKind, DecisionObservation,
@@ -83,11 +73,9 @@ pub use decision::{
     MAXIMUM_SQL_DECISION_PAYLOAD_BYTES, ObservationReceipt, StageBasis,
 };
 
-#[path = "execution/construction.rs"]
 mod construction;
 pub use construction::{OutputImage, OutputObject, StageClaim, StageScope, SupplierResume};
 
-#[path = "execution/candidate.rs"]
 mod candidate;
 pub use candidate::{
     CANDIDATE_VALIDATOR_REVISION, CandidateDescriptor, CandidateError, CandidateObservation,
@@ -157,12 +145,7 @@ macro_rules! execution_id {
 
             /// Lowercase hexadecimal, the only text form used in diagnostics.
             pub fn to_hex(&self) -> String {
-                let mut text = String::with_capacity(32);
-                for byte in self.0 {
-                    text.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('?'));
-                    text.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('?'));
-                }
-                text
+                crate::lower_hex(&self.0)
             }
         }
 
@@ -1242,20 +1225,17 @@ impl ExecutionIdentity {
 #[path = "execution_tests.rs"]
 mod execution_tests;
 
-#[path = "execution/local_inspection.rs"]
 mod local_inspection;
 pub use local_inspection::{
     LocalInspectionCheckpoint, LocalInspectionCommand, LocalInspectionError, LocalInspectionReason,
 };
 
-#[path = "execution/terminal.rs"]
 mod terminal;
 pub use terminal::{
     TerminalActor, TerminalAllocation, TerminalAuthority, TerminalCommand, TerminalStageSnapshot,
     TerminalTail, TerminalValidation,
 };
 
-#[path = "execution/analysis.rs"]
 mod analysis;
 pub use analysis::{
     AnalysisCheckpoint, AnalysisCheckpointReference, AnalysisDependencyRef, AnalysisStageReference,

@@ -6,8 +6,19 @@ use std::{
     time::Duration,
 };
 
-use crate::output_fetch::strict_fal_locator;
+use crate::native_http::{
+    MAXIMUM_BODY_BYTES, NativeHttp, classify_transport_error, hardened_client_builder,
+    header_block_bytes, is_loopback_socket, read_bounded_body,
+};
+use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, strict_fal_locator};
 use crate::{NativeHttpLimits, NativeHttpRefusal, inspect_dns_answers};
+
+/// The largest response header block a media fetcher accepts, in bytes.
+pub(crate) const MAXIMUM_MEDIA_HEADER_BYTES: usize = 16_384;
+/// The most pins one fetcher holds, and the most addresses across them (a DNS answer bound).
+const MAXIMUM_PINNED: usize = 16;
+/// The one content type a BFL delivery is asked for: either still format it may answer with.
+const BFL_IMAGE_TYPES: &str = "image/png,image/jpeg";
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct FalCdnPin {
@@ -92,17 +103,7 @@ fn media_client(
     https_only: bool,
     resolve: Option<(&str, &[SocketAddr])>,
 ) -> Result<reqwest::Client, NativeHttpRefusal> {
-    let mut builder = reqwest::Client::builder()
-        .tls_backend_rustls()
-        .https_only(https_only)
-        .retry(reqwest::retry::never())
-        .redirect(reqwest::redirect::Policy::none())
-        .referer(false)
-        .connection_verbose(false)
-        .no_proxy()
-        .connect_timeout(limits.connect_timeout)
-        .read_timeout(limits.read_timeout)
-        .timeout(limits.total_timeout)
+    let mut builder = hardened_client_builder(&limits, https_only)
         .pool_max_idle_per_host(MEDIA_POOL_IDLE_PER_HOST)
         .pool_idle_timeout(MEDIA_POOL_IDLE_TIMEOUT);
     if let Some((host, addresses)) = resolve {
@@ -117,20 +118,20 @@ impl NativeMediaFetch {
         pins: Vec<FalCdnPin>,
         fixture: Option<SocketAddr>,
     ) -> Result<Self, NativeHttpRefusal> {
-        if limits.maximum_header_bytes > 16_384
-            || pins.len() > 16
-            || pins.iter().map(|pin| pin.addresses.len()).sum::<usize>() > 16
+        if limits.maximum_header_bytes > MAXIMUM_MEDIA_HEADER_BYTES
+            || pins.len() > MAXIMUM_PINNED
+            || pins.iter().map(|pin| pin.addresses.len()).sum::<usize>() > MAXIMUM_PINNED
             || pins.iter().enumerate().any(|(i, pin)| {
                 pins.get(..i)
                     .is_some_and(|earlier| earlier.iter().any(|old| old.host == pin.host))
             })
-            || fixture.is_some_and(|address| !address.ip().is_loopback() || address.port() == 0)
+            || fixture.is_some_and(|address| !is_loopback_socket(address))
             || (fixture.is_none() && pins.is_empty())
         {
             return Err(NativeHttpRefusal::InvalidLimits);
         }
         // Reuse the validated finite native transport bounds without any network operation.
-        crate::native_http::NativeHttp::new(limits, fixture.is_some())?;
+        NativeHttp::new(limits, fixture.is_some())?;
         let fixture_client = match fixture {
             Some(_) => Some(media_client(limits, false, None)?),
             None => None,
@@ -167,14 +168,10 @@ impl NativeMediaFetch {
         fixture: Option<SocketAddr>,
     ) -> Result<Self, (NativeHttpRefusal, &'static str)> {
         if let Some(fixture_address) = fixture {
-            if !fixture_address.ip().is_loopback() || fixture_address.port() == 0 {
+            if !is_loopback_socket(fixture_address) {
                 return Err((NativeHttpRefusal::InvalidEndpoint, "fixture_invalid"));
             }
-            let expected = format!("http://{fixture_address}/");
-            let fixture_locator = locator.len() <= 8192
-                && locator.starts_with(&expected)
-                && !locator.contains(['\\', '\0', '@', '#']);
-            if !(strict_bfl_delivery(locator) || fixture_locator) {
+            if !(strict_bfl_delivery(locator) || is_fixture_locator(fixture_address, locator)) {
                 return Err((NativeHttpRefusal::InvalidEndpoint, "url_contract"));
             }
         } else if !strict_bfl_delivery(locator) {
@@ -186,32 +183,13 @@ impl NativeMediaFetch {
             .host_str()
             .ok_or((NativeHttpRefusal::InvalidEndpoint, "missing_host"))?;
         // Validate transport bounds before DNS so unsupported limits never cause network I/O.
-        crate::native_http::NativeHttp::new(limits, fixture.is_some())
+        NativeHttp::new(limits, fixture.is_some())
             .map_err(|error| (error, "transport_configuration"))?;
         let addresses = if fixture.is_some() {
             vec![]
         } else {
-            let resolved =
-                tokio::time::timeout(limits.connect_timeout, tokio::net::lookup_host((host, 443)))
-                    .await
-                    .map_err(|_| (NativeHttpRefusal::Deadline, "dns_deadline"))?
-                    .map_err(|_| (NativeHttpRefusal::Unknown, "dns_failure"))?;
-            let mut addresses = Vec::new();
-            for socket in resolved {
-                if !addresses.contains(&socket.ip()) {
-                    addresses.push(socket.ip());
-                }
-                if addresses.len() > 16 {
-                    return Err((NativeHttpRefusal::InvalidEndpoint, "dns_answer_limit"));
-                }
-            }
-            inspect_dns_answers(&addresses)
-                .map_err(|_| (NativeHttpRefusal::InvalidEndpoint, "dns_target_refused"))?;
-            addresses
+            resolve_public_addresses(host, limits.connect_timeout).await?
         };
-        if fixture.is_some_and(|socket| !socket.ip().is_loopback() || socket.port() == 0) {
-            return Err((NativeHttpRefusal::InvalidEndpoint, "fixture_invalid"));
-        }
         let fixture_client = match fixture {
             Some(_) => Some(
                 media_client(limits, false, None)
@@ -239,6 +217,19 @@ impl NativeMediaFetch {
             fixture_client,
             pinned,
         })
+    }
+
+    /// Whether this fetcher may read `locator`: a BFL delivery URL (or the fixture's own path)
+    /// for a BFL fetcher, a strict fal media locator otherwise.
+    fn allows_locator(&self, locator: &str) -> bool {
+        if self.bfl {
+            strict_bfl_delivery(locator)
+                || self
+                    .fixture
+                    .is_some_and(|address| is_fixture_locator(address, locator))
+        } else {
+            strict_fal_locator(locator)
+        }
     }
 
     /// The pinned pin and client for `host`, when the host was pinned for this owner.
@@ -272,7 +263,7 @@ impl NativeMediaFetch {
         }
         self.fetch_checked(
             locator,
-            "image/png,image/jpeg",
+            BFL_IMAGE_TYPES,
             remaining_bytes,
             deadline,
             std::future::pending(),
@@ -288,23 +279,17 @@ impl NativeMediaFetch {
         deadline: Duration,
         cancellation: impl Future<Output = ()>,
     ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
-        let allowed = if self.bfl {
-            strict_bfl_delivery(locator)
-                || self.fixture.is_some_and(|address| {
-                    locator.len() <= 8192
-                        && locator.starts_with(&format!("http://{address}/"))
-                        && !locator.contains(['\\', '\0', '@', '#'])
-                })
-        } else {
-            strict_fal_locator(locator)
-        };
-        if !allowed || locator.len() > 8192 || remaining_bytes == 0 {
+        if !self.allows_locator(locator)
+            || locator.len() > MAXIMUM_LOCATOR_BYTES
+            || remaining_bytes == 0
+        {
             return Err(NativeHttpRefusal::InvalidEndpoint);
         }
         let url = reqwest::Url::parse(locator).map_err(|_| NativeHttpRefusal::InvalidEndpoint)?;
         let host = url.host_str().ok_or(NativeHttpRefusal::InvalidEndpoint)?;
         let (target, addresses, client) = if let Some(address) = self.fixture {
-            // Explicit operator fixture redirects only the transport socket, never the returned public locator.
+            // An explicit operator fixture redirects only the transport socket, never the
+            // returned public locator.
             let client = self
                 .fixture_client
                 .as_ref()
@@ -346,7 +331,11 @@ impl NativeMediaFetch {
         mime: &str,
         remaining_bytes: usize,
     ) -> Result<(Vec<u8>, String), NativeHttpRefusal> {
-        let mut response = client.get(target).send().await.map_err(transport_error)?;
+        let mut response = client
+            .get(target)
+            .send()
+            .await
+            .map_err(classify_transport_error)?;
         if self.bfl {
             self.observed_status.store(
                 response.status().as_u16(),
@@ -365,14 +354,9 @@ impl NativeMediaFetch {
         if response.status().as_u16() != 200 {
             return Err(NativeHttpRefusal::Unknown);
         }
-        let mut headers = 0usize;
-        for (name, value) in response.headers() {
-            headers = headers
-                .checked_add(name.as_str().len())
-                .and_then(|v| v.checked_add(value.as_bytes().len()))
-                .ok_or(NativeHttpRefusal::HeadersTooLarge)?;
-        }
-        if headers > self.limits.maximum_header_bytes {
+        if header_block_bytes(response.headers())
+            .is_none_or(|bytes| bytes > self.limits.maximum_header_bytes)
+        {
             return Err(NativeHttpRefusal::HeadersTooLarge);
         }
         if response
@@ -397,7 +381,7 @@ impl NativeMediaFetch {
             .to_owned();
         let allowed = observed == mime
             || (self.bfl
-                && mime == "image/png,image/jpeg"
+                && mime == BFL_IMAGE_TYPES
                 && matches!(observed.as_str(), "image/png" | "image/jpeg"));
         if types.next().is_some() || !allowed {
             return Err(NativeHttpRefusal::ContentType);
@@ -423,24 +407,7 @@ impl NativeMediaFetch {
         if declared.is_some_and(|length| length == 0 || length > maximum as u64) {
             return Err(NativeHttpRefusal::ResponseTooLarge);
         }
-        let mut body = Vec::new();
-        let mut chunks = 0usize;
-        while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-            chunks += 1;
-            if chunks > self.limits.maximum_chunks {
-                return Err(NativeHttpRefusal::TooManyChunks);
-            }
-            if body
-                .len()
-                .checked_add(chunk.len())
-                .is_none_or(|length| length > maximum)
-            {
-                return Err(NativeHttpRefusal::ResponseTooLarge);
-            }
-            body.try_reserve(chunk.len())
-                .map_err(|_| NativeHttpRefusal::ResponseTooLarge)?;
-            body.extend_from_slice(&chunk);
-        }
+        let body = read_bounded_body(&mut response, maximum, self.limits.maximum_chunks).await?;
         if body.is_empty() || declared.is_some_and(|length| length != body.len() as u64) {
             return Err(NativeHttpRefusal::Unknown);
         }
@@ -457,6 +424,13 @@ pub struct BflDeliveryFailure {
     pub http_status: Option<u16>,
 }
 
+/// The delivery ran out of its one total deadline.
+const DELIVERY_DEADLINE: BflDeliveryFailure = BflDeliveryFailure {
+    refusal: NativeHttpRefusal::Deadline,
+    reason: "deadline",
+    http_status: None,
+};
+
 /// Credential-free BFL delivery over one total `remaining` deadline.
 ///
 /// Builds dedicated credential-free delivery limits from the caller transport
@@ -470,13 +444,9 @@ pub async fn fetch_bfl_delivery(
     fixture: Option<SocketAddr>,
 ) -> Result<(Vec<u8>, String, Option<u16>), BflDeliveryFailure> {
     if remaining.is_zero() {
-        return Err(BflDeliveryFailure {
-            refusal: NativeHttpRefusal::Deadline,
-            reason: "deadline",
-            http_status: None,
-        });
+        return Err(DELIVERY_DEADLINE);
     }
-    if max_bytes == 0 || max_bytes > 16_777_216 {
+    if max_bytes == 0 || max_bytes > MAXIMUM_BODY_BYTES {
         return Err(BflDeliveryFailure {
             refusal: NativeHttpRefusal::InvalidLimits,
             reason: "request_bounds",
@@ -493,29 +463,16 @@ pub async fn fetch_bfl_delivery(
         NativeMediaFetch::bfl(delivery_limits, locator, fixture),
     )
     .await
-    .map_err(|_| BflDeliveryFailure {
-        refusal: NativeHttpRefusal::Deadline,
-        reason: "deadline",
-        http_status: None,
-    })?
+    .map_err(|_| DELIVERY_DEADLINE)?
     .map_err(|(refusal, reason)| BflDeliveryFailure {
         refusal,
         reason,
         http_status: None,
     })?;
-    let elapsed = started.elapsed();
-    let left = remaining.checked_sub(elapsed).ok_or(BflDeliveryFailure {
-        refusal: NativeHttpRefusal::Deadline,
-        reason: "deadline",
-        http_status: None,
-    })?;
-    if left.is_zero() {
-        return Err(BflDeliveryFailure {
-            refusal: NativeHttpRefusal::Deadline,
-            reason: "deadline",
-            http_status: None,
-        });
-    }
+    let left = remaining
+        .checked_sub(started.elapsed())
+        .filter(|left| !left.is_zero())
+        .ok_or(DELIVERY_DEADLINE)?;
     let (bytes, mime) = constructed
         .fetch_bfl_image(locator, max_bytes, left)
         .await
@@ -567,165 +524,40 @@ fn strict_bfl_delivery(locator: &str) -> bool {
                     && host.len() > "delivery..bfl.ai".len())
         })
         && !locator.contains(['\\', '\0'])
-        && locator.len() <= 8192
+        && locator.len() <= MAXIMUM_LOCATOR_BYTES
 }
 
-#[cfg(test)]
-mod bfl_tests {
-    use super::*;
-    #[tokio::test]
-    async fn rejected_delivery_has_closed_admission_reason_without_network() {
-        let limits = crate::ProviderLimits::new(Duration::from_secs(1), 1, 1024).build();
-        let error = NativeMediaFetch::bfl(
-            limits,
-            "https://untrusted.example/signed-path?secret=value",
-            None,
-        )
+/// Whether `locator` is a plain path on the loopback fixture `address`: no credentials,
+/// fragment, backslash or NUL, and no longer than any other locator.
+fn is_fixture_locator(address: SocketAddr, locator: &str) -> bool {
+    locator.len() <= MAXIMUM_LOCATOR_BYTES
+        && locator.starts_with(&format!("http://{address}/"))
+        && !locator.contains(['\\', '\0', '@', '#'])
+}
+
+/// Resolves `host` once within `timeout` and keeps its distinct addresses, refusing more than
+/// [`MAXIMUM_PINNED`] of them or any that is not public.
+async fn resolve_public_addresses(
+    host: &str,
+    timeout: Duration,
+) -> Result<Vec<IpAddr>, (NativeHttpRefusal, &'static str)> {
+    let resolved = tokio::time::timeout(timeout, tokio::net::lookup_host((host, 443)))
         .await
-        .err()
-        .unwrap();
-        assert_eq!(error, (NativeHttpRefusal::InvalidEndpoint, "url_contract"));
-    }
-    #[test]
-    fn delivery_allowlist_excludes_private_or_credentialed_urls() {
-        assert!(strict_bfl_delivery(
-            "https://delivery.bfl.ai/image.png?signature=synthetic"
-        ));
-        assert!(strict_bfl_delivery(
-            "https://delivery.us1.bfl.ai/image.png?signature=synthetic"
-        ));
-        for locator in [
-            "http://delivery.us1.bfl.ai/image.png",
-            "https://delivery.bfl.ai.evil.test/image.png",
-            "https://delivery.bfl.ai:444/image.png",
-            "https://user@delivery.bfl.ai/image.png",
-            "https://delivery-bfl.ai/image.png",
-            "https://api.bfl.ai/image.png",
-            "https://127.0.0.1/image.png",
-            "https://delivery.us1.bfl.ai.evil.test/image.png",
-            "https://delivery.us1.bfl.ai:444/image.png",
-            "https://user@delivery.us1.bfl.ai/image.png",
-            "https://delivery.us1.bfl.ai/image.png#fragment",
-        ] {
-            assert!(!strict_bfl_delivery(locator));
+        .map_err(|_| (NativeHttpRefusal::Deadline, "dns_deadline"))?
+        .map_err(|_| (NativeHttpRefusal::Unknown, "dns_failure"))?;
+    let mut addresses = Vec::new();
+    for socket in resolved {
+        if !addresses.contains(&socket.ip()) {
+            addresses.push(socket.ip());
+        }
+        if addresses.len() > MAXIMUM_PINNED {
+            return Err((NativeHttpRefusal::InvalidEndpoint, "dns_answer_limit"));
         }
     }
+    inspect_dns_answers(&addresses)
+        .map_err(|_| (NativeHttpRefusal::InvalidEndpoint, "dns_target_refused"))?;
+    Ok(addresses)
 }
 
 #[cfg(test)]
-mod client_reuse_tests {
-    use super::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-
-    /// A keep-alive fixture: answers every request on each accepted socket with `body` and
-    /// counts accepted sockets. The accept loop is returned so the test can stop it.
-    async fn keep_alive_fixture(
-        body: &'static [u8],
-    ) -> (SocketAddr, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let accepted = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&accepted);
-        let accept_loop = tokio::spawn(async move {
-            // Owned connections: aborting the accept loop drops this set and aborts each socket task.
-            let mut connections = tokio::task::JoinSet::new();
-            while let Ok((mut socket, _)) = listener.accept().await {
-                counter.fetch_add(1, Ordering::SeqCst);
-                connections.spawn(async move {
-                    let mut pending = Vec::new();
-                    let mut chunk = [0u8; 1024];
-                    loop {
-                        while !pending.windows(4).any(|window| window == b"\r\n\r\n") {
-                            match socket.read(&mut chunk).await {
-                                Ok(0) | Err(_) => return,
-                                Ok(read) => pending.extend_from_slice(&chunk[..read]),
-                            }
-                        }
-                        let end = pending.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
-                        pending.drain(..end);
-                        let head = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
-                            body.len()
-                        );
-                        if socket.write_all(head.as_bytes()).await.is_err()
-                            || socket.write_all(body).await.is_err()
-                        {
-                            return;
-                        }
-                    }
-                });
-            }
-        });
-        (address, accepted, accept_loop)
-    }
-
-    /// Two files of one response share one pooled connection. Before the shared client, each
-    /// fetch built its own client and opened its own socket, so this observed two sockets.
-    #[tokio::test]
-    async fn sequential_media_fetches_reuse_one_connection() {
-        let body: &'static [u8] = b"synthetic-media-bytes";
-        let (address, accepted, accept_loop) = keep_alive_fixture(body).await;
-        let limits = crate::ProviderLimits::new(Duration::from_secs(5), 1024, 1024).build();
-        let fetch = NativeMediaFetch::new(limits, Vec::new(), Some(address)).unwrap();
-        let locator = "https://fal.media/files/first.png";
-        for _ in 0..2 {
-            let bytes = fetch
-                .fetch(
-                    locator,
-                    "image/png",
-                    1024,
-                    Duration::from_secs(5),
-                    std::future::pending(),
-                )
-                .await
-                .unwrap();
-            assert_eq!(bytes.as_slice(), body);
-        }
-        accept_loop.abort();
-        assert_eq!(accepted.load(Ordering::SeqCst), 1);
-    }
-
-    /// Each pinned host finds its own pin and that pin's addresses, and an unpinned host finds
-    /// nothing. The client is stored in the same entry as its pin, so the lookup cannot pair a
-    /// client built for one host with another host's addresses.
-    #[test]
-    fn pinned_lookup_pairs_each_host_with_its_own_addresses() {
-        let first: IpAddr = "93.184.216.34".parse().unwrap();
-        let second: IpAddr = "1.1.1.1".parse().unwrap();
-        let pins = vec![
-            FalCdnPin::new("a.fal.media", &[first]).unwrap(),
-            FalCdnPin::new("b.fal.media", &[second]).unwrap(),
-        ];
-        let limits = crate::ProviderLimits::new(Duration::from_secs(5), 1024, 1024).build();
-        let fetch = NativeMediaFetch::new(limits, pins, None).unwrap();
-
-        let second_transport = fetch.pinned_transport("b.fal.media").unwrap();
-        assert_eq!(second_transport.pin.host, "b.fal.media");
-        assert_eq!(
-            pinned_socket_addresses(&second_transport.pin),
-            vec![SocketAddr::new(second, 443)]
-        );
-        let first_transport = fetch.pinned_transport("a.fal.media").unwrap();
-        assert_eq!(first_transport.pin.host, "a.fal.media");
-        assert_eq!(
-            pinned_socket_addresses(&first_transport.pin),
-            vec![SocketAddr::new(first, 443)]
-        );
-        assert!(fetch.pinned_transport("c.fal.media").is_none());
-    }
-}
-
-fn transport_error(error: reqwest::Error) -> NativeHttpRefusal {
-    if error.is_timeout() {
-        NativeHttpRefusal::Deadline
-    } else {
-        NativeHttpRefusal::Unknown
-    }
-}
+mod native_media_fetch_tests;

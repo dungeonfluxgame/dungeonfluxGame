@@ -14,18 +14,25 @@
 //! instead of discarding it, and the caller tries again on resume. The plan keeps no clock and
 //! makes no request: the host does, and reports each outcome here.
 
+pub mod brief;
+pub mod card;
+pub mod locate;
+
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 use crate::event::FailureCause;
 use crate::listed::listed_enum;
-use crate::plate_job::PlateJob;
+use crate::plate::job::PlateJob;
 use crate::private_data::Narration;
-use crate::scene_plan_locate::LocateOutcome;
-use crate::table_state::{StaleResult, TableSnapshot};
+use crate::scene_plan::locate::LocateOutcome;
+use crate::table_state::{StaleResultError, TableSnapshot};
 
 listed_enum! {
     /// A step of the scene builder, in order.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum SceneStage {
         Describe,
         Background,
@@ -122,7 +129,7 @@ impl StageOutputs {
 
 /// A stage that failed, and why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StageFailure {
+pub struct FailedStage {
     pub stage: SceneStage,
     pub cause: FailureCause,
 }
@@ -165,7 +172,7 @@ pub enum PlanError {
     /// The job already ended in a failure, or already finished.
     Ended,
     /// The job is no longer current (D.2); nothing was stored or started.
-    Stale(StaleResult),
+    Stale(StaleResultError),
 }
 
 impl fmt::Display for PlanError {
@@ -200,7 +207,7 @@ pub struct StagePlan {
     job: PlateJob,
     outputs: StageOutputs,
     running: Option<SceneStage>,
-    failure: Option<StageFailure>,
+    failure: Option<FailedStage>,
     finished: bool,
 }
 
@@ -229,7 +236,7 @@ impl StagePlan {
         self.running
     }
 
-    pub fn failure(&self) -> Option<StageFailure> {
+    pub fn failure(&self) -> Option<FailedStage> {
         self.failure
     }
 
@@ -307,11 +314,11 @@ impl StagePlan {
         &mut self,
         stage: SceneStage,
         cause: FailureCause,
-    ) -> Result<StageFailure, PlanError> {
+    ) -> Result<FailedStage, PlanError> {
         if self.running != Some(stage) {
             return Err(PlanError::NotRunning { stage });
         }
-        let failure = StageFailure { stage, cause };
+        let failure = FailedStage { stage, cause };
         self.running = None;
         self.failure = Some(failure);
         Ok(failure)

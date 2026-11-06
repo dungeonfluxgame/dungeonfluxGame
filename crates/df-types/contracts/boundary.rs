@@ -57,60 +57,46 @@
 
 use df_types::{IdentityError, OperationId, RevisionLabel, RevisionLabelError, TextIdentityError};
 
-/// Candidate identity for one client instance, not its stable binding or connection token.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct ClientId(OperationId);
+// Each candidate wraps the canonical OperationId validator; the kinds stay distinct types.
+macro_rules! candidate_identity {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+        pub struct $name(OperationId);
 
-impl ClientId {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, IdentityError> {
-        OperationId::from_bytes(bytes).map(Self)
-    }
+        impl $name {
+            /// Accepts exactly 16 bytes with at least one nonzero byte.
+            pub fn from_bytes(bytes: &[u8]) -> Result<Self, IdentityError> {
+                OperationId::from_bytes(bytes).map(Self)
+            }
 
-    pub fn from_hex(text: &str) -> Result<Self, TextIdentityError> {
-        OperationId::from_hex(text).map(Self)
-    }
+            /// Parses exactly 32 lowercase ASCII hexadecimal digits.
+            pub fn from_hex(text: &str) -> Result<Self, TextIdentityError> {
+                OperationId::from_hex(text).map(Self)
+            }
 
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        self.0.as_bytes()
-    }
+            /// Returns the supplied canonical bytes without reordering.
+            pub fn as_bytes(&self) -> &[u8; 16] {
+                self.0.as_bytes()
+            }
+        }
+    };
 }
 
-/// Candidate utterance identity, independent from the admitted native job identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct UtteranceId(OperationId);
+candidate_identity!(
+    /// Candidate identity for one client instance, not its stable binding or connection token.
+    ClientId
+);
+candidate_identity!(
+    /// Candidate utterance identity, independent from the admitted native job identity.
+    UtteranceId
+);
+candidate_identity!(
+    /// Candidate semantic asset identity; byte backing and authorized publication are separate.
+    AssetId
+);
 
-impl UtteranceId {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, IdentityError> {
-        OperationId::from_bytes(bytes).map(Self)
-    }
-
-    pub fn from_hex(text: &str) -> Result<Self, TextIdentityError> {
-        OperationId::from_hex(text).map(Self)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        self.0.as_bytes()
-    }
-}
-
-/// Candidate semantic asset identity; byte backing and authorized publication are separate.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct AssetId(OperationId);
-
-impl AssetId {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, IdentityError> {
-        OperationId::from_bytes(bytes).map(Self)
-    }
-
-    pub fn from_hex(text: &str) -> Result<Self, TextIdentityError> {
-        OperationId::from_hex(text).map(Self)
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        self.0.as_bytes()
-    }
-}
-
+/// The ruleset component a rejected label belongs to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RulesetComponent {
     Mechanics,
@@ -134,6 +120,7 @@ pub struct RulesetId {
 }
 
 impl RulesetId {
+    /// Validates mechanics, catalog and source manifest in that order; first rejection wins.
     pub fn new(
         mechanics: Option<&str>,
         catalog: Option<&str>,
@@ -172,6 +159,7 @@ impl RulesetId {
     }
 }
 
+/// Rejection of a supplied or advanced work generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GenerationError {
     Zero,
@@ -183,6 +171,7 @@ pub enum GenerationError {
 pub struct Generation(u64);
 
 impl Generation {
+    /// Accepts any nonzero supplied generation.
     pub fn new(value: u64) -> Result<Self, GenerationError> {
         if value == 0 {
             return Err(GenerationError::Zero);
@@ -194,6 +183,7 @@ impl Generation {
         self.0
     }
 
+    /// Advances by one, refusing to wrap past `u64::MAX`.
     pub fn next(self) -> Result<Self, GenerationError> {
         self.0
             .checked_add(1)

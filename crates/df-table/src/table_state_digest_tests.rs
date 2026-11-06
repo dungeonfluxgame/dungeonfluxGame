@@ -239,13 +239,13 @@ fn the_order_cast_entries_arrive_in_does_not_change_the_digest() {
 #[test]
 fn a_machine_slot_digests_by_its_content_and_not_by_the_order_of_its_keys() {
     let slot = |text: &str| {
-        crate::machine_slot::MachineSlot::from_parts(
+        crate::machine::slot::MachineSlot::from_parts(
             machine("explore"),
             1,
             serde_json::from_str(text).unwrap(),
         )
     };
-    let digest_of = |slot: crate::machine_slot::MachineSlot| {
+    let digest_of = |slot: crate::machine::slot::MachineSlot| {
         let mut table = table_in_scene_ten();
         apply(
             &mut table,

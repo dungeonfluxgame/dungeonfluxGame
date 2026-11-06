@@ -28,11 +28,11 @@ use crate::outcome::{Decline, DeclineError, DeclineRecord};
 use crate::pending::digest::{Fnv, mix};
 use crate::private_data::Narration;
 use crate::projection::status::ProjectionStatus;
-use crate::projection::text::{BlankText, NonEmptyText};
+use crate::projection::text::{BlankTextError, NonEmptyText};
 use crate::table_state::{DisplayName, DisplayNameError};
 
 /// The schema version of `PublishedRecord`.
-pub const PUBLISHED_RECORD_VERSION: u32 = 1;
+pub(crate) const PUBLISHED_RECORD_VERSION: u32 = 1;
 
 /// One story line as saved.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,7 +107,7 @@ pub enum PublishedLoadError {
         expected: u32,
     },
     /// A text that must not be blank was.
-    BlankText,
+    BlankTextError,
     /// A name that cannot be shown.
     InvalidName,
     /// A decline that cannot be built.
@@ -125,7 +125,7 @@ impl fmt::Display for PublishedLoadError {
                 formatter,
                 "published views at version {found} were refused; this engine reads {expected}"
             ),
-            Self::BlankText => formatter.write_str("a saved view text was blank"),
+            Self::BlankTextError => formatter.write_str("a saved view text was blank"),
             Self::InvalidName => formatter.write_str("a saved name cannot be shown"),
             Self::InvalidDecline => formatter.write_str("a saved decline cannot be built"),
             Self::Duplicate => formatter.write_str("a saved view holds the same entry twice"),
@@ -136,9 +136,9 @@ impl fmt::Display for PublishedLoadError {
 
 impl std::error::Error for PublishedLoadError {}
 
-impl From<BlankText> for PublishedLoadError {
-    fn from(_: BlankText) -> Self {
-        Self::BlankText
+impl From<BlankTextError> for PublishedLoadError {
+    fn from(_: BlankTextError) -> Self {
+        Self::BlankTextError
     }
 }
 

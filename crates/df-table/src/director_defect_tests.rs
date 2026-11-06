@@ -3,12 +3,14 @@
 //! area rule keeps the card and the spacing and holds across ticks, a failed apply is told back,
 //! a camera moved elsewhere is seen, and the size limits and the log bound hold.
 
-use crate::director::{Director, DirectorSettings, Receipt, Request, StageDirection};
-use crate::director_error::DirectorError;
-use crate::director_log::{Cause, DirectorReport, DropReason, Outcome};
-use crate::director_reason::{Ends, Reason, ReasonSpec, ReasonTable, WideReason};
+use crate::director::error::DirectorError;
+use crate::director::log::{Cause, DirectorReport, DropReason, Outcome};
+use crate::director::reason::{Ends, Reason, ReasonSpec, ReasonTable, WideReason};
+use crate::director::view::{BeatHold, BeatKind, PlateView, StageView, TargetView};
+use crate::director::{
+    Director, DirectorSetting, DirectorSettings, Receipt, Request, StageDirection,
+};
 use crate::director_tests::{ask, director, focus_of, id, tavern, tick, view_of, wide_of};
-use crate::director_view::{BeatHold, BeatKind, PlateView, StageView, TargetView};
 use crate::inspect::InspectAudience;
 
 const SENTINEL: &str = "lurker";
@@ -314,7 +316,7 @@ fn heroes_of_one_result_arriving_in_different_ticks_are_still_an_area() {
             &mut director,
             now,
             &view,
-            Request::focus(Reason::Hit, id(hero)).result(9),
+            Request::focus(Reason::Hit, id(hero)).with_result(9),
         ));
     }
     for now in [400, 799, 800, 1_000] {
@@ -332,7 +334,7 @@ fn heroes_of_one_result_arriving_in_different_ticks_are_still_an_area() {
             &mut director,
             5_000,
             &view,
-            Request::focus(Reason::Hit, id("guard")).result(9)
+            Request::focus(Reason::Hit, id("guard")).with_result(9)
         )
         .is_empty()
     );
@@ -340,7 +342,7 @@ fn heroes_of_one_result_arriving_in_different_ticks_are_still_an_area() {
         &mut director,
         6_000,
         &view,
-        Request::focus(Reason::Hit, id("guard")).result(10),
+        Request::focus(Reason::Hit, id("guard")).with_result(10),
     );
     assert_eq!(focus_of(&moves[0]).0, "guard");
 }
@@ -453,23 +455,24 @@ fn the_director_has_work_for_a_request_that_waits_in_the_inbox() {
     assert!(director.has_work(), "the focus is held");
 }
 
-fn small(change: impl FnOnce(&mut DirectorSettings)) -> Director {
-    let mut settings = DirectorSettings::defaults();
-    change(&mut settings);
-    Director::new(settings).expect("small settings are valid")
+fn small(setting: DirectorSetting, value: u64) -> Director {
+    let settings = DirectorSettings::default()
+        .with(setting, value)
+        .expect("small settings are valid");
+    Director::new(settings)
 }
 
 #[test]
 fn the_size_limits_are_settings_and_each_gives_its_typed_error() {
     let view = tavern();
-    let mut director = small(|settings| settings.maximum_targets = 2);
+    let mut director = small(DirectorSetting::MaximumTargets, 2);
     let three = Request::area(Reason::Hit, vec![id("finn"), id("sigrun"), id("brenna")]);
     assert_eq!(
         director.request(0, &view, three),
         Err(DirectorError::TooManyTargets { limit: 2 })
     );
 
-    let mut director = small(|settings| settings.maximum_waiting = 2);
+    let mut director = small(DirectorSetting::MaximumWaiting, 2);
     for who in ["finn", "sigrun"] {
         director
             .request(0, &view, Request::focus(Reason::Speaker, id(who)))
@@ -484,7 +487,7 @@ fn the_size_limits_are_settings_and_each_gives_its_typed_error() {
         .request(100, &view, Request::focus(Reason::Hit, id("brenna")))
         .expect("the tick emptied the inbox");
 
-    let mut director = small(|settings| settings.maximum_waiting_targets = 3);
+    let mut director = small(DirectorSetting::MaximumWaitingTargets, 3);
     let two = || Request::area(Reason::Hit, vec![id("finn"), id("sigrun")]);
     director.request(0, &view, two()).expect("fits");
     assert_eq!(
@@ -502,29 +505,22 @@ fn the_size_limits_are_settings_and_each_gives_its_typed_error() {
     director.start_scene(1).expect("ok");
     director.request(2, &view, two()).expect("fits again");
 
-    for name in [
-        "maximum_targets",
-        "maximum_waiting",
-        "maximum_waiting_targets",
-        "maximum_log_entries",
+    for setting in [
+        DirectorSetting::MaximumTargets,
+        DirectorSetting::MaximumWaiting,
+        DirectorSetting::MaximumWaitingTargets,
+        DirectorSetting::MaximumLogEntries,
     ] {
-        let mut settings = DirectorSettings::defaults();
-        match name {
-            "maximum_targets" => settings.maximum_targets = 0,
-            "maximum_waiting" => settings.maximum_waiting = 0,
-            "maximum_waiting_targets" => settings.maximum_waiting_targets = 0,
-            _ => settings.maximum_log_entries = 0,
-        }
         assert_eq!(
-            Director::new(settings).err(),
-            Some(DirectorError::BadSetting { name, value: 0 })
+            DirectorSettings::default().with(setting, 0).err(),
+            Some(DirectorError::InvalidSetting { setting, value: 0 })
         );
     }
 }
 
 #[test]
 fn a_small_log_evicts_the_oldest_entry_and_unread_returns_the_newest() {
-    let mut director = small(|settings| settings.maximum_log_entries = 3);
+    let mut director = small(DirectorSetting::MaximumLogEntries, 3);
     let view = tavern();
     for round in 1..=5_u64 {
         director
@@ -568,34 +564,23 @@ fn an_operator_wide_is_a_cut_under_reduced_effects_and_animates_otherwise() {
 
 #[test]
 fn every_reason_round_trips_through_the_table_and_the_table_holds_one_spec_each() {
-    let mut table = ReasonTable::defaults();
+    let mut table = ReasonTable::default();
     assert_eq!(table.specs().len(), Reason::ALL.len());
     for (index, reason) in Reason::ALL.iter().enumerate() {
         let zoom = 110 + u16::try_from(index).expect("a few reasons");
-        let spec = ReasonSpec {
-            zoom_percent: zoom,
-            over_ms: 0,
-            ends: Ends::AfterHold,
-        };
-        table.set(*reason, spec).expect("in range");
+        let spec = ReasonSpec::new(zoom, 0, Ends::AfterHold).expect("in range");
+        table = table.with_spec(*reason, spec);
         assert_eq!(table.spec(*reason), spec);
     }
-    let zooms: Vec<u16> = table.specs().iter().map(|spec| spec.zoom_percent).collect();
+    let zooms: Vec<u16> = table.specs().iter().map(ReasonSpec::zoom_percent).collect();
     let mut distinct = zooms.clone();
     distinct.sort_unstable();
     distinct.dedup();
     assert_eq!(distinct.len(), Reason::ALL.len(), "{zooms:?}");
-    assert!(matches!(
-        table.set(
-            Reason::Hit,
-            ReasonSpec {
-                zoom_percent: 99,
-                over_ms: 0,
-                ends: Ends::AfterHold
-            }
-        ),
+    assert_eq!(
+        ReasonSpec::new(99, 0, Ends::AfterHold),
         Err(DirectorError::ZoomOutOfRange { zoom_percent: 99 })
-    ));
+    );
 }
 
 #[test]

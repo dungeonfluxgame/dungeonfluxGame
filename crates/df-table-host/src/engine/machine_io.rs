@@ -35,7 +35,7 @@ use df_api::machine::{
     admit_machine_intent, check_machine_response,
 };
 use df_protocol::common as wire;
-use df_table::identity::{RecoveryEpoch, SessionRevision};
+use df_table::identity::{OperationId, RecoveryEpoch, SessionRevision};
 use df_table::outcome::{Decline, DeclineCode, DeclineError, OutcomeKind};
 use df_table::owner_queue::NotDeclinedCause;
 use prost::Message;
@@ -45,12 +45,14 @@ use crate::machine_wire::{WireDecline, wire_decline, wire_revision};
 
 use super::handle::EngineHandle;
 use super::owner::{STATUS_IN_PROGRESS, STATUS_QUEUED};
-use super::report::{EngineError, RefusalReport, SubmitReply, TurnReport};
-use super::request::{InputBody, InputRequest};
+use super::report::{
+    EngineError, RefusalCause, RefusalReport, SubmitReply, TurnReport, WireIntentCause,
+};
+use super::request::{InputBody, InputRequest, TraceOperation};
 
 /// What a refused wire intent is, so every service answers the same way (RES40).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallFailure {
+pub enum CallStatus {
     /// gRPC `INVALID_ARGUMENT`: the client sent something malformed.
     InvalidArgument,
     /// gRPC `UNAVAILABLE`: the owner could not take the call now.
@@ -82,10 +84,10 @@ pub enum WireIntentError {
     /// The input waits in the queue (the owner is holding, or it is queued) and nothing has run
     /// for it yet, so there is no receipt. Retry the same operation id.
     NotServedYet,
-    /// The queue refused for a cause this file has no answer for (a repeat included, which is
-    /// answered before).
+    /// The queue refused for a cause this file gives no answer for: a repeat, which is answered
+    /// before `refused` is asked.
     UnknownRefusal {
-        cause: String,
+        cause: RefusalCause,
     },
     /// A declined turn carries no decline code, so there is no code to tell the phone.
     MissingDeclineCode,
@@ -94,21 +96,21 @@ pub enum WireIntentError {
 }
 
 impl WireIntentError {
-    pub fn failure(&self) -> CallFailure {
+    pub fn status(&self) -> CallStatus {
         match self {
-            Self::Refused(_) => CallFailure::InvalidArgument,
-            Self::TooFast { .. } => CallFailure::ResourceExhausted,
-            Self::UnknownSeat { .. } => CallFailure::InvalidArgument,
+            Self::Refused(_) => CallStatus::InvalidArgument,
+            Self::TooFast { .. } => CallStatus::ResourceExhausted,
+            Self::UnknownSeat { .. } => CallStatus::InvalidArgument,
             Self::Stalled
             | Self::NotServedYet
             | Self::Engine(EngineError::MailboxFull | EngineError::Stopped) => {
-                CallFailure::Unavailable
+                CallStatus::Unavailable
             }
             Self::Engine(_)
             | Self::Receipt(_)
             | Self::UnknownRefusal { .. }
             | Self::MissingDeclineCode
-            | Self::Decline(_) => CallFailure::Internal,
+            | Self::Decline(_) => CallStatus::Internal,
         }
     }
 }
@@ -136,7 +138,11 @@ impl fmt::Display for WireIntentError {
                 formatter.write_str("the input waits in the queue; retry the same operation id")
             }
             Self::UnknownRefusal { cause } => {
-                write!(formatter, "the queue refused with the cause '{cause}'")
+                write!(
+                    formatter,
+                    "the queue refused with the cause '{}'",
+                    cause.key()
+                )
             }
             Self::MissingDeclineCode => formatter.write_str("a declined turn has no decline code"),
             Self::Decline(error) => write!(formatter, "the decline cannot be built: {error}"),
@@ -154,16 +160,25 @@ impl From<WireIntentError> for EngineError {
             WireIntentError::Stalled => EngineError::Stalled,
             WireIntentError::NotServedYet => EngineError::NotServedYet,
             WireIntentError::UnknownSeat { seat } => EngineError::UnknownSeat { seat },
-            error @ (WireIntentError::UnknownRefusal { .. }
-            | WireIntentError::MissingDeclineCode
-            | WireIntentError::Decline(_)) => EngineError::Unwritable {
-                what: error.to_string(),
+            WireIntentError::UnknownRefusal { cause } => EngineError::WireIntent {
+                cause: WireIntentCause::UnknownRefusal,
+                detail: Some(cause.key().to_owned()),
             },
-            WireIntentError::Refused(error) => EngineError::BadRequest {
-                reason: format!("the intent was refused at the edge: {error:?}"),
+            WireIntentError::MissingDeclineCode => EngineError::WireIntent {
+                cause: WireIntentCause::MissingDeclineCode,
+                detail: None,
             },
-            WireIntentError::Receipt(error) => EngineError::Unwritable {
-                what: format!("the receipt broke a wire rule: {error:?}"),
+            WireIntentError::Decline(error) => EngineError::WireIntent {
+                cause: WireIntentCause::DeclineInvalid,
+                detail: Some(error.to_string()),
+            },
+            WireIntentError::Refused(error) => EngineError::WireIntent {
+                cause: WireIntentCause::RefusedAtTheEdge,
+                detail: Some(format!("{error:?}")),
+            },
+            WireIntentError::Receipt(error) => EngineError::WireIntent {
+                cause: WireIntentCause::ReceiptInvalid,
+                detail: Some(format!("{error:?}")),
             },
         }
     }
@@ -235,51 +250,29 @@ fn declined(
     }
 }
 
-/// What a queue refusal's cause key names: a decline code or one of the queue's own causes.
-enum Cause {
-    Declined(DeclineCode),
-    NotDeclined(NotDeclinedCause),
-}
-
-fn cause_of(key: &str) -> Result<Cause, WireIntentError> {
-    if let Some(code) = DeclineCode::ALL
-        .iter()
-        .copied()
-        .find(|code| code.key() == key)
-    {
-        return Ok(Cause::Declined(code));
-    }
-    NotDeclinedCause::ALL
-        .iter()
-        .copied()
-        .find(|cause| cause.key() == key)
-        .map(Cause::NotDeclined)
-        .ok_or_else(|| WireIntentError::UnknownRefusal {
-            cause: key.to_owned(),
-        })
-}
-
 /// The answer to a refusal by the queue: a decline receipt for a decline code that is a message,
 /// and a typed error for everything else. The match is exhaustive, so a cause the queue gains
-/// without an answer here does not compile, and a key that names none fails.
+/// without an answer here does not compile.
 pub(super) fn refused(
     refusal: &RefusalReport,
     seat: u64,
 ) -> Result<wire::machine_receipt::Result, WireIntentError> {
-    match cause_of(&refusal.cause)? {
-        Cause::Declined(code) => declined(code, &refusal.detail, refusal.retry_after_ms),
-        Cause::NotDeclined(NotDeclinedCause::LaneStalled) => Err(WireIntentError::Stalled),
-        Cause::NotDeclined(NotDeclinedCause::UnknownSeat) => {
+    match refusal.cause {
+        RefusalCause::Declined(code) => declined(code, &refusal.detail, refusal.retry_after_ms),
+        RefusalCause::NotDeclined(NotDeclinedCause::LaneStalled) => Err(WireIntentError::Stalled),
+        RefusalCause::NotDeclined(NotDeclinedCause::UnknownSeat) => {
             Err(WireIntentError::UnknownSeat { seat })
         }
-        Cause::NotDeclined(NotDeclinedCause::Duplicate) => Err(WireIntentError::UnknownRefusal {
-            cause: refusal.cause.clone(),
-        }),
+        RefusalCause::NotDeclined(NotDeclinedCause::Duplicate) => {
+            Err(WireIntentError::UnknownRefusal {
+                cause: refusal.cause,
+            })
+        }
     }
 }
 
-/// The cause key the queue gives a repeat of an operation it already admitted.
-const DUPLICATE_CAUSE: &str = "duplicate";
+/// The cause the queue gives a repeat of an operation it already admitted.
+const DUPLICATE_CAUSE: RefusalCause = RefusalCause::NotDeclined(NotDeclinedCause::Duplicate);
 
 /// What the owner answered, as the one result of the receipt, and the revision it was answered at.
 /// An input that was admitted and has no turn yet (the owner is holding) is not an answer.
@@ -405,9 +398,11 @@ impl EngineHandle {
         if unfinished {
             return Err(WireIntentError::NotServedYet);
         }
-        let operation = u128::from_be_bytes(*intent.operation.as_bytes());
+        // An admitted operation id is never zero, so the conversion only guards the type change.
+        let operation = OperationId::from_bytes(intent.operation.as_bytes())
+            .map_err(|_| WireIntentError::Engine(EngineError::ZeroOperation))?;
         let trace = self
-            .trace(format!("{operation:032x}"))
+            .trace(TraceOperation::from(operation))
             .await
             .map_err(WireIntentError::Engine)?;
         let sender = format!("seat:{seat}");
@@ -421,7 +416,7 @@ impl EngineHandle {
 
 /// What a dev intent does, in the words of the command line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum WireIntentKind {
     Tap { offer: String },
     Text { text: String },
@@ -432,10 +427,10 @@ pub enum WireIntentKind {
 /// The dev form of a `SubmitMachineIntentRequest`: the seat the call is for, what it does, and
 /// optionally the operation id, the machine and the revision (the route fills what is left out).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WireIntentBody {
     pub seat: u64,
-    #[serde(flatten)]
-    pub what: WireIntentKind,
+    pub intent: WireIntentKind,
     #[serde(default)]
     pub operation: Option<u64>,
     #[serde(default)]
@@ -464,7 +459,7 @@ impl WireIntentBody {
             utterance_id: Some(DEV_UTTERANCE),
             text: text.to_owned(),
         };
-        let (offer_id, payload) = match &self.what {
+        let (offer_id, payload) = match &self.intent {
             WireIntentKind::Tap { offer } => {
                 (Some(offer.clone()), Payload::Tap(wire::MachineTap {}))
             }

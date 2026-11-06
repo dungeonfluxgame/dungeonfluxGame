@@ -7,10 +7,11 @@ use df_assets::{AssetId, Audience, MemberSet};
 use df_types::{AccountId, CampaignId, MemberId, OperationId, RunId};
 
 use crate::config::{
-    AccountHandle, Accounting, AccountingMode, ApiEndpoint, BackendGate, BackendId,
-    CliProfileRevision, CodexExecutable, CodexSettings, GenerationQuality, GlobalMode, ImageConfig,
-    JobWorkDir, ModelName, NamedOutputProfile, OutputProfileName, PriceFileRef, PurposeGate,
-    QualityDefaults, RetryPolicy, SchedulerBounds, TransformLimits,
+    Accounting, AccountingMode, AnalysisPreparationLimits, AnalysisSettings, BackendGate,
+    BackendId, CliProfileRevision, CodexExecutable, CodexSettings, GenerationQuality, GlobalMode,
+    ImageConfig, JobWorkDir, NamedOutputProfile, OutputProfileName, PriceFileRef, PurposeGate,
+    QualityDefaults, QuotaSettings, RetryPolicy, SchedulerBounds, SegmentationProvider,
+    SegmentationRoute, TransformLimits,
 };
 use crate::output::{
     AlphaHandling, Dimensions, Encoding, LossyQuality, OutputProfile, RasterOutputSpec, Rgb,
@@ -23,15 +24,40 @@ use crate::transform::{
     AlignAnchor, Anchor1D, BlendMode, BlurAlgorithm, BlurSpec, BrightnessOffset, CanvasSpec,
     ColorEffect, CompositeLayer, CoverageRef, EncodedAlphaBlend, EncodedFilter, ExposureStops,
     FlipAxis, ImageTransform, Interpolation, MaskChannel, MaskMode, MaskSource, MaskSpec, PadSpec,
-    PixelRect, ResizeMode, ResizeSpec, RotateSpec, SharpenSpec, TransformError, TransformSource,
-    TransformSpec,
+    PixelRect, ResizeMode, ResizeSpec, RotateSpec, SharpenSpec, TransformError, TransformField,
+    TransformSource, TransformSpec,
 };
 
 use super::primitives::{
-    MIN_LAYER_BYTES, MIN_MEMBER_BYTES, MIN_PROFILE_BYTES, MIN_SOURCE_REF_BYTES, MIN_STEP_BYTES,
-    Reader, prompt_byte_bound,
+    ENCODED_STEP_REVISION, MAXIMUM_CLI_PROFILE_BYTES, MAXIMUM_CODEX_PATH_BYTES,
+    MAXIMUM_PRICE_FILE_BYTES, MAXIMUM_PROFILE_NAME_BYTES, MIN_LAYER_BYTES, MIN_MEMBER_BYTES,
+    MIN_PROFILE_BYTES, MIN_SOURCE_REF_BYTES, MIN_STEP_BYTES, Reader, decode_account_handle,
+    decode_api_endpoint, decode_model_name, decode_moderation, decode_route, prompt_byte_bound,
 };
 use super::{CONFIG_CODEC_VERSION, CodecError, DecodedIntent};
+
+/// Frozen analysis preparation bounds of snapshots written before version 9.
+const LEGACY_ANALYSIS_PREPARATION: AnalysisPreparationLimits = AnalysisPreparationLimits {
+    max_pixels: 20_000_000,
+    max_picture_bytes: 1_048_576,
+    max_request_bytes: 16_777_216,
+};
+/// Frozen segmentation preparation bounds of snapshots written before version 10.
+const LEGACY_SEGMENTATION_PREPARATION: AnalysisPreparationLimits = AnalysisPreparationLimits {
+    max_pixels: 20_000_000,
+    max_picture_bytes: 3_145_728,
+    max_request_bytes: 6_291_456,
+};
+/// Frozen quota policy before quota settings joined the snapshot in version 11.
+const LEGACY_QUOTA: QuotaSettings = QuotaSettings {
+    enabled: true,
+    cooldown_ms: 900_000,
+    maximum_accounts: 1_024,
+};
+/// Frozen Codex receipt bounds before they joined the snapshot in versions 4 and 5.
+const LEGACY_CODEX_STDOUT_BYTES: u64 = 4 * 1024 * 1024;
+const LEGACY_CODEX_STDERR_BYTES: u64 = 256 * 1024;
+const LEGACY_CODEX_MESSAGE_BYTES: u64 = 1024 * 1024;
 
 /// Proves `count` items of at least `min_width_bytes` each fit in
 /// `remaining_bytes` before the caller reserves. The multiplication is checked
@@ -255,8 +281,7 @@ pub(crate) fn decode_freshness(input: &mut Reader<'_>) -> Result<Freshness, Code
 
 fn decode_prompt(input: &mut Reader<'_>, limits: &RequestLimits) -> Result<TextPrompt, CodecError> {
     let template_version = input.u32_be()?;
-    let text = input.counted(prompt_byte_bound(limits))?;
-    let text = core::str::from_utf8(text).map_err(|_| CodecError::InvalidText)?;
+    let text = input.text(prompt_byte_bound(limits))?;
     let len_chars = text.chars().count();
     if len_chars > limits.max_prompt_chars {
         return Err(CodecError::Request(RequestError::PromptTooLong {
@@ -480,15 +505,17 @@ fn decode_step(
             _ => return Err(CodecError::Malformed),
         })),
         5 => Ok(ImageTransform::Brighten(
-            BrightnessOffset::new(input.float("brightness")?).map_err(transform_error)?,
+            BrightnessOffset::new(input.float(TransformField::Brightness.label())?)
+                .map_err(transform_error)?,
         )),
         6 => Ok(ImageTransform::Expose(
-            ExposureStops::new(input.float("exposure")?).map_err(transform_error)?,
+            ExposureStops::new(input.float(TransformField::Exposure.label())?)
+                .map_err(transform_error)?,
         )),
         7 => Ok(ImageTransform::Color(decode_color(input)?)),
         8 => Ok(ImageTransform::Blur(
             BlurSpec::new(
-                input.float("blur")?,
+                input.float(TransformField::Blur.label())?,
                 match input.byte()? {
                     0 => BlurAlgorithm::Box,
                     1 => BlurAlgorithm::Gaussian,
@@ -499,8 +526,8 @@ fn decode_step(
         )),
         9 => Ok(ImageTransform::Sharpen(
             SharpenSpec::new(
-                input.float("sharpen")?,
-                input.float("sharpen")?,
+                input.float(TransformField::Sharpen.label())?,
+                input.float(TransformField::Sharpen.label())?,
                 input.byte()?,
             )
             .map_err(transform_error)?,
@@ -562,7 +589,7 @@ fn decode_step(
 
 /// Compatibility algorithms are immutable independently of the outer intent schema.
 fn decode_encoded_revision(input: &mut Reader<'_>) -> Result<(), CodecError> {
-    if input.u32_be()? != 1 {
+    if input.u32_be()? != ENCODED_STEP_REVISION {
         return Err(CodecError::Malformed);
     }
     Ok(())
@@ -610,7 +637,7 @@ fn decode_rotate(input: &mut Reader<'_>) -> Result<RotateSpec, CodecError> {
             Ok(spec)
         }
         1 => {
-            let degrees = input.float("rotation")?;
+            let degrees = input.float(TransformField::Rotation.label())?;
             let expand_canvas = input.boolean()?;
             let fill = decode_rgb(input)?;
             let interpolation = decode_interpolation(input.byte()?)?;
@@ -629,10 +656,15 @@ fn decode_rotate(input: &mut Reader<'_>) -> Result<RotateSpec, CodecError> {
 
 fn decode_color(input: &mut Reader<'_>) -> Result<ColorEffect, CodecError> {
     let effect = match input.byte()? {
-        0 => ColorEffect::contrast(input.float("contrast")?, input.float("contrast")?)
+        0 => ColorEffect::contrast(
+            input.float(TransformField::Contrast.label())?,
+            input.float(TransformField::Contrast.label())?,
+        )
+        .map_err(transform_error)?,
+        1 => ColorEffect::saturation(input.float(TransformField::Saturation.label())?)
             .map_err(transform_error)?,
-        1 => ColorEffect::saturation(input.float("saturation")?).map_err(transform_error)?,
-        2 => ColorEffect::hue_shift(input.float("hue")?).map_err(transform_error)?,
+        2 => ColorEffect::hue_shift(input.float(TransformField::Hue.label())?)
+            .map_err(transform_error)?,
         3 => ColorEffect::Grayscale,
         _ => return Err(CodecError::Malformed),
     };
@@ -655,7 +687,7 @@ fn decode_mask(input: &mut Reader<'_>) -> Result<MaskSpec, CodecError> {
         _ => return Err(CodecError::Malformed),
     };
     let invert = input.boolean()?;
-    let feather_radius_px = input.float("mask")?;
+    let feather_radius_px = input.float(TransformField::Mask.label())?;
     let mode = match input.byte()? {
         0 => MaskMode::Multiply,
         1 => MaskMode::Replace,
@@ -693,7 +725,8 @@ fn decode_layer(input: &mut Reader<'_>) -> Result<CompositeLayer, CodecError> {
 /// snapshots decode with new fields taking built-in defaults, preserving
 /// the old encoding semantics for stored snapshots. Rejects any other
 /// version, malformed or trailing bytes and any bound the validated
-/// constructors refuse.
+/// constructors refuse. Fields are read in wire order; each later version
+/// only appends.
 pub(crate) fn decode_config(bytes: &[u8], max_bytes: usize) -> Result<ImageConfig, CodecError> {
     if bytes.len() > max_bytes {
         return Err(CodecError::TooLong);
@@ -703,179 +736,23 @@ pub(crate) fn decode_config(bytes: &[u8], max_bytes: usize) -> Result<ImageConfi
     if !(1..=CONFIG_CODEC_VERSION).contains(&version) {
         return Err(CodecError::BadVersion { actual: version });
     }
-    let mode = match input.byte()? {
-        0 => GlobalMode::Live,
-        1 => GlobalMode::LocalOnly,
-        2 => GlobalMode::CacheOnly,
-        3 => GlobalMode::Off,
-        _ => return Err(CodecError::Malformed),
-    };
+    let mode = decode_mode(input.byte()?)?;
     let default_backend = decode_backend(input.byte()?)?;
-    let mut purposes = Vec::with_capacity(Purpose::COUNT);
-    for _ in 0..Purpose::COUNT {
-        purposes.push(decode_purpose_gate(&mut input, version)?);
-    }
-    let mut backends = Vec::with_capacity(BackendId::COUNT);
-    for _ in 0..BackendId::COUNT {
-        backends.push(decode_backend_gate(&mut input, version)?);
-    }
-    let transforms = TransformLimits {
-        enabled: input.boolean()?,
-        max_concurrency: input.u32_be()?,
-        max_decoded_bytes: input.u64_be()?,
-        max_output_bytes: input.u64_be()?,
-        queue_capacity: input.u32_be()?,
-        deadline_secs: input.u64_be()?,
-    };
-    let scheduler = SchedulerBounds {
-        foreground_limit: input.u32_be()?,
-        presence_limit: input.u32_be()?,
-        background_limit: input.u32_be()?,
-        max_pending_jobs: input.u32_be()?,
-        max_pending_bytes: input.u64_be()?,
-        queue_age_secs: input.u64_be()?,
-        job_deadline_secs: input.u64_be()?,
-        stage_deadline_secs: input.u64_be()?,
-    };
-    let request_limits = RequestLimits {
-        max_prompt_chars: usize_decode(input.u64_be()?)?,
-        max_references: usize_decode(input.u64_be()?)?,
-        max_transform_steps: usize_decode(input.u64_be()?)?,
-        max_composite_layers: usize_decode(input.u64_be()?)?,
-    };
-    let (mut codex, default_output_profile, output_profiles, retry, accounting, quality) =
-        if version == 1 {
-            let defaults = ImageConfig::defaults().map_err(CodecError::Config)?;
-            (
-                defaults.codex,
-                defaults.default_output_profile,
-                defaults.output_profiles,
-                defaults.retry,
-                defaults.accounting,
-                defaults.quality,
-            )
-        } else {
-            (
-                decode_codex(&mut input)?,
-                decode_output_profile_name(&mut input)?,
-                decode_output_profiles(&mut input)?,
-                decode_retry(&mut input)?,
-                decode_accounting(&mut input)?,
-                decode_quality(&mut input, version)?,
-            )
-        };
-    if version >= 4 {
-        codex.max_stdout_bytes = input.u64_be()?;
-        codex.max_stderr_bytes = input.u64_be()?;
-    }
-    if version >= 5 {
-        codex.max_message_bytes = input.u64_be()?;
-    }
-    let mut analysis = if version >= 6 {
-        crate::config::AnalysisSettings {
-            head_locations: None,
-            staging_identity: None,
-            staging_facing: None,
-            segmentation: None,
-            segmentation_preparation: crate::config::AnalysisPreparationLimits {
-                max_pixels: 20_000_000,
-                max_picture_bytes: 3_145_728,
-                max_request_bytes: 6_291_456,
-            },
-            classification: decode_optional(&mut input, super::pipeline::read_route)?,
-            inspection: decode_optional(&mut input, super::pipeline::read_route)?,
-            preparation: crate::config::AnalysisPreparationLimits {
-                max_pixels: 20_000_000,
-                max_picture_bytes: 1_048_576,
-                max_request_bytes: 16_777_216,
-            },
-        }
-    } else {
-        crate::config::AnalysisSettings {
-            head_locations: None,
-            staging_identity: None,
-            staging_facing: None,
-            segmentation: None,
-            segmentation_preparation: crate::config::AnalysisPreparationLimits {
-                max_pixels: 20_000_000,
-                max_picture_bytes: 3_145_728,
-                max_request_bytes: 6_291_456,
-            },
-            classification: None,
-            inspection: None,
-            preparation: crate::config::AnalysisPreparationLimits {
-                max_pixels: 20_000_000,
-                max_picture_bytes: 1_048_576,
-                max_request_bytes: 16_777_216,
-            },
-        }
-    };
-    if version >= 7 {
-        for purpose in &mut purposes {
-            purpose.quality_override =
-                decode_optional(&mut input, decode_named_generation_quality)?;
-            purpose.model_override = decode_optional(&mut input, decode_model_name)?;
-        }
-    }
-    if version >= 8 {
-        for purpose in &mut purposes {
-            purpose.moderation_override =
-                decode_optional(&mut input, |input| match input.byte()? {
-                    0 => Ok(crate::ProviderModeration::Auto),
-                    1 => Ok(crate::ProviderModeration::Low),
-                    _ => Err(CodecError::Malformed),
-                })?;
-        }
-    }
-    if version >= 9 {
-        analysis.preparation.max_pixels = input.u64_be()?;
-        analysis.preparation.max_picture_bytes = input.u64_be()?;
-        analysis.preparation.max_request_bytes = input.u64_be()?;
-    }
-    if version >= 10 {
-        analysis.head_locations = decode_optional(&mut input, super::pipeline::read_route)?;
-        analysis.staging_identity = decode_optional(&mut input, super::pipeline::read_route)?;
-        analysis.staging_facing = decode_optional(&mut input, super::pipeline::read_route)?;
-        analysis.segmentation = decode_optional(&mut input, |input| {
-            let provider = match input.byte()? {
-                0 => crate::config::SegmentationProvider::Fal,
-                _ => return Err(CodecError::Malformed),
-            };
-            Ok(crate::config::SegmentationRoute {
-                provider,
-                account: AccountHandle::new(&decode_text(input, 64)?)
-                    .map_err(CodecError::Config)?,
-                model: decode_model_name(input)?,
-                endpoint: decode_api_endpoint(input)?,
-            })
-        })?;
-        analysis.segmentation_preparation.max_pixels = input.u64_be()?;
-        analysis.segmentation_preparation.max_picture_bytes = input.u64_be()?;
-        analysis.segmentation_preparation.max_request_bytes = input.u64_be()?;
-        for purpose in &mut purposes {
-            purpose.account_override = decode_optional(&mut input, |input| {
-                AccountHandle::new(&decode_text(input, 64)?).map_err(CodecError::Config)
-            })?;
-        }
-    }
+    let mut purposes = decode_purpose_gates(&mut input, version)?;
+    let backends = decode_backend_gates(&mut input, version)?;
+    let transforms = decode_transform_limits(&mut input)?;
+    let scheduler = decode_scheduler(&mut input)?;
+    let request_limits = decode_request_limits(&mut input)?;
+    let mut profile = decode_profile_sections(&mut input, version)?;
+    decode_codex_receipt_bounds(&mut input, version, &mut profile.codex)?;
+    let analysis = decode_analysis_and_purpose_overrides(&mut input, version, &mut purposes)?;
     let quota = if version >= 11 {
-        crate::config::QuotaSettings {
-            enabled: input.boolean()?,
-            cooldown_ms: input.u64_be()?,
-            maximum_accounts: input.u32_be()?,
-        }
+        decode_quota(&mut input)?
     } else {
-        // Frozen policy before quota settings became part of the configuration snapshot.
-        crate::config::QuotaSettings {
-            enabled: true,
-            cooldown_ms: 900_000,
-            maximum_accounts: 1_024,
-        }
+        LEGACY_QUOTA
     };
     let creator_bfl_account = if version >= 12 {
-        decode_optional(&mut input, |input| {
-            AccountHandle::new(&decode_text(input, 64)?).map_err(CodecError::Config)
-        })?
+        decode_optional(&mut input, decode_account_handle)?
     } else {
         None
     };
@@ -888,18 +765,253 @@ pub(crate) fn decode_config(bytes: &[u8], max_bytes: usize) -> Result<ImageConfi
         transforms,
         scheduler,
         request_limits,
-        codex,
-        default_output_profile,
-        output_profiles,
-        retry,
-        accounting,
-        quality,
+        codex: profile.codex,
+        default_output_profile: profile.default_output_profile,
+        output_profiles: profile.output_profiles,
+        retry: profile.retry,
+        accounting: profile.accounting,
+        quality: profile.quality,
         analysis,
         quota,
         creator_bfl_account,
     };
     config.validate().map_err(CodecError::Config)?;
     Ok(config)
+}
+
+fn decode_mode(tag: u8) -> Result<GlobalMode, CodecError> {
+    match tag {
+        0 => Ok(GlobalMode::Live),
+        1 => Ok(GlobalMode::LocalOnly),
+        2 => Ok(GlobalMode::CacheOnly),
+        3 => Ok(GlobalMode::Off),
+        _ => Err(CodecError::Malformed),
+    }
+}
+
+fn decode_purpose_gates(
+    input: &mut Reader<'_>,
+    version: u8,
+) -> Result<Vec<PurposeGate>, CodecError> {
+    let mut purposes = Vec::with_capacity(Purpose::COUNT);
+    for _ in 0..Purpose::COUNT {
+        purposes.push(decode_purpose_gate(input, version)?);
+    }
+    Ok(purposes)
+}
+
+fn decode_backend_gates(
+    input: &mut Reader<'_>,
+    version: u8,
+) -> Result<Vec<BackendGate>, CodecError> {
+    let mut backends = Vec::with_capacity(BackendId::COUNT);
+    for _ in 0..BackendId::COUNT {
+        backends.push(decode_backend_gate(input, version)?);
+    }
+    Ok(backends)
+}
+
+/// The config sections version 2 added after the request limits.
+struct ProfileSections {
+    codex: CodexSettings,
+    default_output_profile: OutputProfileName,
+    output_profiles: Vec<NamedOutputProfile>,
+    retry: RetryPolicy,
+    accounting: Accounting,
+    quality: QualityDefaults,
+}
+
+/// Version 1 never wrote these sections, so they take the built-in defaults.
+fn decode_profile_sections(
+    input: &mut Reader<'_>,
+    version: u8,
+) -> Result<ProfileSections, CodecError> {
+    if version == 1 {
+        let defaults = ImageConfig::defaults().map_err(CodecError::Config)?;
+        return Ok(ProfileSections {
+            codex: defaults.codex,
+            default_output_profile: defaults.default_output_profile,
+            output_profiles: defaults.output_profiles,
+            retry: defaults.retry,
+            accounting: defaults.accounting,
+            quality: defaults.quality,
+        });
+    }
+    Ok(ProfileSections {
+        codex: decode_codex(input)?,
+        default_output_profile: decode_output_profile_name(input)?,
+        output_profiles: decode_output_profiles(input)?,
+        retry: decode_retry(input)?,
+        accounting: decode_accounting(input)?,
+        quality: decode_quality(input, version)?,
+    })
+}
+
+/// Version 4 appended the stdout and stderr receipt bounds, version 5 the message bound.
+fn decode_codex_receipt_bounds(
+    input: &mut Reader<'_>,
+    version: u8,
+    codex: &mut CodexSettings,
+) -> Result<(), CodecError> {
+    if version >= 4 {
+        codex.max_stdout_bytes = input.u64_be()?;
+        codex.max_stderr_bytes = input.u64_be()?;
+    }
+    if version >= 5 {
+        codex.max_message_bytes = input.u64_be()?;
+    }
+    Ok(())
+}
+
+/// Versions 6 to 10 interleave analysis settings with per-purpose overrides,
+/// so both are read here in wire order.
+fn decode_analysis_and_purpose_overrides(
+    input: &mut Reader<'_>,
+    version: u8,
+    purposes: &mut [PurposeGate],
+) -> Result<AnalysisSettings, CodecError> {
+    let mut analysis = legacy_analysis_settings();
+    if version >= 6 {
+        analysis.classification = decode_optional(input, decode_route)?;
+        analysis.inspection = decode_optional(input, decode_route)?;
+    }
+    if version >= 7 {
+        decode_quality_and_model_overrides(input, purposes)?;
+    }
+    if version >= 8 {
+        decode_moderation_overrides(input, purposes)?;
+    }
+    if version >= 9 {
+        analysis.preparation = decode_preparation_limits(input)?;
+    }
+    if version >= 10 {
+        decode_staging_and_segmentation(input, &mut analysis)?;
+        decode_account_overrides(input, purposes)?;
+    }
+    Ok(analysis)
+}
+
+fn decode_quota(input: &mut Reader<'_>) -> Result<QuotaSettings, CodecError> {
+    Ok(QuotaSettings {
+        enabled: input.boolean()?,
+        cooldown_ms: input.u64_be()?,
+        maximum_accounts: input.u32_be()?,
+    })
+}
+
+fn decode_transform_limits(input: &mut Reader<'_>) -> Result<TransformLimits, CodecError> {
+    Ok(TransformLimits {
+        enabled: input.boolean()?,
+        max_concurrency: input.u32_be()?,
+        max_decoded_bytes: input.u64_be()?,
+        max_output_bytes: input.u64_be()?,
+        queue_capacity: input.u32_be()?,
+        deadline_secs: input.u64_be()?,
+    })
+}
+
+fn decode_scheduler(input: &mut Reader<'_>) -> Result<SchedulerBounds, CodecError> {
+    Ok(SchedulerBounds {
+        foreground_limit: input.u32_be()?,
+        presence_limit: input.u32_be()?,
+        background_limit: input.u32_be()?,
+        max_pending_jobs: input.u32_be()?,
+        max_pending_bytes: input.u64_be()?,
+        queue_age_secs: input.u64_be()?,
+        job_deadline_secs: input.u64_be()?,
+        stage_deadline_secs: input.u64_be()?,
+    })
+}
+
+fn decode_request_limits(input: &mut Reader<'_>) -> Result<RequestLimits, CodecError> {
+    Ok(RequestLimits {
+        max_prompt_chars: usize_decode(input.u64_be()?)?,
+        max_references: usize_decode(input.u64_be()?)?,
+        max_transform_steps: usize_decode(input.u64_be()?)?,
+        max_composite_layers: usize_decode(input.u64_be()?)?,
+    })
+}
+
+/// Analysis settings of a snapshot before any analysis field was encoded.
+fn legacy_analysis_settings() -> AnalysisSettings {
+    AnalysisSettings {
+        head_locations: None,
+        staging_identity: None,
+        staging_facing: None,
+        segmentation: None,
+        segmentation_preparation: LEGACY_SEGMENTATION_PREPARATION,
+        classification: None,
+        inspection: None,
+        preparation: LEGACY_ANALYSIS_PREPARATION,
+    }
+}
+
+fn decode_preparation_limits(
+    input: &mut Reader<'_>,
+) -> Result<AnalysisPreparationLimits, CodecError> {
+    Ok(AnalysisPreparationLimits {
+        max_pixels: input.u64_be()?,
+        max_picture_bytes: input.u64_be()?,
+        max_request_bytes: input.u64_be()?,
+    })
+}
+
+fn decode_quality_and_model_overrides(
+    input: &mut Reader<'_>,
+    purposes: &mut [PurposeGate],
+) -> Result<(), CodecError> {
+    for purpose in purposes {
+        purpose.quality_override = decode_optional(input, decode_named_generation_quality)?;
+        purpose.model_override = decode_optional(input, decode_model_name)?;
+    }
+    Ok(())
+}
+
+fn decode_moderation_overrides(
+    input: &mut Reader<'_>,
+    purposes: &mut [PurposeGate],
+) -> Result<(), CodecError> {
+    for purpose in purposes {
+        purpose.moderation_override = decode_optional(input, decode_moderation)?;
+    }
+    Ok(())
+}
+
+fn decode_account_overrides(
+    input: &mut Reader<'_>,
+    purposes: &mut [PurposeGate],
+) -> Result<(), CodecError> {
+    for purpose in purposes {
+        purpose.account_override = decode_optional(input, decode_account_handle)?;
+    }
+    Ok(())
+}
+
+/// Version 10 routes: head locations, staging identity and facing, then segmentation with
+/// its preparation bounds.
+fn decode_staging_and_segmentation(
+    input: &mut Reader<'_>,
+    analysis: &mut AnalysisSettings,
+) -> Result<(), CodecError> {
+    analysis.head_locations = decode_optional(input, decode_route)?;
+    analysis.staging_identity = decode_optional(input, decode_route)?;
+    analysis.staging_facing = decode_optional(input, decode_route)?;
+    analysis.segmentation = decode_optional(input, decode_segmentation_route)?;
+    analysis.segmentation_preparation = decode_preparation_limits(input)?;
+    Ok(())
+}
+
+fn decode_segmentation_route(input: &mut Reader<'_>) -> Result<SegmentationRoute, CodecError> {
+    let provider = match input.byte()? {
+        0 => SegmentationProvider::Fal,
+        _ => return Err(CodecError::Malformed),
+    };
+    Ok(SegmentationRoute {
+        provider,
+        account: decode_account_handle(input)?,
+        model: decode_model_name(input)?,
+        endpoint: decode_api_endpoint(input)?,
+    })
 }
 
 fn decode_backend(tag: u8) -> Result<BackendId, CodecError> {
@@ -922,7 +1034,7 @@ fn decode_purpose_gate(input: &mut Reader<'_>, version: u8) -> Result<PurposeGat
     let output_profile = if version == 1 {
         None
     } else {
-        decode_optional(input, decode_output_profile_name_text)?
+        decode_optional(input, decode_output_profile_name)?
     };
     Ok(PurposeGate {
         account_override: None,
@@ -937,9 +1049,7 @@ fn decode_purpose_gate(input: &mut Reader<'_>, version: u8) -> Result<PurposeGat
 
 fn decode_backend_gate(input: &mut Reader<'_>, version: u8) -> Result<BackendGate, CodecError> {
     let enabled = input.boolean()?;
-    let account_bytes = input.counted(64)?;
-    let account_text = core::str::from_utf8(account_bytes).map_err(|_| CodecError::InvalidText)?;
-    let account = AccountHandle::new(account_text).map_err(CodecError::Config)?;
+    let account = decode_account_handle(input)?;
     let max_concurrent_jobs = input.u32_be()?;
     let (model, endpoint) = if version == 1 {
         (None, None)
@@ -981,47 +1091,26 @@ fn decode_optional<T>(
     }
 }
 
-fn decode_text(input: &mut Reader<'_>, bound: usize) -> Result<String, CodecError> {
-    let bytes = input.counted(bound)?;
-    let text = core::str::from_utf8(bytes).map_err(|_| CodecError::InvalidText)?;
-    Ok(text.to_owned())
-}
-
-fn decode_model_name(input: &mut Reader<'_>) -> Result<ModelName, CodecError> {
-    ModelName::new(&decode_text(input, 128)?).map_err(CodecError::Config)
-}
-
-fn decode_api_endpoint(input: &mut Reader<'_>) -> Result<ApiEndpoint, CodecError> {
-    ApiEndpoint::new(&decode_text(input, 256)?).map_err(CodecError::Config)
-}
-
-fn decode_output_profile_name_text(
-    input: &mut Reader<'_>,
-) -> Result<OutputProfileName, CodecError> {
-    OutputProfileName::new(&decode_text(input, 64)?).map_err(CodecError::Config)
-}
-
 fn decode_output_profile_name(input: &mut Reader<'_>) -> Result<OutputProfileName, CodecError> {
-    decode_output_profile_name_text(input)
+    OutputProfileName::new(input.text(MAXIMUM_PROFILE_NAME_BYTES)?).map_err(CodecError::Config)
 }
 
 fn decode_codex(input: &mut Reader<'_>) -> Result<CodexSettings, CodecError> {
-    let executable_text = decode_text(input, 4096)?;
-    let executable = CodexExecutable::new(&executable_text).map_err(CodecError::Config)?;
-    let workdir_text = decode_text(input, 4096)?;
-    let workdir = JobWorkDir::new(&workdir_text).map_err(CodecError::Config)?;
-    let cli_text = decode_text(input, 64)?;
-    let cli_profile = CliProfileRevision::new(&cli_text).map_err(CodecError::Config)?;
+    let executable =
+        CodexExecutable::new(input.text(MAXIMUM_CODEX_PATH_BYTES)?).map_err(CodecError::Config)?;
+    let workdir =
+        JobWorkDir::new(input.text(MAXIMUM_CODEX_PATH_BYTES)?).map_err(CodecError::Config)?;
+    let cli_profile = CliProfileRevision::new(input.text(MAXIMUM_CLI_PROFILE_BYTES)?)
+        .map_err(CodecError::Config)?;
     let agent_model = decode_optional(input, decode_model_name)?;
     Ok(CodexSettings {
         executable,
         workdir,
         cli_profile,
         agent_model,
-        // Frozen bounds used by Codex before configurable receipt limits were introduced.
-        max_stdout_bytes: 4 * 1024 * 1024,
-        max_stderr_bytes: 256 * 1024,
-        max_message_bytes: 1024 * 1024,
+        max_stdout_bytes: LEGACY_CODEX_STDOUT_BYTES,
+        max_stderr_bytes: LEGACY_CODEX_STDERR_BYTES,
+        max_message_bytes: LEGACY_CODEX_MESSAGE_BYTES,
     })
 }
 
@@ -1055,7 +1144,7 @@ fn decode_accounting(input: &mut Reader<'_>) -> Result<Accounting, CodecError> {
         _ => return Err(CodecError::Malformed),
     };
     let price_file = decode_optional(input, |input| {
-        PriceFileRef::new(&decode_text(input, 256)?).map_err(CodecError::Config)
+        PriceFileRef::new(input.text(MAXIMUM_PRICE_FILE_BYTES)?).map_err(CodecError::Config)
     })?;
     Ok(Accounting { mode, price_file })
 }
@@ -1082,16 +1171,7 @@ fn decode_quality(input: &mut Reader<'_>, version: u8) -> Result<QualityDefaults
         1 if version == 2 => Some(GenerationQuality::LegacyNumeric(
             LossyQuality::new(input.byte()?).map_err(CodecError::Output)?,
         )),
-        1 => Some(match input.byte()? {
-            0 => GenerationQuality::Low,
-            1 => GenerationQuality::Medium,
-            2 => GenerationQuality::High,
-            3 => GenerationQuality::Auto,
-            4 => GenerationQuality::LegacyNumeric(
-                LossyQuality::new(input.byte()?).map_err(CodecError::Output)?,
-            ),
-            _ => return Err(CodecError::Malformed),
-        }),
+        1 => Some(decode_named_generation_quality(input)?),
         _ => return Err(CodecError::Malformed),
     };
     Ok(QualityDefaults {

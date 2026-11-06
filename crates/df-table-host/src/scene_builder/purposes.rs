@@ -20,12 +20,13 @@
 //! these three entries.
 
 use df_table::element::NameError;
-use df_table::plate_cost::{CostView, StagePrice, StageUse};
-use df_table::plate_timing::PlateTiming;
+use df_table::plate::cost::{CostView, StagePrice, StageUse};
+use df_table::plate::timing::PlateTiming;
 use df_table::ports::PurposeName;
 use df_table::scene_plan::SceneStage;
-use df_table::scene_plan_brief::SceneBrief;
+use df_table::scene_plan::brief::SceneBrief;
 
+use super::request::DevStage;
 use crate::broker::limits::MAXIMUM_TEXT_ANSWER_CHARACTERS;
 use crate::broker::purpose::{
     Fallback, IMAGE_DEADLINE_MS, Price, PurposeError, PurposeFacts, PurposeSpec, PurposeTable,
@@ -109,6 +110,26 @@ impl StagePurposes {
             SceneStage::Ready => None,
         }
     }
+
+    /// The purpose of a stage a dev call slows down or makes fail; each of them asks the broker.
+    pub fn of_dev_stage(&self, stage: DevStage) -> &PurposeName {
+        match stage {
+            DevStage::Describe => &self.describe,
+            DevStage::Background => &self.background,
+            DevStage::Plate => &self.plate,
+            DevStage::Locate => &self.locate,
+        }
+    }
+}
+
+/// The purpose a dev call scripts for `stage` of a build at `priority`.
+pub fn dev_stage_purpose(
+    priority: BuildPriority,
+    stage: DevStage,
+) -> Result<PurposeName, NameError> {
+    Ok(StagePurposes::for_priority(priority)?
+        .of_dev_stage(stage)
+        .clone())
 }
 
 fn locate_spec(name: &str, class: QueueClass) -> Result<PurposeSpec, PurposeError> {

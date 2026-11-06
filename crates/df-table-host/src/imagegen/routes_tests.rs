@@ -2,19 +2,24 @@
 //! real router for what the guard and the registration decide. No test here can reach a provider:
 //! a request that would start the real backend is never sent to the real router.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::Request;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
+use serde::de::DeserializeOwned;
 
-use super::fake::{FakeBackend, Script, picture, png_bytes};
-use super::model::{BackendError, GenerateReply, JobState, RefusalCause};
+use super::backend::BackendError;
+use super::fixtures::{FakeBackend, Script, picture, png_bytes};
+use super::model::GenerateRequestError;
+use super::request::{GenerateError, GenerateReply, JobState, JobView};
 use super::routes::{path, router_with};
 use super::service::ImageGenerator;
 use crate::client::{get, post_json};
 use crate::dev::{DevError, run_dev};
+use crate::dev_http::{BodyCause, DevReply};
 use crate::guard;
 use crate::server;
 use crate::test_support::{Running, post_request, raw_exchange, start};
@@ -46,12 +51,39 @@ fn body(name: &str, extra: &str) -> String {
     format!(r#"{{"prompt":"a candlelit hall","name":"{name}"{extra}}}"#)
 }
 
-fn reply(text: &str) -> GenerateReply {
+fn reply<T: DeserializeOwned>(text: &str) -> GenerateReply<T> {
     serde_json::from_str(text).unwrap_or_else(|error| panic!("a reply: {error}: {text}"))
+}
+
+/// The value of a reply that must be `Done`.
+fn done<T: DeserializeOwned>(text: &str) -> T {
+    match reply(text) {
+        DevReply::Done { value } => value,
+        DevReply::Rejected { error, .. } => panic!("refused: {error:?}"),
+    }
+}
+
+/// The error of a reply that must be `Rejected`.
+fn rejected(text: &str) -> GenerateError {
+    match reply::<serde_json::Value>(text) {
+        DevReply::Rejected { error, .. } => error,
+        DevReply::Done { value } => panic!("not refused: {value}"),
+    }
 }
 
 fn words(line: &str) -> Vec<String> {
     crate::command::split_words(line).expect("splits")
+}
+
+fn imagegen_lines(running: &Running) -> Vec<String> {
+    running
+        .state
+        .log()
+        .newest(20)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("IMAGEGEN"))
+        .collect()
 }
 
 fn media_listing_names(text: &str) -> Vec<String> {
@@ -74,10 +106,8 @@ async fn a_waited_generation_is_stored_and_the_media_command_lists_it() {
         .await
         .expect("answers");
     assert_eq!(response.status, 200, "{}", response.body);
-    let GenerateReply::Finished { job } = reply(&response.body) else {
-        panic!("expected a finished job: {}", response.body);
-    };
-    assert_eq!(job.state, JobState::Done);
+    let job: JobView = done(&response.body);
+    assert!(matches!(job.state, JobState::Stored { .. }), "{job:?}");
     assert_eq!(job.job, 1);
 
     let stored = std::fs::read(running.playground_path("assets/media/hall.png")).expect("reads");
@@ -89,15 +119,7 @@ async fn a_waited_generation_is_stored_and_the_media_command_lists_it() {
         media_listing_names(&listing.body),
         vec!["hall.png".to_owned()]
     );
-
-    let lines: Vec<String> = running
-        .state
-        .log()
-        .newest(10)
-        .into_iter()
-        .map(|line| line.text)
-        .filter(|text| text.starts_with("IMAGEGEN"))
-        .collect();
+    let lines = imagegen_lines(&running);
     assert_eq!(lines.len(), 2, "{lines:?}");
 }
 
@@ -116,18 +138,14 @@ async fn a_generation_that_is_not_waited_for_runs_on_and_status_shows_it() {
         .await
         .expect("answers");
     assert_eq!(started.status, 200);
-    assert!(matches!(
-        reply(&started.body),
-        GenerateReply::Started { job: 1, .. }
-    ));
+    let job: JobView = done(&started.body);
+    assert_eq!((job.job, &job.state), (1, &JobState::Running));
     let mut finished = false;
     for _ in 0..100 {
         let status = get(port, path::GENERATE).await.expect("answers");
-        let GenerateReply::Jobs { jobs } = reply(&status.body) else {
-            panic!("expected jobs: {}", status.body);
-        };
+        let jobs: Vec<JobView> = done(&status.body);
         assert_eq!(jobs.len(), 1);
-        if jobs[0].state == JobState::Done {
+        if matches!(jobs[0].state, JobState::Stored { .. }) {
             finished = true;
             break;
         }
@@ -138,24 +156,34 @@ async fn a_generation_that_is_not_waited_for_runs_on_and_status_shows_it() {
 }
 
 #[tokio::test]
-async fn each_refusal_has_its_typed_cause_and_status() {
+async fn each_refusal_has_its_typed_error_and_status() {
     let running = start(&[]).await;
+    let home = PathBuf::from("codex-home");
     let signed_out = serve_route(
         &running,
-        generator(FakeBackend::failing_check(BackendError::NotSignedIn(
-            "sign in with `CODEX_HOME=<home> codex login`".to_owned(),
-        ))),
+        generator(FakeBackend::failing_check(BackendError::NoLogin {
+            home: home.clone(),
+        })),
     )
     .await;
     let refused = post_json(signed_out, path::GENERATE, &body("hall", ""))
         .await
         .expect("answers");
     assert_eq!(refused.status, 503);
-    let GenerateReply::Refused { cause, message, .. } = reply(&refused.body) else {
-        panic!("expected a refusal: {}", refused.body);
-    };
-    assert_eq!(cause, RefusalCause::NotSignedIn);
-    assert!(message.contains("codex login"));
+    assert_eq!(
+        rejected(&refused.body),
+        GenerateError::Backend {
+            job: None,
+            backend: BackendError::NoLogin { home }
+        }
+    );
+    assert_eq!(
+        imagegen_lines(&running),
+        vec![
+            "IMAGEGEN refused verb=generate name=hall error=backend cause=no_login backend=fake"
+                .to_owned()
+        ]
+    );
 
     let timed_out = serve_route(
         &running,
@@ -166,16 +194,19 @@ async fn each_refusal_has_its_typed_cause_and_status() {
         .await
         .expect("answers");
     assert_eq!(response.status, 504);
-    assert!(matches!(
-        reply(&response.body),
-        GenerateReply::Finished { job } if job.cause == Some(RefusalCause::Timeout)
-    ));
+    assert_eq!(
+        rejected(&response.body),
+        GenerateError::Backend {
+            job: Some(1),
+            backend: BackendError::Timeout
+        }
+    );
 
     let service_refused = serve_route(
         &running,
-        generator(FakeBackend::new(Script::Fail(BackendError::Refused(
-            "refused by the service".to_owned(),
-        )))),
+        generator(FakeBackend::new(Script::Fail(BackendError::Refused {
+            detail: "refused by the service".to_owned(),
+        }))),
     )
     .await;
     let response = post_json(
@@ -186,30 +217,72 @@ async fn each_refusal_has_its_typed_cause_and_status() {
     .await
     .expect("answers");
     assert_eq!(response.status, 502);
+    assert!(matches!(
+        rejected(&response.body),
+        GenerateError::Backend {
+            job: Some(1),
+            backend: BackendError::Refused { .. }
+        }
+    ));
+}
 
-    for (text, label) in [
-        ("not json", "not JSON"),
-        (r#"{"prompt":"a"}"#, "no name"),
-        (&body("bad name", ""), "a bad name"),
-        (&body("hall", r#","purpose":"poster""#), "a bad purpose"),
-        (&body("hall", r#","aspect":"wide""#), "a bad aspect"),
-        (r#"{"prompt":"  ","name":"hall"}"#, "an empty prompt"),
-    ] {
-        let response = post_json(timed_out, path::GENERATE, text)
+#[tokio::test]
+async fn a_body_that_cannot_start_a_generation_is_a_typed_400() {
+    let running = start(&[]).await;
+    let port = serve_route(
+        &running,
+        generator(FakeBackend::new(Script::Picture(picture()))),
+    )
+    .await;
+    let unreadable = [
+        ("not json".to_owned(), BodyCause::Syntax),
+        (r#"{"prompt":"a"}"#.to_owned(), BodyCause::Data),
+        (body("hall", r#","purpose":"poster""#), BodyCause::Data),
+        (body("hall", r#","aspect":"wide""#), BodyCause::Data),
+        (body("hall", r#","colour":"red""#), BodyCause::Data),
+    ];
+    for (text, cause) in unreadable {
+        let response = post_json(port, path::GENERATE, &text)
             .await
             .expect("answers");
-        assert_eq!(response.status, 400, "{label}: {}", response.body);
+        assert_eq!(response.status, 400, "{text}: {}", response.body);
+        let error = rejected(&response.body);
         assert!(
-            matches!(
-                reply(&response.body),
-                GenerateReply::Refused {
-                    cause: RefusalCause::BadRequest,
-                    ..
-                }
-            ),
-            "{label}"
+            matches!(&error, GenerateError::InvalidBody(body) if body.cause == cause),
+            "{text}: {error:?}"
         );
     }
+    let invalid = [
+        (
+            body("bad name", ""),
+            GenerateRequestError::InvalidName {
+                name: "bad name".to_owned(),
+            },
+        ),
+        (
+            r#"{"prompt":"  ","name":"hall"}"#.to_owned(),
+            GenerateRequestError::EmptyPrompt,
+        ),
+    ];
+    for (text, expected) in invalid {
+        let response = post_json(port, path::GENERATE, &text)
+            .await
+            .expect("answers");
+        assert_eq!(response.status, 400, "{text}: {}", response.body);
+        assert_eq!(
+            rejected(&response.body),
+            GenerateError::InvalidRequest(expected)
+        );
+    }
+    assert_eq!(
+        imagegen_lines(&running).len(),
+        7,
+        "each refusal is recorded once"
+    );
+    assert!(
+        running.playground_path("assets/media").read_dir().is_err(),
+        "nothing was made"
+    );
 }
 
 #[tokio::test]
@@ -271,38 +344,32 @@ async fn the_hosts_real_router_registers_the_route_behind_its_guard() {
         .await
         .expect("answers");
     assert_eq!(bad.status, 400, "the route exists: {}", bad.body);
-    assert!(matches!(
-        reply(&bad.body),
-        GenerateReply::Refused {
-            cause: RefusalCause::BadRequest,
-            ..
-        }
-    ));
+    assert!(matches!(rejected(&bad.body), GenerateError::InvalidBody(_)));
     let status = get(running.port, path::GENERATE).await.expect("answers");
     assert_eq!(status.status, 200);
-    assert!(matches!(reply(&status.body), GenerateReply::Jobs { .. }));
+    let _: Vec<JobView> = done(&status.body);
 }
 
 #[tokio::test]
-async fn the_verb_numbers_its_answer_and_types_its_refusals() {
+async fn the_verb_numbers_its_answer_and_reports_refusals() {
     let running = start(&[]).await;
     let port = serve_route(
         &running,
         generator(FakeBackend::new(Script::Picture(picture()))),
     )
     .await;
-    let done = run_dev(
+    let made = run_dev(
         port,
         &words("media generate a candlelit hall as=hall purpose=background aspect=16:9 wait=true"),
     )
     .await
     .expect("generates");
     assert!(
-        done.starts_with("ok (generation 1) stored hall.png in the media library"),
-        "{done}"
+        made.starts_with("ok (generation 1) stored hall.png in the media library"),
+        "{made}"
     );
-    assert!(done.contains("made by fake"), "{done}");
-    assert!(done.contains("PNG stays a PNG"), "{done}");
+    assert!(made.contains("made by fake"), "{made}");
+    assert!(made.contains("PNG stays a PNG"), "{made}");
 
     let started = run_dev(port, &words("media generate a second hall as=second"))
         .await
@@ -320,9 +387,7 @@ async fn the_verb_numbers_its_answer_and_types_its_refusals() {
 
     let signed_out = serve_route(
         &running,
-        generator(FakeBackend::failing_check(BackendError::NotSignedIn(
-            "no login: run `CODEX_HOME=<home> codex login`".to_owned(),
-        ))),
+        generator(FakeBackend::failing_check(BackendError::NoCodexHome)),
     )
     .await;
     let error = run_dev(
@@ -331,30 +396,31 @@ async fn the_verb_numbers_its_answer_and_types_its_refusals() {
     )
     .await
     .expect_err("refused");
-    let DevError::Rejected(text) = error else {
-        panic!("expected a typed refusal: {error:?}");
-    };
-    assert!(text.contains("refused (not_signed_in)"), "{text}");
-    assert!(text.contains("codex login"), "{text}");
-
-    let timed_out = serve_route(
-        &running,
-        generator(FakeBackend::new(Script::Fail(BackendError::Timeout))),
-    )
-    .await;
-    let error = run_dev(timed_out, &words("media generate a hall as=hall wait=true"))
-        .await
-        .expect_err("timed out");
-    let DevError::Rejected(text) = error else {
-        panic!("expected a typed refusal: {error:?}");
-    };
-    assert!(
-        text.contains("generation 1 of hall ended without a picture (timeout)"),
-        "{text}"
-    );
+    assert!(matches!(error, DevError::Rejected(_)), "{error:?}");
 
     let bad = run_dev(port, &words("media generate a hall as=hall.png"))
         .await
         .expect_err("not sent");
     assert!(matches!(bad, DevError::Command(_)), "{bad:?}");
+}
+
+#[tokio::test]
+async fn a_waited_generation_without_a_picture_prints_its_name_and_how_long_it_ran() {
+    let running = start(&[]).await;
+    let port = serve_route(
+        &running,
+        generator(FakeBackend::new(Script::Fail(BackendError::Timeout))),
+    )
+    .await;
+    let error = run_dev(port, &words("media generate a hall as=hall wait=true"))
+        .await
+        .expect_err("no picture");
+    let DevError::Rejected(text) = error else {
+        panic!("not a refusal: {error:?}");
+    };
+    assert!(
+        text.starts_with("generation 1 of hall ended without a picture (backend: timeout) after "),
+        "{text}"
+    );
+    assert!(text.contains("\n  "), "{text}");
 }

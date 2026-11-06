@@ -2,13 +2,58 @@
 
 use std::{
     future::Future,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::{Duration, Instant, SystemTime},
 };
 
 use crate::{HttpMethod, HttpRequest, ProviderFailureClass, ProviderRequestId};
 
-/// Explicit positive transport bounds. Connect/read/total bounds cannot exceed
-/// 180 seconds; response retention is at most 16 MiB and headers at most 64 KiB.
+/// The longest any one exchange (connect, read or total) may be allowed to take: an hour, so a slow
+/// provider call during development is bounded by its caller's deadline, not by the transport.
+pub const MAXIMUM_EXCHANGE_TIME: Duration = Duration::from_secs(3_600);
+/// The largest request or retained response body, in bytes.
+pub const MAXIMUM_BODY_BYTES: usize = 256 * 1024 * 1024;
+/// The largest response header block, in bytes (a protocol-level bound).
+pub const MAXIMUM_HEADER_BYTES: usize = 65_536;
+/// The most body chunks one response may arrive in.
+pub const MAXIMUM_CHUNKS: usize = 1_048_576;
+/// The longest credential any adapter accepts, in bytes. Credentials are header values, so they
+/// are also printable ASCII without spaces (see [`is_valid_credential`]).
+pub(crate) const MAXIMUM_CREDENTIAL_BYTES: usize = 8192;
+/// The longest supplier request or trace id kept from a response header, in bytes.
+const MAXIMUM_SUPPLIER_ID_BYTES: usize = 256;
+
+/// Whether `credential` can travel as a header value: 1 to [`MAXIMUM_CREDENTIAL_BYTES`] bytes of
+/// printable ASCII with no space. Every native adapter constructor gates its credential here;
+/// the target-neutral request builders in `http_contract` check only that the key is non-empty.
+pub(crate) fn is_valid_credential(credential: &str) -> bool {
+    !credential.is_empty()
+        && credential.len() <= MAXIMUM_CREDENTIAL_BYTES
+        && credential.bytes().all(is_visible_ascii)
+}
+
+/// Printable ASCII other than space (`0x21..=0x7e`): the alphabet of credentials and of the
+/// supplier ids this crate keeps.
+fn is_visible_ascii(byte: u8) -> bool {
+    (0x21..=0x7e).contains(&byte)
+}
+
+/// Whether `address` is a usable loopback test socket: any loopback IP and a nonzero port.
+pub(crate) fn is_loopback_socket(address: SocketAddr) -> bool {
+    address.ip().is_loopback() && address.port() != 0
+}
+
+/// Whether `address` is exactly `127.0.0.1` or `::1` with a nonzero port: the stricter fixture
+/// rule of the Responses and speech adapters, which never accept another loopback address.
+pub(crate) fn is_literal_localhost(address: SocketAddr) -> bool {
+    let localhost = match address.ip() {
+        IpAddr::V4(ip) => ip == Ipv4Addr::LOCALHOST,
+        IpAddr::V6(ip) => ip == Ipv6Addr::LOCALHOST,
+    };
+    localhost && address.port() != 0
+}
+
+/// Explicit positive transport bounds, each at most its `MAXIMUM_*` ceiling above.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeHttpLimits {
     pub connect_timeout: Duration,
@@ -39,8 +84,11 @@ pub struct ProviderLimits {
 impl ProviderLimits {
     /// The connect bound defaults to five seconds, or the whole call when that is shorter.
     const DEFAULT_CONNECT: Duration = Duration::from_secs(5);
+    /// Kept at 16 KiB: the media fetchers refuse a larger header bound.
     const DEFAULT_HEADER_BYTES: usize = 16 * 1024;
-    const DEFAULT_CHUNKS: usize = 4096;
+    /// As many chunks as the transport allows: the byte bound already limits a response, and the
+    /// old 4096 refused a large body that a server sent in small frames.
+    const DEFAULT_CHUNKS: usize = MAXIMUM_CHUNKS;
 
     /// A call that may take `total` end to end, send `request_bytes` and keep `response_bytes`.
     pub const fn new(total: Duration, request_bytes: usize, response_bytes: usize) -> Self {
@@ -261,36 +309,25 @@ impl NativeHttp {
         limits: NativeHttpLimits,
         loopback_fixture: bool,
     ) -> Result<Self, NativeHttpRefusal> {
-        let ceiling = Duration::from_secs(180);
         if [
             limits.connect_timeout,
             limits.read_timeout,
             limits.total_timeout,
         ]
         .into_iter()
-        .any(|value| value.is_zero() || value > ceiling)
+        .any(|value| value.is_zero() || value > MAXIMUM_EXCHANGE_TIME)
             || limits.maximum_request_bytes == 0
-            || limits.maximum_request_bytes > 16_777_216
+            || limits.maximum_request_bytes > MAXIMUM_BODY_BYTES
             || limits.maximum_response_bytes == 0
-            || limits.maximum_response_bytes > 16_777_216
+            || limits.maximum_response_bytes > MAXIMUM_BODY_BYTES
             || limits.maximum_header_bytes == 0
-            || limits.maximum_header_bytes > 65_536
+            || limits.maximum_header_bytes > MAXIMUM_HEADER_BYTES
             || limits.maximum_chunks == 0
-            || limits.maximum_chunks > 65_536
+            || limits.maximum_chunks > MAXIMUM_CHUNKS
         {
             return Err(NativeHttpRefusal::InvalidLimits);
         }
-        let client = reqwest::Client::builder()
-            .tls_backend_rustls()
-            .https_only(!loopback_fixture)
-            .retry(reqwest::retry::never())
-            .redirect(reqwest::redirect::Policy::none())
-            .referer(false)
-            .connection_verbose(false)
-            .no_proxy()
-            .connect_timeout(limits.connect_timeout)
-            .read_timeout(limits.read_timeout)
-            .timeout(limits.total_timeout)
+        let client = hardened_client_builder(&limits, !loopback_fixture)
             .build()
             .map_err(|_| NativeHttpRefusal::Unknown)?;
         Ok(Self {
@@ -361,10 +398,11 @@ impl NativeHttp {
         }
         // This single future owns send and body. Dropping it on cancellation,
         // deadline or caller drop releases the response and its network work.
+        let exchange = self.send_and_read(request, profile, captured);
         tokio::select! {
             biased;
             () = cancellation => Err(NativeHttpRefusal::Cancelled),
-            result = tokio::time::timeout(duration, self.send_and_read(request, profile, captured)) => {
+            result = tokio::time::timeout(duration, exchange) => {
                 result.map_err(|_| NativeHttpRefusal::Deadline)?
             }
         }
@@ -394,7 +432,7 @@ impl NativeHttp {
             // Preserve the existing Responses transport's selected-header contract.
             if let Some(value) = response.headers().get("x-request-id") {
                 let value = value.to_str().map_err(|_| NativeHttpRefusal::Unknown)?;
-                if value.len() > 256 {
+                if value.len() > MAXIMUM_SUPPLIER_ID_BYTES {
                     return Err(NativeHttpRefusal::HeadersTooLarge);
                 }
                 captured.transport_request_id =
@@ -409,8 +447,8 @@ impl NativeHttp {
                     }
                     let value = value.to_str().map_err(|_| NativeHttpRefusal::Unknown)?;
                     if value.is_empty()
-                        || value.len() > 256
-                        || !value.bytes().all(|b| (0x21..=0x7e).contains(&b))
+                        || value.len() > MAXIMUM_SUPPLIER_ID_BYTES
+                        || !value.bytes().all(is_visible_ascii)
                     {
                         return Err(NativeHttpRefusal::HeadersTooLarge);
                     }
@@ -437,14 +475,9 @@ impl NativeHttp {
         if response.status().is_redirection() {
             return Err(NativeHttpRefusal::Redirect);
         }
-        let mut header_bytes = 0usize;
-        for (name, value) in response.headers() {
-            header_bytes = header_bytes
-                .checked_add(name.as_str().len())
-                .and_then(|count| count.checked_add(value.as_bytes().len()))
-                .ok_or(NativeHttpRefusal::HeadersTooLarge)?;
-        }
-        if header_bytes > self.limits.maximum_header_bytes {
+        if header_block_bytes(response.headers())
+            .is_none_or(|bytes| bytes > self.limits.maximum_header_bytes)
+        {
             return Err(NativeHttpRefusal::HeadersTooLarge);
         }
         captured.retry_after = NativeRetryAfter::from_raw_values(
@@ -481,31 +514,117 @@ impl NativeHttp {
         {
             return Err(NativeHttpRefusal::ResponseTooLarge);
         }
-        let mut body = Vec::new();
-        let mut chunks = 0usize;
-        while let Some(chunk) = response.chunk().await.map_err(classify_transport_error)? {
-            chunks += 1;
-            if chunks > self.limits.maximum_chunks {
-                return Err(NativeHttpRefusal::TooManyChunks);
-            }
-            let length = body
-                .len()
-                .checked_add(chunk.len())
-                .ok_or(NativeHttpRefusal::ResponseTooLarge)?;
-            if length > self.limits.maximum_response_bytes {
-                return Err(NativeHttpRefusal::ResponseTooLarge);
-            }
-            body.try_reserve(chunk.len())
-                .map_err(|_| NativeHttpRefusal::ResponseTooLarge)?;
-            body.extend_from_slice(&chunk);
-        }
-        // Only actual chunk() == None produces this complete observation.
+        let body = read_bounded_body(
+            &mut response,
+            self.limits.maximum_response_bytes,
+            self.limits.maximum_chunks,
+        )
+        .await?;
         Ok(NativeHttpResponse {
             status,
             body,
             transport_request_id: captured.transport_request_id.clone(),
             metadata: captured.clone(),
         })
+    }
+}
+
+/// The one hardened `reqwest` posture every native client in this crate starts from: rustls,
+/// no retries, no redirects, no referer, no proxy, and the connect, read and total bounds of
+/// `limits`. Callers add only what differs (a pinned resolver, a connection pool bound).
+pub(crate) fn hardened_client_builder(
+    limits: &NativeHttpLimits,
+    https_only: bool,
+) -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .tls_backend_rustls()
+        .https_only(https_only)
+        .retry(reqwest::retry::never())
+        .redirect(reqwest::redirect::Policy::none())
+        .referer(false)
+        .connection_verbose(false)
+        .no_proxy()
+        .connect_timeout(limits.connect_timeout)
+        .read_timeout(limits.read_timeout)
+        .timeout(limits.total_timeout)
+}
+
+/// The size of a response header block (names plus values), in bytes; `None` on overflow.
+pub(crate) fn header_block_bytes(headers: &reqwest::header::HeaderMap) -> Option<usize> {
+    headers.iter().try_fold(0usize, |total, (name, value)| {
+        total
+            .checked_add(name.as_str().len())?
+            .checked_add(value.as_bytes().len())
+    })
+}
+
+/// Reads a response body through its end, refusing more than `maximum_bytes` or more than
+/// `maximum_chunks` chunks. Only a clean end of body (`chunk() == None`) returns bytes.
+pub(crate) async fn read_bounded_body(
+    response: &mut reqwest::Response,
+    maximum_bytes: usize,
+    maximum_chunks: usize,
+) -> Result<Vec<u8>, NativeHttpRefusal> {
+    let mut body = Vec::new();
+    let mut chunks = 0usize;
+    while let Some(chunk) = response.chunk().await.map_err(classify_transport_error)? {
+        chunks += 1;
+        if chunks > maximum_chunks {
+            return Err(NativeHttpRefusal::TooManyChunks);
+        }
+        if body
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|length| length > maximum_bytes)
+        {
+            return Err(NativeHttpRefusal::ResponseTooLarge);
+        }
+        body.try_reserve(chunk.len())
+            .map_err(|_| NativeHttpRefusal::ResponseTooLarge)?;
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// A request body writer that refuses to grow past `maximum_bytes`, so a serializer stops at the
+/// transport's request bound instead of building a body the transport would refuse.
+pub(crate) struct BoundedRequestBody {
+    bytes: Vec<u8>,
+    maximum_bytes: usize,
+}
+
+impl BoundedRequestBody {
+    pub(crate) fn new(maximum_bytes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            maximum_bytes,
+        }
+    }
+
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl std::io::Write for BoundedRequestBody {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let length = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .ok_or_else(|| std::io::Error::other("request body bound"))?;
+        if length > self.maximum_bytes {
+            return Err(std::io::Error::other("request body bound"));
+        }
+        self.bytes
+            .try_reserve(bytes.len())
+            .map_err(|_| std::io::Error::other("request body capacity"))?;
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -528,7 +647,8 @@ fn is_openai_api(url: &str) -> bool {
         })
 }
 
-fn classify_transport_error(error: reqwest::Error) -> NativeHttpRefusal {
+/// A transport timeout is a deadline; every other `reqwest` failure is of unknown outcome.
+pub(crate) fn classify_transport_error(error: reqwest::Error) -> NativeHttpRefusal {
     if error.is_timeout() {
         NativeHttpRefusal::Deadline
     } else {

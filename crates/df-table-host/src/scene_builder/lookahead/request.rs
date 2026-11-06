@@ -2,10 +2,12 @@
 //!
 //! The route is `/dev/engine/scene/lookahead`: a GET reads the planner's report and a POST of a
 //! `LookaheadRequest` changes it. Both answer a `SceneReply<LookaheadReply>`, like every scene dev
-//! call. Nothing here holds player text: the place of a target is a short display name.
+//! call. The body refuses unknown fields and a place that is not a display name. Nothing here holds
+//! player text: the place of a target is a short display name.
 
+use df_table::lookahead::settings::LookaheadSetting;
 use df_table::lookahead::{Expectation, LookaheadReport};
-use df_table::lookahead_settings::LookaheadSetting;
+use df_table::table_state::DisplayName;
 use serde::{Deserialize, Serialize};
 
 use crate::scene_builder::request::{DevStage, SlowStage, TimedLine};
@@ -46,8 +48,8 @@ impl LookaheadSettingName {
         }
     }
 
-    pub fn parse(text: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|name| name.key() == text)
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|name| name.key() == key)
     }
 
     /// The numeric setting this names, or `None` for `lookahead_enabled`.
@@ -62,7 +64,8 @@ impl LookaheadSettingName {
     }
 }
 
-/// One change of the look-ahead worker.
+/// One change of the look-ahead worker. An unknown field is refused, except on a change with no
+/// fields (serde does not check those of a unit variant of a tagged enum), where none can be meant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LookaheadRequest {
@@ -78,7 +81,7 @@ pub enum LookaheadRequest {
     },
     /// The story expects the scene the next `scene build` makes, named `place`.
     Target {
-        place: String,
+        place: DisplayName,
         /// Why it is expected; a certain kind is built at once, a likely one after the start delay.
         #[serde(default = "authored_beat")]
         kind: Expectation,

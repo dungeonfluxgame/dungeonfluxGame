@@ -1,4 +1,10 @@
-use crate::fixture::{ElementSource, Fixture, StageElement, StagePivot, Status};
+mod shipped;
+
+use crate::fixture::{
+    ElementShape, ElementSource, Fixture, FixtureTitle, LiveMarker, StageElement, StagePivot,
+    Status,
+};
+use crate::fixtures::assert_keys_are_serde_names;
 
 const MINIMAL: &str = r#"{
     "name": "Minimal",
@@ -139,4 +145,24 @@ fn a_pivot_with_one_coordinate_takes_the_centre_for_the_other_and_a_misspelt_key
             "shape": "rect", "width_units": 1, "height_units": 1, "pivot": {"x": 10}}]"##,
     );
     assert!(Fixture::parse(&text).is_err());
+}
+
+#[test]
+fn a_fixture_title_is_the_scenario_name_and_none_for_a_file_that_is_not_a_scenario() {
+    let read = FixtureTitle::read("minimal.json".to_owned(), MINIMAL);
+    assert_eq!(read.file, "minimal.json");
+    assert_eq!(read.title.as_deref(), Some("Minimal"));
+    let broken = FixtureTitle::read("broken.json".to_owned(), r#"{"name": "Half""#);
+    assert_eq!(broken.file, "broken.json");
+    assert_eq!(broken.title, None);
+}
+
+#[test]
+fn the_keys_of_an_element_shape_and_the_live_marker_are_their_serde_names() {
+    assert_keys_are_serde_names(
+        &ElementShape::ALL,
+        ElementShape::key,
+        ElementShape::from_key,
+    );
+    assert_keys_are_serde_names(&LiveMarker::ALL, LiveMarker::key, LiveMarker::from_key);
 }

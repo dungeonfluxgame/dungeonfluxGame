@@ -8,7 +8,7 @@
 //!
 //! Every step first asks the table whether the job is still current (D.2): a job of a scene that
 //! has moved on cancels its open requests, stores nothing and ends `Stale`, and a paused table
-//! holds the run where it is. Every failure becomes a typed `StageFailure` with the fallback the
+//! holds the run where it is. Every failure becomes a typed `FailedStage` with the fallback the
 //! stage's purpose names, and ends the job; Locate's failures do not end the job, because a plate
 //! with every figure unlocated at its fallback point is still a plate (pattern 11). It makes no
 //! request without recording its input first, and records each change once, as a
@@ -16,15 +16,15 @@
 
 use df_table::event::FailureCause;
 use df_table::identity::TableScope;
-use df_table::plate_scheduler::JobEnd;
+use df_table::plate::scheduler::JobEnd;
 use df_table::ports::{PurposeName, ResourceHandle};
-use df_table::scene_plan::{
-    PlanError, SceneStage, StageFailure, StageOutput, StagePlan, StoredPicture,
-};
-use df_table::scene_plan_locate::{
+use df_table::scene_plan::locate::{
     FigureTarget, Instance, ItemTarget, LocateOutcome, LocatePlan, LocatePrompt,
 };
-use df_table::table_state::{StaleCause, StaleResult, TableSnapshot};
+use df_table::scene_plan::{
+    FailedStage, PlanError, SceneStage, StageOutput, StagePlan, StoredPicture,
+};
+use df_table::table_state::{StaleCause, StaleResultError, TableSnapshot};
 
 use super::answers::parse_locate_answer;
 use super::builder::{BuilderOutput, JobOutcome, SceneRecord};
@@ -157,7 +157,7 @@ impl Driver<'_> {
 
     /// Ends a job that is no longer current: cancels what it has out, records why, and stores
     /// nothing (D.2).
-    pub(super) fn end_stale(&self, run: &JobRun, stale: StaleResult) -> BuilderOutput {
+    pub(super) fn end_stale(&self, run: &JobRun, stale: StaleResultError) -> BuilderOutput {
         cancel_open(self.hub, run);
         let job = run.plan.job();
         let stage = run.plan.running().unwrap_or(SceneStage::Describe);
@@ -167,7 +167,7 @@ impl Driver<'_> {
         self.ended(run, JobEnd::Stale, None)
     }
 
-    fn ended(&self, run: &JobRun, end: JobEnd, failure: Option<StageFailure>) -> BuilderOutput {
+    fn ended(&self, run: &JobRun, end: JobEnd, failure: Option<FailedStage>) -> BuilderOutput {
         let job = run.plan.job();
         self.record(SceneBuilderEvent::JobEnded {
             scene: job.scene(),

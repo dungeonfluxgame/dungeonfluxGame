@@ -11,6 +11,20 @@
   --alarm: #e0675a;
   --serif: "Palatino Linotype", "Book Antiqua", Palatino, serif;
   color-scheme: dark;
+  /* The testing studio: the developer chrome around the two devices. */
+  --studio-space-1: 4px;
+  --studio-space-2: 8px;
+  --studio-space-3: 12px;
+  --studio-space-4: 16px;
+  --studio-space-5: 24px;
+  --studio-control-h: 32px;
+  --studio-radius: 6px;
+  --studio-edge: #51696e;
+  --studio-text: 14px;
+  --studio-text-label: 11px;
+  --studio-text-title: 18px;
+  /* The toolbar, the scenario strip and the gutters, for the height cap of the screen alone. */
+  --studio-chrome-h: 140px;
 }
 /* Concept tokens (2026-11-02): sampled from assets/concept-art with Pillow, documented in
    planning/client-presentation.md. Every size is in cqw, so the screen scales like a television.
@@ -118,44 +132,327 @@ body {
 }
 :focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
 
-/* Toolbar */
-.toolbar {
-  display: flex; flex-wrap: wrap; align-items: end; gap: 12px 20px;
-  padding: 14px 20px; border-bottom: 1px solid var(--line);
+/* The testing studio: the toolbar, the scenario strip and the stage around the devices. Its
+   classes start with `studio-` so they never meet the classes of what the devices draw. */
+.studio-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--studio-space-3) var(--studio-space-4);
+  padding: var(--studio-space-2) var(--studio-space-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--ink);
 }
-.toolbar h1 { flex: 1 1 100%; margin: 0; font: 400 22px/1.2 var(--serif); color: var(--brass); }
-.control { display: flex; flex-direction: column; gap: 4px; }
-.control-label { color: var(--muted); font-size: 12px; }
-.toolbar select {
-  min-height: 38px; padding: 6px 10px; border: 1px solid #51696e; border-radius: 5px;
-  color: var(--ivory); background: var(--panel); font: inherit;
+.studio-title {
+  margin: 0;
+  font: 400 var(--studio-text-title)/var(--studio-control-h) var(--serif);
+  color: var(--brass);
+  white-space: nowrap;
 }
-.toolbar button, .toggle {
-  min-height: 38px; padding: 6px 14px; border: 1px solid #51696e; border-radius: 5px;
-  color: var(--muted); background: transparent; font: inherit; cursor: pointer;
+/* A group never breaks inside, so the rows of the toolbar break only between groups. */
+.studio-group {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: var(--studio-space-1);
+  min-width: 0;
 }
-.toggle.on { color: var(--ivory); border-color: var(--brass); background: #18343c; }
-.segment { display: flex; }
-.segment .toggle { border-radius: 0; margin-left: -1px; }
-.segment .toggle:first-child { border-radius: 5px 0 0 5px; margin-left: 0; }
-.segment .toggle:last-child { border-radius: 0 5px 5px 0; }
-.segment .toggle.on { position: relative; z-index: 1; }
+.studio-label {
+  color: var(--muted);
+  font-size: var(--studio-text-label);
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.studio-controls {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--studio-space-2);
+}
+.studio-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--studio-space-2);
+}
+.studio-sublabel {
+  color: var(--muted);
+  font-size: 13px;
+}
+.studio-bar select,
+.studio-option,
+.studio-switch,
+.studio-action,
+.studio-state {
+  height: var(--studio-control-h);
+  font: inherit;
+  font-size: var(--studio-text);
+}
+.studio-bar select {
+  max-width: 240px;
+  padding: 0 var(--studio-space-2);
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--studio-radius);
+  color: var(--ivory);
+  background: var(--panel);
+}
+/* A menu away from its default (a status other than the scenario's own) shows it is overridden. */
+.studio-bar select[data-modified] {
+  border-color: var(--brass);
+  color: var(--ui-brass-hi);
+}
+.studio-bar select:hover,
+.studio-switch:hover,
+.studio-action:hover,
+.studio-segment:hover {
+  border-color: var(--brass);
+}
+/* A choice of one: the chosen option is filled with brass. */
+.studio-segment {
+  display: inline-flex;
+  height: var(--studio-control-h);
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--studio-radius);
+}
+.studio-option {
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--studio-radius) - 2px);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.studio-option:hover {
+  color: var(--ivory);
+}
+.studio-option[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--brass);
+  font-weight: 600;
+}
+.studio-option:focus-visible {
+  position: relative;
+  z-index: 1;
+}
+/* An on/off switch: a hollow dot when off, a lit dot when on. */
+.studio-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--studio-space-2);
+  padding: 0 10px;
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--studio-radius);
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.studio-switch::before,
+.studio-state::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--studio-edge);
+}
+.studio-switch[aria-pressed="true"] {
+  border-color: var(--brass);
+  color: var(--ivory);
+}
+.studio-switch[aria-pressed="true"]::before,
+.studio-state::before {
+  background: var(--ui-ready);
+  box-shadow: none;
+}
+/* A one-shot action, and the plain state that replaces it once done. */
+.studio-action {
+  padding: 0 var(--studio-space-3);
+  border: 1px solid var(--brass);
+  border-radius: var(--studio-radius);
+  color: var(--ui-brass-hi);
+  background: var(--teal);
+  font-weight: 600;
+  cursor: pointer;
+}
+.studio-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--studio-space-2);
+  padding: 0 var(--studio-space-1);
+  color: var(--ivory);
+}
 
 /* A piece of a device is drawn into a slot that takes no box of its own, so the page can redraw one piece alone */
 .part { display: contents; }
 
-/* Layout of the page */
-.body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; padding: 20px; align-items: start; }
-.devices { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; min-width: 0; }
-.device-tv { flex: 1 1 560px; min-width: 0; container-type: inline-size; }
-.device-phone { flex: 0 0 auto; }
-@media (max-width: 1100px) { .body { grid-template-columns: 1fr; } }
+/* Layout of the page. A rule on `.devices` depends only on its own width: the leaving copy of a
+   scene change carries the same class and must lie exactly over the devices. */
+.studio-body {
+  padding: var(--studio-space-3) var(--studio-space-5);
+}
+.devices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--studio-space-5);
+  align-items: flex-start;
+  /* `safe`: a phone wider than a narrow stage starts at its left edge instead of being cut. */
+  justify-content: safe center;
+  min-width: 0;
+}
+/* The screen sits beside the phone only when that leaves it at least 640px wide; a narrower
+   stage puts the phone under a full-width screen. */
+.device-tv {
+  flex: 1 1 640px;
+  min-width: 0;
+  max-inline-size: max(320px, calc((100dvh - var(--studio-chrome-h)) * 16 / 9));
+  container-type: inline-size;
+}
+.device-phone {
+  flex: 0 0 auto;
+}
 
-/* Notes */
-.notes h2 { margin: 0 0 6px; font: 400 20px/1.25 var(--serif); color: var(--ivory); }
-.notes p { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
-.notes .note-live { padding: 6px 10px; border-left: 2px solid var(--brass); background: #17343c; color: var(--ivory); }
-.notes .warnings { margin: 0; padding-left: 18px; color: var(--ember); font-size: 13px; }
+/* The scenario strip: closed, one line with the title, the file and pills for what needs seeing. */
+.studio-notes {
+  margin-bottom: var(--studio-space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--studio-radius);
+  background: var(--panel);
+}
+.studio-notes-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--studio-space-1) var(--studio-space-3);
+  min-height: 36px;
+  padding: var(--studio-space-1) var(--studio-space-3);
+  list-style: none;
+  cursor: pointer;
+}
+.studio-notes-summary::-webkit-details-marker {
+  display: none;
+}
+.studio-notes-summary::before {
+  content: "\25B8";
+  color: var(--brass);
+}
+.studio-notes[open] > .studio-notes-summary::before {
+  content: "\25BE";
+}
+.studio-notes-title {
+  margin: 0;
+  font: 400 16px/1.25 var(--serif);
+  color: var(--ivory);
+}
+.studio-file {
+  color: var(--muted);
+  font: 12px/1.4 ui-monospace, Consolas, monospace;
+}
+.studio-pill {
+  max-width: 36ch;
+  overflow: hidden;
+  padding: 1px var(--studio-space-2);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.studio-pill.is-live {
+  color: var(--ui-brass-hi);
+}
+.studio-pill.is-warn {
+  color: var(--ember);
+}
+.studio-pill.is-error {
+  color: var(--alarm);
+}
+.studio-summary-text {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.studio-notes[open] .studio-summary-text {
+  display: none;
+}
+.studio-notes-body {
+  max-width: 100ch;
+  padding: 0 var(--studio-space-3) var(--studio-space-3) 30px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.studio-notes-body p {
+  margin: 0 0 var(--studio-space-2);
+}
+.studio-notes-body h3 {
+  margin: var(--studio-space-3) 0 var(--studio-space-1);
+  color: var(--ember);
+  font-size: var(--studio-text-label);
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.studio-live {
+  padding-left: var(--studio-space-2);
+  border-left: 2px solid var(--brass);
+  color: var(--ivory);
+}
+.studio-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ember);
+}
+.studio-notes .note-error {
+  margin: 0 0 var(--studio-space-2);
+}
+
+/* A narrow window: each group takes a row with its label to the left, and the toolbar scrolls
+   away with the page instead of covering it. */
+@media (max-width: 640px) {
+  .studio-bar {
+    position: static;
+    gap: var(--studio-space-2);
+    padding: var(--studio-space-3) var(--studio-space-4);
+  }
+  .studio-group {
+    flex: 1 1 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--studio-space-3);
+  }
+  .studio-label {
+    flex: 0 0 76px;
+  }
+  .studio-controls {
+    flex: 1 1 0;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .studio-bar select {
+    max-width: 100%;
+  }
+}
+/* A phone-wide window: the phone frame keeps its size and scrolls inside the stage, so the page
+   itself never scrolls sideways. */
+@media (max-width: 480px) {
+  .studio-body {
+    padding: var(--studio-space-4);
+  }
+  .stage-wrap {
+    overflow-x: auto;
+  }
+}
 .note-error { margin: 0 0 14px; padding: 10px 12px; border-left: 2px solid var(--alarm); background: #3a1f22; color: var(--ivory); font-size: 13px; white-space: pre-wrap; }
 
 /* The shared screen: sizes follow the width of the screen, as on a real television */
@@ -169,6 +466,15 @@ body {
   background-image: linear-gradient(#ffffff14 1px, transparent 1px), linear-gradient(90deg, #ffffff14 1px, transparent 1px);
   background-size: 10% 17.78%;
 }
+/* The SAM layer: what the segmentation scan found in the backdrop, for checking; `playground set sam=` */
+.sam-layer { position: absolute; inset: 0; pointer-events: none; }
+.sam-mask { position: absolute; inset: 0; background: hsl(var(--sam-hue) 85% 58% / .42); -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; mix-blend-mode: screen; }
+.sam-mask.sam-labelled { background: hsl(var(--sam-hue) 95% 60% / .55); }
+.sam-box { position: absolute; border: .12cqw dashed hsl(var(--sam-hue) 85% 60%); }
+.sam-tag { position: absolute; transform: translate(-50%, -50%); padding: .1cqw .45cqw; font: 600 .8cqw/1.3 var(--ui-font); color: #0b0b10; background: hsl(var(--sam-hue) 85% 66%); border-radius: .25cqw; white-space: nowrap; box-shadow: 0 0 .3cqw #000a; }
+.sam-tag.sam-labelled { font-size: .95cqw; }
+.sam-head { position: absolute; width: .7cqw; height: .7cqw; margin: -.35cqw 0 0 -.35cqw; border-radius: 50%; background: #ff4f7b; border: .1cqw solid #fff; box-shadow: 0 0 .4cqw #000a; }
+.sam-legend { position: absolute; right: .8cqw; bottom: .6cqw; padding: .2cqw .6cqw; font: 500 .8cqw/1.3 var(--ui-font); color: #cfeee6; background: #000a; border-radius: .3cqw; }
 .tv-place { position: absolute; left: 2.4cqw; top: 2cqw; font: italic var(--ui-t-lead)/1.2 var(--ui-font); color: var(--ui-brass-hi); letter-spacing: .02em; text-shadow: 0 1px 4px #000, 0 0 10px #000a; }
 .tv-figures { position: absolute; inset: 0; z-index: 0; }
 /* A figure keeps its element while it moves, so a change of place glides: about as long as the
@@ -282,7 +588,15 @@ body {
 /* The camera: it moves the backdrop, grid and figures together; the card, caption, status and party
    stay on the screen. A move runs from --cam-from to --cam-to at an even pace. */
 .tv-world { position: absolute; inset: 0; transform-origin: 0 0; }
-@keyframes camera-move { from { transform: var(--cam-from); } to { transform: var(--cam-to); } }
+/* The camera's zoom as a number, animated with its transform, so items tied to a character in the
+   world layer can stay one size on the screen while the world grows (`.tv-anchors`). */
+@property --cam-scale { syntax: "<number>"; inherits: true; initial-value: 1; }
+@keyframes camera-move { from { transform: var(--cam-from); --cam-scale: var(--cam-scale-from); } to { transform: var(--cam-to); --cam-scale: var(--cam-scale-to); } }
+.tv-anchors { position: absolute; inset: 0; pointer-events: none; }
+.tv-anchors .rp-bubble { transform-origin: var(--tail-tip) 100%; transform: scale(calc(1 / var(--cam-scale, 1))); }
+.tv-anchors .rp-marker { transform: translate(-50%, -50%) scale(calc(1 / var(--cam-scale, 1))); }
+/* SAM tags and head dots are labels on the picture: they keep their size while the camera zooms. */
+.sam-tag, .sam-head { scale: calc(1 / var(--cam-scale, 1)); }
 @media (prefers-reduced-motion: reduce) { .tv-world { animation: none !important; transition: none !important; } }
 
 /* A figure with a portrait shows the picture in its outline */
@@ -409,6 +723,36 @@ body {
 .rp-tone-npc { --rim: #e8a8b8; --glow: #e36a8a77; }
 .rp-tone-narrator { --rim: #f2c27a; --glow: #f0a43a99; --fill: linear-gradient(180deg, #2b1a16f5, #140c0af7); }
 .rp-tone-danger { --rim: #ff6a5a; --glow: #ff3b2fbb; --icon: #ffb4a8; --fill: linear-gradient(180deg, #2f1115f5, #170709f7); }
+/* A thought: a rounded box, and two shrinking dots from the tail's root toward the thinker in place of a pointed tail. */
+.rp-tone-thought {
+  --rim: #e4dcf5; --glow: #c4b2ff70; --icon: #d8ccf6; --dot: #1b1724; --tail-h: 2.6cqw;
+  --fill: linear-gradient(180deg, #1e1a27f2, #0e0c14f4);
+  --dot-a: calc(var(--tail-root) + (var(--tail-tip) - var(--tail-root)) * .35);
+  --dot-b: calc(var(--tail-root) + (var(--tail-tip) - var(--tail-root)) * .8);
+}
+.rp-tone-thought::before, .rp-tone-thought::after { clip-path: none; border-radius: 999px; }
+.rp-tone-thought.rp-below::before { inset: 0 0 var(--tail-h) 0; }
+.rp-tone-thought.rp-below::after { inset: .15cqw .15cqw calc(var(--tail-h) + .15cqw) .15cqw; }
+.rp-tone-thought.rp-above::before { inset: var(--tail-h) 0 0 0; }
+.rp-tone-thought.rp-above::after { inset: calc(var(--tail-h) + .15cqw) .15cqw .15cqw .15cqw; }
+.rp-tone-thought.rp-below {
+  background:
+    radial-gradient(circle at var(--dot-a) calc(100% - var(--tail-h) * .6), var(--dot) 0 .32cqw, var(--rim) .34cqw .5cqw, #0000 .53cqw),
+    radial-gradient(circle at var(--dot-b) calc(100% - var(--tail-h) * .14), var(--dot) 0 .1cqw, var(--rim) .12cqw .28cqw, #0000 .31cqw);
+}
+.rp-tone-thought.rp-above {
+  background:
+    radial-gradient(circle at var(--dot-a) calc(var(--tail-h) * .6), var(--dot) 0 .32cqw, var(--rim) .34cqw .5cqw, #0000 .53cqw),
+    radial-gradient(circle at var(--dot-b) calc(var(--tail-h) * .14), var(--dot) 0 .1cqw, var(--rim) .12cqw .28cqw, #0000 .31cqw);
+}
+.rp-tone-thought.rp-below .rp-body { padding: 1cqw 1.2cqw calc(1cqw + var(--tail-h)); }
+.rp-tone-thought.rp-above .rp-body { padding: calc(1cqw + var(--tail-h)) 1.2cqw 1cqw; }
+.rp-think { display: flex; justify-content: center; align-items: center; gap: .7cqw; height: 1.6cqw; }
+.rp-think-dot { width: .9cqw; height: .9cqw; border-radius: 50%; background: var(--rim); animation: rp-think 1.4s ease-in-out infinite; }
+.rp-think-dot:nth-child(2) { animation-delay: .2s; }
+.rp-think-dot:nth-child(3) { animation-delay: .4s; }
+@keyframes rp-think { 0%, 70%, 100% { opacity: .35; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-.35cqw); } }
+@media (prefers-reduced-motion: reduce) { .rp-think-dot { animation: none; opacity: .8; } }
 .rp-head { display: flex; align-items: center; gap: .8cqw; margin-bottom: .45cqw; }
 .rp-speaker-glyph { flex: 0 0 auto; width: 1.9cqw; height: 1.9cqw; color: var(--icon); stroke-width: 1.6; }
 .rp-face { flex: 0 0 auto; width: 2.4cqw; height: 2.4cqw; border-radius: 50%; border: .12cqw solid var(--rim); }
@@ -416,6 +760,8 @@ body {
 .rp-line { font: 400 1.4cqw/1.32 var(--ui-lobby-text); color: #fbf7ee; text-wrap: pretty; text-shadow: 0 .05cqw .2cqw #000a; }
 .rp-emphasis { margin-top: .3cqw; font-style: italic; color: #f6d398; }
 .rp-caption { position: absolute; left: 50%; bottom: max(4%, calc(var(--ui-reserved-bottom) - 6%)); transform: translateX(-50%); width: min(64%, 60cqw); margin: 0; padding: 1.1cqw 2cqw; text-align: center; font: italic 400 1.8cqw/1.35 var(--ui-lobby-text); color: #f6efe0; background: linear-gradient(180deg, #0c0a10b0, #0c0a10e6); border-top: .1cqw solid #f1d9a066; text-shadow: 0 .1cqw .5cqw #000; text-wrap: balance; }
+.rp-marker { position: absolute; transform: translate(-50%, -50%); display: flex; align-items: center; gap: .4cqw; padding: .25cqw .8cqw; font: 600 1.05cqw/1.2 var(--ui-lobby-text); color: #f6efe0; background: linear-gradient(180deg, #1c1824ee, #0e0c14f2); border: .1cqw solid #e4dcf5aa; border-radius: 999px; box-shadow: 0 0 .6cqw #000a; white-space: nowrap; }
+.rp-marker-glyph { width: 1.2cqw; height: 1.2cqw; color: #f1c96a; }
 @media (prefers-reduced-motion: reduce) { .lb-loadbar-fill, .lb-wave { animation: none; } }
 /* === end component: lobby === */
 /* === component: player-lobby === */

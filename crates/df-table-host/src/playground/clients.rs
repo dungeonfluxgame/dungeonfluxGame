@@ -8,7 +8,6 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
 
 use axum::Json;
 use axum::body::Bytes;
@@ -17,7 +16,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use df_playground::media::{ClientReport, ClientReportPost};
 
-use super::{done, refused, reject_malformed};
+use super::{done, refused, reject_body};
+use crate::dev_http::parse_body;
 use crate::limits::{
     FORGET_CLIENT_AFTER, MAXIMUM_CLIENT_NAME, MAXIMUM_CLIENTS, MAXIMUM_REPORT_BYTES,
 };
@@ -63,7 +63,8 @@ pub fn check_client_name(name: &str) -> Result<(), ClientNameError> {
     }
 }
 
-type Heard = BTreeMap<String, (Instant, ClientReport)>;
+/// Each page's newest report with the time it came, in milliseconds on the playground's clock.
+type Heard = BTreeMap<String, (u64, ClientReport)>;
 
 /// The pages heard from, by name.
 #[derive(Debug, Default)]
@@ -76,9 +77,9 @@ impl ClientTable {
         self.heard.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Remembers what a page said. The report is bounded, and past `MAXIMUM_CLIENTS` a new page
-    /// replaces the page heard from longest ago.
-    pub fn record(&self, client: String, report: ClientReport) {
+    /// Remembers what a page said at `now_ms`. The report is bounded, and past `MAXIMUM_CLIENTS` a
+    /// new page replaces the page heard from longest ago.
+    pub fn record(&self, client: String, report: ClientReport, now_ms: u64) {
         let mut heard = self.lock();
         if !heard.contains_key(&client)
             && heard.len() >= MAXIMUM_CLIENTS
@@ -89,20 +90,20 @@ impl ClientTable {
         {
             heard.remove(&oldest);
         }
-        heard.insert(client, (Instant::now(), report.bounded()));
+        heard.insert(client, (now_ms, report.bounded()));
     }
 
-    /// The pages heard from as of `now`, with how long ago each last spoke. A page silent for
+    /// The pages heard from as of `now_ms`, with how long ago each last spoke. A page silent for
     /// `FORGET_CLIENT_AFTER` is dropped from the answer and from memory.
-    pub fn views_at(&self, now: Instant) -> Vec<ClientView> {
+    pub fn views_at(&self, now_ms: u64) -> Vec<ClientView> {
+        let forget_after_ms = u64::try_from(FORGET_CLIENT_AFTER.as_millis()).unwrap_or(u64::MAX);
         let mut heard = self.lock();
-        heard.retain(|_, (when, _)| now.saturating_duration_since(*when) < FORGET_CLIENT_AFTER);
+        heard.retain(|_, (when_ms, _)| now_ms.saturating_sub(*when_ms) < forget_after_ms);
         heard
             .iter()
-            .map(|(client, (when, report))| ClientView {
+            .map(|(client, (when_ms, report))| ClientView {
                 client: client.clone(),
-                age_ms: u64::try_from(now.saturating_duration_since(*when).as_millis())
-                    .unwrap_or(u64::MAX),
+                age_ms: now_ms.saturating_sub(*when_ms),
                 report: report.clone(),
             })
             .collect()
@@ -123,9 +124,9 @@ pub(super) async fn receive_report(State(state): State<Arc<AppState>>, body: Byt
             format!("a report is at most {MAXIMUM_REPORT_BYTES} bytes"),
         );
     }
-    let post: ClientReportPost = match serde_json::from_slice(&body) {
+    let post: ClientReportPost = match parse_body(&body) {
         Ok(post) => post,
-        Err(error) => return reject_malformed(&state, &error),
+        Err(error) => return reject_body(&state, &error),
     };
     if let Err(error) = check_client_name(&post.client) {
         return refused(StatusCode::BAD_REQUEST, error.to_string());

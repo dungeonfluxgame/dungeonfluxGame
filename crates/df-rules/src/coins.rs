@@ -36,7 +36,8 @@ impl fmt::Display for CoinError {
             ),
             Self::Overflow => write!(
                 formatter,
-                "the coins would total more than a purse can hold (the copper total passes the largest number a purse can record)"
+                "the coins would total more than a purse can hold (the copper total passes the \
+                    largest number a purse can record)"
             ),
         }
     }
@@ -65,8 +66,8 @@ impl Price {
 /// An in-game purse: counts of copper, silver, electrum, gold and platinum pieces (SRD p.89).
 ///
 /// The counts are not required to be in lowest terms: a purse of 12 cp is valid and stays that way
-/// when a zero-cost payment leaves it unchanged. The only invariant is that the copper total fits in
-/// u64, which every constructor and operation checks.
+/// when a zero-cost payment leaves it unchanged. The only invariant is that the copper total fits
+/// in u64, which every constructor and operation checks.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "CoinsRecord")]
 pub struct Coins {
@@ -98,13 +99,15 @@ impl TryFrom<CoinsRecord> for Coins {
 }
 
 impl Coins {
-    /// A purse with the given counts. Fails with `Overflow` when the copper total does not fit in u64.
+    /// A purse with the given counts. Fails with `Overflow` when the copper total does not fit in
+    /// u64.
     pub fn new(cp: u64, sp: u64, ep: u64, gp: u64, pp: u64) -> Result<Self, CoinError> {
         Self::from_stock([cp, sp, ep, gp, pp])
     }
 
     /// The purse worth `copper` copper pieces in the fewest coins: as many platinum pieces as fit,
-    /// then gold, electrum, silver and copper. Every u64 amount has such a purse, so this cannot fail.
+    /// then gold, electrum, silver and copper. Every u64 amount has such a purse, so this cannot
+    /// fail.
     pub const fn from_copper(copper: u64) -> Self {
         let pp = copper / 1000;
         let rest = copper % 1000;
@@ -155,7 +158,8 @@ impl Coins {
     }
 
     /// The purse with `other` added, denomination by denomination. No change is made: coins
-    /// stay in the counts they came in. Fails with `Overflow` when a count or the total does not fit.
+    /// stay in the counts they came in. Fails with `Overflow` when a count or the total does not
+    /// fit.
     pub fn checked_add(self, other: Coins) -> Result<Coins, CoinError> {
         let mut sum = [0_u64; 5];
         for ((slot, mine), theirs) in sum.iter_mut().zip(self.stock()).zip(other.stock()) {
@@ -174,8 +178,8 @@ impl Coins {
     ///    and there is no change. `smallest_tender` finds it exactly: each denomination divides the
     ///    next, so at each level only the most top coins that fit, or one more, can be part of the
     ///    smallest tender, and the lower coins are searched only for the first of those.
-    /// 2. Change. The overpaid copper is returned as the fewest coins (`from_copper`), in cp, sp, ep,
-    ///    gp and pp. A tender that does not overpay returns no change.
+    /// 2. Change. The overpaid copper is returned as the fewest coins (`from_copper`), in cp, sp,
+    ///    ep, gp and pp. A tender that does not overpay returns no change.
     /// 3. Remainder. The purse keeps every coin the tender did not hand over, so its counts change
     ///    only by the handed coins and the change. A cost of zero returns the purse unchanged.
     ///
@@ -279,10 +283,10 @@ fn keep_smaller(best: Option<Tender>, candidate: Tender) -> Option<Tender> {
 /// Proof sketch. Let `v` be the value of the top level, `n` its count and `q = owed / v`. In a
 /// tender of least value no more than `q + 1` top coins are used, since dropping one of `q + 2`
 /// top coins still pays the owed amount. When fewer than `min(n, q)` top coins are used and the
-/// lower coins reach at least `v`, a lower subset worth exactly `v` exists (each lower value divides
-/// `v`, so the running sum hits `v` exactly), and swapping it for one top coin keeps the value and
-/// lowers the coin count. So the top count is `min(n, q)` or `min(n, q + 1)`, and each choice
-/// leaves a smaller problem for the lower levels.
+/// lower coins reach at least `v`, a lower subset worth exactly `v` exists (each lower value
+/// divides `v`, so the running sum hits `v` exactly), and swapping it for one top coin keeps the
+/// value and lowers the coin count. So the top count is `min(n, q)` or `min(n, q + 1)`, and each
+/// choice leaves a smaller problem for the lower levels.
 pub(crate) fn smallest_tender(
     stock: &[u64; 5],
     levels: usize,
@@ -294,8 +298,8 @@ pub(crate) fn smallest_tender(
     if levels == 0 {
         return Ok(None);
     }
-    // `levels` is at most COPPER_VALUES.len(): callers pass that length and recursion only lowers it,
-    // so `top` indexes the five-element arrays.
+    // `levels` is at most COPPER_VALUES.len(): callers pass that length and recursion only lowers
+    // it, so `top` indexes the five-element arrays.
     let top = levels - 1;
     let value = COPPER_VALUES[top];
     let available = stock[top];

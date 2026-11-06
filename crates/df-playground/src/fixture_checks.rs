@@ -10,7 +10,7 @@ use crate::fixture::{
     Camera, Choice, ElementSource, Fixture, FixtureError, ImageRef, PartyMember, Slide,
 };
 use crate::limits::{MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_PIVOT_PERCENT};
-use crate::overlay_checks;
+use crate::overlay::checks as overlay_checks;
 use crate::scene::SceneError;
 
 /// One step into the JSON of a fixture.
@@ -148,8 +148,8 @@ fn camera_problems(found: &mut Vec<Problem>, camera: &Camera, elements: &Element
         camera.duration_ms,
     ) {
         let key = match error {
-            SceneError::BadZoom(_) => "zoom_percent",
-            SceneError::BadCameraTime(_) => "duration_ms",
+            SceneError::InvalidZoom(_) => "zoom_percent",
+            SceneError::InvalidCameraTime(_) => "duration_ms",
             _ => "target",
         };
         found.push(Problem::new(&at, Step::Key(key), error));
@@ -178,7 +178,7 @@ fn member_problems(found: &mut Vec<Problem>, index: usize, member: &PartyMember)
         found.push(Problem::new(
             &at,
             Step::Key("maximum_hit_points"),
-            SceneError::BadMaximum,
+            SceneError::InvalidMaximum,
         ));
     }
     for (position, condition) in member.conditions.iter().enumerate() {
@@ -275,13 +275,14 @@ fn overlay_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
         }
     }
     if let Some(home) = &fixture.tv.home
-        && let Err(error) = crate::home_checks::home(home)
+        && let Err(error) = crate::home::checks::home(home)
     {
         found.push(Problem::at(&at("home"), error));
     }
     if let Some(seats) = &fixture.tv.seats {
         add_found(found, overlay_checks::seat_strip(&at("seats"), seats));
     }
+    screen_percent_problems(found, fixture);
 }
 
 fn tv_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
@@ -332,7 +333,7 @@ fn tv_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
                     found.push(Problem::new(
                         &pivot,
                         Step::Key(key),
-                        SceneError::BadPivot(percent),
+                        SceneError::InvalidPivot(percent),
                     ));
                 }
             }
@@ -364,7 +365,12 @@ fn problems(fixture: &Fixture) -> Vec<Problem> {
             "media",
             checks::labelled("a media name", &track.media),
         );
-        push(&mut found, &at, "volume", checks::volume(track.volume));
+        push(
+            &mut found,
+            &at,
+            "volume_percent",
+            checks::volume(track.volume_percent),
+        );
     }
     found
 }
@@ -555,6 +561,44 @@ impl<'a> Scanner<'a> {
                 None
             }
             _ => None,
+        }
+    }
+}
+
+/// The percents of the roleplay card and the loading screen, checked with the same rule as a live
+/// edit (`lobby::change::percent`), so a scene file cannot hold a value a live change is refused.
+fn screen_percent_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
+    let mut check = |path: &[Step], key: &'static str, what: &'static str, value: u8| {
+        if let Err(error) = crate::lobby::change::percent(what, value) {
+            found.push(Problem::new(
+                path,
+                Step::Key(key),
+                SceneError::Screen(error),
+            ));
+        }
+    };
+    if let Some(loading) = &fixture.tv.loading {
+        let at = [Step::Key("tv"), Step::Key("loading")];
+        check(&at, "percent", "the loading bar", loading.percent);
+    }
+    let Some(card) = &fixture.tv.roleplay else {
+        return;
+    };
+    for (index, bubble) in card.bubbles.iter().enumerate() {
+        let at = [
+            Step::Key("tv"),
+            Step::Key("roleplay"),
+            Step::Key("bubbles"),
+            Step::Index(index),
+        ];
+        for (key, what, value) in [
+            ("left_percent", "a bubble's left edge", bubble.left_percent),
+            ("top_percent", "a bubble's top", bubble.top_percent),
+            ("width_percent", "a bubble's width", bubble.width_percent),
+            ("tail_x_percent", "a bubble's tail x", bubble.tail_x_percent),
+            ("tail_y_percent", "a bubble's tail y", bubble.tail_y_percent),
+        ] {
+            check(&at, key, what, value);
         }
     }
 }

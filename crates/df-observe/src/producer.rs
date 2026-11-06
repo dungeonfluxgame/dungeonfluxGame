@@ -1,8 +1,16 @@
 use crate::{
     CaptureKey, PendingReceipt, ProducerId, RecordId, Signal, SourceSequence, TelemetryError,
     TelemetryIngress, TelemetryLimits,
+    capture::{
+        BUILD_REVISION_ATTRIBUTES, PRODUCER_ID_ATTRIBUTE, RECORD_ID_ATTRIBUTE, RESOURCE_SCHEMA_URL,
+        SCOPE_SCHEMA_URL, SCOPE_VERSION, SOURCE_SEQUENCE_ATTRIBUTE, is_capture_identity_attribute,
+    },
+    limits::{
+        MAXIMUM_ATTRIBUTES, MAXIMUM_INPUT_NODES, MAXIMUM_NAME_BYTES, MAXIMUM_SPAN_EVENTS,
+        MAXIMUM_SPAN_LINKS, MAXIMUM_SPAN_NAME_BYTES, MAXIMUM_VALUE_DEPTH, MAXIMUM_VALUE_ELEMENTS,
+    },
 };
-use df_types::{BuildIdentity, BuildRevision};
+use df_types::BuildIdentity;
 use opentelemetry::{
     Context, InstrumentationScope, KeyValue,
     logs::{LogRecord, Logger, LoggerProvider},
@@ -30,6 +38,17 @@ use std::{
 
 pub use opentelemetry::logs::{AnyValue, Severity};
 pub use opentelemetry_sdk::trace::SpanData as NativeSpanData;
+
+/// Budget charge for a link's trace and span identity.
+const LINK_IDENTITY_BYTES: usize = 64;
+/// Budget charge for one scalar value.
+const SCALAR_BYTES: usize = 8;
+/// Event name of a log captured without a subsystem-specific name.
+const DEFAULT_LOG_EVENT_NAME: &str = "native.capture";
+/// Service name of a producer built for synthetic fixtures.
+const SYNTHETIC_SERVICE_NAME: &str = "df-telemetry.synthetic-native";
+/// Instrumentation scope of every record a producer captures.
+const PRODUCER_SCOPE: &str = "df-observe.native";
 /// Safe synthetic/native capture input. The owner supplies explicit timestamps and correlation.
 pub struct LogInput {
     pub timestamp: SystemTime,
@@ -56,6 +75,7 @@ impl std::fmt::Debug for LogInput {
             .finish()
     }
 }
+/// Safe synthetic/native span input with explicit times and parent context.
 #[derive(Debug)]
 pub struct SpanInput {
     pub name: String,
@@ -205,7 +225,7 @@ impl NativeProducer {
         limits: TelemetryLimits,
         service: &'static str,
     ) -> Result<Self, TelemetryError> {
-        if service.is_empty() || service.len() > 128 {
+        if service.is_empty() || service.len() > MAXIMUM_NAME_BYTES {
             return Err(TelemetryError::InvalidIdentity);
         }
         Self::build(
@@ -227,37 +247,15 @@ impl NativeProducer {
     ) -> Result<Self, TelemetryError> {
         let limits = limits.validate()?;
         let result = Arc::new(Mutex::new(None));
+        let service_name = KeyValue::new("service.name", service.unwrap_or(SYNTHETIC_SERVICE_NAME));
+        let revisions = BUILD_REVISION_ATTRIBUTES
+            .into_iter()
+            .map(|(name, revision)| {
+                KeyValue::new(name, build.revision(revision).as_str().to_owned())
+            });
         let resource = Resource::builder_empty()
-            .with_attributes([
-                KeyValue::new(
-                    "service.name",
-                    service.unwrap_or("df-telemetry.synthetic-native"),
-                ),
-                KeyValue::new(
-                    "df.build",
-                    build.revision(BuildRevision::Source).as_str().to_owned(),
-                ),
-                KeyValue::new(
-                    "df.native",
-                    build.revision(BuildRevision::Native).as_str().to_owned(),
-                ),
-                KeyValue::new(
-                    "df.wasm",
-                    build.revision(BuildRevision::Wasm).as_str().to_owned(),
-                ),
-                KeyValue::new(
-                    "df.configuration",
-                    build
-                        .revision(BuildRevision::Configuration)
-                        .as_str()
-                        .to_owned(),
-                ),
-                KeyValue::new(
-                    "df.content",
-                    build.revision(BuildRevision::Content).as_str().to_owned(),
-                ),
-            ])
-            .with_schema_url([], "https://dungeonflux.local/telemetry/native-v1")
+            .with_attributes(std::iter::once(service_name).chain(revisions))
+            .with_schema_url([], RESOURCE_SCHEMA_URL)
             .build();
         let exporter = || NativeExporter {
             ingress: Arc::clone(&ingress),
@@ -276,9 +274,9 @@ impl NativeProducer {
             .with_resource(resource)
             .with_simple_exporter(span_exporter)
             .build();
-        let scope = InstrumentationScope::builder("df-observe.native")
-            .with_version("0.1.0")
-            .with_schema_url("https://dungeonflux.local/telemetry/scope-v1")
+        let scope = InstrumentationScope::builder(PRODUCER_SCOPE)
+            .with_version(SCOPE_VERSION)
+            .with_schema_url(SCOPE_SCHEMA_URL)
             .with_attributes([KeyValue::new("fixture.synthetic", service.is_none())])
             .build();
         Ok(Self {
@@ -315,7 +313,7 @@ impl NativeProducer {
         key: CaptureKey,
         input: LogInput,
     ) -> Result<CapturedBatch, TelemetryError> {
-        self.emit_named_log(key, "native.capture", input)
+        self.emit_named_log(key, DEFAULT_LOG_EVENT_NAME, input)
     }
     /// Preserve the emitting subsystem's event name through the shared SDK capture path.
     pub fn emit_named_log(
@@ -325,23 +323,21 @@ impl NativeProducer {
         input: LogInput,
     ) -> Result<CapturedBatch, TelemetryError> {
         if event_name.is_empty()
-            || event_name.len() > 128
+            || event_name.len() > MAXIMUM_NAME_BYTES
             || !event_name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
         {
             return Err(TelemetryError::InvalidIdentity);
         }
-        if key.producer != self.source || input.attributes.len() > 64 {
+        if key.producer != self.source || input.attributes.len() > MAXIMUM_ATTRIBUTES {
             return Err(TelemetryError::InvalidIdentity);
         }
         let mut budget = InputBudget::new(self.limits.record_bytes);
         budget.log_value(&input.body, 0)?;
         for (name, value) in &input.attributes {
-            if name.starts_with("df.producer_id")
-                || name == "df.record_id"
-                || name == "df.source_sequence"
-            {
+            // Logs also refuse any name that merely starts with the producer attribute.
+            if name.starts_with(PRODUCER_ID_ATTRIBUTE) || is_capture_identity_attribute(name) {
                 return Err(TelemetryError::InvalidIdentity);
             }
             budget.node(name.len())?;
@@ -358,9 +354,9 @@ impl NativeProducer {
         record.set_event_name(event_name);
         record.set_body(input.body);
         record.add_attributes(input.attributes);
-        record.add_attribute("df.producer_id", key.producer.hex());
-        record.add_attribute("df.record_id", key.record.hex());
-        record.add_attribute("df.source_sequence", key.sequence.get());
+        record.add_attribute(PRODUCER_ID_ATTRIBUTE, key.producer.hex());
+        record.add_attribute(RECORD_ID_ATTRIBUTE, key.record.hex());
+        record.add_attribute(SOURCE_SEQUENCE_ATTRIBUTE, key.sequence.get());
         if let Some(trace) = input.trace {
             record.set_trace_context(trace.trace_id(), trace.span_id(), Some(trace.trace_flags()));
         }
@@ -383,9 +379,9 @@ impl NativeProducer {
     ) -> Result<CapturedBatch, TelemetryError> {
         if key.producer != self.source
             || !span.span_context.is_valid()
-            || span.attributes.len() > 64
-            || span.events.events.len() > 128
-            || span.links.links.len() > 16
+            || span.attributes.len() > MAXIMUM_ATTRIBUTES
+            || span.events.events.len() > MAXIMUM_SPAN_EVENTS
+            || span.links.links.len() > MAXIMUM_SPAN_LINKS
         {
             return Err(TelemetryError::Oversized);
         }
@@ -407,10 +403,7 @@ impl NativeProducer {
             budget.node(description.len())?;
         }
         for attribute in &span.attributes {
-            if matches!(
-                attribute.key.as_str(),
-                "df.producer_id" | "df.record_id" | "df.source_sequence"
-            ) {
+            if is_capture_identity_attribute(attribute.key.as_str()) {
                 return Err(TelemetryError::InvalidIdentity);
             }
             budget.node(attribute.key.as_str().len())?;
@@ -425,19 +418,16 @@ impl NativeProducer {
             }
         }
         for link in &span.links.links {
-            budget.node(64)?;
+            budget.node(LINK_IDENTITY_BYTES)?;
             for attribute in &link.attributes {
                 budget.node(attribute.key.as_str().len())?;
                 budget.span_value(&attribute.value)?;
             }
         }
-        span.attributes.extend([
-            KeyValue::new("df.producer_id", key.producer.hex()),
-            KeyValue::new("df.record_id", key.record.hex()),
-            KeyValue::new("df.source_sequence", key.sequence.get()),
-        ]);
+        span.attributes.extend(capture_identity_attributes(key));
         let resource_spans = vec![ResourceSpans::new(span, &self.completed_spans.resource)];
-        // The exact admission result is retained in the shared capture slot, including refusal.
+        // The exact admission result, including refusal, is retained in the shared capture slot
+        // and returned by `take_submission`; this SDK-shaped copy carries nothing more.
         let _sdk_outcome = self.completed_spans.submit(
             Signal::Spans,
             ExportTraceServiceRequest { resource_spans }.encode_to_vec(),
@@ -463,18 +453,17 @@ impl NativeProducer {
         span: Option<opentelemetry::trace::SpanContext>,
     ) -> Result<CapturedBatch, TelemetryError> {
         if key.producer != self.source
-            || input.attributes.len() > 64
-            || input.links.len() > 16
-            || input.name.len() > 256
+            || input.attributes.len() > MAXIMUM_ATTRIBUTES
+            || input.links.len() > MAXIMUM_SPAN_LINKS
+            || input.name.len() > MAXIMUM_SPAN_NAME_BYTES
         {
             return Err(TelemetryError::Oversized);
         }
-        if input.attributes.iter().any(|attribute| {
-            matches!(
-                attribute.key.as_str(),
-                "df.producer_id" | "df.record_id" | "df.source_sequence"
-            )
-        }) {
+        if input
+            .attributes
+            .iter()
+            .any(|attribute| is_capture_identity_attribute(attribute.key.as_str()))
+        {
             return Err(TelemetryError::InvalidIdentity);
         }
         let mut budget = InputBudget::new(self.limits.record_bytes);
@@ -484,10 +473,10 @@ impl NativeProducer {
             budget.span_value(&attribute.value)?;
         }
         for link in &input.links {
-            if link.attributes.len() > 64 {
+            if link.attributes.len() > MAXIMUM_ATTRIBUTES {
                 return Err(TelemetryError::Oversized);
             }
-            budget.node(64)?;
+            budget.node(LINK_IDENTITY_BYTES)?;
             for attribute in &link.attributes {
                 budget.node(attribute.key.as_str().len())?;
                 budget.span_value(&attribute.value)?;
@@ -498,11 +487,7 @@ impl NativeProducer {
         if input.end < input.start {
             return Err(TelemetryError::Malformed);
         }
-        input.attributes.extend([
-            KeyValue::new("df.producer_id", key.producer.hex()),
-            KeyValue::new("df.record_id", key.record.hex()),
-            KeyValue::new("df.source_sequence", key.sequence.get()),
-        ]);
+        input.attributes.extend(capture_identity_attributes(key));
         let tracer = self.traces.tracer_with_scope(self.scope.clone());
         let mut builder = tracer
             .span_builder(input.name)
@@ -527,6 +512,14 @@ impl NativeProducer {
             .map_err(|_| TelemetryError::Internal)
     }
 }
+/// The capture identity attributes the shared path appends to every span.
+fn capture_identity_attributes(key: CaptureKey) -> [KeyValue; 3] {
+    [
+        KeyValue::new(PRODUCER_ID_ATTRIBUTE, key.producer.hex()),
+        KeyValue::new(RECORD_ID_ATTRIBUTE, key.record.hex()),
+        KeyValue::new(SOURCE_SEQUENCE_ATTRIBUTE, key.sequence.get()),
+    ]
+}
 fn validate_time(time: SystemTime) -> Result<(), TelemetryError> {
     let nanos = time
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -539,7 +532,6 @@ fn validate_time(time: SystemTime) -> Result<(), TelemetryError> {
 }
 // One budget spans the complete caller input, before SDK conversion or allocation.
 // Nonzero structural charges bound empty values too; the node cap bounds traversal.
-const MAXIMUM_INPUT_NODES: usize = 512;
 const STRUCTURAL_BYTES: usize = 16;
 struct InputBudget {
     bytes_left: usize,
@@ -567,16 +559,18 @@ impl InputBudget {
         Ok(())
     }
     fn log_value(&mut self, value: &AnyValue, depth: usize) -> Result<(), TelemetryError> {
-        if depth > 8 {
+        if depth > MAXIMUM_VALUE_DEPTH {
             return Err(TelemetryError::Oversized);
         }
         match value {
             AnyValue::String(value) => self.node(value.as_str().len()),
             AnyValue::Bytes(value) => self.node(value.len()),
-            AnyValue::Int(_) | AnyValue::Double(_) | AnyValue::Boolean(_) => self.node(8),
+            AnyValue::Int(_) | AnyValue::Double(_) | AnyValue::Boolean(_) => {
+                self.node(SCALAR_BYTES)
+            }
             AnyValue::ListAny(values) => {
                 self.node(0)?;
-                if values.len() > 64 {
+                if values.len() > MAXIMUM_VALUE_ELEMENTS {
                     return Err(TelemetryError::Oversized);
                 }
                 for value in values.iter() {
@@ -586,7 +580,7 @@ impl InputBudget {
             }
             AnyValue::Map(values) => {
                 self.node(0)?;
-                if values.len() > 64 {
+                if values.len() > MAXIMUM_VALUE_ELEMENTS {
                     return Err(TelemetryError::Oversized);
                 }
                 for (name, value) in values.iter() {
@@ -601,16 +595,16 @@ impl InputBudget {
     fn span_value(&mut self, value: &opentelemetry::Value) -> Result<(), TelemetryError> {
         use opentelemetry::{Array, Value};
         match value {
-            Value::Bool(_) | Value::I64(_) | Value::F64(_) => self.node(8),
+            Value::Bool(_) | Value::I64(_) | Value::F64(_) => self.node(SCALAR_BYTES),
             Value::String(value) => self.node(value.as_str().len()),
             Value::Array(array) => {
                 self.node(0)?;
                 match array {
                     Array::Bool(values) => self.scalar_array(values.len(), 1),
-                    Array::I64(values) => self.scalar_array(values.len(), 8),
-                    Array::F64(values) => self.scalar_array(values.len(), 8),
+                    Array::I64(values) => self.scalar_array(values.len(), SCALAR_BYTES),
+                    Array::F64(values) => self.scalar_array(values.len(), SCALAR_BYTES),
                     Array::String(values) => {
-                        if values.len() > 64 {
+                        if values.len() > MAXIMUM_VALUE_ELEMENTS {
                             return Err(TelemetryError::Oversized);
                         }
                         for value in values {
@@ -625,7 +619,7 @@ impl InputBudget {
         }
     }
     fn scalar_array(&mut self, length: usize, element_bytes: usize) -> Result<(), TelemetryError> {
-        if length > 64 {
+        if length > MAXIMUM_VALUE_ELEMENTS {
             return Err(TelemetryError::Oversized);
         }
         for _ in 0..length {
@@ -647,255 +641,4 @@ fn ordered_resource(resource: &Resource) -> ResourceAttributesWithSchema {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    static COMPLETED_SPAN: Mutex<Option<NativeSpanData>> = Mutex::new(None);
-    fn capture_completed_span(span: NativeSpanData) {
-        *COMPLETED_SPAN.lock().unwrap() = Some(span);
-    }
-
-    #[test]
-    fn completed_sdk_span_keeps_events_status_kind_scope_and_enforces_input_budget() {
-        use opentelemetry::trace::{SpanKind, Status};
-        let provider = SdkTracerProvider::builder()
-            .with_simple_exporter(ForwardSpans(capture_completed_span))
-            .build();
-        let tracer = provider.tracer("test.original-scope");
-        let mut span = tracer.build_with_context(
-            tracer
-                .span_builder("test.completed")
-                .with_kind(SpanKind::Client),
-            &Context::new(),
-        );
-        span.add_event("test.event", vec![KeyValue::new("count", 7i64)]);
-        span.set_status(Status::error("test-error-class"));
-        span.end();
-        let completed = COMPLETED_SPAN.lock().unwrap().take().unwrap();
-        let context = completed.span_context.clone();
-        let event_time = completed.events.events[0].timestamp;
-        let build = BuildIdentity::new(
-            Some("build"),
-            Some("native"),
-            Some("none"),
-            Some("config"),
-            Some("none"),
-        )
-        .unwrap();
-        let mut producer = NativeProducer::for_service(
-            ProducerId::new([1; 16]).unwrap(),
-            SourceSequence::new(1).unwrap(),
-            &build,
-            Arc::new(Accepted),
-            TelemetryLimits::default(),
-            "test.service",
-        )
-        .unwrap();
-        let mut oversized = completed.clone();
-        oversized.events.events[0].name = "x".repeat(8192).into();
-        let key = producer.reserve(RecordId::new([2; 16]).unwrap()).unwrap();
-        assert!(matches!(
-            producer.emit_finished_span(key, oversized),
-            Err(TelemetryError::Oversized)
-        ));
-        let key = producer.reserve(RecordId::new([3; 16]).unwrap()).unwrap();
-        let captured = producer.emit_finished_span(key, completed).unwrap();
-        captured.pending.wait(Duration::from_secs(1)).unwrap();
-        let request = ExportTraceServiceRequest::decode(captured.bytes.as_slice()).unwrap();
-        let scope = &request.resource_spans[0].scope_spans[0];
-        assert_eq!(scope.scope.as_ref().unwrap().name, "test.original-scope");
-        let span = &scope.spans[0];
-        assert_eq!(span.trace_id, context.trace_id().to_bytes());
-        assert_eq!(span.span_id, context.span_id().to_bytes());
-        assert_eq!(span.kind, 3);
-        assert_eq!(span.status.as_ref().unwrap().code, 2);
-        assert_eq!(span.status.as_ref().unwrap().message, "test-error-class");
-        assert_eq!(span.events.len(), 1);
-        assert_eq!(span.events[0].name, "test.event");
-        assert_eq!(
-            u128::from(span.events[0].time_unix_nano),
-            event_time
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        producer.shutdown(Duration::from_secs(1)).unwrap();
-        provider.shutdown().unwrap();
-    }
-
-    #[derive(Debug)]
-    struct Accepted;
-    impl TelemetryIngress for Accepted {
-        fn submit(&self, _: Signal, _: &[u8]) -> Result<PendingReceipt, TelemetryError> {
-            let (sender, receipt) = PendingReceipt::channel();
-            sender
-                .send(Ok(crate::IngestReceipt {
-                    durability: crate::Durability::Committed,
-                    spool_position: 1,
-                    committed_watermark: 1,
-                    records: 1,
-                }))
-                .unwrap();
-            Ok(receipt)
-        }
-    }
-
-    #[test]
-    fn service_capture_preserves_severity_resource_and_dispatched_span_identity() {
-        use opentelemetry::trace::{
-            SpanContext, SpanId, TraceContextExt, TraceFlags, TraceId, TraceState,
-        };
-        use opentelemetry_proto::tonic::common::v1::any_value;
-        let build = BuildIdentity::new(
-            Some("build"),
-            Some("native"),
-            Some("none"),
-            Some("config"),
-            Some("none"),
-        )
-        .unwrap();
-        let mut producer = NativeProducer::for_service(
-            ProducerId::new([1; 16]).unwrap(),
-            SourceSequence::new(1).unwrap(),
-            &build,
-            Arc::new(Accepted),
-            TelemetryLimits::default(),
-            "df-portal-hosted",
-        )
-        .unwrap();
-        let span = SpanContext::new(
-            TraceId::from_bytes([3; 16]),
-            SpanId::from_bytes([4; 8]),
-            TraceFlags::SAMPLED,
-            false,
-            TraceState::default(),
-        );
-        let key = producer.reserve(RecordId::new([2; 16]).unwrap()).unwrap();
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
-        let captured = producer
-            .emit_log(
-                key,
-                LogInput {
-                    timestamp: now,
-                    observed_timestamp: now,
-                    severity: Severity::Error,
-                    body: AnyValue::String("failed".into()),
-                    attributes: vec![("count".to_owned(), AnyValue::Int(1))],
-                    trace: Some(span.clone()),
-                },
-            )
-            .unwrap();
-        captured.pending.wait(Duration::from_secs(1)).unwrap();
-        let request = ExportLogsServiceRequest::decode(captured.bytes.as_slice()).unwrap();
-        let resource = &request.resource_logs[0];
-        assert!(resource.resource.as_ref().unwrap().attributes.iter().any(
-            |attribute| attribute.key == "service.name"
-                && attribute.value.as_ref().unwrap().value
-                    == Some(any_value::Value::StringValue("df-portal-hosted".to_owned()))
-        ));
-        let scope = &resource.scope_logs[0];
-        assert!(
-            scope
-                .scope
-                .as_ref()
-                .unwrap()
-                .attributes
-                .iter()
-                .any(|attribute| attribute.key == "fixture.synthetic"
-                    && attribute.value.as_ref().unwrap().value
-                        == Some(any_value::Value::BoolValue(false)))
-        );
-        let record = &scope.log_records[0];
-        assert_eq!(record.severity_number, 17);
-        assert_eq!(record.severity_text, "ERROR");
-        assert_eq!(record.trace_id, [3; 16]);
-        assert_eq!(record.span_id, [4; 8]);
-        assert!(
-            record
-                .attributes
-                .iter()
-                .any(|attribute| attribute.key == "count"
-                    && attribute.value.as_ref().unwrap().value
-                        == Some(any_value::Value::IntValue(1)))
-        );
-        let key = producer.reserve(RecordId::new([5; 16]).unwrap()).unwrap();
-        let parent = SpanContext::new(
-            span.trace_id(),
-            SpanId::from_bytes([6; 8]),
-            TraceFlags::SAMPLED,
-            true,
-            TraceState::default(),
-        );
-        let captured = producer
-            .emit_correlated_span(
-                key,
-                SpanInput {
-                    name: "request".to_owned(),
-                    start: now,
-                    end: now + Duration::from_secs(1),
-                    parent: Context::new().with_remote_span_context(parent),
-                    links: Vec::new(),
-                    attributes: Vec::new(),
-                },
-                span,
-            )
-            .unwrap();
-        captured.pending.wait(Duration::from_secs(1)).unwrap();
-        let request = ExportTraceServiceRequest::decode(captured.bytes.as_slice()).unwrap();
-        let record = &request.resource_spans[0].scope_spans[0].spans[0];
-        assert_eq!(record.trace_id, [3; 16]);
-        assert_eq!(record.span_id, [4; 8]);
-        assert_eq!(record.parent_span_id, [6; 8]);
-        producer.shutdown(Duration::from_secs(1)).unwrap();
-    }
-
-    fn tree(depth: usize) -> AnyValue {
-        if depth == 0 {
-            AnyValue::String("".into())
-        } else {
-            AnyValue::ListAny(Box::new((0..16).map(|_| tree(depth - 1)).collect()))
-        }
-    }
-
-    #[test]
-    fn empty_tree_preflight_exhausts_one_shared_budget_before_sdk_work() {
-        let mut budget = InputBudget::new(8192);
-        budget.log_value(&tree(2), 0).unwrap();
-        assert_eq!(budget.nodes_left, MAXIMUM_INPUT_NODES - 273);
-        assert!(matches!(
-            budget.log_value(&tree(2), 0),
-            Err(TelemetryError::Oversized)
-        ));
-        // Successful charges can never exceed 512. Each rejected traversal stops
-        // at its first failed charge; no subsequent sibling is visited.
-        assert_eq!(budget.nodes_left, 0);
-        for depth in [3, 4] {
-            let mut budget = InputBudget::new(8192);
-            assert_eq!(
-                budget.log_value(&tree(depth), 0),
-                Err(TelemetryError::Oversized)
-            );
-            assert_eq!(budget.nodes_left, 0);
-        }
-    }
-
-    #[test]
-    fn empty_maps_and_span_arrays_charge_structure_across_attributes_and_links() {
-        let mut budget = InputBudget::new(8192);
-        let empty_map = AnyValue::Map(Box::default());
-        budget.log_value(&empty_map, 0).unwrap();
-        assert_eq!(budget.bytes_left, 8192 - STRUCTURAL_BYTES);
-        let values = opentelemetry::Value::Array(opentelemetry::Array::String(vec!["".into(); 64]));
-        for _ in 0..7 {
-            budget.node(0).unwrap();
-            budget.span_value(&values).unwrap();
-        }
-        assert_eq!(budget.span_value(&values), Err(TelemetryError::Oversized));
-        let mut small = InputBudget::new(31);
-        small.log_value(&AnyValue::String("".into()), 0).unwrap();
-        assert_eq!(
-            small.log_value(&AnyValue::ListAny(Box::default()), 0),
-            Err(TelemetryError::Oversized)
-        );
-    }
-}
+mod producer_tests;

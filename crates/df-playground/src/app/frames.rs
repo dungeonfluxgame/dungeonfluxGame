@@ -14,20 +14,18 @@ use super::assets::{load_selected_fixture, refresh_assets};
 use super::page::{render, update_stage};
 use super::report::send_report;
 use super::sound::sync_audio;
-use super::state::{
-    CANVAS_ADDRESS, CHANGE_ADDRESS, CONTROLS_ADDRESS, FRAME_ADDRESS, PageError, REVISION_ADDRESS,
-    log_error, set_problem, with_app, with_app_mut,
-};
+use super::state::{PageError, log_error, set_problem, with_app, with_app_mut};
 use crate::audio;
 use crate::backoff::retry_delay_ms;
 use crate::continuity::{Admit, canvas_accepts};
-use crate::controls::{ControlsChange, ControlsReply};
+use crate::controls::{ControlsChange, ControlsChangeReply, ControlsReply};
 use crate::decisions::{controls_effect, fixture_load_needed};
 use crate::dom::{js_message, with_continuity};
 use crate::draw_plan::{frame_action, wants_live};
 use crate::frame::{FrameReply, LiveCanvas, LiveFrame, frame_address, parse_frame_reply};
-use crate::limits::{HEARTBEAT_POLLS, POLL_MS};
-use crate::net::{fetch_text, post_json};
+use crate::limits::{HEARTBEAT_POLLS, LONGEST_BROWSER_TIMER_MS, POLL_MS};
+use crate::net::{NetError, fetch_text, post_json};
+use crate::path;
 
 /// What a look at the host's controls found.
 #[derive(Debug, Clone, Copy, Default)]
@@ -104,12 +102,9 @@ fn apply_canvas(boot_id: &str, canvas: LiveCanvas) -> bool {
 /// no frame of it yet. A canvas is taken only if the page still follows that run and has nothing
 /// newer, so a slow read never undoes a frame that arrived meanwhile.
 async fn refresh_canvas(boot_id: String) {
-    let canvas = match fetch_text(CANVAS_ADDRESS).await {
-        Ok(text) => serde_json::from_str::<LiveCanvas>(&text).map_err(|error| PageError::NotRead {
-            address: CANVAS_ADDRESS,
-            wanted: "a canvas",
-            reason: error.to_string(),
-        }),
+    let canvas = match fetch_text(path::CANVAS).await {
+        Ok(text) => serde_json::from_str::<LiveCanvas>(&text)
+            .map_err(PageError::not_read(path::CANVAS, "a canvas")),
         Err(error) => Err(error.into()),
     };
     match canvas {
@@ -125,14 +120,9 @@ async fn refresh_canvas(boot_id: String) {
 
 /// Reads the host's controls. An unreadable answer is shown as a connection problem.
 async fn refresh_controls() -> ControlsUpdate {
-    let reply = match fetch_text(CONTROLS_ADDRESS).await {
-        Ok(text) => {
-            serde_json::from_str::<ControlsReply>(&text).map_err(|error| PageError::NotRead {
-                address: CONTROLS_ADDRESS,
-                wanted: "the controls",
-                reason: error.to_string(),
-            })
-        }
+    let reply = match fetch_text(path::CONTROLS).await {
+        Ok(text) => serde_json::from_str::<ControlsReply>(&text)
+            .map_err(PageError::not_read(path::CONTROLS, "the controls")),
         Err(error) => Err(error.into()),
     };
     match reply {
@@ -151,6 +141,28 @@ async fn refresh_controls() -> ControlsUpdate {
     }
 }
 
+/// Reads the host's answer to a change: the controls after it, or the host's sentence when it
+/// refused, whatever the status. An answer that is neither keeps its network error.
+fn read_change_answer(answer: Result<String, NetError>) -> Result<ControlsReply, PageError> {
+    let address = path::CONTROLS_CHANGE;
+    let refused = |message| PageError::Rejected { address, message };
+    match answer {
+        Ok(text) => serde_json::from_str::<ControlsChangeReply>(&text)
+            .map_err(PageError::not_read(address, "a reply to a change"))?
+            .into_result()
+            .map_err(refused),
+        Err(error) => {
+            let NetError::Status { body, .. } = &error else {
+                return Err(error.into());
+            };
+            match serde_json::from_str::<ControlsChangeReply>(body) {
+                Ok(ControlsChangeReply::Rejected { message }) => Err(refused(message)),
+                Ok(ControlsChangeReply::Done { .. }) | Err(_) => Err(error.into()),
+            }
+        }
+    }
+}
+
 /// Sends one change to the host and draws what it answers.
 pub async fn send_change(change: ControlsChange) {
     let body = match serde_json::to_string(&change) {
@@ -160,17 +172,7 @@ pub async fn send_change(change: ControlsChange) {
             return;
         }
     };
-    let answer = post_json(CHANGE_ADDRESS, &body)
-        .await
-        .map_err(PageError::from)
-        .and_then(|text| {
-            serde_json::from_str::<ControlsReply>(&text).map_err(|error| PageError::NotRead {
-                address: CHANGE_ADDRESS,
-                wanted: "the controls",
-                reason: error.to_string(),
-            })
-        });
-    match answer {
+    match read_change_answer(post_json(path::CONTROLS_CHANGE, &body).await) {
         Ok(reply) => {
             let boot_id = reply.boot_id.clone();
             let update = apply_controls(reply);
@@ -239,16 +241,12 @@ async fn apply_frame(frame: LiveFrame) {
 /// again.
 async fn follow_frames() {
     loop {
-        let address = with_app(|app| frame_address(FRAME_ADDRESS, app.frame, app.gate.boot_id()));
+        let address = with_app(|app| frame_address(path::FRAME, app.frame, app.gate.boot_id()));
         let answer = fetch_text(&address)
             .await
             .map_err(PageError::from)
             .and_then(|text| {
-                parse_frame_reply(&text).map_err(|error| PageError::NotRead {
-                    address: FRAME_ADDRESS,
-                    wanted: "a frame",
-                    reason: error.to_string(),
-                })
+                parse_frame_reply(&text).map_err(PageError::not_read(path::FRAME, "a frame"))
             });
         match answer {
             Ok(FrameReply::Frame(frame)) => {
@@ -275,7 +273,7 @@ async fn follow_frames() {
                 if first_failure {
                     render();
                 }
-                TimeoutFuture::new(retry_delay_ms(failures)).await;
+                wait_ms(retry_delay_ms(failures)).await;
             }
         }
     }
@@ -290,7 +288,7 @@ fn package_part(revision: &str) -> Option<&str> {
 /// theme, the fixture list and the fixture, and the controls are read once more in case a frame
 /// was lost.
 async fn poll() {
-    let Ok(revision) = fetch_text(REVISION_ADDRESS).await else {
+    let Ok(revision) = fetch_text(path::REVISION).await else {
         // The frame loop reports the host being unreachable.
         return;
     };
@@ -341,8 +339,13 @@ pub async fn run() {
     render();
     spawn_local(follow_frames());
     loop {
-        let wait = POLL_MS.max(retry_delay_ms(with_app(|app| app.failures)));
-        TimeoutFuture::new(wait).await;
+        wait_ms(POLL_MS.max(retry_delay_ms(with_app(|app| app.failures)))).await;
         poll().await;
     }
+}
+
+/// Waits `ms` milliseconds, held at the longest wait a browser timer takes.
+fn wait_ms(ms: u64) -> TimeoutFuture {
+    let held = ms.min(LONGEST_BROWSER_TIMER_MS);
+    TimeoutFuture::new(u32::try_from(held).unwrap_or(u32::MAX))
 }

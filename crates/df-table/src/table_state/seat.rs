@@ -73,8 +73,8 @@ impl SeatState {
             hero,
         } = self;
         digest.text(presence.key());
-        digest.option(scene, |digest, scene| digest.number(scene.get()));
-        digest.option(hero, |digest, hero| digest.text(hero.as_str()));
+        digest.option(scene.as_ref(), |digest, scene| digest.number(scene.get()));
+        digest.option(hero.as_ref(), |digest, hero| digest.text(hero.as_str()));
     }
 }
 

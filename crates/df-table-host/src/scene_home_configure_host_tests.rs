@@ -4,7 +4,7 @@
 //! settings-panel verb sequence run in order.
 
 use df_playground::fixture::Fixture;
-use df_playground::home_configure::{ConfigureData, Row};
+use df_playground::home::configure::{ConfigureData, Row};
 
 use crate::client::get;
 use crate::command::split_words;

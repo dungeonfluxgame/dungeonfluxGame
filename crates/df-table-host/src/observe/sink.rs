@@ -41,6 +41,12 @@ pub enum EventLevel {
 }
 
 impl EventLevel {
+    pub const ALL: [Self; 2] = [Self::Always, Self::Verbose];
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|level| level.key() == key)
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Always => "always",

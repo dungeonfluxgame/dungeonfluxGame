@@ -16,35 +16,39 @@
 //! shows plates in order at the rhythm of K.3. It holds no secret and calls no real provider.
 
 use std::collections::VecDeque;
-use std::fmt::Display;
+use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use df_table::element::NameError;
 use df_table::identity::{SceneId, TableId};
-use df_table::lookahead::{PlanView, Take};
-use df_table::lookahead_settings::LookaheadSettings;
-use df_table::plate_buffer::{StageMoment, Step, StepAction};
-use df_table::plate_timing::{PlateTiming, SceneBuildKind};
-use df_table::ports::{Clock, PurposeName};
-use df_table::scene_plan_brief::SceneBrief;
-use df_table::table_state::DisplayName;
+use df_table::lookahead::settings::LookaheadSettings;
+use df_table::lookahead::{LookaheadError, PlanView, Take};
+use df_table::plate::buffer::{StageMoment, Step, StepAction};
+use df_table::plate::timing::{PlateTiming, SceneBuildKind};
+use df_table::ports::Clock;
+use df_table::scene_plan::brief::SceneBrief;
+use df_table::units::MILLISECONDS_PER_SECOND;
 
 use super::builder::SceneBuilder;
 use super::dev_world::{
     DevWorld, HERO_ROW_Y, HEROES, ManualClock, WorldError, dev_brief, dev_script,
 };
-use super::events::{SceneBuilderAudit, SceneBuilderEvent, end_key};
+use super::events::{SceneBuilderAudit, SceneBuilderEvent};
 use super::fakes::{FakeStageWorker, StageScript};
 use super::inputs::StageInputs;
+use super::limits::{MAXIMUM_DEV_VIRTUAL_MS, MAXIMUM_KEPT_EVENTS};
 use super::lookahead::request::{LookaheadReply, LookaheadRequest};
 use super::lookahead::{BenchContext, LookaheadBench};
 use super::pacer::{PacerError, ScenePacer};
-use super::purposes::{BuildPriority, StagePurposes, cost_view, scene_purpose_table};
+use super::purposes::{BuildPriority, cost_view, dev_stage_purpose, scene_purpose_table};
 use super::report::{LocateReport, SceneReport};
 use super::request::{
-    BufferShow, BuildOutcome, BuildReply, BuildRequest, DevStage, PlatesReport, RunReply,
-    RunRequest, SceneError, SceneShow, SlowStage, TimedLine,
+    BufferShow, BuildEnd, BuildOutcome, BuildReply, BuildRequest, DevStage, LookaheadTake,
+    PlatesReport, RunReply, RunRequest, SceneBuilderError, SceneShow, SlowStage, TimedLine,
+    WorkbenchCause,
 };
 use crate::broker::providers::ScriptedCall;
+use crate::broker::purpose::PurposeError;
 use crate::broker::request::{ProviderFault, WorkerId};
 use crate::broker::scheduler::BrokerLimits;
 use crate::broker::{BrokerAudit, BrokerEvent, BrokerHub};
@@ -53,21 +57,15 @@ use crate::event_log::EventLog;
 /// How far the workbench's clock moves between looks at the pipeline, in milliseconds: a tenth of
 /// a second, fine enough that a stage's time is read to the tenth.
 pub const DEV_STEP_MS: u64 = 100;
-/// The longest a build may take in the workbench's own time before it stops waiting: an hour, far
-/// past every deadline in the broker, so only a pipeline that cannot finish reaches it.
-pub const MAXIMUM_DEV_VIRTUAL_MS: u64 = 3_600_000;
 /// The reading time the dev screen assumes for the lines over a plate, in milliseconds: a plate
 /// stays up at least this long before the next one replaces it (K.5: cards of three seconds).
 pub const DEV_READING_MS: u64 = 3_000;
-/// Most audit events one run keeps for its answer; the oldest are forgotten first. Deliberately huge.
-const MAXIMUM_KEPT_EVENTS: usize = 1_000_000;
 /// How far a creature steps along the row when the workbench makes a visible change, in canvas
 /// units, and how many steps it takes before it starts again.
 const VISIBLE_STEP_UNITS: u32 = 4;
 const VISIBLE_STEPS: u64 = 7;
 /// The hero the workbench moves to make a visible change.
 const MOVER: usize = 0;
-const MILLISECONDS_PER_SECOND: u64 = 1_000;
 
 /// One recorded change of the pipeline, typed.
 enum Recorded {
@@ -150,14 +148,14 @@ fn summarise(events: Vec<(u64, Recorded)>) -> Taken {
                 }
                 SceneBuilderEvent::StageFailed { stage, cause, .. } => {
                     taken.last_end = Some(BuildOutcome::Ended {
-                        end: "failed".to_owned(),
-                        stage: Some(stage.key().to_owned()),
-                        cause: Some(cause.key().to_owned()),
+                        end: BuildEnd::Failed,
+                        stage: Some(*stage),
+                        cause: Some(*cause),
                     });
                 }
                 SceneBuilderEvent::JobEnded { end, .. } if taken.last_end.is_none() => {
                     taken.last_end = Some(BuildOutcome::Ended {
-                        end: end_key(*end).to_owned(),
+                        end: BuildEnd::from(*end),
                         stage: None,
                         cause: None,
                     });
@@ -182,6 +180,13 @@ struct Active {
     ready_ms: Option<u64>,
 }
 
+/// The scene a build entered, and what the look-ahead had built for it.
+struct Entered {
+    scene: SceneId,
+    generation: u64,
+    take: Take,
+}
+
 /// The pipeline, the fake providers and the dev table, together.
 pub struct Workbench {
     clock: Arc<ManualClock>,
@@ -197,32 +202,86 @@ pub struct Workbench {
     finished_build_ms: u64,
 }
 
-fn workbench_error(reason: impl Display) -> SceneError {
-    SceneError::Workbench {
-        reason: reason.to_string(),
+/// A part of the workbench failed. The source stays typed here. The reply carries its
+/// `WorkbenchCause` and its sentence, because the sources are not wire values; `failed` and
+/// `not_started` are that one lossy step, named at each call so no `?` erases a source unseen.
+#[derive(Debug)]
+pub enum WorkbenchError {
+    World(WorldError),
+    Pacer(PacerError),
+    Purposes(PurposeError),
+    PurposeName(NameError),
+    Lookahead(LookaheadError),
+}
+
+impl WorkbenchError {
+    pub fn cause(&self) -> WorkbenchCause {
+        match self {
+            Self::World(_) => WorkbenchCause::World,
+            Self::Pacer(_) => WorkbenchCause::Pacer,
+            Self::Purposes(_) | Self::PurposeName(_) => WorkbenchCause::Purposes,
+            Self::Lookahead(_) => WorkbenchCause::Lookahead,
+        }
+    }
+
+    /// The refusal of a call that failed in a part of the workbench.
+    pub fn failed(source: impl Into<Self>) -> SceneBuilderError {
+        let error = source.into();
+        SceneBuilderError::Workbench {
+            cause: error.cause(),
+            detail: error.to_string(),
+        }
+    }
+
+    /// The refusal of every call to routes whose workbench failed to start with this error.
+    pub fn not_started(&self) -> SceneBuilderError {
+        SceneBuilderError::NotStarted {
+            cause: self.cause(),
+            detail: self.to_string(),
+        }
     }
 }
 
-impl From<WorldError> for SceneError {
-    fn from(error: WorldError) -> Self {
-        workbench_error(error)
+impl fmt::Display for WorkbenchError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::World(error) => write!(formatter, "{error}"),
+            Self::Pacer(error) => write!(formatter, "{error}"),
+            Self::Purposes(error) => {
+                write!(formatter, "the purpose table cannot be built: {error}")
+            }
+            Self::PurposeName(error) => {
+                write!(formatter, "a stage's purpose is not a name: {error}")
+            }
+            Self::Lookahead(error) => {
+                write!(formatter, "the look-ahead planner refused: {error}")
+            }
+        }
     }
 }
 
-impl From<PacerError> for SceneError {
-    fn from(error: PacerError) -> Self {
-        workbench_error(error)
-    }
+impl std::error::Error for WorkbenchError {}
+
+/// `From` each source into `WorkbenchError`, so `?` works in a function that answers it.
+macro_rules! workbench_error_from {
+    ($($source:ty => $variant:ident),+ $(,)?) => {
+        $(
+            impl From<$source> for WorkbenchError {
+                fn from(source: $source) -> Self {
+                    Self::$variant(source)
+                }
+            }
+        )+
+    };
 }
 
-/// The purpose a dev stage asks the broker for, for the table's own scene.
-fn purpose_of(stage: DevStage) -> Result<PurposeName, SceneError> {
-    let purposes = StagePurposes::for_priority(BuildPriority::Current).map_err(workbench_error)?;
-    purposes
-        .of(stage.scene_stage())
-        .cloned()
-        .ok_or_else(|| workbench_error("a dev stage has no purpose"))
-}
+workbench_error_from!(
+    WorldError => World,
+    PacerError => Pacer,
+    PurposeError => Purposes,
+    NameError => PurposeName,
+    LookaheadError => Lookahead,
+);
 
 /// The script with the dev tweaks on it: a slower stage and a stage that refuses.
 fn tweak_script(
@@ -230,7 +289,8 @@ fn tweak_script(
     brief: &SceneBrief,
     fail: Option<DevStage>,
     slow: Option<SlowStage>,
-) -> Result<StageScript, SceneError> {
+) -> Result<StageScript, NameError> {
+    let purpose_of = |stage| dev_stage_purpose(BuildPriority::Current, stage);
     let mut script = script;
     if let Some(SlowStage { stage, seconds }) = slow {
         script = script.with_latency(
@@ -260,14 +320,14 @@ fn tweak_script(
 
 impl Workbench {
     /// A workbench whose events also go to `log`, when there is one.
-    pub fn new(timing: PlateTiming, log: Option<Arc<EventLog>>) -> Result<Self, SceneError> {
+    pub fn new(timing: PlateTiming, log: Option<Arc<EventLog>>) -> Result<Self, WorkbenchError> {
         let clock = Arc::new(ManualClock::default());
         let audit = Arc::new(TimedAudit {
             clock: Arc::clone(&clock),
             log,
             kept: Mutex::new(VecDeque::new()),
         });
-        let table = scene_purpose_table().map_err(workbench_error)?;
+        let table = scene_purpose_table()?;
         let hub = Arc::new(BrokerHub::new(
             table.clone(),
             BrokerLimits::default(),
@@ -279,7 +339,7 @@ impl Workbench {
             Arc::clone(&hub),
             Arc::clone(&audit) as Arc<dyn SceneBuilderAudit>,
             Arc::clone(&inputs),
-            LookaheadSettings::defaults(),
+            LookaheadSettings::default(),
         )?;
         let worker = FakeStageWorker::new(
             Arc::clone(&hub),
@@ -315,11 +375,13 @@ impl Workbench {
     }
 
     /// Makes the visible change of the beat: the mover steps along the row.
-    fn make_visible_change(&mut self, now_ms: u64) -> Result<(), SceneError> {
+    fn make_visible_change(&mut self, now_ms: u64) -> Result<(), SceneBuilderError> {
         let (id, _, _, home_x) = HEROES[MOVER];
         let step = now_ms / MILLISECONDS_PER_SECOND % VISIBLE_STEPS;
         let shift = u32::try_from(step).unwrap_or(0) * VISIBLE_STEP_UNITS;
-        self.world.move_cast(id, home_x + shift, HERO_ROW_Y)?;
+        self.world
+            .move_cast(id, home_x + shift, HERO_ROW_Y)
+            .map_err(WorkbenchError::failed)?;
         Ok(())
     }
 
@@ -336,7 +398,7 @@ impl Workbench {
     }
 
     /// Moves the clock a tenth of a second and looks at the pipeline once.
-    fn step(&mut self, moment: StageMoment, make_changes: bool) -> Result<Step, SceneError> {
+    fn step(&mut self, moment: StageMoment, make_changes: bool) -> Result<Step, SceneBuilderError> {
         self.clock.advance_ms(DEV_STEP_MS);
         let now = self.now_ms();
         let tick_due = self
@@ -349,15 +411,21 @@ impl Workbench {
         }
         let snapshot = self.world.snapshot();
         self.worker.pump(now);
-        let active = self.active.as_mut().ok_or(SceneError::NothingBuilt)?;
-        let pumped = active.pacer.pump(
-            now,
-            &snapshot,
-            &active.brief,
-            &mut self.builder,
-            moment,
-            DEV_READING_MS,
-        )?;
+        let active = self
+            .active
+            .as_mut()
+            .ok_or(SceneBuilderError::NothingBuilt)?;
+        let pumped = active
+            .pacer
+            .pump(
+                now,
+                &snapshot,
+                &active.brief,
+                &mut self.builder,
+                moment,
+                DEV_READING_MS,
+            )
+            .map_err(WorkbenchError::failed)?;
         if matches!(pumped.step.action, StepAction::Swapped(_)) && active.ready_ms.is_none() {
             active.ready_ms = Some(now);
         }
@@ -368,11 +436,36 @@ impl Workbench {
 
     /// The dev party enters a new scene called `place` and the scene is built until its first plate
     /// is on screen, or the build ends without one.
-    pub fn build(&mut self, request: &BuildRequest) -> Result<BuildReply, SceneError> {
-        let place = DisplayName::new(&request.place).map_err(|_| SceneError::InvalidName {
-            what: "the place".to_owned(),
-        })?;
+    pub fn build(&mut self, request: &BuildRequest) -> Result<BuildReply, SceneBuilderError> {
         self.audit.take();
+        let started_ms = self.now_ms();
+        let entered = self.enter_next_scene(request)?;
+        let on_screen_at = self.run_until_first_plate(started_ms)?;
+        let taken = self.take_run();
+        let outcome = match on_screen_at {
+            Some(at_ms) => BuildOutcome::PlateOnScreen { at_ms },
+            None => taken.last_end.clone().unwrap_or(BuildOutcome::NoPlate),
+        };
+        let scene = entered.scene.get();
+        Ok(BuildReply {
+            place: request.place.clone(),
+            scene,
+            generation: entered.generation,
+            outcome,
+            elapsed_ms: self.now_ms().saturating_sub(started_ms),
+            card_due_after_ms: taken.card_due_after_ms,
+            lines: taken.lines,
+            scene_report: self
+                .scene_reports()
+                .into_iter()
+                .find(|report| report.scene == scene),
+            lookahead: LookaheadTake::of(&entered.take),
+        })
+    }
+
+    /// The dev party enters the next scene, and its build starts: through the broker, or from what
+    /// the look-ahead built for it.
+    fn enter_next_scene(&mut self, request: &BuildRequest) -> Result<Entered, SceneBuilderError> {
         let scene = SceneId::new(self.next_scene);
         let kind = if self.next_scene == 1 {
             SceneBuildKind::FirstScene
@@ -380,20 +473,23 @@ impl Workbench {
             SceneBuildKind::Standard
         };
         self.next_scene += 1;
-        let generation = self.world.enter_scene(scene)?;
-        self.world.people_of(scene)?;
+        let generation = self
+            .world
+            .enter_scene(scene)
+            .map_err(WorkbenchError::failed)?;
+        self.world
+            .people_of(scene)
+            .map_err(WorkbenchError::failed)?;
         let snapshot = self.world.snapshot();
-        let brief = dev_brief(scene, place.as_str())?;
+        let brief = dev_brief(scene, request.place.as_str()).map_err(WorkbenchError::failed)?;
         let started_ms = self.now_ms();
         // The look-ahead is asked before the broker's epoch moves to the scene: a build that is
         // not done is cancelled as late, and the scene is built the normal way.
         let take = self.lookahead.enter(started_ms, scene, &snapshot, &brief);
-        self.worker.set_script(tweak_script(
-            dev_script()?,
-            &brief,
-            request.fail,
-            request.slow,
-        )?);
+        let script = dev_script().map_err(WorkbenchError::failed)?;
+        let script = tweak_script(script, &brief, request.fail, request.slow)
+            .map_err(WorkbenchError::failed)?;
+        self.worker.set_script(script);
         let mut pacer = ScenePacer::new(
             scene,
             self.timing,
@@ -403,52 +499,42 @@ impl Workbench {
             Take::Hit(booked) | Take::Redress(booked) => Some(&booked.outputs),
             _ => None,
         };
-        pacer.enter_scene_with(
-            started_ms,
-            &snapshot,
-            &brief,
-            kind,
-            &mut self.builder,
-            built,
-        )?;
+        pacer
+            .enter_scene_with(
+                started_ms,
+                &snapshot,
+                &brief,
+                kind,
+                &mut self.builder,
+                built,
+            )
+            .map_err(WorkbenchError::failed)?;
         self.active = Some(Active {
             scene,
             brief,
             pacer,
             ready_ms: None,
         });
-        let on_screen_at = self.run_until_first_plate(started_ms)?;
-        let taken = self.take_run();
-        let outcome = match on_screen_at {
-            Some(at_ms) => BuildOutcome::PlateOnScreen { at_ms },
-            None => taken.last_end.clone().unwrap_or(BuildOutcome::NoPlate),
-        };
-        Ok(BuildReply {
-            place: place.as_str().to_owned(),
-            scene: scene.get(),
+        Ok(Entered {
+            scene,
             generation: generation.get(),
-            outcome,
-            elapsed_ms: self.now_ms().saturating_sub(started_ms),
-            card_due_after_ms: taken.card_due_after_ms,
-            lines: taken.lines,
-            scene_report: self
-                .scene_reports()
-                .into_iter()
-                .find(|report| report.scene == scene.get()),
-            lookahead: (!matches!(take, Take::Miss)).then(|| take.key().to_owned()),
+            take,
         })
     }
 
     /// Steps until a plate is on screen, or nothing is left that could put one there. The time it
     /// went on screen, from `started_ms`, when it did.
-    fn run_until_first_plate(&mut self, started_ms: u64) -> Result<Option<u64>, SceneError> {
+    fn run_until_first_plate(&mut self, started_ms: u64) -> Result<Option<u64>, SceneBuilderError> {
         loop {
             let step = self.step(StageMoment::LineBoundary, false)?;
             let elapsed = self.now_ms().saturating_sub(started_ms);
             if matches!(step.action, StepAction::Swapped(_)) {
                 return Ok(Some(elapsed));
             }
-            let active = self.active.as_ref().ok_or(SceneError::NothingBuilt)?;
+            let active = self
+                .active
+                .as_ref()
+                .ok_or(SceneBuilderError::NothingBuilt)?;
             let idle = self.builder.jobs_in_flight(active.scene) == 0
                 && active.pacer.scheduler().queued() == 0
                 && active.pacer.playout().buffer().outstanding() == 0;
@@ -482,9 +568,9 @@ impl Workbench {
 
     /// Lets the clock run for `seconds`: it ticks every plate interval, and the screen swaps
     /// plates in as the moment allows.
-    pub fn run(&mut self, request: &RunRequest) -> Result<RunReply, SceneError> {
+    pub fn run(&mut self, request: &RunRequest) -> Result<RunReply, SceneBuilderError> {
         if self.active.is_none() {
-            return Err(SceneError::NothingBuilt);
+            return Err(SceneBuilderError::NothingBuilt);
         }
         self.audit.take();
         let moment = request.moment.stage_moment();
@@ -495,10 +581,13 @@ impl Workbench {
             self.step(moment, !request.quiet)?;
         }
         let taken = self.take_run();
-        let active = self.active.as_ref().ok_or(SceneError::NothingBuilt)?;
+        let active = self
+            .active
+            .as_ref()
+            .ok_or(SceneBuilderError::NothingBuilt)?;
         Ok(RunReply {
             seconds: request.seconds,
-            moment: request.moment.key().to_owned(),
+            moment: request.moment,
             quiet: request.quiet,
             lines: taken.lines,
             buffer: active.pacer.playout().buffer().report(self.now_ms()),
@@ -510,7 +599,7 @@ impl Workbench {
     pub fn lookahead(
         &mut self,
         request: Option<&LookaheadRequest>,
-    ) -> Result<LookaheadReply, SceneError> {
+    ) -> Result<LookaheadReply, SceneBuilderError> {
         self.audit.take();
         if let Some(request) = request {
             let now_ms = self.now_ms();

@@ -17,6 +17,7 @@ use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 
 use tokio::sync::{oneshot, watch};
 
+use crate::broker::report::{LedgerReport, QueuesReport};
 use crate::event_log::EventLog;
 
 use super::adapters::Adapters;
@@ -26,14 +27,14 @@ use super::commit::CommitStore;
 use super::extras::Extras;
 use super::limits::{COMMAND_MAILBOX_CAPACITY, LOST_ANSWER_WAIT};
 use super::owner::{Command, Owner, Reply};
+use super::report::observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
 use super::report::{
-    BrokerRequested, BrokerView, ChaosReport, ClockReport, Description, DiceReport, EngineDump,
-    EngineError, ForceReport, HealthReport, QueueReport, ServedReply, SubmitReply, ViableReport,
+    BrokerRequested, ChaosReport, ClockReport, Description, DiceReport, EngineDump, EngineError,
+    ForceReport, HealthReport, QueueReport, ServedReply, SubmitReply, ViableReport,
 };
-use super::report_observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
 use super::request::{
     AudienceSpec, ChaosRequest, ClockControl, ConfigControl, DiceControl, ForceRequest,
-    HistoryRequest, InputRequest, QueueControl, ReplayRequest,
+    HistoryRequest, InputRequest, QueueControl, ReplayRequest, TraceOperation,
 };
 use super::setup::{EngineConfig, EngineStartError};
 
@@ -98,7 +99,7 @@ impl EngineHandle {
                     ended_sender.send_replace(Some(Ended::Panicked));
                 }
             })
-            .map_err(|error| EngineStartError::Thread(error.to_string()))?;
+            .map_err(|error| EngineStartError::Thread(error.kind()))?;
         Ok(Self {
             sender: Some(sender),
             ended,
@@ -193,11 +194,11 @@ impl EngineHandle {
         self.call(|reply| Command::Chaos(request, reply)).await
     }
 
-    pub async fn broker_queues(&self) -> Result<BrokerView, EngineError> {
+    pub async fn broker_queues(&self) -> Result<QueuesReport, EngineError> {
         self.call(Command::BrokerQueues).await
     }
 
-    pub async fn broker_ledger(&self) -> Result<BrokerView, EngineError> {
+    pub async fn broker_ledger(&self) -> Result<LedgerReport, EngineError> {
         self.call(Command::BrokerLedger).await
     }
 
@@ -210,8 +211,9 @@ impl EngineHandle {
         self.call(|reply| Command::History(request, reply)).await
     }
 
-    pub async fn trace(&self, operation: String) -> Result<TraceReport, EngineError> {
-        self.call(|reply| Command::Trace(operation, reply)).await
+    pub async fn trace(&self, operation: TraceOperation) -> Result<TraceReport, EngineError> {
+        self.call(|reply| Command::Trace(operation.id(), reply))
+            .await
     }
 
     pub async fn replay(&self, request: ReplayRequest) -> Result<ReplayReport, EngineError> {

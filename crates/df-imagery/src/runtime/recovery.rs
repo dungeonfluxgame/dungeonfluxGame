@@ -223,12 +223,7 @@ where
             return Box::pin(self.reconcile_standalone(job, lease)).await;
         }
         let config = super::retained_config(&job)?;
-        let intent = crate::intent_codec::decode_intent(
-            job.intent.bytes(),
-            &crate::service::PROTOCOL_LIMITS,
-            crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-        )
-        .map_err(|_| RuntimeError::InvalidRecord)?;
+        let intent = super::retained_intent(&job)?;
         let mut stage = self
             .execution
             .read_stage(&recovery.owner, &recovery.job, &recovery.stage)

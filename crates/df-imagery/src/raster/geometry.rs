@@ -102,11 +102,13 @@ pub(crate) fn apply_resize(
                 content_width_px = content_width_px.min(width_px);
                 content_height_px = content_height_px.min(height_px);
             }
-            // `ResizeSpec::new` refuses `Pad` without a fill, so this is a
-            // proven construction invariant, never a caller default.
-            let fill = spec
-                .pad_fill()
-                .expect("pad fill is enforced by ResizeSpec::new");
+            // `ResizeSpec::new` refuses `Pad` without a fill; the executor still refuses
+            // rather than trusting the constructor alone.
+            let Some(fill) = spec.pad_fill() else {
+                return Err(RasterError::InvalidRecipe(
+                    crate::transform::TransformError::MissingPadFill,
+                ));
+            };
             budget.check_pixels(target_width_px, target_height_px)?;
             budget.check_retained(
                 bounds::rgba_bytes(width_px, height_px),
@@ -183,7 +185,7 @@ fn crop_pixels(
     )?;
     let mut cropped = RgbaImage::new(width_px, height_px);
     for row in 0..height_px {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         for col in 0..width_px {
@@ -236,7 +238,7 @@ fn blit_onto(
     let (canvas_width_px, canvas_height_px) = canvas.dimensions();
     let (content_width_px, content_height_px) = content.dimensions();
     for row in 0..content_height_px {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         let target_y_px = start_y_px + i64::from(row);
@@ -513,7 +515,7 @@ fn resample_linear_checked(
         return Err(RasterError::DecodedTooLarge { pixels: 0 });
     }
     for row in 0..height_px {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         let source_y = (bounds::dim_to_f32(row) + 0.5) * bounds::dim_to_f32(source_height_px)
@@ -594,7 +596,7 @@ fn rotate_arbitrary(
     let mut canvas = RgbaImage::from_pixel(canvas_width_px, canvas_height_px, fill);
     let filter = filter_for(interpolation);
     for row in 0..canvas_height_px {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         for col in 0..canvas_width_px {

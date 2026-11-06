@@ -178,6 +178,8 @@ impl fmt::Display for CanvasError {
     }
 }
 
+impl std::error::Error for CanvasError {}
+
 /// An element that no longer fits its kind, found after the kinds changed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ElementProblem {

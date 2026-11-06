@@ -24,16 +24,9 @@ use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use super::digest::Fnv;
+use crate::limits::{CHUNK_LENGTH, ENTRIES_PER_BUCKET, MAXIMUM_BUCKETS, MINIMUM_BUCKETS};
 
-/// How many entries one bucket holds before the map doubles its buckets.
-const ENTRIES_PER_BUCKET: usize = 8;
-/// The fewest buckets a map has.
-const MINIMUM_BUCKETS: usize = 16;
-/// The most buckets a map has: a clone copies at most this many pointers.
-const MAXIMUM_BUCKETS: usize = 4_096;
-/// How many keys one chunk of the order queue holds: a push copies at most this many.
-const CHUNK_LENGTH: usize = 1_024;
+use super::digest::Fnv;
 
 /// What an insert pushed out: the entry it replaced and the entries beyond the bound.
 #[derive(Debug)]

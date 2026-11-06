@@ -4,12 +4,13 @@ use df_table::event::FailureCause;
 use df_table::ports::{Broker, Clock, PortName, Readiness};
 use df_table::testkit::{ManualClock, correlation};
 
+use super::fixtures::{RecordingAudit, name, test_table};
 use super::hub::BrokerHub;
 use super::providers::{FakeProvider, FakeWorker, ScriptedCall};
 use super::purpose::{QueueClass, ResourceKind};
-use super::request::{Epoch, ProviderFault, RequestStatus, ResourceResult, WorkerId};
+use super::queues::QueueBounds;
+use super::request::{Epoch, ProviderCause, RequestStatus, ResourceResult, WorkerId};
 use super::scheduler::BrokerLimits;
-use super::tests_support::{RecordingAudit, name, test_table};
 
 struct Rig {
     hub: Arc<BrokerHub>,
@@ -42,10 +43,7 @@ fn plain_providers() -> (FakeProvider, FakeProvider) {
 
 #[test]
 fn no_request_waits_on_the_owner_thread_even_while_every_provider_call_hangs() {
-    let rig = rig(BrokerLimits {
-        text_slots: 8,
-        ..BrokerLimits::default()
-    });
+    let rig = rig(BrokerLimits::new(8, 1_024, 1, QueueBounds::default()).unwrap());
     let hanging =
         FakeProvider::new(ResourceKind::Text, 0).scripted(vec![ScriptedCall::hangs(); 64]);
     let mut worker = worker(&rig, hanging, FakeProvider::new(ResourceKind::Image, 0));
@@ -135,7 +133,7 @@ fn a_request_made_through_the_port_is_served_by_the_worker_and_its_result_taken(
 fn a_scripted_failure_is_retried_after_its_backoff_and_both_calls_are_recorded() {
     let rig = rig(BrokerLimits::default());
     let text = FakeProvider::new(ResourceKind::Text, 10).scripted([
-        ScriptedCall::fails_after(10, ProviderFault::Unavailable),
+        ScriptedCall::fails_after(10, ProviderCause::Unavailable),
         ScriptedCall::succeeds_after(10),
     ]);
     let mut worker = worker(&rig, text, FakeProvider::new(ResourceKind::Image, 10));
@@ -187,10 +185,7 @@ fn a_hanging_provider_call_ends_at_the_deadline_with_a_typed_timeout() {
 
 #[test]
 fn a_plate_preempts_a_portrait_and_the_worker_cancels_its_provider_call() {
-    let rig = rig(BrokerLimits {
-        image_slots: 1,
-        ..BrokerLimits::default()
-    });
+    let rig = rig(BrokerLimits::default().with_image_slots(1).unwrap());
     let image = FakeProvider::new(ResourceKind::Image, 50).scripted([
         ScriptedCall::succeeds_after(1_000),
         ScriptedCall::succeeds_after(50),
@@ -271,10 +266,7 @@ fn a_request_through_the_port_after_the_epoch_moved_is_made_for_the_new_epoch() 
 
 #[test]
 fn the_queue_report_shows_depth_oldest_age_and_what_is_running() {
-    let rig = rig(BrokerLimits {
-        image_slots: 1,
-        ..BrokerLimits::default()
-    });
+    let rig = rig(BrokerLimits::default().with_image_slots(1).unwrap());
     let (text, image) = plain_providers();
     let mut worker = worker(&rig, text, image);
     rig.hub

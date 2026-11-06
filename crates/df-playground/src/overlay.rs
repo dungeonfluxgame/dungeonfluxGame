@@ -3,11 +3,20 @@
 //! These are presentation values only. Every field of every type is optional in a scene file
 //! (`TvScene` holds them with a default), so a scene that names none of them is read as before.
 //! Nothing here decides a rule: who is in the party, how healthy they are and what they are
-//! called is what the server projected, and the page draws it. `overlay_rules` turns this data
-//! into view decisions and `overlay_checks` says which values are out of range. The lobby,
-//! roleplay and pill components keep their own data beside the views that draw them.
+//! called is what the server projected, and the page draws it. `overlay::rules` turns this data
+//! into view decisions and `overlay::checks` says which values are out of range. The lobby,
+//! loading, roleplay and top-bar data live in `lobby::model`.
 
 use serde::{Deserialize, Serialize};
+
+pub mod changes;
+pub mod checks;
+pub mod rules;
+
+#[cfg(test)]
+mod changes_tests;
+#[cfg(test)]
+mod rules_tests;
 
 /// The small picture of a thing, drawn by the page from a fixed set of line drawings. A name that
 /// is not in the set is a mistake in the scene file, found when it is read.
@@ -136,6 +145,11 @@ impl Glyph {
 }
 
 /// What a live change does to one optional field: leave it as it is, remove it, or set it.
+///
+/// This is the only keep/clear/set type of a live change. `apply_to` holds the one rule of what
+/// each variant does to a field, and `apply_to_value` and `drawn` are built on it; `set_value` and
+/// `is_keep` only ask which variant it is. A plain `Option<T>` in a change message is for a field
+/// that is only given or not (such as `hit_points`, `title` or `voice`), never for keep/clear/set.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Edit<T> {
@@ -146,21 +160,45 @@ pub enum Edit<T> {
 }
 
 impl<T> Edit<T> {
-    /// Applies the edit to `slot`.
-    pub fn apply_to(self, slot: &mut Option<T>) {
-        match self {
-            Self::Keep => {}
-            Self::Clear => *slot = None,
-            Self::Set(value) => *slot = Some(value),
-        }
-    }
-
     /// The value this edit sets, if it sets one.
     pub fn set_value(&self) -> Option<&T> {
         match self {
             Self::Set(value) => Some(value),
             Self::Keep | Self::Clear => None,
         }
+    }
+
+    /// Whether the edit leaves the field as it is.
+    pub fn is_keep(&self) -> bool {
+        matches!(self, Self::Keep)
+    }
+}
+
+impl<T: Clone> Edit<T> {
+    /// Applies the edit to `slot`: the one rule of keep, clear and set.
+    pub fn apply_to(&self, slot: &mut Option<T>) {
+        match self {
+            Self::Keep => {}
+            Self::Clear => *slot = None,
+            Self::Set(value) => *slot = Some(value.clone()),
+        }
+    }
+
+    /// Applies the edit to a field that is always present: `Clear` leaves its empty value.
+    pub fn apply_to_value(&self, slot: &mut T)
+    where
+        T: Default,
+    {
+        let mut value = Some(std::mem::take(slot));
+        self.apply_to(&mut value);
+        *slot = value.unwrap_or_default();
+    }
+
+    /// What is shown now when this edit is drawn over `base`.
+    pub fn drawn(&self, base: Option<&T>) -> Option<T> {
+        let mut value = base.cloned();
+        self.apply_to(&mut value);
+        value
     }
 }
 
@@ -186,6 +224,8 @@ pub enum NarrationPlacement {
 }
 
 impl NarrationPlacement {
+    pub const ALL: [Self; 2] = [Self::Center, Self::Right];
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Center => "center",
@@ -194,7 +234,7 @@ impl NarrationPlacement {
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
-        [Self::Center, Self::Right]
+        Self::ALL
             .into_iter()
             .find(|placement| placement.key() == key)
     }

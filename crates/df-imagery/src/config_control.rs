@@ -132,7 +132,8 @@ impl ConfigControl {
         Self::from_resolved(base, launch, initial_revision)
     }
 
-    /// Applies operator layers after trusted host defaults; seeded fields retain Default provenance.
+    /// Applies operator layers after trusted host defaults; seeded fields retain Default
+    /// provenance.
     pub fn build_with_defaults(
         defaults: ImageConfig,
         config_text: &str,
@@ -337,18 +338,12 @@ fn recompute(
     provenance.revision = revision;
     apply_launch_patch(launch, &mut config, &mut provenance)?;
     apply_patch(runtime, &mut config, &mut provenance)?;
-    config.validate().map_err(|error| match error {
-        ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })?;
-    config.validate_codex_lines().map_err(|error| match error {
-        ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })?;
+    config
+        .validate()
+        .map_err(crate::config_overlay::overlay_field_error)?;
+    config
+        .validate_codex_lines()
+        .map_err(crate::config_overlay::overlay_field_error)?;
     Ok(ResolvedConfig { config, provenance })
 }
 

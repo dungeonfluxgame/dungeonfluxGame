@@ -8,7 +8,7 @@ use crate::golden::{CountingDice, Leaves, World};
 use crate::identity::SceneId;
 use crate::outcome::{Decline, DeclineCode, Outcome, PendingKind};
 use crate::pending::{RulingBook, RulingSource, ScopedRuling};
-use crate::pipeline::{PENDING_NUDGE_TIMER, PipelineLimits, TurnResult};
+use crate::pipeline::{PENDING_NUDGE_TIMER, PipelineLimit, PipelineLimits, TurnResult};
 use crate::pipeline_fixtures_tests::{
     action, allows, changes, d8, d20, failures_of, lines, lines_after, phase_of, ran, seat,
     steps_of, window_of, world_of,
@@ -957,10 +957,9 @@ fn a_nesting_past_the_bound_is_refused_recorded_once_and_leaves_the_window_open(
         counterspell_offer(),
     );
     let mut world = world_of(&["fireball"], 3, rules);
-    world.limits = PipelineLimits {
-        maximum_pending_nesting: 0,
-        ..PipelineLimits::default()
-    };
+    world.limits = PipelineLimits::default()
+        .with(PipelineLimit::MaximumPendingNesting, 0)
+        .expect("a limit that fits");
     ran(&mut world, 1, "fireball");
 
     let refused = answer(&mut world, 2, 1, "counterspell");
@@ -983,10 +982,9 @@ fn a_full_pending_book_declines_table_busy_and_commits_nothing() {
     world.table = crate::pipeline::PipelineTable::with_limits(
         crate::golden::TABLE,
         world.table.facts().clone(),
-        &PipelineLimits {
-            maximum_open_pendings: 0,
-            ..PipelineLimits::default()
-        },
+        &PipelineLimits::default()
+            .with(PipelineLimit::MaximumOpenPendings, 0)
+            .expect("a limit that fits"),
     );
     let before = world.table.durable_hash();
 

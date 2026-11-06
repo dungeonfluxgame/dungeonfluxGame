@@ -9,7 +9,7 @@
 //! never decides whether the speaker was moved: it reads the typed facts of the rules owner's
 //! result (`succeeded`, or `complied` for a creature that needed no roll) and nothing else. Each
 //! fact is 0 or 1 and appears once. Two facts that disagree, an amount of 2 or more and a repeated
-//! fact are the typed `ResultFault` (the rules owner broke its contract and the machine does not
+//! fact are the typed `ResultCause` (the rules owner broke its contract and the machine does not
 //! guess), and a result with neither fact is declined `not_supported_yet` with the state as it
 //! was, so the urging can be tried again. The end leaves as a `ConversationEnded` effect, as the
 //! explore machine's `BeatResolved` does, so the table state, the event stream and a replay all
@@ -32,13 +32,13 @@ use serde::{Deserialize, Serialize};
 use crate::effects::{ConversationOutcome, TableEffect, TableState};
 use crate::element::NameError;
 use crate::identity::{SceneId, SeatId};
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
-    CarryItem, Decision, Entry, EntryRefusal, HandOff, InspectReport, Machine, MachineError,
-    MachineId, MachineInput, MachineReadout, MachineSpec, ResultFault, Scope, SpecError,
+    CarryItem, Decision, Entry, EntryError, HandOff, InspectReport, Machine, MachineError,
+    MachineId, MachineInput, MachineReadout, MachineSpec, ResultCause, Scope, SpecError,
     StandingOffers, StateName, StepInput, StepOutcome, StepResult, SuspendPolicy,
     rules_action_offers,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode};
 use crate::ports::{ActionId, Audience, PortName, Resolution, Resolved};
 
@@ -47,6 +47,10 @@ const PHASE_TAG: &str = "phase";
 const LISTENING: &str = "listening";
 const AWAITING_ROLL: &str = "awaiting_roll";
 const CONCLUDED: &str = "concluded";
+/// The dialogue machine's id, the name its spec registers and hand-offs name.
+pub const MACHINE_ID: &str = "dialogue";
+/// The machine a concluded conversation hands back to, named by id only: machines never import
+/// one another (the isolation rule `machine_scan_tests` enforces).
 const NEXT_MACHINE: &str = "lobby";
 /// The typed facts that say the speaker gave way: a roll that met its difficulty class, and a
 /// creature that was willing and needed no roll.
@@ -127,8 +131,8 @@ impl Conversation {
 
 /// The verdict the typed facts of a rules result carry, if it carries one: each fact is 0 (no) or
 /// 1 (yes) and appears once, and two facts must agree. A result with neither fact has no verdict.
-fn verdict_of(resolved: &Resolved) -> Result<Option<ConversationOutcome>, ResultFault> {
-    let fact = |label: &str| -> Result<Option<bool>, ResultFault> {
+fn verdict_of(resolved: &Resolved) -> Result<Option<ConversationOutcome>, ResultCause> {
+    let fact = |label: &str| -> Result<Option<bool>, ResultCause> {
         let mut found = None;
         for held in resolved
             .facts
@@ -136,12 +140,12 @@ fn verdict_of(resolved: &Resolved) -> Result<Option<ConversationOutcome>, Result
             .filter(|held| held.label.as_str() == label)
         {
             if found.is_some() {
-                return Err(ResultFault::DuplicateFact);
+                return Err(ResultCause::DuplicateFact);
             }
             found = Some(match held.amount {
                 0 => false,
                 1 => true,
-                _ => return Err(ResultFault::AmountNotZeroOrOne),
+                _ => return Err(ResultCause::AmountNotZeroOrOne),
             });
         }
         Ok(found)
@@ -149,7 +153,7 @@ fn verdict_of(resolved: &Resolved) -> Result<Option<ConversationOutcome>, Result
     let (succeeded, complied) = (fact(SUCCEEDED_FACT)?, fact(COMPLIED_FACT)?);
     match (succeeded, complied) {
         (None, None) => Ok(None),
-        (Some(said), Some(other)) if said != other => Err(ResultFault::FactsConflict),
+        (Some(said), Some(other)) if said != other => Err(ResultCause::FactsConflict),
         (Some(moved), _) | (None, Some(moved)) => Ok(Some(if moved {
             ConversationOutcome::Moved
         } else {
@@ -196,7 +200,7 @@ pub struct DialogueMachine {
 impl DialogueMachine {
     pub fn new(conversation: Conversation) -> Result<Self, SpecError> {
         let spec = MachineSpec::new(
-            "dialogue",
+            MACHINE_ID,
             Scope::Group,
             DIALOGUE_SCHEMA_VERSION,
             &[LISTENING, AWAITING_ROLL, CONCLUDED],
@@ -264,16 +268,16 @@ impl Machine for DialogueMachine {
     }
 
     fn enter(&self, table: &TableState, entry: &Entry) -> Result<MachineSlot, MachineError> {
-        let scene = entry.scene().ok_or(EntryRefusal::MissingScene)?;
+        let scene = entry.scene().ok_or(EntryError::MissingScene)?;
         if table.active_scene() != Some(scene) {
-            return Err(EntryRefusal::SceneNotActive { scene }.into());
+            return Err(EntryError::SceneNotActive { scene }.into());
         }
         let mut seats = entry.seats().peekable();
         if seats.peek().is_none() {
-            return Err(EntryRefusal::NoSeats.into());
+            return Err(EntryError::NoSeats.into());
         }
         if let Some(seat) = seats.find(|seat| !table.seats().contains(seat)) {
-            return Err(EntryRefusal::SeatNotAtTable { seat }.into());
+            return Err(EntryError::SeatNotAtTable { seat }.into());
         }
         self.encode(&DialogueState::Listening { scene })
     }

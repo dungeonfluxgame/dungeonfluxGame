@@ -3,11 +3,7 @@
 //! and <https://developers.openai.com/api/reference/cli/resources/responses/methods/create>.
 //! Output and supplier token counters are candidates, never invoice or publication authority.
 
-use std::{
-    fmt,
-    future::Future,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-};
+use std::{fmt, future::Future, net::SocketAddr};
 
 use df_model::checkpoint::ExecutionMode;
 use df_provider_api::{
@@ -17,7 +13,10 @@ use df_provider_api::{
 use df_types::{Usage, UsageUnit};
 use serde_json::Value;
 
-use crate::native_http::NativeHttp;
+use crate::http_contract::lowercase_hex;
+use crate::native_http::{
+    BoundedRequestBody, NativeHttp, is_literal_localhost, is_valid_credential,
+};
 use crate::text_schema::parse_unique_json;
 use crate::{
     HttpRequest, NativeHttpLimits, NativeHttpRefusal, ProviderFailureClass, ProviderRequestId,
@@ -25,6 +24,10 @@ use crate::{
 };
 
 const RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
+/// The longest model identifier accepted, in bytes.
+const MAXIMUM_MODEL_BYTES: usize = 128;
+/// The longest Responses id (`resp_...`) accepted, in bytes.
+const MAXIMUM_RESPONSE_ID_BYTES: usize = 256;
 
 /// Explicit caller-selected model and checked schema; there is no default model.
 /// The native owner must qualify the model's availability, exact returned model
@@ -70,7 +73,7 @@ impl TextProviderConfig {
         maximum_output_tokens: u32,
     ) -> Result<Self, TextResponseError> {
         if model.is_empty()
-            || model.len() > 128
+            || model.len() > MAXIMUM_MODEL_BYTES
             || !model.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
             })
@@ -359,10 +362,7 @@ impl NativeTextProvider {
     /// loopback IP/port is accepted; path is fixed, no DNS or production fallback.
     /// This deliberately separate constructor never rewrites a production factory.
     pub fn for_loopback_fixture(mut self, address: SocketAddr) -> Result<Self, TextResponseError> {
-        if !matches!(address.ip(), IpAddr::V4(ip) if ip == Ipv4Addr::LOCALHOST)
-            && !matches!(address.ip(), IpAddr::V6(ip) if ip == Ipv6Addr::LOCALHOST)
-            || address.port() == 0
-        {
+        if !is_literal_localhost(address) {
             return Err(TextResponseError::Transport(
                 NativeHttpRefusal::InvalidEndpoint,
             ));
@@ -380,10 +380,7 @@ impl NativeTextProvider {
         endpoint: String,
         fixture: bool,
     ) -> Result<Self, TextResponseError> {
-        if credential.is_empty()
-            || credential.len() > 8192
-            || !credential.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-        {
+        if !is_valid_credential(credential) {
             return Err(TextResponseError::InvalidCredential);
         }
         let http = NativeHttp::new(limits, fixture).map_err(TextResponseError::Transport)?;
@@ -435,14 +432,15 @@ impl NativeTextProvider {
             ));
         }
         let metadata = request_metadata(binding.identity);
-        let mut body = BoundedRequestBody {
-            bytes: Vec::new(),
-            maximum_bytes: maximum_body_bytes,
-        };
+        let mut body = BoundedRequestBody::new(maximum_body_bytes);
         let mut wire_body = serde_json::json!({
-            "model":self.config.model,"input":input,"stream":false,"store":false,
-            "max_output_tokens":self.config.maximum_output_tokens,
-            "text":{"format":self.config.schema.format()},"metadata":metadata,
+            "model": self.config.model,
+            "input": input,
+            "stream": false,
+            "store": false,
+            "max_output_tokens": self.config.maximum_output_tokens,
+            "text": {"format": self.config.schema.format()},
+            "metadata": metadata,
         });
         if let (Some(effort), Some(fields)) =
             (self.config.reasoning_effort, wire_body.as_object_mut())
@@ -454,7 +452,7 @@ impl NativeTextProvider {
         }
         serde_json::to_writer(&mut body, &wire_body)
             .map_err(|_| TextResponseError::Transport(NativeHttpRefusal::RequestTooLarge))?;
-        let mapped = HttpRequest::responses(&self.endpoint, &self.credential, body.bytes);
+        let mapped = HttpRequest::responses(&self.endpoint, &self.credential, body.into_bytes());
         let response = self
             .http
             .execute(
@@ -478,17 +476,8 @@ impl NativeTextProvider {
                     response.transport_request_id.clone(),
                 )
             })?;
-        let captured_response_id = json
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| {
-                id.starts_with("resp_")
-                    && id.len() <= 256
-                    && id
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            })
-            .and_then(|id| ProviderRequestId::new(id).ok());
+        let captured_response_id =
+            response_id(&json).and_then(|id| ProviderRequestId::new(id).ok());
         let failure = |reason| {
             observed(
                 reason,
@@ -518,16 +507,7 @@ impl NativeTextProvider {
                 Some(usage),
             )));
         }
-        let id = json
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| {
-                id.starts_with("resp_")
-                    && id.len() <= 256
-                    && id
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            })
+        let id = response_id(&json)
             .ok_or_else(|| failure(contract(TextResponseContract::Identity, Some(usage))))?;
         let provider_request_id = ProviderRequestId::new(id)
             .map_err(|_| failure(contract(TextResponseContract::Identity, Some(usage))))?;
@@ -559,6 +539,17 @@ impl NativeTextProvider {
     }
 }
 
+/// The response's own `resp_...` id, when it is a well-formed one.
+fn response_id(json: &Value) -> Option<&str> {
+    json.get("id").and_then(Value::as_str).filter(|id| {
+        id.starts_with("resp_")
+            && id.len() <= MAXIMUM_RESPONSE_ID_BYTES
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    })
+}
+
 /// The live API echoes the requested format with an extra `"description": null`; any other
 /// difference from the format that was sent still refuses the response.
 fn without_null_description(format: &Value) -> Value {
@@ -585,32 +576,6 @@ fn observed(
     }
 }
 
-struct BoundedRequestBody {
-    bytes: Vec<u8>,
-    maximum_bytes: usize,
-}
-
-impl std::io::Write for BoundedRequestBody {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let length = self
-            .bytes
-            .len()
-            .checked_add(bytes.len())
-            .ok_or_else(|| std::io::Error::other("request body bound"))?;
-        if length > self.maximum_bytes {
-            return Err(std::io::Error::other("request body bound"));
-        }
-        self.bytes
-            .try_reserve(bytes.len())
-            .map_err(|_| std::io::Error::other("request body capacity"))?;
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 fn contract(reason: TextResponseContract, usage: Option<TextTokenUsage>) -> TextResponseError {
     TextResponseError::Contract {
         reason,
@@ -619,17 +584,11 @@ fn contract(reason: TextResponseContract, usage: Option<TextTokenUsage>) -> Text
 }
 
 fn request_metadata(identity: RequestIdentity) -> Value {
-    serde_json::json!({"df_operation":hex(identity.operation.as_bytes()),"df_job":hex(identity.job.as_bytes()),"df_generation":identity.generation.to_string()})
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8] = b"0123456789abcdef";
-    let mut value = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        value.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        value.push(char::from(DIGITS[usize::from(byte & 15)]));
-    }
-    value
+    serde_json::json!({
+        "df_operation": lowercase_hex(identity.operation.as_bytes()),
+        "df_job": lowercase_hex(identity.job.as_bytes()),
+        "df_generation": identity.generation.to_string(),
+    })
 }
 
 fn parse_usage(json: &Value) -> Option<TextTokenUsage> {

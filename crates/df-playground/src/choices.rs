@@ -9,11 +9,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use crate::fixture::{Choice, ChoiceGroup, PhoneScene, UnavailableChoice};
+use crate::limits::{MAXIMUM_LABEL_WORDS, MAXIMUM_SUGGESTED_CHOICES};
 
-/// Most suggested choices a phone shows above the groups.
-pub const MAXIMUM_SUGGESTED: usize = 4;
-/// Most words in a choice label.
-pub const MAXIMUM_LABEL_WORDS: usize = 4;
 /// The fixed groups, in the order they are shown.
 pub const GROUP_NAMES: [&str; 6] = ["Attack", "Cast", "Move", "Use", "Talk", "Look"];
 
@@ -32,7 +29,7 @@ impl fmt::Display for Warning {
         match self {
             Self::TooManySuggested { given } => write!(
                 formatter,
-                "{given} suggested choices; only the first {MAXIMUM_SUGGESTED} are shown"
+                "{given} suggested choices; only the first {MAXIMUM_SUGGESTED_CHOICES} are shown"
             ),
             Self::LabelTooLong { label, words } => write!(
                 formatter,
@@ -76,12 +73,12 @@ fn group_rank(name: &str) -> usize {
 /// Builds the view of a phone's choices and collects the warnings.
 pub fn build(scene: &PhoneScene, show_unavailable: bool) -> ChoiceListView<'_> {
     let mut warnings = Vec::new();
-    if scene.suggested.len() > MAXIMUM_SUGGESTED {
+    if scene.suggested.len() > MAXIMUM_SUGGESTED_CHOICES {
         warnings.push(Warning::TooManySuggested {
             given: scene.suggested.len(),
         });
     }
-    let shown = scene.suggested.len().min(MAXIMUM_SUGGESTED);
+    let shown = scene.suggested.len().min(MAXIMUM_SUGGESTED_CHOICES);
 
     let all_labels = scene
         .suggested

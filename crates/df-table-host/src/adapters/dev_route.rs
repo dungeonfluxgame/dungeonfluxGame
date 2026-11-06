@@ -1,24 +1,27 @@
 //! The route behind `rules check`: `POST /dev/engine/rules/check`.
 //!
-//! It owns the one handler and its reply, merged into the dev engine's router so it sits behind
-//! the same guard. It holds the check kit only when the table runs the `df-rules` backend; with
-//! the scripted backend it answers `NotAvailable`, as the other dev controls do for a table
-//! without them. It records one audit line per answered check and changes no table state.
+//! It owns the one handler, merged into the dev engine's router so it sits behind the same guard.
+//! It holds the check kit only when the table runs the `df-rules` backend; with the scripted
+//! backend it refuses with `RulesCheckError::ScriptedBackend`. It answers through the shared dev
+//! reply (`dev_http::reply`), records one audit line per answered or refused check, and changes no
+//! table state.
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::post;
-use axum::{Json, Router};
 
-use crate::engine::report::{EngineError, EngineReply};
+use crate::dev_http::{parse_body, reply};
 use crate::engine::routes::path;
 use crate::state::AppState;
 
-use super::dev_check::{RulesCheckKit, RulesCheckReport, RulesCheckRequest, audit_line};
+use super::dev_check::{
+    RulesCheckError, RulesCheckKit, RulesCheckReport, RulesCheckRequest, audit_line,
+    refusal_audit_line,
+};
 
 #[derive(Clone)]
 struct CheckRoute {
@@ -26,17 +29,11 @@ struct CheckRoute {
     kit: Option<Arc<RulesCheckKit>>,
 }
 
-fn run_check(route: &CheckRoute, bytes: &Bytes) -> Result<RulesCheckReport, EngineError> {
-    let request: RulesCheckRequest =
-        serde_json::from_slice(bytes).map_err(|error| EngineError::BadRequest {
-            reason: format!("the request body is not valid: {error}"),
-        })?;
-    let kit = route
-        .kit
-        .as_ref()
-        .ok_or_else(|| EngineError::NotAvailable {
-            what: "a rules check (this table runs the scripted rules backend)".to_owned(),
-        })?;
+/// Reads the request and runs the check. The kit's work is short, in-memory rules arithmetic and
+/// recorded draws, so it runs on the request's task.
+fn run_check(route: &CheckRoute, bytes: &Bytes) -> Result<RulesCheckReport, RulesCheckError> {
+    let request: RulesCheckRequest = parse_body(bytes)?;
+    let kit = route.kit.as_ref().ok_or(RulesCheckError::ScriptedBackend)?;
     let report = kit.run(&request)?;
     route.app.record_line(audit_line(&request, &report));
     Ok(report)
@@ -44,12 +41,10 @@ fn run_check(route: &CheckRoute, bytes: &Bytes) -> Result<RulesCheckReport, Engi
 
 async fn rules_check(State(route): State<CheckRoute>, bytes: Bytes) -> Response {
     let result = run_check(&route, &bytes);
-    route.app.echo_new_lines();
-    let status = result
-        .as_ref()
-        .err()
-        .map_or(StatusCode::OK, |_| StatusCode::BAD_REQUEST);
-    (status, Json(EngineReply::from_result(result))).into_response()
+    if let Err(error) = &result {
+        route.app.record_line(refusal_audit_line(error));
+    }
+    reply(result)
 }
 
 /// The route of `rules check`, answering from `kit` when there is one.

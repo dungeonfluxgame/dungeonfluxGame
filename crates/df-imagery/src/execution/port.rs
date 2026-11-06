@@ -21,9 +21,9 @@ use std::future::Future;
 use super::ExecutionSetupError;
 use super::{
     CancelCommand, ClaimCommand, CompleteCommand, DispatchId, DispatchView, EnqueueCommand,
-    EnqueueOutcome, ExecutionError, ExecutionIdentity, ExecutionStageId, MarkSentCommand,
-    PrepareCommand, RefetchCommand, ReleaseCommand, ResolvedExecution, StageKind, StageState,
-    StageView, SupplierCheckpoint, SupplierReport,
+    EnqueueOutcome, ExecutionError, ExecutionIdentity, ExecutionStageId, LocalAnalysisCheckpoint,
+    LocalInspectionCheckpoint, MarkSentCommand, PrepareCommand, RefetchCommand, ReleaseCommand,
+    ResolvedExecution, StageKind, StageState, StageView, SupplierCheckpoint, SupplierReport,
 };
 use crate::journal::ImageJobId;
 use crate::request::ImageOwner;
@@ -149,7 +149,8 @@ pub trait ImageExecutionJournal: Send + Sync {
         now_ms: i64,
     ) -> impl Future<Output = Result<super::QueuePage, ExecutionError>> + Send;
 
-    /// Discovers due retained dispatches after the cursor, excluding active owners and acknowledged work.
+    /// Discovers due retained dispatches after the cursor, excluding active owners and acknowledged
+    /// work.
     fn scan_recovery(
         &self,
         scope: &str,
@@ -167,7 +168,8 @@ pub trait ImageExecutionJournal: Send + Sync {
         now_ms: i64,
     ) -> impl Future<Output = Result<Vec<super::UnsentTerminal>, ExecutionError>> + Send;
 
-    /// Bounded historical Prepared discovery, plus exact sealed Released/Held tails for cancellation retry.
+    /// Bounded historical Prepared discovery, plus exact sealed Released/Held tails for
+    /// cancellation retry.
     /// Expiry alone never authorizes terminal cleanup or financial release.
     fn scan_unsent_prepared(
         &self,
@@ -183,7 +185,8 @@ pub trait ImageExecutionJournal: Send + Sync {
         command: &super::ClaimRecoveryCommand,
     ) -> impl Future<Output = Result<super::RecoveryLease, ExecutionError>> + Send;
 
-    /// Acknowledges durable terminal receipts or defers a bounded next poll, with exact lease replay.
+    /// Acknowledges durable terminal receipts or defers a bounded next poll, with exact lease
+    /// replay.
     fn finish_recovery(
         &self,
         command: &super::FinishRecoveryCommand,
@@ -204,7 +207,8 @@ pub trait ImageExecutionJournal: Send + Sync {
         stage: &ExecutionStageId,
     ) -> impl Future<Output = Result<super::StageBasis, ExecutionError>> + Send;
 
-    /// Closes the exact sealed never-sent cost obligation only after the actual durable Book tombstone.
+    /// Closes the exact sealed never-sent cost obligation only after the actual durable Book
+    /// tombstone.
     fn acknowledge_unsent_projection(
         &self,
         command: &super::AcknowledgeUnsentProjection,
@@ -251,7 +255,8 @@ pub trait ImageExecutionJournal: Send + Sync {
         dispatch: &DispatchId,
     ) -> impl Future<Output = Result<Option<super::DecisionObservation>, ExecutionError>> + Send;
 
-    /// Retains inspected intermediate image metadata only after exact raw supplier bytes are durable.
+    /// Retains inspected intermediate image metadata only after exact raw supplier bytes are
+    /// durable.
     fn record_candidate_observation(
         &self,
         observation: &super::CandidateObservation,
@@ -289,29 +294,33 @@ pub trait ImageExecutionJournal: Send + Sync {
         parent_dispatch: &DispatchId,
         kind: super::StageKind,
     ) -> impl Future<Output = Result<Option<StageView>, ExecutionError>> + Send;
-    /// Defers only unsent work with no finance/current dispatch/live claim, returning held capacity.
+    /// Defers only unsent work with no finance/current dispatch/live claim, returning held
+    /// capacity.
     fn defer_queued(
         &self,
         command: &super::DeferQueuedCommand,
     ) -> impl Future<Output = Result<(), ExecutionError>> + Send;
-    /// Records protected BestEffort pre-egress failure without inventing supplier usage or a dispatch.
+    /// Records protected BestEffort pre-egress failure without inventing supplier usage or a
+    /// dispatch.
     fn record_local_inspection(
         &self,
         command: &super::LocalInspectionCommand,
-    ) -> impl Future<Output = Result<super::LocalInspectionCheckpoint, ExecutionError>> + Send;
+    ) -> impl Future<Output = Result<LocalInspectionCheckpoint, ExecutionError>> + Send;
     fn read_local_inspection(
         &self,
         owner: &ImageOwner,
         job: &ImageJobId,
         stage: &ExecutionStageId,
-    ) -> impl Future<Output = Result<Option<super::LocalInspectionCheckpoint>, ExecutionError>> + Send;
-    /// Reads the one explicitly selected complete analytical result; intermediate decisions are not final.
+    ) -> impl Future<Output = Result<Option<LocalInspectionCheckpoint>, ExecutionError>> + Send;
+    /// Reads the one explicitly selected complete analytical result; intermediate decisions are not
+    /// final.
     fn read_analysis_checkpoint(
         &self,
         owner: &ImageOwner,
         job: &ImageJobId,
     ) -> impl Future<Output = Result<Option<super::AnalysisCheckpoint>, ExecutionError>> + Send;
-    /// Selects the complete retained supplier/local chain using an outside-transaction private proof.
+    /// Selects the complete retained supplier/local chain using an outside-transaction private
+    /// proof.
     fn select_analysis_checkpoint(
         &self,
         proof: &crate::runtime::QualifiedAnalysis,
@@ -323,13 +332,13 @@ pub trait ImageExecutionJournal: Send + Sync {
         proof: &crate::runtime::QualifiedLocalAnalysis,
         claim: &super::StageClaim,
         now_ms: i64,
-    ) -> impl Future<Output = Result<super::LocalAnalysisCheckpoint, ExecutionError>> + Send;
+    ) -> impl Future<Output = Result<LocalAnalysisCheckpoint, ExecutionError>> + Send;
     fn read_local_analysis_checkpoint(
         &self,
         owner: &ImageOwner,
         job: &ImageJobId,
         stage: &ExecutionStageId,
-    ) -> impl Future<Output = Result<Option<super::LocalAnalysisCheckpoint>, ExecutionError>> + Send;
+    ) -> impl Future<Output = Result<Option<LocalAnalysisCheckpoint>, ExecutionError>> + Send;
     /// Reads installed canonical host bounds; absence is an error, never fabricated defaults.
     fn read_capacity_bounds(
         &self,

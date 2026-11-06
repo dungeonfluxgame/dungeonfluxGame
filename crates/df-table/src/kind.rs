@@ -2,7 +2,9 @@
 //!
 //! A kind says what an element looks like and which fields it has, so a new kind is a file and a
 //! reload, never a build. This module owns the checked definitions and the registry that holds
-//! them. Reading and checking the files is `kind_file.rs`; spawning is `canvas.rs`.
+//! them. Reading and checking the files is `kind::file`; spawning is `canvas.rs`.
+
+pub mod file;
 
 use std::collections::BTreeMap;
 
@@ -10,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::element::{Color, Element, FieldName, FieldValue, KindName};
 use crate::field_type::FieldType;
-use crate::kind_file::{KindError, KindFile, check_kind, duplicate_kind};
+use crate::kind::file::{KindError, KindFile, check_kind, duplicate_kind};
 
 /// How an element is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

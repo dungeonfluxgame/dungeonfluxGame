@@ -12,7 +12,7 @@
 use std::fmt;
 
 use df_table::private_data::Narration;
-use df_table::scene_plan_locate::{Instance, Region, RegionError};
+use df_table::scene_plan::locate::{Instance, Region, RegionError};
 use serde::{Deserialize, Serialize};
 
 /// Why an answer was refused.

@@ -8,9 +8,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use tempfile::TempDir;
 
-use crate::media_ingest::{IngestRefusal, MediaLimits};
+use crate::media_ingest::{IngestError, MediaLimits};
 use crate::media_library::media_entries;
-use crate::media_store::{AddFailure, Added, ingest_upload};
+use crate::media_store::{AddError, Added, ingest_upload};
 use crate::video_fixtures::{mp4_of_seconds, webm_of_seconds};
 use crate::wire::MediaAdd;
 
@@ -29,7 +29,7 @@ fn ingest(
     request: &[u8],
     piece: usize,
     limits: MediaLimits,
-) -> (Result<Added, AddFailure>, usize) {
+) -> (Result<Added, AddError>, usize) {
     let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(2);
     let directory = directory.to_path_buf();
     let worker = std::thread::spawn(move || ingest_upload(receiver, &directory, &limits));
@@ -59,9 +59,9 @@ fn names_on_disk(directory: &Path) -> Vec<String> {
     names
 }
 
-fn refusal(result: Result<Added, AddFailure>) -> IngestRefusal {
+fn refusal(result: Result<Added, AddError>) -> IngestError {
     match result {
-        Err(AddFailure::Refused(refusal)) => refusal,
+        Err(AddError::Ingest(refusal)) => refusal,
         other => panic!("expected a refusal, got {other:?}"),
     }
 }
@@ -126,14 +126,14 @@ fn an_empty_file_and_a_cut_request_are_refused_with_their_reasons() {
         1000,
         MediaLimits::DEFAULT,
     );
-    assert_eq!(refusal(empty), IngestRefusal::Empty);
+    assert_eq!(refusal(empty), IngestError::Empty);
     let (cut, _) = ingest(
         directory.path(),
         br#"{"name":"a.png","data_base64":"aGk"#,
         1000,
         MediaLimits::DEFAULT,
     );
-    assert!(matches!(refusal(cut), IngestRefusal::MalformedRequest(_)));
+    assert!(matches!(refusal(cut), IngestError::InvalidRequest(_)));
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn a_request_over_the_limit_stops_being_read_when_the_limit_is_crossed() {
     let (result, taken) = ingest(directory.path(), &request, 64, limits);
     assert_eq!(
         refusal(result),
-        IngestRefusal::TooLarge { maximum_bytes: 100 }
+        IngestError::TooLarge { maximum_bytes: 100 }
     );
     assert!(taken < 20, "took {taken} of {pieces} pieces");
     assert_eq!(names_on_disk(directory.path()), Vec::<String>::new());
@@ -176,7 +176,7 @@ fn a_file_of_exactly_the_size_limit_is_stored_and_one_byte_more_is_refused() {
     );
     assert_eq!(
         refusal(over),
-        IngestRefusal::TooLarge {
+        IngestError::TooLarge {
             maximum_bytes: 1000
         }
     );
@@ -201,7 +201,7 @@ fn the_library_refuses_a_new_name_at_the_file_limit_but_replaces_an_existing_one
     );
     assert_eq!(
         refusal(third),
-        IngestRefusal::LibraryFull { maximum_files: 2 }
+        IngestError::LibraryFull { maximum_files: 2 }
     );
     let (replaced, _) = ingest(
         directory.path(),
@@ -251,7 +251,7 @@ fn many_adds_at_once_leave_the_library_exactly_at_its_file_limit() {
         for result in results.into_iter().filter(Result::is_err) {
             assert_eq!(
                 refusal(result),
-                IngestRefusal::LibraryFull { maximum_files: 3 }
+                IngestError::LibraryFull { maximum_files: 3 }
             );
         }
         assert_eq!(

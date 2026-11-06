@@ -10,7 +10,7 @@ use image::{ImageDecoder, ImageFormat, ImageReader, RgbaImage};
 use sha2::{Digest, Sha256};
 
 use super::RasterError;
-use super::bounds::LiveBudget;
+use super::bounds::{LiveBudget, rgba_bytes};
 use super::geometry::{
     flip_horizontal, flip_vertical, rotate_90_clockwise, rotate_180, rotate_270_counter_clockwise,
 };
@@ -53,6 +53,7 @@ pub struct SourceHeader {
     pub has_alpha: bool,
 }
 
+/// Why a source header could not be read; no variant carries bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SourceHeaderError {
     UnsupportedFormat,
@@ -86,6 +87,16 @@ pub fn source_header(bytes: &[u8]) -> Result<SourceHeader, SourceHeaderError> {
 /// Embedded ICC profiles are refused instead of silently discarded because
 /// no converter is pinned; sRGB inputs without a profile proceed.
 pub(crate) fn decode_bounded(bytes: &[u8], budget: &LiveBudget) -> Result<RgbaImage, RasterError> {
+    decode_bounded_beside(bytes, budget, 0)
+}
+
+/// [`decode_bounded`] while `resident_bytes` of earlier rasters stay alive: the decoded raster
+/// must fit beside them, checked from the header before any pixel is allocated.
+pub(crate) fn decode_bounded_beside(
+    bytes: &[u8],
+    budget: &LiveBudget,
+    resident_bytes: u64,
+) -> Result<RgbaImage, RasterError> {
     let format = sniff_format(bytes)?;
     if has_icc_profile(bytes, format) {
         return Err(RasterError::UnsupportedColorProfile);
@@ -94,6 +105,7 @@ pub(crate) fn decode_bounded(bytes: &[u8], budget: &LiveBudget) -> Result<RgbaIm
         .into_dimensions()
         .map_err(|_| RasterError::DecodeFailed)?;
     budget.check_pixels(width_px, height_px)?;
+    budget.check_retained(resident_bytes, rgba_bytes(width_px, height_px))?;
     let decoded = image::load_from_memory_with_format(bytes, format)
         .map_err(|_| RasterError::DecodeFailed)?;
     let mut rgba = decoded.to_rgba8();
@@ -142,42 +154,47 @@ fn has_png_iccp(bytes: &[u8]) -> bool {
     false
 }
 
-fn has_jpeg_icc(bytes: &[u8]) -> bool {
-    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
-        return false;
-    }
-    let mut pos = 2_usize;
-    while pos + 4 <= bytes.len() {
-        if bytes[pos] != 0xFF {
-            return false;
+/// JPEG start-of-image marker.
+const JPEG_START_OF_IMAGE: [u8; 2] = [0xFF, 0xD8];
+/// JPEG end-of-image marker byte.
+const JPEG_END_OF_IMAGE: u8 = 0xD9;
+/// JPEG start-of-scan marker byte; header segments end here.
+const JPEG_START_OF_SCAN: u8 = 0xDA;
+/// APP1 carries EXIF.
+const JPEG_APP1: u8 = 0xE1;
+/// APP2 carries an ICC profile.
+const JPEG_APP2: u8 = 0xE2;
+
+/// The JPEG header segments before the scan, as `(marker, payload)`. Iteration ends at the
+/// scan or end marker, a malformed length, or a segment past the input; never an error.
+fn jpeg_header_segments(bytes: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
+    let is_jpeg = bytes.len() >= 4 && bytes[..2] == JPEG_START_OF_IMAGE;
+    let mut pos = if is_jpeg { 2_usize } else { bytes.len() };
+    std::iter::from_fn(move || {
+        if pos + 4 > bytes.len() || bytes[pos] != 0xFF {
+            return None;
         }
         let marker = bytes[pos + 1];
-        if marker == 0xD9 || marker == 0xDA {
-            return false;
+        if marker == JPEG_END_OF_IMAGE || marker == JPEG_START_OF_SCAN {
+            return None;
         }
-        let segment_len = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
+        let segment_len = usize::from(u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]));
         if segment_len < 2 {
-            return false;
+            return None;
         }
         let data_start = pos + 4;
-        let Some(data_end) = pos
-            .checked_add(2)
-            .and_then(|end| end.checked_add(segment_len))
-        else {
-            return false;
-        };
+        let data_end = pos.checked_add(2)?.checked_add(segment_len)?;
         if data_end > bytes.len() {
-            return false;
-        }
-        if marker == 0xE2 && data_end - data_start >= 12 {
-            let header = b"ICC_PROFILE\0";
-            if &bytes[data_start..data_start + 12] == header {
-                return true;
-            }
+            return None;
         }
         pos = data_end;
-    }
-    false
+        Some((marker, &bytes[data_start..data_end]))
+    })
+}
+
+fn has_jpeg_icc(bytes: &[u8]) -> bool {
+    jpeg_header_segments(bytes)
+        .any(|(marker, payload)| marker == JPEG_APP2 && payload.starts_with(b"ICC_PROFILE\0"))
 }
 
 fn has_webp_iccp(bytes: &[u8]) -> bool {
@@ -211,41 +228,11 @@ fn has_webp_iccp(bytes: &[u8]) -> bool {
 /// Reads the EXIF orientation tag (1..=8) from JPEG APP1 bytes; anything
 /// unparseable or absent is the identity orientation, never a failure.
 pub(crate) fn parse_exif_orientation(bytes: &[u8]) -> u8 {
-    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] != 0xD8 {
-        return 1;
-    }
-    let mut pos = 2_usize;
-    while pos + 4 <= bytes.len() {
-        if bytes[pos] != 0xFF {
-            return 1;
-        }
-        let marker = bytes[pos + 1];
-        if marker == 0xD9 || marker == 0xDA {
-            return 1;
-        }
-        let segment_len = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
-        if segment_len < 2 {
-            return 1;
-        }
-        let data_start = pos + 4;
-        let data_end = pos
-            .checked_add(2)
-            .and_then(|end| end.checked_add(segment_len));
-        let Some(data_end) = data_end else {
-            return 1;
-        };
-        if data_end > bytes.len() {
-            return 1;
-        }
-        if marker == 0xE1 {
-            let orientation = parse_exif_segment(&bytes[data_start..data_end]);
-            if orientation != 1 {
-                return orientation;
-            }
-        }
-        pos = data_end;
-    }
-    1
+    jpeg_header_segments(bytes)
+        .filter(|(marker, _)| *marker == JPEG_APP1)
+        .map(|(_, payload)| parse_exif_segment(payload))
+        .find(|orientation| *orientation != 1)
+        .unwrap_or(1)
 }
 
 fn parse_exif_segment(segment: &[u8]) -> u8 {

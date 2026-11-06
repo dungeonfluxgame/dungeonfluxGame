@@ -12,6 +12,7 @@ pub enum RevisionError {
 pub struct RecoveryEpoch(NonZeroU64);
 
 impl RecoveryEpoch {
+    /// Accepts any nonzero supplied epoch; zero is `ZeroEpoch`.
     pub fn new(value: u64) -> Result<Self, RevisionError> {
         NonZeroU64::new(value)
             .map(Self)
@@ -32,6 +33,7 @@ pub struct SessionRevision {
 }
 
 impl SessionRevision {
+    /// Pairs a supplied epoch with an in-epoch sequence; zero is the initial sequence.
     pub fn new(epoch: RecoveryEpoch, sequence: u64) -> Self {
         Self { epoch, sequence }
     }

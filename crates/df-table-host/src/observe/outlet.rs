@@ -2,13 +2,14 @@
 //! outlet reports about itself.
 //!
 //! An outlet takes one record without blocking the owner and without failing the caller: a record
-//! it cannot take is refused with a typed `OutletRefusal` and counted by class, so a loss is
+//! it cannot take is refused with a typed `OutletError` and counted by class, so a loss is
 //! always a number a reader can see, and a class A loss is told apart from a class B one. There
 //! are three: `MemoryOutlet` (the history `history` and `trace` read), `FileSpool` (a durable
 //! JSON-lines file written by its own thread) and `SharedPathOutlet` (df-observe's shared
 //! diagnostic path to the telemetry store). It owns the port, the counters outlets share and the
 //! status type; it never decides which records an outlet gets.
 
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
@@ -18,24 +19,43 @@ use super::record::{ObservedRecord, RecordClass};
 /// Why an outlet did not take a record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OutletRefusal {
-    /// The outlet is at its bound (a full spool, a queue of unwritten records, a path at its limit).
+pub enum OutletError {
+    /// The outlet is at its bound (a full spool, a queue of unwritten records, a path at its
+    /// limit).
     Full,
     /// The outlet is closed or its writer has gone.
     Closed,
     /// The outlet cannot represent this record (too large, malformed).
-    Rejected,
+    Unrepresentable,
 }
 
-impl OutletRefusal {
+impl OutletError {
+    pub const ALL: [Self; 3] = [Self::Full, Self::Closed, Self::Unrepresentable];
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Full => "full",
             Self::Closed => "closed",
-            Self::Rejected => "rejected",
+            Self::Unrepresentable => "unrepresentable",
         }
     }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|error| error.key() == key)
+    }
 }
+
+impl fmt::Display for OutletError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Full => "the outlet is at its bound",
+            Self::Closed => "the outlet is closed",
+            Self::Unrepresentable => "the outlet cannot represent the record",
+        })
+    }
+}
+
+impl std::error::Error for OutletError {}
 
 /// What one outlet says about itself: how much it took, how much is safe, and how much is lost.
 ///
@@ -64,7 +84,7 @@ pub trait RecordOutlet: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Takes one record. It must not block on a disk or a network and must not panic.
-    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletRefusal>;
+    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletError>;
 
     /// The outlet's counters as of `now_ms`, in milliseconds since the Unix epoch.
     fn status(&self, now_ms: u64) -> OutletStatus;

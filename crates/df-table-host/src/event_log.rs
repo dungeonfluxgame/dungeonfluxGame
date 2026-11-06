@@ -2,11 +2,15 @@
 //! `events` command.
 //!
 //! It owns the bound and the numbering. It never interprets a line and never grows without limit,
-//! in lines or in bytes: the oldest lines are forgotten first. Every list it returns is oldest first, so a reader that
-//! wants newest first reverses it.
+//! in lines or in bytes: the oldest lines are forgotten first. Every list it returns is oldest
+//! first, so a reader that wants newest first reverses it.
+//!
+//! It is also where the audit lines of the libraries the host runs arrive: `install_as_audit_sink`
+//! makes a log the df-observe audit sink, so `df_observe::record_audit_line` lands here instead of
+//! on stdout.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
@@ -96,4 +100,25 @@ impl EventLog {
         let skip = lines.kept.len().saturating_sub(limit);
         lines.kept.iter().skip(skip).cloned().collect()
     }
+}
+
+/// The log that df-observe's audit lines go to, set once per process.
+static AUDIT_SINK_LOG: OnceLock<Arc<EventLog>> = OnceLock::new();
+
+/// Receives one df-observe audit line. `install_as_audit_sink` sets the log before it installs
+/// this, so a line always finds it.
+fn record_observe_line(_event: &'static str, line: String) {
+    if let Some(log) = AUDIT_SINK_LOG.get() {
+        log.push(line);
+    }
+}
+
+/// Makes `log` the df-observe audit sink of this process: every `df_observe::record_audit_line`
+/// from then on is pushed to it (and echoed with the host's next echo). The sink is process-wide
+/// and set once: `true` when `log` became it, `false` when an earlier log already is and keeps
+/// the lines.
+pub fn install_as_audit_sink(log: &Arc<EventLog>) -> bool {
+    let installed = AUDIT_SINK_LOG.set(Arc::clone(log)).is_ok();
+    df_observe::install_audit_sink(record_observe_line);
+    installed
 }

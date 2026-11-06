@@ -2,24 +2,26 @@
 //!
 //! It is merged into the host's one router before the layers, so it sits behind the same guard as
 //! every route (loopback host names, JSON for any change, no foreign origin). A change is a POST
-//! of JSON and the status is a GET; every answer is a `GenerateReply`, and a refusal carries its
-//! typed cause and the status that goes with it (a mistake of the caller is a 400, a backend that
-//! is not set up a 503, a deadline a 504). The route reads the request, hands it to the generator
-//! and, when the caller asked to wait, waits for the job; it never runs a backend on a runtime
-//! worker.
+//! of a `GenerateRequest` and the status is a GET; every answer is a `GenerateReply`, and a
+//! refusal carries its typed `GenerateError` and the status that goes with it (a mistake of the
+//! caller is a 400, a backend that is not set up a 503, a deadline a 504). The route reads the
+//! request, hands it to the generator and, when the caller asked to wait, waits for the job; it
+//! never runs a backend on a runtime worker. A refusal that never became a job is recorded here,
+//! once; a job records its own end.
 
 use std::sync::Arc;
 
+use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::post;
-use axum::{Json, Router};
 
-use super::model::{GenerateBody, GenerateReply, ImageRequest, JobState, RefusalCause};
-use super::service::{Context, ImageGenerator};
-use crate::media_library::media_directory;
+use super::events::ImageGenEvent;
+use super::model::ImageRequest;
+use super::request::{GenerateError, GenerateRequest, JobView};
+use super::service::ImageGenerator;
+use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
 
 /// The address of the picture generator's dev API.
@@ -33,86 +35,49 @@ struct GenerateRoutes {
 }
 
 impl GenerateRoutes {
-    fn context(&self) -> Context {
-        let app = Arc::clone(&self.app);
-        Context {
-            media_directory: media_directory(self.app.playground().files()),
-            record: Arc::new(move |line| {
-                app.record_line(line);
-                app.echo_new_lines();
-            }),
+    /// Starts the job `body` asks for and, when it asks to wait, waits for the job to end.
+    async fn generate(&self, body: GenerateRequest) -> Result<JobView, GenerateError> {
+        let request = ImageRequest::new(&body.prompt, &body.name, body.purpose, body.aspect)?;
+        let started = self.generator.start(&self.app, request).await?;
+        if !body.wait {
+            return Ok(started.view);
         }
+        let job = started.view.job;
+        started
+            .finished
+            .await
+            .map_err(|_| GenerateError::Stopped { job: Some(job) })?
     }
-}
 
-fn answer(reply: GenerateReply) -> Response {
-    let status = match &reply {
-        GenerateReply::Refused { cause, .. } => cause.status(),
-        GenerateReply::Finished { job } => match (job.state, job.cause) {
-            (JobState::Done, _) => 200,
-            (_, Some(cause)) => cause.status(),
-            (_, None) => 500,
-        },
-        GenerateReply::Started { .. } | GenerateReply::Jobs { .. } => 200,
-    };
-    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    (status, Json(reply)).into_response()
-}
-
-fn bad_request(message: String) -> Response {
-    answer(GenerateReply::Refused {
-        job: None,
-        cause: RefusalCause::BadRequest,
-        message,
-    })
+    /// Records a refusal that never became a job; a job records its own end.
+    fn record_refusal(&self, name: Option<String>, error: &GenerateError) {
+        if error.job().is_some() {
+            return;
+        }
+        let event = ImageGenEvent::Refused {
+            name,
+            error: error.clone(),
+            backend: self.generator.backend_name(),
+        };
+        self.app.record_line(event.line());
+    }
 }
 
 async fn generate(State(routes): State<Arc<GenerateRoutes>>, bytes: Bytes) -> Response {
-    let body: GenerateBody = match serde_json::from_slice(&bytes) {
-        Ok(body) => body,
-        Err(error) => return bad_request(format!("the request body is not valid: {error}")),
+    let body = parse_body::<GenerateRequest>(&bytes);
+    let name = body.as_ref().ok().map(|body| body.name.clone());
+    let result = match body {
+        Ok(body) => routes.generate(body).await,
+        Err(error) => Err(GenerateError::from(error)),
     };
-    let request = match ImageRequest::new(
-        &body.prompt,
-        &body.name,
-        body.purpose.as_deref(),
-        body.aspect.as_deref(),
-    ) {
-        Ok(request) => request,
-        Err(problem) => return bad_request(problem.to_string()),
-    };
-    let context = routes.context();
-    let started = match routes.generator.start(&context, request).await {
-        Ok(started) => started,
-        Err(refusal) => {
-            return answer(GenerateReply::Refused {
-                job: refusal.job,
-                cause: refusal.cause,
-                message: refusal.message,
-            });
-        }
-    };
-    if !body.wait {
-        return answer(GenerateReply::Started {
-            job: started.job,
-            name: started.name,
-            deadline_secs: started.deadline.as_secs(),
-        });
+    if let Err(error) = &result {
+        routes.record_refusal(name, error);
     }
-    match started.finished.await {
-        Ok(job) => answer(GenerateReply::Finished { job: Box::new(job) }),
-        Err(error) => answer(GenerateReply::Refused {
-            job: Some(started.job),
-            cause: RefusalCause::Failed,
-            message: format!("the generation task stopped: {error}"),
-        }),
-    }
+    reply(result)
 }
 
 async fn status(State(routes): State<Arc<GenerateRoutes>>) -> Response {
-    answer(GenerateReply::Jobs {
-        jobs: routes.generator.views(),
-    })
+    reply::<_, GenerateError>(Ok(routes.generator.views()))
 }
 
 /// The picture generator's routes over `generator`.
@@ -124,5 +89,6 @@ pub fn router_with(app: Arc<AppState>, generator: Arc<ImageGenerator>) -> Router
 
 /// The picture generator's routes with the backend this process's environment asks for.
 pub fn router(app: Arc<AppState>) -> Router {
-    router_with(app, Arc::new(ImageGenerator::from_environment()))
+    let generator = Arc::new(ImageGenerator::from_environment(&app));
+    router_with(app, generator)
 }

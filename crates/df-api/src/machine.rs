@@ -12,8 +12,9 @@
 //! The guards enforce what a protobuf type cannot say: a view is never empty (a plain `readout`,
 //! a known status, non-blank text in every slot that is present), a status other than ok has a
 //! reason, a waiting status names who and what, a message is no larger than the bridge can carry,
-//! an offer lives only in a seat's view, and an intent carries exactly the fields of its kind. They never authenticate a seat, check that an offer is still legal, or look an operation
-//! up: the session owner does all three after admission.
+//! an offer lives only in a seat's view, and an intent carries exactly the fields of its kind.
+//! They never authenticate a seat, check that an offer is still legal, or look an operation up:
+//! the session owner does all three after admission.
 //!
 //! The seam to `df-table` (O.8). The wire types here do not depend on `df-table`, and neither does
 //! this crate: `df-table-host::machine_wire::machine_view` is the one function that knows both
@@ -91,23 +92,27 @@ pub enum MachineViewError {
     UnknownStatus(i32),
     /// Two offers carry the same id, so a tap could not name one of them.
     DuplicateOffer,
+    /// The revision is absent or malformed.
     Revision(RequestError),
     /// The encoded view is longer than `MAXIMUM_MESSAGE_BYTES`.
-    TooLarge {
-        bytes: usize,
-    },
+    TooLarge { bytes: usize },
 }
 
 fn blank(text: &str) -> bool {
     text.trim().is_empty()
 }
 
-fn required(text: &str, slot: ViewSlot) -> Result<(), MachineViewError> {
+/// `Err(blank_error)` when the text holds nothing but whitespace.
+fn non_blank<E>(text: &str, blank_error: E) -> Result<(), E> {
     if blank(text) {
-        Err(MachineViewError::Blank(slot))
+        Err(blank_error)
     } else {
         Ok(())
     }
+}
+
+fn required(text: &str, slot: ViewSlot) -> Result<(), MachineViewError> {
+    non_blank(text, MachineViewError::Blank(slot))
 }
 
 fn present(text: Option<&str>, slot: ViewSlot) -> Result<(), MachineViewError> {
@@ -271,7 +276,9 @@ pub enum ReceiptSlot {
 /// Why an answer to an intent may not be sent. No variant holds the text that failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachineReceiptError {
+    /// A required slot is absent.
     Missing(ReceiptSlot),
+    /// A slot that is present holds blank text.
     Blank(ReceiptSlot),
     /// The receipt names another operation than the one the intent carried.
     OperationMismatch,
@@ -290,9 +297,7 @@ pub enum MachineReceiptError {
     /// The operation id or the revision is absent or malformed.
     Request(RequestError),
     /// The encoded answer is longer than `MAXIMUM_MESSAGE_BYTES`.
-    TooLarge {
-        bytes: usize,
-    },
+    TooLarge { bytes: usize },
 }
 
 impl MachineReceiptError {
@@ -330,11 +335,7 @@ fn check_offer_list(offers: &[wire::MachineOffer]) -> Result<(), MachineReceiptE
 }
 
 fn receipt_text(value: &str, slot: ReceiptSlot) -> Result<(), MachineReceiptError> {
-    if blank(value) {
-        Err(MachineReceiptError::Blank(slot))
-    } else {
-        Ok(())
-    }
+    non_blank(value, MachineReceiptError::Blank(slot))
 }
 
 fn check_result(result: &wire::machine_receipt::Result) -> Result<(), MachineReceiptError> {
@@ -360,6 +361,16 @@ fn check_result(result: &wire::machine_receipt::Result) -> Result<(), MachineRec
     }
 }
 
+/// A typed or spoken line is answered under its utterance id; any other kind of intent has none.
+fn expected_utterance_id(payload: &AdmittedPayload) -> Option<u64> {
+    match payload {
+        AdmittedPayload::SubmitText(line) | AdmittedPayload::Say(line) => Some(line.utterance_id),
+        AdmittedPayload::Tap { .. }
+        | AdmittedPayload::PendingAnswer { .. }
+        | AdmittedPayload::SafetyCard => None,
+    }
+}
+
 /// Checks the answer to an intent the server admitted: it names that intent's operation and, for
 /// a typed or spoken line, its utterance id; it has one of the four outcomes, each well formed; a
 /// decline carries a machine decline class and a reason; and it fits the bridge.
@@ -382,13 +393,7 @@ pub fn check_machine_receipt(
         return Err(MachineReceiptError::OperationMismatch);
     }
     request::session_revision(receipt.revision.as_ref()).map_err(MachineReceiptError::Request)?;
-    let expected_utterance = match &intent.payload {
-        AdmittedPayload::SubmitText(line) | AdmittedPayload::Say(line) => Some(line.utterance_id),
-        AdmittedPayload::Tap { .. }
-        | AdmittedPayload::PendingAnswer { .. }
-        | AdmittedPayload::SafetyCard => None,
-    };
-    if receipt.utterance_id != expected_utterance {
+    if receipt.utterance_id != expected_utterance_id(&intent.payload) {
         return Err(MachineReceiptError::UtteranceMismatch);
     }
     let result = receipt
@@ -411,15 +416,18 @@ pub fn check_machine_response(
         .ok_or(MachineReceiptError::Missing(ReceiptSlot::Outcome))?
     {
         Outcome::Receipt(receipt) => check_machine_receipt(receipt, intent),
-        Outcome::OperationObservation(observation) => {
-            match wire::RejectionCode::try_from(observation.code) {
-                Ok(wire::RejectionCode::Unspecified) => {
-                    Err(MachineReceiptError::Missing(ReceiptSlot::ObservationCode))
-                }
-                Ok(_) => Ok(()),
-                Err(_) => Err(MachineReceiptError::UnknownCode(observation.code)),
-            }
+        Outcome::OperationObservation(observation) => check_observation_code(observation.code),
+    }
+}
+
+/// An observation that the operation did not commit names a known code, never "unspecified".
+fn check_observation_code(code: i32) -> Result<(), MachineReceiptError> {
+    match wire::RejectionCode::try_from(code) {
+        Ok(wire::RejectionCode::Unspecified) => {
+            Err(MachineReceiptError::Missing(ReceiptSlot::ObservationCode))
         }
+        Ok(_) => Ok(()),
+        Err(_) => Err(MachineReceiptError::UnknownCode(code)),
     }
 }
 
@@ -465,7 +473,9 @@ impl MachineIntentError {
 /// A typed or spoken line. `Debug` shows its length and never its words.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IntentText {
+    /// The client's id for this line; the receipt answers under the same id.
     pub utterance_id: u64,
+    /// The line, non-blank and at most `MAXIMUM_INTENT_TEXT_BYTES` long.
     pub text: String,
 }
 
@@ -501,8 +511,10 @@ pub enum AdmittedPayload {
 pub struct AdmittedMachineIntent {
     pub session: SessionId,
     pub run: RunId,
+    /// The revision of the view the client acted on.
     pub observed_revision: SessionRevision,
     pub operation: OperationId,
+    /// The machine the intent names, non-blank.
     pub machine_id: String,
     pub payload: AdmittedPayload,
 }
@@ -563,6 +575,19 @@ pub fn admit_machine_intent(
     if blank(&intent.machine_id) {
         return Err(MachineIntentError::Blank(IntentSlot::MachineId));
     }
+    let payload = admit_payload(intent)?;
+    Ok(AdmittedMachineIntent {
+        session,
+        run,
+        observed_revision,
+        operation,
+        machine_id: intent.machine_id.clone(),
+        payload,
+    })
+}
+
+/// Checks that the intent carries exactly the fields of its kind and copies them out.
+fn admit_payload(intent: &wire::MachineIntent) -> Result<AdmittedPayload, MachineIntentError> {
     let payload = match intent
         .payload
         .as_ref()
@@ -590,14 +615,7 @@ pub fn admit_machine_intent(
             offer_id: offer_for(intent)?,
         },
     };
-    Ok(AdmittedMachineIntent {
-        session,
-        run,
-        observed_revision,
-        operation,
-        machine_id: intent.machine_id.clone(),
-        payload,
-    })
+    Ok(payload)
 }
 
 /// Hand-built messages that stand in for a real projection and a real client until the seam in
@@ -610,19 +628,26 @@ pub mod sample {
 
     /// The identity bytes every sample uses: 16 bytes with one nonzero byte per role.
     pub const SESSION_BYTES: [u8; 16] = [1; 16];
+    /// The sample run identity bytes.
     pub const RUN_BYTES: [u8; 16] = [2; 16];
+    /// The sample operation identity bytes.
     pub const OPERATION_BYTES: [u8; 16] = [3; 16];
-    /// The epoch and sequence of the sample revision.
+    /// The epoch of the sample revision.
     pub const EPOCH: u64 = 1;
+    /// The sequence of the sample revision.
     pub const SEQUENCE: u64 = 42;
-    /// The machine, offer and line the sample intents name.
+    /// The machine the sample views and intents name.
     pub const MACHINE_ID: &str = "explore";
+    /// The open offer of `seat_view`, which `tap_request` taps.
     pub const OFFER_ID: &str = "look-around";
+    /// The utterance id of `say_request`.
     pub const UTTERANCE_ID: u64 = 7;
+    /// The line `say_request` speaks.
     pub const SAY_TEXT: &str = "Is anyone there?";
     /// The line a tap on the sample offer adds to the seat's narration.
     pub const TAP_NARRATION: &str = "You take a slow look around the wharf.";
 
+    /// The revision every sample view and request carries.
     pub fn revision() -> wire::SessionRevision {
         wire::SessionRevision {
             epoch: Some(wire::RecoveryEpoch { value: Some(EPOCH) }),

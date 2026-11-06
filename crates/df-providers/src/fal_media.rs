@@ -14,9 +14,11 @@ use serde_json::{Value, json};
 use crate::media_container::{
     EncodedMediaFacts, MediaContainerRefusal, MediaTimebase, inspect_mp4, inspect_wave,
 };
-use crate::native_http::{NativeHttp, NativeHttpResponse};
-use crate::native_media_fetch::{FalCdnPin, NativeMediaFetch};
-use crate::output_fetch::strict_fal_locator;
+use crate::native_http::{
+    MAXIMUM_BODY_BYTES, NativeHttp, NativeHttpResponse, is_loopback_socket, is_valid_credential,
+};
+use crate::native_media_fetch::{FalCdnPin, MAXIMUM_MEDIA_HEADER_BYTES, NativeMediaFetch};
+use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, is_bounded_image_size, strict_fal_locator};
 use crate::text_schema::{TextSchemaLimits, parse_unique_json};
 use crate::{
     FalQueueObservation, HttpMethod, HttpRequest, NativeHttpLimits, NativeHttpRefusal,
@@ -116,6 +118,20 @@ pub struct FalMediaConfig {
 /// The video endpoints the adapter knows how to request and check.
 pub const KLING_O1_IMAGE_TO_VIDEO: &str = "fal-ai/kling-video/o1/image-to-video";
 
+// Request bounds from the queue endpoints' input contracts: supplier limits, not tuning knobs.
+/// The largest reference frame the video endpoints take, in bytes.
+const MAXIMUM_REFERENCE_FRAME_BYTES: u64 = 10 * 1024 * 1024;
+/// The largest inline (base64 data URI) reference frame, in bytes of base64 text.
+const MAXIMUM_INLINE_REFERENCE_BYTES: usize = 14 * 1024 * 1024;
+/// The longest video prompt, in characters.
+const MAXIMUM_VIDEO_PROMPT_CHARACTERS: usize = 1500;
+/// The longest sound prompt, in characters.
+const MAXIMUM_SOUND_PROMPT_CHARACTERS: usize = 10_000;
+/// The most diffusion steps a sound request may ask for.
+const MAXIMUM_SOUND_STEPS: u32 = 250;
+/// The longest clip either family may be asked for or accept.
+const MAXIMUM_CLIP_DURATION: Duration = Duration::from_secs(180);
+
 impl FalMediaConfig {
     pub fn live(family: FalMediaFamily, pins: Vec<FalCdnPin>) -> Self {
         Self {
@@ -150,11 +166,7 @@ impl FalMediaConfig {
         api: SocketAddr,
         media: SocketAddr,
     ) -> Result<Self, FalMediaReason> {
-        if !api.ip().is_loopback()
-            || api.port() == 0
-            || !media.ip().is_loopback()
-            || media.port() == 0
-        {
+        if !is_loopback_socket(api) || !is_loopback_socket(media) {
             return Err(FalMediaReason::Profile);
         }
         Ok(Self {
@@ -206,7 +218,7 @@ pub struct FalHttpFacts {
 }
 
 /// The longest body excerpt kept, in characters.
-const MAX_FAILURE_BODY_CHARACTERS: usize = 400;
+const MAXIMUM_FAILURE_BODY_CHARACTERS: usize = 400;
 /// A run of this many token characters is opaque data (a key, a data URI) and is not kept.
 const OPAQUE_RUN_CHARACTERS: usize = 32;
 
@@ -240,7 +252,7 @@ fn http_facts(response: &NativeHttpResponse, credential: &str) -> FalHttpFacts {
     flush(&mut run, &mut kept);
     FalHttpFacts {
         status: response.status,
-        body: kept.chars().take(MAX_FAILURE_BODY_CHARACTERS).collect(),
+        body: kept.chars().take(MAXIMUM_FAILURE_BODY_CHARACTERS).collect(),
     }
 }
 
@@ -249,9 +261,7 @@ impl FalMediaError {
         self.http = Some(facts.clone());
         self
     }
-}
 
-impl FalMediaError {
     pub fn failure_class(&self) -> ProviderFailureClass {
         match self.reason {
             FalMediaReason::Owner(RequestError::Cancelled) => ProviderFailureClass::Cancelled,
@@ -295,10 +305,8 @@ impl NativeFalMediaProvider {
         credential: &str,
         limits: NativeHttpLimits,
     ) -> Result<Self, FalMediaError> {
-        if credential.is_empty()
-            || credential.len() > 4096
-            || !credential.bytes().all(|b| (0x21..=0x7e).contains(&b))
-            || limits.maximum_header_bytes > 16_384
+        if !is_valid_credential(credential)
+            || limits.maximum_header_bytes > MAXIMUM_MEDIA_HEADER_BYTES
         {
             return Err(error(FalMediaReason::Profile, None));
         }
@@ -333,7 +341,7 @@ impl NativeFalMediaProvider {
             || !matches!(p.duration_seconds, 5 | 10)
             || resolution_side == 0
             || p.width.min(p.height) != resolution_side
-            || !bounded_dimensions(p.width, p.height)
+            || !is_bounded_image_size(p.width, p.height)
             || !valid_interval(p.accepted_duration_min, p.accepted_duration_max)
         {
             return Err(error(FalMediaReason::Profile, None));
@@ -347,13 +355,13 @@ impl NativeFalMediaProvider {
             || frames.iter().any(|frame| {
                 frame.asset.kind != AssetKind::Image
                     || frame.asset.byte_length == 0
-                    || frame.asset.byte_length > 10 * 1024 * 1024
+                    || frame.asset.byte_length > MAXIMUM_REFERENCE_FRAME_BYTES
                     || !reference_locator_ok(&frame.locator)
             })
         {
             return Err(error(FalMediaReason::Reference, None));
         }
-        validate_prompt(&semantic.prompt, 1500)?;
+        validate_prompt(&semantic.prompt, MAXIMUM_VIDEO_PROMPT_CHARACTERS)?;
         validate_declared(
             request.checked(),
             Duration::from_secs(u64::from(p.duration_seconds)),
@@ -366,14 +374,20 @@ impl NativeFalMediaProvider {
                 .last()
                 .ok_or_else(|| error(FalMediaReason::Reference, None))?;
             json!({
-                "prompt":semantic.prompt,"start_image_url":frame.locator,"end_image_url":end.locator,
-                "duration":p.duration_seconds.to_string()
+                "prompt": semantic.prompt,
+                "start_image_url": frame.locator,
+                "end_image_url": end.locator,
+                "duration": p.duration_seconds.to_string(),
             })
         } else {
             json!({
-                "prompt":semantic.prompt,"image_url":frame.locator,"duration":p.duration_seconds.to_string(),
-                "resolution":p.resolution,"seed":p.seed,"enable_safety_checker":p.safety,
-                "enable_prompt_expansion":p.prompt_expansion
+                "prompt": semantic.prompt,
+                "image_url": frame.locator,
+                "duration": p.duration_seconds.to_string(),
+                "resolution": p.resolution,
+                "seed": p.seed,
+                "enable_safety_checker": p.safety,
+                "enable_prompt_expansion": p.prompt_expansion,
             })
         };
         self.submit(
@@ -397,9 +411,9 @@ impl NativeFalMediaProvider {
         if self.config.family != FalMediaFamily::Sound
             || p.model != FalMediaFamily::Sound.model()
             || p.duration_seconds == 0
-            || p.duration_seconds > 180
+            || u64::from(p.duration_seconds) > MAXIMUM_CLIP_DURATION.as_secs()
             || p.steps == 0
-            || p.steps > 250
+            || p.steps > MAXIMUM_SOUND_STEPS
             || !(8000..=192000).contains(&p.sample_rate)
             || !matches!(p.channels, 1 | 2)
             || !matches!(p.bits_per_sample, 8 | 16 | 24 | 32)
@@ -410,16 +424,22 @@ impl NativeFalMediaProvider {
         {
             return Err(error(FalMediaReason::Profile, None));
         }
-        validate_prompt(&semantic.intent, 10_000)?;
+        validate_prompt(&semantic.intent, MAXIMUM_SOUND_PROMPT_CHARACTERS)?;
         validate_declared(
             request.checked(),
             Duration::from_secs(u64::from(p.duration_seconds)),
             UsageUnit::AudioMillisecond,
         )?;
-        self.submit(request.checked(), owner, json!({
-            "prompt":semantic.intent,"seconds_total":p.duration_seconds,"num_inference_steps":p.steps,
-            "seed":p.seed,"enable_safety_checker":p.safety
-        }), ExpectedMedia::Sound(p.clone(), semantic.loop_metadata), cancellation).await
+        let body = json!({
+            "prompt": semantic.intent,
+            "seconds_total": p.duration_seconds,
+            "num_inference_steps": p.steps,
+            "seed": p.seed,
+            "enable_safety_checker": p.safety,
+        });
+        let expected = ExpectedMedia::Sound(p.clone(), semantic.loop_metadata);
+        self.submit(request.checked(), owner, body, expected, cancellation)
+            .await
     }
 
     async fn submit<'a, Semantic: Eq>(
@@ -480,11 +500,11 @@ impl NativeFalMediaProvider {
             .with_http(&http)
         })?;
         // fal names a request under its endpoint's path, or under the owner and app that hold it
-        // (`fal-ai/kling-video/requests/{id}` for `fal-ai/kling-video/o1/image-to-video`). Either is
-        // this request on the queue host, so either is accepted; anything else is refused.
-        let status = confined_url(&value, "status_url", "status", &id)?;
-        let result = confined_result_url(&value, "response_url", &id)?;
-        let cancel = confined_url(&value, "cancel_url", "cancel", &id)?;
+        // (`fal-ai/kling-video/requests/{id}` for `fal-ai/kling-video/o1/image-to-video`). Either
+        // is this request on the queue host, so either is accepted; anything else is refused.
+        let status = confined_url(&value, "status_url", Some("status"), &id)?;
+        let result = confined_url(&value, "response_url", None, &id)?;
+        let cancel = confined_url(&value, "cancel_url", Some("cancel"), &id)?;
         Ok(FalMediaJob {
             provider: self,
             request,
@@ -872,7 +892,8 @@ pub struct FalMediaCompletion {
     pub outputs: Vec<EncodedFalMedia>,
 }
 impl<Semantic: Eq> PreparedFalMediaResponse<'_, Semantic> {
-    /// Fresh current-owner validation is required after all network work and before output consumption.
+    /// Fresh current-owner validation is required after all network work and before output
+    /// consumption.
     pub fn complete(
         self,
         owner: RequestOwnerState<'_, RequestBasis<Semantic>>,
@@ -936,7 +957,7 @@ fn output_files(
             .and_then(Value::as_str)
             .ok_or_else(|| error(FalMediaReason::Metadata, Some(id)))?;
         if !item.is_object()
-            || locator.len() > 8192
+            || locator.len() > MAXIMUM_LOCATOR_BYTES
             || !strict_fal_locator(locator)
             || item.get("content_type").and_then(Value::as_str) != Some(expected.mime())
             || files
@@ -1048,12 +1069,12 @@ fn reference_locator_ok(locator: &str) -> bool {
     match inline {
         Some(data) => {
             !data.is_empty()
-                && data.len() <= 14 * 1024 * 1024
+                && data.len() <= MAXIMUM_INLINE_REFERENCE_BYTES
                 && data
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'='))
         }
-        None => locator.len() <= 8192 && strict_fal_locator(locator),
+        None => locator.len() <= MAXIMUM_LOCATOR_BYTES && strict_fal_locator(locator),
     }
 }
 
@@ -1068,15 +1089,8 @@ fn optional_number_mismatch(value: &Value, field: &str, expected: f64) -> bool {
             .is_none_or(|observed| !observed.is_finite() || observed != expected)
     })
 }
-fn bounded_dimensions(width: u32, height: u32) -> bool {
-    width > 0
-        && height > 0
-        && width <= 8192
-        && height <= 8192
-        && u64::from(width) * u64::from(height) <= 16_777_216
-}
 fn valid_interval(minimum: Duration, maximum: Duration) -> bool {
-    !minimum.is_zero() && minimum <= maximum && maximum <= Duration::from_secs(180)
+    !minimum.is_zero() && minimum <= maximum && maximum <= MAXIMUM_CLIP_DURATION
 }
 fn duration_in(time: MediaTimebase, minimum: Duration, maximum: Duration) -> bool {
     let actual = u128::from(time.ticks) * 1_000_000_000;
@@ -1129,10 +1143,11 @@ fn valid_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
-/// Whether `url` is this request on fal's queue host: `https://queue.fal.run/<owner>/<app>[/…]/
-/// requests/<id>`, then nothing or the expected `suffix`. Any query, fragment or traversal, any other
-/// host, and any other request id is refused. `suffix` of `None` is the result, which fal names as
-/// the request itself or as `…/response`.
+/// Whether `url` is this request on fal's queue host:
+/// `https://queue.fal.run/<owner>/<app>[/...]/requests/<id>`, then nothing or the expected
+/// `suffix`. Any query, fragment or traversal, any other host, and any other request id is
+/// refused. `suffix` of `None` is the result, which fal names as the request itself or as
+/// `.../response`.
 fn queue_url_confined(url: &str, id: &ProviderRequestId, suffix: Option<&str>) -> bool {
     let Some(tail) = url.strip_prefix("https://queue.fal.run/") else {
         return false;
@@ -1153,32 +1168,19 @@ fn queue_url_confined(url: &str, id: &ProviderRequestId, suffix: Option<&str>) -
     is_app && rest_ok
 }
 
-fn confined_result_url(
-    value: &Value,
-    field: &str,
-    id: &ProviderRequestId,
-) -> Result<String, FalMediaError> {
-    let url = value
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| error(FalMediaReason::QueueUrls, Some(id)))?;
-    if !queue_url_confined(url, id, None) {
-        return Err(error(FalMediaReason::QueueUrls, Some(id)));
-    }
-    Ok(url.to_owned())
-}
-
+/// The queue URL a reply names in `field`, when it is confined to this request (see
+/// [`queue_url_confined`]; a `suffix` of `None` is the result URL).
 fn confined_url(
     value: &Value,
     field: &str,
-    suffix: &str,
+    suffix: Option<&str>,
     id: &ProviderRequestId,
 ) -> Result<String, FalMediaError> {
     let url = value
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| error(FalMediaReason::QueueUrls, Some(id)))?;
-    if !queue_url_confined(url, id, Some(suffix)) {
+    if !queue_url_confined(url, id, suffix) {
         return Err(error(FalMediaReason::QueueUrls, Some(id)));
     }
     Ok(url.to_owned())
@@ -1194,7 +1196,7 @@ fn parse_json(
     parse_unique_json(
         &response.body,
         TextSchemaLimits {
-            maximum_schema_bytes: 16_777_216,
+            maximum_schema_bytes: MAXIMUM_BODY_BYTES,
             maximum_depth: 32,
             maximum_nodes: 65_536,
         },

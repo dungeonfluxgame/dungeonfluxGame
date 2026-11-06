@@ -14,11 +14,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::client::post_json;
 use crate::dev::{DevError, checked_file_size, run_dev};
 use crate::media_ingest::{
-    IngestRefusal, MAXIMUM_MEDIA_BYTES, MAXIMUM_MEDIA_FILES, MAXIMUM_UPLOAD_BODY_BYTES,
+    IngestError, MAXIMUM_MEDIA_BYTES, MAXIMUM_MEDIA_FILES, MAXIMUM_UPLOAD_BODY_BYTES,
     MAXIMUM_VIDEO_DURATION, MediaLimits, UploadKind, check_content, check_room,
 };
 use crate::test_support::{Running, STARTER_FILES, post_request, raw_exchange, start};
-use crate::video_container::{FoundContent, UnreadableDuration, VideoFormat};
+use crate::video_container::{DurationCause, FoundContent, VideoFormat};
 use crate::video_fixtures::{
     SyntheticFile, WebmInfo, mp4_ffmpeg_default, mp4_of_seconds, mp4_of_size, mp4_of_size_prefix,
     mp4_with_brand, mp4_without_movie_header, synthetic_mp4_with_moov_last, webm_ffmpeg_style,
@@ -32,7 +32,7 @@ fn words(line: &str) -> Vec<String> {
     crate::command::split_words(line).expect("the line splits")
 }
 
-fn check(name: &str, bytes: &[u8]) -> Result<(), IngestRefusal> {
+fn check(name: &str, bytes: &[u8]) -> Result<(), IngestError> {
     let upload = UploadKind::from_name(name).expect("a media name");
     check_content(&mut Cursor::new(bytes), upload, &MediaLimits::DEFAULT)
 }
@@ -83,7 +83,8 @@ impl Answer {
 
 async fn send(running: &Running, method: &str, name: &str, extra_headers: &str) -> Answer {
     let request = format!(
-        "{method} /playground/media/{name} HTTP/1.1\r\nHost: 127.0.0.1\r\n{extra_headers}Connection: close\r\n\r\n"
+        "{method} /playground/media/{name} HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+         {extra_headers}Connection: close\r\n\r\n"
     );
     let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", running.port))
         .await
@@ -114,9 +115,9 @@ async fn with_sentence(running: &Running) -> String {
         .to_owned()
 }
 
-fn unreadable(refusal: &IngestRefusal) -> UnreadableDuration {
+fn unreadable(refusal: &IngestError) -> DurationCause {
     match refusal {
-        IngestRefusal::DurationUnreadable { reason, .. } => *reason,
+        IngestError::DurationUnreadable { cause, .. } => *cause,
         other => panic!("expected an unreadable duration, got {other:?}"),
     }
 }
@@ -137,36 +138,40 @@ fn a_text_file_named_mp4_an_svg_and_a_mismatched_type_are_refused_naming_what_wa
     let text = check("a.mp4", b"hello there").expect_err("refused");
     assert_eq!(
         text,
-        IngestRefusal::NotThatVideoType {
+        IngestError::NotThatVideoType {
             claimed: VideoFormat::Mp4,
             found: FoundContent::PlainText
         }
     );
     assert!(
-        text.message().contains("name says mp4"),
+        text.to_string().contains("name says mp4"),
         "{}",
-        text.message()
+        text.to_string()
     );
-    assert!(text.message().contains("plain text"), "{}", text.message());
+    assert!(
+        text.to_string().contains("plain text"),
+        "{}",
+        text.to_string()
+    );
     assert_eq!(text.status(), 400);
     let svg = check("a.mp4", b"<svg onload='x()'/>").expect_err("refused");
-    assert!(svg.message().contains("SVG"), "{}", svg.message());
+    assert!(svg.to_string().contains("SVG"), "{}", svg.to_string());
     let mp4_as_webm = check("a.webm", &mp4_of_seconds(2)).expect_err("refused");
     assert_eq!(
         mp4_as_webm,
-        IngestRefusal::NotThatVideoType {
+        IngestError::NotThatVideoType {
             claimed: VideoFormat::Webm,
             found: FoundContent::Mp4Video
         }
     );
     assert!(
-        mp4_as_webm.message().contains("name says webm")
-            && mp4_as_webm.message().contains("an mp4"),
+        mp4_as_webm.to_string().contains("name says webm")
+            && mp4_as_webm.to_string().contains("an mp4"),
         "{}",
-        mp4_as_webm.message()
+        mp4_as_webm.to_string()
     );
     let webm_as_mp4 = check("a.mp4", &webm_of_seconds(2)).expect_err("refused");
-    assert!(webm_as_mp4.message().contains("a webm video"));
+    assert!(webm_as_mp4.to_string().contains("a webm video"));
 }
 
 #[test]
@@ -196,12 +201,16 @@ fn a_file_of_exactly_the_size_limit_passes_and_one_byte_more_is_refused_for_ever
         let refusal = check_content(&mut over, upload, &limits).expect_err("refused");
         assert_eq!(
             refusal,
-            IngestRefusal::TooLarge {
+            IngestError::TooLarge {
                 maximum_bytes: limit
             }
         );
         assert_eq!(refusal.status(), 413);
-        assert!(refusal.message().contains("2 GiB"), "{}", refusal.message());
+        assert!(
+            refusal.to_string().contains("2 GiB"),
+            "{}",
+            refusal.to_string()
+        );
     }
     let video = UploadKind::from_name("a.mp4").expect("a media name");
     let mut at_limit = synthetic_mp4_with_moov_last(limit);
@@ -214,7 +223,7 @@ fn a_file_of_exactly_the_size_limit_passes_and_one_byte_more_is_refused_for_ever
     let mut over = synthetic_mp4_with_moov_last(limit + 1);
     assert_eq!(
         check_content(&mut over, video, &limits),
-        Err(IngestRefusal::TooLarge {
+        Err(IngestError::TooLarge {
             maximum_bytes: limit
         })
     );
@@ -236,9 +245,13 @@ fn a_video_of_exactly_twelve_hours_passes_and_one_second_more_is_refused_naming_
         &mp4_with_brand(b"isom", 1000, twelve_hours_ms + 1000),
     )
     .expect_err("refused");
-    assert!(matches!(over, IngestRefusal::TooLong { .. }), "{over:?}");
-    assert!(over.message().contains("43201.0 s"), "{}", over.message());
-    assert!(over.message().contains("43200 s"), "{}", over.message());
+    assert!(matches!(over, IngestError::TooLong { .. }), "{over:?}");
+    assert!(
+        over.to_string().contains("43201.0 s"),
+        "{}",
+        over.to_string()
+    );
+    assert!(over.to_string().contains("43200 s"), "{}", over.to_string());
     let webm = |ticks: f64| {
         webm_with(
             "webm",
@@ -252,18 +265,18 @@ fn a_video_of_exactly_twelve_hours_passes_and_one_second_more_is_refused_naming_
     assert_eq!(check("a.webm", &webm(43_200_000.0)), Ok(()));
     assert!(matches!(
         check("a.webm", &webm(43_201_000.0)),
-        Err(IngestRefusal::TooLong { .. })
+        Err(IngestError::TooLong { .. })
     ));
 }
 
 #[test]
 fn a_video_whose_duration_cannot_be_read_is_refused_with_the_reason() {
     let no_header = check("a.mp4", &mp4_without_movie_header()).expect_err("refused");
-    assert_eq!(unreadable(&no_header), UnreadableDuration::NoMovieHeader);
+    assert_eq!(unreadable(&no_header), DurationCause::NoMovieHeader);
     assert!(
-        no_header.message().contains("cannot be read") && no_header.message().contains("mvhd"),
+        no_header.to_string().contains("cannot be read") && no_header.to_string().contains("mvhd"),
         "{}",
-        no_header.message()
+        no_header.to_string()
     );
     let no_duration = webm_with(
         "webm",
@@ -274,16 +287,16 @@ fn a_video_whose_duration_cannot_be_read_is_refused_with_the_reason() {
         8,
     );
     let refusal = check("a.webm", &no_duration).expect_err("refused");
-    assert_eq!(unreadable(&refusal), UnreadableDuration::NoDuration);
+    assert_eq!(unreadable(&refusal), DurationCause::NoDuration);
     assert!(
-        refusal.message().contains("Duration"),
+        refusal.to_string().contains("Duration"),
         "{}",
-        refusal.message()
+        refusal.to_string()
     );
     let fragmented = check("a.mp4", &mp4_with_brand(b"dash", 1000, 0)).expect_err("refused");
     assert_eq!(
         unreadable(&fragmented),
-        UnreadableDuration::ZeroOrUnknownDuration
+        DurationCause::ZeroOrUnknownDuration
     );
 }
 
@@ -291,7 +304,7 @@ fn a_video_whose_duration_cannot_be_read_is_refused_with_the_reason() {
 fn a_picture_or_sound_is_only_size_checked() {
     assert_eq!(check("a.png", b"not really a picture"), Ok(()));
     assert_eq!(check("a.wav", b"RIFF"), Ok(()));
-    assert_eq!(check("a.png", b""), Err(IngestRefusal::Empty));
+    assert_eq!(check("a.png", b""), Err(IngestError::Empty));
 }
 
 #[test]
@@ -328,7 +341,7 @@ fn the_library_has_room_for_the_ten_thousandth_file_but_not_the_next_and_replace
     let full = entries(MAXIMUM_MEDIA_FILES, MediaKind::Image);
     assert_eq!(
         check_room(&full, "new.png", &limits),
-        Err(IngestRefusal::LibraryFull {
+        Err(IngestError::LibraryFull {
             maximum_files: MAXIMUM_MEDIA_FILES
         })
     );
@@ -422,7 +435,8 @@ async fn a_request_that_declares_more_than_the_largest_add_is_refused_with_413_w
     let running = start(&STARTER_FILES).await;
     let declared = MAXIMUM_UPLOAD_BODY_BYTES + 1;
     let request = format!(
-        "POST /dev/playground/media HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+        "POST /dev/playground/media HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+         Content-Type: application/json\r\n\
          Content-Length: {declared}\r\nConnection: close\r\n\r\n"
     );
     let answer = raw_exchange(running.port, &request).await;
@@ -464,8 +478,13 @@ async fn the_raised_body_limit_belongs_to_the_add_route_alone() {
         "{}",
         answer.lines().next().unwrap_or("")
     );
-    let bytes = vec![7_u8; crate::limits::MAXIMUM_REQUEST_BYTES * 2];
-    assert_eq!(add(&running, "wider-than-64-kib.png", &bytes).await.0, 200);
+    let bytes = vec![7_u8; crate::limits::MAXIMUM_REQUEST_BYTES + 1];
+    assert_eq!(
+        add(&running, "wider-than-the-router-limit.png", &bytes)
+            .await
+            .0,
+        200
+    );
 }
 
 #[tokio::test]

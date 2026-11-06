@@ -1,14 +1,15 @@
-//! SRD 5.2.1 equipment prices in copper pieces, for the ids in `local_journey::SRD_521_BASELINE.equipment`.
+//! SRD 5.2.1 equipment prices in copper pieces, for the ids in
+//! `local_journey::SRD_521_BASELINE.equipment`.
 //!
-//! Owns: the table of those prices with the printed SRD page of each, and `price_cp` to look one up.
-//! Never does: price an item the table does not list (magic items, trade goods, other gear), change
-//! the baseline, or apply sale rules (see `local_journey::selling_value_cp`).
-//! Fails: by returning `None` for an unknown id, and for the two baseline ids that have no single SRD
-//! price: `gaming-set` (the price varies by set, SRD p.94) and `gold-piece` (a coin, not a priced
-//! item). Callers must treat `None` as "no price", never as a free item.
+//! Owns: the table of those prices with the printed SRD page of each, and `price_cp` to look one
+//! up. Never does: price an item the table does not list (magic items, trade goods, other gear),
+//! change the baseline, or apply sale rules (see `local_journey::selling_value_cp`).
+//! Fails: by returning `None` for an unknown id, and for the two baseline ids that have no single
+//! SRD price: `gaming-set` (the price varies by set, SRD p.94) and `gold-piece` (a coin, not a
+//! priced item). Callers must treat `None` as "no price", never as a free item.
 //!
-//! Prices are per single unit as the SRD lists them. Arrows are sold in twenties (SRD p.96: 20 arrows
-//! for 1 GP), so one arrow is 5 cp.
+//! Prices are per single unit as the SRD lists them. Arrows are sold in twenties (SRD p.96: 20
+//! arrows for 1 GP), so one arrow is 5 cp.
 
 use crate::coins::Price;
 

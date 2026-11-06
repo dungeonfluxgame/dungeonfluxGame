@@ -808,6 +808,7 @@ dependencies = [
 name = "df-playground"
 version = "0.1.0"
 dependencies = [
+ "df-scene-layout",
  "gloo-timers",
  "js-sys",
  "serde",
@@ -957,6 +958,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "df-scene-layout"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "df-server"
 version = "0.1.0"
 dependencies = [
@@ -1011,12 +1020,15 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "df-ai",
  "df-api",
  "df-imagery",
  "df-observe",
  "df-playground",
  "df-protocol",
+ "df-providers",
  "df-rules",
+ "df-scene-layout",
  "df-table",
  "df-telemetry",
  "df-types",

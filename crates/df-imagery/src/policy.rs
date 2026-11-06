@@ -20,6 +20,7 @@ pub struct PolicyInput {
 }
 
 impl PolicyInput {
+    /// Collects the facts the decision inspects; it validates nothing.
     pub fn new(
         purpose: Purpose,
         backend: BackendId,

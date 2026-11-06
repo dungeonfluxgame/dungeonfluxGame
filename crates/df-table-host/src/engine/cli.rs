@@ -3,31 +3,35 @@
 //! It owns the grammar and usage text of `input`, `viable`, `dump`, `force`, `projection show`,
 //! `queue` and `describe` (and the broker's `broker queues`, `broker ledger` and `broker request`),
 //! and running one against a host on a port. The event and settings verbs (`history`, `trace`,
-//! `replay`, `config`) have their grammar in `cli_observe` and are dispatched from here. Each verb has the shape of the canvas commands: words
-//! in, one typed `EngineCommand` out, a usage line on a mistake (`CommandError::Usage`), and a
-//! numbered answer. They work from the repl and from a script like any other command, because
-//! they are parsed by the same `command::parse`.
+//! `replay`, `config`) have their grammar in `cli/observe`, and the verbs of the first playable
+//! path theirs in `cli/play`; both are dispatched from here. Each verb has the shape of the canvas
+//! commands: words in, one typed `EngineCommand` out, a usage line on a mistake
+//! (`CommandError::Usage`), and a numbered answer. They work from the repl and from a script like
+//! any other command, because they are parsed by the same `command::parse`.
 //!
 //! The registry-generated `describe` and every list read from the owner; nothing here knows what
 //! a machine is. Hosted builds omit `force` and the broker's `request` (RES43, H.16): they are
 //! the operator tools of a local build, and their routes are the only way in.
 
+mod observe;
+pub mod play;
+
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::adapters::dev_check::{
-    RULES_CHECK_USAGE, RulesCheckRequest, format_rules_check, parse as parse_rules_check,
+    RULES_CHECK_USAGE, RulesCheckRequest, parse as parse_rules_check, run as run_rules_check,
 };
-use crate::client::{self, Response};
 use crate::command::CommandError;
 use crate::dev::DevError;
-use crate::limits::MAXIMUM_ECHOED_ANSWER;
+use crate::dev_client;
+use crate::dev_http::DevReply;
 
-use super::cli_observe::{
+use self::observe::{
     CONFIG_USAGE, HISTORY_USAGE, REPLAY_USAGE, TRACE_USAGE, parse_config, parse_history,
     parse_replay, parse_trace, run_config, run_history, run_replay, run_trace,
 };
-use super::cli_play::{
+use self::play::{
     LOBBY_USAGE, PLAY_USAGE, PlayCommand, SCENE_START_USAGE, WIRE_USAGE, parse as parse_play,
     run as run_play,
 };
@@ -36,14 +40,17 @@ use super::format::{
     format_dice, format_force, format_health, format_queue, format_requested, format_served,
     format_submit, format_viable, format_view,
 };
-use super::report::{BrokerView, EngineReply};
+use super::report::{EngineDump, EngineReply};
 use super::request::{
-    AudienceSpec, ChaosRequest, ClockControl, CommitFault, ConfigControl, DiceControl,
-    ForceRequest, HistoryRequest, InputBody, InputRequest, QueueControl, ReplayRequest,
+    AudienceSpec, BrokerRequest, ChaosRequest, ClockControl, CommitFault, ConfigControl,
+    DiceControl, ForceRequest, HistoryRequest, InputBody, InputRequest, ProposalSource,
+    QueueControl, ReplayRequest, TraceOperation,
 };
-use super::routes::{AUDIENCE_PARAMETER, BrokerRequestBody, SEAT_PARAMETER, path};
+use super::routes::{AUDIENCE_PARAMETER, SEAT_PARAMETER, path};
 
-pub const INPUT_USAGE: &str = "input <seat> <text> | input <seat> --tap <action> | --say <text> | --private <seat> <text> | --pause | input engine --timer <name> | --proposal <origin> <proposer>  (any: --op N, --view N)";
+pub const INPUT_USAGE: &str = "input <seat> <text> | input <seat> --tap <action> | --say <text> \
+    | --private <seat> <text> | --pause | input engine --timer <name> \
+    | --proposal <origin> <proposer>  (any: --op N, --view N)";
 pub const VIABLE_USAGE: &str = "viable <seat>";
 pub const DUMP_USAGE: &str = "dump";
 pub const FORCE_USAGE: &str = "force <machine> <state> [<field>=<value> ...]";
@@ -114,7 +121,7 @@ pub enum EngineCommand {
     RulesCheck(RulesCheckRequest),
     History(HistoryRequest),
     Trace {
-        operation: String,
+        operation: TraceOperation,
     },
     Replay(ReplayRequest),
     Config(ConfigControl),
@@ -122,70 +129,164 @@ pub enum EngineCommand {
     Play(PlayCommand),
 }
 
+/// Every verb's usage line and the lines of its help, in the order `describe` and `help` list
+/// them.
+const VERB_HELP: [(&str, &[&str]); 22] = [
+    (
+        INPUT_USAGE,
+        &[
+            "send an input as a seat or the engine through the real owner queue; a line is",
+            "interpreted into one of the seat's choices (the dev stand-in reads a line that is \
+             exactly",
+            "one of them); --op N sends the same operation id again to see a duplicate",
+        ],
+    ),
+    (
+        VIABLE_USAGE,
+        &["what the active machine would accept from the seat now"],
+    ),
+    (
+        DUMP_USAGE,
+        &["the committed table state and the active machine's saved state, as JSON"],
+    ),
+    (
+        FORCE_USAGE,
+        &[
+            "put the table in a machine and state (a driven change for local builds); the \
+             fields are",
+            "the machine's saved state, for a state it does not start in (phase=started scene=1)",
+        ],
+    ),
+    (
+        PROJECTION_USAGE,
+        &["what the shared screen or one seat is shown now"],
+    ),
+    (
+        QUEUE_USAGE,
+        &[
+            "the lanes in the order they are served, duplicates and refusals, recent turns and",
+            "commits; hold admits input without serving it, step serves one batch, release \
+             serves all",
+        ],
+    ),
+    (
+        DESCRIBE_USAGE,
+        &["the registered machines, lanes, ports and verbs, generated from the registry"],
+    ),
+    (
+        BROKER_USAGE,
+        &[
+            "the resource broker's queues and what is running, what has been spent (recorded,",
+            "never limited), or a dev request for a purpose",
+        ],
+    ),
+    (
+        COST_USAGE,
+        &["what each purpose has cost so far: the broker's ledger, which records and never limits"],
+    ),
+    (
+        HEALTH_USAGE,
+        &["whether the owner is serving, what waits, how commits have gone"],
+    ),
+    (
+        CLOCK_USAGE,
+        &["read the owner's clock, move it forward, stop it or let it run (a driven change)"],
+    ),
+    (
+        DICE_USAGE,
+        &["restart the seeded dice or queue the values rolled next (a driven change)"],
+    ),
+    (
+        CHAOS_USAGE,
+        &["make the next commits fail, or take the interpreter down, to see the fallbacks"],
+    ),
+    (
+        RULES_CHECK_USAGE,
+        &[
+            "run one real skill check through the df-rules adapter with a recorded draw (needs",
+            "DF_RULES_BACKEND=df-rules; the DC is 15 when not given)",
+        ],
+    ),
+    (
+        HISTORY_USAGE,
+        &[
+            "the newest events the host kept, oldest first, each with its number, class (A is \
+             always",
+            "on, B is verbose detail) and line, then the event stream's health; --area is an audit",
+            "area such as INPUT, TURN, COMMIT or ENGINE",
+        ],
+    ),
+    (
+        TRACE_USAGE,
+        &[
+            "every event the host kept for one input, with what the queue did with it; the \
+             operation",
+            "is the number --op took or the 32 digits the answers print",
+        ],
+    ),
+    (
+        REPLAY_USAGE,
+        &[
+            "replay a recorded turn log and compare it with the record; not built yet (it needs \
+             C7's",
+            "replay), so it says so",
+        ],
+    ),
+    (
+        CONFIG_USAGE,
+        &["the settings in force with their specs, or change one that the next input will use"],
+    ),
+    (
+        LOBBY_USAGE,
+        &[
+            "the lobby as a seat's phone drives it: each action is the tap its button sends, \
+             through",
+            "the real owner queue, answered with the typed outcome; `show` prints who sits and who \
+             is ready",
+        ],
+    ),
+    (
+        SCENE_START_USAGE,
+        &[
+            "ready every seat at the table that is not ready, then start the lobby as the first \
+             seat",
+            "(or the one named); the lobby hands the table to the story scene",
+        ],
+    ),
+    (
+        WIRE_USAGE,
+        &[
+            "what a TV or a phone is served as a MachineView (with its protobuf size), or send a",
+            "MachineIntent as a seat and read its receipt",
+        ],
+    ),
+    (
+        PLAY_USAGE,
+        &[
+            "write the engine's own shared screen and one seat's phone as a fixture the playground",
+            "shows (`playground go h3-live`), or remove it",
+        ],
+    ),
+];
+
 /// The usage line of every verb, in the order `describe` and `help` list them.
 pub fn verb_usages() -> Vec<String> {
-    [
-        INPUT_USAGE,
-        VIABLE_USAGE,
-        DUMP_USAGE,
-        FORCE_USAGE,
-        PROJECTION_USAGE,
-        QUEUE_USAGE,
-        DESCRIBE_USAGE,
-        BROKER_USAGE,
-        COST_USAGE,
-        HEALTH_USAGE,
-        CLOCK_USAGE,
-        DICE_USAGE,
-        CHAOS_USAGE,
-        RULES_CHECK_USAGE,
-        HISTORY_USAGE,
-        TRACE_USAGE,
-        REPLAY_USAGE,
-        CONFIG_USAGE,
-        LOBBY_USAGE,
-        SCENE_START_USAGE,
-        WIRE_USAGE,
-        PLAY_USAGE,
-    ]
-    .iter()
-    .map(|usage| (*usage).to_owned())
-    .collect()
+    VERB_HELP
+        .iter()
+        .map(|(usage, _)| (*usage).to_owned())
+        .collect()
 }
 
 /// The help text of these verbs, to follow the canvas commands' in `help`.
 pub fn help_text() -> String {
-    format!(
-        "\n  {INPUT_USAGE}\n      send an input as a seat or the engine through the real owner queue; a line is\n      interpreted into one of the seat's choices (the dev stand-in reads a line that is exactly\n      one of them); --op N sends the same operation id again to see a duplicate\n\
-         \n  {VIABLE_USAGE}\n      what the active machine would accept from the seat now\n\
-         \n  {DUMP_USAGE}\n      the committed table state and the active machine's saved state, as JSON\n\
-         \n  {FORCE_USAGE}\n      put the table in a machine and state (a driven change for local builds); the fields are\n      the machine's saved state, for a state it does not start in (phase=started scene=1)\n\
-         \n  {PROJECTION_USAGE}\n      what the shared screen or one seat is shown now\n\
-         \n  {QUEUE_USAGE}\n      the lanes in the order they are served, duplicates and refusals, recent turns and\n      commits; hold admits input without serving it, step serves one batch, release serves all\n\
-         \n  {DESCRIBE_USAGE}\n      the registered machines, lanes, ports and verbs, generated from the registry\n\
-         \n  {BROKER_USAGE}\n      the resource broker's queues and what is running, what has been spent (recorded,\n      never limited), or a dev request for a purpose\n\
-         \n  {COST_USAGE}\n      what each purpose has cost so far: the broker's ledger, which records and never limits\n\
-         \n  {HEALTH_USAGE}\n      whether the owner is serving, what waits, how commits have gone\n\
-         \n  {CLOCK_USAGE}\n      read the owner's clock, move it forward, stop it or let it run (a driven change)\n\
-         \n  {DICE_USAGE}\n      restart the seeded dice or queue the values rolled next (a driven change)\n\
-         \n  {CHAOS_USAGE}\n      make the next commits fail, or take the interpreter down, to see the fallbacks\n\
-         \n  {RULES_CHECK_USAGE}\n      run one real skill check through the df-rules adapter with a recorded draw (needs\n      DF_RULES_BACKEND=df-rules; the DC is 15 when not given)\n\
-         \n  {HISTORY_USAGE}\n      the newest events the host kept, oldest first, each with its number, class (A is always\n      on, B is verbose detail) and line, then the event stream's health; --area is an audit\n      area such as INPUT, TURN, COMMIT or ENGINE\n\
-         \n  {TRACE_USAGE}\n      every event the host kept for one input, with what the queue did with it; the operation\n      is the number --op took or the 32 digits the answers print\n\
-         \n  {REPLAY_USAGE}\n      replay a recorded turn log and compare it with the record; not built yet (it needs C7's\n      replay), so it says so\n\
-         \n  {CONFIG_USAGE}\n      the settings in force with their specs, or change one that the next input will use\n\
-         \n  {LOBBY_USAGE}\n      the lobby as a seat's phone drives it: each action is the tap its button sends, through\n      the real owner queue, answered with the typed outcome; `show` prints who sits and who is ready\n\
-         \n  {SCENE_START_USAGE}\n      ready every seat at the table that is not ready, then start the lobby as the first seat\n      (or the one named); the lobby hands the table to the story scene\n\
-         \n  {WIRE_USAGE}\n      what a TV or a phone is served as a MachineView (with its protobuf size), or send a\n      MachineIntent as a seat and read its receipt\n\
-         \n  {PLAY_USAGE}\n      write the engine's own shared screen and one seat's phone as a fixture the playground\n      shows (`playground go h3-live`), or remove it\n"
-    )
+    VERB_HELP
+        .iter()
+        .map(|(usage, lines)| format!("\n  {usage}\n      {}\n", lines.join("\n      ")))
+        .collect()
 }
 
-fn usage(text: &'static str) -> CommandError {
-    CommandError::Usage(text)
-}
-
-fn whole_number(what: &'static str, text: &str) -> Result<u64, CommandError> {
+/// A whole number from 0 the command names as `what`.
+pub(super) fn whole_number(what: &'static str, text: &str) -> Result<u64, CommandError> {
     text.parse::<u64>().map_err(|_| CommandError::BadCount {
         what,
         text: text.to_owned(),
@@ -200,7 +301,7 @@ fn without_words(
     if words.is_empty() {
         Ok(command)
     } else {
-        Err(usage(text))
+        Err(CommandError::Usage(text))
     }
 }
 
@@ -212,7 +313,7 @@ pub fn parse(verb: &str, words: &[String]) -> Result<EngineCommand, CommandError
             [seat] => Ok(EngineCommand::Viable {
                 seat: whole_number("the seat", seat)?,
             }),
-            _ => Err(usage(VIABLE_USAGE)),
+            _ => Err(CommandError::Usage(VIABLE_USAGE)),
         },
         "dump" => without_words(words, DUMP_USAGE, EngineCommand::Dump),
         "force" => force(words),
@@ -259,7 +360,7 @@ fn options(words: &[String]) -> Result<InputWords, CommandError> {
                 continue;
             }
         };
-        let value = remaining.next().ok_or_else(|| usage(INPUT_USAGE))?;
+        let value = remaining.next().ok_or(CommandError::Usage(INPUT_USAGE))?;
         if slot.replace(whole_number(what_of(what), value)?).is_some() {
             return Err(CommandError::DuplicateKey(what.to_owned()));
         }
@@ -277,7 +378,7 @@ fn what_of(flag: &str) -> &'static str {
 
 fn input(words: &[String]) -> Result<EngineCommand, CommandError> {
     let [target, rest @ ..] = words else {
-        return Err(usage(INPUT_USAGE));
+        return Err(CommandError::Usage(INPUT_USAGE));
     };
     let InputWords {
         rest,
@@ -301,7 +402,7 @@ fn input(words: &[String]) -> Result<EngineCommand, CommandError> {
 fn seat_body(seat: u64, words: &[String]) -> Result<InputBody, CommandError> {
     let texts = |from: &[String]| from.join(" ");
     match words {
-        [] => Err(usage(INPUT_USAGE)),
+        [] => Err(CommandError::Usage(INPUT_USAGE)),
         [flag, action] if flag == "--tap" => Ok(InputBody::Tap {
             seat,
             action: action.clone(),
@@ -318,7 +419,7 @@ fn seat_body(seat: u64, words: &[String]) -> Result<InputBody, CommandError> {
                 text: texts(line),
             })
         }
-        [flag, ..] if flag.starts_with("--") => Err(usage(INPUT_USAGE)),
+        [flag, ..] if flag.starts_with("--") => Err(CommandError::Usage(INPUT_USAGE)),
         line => Ok(InputBody::Text {
             seat,
             text: texts(line),
@@ -330,10 +431,14 @@ fn engine_body(words: &[String]) -> Result<InputBody, CommandError> {
     match words {
         [flag, name] if flag == "--timer" => Ok(InputBody::Timer { name: name.clone() }),
         [flag, origin, proposer] if flag == "--proposal" => Ok(InputBody::Proposal {
-            origin: origin.clone(),
+            origin: ProposalSource::from_key(origin).ok_or_else(|| CommandError::BadChoice {
+                key: "the proposal origin".to_owned(),
+                text: origin.clone(),
+                allowed: "npc, world, story, encounter, timer or machine".to_owned(),
+            })?,
             proposer: proposer.clone(),
         }),
-        _ => Err(usage(INPUT_USAGE)),
+        _ => Err(CommandError::Usage(INPUT_USAGE)),
     }
 }
 
@@ -358,7 +463,7 @@ fn saved_state(pairs: &[String]) -> Result<serde_json::Value, CommandError> {
 
 fn force(words: &[String]) -> Result<EngineCommand, CommandError> {
     let [machine, state, fields @ ..] = words else {
-        return Err(usage(FORCE_USAGE));
+        return Err(CommandError::Usage(FORCE_USAGE));
     };
     let payload = if fields.is_empty() {
         None
@@ -374,22 +479,21 @@ fn force(words: &[String]) -> Result<EngineCommand, CommandError> {
 
 fn projection(words: &[String]) -> Result<EngineCommand, CommandError> {
     let [show, who] = words else {
-        return Err(usage(PROJECTION_USAGE));
+        return Err(CommandError::Usage(PROJECTION_USAGE));
     };
     if show != "show" {
-        return Err(usage(PROJECTION_USAGE));
+        return Err(CommandError::Usage(PROJECTION_USAGE));
     }
-    let audience = match who.as_str() {
-        "tv" => AudienceSpec::Tv,
-        seat => AudienceSpec::Seat {
-            seat: seat.parse::<u64>().map_err(|_| CommandError::BadChoice {
-                key: "the audience".to_owned(),
-                text: who.clone(),
-                allowed: "tv or a seat number".to_owned(),
-            })?,
-        },
-    };
-    Ok(EngineCommand::ProjectionShow(audience))
+    Ok(EngineCommand::ProjectionShow(audience_word(who)?))
+}
+
+/// An audience as the verbs take it: `tv` or a seat number.
+pub(super) fn audience_word(word: &str) -> Result<AudienceSpec, CommandError> {
+    AudienceSpec::from_parameter(word).map_err(|_| CommandError::BadChoice {
+        key: "the audience".to_owned(),
+        text: word.to_owned(),
+        allowed: "tv or a seat number".to_owned(),
+    })
 }
 
 fn queue(words: &[String]) -> Result<EngineCommand, CommandError> {
@@ -406,7 +510,7 @@ fn queue(words: &[String]) -> Result<EngineCommand, CommandError> {
                 count: usize::try_from(count).unwrap_or(usize::MAX),
             }))
         }
-        _ => Err(usage(QUEUE_USAGE)),
+        _ => Err(CommandError::Usage(QUEUE_USAGE)),
     }
 }
 
@@ -417,7 +521,7 @@ fn broker(words: &[String]) -> Result<EngineCommand, CommandError> {
         [verb, purpose] if verb == "request" => Ok(EngineCommand::BrokerRequest {
             purpose: purpose.clone(),
         }),
-        _ => Err(usage(BROKER_USAGE)),
+        _ => Err(CommandError::Usage(BROKER_USAGE)),
     }
 }
 
@@ -429,7 +533,7 @@ fn clock(words: &[String]) -> Result<EngineCommand, CommandError> {
         [verb, ms] if verb == "advance" => ClockControl::Advance {
             ms: whole_number("the milliseconds", ms)?,
         },
-        _ => return Err(usage(CLOCK_USAGE)),
+        _ => return Err(CommandError::Usage(CLOCK_USAGE)),
     };
     Ok(EngineCommand::Clock(control))
 }
@@ -450,7 +554,7 @@ fn dice(words: &[String]) -> Result<EngineCommand, CommandError> {
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         },
-        _ => return Err(usage(DICE_USAGE)),
+        _ => return Err(CommandError::Usage(DICE_USAGE)),
     };
     Ok(EngineCommand::Dice(control))
 }
@@ -458,18 +562,11 @@ fn dice(words: &[String]) -> Result<EngineCommand, CommandError> {
 fn chaos(words: &[String]) -> Result<EngineCommand, CommandError> {
     let request = match words {
         [dependency, fault, rest @ ..] if dependency == "commit" && rest.len() <= 1 => {
-            let fault = match fault.as_str() {
-                "unavailable" => CommitFault::Unavailable,
-                "refused" => CommitFault::Refused,
-                "deadline" => CommitFault::Deadline,
-                other => {
-                    return Err(CommandError::BadChoice {
-                        key: "the commit fault".to_owned(),
-                        text: other.to_owned(),
-                        allowed: "unavailable, refused or deadline".to_owned(),
-                    });
-                }
-            };
+            let fault = CommitFault::from_key(fault).ok_or_else(|| CommandError::BadChoice {
+                key: "the commit fault".to_owned(),
+                text: fault.clone(),
+                allowed: "unavailable, refused or deadline".to_owned(),
+            })?;
             let count = match rest {
                 [count] => u32::try_from(whole_number("the count", count)?).map_err(|_| {
                     CommandError::BadCount {
@@ -492,47 +589,44 @@ fn chaos(words: &[String]) -> Result<EngineCommand, CommandError> {
                 });
             }
         },
-        _ => return Err(usage(CHAOS_USAGE)),
+        _ => return Err(CommandError::Usage(CHAOS_USAGE)),
     };
     Ok(EngineCommand::Chaos(request))
 }
 
-fn unreadable(response: &Response, reason: String) -> DevError {
-    DevError::UnexpectedAnswer {
-        status: response.status,
-        body: response.body.chars().take(MAXIMUM_ECHOED_ANSWER).collect(),
-        reason: Some(reason),
-    }
-}
-
-/// Reads an answer as the owner's reply: the value, or the refusal as a `DevError::Rejected`.
-fn read<T: DeserializeOwned>(response: &Response) -> Result<T, DevError> {
-    let reply: EngineReply<T> = serde_json::from_str(&response.body)
-        .map_err(|error| unreadable(response, error.to_string()))?;
+/// The value of the owner's reply, or its refusal as the command's failure.
+///
+/// Transitional: the refusal becomes text until `DevError` carries a route's typed error
+/// (`dev_client::get_value` / `post_value` then replace this); the route tests match the typed
+/// `EngineError` on the reply itself.
+fn reply_value<T>(reply: EngineReply<T>) -> Result<T, DevError> {
     match reply {
-        EngineReply::Done { value } => Ok(value),
-        EngineReply::Rejected { message, .. } => Err(DevError::Rejected(message)),
+        DevReply::Done { value } => Ok(value),
+        DevReply::Rejected { error, message } => Err(DevError::Rejected(format!(
+            "refused ({}): {message}",
+            error.key()
+        ))),
     }
 }
 
+/// GETs an engine route and reads its value.
 pub(super) async fn fetch<T: DeserializeOwned>(port: u16, address: &str) -> Result<T, DevError> {
-    let response = client::get(port, address).await.map_err(DevError::Client)?;
-    read(&response)
+    reply_value(dev_client::get_json(port, address).await?)
 }
 
+/// POSTs `body` to an engine route and reads its value.
 pub(super) async fn send<T: DeserializeOwned>(
     port: u16,
     address: &str,
     body: &impl Serialize,
 ) -> Result<T, DevError> {
-    let text = serde_json::to_string(body).map_err(|error| DevError::Unwritable {
-        what: "request",
-        reason: error.to_string(),
-    })?;
-    let response = client::post_json(port, address, &text)
-        .await
-        .map_err(DevError::Client)?;
-    read(&response)
+    reply_value(dev_client::post_json(port, address, body).await?)
+}
+
+/// `address` with one query parameter. Every value the verbs put in a query is a number, `tv`,
+/// hexadecimal digits or an audit area (checked by `parse_history`), so none needs encoding.
+pub(super) fn with_query(address: &str, parameter: &str, value: &str) -> String {
+    format!("{address}?{parameter}={value}")
 }
 
 fn pretty<T: Serialize>(what: &'static str, value: &T) -> Result<String, DevError> {
@@ -549,22 +643,18 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
             Ok(format_submit(&send(port, path::INPUT, &request).await?))
         }
         EngineCommand::Viable { seat } => {
-            let address = format!("{}?{SEAT_PARAMETER}={seat}", path::VIABLE);
+            let address = with_query(path::VIABLE, SEAT_PARAMETER, &seat.to_string());
             Ok(format_viable(&fetch(port, &address).await?))
         }
         EngineCommand::Dump => {
-            let dump: super::report::EngineDump = fetch(port, path::DUMP).await?;
+            let dump: EngineDump = fetch(port, path::DUMP).await?;
             pretty("dump", &dump)
         }
         EngineCommand::Force(request) => {
             Ok(format_force(&send(port, path::FORCE, &request).await?))
         }
         EngineCommand::ProjectionShow(audience) => {
-            let who = match audience {
-                AudienceSpec::Tv => "tv".to_owned(),
-                AudienceSpec::Seat { seat } => seat.to_string(),
-            };
-            let address = format!("{}?{AUDIENCE_PARAMETER}={who}", path::PROJECTION);
+            let address = with_query(path::PROJECTION, AUDIENCE_PARAMETER, &audience.parameter());
             let view = fetch(port, &address).await?;
             format_view(&view).map_err(|error| DevError::Unwritable {
                 what: "projection",
@@ -576,20 +666,14 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
             Ok(format_served(&send(port, path::QUEUE, &control).await?))
         }
         EngineCommand::Describe => Ok(format_description(&fetch(port, path::DESCRIBE).await?)),
-        EngineCommand::BrokerQueues => match fetch(port, path::BROKER_QUEUES).await? {
-            BrokerView::Queues(report) => Ok(format_broker_queues(&report)),
-            BrokerView::Ledger(_) => Err(DevError::Rejected(
-                "the host answered the queues with a ledger".to_owned(),
-            )),
-        },
-        EngineCommand::BrokerLedger => match fetch(port, path::BROKER_LEDGER).await? {
-            BrokerView::Ledger(report) => Ok(format_broker_ledger(&report)),
-            BrokerView::Queues(_) => Err(DevError::Rejected(
-                "the host answered the ledger with queues".to_owned(),
-            )),
-        },
+        EngineCommand::BrokerQueues => Ok(format_broker_queues(
+            &fetch(port, path::BROKER_QUEUES).await?,
+        )),
+        EngineCommand::BrokerLedger => Ok(format_broker_ledger(
+            &fetch(port, path::BROKER_LEDGER).await?,
+        )),
         EngineCommand::BrokerRequest { purpose } => {
-            let body = BrokerRequestBody { purpose };
+            let body = BrokerRequest { purpose };
             Ok(format_requested(
                 &send(port, path::BROKER_REQUEST, &body).await?,
             ))
@@ -602,9 +686,9 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
         EngineCommand::Chaos(request) => {
             Ok(format_chaos(&send(port, path::CHAOS, &request).await?))
         }
-        EngineCommand::RulesCheck(request) => Ok(format_rules_check(
-            &send(port, path::RULES_CHECK, &request).await?,
-        )),
+        // The rules-check route answers its own typed refusal (`RulesCheckError`), not
+        // `EngineError`, so the verb reads it through its own call.
+        EngineCommand::RulesCheck(request) => run_rules_check(port, &request).await,
         EngineCommand::History(request) => run_history(port, request).await,
         EngineCommand::Trace { operation } => run_trace(port, operation).await,
         EngineCommand::Replay(request) => run_replay(port, request).await,
@@ -612,3 +696,8 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
         EngineCommand::Play(command) => run_play(port, command).await,
     }
 }
+
+#[cfg(test)]
+mod observe_tests;
+#[cfg(test)]
+mod play_tests;

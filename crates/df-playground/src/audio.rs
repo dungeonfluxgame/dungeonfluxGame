@@ -18,10 +18,9 @@ use crate::controls::Device;
 use crate::dom::js_message;
 use crate::limits::{MAXIMUM_LIVE_EFFECTS, MAXIMUM_REPORTED_ERRORS};
 use crate::media::AudioState;
+use crate::path::media_file;
 use crate::scene::{Cue, Track};
 use crate::sound_plan::{MusicChange, fresh_cues, music_change, volume_of};
-
-const MEDIA_ADDRESS: &str = "/playground/media/";
 
 #[derive(Default)]
 struct Engine {
@@ -81,9 +80,9 @@ pub fn forget_cues() {
     with_engine(|engine| engine.seen_cue = None);
 }
 
-fn new_audio(media: &str, volume: u8, looping: bool) -> Result<HtmlAudioElement, JsValue> {
-    let audio = HtmlAudioElement::new_with_src(&format!("{MEDIA_ADDRESS}{media}"))?;
-    audio.set_volume(volume_of(volume));
+fn new_audio(media: &str, volume_percent: u8, looping: bool) -> Result<HtmlAudioElement, JsValue> {
+    let audio = HtmlAudioElement::new_with_src(&media_file(media))?;
+    audio.set_volume(volume_of(volume_percent));
     audio.set_loop(looping);
     Ok(audio)
 }
@@ -217,11 +216,14 @@ pub fn sync_music(desired: Option<&Track>, device: Device) {
         with_engine(|engine| music_change(engine.music.as_ref().map(|(track, _)| track), wanted));
     match change {
         MusicChange::Keep => {}
-        MusicChange::Update { volume, looping } => with_engine(|engine| {
+        MusicChange::Update {
+            volume_percent,
+            looping,
+        } => with_engine(|engine| {
             if let Some((track, audio)) = &mut engine.music {
-                audio.set_volume(volume_of(volume));
+                audio.set_volume(volume_of(volume_percent));
                 audio.set_loop(looping);
-                track.volume = volume;
+                track.volume_percent = volume_percent;
                 track.looping = looping;
             }
         }),
@@ -236,7 +238,7 @@ pub fn sync_music(desired: Option<&Track>, device: Device) {
 }
 
 fn start_music(track: &Track) {
-    match new_audio(&track.media, track.volume, track.looping) {
+    match new_audio(&track.media, track.volume_percent, track.looping) {
         Ok(audio) => {
             with_engine(|engine| engine.music = Some((track.clone(), audio.clone())));
             start(&audio, track.media.clone(), Kind::Music);
@@ -267,7 +269,7 @@ pub fn play_cues(cues: &[Cue], cue_count: u64, device: Device) {
     }
     for cue in fresh.play {
         with_engine(|engine| engine.last_cue = engine.last_cue.max(cue.id));
-        match new_audio(&cue.media, cue.volume, false) {
+        match new_audio(&cue.media, cue.volume_percent, false) {
             Ok(audio) => {
                 hold_effect(&audio);
                 start(&audio, cue.media.clone(), Kind::Effect);

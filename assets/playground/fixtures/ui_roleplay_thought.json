@@ -1,0 +1,33 @@
+{
+  "name": "UI: roleplay card, thought",
+  "description": "A copy of the roleplay card with the speech bubbles and the party strip taken away, and only a thinking indicator over the innkeeper: pulsing dots in a rounded box with a trail of dots for a tail, no words. The backdrop is render 18 with the painted-out patches filled in by the Codex image tool (innkeeper-table-plate-clean.webp). The indicator is anchored to the region named innkeeper in that picture's SAM 3.1 layout (media locate), with its own numbers as the fallback; playground set sam=true|false shows the layout.",
+  "tv": {
+    "place": "",
+    "status": { "kind": "ok" },
+    "caption": null,
+    "backdrop": { "media": "innkeeper-table-plate-clean.webp", "caption": null },
+    "card": null,
+    "pills": { "logo": "inline", "session": "The Ember Roads", "party": { "joined": 4, "capacity": 6 } },
+    "party": [],
+    "seats": null,
+    "roleplay": {
+      "title": { "glyph": "mug", "text": "Gather information" },
+      "bubbles": [
+        { "speaker": "Innkeeper", "tone": "thought", "line": "", "left_percent": 80, "top_percent": 20, "width_percent": 7, "tail_x_percent": 87, "tail_y_percent": 40, "anchor": { "region": "innkeeper", "shift_percent": -3 } }
+      ],
+      "caption": "The party questions a local about recent events on the Ember Roads."
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Kael",
+    "goal": "Find a guide to the Ember Roads",
+    "status": { "kind": "ok" },
+    "narration": ["The innkeeper wipes a mug and waits for your answer."],
+    "suggested": [{ "label": "Ask about the price" }, { "label": "Ask about the road" }],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

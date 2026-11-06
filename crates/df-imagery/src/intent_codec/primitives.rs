@@ -1,10 +1,12 @@
 //! Byte primitives for the intent codec: the bounded writer, the bounded
 //! reader, the prompt length bound and the minimum wire widths that let the
 //! decoder prove a claimed vector count fits the remaining input before it
-//! reserves anything.
+//! reserves anything. Also the few field codecs (handles, routes, moderation)
+//! that the config and pipeline encodings share.
 
 use super::CodecError;
-use crate::request::RequestLimits;
+use crate::config::{AccountHandle, ApiEndpoint, ModelName};
+use crate::request::{AnalysisRoute, ProviderModeration, RequestLimits};
 
 /// Minimum encoded width of one composite layer: a full source reference, two
 /// coordinates, one opacity and one blend tag.
@@ -21,6 +23,27 @@ pub(super) const MIN_STEP_BYTES: usize = 2;
 /// plus the smallest provider output (tag, generated dims, delivered dims,
 /// alpha tag and encoding tag).
 pub(super) const MIN_PROFILE_BYTES: usize = 24;
+/// Minimum encoded width of one staged identity: three counted texts (a
+/// four-byte length each, possibly empty) and one hero flag.
+pub(super) const MIN_STAGED_IDENTITY_BYTES: usize = 3 * 4 + 1;
+
+/// The only compatibility-algorithm revision of the encoded-byte steps.
+pub(super) const ENCODED_STEP_REVISION: u32 = 1;
+
+/// Decode bound of an account handle; matches the `AccountHandle` constructor bound.
+pub(super) const MAXIMUM_ACCOUNT_HANDLE_BYTES: usize = 64;
+/// Decode bound of a model name; matches the `ModelName` constructor bound.
+pub(super) const MAXIMUM_MODEL_NAME_BYTES: usize = 128;
+/// Decode bound of an API endpoint; matches the `ApiEndpoint` constructor bound.
+pub(super) const MAXIMUM_API_ENDPOINT_BYTES: usize = 256;
+/// Decode bound of an output profile name; matches the `OutputProfileName` constructor bound.
+pub(super) const MAXIMUM_PROFILE_NAME_BYTES: usize = 64;
+/// Decode bound of a CLI profile revision; matches the `CliProfileRevision` constructor bound.
+pub(super) const MAXIMUM_CLI_PROFILE_BYTES: usize = 64;
+/// Decode bound of the Codex executable and work directory paths; matches their constructors.
+pub(super) const MAXIMUM_CODEX_PATH_BYTES: usize = 4096;
+/// Decode bound of a price file reference; matches the `PriceFileRef` constructor bound.
+pub(super) const MAXIMUM_PRICE_FILE_BYTES: usize = 256;
 
 /// Byte bound for one prompt under the injected limits: four UTF-8 bytes per
 /// admitted char.
@@ -90,6 +113,15 @@ impl Writer {
         let len = u32::try_from(bytes.len()).map_err(|_| CodecError::TooLong)?;
         self.u32_be(len)?;
         self.extend(bytes)
+    }
+
+    /// A presence flag, then the counted text when present.
+    pub(crate) fn optional_text(&mut self, text: Option<&str>) -> Result<(), CodecError> {
+        self.boolean(text.is_some())?;
+        match text {
+            Some(text) => self.counted(text.as_bytes()),
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn float(&mut self, value: f32, field: &'static str) -> Result<(), CodecError> {
@@ -177,6 +209,11 @@ impl<'a> Reader<'a> {
         self.take(len)
     }
 
+    /// Counted UTF-8 text of at most `bound_bytes`.
+    pub(crate) fn text(&mut self, bound_bytes: usize) -> Result<&'a str, CodecError> {
+        core::str::from_utf8(self.counted(bound_bytes)?).map_err(|_| CodecError::InvalidText)
+    }
+
     pub(crate) fn float(&mut self, field: &'static str) -> Result<f32, CodecError> {
         let bits = self.u32_be()?;
         if bits == 0x8000_0000 {
@@ -206,4 +243,66 @@ impl<'a> Reader<'a> {
             })
         }
     }
+}
+
+// Field codecs shared by the config snapshot and the pipeline metadata, kept
+// here so neither sibling codec imports the other.
+
+pub(super) fn decode_account_handle(input: &mut Reader<'_>) -> Result<AccountHandle, CodecError> {
+    AccountHandle::new(input.text(MAXIMUM_ACCOUNT_HANDLE_BYTES)?).map_err(CodecError::Config)
+}
+
+pub(super) fn decode_model_name(input: &mut Reader<'_>) -> Result<ModelName, CodecError> {
+    ModelName::new(input.text(MAXIMUM_MODEL_NAME_BYTES)?).map_err(CodecError::Config)
+}
+
+pub(super) fn decode_api_endpoint(input: &mut Reader<'_>) -> Result<ApiEndpoint, CodecError> {
+    ApiEndpoint::new(input.text(MAXIMUM_API_ENDPOINT_BYTES)?).map_err(CodecError::Config)
+}
+
+pub(super) fn encode_route(out: &mut Writer, value: &AnalysisRoute) -> Result<(), CodecError> {
+    out.counted(value.account.as_str().as_bytes())?;
+    out.counted(value.model.as_str().as_bytes())?;
+    out.counted(value.endpoint.as_str().as_bytes())?;
+    out.u64_be(value.maximum_output_tokens)
+}
+
+/// A presence flag, then the route when present.
+pub(super) fn encode_optional_route(
+    out: &mut Writer,
+    route: Option<&AnalysisRoute>,
+) -> Result<(), CodecError> {
+    out.boolean(route.is_some())?;
+    match route {
+        Some(route) => encode_route(out, route),
+        None => Ok(()),
+    }
+}
+
+/// The one moderation tag shared by pipeline metadata and purpose overrides.
+pub(super) fn encode_moderation(
+    out: &mut Writer,
+    moderation: ProviderModeration,
+) -> Result<(), CodecError> {
+    out.push(match moderation {
+        ProviderModeration::Auto => 0,
+        ProviderModeration::Low => 1,
+    })
+}
+
+pub(super) fn decode_moderation(input: &mut Reader<'_>) -> Result<ProviderModeration, CodecError> {
+    match input.byte()? {
+        0 => Ok(ProviderModeration::Auto),
+        1 => Ok(ProviderModeration::Low),
+        _ => Err(CodecError::Malformed),
+    }
+}
+
+pub(super) fn decode_route(input: &mut Reader<'_>) -> Result<AnalysisRoute, CodecError> {
+    Ok(AnalysisRoute {
+        account: decode_account_handle(input)?,
+        model: decode_model_name(input)?,
+        endpoint: decode_api_endpoint(input)?,
+        maximum_output_tokens: input.u64_be()?,
+    })
 }

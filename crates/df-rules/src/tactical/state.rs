@@ -3,11 +3,21 @@ use crate::local_journey::{ChallengeRating, HeroSpecies, SpeciesCombatTraits, Sp
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Most combatants one battle admits. Spawn lists, per-actor records keyed by another combatant
+/// and decoded snapshots share this bound, so every admitted battle round-trips.
+pub(super) const MAXIMUM_COMBATANTS: usize = 64;
+/// Most cells the combatants of one battle can occupy: each is at most Huge (3 by 3 cells).
+pub(super) const MAXIMUM_OCCUPIED_CELLS: usize = MAXIMUM_COMBATANTS * 9;
+/// Most outstanding Help effects one battle retains; Help refuses a new one beyond this.
+pub(super) const MAXIMUM_HELP_EFFECTS: usize = 64;
+
+/// The two sides of a battle.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Side {
     Heroes,
     Enemies,
 }
+/// A creature size; Large and Huge occupy 2 by 2 and 3 by 3 cells (SRD p. 14).
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Size {
     Small,
@@ -147,6 +157,7 @@ impl CombatantSpec {
             Size::Huge => 3,
         }
     }
+    /// Grid distance in feet between the nearest cells of two spaces.
     pub fn distance_from(&self, origin: Cell, other: &CombatantSpec, target: Cell) -> u32 {
         let width = self.space_width_cells();
         let other_width = other.space_width_cells();
@@ -167,6 +178,7 @@ impl CombatantSpec {
             _ => crate::local_journey::ability_modifier(self.abilities[1]),
         }
     }
+    /// Attacks per Attack action from the stat block's Multiattack, 1 without one.
     pub fn multiattack_count(&self) -> u8 {
         match self.kind {
             CreatureKind::Scout
@@ -177,6 +189,7 @@ impl CombatantSpec {
             _ => 1,
         }
     }
+    /// Melee reach with `weapon`, in feet.
     pub fn melee_reach_ft(&self, weapon: Weapon) -> u32 {
         if matches!(
             (self.kind, weapon),
@@ -188,15 +201,16 @@ impl CombatantSpec {
         }
     }
 
-    /// The shared Fighter maximum (SRD 5.2.1 pp. 47, 84, 87) at `level`: the species' bonus per level
-    /// plus Tough's 2 when the profile's options carry it.
+    /// The shared Fighter maximum (SRD 5.2.1 pp. 47, 84, 87) at `level`: the species' bonus per
+    /// level plus Tough's 2 when the profile's options carry it.
     fn maximum_hit_points(&self, level: u8, species: HeroSpecies) -> u32 {
         crate::local_journey::maximum_hit_points(
             level,
             crate::local_journey::FIGHTER_FIRST_LEVEL_HIT_POINTS,
             self.abilities[2],
-            species.combat_traits().hit_points_per_level
-                + if self.species_options.tough { 2 } else { 0 },
+            self.species_options
+                .combat_traits(species)
+                .hit_points_per_level,
         )
     }
     /// The supported fixed-HP Fighter profiles identify their level without changing legacy
@@ -517,6 +531,7 @@ impl CombatantSpec {
         })
     }
 }
+/// What a combatant has spent this turn.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Budget {
@@ -529,6 +544,7 @@ pub struct Budget {
     pub disengaged: bool,
     pub dodging: bool,
 }
+/// A combatant's hit points, conditions and death saving throws.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Health {
@@ -543,6 +559,7 @@ pub struct Health {
     pub death_failures: u8,
 }
 impl Health {
+    /// Whether the combatant cannot act: Unconscious or dead.
     pub fn incapacitated(self) -> bool {
         self.unconscious || self.dead
     }
@@ -561,6 +578,7 @@ pub(crate) struct HelpEffect {
     pub ally: u32,
     pub target: u32,
 }
+/// One combatant in a battle: its spec, position, health and turn state.
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Combatant {
@@ -728,7 +746,8 @@ pub(crate) struct PendingMove {
     pub next: usize,
     pub eligible: Vec<u32>,
 }
-/// The reaction a battle waits on before it accepts an ordinary action (`Battle::pending_reaction`).
+/// The reaction a battle waits on before it accepts an ordinary action
+/// (`Battle::pending_reaction`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PendingReaction {
     /// An opportunity or movement reactor from `reaction_offers`.
@@ -751,6 +770,7 @@ pub struct Battle {
     pub(crate) needs_death_save: bool,
 }
 
+/// XP one defeated creature is worth.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreatureExperience {
     pub combatant: u32,
@@ -758,6 +778,7 @@ pub struct CreatureExperience {
     pub experience_points: u32,
 }
 
+/// XP an encounter awards, per creature and in total.
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq)]
 pub struct EncounterExperience {
     pub creatures: Vec<CreatureExperience>,
@@ -924,6 +945,7 @@ impl Battle {
     pub fn needs_death_save(&self) -> bool {
         self.needs_death_save
     }
+    /// The side still standing once every opponent is out of the fight.
     pub fn winner(&self) -> Option<Side> {
         let heroes = self
             .actors
@@ -943,7 +965,8 @@ impl Battle {
         }
     }
     /// Award source-derived monster XP only after the heroes have won the encounter.
-    /// SRD 5.2.1 p. 256: XP is awarded "for defeating the monster in combat or otherwise neutralizing it."
+    /// SRD 5.2.1 p. 256: XP is awarded "for defeating the monster in combat or otherwise
+    /// neutralizing it."
     pub fn experience_award(&self) -> Result<Option<EncounterExperience>, RuleError> {
         if self.winner() != Some(Side::Heroes) {
             return Ok(None);
@@ -1087,6 +1110,7 @@ impl Battle {
         }
         Ok(movement_cost_ft)
     }
+    /// Checks a movement path for the combatant and returns its cost in feet.
     pub fn validate_path(&self, id: u32, path: &[Cell]) -> Result<u16, RuleError> {
         let actor = self.actor(id)?;
         if actor.health.incapacitated() {
@@ -1173,6 +1197,7 @@ impl Battle {
         }
         Err(RuleError::NoPath)
     }
+    /// Every cell the combatant can end a move in with its remaining movement.
     pub fn reachable_cells(&self, id: u32) -> Result<Vec<Cell>, RuleError> {
         let actor = self.actor(id)?;
         if actor.health.incapacitated() {
@@ -1219,7 +1244,7 @@ pub(super) fn begin_faces(
     specs: Vec<CombatantSpec>,
     initiative: &[u32],
 ) -> Result<Battle, RuleError> {
-    if specs.len() < 2 || specs.len() > 64 || specs.len() != initiative.len() {
+    if specs.len() < 2 || specs.len() > MAXIMUM_COMBATANTS || specs.len() != initiative.len() {
         return Err(RuleError::Capacity);
     }
     let mut ids = BTreeSet::new();
@@ -1403,7 +1428,7 @@ pub fn begin(
     binding: super::DrawBinding<'_>,
     records: &[df_model::checkpoint::ActualDraw],
 ) -> Result<super::Resolution, RuleError> {
-    if specs.len() < 2 || specs.len() > 64 {
+    if specs.len() < 2 || specs.len() > MAXIMUM_COMBATANTS {
         return Err(RuleError::Capacity);
     }
     let mut draws = super::resolve::Draws::new(binding, records)?;
@@ -1494,12 +1519,7 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
                 return Err(RuleError::InvalidBuild);
             }
         }
-        let expected_hit_points = i32::from(progression.hit_points(spec.abilities[2], species))
-            + if spec.species_options.tough {
-                2 * i32::from(progression.level())
-            } else {
-                0
-            };
+        let expected_hit_points = spec.maximum_hit_points(progression.level(), species);
         let standard_melee = matches!(
             base_abilities,
             [17, 13, 15, 10, 12, 8] | [17, 14, 14, 8, 10, 12]
@@ -1523,7 +1543,7 @@ pub(super) fn validate_source_profile(spec: &CombatantSpec) -> Result<(), RuleEr
             || !spec.species_options.valid_for(species)
             || spec.size != expected_size
             || (!standard_melee && !standard_archer)
-            || i32::from(spec.hit_points) != expected_hit_points
+            || u32::from(spec.hit_points) != expected_hit_points
             || spec.speed_ft != species_traits.speed_ft
             || !spec.savage_attacker
             || spec.second_wind_uses != progression.second_wind_maximum()

@@ -1,9 +1,11 @@
 //! What goes into the Director and what comes out: a `Request`, the `Receipt` it gets at once and
 //! the `StageDirection` a tick answers with (O.14, G1).
 
-use crate::director_error::DirectorError;
-use crate::director_log::DropReason;
-use crate::director_reason::{MAXIMUM_CAMERA_MS, Reason, WideReason, check_focus_move, check_zoom};
+use crate::director::error::DirectorError;
+use crate::director::log::DropReason;
+use crate::director::reason::{
+    MAXIMUM_CAMERA_MS, Reason, WideReason, check_focus_move, check_zoom,
+};
 use crate::element::ElementId;
 
 /// One thing that happened that the camera may answer.
@@ -15,7 +17,7 @@ pub struct Request {
     /// A zoom other than the reason's default.
     pub zoom_percent: Option<u16>,
     /// A move time other than the reason's default.
-    pub over_ms: Option<u32>,
+    pub over_ms: Option<u64>,
     /// A hold other than the default: for a moment reason `focus_hold_ms`, for one that ends with
     /// its reason the safety limit.
     pub hold_ms: Option<u64>,
@@ -44,22 +46,22 @@ impl Request {
         }
     }
 
-    pub fn zoom(mut self, zoom_percent: u16) -> Self {
+    pub fn with_zoom_percent(mut self, zoom_percent: u16) -> Self {
         self.zoom_percent = Some(zoom_percent);
         self
     }
 
-    pub fn over(mut self, over_ms: u32) -> Self {
+    pub fn with_over_ms(mut self, over_ms: u64) -> Self {
         self.over_ms = Some(over_ms);
         self
     }
 
-    pub fn hold(mut self, hold_ms: u64) -> Self {
+    pub fn with_hold_ms(mut self, hold_ms: u64) -> Self {
         self.hold_ms = Some(hold_ms);
         self
     }
 
-    pub fn result(mut self, result: u64) -> Self {
+    pub fn with_result(mut self, result: u64) -> Self {
         self.result = Some(result);
         self
     }
@@ -85,7 +87,7 @@ impl Request {
             check_focus_move(over)?;
         }
         if let Some(hold) = self.hold_ms
-            && !(1..=u64::from(MAXIMUM_CAMERA_MS)).contains(&hold)
+            && !(1..=MAXIMUM_CAMERA_MS).contains(&hold)
         {
             return Err(DirectorError::HoldOutOfRange { hold_ms: hold });
         }
@@ -119,13 +121,13 @@ pub enum StageDirection {
         zoom_percent: u16,
         /// The zoom that was asked when it was cut.
         clamped_from: Option<u16>,
-        over_ms: u32,
+        over_ms: u64,
         serial: u64,
         driven: bool,
     },
     Wide {
         reason: WideReason,
-        over_ms: u32,
+        over_ms: u64,
         serial: u64,
         driven: bool,
     },

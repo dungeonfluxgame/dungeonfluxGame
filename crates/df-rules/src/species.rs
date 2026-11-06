@@ -1,5 +1,7 @@
 //! SRD 5.2.1 pp.84-87: source choices and the implemented species combat subset.
-use crate::local_journey::{HeroSpecies, JourneyRuleError, SpeciesCombatTraits, SpeciesSize};
+use crate::local_journey::{
+    HeroSpecies, JourneyRuleError, SOLDIER_SKILLS, SpeciesCombatTraits, SpeciesSize,
+};
 use crate::tactical::DamageType;
 use serde::{Deserialize, Serialize};
 
@@ -110,34 +112,20 @@ pub fn choice_groups(species: HeroSpecies) -> Vec<SpeciesChoiceGroup> {
 }
 /// Recognizes the source catalog only; applicability and completeness are checked separately.
 pub fn choice_option_is_known(id: &str, option: &str) -> bool {
-    [
-        HeroSpecies::Dragonborn,
-        HeroSpecies::Elf,
-        HeroSpecies::Gnome,
-        HeroSpecies::Goliath,
-        HeroSpecies::Human,
-        HeroSpecies::Tiefling,
-    ]
-    .into_iter()
-    .flat_map(choice_groups)
-    .any(|group| group.id == id && group.options.contains(&option))
+    HeroSpecies::ALL
+        .into_iter()
+        .flat_map(choice_groups)
+        .any(|group| group.id == id && group.options.contains(&option))
 }
+/// Whether `id` names a species choice group of any species.
 pub fn is_choice_group(id: &str) -> bool {
-    [
-        "draconic-ancestry",
-        "elven-lineage",
-        "keen-senses",
-        "species-spellcasting",
-        "gnomish-lineage",
-        "giant-ancestry",
-        "species-size",
-        "human-skill",
-        "versatile",
-        "fiendish-legacy",
-    ]
-    .contains(&id)
+    HeroSpecies::ALL
+        .into_iter()
+        .flat_map(choice_groups)
+        .any(|group| group.id == id)
 }
 
+/// Dragonborn Draconic Ancestry.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DraconicAncestry {
     Black,
@@ -152,6 +140,7 @@ pub enum DraconicAncestry {
     White,
 }
 impl DraconicAncestry {
+    /// The damage type this ancestry's breath deals and resists.
     pub fn damage_type(self) -> DamageType {
         use DraconicAncestry::*;
         match self {
@@ -163,17 +152,20 @@ impl DraconicAncestry {
         }
     }
 }
+/// Elf lineage.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ElvenLineage {
     Drow,
     HighElf,
     WoodElf,
 }
+/// Gnome lineage.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GnomishLineage {
     Forest,
     Rock,
 }
+/// Goliath Giant Ancestry.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GiantAncestry {
     Cloud,
@@ -183,12 +175,14 @@ pub enum GiantAncestry {
     Stone,
     Storm,
 }
+/// Tiefling Fiendish Legacy.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FiendishLegacy {
     Abyssal,
     Chthonic,
     Infernal,
 }
+/// The one lineage or ancestry choice a species makes, if it makes one.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Ancestry {
     Draconic(DraconicAncestry),
@@ -206,6 +200,8 @@ pub struct SpeciesOptions {
     pub tough: bool,
 }
 impl SpeciesOptions {
+    /// Parses the species choice groups of a build; refuses a missing, repeated, foreign or
+    /// unoffered pick.
     pub fn from_choices(
         species: HeroSpecies,
         choices: &[(&str, &str)],
@@ -240,7 +236,7 @@ impl SpeciesOptions {
         };
         // SRD pp.84,86: skill grants are additional proficiencies, not duplicate grants.
         if let Some(skill) = choice_value("human-skill").or_else(|| choice_value("keen-senses"))
-            && (matches!(skill, "athletics" | "intimidation")
+            && (SOLDIER_SKILLS.contains(&skill)
                 || choice_value("skill-1") == Some(skill)
                 || choice_value("skill-2") == Some(skill))
         {
@@ -304,6 +300,7 @@ impl SpeciesOptions {
             tough: choice_value("versatile") == Some("tough"),
         })
     }
+    /// Whether these options are exactly the ones `species` asks for.
     pub fn valid_for(self, species: HeroSpecies) -> bool {
         matches!(
             (species, self.ancestry),

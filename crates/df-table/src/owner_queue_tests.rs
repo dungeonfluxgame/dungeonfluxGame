@@ -746,7 +746,7 @@ fn an_exhausted_turn_sequence_refuses_to_serve_and_keeps_the_input_queued() {
 
 #[test]
 fn a_zero_rate_setting_cannot_build_a_queue_and_the_defaults_can() {
-    assert!(OwnerQueue::new(TableId::new(1), &Settings::defaults(), Arc::new(NullSink)).is_ok());
+    assert!(OwnerQueue::new(TableId::new(1), &Settings::default(), Arc::new(NullSink)).is_ok());
     assert_eq!(
         QueueConfigError::ZeroSetting(crate::config::SettingId::SeatRateBurst).to_string(),
         "the setting SeatRateBurst is zero"

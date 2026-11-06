@@ -127,3 +127,14 @@ fn configured_root_refuses_nonempty_foreign_directory_without_mutating_it() {
     assert_eq!(fs::read_dir(&path).unwrap().count(), 1);
     fs::remove_dir_all(path).unwrap();
 }
+
+#[test]
+fn shutdown_with_an_unbounded_timeout_waits_for_the_worker_instead_of_panicking() {
+    let path = root();
+    fs::create_dir(&path).unwrap();
+    let mut store = Store::open_configured(&path, TelemetryLimits::default()).unwrap();
+    // `Instant::now() + Duration::MAX` overflowed and panicked before the deadline was checked.
+    store.shutdown(Duration::MAX).unwrap();
+    drop(store);
+    fs::remove_dir_all(path).unwrap();
+}

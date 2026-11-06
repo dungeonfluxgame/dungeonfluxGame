@@ -5,9 +5,9 @@
 use serde_json::{Value, json};
 
 use crate::effects::TableEffect;
+use crate::limits::{MAXIMUM_TEXT_BYTES, OFFERS_BUDGET_BYTES, WIRE_FRAME_BYTES};
 use crate::outcome::{Decline, DeclineCode};
 use crate::private_data::{Narration, Secret};
-use crate::projection::bounds::{MAXIMUM_TEXT_BYTES, OFFERS_BUDGET_BYTES, WIRE_FRAME_BYTES};
 use crate::projection::{
     AttachmentError, Attachments, OfferEntry, OfferId, ProjectionStatus, StoryLine, project_seat,
     project_shared,

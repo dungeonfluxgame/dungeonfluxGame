@@ -28,6 +28,7 @@ pub(crate) mod standalone;
 mod terminal;
 mod terminal_cleanup;
 pub mod usage_projection;
+mod usage_retention;
 mod worker;
 
 pub(crate) use artifact_basis::artifact_executor_basis;
@@ -55,6 +56,7 @@ use crate::execution::{
     CapacityScope, EnqueueCommand, ExecutionIdentity, ExecutionStageId, StageBasis, StageKind,
     StageScope,
 };
+use crate::intent_codec::DecodedIntent;
 use crate::{AcceptCommand, AcceptTarget, ImageOperation};
 use sha2::{Digest, Sha256};
 
@@ -80,17 +82,10 @@ pub fn reservation_for(
         AcceptTarget::Create { job, .. } | AcceptTarget::Join { job } => job,
         AcceptTarget::JoinReady { .. } => return Err(crate::JournalError::InvalidRecord),
     };
-    let intent = crate::intent_codec::decode_intent(
-        accept.intent.bytes(),
-        &crate::service::PROTOCOL_LIMITS,
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map_err(|_| crate::JournalError::InvalidRecord)?;
-    let config = crate::intent_codec::decode_config(
-        accept.config.bytes(),
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map_err(|_| crate::JournalError::InvalidRecord)?;
+    let intent = decode_protocol_intent(accept.intent.bytes())
+        .map_err(|_| crate::JournalError::InvalidRecord)?;
+    let config = decode_protocol_config(accept.config.bytes())
+        .map_err(|_| crate::JournalError::InvalidRecord)?;
     if (config.accounting.mode == crate::AccountingMode::RecordOnly) != local_accounting {
         return Err(crate::JournalError::InvalidRecord);
     }
@@ -138,22 +133,32 @@ pub fn retained_audience(job: &crate::ImageJob) -> Result<crate::Audience, Runti
             .map(|intent| intent.audience)
             .map_err(|_| RuntimeError::InvalidRecord);
     }
-    crate::intent_codec::decode_intent(
-        job.intent.bytes(),
-        &crate::service::PROTOCOL_LIMITS,
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map(|intent| intent.audience)
-    .map_err(|_| RuntimeError::InvalidRecord)
+    retained_intent(job).map(|intent| intent.audience)
 }
 
 /// Retained validated configuration for native output and publication resource bounds.
 pub fn retained_config(job: &crate::ImageJob) -> Result<crate::ImageConfig, RuntimeError> {
-    crate::intent_codec::decode_config(
-        job.config.bytes(),
+    decode_protocol_config(job.config.bytes())
+}
+
+/// The job's retained image intent, decoded under the fixed protocol bounds so a later
+/// tightening of runtime limits never makes an accepted job unreadable.
+pub(crate) fn retained_intent(job: &crate::ImageJob) -> Result<DecodedIntent, RuntimeError> {
+    decode_protocol_intent(job.intent.bytes())
+}
+
+fn decode_protocol_intent(bytes: &[u8]) -> Result<DecodedIntent, RuntimeError> {
+    crate::intent_codec::decode_intent(
+        bytes,
+        &crate::service::PROTOCOL_LIMITS,
         crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
     )
     .map_err(|_| RuntimeError::InvalidRecord)
+}
+
+fn decode_protocol_config(bytes: &[u8]) -> Result<crate::ImageConfig, RuntimeError> {
+    crate::intent_codec::decode_config(bytes, crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES)
+        .map_err(|_| RuntimeError::InvalidRecord)
 }
 
 /// Decodes only the source facts needed for real cost maxima; prompts never leave this crate.
@@ -165,12 +170,7 @@ pub fn retained_cost_basis(
     if crate::service::analysis_codec::is_analysis_intent(job.intent.bytes()) {
         return standalone::cost_basis(job, config);
     }
-    let intent = crate::intent_codec::decode_intent(
-        job.intent.bytes(),
-        &crate::service::PROTOCOL_LIMITS,
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map_err(|_| RuntimeError::InvalidRecord)?;
+    let intent = retained_intent(job)?;
     let (prompt_bytes, reference_count) = match &intent.operation {
         ImageOperation::Generate(spec) => (spec.prompt.text().len(), spec.references.len()),
         ImageOperation::Edit(spec) => (spec.prompt.text().len(), spec.references.len() + 1),
@@ -236,12 +236,7 @@ pub fn retained_sources(job: &crate::ImageJob) -> Result<Vec<crate::SourceRef>, 
             .map(|intent| intent.operation.sources().into_iter().cloned().collect())
             .map_err(|_| RuntimeError::InvalidRecord);
     }
-    let intent = crate::intent_codec::decode_intent(
-        job.intent.bytes(),
-        &crate::service::PROTOCOL_LIMITS,
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map_err(|_| RuntimeError::InvalidRecord)?;
+    let intent = retained_intent(job)?;
     Ok(dispatch::references(&intent.operation)
         .into_iter()
         .cloned()
@@ -250,12 +245,7 @@ pub fn retained_sources(job: &crate::ImageJob) -> Result<Vec<crate::SourceRef>, 
 
 /// Pipeline decisions and separately metered fal extraction cannot use legacy direct publication.
 pub fn requires_final_selection(job: &crate::ImageJob) -> Result<bool, RuntimeError> {
-    let intent = crate::intent_codec::decode_intent(
-        job.intent.bytes(),
-        &crate::service::PROTOCOL_LIMITS,
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map_err(|_| RuntimeError::InvalidRecord)?;
+    let intent = retained_intent(job)?;
     let config = retained_config(job)?;
     Ok(intent.operation.pipeline().is_some()
         || (dispatch::backend(&config, &intent) == crate::BackendId::Fal
@@ -326,12 +316,7 @@ pub fn retained_analysis_dependencies(
             .map(|handle| (handle.clone(), source.clone()))
             .collect());
     }
-    let intent = crate::intent_codec::decode_intent(
-        job.intent.bytes(),
-        &crate::service::PROTOCOL_LIMITS,
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map_err(|_| RuntimeError::InvalidRecord)?;
+    let intent = retained_intent(job)?;
     if let crate::ImageOperation::Transform(crate::TransformSpec {
         source:
             crate::TransformSource::SegmentationMask {

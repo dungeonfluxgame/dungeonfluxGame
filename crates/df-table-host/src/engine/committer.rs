@@ -1,7 +1,7 @@
 //! The owner's commit under a deadline it enforces itself.
 //!
-//! A store may hang (S1 measured `fsync` stalls of seconds), and the owner thread must not hang with
-//! it. The write therefore runs on its own thread and the owner waits for the answer at most
+//! A store may hang (S1 measured `fsync` stalls of seconds), and the owner thread must not hang
+//! with it. The write therefore runs on its own thread and the owner waits for the answer at most
 //! `commit_deadline_ms`: past that the batch fails `deadline_exceeded` and the owner goes on. The
 //! write is then of unknown outcome, so the committer takes no new write until the old one has
 //! returned (a second attempt while one is stuck is `unavailable`, at once), and the owner gives
@@ -52,7 +52,7 @@ impl Committer {
                     let _ = job.reply.send(answer);
                 }
             })
-            .map_err(|error| EngineStartError::Thread(error.to_string()))?;
+            .map_err(|error| EngineStartError::Thread(error.kind()))?;
         Ok(Self { jobs, writing })
     }
 

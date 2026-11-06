@@ -75,12 +75,7 @@ where
         match route {
             CreatorRoute::General => {}
             CreatorRoute::Bfl => {
-                let intent = crate::intent_codec::decode_intent(
-                    job.intent.bytes(),
-                    &crate::service::PROTOCOL_LIMITS,
-                    crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-                )
-                .map_err(|_| RuntimeError::InvalidRecord)?;
+                let intent = super::retained_intent(job)?;
                 let purpose = &mut resolved.purposes[intent.purpose.purpose.index()];
                 if dispatch::backend(config, &intent) != crate::BackendId::Bfl {
                     purpose.account_override = config.creator_bfl_account.clone();
@@ -527,12 +522,7 @@ where
         self.settle_decision(context, mode, raw, observation, None)
             .await?;
         self.project_usage_or_pending(raw).await?;
-        let intent = crate::intent_codec::decode_intent(
-            context.job.intent.bytes(),
-            &crate::service::PROTOCOL_LIMITS,
-            crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-        )
-        .map_err(|_| RuntimeError::InvalidRecord)?;
+        let intent = super::retained_intent(&context.job)?;
         let config = super::retained_config(&context.job)?;
         self.enqueue_classified_image(context, &intent, &config, assessment)
             .await

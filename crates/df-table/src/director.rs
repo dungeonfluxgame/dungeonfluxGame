@@ -25,29 +25,32 @@
 //!    one at a large safety limit; a scene or combat start is wide; a move the host could not put
 //!    on the screen is told back (`apply_failed`) and the pull-back is made again.
 //! 8. Reduced effects: every move is a cut.
-//! 9. Logged: every move, return and decline is an `Entry` (`director_log`), and an entry names
+//! 9. Logged: every move, return and decline is an `Entry` (`director::log`), and an entry names
 //!    its element to the shared audience only when the table could see it.
 //!
 //! The camera is one shared value for the table, so the Director holds one focus at a time.
 
 mod decide;
+pub mod error;
+pub mod log;
+pub mod reason;
 mod report;
 mod request;
 mod settings;
+pub mod view;
 
 use std::collections::VecDeque;
 
-use crate::director_error::DirectorError;
-use crate::director_log::{Cause, DropReason, Entry, Outcome};
-use crate::director_reason::{Ends, MAXIMUM_CAMERA_MS, Reason, WideReason};
-use crate::director_view::{BeatKind, PlateView, StageView};
+use crate::director::error::DirectorError;
+use crate::director::log::{Cause, DropReason, Entry, Outcome};
+use crate::director::reason::{Ends, MAXIMUM_CAMERA_MS, Reason, WideReason};
+use crate::director::view::{BeatKind, PlateView, StageView};
 use crate::element::ElementId;
 
 pub use self::request::{Receipt, Request, StageDirection};
-pub use self::settings::{
-    DEFAULT_FOCUS_HOLD_MS, DEFAULT_MAXIMUM_TARGETS, DEFAULT_MAXIMUM_WAITING,
-    DEFAULT_MAXIMUM_WAITING_TARGETS, DEFAULT_SPACING_MS, DirectorSettings, UNENDED_FOCUS_LIMIT_MS,
-};
+#[cfg(test)]
+pub(crate) use self::settings::{DEFAULT_FOCUS_HOLD_MS, UNENDED_FOCUS_LIMIT_MS};
+pub use self::settings::{DirectorSetting, DirectorSettings};
 
 #[derive(Debug, Clone)]
 struct Waiting {
@@ -78,7 +81,7 @@ struct Active {
 #[derive(Debug, Clone, Copy)]
 struct OwedWide {
     reason: WideReason,
-    over_ms: u32,
+    over_ms: u64,
     driven: bool,
 }
 
@@ -121,9 +124,8 @@ fn is_visible(view: &StageView, element: &ElementId) -> bool {
 }
 
 impl Director {
-    pub fn new(settings: DirectorSettings) -> Result<Self, DirectorError> {
-        settings.check()?;
-        Ok(Self {
+    pub fn new(settings: DirectorSettings) -> Self {
+        Self {
             settings,
             now_ms: 0,
             serial: 0,
@@ -142,11 +144,7 @@ impl Director {
             queued: 0,
             applied: 0,
             dropped: 0,
-        })
-    }
-
-    pub fn settings(&self) -> &DirectorSettings {
-        &self.settings
+        }
     }
 
     pub fn serial(&self) -> u64 {
@@ -444,7 +442,7 @@ impl Director {
     fn make_wide(
         &mut self,
         why: WideReason,
-        over_ms: u32,
+        over_ms: u64,
         driven: bool,
         view: Option<&StageView>,
     ) -> StageDirection {
@@ -477,7 +475,7 @@ impl Director {
         }
     }
 
-    fn wide_time(&self, view: &StageView) -> u32 {
+    fn wide_time(&self, view: &StageView) -> u64 {
         if view.reduced_effects {
             0
         } else {
@@ -538,7 +536,7 @@ impl Director {
         &mut self,
         now_ms: u64,
         view: &StageView,
-        over_ms: Option<u32>,
+        over_ms: Option<u64>,
     ) -> Result<StageDirection, DirectorError> {
         self.advance(now_ms)?;
         let over = over_ms.unwrap_or_else(|| self.wide_time(view));

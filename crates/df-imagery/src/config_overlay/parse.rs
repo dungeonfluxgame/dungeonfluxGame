@@ -16,10 +16,11 @@ use super::shared::invalid;
 
 /// A file larger than this is refused before parsing.
 const MAXIMUM_FILE_TEXT_BYTES: usize = 1_048_576;
-/// More distinct entries than this cannot be valid: the overlay tracks about
-/// eighty canonical fields, so anything larger holds duplicates or unknown
-/// paths.
-const MAXIMUM_FILE_ENTRIES: usize = 512;
+/// Allocation guard on distinct file entries. About eighty canonical fields
+/// exist, but the named output-profile table has no fixed count (eight
+/// fields per profile), so the guard is generous; the file byte bound above
+/// is the real limit.
+const MAXIMUM_FILE_ENTRIES: usize = 16_384;
 /// Longer dotted paths than this cannot name a recognized field.
 const MAXIMUM_FILE_KEY_CHARS: usize = 128;
 /// Longer quoted strings than this cannot be a valid mode, backend, or handle.

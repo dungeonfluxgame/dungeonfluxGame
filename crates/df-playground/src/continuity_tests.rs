@@ -6,7 +6,8 @@ use crate::continuity::{Admit, CameraClock, Continuity, ReplyGate, SlideClock, c
 use crate::controls::{Controls, ControlsReply};
 use crate::fixture::{Camera, ElementShape, StageElement, StagePivot};
 use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT};
-use crate::scene::{ImageSlot, Override, SceneChange, SceneOverlay};
+use crate::overlay::Edit;
+use crate::scene::{ImageSlot, SceneChange, SceneOverlay};
 
 fn element(id: &str, x: f32, y: f32) -> StageElement {
     StageElement {
@@ -25,7 +26,7 @@ fn element(id: &str, x: f32, y: f32) -> StageElement {
     }
 }
 
-fn camera(target: Option<&str>, serial: u64, duration_ms: u32, elapsed_ms: u64) -> Camera {
+fn camera(target: Option<&str>, serial: u64, duration_ms: u64, elapsed_ms: u64) -> Camera {
     Camera {
         target: target.map(str::to_owned),
         zoom_percent: 200,
@@ -36,7 +37,7 @@ fn camera(target: Option<&str>, serial: u64, duration_ms: u32, elapsed_ms: u64) 
     }
 }
 
-fn slide(serial: u64, duration_ms: u32, elapsed_ms: u64) -> crate::fixture::Slide {
+fn slide(serial: u64, duration_ms: u64, elapsed_ms: u64) -> crate::fixture::Slide {
     crate::fixture::Slide {
         from_percent: 15,
         to_percent: 85,
@@ -184,6 +185,7 @@ fn a_reply_says_how_long_ago_each_move_began_by_the_hosts_clock() {
                 caption: None,
                 rotation_degrees: 0,
                 slide: Some(slide(0, 5_000, 0)),
+                layout: None,
             },
             &base,
             10_500,
@@ -197,20 +199,33 @@ fn a_reply_says_how_long_ago_each_move_began_by_the_hosts_clock() {
     };
     let later = reply.at(13_000);
     assert_eq!(
-        later.scene.camera.as_ref().map(|camera| camera.elapsed_ms),
+        later
+            .scene
+            .camera
+            .set_value()
+            .map(|camera| camera.elapsed_ms),
         Some(3_000)
     );
-    let Some(Override::Set(card)) = later.scene.card else {
+    let Edit::Set(card) = later.scene.card else {
         panic!("a card");
     };
     assert_eq!(card.slide.map(|slide| slide.elapsed_ms), Some(2_500));
     assert_eq!(
-        reply.scene.camera.as_ref().map(|camera| camera.elapsed_ms),
+        reply
+            .scene
+            .camera
+            .set_value()
+            .map(|camera| camera.elapsed_ms),
         Some(0),
         "what the host keeps is not changed by being read"
     );
     assert_eq!(
-        reply.at(5_000).scene.camera.map(|camera| camera.elapsed_ms),
+        reply
+            .at(5_000)
+            .scene
+            .camera
+            .set_value()
+            .map(|camera| camera.elapsed_ms),
         Some(0),
         "never negative"
     );

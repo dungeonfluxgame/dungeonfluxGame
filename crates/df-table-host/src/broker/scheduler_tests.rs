@@ -3,23 +3,23 @@ use df_table::ports::{Readiness, ResourceHandle};
 use df_table::private_data::Narration;
 
 use super::events::{AbandonReason, BrokerEvent, RefusalKind, StaleReason};
+use super::fixtures::{core_over, core_with, facts, name, request_for};
 use super::ledger::LedgerEnd;
 use super::purpose::{Price, PurposeFacts, PurposeSpec, PurposeTable, QueueClass, ResourceKind};
 use super::queues::QueueBounds;
 use super::request::{
-    AttemptId, Epoch, ProviderFault, RequestError, RequestStatus, ResourceResult, ResultError,
+    AttemptId, Epoch, ProviderCause, RequestError, RequestStatus, ResourceResult, ResultError,
     WorkerId,
 };
 use super::scheduler::{BrokerLimits, CancelOutcome, CompleteOutcome};
-use super::tests_support::{core_over, core_with, facts, name, request_for};
 
 const WORKER: WorkerId = WorkerId::new(1);
 
-fn text_ok() -> Result<ResourceResult, ProviderFault> {
+fn text_ok() -> Result<ResourceResult, ProviderCause> {
     Ok(ResourceResult::Text(Narration::new("a line")))
 }
 
-fn image_ok() -> Result<ResourceResult, ProviderFault> {
+fn image_ok() -> Result<ResourceResult, ProviderCause> {
     Ok(ResourceResult::Image {
         width: 64,
         height: 64,
@@ -28,17 +28,11 @@ fn image_ok() -> Result<ResourceResult, ProviderFault> {
 }
 
 fn wide_images() -> BrokerLimits {
-    BrokerLimits {
-        image_slots: 10,
-        ..BrokerLimits::default()
-    }
+    BrokerLimits::default().with_image_slots(10).unwrap()
 }
 
 fn one_image_slot() -> BrokerLimits {
-    BrokerLimits {
-        image_slots: 1,
-        ..BrokerLimits::default()
-    }
+    BrokerLimits::default().with_image_slots(1).unwrap()
 }
 
 fn table_with_deadline(deadline_ms: u64) -> PurposeTable {
@@ -150,7 +144,10 @@ fn a_higher_class_preempts_the_lowest_class_running_when_the_slots_are_full() {
     );
     assert_eq!(core.take_cancellations(), [running.attempt]);
     assert_eq!(
-        audit.count(|event| matches!(event, BrokerEvent::Preempted { handle, by, .. } if *handle == background && *by == plate)),
+        audit.count(|event| matches!(
+            event,
+            BrokerEvent::Preempted { handle, by, .. } if *handle == background && *by == plate
+        )),
         1
     );
     assert_eq!(
@@ -211,11 +208,7 @@ fn a_request_never_preempts_the_same_class_or_a_higher_one() {
 
 #[test]
 fn work_that_is_not_live_never_takes_the_text_slot_reserved_for_live() {
-    let limits = BrokerLimits {
-        text_slots: 2,
-        reserved_live_text_slots: 1,
-        ..BrokerLimits::default()
-    };
+    let limits = BrokerLimits::new(2, 1_024, 1, QueueBounds::default()).unwrap();
     let (mut core, _) = core_with(limits);
     core.request(request_for("text_lookahead", 1, 1), 0)
         .expect("accepted");
@@ -440,7 +433,7 @@ fn a_deadline_miss_fails_a_request_that_is_backing_off() {
         .request(request_for("text_live", 1, 1), 0)
         .expect("accepted");
     let call = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
-    core.complete(call.attempt, Err(ProviderFault::Unavailable), 10);
+    core.complete(call.attempt, Err(ProviderCause::Unavailable), 10);
     assert!(matches!(
         core.status(handle),
         Some(RequestStatus::BackingOff { .. })
@@ -463,7 +456,7 @@ fn a_reported_failure_is_retried_with_a_doubling_backoff_until_the_retries_run_o
         .request(request_for("text_live", 1, 1), 0)
         .expect("accepted");
     let first = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
-    core.complete(first.attempt, Err(ProviderFault::Unavailable), 0);
+    core.complete(first.attempt, Err(ProviderCause::Unavailable), 0);
     let RequestStatus::BackingOff { until_ms } = core.status(handle).expect("known") else {
         panic!("the first failure should back off");
     };
@@ -474,7 +467,7 @@ fn a_reported_failure_is_retried_with_a_doubling_backoff_until_the_retries_run_o
         .claim(ResourceKind::Text, WORKER, until_ms)
         .expect("claimed again");
     assert_eq!(second.number, 2);
-    core.complete(second.attempt, Err(ProviderFault::Unavailable), until_ms);
+    core.complete(second.attempt, Err(ProviderCause::Unavailable), until_ms);
     let RequestStatus::BackingOff { until_ms: later } = core.status(handle).expect("known") else {
         panic!("the second failure should back off");
     };
@@ -486,7 +479,7 @@ fn a_reported_failure_is_retried_with_a_doubling_backoff_until_the_retries_run_o
     let third = core
         .claim(ResourceKind::Text, WORKER, later)
         .expect("claimed a third time");
-    core.complete(third.attempt, Err(ProviderFault::Unavailable), later);
+    core.complete(third.attempt, Err(ProviderCause::Unavailable), later);
 
     assert_eq!(
         core.status(handle),
@@ -509,7 +502,7 @@ fn a_refusal_is_never_retried() {
         .expect("accepted");
     let call = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
 
-    core.complete(call.attempt, Err(ProviderFault::Refused), 5);
+    core.complete(call.attempt, Err(ProviderCause::Refused), 5);
 
     assert_eq!(
         core.status(handle),
@@ -531,7 +524,7 @@ fn a_retry_that_would_end_past_the_deadline_is_not_made() {
         .expect("accepted");
     let call = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
 
-    core.complete(call.attempt, Err(ProviderFault::Unavailable), 100);
+    core.complete(call.attempt, Err(ProviderCause::Unavailable), 100);
 
     assert_eq!(
         core.status(handle),
@@ -620,7 +613,7 @@ fn a_request_that_waited_out_a_retry_backoff_past_its_deadline_is_not_claimed_ei
         .request(request_for("text_live", 1, 1), 0)
         .expect("accepted");
     let first = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
-    core.complete(first.attempt, Err(ProviderFault::Unavailable), 100);
+    core.complete(first.attempt, Err(ProviderCause::Unavailable), 100);
 
     assert_eq!(core.claim(ResourceKind::Text, WORKER, 10_000), None);
 
@@ -848,13 +841,10 @@ fn cancelling_a_waiting_request_removes_it_and_a_running_one_is_abandoned() {
 
 #[test]
 fn a_full_plate_queue_drops_its_oldest_request_and_says_so() {
-    let limits = BrokerLimits {
-        queues: QueueBounds {
-            plate: 2,
-            ..QueueBounds::default()
-        },
-        ..BrokerLimits::default()
-    };
+    let queues = QueueBounds::default()
+        .with_bound(QueueClass::Plate, 2)
+        .unwrap();
+    let limits = BrokerLimits::default().with_queues(queues);
     let (mut core, audit) = core_with(limits);
     let oldest = core
         .request(request_for("image_plate", 1, 1), 0)
@@ -889,13 +879,10 @@ fn a_full_plate_queue_drops_its_oldest_request_and_says_so() {
 
 #[test]
 fn a_full_live_queue_refuses_the_new_request_instead_of_dropping_one() {
-    let limits = BrokerLimits {
-        queues: QueueBounds {
-            live: 2,
-            ..QueueBounds::default()
-        },
-        ..BrokerLimits::default()
-    };
+    let queues = QueueBounds::default()
+        .with_bound(QueueClass::Live, 2)
+        .unwrap();
+    let limits = BrokerLimits::default().with_queues(queues);
     let (mut core, _) = core_with(limits);
     let first = core
         .request(request_for("text_live", 1, 1), 0)
@@ -932,14 +919,13 @@ fn the_ledger_records_every_request_and_every_call_sent_and_never_refuses() {
         .expect("valid"),
     ])
     .expect("valid");
-    let limits = BrokerLimits {
-        image_slots: 1_000,
-        queues: QueueBounds {
-            plate: 1_000,
-            ..QueueBounds::default()
-        },
-        ..BrokerLimits::default()
-    };
+    let queues = QueueBounds::default()
+        .with_bound(QueueClass::Plate, 1_000)
+        .unwrap();
+    let limits = BrokerLimits::default()
+        .with_image_slots(1_000)
+        .unwrap()
+        .with_queues(queues);
     let (mut core, _) = core_over(table, limits);
     for key in 1..=500 {
         core.request(request_for("priced_plate", key, 1), 0)
@@ -1056,7 +1042,7 @@ fn settled_requests_are_pushed_once_as_completions() {
     let first = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
     core.complete(first.attempt, text_ok(), 1);
     let second = core.claim(ResourceKind::Text, WORKER, 1).expect("claimed");
-    core.complete(second.attempt, Err(ProviderFault::Refused), 2);
+    core.complete(second.attempt, Err(ProviderCause::Refused), 2);
 
     let completions = core.take_completions();
 

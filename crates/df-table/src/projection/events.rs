@@ -11,8 +11,8 @@ use std::fmt::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
+use crate::event::field::LineWriter;
 use crate::event::{EventClass, write_context};
-use crate::event_field::LineWriter;
 use crate::identity::{Correlation, EvidenceRef, SeatId, TableScope};
 use crate::private_data::LengthClass;
 use crate::projection::AudienceKind;
@@ -66,12 +66,12 @@ impl ProjectionEvent {
                 let mut line = LineWriter::start(out, "built")?;
                 write_context(&mut line, scope, correlation)?;
                 line.field("audience", audience)?;
-                line.field_if_present("seat", seat)?;
+                line.field_if_present("seat", seat.as_ref())?;
                 line.field("status", status)?;
                 line.field("elements", elements)?;
                 line.field("lines", lines)?;
                 line.field("length", length)?;
-                line.field_if_present("evidence", evidence)
+                line.field_if_present("evidence", evidence.as_ref())
             }
         }
     }

@@ -19,7 +19,14 @@ use df_table::element::NameError;
 use df_table::ports::PurposeName;
 use serde::{Deserialize, Serialize};
 
-use super::limits::{MAXIMUM_IMAGE_ANSWER_EDGE_PIXELS, MAXIMUM_TEXT_ANSWER_CHARACTERS};
+use super::limits::{
+    BACKGROUND_DEADLINE_MS, INTERPRET_DEADLINE_MS, MAXIMUM_IMAGE_ANSWER_EDGE_PIXELS,
+    MAXIMUM_TEXT_ANSWER_CHARACTERS, TEXT_DEADLINE_MS,
+};
+
+/// Transitional second path of `limits::IMAGE_DEADLINE_MS`, kept only while
+/// `scene_builder/purposes.rs` imports it from here; its last caller removes it.
+pub use super::limits::IMAGE_DEADLINE_MS;
 
 /// Whether a purpose goes to the text lane or the image lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -37,6 +44,10 @@ impl ResourceKind {
             Self::Text => "text",
             Self::Image => "image",
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|kind| kind.key() == key)
     }
 }
 
@@ -67,6 +78,10 @@ impl QueueClass {
             Self::Lookahead => "lookahead",
             Self::Background => "background",
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|class| class.key() == key)
     }
 
     /// 0 is the highest priority.
@@ -108,6 +123,16 @@ pub enum Fallback {
 }
 
 impl Fallback {
+    pub const ALL: &'static [Self] = &[
+        Self::ButtonsFromLegalChoices,
+        Self::StructuredReadout,
+        Self::PlaceCard,
+        Self::HoldLastPlate,
+        Self::EstablishingCard,
+        Self::TextInPlaceOfPicture,
+        Self::Nothing,
+    ];
+
     pub fn key(self) -> &'static str {
         match self {
             Self::ButtonsFromLegalChoices => "buttons_from_legal_choices",
@@ -118,6 +143,13 @@ impl Fallback {
             Self::TextInPlaceOfPicture => "text_in_place_of_picture",
             Self::Nothing => "nothing",
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|fallback| fallback.key() == key)
     }
 }
 
@@ -330,18 +362,6 @@ const SINGLE_RETRY: RetryPolicy = RetryPolicy {
     initial_backoff_ms: 250,
     maximum_backoff_ms: 2_000,
 };
-
-/// INTERPRET: the lower end of the observed Codex text latency (H.5), so a slower lane times out
-/// and the seat gets buttons.
-pub const INTERPRET_DEADLINE_MS: u64 = 15_000;
-/// Narration, scene description, dress and staging text: the upper end of the observed text
-/// latency (H.5).
-pub const TEXT_DEADLINE_MS: u64 = 45_000;
-/// The current scene's background: more than `scene_build_budget_s` of J.4 so a slow build still
-/// lands late, and the table plays on the establishing card meanwhile (K.2).
-pub const BACKGROUND_DEADLINE_MS: u64 = 120_000;
-/// A plate or portrait: the upper end of the observed Codex image latency, 90 to 240 s (H.4).
-pub const IMAGE_DEADLINE_MS: u64 = 240_000;
 
 const TEXT_CHARACTERS: SizeRule = SizeRule::TextCharacters {
     maximum: MAXIMUM_TEXT_ANSWER_CHARACTERS,

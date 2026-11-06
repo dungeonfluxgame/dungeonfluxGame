@@ -4,6 +4,8 @@
 //! position of the mistake, so an author sees it on the page instead of a blank panel. It never
 //! draws anything and never decides what a status or a choice means: `copy` and `choices` do.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::overlay::{NarrationBox, SeatStrip};
@@ -26,11 +28,42 @@ pub enum LiveMarker {
     Live,
 }
 
+impl LiveMarker {
+    pub const ALL: [Self; 1] = [Self::Live];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ElementShape {
     Circle,
     Rect,
+}
+
+impl ElementShape {
+    pub const ALL: [Self; 2] = [Self::Circle, Self::Rect];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Circle => "circle",
+            Self::Rect => "rect",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
 }
 
 /// One thing drawn on the stage. The host's `/canvas.json` elements have this shape (plus fields
@@ -128,7 +161,7 @@ pub struct PartyMember {
 pub struct Slide {
     pub from_percent: u8,
     pub to_percent: u8,
-    pub duration_ms: u32,
+    pub duration_ms: u64,
     /// Counts the slides of a session, so a page can tell a new slide from one it has already
     /// begun and carry on from where it was after a redraw. The host sets it; leave it out of a
     /// scene file.
@@ -157,7 +190,7 @@ pub struct Camera {
     /// How far in, in percent: 100 shows the whole stage, 200 shows it twice as large.
     pub zoom_percent: u16,
     /// How long the move takes, in milliseconds. Zero cuts straight to the framing.
-    pub duration_ms: u32,
+    pub duration_ms: u64,
     /// Counts the camera moves of a session, so a page can tell a new move from one it has
     /// already begun and carry on from where it was after a redraw. The host sets it; leave it out
     /// of a scene file.
@@ -186,6 +219,10 @@ pub struct ImageRef {
     /// A slide across the shared screen, for a card.
     #[serde(default)]
     pub slide: Option<Slide>,
+    /// Where a segmentation scan found people in this picture (`media locate`); bubbles anchor to
+    /// its regions. A different picture drops it.
+    #[serde(default)]
+    pub layout: Option<crate::image_layout::ImageLayout>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -213,23 +250,32 @@ pub struct TvScene {
     /// Whether the DungeonFlux logo is drawn at the top left; the place name moves under it.
     #[serde(default)]
     pub brand: bool,
-    /// The lobby: title block, six seats, invite panel and begin button (see `lobby_model`).
+    /// The lobby: title block, six seats, invite panel and begin button (see `lobby::model`).
     #[serde(default)]
-    pub lobby: Option<crate::lobby_model::LobbyScreen>,
+    pub lobby: Option<crate::lobby::model::LobbyScreen>,
     /// The loading screen: where the party is going, the narrator and a progress bar.
     #[serde(default)]
-    pub loading: Option<crate::lobby_model::LoadingScreen>,
+    pub loading: Option<crate::lobby::model::LoadingScreen>,
     /// The roleplay card: title bar, speech bubbles and caption.
     #[serde(default)]
-    pub roleplay: Option<crate::lobby_model::RoleplayScene>,
+    pub roleplay: Option<crate::lobby::model::RoleplayScene>,
     /// The top bar: wordmark, session and party pills, and the optional balance and rate.
     #[serde(default)]
-    pub pills: Option<crate::lobby_model::TopBar>,
+    pub pills: Option<crate::lobby::model::TopBar>,
     /// The landing page: brand, title, navigation, actions, settings, adventure and campaigns
-    /// (see `home_model`).
+    /// (see `home::model`).
     #[serde(default)]
-    pub home: Option<crate::home_model::HomeScene>,
+    pub home: Option<crate::home::model::HomeScene>,
     pub elements: ElementSource,
+}
+
+impl TvScene {
+    /// The scanned layout of the backdrop picture, when it carries one.
+    pub fn backdrop_layout(&self) -> Option<&crate::image_layout::ImageLayout> {
+        self.backdrop
+            .as_ref()
+            .and_then(|backdrop| backdrop.layout.as_ref())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -309,6 +355,22 @@ impl Fixture {
     }
 }
 
+/// A fixture file and the name of the scenario in it, for the scenario menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixtureTitle {
+    pub file: String,
+    /// `None` when the file is not a valid scenario.
+    pub title: Option<String>,
+}
+
+impl FixtureTitle {
+    /// The title of the fixture file `file` whose text is `text`.
+    pub fn read(file: String, text: &str) -> Self {
+        let title = Fixture::parse(text).ok().map(|fixture| fixture.name);
+        Self { file, title }
+    }
+}
+
 /// A fixture that could not be read, with where the reader stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FixtureError {
@@ -316,3 +378,15 @@ pub struct FixtureError {
     pub column: usize,
     pub message: String,
 }
+
+impl fmt::Display for FixtureError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "line {}, column {}: {}",
+            self.line, self.column, self.message
+        )
+    }
+}
+
+impl std::error::Error for FixtureError {}

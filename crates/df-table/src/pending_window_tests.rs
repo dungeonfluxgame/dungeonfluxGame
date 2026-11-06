@@ -6,7 +6,7 @@ use crate::event::TableEvent;
 use crate::identity::{OperationId, SceneId, TableId, TurnSeq};
 use crate::limits::MAXIMUM_OPEN_PENDINGS;
 use crate::outcome::PendingKind;
-use crate::pending::window::{AnswerRefusal, Completion, ResolutionWindow, WindowError};
+use crate::pending::window::{AnswerError, Completion, ResolutionWindow, WindowError};
 use crate::pending::{
     Continuation, MalformedPending, PendingBook, PendingError, PendingLoadError, PendingMark,
     PendingOpening, PendingRecord, PendingResolution, RulingBook, RulingSource, ScopedRuling,
@@ -135,15 +135,15 @@ fn an_answer_from_a_seat_without_an_offer_or_off_the_offer_or_twice_is_refused()
 
     assert_eq!(
         window.answered(seat(9), &action("pass")),
-        Err(AnswerRefusal::NotEligible)
+        Err(AnswerError::NotEligible)
     );
     assert_eq!(
         window.answered(seat(3), &action("shield")),
-        Err(AnswerRefusal::NotOffered)
+        Err(AnswerError::NotOffered)
     );
     assert_eq!(
         answered.answered(seat(2), &action("shield")),
-        Err(AnswerRefusal::AlreadyAnswered)
+        Err(AnswerError::AlreadyAnswered)
     );
 }
 

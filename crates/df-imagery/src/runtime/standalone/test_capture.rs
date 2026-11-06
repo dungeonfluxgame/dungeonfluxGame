@@ -1,4 +1,5 @@
-//! Test-support transport captures genuine loopback responses with production raw retention and usage policy.
+//! Test-support transport captures genuine loopback responses with production raw retention and
+//! usage policy.
 use super::*;
 use crate::cost::{CostRoute, UsageRevision};
 
@@ -16,7 +17,8 @@ pub struct StandaloneUsageCapture<'a> {
     pub maximum_response_bytes: usize,
 }
 
-/// Executes the real prepared head-location transport; never creates a proof, journal row or settlement.
+/// Executes the real prepared head-location transport; never creates a proof, journal row or
+/// settlement.
 pub async fn capture_standalone_usage(
     input: StandaloneUsageCapture<'_>,
 ) -> Result<RuntimeUsage, RuntimeError> {

@@ -23,30 +23,31 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use super::limits::{MAXIMUM_SPOOL_BYTES, MAXIMUM_SPOOL_QUEUE_BYTES};
-use super::outlet::{Losses, OutletRefusal, OutletStatus, RecordOutlet};
+use super::outlet::{Losses, OutletError, OutletStatus, RecordOutlet};
 use super::record::{ObservedRecord, RecordClass};
 
 /// Why the spool could not be opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SpoolError {
-    /// The file could not be opened for appending.
-    Open { path: PathBuf, reason: String },
+    /// The file could not be opened for appending, or its size could not be read.
+    Open {
+        path: PathBuf,
+        kind: std::io::ErrorKind,
+    },
     /// The writer thread could not be started.
-    Thread { reason: String },
+    Thread { kind: std::io::ErrorKind },
 }
 
 impl fmt::Display for SpoolError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Open { path, reason } => {
-                write!(
-                    formatter,
-                    "the spool {} cannot be opened: {reason}",
-                    path.display()
-                )
-            }
-            Self::Thread { reason } => {
-                write!(formatter, "the spool's writer did not start: {reason}")
+            Self::Open { path, kind } => write!(
+                formatter,
+                "the spool {} cannot be opened ({kind})",
+                path.display()
+            ),
+            Self::Thread { kind } => {
+                write!(formatter, "the spool's writer did not start ({kind})")
             }
         }
     }
@@ -125,7 +126,7 @@ impl FileSpool {
     ) -> Result<Self, SpoolError> {
         let open_error = |error: std::io::Error| SpoolError::Open {
             path: path.to_owned(),
-            reason: error.to_string(),
+            kind: error.kind(),
         };
         let file = OpenOptions::new()
             .create(true)
@@ -150,9 +151,7 @@ impl FileSpool {
                 let _closes = CloseOnExit(Arc::clone(&writer_shared));
                 write_loop(&writer_shared, file, existing, maximum_spool_bytes);
             })
-            .map_err(|error| SpoolError::Thread {
-                reason: error.to_string(),
-            })?;
+            .map_err(|error| SpoolError::Thread { kind: error.kind() })?;
         Ok(Self { shared })
     }
 
@@ -255,7 +254,7 @@ impl RecordOutlet for FileSpool {
         "spool"
     }
 
-    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletRefusal> {
+    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletError> {
         let serialized = serde_json::to_vec(record);
         // Every counter changes under the state lock, so a status read (which takes it) sees them
         // as one moment: accepted + refused = confirmed + pending + lost, where `refused` is the
@@ -263,17 +262,17 @@ impl RecordOutlet for FileSpool {
         let mut state = self.shared.locked();
         let Ok(mut line) = serialized else {
             self.refuse(record.class);
-            return Err(OutletRefusal::Rejected);
+            return Err(OutletError::Unrepresentable);
         };
         line.push(b'\n');
         let cost = line.len();
         if state.closed {
             self.refuse(record.class);
-            return Err(OutletRefusal::Closed);
+            return Err(OutletError::Closed);
         }
         if state.queued_bytes.saturating_add(cost) > self.shared.maximum_queue_bytes {
             self.refuse(record.class);
-            return Err(OutletRefusal::Full);
+            return Err(OutletError::Full);
         }
         state.queued_bytes += cost;
         state.pending += 1;

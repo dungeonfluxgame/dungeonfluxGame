@@ -40,6 +40,7 @@ use df_table::ports::EventSink;
 use df_table::registry::Registry;
 use tokio::sync::oneshot;
 
+use crate::broker::report::{LedgerReport, QueuesReport};
 use crate::observe::HostEventSink;
 
 use super::adapters::Adapters;
@@ -50,12 +51,12 @@ use super::committer::Committer;
 use super::extras::Extras;
 use super::limits::IDLE_TICK;
 use super::replay::Replayer;
+use super::report::observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
 use super::report::{
-    BrokerRequested, BrokerView, ChaosReport, ClockReport, Description, DiceReport, EngineDump,
-    EngineError, ForceReport, HealthReport, QueueReport, ServedReply, SubmissionReport,
-    SubmitReply, TurnReport, ViableReport,
+    BrokerRequested, ChaosReport, ClockReport, Description, DiceReport, EngineDump, EngineError,
+    ForceReport, HealthReport, QueueReport, ServedReply, SubmissionReport, SubmitReply, TurnReport,
+    ViableReport,
 };
-use super::report_observe::{ConfigReport, HistoryReport, ReplayReport, TraceReport};
 use super::request::{
     AudienceSpec, ChaosRequest, ClockControl, ConfigControl, DiceControl, ForceRequest,
     HistoryRequest, InputRequest, QueueControl, ReplayRequest,
@@ -85,11 +86,11 @@ pub(super) enum Command {
     Clock(ClockControl, Reply<ClockReport>),
     Dice(DiceControl, Reply<DiceReport>),
     Chaos(ChaosRequest, Reply<ChaosReport>),
-    BrokerQueues(Reply<BrokerView>),
-    BrokerLedger(Reply<BrokerView>),
+    BrokerQueues(Reply<QueuesReport>),
+    BrokerLedger(Reply<LedgerReport>),
     BrokerRequest(String, Reply<BrokerRequested>),
     History(HistoryRequest, Reply<HistoryReport>),
-    Trace(String, Reply<TraceReport>),
+    Trace(OperationId, Reply<TraceReport>),
     Replay(ReplayRequest, Reply<ReplayReport>),
     Config(ConfigControl, Reply<ConfigReport>),
 }
@@ -258,7 +259,7 @@ impl Owner {
             Command::BrokerLedger(reply) => answer(reply, Ok(self.broker_ledger())),
             Command::BrokerRequest(purpose, reply) => answer(reply, self.broker_request(&purpose)),
             Command::History(request, reply) => answer(reply, Ok(self.history(&request))),
-            Command::Trace(operation, reply) => answer(reply, self.trace(&operation)),
+            Command::Trace(operation, reply) => answer(reply, Ok(self.trace(operation))),
             Command::Replay(request, reply) => answer(reply, self.replay(&request)),
             Command::Config(control, reply) => answer(reply, self.config(control)),
         }

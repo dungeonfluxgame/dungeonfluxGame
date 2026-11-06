@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::event::FailureCause;
 use crate::golden::{FixedNarrator, SlowNarrator, World};
 use crate::outcome::{DeclineCode, Outcome};
-use crate::pipeline::{ClarifyCause, PipelineLimits};
+use crate::pipeline::{ClarifyCause, PipelineLimit, PipelineLimits};
 use crate::pipeline_fixtures_tests::{
     action, allows, changes, d20, failures_of, lines, narrated, ran, seat, slot_of, world_of,
 };
@@ -258,10 +258,9 @@ fn narration_that_is_empty_or_over_length_is_text_invalid() {
     let first = ran(&mut world, 1, "wave");
     let blank = narrated(&mut world, &first);
     world.narrator = Box::new(FixedNarrator("far too long".to_owned()));
-    world.limits = PipelineLimits {
-        maximum_narration_chars: 5,
-        ..PipelineLimits::default()
-    };
+    world.limits = PipelineLimits::default()
+        .with(PipelineLimit::MaximumNarrationChars, 5)
+        .expect("a limit that fits");
     let second = ran(&mut world, 1, "wave");
     let long = narrated(&mut world, &second);
 
@@ -400,10 +399,9 @@ fn a_resolution_that_keeps_asking_for_dice_stops_at_the_round_limit() {
     );
     let mut world = world_of(&["wave"], 1, rules);
     world.dice = crate::golden::CountingDice::new([1, 2, 3, 4, 5]);
-    world.limits = PipelineLimits {
-        maximum_draw_rounds: 2,
-        ..PipelineLimits::default()
-    };
+    world.limits = PipelineLimits::default()
+        .with(PipelineLimit::MaximumDrawRounds, 2)
+        .expect("a limit that fits");
 
     let result = ran(&mut world, 1, "wave");
 
@@ -413,4 +411,35 @@ fn a_resolution_that_keeps_asking_for_dice_stops_at_the_round_limit() {
         failures_of(&world.events()),
         [(PortName::RulesOwner, FailureCause::InvalidAnswer)]
     );
+}
+
+#[test]
+fn a_limit_too_large_for_its_counter_is_refused_and_names_the_limit() {
+    let too_large = u64::from(u32::MAX) + 1;
+    let error = PipelineLimits::default()
+        .with(PipelineLimit::MaximumDrawRounds, too_large)
+        .expect_err("a draw round count is a u32");
+    assert_eq!(
+        error,
+        crate::pipeline::PipelineLimitError {
+            limit: PipelineLimit::MaximumDrawRounds,
+            value: too_large,
+        }
+    );
+    assert!(
+        error.to_string().starts_with("maximum_draw_rounds"),
+        "{error}"
+    );
+}
+
+#[test]
+fn every_pipeline_limit_key_is_its_serde_name() {
+    for limit in PipelineLimit::ALL {
+        assert_eq!(
+            serde_json::to_value(limit).expect("a limit serializes"),
+            serde_json::Value::from(limit.key())
+        );
+        assert_eq!(PipelineLimit::from_key(limit.key()), Some(*limit));
+    }
+    assert_eq!(PipelineLimit::from_key("pending_nesting"), None);
 }

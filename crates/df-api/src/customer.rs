@@ -88,21 +88,33 @@ struct ContractObservation {
 const CONTRACT_OBSERVATIONS: [ContractObservation; 3] = [
     ContractObservation {
         criterion: "closed CustomerService method and command variants",
-        decision: "Keep four methods and permit anonymous access only for recovery challenge start/completion.",
+        decision: concat!(
+            "Keep four methods and permit anonymous access only for recovery challenge ",
+            "start/completion."
+        ),
         alternative: "Do not add a generic tenant command or allow anonymous Inspect/Export.",
-        unresolved: "Generated messages, field numbering, production authorization and response shapes remain G03 work.",
+        unresolved: concat!(
+            "Generated messages, field numbering, production authorization and response shapes ",
+            "remain G03 work."
+        ),
     },
     ContractObservation {
         criterion: "payment authority and secret export",
         decision: "Use the independent current df-auth ExportGrant and exact item/scope checks.",
         alternative: "Do not infer private export rights from payer or active subscription status.",
-        unresolved: "The current ExportRequest has no recovery-epoch field; DataLifecycle source selection is not implemented.",
+        unresolved: concat!(
+            "The current ExportRequest has no recovery-epoch field; DataLifecycle source ",
+            "selection is not implemented."
+        ),
     },
     ContractObservation {
         criterion: "bounded export",
         decision: "Represent chunk, byte and item bounds as explicit caller-supplied limits.",
         alternative: "Do not invent numeric production limits or a durable streaming adapter.",
-        unresolved: "DataLifecycle persistence, bounded stream ownership and numeric limits remain unselected.",
+        unresolved: concat!(
+            "DataLifecycle persistence, bounded stream ownership and numeric limits remain ",
+            "unselected."
+        ),
     },
 ];
 

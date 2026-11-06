@@ -9,6 +9,7 @@
 //! family needs at level 1; `Partial` means a named subset; `No` means nothing exists;
 //! `Unverified` means a check or screen exists but this task did not run it.
 
+/// How far one coverage column is met; see the module doc for each level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Level {
     Yes,
@@ -17,6 +18,7 @@ pub enum Level {
     Unverified,
 }
 impl Level {
+    /// The word the report prints for this level.
     pub fn word(self) -> &'static str {
         match self {
             Self::Yes => "yes",
@@ -29,6 +31,7 @@ impl Level {
 /// A source file whose text must contain a needle, relative to the repository root.
 pub type Evidence = (&'static str, &'static str);
 
+/// One mechanic family of the matrix with its level in every column.
 #[derive(Clone, Copy, Debug)]
 pub struct Row {
     /// The planning/rules-coverage.md family this row answers (R01..R17), or `-` for a split.
@@ -59,6 +62,7 @@ const CREATURES: &str = "crates/df-rules/src/srd_creatures.rs";
 
 use Level::{No, Partial, Unverified, Yes};
 
+/// The matrix, one row per mechanic family, checked against its evidence by tests.
 pub const ROWS: &[Row] = &[
     Row {
         planning: "R04",
@@ -68,7 +72,8 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "one normal d20 check against a DC with the proficiency bonus; no Advantage or Disadvantage on checks, no passive checks, no group or contested checks",
+        note: "one normal d20 check against a DC with the proficiency bonus; no Advantage or \
+            Disadvantage on checks, no passive checks, no group or contested checks",
         evidence: &[
             (CHECK, "pub fn resolve"),
             (LOCAL, "pub const fn ability_modifier"),
@@ -83,7 +88,8 @@ pub const ROWS: &[Row] = &[
         native_test: Partial,
         browser: Unverified,
         display: Unverified,
-        note: "creation picks Fighter and Soldier skills and a check can add proficiency; no skill list is checked against a roll, Medicine is not on the Fighter list",
+        note: "creation picks Fighter and Soldier skills and a check can add proficiency; no skill \
+            list is checked against a roll, Medicine is not on the Fighter list",
         evidence: &[(LOCAL, "pub const FIGHTER_SKILLS")],
         browser_scripts: &["play-t03-create.mjs"],
     },
@@ -95,7 +101,8 @@ pub const ROWS: &[Row] = &[
         native_test: Partial,
         browser: No,
         display: No,
-        note: "only the Zombie's Undead Fortitude Constitution save and the Dexterity cover/Dodge adjustments exist; there is no general saving-throw resolver or proficiency in saves",
+        note: "only the Zombie's Undead Fortitude Constitution save and the Dexterity cover/Dodge \
+            adjustments exist; there is no general saving-throw resolver or proficiency in saves",
         evidence: &[
             (RESOLVE, "pub fn dexterity_save_adjustments"),
             (RESOLVE, "Zombie"),
@@ -110,7 +117,8 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "attack rolls: any source of each cancels, never stacks; the reasons are carried on every attack outcome and on each legal target. Ability checks and saves have none",
+        note: "attack rolls: any source of each cancels, never stacks; the reasons are carried on \
+            every attack outcome and on each legal target. Ability checks and saves have none",
         evidence: &[(RESOLVE, "roll_mode"), (AUDIT, "A-ROLL-MODE")],
         browser_scripts: &["play-t03-fight.mjs"],
     },
@@ -122,7 +130,8 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: No,
         display: Partial,
-        note: "Fighter attack proficiency +2 at levels 1-4 and +3 at level 5; native sheet saves scale, while general skill-check callers still need the persisted level; no expertise",
+        note: "Fighter attack proficiency +2 at levels 1-4 and +3 at level 5; native sheet saves \
+            scale, while general skill-check callers still need the persisted level; no expertise",
         evidence: &[(STATE, "hero_attack_modifiers")],
         browser_scripts: &[],
     },
@@ -134,7 +143,9 @@ pub const ROWS: &[Row] = &[
         native_test: Partial,
         browser: No,
         display: Partial,
-        note: "Prone, Unconscious, Incapacitated (as Unconscious or dead), Dodging, Slowed and Sapped exist; Blinded, Charmed, Deafened, Exhaustion, Frightened, Grappled, Invisible, Paralyzed, Petrified, Poisoned, Restrained and Stunned do not",
+        note: "Prone, Unconscious, Incapacitated (as Unconscious or dead), Dodging, Slowed and \
+            Sapped exist; Blinded, Charmed, Deafened, Exhaustion, Frightened, Grappled, Invisible, \
+            Paralyzed, Petrified, Poisoned, Restrained and Stunned do not",
         evidence: &[(STATE, "\"prone\""), (STATE, "\"slowed\"")],
         browser_scripts: &[],
     },
@@ -146,7 +157,11 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "Attack, Dash, Disengage, Dodge, Help (attack; stabilise on a DC 10 Wisdom (Medicine) check), Move, Stand, Utilize (doff shield, pick up a weapon, Healer's Kit to stabilise with no check) exist; Hide, Magic, Ready, Search and Study do not. The owner's order-of-combat checks (initiative, turns, one action) hold over generated fights",
+        note: "Attack, Dash, Disengage, Dodge, Help (attack; stabilise on a DC 10 Wisdom \
+            (Medicine) check), Move, Stand, Utilize (doff shield, pick up a weapon, Healer's Kit \
+            to stabilise with no check) exist; Hide, Magic, Ready, Search and Study do not. The \
+            owner's order-of-combat checks (initiative, turns, one action) hold over generated \
+            fights",
         evidence: &[
             (RESOLVE, "Action::Dash"),
             (INVARIANTS, "generated_fights_with_planner_enemies"),
@@ -161,7 +176,9 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "Second Wind, the Light bonus attack, Nimble Escape and the Opportunity Attack exist; the Ready action and other reaction triggers do not; enemies decline their Opportunity Attacks by policy",
+        note: "Second Wind, the Light bonus attack, Nimble Escape and the Opportunity Attack \
+            exist; the Ready action and other reaction triggers do not; enemies decline their \
+            Opportunity Attacks by policy",
         evidence: &[
             (RESOLVE, "Action::Opportunity"),
             (RESOLVE, "NimbleDisengage"),
@@ -176,7 +193,9 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "one d20 + Dexterity per participant, Champion Initiative Advantage from level 3, one shared roll per identical monster group, fixed order, ties by the table's agreed order; no surprise, Delay or Ready",
+        note: "one d20 + Dexterity per participant, Champion Initiative Advantage from level 3, \
+            one shared roll per identical monster group, fixed order, ties by the table's agreed \
+            order; no surprise, Delay or Ready",
         evidence: &[(STATE, "begin_faces"), (AUDIT, "I-INIT-ORDER")],
         browser_scripts: &["stage-fight.mjs"],
     },
@@ -188,7 +207,11 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "square-by-square Speed budget, diagonals 5 ft, Difficult Terrain and crawling, Dash, standing, passing through allies and the Incapacitated, corners, Opportunity Attacks; Large/Huge source monsters use full 2x2/3x3 spaces, swept occupancy and footprint reach; Huge wire projection awaits its enum; flying, climbing and swimming are not supported",
+        note: "square-by-square Speed budget, diagonals 5 ft, Difficult Terrain and crawling, \
+            Dash, standing, passing through allies and the Incapacitated, corners, Opportunity \
+            Attacks; Large/Huge source monsters use full 2x2/3x3 spaces, swept occupancy and \
+            footprint reach; Huge wire projection awaits its enum; flying, climbing and swimming \
+            are not supported",
         evidence: &[
             (STATE, "fn step_cost"),
             (MAP, "fn step_clear"),
@@ -204,7 +227,8 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "Half, Three-Quarters and Total from the grid with the disclosed centre-line convention (the one custom rule); no light or obscurement",
+        note: "Half, Three-Quarters and Total from the grid with the disclosed centre-line \
+            convention (the one custom rule); no light or obscurement",
         evidence: &[(MAP, "pub fn cover_between"), (AUDIT, "A-COVER")],
         browser_scripts: &["stage-tactical.mjs"],
     },
@@ -216,7 +240,9 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "melee within reach, ranged within range with long-range Disadvantage and the close-enemy Disadvantage, thrown weapons, ammunition, natural 1 and 20, cover; no grappling, shoving or area attacks",
+        note: "melee within reach, ranged within range with long-range Disadvantage and the \
+            close-enemy Disadvantage, thrown weapons, ammunition, natural 1 and 20, cover; no \
+            grappling, shoving or area attacks",
         evidence: &[(RESOLVE, "fn admit_attack"), (AUDIT, "A-ACCEPTED-ILLEGAL")],
         browser_scripts: &["stage-probe-attack.mjs"],
     },
@@ -228,7 +254,9 @@ pub const ROWS: &[Row] = &[
         native_test: Partial,
         browser: No,
         display: No,
-        note: "Slashing, Piercing, Bludgeoning and a separate Necrotic damage exist and the Skeleton's Bludgeoning Vulnerability doubles; there is no general Resistance or Immunity resolver and the damage type is not yet on the wire",
+        note: "Slashing, Piercing, Bludgeoning and a separate Necrotic damage exist and the \
+            Skeleton's Bludgeoning Vulnerability doubles; there is no general Resistance or \
+            Immunity resolver and the damage type is not yet on the wire",
         evidence: &[(WEAPONS, "pub enum DamageType"), (RESOLVE, "Skeleton")],
         browser_scripts: &[],
     },
@@ -240,7 +268,8 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "natural 20 and any hit on an Unconscious creature within 5 ft double the dice, never the modifier",
+        note: "natural 20 and any hit on an Unconscious creature within 5 ft double the dice, \
+            never the modifier",
         evidence: &[(RESOLVE, "let critical"), (AUDIT, "A-CRITICAL")],
         browser_scripts: &["stage-fight.mjs"],
     },
@@ -252,7 +281,11 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: No,
         display: Partial,
-        note: "0 hit points, Unconscious, Death Saving Throws at the start of the turn, nat 1 and 20, damage at 0, massive damage, Stable; one save per turn is now in the log and in CombatView.death_saves; the timed post-fight rounds and the Stable hero's 1d4-hour recovery are accepted by the server; the Help action to stabilise (DC 10 Wisdom (Medicine), SRD p18) is not offered yet; the display of the saves is PLAY-V14's",
+        note: "0 hit points, Unconscious, Death Saving Throws at the start of the turn, nat 1 and \
+            20, damage at 0, massive damage, Stable; one save per turn is now in the log and in \
+            CombatView.death_saves; the timed post-fight rounds and the Stable hero's 1d4-hour \
+            recovery are accepted by the server; the Help action to stabilise (DC 10 Wisdom \
+            (Medicine), SRD p18) is not offered yet; the display of the saves is PLAY-V14's",
         evidence: &[(RESOLVE, "fn death_save"), (AUDIT, "T-DEATH-SAVE-SKIPPED")],
         browser_scripts: &[],
     },
@@ -264,7 +297,9 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "Second Wind (self only), Help to stabilise a dying ally (DC 10 Wisdom (Medicine)), Utilize a Healer's Kit to stabilise (no check) and the knockout awakening exist; no potions, no Hit Point Dice, no temporary Hit Points",
+        note: "Second Wind (self only), Help to stabilise a dying ally (DC 10 Wisdom (Medicine)), \
+            Utilize a Healer's Kit to stabilise (no check) and the knockout awakening exist; no \
+            potions, no Hit Point Dice, no temporary Hit Points",
         evidence: &[(RESOLVE, "Action::SecondWind")],
         browser_scripts: &["play-t03-fight.mjs"],
     },
@@ -276,7 +311,12 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: No,
         display: Partial,
-        note: "a one-hour Short Rest that recharges one Second Wind use (cap 2 through level 3, 3 from level 4), recharges Action Surge and ends the knockout; a Stable hero regains 1 hit point after 1d4 hours (Action::StableRecovery); no tactical Hit Dice or general Long Rest admission (the pure level-5 Fighter rest handler restores HP, Second Wind and Action Surge), no Exhaustion; a rest cannot start while any hero is at 0 hit points, so the table first waits out the dying hero's fate",
+        note: "a one-hour Short Rest that recharges one Second Wind use (cap 2 through level 3, 3 \
+            from level 4), recharges Action Surge and ends the knockout; a Stable hero regains 1 \
+            hit point after 1d4 hours (Action::StableRecovery); no tactical Hit Dice or general \
+            Long Rest admission (the pure level-5 Fighter rest handler restores HP, Second Wind \
+            and Action Surge), no Exhaustion; a rest cannot start while any hero is at 0 hit \
+            points, so the table first waits out the dying hero's fate",
         evidence: &[(RESOLVE, "Action::ShortRest"), (RESOLVE, "StableRecovery")],
         browser_scripts: &[],
     },
@@ -288,7 +328,9 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "thirteen weapons with Heavy, Finesse, Light, Two-Handed, Versatile (Spear), Thrown range and Ammunition; masteries Graze, Sap, Slow, Vex and Nick; the Shield; no Cleave, Push or Topple, no armour system (Armor Class is fixed by the build), no magic items",
+        note: "thirteen weapons with Heavy, Finesse, Light, Two-Handed, Versatile (Spear), Thrown \
+            range and Ammunition; masteries Graze, Sap, Slow, Vex and Nick; the Shield; no Cleave, \
+            Push or Topple, no armour system (Armor Class is fixed by the build), no magic items",
         evidence: &[(WEAPONS, "pub enum Mastery"), (WEAPONS, "pub fn heavy")],
         browser_scripts: &["play-t03-fight.mjs"],
     },
@@ -312,7 +354,11 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "fixed Fighter levels 1-5 with source-pinned HP, proficiency, Second Wind, Action Surge, Champion, level-4 ASI and Extra Attack; level-5 test creation is native, not browser-verified; Tactical Mind and Champion Athletics have pure mechanics but await ability-check admission, and Champion critical movement is currently on-turn only; no general advancement, other class or multiclass",
+        note: "fixed Fighter levels 1-5 with source-pinned HP, proficiency, Second Wind, Action \
+            Surge, Champion, level-4 ASI and Extra Attack; level-5 test creation is native, not \
+            browser-verified; Tactical Mind and Champion Athletics have pure mechanics but await \
+            ability-check admission, and Champion critical movement is currently on-turn only; no \
+            general advancement, other class or multiclass",
         evidence: &[(LOCAL, "pub fn validate_character")],
         browser_scripts: &["play-t03-create.mjs"],
     },
@@ -324,7 +370,8 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "Soldier with Savage Attacker (once per turn); Human Versatile offers implemented Tough (+2 HP per level). No other background or Origin feat is admitted.",
+        note: "Soldier with Savage Attacker (once per turn); Human Versatile offers implemented \
+            Tough (+2 HP per level). No other background or Origin feat is admitted.",
         evidence: &[(STATE, "savage_attacker"), (AUDIT, "F-SAVAGE-ATTACKER")],
         browser_scripts: &["play-t03-create.mjs"],
     },
@@ -336,7 +383,13 @@ pub const ROWS: &[Row] = &[
         native_test: Partial,
         browser: Unverified,
         display: Partial,
-        note: "Nine SRD species Fighter/Soldier builds with source choices, size/speed/Darkvision (Drow 120, Wood Elf 35), ancestry/legacy resistances, Dwarven Toughness, Halfling Luck/Nimbleness, Human Skillful/Tough, Dragonborn Breath Weapon, Goliath Fire/Frost/Hill/Stone/Storm and Orc endurance rules. Live offers/actions/durable species uses require boundary integration. Not in play yet: lineage/legacy spells, Thaumaturgy, condition-save advantages, Heroic Inspiration, Trance, Stonecunning, flight, Cloud teleportation, Large Form, Powerful Build, Hide and Adrenaline Rush",
+        note: "Nine SRD species Fighter/Soldier builds with source choices, size/speed/Darkvision \
+            (Drow 120, Wood Elf 35), ancestry/legacy resistances, Dwarven Toughness, Halfling \
+            Luck/Nimbleness, Human Skillful/Tough, Dragonborn Breath Weapon, Goliath \
+            Fire/Frost/Hill/Stone/Storm and Orc endurance rules. Live offers/actions/durable \
+            species uses require boundary integration. Not in play yet: lineage/legacy spells, \
+            Thaumaturgy, condition-save advantages, Heroic Inspiration, Trance, Stonecunning, \
+            flight, Cloud teleportation, Large Form, Powerful Build, Hide and Adrenaline Rush",
         evidence: &[(LOCAL, "dwarf")],
         browser_scripts: &["play-t03-create.mjs"],
     },
@@ -348,7 +401,11 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "seventeen SRD creatures including CR 2-5 Ogre, Owlbear, Wight, Hill Giant and Troll; source actions and all excluded features are classified in SRD_521_CREATURE_FEATURES and disclosed in the card rules note; Troll regeneration is active, limbs/Charge, Wight Life Drain, Hill Giant Trash Lob and vertical climbing are excluded explicitly",
+        note: "seventeen SRD creatures including CR 2-5 Ogre, Owlbear, Wight, Hill Giant and \
+            Troll; source actions and all excluded features are classified in \
+            SRD_521_CREATURE_FEATURES and disclosed in the card rules note; Troll regeneration is \
+            active, limbs/Charge, Wight Life Drain, Hill Giant Trash Lob and vertical climbing are \
+            excluded explicitly",
         evidence: &[
             (CREATURES, "SRD_521_CREATURE_FEATURES"),
             (STATE, "pub fn creature"),
@@ -363,7 +420,8 @@ pub const ROWS: &[Row] = &[
         native_test: Partial,
         browser: Unverified,
         display: Partial,
-        note: "authored story beats with one ability check; no travel, light, hazards, traps, falling, searching or stealth rules in df-rules",
+        note: "authored story beats with one ability check; no travel, light, hazards, traps, \
+            falling, searching or stealth rules in df-rules",
         evidence: &[],
         browser_scripts: &["investigate-mystery.mjs"],
     },
@@ -375,7 +433,12 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Partial,
-        note: "Influence action with willing/hesitant/unwilling, DC 15 or Intelligence, attitude Advantage/Disadvantage, the 24-hour retry wait, an approach-to-skill table and table-ready explanations in df-rules; word quality as an Advantage/Disadvantage source is the disclosed house rule influence.word-quality-advantage; live hesitant-NPC rolls call `influence::resolve` from df-tools npc_reply.rs (`roll_hesitant_influence`), and the story layer still writes the reply text",
+        note: "Influence action with willing/hesitant/unwilling, DC 15 or Intelligence, attitude \
+            Advantage/Disadvantage, the 24-hour retry wait, an approach-to-skill table and \
+            table-ready explanations in df-rules; word quality as an Advantage/Disadvantage source \
+            is the disclosed house rule influence.word-quality-advantage; live hesitant-NPC rolls \
+            call `influence::resolve` from df-tools npc_reply.rs (`roll_hesitant_influence`), and \
+            the story layer still writes the reply text",
         evidence: &[
             (INFLUENCE, "pub fn resolve"),
             (INFLUENCE, "WORD_QUALITY_RULE_ID"),
@@ -390,35 +453,49 @@ pub const ROWS: &[Row] = &[
 /// the vehicle for the combat rows; the others are proposals of the same kind.
 pub const BUILD_ORDER: &[(&str, &str)] = &[
     (
-        "Typed rules facts a scenario can set: a fight, a hero's level and abilities, conditions, resources, lighting",
-        "DF_GAMEPLAY_TEST_FIGHT=<creature>:<count>[,<creature>:<count>] with hero hit points, conditions and scene light selectable; used by every combat row",
+        "Typed rules facts a scenario can set: a fight, a hero's level and abilities, conditions, \
+            resources, lighting",
+        "DF_GAMEPLAY_TEST_FIGHT=<creature>:<count>[,<creature>:<count>] with hero hit points, \
+            conditions and scene light selectable; used by every combat row",
     ),
     (
-        "A general saving-throw resolver (ability, proficiency, Advantage, DC, Half on success) and a general condition set with source, duration and end triggers",
-        "DF_GAMEPLAY_TEST_CONDITIONS=<condition>: a fight that starts with each condition on a hero or enemy and a trap that forces a save",
+        "A general saving-throw resolver (ability, proficiency, Advantage, DC, Half on success) \
+            and a general condition set with source, duration and end triggers",
+        "DF_GAMEPLAY_TEST_CONDITIONS=<condition>: a fight that starts with each condition on a \
+            hero or enemy and a trap that forces a save",
     ),
     (
-        "Damage types, Resistance, Vulnerability, Immunity and temporary Hit Points in one resolver in SRD order, and the damage type on the wire",
-        "DF_GAMEPLAY_TEST_FIGHT with a Skeleton (Bludgeoning), a resistant test creature and a fire source",
+        "Damage types, Resistance, Vulnerability, Immunity and temporary Hit Points in one \
+            resolver in SRD order, and the damage type on the wire",
+        "DF_GAMEPLAY_TEST_FIGHT with a Skeleton (Bludgeoning), a resistant test creature and a \
+            fire source",
     ),
     (
-        "Ability checks with Advantage and Disadvantage, passive checks, skills with their abilities, Help, Search, Hide, Influence",
-        "DF_GAMEPLAY_TEST_CHECKS=<ability|skill>: one authored room per ability and skill with a visible DC ladder",
+        "Ability checks with Advantage and Disadvantage, passive checks, skills with their \
+            abilities, Help, Search, Hide, Influence",
+        "DF_GAMEPLAY_TEST_CHECKS=<ability|skill>: one authored room per ability and skill with a \
+            visible DC ladder",
     ),
     (
-        "Healing and recovery: Hit Point Dice, Short and Long Rest, stable recovery after 1d4 hours, Help to stabilise, potions, Exhaustion",
-        "DF_GAMEPLAY_TEST_REST=<short|long|stable>: a party that starts hurt, spent and one hero stable at 0",
+        "Healing and recovery: Hit Point Dice, Short and Long Rest, stable recovery after 1d4 \
+            hours, Help to stabilise, potions, Exhaustion",
+        "DF_GAMEPLAY_TEST_REST=<short|long|stable>: a party that starts hurt, spent and one hero \
+            stable at 0",
     ),
     (
-        "Spellcasting: spell data, slots, components, attack and save spells, concentration, ritual casting, one caster class",
+        "Spellcasting: spell data, slots, components, attack and save spells, concentration, \
+            ritual casting, one caster class",
         "DF_GAMEPLAY_TEST_SPELLS=<spell>: a fight and an exploration room per implemented spell",
     ),
     (
-        "Classes, levels, backgrounds, origin feats and species beyond level 1 Fighter, Soldier and Dwarf",
-        "DF_GAMEPLAY_TEST_PARTY=<class:level,...>: a party built from the catalog for the fight and check scenarios",
+        "Classes, levels, backgrounds, origin feats and species beyond level 1 Fighter, Soldier \
+            and Dwarf",
+        "DF_GAMEPLAY_TEST_PARTY=<class:level,...>: a party built from the catalog for the fight \
+            and check scenarios",
     ),
     (
-        "Exploration and social rules: travel, light and senses, hazards, traps, falling, Influence with attitude changes",
+        "Exploration and social rules: travel, light and senses, hazards, traps, falling, \
+            Influence with attitude changes",
         "DF_GAMEPLAY_TEST_EXPLORE=<hazard|social>: an authored room per hazard and per attitude",
     ),
 ];
@@ -427,8 +504,14 @@ pub const BUILD_ORDER: &[(&str, &str)] = &[
 pub fn report() -> String {
     let mut out = String::new();
     out.push_str("# Rules coverage matrix (generated by df-rules coverage::report)\n\n");
-    out.push_str("yes = works end to end for what level 1 needs; partial = a named subset; NO = nothing exists; unverified = a check or screen exists that this task did not run.\n\n");
-    out.push_str("| Family | Planning | Implemented in df-rules | Reachable live | Native test | Browser check | TV and phone | Notes |\n|---|---|---|---|---|---|---|---|\n");
+    out.push_str(
+        "yes = works end to end for what level 1 needs; partial = a named subset; NO = \
+        nothing exists; unverified = a check or screen exists that this task did not run.\n\n",
+    );
+    out.push_str(
+        "| Family | Planning | Implemented in df-rules | Reachable live | Native test | \
+        Browser check | TV and phone | Notes |\n|---|---|---|---|---|---|---|---|\n",
+    );
     for row in ROWS {
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} | {} | {} |\n",

@@ -1,5 +1,5 @@
-//! The page as drawn: the toolbar, the devices and the notes, kept as pieces so a change redraws
-//! only what it touches.
+//! The page as drawn: the toolbar, the scenario strip and the devices, kept as pieces so a change
+//! redraws only what it touches.
 //!
 //! `draw_plan` says what to redraw from the state last drawn and the state now. The leaving copy
 //! of a scene change lives beside the devices, not in them, so a redraw never takes it away and a
@@ -22,22 +22,45 @@ use crate::draw_plan::{DrawPlan, Part, is_leaving, leaving_class};
 use crate::fixture::Fixture;
 use crate::media::AudioState;
 use crate::motion_style::{frozen_card_style, frozen_world_style};
-use crate::{view_phone, view_tv};
+use crate::view;
 
 /// The pieces of the page once it is drawn.
 pub struct Page {
     toolbar: Element,
     wrap: Element,
     devices: Element,
-    notes: Element,
-    tv: Option<view_tv::TvHandles>,
+    /// The scenario strip. It is kept and only its words are redrawn, so it stays open or closed.
+    notes: Notes,
+    tv: Option<view::tv::TvHandles>,
     slots: HashMap<Part, Element>,
+}
+
+/// The scenario strip: the `details`, its `summary` and its body, each kept across redraws.
+struct Notes {
+    details: Element,
+    summary: Element,
+    body: Element,
+}
+
+impl Notes {
+    fn new(document: &Document) -> Result<Self, JsValue> {
+        let details = element(document, "details", "studio-notes")?;
+        let summary = element(document, "summary", "studio-notes-summary")?;
+        let body = element(document, "div", "studio-notes-body")?;
+        append(&details, &summary)?;
+        append(&details, &body)?;
+        Ok(Self {
+            details,
+            summary,
+            body,
+        })
+    }
 }
 
 /// The devices as built: the element, and what the page keeps of them.
 struct Devices {
     element: Element,
-    tv: Option<view_tv::TvHandles>,
+    tv: Option<view::tv::TvHandles>,
     slots: HashMap<Part, Element>,
 }
 
@@ -66,10 +89,10 @@ fn build_part(
     fixture: &Fixture,
     app: &App,
 ) -> Result<Option<Element>, JsValue> {
-    if view_tv::PARTS.contains(&part) {
-        view_tv::build_part(document, part, &fixture.tv, &app.controls)
+    if view::tv::PARTS.contains(&part) {
+        view::tv::build_part(document, part, &fixture.tv, &app.controls)
     } else {
-        view_phone::build_part(document, part, &fixture.phone, &app.controls)
+        view::phone::build_part(document, part, &fixture.phone, &app.controls)
     }
 }
 
@@ -86,18 +109,23 @@ fn build_devices(document: &Document, app: &App) -> Result<Devices, JsValue> {
         });
     };
     if app.controls.device.shows_tv() {
-        let shell = view_tv::shell(document)?;
+        let shell = view::tv::shell(document)?;
         for (part, holder) in &shell.slots {
             fill(holder, build_part(document, *part, fixture, app)?)?;
         }
         let mut handles = shell.handles;
-        handles.sync(document, app.stage_elements(), fixture.tv.camera.as_ref())?;
+        handles.sync(
+            document,
+            app.stage_elements(),
+            fixture.tv.camera.as_ref(),
+            fixture.tv.backdrop_layout(),
+        )?;
         slots.extend(shell.slots);
         append(&stage, &shell.section)?;
         tv = Some(handles);
     }
     if app.controls.device.shows_phone() {
-        let shell = view_phone::shell(document)?;
+        let shell = view::phone::shell(document)?;
         for (part, holder) in &shell.slots {
             fill(holder, build_part(document, *part, fixture, app)?)?;
         }
@@ -111,37 +139,24 @@ fn build_devices(document: &Document, app: &App) -> Result<Devices, JsValue> {
     })
 }
 
-/// The notes beside the devices: a problem, the scenario's name and words, and where it breaks the
-/// choice rules.
-fn notes(document: &Document, app: &App) -> Result<Element, JsValue> {
-    let panel = element(document, "aside", "notes")?;
-    if let Some(problem) = &app.connection_problem {
-        append(
-            &panel,
-            &text_element(document, "div", "note note-error", &problem.to_string())?,
-        )?;
-    }
+fn pill(document: &Document, kind: &str, text: &str) -> Result<Element, JsValue> {
+    let pill = text_element(document, "span", &format!("studio-pill {kind}"), text)?;
+    pill.set_attribute("title", text)?;
+    Ok(pill)
+}
+
+/// The words of the scenario strip, written into the strip `details`, `summary` and body that the
+/// page keeps, so whether it is open and a focus on its summary survive every redraw. Closed, the
+/// strip still shows the scenario's title, its file, and a pill for live changes, for contract
+/// warnings and for a problem; open, it shows the description, the warnings and the problem in
+/// full.
+fn fill_notes(document: &Document, notes: &Notes, app: &App) -> Result<(), JsValue> {
+    let Notes { summary, body, .. } = notes;
+    clear(summary);
+    clear(body);
     let mut warnings = Vec::new();
-    match app.shown.as_deref() {
+    let title = match app.shown.as_deref() {
         Some(Ok(fixture)) => {
-            append(&panel, &text_element(document, "h2", "", &fixture.name)?)?;
-            if !app.scene.is_empty() {
-                append(
-                    &panel,
-                    &text_element(
-                        document,
-                        "p",
-                        "note note-live",
-                        "Live changes are drawn on top of this scenario (scene reset removes them).",
-                    )?,
-                )?;
-            }
-            if !fixture.description.is_empty() {
-                append(
-                    &panel,
-                    &text_element(document, "p", "", &fixture.description)?,
-                )?;
-            }
             if app.controls.device.shows_phone() {
                 warnings = build(&fixture.phone, app.controls.show_unavailable)
                     .warnings
@@ -149,39 +164,87 @@ fn notes(document: &Document, app: &App) -> Result<Element, JsValue> {
                     .map(ToString::to_string)
                     .collect();
             }
+            fixture.name.as_str()
         }
-        Some(Err(message)) => {
-            append(
-                &panel,
-                &text_element(document, "h2", "", "This scenario cannot be read")?,
-            )?;
-            append(
-                &panel,
-                &text_element(document, "pre", "note note-error", message)?,
-            )?;
+        Some(Err(_)) => "This scenario cannot be read",
+        None => "No scenario is loaded",
+    };
+    append(
+        summary,
+        &text_element(document, "h2", "studio-notes-title", title)?,
+    )?;
+    if let Some(file) = &app.loaded_name {
+        append(
+            summary,
+            &text_element(document, "span", "studio-file", file)?,
+        )?;
+    }
+    if !app.scene.is_empty() {
+        append(summary, &pill(document, "is-live", "Live changes")?)?;
+    }
+    if !warnings.is_empty() {
+        let count = match warnings.len() {
+            1 => "1 contract warning".to_owned(),
+            many => format!("{many} contract warnings"),
+        };
+        append(summary, &pill(document, "is-warn", &count)?)?;
+    }
+    if let Some(Err(_)) = app.shown.as_deref() {
+        append(summary, &pill(document, "is-error", "Cannot be read")?)?;
+    }
+    if let Some(problem) = &app.connection_problem {
+        append(summary, &pill(document, "is-error", &problem.to_string())?)?;
+        append(
+            body,
+            &text_element(document, "pre", "note-error", &problem.to_string())?,
+        )?;
+    }
+    match app.shown.as_deref() {
+        Some(Ok(fixture)) => {
+            if let Some(first_line) = fixture.description.lines().next() {
+                append(
+                    summary,
+                    &text_element(document, "span", "studio-summary-text", first_line)?,
+                )?;
+            }
+            if !app.scene.is_empty() {
+                append(
+                    body,
+                    &text_element(
+                        document,
+                        "p",
+                        "studio-live",
+                        "Live changes are drawn over this scenario; scene reset removes them.",
+                    )?,
+                )?;
+            }
+            if !fixture.description.is_empty() {
+                append(
+                    body,
+                    &text_element(document, "p", "", &fixture.description)?,
+                )?;
+            }
         }
-        None => append(
-            &panel,
-            &text_element(document, "p", "", "No scenario is loaded.")?,
-        )?,
+        Some(Err(message)) => append(body, &text_element(document, "pre", "note-error", message)?)?,
+        None => {}
     }
     if !warnings.is_empty() {
         append(
-            &panel,
+            body,
             &text_element(
                 document,
-                "h2",
+                "h3",
                 "",
                 "Where this scenario breaks the contract",
             )?,
         )?;
-        let list = element(document, "ul", "warnings")?;
+        let list = element(document, "ul", "studio-warnings")?;
         for warning in &warnings {
             append(&list, &text_element(document, "li", "", warning)?)?;
         }
-        append(&panel, &list)?;
+        append(body, &list)?;
     }
-    Ok(panel)
+    Ok(())
 }
 
 /// Freezes the animation of the element `selector` finds in `copy`, at the place the same element
@@ -321,16 +384,17 @@ fn redraw_parts(
 
 /// Builds the page from nothing.
 fn build_page(document: &Document, root: &Element, app: &App) -> Result<Page, JsValue> {
-    let shell = element(document, "div", "shell")?;
+    let shell = element(document, "div", "studio")?;
     let bar = toolbar(document, app)?;
     append(&shell, &bar)?;
-    let body = element(document, "div", "body")?;
+    let body = element(document, "div", "studio-body")?;
+    let notes = Notes::new(document)?;
+    fill_notes(document, &notes, app)?;
+    append(&body, &notes.details)?;
     let wrap = element(document, "div", "stage-wrap")?;
     let built = build_devices(document, app)?;
     append(&wrap, &built.element)?;
     append(&body, &wrap)?;
-    let panel = notes(document, app)?;
-    append(&body, &panel)?;
     append(&shell, &body)?;
     clear(root);
     append(root, &shell)?;
@@ -338,7 +402,7 @@ fn build_page(document: &Document, root: &Element, app: &App) -> Result<Page, Js
         toolbar: bar,
         wrap,
         devices: built.element,
-        notes: panel,
+        notes,
         tv: built.tv,
         slots: built.slots,
     })
@@ -377,13 +441,12 @@ fn apply_plan(
             && let Some(tv) = &mut page.tv
         {
             let camera = shown_fixture(app).and_then(|fixture| fixture.tv.camera.as_ref());
-            tv.sync(document, app.stage_elements(), camera)?;
+            let layout = shown_fixture(app).and_then(|fixture| fixture.tv.backdrop_layout());
+            tv.sync(document, app.stage_elements(), camera, layout)?;
         }
     }
     if plan.notes {
-        let panel = notes(document, app)?;
-        replace(&page.notes, &panel)?;
-        page.notes = panel;
+        fill_notes(document, &page.notes, app)?;
     }
     Ok(())
 }
@@ -412,18 +475,18 @@ pub fn update_stage() {
             let App {
                 shown, live, page, ..
             } = app;
-            let camera = match shown.as_deref() {
-                Some(Ok(fixture)) => fixture.tv.camera.as_ref(),
-                _ => None,
+            let (camera, layout) = match shown.as_deref() {
+                Some(Ok(fixture)) => (fixture.tv.camera.as_ref(), fixture.tv.backdrop_layout()),
+                _ => (None, None),
             };
             let elements = stage_elements_of(shown.as_deref(), live.as_ref());
             match page.as_mut().and_then(|page| page.tv.as_mut()) {
-                Some(tv) => tv.sync(&document, elements, camera),
+                Some(tv) => tv.sync(&document, elements, camera, layout),
                 None => Ok(()),
             }
         })
     });
     if let Err(error) = moved {
-        view_tv::log_sync_failure(&error);
+        view::tv::log_sync_failure(&error);
     }
 }

@@ -263,7 +263,8 @@ fn candidate_identity_and_generation_layouts_add_no_heap_or_extra_primitive_stor
         std::mem::size_of::<u64>()
     );
     eprintln!(
-        "boundary layout bytes: client={} utterance={} asset={} canonical-operation={} work-generation={}",
+        "boundary layout bytes: client={} utterance={} asset={} canonical-operation={} \
+         work-generation={}",
         std::mem::size_of::<ClientId>(),
         std::mem::size_of::<UtteranceId>(),
         std::mem::size_of::<AssetId>(),

@@ -1,4 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
+mod fixtures;
+use fixtures::FixtureRoot;
 
 use df_observe::{
     AnyValue, Durability, LogInput, NativeProducer, ProducerId, RecordId, Severity, SourceSequence,
@@ -19,17 +21,31 @@ use std::{
 const WAIT: Duration = Duration::from_secs(5);
 const PRIVATE_PAYLOAD: &str = "synthetic-private-payload-must-not-enter-emergency";
 
+/// The coordinator's preregistered namespace, or one fresh per run that child processes inherit.
+fn namespace() -> String {
+    static GENERATED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    std::env::var("DF_TELEMETRY_FIXTURE_NAMESPACE").unwrap_or_else(|_| {
+        GENERATED
+            .get_or_init(|| {
+                let nonce = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                format!("emergency-{}-{nonce}", std::process::id())
+            })
+            .clone()
+    })
+}
+
 fn root(case: &str) -> PathBuf {
-    let namespace = std::env::var("DF_TELEMETRY_FIXTURE_NAMESPACE")
-        .expect("coordinator must preregister the exact fixture namespace");
+    let namespace = namespace();
     assert!(
         !namespace.is_empty()
             && namespace
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     );
-    PathBuf::from("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06")
-        .join(format!("ownedfixture-{namespace}-{case}"))
+    fixtures::fixture_parent().join(format!("ownedfixture-{namespace}-{case}"))
 }
 
 fn producer(store: &Store, limits: TelemetryLimits) -> NativeProducer {
@@ -93,7 +109,7 @@ fn safe_lines(bytes: &[u8], error: TelemetryError) -> usize {
 
 #[test]
 fn normal_capture_commits_without_emergency_and_does_not_invent_caller_success() {
-    let path = root("emergency-normal");
+    let path = FixtureRoot::new(root("emergency-normal"));
     assert!(!path.exists(), "fixture root must be fresh");
     let limits = TelemetryLimits::default();
     let mut store = Store::open(&path, limits, None).unwrap();
@@ -135,7 +151,7 @@ fn normal_capture_commits_without_emergency_and_does_not_invent_caller_success()
 
 #[test]
 fn successful_caller_read_survives_actual_sdk_export_outage_and_identity_recovery() {
-    let path = root("emergency-sink");
+    let path = FixtureRoot::new(root("emergency-sink"));
     assert!(!path.exists(), "fixture root must be fresh");
     let limits = TelemetryLimits::default();
     let mut store = Store::open(&path, limits, None).unwrap();
@@ -208,7 +224,7 @@ fn successful_caller_read_survives_actual_sdk_export_outage_and_identity_recover
 
 #[test]
 fn startup_refusal_is_typed_and_preserves_foreign_input_without_worker_output() {
-    let path = root("emergency-startup");
+    let path = FixtureRoot::new(root("emergency-startup"));
     assert!(!path.exists(), "fixture root must be fresh");
     fs::create_dir(&path).unwrap();
     fs::write(path.join("OWNER"), b"synthetic-foreign-owner").unwrap();
@@ -230,6 +246,7 @@ fn startup_refusal_is_typed_and_preserves_foreign_input_without_worker_output() 
 fn child_output(test: &str) -> (Vec<u8>, Vec<u8>) {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", test, "--ignored", "--nocapture"])
+        .env("DF_TELEMETRY_FIXTURE_NAMESPACE", namespace())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -271,14 +288,15 @@ fn child_output(test: &str) -> (Vec<u8>, Vec<u8>) {
 
 #[test]
 fn file_obstruction_uses_safe_bounded_stderr_and_preserves_typed_capture_error() {
+    let _root = FixtureRoot::new(root("emergency-stderr"));
     let (_, stderr) = child_output("emergency_stderr_child");
     assert_eq!(safe_lines(&stderr, TelemetryError::Capacity), 1);
 }
 
 #[test]
 fn emergency_record_and_byte_bounds_keep_overflow_visible() {
+    let path = FixtureRoot::new(root("emergency-bound"));
     let (_, stderr) = child_output("emergency_bounds_child");
-    let path = root("emergency-bound");
     let bytes = fs::read(path.join("emergency")).unwrap();
     let retained = safe_lines(&bytes, TelemetryError::Capacity);
     let fallback = safe_lines(&stderr, TelemetryError::Capacity);

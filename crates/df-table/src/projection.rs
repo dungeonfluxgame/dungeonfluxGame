@@ -48,7 +48,6 @@ use crate::private_data::{LengthClass, Measured};
 use crate::table_state::{TableSnapshot, TableStatus};
 
 mod attachments;
-pub mod bounds;
 mod events;
 mod readout;
 mod record;
@@ -59,7 +58,7 @@ mod text;
 
 pub use attachments::{
     AttachmentError, AttachmentLimits, AttachmentVersion, Attachments, OfferEntry, OfferId,
-    PUBLISHED_RECORD_VERSION, PublishedLoadError, PublishedRecord, StoryLine,
+    PublishedLoadError, PublishedRecord, StoryLine,
 };
 pub use events::ProjectionEvent;
 pub use readout::StructuredReadout;
@@ -70,7 +69,7 @@ pub use seat::{
 };
 pub use shared::{CaptionView, PartyMemberView, SharedView, StageElementView};
 pub use status::{ProjectionStatus, StatusKind};
-pub use text::{BlankText, NonEmptyText};
+pub use text::{BlankTextError, NonEmptyText};
 
 const PAUSED_WHO: &str = "the host";
 const PAUSED_WHAT: &str = "to resume the game";
@@ -304,7 +303,7 @@ fn machine_of(snapshot: &TableSnapshot, attachments: &Attachments) -> (NonEmptyT
 }
 
 /// The shared screen's projection of a snapshot.
-pub fn project_shared(
+pub(crate) fn project_shared(
     snapshot: &TableSnapshot,
     attachments: &Attachments,
 ) -> Projection<SharedView> {
@@ -342,7 +341,7 @@ pub fn project_shared(
 }
 
 /// One seat's projection of a snapshot, or an error if the seat is not at the table.
-pub fn project_seat(
+pub(crate) fn project_seat(
     snapshot: &TableSnapshot,
     attachments: &Attachments,
     seat: SeatId,

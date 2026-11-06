@@ -3,7 +3,7 @@
 //! It owns `PlayerText` (what a player typed), `Narration` (what the storyteller wrote) and
 //! `Secret<T>` (a fact an audience may not know), plus the `LengthClass` that is all their `Debug`
 //! output says. None of them implements `Display` or serde, and none implements `EventField`
-//! (`event_field.rs`), so none can be written into a `TableEvent`: records carry an opaque
+//! (`event::field`), so none can be written into a `TableEvent`: records carry an opaque
 //! evidence reference instead (RES36). It never decides who may read a value: a caller that holds
 //! one calls `expose` on purpose, and a reviewer can search for that word.
 //!
@@ -19,7 +19,7 @@
 //! The second does not compile because it is not an event field:
 //!
 //! ```compile_fail,E0277
-//! use df_table::event_field::EventField;
+//! use df_table::event::field::EventField;
 //! use df_table::private_data::Narration;
 //!
 //! fn must_be_an_event_field<T: EventField>(_: &T) {}
@@ -53,10 +53,10 @@ use serde::{Deserialize, Serialize};
 
 /// Up to this many characters a value is called short. A class boundary, not a limit: nothing is
 /// ever refused for its length here.
-pub const SHORT_TEXT_MAXIMUM_CHARS: usize = 40;
+pub(crate) const SHORT_TEXT_MAXIMUM_CHARS: usize = 40;
 /// Up to this many characters a value is called medium (a full phone line, C.7). A class
 /// boundary, not a limit.
-pub const MEDIUM_TEXT_MAXIMUM_CHARS: usize = 280;
+pub(crate) const MEDIUM_TEXT_MAXIMUM_CHARS: usize = 280;
 
 /// How long a private value is, which is everything a log may say about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,7 +94,7 @@ impl LengthClass {
 }
 
 /// A value whose size can be classed without showing it.
-pub trait Measured {
+pub(crate) trait Measured {
     fn length_in_chars(&self) -> usize;
 }
 

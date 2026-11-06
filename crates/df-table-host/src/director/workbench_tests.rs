@@ -1,22 +1,34 @@
 //! The Director on the host without a host: the manual clock, the stand-in view and the audit
 //! lines, plus the checks that the Director's numbers are the dev camera verbs' numbers.
 
+use std::sync::Arc;
+
 use df_playground::camera::{
     clamped_zoom as page_clamped_zoom, zoom_ceiling_percent as page_ceiling,
 };
 use df_playground::limits::{MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
 use df_playground::scene::SceneChange;
 use df_table::director::StageDirection;
-use df_table::director_reason::{self, Reason, ReasonTable, WideReason};
-use df_table::director_view::{clamped_zoom, zoom_ceiling_percent};
+use df_table::director::error::DirectorError as DecisionError;
+use df_table::director::reason::{self as director_reason, Reason, ReasonTable, WideReason};
+use df_table::director::view::{clamped_zoom, zoom_ceiling_percent};
 use df_table::element::ElementId;
 use df_table::inspect::InspectAudience;
+use df_table::testkit::ManualClock;
 
-use super::request::{DirectorAct, DirectorFault, StartKind, ViewEdit};
+use super::request::{DirectorAct, DirectorError, StartKind, ViewEdit};
 use super::workbench::{Decided, Workbench, scene_change};
 
+fn manual(audience: InspectAudience) -> Workbench {
+    Workbench::new(audience, Arc::new(ManualClock::default()))
+}
+
+fn id(name: &str) -> ElementId {
+    ElementId::new(name).expect("an element name")
+}
+
 fn bench(audience: InspectAudience) -> Workbench {
-    let mut bench = Workbench::manual(audience).expect("a workbench");
+    let mut bench = manual(audience);
     bench.refresh_stage(&[
         "finn".to_owned(),
         "sigrun".to_owned(),
@@ -28,11 +40,11 @@ fn bench(audience: InspectAudience) -> Workbench {
 
 fn focus(element: &str, reason: &str) -> DirectorAct {
     DirectorAct::Focus {
-        element: element.to_owned(),
-        reason: Some(reason.to_owned()),
-        zoom: None,
-        over: None,
-        hold: None,
+        element: id(element),
+        reason: Some(Reason::from_key(reason).expect("a reason")),
+        zoom_percent: None,
+        over_ms: None,
+        hold_ms: None,
     }
 }
 
@@ -80,12 +92,12 @@ fn the_directors_numbers_are_the_dev_camera_verbs_numbers() {
 
 #[test]
 fn every_move_the_director_can_make_is_a_camera_change_the_dev_verbs_accept() {
-    let table = ReasonTable::defaults();
+    let table = ReasonTable::default();
     for reason in Reason::ALL {
         let spec = table.spec(*reason);
         assert!(
-            (MINIMUM_ZOOM_PERCENT..=MAXIMUM_ZOOM_PERCENT).contains(&spec.zoom_percent)
-                && spec.over_ms <= MAXIMUM_CAMERA_MS,
+            (MINIMUM_ZOOM_PERCENT..=MAXIMUM_ZOOM_PERCENT).contains(&spec.zoom_percent())
+                && spec.over_ms() <= MAXIMUM_CAMERA_MS,
             "{reason}"
         );
     }
@@ -137,9 +149,9 @@ fn a_focus_verb_is_one_driven_move_with_its_audit_line() {
 fn advance_moves_the_directors_own_clock_so_a_hold_runs_out_with_no_waiting() {
     let mut bench = bench(InspectAudience::Operator);
     run(&mut bench, focus("guard", "reveal"));
-    let decided = run(&mut bench, DirectorAct::Advance { ms: 7_999 });
+    let decided = run(&mut bench, DirectorAct::Advance { by_ms: 7_999 });
     assert!(decided.directions.is_empty());
-    let decided = run(&mut bench, DirectorAct::Advance { ms: 1 });
+    let decided = run(&mut bench, DirectorAct::Advance { by_ms: 1 });
     assert!(matches!(
         decided.directions.as_slice(),
         [StageDirection::Wide {
@@ -151,12 +163,15 @@ fn advance_moves_the_directors_own_clock_so_a_hold_runs_out_with_no_waiting() {
         decided.lines,
         ["CAMERA wide reason=timeout serial=2 over=1200"]
     );
-    assert!(
+    assert_eq!(
         bench
             .act(DirectorAct::Advance {
-                ms: u64::from(MAXIMUM_CAMERA_MS) + 1
+                by_ms: MAXIMUM_CAMERA_MS + 1
             })
-            .is_err()
+            .err(),
+        Some(DirectorError::InvalidAdvance {
+            by_ms: MAXIMUM_CAMERA_MS + 1
+        })
     );
 }
 
@@ -167,8 +182,8 @@ fn a_waiting_direction_starts_when_the_spacing_has_passed() {
     let decided = run(&mut bench, focus("sigrun", "speaker"));
     assert!(decided.directions.is_empty());
     assert!(bench.is_busy());
-    run(&mut bench, DirectorAct::Advance { ms: 799 });
-    let decided = run(&mut bench, DirectorAct::Advance { ms: 1 });
+    run(&mut bench, DirectorAct::Advance { by_ms: 799 });
+    let decided = run(&mut bench, DirectorAct::Advance { by_ms: 1 });
     assert!(matches!(
         decided.directions.as_slice(),
         [StageDirection::Focus { serial: 2, .. }]
@@ -181,7 +196,7 @@ fn a_hidden_element_is_refused_and_a_focus_on_one_that_becomes_hidden_is_pulled_
     run(
         &mut bench,
         view(ViewEdit::Hide {
-            element: "lurker".into(),
+            element: id("lurker"),
         }),
     );
     let decided = run(&mut bench, focus("lurker", "speaker"));
@@ -198,7 +213,7 @@ fn a_hidden_element_is_refused_and_a_focus_on_one_that_becomes_hidden_is_pulled_
     let decided = run(
         &mut bench,
         view(ViewEdit::Hide {
-            element: "guard".into(),
+            element: id("guard"),
         }),
     );
     assert!(matches!(
@@ -212,16 +227,16 @@ fn a_hidden_element_is_refused_and_a_focus_on_one_that_becomes_hidden_is_pulled_
     run(
         &mut bench,
         view(ViewEdit::Hide {
-            element: "finn".into(),
+            element: id("finn"),
         }),
     );
     run(
         &mut bench,
         view(ViewEdit::Hero {
-            element: "finn".into(),
+            element: id("finn"),
         }),
     );
-    run(&mut bench, DirectorAct::Advance { ms: 1_000 });
+    run(&mut bench, DirectorAct::Advance { by_ms: 1_000 });
     let decided = run(&mut bench, focus("finn", "spotlight"));
     assert_eq!(decided.directions.len(), 1);
 }
@@ -232,7 +247,7 @@ fn a_hosted_build_names_nothing_that_is_hidden_in_its_lines_or_in_director_show(
     run(
         &mut bench,
         view(ViewEdit::Hide {
-            element: "lurker".into(),
+            element: id("lurker"),
         }),
     );
     let decided = run(&mut bench, focus("lurker", "speaker"));
@@ -272,7 +287,7 @@ fn bench_with_hidden() -> Workbench {
     run(
         &mut bench,
         view(ViewEdit::Hide {
-            element: "lurker".into(),
+            element: id("lurker"),
         }),
     );
     bench
@@ -298,8 +313,8 @@ fn a_card_declines_every_focus_and_a_plate_sets_the_zoom_ceiling() {
         }),
     );
     let mut request = focus("finn", "speaker");
-    if let DirectorAct::Focus { zoom, .. } = &mut request {
-        *zoom = Some(400);
+    if let DirectorAct::Focus { zoom_percent, .. } = &mut request {
+        *zoom_percent = Some(400);
     }
     let decided = run(&mut bench, request);
     assert!(matches!(
@@ -325,15 +340,15 @@ fn a_result_card_holds_the_camera_still_for_everything_not_about_it() {
         &mut bench,
         view(ViewEdit::Beat {
             reveal: false,
-            ms: 3_000,
-            element: Some("finn".into()),
+            hold_ms: 3_000,
+            element: Some(id("finn")),
         }),
     );
     let decided = run(&mut bench, focus("sigrun", "roll"));
     assert!(decided.directions.is_empty());
-    let decided = run(&mut bench, DirectorAct::Advance { ms: 2_999 });
+    let decided = run(&mut bench, DirectorAct::Advance { by_ms: 2_999 });
     assert!(decided.directions.is_empty());
-    let decided = run(&mut bench, DirectorAct::Advance { ms: 1 });
+    let decided = run(&mut bench, DirectorAct::Advance { by_ms: 1 });
     assert!(matches!(
         decided.directions.as_slice(),
         [StageDirection::Focus { .. }]
@@ -362,8 +377,8 @@ fn end_scene_and_combat_return_the_camera_wide_and_wide_pulls_out_at_once() {
     let decided = run(
         &mut bench,
         DirectorAct::End {
-            reason: "speaker".into(),
-            element: "finn".into(),
+            reason: Reason::Speaker,
+            element: id("finn"),
         },
     );
     assert!(matches!(
@@ -373,7 +388,7 @@ fn end_scene_and_combat_return_the_camera_wide_and_wide_pulls_out_at_once() {
             ..
         }]
     ));
-    run(&mut bench, DirectorAct::Advance { ms: 1_000 });
+    run(&mut bench, DirectorAct::Advance { by_ms: 1_000 });
     run(&mut bench, focus("sigrun", "speaker"));
     let decided = run(
         &mut bench,
@@ -388,14 +403,14 @@ fn end_scene_and_combat_return_the_camera_wide_and_wide_pulls_out_at_once() {
             ..
         }]
     ));
-    run(&mut bench, DirectorAct::Advance { ms: 1_000 });
+    run(&mut bench, DirectorAct::Advance { by_ms: 1_000 });
     run(&mut bench, focus("sigrun", "speaker"));
-    let decided = run(&mut bench, DirectorAct::Wide { over: Some(300) });
+    let decided = run(&mut bench, DirectorAct::Wide { over_ms: Some(300) });
     assert_eq!(
         decided.lines.last().map(String::as_str),
         Some("CAMERA wide reason=operator serial=6 over=300 driven=true")
     );
-    run(&mut bench, DirectorAct::Advance { ms: 1_000 });
+    run(&mut bench, DirectorAct::Advance { by_ms: 1_000 });
     run(&mut bench, focus("sigrun", "speaker"));
     let decided = run(
         &mut bench,
@@ -415,31 +430,43 @@ fn end_scene_and_combat_return_the_camera_wide_and_wide_pulls_out_at_once() {
 
 #[test]
 fn a_bad_name_reason_or_number_is_a_typed_refusal_that_says_what_is_allowed() {
+    for body in [
+        r#"{"verb":"focus","element":"Finn!"}"#,
+        r#"{"verb":"focus","element":"finn","reason":"zoomies"}"#,
+        r#"{"verb":"end","reason":"speaker","element":"Finn!"}"#,
+    ] {
+        assert!(
+            serde_json::from_str::<DirectorAct>(body).is_err(),
+            "{body} is not a verb"
+        );
+    }
     let mut bench = bench(InspectAudience::Operator);
-    assert!(matches!(
-        bench.act(focus("Finn!", "speaker")),
-        Err(DirectorFault::BadElement { .. })
-    ));
-    let Err(error) = bench.act(focus("finn", "zoomies")) else {
-        panic!("an unknown reason is refused");
-    };
-    assert!(error.to_string().contains("speaker"), "{error}");
     let mut request = focus("finn", "speaker");
-    if let DirectorAct::Focus { over, .. } = &mut request {
-        *over = Some(10);
+    if let DirectorAct::Focus { over_ms, .. } = &mut request {
+        *over_ms = Some(10);
     }
     let Err(error) = bench.act(request) else {
         panic!("a move too quick to follow is refused");
     };
+    assert_eq!(
+        error,
+        DirectorError::Refused {
+            cause: DecisionError::FocusMoveOutOfRange { over_ms: 10 }
+        }
+    );
     assert!(error.to_string().contains("600 to 2500"), "{error}");
     let mut request = focus("finn", "speaker");
-    if let DirectorAct::Focus { zoom, .. } = &mut request {
-        *zoom = Some(MAXIMUM_ZOOM_PERCENT + 1);
+    if let DirectorAct::Focus { zoom_percent, .. } = &mut request {
+        *zoom_percent = Some(MAXIMUM_ZOOM_PERCENT + 1);
     }
-    assert!(matches!(
-        bench.act(request),
-        Err(DirectorFault::Refused { .. })
-    ));
+    assert_eq!(
+        bench.act(request).err(),
+        Some(DirectorError::Refused {
+            cause: DecisionError::ZoomOutOfRange {
+                zoom_percent: MAXIMUM_ZOOM_PERCENT + 1
+            }
+        })
+    );
 }
 
 #[test]
@@ -448,7 +475,7 @@ fn director_show_reads_the_same_log_the_lines_were_written_from() {
     let mut written = Vec::new();
     written.extend(run(&mut bench, focus("finn", "speaker")).lines);
     written.extend(run(&mut bench, focus("sigrun", "requested")).lines);
-    run(&mut bench, DirectorAct::Advance { ms: 1_000 });
+    run(&mut bench, DirectorAct::Advance { by_ms: 1_000 });
     let printed = super::format::format_show(&bench.show());
     for line in &written {
         assert!(printed.contains(line.as_str()), "{line}\n{printed}");
@@ -460,8 +487,8 @@ fn director_show_reads_the_same_log_the_lines_were_written_from() {
 fn beat_about_lurker() -> ViewEdit {
     ViewEdit::Beat {
         reveal: false,
-        ms: 3_000,
-        element: Some("lurker".into()),
+        hold_ms: 3_000,
+        element: Some(id("lurker")),
     }
 }
 
@@ -481,7 +508,7 @@ fn shared_text(bench: &Workbench, lines: &[String]) -> String {
 fn a_hidden_id_never_reaches_a_shared_line_report_or_show_whatever_held_the_request_back() {
     let hide = || {
         view(ViewEdit::Hide {
-            element: "lurker".into(),
+            element: id("lurker"),
         })
     };
     // The Director sees the creature while it asks, and the table loses sight of it after.
@@ -492,8 +519,8 @@ fn a_hidden_id_never_reaches_a_shared_line_report_or_show_whatever_held_the_requ
         (
             "end",
             vec![DirectorAct::End {
-                reason: "speaker".into(),
-                element: "lurker".into(),
+                reason: Reason::Speaker,
+                element: id("lurker"),
             }],
         ),
         (
@@ -527,7 +554,7 @@ fn a_beat_about_a_hidden_creature_names_it_only_to_the_operator() {
     run(
         &mut shared,
         view(ViewEdit::Hide {
-            element: "lurker".into(),
+            element: id("lurker"),
         }),
     );
     let beat = shared.show().view.beat.expect("a beat");
@@ -543,7 +570,7 @@ fn a_beat_about_a_hidden_creature_names_it_only_to_the_operator() {
     run(
         &mut shared,
         view(ViewEdit::Unhide {
-            element: "lurker".into(),
+            element: id("lurker"),
         }),
     );
     let beat = shared.show().view.beat.expect("a beat");
@@ -578,7 +605,7 @@ fn a_request_in_the_inbox_is_decided_by_the_host_tick_alone() {
 
 #[test]
 fn a_stage_name_that_is_not_an_element_name_is_reported_once_and_left_out() {
-    let mut bench = Workbench::manual(InspectAudience::Operator).expect("a workbench");
+    let mut bench = manual(InspectAudience::Operator);
     let ids = ["finn".to_owned(), "Not A Name".to_owned()];
     let line = bench.refresh_stage(&ids).expect("a line");
     assert_eq!(
@@ -591,7 +618,7 @@ fn a_stage_name_that_is_not_an_element_name_is_reported_once_and_left_out() {
         "the same names say nothing again"
     );
     assert_eq!(bench.refresh_stage(&["finn".to_owned()]), None);
-    let mut shared = Workbench::manual(InspectAudience::Host).expect("a workbench");
+    let mut shared = manual(InspectAudience::Host);
     assert_eq!(
         shared.refresh_stage(&ids).as_deref(),
         Some("CAMERA stage_names_refused count=1")
@@ -603,7 +630,7 @@ fn the_operators_camera_wide_is_a_cut_under_reduced_effects() {
     let mut bench = bench(InspectAudience::Operator);
     run(&mut bench, view(ViewEdit::Reduced { on: true }));
     run(&mut bench, focus("finn", "speaker"));
-    let decided = run(&mut bench, DirectorAct::Wide { over: None });
+    let decided = run(&mut bench, DirectorAct::Wide { over_ms: None });
     assert!(
         decided
             .lines
@@ -614,7 +641,7 @@ fn the_operators_camera_wide_is_a_cut_under_reduced_effects() {
     );
     run(&mut bench, view(ViewEdit::Reduced { on: false }));
     run(&mut bench, focus("finn", "speaker"));
-    let decided = run(&mut bench, DirectorAct::Wide { over: None });
+    let decided = run(&mut bench, DirectorAct::Wide { over_ms: None });
     assert!(
         decided
             .lines
@@ -631,7 +658,7 @@ fn a_camera_moved_elsewhere_makes_the_next_focus_a_move() {
     run(&mut bench, focus("finn", "speaker"));
     assert!(!bench.camera_moved_elsewhere(Some("finn")).expect("ok"));
     assert!(bench.camera_moved_elsewhere(None).expect("ok"));
-    run(&mut bench, DirectorAct::Advance { ms: 1_000 });
+    run(&mut bench, DirectorAct::Advance { by_ms: 1_000 });
     let decided = run(&mut bench, focus("finn", "speaker"));
     assert!(
         decided

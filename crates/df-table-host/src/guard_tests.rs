@@ -1,6 +1,6 @@
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 
-use crate::guard::{Refusal, check};
+use crate::guard::{GuardError, check};
 
 fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
     let mut map = HeaderMap::new();
@@ -42,13 +42,13 @@ fn a_read_with_another_host_name_or_none_is_refused() {
     ] {
         assert_eq!(
             check(&Method::GET, &headers(&[("host", host)])),
-            Err(Refusal::ForeignHost),
+            Err(GuardError::ForeignHost),
             "{host}"
         );
     }
     assert_eq!(
         check(&Method::GET, &HeaderMap::new()),
-        Err(Refusal::ForeignHost)
+        Err(GuardError::ForeignHost)
     );
 }
 
@@ -57,13 +57,16 @@ fn a_change_must_be_json() {
     let local = [("host", "127.0.0.1")];
     assert_eq!(
         check(&Method::POST, &headers(&local)),
-        Err(Refusal::NotJson)
+        Err(GuardError::NotJson)
     );
     let form = [
         ("host", "127.0.0.1"),
         ("content-type", "application/x-www-form-urlencoded"),
     ];
-    assert_eq!(check(&Method::POST, &headers(&form)), Err(Refusal::NotJson));
+    assert_eq!(
+        check(&Method::POST, &headers(&form)),
+        Err(GuardError::NotJson)
+    );
     let json = [("host", "127.0.0.1"), ("content-type", "application/json")];
     assert_eq!(check(&Method::POST, &headers(&json)), Ok(()));
     let json_with_charset = [
@@ -97,7 +100,7 @@ fn a_change_from_a_page_on_another_site_is_refused() {
     ] {
         assert_eq!(
             check(&Method::POST, &with("origin", origin)),
-            Err(Refusal::ForeignOrigin),
+            Err(GuardError::ForeignOrigin),
             "{origin}"
         );
     }
@@ -111,27 +114,23 @@ fn a_change_from_a_page_on_another_site_is_refused() {
     );
     assert_eq!(
         check(&Method::POST, &with("sec-fetch-site", "cross-site")),
-        Err(Refusal::CrossSiteRequest)
+        Err(GuardError::CrossSiteRequest)
     );
     assert_eq!(
         check(&Method::POST, &with("sec-fetch-site", "same-site")),
-        Err(Refusal::CrossSiteRequest)
+        Err(GuardError::CrossSiteRequest)
     );
 }
 
 #[test]
 fn a_refusal_names_its_status_and_says_why() {
     assert_eq!(
-        Refusal::NotJson.status(),
+        GuardError::NotJson.status(),
         StatusCode::UNSUPPORTED_MEDIA_TYPE
     );
-    assert_eq!(Refusal::ForeignHost.status(), StatusCode::FORBIDDEN);
-    for refusal in [
-        Refusal::ForeignHost,
-        Refusal::ForeignOrigin,
-        Refusal::CrossSiteRequest,
-        Refusal::NotJson,
-    ] {
-        assert!(!refusal.message().is_empty());
+    assert_eq!(GuardError::ForeignHost.status(), StatusCode::FORBIDDEN);
+    for error in GuardError::ALL {
+        assert!(!error.message().is_empty());
+        assert_eq!(error.to_string(), error.message());
     }
 }

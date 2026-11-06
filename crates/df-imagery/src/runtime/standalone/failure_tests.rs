@@ -92,7 +92,15 @@ fn fixture() -> (ImageJob, DispatchView, StageBasis, RuntimeUsage) {
         config_digest: Sha256::digest(job.config.bytes()).into(),
         parent_dispatch: None,
     };
-    let raw = RawAnalysis { response:AnalysisResponse::Http { status:200, body:serde_json::to_vec(&serde_json::json!({"choices":[{"message":{"content":"{\"heads\":\"invalid-schema\"}"}}],"usage":{"prompt_tokens":7,"completion_tokens":3}})).unwrap() }, segmentation:None };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "choices": [{"message": {"content": r#"{"heads":"invalid-schema"}"#}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+    }))
+    .unwrap();
+    let raw = RawAnalysis {
+        response: AnalysisResponse::Http { status: 200, body },
+        segmentation: None,
+    };
     let usage = RuntimeUsage {
         owner,
         job: job.job,
@@ -168,8 +176,16 @@ fn a_useful_head_response_and_forged_failure_cause_cannot_release_liability() {
     let (job, mut dispatch, basis, mut usage) = fixture();
     let (mut response, deps, previous, index) =
         decode_raw(usage.raw_output.as_deref().unwrap()).unwrap();
-    let content = serde_json::json!({"heads":[{"id":"hero-1","left":0.1,"top":0.1,"right":0.2,"bottom":0.3}]}).to_string();
-    response.response = AnalysisResponse::Http { status:200, body:serde_json::to_vec(&serde_json::json!({"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":7,"completion_tokens":3}})).unwrap() };
+    let content = serde_json::json!({
+        "heads": [{"id": "hero-1", "left": 0.1, "top": 0.1, "right": 0.2, "bottom": 0.3}],
+    })
+    .to_string();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "choices": [{"message": {"content": content}}],
+        "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+    }))
+    .unwrap();
+    response.response = AnalysisResponse::Http { status: 200, body };
     usage.raw_output = Some(encode_raw(&response, &deps, previous.as_ref(), index, 4096).unwrap());
     assert_eq!(
         validate_standalone_failure(&job, &dispatch, &basis, &usage),

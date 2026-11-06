@@ -1,8 +1,9 @@
 //! One owned native queue consumer. Stopping waits for the current owned execution.
 
 use super::{dispatch, ports::*};
-use crate::cost::{ImageCostProjection, UsageEvidence, UsageReport, UsageRevision};
+use crate::cost::{ImageCostProjection, UsageEvidence, UsageRevision};
 use crate::execution::*;
+use crate::intent_codec::DecodedIntent;
 use crate::publication::{FrozenOutput, PublishedImage};
 use crate::{
     AlphaHandling, FreezeCommand, FreezeOutcome, ImageConfig, ImageJob, ImageJournal,
@@ -167,11 +168,7 @@ where
             }
             return context;
         }
-        if let Ok(intent) = crate::intent_codec::decode_intent(
-            job.intent.bytes(),
-            &crate::service::PROTOCOL_LIMITS,
-            crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-        ) {
+        if let Ok(intent) = super::retained_intent(job) {
             context.purpose = Some(intent.purpose.purpose);
             context.analysis_kind = match stage.kind {
                 StageKind::Classification => {
@@ -545,6 +542,118 @@ where
         Ok(())
     }
 
+    /// Refuses with `Disabled` when the applied policy no longer admits `policy`.
+    fn require_policy_admission(&self, policy: &PolicyInput) -> Result<(), RuntimeError> {
+        if matches!(decide(&self.settings.config, policy), PolicyDecision::Admit) {
+            Ok(())
+        } else {
+            Err(RuntimeError::Disabled)
+        }
+    }
+
+    /// The policy gate of an analytic stage (classification, inspection or extraction): a
+    /// provider call that publishes nothing by itself.
+    fn require_analytic_admission(&self, intent: &DecodedIntent) -> Result<(), RuntimeError> {
+        self.require_policy_admission(&PolicyInput::new(
+            intent.purpose.purpose,
+            dispatch::backend(&self.settings.config, intent),
+            intent.execution,
+            true,
+            false,
+            false,
+        ))
+    }
+
+    /// Admits and prepares a fresh dispatch for a claimed stage. `None` when a campaign artwork
+    /// election is still pending or was resolved by another stage, so this stage sends nothing.
+    /// A declined retry whose admission is refused releases its claim before the refusal returns.
+    async fn admit_fresh_dispatch(
+        &self,
+        admission: &DispatchAdmission<'_>,
+        retrying: bool,
+    ) -> Result<Option<DispatchMode>, RuntimeError> {
+        let (job, stage, claim) = (admission.job, admission.stage, admission.claim);
+        let admitted = if matches!(stage.kind, StageKind::Generation | StageKind::Edit)
+            && crate::service::artifact_recipe::retained_campaign_artifact_recipe(
+                &job.intent,
+                &job.config,
+            )
+            .map_err(RuntimeError::Journal)?
+            .is_some()
+        {
+            match self.admission.admit_with_artifact(admission).await {
+                Ok(ArtifactAdmission::Admitted(mode)) => Ok(mode),
+                Ok(ArtifactAdmission::ArtifactPending | ArtifactAdmission::ArtifactResolved) => {
+                    return Ok(None);
+                }
+                Err(error) => Err(error),
+            }
+        } else {
+            self.admission.admit(admission).await
+        };
+        let mode = match admitted {
+            Ok(mode) => mode,
+            Err(error) => {
+                if retrying
+                    && matches!(
+                        error,
+                        RuntimeError::ProviderRefused
+                            | RuntimeError::SourceDenied
+                            | RuntimeError::Disabled
+                            | RuntimeError::UnsupportedCapability
+                            | RuntimeError::CredentialUnavailable
+                    )
+                {
+                    self.execution
+                        .release(
+                            &ReleaseCommand::new(
+                                job.owner.clone(),
+                                job.job,
+                                stage.stage,
+                                claim,
+                                stage.claim_generation,
+                                self.clock.now_ms(),
+                            )
+                            .map_err(|_| RuntimeError::InvalidRecord)?,
+                        )
+                        .await
+                        .map_err(RuntimeError::Execution)?;
+                }
+                return Err(error);
+            }
+        };
+        if stage.local_accounting != mode.is_local() {
+            return Err(RuntimeError::InvalidRecord);
+        }
+        self.execution
+            .prepare(
+                &PrepareCommand::new(
+                    StageClaim {
+                        scope: StageScope {
+                            owner: job.owner.clone(),
+                            job: job.job,
+                            stage: stage.stage,
+                        },
+                        token: claim,
+                        generation: stage.claim_generation,
+                    },
+                    admission.dispatch,
+                    mode,
+                    self.clock.now_ms(),
+                )
+                .map_err(|_| RuntimeError::InvalidRecord)?,
+            )
+            .await
+            .map_err(RuntimeError::Execution)?;
+        self.emit(
+            crate::telemetry::EventKind::Admitted,
+            job,
+            stage,
+            Some(admission.dispatch),
+        );
+        Ok(Some(mode))
+    }
+
     pub(super) async fn run_queued_attempt(
         &self,
         job: ImageJob,
@@ -559,17 +668,8 @@ where
             .read_current_dispatch(&job.owner, &job.job, &stage.stage)
             .await
             .map_err(RuntimeError::Execution)?;
-        let intent = crate::intent_codec::decode_intent(
-            job.intent.bytes(),
-            &crate::service::PROTOCOL_LIMITS,
-            crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-        )
-        .map_err(|_| RuntimeError::InvalidRecord)?;
-        let config = crate::intent_codec::decode_config(
-            job.config.bytes(),
-            crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-        )
-        .map_err(|_| RuntimeError::InvalidRecord)?;
+        let intent = super::retained_intent(&job)?;
+        let config = super::retained_config(&job)?;
         if intent.owner != job.owner {
             return Err(RuntimeError::InvalidRecord);
         }
@@ -577,38 +677,12 @@ where
             if current.is_some() {
                 return Err(RuntimeError::ProviderUnknown);
             }
-            let policy = PolicyInput::new(
-                intent.purpose.purpose,
-                dispatch::backend(&self.settings.config, &intent),
-                intent.execution,
-                true,
-                false,
-                false,
-            );
-            if !matches!(
-                decide(&self.settings.config, &policy),
-                PolicyDecision::Admit
-            ) {
-                return Err(RuntimeError::Disabled);
-            }
+            self.require_analytic_admission(&intent)?;
             Box::pin(self.run_classification(job, stage, &intent, &config)).await?;
             return Ok(None);
         }
         if matches!(stage.kind, StageKind::Inspection | StageKind::Extraction) {
-            let policy = PolicyInput::new(
-                intent.purpose.purpose,
-                dispatch::backend(&self.settings.config, &intent),
-                intent.execution,
-                true,
-                false,
-                false,
-            );
-            if !matches!(
-                decide(&self.settings.config, &policy),
-                PolicyDecision::Admit
-            ) {
-                return Err(RuntimeError::Disabled);
-            }
+            self.require_analytic_admission(&intent)?;
             if current.is_some() {
                 return Err(RuntimeError::ProviderUnknown);
             }
@@ -646,12 +720,7 @@ where
             )
         });
         if !recovering {
-            if !matches!(
-                decide(&self.settings.config, &policy),
-                PolicyDecision::Admit
-            ) {
-                return Err(RuntimeError::Disabled);
-            }
+            self.require_policy_admission(&policy)?;
             dispatch::preflight(&resolved_config, &intent)?;
             if job.state == JobState::Retired {
                 return Err(RuntimeError::Cancelled);
@@ -719,11 +788,13 @@ where
             None
         } else {
             let mut basis = super::retained_cost_basis(&job, &resolved_config, stage.kind)?;
-            basis.prompt_bytes = match &intent.operation {
-                ImageOperation::Generate(spec) => spec.prompt.text().len() as u64,
-                ImageOperation::Edit(spec) => spec.prompt.text().len() as u64,
+            let prompt_bytes = match &intent.operation {
+                ImageOperation::Generate(spec) => spec.prompt.text().len(),
+                ImageOperation::Edit(spec) => spec.prompt.text().len(),
                 ImageOperation::Transform(_) => 0,
             };
+            basis.prompt_bytes =
+                u64::try_from(prompt_bytes).map_err(|_| RuntimeError::InvalidRecord)?;
             Some(
                 self.cost_policy
                     .stage_route(&job, &resolved_config, &basis)?,
@@ -773,84 +844,9 @@ where
                 quote: route.as_ref(),
                 sources: &inputs.receipts,
             };
-            let admitted = if matches!(stage.kind, StageKind::Generation | StageKind::Edit)
-                && crate::service::artifact_recipe::retained_campaign_artifact_recipe(
-                    &job.intent,
-                    &job.config,
-                )
-                .map_err(RuntimeError::Journal)?
-                .is_some()
-            {
-                match self.admission.admit_with_artifact(&admission).await {
-                    Ok(ArtifactAdmission::Admitted(mode)) => Ok(mode),
-                    Ok(
-                        ArtifactAdmission::ArtifactPending | ArtifactAdmission::ArtifactResolved,
-                    ) => return Ok(None),
-                    Err(error) => Err(error),
-                }
-            } else {
-                self.admission.admit(&admission).await
+            let Some(mode) = self.admit_fresh_dispatch(&admission, retrying).await? else {
+                return Ok(None);
             };
-            let mode = match admitted {
-                Ok(mode) => mode,
-                Err(error) => {
-                    if retrying
-                        && matches!(
-                            error,
-                            RuntimeError::ProviderRefused
-                                | RuntimeError::SourceDenied
-                                | RuntimeError::Disabled
-                                | RuntimeError::UnsupportedCapability
-                                | RuntimeError::CredentialUnavailable
-                        )
-                    {
-                        self.execution
-                            .release(
-                                &ReleaseCommand::new(
-                                    job.owner.clone(),
-                                    job.job,
-                                    stage.stage,
-                                    claim,
-                                    stage.claim_generation,
-                                    self.clock.now_ms(),
-                                )
-                                .map_err(|_| RuntimeError::InvalidRecord)?,
-                            )
-                            .await
-                            .map_err(RuntimeError::Execution)?;
-                    }
-                    return Err(error);
-                }
-            };
-            if stage.local_accounting != mode.is_local() {
-                return Err(RuntimeError::InvalidRecord);
-            }
-            self.execution
-                .prepare(
-                    &PrepareCommand::new(
-                        StageClaim {
-                            scope: StageScope {
-                                owner: job.owner.clone(),
-                                job: job.job,
-                                stage: stage.stage,
-                            },
-                            token: claim,
-                            generation: stage.claim_generation,
-                        },
-                        dispatch,
-                        mode,
-                        self.clock.now_ms(),
-                    )
-                    .map_err(|_| RuntimeError::InvalidRecord)?,
-                )
-                .await
-                .map_err(RuntimeError::Execution)?;
-            self.emit(
-                crate::telemetry::EventKind::Admitted,
-                &job,
-                &stage,
-                Some(dispatch),
-            );
             (dispatch, mode, false)
         };
         let mut context = PublicationContext {
@@ -1227,234 +1223,6 @@ where
         }
     }
 
-    pub(super) async fn retain_usage(
-        &self,
-        context: &PublicationContext,
-        route: &crate::cost::CostRoute,
-        evidence: UsageEvidence,
-        units: &[crate::cost::CostUnits],
-        raw_output: Option<&[u8]>,
-        usable: bool,
-    ) -> Result<RuntimeUsage, RuntimeError> {
-        let units = if evidence == UsageEvidence::Unknown {
-            route.maxima.clone()
-        } else {
-            units.to_vec()
-        };
-        let previous = self
-            .usage
-            .latest_usage(&context.job.owner, context.dispatch)
-            .await?;
-        if let Some(previous) = &previous
-            && previous.route == *route
-            && previous.evidence == evidence
-            && previous.units == units
-            && previous.usable == usable
-            && previous.raw_output.as_deref() == raw_output
-        {
-            return Ok(previous.clone());
-        }
-        let revision = previous
-            .map_or(Some(1), |usage| usage.revision.0.checked_add(1))
-            .ok_or(RuntimeError::InvalidRecord)?;
-        let usage = RuntimeUsage {
-            owner: context.job.owner.clone(),
-            job: context.job.job,
-            stage: context.stage.stage,
-            dispatch: context.dispatch,
-            revision: UsageRevision(revision),
-            route: route.clone(),
-            evidence,
-            units,
-            usable,
-            at_ms: u64::try_from(self.clock.now_ms()).map_err(|_| RuntimeError::InvalidRecord)?,
-            raw_output: raw_output.map(<[u8]>::to_vec),
-        };
-        self.usage.record_usage(&usage).await?;
-        let mut event = crate::telemetry::ImageEvent::new(
-            crate::telemetry::EventKind::UsageRecorded,
-            self.event_context(&context.job, &context.stage, Some(context.dispatch)),
-        );
-        event.measurements.usage_revision = Some(usage.revision);
-        event.measurements.usage_evidence = Some(usage.evidence);
-        event.measurements.raw_checkpointed = Some(usage.raw_output.is_some());
-        self.telemetry.observe(event);
-        Ok(usage)
-    }
-
-    pub(super) async fn project_usage(&self, usage: &RuntimeUsage) -> Result<(), RuntimeError> {
-        self.project_usage_observed(usage, true).await
-    }
-
-    /// A projection that is not yet durable is finished by the cost log's own acknowledgement, so
-    /// it must not abort a pipeline that still has to queue its next stage.
-    pub(super) async fn project_usage_or_pending(
-        &self,
-        usage: &RuntimeUsage,
-    ) -> Result<(), RuntimeError> {
-        match self.project_usage(usage).await {
-            Ok(()) | Err(RuntimeError::CostProjectionPending) => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
-    async fn project_usage_observed(
-        &self,
-        usage: &RuntimeUsage,
-        report_pending: bool,
-    ) -> Result<(), RuntimeError> {
-        let latest = self
-            .usage
-            .latest_usage(&usage.owner, usage.dispatch)
-            .await?;
-        let selected = latest
-            .as_ref()
-            .filter(|latest| latest.revision.0 > usage.revision.0)
-            .unwrap_or(usage);
-        if selected.owner != usage.owner
-            || selected.job != usage.job
-            || selected.stage != usage.stage
-            || selected.route != usage.route
-        {
-            return Err(RuntimeError::InvalidRecord);
-        }
-        let usage = selected;
-        let result = self.project_usage_inner(usage).await;
-        if let Err(error) = &result {
-            if *error == RuntimeError::CostProjectionPending && !report_pending {
-                return result;
-            }
-            let context = crate::telemetry::EventContext {
-                job: Some(usage.job),
-                stage: Some(usage.stage),
-                attempt: Some(usage.dispatch),
-                gate_revision: Some(self.settings.active_config_revision),
-                ..Default::default()
-            };
-            let pending = *error == RuntimeError::CostProjectionPending;
-            let mut event = crate::telemetry::ImageEvent::new(
-                if pending {
-                    crate::telemetry::EventKind::UsageProjectionPending
-                } else {
-                    crate::telemetry::EventKind::UsageProjectionFailed
-                },
-                context,
-            );
-            if !pending {
-                event.failure = Some(crate::telemetry::FailureKind::UsageProjection);
-            }
-            event.measurements.usage_revision = Some(usage.revision);
-            event.measurements.usage_evidence = Some(usage.evidence);
-            self.telemetry.observe(event);
-        }
-        result
-    }
-
-    async fn project_usage_inner(&self, usage: &RuntimeUsage) -> Result<(), RuntimeError> {
-        let call_id = crate::cost::pinned_call_id(usage.dispatch.as_bytes());
-        self.costs
-            .start_pinned(&call_id, &usage.route)
-            .await
-            .map_err(RuntimeError::Cost)?;
-        let report = UsageReport {
-            revision: usage.revision,
-            evidence: usage.evidence,
-            units: &usage.units,
-            usable: usage.usable,
-            at_ms: usage.at_ms,
-        };
-        match self.costs.correct(&call_id, &report).await {
-            Ok(_) => {}
-            Err(crate::cost::CostError::StaleRevision { stored, .. }) => {
-                return self.acknowledge_newer_projection(usage, stored).await;
-            }
-            Err(error) => return Err(RuntimeError::Cost(error)),
-        }
-        if !self
-            .costs
-            .is_durable(&call_id, Some(usage.revision))
-            .await
-            .map_err(RuntimeError::Cost)?
-        {
-            return Err(RuntimeError::CostProjectionPending);
-        }
-        self.usage
-            .acknowledge_projection(&usage.owner, usage.dispatch, usage.revision)
-            .await?;
-        let mut event = crate::telemetry::ImageEvent::new(
-            crate::telemetry::EventKind::UsageProjected,
-            crate::telemetry::EventContext {
-                job: Some(usage.job),
-                stage: Some(usage.stage),
-                attempt: Some(usage.dispatch),
-                gate_revision: Some(self.settings.active_config_revision),
-                ..Default::default()
-            },
-        );
-        event.measurements.usage_revision = Some(usage.revision);
-        event.measurements.usage_evidence = Some(usage.evidence);
-        self.telemetry.observe(event);
-        Ok(())
-    }
-
-    async fn acknowledge_newer_projection(
-        &self,
-        older: &RuntimeUsage,
-        revision: UsageRevision,
-    ) -> Result<(), RuntimeError> {
-        let scope = ExecutionScope {
-            owner: older.owner.clone(),
-            job: older.job,
-            stage: older.stage,
-            dispatch: older.dispatch,
-        };
-        let current = self
-            .usage
-            .read_usage_revision(&scope, revision)
-            .await?
-            .ok_or(RuntimeError::InvalidRecord)?;
-        if current.revision.0 <= older.revision.0 || current.route != older.route {
-            return Err(RuntimeError::InvalidRecord);
-        }
-        let receipt = self
-            .costs
-            .read_receipt(&crate::cost::pinned_call_id(older.dispatch.as_bytes()))
-            .await
-            .map_err(RuntimeError::Cost)?
-            .ok_or(RuntimeError::StorageUnavailable)?;
-        if !receipt.durable {
-            return Err(RuntimeError::CostProjectionPending);
-        }
-        let max_word_bytes = [
-            &current.route.provider,
-            &current.route.model,
-            &current.route.cause,
-            &current.route.detail,
-        ]
-        .into_iter()
-        .map(|word| word.len())
-        .chain(
-            current
-                .route
-                .maxima
-                .iter()
-                .chain(&current.units)
-                .map(|unit| unit.category.len()),
-        )
-        .max()
-        .ok_or(RuntimeError::InvalidRecord)?;
-        let limits = super::UsageProjectionLimits {
-            max_attempts: 1,
-            max_observations: 1,
-            max_unit_lines: current.route.maxima.len().max(current.units.len()),
-            max_word_bytes,
-        };
-        super::usage_projection::ActualCostReceipt::verify(receipt, &current, limits)
-            .map_err(|_| RuntimeError::InvalidRecord)?;
-        self.usage
-            .acknowledge_projection(&current.owner, current.dispatch, current.revision)
-            .await
-    }
-
     pub(super) async fn complete(
         &self,
         context: &PublicationContext,
@@ -1521,7 +1289,7 @@ where
     async fn freeze(
         &self,
         job: ImageJob,
-        intent: &crate::intent_codec::DecodedIntent,
+        intent: &DecodedIntent,
         config: &ImageConfig,
         classification: Option<&DecisionObservation>,
         analysis: Option<&crate::ImageAnalysisObservation>,
@@ -1577,11 +1345,24 @@ where
             ImageOperation::Edit(spec) => spec.prompt.text(),
             ImageOperation::Transform(_) => "",
         };
-        let selected = serde_json::json!({"text":selected_text,
-            "account":dispatch::account(config,intent).as_str(),
-            "moderation":match dispatch::moderation(config,intent) { crate::backends::api::ImageModeration::Auto=>"auto",crate::backends::api::ImageModeration::Low=>"low" },
-            "rating":intent.operation.pipeline().map(|pipeline| match pipeline.rating {
-                crate::ImageContentRating::Restrained=>"restrained", crate::ImageContentRating::Mature=>"mature" })}).to_string();
+        let moderation = match dispatch::moderation(config, intent) {
+            crate::backends::api::ImageModeration::Auto => "auto",
+            crate::backends::api::ImageModeration::Low => "low",
+        };
+        let rating = intent
+            .operation
+            .pipeline()
+            .map(|pipeline| match pipeline.rating {
+                crate::ImageContentRating::Restrained => "restrained",
+                crate::ImageContentRating::Mature => "mature",
+            });
+        let selected = serde_json::json!({
+            "text": selected_text,
+            "account": dispatch::account(config, intent).as_str(),
+            "moderation": moderation,
+            "rating": rating,
+        })
+        .to_string();
         plan.extend_from_slice(
             &(u32::try_from(selected.len()).map_err(|_| RuntimeError::InvalidRecord)?)
                 .to_be_bytes(),
@@ -1604,7 +1385,7 @@ where
             .map_err(RuntimeError::Publication)?
             .snapshot()
             .map_err(RuntimeError::Publication)?;
-        let owner = dispatch::hex(&crate::owner_scope_bytes(&job.owner));
+        let owner = crate::lower_hex(&crate::owner_scope_bytes(&job.owner));
         let model = dispatch::model(config, intent)?;
         let key = MediaRequestKey::derive_recipe(&MediaRecipeRequest {
             operation_kind: "native",
@@ -1630,7 +1411,8 @@ where
             audience: &intent.audience,
         })
         .map_err(|_| RuntimeError::InvalidRecord)?;
-        // Election semantics remove only the explicit run fence. The actual executable plan stays complete.
+        // Election semantics remove only the explicit run fence. The actual executable plan stays
+        // complete.
         let key = crate::service::artifact_recipe::retained_campaign_artifact_recipe(
             &job.intent,
             &job.config,

@@ -26,76 +26,65 @@ pub enum RequestField {
 /// Neither outcome is a durable game decision or an RPC receipt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RequestError {
+    /// A required field is absent.
     Missing(RequestField),
+    /// An identity field is present but its bytes are not a valid identity.
     Identity {
         field: RequestField,
         cause: IdentityError,
     },
+    /// The recovery epoch is present but not a valid epoch.
     Revision(RevisionError),
+    /// A build provenance label is present but malformed.
     Build(BuildIdentityError),
+    /// The fields are well formed and the closed command is structurally refused.
     Domain(CommandError),
 }
 
-fn identity_bytes(value: Option<&[u8]>, field: RequestField) -> Result<&[u8], RequestError> {
-    value.ok_or(RequestError::Missing(field))
+/// Parses the bytes of one identity field, naming `field` when they are absent or malformed.
+fn parse_identity<T>(
+    value: Option<&[u8]>,
+    field: RequestField,
+    from_bytes: fn(&[u8]) -> Result<T, IdentityError>,
+) -> Result<T, RequestError> {
+    let bytes = value.ok_or(RequestError::Missing(field))?;
+    from_bytes(bytes).map_err(|cause| RequestError::Identity { field, cause })
 }
 
 /// Parses a supplied identity; a well-formed value grants no session access.
 pub fn session_id(value: Option<&wire::SessionId>) -> Result<SessionId, RequestError> {
-    let bytes = identity_bytes(
-        value.and_then(|id| id.value.as_deref()),
-        RequestField::Session,
-    )?;
-    SessionId::from_bytes(bytes).map_err(|cause| RequestError::Identity {
-        field: RequestField::Session,
-        cause,
-    })
+    let bytes = value.and_then(|id| id.value.as_deref());
+    parse_identity(bytes, RequestField::Session, SessionId::from_bytes)
 }
 
 /// Parses a supplied identity; the caller's member must still come from authentication.
 pub fn member_id(value: Option<&wire::MemberId>) -> Result<MemberId, RequestError> {
-    let bytes = identity_bytes(
-        value.and_then(|id| id.value.as_deref()),
-        RequestField::Member,
-    )?;
-    MemberId::from_bytes(bytes).map_err(|cause| RequestError::Identity {
-        field: RequestField::Member,
-        cause,
-    })
+    let bytes = value.and_then(|id| id.value.as_deref());
+    parse_identity(bytes, RequestField::Member, MemberId::from_bytes)
 }
 
 /// Parses an identity without granting or validating an input lease.
 pub fn client_binding_id(
     value: Option<&wire::ClientBindingId>,
 ) -> Result<ClientBindingId, RequestError> {
-    let bytes = identity_bytes(
-        value.and_then(|id| id.value.as_deref()),
+    let bytes = value.and_then(|id| id.value.as_deref());
+    parse_identity(
+        bytes,
         RequestField::ClientBinding,
-    )?;
-    ClientBindingId::from_bytes(bytes).map_err(|cause| RequestError::Identity {
-        field: RequestField::ClientBinding,
-        cause,
-    })
+        ClientBindingId::from_bytes,
+    )
 }
 
+/// Parses a supplied run identity; it does not check that the run is the session's current one.
 pub fn run_id(value: Option<&wire::RunId>) -> Result<RunId, RequestError> {
-    let bytes = identity_bytes(value.and_then(|id| id.value.as_deref()), RequestField::Run)?;
-    RunId::from_bytes(bytes).map_err(|cause| RequestError::Identity {
-        field: RequestField::Run,
-        cause,
-    })
+    let bytes = value.and_then(|id| id.value.as_deref());
+    parse_identity(bytes, RequestField::Run, RunId::from_bytes)
 }
 
 /// Parses the supplied retry identity; it does not perform operation lookup or deduplication.
 pub fn operation_id(value: Option<&wire::OperationId>) -> Result<OperationId, RequestError> {
-    let bytes = identity_bytes(
-        value.and_then(|id| id.value.as_deref()),
-        RequestField::Operation,
-    )?;
-    OperationId::from_bytes(bytes).map_err(|cause| RequestError::Identity {
-        field: RequestField::Operation,
-        cause,
-    })
+    let bytes = value.and_then(|id| id.value.as_deref());
+    parse_identity(bytes, RequestField::Operation, OperationId::from_bytes)
 }
 
 /// Requires explicit epoch and sequence presence. Sequence zero remains a valid value.
@@ -158,17 +147,30 @@ pub fn map_game_command(
     command: GameCommand,
 ) -> Result<GameInput, RequestError> {
     let revision = session_revision(fields.observed_revision)?;
-    Ok(GameInput::Game(CommandInput {
-        basis: Basis {
-            session: session_id(fields.session)?,
-            run: run_id(fields.run)?,
-            revision,
-        },
-        observed_revision: revision,
-        operation: operation_id(fields.operation)?,
+    let basis = Basis {
+        session: session_id(fields.session)?,
+        run: run_id(fields.run)?,
+        revision,
+    };
+    let operation = operation_id(fields.operation)?;
+    Ok(client_command_input(basis, operation, member, command))
+}
+
+/// Builds the one client input shape both mappers return: the observed revision is the basis
+/// revision, and only `GameInput::Game` can come out.
+pub(crate) fn client_command_input(
+    basis: Basis,
+    operation: OperationId,
+    member: MemberId,
+    command: GameCommand,
+) -> GameInput {
+    GameInput::Game(CommandInput {
+        observed_revision: basis.revision,
+        basis,
+        operation,
         member,
         command,
-    }))
+    })
 }
 
 /// Maps actual common wire fields and structurally validates a closed game command.

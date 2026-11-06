@@ -1,9 +1,10 @@
 //! Provider-neutral mask geometry and historical segmentation accounting labels.
 
 use crate::NativeHttpRefusal;
+use crate::output_fetch::MAXIMUM_IMAGE_SIDE_PX;
 
+/// The most instances one segmentation answer may carry.
 pub const MAXIMUM_MASKS: u8 = 32;
-const MAXIMUM_SIDE: u32 = 8192;
 
 /// The hosted segmentation models the adapter knows. Each is one fal endpoint with one price.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,7 +102,11 @@ impl MaskRows {
 
     /// A mask from its runs (0-based starts), under the same rules as [`MaskRows::parse`].
     pub fn from_runs(width: u32, height: u32, runs: Vec<MaskRun>) -> Result<Self, MaskError> {
-        if width == 0 || height == 0 || width > MAXIMUM_SIDE || height > MAXIMUM_SIDE {
+        if width == 0
+            || height == 0
+            || width > MAXIMUM_IMAGE_SIDE_PX
+            || height > MAXIMUM_IMAGE_SIDE_PX
+        {
             return Err(MaskError::Size);
         }
         // A person needs a couple of runs per row; this is far above any real mask.
@@ -210,9 +215,11 @@ impl MaskRows {
     /// row. For a head this is the point just above the crown. `None` for an empty mask.
     pub fn top_centre(&self, rows: u32) -> Option<(f32, u32)> {
         let top = self.bounds()?.top;
+        // Saturating: a caller may ask for every row (`u32::MAX`), which must not overflow.
+        let end_row = top.saturating_add(rows.max(1));
         let (mut sum, mut count) = (0u64, 0u64);
         for (y, from, to) in self.row_segments() {
-            if y >= top + rows.max(1) {
+            if y >= end_row {
                 break;
             }
             let length = u64::from(to - from);
@@ -387,6 +394,17 @@ mod tests {
         assert_eq!(y, 3);
         assert!((x - 10.0).abs() < 0.01, "{x}");
         assert!(MaskRows::parse("", 30, 12).unwrap().top_centre(2).is_none());
+    }
+
+    /// `top + rows` overflowed for a request of every row: a panic in a debug build, and in a
+    /// release build a wrapped bound that skipped every row and reported no centre.
+    #[test]
+    fn asking_for_every_row_averages_the_whole_mask_instead_of_overflowing() {
+        let runs = rectangle(30, 8, 3, 12, 5);
+        let head = MaskRows::from_runs(30, 12, runs).unwrap();
+        let (x, y) = head.top_centre(u32::MAX).unwrap();
+        assert_eq!(y, 3);
+        assert!((x - 10.0).abs() < 0.01, "{x}");
     }
 
     #[test]

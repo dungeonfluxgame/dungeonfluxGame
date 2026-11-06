@@ -1,16 +1,16 @@
 //! What a video file really is and how long it plays, read from its own bytes.
 //!
-//! The library never trusts a file's extension: an mp4 is an `ftyp` box with a known major brand
-//! at offset 4, a webm is the EBML header with the document type `webm`. The duration comes from
-//! the container (the mp4 `moov/mvhd` box, the webm Segment Info `Duration` with its
-//! `TimecodeScale`), so no decoder is needed. The reader works on a `Read + Seek` source and reads
-//! only box and element headers and the few payload bytes it needs (never a whole payload), so a
-//! file of any size costs a bounded amount of memory and at most
-//! `MediaLimits::maximum_container_elements` headers of work. It never panics on malformed input and
-//! refuses a file whose duration it cannot read.
+//! The library never trusts a file's extension: an mp4 is an `ftyp` box with a known major brand at
+//! offset 4, a webm is the EBML header with the document type `webm`. The duration comes from the
+//! container (the mp4 `moov/mvhd` box, the webm Segment Info `Duration` with its `TimecodeScale`),
+//! so no decoder is needed. The reader works on a `Read + Seek` source and reads only box and
+//! element headers and the few payload bytes it needs (never a whole payload), so a file of any
+//! size costs a bounded amount of memory and at most `MediaLimits::maximum_container_elements`
+//! headers of work. It never panics on malformed input and refuses a file whose duration it cannot
+//! read.
 //!
-//! The duration is the header's claim: a file can state one second and play longer, so the limit
-//! on length checks what the container says, not the media (owner decision, 2026-11-02).
+//! The duration is the header's claim: a file can state one second and play longer, so the limit on
+//! length checks what the container says, not the media (owner decision, 2026-11-02).
 
 use std::fmt;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
@@ -65,7 +65,7 @@ impl VideoFormat {
         }
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(crate) fn key(self) -> &'static str {
         match self {
             Self::Mp4 => "mp4",
             Self::Webm => "webm",
@@ -138,7 +138,7 @@ impl fmt::Display for FoundContent {
 
 /// Why the duration of a video of the right format cannot be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum UnreadableDuration {
+pub(crate) enum DurationCause {
     NoMovieBox,
     NoMovieHeader,
     MovieHeaderCutShort,
@@ -150,11 +150,11 @@ pub(crate) enum UnreadableDuration {
     NoSegment,
     NoInfo,
     NoDuration,
-    BadTimecodeScale,
+    InvalidTimecodeScale,
     TooManyElements,
 }
 
-impl fmt::Display for UnreadableDuration {
+impl fmt::Display for DurationCause {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::NoMovieBox => "the file has no complete moov box",
@@ -169,7 +169,7 @@ impl fmt::Display for UnreadableDuration {
             Self::NoSegment => "the file has no Segment",
             Self::NoInfo => "the Segment has no Info element",
             Self::NoDuration => "the Info element has no readable Duration",
-            Self::BadTimecodeScale => "the TimecodeScale is zero or cannot be read",
+            Self::InvalidTimecodeScale => "the TimecodeScale is zero or cannot be read",
             Self::TooManyElements => "the file has too many elements to search for its duration",
         })
     }
@@ -177,25 +177,39 @@ impl fmt::Display for UnreadableDuration {
 
 /// Why the source is not a readable video of the claimed format.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum VideoRefusal {
+pub(crate) enum VideoError {
     /// The bytes are something else.
     WrongContent { found: FoundContent },
     /// The bytes are the right format but the duration cannot be read.
-    DurationUnreadable { reason: UnreadableDuration },
+    DurationUnreadable { cause: DurationCause },
     /// The source could not be read.
     ReadFailed(ErrorKind),
 }
 
-fn unreadable(reason: UnreadableDuration) -> VideoRefusal {
-    VideoRefusal::DurationUnreadable { reason }
+impl fmt::Display for VideoError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WrongContent { found } => write!(formatter, "the file is {found}"),
+            Self::DurationUnreadable { cause } => {
+                write!(formatter, "the video's length cannot be read: {cause}")
+            }
+            Self::ReadFailed(kind) => write!(formatter, "the video could not be read: {kind}"),
+        }
+    }
 }
 
-fn read_failed(error: std::io::Error) -> VideoRefusal {
-    VideoRefusal::ReadFailed(error.kind())
+impl std::error::Error for VideoError {}
+
+fn unreadable(cause: DurationCause) -> VideoError {
+    VideoError::DurationUnreadable { cause }
+}
+
+fn read_failed(error: std::io::Error) -> VideoError {
+    VideoError::ReadFailed(error.kind())
 }
 
 /// `None` is "nothing there": the end of the boxes, or a box that does not fit.
-type Found<T> = Result<Option<T>, VideoRefusal>;
+type Found<T> = Result<Option<T>, VideoError>;
 
 /// A source and its length, read a few bytes at a time.
 struct Window<'a, S> {
@@ -229,7 +243,7 @@ pub(crate) fn inspect_video<S: Read + Seek>(
     source: &mut S,
     claimed: VideoFormat,
     limits: &MediaLimits,
-) -> Result<VideoInfo, VideoRefusal> {
+) -> Result<VideoInfo, VideoError> {
     let length = source.seek(SeekFrom::End(0)).map_err(read_failed)?;
     let mut window = Window { source, length };
     match (claimed, sniff(&mut window, limits)?) {
@@ -243,8 +257,8 @@ pub(crate) fn inspect_video<S: Read + Seek>(
     }
 }
 
-fn wrong(found: FoundContent) -> VideoRefusal {
-    VideoRefusal::WrongContent { found }
+fn wrong(found: FoundContent) -> VideoError {
+    VideoError::WrongContent { found }
 }
 
 enum Sniffed {
@@ -256,7 +270,7 @@ enum Sniffed {
 fn sniff<S: Read + Seek>(
     window: &mut Window<'_, S>,
     limits: &MediaLimits,
-) -> Result<Sniffed, VideoRefusal> {
+) -> Result<Sniffed, VideoError> {
     let length = window.length;
     let prefix = window
         .read_prefix(0, SNIFFED_PREFIX_BYTES, length)?
@@ -282,7 +296,7 @@ fn sniff<S: Read + Seek>(
 fn sniff_ebml<S: Read + Seek>(
     window: &mut Window<'_, S>,
     limits: &MediaLimits,
-) -> Result<Sniffed, VideoRefusal> {
+) -> Result<Sniffed, VideoError> {
     let length = window.length;
     let Some(header) = find_ebml_element(window, 0, length, EBML_HEADER_ID, limits)? else {
         return Ok(Sniffed::Other(FoundContent::EbmlNoDocType));
@@ -320,9 +334,7 @@ fn printable(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn describe_other<S: Read + Seek>(
-    window: &mut Window<'_, S>,
-) -> Result<FoundContent, VideoRefusal> {
+fn describe_other<S: Read + Seek>(window: &mut Window<'_, S>) -> Result<FoundContent, VideoError> {
     let length = window.length;
     let prefix = window
         .read_prefix(0, DESCRIBED_PREFIX_BYTES, length)?
@@ -442,18 +454,18 @@ fn find_mp4_box<S: Read + Seek>(
         }
         offset = found.end;
     }
-    Err(unreadable(UnreadableDuration::TooManyElements))
+    Err(unreadable(DurationCause::TooManyElements))
 }
 
 fn mp4_duration<S: Read + Seek>(
     window: &mut Window<'_, S>,
     limits: &MediaLimits,
-) -> Result<VideoInfo, VideoRefusal> {
+) -> Result<VideoInfo, VideoError> {
     let length = window.length;
     let movie = find_mp4_box(window, 0, length, b"moov", limits)?
-        .ok_or(unreadable(UnreadableDuration::NoMovieBox))?;
+        .ok_or(unreadable(DurationCause::NoMovieBox))?;
     let header = find_mp4_box(window, movie.start, movie.end, b"mvhd", limits)?
-        .ok_or(unreadable(UnreadableDuration::NoMovieHeader))?;
+        .ok_or(unreadable(DurationCause::NoMovieHeader))?;
     let payload = window
         .read_prefix(header.start, 32, header.end)?
         .unwrap_or_default();
@@ -466,21 +478,21 @@ fn mp4_duration<S: Read + Seek>(
         Some(1) if payload.len() >= MP4_MOVIE_HEADER_V1_BYTES => {
             (read_u32(&payload, 20), read_u64(&payload, 24), u64::MAX)
         }
-        Some(0 | 1) => return Err(unreadable(UnreadableDuration::MovieHeaderCutShort)),
-        _ => return Err(unreadable(UnreadableDuration::MovieHeaderUnknownVersion)),
+        Some(0 | 1) => return Err(unreadable(DurationCause::MovieHeaderCutShort)),
+        _ => return Err(unreadable(DurationCause::MovieHeaderUnknownVersion)),
     };
     let (Some(timescale), Some(units)) = (timescale, duration_units) else {
-        return Err(unreadable(UnreadableDuration::MovieHeaderCutShort));
+        return Err(unreadable(DurationCause::MovieHeaderCutShort));
     };
     if timescale == 0 {
-        return Err(unreadable(UnreadableDuration::ZeroTimescale));
+        return Err(unreadable(DurationCause::ZeroTimescale));
     }
     if units == 0 || units == unknown_units {
-        return Err(unreadable(UnreadableDuration::ZeroOrUnknownDuration));
+        return Err(unreadable(DurationCause::ZeroOrUnknownDuration));
     }
     let milliseconds = (u128::from(units) * 1000).div_ceil(u128::from(timescale));
-    let milliseconds = u64::try_from(milliseconds)
-        .map_err(|_| unreadable(UnreadableDuration::DurationOutOfRange))?;
+    let milliseconds =
+        u64::try_from(milliseconds).map_err(|_| unreadable(DurationCause::DurationOutOfRange))?;
     Ok(VideoInfo {
         duration: Duration::from_millis(milliseconds),
     })
@@ -581,7 +593,7 @@ fn find_ebml_element<S: Read + Seek>(
         }
         offset = element.end;
     }
-    Err(unreadable(UnreadableDuration::TooManyElements))
+    Err(unreadable(DurationCause::TooManyElements))
 }
 
 fn ebml_unsigned(payload: &[u8]) -> Option<u64> {
@@ -618,24 +630,24 @@ fn webm_duration<S: Read + Seek>(
     window: &mut Window<'_, S>,
     header_end: u64,
     limits: &MediaLimits,
-) -> Result<VideoInfo, VideoRefusal> {
+) -> Result<VideoInfo, VideoError> {
     let length = window.length;
     let segment = find_ebml_element(window, header_end, length, WEBM_SEGMENT_ID, limits)?
-        .ok_or(unreadable(UnreadableDuration::NoSegment))?;
+        .ok_or(unreadable(DurationCause::NoSegment))?;
     let info = find_ebml_element(window, segment.start, segment.end, WEBM_INFO_ID, limits)?
-        .ok_or(unreadable(UnreadableDuration::NoInfo))?;
+        .ok_or(unreadable(DurationCause::NoInfo))?;
     let duration_range = find_ebml_element(window, info.start, info.end, WEBM_DURATION_ID, limits)?
-        .ok_or(unreadable(UnreadableDuration::NoDuration))?;
+        .ok_or(unreadable(DurationCause::NoDuration))?;
     let duration_ticks = read_ebml_number(window, &duration_range)?
         .as_deref()
         .and_then(ebml_float)
-        .ok_or(unreadable(UnreadableDuration::NoDuration))?;
+        .ok_or(unreadable(DurationCause::NoDuration))?;
     let timecode_scale =
         match find_ebml_element(window, info.start, info.end, WEBM_TIMECODE_SCALE_ID, limits)? {
             Some(range) => read_ebml_number(window, &range)?
                 .as_deref()
                 .and_then(ebml_unsigned)
-                .ok_or(unreadable(UnreadableDuration::BadTimecodeScale))?,
+                .ok_or(unreadable(DurationCause::InvalidTimecodeScale))?,
             None => WEBM_DEFAULT_TIMECODE_SCALE,
         };
     // Matroska writers use 1_000_000 (1 ms a tick) or less. A scale past u32::MAX (a tick of
@@ -643,12 +655,12 @@ fn webm_duration<S: Read + Seek>(
     let timecode_scale = u32::try_from(timecode_scale)
         .ok()
         .filter(|&scale| scale != 0)
-        .ok_or(unreadable(UnreadableDuration::BadTimecodeScale))?;
+        .ok_or(unreadable(DurationCause::InvalidTimecodeScale))?;
     let seconds = duration_ticks * f64::from(timecode_scale) / 1_000_000_000.0;
     if seconds.is_nan() || seconds <= 0.0 {
-        return Err(unreadable(UnreadableDuration::ZeroOrUnknownDuration));
+        return Err(unreadable(DurationCause::ZeroOrUnknownDuration));
     }
     let duration = Duration::try_from_secs_f64(seconds)
-        .map_err(|_| unreadable(UnreadableDuration::DurationOutOfRange))?;
+        .map_err(|_| unreadable(DurationCause::DurationOutOfRange))?;
     Ok(VideoInfo { duration })
 }

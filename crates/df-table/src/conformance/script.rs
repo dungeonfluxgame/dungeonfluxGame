@@ -15,11 +15,11 @@ use crate::effects::{ApplyOutcome, TableState};
 use crate::envelope::PendingId;
 use crate::event::TableEvent;
 use crate::identity::{Correlation, SeatId, TableScope};
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
     Decision, Machine, MachineInput, MachineSpec, StepInput, StepOutcome, StepResult,
     entered_event, step_events,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, Outcome};
 use crate::ports::{
     ActionId, Broker, Clock, Dice, Draw, DrawRequest, Preparation, Resolution, RulesOwner,

@@ -152,6 +152,8 @@ impl BflPortraitCheckpoint {
                 if origin.is_empty() || origin.len() > 8192 {
                     return Err(ApiError::InvalidRequest);
                 }
+                // Only structural validity matters here: resume compares the origin with
+                // the executor's own, which decides plain-HTTP permission.
                 let _ = check_endpoint_url(origin)?;
                 check_model_slug(model_route)?;
                 if model_route.contains('/') {
@@ -681,7 +683,14 @@ fn validate_portrait(edit: &ImageEdit<'_>) -> Result<(), ApiError> {
 }
 
 fn generation_body(prompt: &str) -> Value {
-    json!({"prompt":prompt,"aspect_ratio":"2:3","resolution":"1.5k","grounding":false,"safety_tolerance":2,"version":"latest"})
+    json!({
+        "prompt": prompt,
+        "aspect_ratio": "2:3",
+        "resolution": "1.5k",
+        "grounding": false,
+        "safety_tolerance": 2,
+        "version": "latest",
+    })
 }
 
 fn canonical_origin(origin: &str) -> Result<String, ApiError> {

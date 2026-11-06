@@ -7,13 +7,15 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use df_table::director::Request;
-use df_table::director_reason::Reason;
+use df_table::director::reason::Reason;
 use df_table::element::ElementId;
 use df_table::inspect::InspectAudience;
+use df_table::testkit::ManualClock;
 
-use super::host_tests::{CAMERA_DEMO, camera_of, lines_starting, said, with_three_avatars};
+use super::fixtures::{CAMERA_DEMO, camera_of, lines_starting, said, with_three_avatars};
+use super::limits::HOST_TICK_MS;
 use super::request::DirectorAct;
-use super::routes::{DirectorRoutes, HOST_TICK_MS};
+use super::routes::{DirectorRoutes, runtime_clock};
 use super::workbench::Workbench;
 use crate::test_support::{Running, STARTER_FILES, start};
 
@@ -43,17 +45,17 @@ async fn with_inline_stage(ids: &[&str]) -> Running {
 fn manual_routes(running: &Running) -> Arc<DirectorRoutes> {
     Arc::new(DirectorRoutes::new(
         Arc::clone(&running.state),
-        Workbench::manual(InspectAudience::Operator),
+        Workbench::new(InspectAudience::Operator, Arc::new(ManualClock::default())),
     ))
 }
 
-fn focus(element: &str, reason: &str, hold: Option<u64>) -> DirectorAct {
+fn focus(element: &str, reason: Reason, hold_ms: Option<u64>) -> DirectorAct {
     DirectorAct::Focus {
-        element: element.to_owned(),
-        reason: Some(reason.to_owned()),
-        zoom: None,
-        over: None,
-        hold,
+        element: ElementId::new(element).expect("an element name"),
+        reason: Some(reason),
+        zoom_percent: None,
+        over_ms: None,
+        hold_ms,
     }
 }
 
@@ -68,6 +70,7 @@ fn camera_serial(running: &Running) -> Option<u64> {
         .snapshot()
         .scene
         .camera
+        .set_value()
         .map(|camera| camera.serial)
 }
 
@@ -82,9 +85,7 @@ fn logged(running: &Running) -> Vec<String> {
 }
 
 fn director_serial(routes: &DirectorRoutes) -> u64 {
-    routes
-        .with(|workbench| Ok(workbench.show().report.serial))
-        .expect("a workbench")
+    routes.with(|workbench| workbench.show().report.serial)
 }
 
 /// Lets every task that can run, run: a task blocked at the gate stays blocked.
@@ -99,28 +100,24 @@ async fn a_tick_and_a_verb_cannot_apply_camera_moves_out_of_order() {
     let running = with_inline_stage(&["finn", "sigrun"]).await;
     let routes = manual_routes(&running);
     routes
-        .act(focus("finn", "speaker", None))
+        .act(focus("finn", Reason::Speaker, None))
         .await
         .expect("applies");
     routes
-        .act(DirectorAct::Advance { ms: 1_000 })
+        .act(DirectorAct::Advance { by_ms: 1_000 })
         .await
         .expect("advances");
     // A request waits in the Director's inbox for the tick, which decides the focus on Sigrun and
     // is held just before it applies the move.
-    routes
-        .with(|workbench| {
-            let view = workbench.view();
-            let now = workbench.director_mut().now_ms();
-            let request =
-                Request::focus(Reason::Speaker, ElementId::new("sigrun").expect("a name"));
-            workbench
-                .director_mut()
-                .request(now, &view, request)
-                .expect("well formed");
-            Ok(())
-        })
-        .expect("a workbench");
+    routes.with(|workbench| {
+        let view = workbench.view();
+        let now = workbench.director_mut().now_ms();
+        let request = Request::focus(Reason::Speaker, ElementId::new("sigrun").expect("a name"));
+        workbench
+            .director_mut()
+            .request(now, &view, request)
+            .expect("well formed");
+    });
     routes.hook.hold_next.store(true, Ordering::SeqCst);
     let tick = tokio::spawn({
         let routes = Arc::clone(&routes);
@@ -130,7 +127,7 @@ async fn a_tick_and_a_verb_cannot_apply_camera_moves_out_of_order() {
     assert_eq!(director_serial(&routes), 2, "the tick decided the focus");
     let verb = tokio::spawn({
         let routes = Arc::clone(&routes);
-        async move { routes.act(DirectorAct::Wide { over: None }).await }
+        async move { routes.act(DirectorAct::Wide { over_ms: None }).await }
     });
     settle().await;
     assert_eq!(
@@ -157,13 +154,13 @@ async fn a_pull_back_that_failed_to_apply_is_made_again_and_the_camera_ends_wide
     let running = with_inline_stage(&["finn", "sigrun"]).await;
     let routes = manual_routes(&running);
     routes
-        .act(focus("finn", "reveal", Some(1_000)))
+        .act(focus("finn", Reason::Reveal, Some(1_000)))
         .await
         .expect("applies");
     assert_eq!(camera_target(&running).as_deref(), Some("finn"));
     routes.hook.fail_next.store(1, Ordering::SeqCst);
     let reply = routes
-        .act(DirectorAct::Advance { ms: 1_000 })
+        .act(DirectorAct::Advance { by_ms: 1_000 })
         .await
         .expect("the verb is accepted");
     assert_eq!(reply.problems.len(), 1, "{reply:?}");
@@ -188,7 +185,7 @@ async fn a_focus_whose_element_left_the_fixture_before_it_applied_is_forgotten()
     routes.hook.hold_next.store(true, Ordering::SeqCst);
     let first = tokio::spawn({
         let routes = Arc::clone(&routes);
-        async move { routes.act(focus("finn", "speaker", None)).await }
+        async move { routes.act(focus("finn", Reason::Speaker, None)).await }
     });
     routes.hook.held.notified().await;
     running.write_asset("fixtures/camera_demo.json", &inline_fixture(&["sigrun"]));
@@ -202,9 +199,7 @@ async fn a_focus_whose_element_left_the_fixture_before_it_applied_is_forgotten()
         "{reply:?}"
     );
     assert_eq!(camera_target(&running), None);
-    let held = routes
-        .with(|workbench| Ok(workbench.show().report.active))
-        .expect("a workbench");
+    let held = routes.with(|workbench| workbench.show().report.active);
     assert_eq!(
         held, None,
         "the Director does not hold what was never shown"
@@ -215,11 +210,11 @@ async fn a_focus_whose_element_left_the_fixture_before_it_applied_is_forgotten()
         &inline_fixture(&["finn", "sigrun"]),
     );
     routes
-        .act(DirectorAct::Advance { ms: 1_000 })
+        .act(DirectorAct::Advance { by_ms: 1_000 })
         .await
         .expect("advances");
     let reply = routes
-        .act(focus("finn", "speaker", None))
+        .act(focus("finn", Reason::Speaker, None))
         .await
         .expect("applies");
     assert!(reply.problems.is_empty(), "{reply:?}");
@@ -236,7 +231,7 @@ async fn the_host_tick_pulls_back_from_an_element_removed_from_the_fixture() {
     let running = with_inline_stage(&["finn", "sigrun"]).await;
     let routes = manual_routes(&running);
     routes
-        .act(focus("finn", "speaker", None))
+        .act(focus("finn", Reason::Speaker, None))
         .await
         .expect("applies");
     running.write_asset("fixtures/camera_demo.json", &inline_fixture(&["sigrun"]));
@@ -286,10 +281,10 @@ async fn the_host_tick_returns_the_camera_when_its_hold_ends_with_nobody_asking(
     let running = with_inline_stage(&["finn"]).await;
     let routes = Arc::new(DirectorRoutes::new(
         Arc::clone(&running.state),
-        Workbench::new(InspectAudience::Operator),
+        Workbench::new(InspectAudience::Operator, runtime_clock()),
     ));
     routes
-        .act(focus("finn", "reveal", Some(5_000)))
+        .act(focus("finn", Reason::Reveal, Some(5_000)))
         .await
         .expect("applies");
     assert_eq!(camera_target(&running).as_deref(), Some("finn"));

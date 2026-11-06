@@ -4,13 +4,7 @@
 //! <https://elevenlabs.io/docs/api-reference/text-to-speech/stream>
 //! Encoded audio and transcripts remain candidates; neither settles supplier spend.
 
-use std::{
-    fmt,
-    future::Future,
-    io::Write,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    time::Duration,
-};
+use std::{fmt, future::Future, io::Write, net::SocketAddr, time::Duration};
 
 use df_model::checkpoint::ExecutionMode;
 use df_provider_api::{
@@ -21,8 +15,11 @@ use df_provider_api::{
 use df_types::{LocaleTag, Usage, UsageUnit};
 use serde_json::{Map, Value};
 
-use crate::http_contract::encode_path_segment;
-use crate::native_http::{NativeHttp, NativeHttpMetadata, NativeResponseProfile};
+use crate::http_contract::{encode_path_segment, lowercase_hex};
+use crate::native_http::{
+    BoundedRequestBody, NativeHttp, NativeHttpMetadata, NativeResponseProfile,
+    is_literal_localhost, is_valid_credential,
+};
 use crate::text_schema::parse_unique_json;
 use crate::{
     CandidateRouteId, HttpRequest, NativeHttpLimits, NativeHttpRefusal, ProviderFailureClass,
@@ -41,9 +38,21 @@ pub const ELEVEN_STT_MODEL: &str = "scribe_v2";
 pub const ELEVEN_STT_LANGUAGE: &str = "en";
 const MAXIMUM_STT_KEYTERMS: usize = 32;
 const MAXIMUM_STT_KEYTERM_CHARACTERS: usize = 49;
-const MAX_PCM_BYTES: usize = 1_920_000;
-const MAX_TRANSCRIPT_BYTES: usize = 65_536;
-const MAX_WORDS: usize = 4096;
+// The PCM, transcript, word and text bounds below are pinned by the speech contract tests.
+/// The shortest admitted clip: 100 ms of 16 kHz 16-bit mono PCM, in bytes.
+const MINIMUM_PCM_BYTES: usize = 3200;
+/// The longest admitted clip: 60 s of 16 kHz 16-bit mono PCM, in bytes.
+const MAXIMUM_PCM_BYTES: usize = 1_920_000;
+const MAXIMUM_TRANSCRIPT_BYTES: usize = 65_536;
+const MAXIMUM_TRANSCRIPT_WORDS: usize = 4096;
+/// The longest text one speech request may voice, in characters.
+const MAXIMUM_SPEECH_CHARACTERS: usize = 4096;
+/// The longest voice id, in bytes.
+const MAXIMUM_VOICE_ID_BYTES: usize = 128;
+/// The longest supplier transcription or error id kept, in bytes.
+const MAXIMUM_SUPPLIER_ID_BYTES: usize = 256;
+/// Nanoseconds of audio in one 16 kHz sample.
+const NANOSECONDS_PER_SAMPLE: u64 = 62_500;
 const JSON_LIMITS: TextSchemaLimits = TextSchemaLimits {
     maximum_schema_bytes: 1_048_576,
     maximum_depth: 16,
@@ -323,18 +332,26 @@ impl NativeSpeechObservation {
     }
     pub(crate) fn matches_stt(&self, request: &CheckedRequest<ElevenSttBasis>) -> bool {
         let binding = request.binding();
+        let same_basis = matches!(
+            &self.basis,
+            SpeechObservationBasis::Stt(basis) if basis == &binding.semantic_basis
+        );
         self.identity == binding.identity
             && self.mode == binding.mode
             && self.deadline == binding.deadline
-            && matches!(&self.basis, SpeechObservationBasis::Stt(basis) if basis == &binding.semantic_basis)
+            && same_basis
             && self.matches_checked(request)
     }
     pub(crate) fn matches_speech(&self, request: &CheckedRequest<ElevenSpeechBasis>) -> bool {
         let binding = request.binding();
+        let same_basis = matches!(
+            &self.basis,
+            SpeechObservationBasis::Speech(basis) if basis == &binding.semantic_basis
+        );
         self.identity == binding.identity
             && self.mode == binding.mode
             && self.deadline == binding.deadline
-            && matches!(&self.basis, SpeechObservationBasis::Speech(basis) if basis == &binding.semantic_basis)
+            && same_basis
             && self.matches_checked(request)
     }
     fn matches_checked<Semantic>(&self, request: &CheckedRequest<Semantic>) -> bool {
@@ -478,10 +495,7 @@ impl NativeSpeechProvider {
         ) {
             return Err(error(SpeechAdapterReason::UnregisteredRoute));
         }
-        if credential.is_empty()
-            || credential.len() > 8192
-            || !credential.bytes().all(|b| (0x21..=0x7e).contains(&b))
-        {
+        if !is_valid_credential(credential) {
             return Err(error(SpeechAdapterReason::InvalidCredential));
         }
         let http =
@@ -497,10 +511,7 @@ impl NativeSpeechProvider {
     /// Separate fixture construction accepts only literal loopback, fixed paths,
     /// and no DNS/production fallback. It does not change production factories.
     pub fn for_loopback_fixture(mut self, address: SocketAddr) -> Result<Self, SpeechAdapterError> {
-        if (!matches!(address.ip(), IpAddr::V4(ip) if ip == Ipv4Addr::LOCALHOST)
-            && !matches!(address.ip(), IpAddr::V6(ip) if ip == Ipv6Addr::LOCALHOST))
-            || address.port() == 0
-        {
+        if !is_literal_localhost(address) {
             return Err(error(SpeechAdapterReason::Transport(
                 NativeHttpRefusal::InvalidEndpoint,
             )));
@@ -539,10 +550,12 @@ impl NativeSpeechProvider {
         english_locale(&semantic.locale)?;
         validate_keyterms(&semantic.keyterms)?;
         let bytes = checked.payload();
-        if bytes.len() < 3200 || bytes.len() > MAX_PCM_BYTES || !bytes.len().is_multiple_of(2) {
+        if !(MINIMUM_PCM_BYTES..=MAXIMUM_PCM_BYTES).contains(&bytes.len())
+            || !bytes.len().is_multiple_of(2)
+        {
             return Err(error(SpeechAdapterReason::InvalidInput));
         }
-        let duration = Duration::from_nanos((bytes.len() as u64 / 2) * 62_500);
+        let duration = Duration::from_nanos((bytes.len() as u64 / 2) * NANOSECONDS_PER_SAMPLE);
         let milliseconds = duration.as_nanos().div_ceil(1_000_000);
         if checked.usage().tokens() != 0
             || checked.usage().duration() != duration
@@ -603,6 +616,7 @@ impl NativeSpeechProvider {
         if response.status != 200 {
             return Err(supplier_error(response.status, &json, &observation));
         }
+        // A malformed id is refused below by `parse_transcript`; here it is only not kept.
         observation.transcription_id = optional_id(json.get("transcription_id")).ok().flatten();
         observation.audio_duration_secs = json
             .get("audio_duration_secs")
@@ -654,19 +668,16 @@ impl NativeSpeechProvider {
         let characters = text.chars().count();
         if text != semantic.text
             || text.trim().is_empty()
-            || characters > 4096
+            || characters > MAXIMUM_SPEECH_CHARACTERS
             || semantic.voice.trim().is_empty()
-            || semantic.voice.len() > 128
+            || semantic.voice.len() > MAXIMUM_VOICE_ID_BYTES
             || checked.usage().tokens() != 0
             || !checked.usage().duration().is_zero()
             || checked.usage().usage() != Usage::new(characters as u128, UsageUnit::Character)
         {
             return Err(error(SpeechAdapterReason::InvalidInput));
         }
-        let mut body = BoundedBody {
-            bytes: Vec::new(),
-            limit: self.http.limits().maximum_request_bytes,
-        };
+        let mut body = BoundedRequestBody::new(self.http.limits().maximum_request_bytes);
         serde_json::to_writer(
             &mut body,
             &serde_json::json!({
@@ -690,7 +701,7 @@ impl NativeSpeechProvider {
             &endpoint,
             &self.credential,
             "application/json".to_owned(),
-            body.bytes,
+            body.into_bytes(),
         );
         let response = self
             .http
@@ -756,49 +767,18 @@ fn english_locale(locale: &LocaleTag) -> Result<(), SpeechAdapterError> {
     }
 }
 
-struct BoundedBody {
-    bytes: Vec<u8>,
-    limit: usize,
-}
-impl Write for BoundedBody {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let n = self
-            .bytes
-            .len()
-            .checked_add(bytes.len())
-            .ok_or_else(|| std::io::Error::other("body bound"))?;
-        if n > self.limit {
-            return Err(std::io::Error::other("body bound"));
-        }
-        self.bytes
-            .try_reserve(bytes.len())
-            .map_err(|_| std::io::Error::other("body capacity"))?;
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 fn multipart(
     payload: &[u8],
     identity: RequestIdentity,
     keyterms: &[String],
     limit: usize,
 ) -> Result<(String, Vec<u8>), SpeechAdapterError> {
-    let mut operation = String::new();
-    for b in identity.operation.as_bytes() {
-        operation.push_str(&format!("{b:02x}"));
-    }
+    let operation = lowercase_hex(identity.operation.as_bytes());
     let boundary = (0..8)
         .map(|n| format!("df-scribe-v2-{operation}-{n}"))
         .find(|b| !payload.windows(b.len()).any(|w| w == b.as_bytes()))
         .ok_or_else(|| error(SpeechAdapterReason::InvalidInput))?;
-    let mut body = BoundedBody {
-        bytes: Vec::new(),
-        limit,
-    };
+    let mut body = BoundedRequestBody::new(limit);
     let append_error = |_| {
         error(SpeechAdapterReason::Transport(
             NativeHttpRefusal::RequestTooLarge,
@@ -817,32 +797,39 @@ fn multipart(
         ("use_speaker_library", "false"),
         ("detect_speaker_roles", "false"),
     ] {
-        body.write_all(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
-            )
-            .as_bytes(),
-        )
-        .map_err(append_error)?;
+        let part = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+        );
+        body.write_all(part.as_bytes()).map_err(append_error)?;
     }
     if !keyterms.is_empty() {
         let serialized = serde_json::to_string(keyterms)
             .map_err(|_| error(SpeechAdapterReason::InvalidInput))?;
-        body.write_all(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"keyterms\"\r\n\r\n{serialized}\r\n"
-            )
-            .as_bytes(),
-        )
-        .map_err(append_error)?;
+        let part = format!(
+            concat!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"keyterms\"\r\n\r\n",
+                "{serialized}\r\n"
+            ),
+            boundary = boundary,
+            serialized = serialized
+        );
+        body.write_all(part.as_bytes()).map_err(append_error)?;
     }
-    body.write_all(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.pcm\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes()).map_err(append_error)?;
+    let file_header = format!(
+        concat!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; ",
+            "filename=\"audio.pcm\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        ),
+        boundary = boundary
+    );
+    body.write_all(file_header.as_bytes())
+        .map_err(append_error)?;
     body.write_all(payload).map_err(append_error)?;
     body.write_all(format!("\r\n--{boundary}--\r\n").as_bytes())
         .map_err(append_error)?;
     Ok((
         format!("multipart/form-data; boundary={boundary}"),
-        body.bytes,
+        body.into_bytes(),
     ))
 }
 
@@ -873,7 +860,9 @@ fn decode_json(bytes: &[u8]) -> Result<Value, SpeechAdapterReason> {
 fn optional_id(value: Option<&Value>) -> Result<Option<ProviderRequestId>, SpeechAdapterReason> {
     match value {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(s)) if s.len() <= 256 && !s.chars().any(char::is_control) => {
+        Some(Value::String(s))
+            if s.len() <= MAXIMUM_SUPPLIER_ID_BYTES && !s.chars().any(char::is_control) =>
+        {
             ProviderRequestId::new(s)
                 .map(Some)
                 .map_err(|_| SpeechAdapterReason::Transcript)
@@ -952,12 +941,12 @@ fn parse_transcript(
     let text = o
         .get("text")
         .and_then(Value::as_str)
-        .filter(|s| s.len() <= MAX_TRANSCRIPT_BYTES)
+        .filter(|s| s.len() <= MAXIMUM_TRANSCRIPT_BYTES)
         .ok_or(SpeechAdapterReason::Transcript)?;
     let values = o
         .get("words")
         .and_then(Value::as_array)
-        .filter(|w| w.len() <= MAX_WORDS)
+        .filter(|w| w.len() <= MAXIMUM_TRANSCRIPT_WORDS)
         .ok_or(SpeechAdapterReason::Transcript)?;
     let mut words = Vec::new();
     words
@@ -991,7 +980,7 @@ fn parse_transcript(
             .ok_or(SpeechAdapterReason::Transcript)?;
         bytes = bytes
             .checked_add(word.len())
-            .filter(|n| *n <= MAX_TRANSCRIPT_BYTES)
+            .filter(|n| *n <= MAXIMUM_TRANSCRIPT_BYTES)
             .ok_or(SpeechAdapterReason::Transcript)?;
         let kind = match w.get("type").and_then(Value::as_str) {
             Some("word") => TranscriptWordKind::Word,
@@ -1057,6 +1046,7 @@ fn supplier_error(
         _ => ProviderFailureClass::Unknown,
     };
     let mut refused = observation.refused(SpeechAdapterReason::Supplier(class));
+    // The error's request id is a diagnostic extra: a malformed one is dropped, the failure stands.
     refused.error_request_id = optional_id(detail.and_then(|d| d.get("request_id")))
         .ok()
         .flatten();

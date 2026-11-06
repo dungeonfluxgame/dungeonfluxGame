@@ -669,7 +669,8 @@ where
         handle: &OperationHandle,
         target: Option<AcceptTarget>,
     ) -> Result<RequestOutcome, ImageServiceError> {
-        // Refuse before any journal write: a receipt the requester cannot read back is never recorded.
+        // Refuse before any journal write: a receipt the requester cannot read back is never
+        // recorded.
         self.authorizer
             .authorize_new_visibility(principal, request)
             .map_err(|_| ImageServiceError::NotAuthorizedOrNotFound)?;

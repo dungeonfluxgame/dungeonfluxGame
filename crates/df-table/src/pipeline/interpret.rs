@@ -21,8 +21,8 @@
 
 use crate::event::{FailureCause, PipelineStep};
 use crate::identity::SeatId;
+use crate::machine::slot::MachineSlot;
 use crate::machine::{Machine, MachineInput};
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode, OutcomeKind};
 use crate::ports::{ActionId, Interpretation, NonActionKind, PortError, PortName};
 use crate::private_data::PlayerText;

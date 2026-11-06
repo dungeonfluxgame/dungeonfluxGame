@@ -1,10 +1,19 @@
+/// Largest accepted revision label in bytes; df-types and df-tools contract tests pin it.
+const MAXIMUM_LABEL_BYTES: usize = 128;
+
 /// Invalid supplied nonsecret revision label. No error retains its input text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RevisionLabelError {
     Missing,
     Empty,
-    TooLong { actual: usize },
-    InvalidCharacter { byte_index: usize },
+    /// Longer than 128 bytes; `actual` is the supplied length in bytes.
+    TooLong {
+        actual: usize,
+    },
+    /// The byte at `byte_index` is outside letters, digits and `. _ - : /`.
+    InvalidCharacter {
+        byte_index: usize,
+    },
 }
 
 /// A 1..=128-byte ASCII revision label, never a credential or approval assertion.
@@ -18,7 +27,7 @@ impl RevisionLabel {
         if value.is_empty() {
             return Err(RevisionLabelError::Empty);
         }
-        if value.len() > 128 {
+        if value.len() > MAXIMUM_LABEL_BYTES {
             return Err(RevisionLabelError::TooLong {
                 actual: value.len(),
             });
@@ -51,6 +60,7 @@ pub enum BuildRevision {
     Content,
 }
 
+/// A rejected build label, attributed to its component without retaining the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildIdentityError {
     pub revision: BuildRevision,
@@ -69,6 +79,7 @@ pub struct BuildIdentity {
 }
 
 impl BuildIdentity {
+    /// Validates all five labels in declaration order and reports the first rejection.
     pub fn new(
         source: Option<&str>,
         native: Option<&str>,
@@ -91,6 +102,7 @@ impl BuildIdentity {
         })
     }
 
+    /// Returns the label supplied for one component.
     pub fn revision(&self, revision: BuildRevision) -> &RevisionLabel {
         match revision {
             BuildRevision::Source => &self.source,

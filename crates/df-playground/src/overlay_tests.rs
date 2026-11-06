@@ -2,7 +2,8 @@
 //! to, what a scene file may not say, and the drawings of the glyphs.
 
 use crate::fixture::Fixture;
-use crate::overlay::{Glyph, NarrationBox, NarrationPlacement, SeatStrip};
+use crate::fixtures::assert_keys_are_serde_names;
+use crate::overlay::{Edit, Glyph, NarrationBox, NarrationPlacement, SeatStrip};
 
 /// A fixture with the given `tv` extras spliced in after the place.
 fn scene(extras: &str) -> String {
@@ -169,4 +170,66 @@ fn a_placement_is_named_the_same_in_a_scene_file_and_on_the_command_line() {
         );
     }
     assert_eq!(NarrationPlacement::from_key("left"), None);
+}
+
+#[test]
+fn an_edit_keeps_clears_or_sets_an_optional_field() {
+    let mut slot = Some(3_u8);
+    Edit::Keep.apply_to(&mut slot);
+    assert_eq!(slot, Some(3));
+    Edit::Set(5).apply_to(&mut slot);
+    assert_eq!(slot, Some(5));
+    Edit::<u8>::Clear.apply_to(&mut slot);
+    assert_eq!(slot, None);
+    Edit::<u8>::Keep.apply_to(&mut slot);
+    assert_eq!(slot, None);
+    assert!(Edit::<u8>::Keep.is_keep());
+    assert!(!Edit::<u8>::Clear.is_keep() && !Edit::Set(1).is_keep());
+    assert_eq!(Edit::Set(1).set_value(), Some(&1));
+    assert_eq!(Edit::<u8>::Clear.set_value(), None);
+}
+
+#[test]
+fn an_edit_of_an_always_present_field_clears_to_its_empty_value() {
+    let mut list = vec![1, 2];
+    Edit::Keep.apply_to_value(&mut list);
+    assert_eq!(list, vec![1, 2]);
+    Edit::Set(vec![7]).apply_to_value(&mut list);
+    assert_eq!(list, vec![7]);
+    Edit::Clear.apply_to_value(&mut list);
+    assert!(list.is_empty());
+
+    let mut on = true;
+    Edit::Keep.apply_to_value(&mut on);
+    assert!(on);
+    Edit::Clear.apply_to_value(&mut on);
+    assert!(!on);
+    Edit::Set(true).apply_to_value(&mut on);
+    assert!(on);
+}
+
+#[test]
+fn an_edit_is_drawn_over_its_base() {
+    let base = "fixture".to_owned();
+    assert_eq!(Edit::Keep.drawn(Some(&base)), Some(base.clone()));
+    assert_eq!(Edit::<String>::Keep.drawn(None), None);
+    assert_eq!(Edit::<String>::Clear.drawn(Some(&base)), None);
+    assert_eq!(
+        Edit::Set("live".to_owned()).drawn(Some(&base)),
+        Some("live".to_owned())
+    );
+    assert_eq!(
+        Edit::Set("live".to_owned()).drawn(None),
+        Some("live".to_owned())
+    );
+}
+
+#[test]
+fn the_keys_of_a_glyph_and_a_placement_are_their_serde_names() {
+    assert_keys_are_serde_names(&Glyph::ALL, Glyph::key, Glyph::from_key);
+    assert_keys_are_serde_names(
+        &NarrationPlacement::ALL,
+        NarrationPlacement::key,
+        NarrationPlacement::from_key,
+    );
 }

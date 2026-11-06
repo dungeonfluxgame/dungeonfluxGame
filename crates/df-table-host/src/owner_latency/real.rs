@@ -16,8 +16,8 @@
 //! front of every input, as the live path has (a phone polls its view and the wire route reads one
 //! before each intent), so the figures say what reads cost the group commit; and the rules path,
 //! the conversation's urging with its two d20s through the production influence flow, on a fresh
-//! table for every sample. Projection cost is read as the difference between asking for a view and asking for
-//! the owner's health (a call that does no work), over many calls.
+//! table for every sample. Projection cost is read as the difference between asking for a view
+//! and asking for the owner's health (a call that does no work), over many calls.
 //!
 //! It reads `std::time::Instant`, which the pure crate never does, and is a measurement tool.
 
@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use df_table::config::Settings;
+use df_table::config::{ConfigError, Settings};
 use df_table::ports::Clock;
 
 use crate::adapters::{RulesBackend, story_ports};
@@ -39,8 +39,9 @@ use crate::engine::audit::LogBrokerAudit;
 use crate::engine::commit::{
     Checkpoint, CommitError, CommitReceipt, CommitStore, MemoryCommitStore, Restored,
 };
+use crate::engine::report::EngineError;
 use crate::engine::request::{AudienceSpec, InputBody, InputRequest};
-use crate::engine::setup::{EngineConfig, machines_for};
+use crate::engine::setup::{EngineConfig, EngineStartError, machines_for};
 use crate::event_log::EventLog;
 
 use super::commit::{CommitMode, MODELLED_POSTGRES_MS};
@@ -57,18 +58,27 @@ const COMMIT_DEADLINE_MS: u64 = 60_000;
 /// Why a measurement could not run.
 #[derive(Debug)]
 pub enum RealError {
-    Start(String),
-    Call(String),
-    Io(std::io::Error),
+    /// The raised queue limits the harness runs under do not load.
+    Settings(ConfigError),
+    /// The engine did not start.
+    Start(EngineStartError),
+    /// A call to the running engine was refused.
+    Call(EngineError),
+    /// A measuring task stopped without an answer (it panicked or was cancelled).
+    TaskStopped,
+    /// A result file could not be written.
+    Io(std::io::ErrorKind),
     Nothing,
 }
 
 impl std::fmt::Display for RealError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Start(text) => write!(formatter, "the engine did not start: {text}"),
-            Self::Call(text) => write!(formatter, "a call failed: {text}"),
-            Self::Io(error) => write!(formatter, "a file could not be written: {error}"),
+            Self::Settings(error) => write!(formatter, "the harness settings do not load: {error}"),
+            Self::Start(error) => write!(formatter, "the engine did not start: {error}"),
+            Self::Call(error) => write!(formatter, "a call failed: {error}"),
+            Self::TaskStopped => formatter.write_str("a measuring task stopped without an answer"),
+            Self::Io(kind) => write!(formatter, "a file could not be written ({kind})"),
             Self::Nothing => formatter.write_str("nothing was measured"),
         }
     }
@@ -78,7 +88,19 @@ impl std::error::Error for RealError {}
 
 impl From<std::io::Error> for RealError {
     fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
+        Self::Io(error.kind())
+    }
+}
+
+impl From<EngineStartError> for RealError {
+    fn from(error: EngineStartError) -> Self {
+        Self::Start(error)
+    }
+}
+
+impl From<EngineError> for RealError {
+    fn from(error: EngineError) -> Self {
+        Self::Call(error)
     }
 }
 
@@ -133,7 +155,7 @@ fn settings() -> Result<Settings, RealError> {
     let object = large.as_object().cloned().unwrap_or_default();
     Settings::load(&object)
         .map(|loaded| loaded.settings)
-        .map_err(|error| RealError::Start(format!("{error:?}")))
+        .map_err(RealError::Settings)
 }
 
 /// Starts the first playable path over the production rules adapters and a harness store.
@@ -143,14 +165,14 @@ fn start(mode: CommitMode, directory: &std::path::Path) -> Result<Handle, RealEr
         commit_deadline_ms: COMMIT_DEADLINE_MS,
         ..EngineConfig::first_playable()
     };
-    let machines = machines_for(&config).map_err(|error| RealError::Start(error.to_string()))?;
+    let machines = machines_for(&config)?;
     let ports = story_ports(
         RulesBackend::DfRules,
         &machines.check,
         machines.urge.as_ref(),
         SEED,
     )
-    .map_err(|error| RealError::Start(error.to_string()))?;
+    .map_err(EngineStartError::from)?;
     let clock = Arc::new(DevClock::starting_now());
     let log = Arc::new(EventLog::default());
     let adapters = Adapters {
@@ -158,7 +180,7 @@ fn start(mode: CommitMode, directory: &std::path::Path) -> Result<Handle, RealEr
             clock.clone() as Arc<dyn Clock>,
             Arc::new(LogBrokerAudit::new(Arc::clone(&log))),
         )
-        .map_err(|error| RealError::Start(error.to_string()))?,
+        .map_err(EngineStartError::from)?,
         rules: ports.rules,
         interpreter: Arc::new(ChaosInterpreter::default()),
         narrator: Arc::new(DevNarrator),
@@ -172,7 +194,7 @@ fn start(mode: CommitMode, directory: &std::path::Path) -> Result<Handle, RealEr
         file: Some(directory.join("checkpoint.json")),
         memory: MemoryCommitStore::default(),
     });
-    Handle::start(config, adapters, store, log).map_err(|error| RealError::Start(error.to_string()))
+    Ok(Handle::start(config, adapters, store, log)?)
 }
 
 fn tap(seat: u64, action: &str) -> InputRequest {
@@ -193,7 +215,7 @@ async fn call(handle: &Handle, request: InputRequest) -> Result<(), RealError> {
         .submit(request)
         .await
         .map(|_| ())
-        .map_err(|error| RealError::Call(format!("{error:?}")))
+        .map_err(RealError::Call)
 }
 
 async fn seat_down(handle: &Handle) -> Result<(), RealError> {
@@ -221,7 +243,8 @@ impl RealReport {
     pub fn render(&self) -> String {
         let latency = self.latency;
         format!(
-            "{}: {} inputs, {} commits; submit to answer ms p50 {:.2} p95 {:.2} p99 {:.2} max {:.2} mean {:.2}; checkpoint {} bytes",
+            "{}: {} inputs, {} commits; submit to answer ms p50 {:.2} p95 {:.2} p99 {:.2} \
+             max {:.2} mean {:.2}; checkpoint {} bytes",
             self.label,
             self.inputs,
             self.commits,
@@ -243,10 +266,7 @@ async fn finish(
 ) -> Result<RealReport, RealError> {
     let inputs = samples.len();
     let latency = summarise(&mut samples).map_err(|_| RealError::Nothing)?;
-    let queue = handle
-        .queue_show()
-        .await
-        .map_err(|error| RealError::Call(format!("{error:?}")))?;
+    let queue = handle.queue_show().await?;
     Ok(RealReport {
         label: label.to_owned(),
         latency,
@@ -304,10 +324,7 @@ async fn burst(
             // Several inputs of one seat in a round (the 18 at once) are sent as separate calls.
             tasks.push(tokio::spawn(async move {
                 if read_first {
-                    handle
-                        .machine_view(AudienceSpec::Seat { seat })
-                        .await
-                        .map_err(|error| RealError::Call(format!("{error:?}")))?;
+                    handle.machine_view(AudienceSpec::Seat { seat }).await?;
                 }
                 let started = Instant::now();
                 let outcome = call(&handle, tap(seat, action)).await;
@@ -315,9 +332,7 @@ async fn burst(
             }));
         }
         for task in tasks {
-            let (nanos, outcome) = task
-                .await
-                .map_err(|error| RealError::Call(error.to_string()))??;
+            let (nanos, outcome) = task.await.map_err(|_| RealError::TaskStopped)??;
             outcome?;
             samples.push(nanos);
         }
@@ -379,7 +394,9 @@ impl ProjectionCost {
     pub fn render(&self) -> String {
         let extra = |summary: Summary| millis(summary.p50_ns.saturating_sub(self.baseline.p50_ns));
         format!(
-            "projection (one view, over the health call's p50 {:.3} ms): phone JSON +{:.3} ms p50 (p95 {:.3} ms), tv JSON +{:.3} ms, phone MachineView +{:.3} ms; wire bytes phone {} tv {}",
+            "projection (one view, over the health call's p50 {:.3} ms): phone JSON +{:.3} ms p50 \
+             (p95 {:.3} ms), tv JSON +{:.3} ms, phone MachineView +{:.3} ms; \
+             wire bytes phone {} tv {}",
             millis(self.baseline.p50_ns),
             extra(self.phone_json),
             millis(self.phone_json.p95_ns),
@@ -403,34 +420,27 @@ pub async fn projection_cost(
     }
     call(&handle, tap(1, "start")).await?;
     call(&handle, tap(1, "pick_lock")).await?;
-    let failed = |error: crate::engine::report::EngineError| RealError::Call(format!("{error:?}"));
     let mut baseline = Vec::new();
     let mut phone_json = Vec::new();
     let mut tv_json = Vec::new();
     let mut phone_wire = Vec::new();
     for _ in 0..calls {
         let started = Instant::now();
-        handle.health().await.map_err(failed)?;
+        handle.health().await?;
         baseline.push(nanoseconds(started.elapsed()));
         let started = Instant::now();
-        handle
-            .projection(AudienceSpec::Seat { seat: 1 })
-            .await
-            .map_err(failed)?;
+        handle.projection(AudienceSpec::Seat { seat: 1 }).await?;
         phone_json.push(nanoseconds(started.elapsed()));
         let started = Instant::now();
-        handle.projection(AudienceSpec::Tv).await.map_err(failed)?;
+        handle.projection(AudienceSpec::Tv).await?;
         tv_json.push(nanoseconds(started.elapsed()));
         let started = Instant::now();
-        handle
-            .machine_view(AudienceSpec::Seat { seat: 1 })
-            .await
-            .map_err(failed)?;
+        handle.machine_view(AudienceSpec::Seat { seat: 1 }).await?;
         phone_wire.push(nanoseconds(started.elapsed()));
     }
     let size = |view: Result<df_protocol::common::MachineView, _>| {
         view.map(|view| prost::Message::encoded_len(&view))
-            .map_err(failed)
+            .map_err(RealError::Call)
     };
     let phone_wire_bytes = size(handle.machine_view(AudienceSpec::Seat { seat: 1 }).await)?;
     let tv_wire_bytes = size(handle.machine_view(AudienceSpec::Tv).await)?;

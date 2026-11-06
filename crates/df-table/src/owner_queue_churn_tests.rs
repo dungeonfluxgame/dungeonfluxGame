@@ -110,7 +110,7 @@ fn with_seats_joining_leaving_and_every_kind_of_input_the_queue_matches_a_plain_
             in_progress_lease_ms: LEASE_MS,
             ..QueueLimits::default()
         };
-        let mut queue = OwnerQueue::new(TableId::new(1), &Settings::defaults(), Arc::new(NullSink))
+        let mut queue = OwnerQueue::new(TableId::new(1), &Settings::default(), Arc::new(NullSink))
             .expect("builds")
             .with_limits(limits);
         let mut model: BTreeMap<u64, ModelSeat> = BTreeMap::new();

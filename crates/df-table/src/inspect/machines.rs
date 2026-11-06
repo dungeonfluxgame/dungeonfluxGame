@@ -16,8 +16,8 @@ use serde_json::Value;
 use crate::identity::{MachineId, SessionRevision};
 use crate::inspect::{Inspect, InspectView, Needs, Visible};
 use crate::machine::MachineFailureCause;
-use crate::machine_slot::MachineSlot;
-use crate::machine_spec::StateName;
+use crate::machine::slot::MachineSlot;
+use crate::machine::spec::StateName;
 use crate::registry::Registry;
 use crate::table_state::{MachineHome, TableSnapshot};
 

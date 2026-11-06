@@ -211,7 +211,8 @@ where
         view: &OperationView,
         handle: &OperationHandle,
     ) -> Result<RequestOutcome, ImageServiceError> {
-        // Authorization always precedes conflict comparison, including cross-kind receipt collisions.
+        // Authorization always precedes conflict comparison, including cross-kind receipt
+        // collisions.
         let demand = self
             .open_view(principal, ServiceAction::Read, view, handle)
             .await?;

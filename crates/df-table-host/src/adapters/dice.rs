@@ -17,14 +17,7 @@ use df_table::event::FailureCause;
 use df_table::identity::{Correlation, OperationId};
 use df_table::ports::{Dice, Draw, DrawRequest, PortError, PortName};
 
-/// The most draws a `RecordedDice` keeps. Deliberately huge so it never limits play; scope it
-/// down later (owner, 2026-11-02). A draw past it is refused rather than forgotten, because a
-/// forgotten draw could not be replayed.
-pub const MAXIMUM_RECORDED_DRAWS: usize = 1_000_000;
-
-/// How many random numbers one draw may reject while removing modulo bias before the source is
-/// called broken. A sound source rejects with a probability below 2^-48, so this is never reached.
-const MAXIMUM_REJECTIONS_PER_DRAW: u32 = 1_000;
+use super::limits::{MAXIMUM_RECORDED_DRAWS, MAXIMUM_REJECTIONS_PER_DRAW};
 
 /// A stream of random 64-bit numbers.
 pub trait EntropySource: Send + std::fmt::Debug {

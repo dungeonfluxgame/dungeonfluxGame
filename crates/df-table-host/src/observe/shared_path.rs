@@ -21,7 +21,7 @@ use df_observe::{
     TelemetryError,
 };
 
-use super::outlet::{Losses, OutletRefusal, OutletStatus, RecordOutlet};
+use super::outlet::{Losses, OutletError, OutletStatus, RecordOutlet};
 use super::record::{AttributeValue, ObservedRecord, RecordSeverity};
 
 /// The shared diagnostic path as an outlet.
@@ -96,13 +96,13 @@ pub fn diagnostic_record(record: &ObservedRecord) -> DiagnosticRecord {
 
 /// How a refusal of the shared path reads to the sink. Exhaustive, so a new refusal of the path
 /// does not compile until it is placed.
-fn refusal_of(error: &TelemetryError) -> OutletRefusal {
+fn outlet_error_of(error: &TelemetryError) -> OutletError {
     match error {
-        TelemetryError::Capacity | TelemetryError::SequenceExhausted => OutletRefusal::Full,
+        TelemetryError::Capacity | TelemetryError::SequenceExhausted => OutletError::Full,
         TelemetryError::Oversized
         | TelemetryError::Malformed
         | TelemetryError::InvalidIdentity
-        | TelemetryError::InvalidLimits => OutletRefusal::Rejected,
+        | TelemetryError::InvalidLimits => OutletError::Unrepresentable,
         TelemetryError::Closed
         | TelemetryError::Deadline
         | TelemetryError::Conflict
@@ -111,7 +111,7 @@ fn refusal_of(error: &TelemetryError) -> OutletRefusal {
         | TelemetryError::Ownership
         | TelemetryError::Io
         | TelemetryError::SinkUnavailable
-        | TelemetryError::Internal => OutletRefusal::Closed,
+        | TelemetryError::Internal => OutletError::Closed,
     }
 }
 
@@ -120,7 +120,7 @@ impl RecordOutlet for SharedPathOutlet {
         "shared_path"
     }
 
-    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletRefusal> {
+    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletError> {
         let mut waiting = self.locked();
         match self.sink.emit(diagnostic_record(record)) {
             Ok(()) => {
@@ -130,7 +130,7 @@ impl RecordOutlet for SharedPathOutlet {
             }
             Err(error) => {
                 self.losses.record(record.class);
-                Err(refusal_of(&error))
+                Err(outlet_error_of(&error))
             }
         }
     }

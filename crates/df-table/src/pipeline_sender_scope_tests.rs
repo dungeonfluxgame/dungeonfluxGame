@@ -10,8 +10,8 @@ use crate::golden::{CountingDice, TABLE, World};
 use crate::identity::TableScope;
 use crate::outcome::{DeclineCode, Outcome};
 use crate::pipeline::{
-    BookLoadError, PipelineLimits, PipelineLoadError, PipelineRecord, PipelineTable, ResultBook,
-    ResultKey, ResultRecord, TurnResult,
+    BookLoadError, PipelineLimit, PipelineLimits, PipelineLoadError, PipelineRecord, PipelineTable,
+    ResultBook, ResultKey, ResultRecord, TurnResult,
 };
 use crate::pipeline_fixtures_tests::{action, d20, seat, world_of};
 use crate::ports::{Clock, Preparation, Resolution};
@@ -278,10 +278,9 @@ fn a_rejoined_seat_does_not_see_the_previous_occupants_stored_outcome() {
 #[test]
 fn another_seats_operation_id_no_longer_blocks_an_input_the_results_have_forgotten() {
     let mut world = world(&[]);
-    world.limits = PipelineLimits {
-        maximum_remembered_results: 1,
-        ..PipelineLimits::default()
-    };
+    world.limits = PipelineLimits::default()
+        .with(PipelineLimit::MaximumRememberedResults, 1)
+        .expect("a limit that fits");
     world.table = PipelineTable::with_limits(TABLE, world.table.facts().clone(), &world.limits);
     let first = tap(1, 1, "wave");
     send(&mut world, &first, 1);

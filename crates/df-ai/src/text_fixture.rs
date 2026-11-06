@@ -123,42 +123,45 @@ impl MemoryAttemptStore {
         state: AttemptState,
         basis: Option<Basis>,
     ) -> Self {
-        let store = Self::default();
-        store.lock().ok().map(|mut records| {
-            records.insert(
-                slot(key),
-                Record {
-                    fingerprint,
-                    state,
-                    basis,
-                },
-            )
-        });
-        store
+        let record = Record {
+            fingerprint,
+            state,
+            basis,
+        };
+        Self {
+            records: Mutex::new(HashMap::from([(slot(key), record)])),
+            failure: None,
+        }
     }
 
     /// The stored state under `key`, for assertions.
     pub fn state(&self, key: &OperationKey) -> Option<AttemptState> {
-        let records = self.records.lock().unwrap_or_else(PoisonError::into_inner);
-        records.get(&slot(key)).map(|record| record.state.clone())
+        self.records()
+            .get(&slot(key))
+            .map(|record| record.state.clone())
     }
 
     /// How many attempts are stored.
     pub fn len(&self) -> usize {
-        self.records
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .len()
+        self.records().len()
     }
 
+    /// Whether no attempt is stored.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// The records for inspection, whatever failure the store is configured with. A poisoned
+    /// lock still holds consistent records: every transition is a single assignment.
+    fn records(&self) -> Records<'_> {
+        self.records.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The records for a store call, or the configured failure.
     fn lock(&self) -> Result<Records<'_>, AttemptStoreError> {
         match self.failure {
             Some(error) => Err(error),
-            None => Ok(self.records.lock().unwrap_or_else(PoisonError::into_inner)),
+            None => Ok(self.records()),
         }
     }
 

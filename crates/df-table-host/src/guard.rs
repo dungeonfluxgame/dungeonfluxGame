@@ -12,14 +12,21 @@ use axum::http::{HeaderMap, Method, StatusCode, header};
 
 /// Why a request was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Refusal {
+pub enum GuardError {
     ForeignHost,
     ForeignOrigin,
     CrossSiteRequest,
     NotJson,
 }
 
-impl Refusal {
+impl GuardError {
+    pub const ALL: [Self; 4] = [
+        Self::ForeignHost,
+        Self::ForeignOrigin,
+        Self::CrossSiteRequest,
+        Self::NotJson,
+    ];
+
     /// The status to answer with.
     pub fn status(self) -> StatusCode {
         match self {
@@ -30,6 +37,7 @@ impl Refusal {
         }
     }
 
+    /// The sentence of the refusal, without an allocation (the `Display` text).
     pub fn message(self) -> &'static str {
         match self {
             Self::ForeignHost => "requests are accepted only for a local host name",
@@ -39,6 +47,14 @@ impl Refusal {
         }
     }
 }
+
+impl std::fmt::Display for GuardError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.message())
+    }
+}
+
+impl std::error::Error for GuardError {}
 
 /// The host name inside an authority such as `127.0.0.1:7878`, `localhost` or `[::1]:7878`.
 fn host_name(authority: &str) -> &str {
@@ -67,10 +83,10 @@ fn header_text(headers: &HeaderMap, name: header::HeaderName) -> Option<&str> {
 }
 
 /// Applies the rules to one request.
-pub fn check(method: &Method, headers: &HeaderMap) -> Result<(), Refusal> {
-    let host = header_text(headers, header::HOST).ok_or(Refusal::ForeignHost)?;
+pub fn check(method: &Method, headers: &HeaderMap) -> Result<(), GuardError> {
+    let host = header_text(headers, header::HOST).ok_or(GuardError::ForeignHost)?;
     if !is_loopback_name(host_name(host)) {
-        return Err(Refusal::ForeignHost);
+        return Err(GuardError::ForeignHost);
     }
     if method == Method::GET || method == Method::HEAD {
         return Ok(());
@@ -81,19 +97,19 @@ pub fn check(method: &Method, headers: &HeaderMap) -> Result<(), Refusal> {
             .starts_with("application/json")
     });
     if !is_json {
-        return Err(Refusal::NotJson);
+        return Err(GuardError::NotJson);
     }
     if let Some(origin) = header_text(headers, header::ORIGIN)
         && !origin_host(origin).is_some_and(is_loopback_name)
     {
-        return Err(Refusal::ForeignOrigin);
+        return Err(GuardError::ForeignOrigin);
     }
     if let Some(site) = headers
         .get("sec-fetch-site")
         .and_then(|value| value.to_str().ok())
         && !matches!(site, "same-origin" | "none")
     {
-        return Err(Refusal::CrossSiteRequest);
+        return Err(GuardError::CrossSiteRequest);
     }
     Ok(())
 }

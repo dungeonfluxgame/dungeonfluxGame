@@ -46,11 +46,14 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::config::Settings;
 use crate::element::NameError;
 use crate::envelope::{InputEnvelope, InputOrigin, PendingId};
 use crate::event::{PipelineStep, TableEvent};
 use crate::identity::{Correlation, SeatId};
+use crate::listed::listed_enum;
 use crate::machine::Machine;
 use crate::outcome::{Decline, DeclineCode, Outcome, OutcomeKind};
 use crate::pending::StoredDraw;
@@ -85,7 +88,7 @@ pub use action::SPLIT_ACTION;
 pub use books::{
     BookLoadError, ReleaseBook, ReleaseEntry, ReleaseRecord, RequestBook, RequestEntry,
     RequestRecord, ResultBook, ResultKey, ResultRecord, StoredClarification, StoredEnding,
-    StoredOutcome, StoredResult, StoredSender, TakenRequest,
+    StoredOutcome, StoredResult, TakenRequest,
 };
 pub use events::{ClarifyCause, ViewPart};
 pub use narrate::NarrationJob;
@@ -104,22 +107,72 @@ pub use crate::limits::{
 };
 
 /// The most steps an action plan has (C.0). A rule of the plan, not an invented cap.
-pub const MAXIMUM_PLAN_STEPS: usize = 6;
+pub(crate) const MAXIMUM_PLAN_STEPS: usize = 6;
 
 /// The name of the timer that sweeps the open pendings for the nudge line (J.4).
-pub const PENDING_NUDGE_TIMER: &str = "pending_nudge";
+pub(crate) const PENDING_NUDGE_TIMER: &str = "pending_nudge";
+
+listed_enum! { keyed
+    /// The numbers `PipelineLimits` holds, named as `with` takes them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PipelineLimit {
+        MaximumPendingNesting,
+        MaximumDrawRounds,
+        MaximumOutstandingRequests,
+        MaximumNarrationChars,
+        MaximumOpenPendings,
+        MaximumStoredRulings,
+        MaximumRememberedResults,
+    }
+}
+
+impl PipelineLimit {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::MaximumPendingNesting => "maximum_pending_nesting",
+            Self::MaximumDrawRounds => "maximum_draw_rounds",
+            Self::MaximumOutstandingRequests => "maximum_outstanding_requests",
+            Self::MaximumNarrationChars => "maximum_narration_chars",
+            Self::MaximumOpenPendings => "maximum_open_pendings",
+            Self::MaximumStoredRulings => "maximum_stored_rulings",
+            Self::MaximumRememberedResults => "maximum_remembered_results",
+        }
+    }
+}
+
+/// A limit value that does not fit the number the pipeline keeps it in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PipelineLimitError {
+    pub limit: PipelineLimit,
+    pub value: u64,
+}
+
+impl std::fmt::Display for PipelineLimitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} cannot be {}: it is too large to count",
+            self.limit.key(),
+            self.value
+        )
+    }
+}
+
+impl std::error::Error for PipelineLimitError {}
 
 /// The bounds of the pipeline and of the books it keeps in the table. Every default is a very
-/// large named constant of `limits` (owner, 2026-11-02); a test or a measurement lowers one.
+/// large named constant of `limits` (owner, 2026-11-02); a test or a measurement lowers one with
+/// `with`. Zero is a valid bound: it refuses everything the bound counts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PipelineLimits {
-    pub maximum_pending_nesting: u32,
-    pub maximum_draw_rounds: u32,
-    pub maximum_outstanding_requests: usize,
-    pub maximum_narration_chars: usize,
-    pub maximum_open_pendings: usize,
-    pub maximum_stored_rulings: usize,
-    pub maximum_remembered_results: usize,
+    pub(crate) maximum_pending_nesting: u32,
+    pub(crate) maximum_draw_rounds: u32,
+    pub(crate) maximum_outstanding_requests: usize,
+    pub(crate) maximum_narration_chars: usize,
+    pub(crate) maximum_open_pendings: usize,
+    pub(crate) maximum_stored_rulings: usize,
+    pub(crate) maximum_remembered_results: usize,
 }
 
 impl Default for PipelineLimits {
@@ -133,6 +186,27 @@ impl Default for PipelineLimits {
             maximum_stored_rulings: crate::limits::MAXIMUM_STORED_RULINGS,
             maximum_remembered_results: crate::limits::MAXIMUM_REMEMBERED_RESULTS,
         }
+    }
+}
+
+impl PipelineLimits {
+    /// The same limits with one changed, or the error that names it.
+    pub fn with(mut self, limit: PipelineLimit, value: u64) -> Result<Self, PipelineLimitError> {
+        let error = PipelineLimitError { limit, value };
+        let count = || u32::try_from(value).map_err(|_| error);
+        let size = || usize::try_from(value).map_err(|_| error);
+        match limit {
+            PipelineLimit::MaximumPendingNesting => self.maximum_pending_nesting = count()?,
+            PipelineLimit::MaximumDrawRounds => self.maximum_draw_rounds = count()?,
+            PipelineLimit::MaximumOutstandingRequests => {
+                self.maximum_outstanding_requests = size()?;
+            }
+            PipelineLimit::MaximumNarrationChars => self.maximum_narration_chars = size()?,
+            PipelineLimit::MaximumOpenPendings => self.maximum_open_pendings = size()?,
+            PipelineLimit::MaximumStoredRulings => self.maximum_stored_rulings = size()?,
+            PipelineLimit::MaximumRememberedResults => self.maximum_remembered_results = size()?,
+        }
+        Ok(self)
     }
 }
 
@@ -251,6 +325,7 @@ impl TurnResult {
         self.record
             .draws
             .iter()
+            // This turn stored each die with `StoredDraw::of` from a real draw, so none is refused.
             .filter_map(|stored| StoredDraw::restore(*stored).ok())
             .collect()
     }

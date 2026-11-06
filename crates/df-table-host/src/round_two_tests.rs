@@ -17,7 +17,7 @@ use crate::limits::{
     ECHO_LINE_OVERHEAD_BYTES, FIGURE_GLIDE_MS, MAXIMUM_BATCH_CHANGES, MAXIMUM_REPORT_BYTES,
     TURN_SETTLE,
 };
-use crate::playground::{ControlsRefusal, PlaygroundFiles, PlaygroundState};
+use crate::playground::{ControlsChangeError, PlaygroundFiles, PlaygroundState};
 use crate::sink::LineEcho;
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::EventsReply;
@@ -71,7 +71,7 @@ fn a_choice_of_fixture_read_before_a_removal_is_refused_as_changed() {
     let generation = state.generation();
     // `fixture remove b` completes between reading the names and applying the choice.
     state.fixture_files_changed();
-    let refusal = state
+    let error = state
         .change_all(
             vec![ControlsChange::Fixture("b.json".to_owned())],
             &names,
@@ -79,9 +79,9 @@ fn a_choice_of_fixture_read_before_a_removal_is_refused_as_changed() {
             |_| panic!("nothing is applied"),
         )
         .expect_err("refused");
-    assert_eq!(refusal, ControlsRefusal::FixtureChanged);
-    assert_eq!(refusal.status().as_u16(), 409);
-    assert_eq!(refusal.reason(), "fixture_changed");
+    assert_eq!(error, ControlsChangeError::FixtureChanged);
+    assert_eq!(error.status().as_u16(), 409);
+    assert_eq!(error.key(), "fixture_changed");
     assert_eq!(
         state.snapshot().controls.fixture.as_deref(),
         Some("a.json"),
@@ -144,11 +144,11 @@ async fn sixteen_writes_of_one_fixture_at_once_each_succeed_and_leave_one_whole_
 fn the_audit_callback_runs_with_the_lock_so_lines_come_in_revision_order() {
     let state = Arc::new(state());
     let log = Arc::new(EventLog::default());
-    let threads: Vec<_> = (0..8_u32)
+    let threads: Vec<_> = (0..8_u64)
         .map(|thread| {
             let (state, log) = (Arc::clone(&state), Arc::clone(&log));
             std::thread::spawn(move || {
-                for step in 0..60_u32 {
+                for step in 0..60_u64 {
                     // Every value is new, so every change counts.
                     let ms = 1 + thread * 100 + step;
                     state
@@ -254,7 +254,9 @@ async fn a_batch_of_too_many_changes_is_refused_and_one_at_the_most_makes_a_boun
     assert_eq!(allowed.status, 200);
     let lines = log_lines(&running).await;
     let longest = lines.iter().map(String::len).max().expect("a line");
-    assert!(longest < 16 * 1024, "the longest line is {longest} bytes");
+    // Each change writes one short pair (` transition_ms=100000`), well under 64 bytes.
+    let bound = 64 * MAXIMUM_BATCH_CHANGES;
+    assert!(longest < bound, "the longest line is {longest} bytes");
     assert!(
         lines
             .iter()

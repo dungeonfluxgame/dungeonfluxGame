@@ -33,21 +33,21 @@ use crate::envelope::PendingId;
 use crate::identity::{OperationId, SceneId, SeatId, TableId, TurnSeq};
 use crate::limits::MAXIMUM_OPEN_PENDINGS;
 use crate::listed::listed_enum;
-use crate::machine_slot::{LoadFault, RecordKind};
+use crate::machine::slot::{LoadCause, RecordKind};
 use crate::outcome::PendingKind;
 use crate::ports::{ActionId, ConfirmationReason, Draw, RulingRequest};
 
 pub(crate) mod bounded;
 pub(crate) mod digest;
-pub mod ruling;
-pub mod window;
+pub(crate) mod ruling;
+pub(crate) mod window;
 
 use digest::{Fnv, mix};
 pub use ruling::{RulingBook, RulingLoadError, RulingRecord, RulingSource, ScopedRuling};
-pub use window::{AnswerRefusal, Completion, ResolutionWindow, SeatOffer, WindowError};
+pub use window::{AnswerError, Completion, ResolutionWindow, SeatOffer, WindowError};
 
 /// The schema version of `PendingRecord`. Raised when the saved shape changes.
-pub const PENDING_SCHEMA_VERSION: u32 = 1;
+pub(crate) const PENDING_SCHEMA_VERSION: u32 = 1;
 
 /// One die as saved: the sides and the value, checked when it is read back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -365,10 +365,10 @@ pub enum PendingLoadError {
 }
 
 impl PendingLoadError {
-    pub fn fault(&self) -> LoadFault {
+    pub fn cause(&self) -> LoadCause {
         match self {
-            Self::UnsupportedVersion { .. } => LoadFault::UnsupportedVersion,
-            Self::Malformed(_) => LoadFault::Malformed,
+            Self::UnsupportedVersion { .. } => LoadCause::UnsupportedVersion,
+            Self::Malformed(_) => LoadCause::Malformed,
         }
     }
 
@@ -384,7 +384,7 @@ impl PendingLoadError {
             machine: None,
             version,
             expected: u64::from(PENDING_SCHEMA_VERSION),
-            cause: self.fault(),
+            cause: self.cause(),
         }
     }
 }

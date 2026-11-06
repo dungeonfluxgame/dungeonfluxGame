@@ -14,14 +14,15 @@ use super::limits::{
     MAXIMUM_QUEUED_BACKGROUND, MAXIMUM_QUEUED_LIVE, MAXIMUM_QUEUED_LOOKAHEAD, MAXIMUM_QUEUED_PLATES,
 };
 use super::purpose::QueueClass;
+use super::scheduler::BrokerLimitsError;
 
-/// The most requests each class may have waiting.
+/// The most requests each class may have waiting; every bound is at least one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QueueBounds {
-    pub live: usize,
-    pub plate: usize,
-    pub lookahead: usize,
-    pub background: usize,
+    live: usize,
+    plate: usize,
+    lookahead: usize,
+    background: usize,
 }
 
 impl Default for QueueBounds {
@@ -36,7 +37,41 @@ impl Default for QueueBounds {
 }
 
 impl QueueBounds {
-    fn of(self, class: QueueClass) -> usize {
+    /// The bounds of the four classes. A bound of zero is refused: a live queue of zero would
+    /// refuse every request, and a dropping queue of zero would still keep one.
+    pub fn new(
+        live: usize,
+        plate: usize,
+        lookahead: usize,
+        background: usize,
+    ) -> Result<Self, BrokerLimitsError> {
+        Self::default()
+            .with_bound(QueueClass::Live, live)?
+            .with_bound(QueueClass::Plate, plate)?
+            .with_bound(QueueClass::Lookahead, lookahead)?
+            .with_bound(QueueClass::Background, background)
+    }
+
+    /// These bounds with `class` bounded at `bound`.
+    pub fn with_bound(
+        mut self,
+        class: QueueClass,
+        bound: usize,
+    ) -> Result<Self, BrokerLimitsError> {
+        if bound == 0 {
+            return Err(BrokerLimitsError::ZeroQueueBound { class });
+        }
+        *match class {
+            QueueClass::Live => &mut self.live,
+            QueueClass::Plate => &mut self.plate,
+            QueueClass::Lookahead => &mut self.lookahead,
+            QueueClass::Background => &mut self.background,
+        } = bound;
+        Ok(self)
+    }
+
+    /// The most requests `class` may have waiting.
+    pub fn of(self, class: QueueClass) -> usize {
         match class {
             QueueClass::Live => self.live,
             QueueClass::Plate => self.plate,

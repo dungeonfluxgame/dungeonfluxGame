@@ -107,7 +107,7 @@ pub enum ReplayError {
     /// A turn replayed differently (`Replay::run` stops at the first).
     Diverged(Divergence),
     /// A name in a golden script is not a valid name.
-    BadName(NameError),
+    InvalidName(NameError),
 }
 
 impl fmt::Display for ReplayError {
@@ -129,7 +129,9 @@ impl fmt::Display for ReplayError {
                 "turn {} replayed differently in {:?}",
                 divergence.turn, divergence.fields
             ),
-            Self::BadName(error) => write!(formatter, "a name in the script is invalid: {error}"),
+            Self::InvalidName(error) => {
+                write!(formatter, "a name in the script is invalid: {error}")
+            }
         }
     }
 }
@@ -192,7 +194,7 @@ pub fn record(world: &mut World, script: &[InputOrigin]) -> Result<Recording, Re
 
 /// The script of a golden session's inputs, numbered as a fresh world numbers them.
 pub fn golden_script(steps: &[GoldenStep]) -> Result<Vec<InputOrigin>, ReplayError> {
-    let name = |text: &str| ActionId::new(text).map_err(ReplayError::BadName);
+    let name = |text: &str| ActionId::new(text).map_err(ReplayError::InvalidName);
     steps
         .iter()
         .zip(1_u64..)
@@ -222,11 +224,11 @@ pub fn golden_script(steps: &[GoldenStep]) -> Result<Vec<InputOrigin>, ReplayErr
                 },
             }),
             GoldenInput::Timer(timer) => Ok(InputOrigin::Engine(EngineInput::Timer {
-                timer: TimerName::new(timer).map_err(ReplayError::BadName)?,
+                timer: TimerName::new(timer).map_err(ReplayError::InvalidName)?,
             })),
             GoldenInput::MachineProposal => Ok(InputOrigin::Engine(EngineInput::Proposal {
                 origin: ProposalOrigin::Machine,
-                proposer: ProposerRef::new("scene").map_err(ReplayError::BadName)?,
+                proposer: ProposerRef::new("scene").map_err(ReplayError::InvalidName)?,
             })),
         })
         .collect()

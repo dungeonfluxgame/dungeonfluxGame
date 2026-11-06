@@ -35,8 +35,11 @@
 //! builder next to the code that knows the fact, for the pipeline (C3) to call: `step_events`
 //! (transitioned, declined), `entered_event`, `exited_event`, `MachineError::event` (failed),
 //! `TableState::apply` and `EffectError::event` (effect applied, refused) and
-//! `LoadError::refusal_event` and `RecordRefused::event` (load refused). Until C3 exists the
+//! `LoadError::refusal_event` and `RecordLoadError::event` (load refused). Until C3 exists the
 //! conformance driver is their only caller.
+
+pub mod slot;
+pub(crate) mod spec;
 
 use std::fmt;
 
@@ -47,19 +50,16 @@ use crate::element::NameError;
 use crate::envelope::{PendingId, ProposalOrigin, ProposerRef, TimerName};
 use crate::event::{FailureCause, TableEvent};
 use crate::identity::{Correlation, SceneId, SeatId, TableScope};
+use crate::limits::MAXIMUM_CARRY_ITEMS;
 use crate::listed::listed_enum;
-use crate::machine_slot::{LoadError, LoadFault, MachineSlot, SlotError};
+use crate::machine::slot::{LoadCause, LoadError, MachineSlot, SlotError};
 use crate::outcome::{Decline, DeclineError, Outcome};
 use crate::ports::{ActionId, Audience, Draw, PurposeName, Resolution};
 
 pub use crate::identity::MachineId;
-pub use crate::machine_spec::{
+pub use crate::machine::spec::{
     InputClaim, MachineSpec, Scope, SpecError, StateName, SuspendPolicy,
 };
-
-/// The most items a hand-off carries. Seats are bounded by `MAXIMUM_SEATS`, so this never limits
-/// play; scope it down later (owner, 2026-11-02).
-pub const MAXIMUM_CARRY_ITEMS: usize = 1_000_000;
 
 /// One thing a machine hands to the next: the typed carry list of a hand-off (RES27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,14 +209,14 @@ impl Entry {
 
 /// Why `enter` refused to start a machine: the entry and the table disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntryRefusal {
+pub enum EntryError {
     MissingScene,
     SceneNotActive { scene: SceneId },
     NoSeats,
     SeatNotAtTable { seat: SeatId },
 }
 
-impl fmt::Display for EntryRefusal {
+impl fmt::Display for EntryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingScene => formatter.write_str("the entry carries no scene"),
@@ -229,7 +229,7 @@ impl fmt::Display for EntryRefusal {
     }
 }
 
-impl std::error::Error for EntryRefusal {}
+impl std::error::Error for EntryError {}
 
 /// Why a projection could not be built: it would have been empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,7 +248,7 @@ impl std::error::Error for ReadoutError {}
 /// Why the rules owner's result could not be read as the verdict a machine needs. The rules owner
 /// broke its contract; the machine does not guess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResultFault {
+pub enum ResultCause {
     /// A verdict fact carries an amount other than 0 (no) or 1 (yes).
     AmountNotZeroOrOne,
     /// Two facts of one result say different things about the same verdict.
@@ -257,7 +257,7 @@ pub enum ResultFault {
     DuplicateFact,
 }
 
-impl fmt::Display for ResultFault {
+impl fmt::Display for ResultCause {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::AmountNotZeroOrOne => "a verdict fact is neither 0 nor 1",
@@ -267,11 +267,11 @@ impl fmt::Display for ResultFault {
     }
 }
 
-impl std::error::Error for ResultFault {}
+impl std::error::Error for ResultCause {}
 
 listed_enum! {
     /// The closed cause of a failed machine call, as the `MachineFailed` event records it. A
-    /// record that could not be read keeps the fault that `load.refused` would name.
+    /// record that could not be read keeps the cause that `load.refused` would name.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum MachineFailureCause {
@@ -307,12 +307,12 @@ impl MachineFailureCause {
     }
 }
 
-impl From<LoadFault> for MachineFailureCause {
-    fn from(fault: LoadFault) -> Self {
-        match fault {
-            LoadFault::WrongMachine => Self::SlotWrongMachine,
-            LoadFault::UnsupportedVersion => Self::SlotUnsupportedVersion,
-            LoadFault::Malformed => Self::SlotMalformed,
+impl From<LoadCause> for MachineFailureCause {
+    fn from(cause: LoadCause) -> Self {
+        match cause {
+            LoadCause::WrongMachine => Self::SlotWrongMachine,
+            LoadCause::UnsupportedVersion => Self::SlotUnsupportedVersion,
+            LoadCause::Malformed => Self::SlotMalformed,
         }
     }
 }
@@ -322,18 +322,18 @@ impl From<LoadFault> for MachineFailureCause {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MachineError {
     Load(LoadError),
-    Entry(EntryRefusal),
+    Entry(EntryError),
     Slot(SlotError),
     HandOff(HandOffError),
     Projection(ReadoutError),
     Decline(DeclineError),
-    Result(ResultFault),
+    Result(ResultCause),
 }
 
 impl MachineError {
     pub fn cause(&self) -> MachineFailureCause {
         match self {
-            Self::Load(error) => error.fault().into(),
+            Self::Load(error) => error.cause().into(),
             Self::Entry(_) => MachineFailureCause::EntryRefused,
             Self::Slot(_) => MachineFailureCause::StateInvalid,
             Self::HandOff(_) => MachineFailureCause::HandOffRefused,
@@ -383,12 +383,12 @@ macro_rules! machine_error_from {
 
 machine_error_from!(
     LoadError => Load,
-    EntryRefusal => Entry,
+    EntryError => Entry,
     SlotError => Slot,
     HandOffError => HandOff,
     ReadoutError => Projection,
     DeclineError => Decline,
-    ResultFault => Result,
+    ResultCause => Result,
 );
 
 impl From<NameError> for MachineError {
@@ -572,11 +572,11 @@ pub struct InspectReport {
 }
 
 /// The standing buttons of each seat asked about, in the order the seats were given.
-pub type StandingOffers = Vec<(SeatId, Vec<ActionId>)>;
+pub(crate) type StandingOffers = Vec<(SeatId, Vec<ActionId>)>;
 
 /// The rules actions of `spec` that `admits` accepts as an intent from each of `seats`: the one
 /// derivation of a standing offer from the spec, so a button is never one the machine declines.
-pub fn rules_action_offers(
+pub(crate) fn rules_action_offers(
     spec: &MachineSpec,
     seats: &[SeatId],
     admits: impl Fn(&MachineInput) -> bool,
@@ -701,7 +701,7 @@ pub trait Machine: Send + Sync {
             Err(MachineError::Load(error)) => Err(error),
             Err(_) => Err(LoadError::Malformed {
                 version: expected,
-                class: crate::machine_slot::ErrorClass::Data,
+                class: crate::machine::slot::ErrorClass::Data,
             }),
         }
     }
@@ -746,7 +746,7 @@ pub fn entered_event(scope: &TableScope, correlation: Correlation, state: StateN
 }
 
 /// The event for a machine ending with this hand-off.
-pub fn exited_event(
+pub(crate) fn exited_event(
     scope: &TableScope,
     correlation: Correlation,
     hand_off: &HandOff,

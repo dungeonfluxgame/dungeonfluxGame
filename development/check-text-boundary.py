@@ -114,6 +114,8 @@ ALLOWLIST = _allow([
     ("crates/df-hosted/src/support_ingest/support_text.rs", "literal", "/v1/responses", 1, "backend", PHASE_REASONS["backend"]),
     ("crates/df-hosted/src/support_ingest/support_text.rs", "literal", "/v1/systemone", 1, "backend", PHASE_REASONS["backend"]),
     ("crates/df-imagery/src/backends/codex_cli/process.rs", "process", "Command::new", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-table-host/src/text/codex_text.rs", "process", "Command::new", 1, "backend", PHASE_REASONS["backend"]),
+    ("crates/df-table-host/src/text/responses_text.rs", "literal", "/v1/responses", 1, "backend", PHASE_REASONS["backend"]),
     ("crates/df-tools/src/gameplay/responses_text.rs", "call", "NativeTextProvider.submit", 1, "backend", PHASE_REASONS["backend"]),
     ("crates/df-tools/src/gameplay/responses_text.rs", "call", "registered_text_provider", 2, "backend", PHASE_REASONS["backend"]),
     ("crates/df-tools/src/gameplay/responses_text.rs", "identifier", "NativeTextProvider", 1, "backend", PHASE_REASONS["backend"]),

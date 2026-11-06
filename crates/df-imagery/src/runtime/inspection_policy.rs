@@ -56,24 +56,34 @@ impl PhotoCheckFailure {
     /// what the photograph must be; it names no other medium.
     pub(crate) const fn correction(self) -> &'static str {
         match self {
-            Self::GridOrCollage => {
-                "The previous result was split into several pictures; make one single continuous camera frame of one place."
-            }
-            Self::CutoutComposite => {
-                "In the previous result the people looked pasted in; photograph everyone standing in the place itself, in its light and shadow."
-            }
-            Self::NotPhotograph => {
-                "The previous result did not have convincing photographic materials and light; photograph the requested subject with natural material textures, coherent camera perspective and physically consistent light and shadows. Keep the requested people count, including exactly zero people for an empty place. Clean surfaces and even daylight are welcome."
-            }
-            Self::ModernSetting => {
-                "The previous result showed a modern place; show a pre-industrial town of timber, stone, plaster and tile, lit only by daylight, lanterns, candles and fire."
-            }
-            Self::VisibleText => {
-                "The previous result showed lettering; leave every sign, board, cloth and wall surface plain and blank."
-            }
-            Self::ModernClothing => {
-                "In the previous result someone wore modern clothes; dress every person in plain period costume."
-            }
+            Self::GridOrCollage => concat!(
+                "The previous result was split into several pictures; make one single continuous ",
+                "camera frame of one place."
+            ),
+            Self::CutoutComposite => concat!(
+                "In the previous result the people looked pasted in; photograph everyone standing ",
+                "in the place itself, in its light and shadow."
+            ),
+            Self::NotPhotograph => concat!(
+                "The previous result did not have convincing photographic materials and light; ",
+                "photograph the requested subject with natural material textures, coherent camera ",
+                "perspective and physically consistent light and shadows. ",
+                "Keep the requested people count, including exactly zero people for an empty ",
+                "place. ",
+                "Clean surfaces and even daylight are welcome."
+            ),
+            Self::ModernSetting => concat!(
+                "The previous result showed a modern place; show a pre-industrial town of timber, ",
+                "stone, plaster and tile, lit only by daylight, lanterns, candles and fire."
+            ),
+            Self::VisibleText => concat!(
+                "The previous result showed lettering; leave every sign, board, cloth and wall ",
+                "surface plain and blank."
+            ),
+            Self::ModernClothing => concat!(
+                "In the previous result someone wore modern clothes; dress every person in plain ",
+                "period costume."
+            ),
             Self::PeopleInEmptyRoom => {
                 "The previous result showed people; the place is empty, with exactly zero people."
             }
@@ -83,12 +93,19 @@ impl PhotoCheckFailure {
             Self::CharacterHasNoPeople => {
                 "The previous result showed nobody; show exactly one person."
             }
-            Self::UnexpectedDrawnWeapon => {
-                "Match each person's recorded hand custody and positions exactly. Empty hands stay empty; weapons stay sheathed at the hip or slung on the back, bows unstrung on the shoulder. Show a drawn weapon only for the person whose recorded state explicitly places it drawn in a hand. Reference poses never authorize a drawn weapon."
-            }
-            Self::HeroCount { .. } => {
-                "The previous result showed the wrong number of player heroes. Show exactly the requested number, each once and matching their reference-sheet photograph; include no other figure dressed or posed as a hero."
-            }
+            Self::UnexpectedDrawnWeapon => concat!(
+                "Match each person's recorded hand custody and positions exactly. ",
+                "Empty hands stay empty; weapons stay sheathed at the hip or slung on the back, ",
+                "bows unstrung on the shoulder. ",
+                "Show a drawn weapon only for the person whose recorded state explicitly places ",
+                "it drawn in a hand. ",
+                "Reference poses never authorize a drawn weapon."
+            ),
+            Self::HeroCount { .. } => concat!(
+                "The previous result showed the wrong number of player heroes. ",
+                "Show exactly the requested number, each once and matching their reference-sheet ",
+                "photograph; include no other figure dressed or posed as a hero."
+            ),
         }
     }
 }

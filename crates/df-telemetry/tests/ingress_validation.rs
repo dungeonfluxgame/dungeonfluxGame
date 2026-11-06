@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
+mod fixtures;
 use df_observe::{Durability, Signal, TelemetryError, TelemetryLimits};
 use df_telemetry::{BarrierStage, DiagnosticReader, FailureBarrier, QueryFilter, Store};
+use fixtures::FixtureRoot;
 use opentelemetry_proto::tonic::{
     collector::{logs::v1::ExportLogsServiceRequest, trace::v1::ExportTraceServiceRequest},
     common::v1::{AnyValue, ArrayValue, KeyValue, any_value::Value},
@@ -13,14 +15,14 @@ use opentelemetry_proto::tonic::{
 };
 use prost::Message;
 use std::{
-    path::PathBuf,
+    path::Path,
     sync::mpsc,
     time::{Duration, SystemTime},
 };
 
 const COMPLETION_TIMEOUT: Duration = Duration::from_secs(5);
 
-fn fixture_root(case_name: &str) -> PathBuf {
+fn fixture_root(case_name: &str) -> FixtureRoot {
     assert!(
         [
             "ingress-normal",
@@ -50,16 +52,14 @@ fn fixture_root(case_name: &str) -> PathBuf {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     );
-    let path =
-        PathBuf::from("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06")
-            .join(format!("ownedfixture-{namespace}-{case_name}"));
+    let path = fixtures::fixture_parent().join(format!("ownedfixture-{namespace}-{case_name}"));
     assert!(path.file_name().unwrap().len() <= 100);
     assert!(
         !path.exists(),
         "fixture root must be fresh: {}",
         path.display()
     );
-    path
+    FixtureRoot::new(path)
 }
 
 fn attribute(name: &str, value: Value) -> KeyValue {
@@ -200,12 +200,8 @@ fn ordinary_logs_and_spans_preserve_typed_events_links_and_maximum_sequence() {
 
 #[test]
 fn byte_and_record_caps_accept_the_edge_and_refuse_the_next_byte_or_record() {
-    let mut store = Store::open(
-        &fixture_root("ingress-byte-boundaries"),
-        TelemetryLimits::default(),
-        None,
-    )
-    .unwrap();
+    let root = fixture_root("ingress-byte-boundaries");
+    let mut store = Store::open(&root, TelemetryLimits::default(), None).unwrap();
     let mut request = logs(vec![record(1)]);
     request.resource_logs[0].scope_logs[0].log_records[0].body = Some(AnyValue {
         value: Some(Value::BytesValue(Vec::new())),
@@ -271,12 +267,8 @@ fn byte_and_record_caps_accept_the_edge_and_refuse_the_next_byte_or_record() {
 
 #[test]
 fn message_event_and_aggregate_fields_share_the_existing_structural_budgets() {
-    let mut store = Store::open(
-        &fixture_root("ingress-field-boundaries"),
-        TelemetryLimits::default(),
-        None,
-    )
-    .unwrap();
+    let root = fixture_root("ingress-field-boundaries");
+    let mut store = Store::open(&root, TelemetryLimits::default(), None).unwrap();
     let mut span = Span {
         attributes: identities(1, 1),
         events: vec![Event::default(); 125],
@@ -333,12 +325,8 @@ fn message_event_and_aggregate_fields_share_the_existing_structural_budgets() {
 
 #[test]
 fn nested_values_accept_depth_twelve_and_refuse_deeper_allocations() {
-    let mut store = Store::open(
-        &fixture_root("ingress-depth-boundaries"),
-        TelemetryLimits::default(),
-        None,
-    )
-    .unwrap();
+    let root = fixture_root("ingress-depth-boundaries");
+    let mut store = Store::open(&root, TelemetryLimits::default(), None).unwrap();
     let mut value = AnyValue {
         value: Some(Value::BoolValue(true)),
     };
@@ -373,12 +361,8 @@ fn nested_values_accept_depth_twelve_and_refuse_deeper_allocations() {
 
 #[test]
 fn required_capture_identities_refuse_missing_duplicate_mistyped_and_invalid_values() {
-    let mut store = Store::open(
-        &fixture_root("ingress-identity-boundaries"),
-        TelemetryLimits::default(),
-        None,
-    )
-    .unwrap();
+    let root = fixture_root("ingress-identity-boundaries");
+    let mut store = Store::open(&root, TelemetryLimits::default(), None).unwrap();
     for index in 0..3 {
         let mut log = record(1);
         log.attributes.remove(index);
@@ -461,12 +445,8 @@ fn required_capture_identities_refuse_missing_duplicate_mistyped_and_invalid_val
 
 #[test]
 fn malformed_wire_and_bad_correlation_lengths_refuse_without_reserving_the_queue() {
-    let mut store = Store::open(
-        &fixture_root("ingress-malformed-boundaries"),
-        TelemetryLimits::default(),
-        None,
-    )
-    .unwrap();
+    let root = fixture_root("ingress-malformed-boundaries");
+    let mut store = Store::open(&root, TelemetryLimits::default(), None).unwrap();
     for bytes in [
         vec![],
         vec![0],
@@ -499,13 +479,13 @@ fn malformed_wire_and_bad_correlation_lengths_refuse_without_reserving_the_queue
 }
 
 fn gated_store(
-    case_name: &str,
+    root: &Path,
     limits: TelemetryLimits,
 ) -> (Store, mpsc::Receiver<BarrierStage>, mpsc::Sender<()>) {
     let (reached, receiver) = mpsc::sync_channel(1);
     let (release, gate) = mpsc::channel();
     let store = Store::open(
-        &fixture_root(case_name),
+        root,
         limits,
         Some(FailureBarrier {
             stage: BarrierStage::BeforeSpool,
@@ -538,7 +518,8 @@ fn retained_projection_bytes_are_charged_and_byte_refusal_rolls_back_items() {
         queue_bytes: cost,
         ..Default::default()
     };
-    let (mut store, reached, release) = gated_store("ingress-queue-cost", limits);
+    let root = fixture_root("ingress-queue-cost");
+    let (mut store, reached, release) = gated_store(&root, limits);
     let pending = store.ingress().submit(Signal::Logs, &bytes).unwrap();
     reached.recv_timeout(COMPLETION_TIMEOUT).unwrap();
     assert_eq!(store.health().pending_bytes, cost);
@@ -559,7 +540,8 @@ fn capacity_refusal_leaves_space_for_a_smaller_valid_admission() {
         queue_bytes: 1024,
         ..Default::default()
     };
-    let (mut store, reached, release) = gated_store("ingress-queue-rollback", limits);
+    let root = fixture_root("ingress-queue-rollback");
+    let (mut store, reached, release) = gated_store(&root, limits);
     let mut large = record(1);
     large.body = Some(AnyValue {
         value: Some(Value::StringValue("x".repeat(600))),

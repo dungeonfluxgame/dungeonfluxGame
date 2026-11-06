@@ -2,9 +2,8 @@
 //! the host, and run back to back from a script with two avatars on the canvas.
 
 use df_playground::fixture::Camera;
-use df_playground::scene::{
-    MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT, SceneChange,
-};
+use df_playground::limits::{MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
+use df_playground::scene::SceneChange;
 
 use crate::client::get;
 use crate::command::{
@@ -27,7 +26,7 @@ fn scene(line: &str) -> Result<SceneChange, CommandError> {
     }
 }
 
-fn look(target: Option<&str>, zoom_percent: u16, duration_ms: u32) -> SceneChange {
+fn look(target: Option<&str>, zoom_percent: u16, duration_ms: u64) -> SceneChange {
     SceneChange::Camera {
         target: target.map(str::to_owned),
         zoom_percent,
@@ -149,10 +148,15 @@ async fn shown(running: &Running) -> ControlsReply {
 /// The camera as shown, without the host's reading of how far the move has run, which changes
 /// with every look.
 async fn camera_of(running: &Running) -> Option<Camera> {
-    shown(running).await.scene.camera.map(|camera| Camera {
-        elapsed_ms: 0,
-        ..camera
-    })
+    shown(running)
+        .await
+        .scene
+        .camera
+        .set_value()
+        .map(|camera| Camera {
+            elapsed_ms: 0,
+            ..camera.clone()
+        })
 }
 
 /// A host with the shipped avatar kind and the shipped camera scene chosen.
@@ -395,7 +399,7 @@ async fn a_late_reader_of_the_same_change_count_gets_the_moves_age_now() {
     let elapsed = |frame: &crate::state::BuiltFrame| {
         let json: serde_json::Value =
             serde_json::from_slice(&frame.to_vec()).expect("the frame is JSON");
-        json["controls"]["scene"]["camera"]["elapsed_ms"]
+        json["controls"]["scene"]["camera"]["set"]["elapsed_ms"]
             .as_u64()
             .expect("a camera with an age")
     };

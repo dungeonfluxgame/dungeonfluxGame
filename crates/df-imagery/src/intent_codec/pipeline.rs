@@ -2,24 +2,19 @@
 
 use super::{
     CodecError,
-    primitives::{Reader, Writer, prompt_byte_bound},
+    primitives::{
+        MIN_STAGED_IDENTITY_BYTES, Reader, Writer, decode_moderation, decode_route,
+        encode_moderation, encode_route, prompt_byte_bound,
+    },
 };
-use crate::config::{AccountHandle, ApiEndpoint, ModelName};
 use crate::request::{
-    AnalysisRoute, CreatorClassification, ImageContentRating, ImageInspection, ImagePipeline,
-    InspectionKind, InspectionRequirement, PrivateImageText, ProviderModeration, RequestLimits,
-    StagedIdentity,
+    CreatorClassification, ImageContentRating, ImageInspection, ImagePipeline, InspectionKind,
+    InspectionRequirement, MAXIMUM_PUBLIC_APPEARANCE_BYTES, MAXIMUM_STAGED_IDENTITIES,
+    PrivateImageText, RequestLimits, StagedIdentity,
 };
 
-fn text(out: &mut Writer, value: &PrivateImageText) -> Result<(), CodecError> {
+fn encode_private_text(out: &mut Writer, value: &PrivateImageText) -> Result<(), CodecError> {
     out.counted(value.text().as_bytes())
-}
-
-pub(super) fn route(out: &mut Writer, value: &AnalysisRoute) -> Result<(), CodecError> {
-    out.counted(value.account.as_str().as_bytes())?;
-    out.counted(value.model.as_str().as_bytes())?;
-    out.counted(value.endpoint.as_str().as_bytes())?;
-    out.u64_be(value.maximum_output_tokens)
 }
 
 pub(super) fn encode(out: &mut Writer, pipeline: &ImagePipeline) -> Result<(), CodecError> {
@@ -30,9 +25,9 @@ pub(super) fn encode(out: &mut Writer, pipeline: &ImagePipeline) -> Result<(), C
     })?;
     out.boolean(pipeline.creator.is_some())?;
     if let Some(creator) = &pipeline.creator {
-        route(out, &creator.route)?;
+        encode_route(out, &creator.route)?;
         out.u32_be(creator.contract_revision)?;
-        text(out, &creator.public_appearance)?;
+        encode_private_text(out, &creator.public_appearance)?;
     }
     out.boolean(pipeline.inspection.is_some())?;
     if let Some(inspection) = &pipeline.inspection {
@@ -40,10 +35,7 @@ pub(super) fn encode(out: &mut Writer, pipeline: &ImagePipeline) -> Result<(), C
     }
     out.boolean(pipeline.moderation.is_some())?;
     if let Some(moderation) = pipeline.moderation {
-        out.push(match moderation {
-            ProviderModeration::Auto => 0,
-            ProviderModeration::Low => 1,
-        })?;
+        encode_moderation(out, moderation)?;
     }
     let general = pipeline
         .creator
@@ -51,7 +43,7 @@ pub(super) fn encode(out: &mut Writer, pipeline: &ImagePipeline) -> Result<(), C
         .and_then(|creator| creator.general_prompt.as_ref());
     out.boolean(general.is_some())?;
     if let Some(general) = general {
-        text(out, general)?;
+        encode_private_text(out, general)?;
     }
     Ok(())
 }
@@ -60,7 +52,7 @@ pub(crate) fn encode_inspection(
     out: &mut Writer,
     inspection: &ImageInspection,
 ) -> Result<(), CodecError> {
-    route(out, &inspection.route)?;
+    encode_route(out, &inspection.route)?;
     out.u32_be(inspection.contract_revision)?;
     out.push(match inspection.kind {
         InspectionKind::ScenePlate => 0,
@@ -76,12 +68,12 @@ pub(crate) fn encode_inspection(
         (None, None) => out.push(0)?,
         _ => return Err(CodecError::Malformed),
     }
-    text(out, &inspection.hand_custody)?;
+    encode_private_text(out, &inspection.hand_custody)?;
     out.u32_be(u32::try_from(inspection.staging.len()).map_err(|_| CodecError::TooLong)?)?;
     for identity in &inspection.staging {
-        text(out, &identity.locator_id)?;
-        text(out, &identity.reference_id)?;
-        text(out, &identity.public_name)?;
+        encode_private_text(out, &identity.locator_id)?;
+        encode_private_text(out, &identity.reference_id)?;
+        encode_private_text(out, &identity.public_name)?;
         out.boolean(identity.hero)?;
     }
     out.u32_be(inspection.maximum_corrections)?;
@@ -92,24 +84,11 @@ pub(crate) fn encode_inspection(
     })
 }
 
-fn read_text<'a>(input: &mut Reader<'a>, maximum_bytes: usize) -> Result<&'a str, CodecError> {
-    core::str::from_utf8(input.counted(maximum_bytes)?).map_err(|_| CodecError::InvalidText)
-}
-
-fn read_private(
+fn read_private_text(
     input: &mut Reader<'_>,
     maximum_bytes: usize,
 ) -> Result<PrivateImageText, CodecError> {
-    Ok(PrivateImageText::new(read_text(input, maximum_bytes)?))
-}
-
-pub(super) fn read_route(input: &mut Reader<'_>) -> Result<AnalysisRoute, CodecError> {
-    Ok(AnalysisRoute {
-        account: AccountHandle::new(read_text(input, 64)?).map_err(CodecError::Config)?,
-        model: ModelName::new(read_text(input, 128)?).map_err(CodecError::Config)?,
-        endpoint: ApiEndpoint::new(read_text(input, 256)?).map_err(CodecError::Config)?,
-        maximum_output_tokens: input.u64_be()?,
-    })
+    Ok(PrivateImageText::new(input.text(maximum_bytes)?))
 }
 
 pub(super) fn decode(
@@ -125,9 +104,12 @@ pub(super) fn decode(
     };
     let mut creator = if input.boolean()? {
         Some(CreatorClassification {
-            route: read_route(input)?,
+            route: decode_route(input)?,
             contract_revision: input.u32_be()?,
-            public_appearance: read_private(input, (8 * 1024).min(prompt_byte_bound(limits)))?,
+            public_appearance: read_private_text(
+                input,
+                MAXIMUM_PUBLIC_APPEARANCE_BYTES.min(prompt_byte_bound(limits)),
+            )?,
             general_prompt: None,
         })
     } else {
@@ -139,16 +121,12 @@ pub(super) fn decode(
         None
     };
     let moderation = if version >= super::MODERATION_INTENT_CODEC_VERSION && input.boolean()? {
-        Some(match input.byte()? {
-            0 => ProviderModeration::Auto,
-            1 => ProviderModeration::Low,
-            _ => return Err(CodecError::Malformed),
-        })
+        Some(decode_moderation(input)?)
     } else {
         None
     };
     if version >= super::PIPELINE_INTENT_CODEC_VERSION && input.boolean()? {
-        let general = read_private(input, prompt_byte_bound(limits))?;
+        let general = read_private_text(input, prompt_byte_bound(limits))?;
         creator
             .as_mut()
             .ok_or(CodecError::Malformed)?
@@ -170,7 +148,7 @@ pub(crate) fn read_inspection(
     limits: &RequestLimits,
     version: u8,
 ) -> Result<ImageInspection, CodecError> {
-    let route = read_route(input)?;
+    let route = decode_route(input)?;
     let contract_revision = input.u32_be()?;
     let kind = match input.byte()? {
         0 => InspectionKind::ScenePlate,
@@ -183,12 +161,12 @@ pub(crate) fn read_inspection(
         1 => (Some(input.byte()?), Some(input.u32_be()?)),
         _ => return Err(CodecError::Malformed),
     };
-    let hand_custody = read_private(input, prompt_byte_bound(limits))?;
+    let hand_custody = read_private_text(input, prompt_byte_bound(limits))?;
     let count = usize::try_from(input.u32_be()?).map_err(|_| CodecError::TooLong)?;
-    // Three counted texts plus a boolean must fit before allocating the vector.
-    if count > 24
+    // Every claimed identity must fit the unread input before the vector is allocated.
+    if count > MAXIMUM_STAGED_IDENTITIES
         || count
-            .checked_mul(13)
+            .checked_mul(MIN_STAGED_IDENTITY_BYTES)
             .is_none_or(|minimum| minimum > input.remaining())
     {
         return Err(CodecError::TooLong);
@@ -196,9 +174,9 @@ pub(crate) fn read_inspection(
     let mut staging = Vec::with_capacity(count);
     for _ in 0..count {
         staging.push(StagedIdentity {
-            locator_id: read_private(input, prompt_byte_bound(limits))?,
-            reference_id: read_private(input, prompt_byte_bound(limits))?,
-            public_name: read_private(input, prompt_byte_bound(limits))?,
+            locator_id: read_private_text(input, prompt_byte_bound(limits))?,
+            reference_id: read_private_text(input, prompt_byte_bound(limits))?,
+            public_name: read_private_text(input, prompt_byte_bound(limits))?,
             hero: input.boolean()?,
         });
     }

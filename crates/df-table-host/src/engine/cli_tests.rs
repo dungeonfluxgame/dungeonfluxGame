@@ -4,7 +4,9 @@ use super::cli::{
     BROKER_USAGE, DEFAULT_STEP_COUNT, DUMP_USAGE, EngineCommand, FORCE_USAGE, INPUT_USAGE,
     PROJECTION_USAGE, QUEUE_USAGE, VERBS, VIABLE_USAGE, verb_usages,
 };
-use super::request::{AudienceSpec, ForceRequest, InputBody, InputRequest, QueueControl};
+use super::request::{
+    AudienceSpec, ForceRequest, InputBody, InputRequest, ProposalSource, QueueControl,
+};
 
 fn words(line: &str) -> Vec<String> {
     split_words(line).expect("the line splits")
@@ -86,7 +88,7 @@ fn the_engine_can_send_a_timer_or_a_proposal() {
     assert_eq!(
         engine("input engine --proposal npc guard"),
         input(InputBody::Proposal {
-            origin: "npc".to_owned(),
+            origin: ProposalSource::Npc,
             proposer: "guard".to_owned()
         })
     );

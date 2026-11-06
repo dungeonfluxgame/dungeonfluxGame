@@ -5,7 +5,32 @@
 //! adds behaviour: keys, classes and texts stay in exhaustive `match`es next to each enum.
 
 /// Declares a fieldless enum and `ALL`, the slice of every variant in declaration order.
+///
+/// Written `listed_enum! { keyed ... }`, it also declares `from_key`, the variant whose `key()` is
+/// the text, found in `ALL`; the enum keeps its exhaustive `key()` next to it (a closed key set of
+/// the coding style).
 macro_rules! listed_enum {
+    (
+        keyed
+        $(#[$meta:meta])*
+        $visibility:vis enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident),+ $(,)?
+        }
+    ) => {
+        $crate::listed::listed_enum! {
+            $(#[$meta])*
+            $visibility enum $name {
+                $($(#[$variant_meta])* $variant),+
+            }
+        }
+
+        impl $name {
+            /// The variant whose `key()` is `text`, if any.
+            pub fn from_key(text: &str) -> Option<Self> {
+                Self::ALL.iter().copied().find(|variant| variant.key() == text)
+            }
+        }
+    };
     (
         $(#[$meta:meta])*
         $visibility:vis enum $name:ident {

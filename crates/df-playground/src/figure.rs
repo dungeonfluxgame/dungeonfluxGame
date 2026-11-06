@@ -2,7 +2,7 @@
 //!
 //! It owns what a figure's style says and which way round a turn goes, from numbers and a checked
 //! colour only: no id, label or other text of a fixture reaches a style. It never touches the page,
-//! so native tests cover it; `view_tv` applies what it returns.
+//! so native tests cover it; `view::tv` applies what it returns.
 
 use crate::fixture::{ElementShape, StageElement};
 use crate::layout::{stage_percent, stage_size_percent};

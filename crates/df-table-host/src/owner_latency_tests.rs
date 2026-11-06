@@ -19,6 +19,21 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[test]
+fn every_mode_key_is_its_serde_name_and_reads_back() {
+    for mode in CommitMode::ALL {
+        let serde_name = serde_json::to_value(mode).expect("a mode serialises");
+        assert_eq!(serde_name, serde_json::Value::from(mode.key()));
+        assert_eq!(CommitMode::from_key(mode.key()), Some(mode));
+    }
+    for mode in SnapshotMode::ALL {
+        let serde_name = serde_json::to_value(mode).expect("a mode serialises");
+        assert_eq!(serde_name, serde_json::Value::from(mode.key()));
+        assert_eq!(SnapshotMode::from_key(mode.key()), Some(mode));
+    }
+    assert_eq!(CommitMode::from_key("postgres20ms"), None);
+}
+
+#[test]
 fn nearest_rank_percentiles_of_one_to_one_hundred() {
     let sorted: Vec<u64> = (1..=100).collect();
     assert_eq!(percentile_of_sorted(&sorted, PERMILLE_P50), Ok(50));

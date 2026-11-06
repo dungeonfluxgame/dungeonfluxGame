@@ -472,7 +472,7 @@ fn unsupported_shared_transport_limits_refuse_before_any_egress_without_clamping
     let bytes = testing::png(2, 2, [20, 40, 60, 255]);
     let operation = head_operation(&bytes);
     let limits = AnalysisPreparationLimits {
-        max_request_bytes: 32 * 1024 * 1024,
+        max_request_bytes: df_providers::MAXIMUM_BODY_BYTES as u64 + 1,
         ..Default::default()
     };
     assert!(matches!(

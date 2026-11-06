@@ -9,8 +9,8 @@ use std::{
 };
 
 use df_providers::{
-    ElevenMusicConfig, ElevenMusicError, MUSIC_MAXIMUM_PROMPT_CHARACTERS,
-    MUSIC_MINIMUM_LENGTH_MILLIS, NativeElevenMusicProvider,
+    ElevenMusicConfig, ElevenMusicError, MUSIC_MAXIMUM_LENGTH_MS, MUSIC_MAXIMUM_PROMPT_CHARACTERS,
+    MUSIC_MINIMUM_LENGTH_MS, NativeElevenMusicProvider,
 };
 
 struct Captured {
@@ -26,7 +26,8 @@ struct Fake {
 }
 
 impl Fake {
-    fn start(status: u16, content_type: &'static str, body: &'static [u8]) -> Self {
+    fn start(status: u16, content_type: &'static str, body: impl Into<Vec<u8>>) -> Self {
+        let body: Vec<u8> = body.into();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let captured = Arc::new(Mutex::new(Vec::new()));
@@ -75,7 +76,7 @@ impl Fake {
                 body.len()
             );
             socket.write_all(reply.as_bytes()).unwrap();
-            socket.write_all(body).unwrap();
+            socket.write_all(&body).unwrap();
         });
         Self { address, captured }
     }
@@ -129,6 +130,25 @@ async fn an_ambience_request_asks_for_a_loop() {
     assert_eq!(captured[0].body["text"], "A quiet shop.");
 }
 
+/// The longest composition, ten minutes at the 128 kbit/s output format, is 9.6 MB of MP3. The
+/// old 8 MiB response bound refused it as too large after the supplier had composed (and billed)
+/// it.
+#[tokio::test(flavor = "current_thread")]
+async fn the_longest_composition_fits_the_response_bound() {
+    let ten_minutes_of_mp3 = vec![0x55u8; 9_600_000];
+    let fake = Fake::start(200, "audio/mpeg", ten_minutes_of_mp3);
+    let audio = fake
+        .provider()
+        .compose(
+            "Instrumental score.",
+            MUSIC_MAXIMUM_LENGTH_MS,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audio.bytes.len(), 9_600_000);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn a_rejected_credential_and_other_failures_are_typed_without_the_supplier_text() {
     let denied = Fake::start(401, "application/json", br#"{"detail":"secret detail"}"#);
@@ -157,7 +177,7 @@ async fn requests_outside_the_documented_bounds_send_nothing() {
     let long = "x".repeat(MUSIC_MAXIMUM_PROMPT_CHARACTERS + 1);
     for (prompt, length) in [
         ("   ", 10_000),
-        ("ok", MUSIC_MINIMUM_LENGTH_MILLIS - 1),
+        ("ok", MUSIC_MINIMUM_LENGTH_MS - 1),
         (long.as_str(), 10_000),
     ] {
         assert_eq!(

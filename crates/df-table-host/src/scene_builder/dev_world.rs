@@ -20,8 +20,8 @@ use df_table::identity::{
     TurnSeq,
 };
 use df_table::ports::Clock;
-use df_table::scene_plan_brief::{LocatePhrase, PhraseError, SceneBrief, SetPiece, SetPieceError};
-use df_table::scene_plan_locate::{Instance, Region, RegionError};
+use df_table::scene_plan::brief::{LocatePhrase, PhraseError, SceneBrief, SetPiece, SetPieceError};
+use df_table::scene_plan::locate::{Instance, Region, RegionError};
 
 use super::fakes::StageScript;
 use df_table::table_state::{

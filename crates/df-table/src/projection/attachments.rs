@@ -36,20 +36,20 @@ use serde::Serialize;
 
 use crate::element::name_type;
 use crate::identity::{EvidenceRef, FactId, MachineId, SceneId, SeatId, SessionRevision};
-use crate::outcome::Decline;
-use crate::ports::Audience;
-use crate::private_data::{Narration, Secret};
-use crate::projection::bounds::{
+use crate::limits::{
     MAXIMUM_FACTS_PER_SEAT, MAXIMUM_OFFERS_PER_SEAT, MAXIMUM_PLACES, MAXIMUM_SEATS_WITH_ENTRIES,
     MAXIMUM_STATE_LABELS, MAXIMUM_STORY_ENTRIES, MAXIMUM_TEXT_BYTES, OFFERS_BUDGET_BYTES,
 };
+use crate::outcome::Decline;
+use crate::ports::Audience;
+use crate::private_data::{Narration, Secret};
 use crate::projection::status::ProjectionStatus;
 use crate::projection::text::NonEmptyText;
 use crate::table_state::DisplayName;
 
 mod published;
 
-pub use published::{PUBLISHED_RECORD_VERSION, PublishedLoadError, PublishedRecord};
+pub use published::{PublishedLoadError, PublishedRecord};
 
 name_type!(
     /// The id a tap on an offer sends back (`MachineOffer.offer_id`).

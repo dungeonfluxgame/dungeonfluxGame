@@ -31,16 +31,16 @@ use std::sync::Arc;
 use df_table::element::NameError;
 use df_table::event::FailureCause;
 use df_table::identity::{Correlation, OperationId, SceneId, TurnSeq};
+use df_table::lookahead::settings::{LookaheadSetting, LookaheadSettings};
+use df_table::lookahead::stamp::WorldStamp;
 use df_table::lookahead::{
     Action, BuildOutcome, BuildToken, Expected, LookaheadError, LookaheadPlanner, LookaheadReport,
     PlanView, Take, lookahead_candidates,
 };
-use df_table::lookahead_settings::{LookaheadSetting, LookaheadSettings};
-use df_table::lookahead_stamp::WorldStamp;
-use df_table::plate_digest::PlateDigest;
+use df_table::plate::digest::PlateDigest;
 use df_table::ports::{PurposeName, ResourceHandle};
+use df_table::scene_plan::brief::SceneBrief;
 use df_table::scene_plan::{SceneStage, StageOutput, StageOutputs};
-use df_table::scene_plan_brief::SceneBrief;
 use df_table::table_state::{SceneGeneration, TableSnapshot};
 
 use crate::broker::BrokerHub;

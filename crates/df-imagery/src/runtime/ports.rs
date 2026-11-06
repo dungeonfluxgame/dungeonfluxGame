@@ -194,7 +194,8 @@ pub struct DispatchDecisionSettlement<'a> {
     pub qualified: &'a super::QualifiedDecision,
 }
 
-/// An actual failed standalone supplier stage, with protected non-output evidence and no media allocation.
+/// An actual failed standalone supplier stage, with protected non-output evidence and no media
+/// allocation.
 #[derive(Clone, Copy)]
 pub struct DispatchNoOutputSettlement<'a> {
     pub job: &'a ImageJob,
@@ -213,7 +214,8 @@ pub enum ArtifactAdmission {
 
 /// Host-owned catalog allocation and finance authority; hosted work never takes a local fallback.
 pub trait ImageDispatchAdmission: Send + Sync {
-    /// Eligible artwork requires an actual election owner; ordinary requests retain existing admission.
+    /// Eligible artwork requires an actual election owner; ordinary requests retain existing
+    /// admission.
     fn admit_with_artifact(
         &self,
         input: &DispatchAdmission<'_>,
@@ -396,7 +398,8 @@ pub trait ImageUsageJournal: Send + Sync {
         owner: &ImageOwner,
         dispatch: DispatchId,
     ) -> impl Future<Output = Result<Option<RuntimeUsage>, RuntimeError>> + Send;
-    /// Reads the semantic receipt's exact retained revision; a newer billing correction is distinct.
+    /// Reads the semantic receipt's exact retained revision; a newer billing correction is
+    /// distinct.
     fn read_usage_revision(
         &self,
         scope: &crate::execution::ExecutionScope,

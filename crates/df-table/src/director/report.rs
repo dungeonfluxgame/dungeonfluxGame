@@ -1,9 +1,9 @@
 //! `director show`: the Director's state and log as one audience may read them.
 
 use super::Director;
-use crate::director_log::{ActiveReport, DirectorReport, EndsReport, WaitingReport};
-use crate::director_reason::Ends;
-use crate::director_view::StageView;
+use crate::director::log::{ActiveReport, DirectorReport, EndsReport, WaitingReport};
+use crate::director::reason::Ends;
+use crate::director::view::StageView;
 use crate::element::ElementId;
 use crate::inspect::InspectAudience;
 

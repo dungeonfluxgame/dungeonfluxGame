@@ -1,14 +1,12 @@
 use crate::ecs::{Entities, Entity, Store};
 
 #[test]
-fn entities_are_distinct_alive_and_counted() {
+fn entities_are_distinct_and_alive() {
     let mut entities = Entities::default();
     let a = entities.spawn().expect("room");
     let b = entities.spawn().expect("room");
     assert_ne!(a, b);
     assert!(entities.is_alive(a) && entities.is_alive(b));
-    assert_eq!(entities.len(), 2);
-    assert!(!entities.is_empty());
 }
 
 #[test]
@@ -18,7 +16,6 @@ fn a_removed_entity_is_not_alive_and_removing_it_again_does_nothing() {
     assert!(entities.despawn(a));
     assert!(!entities.is_alive(a));
     assert!(!entities.despawn(a));
-    assert_eq!(entities.len(), 0);
 }
 
 #[test]
@@ -61,7 +58,7 @@ fn a_store_gives_back_what_it_was_given_and_replaces_on_a_second_insert() {
     assert_eq!(store.get(a), Some(&"first"));
     assert_eq!(store.insert(a, "second"), Some("first"));
     assert_eq!(store.get(a), Some(&"second"));
-    assert_eq!(store.len(), 1);
+    assert_eq!(store.iter().count(), 1);
     *store.get_mut(a).expect("has it") = "third";
     assert_eq!(store.get(a), Some(&"third"));
 }
@@ -78,7 +75,7 @@ fn removing_from_the_middle_keeps_every_other_component_reachable() {
     assert_eq!(store.remove(a), Some("a"));
     assert_eq!(store.get(a), None);
     assert_eq!((store.get(b), store.get(c)), (Some(&"b"), Some(&"c")));
-    assert_eq!(store.len(), 2);
+    assert_eq!(store.iter().count(), 2);
     assert_eq!(store.remove(a), None);
     assert_eq!(store.remove(c), Some("c"));
     assert_eq!(store.get(b), Some(&"b"));
@@ -92,7 +89,6 @@ fn a_store_does_not_answer_for_a_stale_handle_whose_index_was_reused() {
     entities.despawn(old);
     let new = entities.spawn().expect("room");
     assert_eq!(store.get(new), None);
-    assert!(!store.contains(new));
     store.insert(new, "new");
     assert_eq!(
         store.get(old),
@@ -103,22 +99,20 @@ fn a_store_does_not_answer_for_a_stale_handle_whose_index_was_reused() {
 }
 
 #[test]
-fn iteration_visits_every_component_once_and_can_change_them() {
+fn iteration_visits_every_component_once() {
     let mut entities = Entities::default();
     let [a, b] = [
         entities.spawn().expect("room"),
         entities.spawn().expect("room"),
     ];
     let mut store = Store::default();
-    store.insert(a, 1);
-    store.insert(b, 2);
-    for (_, item) in store.iter_mut() {
-        *item *= 10;
-    }
+    store.insert(a, 10);
+    store.insert(b, 20);
     let mut seen: Vec<(Entity, i32)> = store.iter().map(|(entity, item)| (entity, *item)).collect();
     seen.sort();
     assert_eq!(seen, vec![(a, 10), (b, 20)]);
-    store.clear();
+    store.remove(a);
+    store.remove(b);
     assert!(store.is_empty() && store.get(a).is_none());
 }
 

@@ -41,6 +41,7 @@ mod shared;
 
 pub use analysis::{AnalysisRouteFields, AnalysisRoutePatch};
 pub use segmentation::{SegmentationRouteFields, SegmentationRoutePatch};
+pub(crate) use shared::overlay_field_error;
 pub use shared::{BodyField, ProfileEdit};
 
 use crate::config::{
@@ -314,12 +315,7 @@ pub fn resolve(
     runtime: &RuntimePatch,
     revision: u64,
 ) -> Result<ResolvedConfig, OverlayError> {
-    let defaults = ImageConfig::defaults().map_err(|error| match error {
-        crate::config::ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })?;
+    let defaults = ImageConfig::defaults().map_err(shared::overlay_field_error)?;
     resolve_with_defaults(defaults, config_text, env, runtime, revision)
 }
 
@@ -331,12 +327,7 @@ pub fn resolve_with_defaults(
     runtime: &RuntimePatch,
     revision: u64,
 ) -> Result<ResolvedConfig, OverlayError> {
-    config.validate().map_err(|error| match error {
-        crate::config::ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })?;
+    config.validate().map_err(shared::overlay_field_error)?;
     let mut provenance = Provenance {
         revision,
         fields: shared::tracked_fields(),
@@ -345,18 +336,10 @@ pub fn resolve_with_defaults(
     file_layer::apply_file_layer(config_text, &mut config, &mut provenance)?;
     env_layer::apply_env_layer(env, &mut config, &mut provenance)?;
     apply_patch(runtime, &mut config, &mut provenance)?;
-    config.validate().map_err(|error| match error {
-        crate::config::ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })?;
-    config.validate_codex_lines().map_err(|error| match error {
-        crate::config::ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })?;
+    config.validate().map_err(shared::overlay_field_error)?;
+    config
+        .validate_codex_lines()
+        .map_err(shared::overlay_field_error)?;
     Ok(ResolvedConfig { config, provenance })
 }
 
@@ -373,12 +356,7 @@ pub fn apply_runtime(
         ignored: Vec::new(),
     };
     apply_patch(patch, &mut next, &mut provenance)?;
-    next.validate().map_err(|error| match error {
-        crate::config::ConfigError::InvalidField { field, reason } => OverlayError::InvalidField {
-            field: field.to_owned(),
-            reason,
-        },
-    })?;
+    next.validate().map_err(shared::overlay_field_error)?;
     Ok(next)
 }
 

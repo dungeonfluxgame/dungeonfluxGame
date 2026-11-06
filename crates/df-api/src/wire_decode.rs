@@ -1,6 +1,6 @@
 //! Bounded decoding of the currently generated common messages; no action schema is invented.
 use crate::request::{self, RequestError, RequestField};
-use df_model::checkpoint::{Basis, CommandInput, GameCommand, GameInput};
+use df_model::checkpoint::{Basis, GameCommand, GameInput};
 use df_protocol::common as wire;
 use df_types::{
     BuildIdentity, BuildRevision, ClientBindingId, MemberId, OperationId, RecoveryEpoch, RunId,
@@ -20,14 +20,37 @@ pub struct WireDecodeLimits {
     pub maximum_owned_bytes: usize,
 }
 
+impl WireDecodeLimits {
+    /// A zero bound would refuse every message, so it is a caller error and not a limit.
+    const fn has_zero_bound(self) -> bool {
+        self.maximum_wire_bytes == 0 || self.maximum_owned_bytes == 0
+    }
+}
+
 /// Safe classifications: no error retains malformed bytes, private text, or codec diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WireDecodeError {
+    /// A caller-supplied bound is zero.
     InvalidLimits,
+    /// The encoded bytes exceed `maximum_wire_bytes`.
     WireCapacity,
+    /// The decoded value would retain more than `maximum_owned_bytes`, or the final command more
+    /// than the caller's `maximum_command_retained_bytes`.
     OwnedCapacity,
+    /// The bytes are not a valid protobuf message of the named field.
     Malformed(RequestField),
+    /// The message decoded but its fields are absent or invalid.
     Field(RequestError),
+}
+
+/// Heap bytes a generated identity message retains: the capacity of its byte vector.
+fn identity_heap_bytes(value: Option<&Vec<u8>>) -> Option<usize> {
+    Some(value.map_or(0, Vec::capacity))
+}
+
+/// For a message or domain value that owns no heap storage.
+fn no_heap_bytes<T>(_: &T) -> Option<usize> {
+    Some(0)
 }
 
 fn decode_field<M: Message + Default, T>(
@@ -38,7 +61,7 @@ fn decode_field<M: Message + Default, T>(
     map: fn(&M) -> Result<T, RequestError>,
     domain_heap: fn(&T) -> Option<usize>,
 ) -> Result<T, WireDecodeError> {
-    if limits.maximum_wire_bytes == 0 || limits.maximum_owned_bytes == 0 {
+    if limits.has_zero_bound() {
         return Err(WireDecodeError::InvalidLimits);
     }
     if encoded.len() > limits.maximum_wire_bytes {
@@ -78,12 +101,14 @@ pub fn decode_session_id(
         RequestField::Session,
         encoded,
         limits,
-        |message: &wire::SessionId| Some(message.value.as_ref().map_or(0, Vec::capacity)),
+        |message: &wire::SessionId| identity_heap_bytes(message.value.as_ref()),
         |message| request::session_id(Some(message)),
-        |_| Some(0),
+        no_heap_bytes,
     )
 }
 
+/// Decodes an actual generated MemberId message; the caller's member still comes from
+/// authentication.
 pub fn decode_member_id(
     encoded: &[u8],
     limits: WireDecodeLimits,
@@ -92,12 +117,13 @@ pub fn decode_member_id(
         RequestField::Member,
         encoded,
         limits,
-        |message: &wire::MemberId| Some(message.value.as_ref().map_or(0, Vec::capacity)),
+        |message: &wire::MemberId| identity_heap_bytes(message.value.as_ref()),
         |message| request::member_id(Some(message)),
-        |_| Some(0),
+        no_heap_bytes,
     )
 }
 
+/// Decodes an actual generated ClientBindingId message without granting an input lease.
 pub fn decode_client_binding_id(
     encoded: &[u8],
     limits: WireDecodeLimits,
@@ -106,23 +132,25 @@ pub fn decode_client_binding_id(
         RequestField::ClientBinding,
         encoded,
         limits,
-        |message: &wire::ClientBindingId| Some(message.value.as_ref().map_or(0, Vec::capacity)),
+        |message: &wire::ClientBindingId| identity_heap_bytes(message.value.as_ref()),
         |message| request::client_binding_id(Some(message)),
-        |_| Some(0),
+        no_heap_bytes,
     )
 }
 
+/// Decodes an actual generated RunId message.
 pub fn decode_run_id(encoded: &[u8], limits: WireDecodeLimits) -> Result<RunId, WireDecodeError> {
     decode_field(
         RequestField::Run,
         encoded,
         limits,
-        |message: &wire::RunId| Some(message.value.as_ref().map_or(0, Vec::capacity)),
+        |message: &wire::RunId| identity_heap_bytes(message.value.as_ref()),
         |message| request::run_id(Some(message)),
-        |_| Some(0),
+        no_heap_bytes,
     )
 }
 
+/// Decodes an actual generated OperationId message; it performs no operation lookup.
 pub fn decode_operation_id(
     encoded: &[u8],
     limits: WireDecodeLimits,
@@ -131,12 +159,13 @@ pub fn decode_operation_id(
         RequestField::Operation,
         encoded,
         limits,
-        |message: &wire::OperationId| Some(message.value.as_ref().map_or(0, Vec::capacity)),
+        |message: &wire::OperationId| identity_heap_bytes(message.value.as_ref()),
         |message| request::operation_id(Some(message)),
-        |_| Some(0),
+        no_heap_bytes,
     )
 }
 
+/// Decodes an actual generated RecoveryEpoch message; the value must be present and valid.
 pub fn decode_recovery_epoch(
     encoded: &[u8],
     limits: WireDecodeLimits,
@@ -145,17 +174,18 @@ pub fn decode_recovery_epoch(
         RequestField::Epoch,
         encoded,
         limits,
-        |_: &wire::RecoveryEpoch| Some(0),
+        no_heap_bytes::<wire::RecoveryEpoch>,
         |message| {
             let value = message
                 .value
                 .ok_or(RequestError::Missing(RequestField::Epoch))?;
             RecoveryEpoch::new(value).map_err(RequestError::Revision)
         },
-        |_| Some(0),
+        no_heap_bytes,
     )
 }
 
+/// Decodes an actual generated SessionRevision message with explicit epoch and sequence.
 pub fn decode_session_revision(
     encoded: &[u8],
     limits: WireDecodeLimits,
@@ -164,12 +194,13 @@ pub fn decode_session_revision(
         RequestField::Revision,
         encoded,
         limits,
-        |_: &wire::SessionRevision| Some(0),
+        no_heap_bytes::<wire::SessionRevision>,
         |message| request::session_revision(Some(message)),
-        |_| Some(0),
+        no_heap_bytes,
     )
 }
 
+/// Decodes an actual generated BuildIdentity message; parsing does not approve that build.
 pub fn decode_build_identity(
     encoded: &[u8],
     limits: WireDecodeLimits,
@@ -178,34 +209,40 @@ pub fn decode_build_identity(
         RequestField::Build,
         encoded,
         limits,
-        |message: &wire::BuildIdentity| {
-            [
-                message.source_revision.as_ref(),
-                message.native_revision.as_ref(),
-                message.wasm_revision.as_ref(),
-                message.configuration_revision.as_ref(),
-                message.content_revision.as_ref(),
-            ]
-            .into_iter()
-            .try_fold(0usize, |bytes, label| {
-                bytes.checked_add(label.map_or(0, String::capacity))
-            })
-        },
+        build_identity_wire_heap_bytes,
         |message| request::build_identity(Some(message)),
-        |identity| {
-            [
-                BuildRevision::Source,
-                BuildRevision::Native,
-                BuildRevision::Wasm,
-                BuildRevision::Configuration,
-                BuildRevision::Content,
-            ]
-            .into_iter()
-            .try_fold(0usize, |bytes, label| {
-                bytes.checked_add(identity.revision(label).retained_heap_bytes())
-            })
-        },
+        build_identity_heap_bytes,
     )
+}
+
+/// Heap bytes the generated provenance labels retain, or `None` on overflow.
+fn build_identity_wire_heap_bytes(message: &wire::BuildIdentity) -> Option<usize> {
+    [
+        message.source_revision.as_ref(),
+        message.native_revision.as_ref(),
+        message.wasm_revision.as_ref(),
+        message.configuration_revision.as_ref(),
+        message.content_revision.as_ref(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |bytes, label| {
+        bytes.checked_add(label.map_or(0, String::capacity))
+    })
+}
+
+/// Heap bytes the parsed provenance labels retain, or `None` on overflow.
+fn build_identity_heap_bytes(identity: &BuildIdentity) -> Option<usize> {
+    [
+        BuildRevision::Source,
+        BuildRevision::Native,
+        BuildRevision::Wasm,
+        BuildRevision::Configuration,
+        BuildRevision::Content,
+    ]
+    .into_iter()
+    .try_fold(0usize, |bytes, label| {
+        bytes.checked_add(identity.revision(label).retained_heap_bytes())
+    })
 }
 
 /// Four separate currently generated common message bodies, collected by a caller.
@@ -227,7 +264,8 @@ fn required_field(value: Option<&[u8]>, field: RequestField) -> Result<&[u8], Wi
 /// the unavailable production action DTO is not synthesized here. Native retry callers perform
 /// operation lookup before state admission. This function performs no authentication, lease
 /// issuance, mechanics, operation lookup, admission, or receipt commit. Internal inputs are
-/// excluded by the GameCommand parameter. Final command capacity includes unused owned storage.
+/// excluded by the GameCommand parameter. `maximum_command_retained_bytes` bounds the final
+/// command's retained bytes, including unused owned storage.
 pub fn map_encoded_game_command(
     fields: EncodedCommandFields<'_>,
     member: MemberId,
@@ -235,10 +273,7 @@ pub fn map_encoded_game_command(
     limits: WireDecodeLimits,
     maximum_command_retained_bytes: usize,
 ) -> Result<GameInput, WireDecodeError> {
-    if limits.maximum_wire_bytes == 0
-        || limits.maximum_owned_bytes == 0
-        || maximum_command_retained_bytes == 0
-    {
+    if limits.has_zero_bound() || maximum_command_retained_bytes == 0 {
         return Err(WireDecodeError::InvalidLimits);
     }
     let session = required_field(fields.session, RequestField::Session)?;
@@ -253,17 +288,13 @@ pub fn map_encoded_game_command(
         return Err(WireDecodeError::WireCapacity);
     }
     let revision = decode_session_revision(revision, limits)?;
-    let input = GameInput::Game(CommandInput {
-        basis: Basis {
-            session: decode_session_id(session, limits)?,
-            run: decode_run_id(run, limits)?,
-            revision,
-        },
-        observed_revision: revision,
-        operation: decode_operation_id(operation, limits)?,
-        member,
-        command,
-    });
+    let basis = Basis {
+        session: decode_session_id(session, limits)?,
+        run: decode_run_id(run, limits)?,
+        revision,
+    };
+    let operation = decode_operation_id(operation, limits)?;
+    let input = request::client_command_input(basis, operation, member, command);
     if input
         .retained_bytes()
         .ok_or(WireDecodeError::OwnedCapacity)?

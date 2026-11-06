@@ -1,7 +1,6 @@
-use crate::plate_cost::{CostBasis, CostView, StagePrice, StageUse};
-use crate::plate_timing::{
-    LARGE_TIMING_MAXIMUM_S, PlateTiming, SceneBuildKind, TimingError, TimingSetting,
-};
+use crate::limits::LARGE_TIMING_MAXIMUM_S;
+use crate::plate::cost::{CostBasis, CostView, StagePrice, StageUse};
+use crate::plate::timing::{PlateTiming, SceneBuildKind, TimingError, TimingSetting};
 use crate::ports::PurposeName;
 
 fn purpose(name: &str) -> PurposeName {
@@ -30,7 +29,7 @@ fn plate_use() -> StageUse {
 
 #[test]
 fn the_defaults_are_the_numbers_of_j_4() {
-    let timing = PlateTiming::defaults();
+    let timing = PlateTiming::default();
     assert_eq!(timing.plate_interval_s(), 15);
     assert_eq!(timing.build_budget_ms(SceneBuildKind::Standard), 8_000);
     assert_eq!(timing.build_budget_ms(SceneBuildKind::FirstScene), 20_000);
@@ -42,7 +41,7 @@ fn the_defaults_are_the_numbers_of_j_4() {
 #[test]
 fn plates_per_hour_match_the_plan_s_table() {
     let per_hour = |interval: u64| {
-        PlateTiming::defaults()
+        PlateTiming::default()
             .with(TimingSetting::PlateIntervalS, interval)
             .expect("in range")
             .plates_per_hour_at_most()
@@ -57,7 +56,7 @@ fn plates_per_hour_match_the_plan_s_table() {
 
 #[test]
 fn a_timing_out_of_range_is_refused_with_the_setting_named() {
-    let timing = PlateTiming::defaults();
+    let timing = PlateTiming::default();
     for value in [0, u64::from(LARGE_TIMING_MAXIMUM_S) + 1, u64::MAX] {
         assert_eq!(
             timing.with(TimingSetting::PlateIntervalS, value),
@@ -77,7 +76,7 @@ fn a_timing_out_of_range_is_refused_with_the_setting_named() {
 fn every_setting_has_its_own_name_and_default() {
     let names: Vec<&str> = TimingSetting::ALL
         .iter()
-        .map(|setting| setting.name())
+        .map(|setting| setting.key())
         .collect();
     assert_eq!(
         names,
@@ -98,7 +97,7 @@ fn every_setting_has_its_own_name_and_default() {
 
 #[test]
 fn locate_alone_at_fifteen_seconds_costs_two_dollars_forty_an_hour() {
-    let view = CostView::estimate(PlateTiming::defaults(), &[locate_use(1, 1)]);
+    let view = CostView::estimate(PlateTiming::default(), &[locate_use(1, 1)]);
     assert_eq!(view.plates_per_hour_at_most, 240);
     assert_eq!(view.priced_micro_dollars_least_per_hour, 2_400_000);
     assert_eq!(view.basis, CostBasis::AllStagesPriced);
@@ -106,7 +105,7 @@ fn locate_alone_at_fifteen_seconds_costs_two_dollars_forty_an_hour() {
 
 #[test]
 fn an_unpriced_stage_makes_the_figure_partial_and_shows_its_calls_instead() {
-    let view = CostView::estimate(PlateTiming::defaults(), &[plate_use(), locate_use(3, 7)]);
+    let view = CostView::estimate(PlateTiming::default(), &[plate_use(), locate_use(3, 7)]);
     assert_eq!(view.basis, CostBasis::SomeStagesUnpriced);
     let plate = &view.stages[0];
     assert_eq!(
@@ -125,7 +124,7 @@ fn an_unpriced_stage_makes_the_figure_partial_and_shows_its_calls_instead() {
 fn a_shorter_interval_costs_more_and_a_longer_one_less() {
     let at = |interval: u64| {
         CostView::estimate(
-            PlateTiming::defaults()
+            PlateTiming::default()
                 .with(TimingSetting::PlateIntervalS, interval)
                 .expect("in range"),
             &[locate_use(1, 1)],

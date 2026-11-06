@@ -7,7 +7,11 @@
 //! free line is player text: it travels as a string to the owner, which wraps it in `PlayerText`
 //! at once and never records it.
 
-use df_table::identity::SeatId;
+use std::fmt;
+use std::num::NonZeroU128;
+
+use df_table::envelope::ProposalOrigin;
+use df_table::identity::{OperationId, SeatId};
 use df_table::ports::Audience;
 use serde::{Deserialize, Serialize};
 
@@ -27,8 +31,62 @@ pub enum InputBody {
     Pause { seat: u64 },
     /// A timer of the engine fired.
     Timer { name: String },
-    /// A proposal of the engine (`npc`, `world`, `story`, `encounter`, `timer` or `machine`).
-    Proposal { origin: String, proposer: String },
+    /// A proposal of the engine.
+    Proposal {
+        origin: ProposalSource,
+        proposer: String,
+    },
+}
+
+/// Where an engine proposal comes from, as the dev wire writes it: `df_table`'s `ProposalOrigin`
+/// with a key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalSource {
+    Npc,
+    World,
+    Story,
+    Encounter,
+    Timer,
+    Machine,
+}
+
+impl ProposalSource {
+    pub const ALL: [Self; 6] = [
+        Self::Npc,
+        Self::World,
+        Self::Story,
+        Self::Encounter,
+        Self::Timer,
+        Self::Machine,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Npc => "npc",
+            Self::World => "world",
+            Self::Story => "story",
+            Self::Encounter => "encounter",
+            Self::Timer => "timer",
+            Self::Machine => "machine",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|source| source.key() == key)
+    }
+
+    /// The pure crate's origin this source stands for.
+    pub fn origin(self) -> ProposalOrigin {
+        match self {
+            Self::Npc => ProposalOrigin::Npc,
+            Self::World => ProposalOrigin::World,
+            Self::Story => ProposalOrigin::Story,
+            Self::Encounter => ProposalOrigin::Encounter,
+            Self::Timer => ProposalOrigin::Timer,
+            Self::Machine => ProposalOrigin::Machine,
+        }
+    }
 }
 
 /// One input to submit. `operation` is the operation id the sender minted (a duplicate of it is a
@@ -78,11 +136,144 @@ impl AudienceSpec {
             Self::Seat { seat } => Audience::Seat(SeatId::new(seat)),
         }
     }
+
+    /// The audience as a query and the command line write it: `tv` or a seat number.
+    pub fn parameter(self) -> String {
+        match self {
+            Self::Tv => "tv".to_owned(),
+            Self::Seat { seat } => seat.to_string(),
+        }
+    }
+
+    /// The audience `parameter` wrote.
+    pub fn from_parameter(text: &str) -> Result<Self, AudienceError> {
+        match text {
+            "tv" => Ok(Self::Tv),
+            seat => seat
+                .parse::<u64>()
+                .map(|seat| Self::Seat { seat })
+                .map_err(|_| AudienceError),
+        }
+    }
+}
+
+/// A text that is neither `tv` nor a seat number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudienceError;
+
+impl fmt::Display for AudienceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an audience is tv or a seat number")
+    }
+}
+
+impl std::error::Error for AudienceError {}
+
+/// An audience in a query (`?audience=tv` or `?audience=2`): the text `AudienceSpec::parameter`
+/// writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "String")]
+pub struct AudienceParameter(pub AudienceSpec);
+
+impl TryFrom<String> for AudienceParameter {
+    type Error = AudienceError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        AudienceSpec::from_parameter(&text).map(Self)
+    }
+}
+
+/// The query of the projection and the wire view: who the view is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudienceQuery {
+    pub audience: AudienceParameter,
+}
+
+/// The query of `viable`: the seat asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViableQuery {
+    pub seat: u64,
+}
+
+/// An operation as a person writes it: the number `--op` took, or the 32 hexadecimal digits the
+/// reports print. It is written back as the 32 digits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
+pub struct TraceOperation(OperationId);
+
+impl TraceOperation {
+    /// The width of an operation written as hexadecimal digits.
+    const HEXADECIMAL_DIGITS: usize = 32;
+
+    pub fn new(text: &str) -> Result<Self, TraceOperationError> {
+        if text.len() == Self::HEXADECIMAL_DIGITS {
+            return OperationId::from_hex(text)
+                .map(Self)
+                .map_err(|_| TraceOperationError);
+        }
+        text.parse::<u64>()
+            .ok()
+            .and_then(|number| NonZeroU128::new(u128::from(number)))
+            .map(|number| Self(OperationId::from_nonzero_u128(number)))
+            .ok_or(TraceOperationError)
+    }
+
+    pub fn id(self) -> OperationId {
+        self.0
+    }
+}
+
+impl From<OperationId> for TraceOperation {
+    fn from(id: OperationId) -> Self {
+        Self(id)
+    }
+}
+
+impl From<TraceOperation> for String {
+    fn from(operation: TraceOperation) -> Self {
+        operation.0.to_string()
+    }
+}
+
+impl TryFrom<String> for TraceOperation {
+    type Error = TraceOperationError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        Self::new(&text)
+    }
+}
+
+/// A text that is neither a number from 1 nor 32 hexadecimal digits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraceOperationError;
+
+impl fmt::Display for TraceOperationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("an operation is a number from 1 or 32 hexadecimal digits")
+    }
+}
+
+impl std::error::Error for TraceOperationError {}
+
+/// The query of `trace`: the operation to follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TraceQuery {
+    pub operation: TraceOperation,
+}
+
+/// The body of `broker request`: the purpose to request a resource for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrokerRequest {
+    pub purpose: String,
 }
 
 /// What to do with the owner's serving of the queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "control", rename_all = "snake_case")]
+#[serde(tag = "control", rename_all = "snake_case", deny_unknown_fields)]
 pub enum QueueControl {
     /// Admit inputs but serve none, so the order they wait in can be read.
     Hold,
@@ -94,7 +285,7 @@ pub enum QueueControl {
 
 /// A control of the owner's clock (H.16 `clock now, advance or freeze`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "control", rename_all = "snake_case")]
+#[serde(tag = "control", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ClockControl {
     Now,
     /// Moves the clock forward by `ms` and keeps it moving.
@@ -110,7 +301,7 @@ pub enum ClockControl {
 /// A control of the dice (H.16 `dice seed or force`). A forced value is marked `driven=true` in
 /// the audit line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "control", rename_all = "snake_case")]
+#[serde(tag = "control", rename_all = "snake_case", deny_unknown_fields)]
 pub enum DiceControl {
     /// Restarts the seeded sequence.
     Seed { seed: u64 },
@@ -128,10 +319,26 @@ pub enum CommitFault {
     Deadline,
 }
 
+impl CommitFault {
+    pub const ALL: [Self; 3] = [Self::Unavailable, Self::Refused, Self::Deadline];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Refused => "refused",
+            Self::Deadline => "deadline",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|fault| fault.key() == key)
+    }
+}
+
 /// A fault to put in force (H.16 `chaos <dependency> <fault>`): the next `count` commits fail, or
 /// the interpreter is down until it is put back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "dependency", rename_all = "snake_case")]
+#[serde(tag = "dependency", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ChaosRequest {
     Commit { fault: CommitFault, count: u32 },
     Interpreter { down: bool },
@@ -164,7 +371,7 @@ pub struct HistoryRequest {
 
 /// What to do with the settings in force (H.16 `config show|set`, J.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "control", rename_all = "snake_case")]
+#[serde(tag = "control", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConfigControl {
     Show,
     /// Changes one setting. The owner checks the name and the value against the setting's spec

@@ -171,7 +171,17 @@ impl DeclineObservation {
             },
         )
         .map_err(|_| ExecutionError::InvalidRecord)?;
-        let expected = serde_json::json!({"schema_revision":2,"kind":"image-api-failure","exchange":"submit","submission":"rejected_submit","decline_contract":contract.label(),"status":response.status,"body":response.body,"transport_request_id":response.transport_request_id.as_ref().map(|id|id.as_str()),"retry_after_values":response.retry_after.raw_values()});
+        let expected = serde_json::json!({
+            "schema_revision": 2,
+            "kind": "image-api-failure",
+            "exchange": "submit",
+            "submission": "rejected_submit",
+            "decline_contract": contract.label(),
+            "status": response.status,
+            "body": response.body,
+            "transport_request_id": response.transport_request_id.as_ref().map(|id| id.as_str()),
+            "retry_after_values": response.retry_after.raw_values(),
+        });
         if value != expected
             || raw.is_empty()
             || observed_at_ms <= 0
@@ -225,7 +235,8 @@ impl DeclineObservation {
         })
     }
 }
-/// Requeue is technical authority only; a fresh claim and independent finance admission precede send.
+/// Requeue is technical authority only; a fresh claim and independent finance admission precede
+/// send.
 #[derive(Clone, Eq, PartialEq)]
 pub struct DeclineRetryCommand {
     pub claim: StageClaim,

@@ -932,16 +932,34 @@ pub(super) fn retain_api_failure(failure: &api::ApiFailure) -> ObservedDispatchU
         }
         _ => None,
     };
+    let exchange = match failure.exchange {
+        api::ApiExchange::Submit => "submit",
+        api::ApiExchange::Poll => "poll",
+        api::ApiExchange::Result => "result",
+        api::ApiExchange::Delivery => "delivery",
+    };
+    let submission = match failure.submission {
+        api::SubmissionEvidence::BeforeTransport => "before_transport",
+        api::SubmissionEvidence::RejectedSubmit(_) => "rejected_submit",
+        api::SubmissionEvidence::AcceptedJob => "accepted_job",
+        api::SubmissionEvidence::Unknown => "unknown",
+    };
+    let response = failure.response.as_ref();
     let raw = serde_json::json!({
-        "schema_revision":2,"kind":"image-api-failure",
-        "exchange":match failure.exchange {api::ApiExchange::Submit=>"submit",api::ApiExchange::Poll=>"poll",api::ApiExchange::Result=>"result",api::ApiExchange::Delivery=>"delivery"},
-        "submission":match failure.submission {api::SubmissionEvidence::BeforeTransport=>"before_transport",api::SubmissionEvidence::RejectedSubmit(_)=>"rejected_submit",api::SubmissionEvidence::AcceptedJob=>"accepted_job",api::SubmissionEvidence::Unknown=>"unknown"},
-        "decline_contract":contract,
-        "status":failure.response.as_ref().map(|response|response.status),
-        "body":failure.response.as_ref().map(|response|&response.body),
-        "transport_request_id":failure.response.as_ref().and_then(|response|response.transport_request_id.as_ref()).map(|id|id.as_str()),
-        "retry_after_values":failure.response.as_ref().map(|response|response.retry_after.raw_values()),
-    }).to_string().into_bytes();
+        "schema_revision": 2,
+        "kind": "image-api-failure",
+        "exchange": exchange,
+        "submission": submission,
+        "decline_contract": contract,
+        "status": response.map(|response| response.status),
+        "body": response.map(|response| &response.body),
+        "transport_request_id": response
+            .and_then(|response| response.transport_request_id.as_ref())
+            .map(|id| id.as_str()),
+        "retry_after_values": response.map(|response| response.retry_after.raw_values()),
+    })
+    .to_string()
+    .into_bytes();
     ObservedDispatchUsage {
         raw,
         units: Vec::new(),
@@ -1106,7 +1124,7 @@ async fn codex(
         tokio::fs::write(&path, bytes)
             .await
             .map_err(|_| RuntimeError::StorageUnavailable)?;
-        let digest = hex(pin.digest.as_bytes());
+        let digest = crate::lower_hex(pin.digest.as_bytes());
         staged.push(
             codex_cli::StagedReference::new(path, &digest)
                 .map_err(|_| RuntimeError::InvalidConfiguration)?,
@@ -1261,16 +1279,6 @@ fn codex_usage(usage: codex_cli::ObservedUsage) -> ObservedDispatchUsage {
         },
         raw,
     }
-}
-
-pub(super) fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        text.push(char::from(DIGITS[usize::from(byte & 15)]));
-    }
-    text
 }
 
 /// Lifecycle event for one Codex turn. Carries only the outcome class and a failure kind; the

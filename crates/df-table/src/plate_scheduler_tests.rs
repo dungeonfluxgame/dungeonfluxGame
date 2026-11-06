@@ -1,10 +1,10 @@
-use crate::plate_fixtures_tests::{SCENE, World, brief, display_name, market, scene, timing};
-use crate::plate_job::{JobError, PlateJobId};
-use crate::plate_scheduler::{
+use crate::plate::job::{JobError, JobReason, PlateJobId};
+use crate::plate::scheduler::{
     JobEnd, MAXIMUM_QUEUED_JOBS, PlateScheduler, SkipReason, Tick, TickOutcome,
 };
-use crate::plate_timing::TimingSetting;
-use crate::scene_plan_brief::SceneBrief;
+use crate::plate::timing::TimingSetting;
+use crate::plate_fixtures_tests::{SCENE, World, brief, display_name, market, scene, timing};
+use crate::scene_plan::brief::SceneBrief;
 use crate::table_state::Visibility;
 
 const INTERVAL_MS: u64 = 15_000;
@@ -47,7 +47,7 @@ fn entering_a_scene_queues_its_first_plate_and_starts_the_clock_one_interval_out
     assert_eq!(queued(&tick), PlateJobId::new(1));
     assert_eq!(scheduler.next_tick_ms(), Some(1_000 + INTERVAL_MS));
     let job = scheduler.take_next().expect("a job");
-    assert_eq!(job.cause().key(), "scene_entered");
+    assert_eq!(job.reason(), JobReason::SceneEntered);
     assert_eq!(job.tick_ms(), 1_000, "a job keeps its tick time");
 }
 
@@ -330,4 +330,24 @@ fn the_job_s_digest_ignores_overlay_facts_and_follows_the_set() {
     world.move_to("mara", 50, 20);
     let after_move = crate::plate_fixtures_tests::job(&world, 3, 0).staging_digest();
     assert_ne!(before, after_move);
+}
+
+#[test]
+fn every_job_reason_key_is_its_serde_name_and_a_queued_job_reports_it_typed() {
+    for reason in JobReason::ALL {
+        assert_eq!(
+            serde_json::to_value(reason).expect("a reason serializes"),
+            serde_json::Value::from(reason.key())
+        );
+        assert_eq!(JobReason::from_key(reason.key()), Some(*reason));
+    }
+    assert_eq!(JobReason::from_key("entered"), None);
+    let world = market();
+    let mut scheduler = scheduler();
+    scheduler
+        .enter_scene(0, &world.snapshot(), &brief())
+        .expect("enters");
+    let report = scheduler.report();
+    let queued = serde_json::to_value(&report.queued).expect("a report serializes");
+    assert_eq!(queued[0]["reason"], "scene_entered", "{queued}");
 }

@@ -1325,6 +1325,20 @@ fn new_env_profile_body_merges_over_file_defaults() {
 }
 
 #[test]
+fn a_file_with_a_hundred_named_profiles_resolves_because_the_profile_table_has_no_fixed_count() {
+    let mut file = String::new();
+    for index in 0..100 {
+        file.push_str(&format!(
+            "[imagery.outputs.profile-{index}]\nwidth_px = 96\nheight_px = 144\n\
+             generated_width_px = 1024\ngenerated_height_px = 1024\nformat = \"jpeg\"\n\
+             quality = 65\n"
+        ));
+    }
+    let resolved = resolve(&file, &[], &empty_patch(), 1).unwrap();
+    assert_eq!(resolved.config.output_profiles.len(), 101);
+}
+
+#[test]
 fn none_clears_optional_selections_across_layers() {
     let file = "[imagery.codex]\nagent_model = \"gpt-5\"\n\
         [imagery.purposes.scene_plate]\noutput_profile = \"default\"\n";

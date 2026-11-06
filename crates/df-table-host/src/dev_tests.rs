@@ -136,9 +136,12 @@ async fn reload_picks_up_a_new_kind_file_and_a_broken_one_leaves_the_kinds_alone
     );
     running.write_file("broken.json", "{ not json");
     let error = run(&running, "reload").await.expect_err("refused");
+    let DevError::Rejected(text) = &error else {
+        panic!("expected a rejection, got {error:?}");
+    };
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("unchanged") && text.contains("broken.json")),
-        "{error}"
+        text.contains("unchanged") && text.contains("broken.json"),
+        "{text}"
     );
     assert!(
         run(&running, "kinds")
@@ -220,7 +223,7 @@ async fn with_nothing_serving_the_error_says_how_to_start_it() {
 
 #[tokio::test]
 async fn an_answer_the_program_does_not_understand_is_reported_with_its_status_and_start() {
-    let body = "x".repeat(crate::limits::MAXIMUM_ECHOED_ANSWER + 300);
+    let body = "x".repeat(crate::limits::MAXIMUM_ECHOED_ANSWER_CHARACTERS + 300);
     let answer = format!(
         "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
@@ -233,5 +236,56 @@ async fn an_answer_the_program_does_not_understand_is_reported_with_its_status_a
         panic!("expected an unexpected answer");
     };
     assert_eq!(status, 500);
-    assert_eq!(body.chars().count(), crate::limits::MAXIMUM_ECHOED_ANSWER);
+    assert_eq!(
+        body.chars().count(),
+        crate::limits::MAXIMUM_ECHOED_ANSWER_CHARACTERS
+    );
+}
+
+#[tokio::test]
+async fn a_changed_controls_answer_that_does_not_read_says_why() {
+    let body = r#"{"outcome":"done","value":{"revision":3,"screens":{}}}"#;
+    let answer = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let port = canned_server(answer.into_bytes()).await;
+    let error = run_dev(
+        port,
+        &split_words("playground set device=tv").expect("splits"),
+    )
+    .await
+    .expect_err("fails");
+    let DevError::UnexpectedAnswer { status, reason, .. } = error else {
+        panic!("expected an unexpected answer");
+    };
+    assert_eq!(status, 200);
+    let reason = reason.expect("a reason");
+    assert!(reason.contains("missing field `controls`"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_guard_refusal_of_a_controls_change_is_reported_as_its_sentence() {
+    let body = serde_json::json!({
+        "outcome": "rejected",
+        "cause": "forbidden_request",
+        "message": "requests are not accepted from another site",
+        "problems": [],
+    })
+    .to_string();
+    let answer = format!(
+        "HTTP/1.1 403 Forbidden\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let port = canned_server(answer.into_bytes()).await;
+    let error = run_dev(
+        port,
+        &split_words("playground set device=tv").expect("splits"),
+    )
+    .await
+    .expect_err("refused");
+    let DevError::Rejected(text) = error else {
+        panic!("expected a refusal, got {error:?}");
+    };
+    assert!(text.contains("not accepted from another site"), "{text}");
 }

@@ -41,7 +41,7 @@ use crate::event::{FailureCause, TableEvent};
 use crate::identity::SeatId;
 use crate::machine::{Decision, MachineFailureCause, MachineInput, StepInput, StepOutcome};
 use crate::outcome::{Decline, DeclineCode, Outcome, PendingKind};
-use crate::pending::window::{AnswerRefusal, Completion, ResolutionWindow};
+use crate::pending::window::{AnswerError, Completion, ResolutionWindow};
 use crate::pending::{Continuation, PendingResolution, RulingSource, ScopedRuling};
 use crate::ports::{
     ActionId, Awaiting, AwaitingKind, Draw, DrawRequest, Offer, PortName, Resolution, Resolved,
@@ -73,8 +73,8 @@ pub(super) fn answer(
     }
     let window = match pending.window().answered(seat, choice) {
         Ok(window) => window,
-        Err(AnswerRefusal::NotEligible) => return declined(DeclineCode::NotYourTurn),
-        Err(AnswerRefusal::NotOffered | AnswerRefusal::AlreadyAnswered) => {
+        Err(AnswerError::NotEligible) => return declined(DeclineCode::NotYourTurn),
+        Err(AnswerError::NotOffered | AnswerError::AlreadyAnswered) => {
             return declined(DeclineCode::IntentInvalid);
         }
     };
@@ -269,7 +269,7 @@ pub(super) fn release_machine(
     table: &PipelineTable,
     snapshot: &crate::table_state::TableSnapshot,
     pending: PendingId,
-) -> Option<crate::machine_slot::MachineSlot> {
+) -> Option<crate::machine::slot::MachineSlot> {
     let (machine, running) = turn.pipeline.active_machine(table, snapshot)?;
     let input = MachineInput::PendingCancelled { pending };
     if !machine.accepts(table.facts(), &input, running.slot) {

@@ -2,8 +2,8 @@
 use crate::dispatch::{DispatchError, DispatchRegistry};
 use crate::explanation::RuleExplanation;
 use df_model::checkpoint::{
-    ActualDraw, Checkpoint, CheckpointError, CheckpointPins, FactValue, GameCommand, GameInput,
-    PendingInput, RuleReference,
+    ActualDraw, Basis, Checkpoint, CheckpointError, CheckpointPins, FactValue, GameCommand,
+    GameInput, PendingInput, PendingResolution, RuleReference,
 };
 use df_types::{OperationId, RevisionError, RevisionLabel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -86,6 +86,61 @@ pub fn stage_handler<Handler: RulesCommandHandler>(
     current: &Checkpoint,
     maximum_candidate_bytes: usize,
 ) -> Result<Checkpoint, InvocationError<Handler::Rejection>> {
+    let operation = validate_current_input(expected_pins, input, current)?;
+    if maximum_candidate_bytes == 0 {
+        return Err(InvocationError::Capacity);
+    }
+    validate_draw_input(input, current, operation, maximum_candidate_bytes)?;
+    validate_handler_pins(handler.pins(), expected_pins)?;
+    let mut next_basis = current.basis();
+    next_basis.revision = next_basis
+        .revision
+        .next_sequence()
+        .map_err(InvocationError::Revision)?;
+    let candidate = handler
+        .stage(input, current)
+        .map_err(InvocationError::Handler)?;
+    validate_candidate_binding(&candidate, expected_pins, next_basis, operation)?;
+    if candidate
+        .retained_bytes()
+        .filter(|retained_bytes| *retained_bytes <= maximum_candidate_bytes)
+        .is_none()
+    {
+        return Err(InvocationError::Capacity);
+    }
+    validate_draw_accounting(input.supplied_draws, current, &candidate, operation)?;
+    // Canonical checkpoints retain past operations, but one staged command appends only its
+    // requested decision. Existing matching-decision and prefix guards bind this sole append.
+    if candidate
+        .state()
+        .decisions
+        .len()
+        .checked_sub(current.state().decisions.len())
+        != Some(1)
+    {
+        return Err(InvocationError::CandidateDecisionHistoryMismatch);
+    }
+    validate_retained_intents(current, &candidate)?;
+    validate_appended_facts(current, &candidate)?;
+    Ok(candidate)
+}
+
+/// Whether `observed` is the current basis or an older sequence of the same session, run and
+/// recovery epoch: the only observations a command or prepared snapshot may stage against.
+pub(crate) fn is_same_epoch_observation(observed: Basis, current: Basis) -> bool {
+    observed.session == current.session
+        && observed.run == current.run
+        && observed.revision.epoch() == current.revision.epoch()
+        && observed.revision <= current.revision
+}
+
+/// The current checkpoint resumes under the expected pins and the command observes it and has
+/// not already been accepted; returns the command's operation.
+fn validate_current_input<Rejection>(
+    expected_pins: &CheckpointPins,
+    input: RulesCommandInput<'_>,
+    current: &Checkpoint,
+) -> Result<OperationId, InvocationError<Rejection>> {
     if current.pins() != expected_pins {
         return Err(InvocationError::CurrentPinsMismatch);
     }
@@ -97,12 +152,7 @@ pub fn stage_handler<Handler: RulesCommandHandler>(
         GameInput::Host(command) => (command.basis, command.operation),
         _ => return Err(InvocationError::UnsupportedInput),
     };
-    let current_basis = current.basis();
-    if input_basis.session != current_basis.session
-        || input_basis.run != current_basis.run
-        || input_basis.revision.epoch() != current_basis.revision.epoch()
-        || input_basis.revision > current_basis.revision
-    {
+    if !is_same_epoch_observation(input_basis, current.basis()) {
         return Err(InvocationError::InputBasisMismatch);
     }
     if current
@@ -113,11 +163,13 @@ pub fn stage_handler<Handler: RulesCommandHandler>(
     {
         return Err(InvocationError::AlreadyAccepted);
     }
-    if maximum_candidate_bytes == 0 {
-        return Err(InvocationError::Capacity);
-    }
-    validate_draw_input(input, current, operation, maximum_candidate_bytes)?;
-    let handler_pins = handler.pins();
+    Ok(operation)
+}
+
+fn validate_handler_pins<Rejection>(
+    handler_pins: &CheckpointPins,
+    expected_pins: &CheckpointPins,
+) -> Result<(), InvocationError<Rejection>> {
     if handler_pins.rules != expected_pins.rules {
         return Err(InvocationError::HandlerRulesMismatch);
     }
@@ -127,14 +179,17 @@ pub fn stage_handler<Handler: RulesCommandHandler>(
     if handler_pins.build != expected_pins.build {
         return Err(InvocationError::HandlerBuildMismatch);
     }
-    let mut next_basis = current.basis();
-    next_basis.revision = next_basis
-        .revision
-        .next_sequence()
-        .map_err(InvocationError::Revision)?;
-    let candidate = handler
-        .stage(input, current)
-        .map_err(InvocationError::Handler)?;
+    Ok(())
+}
+
+/// The candidate sits exactly one sequence after the current basis, under the expected pins,
+/// and records the command's decision at that revision.
+fn validate_candidate_binding<Rejection>(
+    candidate: &Checkpoint,
+    expected_pins: &CheckpointPins,
+    next_basis: Basis,
+    operation: OperationId,
+) -> Result<(), InvocationError<Rejection>> {
     if candidate.basis() != next_basis {
         return Err(InvocationError::CandidateBasisMismatch);
     }
@@ -158,28 +213,7 @@ pub fn stage_handler<Handler: RulesCommandHandler>(
     {
         return Err(InvocationError::MissingAcceptedDecision);
     }
-    if candidate
-        .retained_bytes()
-        .filter(|retained_bytes| *retained_bytes <= maximum_candidate_bytes)
-        .is_none()
-    {
-        return Err(InvocationError::Capacity);
-    }
-    validate_draw_accounting(input.supplied_draws, current, &candidate, operation)?;
-    // Canonical checkpoints retain past operations, but one staged command appends only its
-    // requested decision. Existing matching-decision and prefix guards bind this sole append.
-    if candidate
-        .state()
-        .decisions
-        .len()
-        .checked_sub(current.state().decisions.len())
-        != Some(1)
-    {
-        return Err(InvocationError::CandidateDecisionHistoryMismatch);
-    }
-    validate_retained_intents(current, &candidate)?;
-    validate_appended_facts(current, &candidate)?;
-    Ok(candidate)
+    Ok(())
 }
 
 fn validate_appended_facts<Rejection>(
@@ -310,7 +344,7 @@ fn validate_draw_input<Rejection>(
             .state()
             .pending
             .len()
-            .checked_mul(std::mem::size_of::<df_model::checkpoint::PendingResolution>())
+            .checked_mul(std::mem::size_of::<PendingResolution>())
             .filter(|pending_bytes| *pending_bytes <= maximum_retained_bytes)
             .is_none()
         {

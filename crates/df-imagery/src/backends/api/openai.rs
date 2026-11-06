@@ -390,7 +390,14 @@ pub(crate) fn reported_image_usage(body: &[u8]) -> Option<ImageUsage> {
         },
     )
     .ok()?;
-    let [text, image, output] = image_usage(&value);
+    complete_image_usage(&value)
+}
+
+/// All three reported counters, or `None`. A partial report is not evidence:
+/// a missing counter must never become a reported zero. The all-zero
+/// `ImageUsage` on a delivered image is the consumer's "unknown" value.
+fn complete_image_usage(value: &Value) -> Option<ImageUsage> {
+    let [text, image, output] = image_usage(value);
     Some(ImageUsage {
         text_input_tokens: text?,
         image_input_tokens: image?,
@@ -398,12 +405,7 @@ pub(crate) fn reported_image_usage(body: &[u8]) -> Option<ImageUsage> {
     })
 }
 async fn decode(value: &Value, edit: &ImageEdit<'_>) -> Result<GeneratedImage, ApiError> {
-    let [text, image, output] = image_usage(value);
-    let usage = ImageUsage {
-        text_input_tokens: text.unwrap_or(0),
-        image_input_tokens: image.unwrap_or(0),
-        output_tokens: output.unwrap_or(0),
-    };
+    let usage = complete_image_usage(value).unwrap_or_default();
     let encoded = value
         .get("data")
         .and_then(Value::as_array)

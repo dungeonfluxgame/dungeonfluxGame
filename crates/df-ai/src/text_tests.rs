@@ -41,6 +41,7 @@ fn request() -> TextRequest {
         output_name: "narration".to_owned(),
         output_schema: json!({"type": "object", "properties": {"line": {"type": "string"}}}),
         deadline: Duration::from_secs(30),
+        images: Vec::new(),
     }
 }
 
@@ -134,4 +135,72 @@ fn every_answered_request_reports_one_event_with_purpose_and_outcome() {
     assert_eq!(events[0].purpose.label(), "storyteller");
     assert_eq!(events[0].output_name, "narration");
     assert_eq!(events[0].kind, TextEventKind::Answered);
+}
+
+#[test]
+fn pictures_are_checked_and_change_the_fingerprint_only_when_present() {
+    use crate::text::{MAXIMUM_IMAGES, TextImage, TextImageType};
+    use crate::text_attempts::fingerprint;
+    let plain = request();
+    let mut with_picture = plain.clone();
+    with_picture.images.push(TextImage {
+        label: "Candidate 1".to_owned(),
+        media_type: TextImageType::Jpeg,
+        bytes: vec![1, 2, 3],
+    });
+    assert_ne!(fingerprint(&plain), fingerprint(&with_picture));
+    let mut other_picture = with_picture.clone();
+    other_picture.images[0].bytes = vec![9];
+    assert_ne!(fingerprint(&with_picture), fingerprint(&other_picture));
+    assert!(!format!("{:?}", with_picture.images[0]).contains("[1, 2, 3]"));
+    let service = TextService::new(Fixed(Mutex::new(Vec::new())));
+    assert!(service.check(&with_picture).is_ok());
+    let mut empty = with_picture.clone();
+    empty.images[0].bytes.clear();
+    assert_eq!(service.check(&empty), Err(TextRequestError::InvalidImages));
+    let mut many = with_picture;
+    many.images = vec![many.images[0].clone(); MAXIMUM_IMAGES + 1];
+    assert_eq!(service.check(&many), Err(TextRequestError::InvalidImages));
+}
+
+#[test]
+fn an_output_name_the_attempt_store_cannot_hold_is_refused_before_admission() {
+    let service = service(TextOutcome::Invalid);
+    let mut too_long = request();
+    too_long.output_name = "n".repeat(MAXIMUM_LABEL_BYTES + 1);
+    assert_eq!(
+        service.check(&too_long),
+        Err(TextRequestError::InvalidSchema)
+    );
+    let mut control = request();
+    control.output_name = "narration\n".to_owned();
+    assert_eq!(
+        service.check(&control),
+        Err(TextRequestError::InvalidSchema)
+    );
+    let mut longest = request();
+    longest.output_name = "n".repeat(MAXIMUM_LABEL_BYTES);
+    assert!(service.check(&longest).is_ok());
+}
+
+#[test]
+fn facts_at_the_budget_pass_and_one_byte_over_is_refused() {
+    let facts = json!({"room": "harbor"});
+    let facts_bytes = serde_json::to_vec(&facts).unwrap().len();
+    let at_budget = TextLimits::new(1024, facts_bytes, DEFAULT_MAXIMUM_DEADLINE).unwrap();
+    let mut fitting = request();
+    fitting.facts = facts.clone();
+    assert!(
+        service(TextOutcome::Invalid)
+            .with_limits(at_budget)
+            .check(&fitting)
+            .is_ok()
+    );
+    let below = TextLimits::new(1024, facts_bytes - 1, DEFAULT_MAXIMUM_DEADLINE).unwrap();
+    assert_eq!(
+        service(TextOutcome::Invalid)
+            .with_limits(below)
+            .check(&fitting),
+        Err(TextRequestError::FactsTooLarge)
+    );
 }

@@ -13,7 +13,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use serde::{Deserialize, Serialize};
 
 use super::limits::{MAXIMUM_RETAINED_BYTES, MAXIMUM_RETAINED_RECORDS};
-use super::outlet::{OutletRefusal, OutletStatus, RecordOutlet};
+use super::outlet::{OutletError, OutletStatus, RecordOutlet};
 use super::record::{ObservedRecord, RecordClass};
 
 /// Which retained records a query wants. A field left out matches everything.
@@ -132,7 +132,7 @@ impl RecordOutlet for MemoryOutlet {
         "memory"
     }
 
-    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletRefusal> {
+    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletError> {
         let cost = record.approximate_bytes();
         let mut retained = self.locked();
         retained.records.push_back(record.clone());

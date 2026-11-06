@@ -8,11 +8,21 @@ use serde_json::{Value, json};
 use crate::metering::{
     AnsweredUsage, CallMeter, MeterSlot, MeteredClient, SentCall, settle_refusal, settle_status,
 };
-use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal, native_http::NativeHttp};
+use crate::native_http::{NativeHttp, is_valid_credential};
+use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
 
 // 800 ms and 32 KiB failed every free-roam judgement (larger generated-place context) as a
 // transport error, which silenced every stranger (2026-10-24, owner: remove the limits).
+// The deadline is how long a judgement may hold the table, so it stays a gameplay value.
 const DEADLINE: Duration = Duration::from_secs(4);
+/// The largest judgement request sent, in bytes; the state of a large place fits with room.
+const MAXIMUM_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+/// The largest answer kept, in bytes.
+const MAXIMUM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+/// The largest response header block, in bytes.
+const MAXIMUM_HEADER_BYTES: usize = 16 * 1024;
+/// The most body chunks of one answer (the old 64 could refuse a small answer sent in frames).
+const MAXIMUM_CHUNKS: usize = 65_536;
 /// The model every call asks for.
 const MODEL: &str = "jev-latest";
 
@@ -47,10 +57,7 @@ impl SystemOneChoiceProvider {
         base_url: &str,
         meter: Arc<dyn CallMeter>,
     ) -> Result<Self, SystemOneError> {
-        if credential.is_empty()
-            || credential.len() > 8192
-            || !credential.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-        {
+        if !is_valid_credential(&credential) {
             return Err(SystemOneError::Transport);
         }
         let url = reqwest::Url::parse(base_url).map_err(|_| SystemOneError::Transport)?;
@@ -74,10 +81,10 @@ impl SystemOneChoiceProvider {
                 connect_timeout: DEADLINE,
                 read_timeout: DEADLINE,
                 total_timeout: DEADLINE,
-                maximum_request_bytes: 256 * 1024,
-                maximum_response_bytes: 64 * 1024,
-                maximum_header_bytes: 8 * 1024,
-                maximum_chunks: 64,
+                maximum_request_bytes: MAXIMUM_REQUEST_BYTES,
+                maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
+                maximum_header_bytes: MAXIMUM_HEADER_BYTES,
+                maximum_chunks: MAXIMUM_CHUNKS,
             },
             loopback,
         )
@@ -107,9 +114,10 @@ impl SystemOneChoiceProvider {
             .enumerate()
             .map(|(index, criterion)| (format!("o{}", index + 1), criterion))
             .collect();
+        let question = json!({"type": "choice", "instructions": instructions, "criteria": options});
         let body = serde_json::to_vec(&json!({
             "model": MODEL,
-            "questions": {"q1": {"type": "choice", "instructions": instructions, "criteria": options}},
+            "questions": {"q1": question},
             "state": state,
         }))
         .map_err(|_| SystemOneError::InvalidAnswer)?;
@@ -146,6 +154,7 @@ impl SystemOneChoiceProvider {
             return Err(SystemOneError::Transport);
         }
         let response: Result<Value, _> = serde_json::from_slice(&response.body);
+        // An answer that does not parse reports no usage; it is still settled below as unusable.
         let usage = response.as_ref().map(reported_usage).unwrap_or_default();
         let choice = response
             .map_err(|_| SystemOneError::InvalidAnswer)

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::effects::{BeatName, ConversationOutcome};
 use crate::identity::{MachineId, SceneId, SessionRevision};
-use crate::machine_slot::MachineSlot;
+use crate::machine::slot::MachineSlot;
 use crate::table_state::digest::Digest;
 
 /// The scene's epoch of D.2: it rises in the same commit as a scene change, and every plate job,
@@ -183,9 +183,11 @@ impl SceneRecord {
             stack,
         } = self;
         digest.number(generation.get());
-        digest.option(beat, |digest, beat| digest.beat(beat));
-        digest.option(conversation, |digest, outcome| digest.text(outcome.key()));
-        digest.option(active, |digest, active| active.digest_into(digest));
+        digest.option(beat.as_ref(), |digest, beat| digest.beat(beat));
+        digest.option(conversation.as_ref(), |digest, outcome| {
+            digest.text(outcome.key())
+        });
+        digest.option(active.as_ref(), |digest, active| active.digest_into(digest));
         digest.count(stack.len());
         for frame in stack {
             frame.digest_into(digest);

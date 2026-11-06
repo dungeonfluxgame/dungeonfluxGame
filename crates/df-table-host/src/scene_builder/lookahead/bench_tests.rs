@@ -1,22 +1,26 @@
 //! The look-ahead through the workbench: the same pipeline the dev verbs drive, over scripted
 //! providers on the workbench's own clock.
 
-use df_table::plate_timing::PlateTiming;
+use df_table::lookahead::Expectation;
+use df_table::plate::timing::PlateTiming;
 
 use super::request::{LookaheadReply, LookaheadRequest};
+use crate::dev_http::RouteError;
+use crate::scene_builder::fixtures::name;
 use crate::scene_builder::request::{
-    BuildReply, BuildRequest, DevMoment, DevStage, RunRequest, SceneError, SlowStage,
+    BuildReply, BuildRequest, DevMoment, DevStage, LookaheadTake, RunRequest, SceneBuilderError,
+    SlowStage,
 };
 use crate::scene_builder::workbench::Workbench;
 
 fn bench() -> Workbench {
-    Workbench::new(PlateTiming::defaults(), None).expect("a workbench")
+    Workbench::new(PlateTiming::default(), None).expect("a workbench")
 }
 
 fn build(bench: &mut Workbench, place: &str) -> BuildReply {
     bench
         .build(&BuildRequest {
-            place: place.to_owned(),
+            place: name(place),
             fail: None,
             slow: None,
         })
@@ -35,8 +39,8 @@ fn run(bench: &mut Workbench, seconds: u64) {
 
 fn target(place: &str) -> LookaheadRequest {
     LookaheadRequest::Target {
-        place: place.to_owned(),
-        kind: df_table::lookahead::Expectation::AuthoredBeat,
+        place: name(place),
+        kind: Expectation::AuthoredBeat,
         likelihood_permille: None,
         fail: None,
         slow: None,
@@ -69,11 +73,11 @@ fn a_target_is_built_while_the_clock_runs_and_the_next_scene_build_finds_it_read
     );
     run(&mut bench, 5);
     let shown = bench.lookahead(None).expect("shows");
-    assert_eq!(shown.report.book[0].state, "ready");
+    assert_eq!(shown.report.book[0].state.key(), "ready");
     assert_eq!(shown.report.counts.built, 1);
 
     let ahead = build(&mut bench, "Quay");
-    assert_eq!(ahead.lookahead.as_deref(), Some("hit"));
+    assert_eq!(ahead.lookahead, Some(LookaheadTake::Hit));
     assert!(
         ahead
             .lines
@@ -101,8 +105,8 @@ fn a_slow_look_ahead_provider_leaves_the_build_of_the_scene_as_it_was() {
     say(
         &mut bench,
         &LookaheadRequest::Target {
-            place: "Quay".to_owned(),
-            kind: df_table::lookahead::Expectation::TravelLeg,
+            place: name("Quay"),
+            kind: Expectation::TravelLeg,
             likelihood_permille: None,
             fail: None,
             slow: Some(SlowStage {
@@ -113,7 +117,7 @@ fn a_slow_look_ahead_provider_leaves_the_build_of_the_scene_as_it_was() {
     );
     run(&mut bench, 5);
     let late = build(&mut bench, "Quay");
-    assert_eq!(late.lookahead.as_deref(), Some("late"));
+    assert_eq!(late.lookahead, Some(LookaheadTake::Late));
     let mut plain = self::bench();
     build(&mut plain, "Harbor market");
     assert_eq!(plate_ms(&late), plate_ms(&build(&mut plain, "Quay")));
@@ -126,8 +130,8 @@ fn a_scene_built_for_another_place_is_stale_and_a_branch_to_a_new_target_cancels
     say(&mut bench, &target("Quay"));
     run(&mut bench, 5);
     assert_eq!(
-        build(&mut bench, "Elsewhere").lookahead.as_deref(),
-        Some("stale")
+        build(&mut bench, "Elsewhere").lookahead,
+        Some(LookaheadTake::Stale)
     );
 
     say(&mut bench, &target("Keep"));
@@ -143,7 +147,10 @@ fn a_scene_built_for_another_place_is_stale_and_a_branch_to_a_new_target_cancels
         branched.lines
     );
     run(&mut bench, 5);
-    assert_eq!(build(&mut bench, "Tower").lookahead.as_deref(), Some("hit"));
+    assert_eq!(
+        build(&mut bench, "Tower").lookahead,
+        Some(LookaheadTake::Hit)
+    );
 }
 
 #[test]
@@ -182,27 +189,37 @@ fn pause_resume_and_clear_change_what_the_worker_does() {
 fn only_describe_and_background_are_built_ahead() {
     let mut bench = bench();
     let refused = bench.lookahead(Some(&LookaheadRequest::Target {
-        place: "Quay".to_owned(),
-        kind: df_table::lookahead::Expectation::AuthoredBeat,
+        place: name("Quay"),
+        kind: Expectation::AuthoredBeat,
         likelihood_permille: None,
         fail: Some(DevStage::Plate),
         slow: None,
     }));
-    assert!(
-        matches!(refused, Err(SceneError::BadRequest { .. })),
-        "{refused:?}"
+    assert_eq!(
+        refused.err(),
+        Some(SceneBuilderError::InvalidLookaheadStage {
+            stage: DevStage::Plate
+        }),
     );
     let wild = bench.lookahead(Some(&LookaheadRequest::Target {
-        place: "Quay".to_owned(),
-        kind: df_table::lookahead::Expectation::ExitHint,
+        place: name("Quay"),
+        kind: Expectation::ExitHint,
         likelihood_permille: Some(1_001),
         fail: None,
         slow: None,
     }));
-    assert!(
-        matches!(wild, Err(SceneError::Workbench { .. })),
-        "{wild:?}"
+    // A likelihood above certain is the caller's mistake (a 400), not a workbench failure.
+    let Err(wild) = wild else {
+        panic!("a likelihood above 1,000 thousandths is refused");
+    };
+    assert_eq!(
+        wild,
+        SceneBuilderError::InvalidLikelihood {
+            kind: Expectation::ExitHint,
+            likelihood_permille: Some(1_001),
+        }
     );
+    assert_eq!(wild.status(), axum::http::StatusCode::BAD_REQUEST);
 }
 
 #[test]
@@ -212,8 +229,8 @@ fn a_likely_scene_waits_for_the_start_delay_after_the_current_scene_is_ready() {
     let waiting = say(
         &mut bench,
         &LookaheadRequest::Target {
-            place: "Quay".to_owned(),
-            kind: df_table::lookahead::Expectation::ExitHint,
+            place: name("Quay"),
+            kind: Expectation::ExitHint,
             likelihood_permille: Some(700),
             fail: None,
             slow: None,
@@ -258,7 +275,7 @@ fn nothing_of_a_pending_build_reaches_a_projection_until_the_transition_adopts_i
     let before_show = bench.show();
     let before_card = bench.buffer_show().card;
     let started = say(&mut bench, &target("Quay"));
-    assert_eq!(started.report.book[0].state, "building");
+    assert_eq!(started.report.book[0].state.key(), "building");
 
     let mut lines: Vec<String> = started.lines.iter().map(|l| l.line.clone()).collect();
     let mut seen = Vec::new();
@@ -273,7 +290,7 @@ fn nothing_of_a_pending_build_reaches_a_projection_until_the_transition_adopts_i
         lines.extend(reply.lines.iter().map(|l| l.line.clone()));
         assert_eq!(reply.buffer.scene, 1, "the buffer is the current scene's");
         let book = bench.lookahead(None).expect("shows").report.book;
-        assert_eq!(book[0].state, state, "{book:?}");
+        assert_eq!(book[0].state.key(), state, "{book:?}");
         seen.push(projected_scenes(&bench));
     }
     for scenes in &seen {
@@ -311,7 +328,7 @@ fn nothing_of_a_pending_build_reaches_a_projection_until_the_transition_adopts_i
     );
 
     let entered = build(&mut bench, "Quay");
-    assert_eq!(entered.lookahead.as_deref(), Some("hit"));
+    assert_eq!(entered.lookahead, Some(LookaheadTake::Hit));
     let adopted = entered
         .lines
         .iter()
@@ -327,8 +344,8 @@ fn a_refused_target_scripts_nothing_and_a_certain_kind_takes_no_likelihood() {
     let mut bench = bench();
     build(&mut bench, "Harbor market");
     let wild = bench.lookahead(Some(&LookaheadRequest::Target {
-        place: "Quay".to_owned(),
-        kind: df_table::lookahead::Expectation::ExitHint,
+        place: name("Quay"),
+        kind: Expectation::ExitHint,
         likelihood_permille: Some(1_500),
         fail: Some(DevStage::Describe),
         slow: Some(SlowStage {
@@ -337,12 +354,12 @@ fn a_refused_target_scripts_nothing_and_a_certain_kind_takes_no_likelihood() {
         }),
     }));
     assert!(
-        matches!(wild, Err(SceneError::Workbench { .. })),
+        matches!(wild, Err(SceneBuilderError::InvalidLikelihood { .. })),
         "{wild:?}"
     );
     let certain_with_likelihood = bench.lookahead(Some(&LookaheadRequest::Target {
-        place: "Quay".to_owned(),
-        kind: df_table::lookahead::Expectation::TravelLeg,
+        place: name("Quay"),
+        kind: Expectation::TravelLeg,
         likelihood_permille: Some(500),
         fail: Some(DevStage::Describe),
         slow: Some(SlowStage {
@@ -351,18 +368,21 @@ fn a_refused_target_scripts_nothing_and_a_certain_kind_takes_no_likelihood() {
         }),
     }));
     assert!(
-        matches!(certain_with_likelihood, Err(SceneError::BadRequest { .. })),
+        matches!(
+            certain_with_likelihood,
+            Err(SceneBuilderError::InvalidLikelihood { .. })
+        ),
         "{certain_with_likelihood:?}"
     );
     let no_default = bench.lookahead(Some(&LookaheadRequest::Target {
-        place: "Quay".to_owned(),
-        kind: df_table::lookahead::Expectation::ExitHint,
+        place: name("Quay"),
+        kind: Expectation::ExitHint,
         likelihood_permille: None,
         fail: None,
         slow: None,
     }));
     assert!(
-        matches!(no_default, Err(SceneError::BadRequest { .. })),
+        matches!(no_default, Err(SceneBuilderError::InvalidLikelihood { .. })),
         "a likely scene never gets a likelihood nobody stated: {no_default:?}"
     );
     assert_eq!(
@@ -376,11 +396,15 @@ fn a_refused_target_scripts_nothing_and_a_certain_kind_takes_no_likelihood() {
     run(&mut bench, 5);
     let shown = bench.lookahead(None).expect("shows");
     assert_eq!(
-        shown.report.book[0].state, "ready",
+        shown.report.book[0].state.key(),
+        "ready",
         "{:?}",
         shown.report.book
     );
-    assert_eq!(build(&mut bench, "Quay").lookahead.as_deref(), Some("hit"));
+    assert_eq!(
+        build(&mut bench, "Quay").lookahead,
+        Some(LookaheadTake::Hit)
+    );
 }
 
 #[test]
@@ -390,8 +414,8 @@ fn a_target_says_which_provider_it_slowed_and_which_it_will_refuse() {
     let reply = say(
         &mut bench,
         &LookaheadRequest::Target {
-            place: "Quay".to_owned(),
-            kind: df_table::lookahead::Expectation::AuthoredBeat,
+            place: name("Quay"),
+            kind: Expectation::AuthoredBeat,
             likelihood_permille: None,
             fail: Some(DevStage::Describe),
             slow: Some(SlowStage {

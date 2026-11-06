@@ -48,7 +48,8 @@ pub struct ImageDemandView {
     pub staging: Vec<crate::StagedIdentity>,
     /// Authorized durable execution state; Unknown never authorizes a replacement request.
     pub execution: ImageExecutionState,
-    /// Closed supplier failure on the actual current graph tail, independent of billing uncertainty.
+    /// Closed supplier failure on the actual current graph tail, independent of billing
+    /// uncertainty.
     pub failure: Option<crate::execution::FailureCause>,
     /// Actual unsent queue deferral, separate from supplier failure or financial liability.
     pub operational_notice: Option<crate::execution::QueueDeferralNotice>,
@@ -63,7 +64,8 @@ pub struct ImageDemandView {
 pub enum RequestOutcome {
     /// Current-authorized immutable shared artwork, with no foreign operation or usage.
     ReusedArtifact(crate::publication::ReadyArtifact),
-    /// An authorized immutable Ready result; its original historical handle and interest are retained.
+    /// An authorized immutable Ready result; its original historical handle and interest are
+    /// retained.
     Reused(ImageDemandView),
     /// A genuinely new Live demand was recorded; the view is its first revision.
     Recorded(ImageDemandView),
@@ -214,6 +216,7 @@ pub struct CreatorAssessment {
     pub contract_revision: u32,
 }
 
+/// The closed creator-content categories a classification answer may choose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreatorCategory {
     General,
@@ -250,6 +253,8 @@ impl CreatorCategory {
     }
 }
 
+/// Where a classified creator request goes next: the general route, the BFL route, back for
+/// revision, or held as uncertain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreatorRoute {
     General,
@@ -284,6 +289,7 @@ pub struct ImageUsageObservation {
     pub summary: crate::runtime::ImageUsageSummary,
 }
 
+/// An authorized audience-safe inspection assessment and the job revision it was read at.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImageInspectionObservation {
     pub job_revision: u64,

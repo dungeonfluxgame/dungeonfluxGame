@@ -2,6 +2,7 @@
 //! is `continuity`; this module only reads the browser's clock for it.
 
 use std::cell::RefCell;
+use std::fmt;
 
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
@@ -10,6 +11,7 @@ use crate::continuity::Continuity;
 use crate::fixture::{ImageRef, Slide};
 use crate::media::{MediaKind, media_kind};
 use crate::motion_style::slide_style;
+use crate::path::media_file;
 
 pub fn document() -> Result<Document, JsValue> {
     web_sys::window()
@@ -25,6 +27,24 @@ pub fn now_ms() -> Result<f64, JsValue> {
         .map(|performance| performance.now())
         .ok_or_else(|| JsValue::from_str("the page has no performance clock"))
 }
+
+/// An exception the browser threw, kept as it was thrown. It prints as its message.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BrowserError(JsValue);
+
+impl From<JsValue> for BrowserError {
+    fn from(thrown: JsValue) -> Self {
+        Self(thrown)
+    }
+}
+
+impl fmt::Display for BrowserError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&js_message(&self.0))
+    }
+}
+
+impl std::error::Error for BrowserError {}
 
 /// What a thrown value says, for a message that names the cause.
 pub fn js_message(error: &JsValue) -> String {
@@ -109,7 +129,7 @@ pub fn picture(document: &Document, class: &str, image: &ImageRef) -> Result<Ele
         return Ok(frame);
     }
     let picture = element(document, "img", &format!("{class}-image"))?;
-    picture.set_attribute("src", &format!("/playground/media/{}", image.media))?;
+    picture.set_attribute("src", &media_file(&image.media))?;
     picture.set_attribute("data-media", &image.media)?;
     picture.set_attribute("alt", image.caption.as_deref().unwrap_or(&image.media))?;
     if image.rotation_degrees != 0 {

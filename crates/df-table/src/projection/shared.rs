@@ -22,7 +22,6 @@ use serde_json::Value;
 
 use crate::element::ElementId;
 use crate::identity::EvidenceRef;
-use crate::projection::bounds::FIGURE_SIZE_UNITS;
 use crate::projection::record::ProjectionWork;
 use crate::projection::status::ProjectionStatus;
 use crate::projection::text::NonEmptyText;
@@ -35,6 +34,9 @@ const HIDDEN_FIELD: &str = "hidden";
 const PORTRAIT_FIELD: &str = "portrait";
 const MARKER_KIND: &str = "marker";
 const MARKER_LABEL: &str = "Something unseen";
+/// The width and height of a creature's figure on the stage, in canvas units, until the kinds say
+/// otherwise (the canvas's `character` kind draws a 6 unit circle).
+const FIGURE_SIZE_UNITS: f32 = 6.0;
 
 /// The line under the picture on the shared screen.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

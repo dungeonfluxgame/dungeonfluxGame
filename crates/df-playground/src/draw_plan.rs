@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::choices::build;
 use crate::controls::{Controls, Transition, TransitionStyle};
 use crate::copy::status_blocks_input;
-use crate::fixture::{ElementSource, Fixture, ImageRef, Slide};
+use crate::fixture::{ElementSource, Fixture, FixtureTitle, ImageRef, Slide};
 
 /// A piece of a device that is redrawn on its own. The shared screen's figures and camera are not
 /// listed: they move in place, frame by frame.
@@ -20,6 +20,8 @@ use crate::fixture::{ElementSource, Fixture, ImageRef, Slide};
 pub enum Part {
     TvBackdrop,
     TvGrid,
+    TvSam,
+    TvAnchors,
     TvPlace,
     TvCard,
     TvPanels,
@@ -37,11 +39,14 @@ pub enum Part {
 }
 
 impl Part {
-    /// The marker the page puts on the piece, so it can find it again.
-    pub fn key(self) -> &'static str {
+    /// The `data-part` marker the page puts on the piece, so it can find it again. It is a DOM
+    /// marker, not a wire key: no reader parses it back.
+    pub fn dom_marker(self) -> &'static str {
         match self {
             Self::TvBackdrop => "tv-backdrop",
             Self::TvGrid => "tv-grid",
+            Self::TvSam => "tv-sam",
+            Self::TvAnchors => "tv-anchors",
             Self::TvPlace => "tv-place",
             Self::TvCard => "tv-card",
             Self::TvPanels => "tv-panels",
@@ -63,7 +68,8 @@ impl Part {
 /// What the page is made from, as of one draw. Cheap to keep: the fixture is shared.
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    pub names: Vec<String>,
+    /// The fixture files and their titles, for the scenario menu.
+    pub names: Vec<FixtureTitle>,
     pub controls: Controls,
     /// The file the fixture was read from. Another file is another scene.
     pub loaded_name: Option<String>,
@@ -71,6 +77,8 @@ pub struct Snapshot {
     /// could not be read.
     pub shown: Option<Rc<Result<Fixture, String>>>,
     pub connection_problem: Option<String>,
+    /// The host's scene has live changes drawn over the fixture (the notes say so).
+    pub live_changes: bool,
     pub audio_unlocked: bool,
 }
 
@@ -124,7 +132,8 @@ impl DrawPlan {
             plan.stage = true;
             return plan;
         }
-        plan.notes = old.connection_problem != new.connection_problem;
+        plan.notes = old.connection_problem != new.connection_problem
+            || old.live_changes != new.live_changes;
         if let (Some(old_fixture), Some(new_fixture)) = (fixture_of(old), fixture_of(new)) {
             plan.compare_fixtures((old_fixture, &old.controls), (new_fixture, &new.controls));
         } else if kind(new) == 2 && !same_error(old, new) {
@@ -143,8 +152,10 @@ impl DrawPlan {
         let ((before, before_controls), (after, after_controls)) = (old, new);
         self.compare_tv(old, new);
         let choices_differ = self.compare_phone(old, new);
+        // The camera can aim at a character of the backdrop's layout, so a new layout reframes.
         self.stage |= before.tv.elements != after.tv.elements
-            || !same_camera(&before.tv.camera, &after.tv.camera);
+            || !same_camera(before.tv.camera.as_ref(), after.tv.camera.as_ref())
+            || before.tv.backdrop_layout() != after.tv.backdrop_layout();
         let words_differ = (&before.name, &before.description) != (&after.name, &after.description);
         // The notes list where the scenario breaks the choice rules, so they follow the choices.
         let warnings_differ =
@@ -159,24 +170,36 @@ impl DrawPlan {
         let status_after = after_controls.status_for(&after.tv.status);
         self.mark(
             Part::TvBackdrop,
-            !same_image(&before.tv.backdrop, &after.tv.backdrop),
+            !same_image(before.tv.backdrop.as_ref(), after.tv.backdrop.as_ref()),
         );
         self.mark(
             Part::TvGrid,
             before_controls.show_grid != after_controls.show_grid,
         );
         self.mark(
+            Part::TvSam,
+            before_controls.show_sam != after_controls.show_sam
+                || before.tv.backdrop_layout() != after.tv.backdrop_layout(),
+        );
+        self.mark(
             Part::TvPlace,
             before.tv.place != after.tv.place || before.tv.brand != after.tv.brand,
         );
-        self.mark(Part::TvCard, !same_image(&before.tv.card, &after.tv.card));
+        self.mark(
+            Part::TvCard,
+            !same_image(before.tv.card.as_ref(), after.tv.card.as_ref()),
+        );
         self.mark(
             Part::TvPanels,
-            crate::overlay_changes::panels_differ(&before.tv, &after.tv),
+            crate::overlay::changes::panels_differ(&before.tv, &after.tv),
+        );
+        self.mark(
+            Part::TvAnchors,
+            crate::overlay::changes::anchors_differ(&before.tv, &after.tv),
         );
         self.mark(
             Part::TvPills,
-            crate::overlay_changes::pills_differ(&before.tv, &after.tv),
+            crate::overlay::changes::pills_differ(&before.tv, &after.tv),
         );
         self.mark(Part::TvStatus, status_before != status_after);
         self.mark(
@@ -203,7 +226,7 @@ impl DrawPlan {
         self.mark(Part::PhoneStatus, status_before != status_after);
         self.mark(
             Part::PhoneImage,
-            !same_image(&before.phone.image, &after.phone.image),
+            !same_image(before.phone.image.as_ref(), after.phone.image.as_ref()),
         );
         self.mark(
             Part::PhoneNarration,
@@ -249,6 +272,7 @@ fn toolbar_changed(old: &Snapshot, new: &Snapshot) -> bool {
             &before.status_key,
             before.show_unavailable,
             before.show_grid,
+            before.show_sam,
         ) != (
             &after.fixture,
             after.device,
@@ -256,6 +280,7 @@ fn toolbar_changed(old: &Snapshot, new: &Snapshot) -> bool {
             &after.status_key,
             after.show_unavailable,
             after.show_grid,
+            after.show_sam,
         )
 }
 
@@ -283,7 +308,7 @@ fn same_error(old: &Snapshot, new: &Snapshot) -> bool {
 }
 
 /// Whether two slides are the same slide, whatever the host said about how far along it is.
-fn same_slide(before: &Option<Slide>, after: &Option<Slide>) -> bool {
+fn same_slide(before: Option<&Slide>, after: Option<&Slide>) -> bool {
     match (before, after) {
         (None, None) => true,
         (Some(before), Some(after)) => {
@@ -304,22 +329,22 @@ fn same_slide(before: &Option<Slide>, after: &Option<Slide>) -> bool {
 }
 
 /// Whether two pictures are the same picture, in the same place, turn and slide.
-fn same_image(before: &Option<ImageRef>, after: &Option<ImageRef>) -> bool {
+fn same_image(before: Option<&ImageRef>, after: Option<&ImageRef>) -> bool {
     match (before, after) {
         (None, None) => true,
         (Some(before), Some(after)) => {
             before.media == after.media
                 && before.caption == after.caption
                 && before.rotation_degrees == after.rotation_degrees
-                && same_slide(&before.slide, &after.slide)
+                && same_slide(before.slide.as_ref(), after.slide.as_ref())
         }
         _ => false,
     }
 }
 
 fn same_camera(
-    before: &Option<crate::fixture::Camera>,
-    after: &Option<crate::fixture::Camera>,
+    before: Option<&crate::fixture::Camera>,
+    after: Option<&crate::fixture::Camera>,
 ) -> bool {
     match (before, after) {
         (None, None) => true,

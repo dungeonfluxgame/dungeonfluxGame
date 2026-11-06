@@ -5,11 +5,11 @@
 use crate::effects::{TableEffect, TableState};
 use crate::element::ElementId;
 use crate::identity::{SceneId, SeatId, TableId, TableScope};
-use crate::plate_job::{JobCause, PlateJob, PlateJobId};
-use crate::plate_timing::PlateTiming;
+use crate::plate::job::{JobReason, PlateJob, PlateJobId};
+use crate::plate::timing::PlateTiming;
+use crate::scene_plan::brief::{LocatePhrase, SceneBrief, SetPiece};
+use crate::scene_plan::locate::{Instance, LocateOutcome, Region};
 use crate::scene_plan::{ReadyPlate, StageOutputs, StagePlan, StoredPicture};
-use crate::scene_plan_brief::{LocatePhrase, SceneBrief, SetPiece};
-use crate::scene_plan_locate::{Instance, LocateOutcome, Region};
 use crate::table_state::{
     CastChange, CastEntry, CastKind, Controller, DisplayName, MediaName, Placement, Presence,
     SceneGeneration, SplitPolicy, TableSnapshot, Visibility, Vitals,
@@ -216,13 +216,13 @@ pub(crate) fn brief() -> SceneBrief {
 }
 
 pub(crate) fn timing() -> PlateTiming {
-    PlateTiming::defaults()
+    PlateTiming::default()
 }
 
 pub(crate) fn job(world: &World, id: u64, now_ms: u64) -> PlateJob {
     PlateJob::capture(
         PlateJobId::new(id),
-        JobCause::Tick,
+        JobReason::Tick,
         now_ms,
         &world.snapshot(),
         &brief(),
@@ -239,7 +239,7 @@ pub(crate) fn ready_plate(job: PlateJob, ready_ms: u64) -> ReadyPlate {
     let figures: Vec<_> = job
         .figures()
         .iter()
-        .map(|figure| crate::scene_plan_locate::FigureTarget {
+        .map(|figure| crate::scene_plan::locate::FigureTarget {
             id: figure.id.clone(),
             stated: figure.stated,
         })
@@ -247,7 +247,7 @@ pub(crate) fn ready_plate(job: PlateJob, ready_ms: u64) -> ReadyPlate {
     let locate = LocateOutcome::unlocated(
         &figures,
         &[],
-        crate::scene_plan_locate::UnlocatedReason::NoInstance,
+        crate::scene_plan::locate::UnlocatedReason::NoInstance,
     )
     .expect("an outcome");
     ReadyPlate {

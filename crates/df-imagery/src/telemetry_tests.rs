@@ -289,3 +289,19 @@ fn preflight_and_quota_reasons_remain_closed_without_inventing_supplier_identity
         assert!(attribute(&record, "image.attempt_id").is_none());
     }
 }
+
+#[test]
+fn the_recent_event_buffer_keeps_only_the_newest_capacity_events_in_order() {
+    let observer = SharedImageObserver::new(Arc::new(Failing));
+    for _ in 0..RECENT_EVENT_CAPACITY + 3 {
+        ImageObserver::observe(&observer, ImageEvent::new(EventKind::Sent, context()));
+    }
+    let recent = observer.recent(usize::MAX);
+    assert_eq!(recent.len(), RECENT_EVENT_CAPACITY);
+    assert_eq!(recent.first().map(|event| event.sequence), Some(4));
+    assert_eq!(
+        recent.last().map(|event| event.sequence),
+        Some(u64::try_from(RECENT_EVENT_CAPACITY).unwrap() + 3)
+    );
+    assert_eq!(observer.recent(2).len(), 2);
+}

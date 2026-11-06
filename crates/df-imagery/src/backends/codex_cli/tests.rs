@@ -12,7 +12,7 @@ use crate::backends::codex_cli::fixtures::{
 use crate::backends::codex_cli::process::TokioProcessRunner;
 use crate::output::{Dimensions, OutputFormat};
 use crate::request::TextPrompt;
-use process::{FakeRunner, ProcessEnd, ProcessError, ProcessSession};
+use process::{FakeRunner, ProcessError, ProcessSession};
 use protocol::{ResponseView, RpcId};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -1520,8 +1520,8 @@ impl ProcessSession for BlockedStdinSession {
         Ok(None)
     }
 
-    async fn finish(&mut self) -> Result<ProcessEnd, ProcessError> {
-        Ok(ProcessEnd { code: Some(0) })
+    async fn finish(&mut self) -> Result<(), ProcessError> {
+        Ok(())
     }
 
     async fn kill(&mut self) -> Result<(), ProcessError> {

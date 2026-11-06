@@ -1,3 +1,11 @@
+/// Every compiled schema under `proto/`, in compile order; each also triggers a rebuild.
+const SCHEMAS: [&str; 4] = [
+    "proto/transport_fixture.proto",
+    "proto/common.proto",
+    "proto/contract_fixture.proto",
+    "proto/gameplay.proto",
+];
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = tonic_prost_build::Config::new();
     for field in [
@@ -13,23 +21,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_prost_build::configure()
         .build_transport(false)
         .file_descriptor_set_path(descriptor)
-        .compile_with_config(
-            config,
-            &[
-                "proto/transport_fixture.proto",
-                "proto/common.proto",
-                "proto/contract_fixture.proto",
-                "proto/gameplay.proto",
-            ],
-            &["proto"],
-        )?;
-    for schema in [
-        "transport_fixture",
-        "common",
-        "contract_fixture",
-        "gameplay",
-    ] {
-        println!("cargo:rerun-if-changed=proto/{schema}.proto");
+        .compile_with_config(config, &SCHEMAS, &["proto"])?;
+    for schema in SCHEMAS {
+        println!("cargo:rerun-if-changed={schema}");
     }
     Ok(())
 }

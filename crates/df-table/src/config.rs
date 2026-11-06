@@ -24,6 +24,7 @@ use serde_json::{Map, Value};
 
 use crate::element::name_type;
 use crate::event::TableEvent;
+use crate::limits::LARGE_SETTING_MAXIMUM;
 use crate::listed::listed_enum;
 
 name_type!(
@@ -84,42 +85,37 @@ pub struct SettingSpec {
 /// Why a configuration value was not used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SettingFault {
+pub enum SettingCause {
     Missing,
     NotAWholeNumber,
     OutOfRange,
     UnknownSetting,
     /// The value contradicts a related setting, so both were put back to their defaults.
-    #[serde(rename = "inconsistent_with_related_setting")]
-    InconsistentWith,
+    InconsistentWithRelatedSetting,
 }
 
-impl SettingFault {
+impl SettingCause {
     pub fn key(self) -> &'static str {
         match self {
             Self::Missing => "missing",
             Self::NotAWholeNumber => "not_a_whole_number",
             Self::OutOfRange => "out_of_range",
             Self::UnknownSetting => "unknown_setting",
-            Self::InconsistentWith => "inconsistent_with_related_setting",
+            Self::InconsistentWithRelatedSetting => "inconsistent_with_related_setting",
         }
     }
 }
 
 impl SettingSpec {
-    fn check(&self, value: &Value) -> Result<u32, SettingFault> {
-        let whole_number = value.as_u64().ok_or(SettingFault::NotAWholeNumber)?;
-        let value = u32::try_from(whole_number).map_err(|_| SettingFault::OutOfRange)?;
+    fn check(&self, value: &Value) -> Result<u32, SettingCause> {
+        let whole_number = value.as_u64().ok_or(SettingCause::NotAWholeNumber)?;
+        let value = u32::try_from(whole_number).map_err(|_| SettingCause::OutOfRange)?;
         if !self.range.contains(value) {
-            return Err(SettingFault::OutOfRange);
+            return Err(SettingCause::OutOfRange);
         }
         Ok(value)
     }
 }
-
-/// The upper end of every range for now. Deliberately huge so it never limits play; scope each
-/// setting down on its own later (owner, 2026-11-02). The plan gives defaults and no ranges.
-pub const LARGE_SETTING_MAXIMUM: u32 = 1_000_000;
 
 const NARRATION_LATE_S: SettingSpec = SettingSpec {
     name: "narration_late_s",
@@ -290,28 +286,30 @@ pub struct Settings {
     values: [u32; SettingId::ALL.len()],
 }
 
-impl Settings {
+impl Default for Settings {
     /// Every setting at its default.
-    pub fn defaults() -> Self {
+    fn default() -> Self {
         let mut values = [0; SettingId::ALL.len()];
         for id in SettingId::ALL {
             values[id.index()] = id.spec().default;
         }
         Self { values }
     }
+}
 
+impl Settings {
     /// Reads the settings from a parsed configuration object. Every setting whose value is
     /// missing, not a whole number or outside its range keeps its default and is reported. If
     /// `narration_late_s` ends below `narration_batch_s` (J.4 defines it as that budget plus the
     /// batch window), both go back to their defaults and both are reported.
     pub fn load(configuration: &Map<String, Value>) -> Result<LoadedSettings, ConfigError> {
-        let mut settings = Self::defaults();
+        let mut settings = Self::default();
         let mut events = Vec::new();
         for id in SettingId::ALL {
             let spec = id.spec();
             let checked = match configuration.get(spec.name) {
                 Some(value) => spec.check(value),
-                None => Err(SettingFault::Missing),
+                None => Err(SettingCause::Missing),
             };
             match checked {
                 Ok(value) => settings.values[id.index()] = value,
@@ -330,7 +328,7 @@ impl Settings {
             match SettingName::new(key) {
                 Ok(name) => events.push(TableEvent::SettingRejected {
                     name,
-                    cause: SettingFault::UnknownSetting,
+                    cause: SettingCause::UnknownSetting,
                 }),
                 Err(_) => unnameable_keys += 1,
             }
@@ -354,7 +352,7 @@ impl Settings {
             self.values[id.index()] = id.spec().default;
             events.push(TableEvent::SettingRejected {
                 name: id.name()?,
-                cause: SettingFault::InconsistentWith,
+                cause: SettingCause::InconsistentWithRelatedSetting,
             });
         }
         Ok(())

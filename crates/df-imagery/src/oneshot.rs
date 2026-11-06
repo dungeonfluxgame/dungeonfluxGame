@@ -65,6 +65,7 @@ pub struct OneShotConfig {
 /// One picture to make.
 #[derive(Debug, Clone)]
 pub struct OneShotRequest {
+    /// The request text, at most `MAXIMUM_PROMPT_CHARS` characters.
     pub prompt: String,
     /// The size asked for. The Codex image tool decides the real size.
     pub width_px: u32,
@@ -75,11 +76,14 @@ pub struct OneShotRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OneShotImage {
     pub bytes: Vec<u8>,
+    /// The type read from the delivered bytes: `image/png`, `image/jpeg` or `image/webp`.
     pub mime: &'static str,
+    /// The real size read from the delivered bytes, not the size asked for.
     pub width_px: u32,
     pub height_px: u32,
     pub sha256_hex: String,
     pub elapsed: Duration,
+    /// Token counts when the CLI reported them.
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
 }
@@ -98,17 +102,12 @@ pub enum OneShotError {
     /// The account's usage limit stopped the attempt.
     UsageLimited,
     /// The CLI could not be started: `kind` is the operating system's error kind.
-    Transport {
-        kind: String,
-    },
+    Transport { kind: String },
     /// The service refused or failed the turn, or its output could not be verified.
-    Refused {
-        detail: String,
-    },
+    Refused { detail: String },
     /// The picture was made but its file could not be read back.
-    Unreadable {
-        kind: String,
-    },
+    Unreadable { kind: String },
+    /// A blocking task, the private runtime or local disk work failed inside this process.
     Internal,
 }
 
@@ -153,13 +152,23 @@ fn dimensions(request: &OneShotRequest) -> Result<Dimensions, OneShotError> {
         .map_err(|_| OneShotError::InvalidRequest("the size asked for is not a valid size"))
 }
 
-/// A folder of its own for one attempt, removed when dropped.
+/// A folder of its own for one attempt. `remove` deletes it off the async thread; dropping it
+/// unremoved (a cancelled attempt) deletes it on the spot.
 struct AttemptFolder {
-    root: PathBuf,
+    root: Option<PathBuf>,
 }
 
 impl AttemptFolder {
-    fn create(work_root: &Path) -> std::io::Result<(Self, AttemptDirs)> {
+    /// Creates the attempt's folders on a blocking thread.
+    async fn create(work_root: &Path) -> Result<(Self, AttemptDirs), OneShotError> {
+        let work_root = work_root.to_owned();
+        tokio::task::spawn_blocking(move || Self::create_blocking(&work_root))
+            .await
+            .map_err(|_| OneShotError::Internal)?
+            .map_err(|error| map_work_folder_failure(error.kind()))
+    }
+
+    fn create_blocking(work_root: &Path) -> std::io::Result<(Self, AttemptDirs)> {
         let number = NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -171,14 +180,48 @@ impl AttemptFolder {
         for directory in [&scratch, &inputs, &outputs] {
             std::fs::create_dir_all(directory)?;
         }
-        Ok((Self { root }, AttemptDirs::new(scratch, inputs, outputs)))
+        let folder = Self { root: Some(root) };
+        Ok((folder, AttemptDirs::new(scratch, inputs, outputs)))
+    }
+
+    async fn remove(mut self) {
+        let Some(root) = self.root.take() else {
+            return;
+        };
+        // The folder is ours and holds only this attempt; a leftover or a failed blocking task
+        // costs only disk space, never the picture.
+        let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(root)).await;
+    }
+}
+
+/// Names a work root that cannot hold an attempt as a configuration failure, with its cause in the
+/// reason. Any other local failure (a full disk, a quota, a locked file) happens on a well
+/// configured host, so it is a failure inside this process, never "not configured".
+fn map_work_folder_failure(kind: std::io::ErrorKind) -> OneShotError {
+    use std::io::ErrorKind;
+    match kind {
+        ErrorKind::NotADirectory | ErrorKind::AlreadyExists => {
+            OneShotError::InvalidConfig("the work folder path runs through a file, not a folder")
+        }
+        ErrorKind::NotFound | ErrorKind::InvalidInput | ErrorKind::InvalidFilename => {
+            OneShotError::InvalidConfig("the work folder path is not a usable folder path")
+        }
+        ErrorKind::PermissionDenied => {
+            OneShotError::InvalidConfig("the work folder does not let this process create folders")
+        }
+        ErrorKind::ReadOnlyFilesystem => {
+            OneShotError::InvalidConfig("the work folder is on a read-only file system")
+        }
+        _ => OneShotError::Internal,
     }
 }
 
 impl Drop for AttemptFolder {
     fn drop(&mut self) {
-        // The folder is ours and holds only this attempt; leftovers are only disk space.
-        let _ = std::fs::remove_dir_all(&self.root);
+        if let Some(root) = self.root.take() {
+            // The folder is ours and holds only this attempt; leftovers are only disk space.
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 }
 
@@ -238,10 +281,7 @@ pub async fn generate(
         AlphaRequirement::Either,
         OutputFormat::Png,
     );
-    let (folder, attempt) =
-        AttemptFolder::create(&config.work_root).map_err(|error| OneShotError::Unreadable {
-            kind: format!("{:?}", error.kind()),
-        })?;
+    let (folder, attempt) = AttemptFolder::create(&config.work_root).await?;
     let started = Instant::now();
     let outcome = execute(
         &backend,
@@ -253,37 +293,46 @@ pub async fn generate(
     )
     .await;
     let elapsed = started.elapsed();
-    match outcome {
-        CodexOutcome::Ready { receipt, usage } => {
-            let path = receipt.path().to_owned();
-            let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
-                .await
-                .map_err(|_| OneShotError::Internal)?
-                .map_err(|error| OneShotError::Unreadable {
-                    kind: format!("{:?}", error.kind()),
-                })?;
-            drop(folder);
-            let (mime, width_px, height_px) = describe(&bytes).ok_or(OneShotError::Refused {
-                detail: "the delivered file is not a readable picture".to_owned(),
-            })?;
-            Ok(OneShotImage {
-                sha256_hex: hex(&Sha256::digest(&bytes)),
-                bytes,
-                mime,
-                width_px,
-                height_px,
-                elapsed,
-                input_tokens: usage.input_tokens(),
-                output_tokens: usage.output_tokens(),
-            })
-        }
+    let delivered = match outcome {
+        CodexOutcome::Ready { receipt, usage } => read_delivered(receipt.path().to_owned())
+            .await
+            .map(|bytes| (bytes, usage.input_tokens(), usage.output_tokens())),
         CodexOutcome::Failed { error, .. } => Err(map_failure(error)),
-        CodexOutcome::Unknown { reason, .. } => Err(match reason {
-            UnknownReason::Deadline => OneShotError::Timeout,
-            UnknownReason::Cancelled | UnknownReason::Interrupted | UnknownReason::LostOutput => {
-                OneShotError::Interrupted
-            }
-        }),
+        CodexOutcome::Unknown { reason, .. } => Err(map_unknown(reason)),
+    };
+    folder.remove().await;
+    let (bytes, input_tokens, output_tokens) = delivered?;
+    let (mime, width_px, height_px) = describe(&bytes).ok_or(OneShotError::Refused {
+        detail: "the delivered file is not a readable picture".to_owned(),
+    })?;
+    Ok(OneShotImage {
+        sha256_hex: crate::lower_hex(&Sha256::digest(&bytes)),
+        bytes,
+        mime,
+        width_px,
+        height_px,
+        elapsed,
+        input_tokens,
+        output_tokens,
+    })
+}
+
+/// Reads the verified artifact's bytes on a blocking thread.
+async fn read_delivered(path: PathBuf) -> Result<Vec<u8>, OneShotError> {
+    tokio::task::spawn_blocking(move || std::fs::read(path))
+        .await
+        .map_err(|_| OneShotError::Internal)?
+        .map_err(|error| OneShotError::Unreadable {
+            kind: format!("{:?}", error.kind()),
+        })
+}
+
+fn map_unknown(reason: UnknownReason) -> OneShotError {
+    match reason {
+        UnknownReason::Deadline => OneShotError::Timeout,
+        UnknownReason::Cancelled | UnknownReason::Interrupted | UnknownReason::LostOutput => {
+            OneShotError::Interrupted
+        }
     }
 }
 
@@ -298,14 +347,6 @@ pub fn generate_blocking(
         .build()
         .map_err(|_| OneShotError::Internal)?;
     runtime.block_on(generate(config, request))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        text.push_str(&format!("{byte:02x}"));
-    }
-    text
 }
 
 #[cfg(test)]
@@ -360,5 +401,54 @@ mod tests {
         };
         let error = generate_blocking(&config, &request).expect_err("nothing to run");
         assert_eq!(error.key(), "transport", "{error:?}");
+    }
+
+    #[test]
+    fn a_work_root_that_cannot_hold_folders_is_a_configuration_failure_not_an_unreadable_picture() {
+        let blocker = std::env::temp_dir().join(format!(
+            "df-imagery-oneshot-blocker-{}-{}",
+            std::process::id(),
+            NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&blocker, b"a file, not a folder").unwrap();
+        let config = OneShotConfig {
+            executable: std::env::temp_dir().join("no-such-codex-executable.exe"),
+            work_root: blocker.clone(),
+            agent_model: None,
+            deadline: Duration::from_secs(5),
+        };
+        let request = OneShotRequest {
+            prompt: "a lake".to_owned(),
+            width_px: 16,
+            height_px: 9,
+        };
+        let error = generate_blocking(&config, &request).expect_err("no folder can be made");
+        std::fs::remove_file(&blocker).unwrap();
+        assert_eq!(error.key(), "invalid_config", "{error:?}");
+    }
+
+    #[test]
+    fn a_full_disk_or_locked_file_under_the_work_root_is_an_internal_failure_not_invalid_config() {
+        for kind in [
+            std::io::ErrorKind::StorageFull,
+            std::io::ErrorKind::QuotaExceeded,
+            std::io::ErrorKind::ResourceBusy,
+            std::io::ErrorKind::Other,
+        ] {
+            let error = map_work_folder_failure(kind);
+            assert_eq!(error.key(), "internal", "{kind:?} gave {error:?}");
+        }
+    }
+
+    #[test]
+    fn a_denied_or_read_only_work_root_is_invalid_config_naming_the_cause() {
+        assert_eq!(
+            map_work_folder_failure(std::io::ErrorKind::PermissionDenied),
+            OneShotError::InvalidConfig("the work folder does not let this process create folders")
+        );
+        assert_eq!(
+            map_work_folder_failure(std::io::ErrorKind::ReadOnlyFilesystem),
+            OneShotError::InvalidConfig("the work folder is on a read-only file system")
+        );
     }
 }

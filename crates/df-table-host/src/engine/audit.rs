@@ -272,7 +272,8 @@ impl EngineAudit {
                 policy,
             } => write!(
                 out,
-                "applied commit={commit} revision={revision} inputs={inputs} bytes={bytes} ms={ms} policy={policy}"
+                "applied commit={commit} revision={revision} inputs={inputs} bytes={bytes} ms={ms} \
+                 policy={policy}"
             ),
             Self::NothingToCommit { inputs } => write!(out, "none inputs={inputs}"),
             Self::CommitFailed {

@@ -1,7 +1,8 @@
 //! The `scene` commands: parsed, sent, applied by the host and drawn on top of the fixture.
 
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
-use df_playground::scene::{CaptionOverride, SceneChange};
+use df_playground::overlay::Edit;
+use df_playground::scene::SceneChange;
 
 use crate::client::{get, post_json};
 use crate::command::{Command, CommandError, parse, split_words, usage_text};
@@ -225,9 +226,7 @@ async fn a_scene_change_is_applied_numbered_shown_by_playground_and_recorded() {
         .expect("applies");
     assert_eq!(said, format!("ok (revision {})", before + 1));
     let reply = shown(&running).await;
-    assert!(
-        matches!(&reply.scene.caption, Some(CaptionOverride::Set(caption)) if caption.text == "A new line.")
-    );
+    assert!(matches!(&reply.scene.caption, Edit::Set(caption) if caption.text == "A new line."));
     assert!(
         run(&running, "playground")
             .await
@@ -255,11 +254,13 @@ async fn a_party_change_starts_from_the_fixtures_party_and_reset_returns_to_the_
         .await
         .scene
         .party
+        .set_value()
+        .cloned()
         .expect("the party is overridden");
     let names: Vec<String> = party.into_iter().map(|member| member.name).collect();
     assert_eq!(names, vec!["Pip", "Vex"]);
     run(&running, "scene reset").await.expect("resets");
-    assert!(shown(&running).await.scene.party.is_none());
+    assert!(shown(&running).await.scene.party.is_keep());
     assert!(
         run(&running, "playground")
             .await
@@ -277,11 +278,11 @@ async fn choosing_another_fixture_drops_the_live_changes() {
         .await
         .expect("answers");
     run(&running, "scene caption Hello").await.expect("applies");
-    assert!(shown(&running).await.scene.caption.is_some());
+    assert!(!shown(&running).await.scene.caption.is_keep());
     run(&running, "playground set fixture=b.json")
         .await
         .expect("switches");
-    assert!(shown(&running).await.scene.caption.is_none());
+    assert!(shown(&running).await.scene.caption.is_keep());
 }
 
 #[tokio::test]
@@ -345,6 +346,6 @@ async fn a_script_can_stage_a_whole_scene() {
     let said = run_dev(running.port, &words).await.expect("runs");
     assert!(said.ends_with("ran 3 commands, all ok"), "{said}");
     let scene = shown(&running).await.scene;
-    assert_eq!(scene.party.expect("party")[0].hit_points, 2);
-    assert_eq!(scene.suggested.expect("suggested").len(), 2);
+    assert_eq!(scene.party.set_value().expect("party")[0].hit_points, 2);
+    assert_eq!(scene.suggested.set_value().expect("suggested").len(), 2);
 }

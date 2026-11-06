@@ -26,7 +26,20 @@ pub struct ReleasedTerminal {
     pub claim_generation: u64,
     pub candidate_dispatch: DispatchId,
 }
-macro_rules! private_proof_debug {($($name:ident),*)=>{$(impl fmt::Debug for $name{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{f.debug_struct(stringify!($name)).field("job_revision",&self.job_revision).finish_non_exhaustive()}})*};}
+/// Debug shows only the job revision: the rest of each proof is private recovery state.
+macro_rules! private_proof_debug {
+    ($($name:ident),*) => {
+        $(
+            impl fmt::Debug for $name {
+                fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.debug_struct(stringify!($name))
+                        .field("job_revision", &self.job_revision)
+                        .finish_non_exhaustive()
+                }
+            }
+        )*
+    };
+}
 private_proof_debug!(
     UnclaimedTerminal,
     ClaimedTerminal,

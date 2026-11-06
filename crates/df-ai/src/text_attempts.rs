@@ -32,6 +32,7 @@ pub type OperationKeyError = LabelError;
 pub struct AttemptScope(String);
 
 impl AttemptScope {
+    /// A scope name follows the label rules ([`LabelError`]).
     pub fn new(value: &str) -> Result<Self, LabelError> {
         checked_label(value).map(Self)
     }
@@ -50,6 +51,7 @@ pub struct OperationKey {
 }
 
 impl OperationKey {
+    /// An operation id follows the label rules ([`LabelError`]).
     pub fn new(scope: &AttemptScope, operation: &str) -> Result<Self, LabelError> {
         Ok(Self {
             scope: scope.clone(),
@@ -72,6 +74,7 @@ impl OperationKey {
 pub struct AttemptOwner([u8; 16]);
 
 impl AttemptOwner {
+    /// `None` for the all-zero value, which would look like an unset owner.
     pub fn new(value: [u8; 16]) -> Option<Self> {
         (value != [0; 16]).then_some(Self(value))
     }
@@ -94,13 +97,30 @@ pub fn fingerprint(request: &TextRequest) -> Fingerprint {
     absorb(&mut hasher, request.facts.to_string().as_bytes());
     absorb(&mut hasher, request.output_schema.to_string().as_bytes());
     absorb(&mut hasher, &request.deadline.as_nanos().to_be_bytes());
+    // Pictures by label, type and content digest: a different picture is a different request.
+    // A text-only request absorbs nothing more, so its fingerprint is the one stored before
+    // pictures existed and its recorded attempts still replay.
+    if !request.images.is_empty() {
+        absorb(&mut hasher, &length_prefix(request.images.len()));
+    }
+    for image in &request.images {
+        absorb(&mut hasher, image.label.as_bytes());
+        absorb(&mut hasher, image.media_type.mime().as_bytes());
+        absorb(&mut hasher, &Sha256::digest(&image.bytes));
+    }
     hasher.finalize().into()
 }
 
 /// Length-prefixed fields keep distinct field splits from producing the same input bytes.
 fn absorb(hasher: &mut Sha256, bytes: &[u8]) {
-    hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
+    hasher.update(length_prefix(bytes.len()));
     hasher.update(bytes);
+}
+
+/// A length as eight big-endian bytes. Every supported target has a `usize` of at most 64 bits,
+/// so the saturating fallback is never taken.
+fn length_prefix(length: usize) -> [u8; 8] {
+    u64::try_from(length).unwrap_or(u64::MAX).to_be_bytes()
 }
 
 /// A digest of the owner's current basis for one operation: the revisions the answer depends on.
@@ -119,6 +139,7 @@ pub enum AttemptPhase {
 }
 
 impl AttemptPhase {
+    /// Every phase, in transition order.
     pub const ALL: [Self; 7] = [
         Self::Accepted,
         Self::Dispatched,
@@ -129,6 +150,7 @@ impl AttemptPhase {
         Self::Cancelled,
     ];
 
+    /// The stored label; the PostgreSQL `phase` CHECK lists the same values.
     pub fn label(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
@@ -141,6 +163,7 @@ impl AttemptPhase {
         }
     }
 
+    /// The inverse of [`Self::label`].
     pub fn parse(label: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|phase| phase.label() == label)
     }
@@ -157,6 +180,7 @@ pub enum OutcomeKind {
 }
 
 impl OutcomeKind {
+    /// Every outcome kind, in declaration order.
     pub const ALL: [Self; 5] = [
         Self::Answered,
         Self::Unavailable,
@@ -165,6 +189,7 @@ impl OutcomeKind {
         Self::Stale,
     ];
 
+    /// The stored label; the PostgreSQL `outcome_kind` CHECK lists the same values.
     pub fn label(self) -> &'static str {
         match self {
             Self::Answered => "answered",
@@ -175,6 +200,7 @@ impl OutcomeKind {
         }
     }
 
+    /// The inverse of [`Self::label`].
     pub fn parse(label: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.label() == label)
     }
@@ -447,7 +473,8 @@ impl<T: TextAttemptStore> TextAttemptStore for Arc<T> {
 #[derive(Clone, PartialEq)]
 pub enum Submission {
     /// A reusable result: the backend's answer was qualified earlier (`replayed: true`), or the
-    /// backend returned an outcome that is not an answer. `replayed: false` means this call made it.
+    /// backend returned an outcome that is not an answer. `replayed: false` means this call made
+    /// it.
     Settled {
         outcome: TextOutcome,
         replayed: bool,
@@ -553,6 +580,8 @@ pub struct DurableTextService<B, S, A, O = NoTextObserver> {
 impl<B: TextBackend, S: TextAttemptStore, A: TextAuthority, O: TextObserver>
     DurableTextService<B, S, A, O>
 {
+    /// `owner` must be fresh per process start, so a dispatch left by a crashed process is never
+    /// mistaken for this one's in-flight call.
     pub fn new(text: TextService<B, O>, store: S, authority: A, owner: AttemptOwner) -> Self {
         Self {
             text,

@@ -125,17 +125,10 @@ impl HttpRequest {
         self.body
     }
 
+    /// A bearer-authenticated JSON `POST`, the shape of an OpenAI Responses call.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn responses(endpoint: &str, credential: &str, body: Vec<u8>) -> Self {
-        Self {
-            method: HttpMethod::Post,
-            url: endpoint.to_owned(),
-            headers: vec![
-                ("Authorization", format!("Bearer {credential}")),
-                ("Content-Type", "application/json".to_owned()),
-            ],
-            body,
-        }
+        Self::bearer_native(endpoint, credential, "application/json".to_owned(), body)
     }
 
     pub const fn method(&self) -> HttpMethod {
@@ -381,7 +374,10 @@ pub fn fal_submit_request(api_key: &str, prompt: &str) -> Result<HttpRequest, Ht
     }
 
     let body = format!(
-        "{{\"prompt\":{},\"num_inference_steps\":4,\"image_size\":\"landscape_4_3\",\"num_images\":1,\"enable_safety_checker\":true,\"output_format\":\"jpeg\"}}",
+        concat!(
+            "{{\"prompt\":{},\"num_inference_steps\":4,\"image_size\":\"landscape_4_3\",",
+            "\"num_images\":1,\"enable_safety_checker\":true,\"output_format\":\"jpeg\"}}"
+        ),
         json_string(prompt)
     );
     Ok(HttpRequest {
@@ -657,10 +653,23 @@ pub(crate) fn encode_path_segment(value: &str) -> String {
             encoded.push(char::from(byte));
         } else {
             use fmt::Write as _;
+            // Writing into a `String` cannot fail.
             let _ = write!(encoded, "%{byte:02X}");
         }
     }
     encoded
+}
+
+/// `bytes` as lowercase hexadecimal, two digits per byte.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn lowercase_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut value = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        value.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        value.push(char::from(DIGITS[usize::from(byte & 15)]));
+    }
+    value
 }
 
 fn json_string(value: &str) -> String {
@@ -677,7 +686,8 @@ fn json_string(value: &str) -> String {
             '\t' => encoded.push_str("\\t"),
             character if character <= '\u{1F}' => {
                 use fmt::Write as _;
-                let _ = write!(encoded, "\\u{:04x}", character as u32);
+                // Writing into a `String` cannot fail.
+                let _ = write!(encoded, "\\u{:04x}", u32::from(character));
             }
             character => encoded.push(character),
         }

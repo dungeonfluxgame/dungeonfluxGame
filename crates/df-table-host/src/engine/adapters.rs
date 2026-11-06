@@ -47,30 +47,33 @@ const CHECK_DIE: NonZeroU16 = NonZeroU16::MIN.saturating_add(19);
 #[derive(Debug)]
 struct ClockState {
     frozen_at_ms: Option<u64>,
-    offset_ms: u64,
+    /// The clock's reading at `base`; a running clock reads this plus the time since `base`.
+    base_ms: u64,
+    base: Instant,
+}
+
+impl ClockState {
+    fn running_ms(&self) -> u64 {
+        let elapsed = u64::try_from(self.base.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.base_ms.saturating_add(elapsed)
+    }
 }
 
 /// Milliseconds since the host started, from the monotonic clock, that a dev verb can freeze and
 /// advance (H.16 `clock`). The only `Instant` read of the engine.
 pub struct DevClock {
-    origin: Instant,
     state: Mutex<ClockState>,
 }
 
 impl DevClock {
     pub fn starting_now() -> Self {
         Self {
-            origin: Instant::now(),
             state: Mutex::new(ClockState {
                 frozen_at_ms: None,
-                offset_ms: 0,
+                base_ms: 0,
+                base: Instant::now(),
             }),
         }
-    }
-
-    fn running_ms(&self, state: &ClockState) -> u64 {
-        let elapsed = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
-        elapsed.saturating_add(state.offset_ms)
     }
 
     fn locked(&self) -> std::sync::MutexGuard<'_, ClockState> {
@@ -82,7 +85,7 @@ impl DevClock {
         let mut state = self.locked();
         match state.frozen_at_ms.as_mut() {
             Some(frozen) => *frozen = frozen.saturating_add(ms),
-            None => state.offset_ms = state.offset_ms.saturating_add(ms),
+            None => state.base_ms = state.base_ms.saturating_add(ms),
         }
     }
 
@@ -90,7 +93,7 @@ impl DevClock {
     pub fn freeze(&self) {
         let mut state = self.locked();
         if state.frozen_at_ms.is_none() {
-            state.frozen_at_ms = Some(self.running_ms(&state));
+            state.frozen_at_ms = Some(state.running_ms());
         }
     }
 
@@ -98,8 +101,8 @@ impl DevClock {
     pub fn resume(&self) {
         let mut state = self.locked();
         if let Some(frozen) = state.frozen_at_ms.take() {
-            let elapsed = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
-            state.offset_ms = frozen.saturating_sub(elapsed);
+            state.base_ms = frozen;
+            state.base = Instant::now();
         }
     }
 
@@ -111,9 +114,7 @@ impl DevClock {
 impl Clock for DevClock {
     fn now_ms(&self) -> u64 {
         let state = self.locked();
-        state
-            .frozen_at_ms
-            .unwrap_or_else(|| self.running_ms(&state))
+        state.frozen_at_ms.unwrap_or_else(|| state.running_ms())
     }
 }
 
@@ -199,7 +200,8 @@ impl DevRulesOwner {
         }
     }
 
-    /// Also runs `urging`, the conversation's action, as a d20 that either moves the speaker or not.
+    /// Also runs `urging`, the conversation's action, as a d20 that either moves the speaker or
+    /// not.
     pub fn with_urging(mut self, urging: ActionId) -> Self {
         self.urging = Some(urging);
         self

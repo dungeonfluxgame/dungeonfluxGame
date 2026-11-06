@@ -23,6 +23,15 @@ use std::{
 };
 
 const WAIT: Duration = Duration::from_secs(5);
+/// Finest `SystemTime` step: Windows counts 100 ns intervals, other platforms nanoseconds.
+#[cfg(windows)]
+const SYSTEM_TIME_STEP_NANOS: u64 = 100;
+#[cfg(not(windows))]
+const SYSTEM_TIME_STEP_NANOS: u64 = 1;
+/// Delay from the log's source time to its observed time: 9 clock steps.
+const OBSERVED_DELAY_NANOS: u64 = 9 * SYSTEM_TIME_STEP_NANOS;
+/// Span duration of 11 clock steps.
+const SPAN_DURATION_NANOS: u64 = 11 * SYSTEM_TIME_STEP_NANOS;
 
 #[test]
 fn current_producers_store_reader_preserve_identity_gaps_retry_and_owned_shutdown() {
@@ -78,7 +87,7 @@ fn current_producers_store_reader_preserve_identity_gaps_retry_and_owned_shutdow
             log_key,
             LogInput {
                 timestamp: time,
-                observed_timestamp: time + Duration::from_nanos(9),
+                observed_timestamp: time + Duration::from_nanos(OBSERVED_DELAY_NANOS),
                 severity: Severity::Info,
                 body: AnyValue::Int(i64::MIN),
                 attributes: vec![("rpc.bytes".into(), AnyValue::Int(0))],
@@ -108,7 +117,7 @@ fn current_producers_store_reader_preserve_identity_gaps_retry_and_owned_shutdow
             SpanInput {
                 name: "boundary.fixture".into(),
                 start: time,
-                end: time + Duration::from_nanos(11),
+                end: time + Duration::from_nanos(SPAN_DURATION_NANOS),
                 parent: Context::new().with_remote_span_context(parent),
                 links: vec![Link::new(
                     unsampled,
@@ -245,7 +254,7 @@ fn current_producers_store_reader_preserve_identity_gaps_retry_and_owned_shutdow
     );
     assert_eq!(
         (view.source_time_unix_nanos, view.observed_time_unix_nanos),
-        (1000, Some(1009))
+        (1000, Some(1000 + OBSERVED_DELAY_NANOS))
     );
     let logs = ExportLogsServiceRequest::decode(view.otlp.as_slice()).unwrap();
     let resource = &logs.resource_logs[0];
@@ -285,7 +294,10 @@ fn current_producers_store_reader_preserve_identity_gaps_retry_and_owned_shutdow
     assert_eq!(span.parent_span_id, [8; 8]);
     assert_eq!(span.links[0].trace_id, [2; 16]);
     assert_eq!(span.links[0].span_id, [3; 8]);
-    assert_eq!(span.end_time_unix_nano - span.start_time_unix_nano, 11);
+    assert_eq!(
+        span.end_time_unix_nano - span.start_time_unix_nano,
+        SPAN_DURATION_NANOS
+    );
     let filtered = reader
         .query(
             &QueryFilter {

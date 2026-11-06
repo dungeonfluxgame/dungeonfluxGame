@@ -4,7 +4,8 @@ use df_playground::controls::{ControlsChange, Device};
 use serde_json::json;
 
 use crate::client::{get, post_json};
-use crate::playground::fixture_file_name;
+use crate::dev_http::DevReply;
+use crate::playground::{ChangeReply, PlaygroundChangeError, fixture_file_name};
 use crate::test_support::{Running, STARTER_FILES, post_request, raw_exchange, start};
 use crate::wire::{ControlsReply, EventsReply, Reply};
 
@@ -54,7 +55,7 @@ fn a_fixture_name_may_leave_off_its_extension_but_not_leave_its_directory() {
         "a b",
         ".hidden",
         "a\\b",
-        &"a".repeat(df_playground::media::MAXIMUM_NAME_LENGTH + 1),
+        &"a".repeat(df_playground::limits::MAXIMUM_MEDIA_NAME_BYTES + 1),
     ] {
         assert!(fixture_file_name(bad).is_err(), "{bad:?}");
     }
@@ -90,7 +91,10 @@ async fn a_change_is_applied_numbered_and_recorded() {
     controls(&running).await;
     let (status, body) = change(&running, &ControlsChange::Device(Device::Tv)).await;
     assert_eq!(status, 200);
-    let reply: ControlsReply = serde_json::from_str(&body).expect("controls");
+    let reply: ChangeReply = serde_json::from_str(&body).expect("a change reply");
+    let DevReply::Done { value: reply } = reply else {
+        panic!("applied: {body}");
+    };
     assert_eq!(reply.controls.device, Device::Tv);
     assert_eq!(controls(&running).await, reply);
     assert!(
@@ -117,6 +121,17 @@ async fn a_refused_change_is_a_400_that_says_why_and_leaves_the_controls_alone()
     let (status, body) = change(&running, &ControlsChange::Status("sleepy".into())).await;
     assert_eq!(status, 400);
     assert!(body.contains("waiting_for"));
+    let reply: ChangeReply = serde_json::from_str(&body).expect("a change reply");
+    assert!(
+        matches!(
+            reply,
+            DevReply::Rejected {
+                error: PlaygroundChangeError::InvalidChange { .. },
+                ..
+            }
+        ),
+        "{body}"
+    );
     let (status, body) = change(&running, &ControlsChange::Fixture("ghost.json".into())).await;
     assert_eq!(status, 400);
     assert!(body.contains("a.json"), "{body}");
@@ -137,6 +152,18 @@ async fn a_body_that_is_not_a_change_is_a_400_and_recorded() {
             .await
             .expect("answers");
         assert_eq!(response.status, 400, "{body}");
+        let reply: ChangeReply = serde_json::from_str(&response.body).expect("a change reply");
+        assert!(
+            matches!(
+                reply,
+                DevReply::Rejected {
+                    error: PlaygroundChangeError::InvalidBody(_),
+                    ..
+                }
+            ),
+            "{}",
+            response.body
+        );
     }
     let count = events(&running)
         .await

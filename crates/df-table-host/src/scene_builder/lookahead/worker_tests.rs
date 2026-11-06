@@ -7,12 +7,12 @@ use std::sync::Arc;
 use df_table::effects::TableEffect;
 use df_table::element::ElementId;
 use df_table::identity::{SceneId, TableId};
+use df_table::lookahead::settings::LookaheadSettings;
 use df_table::lookahead::{Expectation, Expected, PlanView, Take};
-use df_table::lookahead_settings::LookaheadSettings;
-use df_table::plate_timing::{PlateTiming, SceneBuildKind};
+use df_table::plate::timing::{PlateTiming, SceneBuildKind};
 use df_table::ports::{Clock, PurposeName};
 use df_table::private_data::Narration;
-use df_table::scene_plan_brief::SceneBrief;
+use df_table::scene_plan::brief::SceneBrief;
 
 use super::worker::LookaheadWorker;
 use crate::broker::providers::ScriptedCall;
@@ -23,9 +23,9 @@ use crate::scene_builder::builder::{BuilderOutput, SceneBuilder};
 use crate::scene_builder::dev_world::{DevWorld, ManualClock, dev_brief, dev_script};
 use crate::scene_builder::events::{SceneBuilderAudit, SceneBuilderEvent};
 use crate::scene_builder::fakes::{FakeStageWorker, StageScript};
+use crate::scene_builder::fixtures::{RecordingAudit, plate_of, requested_stages};
 use crate::scene_builder::inputs::StageInputs;
 use crate::scene_builder::purposes::{BuildPriority, scene_purpose_table};
-use crate::scene_builder::tests_support::{RecordingAudit, plate_of, requested_stages};
 
 const STEP_MS: u64 = 100;
 const CURRENT: u64 = 1;
@@ -78,7 +78,7 @@ fn rig_with(script: StageScript, limits: BrokerLimits, settings: LookaheadSettin
         Arc::clone(&hub),
         Arc::clone(&audit) as Arc<dyn SceneBuilderAudit>,
         inputs,
-        PlateTiming::defaults(),
+        PlateTiming::default(),
     );
     let mut world = DevWorld::new().expect("the dev table");
     world.enter_scene(SceneId::new(CURRENT)).expect("enters");
@@ -98,7 +98,7 @@ fn rig() -> Rig {
     rig_with(
         dev_script().expect("the dev script"),
         BrokerLimits::default(),
-        LookaheadSettings::defaults(),
+        LookaheadSettings::default(),
     )
 }
 
@@ -183,9 +183,9 @@ impl Rig {
     fn build_first_plate(&mut self, number: u64) -> Option<u64> {
         let scene = SceneId::new(number);
         let brief = dev_brief(scene, "any").expect("a brief");
-        let job = df_table::plate_job::PlateJob::capture(
-            df_table::plate_job::PlateJobId::new(1),
-            df_table::plate_job::JobCause::SceneEntered,
+        let job = df_table::plate::job::PlateJob::capture(
+            df_table::plate::job::PlateJobId::new(1),
+            df_table::plate::job::JobReason::SceneEntered,
             self.now(),
             &self.world.snapshot(),
             &brief,
@@ -249,7 +249,7 @@ fn the_next_scene_is_ready_when_the_transition_comes_and_its_first_plate_skips_t
     let mut plain = rig_with(
         dev_script().expect("the dev script"),
         BrokerLimits::default(),
-        LookaheadSettings::defaults().with_enabled(false),
+        LookaheadSettings::default().with_enabled(false),
     );
     let _ = plain.transition(NEXT, "Quay");
     let without = plain.build_first_plate(NEXT).expect("a plate");
@@ -316,7 +316,7 @@ fn a_slow_provider_never_delays_the_transition_and_the_normal_build_runs_unchang
     let slow = StageScript::default()
         .with_people(Vec::new())
         .with_latency(&purpose("lookahead_background"), 90_000);
-    let mut rig = rig_with(slow, BrokerLimits::default(), LookaheadSettings::defaults());
+    let mut rig = rig_with(slow, BrokerLimits::default(), LookaheadSettings::default());
     rig.expect(vec![certain(NEXT, "Quay")]);
     rig.run(5_000, PlanView::default());
     assert_eq!(rig.lookahead.running(), 1, "the picture is still not made");
@@ -338,7 +338,7 @@ fn a_slow_provider_never_delays_the_transition_and_the_normal_build_runs_unchang
     let mut plain = rig_with(
         StageScript::default(),
         BrokerLimits::default(),
-        LookaheadSettings::defaults().with_enabled(false),
+        LookaheadSettings::default().with_enabled(false),
     );
     let _ = plain.transition(NEXT, "Quay");
     let normal = plain.build_first_plate(NEXT).expect("a plate");
@@ -361,7 +361,7 @@ fn the_lowest_class_never_starves_a_foreground_request() {
     let script = dev_script()
         .expect("the dev script")
         .with_latency(&purpose("lookahead_background"), 30_000);
-    let mut rig = rig_with(script, limits, LookaheadSettings::defaults());
+    let mut rig = rig_with(script, limits, LookaheadSettings::default());
     rig.expect(vec![certain(NEXT, "Quay")]);
     rig.run(1_000, PlanView::default());
     assert_eq!(
@@ -392,7 +392,7 @@ fn the_lowest_class_never_starves_a_foreground_request() {
     let mut alone = rig_with(
         dev_script().expect("the dev script"),
         limits,
-        LookaheadSettings::defaults().with_enabled(false),
+        LookaheadSettings::default().with_enabled(false),
     );
     let scene = SceneId::new(CURRENT);
     let brief = dev_brief(scene, "Harbor market").expect("a brief");
@@ -470,7 +470,7 @@ fn a_paused_worker_starts_nothing_and_lets_the_build_that_is_out_finish() {
 #[test]
 fn a_build_whose_epoch_passed_without_the_owner_saying_so_is_discarded() {
     let slow = StageScript::default().with_latency(&purpose("lookahead_background"), 30_000);
-    let mut rig = rig_with(slow, BrokerLimits::default(), LookaheadSettings::defaults());
+    let mut rig = rig_with(slow, BrokerLimits::default(), LookaheadSettings::default());
     rig.expect(vec![certain(NEXT, "Quay")]);
     rig.run(1_000, PlanView::default());
     // The table enters a scene and the owner does not call `enter`: the broker's epoch moves.
@@ -504,8 +504,8 @@ fn closing_the_table_cancels_every_build_and_empties_the_book() {
     let mut rig = rig();
     rig.expect(vec![certain(NEXT, "Quay"), certain(OTHER, "Keep")]);
     rig.lookahead.set_settings(
-        LookaheadSettings::defaults()
-            .with(df_table::lookahead_settings::LookaheadSetting::Depth, 2)
+        LookaheadSettings::default()
+            .with(df_table::lookahead::settings::LookaheadSetting::Depth, 2)
             .expect("depth"),
     );
     rig.run(500, PlanView::default());
@@ -584,7 +584,7 @@ fn a_refused_stage_fails_the_build_once_and_the_transition_says_why() {
     let mut rig = rig_with(
         script,
         BrokerLimits::default(),
-        LookaheadSettings::defaults(),
+        LookaheadSettings::default(),
     );
     rig.expect(vec![certain(NEXT, "Quay")]);
     rig.run(BUILD_MS + 5_000, PlanView::default());

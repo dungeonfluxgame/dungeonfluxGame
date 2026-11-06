@@ -13,12 +13,12 @@ use crate::explore::{AuthoredBeat, ExploreMachine};
 use crate::golden::{FIRST_SCENE, TABLE, World, compact};
 use crate::identity::{MachineId, SeatId};
 use crate::lobby::LobbyMachine;
+use crate::machine::slot::{MachineSlot, decodes_on_this_thread};
 use crate::machine::{
     Decision, Entry, HandOff, InspectReport, Machine, MachineError, MachineInput, MachineReadout,
     MachineSpec, ReadoutError, Scope, StandingOffers, StateName, StepInput, StepOutcome,
     StepResult, SuspendPolicy,
 };
-use crate::machine_slot::{MachineSlot, decodes_on_this_thread};
 use crate::outcome::{Decline, DeclineCode, Outcome, PendingKind};
 use crate::pipeline::PipelineLimits;
 use crate::pipeline_fixtures_tests::{action, seat};

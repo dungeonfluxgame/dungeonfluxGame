@@ -16,18 +16,15 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use df_table::identity::SceneId;
-use df_table::plate_digest::PlateDigest;
-use df_table::plate_job::PlateJobId;
+use df_table::plate::digest::PlateDigest;
+use df_table::plate::job::PlateJobId;
 use df_table::ports::PurposeName;
+use df_table::scene_plan::locate::LocatePrompt;
 use df_table::scene_plan::{SceneStage, StoredPicture};
-use df_table::scene_plan_locate::LocatePrompt;
 use df_table::table_state::SceneGeneration;
 
+use super::limits::MAXIMUM_REMEMBERED_INPUTS;
 use crate::broker::request::RequestKey;
-
-/// Most stage inputs remembered; the oldest are forgotten first. Deliberately huge; scope it down
-/// when measured (owner, 2026-11-02).
-pub const MAXIMUM_REMEMBERED_INPUTS: usize = 1_000_000;
 
 /// What one stage request is for.
 #[derive(Debug, Clone, PartialEq, Eq)]

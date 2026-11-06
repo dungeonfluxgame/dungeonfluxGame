@@ -3,26 +3,30 @@
 //! They sit behind the same guard as every route of the host (loopback host names, JSON for any
 //! change, no foreign origin), because they are merged into the one router before its layers. A
 //! read is a GET and a change is a POST of JSON; every answer is a `SceneReply`, `done` with the
-//! value or `rejected` with a typed error and its message, and a refusal that is the caller's
-//! mistake is a 400 while a workbench that failed is a 500 and one that never started a 503. The
-//! routes hold the workbench behind one lock that is taken for the length of a call and never across
-//! an `.await`: a call runs the pipeline over fake providers in a clock of its own, which is a
-//! bounded number of cheap steps, so it never waits for time to pass.
+//! value or `rejected` with a `SceneBuilderError` and its message, at the error's status: a
+//! refusal that is the caller's mistake is a 400, a workbench that failed a 500 and one that never
+//! started a 503. A refusal writes one `SCENE refused` audit line; the guard's middleware echoes
+//! the request's lines.
+//!
+//! The routes hold the workbench behind one lock that is taken for the length of a call and never
+//! across an `.await`. A call runs the pipeline over fake providers in a clock of its own (a
+//! bounded number of steps that never waits for time to pass) on the blocking pool, one task per
+//! call.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use axum::Router;
 use axum::body::Bytes;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
-use df_table::plate_timing::PlateTiming;
+use axum::extract::State;
+use axum::response::Response;
+use axum::routing::{get, post};
+use df_table::plate::timing::PlateTiming;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 use super::lookahead::LookaheadRequest;
-use super::request::{BuildRequest, RunRequest, SceneError, SceneReply};
+use super::request::{BuildRequest, RunRequest, SceneBuilderError};
 use super::workbench::Workbench;
+use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
 
 /// The addresses of the scene builder's dev API.
@@ -36,11 +40,12 @@ pub mod path {
 
 struct SceneRoutes {
     app: Arc<AppState>,
-    workbench: Mutex<Result<Workbench, SceneError>>,
+    /// The workbench, or the refusal every call gets because it did not start.
+    workbench: Mutex<Result<Workbench, SceneBuilderError>>,
 }
 
 impl SceneRoutes {
-    fn workbench(&self) -> MutexGuard<'_, Result<Workbench, SceneError>> {
+    fn workbench(&self) -> MutexGuard<'_, Result<Workbench, SceneBuilderError>> {
         self.workbench
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -49,88 +54,99 @@ impl SceneRoutes {
     /// Runs `call` on the workbench, or reports why there is none.
     fn with<T>(
         &self,
-        call: impl FnOnce(&mut Workbench) -> Result<T, SceneError>,
-    ) -> Result<T, SceneError> {
+        call: impl FnOnce(&mut Workbench) -> Result<T, SceneBuilderError>,
+    ) -> Result<T, SceneBuilderError> {
         match self.workbench().as_mut() {
             Ok(workbench) => call(workbench),
-            Err(error) => Err(SceneError::NotStarted {
-                reason: error.to_string(),
-            }),
+            Err(not_started) => Err(not_started.clone()),
         }
     }
 }
 
-fn status_of(error: &SceneError) -> StatusCode {
-    match error {
-        SceneError::InvalidName { .. }
-        | SceneError::NothingBuilt
-        | SceneError::BadRequest { .. } => StatusCode::BAD_REQUEST,
-        SceneError::Workbench { .. } => StatusCode::INTERNAL_SERVER_ERROR,
-        SceneError::NotStarted { .. } => StatusCode::SERVICE_UNAVAILABLE,
+/// Runs `call` on the workbench on the blocking pool. A task that stopped without an answer (it
+/// panicked, or the runtime is stopping) is `Stopped`.
+async fn on_workbench<T, Call>(
+    routes: &Arc<SceneRoutes>,
+    call: Call,
+) -> Result<T, SceneBuilderError>
+where
+    T: Send + 'static,
+    Call: FnOnce(&mut Workbench) -> Result<T, SceneBuilderError> + Send + 'static,
+{
+    let worker = Arc::clone(routes);
+    tokio::task::spawn_blocking(move || worker.with(call))
+        .await
+        .unwrap_or_else(|_| Err(SceneBuilderError::Stopped))
+}
+
+/// Writes the refusal line of `verb` when `result` failed, and answers with it.
+fn answer<T: Serialize>(
+    routes: &SceneRoutes,
+    verb: &str,
+    result: Result<T, SceneBuilderError>,
+) -> Response {
+    if let Err(error) = &result {
+        routes
+            .app
+            .record_line(format!("SCENE refused verb={verb} error={}", error.key()));
     }
+    reply(result)
 }
 
-fn reply<T: Serialize>(routes: &SceneRoutes, result: Result<T, SceneError>) -> Response {
-    routes.app.echo_new_lines();
-    let status = result.as_ref().err().map_or(StatusCode::OK, status_of);
-    (status, Json(SceneReply::from_result(result))).into_response()
+async fn build(State(routes): State<Arc<SceneRoutes>>, bytes: Bytes) -> Response {
+    let result = match parse_body::<BuildRequest>(&bytes) {
+        Ok(request) => on_workbench(&routes, move |bench| bench.build(&request)).await,
+        Err(error) => Err(error.into()),
+    };
+    answer(&routes, "build", result)
 }
 
-fn body<T: DeserializeOwned>(bytes: &Bytes) -> Result<T, SceneError> {
-    serde_json::from_slice(bytes).map_err(|error| SceneError::BadRequest {
-        reason: format!("the request body is not valid: {error}"),
-    })
+async fn show(State(routes): State<Arc<SceneRoutes>>) -> Response {
+    let result = on_workbench(&routes, |bench| Ok(bench.show())).await;
+    answer(&routes, "show", result)
 }
 
-type Shared = axum::extract::State<Arc<SceneRoutes>>;
-
-async fn build(axum::extract::State(routes): Shared, bytes: Bytes) -> Response {
-    let result =
-        body::<BuildRequest>(&bytes).and_then(|request| routes.with(|bench| bench.build(&request)));
-    reply(&routes, result)
+async fn plates(State(routes): State<Arc<SceneRoutes>>) -> Response {
+    let result = on_workbench(&routes, |bench| Ok(bench.plates())).await;
+    answer(&routes, "plates", result)
 }
 
-async fn show(axum::extract::State(routes): Shared) -> Response {
-    let result = routes.with(|bench| Ok(bench.show()));
-    reply(&routes, result)
+async fn plates_run(State(routes): State<Arc<SceneRoutes>>, bytes: Bytes) -> Response {
+    let result = match parse_body::<RunRequest>(&bytes) {
+        Ok(request) => on_workbench(&routes, move |bench| bench.run(&request)).await,
+        Err(error) => Err(error.into()),
+    };
+    answer(&routes, "plates_run", result)
 }
 
-async fn plates(axum::extract::State(routes): Shared) -> Response {
-    let result = routes.with(|bench| Ok(bench.plates()));
-    reply(&routes, result)
+async fn lookahead(State(routes): State<Arc<SceneRoutes>>) -> Response {
+    let result = on_workbench(&routes, |bench| bench.lookahead(None)).await;
+    answer(&routes, "lookahead", result)
 }
 
-async fn plates_run(axum::extract::State(routes): Shared, bytes: Bytes) -> Response {
-    let result =
-        body::<RunRequest>(&bytes).and_then(|request| routes.with(|bench| bench.run(&request)));
-    reply(&routes, result)
+async fn lookahead_change(State(routes): State<Arc<SceneRoutes>>, bytes: Bytes) -> Response {
+    let result = match parse_body::<LookaheadRequest>(&bytes) {
+        Ok(request) => on_workbench(&routes, move |bench| bench.lookahead(Some(&request))).await,
+        Err(error) => Err(error.into()),
+    };
+    answer(&routes, "lookahead", result)
 }
 
-async fn lookahead(axum::extract::State(routes): Shared) -> Response {
-    let result = routes.with(|bench| bench.lookahead(None));
-    reply(&routes, result)
-}
-
-async fn lookahead_change(axum::extract::State(routes): Shared, bytes: Bytes) -> Response {
-    let result = body::<LookaheadRequest>(&bytes)
-        .and_then(|request| routes.with(|bench| bench.lookahead(Some(&request))));
-    reply(&routes, result)
-}
-
-async fn buffer(axum::extract::State(routes): Shared) -> Response {
-    let result = routes.with(|bench| Ok(bench.buffer_show()));
-    reply(&routes, result)
+async fn buffer(State(routes): State<Arc<SceneRoutes>>) -> Response {
+    let result = on_workbench(&routes, |bench| Ok(bench.buffer_show())).await;
+    answer(&routes, "buffer", result)
 }
 
 /// The scene builder's routes over a workbench of its own that logs to the host's event log.
 pub fn router(app: Arc<AppState>) -> Router {
-    let workbench = Workbench::new(PlateTiming::defaults(), Some(Arc::clone(app.log())));
+    let workbench = Workbench::new(PlateTiming::default(), Some(Arc::clone(app.log())))
+        .map_err(|error| error.not_started());
     let routes = Arc::new(SceneRoutes {
         app,
         workbench: Mutex::new(workbench),
     });
     Router::new()
-        .route(path::BUILD, axum::routing::post(build))
+        .route(path::BUILD, post(build))
         .route(path::SHOW, get(show))
         .route(path::PLATES, get(plates).post(plates_run))
         .route(path::BUFFER, get(buffer))

@@ -74,6 +74,7 @@ pub(crate) fn controls_pairs(changes: &[ControlsChange]) -> Vec<(&'static str, S
             ControlsChange::Status(key) => ("status", value(key)),
             ControlsChange::ShowUnavailable(shown) => ("show_unavailable", shown.to_string()),
             ControlsChange::ShowGrid(shown) => ("show_grid", shown.to_string()),
+            ControlsChange::ShowSam(shown) => ("show_sam", shown.to_string()),
             ControlsChange::TransitionStyle(style) => ("transition_style", style.key().to_owned()),
             ControlsChange::TransitionMs(ms) => ("transition_ms", ms.to_string()),
         })
@@ -176,13 +177,13 @@ fn scene_fields(
         SceneChange::Music {
             media,
             target,
-            volume,
+            volume_percent,
             looping,
         } => (
             "music",
             vec![
                 ("media", value(media)),
-                ("volume", volume.to_string()),
+                ("volume", volume_percent.to_string()),
                 ("on", target_key(*target).to_owned()),
                 ("loop", looping.to_string()),
             ],
@@ -191,12 +192,12 @@ fn scene_fields(
         SceneChange::Sound {
             media,
             target,
-            volume,
+            volume_percent,
         } => (
             "sound",
             vec![
                 ("media", value(media)),
-                ("volume", volume.to_string()),
+                ("volume", volume_percent.to_string()),
                 ("on", target_key(*target).to_owned()),
                 ("cue", scene.cue_count.to_string()),
             ],

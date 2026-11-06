@@ -8,6 +8,7 @@
 //! an upload is decoded to a staged file in pieces, a file is read through a seekable handle a
 //! few bytes at a time, and a file is served in chunks.
 
+use std::fmt;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::time::Duration;
 
@@ -16,10 +17,8 @@ use df_playground::media::{
     AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, MediaEntry, MediaKind, VIDEO_EXTENSIONS, media_kind,
 };
 
-use crate::media_upload::EnvelopeProblem;
-use crate::video_container::{
-    FoundContent, UnreadableDuration, VideoFormat, VideoRefusal, inspect_video,
-};
+use crate::media_upload::EnvelopeCause;
+use crate::video_container::{DurationCause, FoundContent, VideoError, VideoFormat, inspect_video};
 
 const BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
 /// Bytes the request carries besides the file's base64: the JSON braces, the two keys, the name
@@ -96,13 +95,13 @@ pub(crate) fn kinds_help() -> String {
 
 /// Why a file is not added to the library.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum IngestRefusal {
+pub(crate) enum IngestError {
     /// The request is not the JSON object the route takes.
-    MalformedRequest(EnvelopeProblem),
-    NotAMediaName {
+    InvalidRequest(EnvelopeCause),
+    InvalidMediaName {
         name: String,
     },
-    NotBase64,
+    InvalidBase64,
     Empty,
     TooLarge {
         maximum_bytes: u64,
@@ -117,7 +116,7 @@ pub(crate) enum IngestRefusal {
     },
     DurationUnreadable {
         claimed: VideoFormat,
-        reason: UnreadableDuration,
+        cause: DurationCause,
     },
     TooLong {
         duration: Duration,
@@ -127,7 +126,7 @@ pub(crate) enum IngestRefusal {
     FileFailed(ErrorKind),
 }
 
-impl IngestRefusal {
+impl IngestError {
     pub(crate) fn status(&self) -> StatusCode {
         match self {
             Self::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
@@ -135,39 +134,50 @@ impl IngestRefusal {
             _ => StatusCode::BAD_REQUEST,
         }
     }
+}
 
-    pub(crate) fn message(&self) -> String {
+impl fmt::Display for IngestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MalformedRequest(problem) => format!("the request is not valid: {problem}"),
-            Self::NotAMediaName { name } => format!(
+            Self::InvalidRequest(cause) => write!(formatter, "the request is not valid: {cause}"),
+            Self::InvalidMediaName { name } => write!(
+                formatter,
                 "'{name}' is not a media name: use a plain name ending in one of these ({})",
                 kinds_help()
             ),
-            Self::NotBase64 => "the file data is not valid base64".to_owned(),
-            Self::Empty => "the file is empty".to_owned(),
-            Self::TooLarge { maximum_bytes } => format!(
+            Self::InvalidBase64 => formatter.write_str("the file data is not valid base64"),
+            Self::Empty => formatter.write_str("the file is empty"),
+            Self::TooLarge { maximum_bytes } => write!(
+                formatter,
                 "a media file is at most {maximum_bytes} bytes ({} GiB)",
                 maximum_bytes / BYTES_PER_GIB
             ),
-            Self::LibraryFull { maximum_files } => {
-                format!("the library holds at most {maximum_files} files; remove one first")
-            }
-            Self::NotThatVideoType { claimed, found } => {
-                format!("the name says {} but the file is {found}", claimed.label())
-            }
-            Self::DurationUnreadable { claimed, reason } => format!(
-                "the length of this {} cannot be read ({reason}), so it is refused",
-                claimed.label()
+            Self::LibraryFull { maximum_files } => write!(
+                formatter,
+                "the library holds at most {maximum_files} files; remove one first"
             ),
-            Self::TooLong { duration, maximum } => format!(
+            Self::NotThatVideoType { claimed, found } => write!(
+                formatter,
+                "the name says {} but the file is {found}",
+                claimed.key()
+            ),
+            Self::DurationUnreadable { claimed, cause } => write!(
+                formatter,
+                "the length of this {} cannot be read ({cause}), so it is refused",
+                claimed.key()
+            ),
+            Self::TooLong { duration, maximum } => write!(
+                formatter,
                 "this video is {:.1} s long; a video is at most {} s",
                 duration.as_secs_f64(),
                 maximum.as_secs()
             ),
-            Self::FileFailed(kind) => format!("the file could not be stored: {kind}"),
+            Self::FileFailed(kind) => write!(formatter, "the file could not be stored: {kind}"),
         }
     }
 }
+
+impl std::error::Error for IngestError {}
 
 /// The video limits as help text, for the dev command line.
 pub fn video_limits_text() -> String {
@@ -186,15 +196,15 @@ pub(crate) fn check_content<S: Read + Seek>(
     source: &mut S,
     upload: UploadKind,
     limits: &MediaLimits,
-) -> Result<(), IngestRefusal> {
+) -> Result<(), IngestError> {
     let length = source
         .seek(SeekFrom::End(0))
-        .map_err(|error| IngestRefusal::FileFailed(error.kind()))?;
+        .map_err(|error| IngestError::FileFailed(error.kind()))?;
     if length == 0 {
-        return Err(IngestRefusal::Empty);
+        return Err(IngestError::Empty);
     }
     if length > limits.maximum_file_bytes {
-        return Err(IngestRefusal::TooLarge {
+        return Err(IngestError::TooLarge {
             maximum_bytes: limits.maximum_file_bytes,
         });
     }
@@ -202,14 +212,14 @@ pub(crate) fn check_content<S: Read + Seek>(
         return Ok(());
     };
     let info = inspect_video(source, claimed, limits).map_err(|refusal| match refusal {
-        VideoRefusal::WrongContent { found } => IngestRefusal::NotThatVideoType { claimed, found },
-        VideoRefusal::DurationUnreadable { reason } => {
-            IngestRefusal::DurationUnreadable { claimed, reason }
+        VideoError::WrongContent { found } => IngestError::NotThatVideoType { claimed, found },
+        VideoError::DurationUnreadable { cause } => {
+            IngestError::DurationUnreadable { claimed, cause }
         }
-        VideoRefusal::ReadFailed(kind) => IngestRefusal::FileFailed(kind),
+        VideoError::ReadFailed(kind) => IngestError::FileFailed(kind),
     })?;
     if info.duration > limits.maximum_video_duration {
-        return Err(IngestRefusal::TooLong {
+        return Err(IngestError::TooLong {
             duration: info.duration,
             maximum: limits.maximum_video_duration,
         });
@@ -222,12 +232,12 @@ pub(crate) fn check_room(
     existing: &[MediaEntry],
     name: &str,
     limits: &MediaLimits,
-) -> Result<(), IngestRefusal> {
+) -> Result<(), IngestError> {
     if existing.iter().any(|entry| entry.name == name) {
         return Ok(());
     }
     if existing.len() >= limits.maximum_files {
-        return Err(IngestRefusal::LibraryFull {
+        return Err(IngestError::LibraryFull {
             maximum_files: limits.maximum_files,
         });
     }

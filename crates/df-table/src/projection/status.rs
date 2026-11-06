@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::listed::listed_enum;
-use crate::projection::text::{BlankText, NonEmptyText};
+use crate::projection::text::{BlankTextError, NonEmptyText};
 
 /// What the table is doing or waiting for, as a view says it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -33,7 +33,7 @@ pub enum ProjectionStatus {
 
 impl ProjectionStatus {
     /// A wait on a person, named in words: "Waiting for {who} {what}".
-    pub fn waiting_for(who: &str, what: &str) -> Result<Self, BlankText> {
+    pub fn waiting_for(who: &str, what: &str) -> Result<Self, BlankTextError> {
         Ok(Self::WaitingFor {
             who: NonEmptyText::new(who)?,
             what: NonEmptyText::new(what)?,

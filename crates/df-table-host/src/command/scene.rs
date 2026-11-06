@@ -4,17 +4,22 @@
 //! Each verb reads its words into one `SceneChange`; whether the change is allowed (a name that is
 //! in the media library, a target that is on the stage) is decided by the host when it arrives.
 
+pub(super) mod home;
+pub(super) mod lobby;
+pub(super) mod pills;
+mod ui;
+
 use df_playground::fixture::Slide;
 use df_playground::fixture::{Choice, PartyMember, UnavailableChoice};
-use df_playground::limits::MAXIMUM_SLIDE_PERCENT;
-use df_playground::scene::{
-    ImageSlot, MAXIMUM_CAMERA_MS, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME,
-    MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT, SceneChange, Target,
+use df_playground::limits::{
+    MAXIMUM_CAMERA_MS, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS, MAXIMUM_SLIDE_PERCENT,
+    MAXIMUM_VOLUME_PERCENT, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
 };
+use df_playground::scene::{ImageSlot, SceneChange, Target};
 
 use super::usage::{
-    CAMERA_USAGE, CAPTION_USAGE, CHOICES_USAGE, IMAGE_USAGE, MUSIC_USAGE, PARTY_USAGE, SCENE_USAGE,
-    SLIDE_USAGE, SOUND_USAGE,
+    CAPTION_USAGE, CHOICES_USAGE, IMAGE_USAGE, MUSIC_USAGE, PARTY_USAGE, SCENE_CAMERA_USAGE,
+    SCENE_USAGE, SLIDE_USAGE, SOUND_USAGE,
 };
 use super::{Command, CommandError, bad_choice, count, keyed, pair, split_list, truth};
 
@@ -32,7 +37,7 @@ pub const DEFAULT_SLIDE: Slide = Slide {
 };
 /// Zoom of a camera move and how long it takes when none are given.
 pub const DEFAULT_ZOOM_PERCENT: u16 = 200;
-pub const DEFAULT_CAMERA_MS: u32 = 1_200;
+pub const DEFAULT_CAMERA_MS: u64 = 1_200;
 
 const PICTURE_SLOTS: &str = "tv-backdrop, tv-card or phone";
 
@@ -164,12 +169,12 @@ fn volume(value: &str) -> Result<u8, CommandError> {
     value
         .parse::<u8>()
         .ok()
-        .filter(|volume| *volume <= MAXIMUM_VOLUME)
+        .filter(|volume| *volume <= MAXIMUM_VOLUME_PERCENT)
         .ok_or_else(|| {
             bad_choice(
                 "volume",
                 value,
-                format!("a whole number from 0 to {MAXIMUM_VOLUME}"),
+                format!("a whole number from 0 to {MAXIMUM_VOLUME_PERCENT}"),
             )
         })
 }
@@ -188,8 +193,15 @@ fn rotation(key: &str, value: &str, suffix: &str) -> Result<u16, CommandError> {
         })
 }
 
+/// The slot a CLI word names: `tv-backdrop`, `tv-card` or `phone` (the words `playground::audit`
+/// writes back), not the slot's wire key.
 fn picture_slot(text: &str, allowed: &str) -> Result<ImageSlot, CommandError> {
-    ImageSlot::from_key(text).ok_or_else(|| bad_choice("the picture slot", text, allowed))
+    match text {
+        "tv-backdrop" => Ok(ImageSlot::TvBackdrop),
+        "tv-card" => Ok(ImageSlot::TvCard),
+        "phone" => Ok(ImageSlot::PhoneImage),
+        _ => Err(bad_choice("the picture slot", text, allowed)),
+    }
 }
 
 fn image(words: &[String]) -> Result<Command, CommandError> {
@@ -211,6 +223,7 @@ fn image(words: &[String]) -> Result<Command, CommandError> {
         caption,
         rotation_degrees,
         slide: None,
+        layout: None,
     }))
 }
 
@@ -224,7 +237,8 @@ fn percent(key: &str, value: &str) -> Result<u8, CommandError> {
                 key,
                 value,
                 format!(
-                    "a whole number from 0 to {MAXIMUM_SLIDE_PERCENT} (a share of the screen's width)"
+                    "a whole number from 0 to {} (a share of the screen's width)",
+                    MAXIMUM_SLIDE_PERCENT
                 ),
             )
         })
@@ -247,7 +261,7 @@ fn slide(words: &[String]) -> Result<Command, CommandError> {
             "to" => moving.to_percent = percent(key, value)?,
             "over" => {
                 moving.duration_ms = value
-                    .parse::<u32>()
+                    .parse::<u64>()
                     .ok()
                     .filter(|ms| (1..=MAXIMUM_SLIDE_MS).contains(ms))
                     .ok_or_else(|| {
@@ -268,10 +282,11 @@ fn slide(words: &[String]) -> Result<Command, CommandError> {
         caption,
         rotation_degrees,
         slide: Some(moving),
+        layout: None,
     }))
 }
 
-fn camera(words: &[String], looking_at: Option<&String>) -> Result<Command, CommandError> {
+fn camera(words: &[String], looking_at: Option<&str>) -> Result<Command, CommandError> {
     let mut zoom_percent = if looking_at.is_some() {
         DEFAULT_ZOOM_PERCENT
     } else {
@@ -294,13 +309,14 @@ fn camera(words: &[String], looking_at: Option<&String>) -> Result<Command, Comm
                         key,
                         value,
                         format!(
-                            "a whole number of percent from {MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT} (200 is twice as large)"
+                            "a whole number of percent from {} to {} (200 is twice as large)",
+                            MINIMUM_ZOOM_PERCENT, MAXIMUM_ZOOM_PERCENT
                         ),
                     )
                 })?;
         } else {
             duration_ms = value
-                .parse::<u32>()
+                .parse::<u64>()
                 .ok()
                 .filter(|ms| *ms <= MAXIMUM_CAMERA_MS)
                 .ok_or_else(|| {
@@ -313,7 +329,7 @@ fn camera(words: &[String], looking_at: Option<&String>) -> Result<Command, Comm
         }
     }
     Ok(Command::Scene(SceneChange::Camera {
-        target: looking_at.cloned(),
+        target: looking_at.map(str::to_owned),
         zoom_percent,
         duration_ms,
     }))
@@ -334,7 +350,7 @@ fn music(words: &[String]) -> Result<Command, CommandError> {
     Ok(Command::Scene(SceneChange::Music {
         media: media.clone(),
         target: on,
-        volume: level,
+        volume_percent: level,
         looping,
     }))
 }
@@ -353,7 +369,7 @@ fn sound(words: &[String]) -> Result<Command, CommandError> {
     Ok(Command::Scene(SceneChange::Sound {
         media: media.clone(),
         target: on,
-        volume: level,
+        volume_percent: level,
     }))
 }
 
@@ -369,10 +385,15 @@ pub(super) fn scene(words: &[String]) -> Result<Command, CommandError> {
         Some((verb, rest)) if verb == "image" => image(rest),
         Some((verb, rest)) if verb == "slide" => slide(rest),
         Some((verb, rest)) if verb == "camera" => match rest.split_first() {
-            Some((target, rest)) => camera(rest, Some(target)),
-            None => Err(CommandError::Usage(CAMERA_USAGE)),
+            Some((target, rest)) => camera(rest, Some(target.as_str())),
+            None => Err(CommandError::Usage(SCENE_CAMERA_USAGE)),
         },
         Some((verb, rest)) if verb == "camera-reset" => camera(rest, None),
+        Some((verb, rest)) if verb == "camera-on" => {
+            crate::cast::cli::parse_camera_on(rest).map(Command::Cast)
+        }
+        Some((verb, rest)) if verb == "cue" => crate::cast::cli::parse_cue(rest).map(Command::Cast),
+        Some((verb, [])) if verb == "cast" => Ok(Command::Cast(crate::cast::CastCommand::List)),
         Some((verb, rest)) if verb == "image-clear" => match rest {
             [slot] => picture_slot(slot, PICTURE_SLOTS)
                 .map(|slot| Command::Scene(SceneChange::ClearImage { slot })),
@@ -387,17 +408,17 @@ pub(super) fn scene(words: &[String]) -> Result<Command, CommandError> {
             Ok(Command::Scene(SceneChange::Reset {}))
         }
         Some((verb, rest)) if matches!(verb.as_str(), "lobby" | "loading" | "roleplay") => {
-            super::scene_lobby::parse(verb, rest)
+            lobby::parse(verb, rest)
         }
-        Some((verb, rest)) if verb == "pill" => super::scene_pills::parse(rest),
-        Some((verb, rest)) if verb == "home" => super::scene_home::parse(rest),
+        Some((verb, rest)) if verb == "pill" => pills::parse(rest),
+        Some((verb, rest)) if verb == "home" => home::parse(rest),
         Some((verb, rest)) if verb == "start" => crate::engine::parse_scene_start(rest)
             .map(|command| Command::Engine(crate::engine::EngineCommand::Play(command))),
         Some((verb, rest)) if matches!(verb.as_str(), "build" | "show" | "lookahead") => {
             crate::scene_builder::parse_scene(verb, rest).map(Command::SceneBuilder)
         }
         Some((verb, rest)) if matches!(verb.as_str(), "narration" | "seat" | "seats" | "logo") => {
-            super::scene_ui::parse(verb, rest)
+            ui::parse(verb, rest)
         }
         _ => Err(CommandError::Usage(SCENE_USAGE)),
     }

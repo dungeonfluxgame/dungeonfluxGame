@@ -2,13 +2,14 @@
 //! committed table, written as JSON for the dev routes.
 //!
 //! The owner calls `project_view` and nothing else, and always on state that is already computed
-//! and committed: no model call, no I/O and no loop over history. A view is `df_table::projection`'s
-//! own (the shared screen's, or one seat's, never blank, with the sentinel-secret and paired-state
-//! guarantees of C5); this file only chooses the audience, reads the committed table and turns the
-//! view into JSON, because `AudienceProjection` serializes and does not deserialize. A view the
-//! pipeline built for a turn reaches the sender's report through `sender_view`, and is released
-//! only after the batch that made it has committed. `project_machine_view` is the same projection
-//! as the wire's `MachineView` (`machine_wire`), which a phone or a shared screen is served.
+//! and committed: no model call, no I/O and no loop over history. A view is
+//! `df_table::projection`'s own (the shared screen's, or one seat's, never blank, with the
+//! sentinel-secret and paired-state guarantees of C5); this file only chooses the audience, reads
+//! the committed table and turns the view into JSON, because `AudienceProjection` serializes and
+//! does not deserialize. A view the pipeline built for a turn reaches the sender's report through
+//! `sender_view`, and is released only after the batch that made it has committed.
+//! `project_machine_view` is the same projection as the wire's `MachineView` (`machine_wire`),
+//! which a phone or a shared screen is served.
 
 use df_protocol::common as wire;
 use df_table::identity::SeatId;

@@ -307,7 +307,8 @@ extern "C" fn write_chunk(
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
         write_chunk_inner(data, data_size, picture)
     }));
-    outcome.unwrap_or_default()
+    // A contained panic reports a failed write (0), so the encoder stops.
+    outcome.unwrap_or(0)
 }
 
 fn write_chunk_inner(
@@ -365,8 +366,8 @@ fn write_chunk_inner(
 /// Native progress hook: polls the injected cancellation check and aborts
 /// the encode when it fires. Panics are contained like the writer's.
 extern "C" fn report_progress(_percent: c_int, picture: *const libwebp_sys::WebPPicture) -> c_int {
-    std::panic::catch_unwind(AssertUnwindSafe(|| report_progress_inner(picture)))
-        .unwrap_or_default()
+    // A contained panic reports an abort (0), so the encoder stops.
+    std::panic::catch_unwind(AssertUnwindSafe(|| report_progress_inner(picture))).unwrap_or(0)
 }
 
 fn report_progress_inner(picture: *const libwebp_sys::WebPPicture) -> c_int {
@@ -394,4 +395,4 @@ fn report_progress_inner(picture: *const libwebp_sys::WebPPicture) -> c_int {
 }
 
 #[cfg(test)]
-mod tests;
+mod webp_lossy_tests;

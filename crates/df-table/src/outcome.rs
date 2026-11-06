@@ -15,12 +15,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::limits::MAXIMUM_ALTERNATIVES;
 use crate::listed::listed_enum;
 use crate::private_data::{LengthClass, Measured};
-
-/// The most alternatives a decline holds. Deliberately huge so it never limits play; scope it down
-/// later (owner, 2026-11-02). The phone's own choice-list rule of O.12 is applied when it draws.
-pub const MAXIMUM_ALTERNATIVES: usize = 10_000;
 
 listed_enum! {
     /// Why an input was declined. The list is C.6; an RES47 or M2-D27 code is one more variant.

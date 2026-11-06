@@ -6,10 +6,10 @@ use std::sync::Arc;
 use crate::envelope::Sender;
 use crate::event::FailureCause;
 use crate::identity::{SeatId, TableId};
+use crate::limits::MAXIMUM_IN_PROGRESS_MS;
 use crate::outcome::OutcomeKind;
 use crate::owner_queue::{
-    AdmitError, FinishError, Lane, MAXIMUM_IN_PROGRESS_MS, OperationStatus, OwnerQueue,
-    QueueLimits, ServedInput,
+    AdmitError, FinishError, Lane, OperationStatus, OwnerQueue, QueueLimits, ServedInput,
 };
 use crate::owner_queue_tests::{
     NullSink, SEAT_ONE, operation, proposal, safety_card, seated_queue, settings, tap, text_line,

@@ -1,9 +1,9 @@
 //! The Director's pace and priority rules with a controlled clock (O.14 camera rule 5): spacing,
 //! the order of reasons, bursts, areas and the "look at me" request.
 
+use crate::director::log::{DropReason, Outcome};
+use crate::director::reason::{Reason, WideReason};
 use crate::director::{Receipt, Request, StageDirection};
-use crate::director_log::{DropReason, Outcome};
-use crate::director_reason::{Reason, WideReason};
 use crate::director_tests::{ask, director, focus_of, id, lines, tavern, tick, wide_of};
 use crate::inspect::InspectAudience;
 
@@ -16,8 +16,8 @@ fn finn_then_sigrun_back_to_back_pans_on_without_pulling_out() {
         0,
         &view,
         Request::focus(Reason::Speaker, id("finn"))
-            .zoom(250)
-            .over(1_500),
+            .with_zoom_percent(250)
+            .with_over_ms(1_500),
     );
     assert_eq!(focus_of(&first[0]), ("finn", Reason::Speaker, 1));
     // The next speaker comes at once: it waits out the 800 ms, then pans straight on.
@@ -26,8 +26,8 @@ fn finn_then_sigrun_back_to_back_pans_on_without_pulling_out() {
             100,
             &view,
             Request::focus(Reason::Speaker, id("sigrun"))
-                .zoom(250)
-                .over(1_500),
+                .with_zoom_percent(250)
+                .with_over_ms(1_500),
         )
         .expect("well formed");
     let mut moves = Vec::new();
@@ -233,7 +233,11 @@ fn three_heroes_hit_by_one_area_leave_the_camera_wide() {
     // On a stage the camera has not zoomed on, three hits of one result move nothing.
     for who in ["finn", "sigrun", "brenna"] {
         director
-            .request(0, &view, Request::focus(Reason::Hit, id(who)).result(9))
+            .request(
+                0,
+                &view,
+                Request::focus(Reason::Hit, id(who)).with_result(9),
+            )
             .expect("well formed");
     }
     assert!(tick(&mut director, 0, &view).is_empty());
@@ -263,7 +267,7 @@ fn three_heroes_hit_by_one_area_leave_the_camera_wide() {
             .request(
                 6_000,
                 &view,
-                Request::focus(Reason::Hit, id(who)).result(10),
+                Request::focus(Reason::Hit, id(who)).with_result(10),
             )
             .expect("well formed");
     }
@@ -281,7 +285,7 @@ fn three_heroes_hit_by_one_area_leave_the_camera_wide() {
     let moves = ask(&mut director, 9_900, &view, area);
     assert_eq!(wide_of(&moves[0]).0, WideReason::Area);
     // Two hits of one result on the same hero are not an area.
-    let one = Request::focus(Reason::Hit, id("finn")).result(11);
+    let one = Request::focus(Reason::Hit, id("finn")).with_result(11);
     director
         .request(12_000, &view, one.clone())
         .expect("well formed");

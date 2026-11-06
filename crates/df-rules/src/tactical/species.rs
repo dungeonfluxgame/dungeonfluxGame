@@ -4,6 +4,10 @@ use super::{Battle, Cell, DamageType, RuleError, Size};
 use crate::species::{Ancestry, GiantAncestry};
 use serde::{Deserialize, Serialize};
 
+/// Most species-damage records one battle retains; a new record beyond this is refused.
+pub(super) const MAXIMUM_SPECIES_DAMAGE_RECORDS: usize = 64;
+
+/// The area of a Dragonborn Breath Weapon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BreathShape {
     Cone,
@@ -15,6 +19,7 @@ pub struct BreathDirection {
     pub column: i8,
     pub row: i8,
 }
+/// One target's saving throw against a species area effect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SavingThrowSummary {
     pub target: u32,
@@ -25,6 +30,7 @@ pub struct SavingThrowSummary {
     pub damage: u16,
     pub damage_type: DamageType,
 }
+/// A species reaction a battle may wait on.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SpeciesReaction {
     StoneEndurance,
@@ -73,7 +79,7 @@ pub(super) fn queue_damage(
     critical: bool,
     knockout: bool,
 ) -> Result<(), RuleError> {
-    if battle.species_damage.len() >= 64 {
+    if battle.species_damage.len() >= MAXIMUM_SPECIES_DAMAGE_RECORDS {
         return Err(RuleError::Capacity);
     }
     battle.species_damage.push(SpeciesDamage {
@@ -300,7 +306,8 @@ pub(super) fn breath(
         } else {
             take_d20(spec, target, D20Test::SavingThrow, draws, rerolls)?
         };
-        // SRD p.9 Dodge grants Dexterity-save Advantage; only its attack-roll benefit requires sight.
+        // SRD p.9 Dodge grants Dexterity-save Advantage; only its attack-roll benefit requires
+        // sight.
         let die = if !automatic_failure && battle.actor(target)?.budget.dodging {
             die.max(take_d20(
                 spec,

@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use crate::envelope::Sender;
 use crate::identity::SeatId;
+use crate::limits::{MAXIMUM_CONTROLS_LANE_LENGTH, MAXIMUM_SEAT_CONTROLS_PENDING};
 use crate::outcome::OutcomeKind;
 use crate::owner_queue::{
-    AdmitError, FinishError, Lane, MAXIMUM_CONTROLS_LANE_LENGTH, MAXIMUM_SEAT_CONTROLS_PENDING,
-    OperationStatus, OwnerQueue, QueueLimits, ServedInput,
+    AdmitError, FinishError, Lane, OperationStatus, OwnerQueue, QueueLimits, ServedInput,
 };
 use crate::owner_queue_tests::{
     NullSink, operation, pending_answer, proposal, safety_card, seated_queue, settings, tap,

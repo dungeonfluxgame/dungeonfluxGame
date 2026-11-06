@@ -6,18 +6,18 @@ use serde_json::json;
 use crate::conformance::{self, ConformanceFixture, Expectation, ScriptedStep};
 use crate::dialogue::{Conversation, ConversationError, DialogueMachine};
 use crate::effects::{
-    ApplyOutcome, ConversationOutcome, EffectRecord, EffectRefusal, TableEffect, TableState,
+    ApplyOutcome, ConversationOutcome, EffectCause, EffectRecord, TableEffect, TableState,
 };
 use crate::envelope::{PendingId, TimerName};
 use crate::explore::{AuthoredBeat, ExploreMachine};
 use crate::explore_tests::{entry_to_the_first_scene, table_in_the_first_scene};
 use crate::identity::{MachineId, SceneId, TableId, TableScope};
 use crate::lobby_tests::{FIRST_SCENE, action, lobby, offered, seat};
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
-    CarryItem, Decision, Entry, EntryRefusal, Machine, MachineError, MachineFailureCause,
-    MachineInput, ResultFault, StepInput, StepOutcome, StepResult,
+    CarryItem, Decision, Entry, EntryError, Machine, MachineError, MachineFailureCause,
+    MachineInput, ResultCause, StepInput, StepOutcome, StepResult,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode, Outcome};
 use crate::ports::{Audience, Draw, DrawRequest, PortName, Preparation, Resolution, Resolved};
 use crate::testkit::{QueuedDice, ScriptedBroker, ScriptedRulesOwner, correlation};
@@ -207,14 +207,14 @@ fn entering_needs_a_scene_the_table_is_in_and_seats_it_holds() {
     let table = table_in_the_first_scene();
     assert_eq!(
         machine.enter(&table, &Entry::empty()),
-        Err(MachineError::Entry(EntryRefusal::MissingScene))
+        Err(MachineError::Entry(EntryError::MissingScene))
     );
     assert_eq!(
         machine.enter(
             &table,
             &Entry::carrying(vec![CarryItem::Scene(FIRST_SCENE)])
         ),
-        Err(MachineError::Entry(EntryRefusal::NoSeats))
+        Err(MachineError::Entry(EntryError::NoSeats))
     );
     assert_eq!(
         machine.enter(
@@ -224,7 +224,7 @@ fn entering_needs_a_scene_the_table_is_in_and_seats_it_holds() {
                 CarryItem::Seat(seat(9))
             ])
         ),
-        Err(MachineError::Entry(EntryRefusal::SeatNotAtTable {
+        Err(MachineError::Entry(EntryError::SeatNotAtTable {
             seat: seat(9)
         }))
     );
@@ -560,7 +560,7 @@ fn a_rules_result_is_read_as_a_verdict_or_refused_with_a_typed_reason() {
     let (machine, slot, table) = entered();
     let moved = Some(ConversationOutcome::Moved);
     let unmoved = Some(ConversationOutcome::Unmoved);
-    let cases: [(Facts, Result<Option<ConversationOutcome>, ResultFault>); 12] = [
+    let cases: [(Facts, Result<Option<ConversationOutcome>, ResultCause>); 12] = [
         (&[("succeeded", 1)], Ok(moved)),
         (&[("succeeded", 0)], Ok(unmoved)),
         (&[("complied", 1)], Ok(moved)),
@@ -569,18 +569,18 @@ fn a_rules_result_is_read_as_a_verdict_or_refused_with_a_typed_reason() {
         (&[("succeeded", 0), ("complied", 0)], Ok(unmoved)),
         (&[], Ok(None)),
         (&[("damage", 7)], Ok(None)),
-        (&[("succeeded", 2)], Err(ResultFault::AmountNotZeroOrOne)),
+        (&[("succeeded", 2)], Err(ResultCause::AmountNotZeroOrOne)),
         (
             &[("complied", u64::MAX)],
-            Err(ResultFault::AmountNotZeroOrOne),
+            Err(ResultCause::AmountNotZeroOrOne),
         ),
         (
             &[("succeeded", 0), ("complied", 1)],
-            Err(ResultFault::FactsConflict),
+            Err(ResultCause::FactsConflict),
         ),
         (
             &[("succeeded", 1), ("succeeded", 1)],
-            Err(ResultFault::DuplicateFact),
+            Err(ResultCause::DuplicateFact),
         ),
     ];
     for (facts, wanted) in cases {
@@ -690,6 +690,6 @@ fn a_conversation_that_ended_in_a_scene_that_is_not_open_is_refused() {
     );
     assert_eq!(
         refused.expect_err("refused").cause,
-        EffectRefusal::SceneNotActive
+        EffectCause::SceneNotActive
     );
 }

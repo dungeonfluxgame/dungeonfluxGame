@@ -10,7 +10,8 @@ use std::{
 };
 // O_NOFOLLOW differs by target. macOS: 0x100. Linux x86 and x86_64: 0x20000. Linux aarch64 and
 // arm: 0x8000 (on those, 0x20000 is not O_NOFOLLOW, so an open would follow the link silently).
-// Values from the kernel's per-arch fcntl headers; the crate has no libc dependency to check against.
+// Values from the kernel's per-arch fcntl headers; the crate has no libc dependency to check
+// against.
 #[cfg(target_os = "macos")]
 const NOFOLLOW: i32 = 0x100;
 #[cfg(all(target_os = "linux", any(target_arch = "x86", target_arch = "x86_64")))]
@@ -26,9 +27,10 @@ const NOFOLLOW: i32 = 0x8000;
         target_arch = "arm"
     ))
 ))]
-compile_error!(
-    "df-telemetry: O_NOFOLLOW is not verified for this Linux architecture; add its value to ownership.rs"
-);
+compile_error!(concat!(
+    "df-telemetry: O_NOFOLLOW is not verified for this Linux architecture; ",
+    "add its value to ownership.rs"
+));
 #[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
 compile_error!(
     "df-telemetry: O_NOFOLLOW is not verified for this unix target; add its value to ownership.rs"
@@ -83,7 +85,22 @@ fn is_open_reparse_point(file: &File) -> bool {
         .map(|information| information.file_attributes() as u32 & FILE_ATTRIBUTE_REPARSE_POINT != 0)
         .unwrap_or(true)
 }
-const MARKER: &[u8] = b"df-telemetry native synthetic owned root v1\n";
+/// Content of the `OWNER` file that marks a directory as a root this crate created.
+pub(crate) const MARKER: &[u8] = b"df-telemetry native synthetic owned root v1\n";
+
+/// The only parent under which the fixture-only `Store::open` accepts a root:
+/// `artifacts/runtime/telemetry-g06` in the workspace this crate was built from.
+pub fn fixture_root_parent() -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // `crates/df-telemetry` always has the workspace two levels up; the fallback keeps the
+    // bound inside this crate's own directory rather than inventing a wider one.
+    let workspace = manifest.ancestors().nth(2).unwrap_or(manifest);
+    workspace
+        .join("artifacts")
+        .join("runtime")
+        .join("telemetry-g06")
+}
+
 pub(crate) struct OwnedRoot {
     pub path: PathBuf,
     _lock: File,
@@ -142,6 +159,10 @@ pub(crate) fn open_file(
     };
     Ok(file)
 }
+/// Open an existing owned file for writing, or create it when absent.
+pub(crate) fn open_or_create_file(path: &Path) -> Result<File, TelemetryError> {
+    open_file(path, true, !path.exists())
+}
 pub(crate) fn sync_directory(path: &Path) -> Result<(), TelemetryError> {
     #[cfg(unix)]
     {
@@ -175,12 +196,8 @@ impl OwnedRoot {
         let parent = path.parent().ok_or(TelemetryError::ForeignRoot)?;
         if !configured {
             // This foundation deliberately has no deployment path/configuration authority.
-            // Only coordinator-provisioned synthetic roots beneath this local MAIN are writable.
-            if parent
-                != Path::new(
-                    "/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06",
-                )
-            {
+            // Only synthetic roots beneath this workspace's fixture parent are writable.
+            if parent != fixture_root_parent() {
                 return Err(TelemetryError::ForeignRoot);
             }
             let name = path
@@ -254,11 +271,7 @@ impl OwnedRoot {
             }
         }
         let lock_path = path.join("LOCK");
-        let lock = if lock_path.exists() {
-            open_file(&lock_path, true, false)?
-        } else {
-            open_file(&lock_path, true, true)?
-        };
+        let lock = open_or_create_file(&lock_path)?;
         lock.try_lock().map_err(|_| TelemetryError::Ownership)?;
         Ok(Self {
             path: path.to_owned(),

@@ -11,25 +11,38 @@
 //!
 //! Reading order for a newcomer, following one command from the terminal to the viewer:
 //! `command` (parse the words) -> `dev` (send them) -> `client` (the socket) -> `guard` and
-//! `server` (accept them; `playground` serves the playground's files) -> `request` (words to a typed effect) -> `df_table::canvas` (apply and
-//! record) -> `sink` and `event_log` (keep the line) -> `view` and `render` (draw it). `wire`
-//! holds the types both sides share.
+//! `server` (accept them; `playground` serves the playground's files) -> `request` (words to a
+//! typed effect) -> `df_table::canvas` (apply and record) -> `sink` and `event_log` (keep the
+//! line) -> `view` and `render` (draw it). `wire` holds the types both sides share.
+//!
+//! The dev route convention (`planning/coding-style.md`, "Dev routes and CLI") is being adopted,
+//! not yet true everywhere. The routes that change what the playground shows answer the shared
+//! envelope, `dev_http::DevReply`, through `dev_http::reply`. The engine, director, scene, cast,
+//! locate and imagegen routes read bodies with `dev_http::parse_body` and their CLIs call through
+//! `dev_client`, but each still keeps its own reply type; the canvas and fixture-file routes still
+//! answer `wire::Reply`.
 //!
 //! Differences from section O of the plan are listed in the `df-table` crate docs. The host has no
 //! player surfaces yet: this is the workbench the machines and pipeline plug into.
 
 pub mod adapters;
+mod atomic_file;
 pub mod broker;
+pub mod cast;
 pub mod client;
 pub mod command;
 pub mod dev;
+mod dev_client;
+mod dev_http;
 pub mod director;
 pub mod engine;
+pub mod environment;
 pub mod event_log;
 pub mod guard;
 pub mod imagegen;
 pub mod kind_files;
 pub mod limits;
+pub mod locate;
 pub mod machine_wire;
 mod media_ingest;
 pub mod media_library;
@@ -49,10 +62,13 @@ pub mod serve;
 pub mod server;
 pub mod sink;
 pub mod state;
+pub mod text;
 mod video_container;
 pub mod view;
 pub mod wire;
 
+#[cfg(test)]
+mod atomic_file_tests;
 #[cfg(test)]
 mod boot_tests;
 #[cfg(test)]
@@ -64,11 +80,15 @@ mod command_tests;
 #[cfg(test)]
 mod contract_tests;
 #[cfg(test)]
+mod dev_http_tests;
+#[cfg(test)]
 mod dev_playground_tests;
 #[cfg(test)]
 mod dev_tests;
 #[cfg(test)]
 mod echo_tests;
+#[cfg(test)]
+mod environment_tests;
 #[cfg(test)]
 mod event_log_tests;
 #[cfg(test)]

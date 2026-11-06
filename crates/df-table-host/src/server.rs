@@ -4,10 +4,12 @@
 //! briefly and never across an `.await`; the lock stays held from converting a request to
 //! applying it, so a reload cannot change the kinds in between. Every request passes the guard
 //! first (`guard.rs`), every change goes through `Canvas::apply`, and every rejection, including
-//! the ones that happen before a request becomes an effect, is recorded as an event.
+//! the ones that happen before a request becomes an effect, is recorded as an event. The audit
+//! lines a request records are echoed to the terminal once, after it is answered, by the guard
+//! middleware, so no route echoes on its own.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -49,22 +51,26 @@ fn rejected(status: StatusCode, cause: Option<RejectionCause>, message: &str) ->
     )
 }
 
-/// Runs the guard before every route and records what it refuses.
+/// Runs the guard before every route and records what it refuses, then echoes the audit lines
+/// the request recorded to the terminal: the one echo of every route.
 async fn guard_requests(
     State(state): State<Arc<AppState>>,
     request: Request,
     next: Next,
 ) -> Response {
-    if let Err(refusal) = guard::check(request.method(), request.headers()) {
-        state.record_rejection(None, None, RejectionCause::ForbiddenRequest);
-        state.echo_new_lines();
-        return rejected(
-            refusal.status(),
-            Some(RejectionCause::ForbiddenRequest),
-            refusal.message(),
-        );
-    }
-    next.run(request).await
+    let response = match guard::check(request.method(), request.headers()) {
+        Ok(()) => next.run(request).await,
+        Err(error) => {
+            state.record_rejection(None, None, RejectionCause::ForbiddenRequest);
+            rejected(
+                error.status(),
+                Some(RejectionCause::ForbiddenRequest),
+                error.message(),
+            )
+        }
+    };
+    state.echo_new_lines();
+    response
 }
 
 /// Tells readers waiting for news that a change was made. Every POST is a change attempt, so
@@ -93,7 +99,6 @@ fn canvas_view(state: &AppState) -> Result<CanvasView, ViewError> {
 
 fn view_failed(state: &AppState, error: &dyn std::fmt::Display) -> Response {
     state.record_line(format!("HOST view_failed reason={error}"));
-    state.echo_new_lines();
     rejected(StatusCode::INTERNAL_SERVER_ERROR, None, &error.to_string())
 }
 
@@ -115,10 +120,15 @@ async fn canvas_json(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-/// The query of `route::PLAYGROUND_FRAME`; the field is named like `wire::FRAME_AFTER_PARAMETER`.
+/// The query of `route::PLAYGROUND_FRAME`; the fields are named like `wire::FRAME_AFTER_PARAMETER`,
+/// `wire::FRAME_BOOT_PARAMETER` and `wire::FRAME_IDLE_PARAMETER`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FrameQuery {
     after: Option<u64>,
+    /// The run of the host the frame `after` came from. A page that names another run kept a frame
+    /// from before a restart, so it is answered at once even when this run's count is the same.
+    boot: Option<String>,
     /// `idle=204`: answer a wait that ran out with nothing changed by an empty 204 (the page
     /// asks again with the same count) instead of a frame it would only throw away.
     idle: Option<u16>,
@@ -126,7 +136,8 @@ pub(crate) struct FrameQuery {
 
 /// The current frame. With `after=N`, a request made while the host is still at frame N is held
 /// until the next change (or `FRAME_WAIT`), so a page learns of a change as it happens instead of
-/// by asking again and again. A different count, such as after a host restart, answers at once.
+/// by asking again and again. A different count, or a `boot` that names another run of the host
+/// (after a restart), answers at once.
 /// The frame is built once for each change count and every page is sent the same bytes.
 async fn frame_json(
     State(state): State<Arc<AppState>>,
@@ -137,7 +148,11 @@ async fn frame_json(
 
 /// `frame_json` with the wait as a parameter, so a test need not wait twenty-five seconds.
 async fn frame_answer(state: &Arc<AppState>, query: &FrameQuery, patience: Duration) -> Response {
-    if let Some(after) = query.after {
+    let same_run = query
+        .boot
+        .as_deref()
+        .is_none_or(|boot| state.playground().is_boot(boot));
+    if let Some(after) = query.after.filter(|_| same_run) {
         let mut changes = state.watch_changes();
         // A timeout is not an error: the page asks again with the same count.
         let timed_out = tokio::time::timeout(patience, changes.wait_for(|count| *count != after))
@@ -194,12 +209,7 @@ async fn apply_effect(
     State(state): State<Arc<AppState>>,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
-    let response = apply_effect_body(&state, body);
-    state.echo_new_lines();
-    response
-}
-
-fn apply_effect_body(state: &AppState, body: Result<Bytes, BytesRejection>) -> Response {
+    let state = state.as_ref();
     let bytes = match body {
         Ok(bytes) => bytes,
         Err(rejection) => {
@@ -347,7 +357,7 @@ fn reject_conversion(
 
 async fn reload(State(state): State<Arc<AppState>>) -> Response {
     let loaded = load_kind_files_async(state.kind_directory().to_path_buf()).await;
-    let response = match loaded {
+    match loaded {
         Ok(registry) => {
             let mut canvas = state.canvas();
             let report = canvas.replace_registry(registry, state.sink());
@@ -378,9 +388,7 @@ async fn reload(State(state): State<Arc<AppState>>) -> Response {
                 },
             )
         }
-    };
-    state.echo_new_lines();
-    response
+    }
 }
 
 /// The routes of the developer API, the viewer and the playground.
@@ -399,6 +407,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .merge(crate::scene_builder::router(state.clone()))
         .merge(crate::director::router(state.clone()))
         .merge(crate::imagegen::router(state.clone()))
+        .merge(crate::locate::routes::router(state.clone()))
+        .merge(crate::cast::routes::router(state.clone()))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -410,22 +420,23 @@ pub fn router(state: Arc<AppState>) -> Router {
 /// Starts the host's clock: every `TICK_INTERVAL` while something travels it advances travelling
 /// elements by the time that really passed, which the canvas cuts to a sane length if the host
 /// stalled. With nothing travelling it sleeps until an effect wakes it, so an idle host has no
-/// timer running. Abort the handle to stop it.
+/// timer running. It reads tokio's clock, so a test with paused time drives it. Abort the handle
+/// to stop it.
 pub fn spawn_clock(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(TICK_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut last = Instant::now();
+        let mut last = tokio::time::Instant::now();
         loop {
             if !state.is_moving() {
                 state.clock_woken().await;
                 // Time spent asleep is not travel: start counting again from the wake-up.
                 interval.reset();
-                last = Instant::now();
+                last = tokio::time::Instant::now();
                 continue;
             }
             interval.tick().await;
-            let now = Instant::now();
+            let now = tokio::time::Instant::now();
             let seconds = now.duration_since(last).as_secs_f32();
             last = now;
             state.tick(seconds);
@@ -453,7 +464,18 @@ pub async fn serve_listener(
 #[cfg(test)]
 impl FrameQuery {
     pub(crate) fn for_test(after: Option<u64>, idle: Option<u16>) -> Self {
-        Self { after, idle }
+        Self {
+            after,
+            boot: None,
+            idle,
+        }
+    }
+
+    pub(crate) fn with_boot(self, boot: &str) -> Self {
+        Self {
+            boot: Some(boot.to_owned()),
+            ..self
+        }
     }
 }
 

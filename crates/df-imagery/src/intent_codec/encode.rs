@@ -6,8 +6,9 @@ use df_assets::{Audience, MemberSet};
 use sha2::{Digest, Sha256};
 
 use crate::config::{
-    AccountingMode, BackendGate, BackendId, GenerationQuality, GlobalMode, ImageConfig,
-    PurposeGate, SchedulerBounds, TransformLimits,
+    Accounting, AccountingMode, AnalysisPreparationLimits, BackendGate, BackendId,
+    GenerationQuality, GlobalMode, ImageConfig, NamedOutputProfile, PurposeGate, RetryPolicy,
+    SchedulerBounds, SegmentationRoute, TransformLimits,
 };
 use crate::output::{AlphaHandling, Encoding, OutputProfile, RasterOutputSpec, Rgb};
 use crate::request::{
@@ -17,11 +18,14 @@ use crate::request::{
 use crate::transform::{
     AlignAnchor, Anchor1D, BlendMode, BlurAlgorithm, ColorEffect, CompositeLayer, CoverageRef,
     EncodedAlphaBlend, EncodedFilter, FlipAxis, ImageTransform, Interpolation, MaskChannel,
-    MaskMode, MaskSource, MaskSpec, ResizeMode, RotateSpec, TransformError, TransformSource,
-    TransformSpec,
+    MaskMode, MaskSource, MaskSpec, ResizeMode, RotateSpec, TransformError, TransformField,
+    TransformSource, TransformSpec,
 };
 
-use super::primitives::{MIN_MEMBER_BYTES, Writer, prompt_byte_bound};
+use super::primitives::{
+    ENCODED_STEP_REVISION, MIN_MEMBER_BYTES, Writer, encode_moderation, encode_optional_route,
+    prompt_byte_bound,
+};
 use super::{CONFIG_CODEC_VERSION, CodecError, EncodedConfig, EncodedIntent, INTENT_CODEC_VERSION};
 
 /// Encodes the consumer intent of `request` under `limits` without exceeding
@@ -70,6 +74,7 @@ pub(crate) fn encode_decoded_intent(
     )
 }
 
+/// The canonical intent fields shared by a live request and a decoded one.
 struct IntentFields<'a> {
     owner: &'a ImageOwner,
     purpose: crate::PurposedUse,
@@ -80,6 +85,7 @@ struct IntentFields<'a> {
     expected_source_revision: u64,
     output: &'a OutputProfile,
 }
+
 fn encode_fields(
     request: IntentFields<'_>,
     limits: &RequestLimits,
@@ -124,6 +130,7 @@ fn encode_fields(
     })
 }
 
+/// The one variant-role tag shared by intent and analysis encodings.
 pub(crate) fn role_tag(role: VariantRole) -> u8 {
     match role {
         VariantRole::Primary => 0,
@@ -425,12 +432,7 @@ fn encode_step(
                 ResizeMode::Pad => 3,
             })?;
             encode_anchor(out, spec.anchor())?;
-            out.push(match spec.interpolation() {
-                Interpolation::Nearest => 0,
-                Interpolation::Bilinear => 1,
-                Interpolation::Bicubic => 2,
-                Interpolation::Lanczos3 => 3,
-            })?;
+            out.push(interpolation_tag(spec.interpolation()))?;
             out.boolean(spec.allow_upscale())?;
             match spec.pad_fill() {
                 Some(fill) => {
@@ -468,15 +470,10 @@ fn encode_step(
                     interpolation,
                 } => {
                     out.push(1)?;
-                    out.float(*degrees, "rotation")?;
+                    out.float(*degrees, TransformField::Rotation.label())?;
                     out.boolean(*expand_canvas)?;
                     encode_rgb(out, *fill)?;
-                    out.push(match interpolation {
-                        Interpolation::Nearest => 0,
-                        Interpolation::Bilinear => 1,
-                        Interpolation::Bicubic => 2,
-                        Interpolation::Lanczos3 => 3,
-                    })?;
+                    out.push(interpolation_tag(*interpolation))?;
                 }
             }
         }
@@ -489,34 +486,34 @@ fn encode_step(
         }
         ImageTransform::Brighten(offset) => {
             out.push(5)?;
-            out.float(offset.value(), "brightness")?;
+            out.float(offset.value(), TransformField::Brightness.label())?;
         }
         ImageTransform::Expose(stops) => {
             out.push(6)?;
-            out.float(stops.value(), "exposure")?;
+            out.float(stops.value(), TransformField::Exposure.label())?;
         }
         ImageTransform::Color(effect) => {
             out.push(7)?;
             match effect {
                 ColorEffect::Contrast { gain, pivot } => {
                     out.push(0)?;
-                    out.float(*gain, "contrast")?;
-                    out.float(*pivot, "contrast")?;
+                    out.float(*gain, TransformField::Contrast.label())?;
+                    out.float(*pivot, TransformField::Contrast.label())?;
                 }
                 ColorEffect::Saturation { factor } => {
                     out.push(1)?;
-                    out.float(*factor, "saturation")?;
+                    out.float(*factor, TransformField::Saturation.label())?;
                 }
                 ColorEffect::HueShift { degrees } => {
                     out.push(2)?;
-                    out.float(*degrees, "hue")?;
+                    out.float(*degrees, TransformField::Hue.label())?;
                 }
                 ColorEffect::Grayscale => out.push(3)?,
             }
         }
         ImageTransform::Blur(spec) => {
             out.push(8)?;
-            out.float(spec.radius_px(), "blur")?;
+            out.float(spec.radius_px(), TransformField::Blur.label())?;
             out.push(match spec.algorithm() {
                 BlurAlgorithm::Box => 0,
                 BlurAlgorithm::Gaussian => 1,
@@ -524,8 +521,8 @@ fn encode_step(
         }
         ImageTransform::Sharpen(spec) => {
             out.push(9)?;
-            out.float(spec.radius_px(), "sharpen")?;
-            out.float(spec.amount_factor(), "sharpen")?;
+            out.float(spec.radius_px(), TransformField::Sharpen.label())?;
+            out.float(spec.amount_factor(), TransformField::Sharpen.label())?;
             out.push(spec.threshold_0_255())?;
         }
         ImageTransform::Mask(spec) => {
@@ -547,7 +544,7 @@ fn encode_step(
         }
         ImageTransform::EncodedResize { dimensions, filter } => {
             out.push(12)?;
-            out.u32_be(1)?;
+            out.u32_be(ENCODED_STEP_REVISION)?;
             out.u32_be(dimensions.width_px())?;
             out.u32_be(dimensions.height_px())?;
             out.push(match filter {
@@ -557,13 +554,13 @@ fn encode_step(
         }
         ImageTransform::EncodedThumbnail(dimensions) => {
             out.push(13)?;
-            out.u32_be(1)?;
+            out.u32_be(ENCODED_STEP_REVISION)?;
             out.u32_be(dimensions.width_px())?;
             out.u32_be(dimensions.height_px())?;
         }
         ImageTransform::EncodedMatte { fill, blend } => {
             out.push(14)?;
-            out.u32_be(1)?;
+            out.u32_be(ENCODED_STEP_REVISION)?;
             encode_rgb(out, *fill)?;
             out.push(match blend {
                 EncodedAlphaBlend::IntegerFloor => 0,
@@ -572,23 +569,32 @@ fn encode_step(
         }
         ImageTransform::DiscardAlpha => {
             out.push(15)?;
-            out.u32_be(1)?;
+            out.u32_be(ENCODED_STEP_REVISION)?;
         }
     }
     Ok(())
 }
 
+fn interpolation_tag(interpolation: Interpolation) -> u8 {
+    match interpolation {
+        Interpolation::Nearest => 0,
+        Interpolation::Bilinear => 1,
+        Interpolation::Bicubic => 2,
+        Interpolation::Lanczos3 => 3,
+    }
+}
+
+fn anchor_axis_tag(axis: Anchor1D) -> u8 {
+    match axis {
+        Anchor1D::Start => 0,
+        Anchor1D::Center => 1,
+        Anchor1D::End => 2,
+    }
+}
+
 fn encode_anchor(out: &mut Writer, anchor: AlignAnchor) -> Result<(), CodecError> {
-    out.push(match anchor.x {
-        Anchor1D::Start => 0,
-        Anchor1D::Center => 1,
-        Anchor1D::End => 2,
-    })?;
-    out.push(match anchor.y {
-        Anchor1D::Start => 0,
-        Anchor1D::Center => 1,
-        Anchor1D::End => 2,
-    })
+    out.push(anchor_axis_tag(anchor.x))?;
+    out.push(anchor_axis_tag(anchor.y))
 }
 
 fn encode_mask(out: &mut Writer, spec: &MaskSpec) -> Result<(), CodecError> {
@@ -610,7 +616,7 @@ fn encode_mask(out: &mut Writer, spec: &MaskSpec) -> Result<(), CodecError> {
         MaskChannel::Luminance => 1,
     })?;
     out.boolean(spec.invert())?;
-    out.float(spec.feather_radius_px(), "mask")?;
+    out.float(spec.feather_radius_px(), TransformField::Mask.label())?;
     out.push(match spec.mode() {
         MaskMode::Multiply => 0,
         MaskMode::Replace => 1,
@@ -654,145 +660,56 @@ pub(crate) fn encode_config(
     }
     encode_transform_limits(&mut out, &config.transforms)?;
     encode_scheduler(&mut out, &config.scheduler)?;
-    out.u64_be(
-        u64::try_from(config.request_limits.max_prompt_chars).map_err(|_| CodecError::TooLong)?,
-    )?;
-    out.u64_be(
-        u64::try_from(config.request_limits.max_references).map_err(|_| CodecError::TooLong)?,
-    )?;
-    out.u64_be(
-        u64::try_from(config.request_limits.max_transform_steps)
-            .map_err(|_| CodecError::TooLong)?,
-    )?;
-    out.u64_be(
-        u64::try_from(config.request_limits.max_composite_layers)
-            .map_err(|_| CodecError::TooLong)?,
-    )?;
+    encode_request_limits(&mut out, &config.request_limits)?;
     encode_codex(&mut out, &config.codex)?;
     out.counted(config.default_output_profile.as_str().as_bytes())?;
-    // Canonical profile order is by name: the table is semantically a
-    // names mapping, so reordering alone must not change the recipe bytes.
-    let mut ordered: Vec<&crate::config::NamedOutputProfile> =
-        config.output_profiles.iter().collect();
-    ordered.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
-    let profile_count = u32::try_from(ordered.len()).map_err(|_| CodecError::TooLong)?;
-    out.u32_be(profile_count)?;
-    for entry in ordered {
-        out.counted(entry.name.as_str().as_bytes())?;
-        encode_output(&mut out, &entry.profile)?;
-    }
-    out.u32_be(config.retry.max_attempts)?;
-    out.u64_be(config.retry.retry_deadline_secs)?;
-    out.u64_be(config.retry.backoff_secs)?;
-    out.push(match config.accounting.mode {
-        AccountingMode::RecordOnly => 0,
-        AccountingMode::Hosted => 1,
-    })?;
-    match &config.accounting.price_file {
-        Some(reference) => {
-            out.push(1)?;
-            out.counted(reference.as_str().as_bytes())?;
-        }
-        None => out.push(0)?,
-    }
+    encode_output_profiles(&mut out, &config.output_profiles)?;
+    encode_retry(&mut out, &config.retry)?;
+    encode_accounting(&mut out, &config.accounting)?;
     out.push(config.quality.jpeg_quality.value())?;
-    match config.quality.provider_quality {
-        Some(quality) => {
-            out.push(1)?;
-            match quality {
-                GenerationQuality::Low => out.push(0)?,
-                GenerationQuality::Medium => out.push(1)?,
-                GenerationQuality::High => out.push(2)?,
-                GenerationQuality::Auto => out.push(3)?,
-                GenerationQuality::LegacyNumeric(value) => {
-                    out.push(4)?;
-                    out.push(value.value())?;
-                }
-            }
-        }
-        None => out.push(0)?,
+    out.boolean(config.quality.provider_quality.is_some())?;
+    if let Some(quality) = config.quality.provider_quality {
+        encode_generation_quality(&mut out, quality)?;
     }
+    // Each later field was appended by the codec version that introduced it.
     out.u64_be(config.codex.max_stdout_bytes)?;
     out.u64_be(config.codex.max_stderr_bytes)?;
     out.u64_be(config.codex.max_message_bytes)?;
-    for route in [&config.analysis.classification, &config.analysis.inspection] {
-        out.boolean(route.is_some())?;
-        if let Some(route) = route {
-            super::pipeline::route(&mut out, route)?;
-        }
-    }
-    for purpose in &config.purposes {
-        match purpose.quality_override {
-            None => out.push(0)?,
-            Some(quality) => {
-                out.push(1)?;
-                match quality {
-                    GenerationQuality::Low => out.push(0)?,
-                    GenerationQuality::Medium => out.push(1)?,
-                    GenerationQuality::High => out.push(2)?,
-                    GenerationQuality::Auto => out.push(3)?,
-                    GenerationQuality::LegacyNumeric(value) => {
-                        out.push(4)?;
-                        out.push(value.value())?;
-                    }
-                }
-            }
-        }
-        match &purpose.model_override {
-            None => out.push(0)?,
-            Some(model) => {
-                out.push(1)?;
-                out.counted(model.as_str().as_bytes())?;
-            }
-        }
-    }
+    encode_optional_route(&mut out, config.analysis.classification.as_ref())?;
+    encode_optional_route(&mut out, config.analysis.inspection.as_ref())?;
+    encode_quality_and_model_overrides(&mut out, &config.purposes)?;
     for purpose in &config.purposes {
         out.boolean(purpose.moderation_override.is_some())?;
         if let Some(moderation) = purpose.moderation_override {
-            out.push(match moderation {
-                crate::ProviderModeration::Auto => 0,
-                crate::ProviderModeration::Low => 1,
-            })?;
+            encode_moderation(&mut out, moderation)?;
         }
     }
-    out.u64_be(config.analysis.preparation.max_pixels)?;
-    out.u64_be(config.analysis.preparation.max_picture_bytes)?;
-    out.u64_be(config.analysis.preparation.max_request_bytes)?;
-    for route in [
-        &config.analysis.head_locations,
-        &config.analysis.staging_identity,
-        &config.analysis.staging_facing,
-    ] {
-        out.boolean(route.is_some())?;
-        if let Some(route) = route {
-            super::pipeline::route(&mut out, route)?;
-        }
-    }
+    encode_preparation_limits(&mut out, &config.analysis.preparation)?;
+    encode_optional_route(&mut out, config.analysis.head_locations.as_ref())?;
+    encode_optional_route(&mut out, config.analysis.staging_identity.as_ref())?;
+    encode_optional_route(&mut out, config.analysis.staging_facing.as_ref())?;
     out.boolean(config.analysis.segmentation.is_some())?;
     if let Some(route) = &config.analysis.segmentation {
-        out.push(match route.provider {
-            crate::config::SegmentationProvider::Fal => 0,
-        })?;
-        out.counted(route.account.as_str().as_bytes())?;
-        out.counted(route.model.as_str().as_bytes())?;
-        out.counted(route.endpoint.as_str().as_bytes())?;
+        encode_segmentation_route(&mut out, route)?;
     }
-    out.u64_be(config.analysis.segmentation_preparation.max_pixels)?;
-    out.u64_be(config.analysis.segmentation_preparation.max_picture_bytes)?;
-    out.u64_be(config.analysis.segmentation_preparation.max_request_bytes)?;
+    encode_preparation_limits(&mut out, &config.analysis.segmentation_preparation)?;
     for purpose in &config.purposes {
-        out.boolean(purpose.account_override.is_some())?;
-        if let Some(account) = &purpose.account_override {
-            out.counted(account.as_str().as_bytes())?;
-        }
+        out.optional_text(
+            purpose
+                .account_override
+                .as_ref()
+                .map(|account| account.as_str()),
+        )?;
     }
     out.boolean(config.quota.enabled)?;
     out.u64_be(config.quota.cooldown_ms)?;
     out.u32_be(config.quota.maximum_accounts)?;
-    out.boolean(config.creator_bfl_account.is_some())?;
-    if let Some(account) = &config.creator_bfl_account {
-        out.counted(account.as_str().as_bytes())?;
-    }
+    out.optional_text(
+        config
+            .creator_bfl_account
+            .as_ref()
+            .map(|account| account.as_str()),
+    )?;
     let bytes = out.finish();
     let fingerprint = Sha256::digest(&bytes).into();
     Ok(EncodedConfig {
@@ -800,6 +717,104 @@ pub(crate) fn encode_config(
         bytes,
         fingerprint,
     })
+}
+
+fn encode_request_limits(out: &mut Writer, limits: &RequestLimits) -> Result<(), CodecError> {
+    for bound in [
+        limits.max_prompt_chars,
+        limits.max_references,
+        limits.max_transform_steps,
+        limits.max_composite_layers,
+    ] {
+        out.u64_be(u64::try_from(bound).map_err(|_| CodecError::TooLong)?)?;
+    }
+    Ok(())
+}
+
+/// Canonical profile order is by name: the table is semantically a names mapping, so
+/// reordering alone must not change the recipe bytes.
+fn encode_output_profiles(
+    out: &mut Writer,
+    profiles: &[NamedOutputProfile],
+) -> Result<(), CodecError> {
+    let mut ordered: Vec<&NamedOutputProfile> = profiles.iter().collect();
+    ordered.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    out.u32_be(u32::try_from(ordered.len()).map_err(|_| CodecError::TooLong)?)?;
+    for entry in ordered {
+        out.counted(entry.name.as_str().as_bytes())?;
+        encode_output(out, &entry.profile)?;
+    }
+    Ok(())
+}
+
+fn encode_retry(out: &mut Writer, retry: &RetryPolicy) -> Result<(), CodecError> {
+    out.u32_be(retry.max_attempts)?;
+    out.u64_be(retry.retry_deadline_secs)?;
+    out.u64_be(retry.backoff_secs)
+}
+
+fn encode_accounting(out: &mut Writer, accounting: &Accounting) -> Result<(), CodecError> {
+    out.push(match accounting.mode {
+        AccountingMode::RecordOnly => 0,
+        AccountingMode::Hosted => 1,
+    })?;
+    out.optional_text(
+        accounting
+            .price_file
+            .as_ref()
+            .map(|reference| reference.as_str()),
+    )
+}
+
+fn encode_generation_quality(
+    out: &mut Writer,
+    quality: GenerationQuality,
+) -> Result<(), CodecError> {
+    match quality {
+        GenerationQuality::Low => out.push(0),
+        GenerationQuality::Medium => out.push(1),
+        GenerationQuality::High => out.push(2),
+        GenerationQuality::Auto => out.push(3),
+        GenerationQuality::LegacyNumeric(value) => {
+            out.push(4)?;
+            out.push(value.value())
+        }
+    }
+}
+
+fn encode_quality_and_model_overrides(
+    out: &mut Writer,
+    purposes: &[PurposeGate],
+) -> Result<(), CodecError> {
+    for purpose in purposes {
+        out.boolean(purpose.quality_override.is_some())?;
+        if let Some(quality) = purpose.quality_override {
+            encode_generation_quality(out, quality)?;
+        }
+        out.optional_text(purpose.model_override.as_ref().map(|model| model.as_str()))?;
+    }
+    Ok(())
+}
+
+fn encode_preparation_limits(
+    out: &mut Writer,
+    limits: &AnalysisPreparationLimits,
+) -> Result<(), CodecError> {
+    out.u64_be(limits.max_pixels)?;
+    out.u64_be(limits.max_picture_bytes)?;
+    out.u64_be(limits.max_request_bytes)
+}
+
+fn encode_segmentation_route(
+    out: &mut Writer,
+    route: &SegmentationRoute,
+) -> Result<(), CodecError> {
+    out.push(match route.provider {
+        crate::config::SegmentationProvider::Fal => 0,
+    })?;
+    out.counted(route.account.as_str().as_bytes())?;
+    out.counted(route.model.as_str().as_bytes())?;
+    out.counted(route.endpoint.as_str().as_bytes())
 }
 
 fn backend_tag(backend: BackendId) -> u8 {
@@ -820,42 +835,17 @@ fn encode_purpose_gate(out: &mut Writer, gate: &PurposeGate) -> Result<(), Codec
         }
         None => out.push(0)?,
     }
-    match &gate.output_profile {
-        Some(name) => {
-            out.push(1)?;
-            out.counted(name.as_str().as_bytes())?;
-        }
-        None => out.push(0)?,
-    }
-    Ok(())
+    out.optional_text(gate.output_profile.as_ref().map(|name| name.as_str()))
 }
 
 fn encode_backend_gate(out: &mut Writer, gate: &BackendGate) -> Result<(), CodecError> {
     out.boolean(gate.enabled)?;
     out.counted(gate.account.as_str().as_bytes())?;
     out.u32_be(gate.max_concurrent_jobs)?;
-    match &gate.model {
-        Some(model) => {
-            out.push(1)?;
-            out.counted(model.as_str().as_bytes())?;
-        }
-        None => out.push(0)?,
-    }
-    match &gate.endpoint {
-        Some(endpoint) => {
-            out.push(1)?;
-            out.counted(endpoint.as_str().as_bytes())?;
-        }
-        None => out.push(0)?,
-    }
+    out.optional_text(gate.model.as_ref().map(|model| model.as_str()))?;
+    out.optional_text(gate.endpoint.as_ref().map(|endpoint| endpoint.as_str()))?;
     for model in [&gate.generation_model, &gate.edit_model, &gate.alpha_model] {
-        match model {
-            Some(model) => {
-                out.push(1)?;
-                out.counted(model.as_str().as_bytes())?;
-            }
-            None => out.push(0)?,
-        }
+        out.optional_text(model.as_ref().map(|model| model.as_str()))?;
     }
     Ok(())
 }
@@ -864,14 +854,7 @@ fn encode_codex(out: &mut Writer, codex: &crate::config::CodexSettings) -> Resul
     out.counted(codex.executable.as_str().as_bytes())?;
     out.counted(codex.workdir.as_str().as_bytes())?;
     out.counted(codex.cli_profile.as_str().as_bytes())?;
-    match &codex.agent_model {
-        Some(model) => {
-            out.push(1)?;
-            out.counted(model.as_str().as_bytes())?;
-        }
-        None => out.push(0)?,
-    }
-    Ok(())
+    out.optional_text(codex.agent_model.as_ref().map(|model| model.as_str()))
 }
 
 fn encode_transform_limits(out: &mut Writer, limits: &TransformLimits) -> Result<(), CodecError> {

@@ -16,12 +16,15 @@ use df_rules::influence::{
     combine_sources, word_source,
 };
 use df_table::ports::ActionId;
+use serde::{Deserialize, Serialize};
 
 use super::error::AdapterError;
 use super::hero_profile::Skill;
 
-/// A difficulty class, which is at least 1 (`df-rules` refuses zero).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// A difficulty class, which is at least 1 (`df-rules` refuses zero). On the wire it is the
+/// number, read through `new`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "u8", into = "u8")]
 pub struct DifficultyClass(NonZeroU8);
 
 impl DifficultyClass {
@@ -36,6 +39,20 @@ impl DifficultyClass {
 
     pub fn get(self) -> u8 {
         self.0.get()
+    }
+}
+
+impl TryFrom<u8> for DifficultyClass {
+    type Error = AdapterError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<DifficultyClass> for u8 {
+    fn from(difficulty_class: DifficultyClass) -> Self {
+        difficulty_class.get()
     }
 }
 
@@ -105,6 +122,10 @@ impl MissingPiece {
         }
     }
 
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|piece| piece.key() == key)
+    }
+
     /// What is missing, in a sentence a developer reads in a decline.
     pub fn describe(self) -> &'static str {
         match self {
@@ -127,9 +148,10 @@ impl MissingPiece {
             }
             Self::LevelFromExperience => "a level-from-experience table (SRD page 23)",
             Self::FleeAndSurrender => "flee and surrender outcomes",
-            Self::RestRecovery => {
-                "hero hit points, Hit Dice and Second Wind uses held by the table, and a standalone rest"
-            }
+            Self::RestRecovery => concat!(
+                "hero hit points, Hit Dice and Second Wind uses held by the table, ",
+                "and a standalone rest"
+            ),
             Self::BattleState => {
                 "a tactical battle held by the table (df-rules tactical needs one)"
             }

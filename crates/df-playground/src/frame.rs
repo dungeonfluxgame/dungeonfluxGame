@@ -9,6 +9,9 @@ use serde::Deserialize;
 
 use crate::controls::ControlsReply;
 use crate::fixture::StageElement;
+use crate::path::{
+    FRAME_AFTER_PARAMETER, FRAME_BOOT_PARAMETER, FRAME_IDLE_NO_CONTENT, FRAME_IDLE_PARAMETER,
+};
 
 /// The canvas the host serves, as far as the stage needs it.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -41,9 +44,6 @@ pub fn parse_frame_reply(text: &str) -> Result<FrameReply, serde_json::Error> {
     serde_json::from_str(text).map(|frame| FrameReply::Frame(Box::new(frame)))
 }
 
-/// The status the host may answer an idle wait with instead of a whole frame.
-const IDLE_NO_CONTENT: u16 = 204;
-
 /// Whether a boot id is plain enough to put in an address as it is.
 fn plain_boot_id(boot_id: &str) -> bool {
     !boot_id.is_empty()
@@ -61,7 +61,11 @@ pub fn frame_address(base: &str, after: Option<u64>, boot_id: Option<&str>) -> S
         return base.to_owned();
     };
     match boot_id.filter(|boot| plain_boot_id(boot)) {
-        Some(boot) => format!("{base}?after={after}&boot={boot}&idle={IDLE_NO_CONTENT}"),
-        None => format!("{base}?after={after}&idle={IDLE_NO_CONTENT}"),
+        Some(boot) => format!(
+            "{base}?{FRAME_AFTER_PARAMETER}={after}&{FRAME_BOOT_PARAMETER}={boot}&{FRAME_IDLE_PARAMETER}={FRAME_IDLE_NO_CONTENT}"
+        ),
+        None => format!(
+            "{base}?{FRAME_AFTER_PARAMETER}={after}&{FRAME_IDLE_PARAMETER}={FRAME_IDLE_NO_CONTENT}"
+        ),
     }
 }

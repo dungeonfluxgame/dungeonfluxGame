@@ -137,7 +137,8 @@ fn verdict_lines(records: &[InputRecord], arrival: Arrival) -> Result<Vec<String
     let total = summary_of(records, |r| r.projection_ns)?;
     let (path, path_p95_ns) = match arrival {
         Arrival::Saturated { .. } => (
-            "H.5 rules-only path (reduce alone: a saturated run keeps the queue full by design, so its wait says nothing; rules cost zero)",
+            "H.5 rules-only path (reduce alone: a saturated run keeps the queue full by design, so \
+             its wait says nothing; rules cost zero)",
             summary_of(records, InputRecord::reduce_ns)?.p95_ns,
         ),
         Arrival::Steady { .. } | Arrival::Burst { .. } => (
@@ -231,8 +232,8 @@ pub fn render(result: &RunResult) -> Result<String, HarnessError> {
             "scenario: {} | profile {} | commit {} | snapshot {} | stop after {}",
             arrival_text(config.arrival),
             config.profile.name,
-            config.commit.name(),
-            config.snapshot.name(),
+            config.commit.key(),
+            config.snapshot.key(),
             stop_text(config.stop),
         ),
         format!(

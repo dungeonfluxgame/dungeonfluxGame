@@ -9,7 +9,7 @@ use super::fixtures::{
     boundary_failed, dice_drawn, operation_of, received, spawned, step_finished,
 };
 use super::{
-    EventLevel, HistoryFilter, HostEventSink, Losses, MemoryOutlet, ObservedRecord, OutletRefusal,
+    EventLevel, HistoryFilter, HostEventSink, Losses, MemoryOutlet, ObservedRecord, OutletError,
     OutletStatus, RecordClass, RecordOutlet,
 };
 
@@ -34,9 +34,9 @@ impl RecordOutlet for FullOutlet {
         "full"
     }
 
-    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletRefusal> {
+    fn accept(&self, record: &ObservedRecord) -> Result<(), OutletError> {
         self.losses.record(record.class);
-        Err(OutletRefusal::Full)
+        Err(OutletError::Full)
     }
 
     fn status(&self, _now_ms: u64) -> OutletStatus {

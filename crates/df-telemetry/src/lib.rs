@@ -1,9 +1,15 @@
 //! Native synthetic telemetry foundation. This is not an authenticated game collector.
 #![cfg(not(target_arch = "wasm32"))]
+mod clock;
 #[cfg(test)]
 mod configured_tests;
-mod clock;
+mod limits;
 pub use clock::StoreClock;
+use limits::{
+    BARRIER_RELEASE_TIMEOUT, DEGRADED_LAG_MS, MAXIMUM_EMERGENCY_FILE_BYTES,
+    MAXIMUM_EMERGENCY_RECORDS, SINK_RETRY_BACKOFF, WARNING_LAG_MS, WORKER_IDLE_POLL,
+};
+pub use limits::{MAXIMUM_PAGE_ROWS, MAXIMUM_ROOT_RECORDS};
 mod ownership;
 mod persistence;
 mod query;
@@ -12,7 +18,8 @@ use df_observe::{
     Durability, IngestReceipt, PendingReceipt, Signal, TelemetryError, TelemetryIngress,
     TelemetryLimits,
 };
-use ownership::{OwnedRoot, open_file};
+pub use ownership::fixture_root_parent;
+use ownership::{OwnedRoot, open_or_create_file};
 use persistence::Persistence;
 pub use query::{DiagnosticReader, QueryFilter, QueryPage, RecordView, SourceWatermark};
 use std::{
@@ -36,36 +43,46 @@ pub enum BarrierStage {
     Spooled,
     CommittedBeforeCheckpoint,
 }
+/// Pause point for crash tests: the worker reports `stage`, then waits for `release`.
 pub struct FailureBarrier {
     pub stage: BarrierStage,
     pub reached: mpsc::SyncSender<BarrierStage>,
     pub release: mpsc::Receiver<()>,
 }
+/// Health classification from the age of the oldest uncommitted spool frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Readiness {
     Healthy,
     Warning,
     Degraded,
 }
+/// Point-in-time store counters; synthetic health grants no game admission authority.
 #[derive(Debug, Clone)]
 pub struct IngestionHealth {
     pub admitted: u64,
     pub spooled: u64,
     pub committed: u64,
+    /// Backlog commit attempts, including first attempts after spooling.
     pub retries: u64,
     pub duplicates: u64,
     pub rejected: u64,
+    /// Refusals and commit failures caused by a full queue, spool or SQLite budget.
     pub capacity: u64,
+    /// Places where completeness cannot be confirmed (refusals, lost receipts, overflow).
     pub unconfirmed_gaps: u64,
     pub pending_items: usize,
     pub pending_bytes: usize,
     pub backlog_files: usize,
     pub spool_bytes: u64,
+    /// Last spool position durably committed to SQLite.
     pub checkpoint: u64,
     pub committed_watermark: u64,
+    /// Injected clock time of the last commit, in milliseconds.
     pub last_commit_millis: Option<u64>,
+    /// Milliseconds the oldest uncommitted spool frame has waited.
     pub lag_millis: u64,
     pub readiness: Readiness,
+    /// Emergency lines written to the bounded fallback file.
     pub emergency_records: u64,
 }
 #[derive(Default, Debug)]
@@ -186,13 +203,29 @@ pub struct Store {
     shutdown_reply: Option<mpsc::Receiver<Result<(), TelemetryError>>>,
 }
 impl Store {
+    /// Open a fixture store. The root must be a fresh or owned `ownedfixture-*` directory
+    /// directly under [`fixture_root_parent`]; `barrier` pauses the worker for crash tests.
     pub fn open(
         path: &Path,
         limits: TelemetryLimits,
         barrier: Option<FailureBarrier>,
     ) -> Result<Self, TelemetryError> {
         let limits = limits.validate()?;
-        let persistent = Persistence::open(OwnedRoot::open(path)?, limits)?;
+        Self::start(OwnedRoot::open(path)?, limits, barrier)
+    }
+    /// Open a store under a root the deployment composition configured. The
+    /// fixture-only `open` path restriction does not apply; marker, allowlist,
+    /// spool and SQLite bounds are unchanged.
+    pub fn open_configured(path: &Path, limits: TelemetryLimits) -> Result<Self, TelemetryError> {
+        let limits = limits.validate()?;
+        Self::start(OwnedRoot::open_configured(path)?, limits, None)
+    }
+    fn start(
+        root: OwnedRoot,
+        limits: TelemetryLimits,
+        barrier: Option<FailureBarrier>,
+    ) -> Result<Self, TelemetryError> {
+        let persistent = Persistence::open(root, limits)?;
         let counters = Arc::new(Counters::default());
         // Never assert completeness of a producer lifetime from local accepted records.
         counters.gaps.store(1, Ordering::Relaxed);
@@ -213,31 +246,7 @@ impl Store {
             shutdown_reply: None,
         })
     }
-    /// Open a store under a root the deployment composition configured. The
-    /// fixture-only `open` path restriction does not apply; marker, allowlist,
-    /// spool and SQLite bounds are unchanged.
-    pub fn open_configured(path: &Path, limits: TelemetryLimits) -> Result<Self, TelemetryError> {
-        let limits = limits.validate()?;
-        let persistent = Persistence::open(OwnedRoot::open_configured(path)?, limits)?;
-        let counters = Arc::new(Counters::default());
-        counters.gaps.store(1, Ordering::Relaxed);
-        update(&persistent, &counters);
-        let (sender, receiver) = mpsc::sync_channel(limits.queue_items);
-        let ingress = LocalIngress {
-            sender,
-            counters: Arc::clone(&counters),
-            limits,
-        };
-        let worker = thread::Builder::new()
-            .name("df-telemetry-spool".into())
-            .spawn(move || worker(persistent, receiver, counters, None))
-            .map_err(|_| TelemetryError::Internal)?;
-        Ok(Self {
-            ingress,
-            worker: Some(worker),
-            shutdown_reply: None,
-        })
-    }
+    /// A fail-fast ingress handle; all disk work stays on the store worker.
     pub fn ingress(&self) -> Arc<dyn TelemetryIngress> {
         Arc::new(self.ingress.clone())
     }
@@ -276,9 +285,9 @@ impl Store {
             committed_watermark: c.watermark.load(Ordering::Acquire),
             last_commit_millis: if last == 0 { None } else { Some(last - 1) },
             lag_millis: lag,
-            readiness: if lag > 120000 {
+            readiness: if lag > DEGRADED_LAG_MS {
                 Readiness::Degraded
-            } else if lag > 30000 {
+            } else if lag > WARNING_LAG_MS {
                 Readiness::Warning
             } else {
                 Readiness::Healthy
@@ -298,6 +307,7 @@ impl Store {
             })?;
         receive(receiver, timeout)
     }
+    /// Drain the backlog and stop the worker; retry after `Deadline` with the store kept alive.
     pub fn shutdown(&mut self, timeout: Duration) -> Result<(), TelemetryError> {
         if self.worker.is_none() {
             return Ok(());
@@ -311,7 +321,8 @@ impl Store {
                 .map_err(|_| TelemetryError::Capacity)?;
             self.shutdown_reply = Some(receiver);
         }
-        let deadline = Instant::now() + timeout;
+        // A timeout too large to add to now (for example `Duration::MAX`) means no deadline.
+        let deadline = Instant::now().checked_add(timeout);
         let shutdown_outcome = self
             .shutdown_reply
             .as_ref()
@@ -323,7 +334,7 @@ impl Store {
             .as_ref()
             .is_some_and(|worker| !worker.is_finished())
         {
-            if Instant::now() >= deadline {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 return Err(TelemetryError::Deadline);
             }
             thread::yield_now();
@@ -394,7 +405,7 @@ fn barrier_wait(
             .map_err(|_| TelemetryError::Internal)?;
         barrier
             .release
-            .recv_timeout(Duration::from_secs(30))
+            .recv_timeout(BARRIER_RELEASE_TIMEOUT)
             .map_err(|_| TelemetryError::Deadline)?;
     }
     Ok(())
@@ -404,7 +415,7 @@ fn emergency(persistent: &Persistence, counters: &Counters, error: &TelemetryErr
     if counters
         .emergency
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-            (count < 32).then_some(count + 1)
+            (count < MAXIMUM_EMERGENCY_RECORDS).then_some(count + 1)
         })
         .is_err()
     {
@@ -412,19 +423,20 @@ fn emergency(persistent: &Persistence, counters: &Counters, error: &TelemetryErr
         return;
     }
     let line = format!(
-        "df-telemetry emergency source=local-spool error={error} checkpoint={} backlog={} unconfirmed=true\n",
+        concat!(
+            "df-telemetry emergency source=local-spool error={} checkpoint={} backlog={} ",
+            "unconfirmed=true\n",
+        ),
+        error,
         persistent.checkpoint,
         persistent.backlog.len()
     );
     let path = persistent.root.path.join("emergency");
     let write_result = (|| {
-        let mut file = if path.exists() {
-            open_file(&path, true, false)?
-        } else {
-            open_file(&path, true, true)?
-        };
+        let mut file = open_or_create_file(&path)?;
         let existing_file_bytes = file.metadata().map_err(|_| TelemetryError::Io)?.len();
-        if existing_file_bytes.saturating_add(line.len() as u64) > 8192 {
+        let line_bytes = u64::try_from(line.len()).map_err(|_| TelemetryError::Capacity)?;
+        if existing_file_bytes.saturating_add(line_bytes) > MAXIMUM_EMERGENCY_FILE_BYTES {
             return Err(TelemetryError::Capacity);
         }
         use std::io::Seek;
@@ -476,6 +488,18 @@ fn drain(
     }
     Ok(())
 }
+/// Count and record one failed backlog commit, and return when the next retry may start.
+fn record_commit_failure(
+    persistent: &Persistence,
+    counters: &Counters,
+    error: &TelemetryError,
+) -> Instant {
+    if *error == TelemetryError::Capacity {
+        counters.capacity.fetch_add(1, Ordering::Relaxed);
+    }
+    emergency(persistent, counters, error);
+    Instant::now() + SINK_RETRY_BACKOFF
+}
 fn worker(
     mut persistent: Persistence,
     receiver: mpsc::Receiver<Command>,
@@ -488,7 +512,7 @@ fn worker(
         let command = if let Some(command) = deferred.take() {
             command
         } else {
-            match receiver.recv_timeout(Duration::from_millis(50)) {
+            match receiver.recv_timeout(WORKER_IDLE_POLL) {
                 Ok(command) => command,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if counters.closed.load(Ordering::Acquire) {
@@ -498,11 +522,7 @@ fn worker(
                         && Instant::now() >= retry_not_before
                         && let Err(error) = drain_one(&mut persistent, &counters, &mut barrier)
                     {
-                        retry_not_before = Instant::now() + Duration::from_millis(250);
-                        if error == TelemetryError::Capacity {
-                            counters.capacity.fetch_add(1, Ordering::Relaxed);
-                        }
-                        emergency(&persistent, &counters, &error);
+                        retry_not_before = record_commit_failure(&persistent, &counters, &error);
                     }
                     continue;
                 }
@@ -511,103 +531,155 @@ fn worker(
         };
         match command {
             Command::Admit(first) => {
-                let mut batch = first.batch;
-                let mut replies = vec![(first.reply, first.cost, batch.records.len())];
-                // Opportunistically combine already queued standard protobuf requests.
-                // Repeated root messages concatenate legally in protobuf; signal stays fixed.
-                while batch.records.len() < persistent.limits.batch_records {
-                    match receiver.try_recv() {
-                        Ok(Command::Admit(next))
-                            if next.batch.signal == batch.signal
-                                && batch.records.len() + next.batch.records.len()
-                                    <= persistent.limits.batch_records
-                                && batch.bytes.len() + next.batch.bytes.len()
-                                    <= persistent.limits.batch_bytes =>
-                        {
-                            replies.push((next.reply, next.cost, next.batch.records.len()));
-                            batch.bytes.extend(next.batch.bytes);
-                            batch.records.extend(next.batch.records);
-                        }
-                        Ok(command) => {
-                            deferred = Some(command);
-                            break;
-                        }
-                        Err(_) => break,
-                    }
-                }
-                let outcome = (|| {
-                    barrier_wait(&mut barrier, BarrierStage::BeforeSpool)?;
-                    let position = persistent.spool(&batch)?;
-                    counters
-                        .spooled
-                        .fetch_add(batch.records.len() as u64, Ordering::Relaxed);
-                    update(&persistent, &counters);
-                    barrier_wait(&mut barrier, BarrierStage::Spooled)?;
-                    // A blocked sink does not impose its 50ms busy wait on every
-                    // spool admission. One owned retry clock backs off for 250ms;
-                    // spooling continues and FIFO flush explicitly forces retry.
-                    let durability = if Instant::now() < retry_not_before {
-                        Durability::Spooled
-                    } else {
-                        // One old frame between new spool admissions keeps recovery fair.
-                        // Only a checkpoint covering this frame earns Committed.
-                        match drain_one(&mut persistent, &counters, &mut barrier) {
-                            Ok(()) if persistent.checkpoint >= position => Durability::Committed,
-                            Ok(()) => Durability::Spooled,
-                            Err(error) => {
-                                retry_not_before = Instant::now() + Duration::from_millis(250);
-                                if error == TelemetryError::Capacity {
-                                    counters.capacity.fetch_add(1, Ordering::Relaxed);
-                                }
-                                emergency(&persistent, &counters, &error);
-                                Durability::Spooled
-                            }
-                        }
-                    };
-                    Ok(IngestReceipt {
-                        durability,
-                        spool_position: position,
-                        committed_watermark: persistent.watermark,
-                        records: batch.records.len(),
-                    })
-                })();
+                let mut admitted = AdmittedBatch::new(first);
+                deferred = admitted.combine_queued(&receiver, persistent.limits);
+                let outcome = admitted.spool_and_commit(
+                    &mut persistent,
+                    &counters,
+                    &mut barrier,
+                    &mut retry_not_before,
+                );
                 if let Err(error) = &outcome {
                     reject(&counters, error);
                     emergency(&persistent, &counters, error);
                 }
-                for (reply, cost, count) in replies {
-                    counters.items.fetch_sub(1, Ordering::AcqRel);
-                    counters.bytes.fetch_sub(cost, Ordering::AcqRel);
-                    let outcome = outcome.clone().map(|mut receipt| {
-                        receipt.records = count;
-                        receipt
-                    });
-                    // A lost receipt never cancels or reallocates accepted identities.
-                    if reply.send(outcome).is_err() {
-                        counters.gaps.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+                admitted.reply(&counters, &outcome);
             }
             Command::Flush(reply) => {
-                let drain_result = drain(&mut persistent, &counters, &mut barrier);
-                if let Err(error) = &drain_result {
-                    emergency(&persistent, &counters, error);
-                }
-                if reply.send(drain_result).is_err() {
-                    counters.gaps.fetch_add(1, Ordering::Relaxed);
-                }
+                drain_and_reply(&mut persistent, &counters, &mut barrier, reply);
             }
             Command::Shutdown(reply) => {
-                let drain_result = drain(&mut persistent, &counters, &mut barrier);
-                if let Err(error) = &drain_result {
-                    emergency(&persistent, &counters, error);
-                }
-                if reply.send(drain_result).is_err() {
-                    counters.gaps.fetch_add(1, Ordering::Relaxed);
-                }
+                drain_and_reply(&mut persistent, &counters, &mut barrier, reply);
                 break;
             }
         }
     }
     counters.closed.store(true, Ordering::Release);
+}
+/// One producer's receipt channel and what it reserved in the admission queue.
+struct PendingReply {
+    reply: mpsc::Sender<Result<IngestReceipt, TelemetryError>>,
+    queue_cost_bytes: usize,
+    records: usize,
+}
+impl Admission {
+    fn split(self) -> (Batch, PendingReply) {
+        let reply = PendingReply {
+            reply: self.reply,
+            queue_cost_bytes: self.cost,
+            records: self.batch.records.len(),
+        };
+        (self.batch, reply)
+    }
+}
+/// One spool frame built from an admission plus the queued admissions combined into it.
+struct AdmittedBatch {
+    batch: Batch,
+    replies: Vec<PendingReply>,
+}
+impl AdmittedBatch {
+    fn new(first: Admission) -> Self {
+        let (batch, reply) = first.split();
+        Self {
+            batch,
+            replies: vec![reply],
+        }
+    }
+    /// Opportunistically combine already queued standard protobuf requests. Repeated root
+    /// messages concatenate legally in protobuf; the signal stays fixed. Returns the first
+    /// queued command that could not join, for the worker to handle next.
+    fn combine_queued(
+        &mut self,
+        receiver: &mpsc::Receiver<Command>,
+        limits: TelemetryLimits,
+    ) -> Option<Command> {
+        while self.batch.records.len() < limits.batch_records {
+            match receiver.try_recv() {
+                Ok(Command::Admit(next))
+                    if next.batch.signal == self.batch.signal
+                        && self.batch.records.len() + next.batch.records.len()
+                            <= limits.batch_records
+                        && self.batch.bytes.len() + next.batch.bytes.len()
+                            <= limits.batch_bytes =>
+                {
+                    let (batch, reply) = next.split();
+                    self.replies.push(reply);
+                    self.batch.bytes.extend(batch.bytes);
+                    self.batch.records.extend(batch.records);
+                }
+                Ok(command) => return Some(command),
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+    fn spool_and_commit(
+        &self,
+        persistent: &mut Persistence,
+        counters: &Counters,
+        barrier: &mut Option<FailureBarrier>,
+        retry_not_before: &mut Instant,
+    ) -> Result<IngestReceipt, TelemetryError> {
+        let batch = &self.batch;
+        barrier_wait(barrier, BarrierStage::BeforeSpool)?;
+        let position = persistent.spool(batch)?;
+        counters
+            .spooled
+            .fetch_add(batch.records.len() as u64, Ordering::Relaxed);
+        update(persistent, counters);
+        barrier_wait(barrier, BarrierStage::Spooled)?;
+        // A blocked sink does not impose its busy wait on every spool admission. One owned
+        // retry clock backs off; spooling continues and FIFO flush explicitly forces retry.
+        let durability = if Instant::now() < *retry_not_before {
+            Durability::Spooled
+        } else {
+            // One old frame between new spool admissions keeps recovery fair.
+            // Only a checkpoint covering this frame earns Committed.
+            match drain_one(persistent, counters, barrier) {
+                Ok(()) if persistent.checkpoint >= position => Durability::Committed,
+                Ok(()) => Durability::Spooled,
+                Err(error) => {
+                    *retry_not_before = record_commit_failure(persistent, counters, &error);
+                    Durability::Spooled
+                }
+            }
+        };
+        Ok(IngestReceipt {
+            durability,
+            spool_position: position,
+            committed_watermark: persistent.watermark,
+            records: batch.records.len(),
+        })
+    }
+    /// Release queue reservations and send each producer its own record count.
+    fn reply(self, counters: &Counters, outcome: &Result<IngestReceipt, TelemetryError>) {
+        for pending in self.replies {
+            counters.items.fetch_sub(1, Ordering::AcqRel);
+            counters
+                .bytes
+                .fetch_sub(pending.queue_cost_bytes, Ordering::AcqRel);
+            let outcome = outcome.clone().map(|mut receipt| {
+                receipt.records = pending.records;
+                receipt
+            });
+            // A lost receipt never cancels or reallocates accepted identities.
+            if pending.reply.send(outcome).is_err() {
+                counters.gaps.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+}
+fn drain_and_reply(
+    persistent: &mut Persistence,
+    counters: &Counters,
+    barrier: &mut Option<FailureBarrier>,
+    reply: mpsc::Sender<Result<(), TelemetryError>>,
+) {
+    let drain_result = drain(persistent, counters, barrier);
+    if let Err(error) = &drain_result {
+        emergency(persistent, counters, error);
+    }
+    if reply.send(drain_result).is_err() {
+        counters.gaps.fetch_add(1, Ordering::Relaxed);
+    }
 }

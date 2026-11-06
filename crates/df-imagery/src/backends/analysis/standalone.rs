@@ -1,4 +1,5 @@
-//! Private standalone image analysis adapters. Durable authority and accounting belong to the runtime.
+//! Private standalone image analysis adapters. Durable authority and accounting belong to the
+//! runtime.
 mod chat;
 mod geometry;
 mod heads;
@@ -49,21 +50,16 @@ fn candidate_label(number: usize) -> String {
 }
 
 #[cfg(test)]
-#[path = "standalone/tests.rs"]
 mod tests;
 
 #[cfg(test)]
-#[path = "standalone/legacy_photo_tests.rs"]
 mod legacy_photo_tests;
 
 #[cfg(test)]
-#[path = "standalone/legacy_crop_tests.rs"]
 mod legacy_crop_tests;
 
 #[cfg(test)]
-#[path = "standalone/legacy_head_tests.rs"]
 mod legacy_head_tests;
 
 #[cfg(test)]
-#[path = "standalone/legacy_segment_tests.rs"]
 mod legacy_segment_tests;

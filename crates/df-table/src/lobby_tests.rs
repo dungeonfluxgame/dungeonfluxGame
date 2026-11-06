@@ -6,11 +6,11 @@ use crate::envelope::TimerName;
 use crate::explore::{AuthoredBeat, ExploreMachine};
 use crate::identity::{SceneId, SeatId, TableId, TableScope};
 use crate::lobby::{LobbyAction, LobbyMachine};
+use crate::machine::slot::{MachineSlot, decodes_on_this_thread};
 use crate::machine::{
     CarryItem, Entry, Machine, MachineInput, MachineSpec, Scope, StateName, StepInput, StepOutcome,
     StepResult,
 };
-use crate::machine_slot::{MachineSlot, decodes_on_this_thread};
 use crate::outcome::{DeclineCode, Outcome};
 use crate::ports::{ActionId, Audience};
 use crate::testkit::{QueuedDice, ScriptedBroker, ScriptedRulesOwner, correlation};

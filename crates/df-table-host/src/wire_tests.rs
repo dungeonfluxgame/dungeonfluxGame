@@ -2,7 +2,7 @@ use df_table::event::RejectionCause;
 use serde_json::json;
 
 use crate::limits::MAXIMUM_LISTED_PROBLEMS;
-use crate::wire::{EffectRequest, Reply, ValueForm, capped};
+use crate::wire::{EffectRequest, MediaAdd, Reply, ValueForm, capped};
 
 #[test]
 fn a_request_without_a_value_form_reads_its_values_as_json() {
@@ -97,4 +97,18 @@ fn a_long_list_of_problems_is_cut_with_a_count_of_the_rest() {
     assert_eq!(cut.last().map(String::as_str), Some("and 7 more"));
     let few = vec!["a".to_owned()];
     assert_eq!(capped(few.clone()), few);
+}
+
+#[test]
+fn a_media_add_sent_in_pieces_reads_back_as_the_same_add() {
+    let (opening, closing) = MediaAdd::streamed_ends("say \"hi\".png").unwrap();
+    let body = format!("{opening}aGk={closing}");
+    let read: MediaAdd = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        read,
+        MediaAdd {
+            name: "say \"hi\".png".to_owned(),
+            data_base64: "aGk=".to_owned(),
+        }
+    );
 }

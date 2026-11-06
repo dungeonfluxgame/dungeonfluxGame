@@ -27,7 +27,7 @@ commands:
       window=3                         outstanding per seat when saturated
       rate=20                          inputs per second when steady
       burst=6 period_ms=100            inputs at once and the gap between bursts
-      profile=representative|combat|heavy    commit=memory|fsync|postgres
+      profile=representative|combat|heavy    commit=memory|fsync|modelled_postgres
       checkpoint=200000                checkpoint bytes (at least; state alone may be larger)
       snapshot=in_place|copy_on_write
       inputs=5000 or seconds=60        when to stop (inputs are measured ones)
@@ -37,7 +37,8 @@ commands:
   soak [minutes=10]          saturated fsync run with a table of each minute, for thermal drift
   hash                       throughput of the stand-in software SHA-256
   real                       the H3 rerun over the real owner actor, pipeline, production rules,
-                             real projection and group commit (store: memory, fsync, postgres20ms)
+                             real projection and group commit
+                             (store: memory, fsync, modelled_postgres)
 ";
 
 fn main() -> Result<(), Failure> {
@@ -115,17 +116,12 @@ impl Options {
             "heavy" => WorkloadProfile::heavy(),
             other => return Err(format!("unknown profile {other}").into()),
         };
-        let commit = match self.text("commit", "fsync").as_str() {
-            "memory" => CommitMode::Memory,
-            "fsync" => CommitMode::Fsync,
-            "postgres" => CommitMode::ModelledPostgres,
-            other => return Err(format!("unknown commit {other}").into()),
-        };
-        let snapshot = match self.text("snapshot", "in_place").as_str() {
-            "in_place" => SnapshotMode::InPlace,
-            "copy_on_write" => SnapshotMode::CopyOnWrite,
-            other => return Err(format!("unknown snapshot {other}").into()),
-        };
+        let commit_key = self.text("commit", "fsync");
+        let commit = CommitMode::from_key(&commit_key)
+            .ok_or_else(|| format!("unknown commit {commit_key}"))?;
+        let snapshot_key = self.text("snapshot", "in_place");
+        let snapshot = SnapshotMode::from_key(&snapshot_key)
+            .ok_or_else(|| format!("unknown snapshot {snapshot_key}"))?;
         Ok(RunConfig {
             profile,
             commit,
@@ -289,7 +285,7 @@ fn busy(out: &mut impl Write, options: &Options, directory: &Path) -> Result<(),
             writeln!(
                 out,
                 "=== busy share at {inputs_per_s} inputs per second, {} ===",
-                commit.name()
+                commit.key()
             )?;
             let config = RunConfig {
                 commit,
@@ -330,7 +326,7 @@ fn real(out: &mut impl Write, directory: &Path) -> Result<(), Failure> {
             CommitMode::Fsync,
             CommitMode::ModelledPostgres,
         ] {
-            let name = mode.name();
+            let name = mode.key();
             let reports = [
                 lobby_single(&format!("one at a time, {name}"), mode, 400, 20, directory).await?,
                 lobby_burst(&format!("six at once, {name}"), mode, 6, 200, 50, directory).await?,

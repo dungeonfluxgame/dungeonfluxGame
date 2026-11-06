@@ -7,7 +7,7 @@
 use crate::fixture::{Choice, PartyMember, Slide};
 use crate::limits::{
     MAXIMUM_CAMERA_MS, MAXIMUM_CHOICES_PER_LIST, MAXIMUM_NAME_CHARACTERS, MAXIMUM_ROTATION_DEGREES,
-    MAXIMUM_SLIDE_MS, MAXIMUM_SLIDE_PERCENT, MAXIMUM_VOLUME, MAXIMUM_ZOOM_PERCENT,
+    MAXIMUM_SLIDE_MS, MAXIMUM_SLIDE_PERCENT, MAXIMUM_VOLUME_PERCENT, MAXIMUM_ZOOM_PERCENT,
     MINIMUM_ZOOM_PERCENT,
 };
 use crate::scene::SceneError;
@@ -29,8 +29,8 @@ pub fn labelled(what: &'static str, value: &str) -> Result<(), SceneError> {
 }
 
 pub fn volume(percent: u8) -> Result<(), SceneError> {
-    if percent > MAXIMUM_VOLUME {
-        Err(SceneError::BadVolume(percent))
+    if percent > MAXIMUM_VOLUME_PERCENT {
+        Err(SceneError::InvalidVolume(percent))
     } else {
         Ok(())
     }
@@ -39,7 +39,7 @@ pub fn volume(percent: u8) -> Result<(), SceneError> {
 /// A turn is from 0 to 359 degrees; 360 is the same as 0 and is refused with the range.
 pub fn rotation(degrees: u16) -> Result<(), SceneError> {
     if degrees > MAXIMUM_ROTATION_DEGREES {
-        Err(SceneError::BadRotation(degrees))
+        Err(SceneError::InvalidRotation(degrees))
     } else {
         Ok(())
     }
@@ -52,7 +52,7 @@ pub fn slide(slide: &Slide) -> Result<(), SceneError> {
         || slide.to_percent > MAXIMUM_SLIDE_PERCENT
         || !(1..=MAXIMUM_SLIDE_MS).contains(&slide.duration_ms)
     {
-        Err(SceneError::BadSlide)
+        Err(SceneError::InvalidSlide)
     } else {
         Ok(())
     }
@@ -60,15 +60,15 @@ pub fn slide(slide: &Slide) -> Result<(), SceneError> {
 
 /// A camera look: a target that is a name (when there is one), a zoom from the whole stage up to
 /// the largest, and a move that takes no more than the longest allowed.
-pub fn camera(target: Option<&str>, zoom_percent: u16, duration_ms: u32) -> Result<(), SceneError> {
+pub fn camera(target: Option<&str>, zoom_percent: u16, duration_ms: u64) -> Result<(), SceneError> {
     if let Some(target) = target {
         labelled("a camera target", target)?;
     }
     if !(MINIMUM_ZOOM_PERCENT..=MAXIMUM_ZOOM_PERCENT).contains(&zoom_percent) {
-        return Err(SceneError::BadZoom(zoom_percent));
+        return Err(SceneError::InvalidZoom(zoom_percent));
     }
     if duration_ms > MAXIMUM_CAMERA_MS {
-        return Err(SceneError::BadCameraTime(duration_ms));
+        return Err(SceneError::InvalidCameraTime(duration_ms));
     }
     Ok(())
 }
@@ -94,7 +94,7 @@ pub fn choice(choice: &Choice) -> Result<(), SceneError> {
 pub fn member(member: &PartyMember) -> Result<(), SceneError> {
     labelled("a party member's name", &member.name)?;
     if member.maximum_hit_points == 0 {
-        return Err(SceneError::BadMaximum);
+        return Err(SceneError::InvalidMaximum);
     }
     for condition in &member.conditions {
         labelled("a condition", condition)?;

@@ -62,7 +62,8 @@ pub struct CandidateObservation {
     inner: CandidateReceipt,
 }
 impl CandidateObservation {
-    /// Run on the owning blocking worker: decoding and actual-alpha inspection are bounded CPU work.
+    /// Run on the owning blocking worker: decoding and actual-alpha inspection are bounded CPU
+    /// work.
     pub fn inspect(
         scope: ExecutionScope,
         basis: StageBasis,

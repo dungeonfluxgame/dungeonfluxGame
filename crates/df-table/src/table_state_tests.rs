@@ -1,9 +1,9 @@
-use crate::effects::{ApplyOutcome, BeatName, EffectError, EffectRefusal, TableEffect};
+use crate::effects::{ApplyOutcome, BeatName, EffectCause, EffectError, TableEffect};
 use crate::element::ElementId;
 use crate::identity::{
     MachineId, RecoveryEpoch, SceneId, SeatId, SessionRevision, TableId, TableScope,
 };
-use crate::machine_slot::MachineSlot;
+use crate::machine::slot::MachineSlot;
 use crate::table_state::{
     CastChange, CastEntry, CastKind, ConditionName, Controller, DisplayName, Placement, Presence,
     SceneGeneration, SplitPolicy, TableState, TableStatus, Visibility, Vitals,
@@ -74,7 +74,7 @@ pub(crate) fn apply(
     table.apply(&scope(), correlation(turn), effects)
 }
 
-pub(crate) fn refusal(result: Result<ApplyOutcome, EffectError>) -> EffectRefusal {
+pub(crate) fn refusal(result: Result<ApplyOutcome, EffectError>) -> EffectCause {
     result.expect_err("the commit is refused").cause
 }
 
@@ -140,7 +140,7 @@ fn presence_changes_for_a_seated_seat_and_is_refused_for_anyone_else() {
             presence: Presence::Sleeping,
         }],
     );
-    assert_eq!(refusal(unseated), EffectRefusal::SeatNotSeated);
+    assert_eq!(refusal(unseated), EffectCause::SeatNotSeated);
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn a_beat_resolves_only_in_an_open_scene_and_entering_another_scene_clears_it() 
             beat: beat.clone(),
         }],
     );
-    assert_eq!(refusal(missing), EffectRefusal::SceneNotActive);
+    assert_eq!(refusal(missing), EffectCause::SceneNotActive);
     apply(
         &mut table,
         3,
@@ -262,7 +262,7 @@ fn while_the_party_stays_together_one_seat_cannot_go_to_another_scene() {
             scene: scene(11),
         }],
     );
-    assert_eq!(refusal(split), EffectRefusal::SplitPartyDeclined);
+    assert_eq!(refusal(split), EffectCause::SplitPartyDeclined);
     assert_eq!(table, before);
 }
 
@@ -478,7 +478,7 @@ fn the_world_clock_adds_up_and_refuses_to_overflow() {
             advance_s: u64::MAX,
         }],
     );
-    assert_eq!(refusal(overflow), EffectRefusal::WorldTimeOverflow);
+    assert_eq!(refusal(overflow), EffectCause::WorldTimeOverflow);
     assert_eq!(table.snapshot().world_time_s(), 3_606);
 }
 
@@ -487,7 +487,7 @@ fn a_paused_table_freezes_the_clock_and_resuming_lets_it_move_again() {
     let mut table = table_in_scene_ten();
     apply(&mut table, 2, &[TableEffect::TablePaused]).expect("pauses");
     let frozen = apply(&mut table, 3, &[TableEffect::TimeAdvanced { advance_s: 6 }]);
-    assert_eq!(refusal(frozen), EffectRefusal::TablePaused);
+    assert_eq!(refusal(frozen), EffectCause::TablePaused);
     assert_eq!(table.snapshot().world_time_s(), 0);
     apply(&mut table, 4, &[TableEffect::TableResumed]).expect("resumes");
     apply(&mut table, 5, &[TableEffect::TimeAdvanced { advance_s: 6 }]).expect("advances");
@@ -509,23 +509,23 @@ fn the_status_moves_only_along_the_allowed_edges() {
     assert_eq!(status(&table), TableStatus::Active);
     assert_eq!(
         refusal(apply(&mut table, 2, &[TableEffect::TableResumed])),
-        EffectRefusal::TableNotPausedOrIdle
+        EffectCause::TableNotPausedOrIdle
     );
     apply(&mut table, 3, &[TableEffect::TableIdled]).expect("idles");
     assert_eq!(status(&table), TableStatus::Idle);
     assert_eq!(
         refusal(apply(&mut table, 4, &[TableEffect::TableIdled])),
-        EffectRefusal::TableNotActive
+        EffectCause::TableNotActive
     );
     apply(&mut table, 5, &[TableEffect::TablePaused]).expect("an idle table can be paused");
     assert_eq!(status(&table), TableStatus::Paused);
     assert_eq!(
         refusal(apply(&mut table, 6, &[TableEffect::TablePaused])),
-        EffectRefusal::AlreadyPaused
+        EffectCause::AlreadyPaused
     );
     assert_eq!(
         refusal(apply(&mut table, 7, &[TableEffect::TableIdled])),
-        EffectRefusal::TableNotActive
+        EffectCause::TableNotActive
     );
     apply(&mut table, 8, &[TableEffect::TableResumed]).expect("resumes");
     assert_eq!(status(&table), TableStatus::Active);
@@ -608,15 +608,15 @@ fn a_cast_entry_that_breaks_a_rule_is_refused_with_its_own_cause() {
     let cases = [
         (
             hero("pip", "Pip again", 1, 10, 30),
-            EffectRefusal::CastEntryExists,
+            EffectCause::CastEntryExists,
         ),
         (
             creature("goblin", "Goblin", 77, 30),
-            EffectRefusal::SceneNotActive,
+            EffectCause::SceneNotActive,
         ),
         (
             hero("ghost", "Ghost", 9, 10, 30),
-            EffectRefusal::ControllerNotSeated,
+            EffectCause::ControllerNotSeated,
         ),
         (
             CastEntry::new(
@@ -627,7 +627,7 @@ fn a_cast_entry_that_breaks_a_rule_is_refused_with_its_own_cause() {
                 display_name("Lord"),
                 Vitals::new(1, 1).unwrap(),
             ),
-            EffectRefusal::PartyNeedsSeatController,
+            EffectCause::PartyNeedsSeatController,
         ),
     ];
     for (turn, (entry, expected)) in (3..).zip(cases) {
@@ -655,7 +655,7 @@ fn a_hero_must_stand_in_the_scene_its_seat_is_in() {
             entry: hero("vex", "Vex", 2, 10, 30),
         }],
     );
-    assert_eq!(refusal(astray), EffectRefusal::ControlledOutsideSeatScene);
+    assert_eq!(refusal(astray), EffectCause::ControlledOutsideSeatScene);
 }
 
 #[test]
@@ -670,7 +670,7 @@ fn hit_points_cannot_be_raised_above_the_maximum_and_unknown_entries_cannot_chan
             change: CastChange::HitPoints { hit_points: 10 },
         }],
     );
-    assert_eq!(refusal(too_many), EffectRefusal::HitPointsAboveMaximum);
+    assert_eq!(refusal(too_many), EffectCause::HitPointsAboveMaximum);
     let unknown = apply(
         &mut table,
         4,
@@ -679,7 +679,7 @@ fn hit_points_cannot_be_raised_above_the_maximum_and_unknown_entries_cannot_chan
             change: CastChange::HitPoints { hit_points: 1 },
         }],
     );
-    assert_eq!(refusal(unknown), EffectRefusal::CastEntryUnknown);
+    assert_eq!(refusal(unknown), EffectCause::CastEntryUnknown);
     let gone = apply(
         &mut table,
         5,
@@ -687,7 +687,7 @@ fn hit_points_cannot_be_raised_above_the_maximum_and_unknown_entries_cannot_chan
             cast: element("nobody"),
         }],
     );
-    assert_eq!(refusal(gone), EffectRefusal::CastEntryUnknown);
+    assert_eq!(refusal(gone), EffectCause::CastEntryUnknown);
 }
 
 pub(crate) fn slot_with(machine_name: &str, phase: &str) -> MachineSlot {
@@ -768,7 +768,7 @@ fn the_hand_off_stack_holds_three_frames_and_a_pop_resumes_the_suspended_machine
         apply(&mut table, turn, &[push(10, name)]).expect("pushes");
     }
     let full = apply(&mut table, 6, &[push(10, "travel")]);
-    assert_eq!(refusal(full), EffectRefusal::HandOffStackFull);
+    assert_eq!(refusal(full), EffectCause::HandOffStackFull);
     assert_eq!(
         active_name(&table),
         "rest",
@@ -801,13 +801,13 @@ fn the_hand_off_stack_holds_three_frames_and_a_pop_resumes_the_suspended_machine
 fn a_hand_off_needs_an_active_machine_a_new_one_and_a_slot_of_its_own() {
     let mut table = table_in_scene_ten();
     let none_running = apply(&mut table, 2, &[push(10, "explore")]);
-    assert_eq!(refusal(none_running), EffectRefusal::NoActiveMachine);
+    assert_eq!(refusal(none_running), EffectCause::NoActiveMachine);
     apply(&mut table, 3, &[set_active(10, "explore")]).expect("sets");
     let same = apply(&mut table, 4, &[push(10, "explore")]);
-    assert_eq!(refusal(same), EffectRefusal::MachineAlreadyOnStack);
+    assert_eq!(refusal(same), EffectCause::MachineAlreadyOnStack);
     apply(&mut table, 5, &[push(10, "dialogue")]).expect("pushes");
     let below = apply(&mut table, 6, &[push(10, "explore")]);
-    assert_eq!(refusal(below), EffectRefusal::MachineAlreadyOnStack);
+    assert_eq!(refusal(below), EffectCause::MachineAlreadyOnStack);
     assert_eq!(active_name(&table), "dialogue");
     assert_eq!(stack_names(&table), ["explore"]);
     let mismatched = apply(
@@ -819,9 +819,9 @@ fn a_hand_off_needs_an_active_machine_a_new_one_and_a_slot_of_its_own() {
             slot: slot("rest"),
         }],
     );
-    assert_eq!(refusal(mismatched), EffectRefusal::FrameSlotMismatch);
+    assert_eq!(refusal(mismatched), EffectCause::FrameSlotMismatch);
     let nowhere = apply(&mut table, 8, &[push(99, "shop")]);
-    assert_eq!(refusal(nowhere), EffectRefusal::SceneNotActive);
+    assert_eq!(refusal(nowhere), EffectCause::SceneNotActive);
 }
 
 #[test]
@@ -833,7 +833,7 @@ fn an_empty_stack_cannot_be_popped() {
         3,
         &[TableEffect::HandOffPopped { scene: scene(10) }],
     );
-    assert_eq!(refusal(empty), EffectRefusal::HandOffStackEmpty);
+    assert_eq!(refusal(empty), EffectCause::HandOffStackEmpty);
     assert_eq!(active_name(&table), "explore");
 }
 
@@ -871,9 +871,9 @@ fn a_scene_has_an_active_machine_with_its_slot_once_one_was_set_and_a_step_updat
             slot: slot("dialogue"),
         }],
     );
-    assert_eq!(refusal(wrong), EffectRefusal::FrameSlotMismatch);
+    assert_eq!(refusal(wrong), EffectCause::FrameSlotMismatch);
     let nowhere = apply(&mut table, 5, &[set_active(99, "explore")]);
-    assert_eq!(refusal(nowhere), EffectRefusal::SceneNotActive);
+    assert_eq!(refusal(nowhere), EffectCause::SceneNotActive);
     let mismatched = apply(
         &mut table,
         6,
@@ -883,7 +883,7 @@ fn a_scene_has_an_active_machine_with_its_slot_once_one_was_set_and_a_step_updat
             slot: slot("rest"),
         }],
     );
-    assert_eq!(refusal(mismatched), EffectRefusal::FrameSlotMismatch);
+    assert_eq!(refusal(mismatched), EffectCause::FrameSlotMismatch);
 }
 
 #[test]
@@ -897,7 +897,7 @@ fn a_slot_update_for_a_scene_with_no_active_machine_is_refused() {
             slot: slot("explore"),
         }],
     );
-    assert_eq!(refusal(none), EffectRefusal::NoActiveMachine);
+    assert_eq!(refusal(none), EffectCause::NoActiveMachine);
 }
 
 #[test]
@@ -1096,7 +1096,7 @@ fn the_table_machine_and_a_scenes_machine_each_have_their_own_home_and_the_focus
             slot: slot_with("explore", "x"),
         }],
     );
-    assert_eq!(refusal(wrong), EffectRefusal::FrameSlotMismatch);
+    assert_eq!(refusal(wrong), EffectCause::FrameSlotMismatch);
 }
 
 #[test]
@@ -1110,7 +1110,7 @@ fn a_slot_update_for_a_table_with_no_table_machine_is_refused() {
             slot: slot_with("lobby", "gathering"),
         }],
     );
-    assert_eq!(refusal(none), EffectRefusal::NoActiveMachine);
+    assert_eq!(refusal(none), EffectCause::NoActiveMachine);
 }
 
 #[test]
@@ -1135,7 +1135,7 @@ fn a_seat_may_play_one_hero_and_the_next_waits_for_the_first_to_leave() {
             entry: hero("pop", "Pop", 1, 10, 40),
         }],
     );
-    assert_eq!(refusal(second), EffectRefusal::SeatHasHero);
+    assert_eq!(refusal(second), EffectCause::SeatHasHero);
     apply(
         &mut table,
         4,
@@ -1250,7 +1250,7 @@ fn a_creature_a_seat_controls_must_stand_where_the_seat_stands() {
         3,
         &[TableEffect::CastEntered { entry: horse() }],
     );
-    assert_eq!(refusal(astray), EffectRefusal::ControlledOutsideSeatScene);
+    assert_eq!(refusal(astray), EffectCause::ControlledOutsideSeatScene);
 }
 
 #[test]

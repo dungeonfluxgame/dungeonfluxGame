@@ -16,13 +16,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::effects::{BeatName, ConversationOutcome, EffectRefusal, TableEffect};
+use crate::effects::{BeatName, ConversationOutcome, EffectCause, TableEffect};
 use crate::element::ElementId;
 use crate::identity::{MachineId, SceneId, SeatId, SessionRevision};
-use crate::machine_slot::MachineSlot;
-use crate::table_state::bounds::{
-    MAXIMUM_CAST_ENTRIES, MAXIMUM_CONDITIONS_PER_ENTRY, MAXIMUM_HAND_OFF_DEPTH,
-};
+use crate::limits::{MAXIMUM_CAST_ENTRIES, MAXIMUM_CONDITIONS_PER_ENTRY, MAXIMUM_HAND_OFF_DEPTH};
+use crate::machine::slot::MachineSlot;
 use crate::table_state::cast::{
     CastChange, CastEntry, CastKind, ConditionName, Controller, Vitals,
 };
@@ -39,7 +37,7 @@ impl Facts {
         &mut self,
         effect: &TableEffect,
         at: SessionRevision,
-    ) -> Result<(), EffectRefusal> {
+    ) -> Result<(), EffectCause> {
         match effect {
             TableEffect::SeatJoined { seat } => self.join(*seat),
             TableEffect::SeatLeft { seat } => self.leave(*seat),
@@ -82,21 +80,21 @@ impl Facts {
         }
     }
 
-    fn scene_mut(&mut self, scene: SceneId) -> Result<&mut SceneRecord, EffectRefusal> {
+    fn scene_mut(&mut self, scene: SceneId) -> Result<&mut SceneRecord, EffectCause> {
         if !self.scenes.contains_key(&scene) {
-            return Err(EffectRefusal::SceneNotActive);
+            return Err(EffectCause::SceneNotActive);
         }
         Arc::make_mut(&mut self.scenes)
             .get_mut(&scene)
-            .ok_or(EffectRefusal::SceneNotActive)
+            .ok_or(EffectCause::SceneNotActive)
     }
 
-    fn join(&mut self, seat: SeatId) -> Result<(), EffectRefusal> {
+    fn join(&mut self, seat: SeatId) -> Result<(), EffectCause> {
         if self.seats.contains_key(&seat) {
-            return Err(EffectRefusal::SeatAlreadySeated);
+            return Err(EffectCause::SeatAlreadySeated);
         }
         if self.seats.len() >= self.seat_capacity {
-            return Err(EffectRefusal::TableFull);
+            return Err(EffectCause::TableFull);
         }
         let state = SeatState {
             presence: Presence::Connected,
@@ -107,9 +105,9 @@ impl Facts {
         Ok(())
     }
 
-    fn leave(&mut self, seat: SeatId) -> Result<(), EffectRefusal> {
+    fn leave(&mut self, seat: SeatId) -> Result<(), EffectCause> {
         let Some(state) = self.seats.get(&seat).cloned() else {
-            return Err(EffectRefusal::SeatNotSeated);
+            return Err(EffectCause::SeatNotSeated);
         };
         let controlled = |entry: &CastEntry| entry.controller() == (Controller::Seat { seat });
         if self.cast.values().any(controlled) {
@@ -123,9 +121,9 @@ impl Facts {
         Ok(())
     }
 
-    fn set_presence(&mut self, seat: SeatId, presence: Presence) -> Result<(), EffectRefusal> {
+    fn set_presence(&mut self, seat: SeatId, presence: Presence) -> Result<(), EffectCause> {
         if !self.seats.contains_key(&seat) {
-            return Err(EffectRefusal::SeatNotSeated);
+            return Err(EffectCause::SeatNotSeated);
         }
         if let Some(state) = Arc::make_mut(&mut self.seats).get_mut(&seat) {
             state.presence = presence;
@@ -133,15 +131,15 @@ impl Facts {
         Ok(())
     }
 
-    fn move_seat(&mut self, seat: SeatId, scene: SceneId) -> Result<(), EffectRefusal> {
+    fn move_seat(&mut self, seat: SeatId, scene: SceneId) -> Result<(), EffectCause> {
         let Some(from) = self.seats.get(&seat).map(|state| state.scene) else {
-            return Err(EffectRefusal::SeatNotSeated);
+            return Err(EffectCause::SeatNotSeated);
         };
         if from == Some(scene) {
             return Ok(());
         }
         if self.split_policy == SplitPolicy::Declined && self.parts_company(seat, scene) {
-            return Err(EffectRefusal::SplitPartyDeclined);
+            return Err(EffectCause::SplitPartyDeclined);
         }
         self.open_scene(scene)?;
         if let Some(state) = Arc::make_mut(&mut self.seats).get_mut(&seat) {
@@ -170,7 +168,7 @@ impl Facts {
         }
     }
 
-    fn enter_scene(&mut self, scene: SceneId) -> Result<(), EffectRefusal> {
+    fn enter_scene(&mut self, scene: SceneId) -> Result<(), EffectCause> {
         let generation = self.issue_generation()?;
         let mut opened = BTreeMap::new();
         opened.insert(scene, SceneRecord::opened(generation));
@@ -191,7 +189,7 @@ impl Facts {
         Ok(())
     }
 
-    fn resolve_beat(&mut self, scene: SceneId, beat: &BeatName) -> Result<(), EffectRefusal> {
+    fn resolve_beat(&mut self, scene: SceneId, beat: &BeatName) -> Result<(), EffectCause> {
         self.scene_mut(scene)?.beat = Some(beat.clone());
         Ok(())
     }
@@ -200,75 +198,75 @@ impl Facts {
         &mut self,
         scene: SceneId,
         outcome: ConversationOutcome,
-    ) -> Result<(), EffectRefusal> {
+    ) -> Result<(), EffectCause> {
         self.scene_mut(scene)?.conversation = Some(outcome);
         Ok(())
     }
 
-    fn advance_time(&mut self, advance_s: u64) -> Result<(), EffectRefusal> {
+    fn advance_time(&mut self, advance_s: u64) -> Result<(), EffectCause> {
         if self.status == TableStatus::Paused {
-            return Err(EffectRefusal::TablePaused);
+            return Err(EffectCause::TablePaused);
         }
         self.world_time_s = self
             .world_time_s
             .checked_add(advance_s)
-            .ok_or(EffectRefusal::WorldTimeOverflow)?;
+            .ok_or(EffectCause::WorldTimeOverflow)?;
         Ok(())
     }
 
-    fn pause(&mut self, at: SessionRevision) -> Result<(), EffectRefusal> {
+    fn pause(&mut self, at: SessionRevision) -> Result<(), EffectCause> {
         if self.status == TableStatus::Paused {
-            return Err(EffectRefusal::AlreadyPaused);
+            return Err(EffectCause::AlreadyPaused);
         }
         self.status = TableStatus::Paused;
         self.last_paused_at = Some(at);
         Ok(())
     }
 
-    fn resume(&mut self) -> Result<(), EffectRefusal> {
+    fn resume(&mut self) -> Result<(), EffectCause> {
         if self.status == TableStatus::Active {
-            return Err(EffectRefusal::TableNotPausedOrIdle);
+            return Err(EffectCause::TableNotPausedOrIdle);
         }
         self.status = TableStatus::Active;
         Ok(())
     }
 
-    fn idle(&mut self) -> Result<(), EffectRefusal> {
+    fn idle(&mut self) -> Result<(), EffectCause> {
         if self.status != TableStatus::Active {
-            return Err(EffectRefusal::TableNotActive);
+            return Err(EffectCause::TableNotActive);
         }
         self.status = TableStatus::Idle;
         Ok(())
     }
 
-    fn enter_cast(&mut self, entry: &CastEntry) -> Result<(), EffectRefusal> {
+    fn enter_cast(&mut self, entry: &CastEntry) -> Result<(), EffectCause> {
         if !self.scenes.contains_key(&entry.scene()) {
-            return Err(EffectRefusal::SceneNotActive);
+            return Err(EffectCause::SceneNotActive);
         }
         if self.cast.contains_key(entry.id()) {
-            return Err(EffectRefusal::CastEntryExists);
+            return Err(EffectCause::CastEntryExists);
         }
         if self.cast.len() >= MAXIMUM_CAST_ENTRIES {
-            return Err(EffectRefusal::TooManyCastEntries);
+            return Err(EffectCause::TooManyCastEntries);
         }
         if entry.conditions().len() > MAXIMUM_CONDITIONS_PER_ENTRY {
-            return Err(EffectRefusal::TooManyConditions);
+            return Err(EffectCause::TooManyConditions);
         }
         match entry.controller() {
             Controller::Seat { seat } => {
                 let state = self
                     .seats
                     .get(&seat)
-                    .ok_or(EffectRefusal::ControllerNotSeated)?;
+                    .ok_or(EffectCause::ControllerNotSeated)?;
                 if state.scene != Some(entry.scene()) {
-                    return Err(EffectRefusal::ControlledOutsideSeatScene);
+                    return Err(EffectCause::ControlledOutsideSeatScene);
                 }
                 if entry.kind() == CastKind::Party && state.hero.is_some() {
-                    return Err(EffectRefusal::SeatHasHero);
+                    return Err(EffectCause::SeatHasHero);
                 }
             }
             Controller::Engine if entry.kind() == CastKind::Party => {
-                return Err(EffectRefusal::PartyNeedsSeatController);
+                return Err(EffectCause::PartyNeedsSeatController);
             }
             Controller::Engine => {}
         }
@@ -281,9 +279,9 @@ impl Facts {
         Ok(())
     }
 
-    fn leave_cast(&mut self, cast: &ElementId) -> Result<(), EffectRefusal> {
+    fn leave_cast(&mut self, cast: &ElementId) -> Result<(), EffectCause> {
         let Some(entry) = self.cast.get(cast) else {
-            return Err(EffectRefusal::CastEntryUnknown);
+            return Err(EffectCause::CastEntryUnknown);
         };
         if let (CastKind::Party, Controller::Seat { seat }) = (entry.kind(), entry.controller())
             && let Some(state) = Arc::make_mut(&mut self.seats).get_mut(&seat)
@@ -294,14 +292,14 @@ impl Facts {
         Ok(())
     }
 
-    fn change_cast(&mut self, cast: &ElementId, change: &CastChange) -> Result<(), EffectRefusal> {
+    fn change_cast(&mut self, cast: &ElementId, change: &CastChange) -> Result<(), EffectCause> {
         let Some(current) = self.cast.get(cast) else {
-            return Err(EffectRefusal::CastEntryUnknown);
+            return Err(EffectCause::CastEntryUnknown);
         };
         let hit_points = match change {
             CastChange::HitPoints { hit_points } => Some(
                 Vitals::new(*hit_points, current.vitals().maximum_hit_points())
-                    .map_err(|_| EffectRefusal::HitPointsAboveMaximum)?,
+                    .map_err(|_| EffectCause::HitPointsAboveMaximum)?,
             ),
             CastChange::Conditions { conditions } => {
                 check_conditions(conditions)?;
@@ -310,7 +308,7 @@ impl Facts {
             CastChange::Visibility { .. } | CastChange::Placement { .. } => None,
         };
         let Some(entry) = Arc::make_mut(&mut self.cast).get_mut(cast) else {
-            return Err(EffectRefusal::CastEntryUnknown);
+            return Err(EffectCause::CastEntryUnknown);
         };
         match change {
             CastChange::Visibility { visibility } => entry.set_visibility(*visibility),
@@ -332,9 +330,9 @@ impl Facts {
         home: &MachineHome,
         machine: &MachineId,
         slot: &MachineSlot,
-    ) -> Result<(), EffectRefusal> {
+    ) -> Result<(), EffectCause> {
         if slot.machine() != machine {
-            return Err(EffectRefusal::FrameSlotMismatch);
+            return Err(EffectCause::FrameSlotMismatch);
         }
         let active = Some(ActiveMachine {
             machine: machine.clone(),
@@ -352,16 +350,16 @@ impl Facts {
         &mut self,
         home: &MachineHome,
         slot: &MachineSlot,
-    ) -> Result<(), EffectRefusal> {
+    ) -> Result<(), EffectCause> {
         let active = match home {
             MachineHome::Table => self.table_machine.as_mut(),
             MachineHome::Scene { scene } => self.scene_mut(*scene)?.active.as_mut(),
         };
         let Some(active) = active else {
-            return Err(EffectRefusal::NoActiveMachine);
+            return Err(EffectCause::NoActiveMachine);
         };
         if slot.machine() != &active.machine {
-            return Err(EffectRefusal::FrameSlotMismatch);
+            return Err(EffectCause::FrameSlotMismatch);
         }
         active.slot = slot.clone();
         Ok(())
@@ -376,22 +374,22 @@ impl Facts {
         machine: &MachineId,
         slot: &MachineSlot,
         at: SessionRevision,
-    ) -> Result<(), EffectRefusal> {
+    ) -> Result<(), EffectCause> {
         if slot.machine() != machine {
-            return Err(EffectRefusal::FrameSlotMismatch);
+            return Err(EffectCause::FrameSlotMismatch);
         }
         let record = self.scene_mut(scene)?;
         let Some(running) = record.active.take() else {
-            return Err(EffectRefusal::NoActiveMachine);
+            return Err(EffectCause::NoActiveMachine);
         };
         let on_the_stack = record.stack.iter().any(|frame| &frame.machine == machine);
         if &running.machine == machine || on_the_stack {
             record.active = Some(running);
-            return Err(EffectRefusal::MachineAlreadyOnStack);
+            return Err(EffectCause::MachineAlreadyOnStack);
         }
         if record.stack.len() >= MAXIMUM_HAND_OFF_DEPTH {
             record.active = Some(running);
-            return Err(EffectRefusal::HandOffStackFull);
+            return Err(EffectCause::HandOffStackFull);
         }
         record.stack.push(HandOffFrame {
             machine: running.machine,
@@ -407,9 +405,9 @@ impl Facts {
 
     /// Ends the active machine and resumes the machine on top of the stack with the slot it was
     /// suspended with.
-    fn pop_frame(&mut self, scene: SceneId) -> Result<(), EffectRefusal> {
+    fn pop_frame(&mut self, scene: SceneId) -> Result<(), EffectCause> {
         let record = self.scene_mut(scene)?;
-        let frame = record.stack.pop().ok_or(EffectRefusal::HandOffStackEmpty)?;
+        let frame = record.stack.pop().ok_or(EffectCause::HandOffStackEmpty)?;
         record.active = Some(ActiveMachine {
             machine: frame.machine,
             slot: frame.slot,
@@ -418,9 +416,9 @@ impl Facts {
     }
 }
 
-fn check_conditions(conditions: &[ConditionName]) -> Result<(), EffectRefusal> {
+fn check_conditions(conditions: &[ConditionName]) -> Result<(), EffectCause> {
     if conditions.len() > MAXIMUM_CONDITIONS_PER_ENTRY {
-        return Err(EffectRefusal::TooManyConditions);
+        return Err(EffectCause::TooManyConditions);
     }
     Ok(())
 }

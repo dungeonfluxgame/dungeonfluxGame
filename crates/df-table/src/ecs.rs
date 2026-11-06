@@ -35,7 +35,6 @@ pub struct Entities {
     generations: Vec<u32>,
     alive: Vec<bool>,
     free: Vec<u32>,
-    live: usize,
 }
 
 impl Entities {
@@ -43,7 +42,6 @@ impl Entities {
     /// slots an index can name is in use: this type bounds itself, whatever its owner checks.
     pub fn spawn(&mut self) -> Option<Entity> {
         if let Some(index) = self.free.pop() {
-            self.live += 1;
             let slot = index as usize;
             self.alive[slot] = true;
             return Some(Entity {
@@ -52,7 +50,6 @@ impl Entities {
             });
         }
         let index = u32::try_from(self.generations.len()).ok()?;
-        self.live += 1;
         self.generations.push(0);
         self.alive.push(true);
         Some(Entity {
@@ -70,21 +67,12 @@ impl Entities {
         self.alive[slot] = false;
         self.generations[slot] = self.generations[slot].wrapping_add(1);
         self.free.push(entity.index);
-        self.live -= 1;
         true
     }
 
     pub fn is_alive(&self, entity: Entity) -> bool {
         self.alive.get(entity.slot()).copied().unwrap_or(false)
             && self.generations[entity.slot()] == entity.generation
-    }
-
-    pub fn len(&self) -> usize {
-        self.live
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.live == 0
     }
 }
 
@@ -140,10 +128,6 @@ impl<T> Store<T> {
         self.position(entity).map(|dense| &mut self.items[dense])
     }
 
-    pub fn contains(&self, entity: Entity) -> bool {
-        self.position(entity).is_some()
-    }
-
     /// Takes the component away from the entity. The last component moves into the gap, so the
     /// store stays dense.
     pub fn remove(&mut self, entity: Entity) -> Option<T> {
@@ -168,21 +152,7 @@ impl<T> Store<T> {
         self.entities.iter().copied().zip(self.items.iter())
     }
 
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (Entity, &mut T)> {
-        self.entities.iter().copied().zip(self.items.iter_mut())
-    }
-
-    pub fn len(&self) -> usize {
-        self.items.len()
-    }
-
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.sparse.clear();
-        self.entities.clear();
-        self.items.clear();
     }
 }

@@ -42,6 +42,7 @@ pub(super) const MODERATION_INTENT_CODEC_VERSION: u8 = 4;
 pub(super) const PIPELINE_INTENT_CODEC_VERSION: u8 = 5;
 pub(super) const ARTWORK_INTENT_CODEC_VERSION: u8 = 6;
 
+/// The intent codec version in the first byte, refusing any version this build cannot read.
 pub(crate) fn intent_version(bytes: &[u8]) -> Result<u8, CodecError> {
     match bytes.first().copied() {
         Some(
@@ -56,6 +57,7 @@ pub(crate) fn intent_version(bytes: &[u8]) -> Result<u8, CodecError> {
         None => Err(CodecError::Truncated),
     }
 }
+
 /// Version 12 appends the explicit creator BFL account after the frozen v11 quota policy.
 /// Every earlier version retains its original field defaults and exact layout.
 pub(crate) const CONFIG_CODEC_VERSION: u8 = 12;
@@ -127,7 +129,7 @@ impl fmt::Debug for EncodedIntent {
         f.debug_struct("EncodedIntent")
             .field("version", &self.version)
             .field("len_bytes", &self.bytes.len())
-            .field("fingerprint", &hex(&self.fingerprint))
+            .field("fingerprint", &crate::lower_hex(&self.fingerprint))
             .finish()
     }
 }
@@ -159,7 +161,7 @@ impl fmt::Debug for EncodedConfig {
         f.debug_struct("EncodedConfig")
             .field("version", &self.version)
             .field("len_bytes", &self.bytes.len())
-            .field("fingerprint", &hex(&self.fingerprint))
+            .field("fingerprint", &crate::lower_hex(&self.fingerprint))
             .finish()
     }
 }
@@ -208,16 +210,6 @@ impl fmt::Debug for DecodedIntent {
                 .finish(),
         }
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    text
 }
 
 impl crate::config::ImageConfig {

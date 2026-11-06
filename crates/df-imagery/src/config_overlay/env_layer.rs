@@ -116,8 +116,9 @@ fn master_gated_purpose(purpose: Purpose) -> bool {
 
 /// Allocation guards for recognized environment only. Unrelated names are
 /// skipped before any bound or clone, so ordinary credentials never enter
-/// the map. Bounds exceed every valid shape: short names, small scalars.
-const MAXIMUM_ENV_ENTRIES: usize = 512;
+/// the map. Bounds exceed every valid shape: short names, small scalars, and
+/// a named output-profile table with no fixed count (eight variables each).
+const MAXIMUM_ENV_ENTRIES: usize = 16_384;
 const MAXIMUM_ENV_NAME_CHARS: usize = 128;
 const MAXIMUM_ENV_VALUE_BYTES: usize = 4096;
 
@@ -1314,7 +1315,9 @@ fn apply_profile_body_env(
         if fields.is_empty() {
             continue;
         }
-        let first = &vars[0].1;
+        let Some((_, first)) = vars.first() else {
+            continue;
+        };
         let edit = ProfileEdit {
             name: name.clone(),
             source: OverlaySource::NewEnv(first.clone()),

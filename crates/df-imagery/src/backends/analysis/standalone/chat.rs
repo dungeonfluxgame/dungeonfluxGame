@@ -277,7 +277,8 @@ impl PreparedStandaloneChat {
                 };
                 let body =
                     heads::request_body(&picture, face.as_deref(), &spec.targets, input.route)?;
-                // Preserve the legacy head-locator text metric: serialized body excluding base64 payloads.
+                // Preserve the legacy head-locator text metric: serialized body excluding base64
+                // payloads.
                 let encoded = picture.len().div_ceil(3) * 4
                     + face.as_ref().map_or(0, |face| face.len().div_ceil(3) * 4);
                 let text_bytes = body

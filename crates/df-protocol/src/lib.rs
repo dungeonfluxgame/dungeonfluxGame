@@ -13,8 +13,11 @@ pub mod transport_fixture {
 }
 
 pub mod public {
-    // Generated: the Audience oneof keeps its full views unboxed; boxing would change the generated contract.
-    #[allow(clippy::large_enum_variant)]
+    #[allow(
+        clippy::large_enum_variant,
+        reason = "generated: the Audience oneof keeps its full views unboxed; boxing would \
+                  change the generated contract"
+    )]
     pub mod v1 {
         tonic::include_proto!("dungeonflux.public.v1");
     }

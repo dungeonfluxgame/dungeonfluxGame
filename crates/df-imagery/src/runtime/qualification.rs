@@ -94,6 +94,7 @@ impl QualifiedPipeline {
     }
 }
 
+/// How useful a retained decision is to final selection: useful, uncertain, or unjudged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DecisionValidity {
     Useful,
@@ -170,6 +171,7 @@ impl QualifiedDecision {
     }
 }
 
+/// The closed reasons a job ends without delivering an image; each has a stable label.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NoDeliveryReason {
     InspectionRejected,
@@ -223,6 +225,7 @@ impl NoDeliveryReason {
         }
     }
 }
+/// A proof, built only from retained receipts, that a job ends without delivery for `reason`.
 #[derive(Clone)]
 pub struct QualifiedNoDelivery {
     binding: Binding,
@@ -273,6 +276,7 @@ impl QualifiedNoDelivery {
         self.candidate.as_ref()
     }
 }
+/// A proof that a job's demand ended (retired or expired) before any delivery.
 #[derive(Clone, Debug)]
 pub struct QualifiedDemandEnded {
     owner: ImageOwner,
@@ -299,6 +303,7 @@ impl QualifiedDemandEnded {
     }
 }
 
+/// Proves that `job` was retired or expired at `now_ms`; a live job is refused.
 pub fn qualify_demand_ended(
     job: &ImageJob,
     now_ms: i64,
@@ -366,6 +371,8 @@ impl QualifiedRequiredPreflight {
         self.reason
     }
 }
+/// Proves that a required inspection of `candidate` could not run (its preparation failed or
+/// inspection is disabled), so the job ends without delivery.
 pub fn qualify_required_preflight(
     job: &ImageJob,
     claim: &crate::execution::StageClaim,
@@ -374,7 +381,7 @@ pub fn qualify_required_preflight(
     reason: crate::execution::LocalInspectionReason,
     now_ms: i64,
 ) -> Result<QualifiedRequiredPreflight, RuntimeError> {
-    let intent = decoded(job)?;
+    let intent = super::retained_intent(job)?;
     let spec = intent
         .operation
         .pipeline()
@@ -435,7 +442,7 @@ pub fn qualify_economic_decision(
             classification_route: None,
         });
     }
-    let intent = decoded(job)?;
+    let intent = super::retained_intent(job)?;
     let config = super::retained_config(job)?;
     let meaning = replay_decision(job, &intent, &config, evidence)?;
     let (validity, route) = match meaning {
@@ -475,13 +482,14 @@ pub fn qualify_economic_decision(
     })
 }
 
-/// Qualified output requires exact configured decisions; BestEffort never becomes a fabricated Pass.
+/// Qualified output requires exact configured decisions; BestEffort never becomes a fabricated
+/// Pass.
 pub fn qualify_publication(
     job: &ImageJob,
     evidence: &PublicationEvidence,
     candidate: &CandidateReceipt,
 ) -> Result<QualifiedPipeline, RuntimeError> {
-    let intent = decoded(job)?;
+    let intent = super::retained_intent(job)?;
     let config = super::retained_config(job)?;
     let facts = collect(job, evidence)?;
     if !facts.binding.candidates.contains(candidate) {
@@ -555,7 +563,7 @@ pub fn qualify_no_delivery(
     evidence: &PublicationEvidence,
     candidate: Option<&CandidateReceipt>,
 ) -> Result<QualifiedNoDelivery, RuntimeError> {
-    let intent = decoded(job)?;
+    let intent = super::retained_intent(job)?;
     let facts = collect(job, evidence)?;
     let (actor, reason) = if let Some(candidate) = candidate {
         if !facts.binding.candidates.contains(candidate) {
@@ -618,7 +626,7 @@ struct Facts {
     inspections: Vec<(ExecutionScope, CandidateReceipt, InspectionAssessment)>,
 }
 fn collect(job: &ImageJob, evidence: &PublicationEvidence) -> Result<Facts, RuntimeError> {
-    let intent = decoded(job)?;
+    let intent = super::retained_intent(job)?;
     let config = super::retained_config(job)?;
     let config_digest = digest(job.config.bytes());
     let mut candidates = evidence.candidates.clone();
@@ -841,14 +849,6 @@ fn visible_text_exception(
             Some(scope.dispatch) == candidate.basis.parent_dispatch
                 && matches!(assessment.verdict, InspectionVerdict::Failed(_))
         })
-}
-fn decoded(job: &ImageJob) -> Result<crate::intent_codec::DecodedIntent, RuntimeError> {
-    crate::intent_codec::decode_intent(
-        job.intent.bytes(),
-        &crate::service::PROTOCOL_LIMITS,
-        crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-    )
-    .map_err(|_| RuntimeError::InvalidRecord)
 }
 fn digest(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()

@@ -33,12 +33,11 @@ use crate::effects::{BeatName, ConversationOutcome, EffectError, TableEffect};
 use crate::envelope::Sender;
 use crate::event::TableEvent;
 use crate::identity::{Correlation, OperationId, SceneId, SeatId, SessionRevision, TableScope};
-use crate::owner_queue::{MAXIMUM_REMEMBERED_OPERATIONS, MAXIMUM_SEATS};
+use crate::limits::{MAXIMUM_REMEMBERED_OPERATIONS, MAXIMUM_SEATS};
 use crate::pending::bounded::BoundedMap;
 use crate::pending::digest::{Fnv, mix};
 
 mod apply;
-pub mod bounds;
 mod cast;
 mod digest;
 mod events;
@@ -50,6 +49,7 @@ mod seat;
 mod snapshot;
 mod status;
 
+pub(crate) use cast::{CANVAS_HEIGHT_MILLI_UNITS, CANVAS_WIDTH_MILLI_UNITS};
 pub use cast::{
     CastChange, CastEntry, CastKind, ConditionName, Controller, DisplayName, DisplayNameError,
     HeroColor, HeroColorError, MediaName, MediaNameError, Placement, PlacementError, Visibility,
@@ -57,7 +57,7 @@ pub use cast::{
 };
 pub use events::TableStateEvent;
 pub use judge::{
-    IdleClock, IdleVerdict, InFlight, PlayInput, ResultStamp, StaleCause, StaleResult,
+    IdleClock, IdleVerdict, InFlight, PlayInput, ResultStamp, StaleCause, StaleResultError,
     split_party_decline,
 };
 pub use lanes::{LaneChange, reconcile_lanes};

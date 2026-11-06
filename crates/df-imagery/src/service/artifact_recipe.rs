@@ -1,8 +1,6 @@
 //! A pure campaign admission recipe keeps public artwork semantics separate from run authority.
 //! Keys aid the existing catalog election; source grants and actual Ready proof remain mandatory.
 
-use std::fmt::Write;
-
 use df_assets::{MediaRecipeRequest, MediaRequestKey};
 
 use crate::config::{BackendId, ImageConfig};
@@ -85,10 +83,10 @@ pub fn retained_campaign_artifact_recipe(
         PROTOCOL_MAX_SNAPSHOT_BYTES,
     )
     .map_err(|_| JournalError::InvalidRecord)?;
-    let mut scope = String::from("campaign-artwork-v1/");
-    for byte in artwork.spec.campaign.as_bytes() {
-        write!(&mut scope, "{byte:02x}").map_err(|_| JournalError::InvalidRecord)?;
-    }
+    let scope = format!(
+        "campaign-artwork-v1/{}",
+        crate::lower_hex(artwork.spec.campaign.as_bytes())
+    );
     let (operation_kind, template_revision) = match &intent.operation {
         ImageOperation::Generate(spec) => ("generate", spec.prompt.template_version),
         ImageOperation::Edit(spec) => ("edit", spec.prompt.template_version),

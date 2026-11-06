@@ -12,8 +12,8 @@ use std::fmt::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
+use crate::event::field::LineWriter;
 use crate::event::{EventClass, write_context};
-use crate::event_field::LineWriter;
 use crate::identity::{Correlation, MachineId, SceneId, TableScope};
 use crate::table_state::judge::StaleCause;
 
@@ -70,7 +70,7 @@ impl TableStateEvent {
                 write_context(&mut line, scope, correlation)?;
                 line.field("cause", cause)?;
                 line.field("generation", generation)?;
-                line.field_if_present("current", current)
+                line.field_if_present("current", current.as_ref())
             }
             Self::SceneClosed {
                 scope,
@@ -84,7 +84,7 @@ impl TableStateEvent {
                 write_context(&mut line, scope, correlation)?;
                 line.field("closed_scene", scene)?;
                 line.field("generation", generation)?;
-                line.field_if_present("active", machine)?;
+                line.field_if_present("active", machine.as_ref())?;
                 line.field("stack_depth", stack_depth)
             }
         }

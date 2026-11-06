@@ -9,11 +9,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::limits::{
-    MAXIMUM_MEDIA_NAME_LENGTH, MAXIMUM_REPORT_BYTES, MAXIMUM_REPORTED_ERROR_CHARACTERS,
-    MAXIMUM_REPORTED_IMAGES,
-};
-pub use crate::limits::{
-    MAXIMUM_MEDIA_NAME_LENGTH as MAXIMUM_NAME_LENGTH, MAXIMUM_REPORTED_ERRORS,
+    MAXIMUM_MEDIA_NAME_BYTES, MAXIMUM_REPORT_BYTES, MAXIMUM_REPORTED_ERROR_CHARACTERS,
+    MAXIMUM_REPORTED_ERRORS, MAXIMUM_REPORTED_IMAGES,
 };
 
 /// Image file types a page can show. SVG is left out on purpose: opened on its own it can run
@@ -28,7 +25,7 @@ pub const VIDEO_EXTENSIONS: [&str; 2] = ["mp4", "webm"];
 /// dot and no `..`.
 pub fn is_plain_file_name(name: &str) -> bool {
     !name.is_empty()
-        && name.len() <= MAXIMUM_NAME_LENGTH
+        && name.len() <= MAXIMUM_MEDIA_NAME_BYTES
         && !name.starts_with('.')
         && !name.contains("..")
         && name
@@ -45,6 +42,12 @@ pub enum MediaKind {
 }
 
 impl MediaKind {
+    pub const ALL: [Self; 3] = [Self::Image, Self::Audio, Self::Video];
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.key() == key)
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Image => "image",
@@ -111,9 +114,26 @@ pub enum AudioState {
     Unlocked,
 }
 
+impl AudioState {
+    pub const ALL: [Self; 2] = [Self::Locked, Self::Unlocked];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Locked => "locked",
+            Self::Unlocked => "unlocked",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+}
+
 /// What one page says it is showing and playing, sent to the host so the dev CLI can ask. An agent
-/// cannot see or hear a screen; this is how it checks.
+/// cannot see or hear a screen; this is how it checks. A misspelt key is refused, not dropped.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClientReport {
     pub audio: AudioState,
     /// The newest sound cue this page has played or tried to play.
@@ -155,9 +175,9 @@ impl ClientReport {
         self.images_shown.truncate(MAXIMUM_REPORTED_IMAGES);
         self.images_shown
             .iter_mut()
-            .for_each(|name| cut(name, MAXIMUM_MEDIA_NAME_LENGTH));
+            .for_each(|name| cut(name, MAXIMUM_MEDIA_NAME_BYTES));
         if let Some(music) = &mut self.music {
-            cut(music, MAXIMUM_MEDIA_NAME_LENGTH);
+            cut(music, MAXIMUM_MEDIA_NAME_BYTES);
         }
         while self.held_bytes() > MAXIMUM_REPORT_BYTES {
             if !self.errors.is_empty() {

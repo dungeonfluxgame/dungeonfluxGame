@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::effects::EffectRefusal;
+use crate::effects::EffectCause;
 use crate::element::ElementId;
 use crate::identity::{RecoveryEpoch, SceneId, SeatId, SessionRevision};
 use crate::table_state::cast::{CastEntry, Controller};
@@ -77,17 +77,17 @@ impl Facts {
     }
 
     /// The next scene generation, one above every one issued before.
-    pub(super) fn issue_generation(&mut self) -> Result<SceneGeneration, EffectRefusal> {
+    pub(super) fn issue_generation(&mut self) -> Result<SceneGeneration, EffectCause> {
         let next = self
             .last_generation
             .checked_add(1)
-            .ok_or(EffectRefusal::GenerationOverflow)?;
+            .ok_or(EffectCause::GenerationOverflow)?;
         self.last_generation = next;
         Ok(SceneGeneration::new(next))
     }
 
     /// Opens the scene with a fresh generation unless it is open already.
-    pub(super) fn open_scene(&mut self, scene: SceneId) -> Result<(), EffectRefusal> {
+    pub(super) fn open_scene(&mut self, scene: SceneId) -> Result<(), EffectCause> {
         if self.scenes.contains_key(&scene) {
             return Ok(());
         }

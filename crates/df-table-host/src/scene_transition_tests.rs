@@ -231,7 +231,7 @@ async fn a_transition_longer_than_the_limit_is_refused_before_anything_changes()
     let before = shown(&running).await;
     let too_long = format!(
         "playground go tavern ms={}",
-        df_playground::controls::MAXIMUM_TRANSITION_MS + 1
+        df_playground::limits::MAXIMUM_TRANSITION_MS + 1
     );
     let error = run(&running, &too_long).await.expect_err("refused");
     assert!(

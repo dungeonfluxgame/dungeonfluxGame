@@ -3,10 +3,12 @@
 
 use crate::command::split_words;
 use crate::dev::run_dev;
+use crate::dev_http::{BodyCause, BodyError};
 use crate::test_support::{STARTER_FILES, post_request, raw_exchange, start};
 use crate::wire::EventsReply;
 
-use super::request::{BuildReply, SceneReply};
+use super::fixtures::refusal_of;
+use super::request::{BuildReply, SceneBuilderError, SceneReply};
 use super::routes::path;
 
 async fn dev(port: u16, line: &str) -> String {
@@ -93,13 +95,16 @@ async fn the_events_of_a_build_reach_the_hosts_event_log() {
 #[tokio::test]
 async fn a_request_before_any_build_and_a_bad_body_are_typed_refusals() {
     let host = start(&STARTER_FILES).await;
-    let error = run_dev(host.port, &split_words("plates run 10").expect("splits"))
+    let early = raw_exchange(
+        host.port,
+        &post_request(path::PLATES, r#"{"seconds":10}"#, ""),
+    )
+    .await;
+    assert!(early.starts_with("HTTP/1.1 400"), "{early}");
+    assert_eq!(refusal_of(&early), SceneBuilderError::NothingBuilt);
+    run_dev(host.port, &split_words("plates run 10").expect("splits"))
         .await
-        .expect_err("nothing is built");
-    assert!(
-        error.to_string().contains("no scene has been built yet"),
-        "{error}"
-    );
+        .expect_err("the command line fails too");
 
     let bad = raw_exchange(
         host.port,
@@ -107,7 +112,16 @@ async fn a_request_before_any_build_and_a_bad_body_are_typed_refusals() {
     )
     .await;
     assert!(bad.starts_with("HTTP/1.1 400"), "{bad}");
-    assert!(bad.contains("\"outcome\":\"rejected\""), "{bad}");
+    assert!(
+        matches!(
+            refusal_of(&bad),
+            SceneBuilderError::InvalidBody(BodyError {
+                cause: BodyCause::Data,
+                ..
+            })
+        ),
+        "{bad}"
+    );
 
     let blank = raw_exchange(
         host.port,
@@ -115,7 +129,18 @@ async fn a_request_before_any_build_and_a_bad_body_are_typed_refusals() {
     )
     .await;
     assert!(blank.starts_with("HTTP/1.1 400"), "{blank}");
-    assert!(blank.contains("invalid_name"), "{blank}");
+    assert!(
+        matches!(refusal_of(&blank), SceneBuilderError::InvalidBody(_)),
+        "a place that is not a name is not a body of scene build: {blank}"
+    );
+    let refusals = host
+        .state
+        .log()
+        .newest(10_000)
+        .into_iter()
+        .filter(|line| line.text == "SCENE refused verb=build error=invalid_body")
+        .count();
+    assert_eq!(refusals, 2, "one refusal line for each refused body");
 }
 
 #[tokio::test]
@@ -171,6 +196,6 @@ async fn a_reply_reads_back_as_the_typed_value() {
     let SceneReply::Done { value } = reply else {
         panic!("the build was refused: {body}");
     };
-    assert_eq!(value.place, "quay");
+    assert_eq!(value.place.as_str(), "quay");
     assert!(!value.lines.is_empty());
 }

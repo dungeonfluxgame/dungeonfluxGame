@@ -12,8 +12,9 @@ pub const LEVEL_FIVE_BUILDS: [&str; 3] = [
 ];
 /// SRD 5.2.1 p. 47 Fighter starting equipment:
 /// A "Chain Mail, Greatsword, Flail, 8 Javelins, Dungeoneer's Pack, and 4 GP";
-/// B "Studded Leather Armor, Scimitar, Shortsword, Longbow, 20 Arrows, Quiver, Dungeoneer's Pack, and 11 GP";
-/// C "155 GP". P. 83 Soldier: "Athletics and Intimidation"; equipment A "Spear, Shortbow, 20 Arrows, Gaming Set, Healer's Kit, Quiver, Traveler's Clothes, 14 GP" or B "50 GP".
+/// B "Studded Leather Armor, Scimitar, Shortsword, Longbow, 20 Arrows, Quiver, Dungeoneer's Pack,
+/// and 11 GP"; C "155 GP". P. 83 Soldier: "Athletics and Intimidation"; equipment A "Spear,
+/// Shortbow, 20 Arrows, Gaming Set, Healer's Kit, Quiver, Traveler's Clothes, 14 GP" or B "50 GP".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ArcherBuild {
     character: LegalCharacter,
@@ -94,10 +95,12 @@ pub fn validate_archer(name: &str, choices: &[(&str, &str)]) -> Result<ArcherBui
     .ok_or(RuleError::InvalidBuild)?;
     let species_options = crate::species::SpeciesOptions::from_choices(species, choices)
         .map_err(|_| RuleError::InvalidBuild)?;
-    character.hit_points = (10_i32
-        + local_journey::ability_modifier(character.abilities[2])
-        + i32::from(species_options.combat_traits(species).hit_points_per_level))
-        as u32;
+    character.hit_points = local_journey::maximum_hit_points(
+        1,
+        local_journey::FIGHTER_FIRST_LEVEL_HIT_POINTS,
+        character.abilities[2],
+        species_options.combat_traits(species).hit_points_per_level,
+    );
     character.choices = choices
         .iter()
         .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))

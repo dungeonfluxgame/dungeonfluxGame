@@ -17,11 +17,11 @@ use crate::inspect::{
     Needs, OwnerQueueReport, PendingReport, ReportName, Verb, VerbAccess, WiredPorts, describe,
 };
 use crate::lobby_tests::{lobby, lobby_fixture};
+use crate::machine::slot::{LoadError, MachineSlot};
 use crate::machine::{
     Entry, HandOff, InspectReport, Machine, MachineError, MachineInput, MachineReadout,
     MachineSpec, ReadoutError, StateName, StepInput, StepResult,
 };
-use crate::machine_slot::{LoadError, MachineSlot};
 use crate::owner_queue::OwnerQueue;
 use crate::owner_queue_tests::{NullSink, seated_queue, settings, tap};
 use crate::pipeline_fixtures_tests::{action, allows, window_of, world_of};
@@ -151,7 +151,7 @@ fn equal_state_gives_equal_reports_for_every_audience() {
 
 #[test]
 fn the_settings_report_lists_every_setting_with_its_value_default_and_range() {
-    let settings = Settings::defaults();
+    let settings = Settings::default();
 
     let report = settings.inspect(seat_view(1));
 
@@ -195,7 +195,7 @@ fn registry_with_scene_off() -> crate::registry::Registry {
         .register(lobby())
         .register(crate::lobby_tests::explore_for_neighbour())
         .register(scene_machine)
-        .flags(MachineFlags::default().with_flag(machine("scene"), FlagState::Off))
+        .with_flags(MachineFlags::default().with_flag(machine("scene"), FlagState::Off))
         .build(PortName::ALL)
         .expect("a startable registry")
 }
@@ -659,7 +659,7 @@ fn all_reports(audience: InspectAudience) -> Vec<(ReportName, Value)> {
         ),
         (
             ReportName::Settings,
-            json_of(&Settings::defaults().inspect(at)),
+            json_of(&Settings::default().inspect(at)),
         ),
         (
             ReportName::Pipeline,

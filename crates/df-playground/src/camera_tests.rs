@@ -124,10 +124,8 @@ fn progress_runs_from_nothing_to_all_and_a_move_of_no_length_is_done() {
 
 mod overlay {
     use crate::fixture::{Camera, Fixture, StageElement};
-    use crate::scene::{
-        MAXIMUM_CAMERA_MS, MAXIMUM_NAME_CHARACTERS, MAXIMUM_ZOOM_PERCENT, SceneChange, SceneError,
-        SceneOverlay,
-    };
+    use crate::limits::{MAXIMUM_CAMERA_MS, MAXIMUM_NAME_CHARACTERS, MAXIMUM_ZOOM_PERCENT};
+    use crate::scene::{SceneChange, SceneError, SceneOverlay};
 
     const FIXTURE: &str = r#"{
         "name": "Base",
@@ -139,7 +137,7 @@ mod overlay {
         Fixture::parse(FIXTURE).expect("the fixture reads")
     }
 
-    fn look(target: Option<&str>, zoom_percent: u16, duration_ms: u32) -> SceneChange {
+    fn look(target: Option<&str>, zoom_percent: u16, duration_ms: u64) -> SceneChange {
         SceneChange::Camera {
             target: target.map(str::to_owned),
             zoom_percent,
@@ -205,19 +203,19 @@ mod overlay {
             assert!(
                 matches!(
                     refused,
-                    Err(SceneError::BadZoom(_) | SceneError::BadCameraTime(_))
+                    Err(SceneError::InvalidZoom(_) | SceneError::InvalidCameraTime(_))
                 ),
                 "{zoom} {ms}"
             );
             assert!(overlay.is_empty() && overlay.camera_count == 0);
         }
         assert!(
-            SceneError::BadZoom(MAXIMUM_ZOOM_PERCENT + 1)
+            SceneError::InvalidZoom(MAXIMUM_ZOOM_PERCENT + 1)
                 .to_string()
                 .contains(&format!("100 to {MAXIMUM_ZOOM_PERCENT}"))
         );
         assert!(
-            SceneError::BadCameraTime(1)
+            SceneError::InvalidCameraTime(1)
                 .to_string()
                 .contains(&format!("0 to {MAXIMUM_CAMERA_MS}"))
         );

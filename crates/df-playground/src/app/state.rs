@@ -13,37 +13,48 @@ use wasm_bindgen::JsValue;
 use super::page::Page;
 use crate::continuity::ReplyGate;
 use crate::controls::{Controls, Transition};
+use crate::dom::BrowserError;
 use crate::draw_plan::Snapshot;
-use crate::fixture::{ElementSource, Fixture, FixtureError, StageElement};
+use crate::fixture::{ElementSource, Fixture, FixtureError, FixtureTitle, StageElement};
 use crate::frame::LiveCanvas;
 use crate::net::NetError;
 use crate::scene::SceneOverlay;
 
-pub const REVISION_ADDRESS: &str = "/playground/revision";
-pub const THEME_ADDRESS: &str = "/playground/theme.css";
-pub const FIXTURE_LIST_ADDRESS: &str = "/playground/fixtures.json";
-pub const FIXTURE_DIRECTORY_ADDRESS: &str = "/playground/fixtures/";
-pub const FRAME_ADDRESS: &str = "/playground/frame";
-pub const CONTROLS_ADDRESS: &str = "/playground/controls.json";
-pub const CANVAS_ADDRESS: &str = "/canvas.json";
-pub const CHANGE_ADDRESS: &str = "/dev/playground/controls";
-pub const REPORT_ADDRESS: &str = "/dev/playground/report";
 pub const ROOT_ID: &str = "playground";
 pub const THEME_ID: &str = "playground-theme";
 
 /// Why the page cannot show what the host says: the host cannot be reached, or it answered with
 /// something the page cannot read.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum PageError {
     Net(NetError),
     /// An answer that is not what the address promises.
     NotRead {
         address: &'static str,
         wanted: &'static str,
-        reason: String,
+        cause: serde_json::Error,
+    },
+    /// The host refused a change the page sent; `message` is its sentence.
+    Rejected {
+        address: &'static str,
+        message: String,
     },
     /// The page could not be drawn or changed.
-    Dom(String),
+    Dom(BrowserError),
+}
+
+impl PageError {
+    /// The error for an answer from `address` that does not read as `wanted`.
+    pub fn not_read(
+        address: &'static str,
+        wanted: &'static str,
+    ) -> impl FnOnce(serde_json::Error) -> Self {
+        move |cause| Self::NotRead {
+            address,
+            wanted,
+            cause,
+        }
+    }
 }
 
 impl fmt::Display for PageError {
@@ -53,12 +64,17 @@ impl fmt::Display for PageError {
             Self::NotRead {
                 address,
                 wanted,
-                reason,
-            } => write!(formatter, "{address} is not {wanted}: {reason}"),
-            Self::Dom(message) => formatter.write_str(message),
+                cause,
+            } => write!(formatter, "{address} is not {wanted}: {cause}"),
+            Self::Rejected { address, message } => {
+                write!(formatter, "{address} refused the change: {message}")
+            }
+            Self::Dom(error) => write!(formatter, "{error}"),
         }
     }
 }
+
+impl std::error::Error for PageError {}
 
 impl From<NetError> for PageError {
     fn from(error: NetError) -> Self {
@@ -67,14 +83,14 @@ impl From<NetError> for PageError {
 }
 
 impl From<JsValue> for PageError {
-    fn from(error: JsValue) -> Self {
-        Self::Dom(crate::dom::js_message(&error))
+    fn from(thrown: JsValue) -> Self {
+        Self::Dom(BrowserError::from(thrown))
     }
 }
 
 /// Why a fixture could not be loaded.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FixtureProblem {
+#[derive(Debug, Clone, PartialEq)]
+pub enum FixtureLoadError {
     Fetch(NetError),
     /// The file was read and is not a valid scenario.
     Invalid {
@@ -83,29 +99,28 @@ pub enum FixtureProblem {
     },
 }
 
-impl fmt::Display for FixtureProblem {
+impl fmt::Display for FixtureLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Fetch(error) => write!(formatter, "{error}"),
-            Self::Invalid { name, error } => write!(
-                formatter,
-                "{name}, line {}, column {}: {}",
-                error.line, error.column, error.message
-            ),
+            Self::Invalid { name, error } => write!(formatter, "{name}, {error}"),
         }
     }
 }
 
+impl std::error::Error for FixtureLoadError {}
+
 #[derive(Default)]
 pub struct App {
-    pub fixture_names: Vec<String>,
+    /// The fixture files and the titles of the scenarios in them, for the scenario menu.
+    pub fixtures: Vec<FixtureTitle>,
     /// The name of the fixture in `fixture`, so a change of choice is noticed.
     pub loaded_name: Option<String>,
     /// Set when the scene has just changed and the next draw should leave the old one with a
     /// transition.
     pub pending_transition: Option<Transition>,
     /// The loaded fixture, or why it could not be read.
-    pub fixture: Option<Result<Fixture, FixtureProblem>>,
+    pub fixture: Option<Result<Fixture, FixtureLoadError>>,
     /// The loaded fixture with the scene's live changes drawn on it, made when either changes and
     /// shared with what was drawn, so a frame does not copy a fixture.
     pub shown: Option<Rc<Result<Fixture, String>>>,
@@ -177,11 +192,12 @@ impl App {
     /// What the page is made from now.
     pub fn snapshot(&self, audio_unlocked: bool) -> Snapshot {
         Snapshot {
-            names: self.fixture_names.clone(),
+            names: self.fixtures.clone(),
             controls: self.controls.clone(),
             loaded_name: self.loaded_name.clone(),
             shown: self.shown.clone(),
             connection_problem: self.connection_problem.as_ref().map(ToString::to_string),
+            live_changes: !self.scene.is_empty(),
             audio_unlocked,
         }
     }

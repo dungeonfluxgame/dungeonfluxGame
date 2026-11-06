@@ -90,9 +90,18 @@ fn validate_dependency_shape(
     dependencies: &Dependencies,
 ) -> Result<(), RuntimeError> {
     let source = analysis_codec::source(operation);
-    let segmentation = matches!(&dependencies.segmentation, Some(ImageAnalysisResult::Segmentation {source:pin,..}) if pin==source);
-    let locations = matches!(&dependencies.locations, Some(ImageAnalysisResult::HeadLocations {source:pin,..}) if pin==source);
-    let identity = matches!(&dependencies.identity, Some(ImageAnalysisResult::StagingIdentity {source:pin,..}) if pin==source);
+    let segmentation = matches!(
+        &dependencies.segmentation,
+        Some(ImageAnalysisResult::Segmentation { source: pin, .. }) if pin == source
+    );
+    let locations = matches!(
+        &dependencies.locations,
+        Some(ImageAnalysisResult::HeadLocations { source: pin, .. }) if pin == source
+    );
+    let identity = matches!(
+        &dependencies.identity,
+        Some(ImageAnalysisResult::StagingIdentity { source: pin, .. }) if pin == source
+    );
     let valid = match operation {
         ImageAnalysisOperation::StagingIdentity(spec) => {
             segmentation

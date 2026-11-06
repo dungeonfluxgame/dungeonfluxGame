@@ -1,4 +1,5 @@
-//! Owned standalone analysis execution. Decisions retain sources and raw usage without publishing media.
+//! Owned standalone analysis execution. Decisions retain sources and raw usage without publishing
+//! media.
 use super::{
     DecisionValidity, PublicationDecisionEvidence, analysis, inspection_policy, ports::*,
     retained_config, worker::NativeImageRuntime,
@@ -182,6 +183,15 @@ fn scope(context: &PublicationContext) -> ExecutionScope {
         stage: context.stage.stage,
         dispatch: context.dispatch,
     }
+}
+/// Whether an interpreted result carries a judgement: every result does except a photo inspection
+/// the supplier left unjudged, whose usage is retained as not usable.
+fn carries_judgement(result: &ImageAnalysisResult) -> bool {
+    !matches!(
+        result,
+        ImageAnalysisResult::PhotoInspection { assessment, .. }
+            if matches!(assessment.verdict, PhotoInspectionVerdict::Unjudged(_))
+    )
 }
 #[derive(Clone, Copy)]
 enum AnalysisTransportFailure {

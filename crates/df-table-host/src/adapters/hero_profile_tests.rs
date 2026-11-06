@@ -46,7 +46,7 @@ fn a_skill_key_round_trips_through_its_parse_and_its_serde_name() {
         assert_eq!(written, format!("\"{}\"", skill.key()));
     }
     assert_eq!(Skill::from_key("Perception"), None);
-    assert_eq!(Skill::from_key("sleight_of_hand"), None);
+    assert_eq!(Skill::from_key("sleight-of-hand"), None);
 }
 
 #[test]

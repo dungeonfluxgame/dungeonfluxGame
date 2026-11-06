@@ -12,6 +12,10 @@ use crate::transform::Anchor1D;
 
 /// Bytes per pixel of the canonical working representation.
 pub(crate) const WORKING_BYTES_PER_PIXEL: u64 = 4;
+/// Rows a raster loop processes between cancellation polls.
+pub(crate) const CANCEL_POLL_ROWS: u32 = 16;
+/// Pixels a flat pixel loop processes between cancellation polls.
+pub(crate) const CANCEL_POLL_PIXELS: usize = 4096;
 
 /// Injected local limits plus the shared asset pixel ceiling.
 pub(crate) struct LiveBudget {

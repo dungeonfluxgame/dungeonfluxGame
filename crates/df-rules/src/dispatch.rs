@@ -14,6 +14,7 @@ pub struct HandlerRegistration<'a, Handler> {
 }
 
 impl<'a, Handler> HandlerRegistration<'a, Handler> {
+    /// Pairs a reviewed handler with the selector and source clause it is registered under.
     pub fn new(
         selector: &'a RevisionLabel,
         source: &'a RuleReference,

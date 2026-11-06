@@ -49,7 +49,13 @@ async fn with_finn() -> Running {
 }
 
 async fn camera_of(running: &Running) -> Camera {
-    controls(running).await.scene.camera.expect("a camera")
+    controls(running)
+        .await
+        .scene
+        .camera
+        .set_value()
+        .cloned()
+        .expect("a camera")
 }
 
 #[tokio::test]
@@ -114,6 +120,8 @@ async fn a_move_is_stamped_with_the_hosts_clock_once_and_every_read_says_how_old
         .controls
         .scene
         .camera
+        .set_value()
+        .cloned()
         .expect("the frame carries the move too");
     assert_eq!(
         (in_frame.serial, in_frame.began_ms),
@@ -150,7 +158,7 @@ async fn a_slide_is_stamped_the_same_way() {
         .await
         .expect("slides");
     let slide = |reply: ControlsReply| match reply.scene.card {
-        Some(df_playground::scene::Override::Set(image)) => image.slide.expect("a slide"),
+        df_playground::overlay::Edit::Set(image) => image.slide.expect("a slide"),
         other => panic!("a card with a slide, got {other:?}"),
     };
     let first = slide(controls(&running).await);
@@ -158,4 +166,40 @@ async fn a_slide_is_stamped_the_same_way() {
     assert_eq!(later.serial, first.serial);
     assert_eq!(later.began_ms, first.began_ms);
     assert!(later.elapsed_ms >= first.elapsed_ms);
+}
+
+/// A page that kept a frame from before a restart names the old run; a restarted host whose count
+/// has reached the page's must not hold that request until its next change.
+#[tokio::test]
+async fn a_frame_request_naming_another_run_is_answered_at_once_even_at_the_same_count() {
+    let running = start(&STARTER_FILES).await;
+    let count = running.state.change_count();
+    let patience = std::time::Duration::from_millis(60);
+    let this_run = controls(&running).await.boot_id;
+    let held = crate::server::FrameQuery::for_test(Some(count), Some(204)).with_boot(&this_run);
+    let answer = crate::server::frame_answer_for_test(&running.state, &held, patience).await;
+    assert_eq!(answer.status().as_u16(), 204, "this run, nothing changed");
+    let other_run = crate::server::FrameQuery::for_test(Some(count), Some(204)).with_boot("0-old");
+    let answer = crate::server::frame_answer_for_test(&running.state, &other_run, patience).await;
+    assert_eq!(answer.status().as_u16(), 200, "another run gets the frame");
+}
+
+#[tokio::test]
+async fn a_frame_request_reads_the_query_the_page_writes_and_refuses_an_unknown_parameter() {
+    let running = start(&STARTER_FILES).await;
+    let boot_id = controls(&running).await.boot_id;
+    let address = df_playground::frame::frame_address(
+        df_playground::path::FRAME,
+        Some(running.state.change_count() + 1),
+        Some(&boot_id),
+    );
+    assert_eq!(
+        get(running.port, &address).await.expect("answers").status,
+        200
+    );
+    let unknown = format!("{}?after=0&bot=x", df_playground::path::FRAME);
+    assert_eq!(
+        get(running.port, &unknown).await.expect("answers").status,
+        400
+    );
 }

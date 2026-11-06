@@ -10,12 +10,7 @@
 
 use crate::camera::{Framing, framing_within, progress};
 use crate::fixture::{Camera, Slide, StageElement};
-use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT};
-
-/// How many answers in a row from one older run of the host are taken to mean that run is the real
-/// one. A host that restarts with a clock set back has an older boot id than the run the page was
-/// following, and the page must not refuse it for ever.
-const OLDER_RUN_STRIKES: u8 = 3;
+use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT, OLDER_RUN_STRIKES};
 
 /// What the page does with an answer from the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,7 +146,7 @@ impl SlideClock {
 struct CameraRun {
     serial: u64,
     began: f64,
-    duration_ms: u32,
+    duration_ms: u64,
     from: Framing,
     to: Framing,
 }
@@ -172,7 +167,7 @@ pub struct CameraPlan {
     pub to: Framing,
     /// How long the move has been going, in milliseconds.
     pub elapsed_ms: f64,
-    pub duration_ms: u32,
+    pub duration_ms: u64,
     /// Whether the move is still under way.
     pub moving: bool,
     /// Which move this is; 0 for none.

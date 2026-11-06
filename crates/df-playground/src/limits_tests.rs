@@ -58,7 +58,7 @@ fn values_the_old_caps_refused_are_accepted() {
                 SceneChange::Sound {
                     media: "bell.wav".to_owned(),
                     target: Target::Both,
-                    volume: 80,
+                    volume_percent: 80,
                 },
                 &fixture,
             )
@@ -82,6 +82,7 @@ fn values_the_old_caps_refused_are_accepted() {
                 media: "a.png".to_owned(),
                 caption: None,
                 rotation_degrees: 0,
+                layout: None,
                 slide: Some(crate::fixture::Slide {
                     from_percent: 0,
                     to_percent: 100,
@@ -120,7 +121,7 @@ fn a_cap_still_refuses_what_is_past_it_and_the_words_name_the_constant() {
             .contains(&limits::MAXIMUM_PARTY_MEMBERS.to_string())
     );
     assert!(
-        SceneError::BadCameraTime(1)
+        SceneError::InvalidCameraTime(1)
             .to_string()
             .contains(&limits::MAXIMUM_CAMERA_MS.to_string())
     );
@@ -134,12 +135,13 @@ fn the_rotation_range_takes_zero_and_359_and_refuses_360() {
         caption: None,
         rotation_degrees: degrees,
         slide: None,
+        layout: None,
     };
     let mut overlay = SceneOverlay::default();
     assert!(overlay.apply(turn(0), &base()).is_ok());
     assert!(overlay.apply(turn(359), &base()).is_ok());
     assert_eq!(
         overlay.apply(turn(360), &base()),
-        Err(SceneError::BadRotation(360))
+        Err(SceneError::InvalidRotation(360))
     );
 }

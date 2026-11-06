@@ -14,8 +14,8 @@ use serde::Serialize;
 
 use crate::identity::MachineId;
 use crate::inspect::{Inspect, InspectView, Needs, Visible};
+use crate::machine::spec::{MachineSpec, StateName};
 use crate::machine::{InputClaim, Scope, SuspendPolicy};
-use crate::machine_spec::{MachineSpec, StateName};
 use crate::ports::{ActionId, PortName};
 use crate::registry::{Enablement, EnablementReason, Registry};
 

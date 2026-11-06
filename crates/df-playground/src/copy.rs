@@ -6,13 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::fixture::Status;
-
-/// Shortest time a caption stays up, in milliseconds.
-pub const MINIMUM_CAPTION_DWELL_MS: u32 = 1_800;
-/// Time per word that a person needs to read a caption across a room, in milliseconds.
-pub const DWELL_MS_PER_WORD: u32 = 330;
-/// Shortest time a result card stays up, in milliseconds.
-pub const MINIMUM_RESULT_CARD_DWELL_MS: u32 = 3_000;
+use crate::limits::{DWELL_MS_PER_WORD, MINIMUM_CAPTION_DWELL_MS, MINIMUM_RESULT_CARD_DWELL_MS};
 
 /// How fast the table likes to read: scales every dwell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +18,8 @@ pub enum ReadingPace {
 }
 
 impl ReadingPace {
+    pub const ALL: [Self; 3] = [Self::Slow, Self::Normal, Self::Fast];
+
     /// The pace as a share of the normal dwell, in percent.
     fn percent(self) -> u32 {
         match self {
@@ -42,30 +38,25 @@ impl ReadingPace {
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "slow" => Some(Self::Slow),
-            "normal" => Some(Self::Normal),
-            "fast" => Some(Self::Fast),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|value| value.key() == key)
     }
 }
 
-/// Scales a normal-pace dwell to the pace. Done in 64 bits and held at the largest `u32`, so an
-/// enormous caption stays enormous instead of wrapping to something short.
-fn scaled(normal_ms: u64, pace: ReadingPace) -> u32 {
-    u32::try_from(normal_ms * u64::from(pace.percent()) / 100).unwrap_or(u32::MAX)
+/// Scales a normal-pace dwell to the pace, held at the largest `u64` so an enormous caption stays
+/// enormous instead of wrapping to something short.
+fn scaled(normal_ms: u64, pace: ReadingPace) -> u64 {
+    normal_ms.saturating_mul(u64::from(pace.percent())) / 100
 }
 
 /// How long a caption of `words` words stays up at the given pace, in milliseconds.
-pub fn caption_dwell_ms(words: u32, pace: ReadingPace) -> u32 {
-    let reading_ms = u64::from(words) * u64::from(DWELL_MS_PER_WORD);
-    scaled(u64::from(MINIMUM_CAPTION_DWELL_MS).max(reading_ms), pace)
+pub fn caption_dwell_ms(words: u32, pace: ReadingPace) -> u64 {
+    let reading_ms = u64::from(words).saturating_mul(DWELL_MS_PER_WORD);
+    scaled(MINIMUM_CAPTION_DWELL_MS.max(reading_ms), pace)
 }
 
 /// How long a result card stays up at the given pace, in milliseconds.
-pub fn result_card_dwell_ms(pace: ReadingPace) -> u32 {
-    scaled(u64::from(MINIMUM_RESULT_CARD_DWELL_MS), pace)
+pub fn result_card_dwell_ms(pace: ReadingPace) -> u64 {
+    scaled(MINIMUM_RESULT_CARD_DWELL_MS, pace)
 }
 
 /// The number of whitespace-separated words in a caption.

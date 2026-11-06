@@ -2217,7 +2217,8 @@ fn version_two_numeric_quality_is_preserved_without_mapping() {
         historical.drain(offset..offset + 3);
     }
     historical[0] = 2;
-    // Snapshots before the Codex line bounds decode to their frozen legacy limits, not today's defaults.
+    // Snapshots before the Codex line bounds decode to their frozen legacy limits, not today's
+    // defaults.
     let mut frozen = config.clone();
     frozen.codex.max_message_bytes = 1_048_576;
     frozen.codex.max_stdout_bytes = 4_194_304;

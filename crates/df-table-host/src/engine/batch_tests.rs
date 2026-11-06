@@ -6,16 +6,16 @@ use std::sync::Arc;
 use df_table::outcome::{DeclineCode, OutcomeKind};
 
 use super::commit::{CommitError, CommitPolicy, ScriptedCommit};
+use super::fixtures::{
+    RigOptions, TickingClock, adapters, config, count_lines, lines, rig_with, tap,
+};
 use super::handle::EngineHandle;
 use super::report::{CommitDisposition, TurnReport};
 use super::request::QueueControl;
-use super::tests_support::{
-    RigOptions, TickingClock, adapters, config, count_lines, lines, rig_with, tap,
-};
 use crate::event_log::EventLog;
 
 async fn join_and_release(
-    rig: &super::tests_support::Rig,
+    rig: &super::fixtures::Rig,
     seats: std::ops::RangeInclusive<u64>,
 ) -> Vec<TurnReport> {
     for seat in seats {
@@ -119,9 +119,7 @@ async fn a_failed_commit_fails_the_whole_batch_and_nothing_of_it_is_kept_or_repo
         assert_eq!(turn.decline, Some(DeclineCode::TableBusy));
         assert_eq!(
             turn.commit,
-            CommitDisposition::Failed {
-                cause: "unavailable".to_owned()
-            }
+            CommitDisposition::Failed(CommitError::Unavailable)
         );
         assert_eq!(turn.effects, 0);
         assert_eq!(turn.state_after, turn.state_before);
@@ -158,9 +156,7 @@ async fn a_commit_that_misses_its_deadline_refuses_the_batch_table_busy_and_keep
     assert_eq!(turn.decline, Some(DeclineCode::TableBusy));
     assert_eq!(
         turn.commit,
-        CommitDisposition::Failed {
-            cause: "deadline_exceeded".to_owned()
-        }
+        CommitDisposition::Failed(CommitError::DeadlineExceeded { deadline_ms: 1_000 })
     );
     assert!(rig.store.records().is_empty());
     assert_eq!(rig.store.attempts(), 1);
@@ -189,7 +185,7 @@ async fn after_a_failed_commit_the_owner_refuses_new_input_until_the_backoff_end
         .submission
         .refusal
         .expect("refused while backing off");
-    assert_eq!(refusal.cause, "table_busy");
+    assert_eq!(refusal.cause.key(), "table_busy");
     assert_eq!(refusal.retry_after_ms, Some(5_000));
     assert!(refused.turns.is_empty());
     let queue = rig.handle.queue_show().await.expect("answered");
@@ -221,7 +217,7 @@ async fn an_operation_id_of_a_failed_batch_is_released_so_the_same_id_can_be_ret
     });
     let failed = rig
         .handle
-        .submit(super::tests_support::with_operation(tap(1, "join"), 9))
+        .submit(super::fixtures::with_operation(tap(1, "join"), 9))
         .await
         .expect("answered");
     assert_eq!(failed.turns[0].decline, Some(DeclineCode::TableBusy));
@@ -229,7 +225,7 @@ async fn an_operation_id_of_a_failed_batch_is_released_so_the_same_id_can_be_ret
 
     let again = rig
         .handle
-        .submit(super::tests_support::with_operation(tap(1, "join"), 9))
+        .submit(super::fixtures::with_operation(tap(1, "join"), 9))
         .await
         .expect("answered");
 
@@ -245,7 +241,7 @@ async fn an_operation_id_of_a_failed_batch_is_released_so_the_same_id_can_be_ret
     ));
     let third = rig
         .handle
-        .submit(super::tests_support::with_operation(tap(1, "join"), 9))
+        .submit(super::fixtures::with_operation(tap(1, "join"), 9))
         .await
         .expect("answered");
     assert_eq!(
@@ -253,7 +249,8 @@ async fn an_operation_id_of_a_failed_batch_is_released_so_the_same_id_can_be_ret
             .submission
             .refusal
             .expect("now it is remembered")
-            .cause,
+            .cause
+            .key(),
         "duplicate"
     );
     assert_eq!(
@@ -310,7 +307,7 @@ async fn a_view_is_released_with_its_commit_and_never_after_a_failed_one() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn inputs_that_pile_up_during_a_commit_are_served_together_so_n_submits_make_fewer_commits() {
-    let rig = super::tests_support::blocking_rig(&RigOptions::default());
+    let rig = super::fixtures::blocking_rig(&RigOptions::default());
     let first = tokio::spawn({
         let handle = Arc::clone(&rig.handle);
         async move { handle.submit(tap(1, "join")).await }
@@ -355,9 +352,8 @@ async fn inputs_that_pile_up_during_a_commit_are_served_together_so_n_submits_ma
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn the_owner_gives_up_on_a_write_that_outlasts_its_deadline_and_takes_no_second_one_meanwhile()
- {
-    let rig = super::tests_support::blocking_rig(&RigOptions {
+async fn the_owner_gives_up_on_a_write_past_its_deadline_and_takes_no_second_one_meanwhile() {
+    let rig = super::fixtures::blocking_rig(&RigOptions {
         commit_deadline_ms: 50,
         commit_backoff_ms: 1_000,
         ..RigOptions::default()
@@ -367,9 +363,7 @@ async fn the_owner_gives_up_on_a_write_that_outlasts_its_deadline_and_takes_no_s
 
     assert_eq!(
         first.turns[0].commit,
-        CommitDisposition::Failed {
-            cause: "deadline_exceeded".to_owned()
-        },
+        CommitDisposition::Failed(CommitError::DeadlineExceeded { deadline_ms: 50 }),
         "the owner enforces the deadline itself; the store never returned"
     );
     assert_eq!(first.turns[0].decline, Some(DeclineCode::TableBusy));
@@ -377,9 +371,7 @@ async fn the_owner_gives_up_on_a_write_that_outlasts_its_deadline_and_takes_no_s
     let second = rig.handle.submit(tap(1, "join")).await.expect("answered");
     assert_eq!(
         second.turns[0].commit,
-        CommitDisposition::Failed {
-            cause: "unavailable".to_owned()
-        },
+        CommitDisposition::Failed(CommitError::Unavailable),
         "the first write is still stuck, so no second one is started"
     );
     assert_eq!(rig.store.attempts().len(), 1);
@@ -424,6 +416,37 @@ async fn a_batch_that_changed_nothing_worth_saving_writes_no_checkpoint() {
     );
     assert_eq!(rig.store.attempts(), 0);
     assert_eq!(count_lines(&rig.log, "COMMIT none inputs=3"), 1);
+}
+
+#[test]
+fn a_scripted_run_answers_each_of_its_writes_in_order_then_the_store_succeeds() {
+    use super::commit::{Checkpoint, CommitId, CommitStore, ScriptedCommitStore};
+    let store = ScriptedCommitStore::default();
+    store.push(ScriptedCommit::Fails(CommitError::Refused), 2);
+    store.push(ScriptedCommit::Fails(CommitError::Unavailable), 0);
+    store.push(ScriptedCommit::Fails(CommitError::Unavailable), 1);
+    assert_eq!(store.scripted_remaining(), 3);
+    let checkpoint = Checkpoint {
+        commit: CommitId::new(1),
+        inputs: 1,
+        bytes: b"{}".to_vec(),
+    };
+
+    let answers: Vec<_> = (0..4)
+        .map(|_| store.commit(&checkpoint, u64::MAX).map(|_| ()))
+        .collect();
+
+    assert_eq!(
+        answers,
+        [
+            Err(CommitError::Refused),
+            Err(CommitError::Refused),
+            Err(CommitError::Unavailable),
+            Ok(()),
+        ]
+    );
+    assert_eq!(store.scripted_remaining(), 0);
+    assert_eq!(store.attempts(), 4);
 }
 
 #[tokio::test]
@@ -492,7 +515,7 @@ async fn step_serves_one_batch_of_at_most_the_count_and_a_zero_step_is_refused()
         rig.handle
             .queue_control(QueueControl::Step { count: 0 })
             .await,
-        Err(super::report::EngineError::BadRequest { .. })
+        Err(super::report::EngineError::ZeroStep)
     ));
     assert_eq!(rig.store.records().len(), 2);
 }

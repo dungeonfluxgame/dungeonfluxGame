@@ -19,20 +19,43 @@ fn d20_request() -> DrawRequest {
 }
 
 #[test]
-fn the_backend_names_are_scripted_and_df_rules_and_nothing_else_parses() {
-    assert_eq!(RulesBackend::parse("scripted"), Ok(RulesBackend::Scripted));
-    assert_eq!(RulesBackend::parse("df-rules"), Ok(RulesBackend::DfRules));
+fn the_backend_names_are_scripted_and_df_rules_and_nothing_else_reads() {
+    assert_eq!(
+        RulesBackend::from_key("scripted"),
+        Some(RulesBackend::Scripted)
+    );
+    assert_eq!(
+        RulesBackend::from_key("df-rules"),
+        Some(RulesBackend::DfRules)
+    );
     for backend in RulesBackend::ALL {
-        assert_eq!(RulesBackend::parse(backend.key()), Ok(backend));
+        assert_eq!(RulesBackend::from_key(backend.key()), Some(backend));
     }
     for text in ["", "df_rules", "DF-RULES", "real", " scripted"] {
-        assert_eq!(
-            RulesBackend::parse(text),
-            Err(AdapterError::UnknownRulesBackend {
-                text: text.to_owned()
-            })
-        );
+        assert_eq!(RulesBackend::from_key(text), None, "{text:?}");
     }
+}
+
+#[test]
+fn the_environment_setting_is_trimmed_empty_is_unset_and_anything_else_is_refused() {
+    use std::ffi::OsString;
+
+    use crate::environment::read_text;
+
+    let read = |value: Option<&str>| {
+        RulesBackend::from_setting(read_text(RULES_BACKEND_VARIABLE, value.map(OsString::from)))
+    };
+    assert_eq!(read(None), Ok(RulesBackend::Scripted));
+    assert_eq!(read(Some("")), Ok(RulesBackend::Scripted));
+    assert_eq!(read(Some("  ")), Ok(RulesBackend::Scripted));
+    assert_eq!(read(Some(" df-rules ")), Ok(RulesBackend::DfRules));
+    assert_eq!(read(Some("scripted")), Ok(RulesBackend::Scripted));
+    assert_eq!(
+        read(Some("df_rules")),
+        Err(AdapterError::UnknownRulesBackend {
+            text: "df_rules".to_owned()
+        })
+    );
 }
 
 #[test]

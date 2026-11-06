@@ -10,7 +10,14 @@ use sha2::{Digest, Sha256};
 use std::future::Future;
 
 const MAGIC: &[u8; 8] = b"DFIMGP01";
-const INTENT_ENCODED_BYTES: usize = 10;
+/// The only frozen-output envelope revision this build writes and reads.
+const FROZEN_OUTPUT_REVISION: u32 = 1;
+/// One encoded intent: mime tag, width, height and alpha tag.
+const INTENT_ENCODED_BYTES: usize = 1 + 4 + 4 + 1;
+/// Display-presence flag plus the execution recipe length prefix.
+const ENVELOPE_FIELD_BYTES: usize = 1 + 4;
+/// Revision-one mime tags by index; `ImageIntent` admits exactly these types.
+const MIME_TAGS: [&str; 3] = ["image/png", "image/jpeg", "image/webp"];
 /// Maximum complete frozen recipe envelope, in bytes; matches the durable snapshot allocation.
 pub const MAXIMUM_RECIPE_BYTES: usize = 1_048_576;
 
@@ -54,6 +61,7 @@ pub enum NoDeliveryStage {
     ReleasedStage(crate::execution::StageScope),
 }
 
+/// Whether the sealed job had already allocated a catalog asset and attempt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NoDeliveryAllocation {
     NoAllocation,
@@ -123,6 +131,7 @@ impl std::fmt::Debug for FinalDecisionRef {
 }
 
 impl FinalDecisionRef {
+    /// The lineage reference of one observed decision, including its payload digest.
     pub fn from_observation(observation: &crate::execution::DecisionObservation) -> Self {
         Self {
             scope: observation.scope.clone(),
@@ -155,6 +164,7 @@ impl std::fmt::Debug for FrozenOutput {
 }
 
 impl FrozenOutput {
+    /// Refuses an empty plan and any envelope over [`MAXIMUM_RECIPE_BYTES`].
     pub fn new(
         master: ImageIntent,
         display: Option<ImageIntent>,
@@ -162,8 +172,7 @@ impl FrozenOutput {
     ) -> Result<Self, PublicationError> {
         let envelope_bytes = MAGIC.len()
             + INTENT_ENCODED_BYTES
-            + 1
-            + 4
+            + ENVELOPE_FIELD_BYTES
             + if display.is_some() {
                 INTENT_ENCODED_BYTES
             } else {
@@ -197,22 +206,24 @@ impl FrozenOutput {
     /// Revision one encodes both expected variants and the full execution plan without ambiguity.
     pub fn snapshot(&self) -> Result<VersionedSnapshot, PublicationError> {
         let mut bytes = MAGIC.to_vec();
-        encode_intent(&mut bytes, self.master);
+        encode_intent(&mut bytes, self.master)?;
         bytes.push(u8::from(self.display.is_some()));
         if let Some(display) = self.display {
-            encode_intent(&mut bytes, display);
+            encode_intent(&mut bytes, display)?;
         }
         let length = u32::try_from(self.execution_recipe.len())
             .map_err(|_| PublicationError::InvalidRecipe)?;
         bytes.extend_from_slice(&length.to_be_bytes());
         bytes.extend_from_slice(&self.execution_recipe);
-        VersionedSnapshot::new(1, bytes, MAXIMUM_RECIPE_BYTES)
+        VersionedSnapshot::new(FROZEN_OUTPUT_REVISION, bytes, MAXIMUM_RECIPE_BYTES)
             .map_err(|_| PublicationError::InvalidRecipe)
     }
 
     /// Unknown versions, trailing bytes and oversized plans are refused, never inferred.
     pub fn decode(snapshot: &VersionedSnapshot) -> Result<Self, PublicationError> {
-        if snapshot.revision() != 1 || snapshot.bytes().len() > MAXIMUM_RECIPE_BYTES {
+        if snapshot.revision() != FROZEN_OUTPUT_REVISION
+            || snapshot.bytes().len() > MAXIMUM_RECIPE_BYTES
+        {
             return Err(PublicationError::InvalidRecipe);
         }
         let mut bytes = snapshot.bytes();
@@ -235,12 +246,14 @@ impl FrozenOutput {
     }
 }
 
-fn encode_intent(bytes: &mut Vec<u8>, intent: ImageIntent) {
-    bytes.push(match intent.mime() {
-        "image/png" => 0,
-        "image/jpeg" => 1,
-        _ => 2,
-    });
+/// An unknown mime type is refused rather than written under another type's tag.
+fn encode_intent(bytes: &mut Vec<u8>, intent: ImageIntent) -> Result<(), PublicationError> {
+    let mime_tag = MIME_TAGS
+        .iter()
+        .position(|mime| *mime == intent.mime())
+        .and_then(|index| u8::try_from(index).ok())
+        .ok_or(PublicationError::InvalidRecipe)?;
+    bytes.push(mime_tag);
     bytes.extend_from_slice(&intent.width_px().to_be_bytes());
     bytes.extend_from_slice(&intent.height_px().to_be_bytes());
     bytes.push(match intent.alpha_requirement() {
@@ -248,6 +261,7 @@ fn encode_intent(bytes: &mut Vec<u8>, intent: ImageIntent) {
         ImageAlphaRequirement::Transparent => 1,
         ImageAlphaRequirement::Preserve => 2,
     });
+    Ok(())
 }
 
 fn take<'a>(bytes: &mut &'a [u8], length: usize) -> Result<&'a [u8], PublicationError> {
@@ -266,12 +280,12 @@ fn read_u32(bytes: &mut &[u8]) -> Result<u32, PublicationError> {
 }
 
 fn decode_intent(bytes: &mut &[u8]) -> Result<ImageIntent, PublicationError> {
-    let mime = match take(bytes, 1)? {
-        [0] => "image/png",
-        [1] => "image/jpeg",
-        [2] => "image/webp",
-        _ => return Err(PublicationError::InvalidRecipe),
+    let [mime_tag] = take(bytes, 1)? else {
+        return Err(PublicationError::InvalidRecipe);
     };
+    let mime = MIME_TAGS
+        .get(usize::from(*mime_tag))
+        .ok_or(PublicationError::InvalidRecipe)?;
     let width = read_u32(bytes)?;
     let height = read_u32(bytes)?;
     let alpha = match take(bytes, 1)? {
@@ -361,6 +375,7 @@ pub trait ImageResults: Send + Sync {
         async { Ok(None) }
     }
 
+    /// A current Ready artifact compatible with the request under its frozen config, if any.
     fn find_ready_artifact(
         &self,
         _request: &crate::ImageRequest,
@@ -390,6 +405,7 @@ pub trait ImageResults: Send + Sync {
         async { Ok(None) }
     }
 
+    /// The job's published result within its owner scope, or `None`.
     fn read_result(
         &self,
         owner: &ImageOwner,
@@ -398,56 +414,4 @@ pub trait ImageResults: Send + Sync {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn frozen_output_round_trips_distinct_variants_and_full_plan() {
-        let master = ImageIntent::new("image/png", 2, 3, ImageAlpha::Transparent).unwrap();
-        let display = ImageIntent::new("image/webp", 1, 2, ImageAlpha::Opaque).unwrap();
-        let frozen = FrozenOutput::new(
-            master,
-            Some(display),
-            b"inputs-config-model-profile-transform-revisions".to_vec(),
-        )
-        .unwrap();
-        let snapshot = frozen.snapshot().unwrap();
-        assert_eq!(FrozenOutput::decode(&snapshot).unwrap(), frozen);
-        let changed = FrozenOutput::new(master, Some(display), b"changed execution plan".to_vec())
-            .unwrap()
-            .snapshot()
-            .unwrap();
-        assert_ne!(recipe_digest(&snapshot), recipe_digest(&changed));
-    }
-
-    #[test]
-    fn frozen_output_rejects_unknown_versions_truncation_and_trailing_bytes() {
-        let master = ImageIntent::new("image/png", 2, 3, ImageAlpha::Opaque).unwrap();
-        let snapshot = FrozenOutput::new(master, None, b"execution plan".to_vec())
-            .unwrap()
-            .snapshot()
-            .unwrap();
-        let unknown =
-            VersionedSnapshot::new(2, snapshot.bytes().to_vec(), MAXIMUM_RECIPE_BYTES).unwrap();
-        assert_eq!(
-            FrozenOutput::decode(&unknown),
-            Err(PublicationError::InvalidRecipe)
-        );
-        for length in 1..snapshot.bytes().len() {
-            let truncated = VersionedSnapshot::new(
-                1,
-                snapshot.bytes()[..length].to_vec(),
-                MAXIMUM_RECIPE_BYTES,
-            )
-            .unwrap();
-            assert!(FrozenOutput::decode(&truncated).is_err());
-        }
-        let mut bytes = snapshot.bytes().to_vec();
-        bytes.push(0);
-        let trailing = VersionedSnapshot::new(1, bytes, MAXIMUM_RECIPE_BYTES).unwrap();
-        assert_eq!(
-            FrozenOutput::decode(&trailing),
-            Err(PublicationError::InvalidRecipe)
-        );
-    }
-}
+mod publication_tests;

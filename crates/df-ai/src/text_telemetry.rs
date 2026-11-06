@@ -21,6 +21,7 @@ pub struct TextTelemetry {
 }
 
 impl TextTelemetry {
+    /// An observer that emits through `sink` with no failures counted yet.
     pub fn new(sink: Arc<dyn DiagnosticSink>) -> Self {
         Self {
             sink,

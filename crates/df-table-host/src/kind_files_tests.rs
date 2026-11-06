@@ -1,6 +1,7 @@
 use df_table::testkit::{CHARACTER_KIND, MARKER_KIND};
 use tempfile::TempDir;
 
+use crate::dev_http::BodyCause;
 use crate::kind_files::{KindFileProblem, load_kind_files, load_kind_files_async};
 use crate::limits::{MAXIMUM_KIND_FILE_BYTES, MAXIMUM_KIND_FILES};
 
@@ -34,7 +35,37 @@ fn a_file_that_is_not_valid_json_is_named_in_the_problems() {
     let directory = directory_with(&[("broken.json", "{ not json"), ("marker.json", MARKER_KIND)]);
     let problems = load_kind_files(directory.path()).expect_err("refused");
     assert_eq!(problems.len(), 1);
-    assert!(matches!(&problems.0[0], KindFileProblem::Parse { file, .. } if file == "broken.json"));
+    let KindFileProblem::Parse { file, error } = &problems.0[0] else {
+        panic!("{problems}");
+    };
+    assert_eq!(file, "broken.json");
+    assert_eq!(error.cause, BodyCause::Syntax);
+    assert_eq!((error.line, error.column), (1, 3));
+    assert_eq!(
+        problems.0[0].to_string(),
+        format!("broken.json: {}", error.detail)
+    );
+}
+
+#[test]
+fn a_file_that_ends_early_or_has_the_wrong_shape_says_which() {
+    let directory = directory_with(&[("short.json", "{"), ("shape.json", r#"{"name": 7}"#)]);
+    let problems = load_kind_files(directory.path()).expect_err("refused");
+    let causes: Vec<(&str, BodyCause)> = problems
+        .0
+        .iter()
+        .filter_map(|problem| match problem {
+            KindFileProblem::Parse { file, error } => Some((file.as_str(), error.cause)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        causes,
+        vec![
+            ("shape.json", BodyCause::Data),
+            ("short.json", BodyCause::Truncated)
+        ]
+    );
 }
 
 #[test]
@@ -69,7 +100,10 @@ fn a_missing_directory_is_a_problem_not_a_panic() {
     let problems = load_kind_files(&directory.path().join("absent")).expect_err("refused");
     assert!(matches!(
         problems.0[0],
-        KindFileProblem::UnreadableDirectory { .. }
+        KindFileProblem::UnreadableDirectory {
+            kind: std::io::ErrorKind::NotFound,
+            ..
+        }
     ));
 }
 
@@ -95,9 +129,10 @@ fn more_files_than_the_limit_are_reported_and_only_the_limit_is_read() {
         std::fs::write(directory.path().join(format!("k{index:03}.json")), text).expect("writes");
     }
     let problems = load_kind_files(directory.path()).expect_err("refused");
-    assert!(
-        matches!(problems.0[0], KindFileProblem::TooManyFiles { found } if found == MAXIMUM_KIND_FILES + 1)
-    );
+    let KindFileProblem::TooManyFiles { found } = problems.0[0] else {
+        panic!("too many files is the first problem: {problems:?}");
+    };
+    assert_eq!(found, MAXIMUM_KIND_FILES + 1);
 }
 
 #[tokio::test]

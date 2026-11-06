@@ -96,6 +96,7 @@ pace: {pace}
 status: {}
 unavailable: {}
 grid: {}
+sam: {}
 transition: {} {} ms
 scene: {scene}
 revision: {}
@@ -103,6 +104,7 @@ fixtures: {listed}",
         controls.status_key,
         controls.show_unavailable,
         controls.show_grid,
+        controls.show_sam,
         controls.transition.style.key(),
         controls.transition.duration_ms,
         reply.revision
@@ -111,20 +113,7 @@ fixtures: {listed}",
 
 /// Which parts of the scene have live changes on top of the fixture.
 fn changed_parts(scene: &df_playground::scene::SceneOverlay) -> String {
-    let parts: Vec<&str> = [
-        ("caption", scene.caption.is_some()),
-        ("party", scene.party.is_some()),
-        ("suggested", scene.suggested.is_some()),
-        ("groups", scene.groups.is_some()),
-        ("unavailable", scene.unavailable.is_some()),
-        ("backdrop", scene.backdrop.is_some()),
-        ("card", scene.card.is_some()),
-        ("phone picture", scene.phone_image.is_some()),
-        ("music", scene.music.is_some()),
-    ]
-    .into_iter()
-    .filter_map(|(name, changed)| changed.then_some(name))
-    .collect();
+    let parts = scene.changed_slots();
     if parts.is_empty() {
         "as the fixture has it".to_owned()
     } else {

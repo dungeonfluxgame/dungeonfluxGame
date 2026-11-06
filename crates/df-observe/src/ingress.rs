@@ -1,17 +1,24 @@
 //! Native local telemetry contracts. Supplied diagnostic IDs grant no authority.
 use std::{fmt, sync::mpsc, time::Duration};
 
-use crate::{Signal, TelemetryError};
+use crate::{Signal, TelemetryError, limits::MINIMUM_SQLITE_BYTES};
 
 /// Finite qualification limits. Smaller boundary fixtures may select smaller limits.
 #[derive(Clone, Copy, Debug)]
 pub struct TelemetryLimits {
+    /// Largest encoded single-record OTLP request.
     pub record_bytes: usize,
+    /// Largest encoded batch one admission or spool frame carries.
     pub batch_bytes: usize,
+    /// Most records in one batch.
     pub batch_records: usize,
+    /// Most admissions waiting for the store worker.
     pub queue_items: usize,
+    /// Retained bytes the waiting admissions may hold.
     pub queue_bytes: usize,
+    /// Durable spool budget; spool frames are retained, never deleted.
     pub spool_bytes: u64,
+    /// Physical SQLite budget, including WAL and shared memory files.
     pub sqlite_bytes: u64,
 }
 impl Default for TelemetryLimits {
@@ -28,6 +35,7 @@ impl Default for TelemetryLimits {
     }
 }
 impl TelemetryLimits {
+    /// Refuse a zero field, a field above the default ceiling, or SQLite below its minimum.
     pub fn validate(self) -> Result<Self, TelemetryError> {
         let ceiling = Self::default();
         if self.record_bytes == 0
@@ -42,7 +50,7 @@ impl TelemetryLimits {
             || self.queue_bytes > ceiling.queue_bytes
             || self.spool_bytes == 0
             || self.spool_bytes > ceiling.spool_bytes
-            || self.sqlite_bytes < 262144
+            || self.sqlite_bytes < MINIMUM_SQLITE_BYTES
             || self.sqlite_bytes > ceiling.sqlite_bytes
         {
             return Err(TelemetryError::InvalidLimits);
@@ -54,6 +62,7 @@ impl TelemetryLimits {
 #[derive(Debug)]
 pub struct PendingReceipt(mpsc::Receiver<Result<IngestReceipt, TelemetryError>>);
 impl PendingReceipt {
+    /// A receipt and the sender the ingestion owner answers it through.
     pub fn channel() -> (mpsc::Sender<Result<IngestReceipt, TelemetryError>>, Self) {
         let (sender, receiver) = mpsc::channel();
         (sender, Self(receiver))
@@ -75,16 +84,21 @@ impl PendingReceipt {
         })?
     }
 }
+/// How far an admitted batch got before its receipt was sent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Durability {
     Spooled,
     Committed,
 }
+/// Final answer for one admission; watermarks are observations, not completeness claims.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IngestReceipt {
     pub durability: Durability,
+    /// Spool frame that holds the batch.
     pub spool_position: u64,
+    /// Highest committed SQLite position when the receipt was sent.
     pub committed_watermark: u64,
+    /// Records of this admission, even when it shared a frame with others.
     pub records: usize,
 }
 /// Object-safe native local port; implementations preflight bytes and fail fast on admission.

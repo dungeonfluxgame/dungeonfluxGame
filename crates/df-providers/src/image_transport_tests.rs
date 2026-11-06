@@ -309,11 +309,37 @@ async fn redirect_fixture_is_refused_without_following() {
     server.join().expect("server");
 }
 
+/// The delivery bound used to stop at 16 MiB while the transport allows far more, so a caller
+/// with a larger delivery bound was refused with `request_bounds` before any fetch.
+#[tokio::test]
+async fn a_delivery_bound_above_sixteen_mebibytes_is_accepted() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let _ = read_request(&mut stream);
+        reply(&mut stream, "image/png", b"large-bound-bytes");
+    });
+    let http = transport(true);
+    let locator = format!("http://{address}/image.png");
+    let (bytes, _, _) = fetch_bfl_delivery(
+        &http,
+        &locator,
+        32 * 1024 * 1024,
+        Duration::from_secs(5),
+        Some(address),
+    )
+    .await
+    .expect("a 32 MiB delivery bound is within the transport ceiling");
+    assert_eq!(bytes, b"large-bound-bytes");
+    server.join().expect("server");
+}
+
 #[tokio::test]
 async fn unsupported_delivery_bounds_are_refused_before_dns() {
     let http = transport(false);
     let locator = "https://delivery.bfl.ai/image.png?signature=synthetic";
-    for max_bytes in [0usize, 16_777_217usize] {
+    for max_bytes in [0, crate::MAXIMUM_BODY_BYTES + 1] {
         let error = fetch_bfl_delivery(&http, locator, max_bytes, Duration::from_secs(1), None)
             .await
             .expect_err("unsupported delivery bound is refused");

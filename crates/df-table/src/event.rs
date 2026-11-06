@@ -1,7 +1,7 @@
 //! Typed events: the one record of what the table did and why.
 //!
 //! Every variant carries only ids, enums, counts, revisions and millisecond durations, and every
-//! value is an `EventField` (`event_field.rs`), so no private text can reach an event by accident
+//! value is an `EventField` (`event::field`), so no private text can reach an event by accident
 //! and an audit line cannot be built from one. It owns the variants, their class, their audit
 //! area and the exhaustive audit-line rendering (`AREA verb key=value`) that hosts print and
 //! store; the same record serializes with serde, so the line and the structured record never
@@ -14,18 +14,21 @@
 //! `code`, `ms` and the other keys a test pins (`event_tests.rs`, question 89). Class B (`EventClass::Verbose`) is
 //! detail a host may leave out.
 
+pub(crate) mod cause;
+pub mod field;
+
 use std::fmt::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{SettingFault, SettingName};
-use crate::effects::{EffectRefusal, TableEffectKind};
+use crate::config::{SettingCause, SettingName};
+use crate::effects::{EffectCause, TableEffectKind};
 use crate::element::{Degrees, ElementId, FieldName, KindName, Percent};
-use crate::event_field::LineWriter;
+use crate::event::field::LineWriter;
 use crate::identity::{Correlation, EvidenceRef, MachineId, TableId, TableScope};
 use crate::limits::MAXIMUM_NAME_LENGTH;
+use crate::machine::slot::{LoadCause, RecordKind};
 use crate::machine::{HandOffKind, MachineFailureCause, StateName};
-use crate::machine_slot::{LoadFault, RecordKind};
 use crate::outcome::{DeclineCode, OutcomeKind};
 use crate::owner_queue::{Lane, NotDeclinedCause};
 use crate::pipeline::events::PipelineEvent;
@@ -56,7 +59,7 @@ pub enum EventClass {
     Verbose,
 }
 
-pub use crate::event_cause::{
+pub use crate::event::cause::{
     EffectKind, FailureCause, PipelineStep, RejectionCause, TransformKind,
 };
 
@@ -159,7 +162,7 @@ pub enum TableEvent {
     /// changes nothing).
     SettingRejected {
         name: SettingName,
-        cause: SettingFault,
+        cause: SettingCause,
     },
     /// Keys of the configuration file that are not valid setting names, so none can be named
     /// safely. Only their number is recorded.
@@ -245,7 +248,7 @@ pub enum TableEvent {
         scope: TableScope,
         correlation: Correlation,
         effect: TableEffectKind,
-        cause: EffectRefusal,
+        cause: EffectCause,
     },
     /// A saved record could not be used (`load.refused{type, version, expected}`, H.12) when the
     /// host loaded `table`: `record` is its type, `machine` the machine a slot belongs to,
@@ -256,7 +259,7 @@ pub enum TableEvent {
         machine: Option<MachineId>,
         version: u64,
         expected: u64,
-        cause: LoadFault,
+        cause: LoadCause,
     },
     /// What the pipeline and the pending resolutions did that explains a turn (`pipeline.rs`).
     Pipeline(PipelineEvent),
@@ -406,9 +409,9 @@ impl TableEvent {
                 cause,
             } => {
                 let mut line = LineWriter::start(out, "reject")?;
-                line.field_if_present("effect", effect)?;
+                line.field_if_present("effect", effect.as_ref())?;
                 line.field("cause", cause)?;
-                line.field_if_present("element", element)
+                line.field_if_present("element", element.as_ref())
             }
             Self::KindsReloaded {
                 kinds,
@@ -433,7 +436,7 @@ impl TableEvent {
                 let mut line = LineWriter::start(out, "received")?;
                 write_context(&mut line, scope, correlation)?;
                 line.field("length", length)?;
-                line.field_if_present("evidence", evidence)
+                line.field_if_present("evidence", evidence.as_ref())
             }
             Self::InputDeclined {
                 scope,
@@ -454,7 +457,7 @@ impl TableEvent {
                 let mut line = LineWriter::start(out, "finished")?;
                 write_context(&mut line, scope, correlation)?;
                 line.field("step", step)?;
-                line.field_if_present("outcome", outcome)?;
+                line.field_if_present("outcome", outcome.as_ref())?;
                 line.field("ms", ms)
             }
             Self::TurnApplied {
@@ -574,7 +577,7 @@ impl TableEvent {
                 let mut line = LineWriter::start(out, "exited")?;
                 write_context(&mut line, scope, correlation)?;
                 line.field("kind", kind)?;
-                line.field_if_present("target", target)?;
+                line.field_if_present("target", target.as_ref())?;
                 line.field("carried", carried)
             }
             Self::MachineFailed {
@@ -617,7 +620,7 @@ impl TableEvent {
                 let mut line = LineWriter::start(out, "refused")?;
                 line.field("table", table)?;
                 line.field("record", record)?;
-                line.field_if_present("machine", machine)?;
+                line.field_if_present("machine", machine.as_ref())?;
                 line.field("version", version)?;
                 line.field("expected", expected)?;
                 line.field("cause", cause)
@@ -647,8 +650,8 @@ pub(crate) fn write_context<W: Write>(
     correlation: &Correlation,
 ) -> fmt::Result {
     line.field("table", &scope.table)?;
-    line.field_if_present("scene", &scope.scene)?;
-    line.field_if_present("machine", &scope.machine)?;
+    line.field_if_present("scene", scope.scene.as_ref())?;
+    line.field_if_present("machine", scope.machine.as_ref())?;
     line.field("operation_id", &correlation.operation_id)?;
     line.field("turn_seq", &correlation.turn_seq)?;
     line.field("epoch", &correlation.revision.epoch().get())?;

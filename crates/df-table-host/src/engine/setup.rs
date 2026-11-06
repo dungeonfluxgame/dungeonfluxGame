@@ -3,14 +3,15 @@
 //!
 //! The dev table registers the two real machines of C2, the lobby and a minimal explore, over one
 //! authored scene and one authored beat. The first playable path (H3) registers a third, the
-//! dialogue, and chains the explore to it: lobby, one story scene, one conversation (`story_machines`,
-//! chosen by `EngineConfig::story`). The action catalog is the stand-in for the action
-//! registry of O.5: for each machine, the actions a seat can send it, which `viable` and the
+//! dialogue, and chains the explore to it: lobby, one story scene, one conversation
+//! (`story_machines`, chosen by `EngineConfig::story`). The action catalog is the stand-in for the
+//! action registry of O.5: for each machine, the actions a seat can send it, which `viable` and the
 //! interpreter read. Starting fails with a typed `EngineStartError` that names what to fix; a
 //! machine that is not startable is never left out silently.
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use df_table::config::Settings;
 use df_table::dialogue::{Conversation, ConversationError, DialogueMachine};
@@ -28,9 +29,11 @@ use df_table::pipeline::{PipelineError, PipelineLimits, PipelineTable};
 use df_table::ports::{ActionId, PortName};
 use df_table::registry::{Registry, RegistryBuilder, RegistryError};
 use df_table::table_state::MachineHome;
+use serde::{Deserialize, Serialize};
 
 use crate::adapters::AdapterError;
 use crate::broker::purpose::PurposeError;
+use crate::observe::SpoolError;
 
 use super::commit::CommitPolicy;
 use super::limits::{DEFAULT_COMMIT_BACKOFF_MS, DEFAULT_COMMIT_DEADLINE_MS, DEV_SEAT_COUNT};
@@ -90,7 +93,7 @@ impl EngineConfig {
         Self {
             table: TableId::new(DEV_TABLE),
             seats: DEV_SEAT_COUNT,
-            settings: Settings::defaults(),
+            settings: Settings::default(),
             limits: PipelineLimits::default(),
             policy: CommitPolicy::per_batch(),
             commit_deadline_ms: DEFAULT_COMMIT_DEADLINE_MS,
@@ -131,11 +134,106 @@ pub enum EngineStartError {
     /// The machine the table starts in is not registered and enabled.
     FirstMachineMissing(MachineId),
     /// The owner thread could not be started.
-    Thread(String),
-    /// The event spool that the environment asks for could not be opened.
-    Spool {
-        reason: String,
+    Thread(std::io::ErrorKind),
+    /// The directory of the event spool that the environment asks for could not be made.
+    SpoolDirectory {
+        directory: PathBuf,
+        kind: std::io::ErrorKind,
     },
+    /// The event spool that the environment asks for could not be opened.
+    Spool(SpoolError),
+}
+
+/// What kind of part made the owner fail to start: the closed half of `EngineError::NotStarted`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartCause {
+    Name,
+    Conversation,
+    Spec,
+    Registry,
+    Machine,
+    Table,
+    Setup,
+    Pipeline,
+    Queue,
+    Seat,
+    Purpose,
+    Adapter,
+    FirstMachineMissing,
+    Thread,
+    SpoolDirectory,
+    Spool,
+}
+
+impl StartCause {
+    pub const ALL: [Self; 16] = [
+        Self::Name,
+        Self::Conversation,
+        Self::Spec,
+        Self::Registry,
+        Self::Machine,
+        Self::Table,
+        Self::Setup,
+        Self::Pipeline,
+        Self::Queue,
+        Self::Seat,
+        Self::Purpose,
+        Self::Adapter,
+        Self::FirstMachineMissing,
+        Self::Thread,
+        Self::SpoolDirectory,
+        Self::Spool,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::Conversation => "conversation",
+            Self::Spec => "spec",
+            Self::Registry => "registry",
+            Self::Machine => "machine",
+            Self::Table => "table",
+            Self::Setup => "setup",
+            Self::Pipeline => "pipeline",
+            Self::Queue => "queue",
+            Self::Seat => "seat",
+            Self::Purpose => "purpose",
+            Self::Adapter => "adapter",
+            Self::FirstMachineMissing => "first_machine_missing",
+            Self::Thread => "thread",
+            Self::SpoolDirectory => "spool_directory",
+            Self::Spool => "spool",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+}
+
+impl EngineStartError {
+    /// The closed kind of this error, for a refusal that crosses the wire.
+    pub fn cause(&self) -> StartCause {
+        match self {
+            Self::Name(_) => StartCause::Name,
+            Self::Conversation(_) => StartCause::Conversation,
+            Self::Spec(_) => StartCause::Spec,
+            Self::Registry(_) => StartCause::Registry,
+            Self::Machine(_) => StartCause::Machine,
+            Self::Table(_) => StartCause::Table,
+            Self::Setup(_) => StartCause::Setup,
+            Self::Pipeline(_) => StartCause::Pipeline,
+            Self::Queue(_) => StartCause::Queue,
+            Self::Seat(_) => StartCause::Seat,
+            Self::Purpose(_) => StartCause::Purpose,
+            Self::Adapter(_) => StartCause::Adapter,
+            Self::FirstMachineMissing(_) => StartCause::FirstMachineMissing,
+            Self::Thread(_) => StartCause::Thread,
+            Self::SpoolDirectory { .. } => StartCause::SpoolDirectory,
+            Self::Spool(_) => StartCause::Spool,
+        }
+    }
 }
 
 impl fmt::Display for EngineStartError {
@@ -161,10 +259,13 @@ impl fmt::Display for EngineStartError {
             Self::FirstMachineMissing(machine) => {
                 write!(formatter, "the starting machine {machine} is not enabled")
             }
-            Self::Thread(message) => write!(formatter, "the owner thread did not start: {message}"),
-            Self::Spool { reason } => {
-                write!(formatter, "the event spool cannot be opened: {reason}")
-            }
+            Self::Thread(kind) => write!(formatter, "the owner thread did not start ({kind})"),
+            Self::SpoolDirectory { directory, kind } => write!(
+                formatter,
+                "the event spool's directory {} cannot be made ({kind})",
+                directory.display()
+            ),
+            Self::Spool(error) => write!(formatter, "the event spool cannot be opened: {error}"),
         }
     }
 }
@@ -196,6 +297,7 @@ start_error_from!(
     SeatError => Seat,
     PurposeError => Purpose,
     AdapterError => Adapter,
+    SpoolError => Spool,
 );
 
 /// For each machine, the actions a seat can send it: the stand-in for the action registry.
@@ -267,7 +369,7 @@ pub fn dev_machines(first_scene: SceneId) -> Result<Machines, EngineStartError> 
 pub fn story_machines(first_scene: SceneId) -> Result<Machines, EngineStartError> {
     let lobby = LobbyMachine::new(first_scene)?;
     let beat = AuthoredBeat::new(DEV_BEAT, DEV_CHECK)?;
-    let explore = ExploreMachine::followed_by(beat, "dialogue")?;
+    let explore = ExploreMachine::followed_by(beat, df_table::dialogue::MACHINE_ID)?;
     let conversation = Conversation::new(
         STORY_SPEAKER,
         STORY_OPENING,

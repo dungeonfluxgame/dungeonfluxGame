@@ -1,9 +1,9 @@
-use crate::plate_buffer::{
-    Delivery, GenerationRegression, PlayoutBuffer, RejectReason, StageMoment, StepAction,
+use crate::plate::buffer::{
+    Delivery, GenerationRegressionError, PlateRejectError, PlayoutBuffer, StageMoment, StepAction,
     WaitReason,
 };
+use crate::plate::timing::PLATE_DISSOLVE_MINIMUM_MS;
 use crate::plate_fixtures_tests::{SCENE, World, job, market, ready_plate, scene, timing};
-use crate::plate_timing::PLATE_DISSOLVE_MINIMUM_MS;
 
 const INTERVAL_MS: u64 = 15_000;
 const READING_MS: u64 = 3_000;
@@ -301,12 +301,12 @@ fn a_plate_of_another_scene_is_refused_and_never_shown() {
     let mut world = market();
     let mut buffer = buffer(&world);
     world.enter_scene(11);
-    let other = crate::plate_job::PlateJob::capture(
-        crate::plate_job::PlateJobId::new(1),
-        crate::plate_job::JobCause::Tick,
+    let other = crate::plate::job::PlateJob::capture(
+        crate::plate::job::PlateJobId::new(1),
+        crate::plate::job::JobReason::Tick,
         0,
         &world.snapshot(),
-        &crate::scene_plan_brief::SceneBrief::new(
+        &crate::scene_plan::brief::SceneBrief::new(
             scene(11),
             crate::plate_fixtures_tests::display_name("Back room"),
         ),
@@ -314,7 +314,7 @@ fn a_plate_of_another_scene_is_refused_and_never_shown() {
     .expect("a job");
     assert_eq!(
         buffer.deliver(ready_plate(other, 10)),
-        Delivery::Rejected(RejectReason::WrongScene)
+        Delivery::Rejected(PlateRejectError::WrongScene)
     );
     assert_eq!(buffer.stats().rejected_wrong_scene, 1);
     assert_eq!(
@@ -336,7 +336,7 @@ fn a_plate_of_an_earlier_generation_is_stored_as_late_and_never_shown() {
         .expect("moves forward");
     assert_eq!(
         buffer.deliver(ready_plate(old, 10)),
-        Delivery::Rejected(RejectReason::StaleGeneration)
+        Delivery::Rejected(PlateRejectError::StaleGeneration)
     );
     assert_eq!(buffer.stats().rejected_stale_generation, 1);
     let step = buffer.step(20, StageMoment::LineBoundary, READING_MS);
@@ -388,17 +388,24 @@ fn the_buffer_never_goes_back_to_an_older_generation() {
         .expect("moves forward");
     assert_eq!(
         buffer.focus_changed(scene(SCENE), first),
-        Err(GenerationRegression {
+        Err(GenerationRegressionError {
             current: second,
             requested: first
         })
     );
+    let refused = buffer
+        .focus_changed(scene(11), second)
+        .expect_err("the same generation is not after the screen's");
     assert_eq!(
-        buffer.focus_changed(scene(11), second),
-        Err(GenerationRegression {
+        refused,
+        GenerationRegressionError {
             current: second,
             requested: second
-        })
+        }
+    );
+    assert_eq!(
+        refused.to_string(),
+        format!("generation {second} is not after the screen's generation {second}")
     );
     assert_eq!(buffer.scene(), scene(11));
 }
@@ -416,7 +423,7 @@ fn a_plate_older_than_the_one_on_screen_is_refused() {
     let late = ready_plate(job(&world, 1, 0), 200);
     assert_eq!(
         buffer.deliver(late),
-        Delivery::Rejected(RejectReason::OlderThanShown)
+        Delivery::Rejected(PlateRejectError::OlderThanShown)
     );
     assert_eq!(buffer.stats().rejected_older_than_shown, 1);
     assert_eq!(buffer.current().expect("unchanged").job().get(), 2);

@@ -22,23 +22,29 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::Engine;
 use df_playground::media::{MediaEntry, MediaKind, content_type, media_kind};
 use df_playground::scene::SceneChange;
 use df_table::event::RejectionCause;
 use futures_util::{Stream, StreamExt};
+use tokio::sync::mpsc::Sender;
+use tokio::task::JoinHandle;
 
-use crate::media_ingest::{IngestRefusal, MediaLimits};
+use crate::dev_http::parse_body;
+use crate::limits::UPLOAD_PIECE_BYTES;
+use crate::media_ingest::{IngestError, MediaLimits};
 pub use crate::media_ingest::{
     MAXIMUM_MEDIA_BYTES, MAXIMUM_MEDIA_FILES, MAXIMUM_UPLOAD_BODY_BYTES, MAXIMUM_VIDEO_DURATION,
     video_limits_text,
 };
 use crate::media_range::{ByteSpan, RangeRequest, parse_range};
-use crate::media_store::{AddFailure, ingest_upload};
+use crate::media_store::{AddError, Added, ingest_upload};
 use crate::playground::{
-    FileProblem, PlaygroundFiles, done, playground_line, problem_from, refused, reject_malformed,
+    FileError, PlaygroundFiles, done, playground_line, refuse_file, refused, reject_body,
+    run_file_task,
 };
 use crate::state::AppState;
-use crate::wire::{MediaRemove, route};
+use crate::wire::{MediaAdd, MediaRemove, path};
 
 const MEDIA_DIRECTORY: &str = "media";
 /// Bytes of a file read and sent at a time: the most of a file the host holds for one answer.
@@ -53,22 +59,22 @@ pub fn media_directory(files: &PlaygroundFiles) -> PathBuf {
 }
 
 /// The files in the library, sorted by name. A missing directory is an empty library.
-pub fn media_entries(directory: &Path) -> Result<Vec<MediaEntry>, FileProblem> {
+pub fn media_entries(directory: &Path) -> Result<Vec<MediaEntry>, FileError> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(problem_from(&error)),
+        Err(error) => return Err(error.into()),
     };
     let mut found = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| problem_from(&error))?;
+        let entry = entry?;
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
         let Some(kind) = media_kind(&name) else {
             continue;
         };
-        let metadata = entry.metadata().map_err(|error| problem_from(&error))?;
+        let metadata = entry.metadata()?;
         if metadata.is_file() {
             found.push(MediaEntry {
                 name,
@@ -143,14 +149,11 @@ pub fn media_problem(change: &SceneChange, entries: &[MediaEntry]) -> Option<Str
 /// A value that changes when the file does, so a page can ask whether it has the current one. A
 /// file whose modification time cannot be read has no such value, and the answer says so: a
 /// made-up value would let a replaced file of the same size answer 304 with stale bytes.
-fn entity_tag(metadata: &std::fs::Metadata) -> Result<String, FileProblem> {
+fn entity_tag(metadata: &std::fs::Metadata) -> Result<String, FileError> {
     let modified = metadata
-        .modified()
-        .map_err(|error| {
-            FileProblem::Unreadable(format!("its modification time cannot be read: {error}"))
-        })?
+        .modified()?
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| FileProblem::Unreadable("its modification time is before 1970".to_owned()))?
+        .map_err(|_| FileError::ModifiedBeforeEpoch)?
         .as_nanos();
     Ok(format!("\"{:x}-{:x}\"", metadata.len(), modified))
 }
@@ -188,12 +191,11 @@ enum Payload {
 
 impl Payload {
     /// The `length` bytes of `file` from `start`, or just `length` for a `HEAD`. Nothing is read.
-    fn of(mut file: File, start: u64, length: u64, head: bool) -> Result<Self, FileProblem> {
+    fn of(mut file: File, start: u64, length: u64, head: bool) -> Result<Self, FileError> {
         if head {
             return Ok(Self::Withheld { length });
         }
-        file.seek(SeekFrom::Start(start))
-            .map_err(|error| problem_from(&error))?;
+        file.seek(SeekFrom::Start(start))?;
         Ok(Self::Stream { file, length })
     }
 
@@ -291,14 +293,14 @@ fn serve_file(
     conditions: &Conditions,
     head: bool,
     limits: &MediaLimits,
-) -> Result<Served, FileProblem> {
-    let metadata = file.metadata().map_err(|error| problem_from(&error))?;
+) -> Result<Served, FileError> {
+    let metadata = file.metadata()?;
     if !metadata.is_file() {
-        return Err(FileProblem::NotFound);
+        return Err(FileError::NotFound);
     }
     let file_bytes = metadata.len();
     if file_bytes > limits.maximum_file_bytes {
-        return Err(FileProblem::TooLarge {
+        return Err(FileError::TooLarge {
             maximum_bytes: limits.maximum_file_bytes,
         });
     }
@@ -326,11 +328,11 @@ fn open_media(
     name: &str,
     conditions: &Conditions,
     head: bool,
-) -> Result<Served, FileProblem> {
+) -> Result<Served, FileError> {
     if media_kind(name).is_none() {
-        return Err(FileProblem::BadName);
+        return Err(FileError::InvalidName);
     }
-    let file = File::open(directory.join(name)).map_err(|error| problem_from(&error))?;
+    let file = File::open(directory.join(name))?;
     serve_file(file, conditions, head, &MediaLimits::DEFAULT)
 }
 
@@ -393,33 +395,27 @@ async fn media_file(
     let head = method == Method::HEAD;
     let served = {
         let name = name.clone();
-        tokio::task::spawn_blocking(move || open_media(&directory, &name, &conditions, head))
-            .await
-            .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())))
+        run_file_task(move || open_media(&directory, &name, &conditions, head)).await
     };
     match served {
         Ok(served) => served_response(served, content_type(&name)),
-        Err(problem) => {
-            if matches!(problem, FileProblem::Unreadable(_)) {
+        Err(error) => {
+            if error.status().is_server_error() {
                 state.record_line(playground_line(
                     "media_unreadable",
                     &[("name", name.clone())],
                 ));
-                state.echo_new_lines();
             }
-            refused(problem.status(), problem.message())
+            refuse_file(error)
         }
     }
 }
 
 async fn media_list(State(state): State<Arc<AppState>>) -> Response {
     let directory = media_directory(state.playground().files());
-    let listed = tokio::task::spawn_blocking(move || media_entries(&directory))
-        .await
-        .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
-    match listed {
+    match run_file_task(move || media_entries(&directory)).await {
         Ok(entries) => Json(entries).into_response(),
-        Err(problem) => refused(problem.status(), problem.message()),
+        Err(error) => refuse_file(error),
     }
 }
 
@@ -441,11 +437,11 @@ fn record_malformed(state: &AppState) {
     ));
 }
 
-fn refusal_response(state: &AppState, refusal: &IngestRefusal) -> Response {
-    if matches!(refusal, IngestRefusal::MalformedRequest(_)) {
+fn refuse_add(state: &AppState, error: &AddError) -> Response {
+    if matches!(error, AddError::Ingest(IngestError::InvalidRequest(_))) {
         record_malformed(state);
     }
-    refused(refusal.status(), refusal.message())
+    refused(error.status(), error.to_string())
 }
 
 /// Reads the request body as it arrives and hands it to the thread that stages the file. After
@@ -454,14 +450,13 @@ fn refusal_response(state: &AppState, refusal: &IngestRefusal) -> Response {
 async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body: Body) -> Response {
     let limits = MediaLimits::DEFAULT;
     if declared_length(&headers).is_some_and(|length| length > limits.maximum_upload_body_bytes()) {
-        let refusal = IngestRefusal::TooLarge {
+        let error = AddError::Ingest(IngestError::TooLarge {
             maximum_bytes: limits.maximum_file_bytes,
-        };
-        return refusal_response(&state, &refusal);
+        });
+        return refuse_add(&state, &error);
     }
     let directory = media_directory(state.playground().files());
-    let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(UPLOAD_QUEUE_PIECES);
-    let worker = tokio::task::spawn_blocking(move || ingest_upload(receiver, &directory, &limits));
+    let (sender, worker) = start_staging(directory, limits);
     let mut pieces = body.into_data_stream();
     let mut received = 0_u64;
     let mut worker_listening = true;
@@ -475,10 +470,7 @@ async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body:
         }
     }
     drop(sender);
-    let added = worker
-        .await
-        .unwrap_or_else(|error| Err(AddFailure::File(FileProblem::Unreadable(error.to_string()))));
-    let response = match added {
+    match finish_staging(worker).await {
         Ok(added) => {
             state.record_line(playground_line(
                 "media_add",
@@ -489,17 +481,61 @@ async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body:
             ));
             done(&state)
         }
-        Err(AddFailure::Refused(refusal)) => refusal_response(&state, &refusal),
-        Err(AddFailure::File(problem)) => refused(problem.status(), problem.message()),
-    };
-    state.echo_new_lines();
-    response
+        Err(error) => refuse_add(&state, &error),
+    }
+}
+
+/// Starts the thread that stages one add into `directory`; the add request is sent to it in
+/// pieces through the returned sender, and dropping the sender ends the request.
+fn start_staging(
+    directory: PathBuf,
+    limits: MediaLimits,
+) -> (Sender<Bytes>, JoinHandle<Result<Added, AddError>>) {
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(UPLOAD_QUEUE_PIECES);
+    let worker = tokio::task::spawn_blocking(move || ingest_upload(receiver, &directory, &limits));
+    (sender, worker)
+}
+
+/// The staging thread's answer; a thread that stopped without one is `FileError::Stopped`.
+async fn finish_staging(worker: JoinHandle<Result<Added, AddError>>) -> Result<Added, AddError> {
+    worker
+        .await
+        .unwrap_or(Err(AddError::File(FileError::Stopped)))
+}
+
+/// Stores `bytes` as `file_name` in the library at `directory` through the same staged path and
+/// add envelope as `media add`, encoded and sent in pieces, so the picture is never held twice.
+pub(crate) async fn store_bytes(
+    directory: PathBuf,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<Added, AddError> {
+    // A name always writes as a JSON string; the mapping only keeps the path panic-free.
+    let (prefix, suffix) = MediaAdd::streamed_ends(file_name)
+        .map_err(|_| AddError::File(FileError::Io(std::io::ErrorKind::InvalidData)))?;
+    let (sender, worker) = start_staging(directory, MediaLimits::DEFAULT);
+    // A send fails once the staging thread has given up (a refusal); its answer says why, so the
+    // sending simply stops.
+    let mut open = sender.send(Bytes::from(prefix)).await.is_ok();
+    for piece in bytes.chunks(UPLOAD_PIECE_BYTES) {
+        if !open {
+            break;
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(piece);
+        open = sender.send(Bytes::from(encoded)).await.is_ok();
+    }
+    if open {
+        // The result of the last send is read through the worker's answer below.
+        let _ = sender.send(Bytes::from_static(suffix.as_bytes())).await;
+    }
+    drop(sender);
+    finish_staging(worker).await
 }
 
 async fn remove_media(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    let request: MediaRemove = match serde_json::from_slice(&body) {
+    let request: MediaRemove = match parse_body(&body) {
         Ok(request) => request,
-        Err(error) => return reject_malformed(&state, &error),
+        Err(error) => return reject_body(&state, &error),
     };
     if media_kind(&request.name).is_none() {
         return refused(
@@ -507,39 +543,33 @@ async fn remove_media(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
             format!("'{}' is not a media name", request.name),
         );
     }
-    let path = media_directory(state.playground().files()).join(&request.name);
-    let removed = tokio::task::spawn_blocking(move || std::fs::remove_file(path))
-        .await
-        .unwrap_or_else(|error| Err(std::io::Error::other(error.to_string())));
-    let response = match removed {
+    let media_path = media_directory(state.playground().files()).join(&request.name);
+    let removed =
+        run_file_task(move || std::fs::remove_file(media_path).map_err(FileError::from)).await;
+    match removed {
         Ok(()) => {
             state.record_line(playground_line("media_remove", &[("name", request.name)]));
             done(&state)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => refused(
+        Err(FileError::NotFound) => refused(
             StatusCode::BAD_REQUEST,
             format!("there is no media '{}'", request.name),
         ),
-        Err(error) => {
-            let problem = problem_from(&error);
-            refused(problem.status(), problem.message())
-        }
-    };
-    state.echo_new_lines();
-    response
+        Err(error) => refuse_file(error),
+    }
 }
 
 /// The media routes: list and fetch (GET and HEAD), add and remove (POST). The add route reads
-/// its own body, up to `MAXIMUM_UPLOAD_BODY_BYTES`; the router-wide 64 KiB limit does not cover it.
+/// its own body, up to `MAXIMUM_UPLOAD_BODY_BYTES`; the router-wide `MAXIMUM_REQUEST_BYTES` limit
+/// does not cover it.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route(route::PLAYGROUND_MEDIA_LIST, get(media_list))
-        .route(route::PLAYGROUND_MEDIA_FILE, get(media_file))
-        .route(route::DEV_MEDIA_ADD, post(add_media))
-        .route(route::DEV_MEDIA_REMOVE, post(remove_media))
+        .route(path::PLAYGROUND_MEDIA_LIST, get(media_list))
+        .route(path::PLAYGROUND_MEDIA_FILE, get(media_file))
+        .route(path::DEV_MEDIA_ADD, post(add_media))
+        .route(path::DEV_MEDIA_REMOVE, post(remove_media))
         .with_state(state)
 }
 
 #[cfg(test)]
-#[path = "media_library_tests.rs"]
-mod tests;
+mod media_library_tests;

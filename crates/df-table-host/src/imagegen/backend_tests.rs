@@ -1,12 +1,13 @@
-//! The preconditions of the Codex backend: each one fails with its own typed cause and says what
+//! The preconditions of the Codex backend: each one fails with its own typed error and says what
 //! the owner must do. Nothing here starts Codex or opens a login file.
 
 use std::path::{Path, PathBuf};
 
+use axum::http::StatusCode;
 use tempfile::TempDir;
 
-use super::backend::{CodexBackend, CodexSettings, ImageBackend, backend_for};
-use super::model::{BackendError, RefusalCause};
+use super::backend::{BackendError, CodexBackend, CodexSettings, ImageBackend, backend_for};
+use crate::locate::IoCause;
 
 /// A signed-in-looking home: the login file is only looked for, so its content is irrelevant.
 fn home_with_login(root: &Path) -> PathBuf {
@@ -39,8 +40,8 @@ fn check(settings: CodexSettings) -> Result<(), BackendError> {
     CodexBackend::new(settings).check()
 }
 
-fn cause(settings: CodexSettings) -> RefusalCause {
-    check(settings).expect_err("refused").cause()
+fn refused(settings: CodexSettings) -> BackendError {
+    check(settings).expect_err("refused")
 }
 
 #[test]
@@ -54,17 +55,13 @@ fn a_home_with_a_login_and_an_executable_passes() {
 }
 
 #[test]
-fn no_codex_home_is_not_signed_in_and_says_how_to_start_the_host() {
+fn no_codex_home_is_refused_and_says_how_to_start_the_host() {
     let root = TempDir::new().expect("makes a directory");
     let mut without = settings(root.path());
     without.codex_home = None;
-    let error = check(without).expect_err("refused");
-    assert_eq!(error.cause(), RefusalCause::NotSignedIn);
-    assert!(
-        error.message().contains("CODEX_HOME"),
-        "{}",
-        error.message()
-    );
+    let error = refused(without);
+    assert_eq!(error, BackendError::NoCodexHome);
+    assert!(error.to_string().contains("CODEX_HOME="), "{error}");
 }
 
 #[test]
@@ -74,18 +71,14 @@ fn a_home_without_a_login_file_says_to_run_codex_login() {
     let empty = root.path().join("empty-home");
     std::fs::create_dir_all(&empty).expect("makes a directory");
     signed_out.codex_home = Some(empty.clone());
-    let error = check(signed_out).expect_err("refused");
-    assert_eq!(error.cause(), RefusalCause::NotSignedIn);
-    assert!(
-        error.message().contains("codex login"),
-        "{}",
-        error.message()
-    );
-    assert!(error.message().contains(&empty.display().to_string()));
+    let error = refused(signed_out);
+    assert_eq!(error, BackendError::NoLogin { home: empty });
+    assert!(error.to_string().contains("codex login"), "{error}");
 
     let mut missing = settings(root.path());
-    missing.codex_home = Some(root.path().join("no-such-home"));
-    assert_eq!(cause(missing), RefusalCause::NotSignedIn);
+    let nowhere = root.path().join("no-such-home");
+    missing.codex_home = Some(nowhere.clone());
+    assert_eq!(refused(missing), BackendError::NoLogin { home: nowhere });
 }
 
 #[test]
@@ -94,26 +87,33 @@ fn a_home_with_a_config_file_is_not_the_dedicated_home() {
     let with_config = settings(root.path());
     let home = with_config.codex_home.clone().expect("a home");
     std::fs::write(home.join("config.toml"), b"model = \"x\"").expect("writes");
-    assert_eq!(cause(with_config), RefusalCause::NotConfigured);
+    assert_eq!(refused(with_config), BackendError::HomeHasConfig { home });
 }
 
 #[test]
-fn a_missing_executable_is_codex_missing() {
+fn a_missing_executable_is_refused_by_where_it_was_looked_for() {
     let root = TempDir::new().expect("makes a directory");
     let mut explicit = settings(root.path());
-    explicit.executable = Some(root.path().join("nowhere").join("codex.exe"));
-    assert_eq!(cause(explicit), RefusalCause::CodexMissing);
+    let nowhere = root.path().join("nowhere").join("codex.exe");
+    explicit.executable = Some(nowhere.clone());
+    assert_eq!(
+        refused(explicit),
+        BackendError::ExecutableNotAFile { path: nowhere }
+    );
 
     let mut relative = settings(root.path());
     relative.executable = Some(PathBuf::from("codex"));
-    assert_eq!(cause(relative), RefusalCause::CodexMissing);
+    assert_eq!(
+        refused(relative),
+        BackendError::ExecutableNotAFile {
+            path: PathBuf::from("codex")
+        }
+    );
 
     let mut not_on_path = settings(root.path());
     not_on_path.executable = None;
     not_on_path.path_directories = vec![root.path().join("empty-bin")];
-    let error = check(not_on_path).expect_err("refused");
-    assert_eq!(error.cause(), RefusalCause::CodexMissing);
-    assert!(error.message().contains("PATH"));
+    assert_eq!(refused(not_on_path), BackendError::ExecutableNotOnPath);
 }
 
 #[test]
@@ -138,20 +138,51 @@ fn a_scratch_folder_inside_a_repository_or_an_agents_folder_is_refused() {
     std::fs::create_dir_all(repository.join(".git")).expect("makes a directory");
     let mut inside_repository = settings(root.path());
     inside_repository.work_root = repository.join("jobs");
-    let error = check(inside_repository).expect_err("refused");
-    assert_eq!(error.cause(), RefusalCause::NotConfigured);
-    assert!(error.message().contains("DF_IMAGERY_CODEX_WORKDIR"));
+    assert_eq!(
+        refused(inside_repository),
+        BackendError::WorkRootUnfit {
+            path: repository.join("jobs"),
+            folder: repository.clone(),
+        }
+    );
 
     let instructions = root.path().join("instructions");
     std::fs::create_dir_all(&instructions).expect("makes a directory");
     std::fs::write(instructions.join("AGENTS.md"), b"# rules").expect("writes");
     let mut inside_agents = settings(root.path());
     inside_agents.work_root = instructions.join("deeper").join("jobs");
-    assert_eq!(cause(inside_agents), RefusalCause::NotConfigured);
+    assert_eq!(
+        refused(inside_agents),
+        BackendError::WorkRootUnfit {
+            path: instructions.join("deeper").join("jobs"),
+            folder: instructions.clone(),
+        }
+    );
 
     let mut relative = settings(root.path());
     relative.work_root = PathBuf::from("jobs");
-    assert_eq!(cause(relative), RefusalCause::NotConfigured);
+    assert_eq!(
+        refused(relative),
+        BackendError::WorkRootNotAbsolute {
+            path: PathBuf::from("jobs")
+        }
+    );
+}
+
+#[test]
+fn a_scratch_folder_that_cannot_be_made_carries_its_io_error_kind() {
+    let root = TempDir::new().expect("makes a directory");
+    let blocker = root.path().join("blocker");
+    std::fs::write(&blocker, b"a file").expect("writes");
+    let mut below_a_file = settings(root.path());
+    below_a_file.work_root = blocker.join("jobs");
+    let error = refused(below_a_file);
+    let BackendError::WorkRootUnmakeable { path, io_cause } = &error else {
+        panic!("expected an unmakeable folder: {error:?}");
+    };
+    assert_eq!(*path, blocker.join("jobs"));
+    let made = std::fs::create_dir_all(blocker.join("jobs")).expect_err("cannot be made");
+    assert_eq!(*io_cause, IoCause::from_kind(made.kind()));
 }
 
 #[test]
@@ -164,21 +195,94 @@ fn the_backend_is_off_unless_both_switches_say_codex() {
         (Some("fake"), Some("codex-cli")),
         (Some("live"), Some("openai")),
     ] {
-        let chosen = backend_for(
-            mode.map(str::to_owned),
-            backend.map(str::to_owned),
-            settings(root.path()),
-        );
+        let chosen = backend_for(mode, backend, settings(root.path()));
         assert_eq!(chosen.name(), "none", "{mode:?} {backend:?}");
         let error = chosen.check().expect_err("not switched on");
-        assert_eq!(error.cause(), RefusalCause::NotConfigured);
-        assert!(error.message().contains("DF_IMAGERY_MODE=live"));
+        assert_eq!(error, BackendError::NotSwitchedOn);
+        assert!(
+            error.to_string().contains("DF_IMAGERY_MODE=live"),
+            "{error}"
+        );
     }
-    let on = backend_for(
-        Some("live".to_owned()),
-        Some("codex-cli".to_owned()),
-        settings(root.path()),
-    );
+    let on = backend_for(Some("live"), Some("codex-cli"), settings(root.path()));
     assert_eq!(on.name(), "codex-cli");
     on.check().expect("switched on and ready");
+}
+
+#[test]
+fn each_backend_error_answers_the_status_of_its_kind_of_failure() {
+    let unavailable = StatusCode::SERVICE_UNAVAILABLE;
+    for (error, status) in [
+        (BackendError::NotSwitchedOn, unavailable),
+        (
+            BackendError::NoLogin {
+                home: PathBuf::from("home"),
+            },
+            unavailable,
+        ),
+        (BackendError::ExecutableNotOnPath, unavailable),
+        (BackendError::UsageLimited, unavailable),
+        (BackendError::Timeout, StatusCode::GATEWAY_TIMEOUT),
+        (BackendError::Interrupted, StatusCode::BAD_GATEWAY),
+        (
+            BackendError::Refused {
+                detail: "policy".to_owned(),
+            },
+            StatusCode::BAD_GATEWAY,
+        ),
+        (BackendError::Internal, StatusCode::INTERNAL_SERVER_ERROR),
+    ] {
+        assert_eq!(error.status(), status, "{error:?}");
+    }
+}
+
+#[test]
+fn a_backend_error_key_is_its_serde_name_and_it_reads_back() {
+    let errors = [
+        BackendError::NotSwitchedOn,
+        BackendError::ExecutableNotAFile {
+            path: PathBuf::from("codex"),
+        },
+        BackendError::ExecutableNotOnPath,
+        BackendError::ExecutableNotStartable {
+            kind: "not found".to_owned(),
+        },
+        BackendError::NoCodexHome,
+        BackendError::NoLogin {
+            home: PathBuf::from("home"),
+        },
+        BackendError::HomeHasConfig {
+            home: PathBuf::from("home"),
+        },
+        BackendError::WorkRootNotAbsolute {
+            path: PathBuf::from("jobs"),
+        },
+        BackendError::WorkRootUnmakeable {
+            path: PathBuf::from("jobs"),
+            io_cause: IoCause::PermissionDenied,
+        },
+        BackendError::WorkRootUnfit {
+            path: PathBuf::from("jobs"),
+            folder: PathBuf::from("repository"),
+        },
+        BackendError::Unaccepted {
+            detail: "the prompt is too long".to_owned(),
+        },
+        BackendError::Timeout,
+        BackendError::Interrupted,
+        BackendError::UsageLimited,
+        BackendError::Refused {
+            detail: "policy".to_owned(),
+        },
+        BackendError::Unreadable {
+            kind: "not found".to_owned(),
+        },
+        BackendError::Internal,
+    ];
+    for error in errors {
+        let json = serde_json::to_value(&error).expect("serializes");
+        assert_eq!(json["cause"], error.key(), "{json}");
+        let read: BackendError = serde_json::from_value(json).expect("reads back");
+        assert_eq!(read, error);
+    }
 }

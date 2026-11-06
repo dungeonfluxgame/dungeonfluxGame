@@ -53,7 +53,7 @@ fn the_edges_of_every_range_are_accepted() {
     let source = text(
         "\"card\": {\"media\": \"a.png\", \"caption\": null, \"rotation_degrees\": 359, \"slide\": {\"from_percent\": 100, \"to_percent\": 0, \"duration_ms\": 1}},\n    \"camera\": {\"target\": \"a\", \"zoom_percent\": 100, \"duration_ms\": 0},",
         "",
-        "\"music\": {\"media\": \"m.ogg\", \"target\": \"both\", \"volume\": 100, \"looping\": true},",
+        "\"music\": {\"media\": \"m.ogg\", \"target\": \"both\", \"volume_percent\": 100, \"looping\": true},",
         "[{\"id\": \"a\", \"kind\": \"k\", \"label\": \"A\", \"x\": 1, \"y\": 1, \"color\": null, \"shape\": \"circle\", \"width_units\": 1, \"height_units\": 1, \"rotation_degrees\": 0, \"pivot\": {\"x_percent\": 100, \"y_percent\": 0}}]",
     );
     Fixture::parse(&source).expect("reads");
@@ -202,14 +202,14 @@ fn music_louder_than_a_hundred_percent_is_refused() {
     let source = text(
         "",
         "",
-        "\"music\": {\"media\": \"m.ogg\", \"target\": \"both\", \"volume\": 255, \"looping\": false},",
+        "\"music\": {\"media\": \"m.ogg\", \"target\": \"both\", \"volume_percent\": 255, \"looping\": false},",
         "[]",
     );
     let error = refused(&source);
-    assert_eq!(error.line, line_of(&source, "volume"));
+    assert_eq!(error.line, line_of(&source, "volume_percent"));
     assert_eq!(
         error.message,
-        "music.volume: a volume is from 0 to 100 percent, not 255"
+        "music.volume_percent: a volume is from 0 to 100 percent, not 255"
     );
 }
 
@@ -264,7 +264,7 @@ fn the_mistake_nearest_the_top_is_the_one_reported() {
     let source = text(
         "\"card\": {\"media\": \"a.png\", \"caption\": null, \"rotation_degrees\": 400},",
         "",
-        "\"music\": {\"media\": \"m.ogg\", \"target\": \"both\", \"volume\": 255, \"looping\": false},",
+        "\"music\": {\"media\": \"m.ogg\", \"target\": \"both\", \"volume_percent\": 255, \"looping\": false},",
         "[]",
     );
     assert!(
@@ -492,4 +492,35 @@ fn a_column_counts_characters_for_both_kinds_of_mistake() {
         error.column
     );
     assert!(!error.message.contains(" at line "), "{}", error.message);
+}
+
+#[test]
+fn a_bubble_or_loading_percent_a_live_edit_refuses_is_refused_in_a_file_too() {
+    let bubble = text(
+        "\"roleplay\": {\"bubbles\": [{\"speaker\": \"A\", \"line\": \"B\", \"left_percent\": 250, \"top_percent\": 10, \"width_percent\": 10, \"tail_x_percent\": 10, \"tail_y_percent\": 10}]},",
+        "",
+        "",
+        "[]",
+    );
+    let error = refused(&bubble);
+    assert_eq!(error.line, line_of(&bubble, "left_percent"));
+    assert!(
+        error
+            .message
+            .starts_with("tv.roleplay.bubbles[0].left_percent: "),
+        "{}",
+        error.message
+    );
+    let loading = text(
+        "\"loading\": {\"title\": \"T\", \"percent\": 180},",
+        "",
+        "",
+        "[]",
+    );
+    let error = refused(&loading);
+    assert!(
+        error.message.starts_with("tv.loading.percent: "),
+        "{}",
+        error.message
+    );
 }

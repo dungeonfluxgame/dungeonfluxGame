@@ -341,9 +341,10 @@ async fn deferred_queue_preserves_due_hints_and_revokes_only_expired_unsent_clai
     );
     let token = ClaimToken::from_bytes(&[5; 16]).unwrap();
     let early = ClaimCommand::new(owner(), stage.job, stage.stage, 1, token, 10, now + 99).unwrap();
-    assert!(
-        matches!(store.claim(&early).await, Err(ExecutionError::Deferred {not_before_ms}) if not_before_ms == now+100)
-    );
+    assert!(matches!(
+        store.claim(&early).await,
+        Err(ExecutionError::Deferred { not_before_ms }) if not_before_ms == now + 100
+    ));
     let ready =
         ClaimCommand::new(owner(), stage.job, stage.stage, 1, token, 10, now + 100).unwrap();
     store.claim(&ready).await.unwrap();

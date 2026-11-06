@@ -1,8 +1,8 @@
+use super::fixtures::{facts, name};
 use super::purpose::{
     Fallback, Price, PurposeError, PurposeFacts, PurposeSpec, PurposeTable, QueueClass,
     ResourceKind, RetryPolicy, SizeRule,
 };
-use super::tests_support::{facts, name};
 
 #[test]
 fn every_built_in_purpose_has_a_deadline_a_class_and_a_fallback() {
@@ -150,4 +150,23 @@ fn the_backoff_doubles_from_the_initial_and_stops_at_the_maximum() {
 fn the_built_in_lanes_are_unpriced_until_a_lane_sets_a_price() {
     let table = PurposeTable::built_in().expect("valid");
     assert!(table.all().all(|spec| spec.price() == Price::Unpriced));
+}
+
+#[test]
+fn every_closed_purpose_key_is_its_serde_name_and_reads_back() {
+    fn check<T>(all: &[T], key: fn(T) -> &'static str, from_key: fn(&str) -> Option<T>)
+    where
+        T: Copy + PartialEq + std::fmt::Debug + serde::Serialize,
+    {
+        for value in all.iter().copied() {
+            let written = serde_json::to_string(&value).unwrap();
+            assert_eq!(written, format!("\"{}\"", key(value)));
+            assert_eq!(from_key(key(value)), Some(value));
+        }
+        assert_eq!(from_key("not_a_key"), None);
+    }
+
+    check(ResourceKind::ALL, ResourceKind::key, ResourceKind::from_key);
+    check(QueueClass::ALL, QueueClass::key, QueueClass::from_key);
+    check(Fallback::ALL, Fallback::key, Fallback::from_key);
 }

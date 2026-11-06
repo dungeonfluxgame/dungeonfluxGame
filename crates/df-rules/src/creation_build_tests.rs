@@ -11,7 +11,8 @@ fn pairs(build: &Build) -> Vec<(&str, &str)> {
 }
 
 /// A complete build for `species` that `validate_character` admits. `tested` is the one pick a test
-/// varies: the skill and language pairs and the species defaults avoid its value, so no other pick clashes.
+/// varies: the skill and language pairs and the species defaults avoid its value, so no other pick
+/// clashes.
 fn sample(species: HeroSpecies, tested: Option<(&str, &str)>) -> Build {
     let avoid = tested.map(|(_, value)| value);
     let languages: Vec<&str> = STANDARD_LANGUAGES
@@ -269,8 +270,11 @@ fn species_list_names_every_hero_species_and_its_label_is_plain() {
             HeroSpecies::Tiefling => 8,
         }
     }
-    for species in SPECIES {
-        assert_eq!(SPECIES[position(species)].choice_id(), species.choice_id());
+    for species in HeroSpecies::ALL {
+        assert_eq!(
+            HeroSpecies::ALL[position(species)].choice_id(),
+            species.choice_id()
+        );
     }
     assert_eq!(option_label("high-elf"), "High Elf");
     assert_eq!(option_label("sleight-of-hand"), "Sleight of Hand");
@@ -291,14 +295,18 @@ fn listing_ids_match_the_golden_list() {
         "class [class]: fighter-1",
         "background [background]: soldier",
         "array [array]: stalwart vanguard",
-        "skills [skill-1,skill-2]: acrobatics animal-handling history insight persuasion perception survival",
-        "languages [language-1,language-2]: common-sign draconic dwarvish elvish giant gnomish goblin halfling orc",
-        "alignment [alignment]: lawful-good neutral-good chaotic-good lawful-neutral neutral chaotic-neutral",
+        "skills [skill-1,skill-2]: acrobatics animal-handling history insight persuasion \
+            perception survival",
+        "languages [language-1,language-2]: common-sign draconic dwarvish elvish giant gnomish \
+            goblin halfling orc",
+        "alignment [alignment]: lawful-good neutral-good chaotic-good lawful-neutral neutral \
+            chaotic-neutral",
         "gaming-set [gaming-set]: dice dragonchess playing-cards three-dragon-ante",
         "equipment [equipment]: fighter-a-soldier-a",
         "style-masteries [style-masteries]: defense-greatsword-flail-javelin",
         "allied-ties [allied-ties]: join-order",
-        "dragonborn > draconic-ancestry [draconic-ancestry]: black blue brass bronze copper gold green red silver white",
+        "dragonborn > draconic-ancestry [draconic-ancestry]: black blue brass bronze copper gold \
+            green red silver white",
         "elf > elven-lineage [elven-lineage]: drow high-elf wood-elf",
         "elf > keen-senses [keen-senses]: insight perception survival",
         "elf > species-spellcasting [species-spellcasting]: intelligence wisdom charisma",
@@ -306,7 +314,9 @@ fn listing_ids_match_the_golden_list() {
         "gnome > species-spellcasting [species-spellcasting]: intelligence wisdom charisma",
         "goliath > giant-ancestry [giant-ancestry]: cloud fire frost hill stone storm",
         "human > species-size [species-size]: medium small",
-        "human > human-skill [human-skill]: acrobatics animal-handling arcana deception history insight investigation medicine nature perception performance persuasion religion sleight-of-hand stealth survival",
+        "human > human-skill [human-skill]: acrobatics animal-handling arcana deception history \
+            insight investigation medicine nature perception performance persuasion religion \
+            sleight-of-hand stealth survival",
         "human > versatile [versatile]: tough",
         "tiefling > fiendish-legacy [fiendish-legacy]: abyssal chthonic infernal",
         "tiefling > species-size [species-size]: medium small",
@@ -347,7 +357,7 @@ fn every_listed_option_is_accepted_in_some_build() {
             }
         }
     }
-    for species in SPECIES {
+    for species in HeroSpecies::ALL {
         let offer = listing
             .species
             .iter()
@@ -379,7 +389,7 @@ fn every_listed_option_is_accepted_in_some_build() {
 #[test]
 fn accepted_build_equals_validate_character_output() {
     let rules = CreationRules::srd_521();
-    for species in SPECIES {
+    for species in HeroSpecies::ALL {
         let build = sample(species, None);
         let refs = pairs(&build);
         let expected = validate_character(&rules, "Brynn", &refs).expect("sample is admitted");

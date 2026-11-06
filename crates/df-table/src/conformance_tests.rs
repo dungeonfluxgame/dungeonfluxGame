@@ -14,12 +14,12 @@ use crate::envelope::PendingId;
 use crate::explore_tests::{entry_to_the_first_scene, explore_fixture};
 use crate::identity::{MachineId, SeatId};
 use crate::lobby_tests::{FIRST_SCENE, explore_for_neighbour, lobby, lobby_fixture};
+use crate::machine::slot::{LoadError, MachineSlot};
 use crate::machine::{
     CarryItem, Entry, HandOff, InspectReport, Machine, MachineError, MachineInput, MachineReadout,
     MachineSpec, ReadoutError, RequestKey, ResourceRequest, Scope, StateName, StepInput,
     StepOutcome, StepResult, SuspendPolicy,
 };
-use crate::machine_slot::{LoadError, MachineSlot};
 use crate::outcome::{Decline, DeclineCode, Outcome};
 use crate::ports::{Audience, PortName, PurposeName};
 
@@ -377,7 +377,7 @@ impl Machine for Faulty {
                     .state_name(saved)
                     .map_err(|_| LoadError::Malformed {
                         version: saved.schema_version(),
-                        class: crate::machine_slot::ErrorClass::Data,
+                        class: crate::machine::slot::ErrorClass::Data,
                     })?;
                 Ok(saved.clone())
             }

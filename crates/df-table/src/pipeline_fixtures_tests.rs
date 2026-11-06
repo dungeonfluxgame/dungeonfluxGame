@@ -149,7 +149,7 @@ pub(crate) fn phase_of(world: &World) -> String {
 }
 
 /// The saved state of the running machine.
-pub(crate) fn slot_of(world: &World) -> Option<crate::machine_slot::MachineSlot> {
+pub(crate) fn slot_of(world: &World) -> Option<crate::machine::slot::MachineSlot> {
     world
         .table
         .facts()

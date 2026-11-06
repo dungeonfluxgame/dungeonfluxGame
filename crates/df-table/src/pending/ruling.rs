@@ -28,7 +28,7 @@ use crate::listed::listed_enum;
 use crate::ports::{ActionId, RulingAnswer, RulingKey, RulingScope, RulingTier};
 
 /// The schema version of `RulingRecord`.
-pub const RULING_SCHEMA_VERSION: u32 = 1;
+pub(crate) const RULING_SCHEMA_VERSION: u32 = 1;
 
 listed_enum! {
     /// Who made a ruling.

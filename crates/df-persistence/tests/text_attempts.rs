@@ -148,6 +148,7 @@ fn request() -> TextRequest {
         output_name: "narration".to_owned(),
         output_schema: json!({"type": "object", "properties": {"line": {"type": "string"}}}),
         deadline: Duration::from_secs(30),
+        images: Vec::new(),
     }
 }
 

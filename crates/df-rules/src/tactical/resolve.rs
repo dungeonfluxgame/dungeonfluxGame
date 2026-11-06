@@ -13,6 +13,7 @@ pub struct DrawBinding<'a> {
     pub source: &'a RuleReference,
     pub next_ordinal: u32,
 }
+/// What an attack spends from the attacker's turn.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AttackSpend {
     Action,
@@ -33,11 +34,13 @@ pub struct AttackUse {
     /// this never grants an unchosen mastery. Nick spend also requires this opt-in.
     pub use_mastery: bool,
 }
+/// What a Help action aids.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HelpPurpose {
     Attack { ally: u32, target: u32 },
     Stabilize { target: u32 },
 }
+/// How a dying creature was stabilised: a Medicine check or a Healer's Kit use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StabilizationOutcome {
     Medicine {
@@ -50,18 +53,21 @@ pub enum StabilizationOutcome {
         uses_remaining: u8,
     },
 }
+/// A resolved stabilisation attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StabilizationSummary {
     pub helper: u32,
     pub target: u32,
     pub outcome: StabilizationOutcome,
 }
+/// A resolved Help action.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HelpSummary {
     pub helper: u32,
     pub ally: u32,
     pub target: u32,
 }
+/// The kind of d20 Test a reroll applied to.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum D20Test {
     Attack,
@@ -70,6 +76,7 @@ pub enum D20Test {
     Initiative,
     SavingThrow,
 }
+/// One Halfling Luck reroll: who rerolled which test, the discarded face and the new one.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct D20Reroll {
     pub actor: u32,
@@ -77,6 +84,7 @@ pub struct D20Reroll {
     pub original: u32,
     pub replacement: u32,
 }
+/// One action a combatant takes on its turn or as a reaction.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Action {
     Move(Vec<Cell>),
@@ -110,7 +118,8 @@ pub enum Action {
     },
     EndTurn,
     DeathSave,
-    /// SRD Short Rest: this slice spends no Hit Dice; Fighters starting with at least 1 HP recharge one use.
+    /// SRD Short Rest: this slice spends no Hit Dice; Fighters starting with at least 1 HP recharge
+    /// one use.
     ShortRest {
         elapsed_seconds: u32,
     },
@@ -124,6 +133,7 @@ pub enum Action {
     DoffShield,
     PickUpWeapon(Weapon),
 }
+/// A source of Advantage or Disadvantage carried on an attack outcome.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AttackReason {
     LongRange,
@@ -157,7 +167,8 @@ pub struct AttackSummary {
     pub modifier: i16,
     pub advantage: Vec<AttackReason>,
     pub disadvantage: Vec<AttackReason>,
-    /// -1 disadvantage, 0 normal, +1 advantage; faces are post-reroll, and Resolution.rerolls records Halfling Luck draws.
+    /// -1 disadvantage, 0 normal, +1 advantage; faces are post-reroll, and Resolution.rerolls
+    /// records Halfling Luck draws.
     pub roll_mode: i8,
     pub faces: Vec<u32>,
     pub selected: u32,
@@ -450,7 +461,8 @@ pub(crate) fn take_d20(
     rerolls: &mut Vec<D20Reroll>,
 ) -> Result<u32, RuleError> {
     let original = draws.take(20)?;
-    // SRD 5.2.1 p. 86: "When you roll a 1 on the d20 of a D20 Test, you can reroll the die, and you must use the new roll."
+    // SRD 5.2.1 p. 86: "When you roll a 1 on the d20 of a D20 Test, you can reroll the die, and you
+    // must use the new roll."
     if original == 1
         && spec
             .species
@@ -841,14 +853,15 @@ fn help_attack(
     {
         return Err(RuleError::InvalidTarget);
     }
-    // SRD 5.2.1 p. 182: "The creature you aid has Advantage on the next attack roll it makes against a creature within 5 feet of you."
+    // SRD 5.2.1 p. 182: "The creature you aid has Advantage on the next attack roll it makes
+    // against a creature within 5 feet of you."
     if helper_actor.distance_to(target_actor) > 5 {
         return Err(RuleError::OutOfRange);
     }
     if helper_actor.budget().action_used && helper_actor.additional_actions == 0 {
         return Err(RuleError::ActionSpent);
     }
-    if battle.helped_attacks.len() >= 64 {
+    if battle.helped_attacks.len() >= super::state::MAXIMUM_HELP_EFFECTS {
         return Err(RuleError::Capacity);
     }
     let helper_turn_count = helper_actor.turn_count;
@@ -1538,7 +1551,8 @@ fn attack(
             }
         }
         actor.sap.clear();
-        // Vex applies to the next attack against its marked creature, not the next arbitrary target.
+        // Vex applies to the next attack against its marked creature, not the next arbitrary
+        // target.
         actor.vex.retain(|(marked, _)| *marked != target);
         if hit && usage.savage_attacker {
             actor.savage_used = true;
@@ -1792,7 +1806,8 @@ pub(super) fn apply_damage(
         drop_held(actor)?;
         return Ok(());
     }
-    // SRD 5.2.1 p. 86: "When you are reduced to 0 Hit Points but not killed outright, you can drop to 1 Hit Point instead."
+    // SRD 5.2.1 p. 86: "When you are reduced to 0 Hit Points but not killed outright, you can drop
+    // to 1 Hit Point instead."
     if hp > 0
         && actor.spec.kind == CreatureKind::Hero
         && actor.spec.relentless_endurance_available

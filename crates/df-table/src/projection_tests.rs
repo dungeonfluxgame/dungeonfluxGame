@@ -4,11 +4,11 @@ use serde_json::{Value, json};
 
 use crate::effects::TableEffect;
 use crate::identity::{EvidenceRef, FactId, RecoveryEpoch, SessionRevision, TableId, TableScope};
+use crate::limits::PHONE_NARRATION_LINES;
 use crate::machine::MachineReadout;
 use crate::outcome::{Decline, DeclineCode, OutcomeKind};
 use crate::ports::{ActionId, Audience};
 use crate::private_data::{LengthClass, Narration, Secret};
-use crate::projection::bounds::PHONE_NARRATION_LINES;
 use crate::projection::{
     AttachmentError, AttachmentLimits, AttachmentVersion, Attachments, AudienceKind,
     AudienceProjection, NonEmptyText, ProjectionError, ProjectionStatus, StatusKind, StoryLine,
@@ -1182,9 +1182,6 @@ fn every_attachment_error_reads_as_a_distinct_sentence() {
     let sentences: BTreeSet<_> = errors.iter().map(ToString::to_string).collect();
     assert_eq!(sentences.len(), errors.len());
     let defaults = AttachmentLimits::default();
-    assert_eq!(
-        defaults.story_entries,
-        crate::projection::bounds::MAXIMUM_STORY_ENTRIES
-    );
-    assert_eq!(defaults.seats, crate::owner_queue::MAXIMUM_SEATS);
+    assert_eq!(defaults.story_entries, crate::limits::MAXIMUM_STORY_ENTRIES);
+    assert_eq!(defaults.seats, crate::limits::MAXIMUM_SEATS);
 }

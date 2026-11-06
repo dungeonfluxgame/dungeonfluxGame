@@ -2,12 +2,12 @@ use df_table::outcome::{DeclineCode, OutcomeKind};
 use df_table::owner_queue::Lane;
 use df_table::private_data::LengthClass;
 
-use super::report::{CommitDisposition, EngineError};
-use super::request::{AudienceSpec, ForceRequest, InputBody, QueueControl};
-use super::tests_support::{
+use super::fixtures::{
     FailingInterpreter, RigOptions, count_lines, lines, proposal, request, rig, rig_customised,
     rig_with, tap, text, timer, with_operation,
 };
+use super::report::{CommitDisposition, EngineError};
+use super::request::{AudienceSpec, ForceRequest, InputBody, ProposalSource, QueueControl};
 
 #[tokio::test]
 async fn an_input_goes_through_the_queue_runs_the_lobby_and_the_projection_shows_the_result() {
@@ -144,8 +144,7 @@ async fn a_finished_lobby_hands_the_table_to_explore_and_explore_hands_it_back_i
 }
 
 #[tokio::test]
-async fn a_typed_line_that_is_one_of_the_rules_choices_is_interpreted_and_any_other_needs_clarifying()
- {
+async fn a_typed_line_that_is_a_rules_choice_is_interpreted_and_any_other_needs_clarifying() {
     let rig = rig();
     for seat in [1, 2] {
         rig.handle
@@ -224,7 +223,7 @@ async fn a_duplicate_operation_runs_once_and_learns_where_the_first_stands() {
         .expect("answered");
 
     let refusal = second.submission.refusal.expect("the duplicate is refused");
-    assert_eq!(refusal.cause, "duplicate");
+    assert_eq!(refusal.cause.key(), "duplicate");
     let first_status = refusal
         .first_status
         .expect("it says where the first stands");
@@ -251,7 +250,7 @@ async fn a_seat_that_sends_faster_than_its_bucket_refills_is_rate_limited_with_a
     let fourth = rig.handle.submit(text(1, "x")).await.expect("answered");
 
     let refusal = fourth.submission.refusal.expect("refused");
-    assert_eq!(refusal.cause, "rate_limited");
+    assert_eq!(refusal.cause.key(), "rate_limited");
     assert!(refusal.retry_after_ms.is_some_and(|retry| retry > 0));
     assert_eq!(count_lines(&rig.log, "code=rate_limited"), 1);
 }
@@ -272,7 +271,7 @@ async fn a_seat_with_three_inputs_waiting_is_told_the_table_is_busy_and_others_a
     let other = rig.handle.submit(tap(2, "join")).await.expect("answered");
 
     assert_eq!(
-        fourth.submission.refusal.expect("refused").cause,
+        fourth.submission.refusal.expect("refused").cause.key(),
         "table_busy"
     );
     assert!(other.submission.refusal.is_none());
@@ -293,7 +292,7 @@ async fn a_seat_that_is_not_at_the_session_is_refused_and_the_refusal_is_listed(
     let reply = rig.handle.submit(tap(99, "join")).await.expect("answered");
 
     assert_eq!(
-        reply.submission.refusal.expect("refused").cause,
+        reply.submission.refusal.expect("refused").cause.key(),
         "unknown_seat"
     );
     assert_eq!(
@@ -323,7 +322,7 @@ async fn lanes_are_served_controls_then_engine_then_timers_then_player_and_queue
         .await
         .expect("answered");
     rig.handle
-        .submit(proposal("npc", "guard"))
+        .submit(proposal(ProposalSource::Npc, "guard"))
         .await
         .expect("answered");
     rig.handle
@@ -396,16 +395,21 @@ async fn a_machine_that_is_not_addressed_declines_what_it_does_not_handle_with_i
 #[tokio::test]
 async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_and_saves_it() {
     let rig = rig();
-    assert!(matches!(
-        rig.handle
-            .force(ForceRequest {
-                machine: "explore".to_owned(),
-                state: "presenting".to_owned(),
-                payload: None
-            })
-            .await,
-        Err(EngineError::ForceRefused { .. })
-    ));
+    let closed = rig
+        .handle
+        .force(ForceRequest {
+            machine: "explore".to_owned(),
+            state: "presenting".to_owned(),
+            payload: None,
+        })
+        .await;
+    let Err(EngineError::ForceRefused {
+        cause: closed_cause,
+        ..
+    }) = closed
+    else {
+        panic!("not a closed refusal: {closed:?}");
+    };
     assert!(matches!(
         rig.handle
             .force(ForceRequest {
@@ -434,7 +438,7 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
                 payload: None
             })
             .await,
-        Err(EngineError::BadPayload { .. })
+        Err(EngineError::ForcedStateMismatch { .. })
     ));
     assert!(matches!(
         rig.handle
@@ -444,7 +448,7 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
                 payload: Some(serde_json::json!({"phase": "nope"}))
             })
             .await,
-        Err(EngineError::BadPayload { .. })
+        Err(EngineError::PayloadUnreadable { .. })
     ));
     assert_eq!(rig.handle.dump().await.expect("answered").commit, 0);
 
@@ -474,6 +478,26 @@ async fn force_puts_the_table_in_a_machine_state_through_the_machines_own_entry_
     );
     assert_eq!(count_lines(&rig.log, "MACHINE entered"), 1);
     assert_eq!(count_lines(&rig.log, "ENGINE force_refused"), 5);
+    // Each audit line names the refusal by the key the reply carries (it said `bad_payload` for
+    // two different refusals, and `refused` for every closed cause).
+    let causes: Vec<String> = lines(&rig.log)
+        .iter()
+        .filter(|line| line.starts_with("ENGINE force_refused "))
+        .filter_map(|line| {
+            line.split_once(" cause=")
+                .map(|(_, cause)| cause.to_owned())
+        })
+        .collect();
+    assert_eq!(
+        causes,
+        [
+            closed_cause.key(),
+            "unknown_machine",
+            "unknown_state",
+            "forced_state_mismatch",
+            "payload_unreadable",
+        ]
+    );
 }
 
 #[tokio::test]
@@ -490,7 +514,7 @@ async fn a_hand_off_the_table_refuses_is_recorded_and_the_machine_stays_where_it
 
     let reply = rig
         .handle
-        .submit(proposal("machine", "lobby"))
+        .submit(proposal(ProposalSource::Machine, "lobby"))
         .await
         .expect("answered");
 
@@ -552,10 +576,7 @@ async fn a_request_to_the_broker_settles_off_the_owner_and_arrives_as_an_engine_
         (requested.handle, requested.readiness.as_str()),
         (1, "pending")
     );
-    let queues = match rig.handle.broker_queues().await.expect("answered") {
-        super::report::BrokerView::Queues(queues) => queues,
-        other => panic!("expected the queues, got {other:?}"),
-    };
+    let queues = rig.handle.broker_queues().await.expect("answered");
     assert_eq!(queues.running.len(), 1);
     assert!(queues.running[0].sent);
 
@@ -577,10 +598,7 @@ async fn a_request_to_the_broker_settles_off_the_owner_and_arrives_as_an_engine_
 
     assert_eq!(served.turns[0].kind, "resource_result");
     assert_eq!(served.turns[0].lane, Lane::TimersAndResults);
-    let ledger = match rig.handle.broker_ledger().await.expect("answered") {
-        super::report::BrokerView::Ledger(ledger) => ledger,
-        other => panic!("expected the ledger, got {other:?}"),
-    };
+    let ledger = rig.handle.broker_ledger().await.expect("answered");
     assert_eq!(ledger.totals[0].totals.calls_sent, 1);
     assert_eq!(ledger.entries[0].handle, 1);
     assert!(count_lines(&rig.log, "RESOURCE request purpose=plate") >= 1);
@@ -595,14 +613,14 @@ async fn a_request_to_the_broker_settles_off_the_owner_and_arrives_as_an_engine_
 
 #[tokio::test(flavor = "current_thread")]
 async fn a_full_mailbox_refuses_at_once_and_the_owner_answers_what_it_took() {
-    let (store, entered, release) = super::tests_support::BlockingStore::new();
+    let (store, entered, release) = super::fixtures::BlockingStore::new();
     let clock = std::sync::Arc::new(df_table::testkit::ManualClock::default());
     let log = std::sync::Arc::new(crate::event_log::EventLog::default());
     let options = RigOptions::default();
     let handle = std::sync::Arc::new(
         super::handle::EngineHandle::start_with_mailbox(
-            super::tests_support::config(&options),
-            super::tests_support::adapters(clock, &log),
+            super::fixtures::config(&options),
+            super::fixtures::adapters(clock, &log),
             store,
             std::sync::Arc::clone(&log),
             1,
@@ -667,7 +685,7 @@ async fn a_forced_name_with_a_newline_cannot_forge_a_log_line() {
 #[tokio::test]
 async fn an_owner_thread_that_panics_says_so_once_and_every_call_answers_with_a_typed_error() {
     let rig = rig_customised(RigOptions::default(), |adapters| {
-        adapters.interpreter = std::sync::Arc::new(super::tests_support::PanickingInterpreter);
+        adapters.interpreter = std::sync::Arc::new(super::fixtures::PanickingInterpreter);
     });
     rig.handle.submit(tap(1, "join")).await.expect("answered");
 
@@ -686,7 +704,7 @@ async fn an_owner_thread_that_panics_says_so_once_and_every_call_answers_with_a_
 
 #[tokio::test]
 async fn dropping_the_handle_while_a_commit_is_stuck_does_not_block_the_runtime() {
-    let rig = super::tests_support::blocking_rig(&RigOptions {
+    let rig = super::fixtures::blocking_rig(&RigOptions {
         commit_deadline_ms: 60_000,
         ..RigOptions::default()
     });
@@ -698,7 +716,7 @@ async fn dropping_the_handle_while_a_commit_is_stuck_does_not_block_the_runtime(
     rig.entered.recv().expect("the owner began its commit");
 
     let started = std::time::Instant::now();
-    let super::tests_support::BlockingRig {
+    let super::fixtures::BlockingRig {
         handle, release, ..
     } = rig;
     stuck.abort();

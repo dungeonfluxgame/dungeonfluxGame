@@ -23,6 +23,15 @@ pub const DEFAULT_MAX_TRANSFORM_STEPS: usize = 32;
 /// Default bound on layers per composite step.
 pub const DEFAULT_MAX_COMPOSITE_LAYERS: usize = 8;
 
+/// Bound on staged identities in one inspection; inspection contract v1.
+pub(crate) const MAXIMUM_STAGED_IDENTITIES: usize = 24;
+/// The deployed creator-content-v3 contract bounds public appearance in UTF-8 bytes.
+pub(crate) const MAXIMUM_PUBLIC_APPEARANCE_BYTES: usize = 8 * 1024;
+/// Largest party an inspection may expect; matches the table's hero seats.
+const MAXIMUM_EXPECTED_HEROES: u8 = 6;
+/// Compatibility v1 supports the existing one-correction quality policy.
+const MAXIMUM_INSPECTION_CORRECTIONS: u32 = 1;
+
 /// Operational request-shape bounds. Injected and validated: a value above a
 /// default is valid when the injected configuration allows it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,6 +98,7 @@ pub struct OperationIdentity {
 }
 
 impl OperationIdentity {
+    /// True when the same scoped operation returns with a different intent fingerprint.
     pub fn conflicts_with(&self, other: &Self) -> bool {
         self.owner == other.owner
             && self.operation == other.operation
@@ -115,8 +125,10 @@ pub enum Purpose {
 }
 
 impl Purpose {
+    /// Number of purposes; [`Self::index`] runs from zero to one below this.
     pub const COUNT: usize = 12;
 
+    /// Stable dense index, used for per-purpose tables and canonical encodings.
     pub fn index(self) -> usize {
         match self {
             Self::CreatorPortrait => 0,
@@ -134,6 +146,7 @@ impl Purpose {
         }
     }
 
+    /// Stable snake_case name for diagnostics and configuration keys.
     pub fn label(self) -> &'static str {
         match self {
             Self::CreatorPortrait => "creator_portrait",
@@ -151,6 +164,7 @@ impl Purpose {
         }
     }
 
+    /// The purpose at a stable index, or `None` past [`Self::COUNT`].
     pub fn from_index(index: usize) -> Option<Self> {
         match index {
             0 => Some(Self::CreatorPortrait),
@@ -191,6 +205,7 @@ pub struct PurposedUse {
 pub struct AssetDigest([u8; 32]);
 
 impl AssetDigest {
+    /// Wraps an expected digest; it is verified against bytes only when they are read.
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
@@ -238,9 +253,11 @@ pub enum Urgency {
 pub struct PrivateImageText(String);
 
 impl PrivateImageText {
+    /// Keeps the text exactly; bounds are checked with the pipeline that carries it.
     pub fn new(text: &str) -> Self {
         Self(text.to_owned())
     }
+
     pub fn text(&self) -> &str {
         &self.0
     }
@@ -273,6 +290,7 @@ pub struct CreatorClassification {
     pub general_prompt: Option<PrivateImageText>,
 }
 
+/// What an inspection judges, which selects its contract questions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InspectionKind {
     ScenePlate,
@@ -319,6 +337,7 @@ pub struct ImageInspection {
     pub allow_visible_text: bool,
 }
 
+/// The application's content rating for generated pictures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImageContentRating {
     Restrained,
@@ -346,7 +365,18 @@ pub enum PipelineError {
     Corrections,
     Staging,
     UnsupportedContract,
-    TextTooLong { field: &'static str },
+    TextTooLong { field: PipelineTextField },
+}
+
+/// Which pipeline text exceeded its bound; never the text itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PipelineTextField {
+    PublicAppearance,
+    GeneralPrompt,
+    HandCustody,
+    LocatorId,
+    ReferenceId,
+    PublicName,
 }
 
 /// Creator classifier payload schemas this build reads and writes. A request naming any other
@@ -389,14 +419,14 @@ impl ImagePipeline {
             }
             match (inspection.expected_heroes, inspection.party_reference) {
                 (None, None) => {}
-                (Some(1..=6), Some(reference)) if reference > 0 => {}
+                (Some(heroes), Some(reference))
+                    if (1..=MAXIMUM_EXPECTED_HEROES).contains(&heroes) && reference > 0 => {}
                 _ => return Err(invalid(PipelineError::PartyMetadata)),
             }
-            // Compatibility v1 supports the existing one-correction quality policy.
-            if inspection.maximum_corrections > 1 {
+            if inspection.maximum_corrections > MAXIMUM_INSPECTION_CORRECTIONS {
                 return Err(invalid(PipelineError::Corrections));
             }
-            if inspection.staging.len() > 24
+            if inspection.staging.len() > MAXIMUM_STAGED_IDENTITIES
                 || inspection.staging.iter().any(|identity| {
                     identity.locator_id.text().is_empty()
                         || identity.reference_id.text().is_empty()
@@ -411,33 +441,32 @@ impl ImagePipeline {
 
     pub(crate) fn validate(&self, limits: &RequestLimits) -> Result<(), RequestError> {
         self.validate_structure()?;
+        let too_long = |field| RequestError::InvalidPipeline(PipelineError::TextTooLong { field });
         let check = |text: &PrivateImageText, field| {
             if text.text().chars().count() > limits.max_prompt_chars {
-                Err(RequestError::InvalidPipeline(PipelineError::TextTooLong {
-                    field,
-                }))
+                Err(too_long(field))
             } else {
                 Ok(())
             }
         };
         if let Some(creator) = &self.creator {
-            // The deployed creator-content-v3 contract bounds public appearance in bytes.
-            if creator.public_appearance.text().len() > 8 * 1024 {
-                return Err(RequestError::InvalidPipeline(PipelineError::TextTooLong {
-                    field: "public_appearance",
-                }));
+            if creator.public_appearance.text().len() > MAXIMUM_PUBLIC_APPEARANCE_BYTES {
+                return Err(too_long(PipelineTextField::PublicAppearance));
             }
-            check(&creator.public_appearance, "public_appearance")?;
+            check(
+                &creator.public_appearance,
+                PipelineTextField::PublicAppearance,
+            )?;
             if let Some(prompt) = &creator.general_prompt {
-                check(prompt, "general_prompt")?;
+                check(prompt, PipelineTextField::GeneralPrompt)?;
             }
         }
         if let Some(inspection) = &self.inspection {
-            check(&inspection.hand_custody, "hand_custody")?;
+            check(&inspection.hand_custody, PipelineTextField::HandCustody)?;
             for identity in &inspection.staging {
-                check(&identity.locator_id, "locator_id")?;
-                check(&identity.reference_id, "reference_id")?;
-                check(&identity.public_name, "public_name")?;
+                check(&identity.locator_id, PipelineTextField::LocatorId)?;
+                check(&identity.reference_id, PipelineTextField::ReferenceId)?;
+                check(&identity.public_name, PipelineTextField::PublicName)?;
             }
         }
         Ok(())
@@ -481,6 +510,8 @@ impl TextPrompt {
         self.artwork.as_ref()
     }
 
+    /// Attaches stage metadata after checking its structure; text bounds are checked at the
+    /// request boundary against injected limits.
     pub fn with_pipeline(mut self, pipeline: ImagePipeline) -> Result<Self, RequestError> {
         pipeline.validate_structure()?;
         self.pipeline = Some(pipeline);
@@ -575,6 +606,7 @@ impl ImageOperation {
         pins
     }
 
+    /// The artwork binding a Generate or Edit prompt carries; transforms carry none.
     pub fn artwork(&self) -> Option<&crate::ArtworkBinding> {
         match self {
             Self::Generate(spec) => spec.prompt.artwork(),
@@ -583,6 +615,7 @@ impl ImageOperation {
         }
     }
 
+    /// The stage metadata a Generate or Edit prompt carries; transforms carry none.
     pub fn pipeline(&self) -> Option<&ImagePipeline> {
         match self {
             Self::Generate(spec) => spec.prompt.pipeline(),

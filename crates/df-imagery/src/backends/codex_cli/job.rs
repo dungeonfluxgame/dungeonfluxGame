@@ -10,8 +10,7 @@
 //! This module never pins a CLI version, model name or tool policy, never
 //! restricts the inherited environment, and never caps the process count:
 //! the job carries only `KILL_ON_JOB_CLOSE`. Prompts and server text may flow
-//! through these pipes, so finished sessions report only the exit code and
-//! never retain byte content.
+//! through these pipes, so finished sessions never retain byte content.
 
 use std::{
     ffi::{OsStr, OsString},
@@ -24,7 +23,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use windows_sys::Win32::{
     Foundation::{GetLastError, HANDLE, HANDLE_FLAG_INHERIT, STILL_ACTIVE, SetHandleInformation},
     Security::SECURITY_ATTRIBUTES,
@@ -45,13 +44,13 @@ use windows_sys::Win32::{
     },
 };
 
-use super::process::join_drain;
-use super::process::{ProcessEnd, ProcessError, ProcessSession, ProcessSpec, StreamLimits};
+use super::process::{
+    KILL_WAIT_TIMEOUT, ProcessError, ProcessSession, ProcessSpec, StreamLimits,
+    discard_remaining_stdout, discard_stderr, join_drain, read_framed_line,
+};
 
 /// How often a finished child is re-polled while draining a session.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// How long `kill` waits for the tree to exit after closing the job.
-const KILL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Well-known lookup failures for the child image, kept distinct from
 /// resource failures so the caller reports transport honestly.
@@ -177,7 +176,8 @@ fn pipe(child_reads: bool) -> Result<(OwnedHandle, OwnedHandle), ProcessError> {
     let read = unsafe { OwnedHandle::from_raw_handle(read) };
     let write = unsafe { OwnedHandle::from_raw_handle(write) };
     let parent = if child_reads { &write } else { &read };
-    // SAFETY: parent is an open pipe handle; clearing inheritance leaves only the child end inherited.
+    // SAFETY: parent is an open pipe handle; clearing inheritance leaves only the child end
+    // inherited.
     if unsafe { SetHandleInformation(parent.as_raw_handle().cast(), HANDLE_FLAG_INHERIT, 0) } == 0 {
         return Err(ProcessError::SpawnFailed {
             kind: ErrorKind::Other,
@@ -332,27 +332,10 @@ pub(crate) fn spawn(spec: &ProcessSpec, limits: &StreamLimits) -> Result<JobSess
     let stdin_file: File = stdin_write.into();
     let stdout_file: File = stdout_read.into();
     let stderr_file: File = stderr_read.into();
-    // Owned discard drain: bounded cumulative read, no retained bytes.
-    let max_stderr_bytes = limits.max_stderr_bytes;
-    let stderr_drain = tokio::spawn(async move {
-        let mut pipe = tokio::fs::File::from_std(stderr_file);
-        let mut total: u64 = 0;
-        let mut chunk = [0u8; 8192];
-        loop {
-            let remaining = max_stderr_bytes.saturating_sub(total);
-            if remaining == 0 {
-                break;
-            }
-            let take = remaining.min(chunk.len() as u64) as usize;
-            match pipe.read(&mut chunk[..take]).await {
-                Ok(0) => break,
-                Ok(count) => {
-                    total = total.saturating_add(count as u64);
-                }
-                Err(_) => break,
-            }
-        }
-    });
+    let stderr_drain = tokio::spawn(discard_stderr(
+        tokio::fs::File::from_std(stderr_file),
+        limits.max_stderr_bytes,
+    ));
     Ok(JobSession {
         process: child.process,
         stdin: Some(tokio::fs::File::from_std(stdin_file)),
@@ -423,61 +406,26 @@ impl ProcessSession for JobSession {
     }
 
     async fn next_line(&mut self, max_line_bytes: usize) -> Result<Option<Vec<u8>>, ProcessError> {
-        let remaining_total = self
-            .max_stdout_bytes
-            .saturating_sub(self.stdout_total_bytes);
-        let cap = (max_line_bytes as u64)
-            .saturating_add(1)
-            .min(remaining_total);
-        if cap == 0 {
-            return Err(ProcessError::OutputTooLarge);
-        }
-        let mut line = Vec::new();
-        let count = (&mut self.stdout)
-            .take(cap)
-            .read_until(b'\n', &mut line)
-            .await
-            .map_err(|error| ProcessError::StreamFailed { kind: error.kind() })?;
-        if count == 0 {
-            return Ok(None);
-        }
-        self.stdout_total_bytes = self.stdout_total_bytes.saturating_add(line.len() as u64);
-        if line.len() > max_line_bytes {
-            return Err(ProcessError::OutputTooLarge);
-        }
-        if line.ends_with(b"\n") {
-            line.pop();
-            if line.ends_with(b"\r") {
-                line.pop();
-            }
-        }
-        Ok(Some(line))
+        read_framed_line(
+            &mut self.stdout,
+            &mut self.stdout_total_bytes,
+            self.max_stdout_bytes,
+            max_line_bytes,
+        )
+        .await
     }
 
-    async fn finish(&mut self) -> Result<ProcessEnd, ProcessError> {
+    async fn finish(&mut self) -> Result<(), ProcessError> {
         self.stdin.take();
-        let mut chunk = [0u8; 8192];
-        loop {
-            let remaining = self
-                .max_stdout_bytes
-                .saturating_sub(self.stdout_total_bytes);
-            if remaining == 0 {
-                return Err(ProcessError::OutputTooLarge);
-            }
-            let count = (&mut self.stdout)
-                .take(remaining.min(chunk.len() as u64))
-                .read(&mut chunk)
-                .await
-                .map_err(|error| ProcessError::StreamFailed { kind: error.kind() })?;
-            if count == 0 {
-                break;
-            }
-            self.stdout_total_bytes = self.stdout_total_bytes.saturating_add(count as u64);
-        }
+        discard_remaining_stdout(
+            &mut self.stdout,
+            &mut self.stdout_total_bytes,
+            self.max_stdout_bytes,
+        )
+        .await?;
         join_drain(&mut self.stderr_drain).await;
         wait_for_exit(&self.process).await;
-        let code = exit_code(&self.process)?.and_then(|code| i32::try_from(code).ok());
-        Ok(ProcessEnd { code })
+        Ok(())
     }
 
     async fn kill(&mut self) -> Result<(), ProcessError> {
@@ -490,7 +438,7 @@ impl ProcessSession for JobSession {
         drop(self.job.take());
         // A bounded wait: expiry is harmless because the closed job already
         // terminated every member; the remaining drops only release handles.
-        let _ = tokio::time::timeout(KILL_TIMEOUT, wait_for_exit(&self.process)).await;
+        let _ = tokio::time::timeout(KILL_WAIT_TIMEOUT, wait_for_exit(&self.process)).await;
         join_drain(&mut self.stderr_drain).await;
         Ok(())
     }

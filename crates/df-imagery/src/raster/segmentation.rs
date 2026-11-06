@@ -5,7 +5,17 @@ use image::{GrayImage, ImageReader, Luma, Rgba, RgbaImage};
 use std::{io::Cursor, mem::size_of};
 
 use super::{CancelCheck, RasterError, ResolveBytes, bounds::LiveBudget, decode};
+use crate::transform::SEGMENTATION_MASK_CONTRACT_REVISION;
 use crate::{AnalysisMask, AnalysisMaskSet, ImageAnalysisResult, TransformSource};
+
+/// Largest accepted segmentation mask axis; larger observations are refused as unresolvable.
+const MAXIMUM_MASK_AXIS_PX: u32 = 8192;
+/// The legacy focus mask fits the longer source axis to this many pixels.
+const FOCUS_MASK_FIT_PX: u32 = 768;
+/// Legacy feather: Gaussian sigma as a share of the rendered mask height.
+const FEATHER_SIGMA_HEIGHT_SHARE: f32 = 0.005;
+/// Smallest legacy feather sigma, in pixels.
+const MINIMUM_FEATHER_SIGMA_PX: f32 = 0.5;
 
 pub(super) fn retained_bytes(result: &ImageAnalysisResult) -> Result<u64, RasterError> {
     let ImageAnalysisResult::Segmentation { masks, .. } = result else {
@@ -59,7 +69,9 @@ pub(super) fn load(
     else {
         return Err(RasterError::ResolveFailed);
     };
-    if analyzed != result_source || *contract_revision != 1 || result_revision != contract_revision
+    if analyzed != result_source
+        || *contract_revision != SEGMENTATION_MASK_CONTRACT_REVISION
+        || result_revision != contract_revision
     {
         return Err(RasterError::ResolveFailed);
     }
@@ -103,7 +115,11 @@ pub(super) fn load(
 }
 
 fn validate_runs(set: &AnalysisMaskSet, mask: &AnalysisMask) -> Result<(), RasterError> {
-    if set.width_px == 0 || set.height_px == 0 || set.width_px > 8192 || set.height_px > 8192 {
+    if set.width_px == 0
+        || set.height_px == 0
+        || set.width_px > MAXIMUM_MASK_AXIS_PX
+        || set.height_px > MAXIMUM_MASK_AXIS_PX
+    {
         return Err(RasterError::ResolveFailed);
     }
     let pixels = u64::from(set.width_px) * u64::from(set.height_px);
@@ -127,8 +143,9 @@ fn render(
     budget: &LiveBudget,
     check_cancel: CancelCheck<'_>,
 ) -> Result<RgbaImage, RasterError> {
-    let scale = 768.0 / f64::from(source_width_px.max(source_height_px).max(768));
-    // The fixed fit bounds both rounded dimensions by 768, including thin sources.
+    let fit_px = f64::from(FOCUS_MASK_FIT_PX);
+    let scale = fit_px / f64::from(source_width_px.max(source_height_px).max(FOCUS_MASK_FIT_PX));
+    // The fixed fit bounds both rounded dimensions by the fit, including thin sources.
     let width_px = (f64::from(source_width_px) * scale).round().max(1.0) as u32;
     let height_px = (f64::from(source_height_px) * scale).round().max(1.0) as u32;
     budget.check_pixels(width_px, height_px)?;
@@ -158,7 +175,7 @@ fn render(
         }
     }
     check_cancel()?;
-    let blurred = image::imageops::blur(&alpha, (height_px as f32 * 0.005).max(0.5));
+    let blurred = image::imageops::blur(&alpha, feather_sigma_px(height_px));
     check_cancel()?;
     drop(alpha);
     let mut rgba = RgbaImage::new(width_px, height_px);
@@ -180,9 +197,13 @@ fn project(pixel: u64, output_px: u32, input_px: u32) -> Result<u32, RasterError
         .map_err(|_| RasterError::ResolveFailed)
 }
 
+fn feather_sigma_px(height_px: u32) -> f32 {
+    (height_px as f32 * FEATHER_SIGMA_HEIGHT_SHARE).max(MINIMUM_FEATHER_SIGMA_PX)
+}
+
 fn workspace_bytes(width_px: u32, height_px: u32) -> u64 {
     let pixels = u64::from(width_px) * u64::from(height_px);
-    let sigma = (height_px as f32 * 0.005).max(0.5);
+    let sigma = feather_sigma_px(height_px);
     // image0.25.10 sample.rs:1237 derives an odd kernel. Fixed sigma <=3.84 gives <=23 taps.
     let mut kernel = (((((sigma - 0.8) / 0.3) + 1.0) * 2.0) + 1.0).max(3.0) as u64;
     if kernel.is_multiple_of(2) {
@@ -201,4 +222,4 @@ fn workspace_bytes(width_px: u32, height_px: u32) -> u64 {
 }
 
 #[cfg(test)]
-mod tests;
+mod segmentation_tests;

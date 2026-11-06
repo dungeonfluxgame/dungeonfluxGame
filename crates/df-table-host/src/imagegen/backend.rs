@@ -1,6 +1,6 @@
 //! The backends of the picture generator: the trait the service calls, the real Codex CLI backend
 //! (through the image service's one-shot door in `df-imagery`) and the backend that says it is not
-//! switched on.
+//! switched on, with the typed reasons a backend gives no picture.
 //!
 //! A backend is blocking: the service runs it in a blocking task, because the Codex turn takes
 //! minutes and its future cannot be moved between runtime threads. Every precondition is checked
@@ -12,30 +12,252 @@
 //! the environment `df-table serve` was started with: it is never guessed from the user's own
 //! Codex folder.
 
-use std::ffi::OsString;
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use df_imagery::oneshot::{self, OneShotConfig, OneShotError, OneShotRequest};
+use serde::{Deserialize, Serialize};
 
-use super::model::{BackendError, BackendRequest, GeneratedImage};
+use super::model::{BackendRequest, GeneratedImage};
+use crate::locate::IoCause;
 
 /// The login file a signed-in Codex home holds. Its presence is checked; it is never read.
 const LOGIN_FILE: &str = "auth.json";
 /// A Codex home with this file is not the dedicated, config-free one the service expects.
 const CONFIG_FILE: &str = "config.toml";
 
-/// Names of the environment variables the real backend reads. They match the runbook's names.
-pub mod environment {
-    pub const MODE: &str = "DF_IMAGERY_MODE";
-    pub const BACKEND: &str = "DF_IMAGERY_BACKEND";
-    pub const EXECUTABLE: &str = "DF_IMAGERY_CODEX_EXECUTABLE";
-    pub const WORK_DIRECTORY: &str = "DF_IMAGERY_CODEX_WORKDIR";
-    pub const AGENT_MODEL: &str = "DF_IMAGEGEN_AGENT_MODEL";
-    pub const DEADLINE_SECS: &str = "DF_IMAGEGEN_DEADLINE_SECS";
-    pub const PROVENANCE_DIRECTORY: &str = "DF_IMAGEGEN_PROVENANCE_DIR";
-    pub const CODEX_HOME: &str = "CODEX_HOME";
+// The environment variables the real backend reads. They match the runbook's names.
+
+/// `live` with `BACKEND_VARIABLE` set to `codex-cli` switches generation on.
+pub const MODE_VARIABLE: &str = "DF_IMAGERY_MODE";
+pub const BACKEND_VARIABLE: &str = "DF_IMAGERY_BACKEND";
+/// An absolute path of the Codex executable; unset looks for it on `PATH`.
+pub const EXECUTABLE_VARIABLE: &str = "DF_IMAGERY_CODEX_EXECUTABLE";
+/// The folder each attempt gets a scratch folder in.
+pub const WORK_DIRECTORY_VARIABLE: &str = "DF_IMAGERY_CODEX_WORKDIR";
+pub const AGENT_MODEL_VARIABLE: &str = "DF_IMAGEGEN_AGENT_MODEL";
+/// The dedicated, signed-in Codex home the Codex child runs with.
+pub const CODEX_HOME_VARIABLE: &str = "CODEX_HOME";
+/// The directories searched for the executable when none is named.
+const PATH_VARIABLE: &str = "PATH";
+
+/// The value of `MODE_VARIABLE` that switches generation on.
+const LIVE_MODE: &str = "live";
+
+/// Why a backend gave no picture. Each case says what to do about it.
+///
+/// `kind` and `detail` of the variants that come from `df_imagery::oneshot` are that crate's own
+/// text (`OneShotError` carries text there). On the wire it is tagged `"cause"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "cause", rename_all = "snake_case")]
+pub enum BackendError {
+    /// The host was not started with the switches that turn picture generation on.
+    NotSwitchedOn,
+    /// The named Codex executable is not an absolute path of a file.
+    ExecutableNotAFile { path: PathBuf },
+    /// No Codex executable is on `PATH`.
+    ExecutableNotOnPath,
+    /// The Codex executable could not be started.
+    ExecutableNotStartable { kind: String },
+    /// No Codex home is set.
+    NoCodexHome,
+    /// The Codex home has no login file.
+    NoLogin { home: PathBuf },
+    /// The Codex home has a `config.toml`, so it is not the dedicated home.
+    HomeHasConfig { home: PathBuf },
+    /// The scratch folder is not absolute.
+    WorkRootNotAbsolute { path: PathBuf },
+    /// The scratch folder cannot be made. (`cause` is the variant's tag, so the file system's
+    /// cause is `io_cause`.)
+    WorkRootUnmakeable { path: PathBuf, io_cause: IoCause },
+    /// The scratch folder is inside `folder`, a git repository or a folder with an `AGENTS.md`.
+    WorkRootUnfit { path: PathBuf, folder: PathBuf },
+    /// The image service's door refused the configuration or the request before any work.
+    Unaccepted { detail: String },
+    /// The deadline ended the attempt.
+    Timeout,
+    /// The attempt was interrupted after work may have started.
+    Interrupted,
+    /// The account's usage limit stopped it.
+    UsageLimited,
+    /// The service refused or failed the request.
+    Refused { detail: String },
+    /// The delivered picture could not be read back.
+    Unreadable { kind: String },
+    /// The image backend failed inside the host.
+    Internal,
 }
+
+impl BackendError {
+    /// The serde name of the variant.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::NotSwitchedOn => "not_switched_on",
+            Self::ExecutableNotAFile { .. } => "executable_not_a_file",
+            Self::ExecutableNotOnPath => "executable_not_on_path",
+            Self::ExecutableNotStartable { .. } => "executable_not_startable",
+            Self::NoCodexHome => "no_codex_home",
+            Self::NoLogin { .. } => "no_login",
+            Self::HomeHasConfig { .. } => "home_has_config",
+            Self::WorkRootNotAbsolute { .. } => "work_root_not_absolute",
+            Self::WorkRootUnmakeable { .. } => "work_root_unmakeable",
+            Self::WorkRootUnfit { .. } => "work_root_unfit",
+            Self::Unaccepted { .. } => "unaccepted",
+            Self::Timeout => "timeout",
+            Self::Interrupted => "interrupted",
+            Self::UsageLimited => "usage_limited",
+            Self::Refused { .. } => "refused",
+            Self::Unreadable { .. } => "unreadable",
+            Self::Internal => "internal",
+        }
+    }
+
+    /// The status a refusal for this reason is answered with: a backend that is not set up is a
+    /// 503, a deadline a 504, a failure of the service a 502 and a failure inside the host a 500.
+    pub fn status(&self) -> StatusCode {
+        match self {
+            Self::NotSwitchedOn
+            | Self::ExecutableNotAFile { .. }
+            | Self::ExecutableNotOnPath
+            | Self::ExecutableNotStartable { .. }
+            | Self::NoCodexHome
+            | Self::NoLogin { .. }
+            | Self::HomeHasConfig { .. }
+            | Self::WorkRootNotAbsolute { .. }
+            | Self::WorkRootUnmakeable { .. }
+            | Self::WorkRootUnfit { .. }
+            | Self::Unaccepted { .. }
+            | Self::UsageLimited => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Timeout => StatusCode::GATEWAY_TIMEOUT,
+            Self::Interrupted | Self::Refused { .. } => StatusCode::BAD_GATEWAY,
+            Self::Unreadable { .. } | Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+}
+
+impl fmt::Display for BackendError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotSwitchedOn => write!(
+                formatter,
+                concat!(
+                    "picture generation is not switched on: start `df-table serve` with {}={} ",
+                    "and {}=codex-cli (and {}=<signed-in home>)"
+                ),
+                MODE_VARIABLE, LIVE_MODE, BACKEND_VARIABLE, CODEX_HOME_VARIABLE
+            ),
+            Self::ExecutableNotAFile { path } => write!(
+                formatter,
+                concat!(
+                    "{} is not a file; set {} to the absolute path of codex.exe or unset it to ",
+                    "find codex on PATH"
+                ),
+                path.display(),
+                EXECUTABLE_VARIABLE
+            ),
+            Self::ExecutableNotOnPath => write!(
+                formatter,
+                concat!(
+                    "the codex executable is not on PATH; install the Codex CLI or set {} to its ",
+                    "absolute path"
+                ),
+                EXECUTABLE_VARIABLE
+            ),
+            Self::ExecutableNotStartable { kind } => write!(
+                formatter,
+                concat!(
+                    "the codex executable could not be started ({}); check the path and that ",
+                    "the file runs"
+                ),
+                kind
+            ),
+            Self::NoCodexHome => write!(
+                formatter,
+                concat!(
+                    "no Codex home is set: start `df-table serve` with {}=<the dedicated ",
+                    "signed-in folder> in its environment"
+                ),
+                CODEX_HOME_VARIABLE
+            ),
+            Self::NoLogin { home } => write!(
+                formatter,
+                concat!(
+                    "the Codex home {} has no login: sign in once with `{}={} codex login` in a ",
+                    "terminal, then try again"
+                ),
+                home.display(),
+                CODEX_HOME_VARIABLE,
+                home.display()
+            ),
+            Self::HomeHasConfig { home } => write!(
+                formatter,
+                concat!(
+                    "the Codex home {} has a {}; the image service expects a dedicated home ",
+                    "with none"
+                ),
+                home.display(),
+                CONFIG_FILE
+            ),
+            Self::WorkRootNotAbsolute { path } => write!(
+                formatter,
+                "{} must be an absolute folder, not {}",
+                WORK_DIRECTORY_VARIABLE,
+                path.display()
+            ),
+            Self::WorkRootUnmakeable { path, io_cause } => write!(
+                formatter,
+                "the scratch folder {} cannot be made: {io_cause}",
+                path.display()
+            ),
+            Self::WorkRootUnfit { path, folder } => write!(
+                formatter,
+                concat!(
+                    "the scratch folder {} is inside {}, which is a git repository or holds an ",
+                    "AGENTS.md; set {} to a folder outside any repository"
+                ),
+                path.display(),
+                folder.display(),
+                WORK_DIRECTORY_VARIABLE
+            ),
+            Self::Unaccepted { detail } => {
+                write!(
+                    formatter,
+                    "the image service did not accept the call: {detail}"
+                )
+            }
+            Self::Timeout => formatter.write_str(concat!(
+                "the generation did not finish before its deadline; the provider may still have ",
+                "done the work, and nothing was retried"
+            )),
+            Self::Interrupted => formatter.write_str(
+                "the generation was interrupted after work may have started; nothing was retried",
+            ),
+            Self::UsageLimited => formatter.write_str(concat!(
+                "the Codex account's usage limit stopped the generation; try again when the ",
+                "limit resets"
+            )),
+            Self::Refused { detail } => write!(
+                formatter,
+                concat!(
+                    "the image service refused or failed the request ({}); if the login expired, ",
+                    "sign in again with `{}=<home> codex login`"
+                ),
+                detail, CODEX_HOME_VARIABLE
+            ),
+            Self::Unreadable { kind } => {
+                write!(
+                    formatter,
+                    "the delivered picture could not be read ({kind})"
+                )
+            }
+            Self::Internal => formatter.write_str("the image backend failed inside the host"),
+        }
+    }
+}
+
+impl std::error::Error for BackendError {}
 
 /// Something that turns a request into a picture.
 pub trait ImageBackend: Send + Sync {
@@ -54,26 +276,16 @@ pub trait ImageBackend: Send + Sync {
 }
 
 /// The backend of a host that was not told to generate pictures.
-#[derive(Debug, Clone)]
-pub struct NotConfigured {
-    reason: String,
-}
+#[derive(Debug, Clone, Copy)]
+pub struct SwitchedOff;
 
-impl NotConfigured {
-    pub fn new(reason: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
-        }
-    }
-}
-
-impl ImageBackend for NotConfigured {
+impl ImageBackend for SwitchedOff {
     fn name(&self) -> &'static str {
         "none"
     }
 
     fn check(&self) -> Result<(), BackendError> {
-        Err(BackendError::NotConfigured(self.reason.clone()))
+        Err(BackendError::NotSwitchedOn)
     }
 
     fn generate_blocking(
@@ -81,7 +293,7 @@ impl ImageBackend for NotConfigured {
         _request: &BackendRequest,
         _deadline: Duration,
     ) -> Result<GeneratedImage, BackendError> {
-        Err(BackendError::NotConfigured(self.reason.clone()))
+        Err(BackendError::NotSwitchedOn)
     }
 }
 
@@ -99,10 +311,6 @@ pub struct CodexSettings {
     pub agent_model: Option<String>,
 }
 
-fn text(name: &str) -> Option<OsString> {
-    std::env::var_os(name).filter(|value| !value.is_empty())
-}
-
 /// The folder a plain `df-table serve` uses for Codex image attempts.
 pub fn default_work_root() -> PathBuf {
     std::env::temp_dir().join("df-codex-image-jobs")
@@ -112,17 +320,14 @@ impl CodexSettings {
     /// The settings this process's environment gives.
     pub fn from_process_environment() -> Self {
         Self {
-            executable: text(environment::EXECUTABLE).map(PathBuf::from),
-            path_directories: text("PATH")
+            executable: crate::environment::path(EXECUTABLE_VARIABLE),
+            path_directories: crate::environment::path(PATH_VARIABLE)
                 .map(|path| std::env::split_paths(&path).collect())
                 .unwrap_or_default(),
-            codex_home: text(environment::CODEX_HOME).map(PathBuf::from),
-            work_root: text(environment::WORK_DIRECTORY)
-                .map(PathBuf::from)
+            codex_home: crate::environment::path(CODEX_HOME_VARIABLE),
+            work_root: crate::environment::path(WORK_DIRECTORY_VARIABLE)
                 .unwrap_or_else(default_work_root),
-            agent_model: text(environment::AGENT_MODEL)
-                .and_then(|model| model.into_string().ok())
-                .filter(|model| !model.trim().is_empty()),
+            agent_model: crate::environment::text(AGENT_MODEL_VARIABLE),
         }
     }
 }
@@ -134,14 +339,10 @@ pub struct CodexBackend {
 }
 
 fn first_existing(directories: &[PathBuf]) -> Option<PathBuf> {
-    let names: &[&str] = if cfg!(windows) {
-        &["codex.exe"]
-    } else {
-        &["codex"]
-    };
+    let name = if cfg!(windows) { "codex.exe" } else { "codex" };
     directories
         .iter()
-        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
 }
 
@@ -164,41 +365,29 @@ impl CodexBackend {
             return if explicit.is_absolute() && explicit.is_file() {
                 Ok(explicit.clone())
             } else {
-                Err(BackendError::CodexMissing(format!(
-                    "{} is not a file; set {} to the absolute path of codex.exe or unset it to find codex on PATH",
-                    explicit.display(),
-                    environment::EXECUTABLE
-                )))
+                Err(BackendError::ExecutableNotAFile {
+                    path: explicit.clone(),
+                })
             };
         }
-        first_existing(&self.settings.path_directories).ok_or_else(|| {
-            BackendError::CodexMissing(format!(
-                "the codex executable is not on PATH; install the Codex CLI or set {} to its absolute path",
-                environment::EXECUTABLE
-            ))
-        })
+        first_existing(&self.settings.path_directories).ok_or(BackendError::ExecutableNotOnPath)
     }
 
     fn signed_in_home(&self) -> Result<&Path, BackendError> {
-        let home = self.settings.codex_home.as_deref().ok_or_else(|| {
-            BackendError::NotSignedIn(format!(
-                "no Codex home is set: start `df-table serve` with {}=<the dedicated signed-in folder> in its environment",
-                environment::CODEX_HOME
-            ))
-        })?;
+        let home = self
+            .settings
+            .codex_home
+            .as_deref()
+            .ok_or(BackendError::NoCodexHome)?;
         if !home.join(LOGIN_FILE).is_file() {
-            return Err(BackendError::NotSignedIn(format!(
-                "the Codex home {} has no login: sign in once with `{}={} codex login` in a terminal, then try again",
-                home.display(),
-                environment::CODEX_HOME,
-                home.display()
-            )));
+            return Err(BackendError::NoLogin {
+                home: home.to_path_buf(),
+            });
         }
         if home.join(CONFIG_FILE).exists() {
-            return Err(BackendError::NotConfigured(format!(
-                "the Codex home {} has a {CONFIG_FILE}; the image service expects a dedicated home with none",
-                home.display()
-            )));
+            return Err(BackendError::HomeHasConfig {
+                home: home.to_path_buf(),
+            });
         }
         Ok(home)
     }
@@ -206,24 +395,19 @@ impl CodexBackend {
     fn work_root(&self) -> Result<&Path, BackendError> {
         let root = self.settings.work_root.as_path();
         if !root.is_absolute() {
-            return Err(BackendError::NotConfigured(format!(
-                "{} must be an absolute folder",
-                environment::WORK_DIRECTORY
-            )));
+            return Err(BackendError::WorkRootNotAbsolute {
+                path: root.to_path_buf(),
+            });
         }
-        std::fs::create_dir_all(root).map_err(|error| {
-            BackendError::NotConfigured(format!(
-                "the scratch folder {} cannot be made: {error}",
-                root.display()
-            ))
+        std::fs::create_dir_all(root).map_err(|error| BackendError::WorkRootUnmakeable {
+            path: root.to_path_buf(),
+            io_cause: IoCause::from_kind(error.kind()),
         })?;
         if let Some(folder) = unfit_ancestor(root) {
-            return Err(BackendError::NotConfigured(format!(
-                "the scratch folder {} is inside {}, which is a git repository or holds an AGENTS.md; set {} to a folder outside any repository",
-                root.display(),
-                folder.display(),
-                environment::WORK_DIRECTORY
-            )));
+            return Err(BackendError::WorkRootUnfit {
+                path: root.to_path_buf(),
+                folder,
+            });
         }
         Ok(root)
     }
@@ -258,43 +442,34 @@ impl ImageBackend for CodexBackend {
             width_px: request.width_px,
             height_px: request.height_px,
         };
-        match oneshot::generate_blocking(&config, &one_shot) {
-            Ok(image) => Ok(GeneratedImage {
-                bytes: image.bytes,
-                mime: image.mime.to_owned(),
-                width_px: image.width_px,
-                height_px: image.height_px,
-                sha256_hex: image.sha256_hex,
-                duration: image.elapsed,
-                input_tokens: image.input_tokens,
-                output_tokens: image.output_tokens,
-            }),
-            Err(error) => Err(map_error(error)),
-        }
+        let image = oneshot::generate_blocking(&config, &one_shot).map_err(backend_error)?;
+        Ok(GeneratedImage {
+            bytes: image.bytes,
+            mime: image.mime.to_owned(),
+            width_px: image.width_px,
+            height_px: image.height_px,
+            sha256_hex: image.sha256_hex,
+            duration: image.elapsed,
+            input_tokens: image.input_tokens,
+            output_tokens: image.output_tokens,
+        })
     }
 }
 
-fn map_error(error: OneShotError) -> BackendError {
+fn backend_error(error: OneShotError) -> BackendError {
     match error {
         OneShotError::Timeout => BackendError::Timeout,
         OneShotError::Interrupted => BackendError::Interrupted,
         OneShotError::UsageLimited => BackendError::UsageLimited,
-        OneShotError::Transport { kind } => BackendError::CodexMissing(format!(
-            "the codex executable could not be started ({kind}); check the path and that the file runs"
-        )),
-        OneShotError::Refused { detail } => BackendError::Refused(format!(
-            "the image service refused or failed the request ({detail}); if the login expired, sign in again with `{}=<home> codex login`",
-            environment::CODEX_HOME
-        )),
-        OneShotError::InvalidConfig(reason) | OneShotError::InvalidRequest(reason) => {
-            BackendError::NotConfigured(reason.to_owned())
+        OneShotError::Transport { kind } => BackendError::ExecutableNotStartable { kind },
+        OneShotError::Refused { detail } => BackendError::Refused { detail },
+        OneShotError::InvalidConfig(detail) | OneShotError::InvalidRequest(detail) => {
+            BackendError::Unaccepted {
+                detail: detail.to_owned(),
+            }
         }
-        OneShotError::Unreadable { kind } => {
-            BackendError::Failed(format!("the delivered picture could not be read ({kind})"))
-        }
-        OneShotError::Internal => {
-            BackendError::Failed("the image backend failed inside the host".to_owned())
-        }
+        OneShotError::Unreadable { kind } => BackendError::Unreadable { kind },
+        OneShotError::Internal => BackendError::Internal,
     }
 }
 
@@ -302,25 +477,20 @@ fn map_error(error: OneShotError) -> BackendError {
 /// with `DF_IMAGERY_MODE=live` and `DF_IMAGERY_BACKEND=codex-cli`, otherwise one that says so.
 pub fn backend_from_environment() -> Box<dyn ImageBackend> {
     backend_for(
-        text(environment::MODE).and_then(|value| value.into_string().ok()),
-        text(environment::BACKEND).and_then(|value| value.into_string().ok()),
+        crate::environment::text(MODE_VARIABLE).as_deref(),
+        crate::environment::text(BACKEND_VARIABLE).as_deref(),
         CodexSettings::from_process_environment(),
     )
 }
 
 /// The backend for the two switches' values and the Codex settings.
 pub fn backend_for(
-    mode: Option<String>,
-    backend: Option<String>,
+    mode: Option<&str>,
+    backend: Option<&str>,
     settings: CodexSettings,
 ) -> Box<dyn ImageBackend> {
-    match (mode.as_deref(), backend.as_deref()) {
-        (Some("live"), Some("codex-cli")) => Box::new(CodexBackend::new(settings)),
-        _ => Box::new(NotConfigured::new(format!(
-            "picture generation is not switched on: start `df-table serve` with {}=live and {}=codex-cli (and {}=<signed-in home>)",
-            environment::MODE,
-            environment::BACKEND,
-            environment::CODEX_HOME
-        ))),
+    match (mode, backend) {
+        (Some(LIVE_MODE), Some(oneshot::BACKEND_NAME)) => Box::new(CodexBackend::new(settings)),
+        _ => Box::new(SwitchedOff),
     }
 }

@@ -69,7 +69,7 @@ pub(crate) fn apply_mask(
     let start_x_px = bounds::anchor_start(width_px, mask_width_px, spec.align().x);
     let start_y_px = bounds::anchor_start(height_px, mask_height_px, spec.align().y);
     for row in 0..height_px {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         let mask_y = i64::from(row) - start_y_px;
@@ -163,10 +163,10 @@ pub(crate) fn apply_composite(
     for layer in layers {
         check_cancel()?;
         let layer_bytes = decode::resolve_verified(resolve, layer.source(), budget)?;
-        let layer_image = decode::decode_bounded(&layer_bytes, budget)?;
-        budget.check_retained(
+        let layer_image = decode::decode_bounded_beside(
+            &layer_bytes,
+            budget,
             bounds::rgba_bytes(width_px, height_px),
-            bounds::rgba_bytes(layer_image.width(), layer_image.height()),
         )?;
         composite_layer(&mut image, &layer_image, layer, check_cancel)?;
     }
@@ -186,7 +186,7 @@ fn composite_layer(
         return Ok(());
     }
     for row in 0..layer_height_px {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         let target_y = i64::from(spec.y_px()) + i64::from(row);

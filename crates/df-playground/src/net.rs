@@ -1,8 +1,8 @@
 //! Fetching text from, and posting JSON to, the page's own server.
 //!
 //! It owns one request at a time and reports a failure as a typed error that names the address and
-//! carries the browser's own words for the cause, so the page can show it and a bug is not mistaken
-//! for a refusal. It never retries; the caller's poll loop does that.
+//! carries the exception the browser threw, so the page can show it and a bug is not mistaken for
+//! a refusal. It never retries; the caller's poll loop does that.
 
 use std::fmt;
 
@@ -10,21 +10,30 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Headers, RequestInit, Response};
 
-use crate::dom::js_message;
+use crate::dom::BrowserError;
 
 /// Why a request did not give text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NetError {
     /// The page has no window to ask from.
     NoWindow,
     /// The request could not be made at all.
-    Request { what: &'static str, cause: String },
+    Request {
+        what: &'static str,
+        cause: BrowserError,
+    },
     /// The host could not be reached.
-    Unreachable { address: String, cause: String },
+    Unreachable {
+        address: String,
+        cause: BrowserError,
+    },
     /// Something answered that is not a response.
     NotAResponse { address: String },
     /// The answer's body could not be read.
-    Unreadable { address: String, cause: String },
+    Unreadable {
+        address: String,
+        cause: BrowserError,
+    },
     /// The answer's body is not text.
     NotText { address: String },
     /// The host answered with a refusal; `body` is its own explanation.
@@ -59,26 +68,26 @@ impl fmt::Display for NetError {
     }
 }
 
+impl std::error::Error for NetError {}
+
 fn request_error(what: &'static str) -> impl Fn(JsValue) -> NetError {
     move |cause| NetError::Request {
         what,
-        cause: js_message(&cause),
+        cause: cause.into(),
     }
 }
 
 async fn read_body(address: &str, response: Response) -> Result<String, NetError> {
     let status = response.status();
     let ok = response.ok();
-    let text = response.text().map_err(|cause| NetError::Unreadable {
+    let unreadable = |cause: JsValue| NetError::Unreadable {
         address: address.to_owned(),
-        cause: js_message(&cause),
-    })?;
+        cause: cause.into(),
+    };
+    let text = response.text().map_err(unreadable)?;
     let body = JsFuture::from(text)
         .await
-        .map_err(|cause| NetError::Unreadable {
-            address: address.to_owned(),
-            cause: js_message(&cause),
-        })?
+        .map_err(unreadable)?
         .as_string()
         .ok_or_else(|| NetError::NotText {
             address: address.to_owned(),
@@ -99,7 +108,7 @@ async fn response_of(address: &str, request: js_sys::Promise) -> Result<Response
         .await
         .map_err(|cause| NetError::Unreachable {
             address: address.to_owned(),
-            cause: js_message(&cause),
+            cause: cause.into(),
         })?
         .dyn_into::<Response>()
         .map_err(|_| NetError::NotAResponse {

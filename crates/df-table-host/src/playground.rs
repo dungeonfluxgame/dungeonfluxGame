@@ -14,6 +14,9 @@ mod audit;
 mod clients;
 mod controls_state;
 mod files;
+mod request;
+#[cfg(test)]
+mod request_tests;
 
 use std::fmt;
 use std::path::Path;
@@ -26,24 +29,28 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use df_playground::controls::{ControlsChange, ControlsReply};
-use df_playground::fixture::{ElementSource, Fixture};
-use df_playground::scene::SceneChange;
+use df_playground::fixture::{ElementSource, Fixture, FixtureError};
+use df_playground::scene::{ImageSlot, SceneChange};
 use df_table::event::RejectionCause;
 
 pub(crate) use self::audit::playground_line;
 use self::audit::{controls_pairs, reject_line, scene_line};
 pub use self::clients::{ClientNameError, check_client_name};
-pub use self::controls_state::{ControlsRefusal, PlaygroundState, SceneRefusal};
-pub(crate) use self::files::problem_from;
+pub use self::controls_state::{
+    ControlsChangeError, ControlsRefusal, PlaygroundState, SceneChangeError,
+};
+pub(crate) use self::files::run_file_task;
 use self::files::{FIXTURE_DIRECTORY, FIXTURE_EXTENSIONS, current_fixture_names};
 pub use self::files::{
-    FileProblem, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
+    FileError, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
     revision,
 };
+pub(crate) use self::request::{ChangeReply, PlaygroundChangeError};
+use crate::dev_http::{BodyError, parse_body, reply};
 use crate::limits::MAXIMUM_FIXTURE_NAME_LENGTH;
 use crate::media_library::{media_directory, media_entries, media_problem};
 use crate::state::AppState;
-use crate::wire::{ControlsBatch, FixtureRemove, FixtureWrite, Reply, route};
+use crate::wire::{ControlsBatch, FixtureRemove, FixtureWrite, Reply, path};
 
 pub(crate) fn refused(status: StatusCode, message: String) -> Response {
     (
@@ -65,13 +72,23 @@ pub(crate) fn done(state: &AppState) -> Response {
     .into_response()
 }
 
-pub(crate) fn reject_malformed(state: &AppState, error: &serde_json::Error) -> Response {
+/// Records and answers a body that is not the JSON the route reads, with its typed cause.
+pub(crate) fn reject_body(state: &AppState, error: &BodyError) -> Response {
     state.record_line(reject_line(RejectionCause::MalformedRequest, &[]));
-    state.echo_new_lines();
-    refused(
+    (
         StatusCode::BAD_REQUEST,
-        format!("the request is not valid: {error}"),
+        Json(Reply::Rejected {
+            cause: Some(RejectionCause::MalformedRequest),
+            message: error.to_string(),
+            problems: Vec::new(),
+        }),
     )
+        .into_response()
+}
+
+/// The refusal of a file the route could not read or write.
+pub(crate) fn refuse_file(error: FileError) -> Response {
+    refused(error.status(), error.to_string())
 }
 
 /// Why a fixture name is not accepted.
@@ -84,8 +101,11 @@ impl fmt::Display for FixtureNameError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "'{}' is not a fixture name: use letters, digits, '_', '-' and '.', up to {MAXIMUM_FIXTURE_NAME_LENGTH} characters",
-            self.name
+            concat!(
+                "'{}' is not a fixture name: use letters, digits, '_', '-' and '.', ",
+                "up to {} characters"
+            ),
+            self.name, MAXIMUM_FIXTURE_NAME_LENGTH
         )
     }
 }
@@ -113,7 +133,7 @@ pub fn fixture_file_name(name: &str) -> Result<String, FixtureNameError> {
 /// Replaces what is shown with the first fixture when the chosen one is gone (or none was chosen
 /// and one exists), and records the change as `PLAYGROUND reconcile fixture=.. revision=..`. The
 /// caller announces it: every POST does.
-pub(crate) fn reconcile_fixtures(state: &AppState) -> Result<Option<ControlsReply>, FileProblem> {
+pub(crate) fn reconcile_fixtures(state: &AppState) -> Result<Option<ControlsReply>, FileError> {
     let names = fixture_names(state.playground().files())?;
     // The line is written with the playground's lock held, so it is in revision order.
     let reconciled = state.playground().reconcile(&names, |reply| {
@@ -137,12 +157,11 @@ pub(crate) fn reconcile_fixtures(state: &AppState) -> Result<Option<ControlsRepl
 
 /// `reconcile_fixtures` off the async threads. A directory that cannot be read is refused with
 /// its reason, so the write that came before it still shows the problem.
-async fn reconcile_after_files_changed(state: &Arc<AppState>) -> Result<(), FileProblem> {
+async fn reconcile_after_files_changed(state: &Arc<AppState>) -> Result<(), FileError> {
     state.playground().fixture_files_changed();
     let worker = Arc::clone(state);
-    tokio::task::spawn_blocking(move || reconcile_fixtures(&worker))
+    run_file_task(move || reconcile_fixtures(&worker))
         .await
-        .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())))
         .map(|_| ())
 }
 
@@ -164,104 +183,124 @@ fn with_fixture_files(
         .collect()
 }
 
-/// Applies the changes together or not at all, and answers. A change that counts writes one
-/// `PLAYGROUND set` line naming each part, with the playground's lock held so the log is in
-/// revision order; one that alters nothing writes none; a refusal writes a reject line with its
-/// reason.
-async fn apply_controls(state: &Arc<AppState>, changes: Vec<ControlsChange>) -> Response {
-    let changes = match with_fixture_files(changes) {
-        Ok(changes) => changes,
-        Err(error) => return refused(StatusCode::BAD_REQUEST, error.to_string()),
-    };
+/// Records the refusal of a body that is not the change a route reads.
+fn reject_change_body(state: &AppState, error: BodyError) -> PlaygroundChangeError {
+    state.record_line(reject_line(RejectionCause::MalformedRequest, &[]));
+    PlaygroundChangeError::InvalidBody(error)
+}
+
+/// Applies the changes together or not at all. A change that counts writes one `PLAYGROUND set`
+/// line naming each part, with the playground's lock held so the log is in revision order; one
+/// that alters nothing writes none; a refusal writes a reject line with its reason.
+async fn apply_controls(
+    state: &Arc<AppState>,
+    changes: Vec<ControlsChange>,
+) -> Result<ControlsReply, PlaygroundChangeError> {
+    let changes = with_fixture_files(changes)?;
     // The generation is read before the names: a fixture written or removed after this makes the
     // choice of a fixture refuse as changed instead of applying to a list that is out of date.
     let generation = state.playground().generation();
-    let names = match current_fixture_names(state.playground().files().clone()).await {
-        Ok(names) => names,
-        Err(problem) => return refused(problem.status(), problem.message()),
-    };
-    let response =
-        match state
-            .playground()
-            .change_all(changes.clone(), &names, generation, |reply| {
-                let mut pairs = controls_pairs(&changes);
-                pairs.push(("revision", reply.revision.to_string()));
-                state.record_line(playground_line("set", &pairs));
-            }) {
-            Ok(reply) => Json(reply).into_response(),
-            Err(refusal) => {
-                state.record_line(reject_line(
-                    RejectionCause::InvalidValue,
-                    &[("reason", refusal.reason().to_owned())],
-                ));
-                refused(refusal.status(), refusal.to_string())
-            }
-        };
-    state.echo_new_lines();
-    response
+    let names = current_fixture_names(state.playground().files().clone()).await?;
+    state
+        .playground()
+        .change_all(changes.clone(), &names, generation, |reply| {
+            let mut pairs = controls_pairs(&changes);
+            pairs.push(("revision", reply.revision.to_string()));
+            state.record_line(playground_line("set", &pairs));
+        })
+        .map_err(|refusal| {
+            state.record_line(reject_line(
+                RejectionCause::InvalidValue,
+                &[("reason", refusal.key().to_owned())],
+            ));
+            PlaygroundChangeError::from(refusal)
+        })
 }
 
 async fn change_controls(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    match serde_json::from_slice::<ControlsChange>(&body) {
+    let result = match parse_body::<ControlsChange>(&body) {
         Ok(change) => apply_controls(&state, vec![change]).await,
-        Err(error) => reject_malformed(&state, &error),
-    }
+        Err(error) => Err(reject_change_body(&state, error)),
+    };
+    reply(result)
 }
 
 /// Several changes of the controls as one: all are applied, or none is.
 async fn change_controls_batch(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    match serde_json::from_slice::<ControlsBatch>(&body) {
+    let result = match parse_body::<ControlsBatch>(&body) {
         Ok(batch) => apply_controls(&state, batch.changes).await,
-        Err(error) => reject_malformed(&state, &error),
-    }
+        Err(error) => Err(reject_change_body(&state, error)),
+    };
+    reply(result)
+}
+
+/// The sentence for a fixture file whose text does not read as a fixture.
+fn fixture_text_problem(file_name: &str, error: &FixtureError) -> String {
+    format!(
+        "{file_name}, line {}, column {}: {}",
+        error.line, error.column, error.message
+    )
 }
 
 /// Reads and checks the fixture `name` in `directory`, on the blocking pool.
 async fn read_fixture(
     directory: std::path::PathBuf,
     name: String,
-) -> Result<Fixture, (StatusCode, String)> {
+) -> Result<Fixture, SceneApplyError> {
     let read_name = name.clone();
-    let loaded =
-        tokio::task::spawn_blocking(move || read_file(&directory, &read_name, &FIXTURE_EXTENSIONS))
-            .await
-            .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
-    match loaded {
-        Ok(bytes) => Fixture::parse(&String::from_utf8_lossy(&bytes)).map_err(|error| {
-            (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "{name}, line {}, column {}: {}",
-                    error.line, error.column, error.message
-                ),
-            )
-        }),
-        Err(problem) => Err((problem.status(), problem.message())),
-    }
+    let bytes =
+        run_file_task(move || read_file(&directory, &read_name, &FIXTURE_EXTENSIONS)).await?;
+    Fixture::parse(&String::from_utf8_lossy(&bytes)).map_err(|error| SceneApplyError {
+        status: StatusCode::BAD_REQUEST,
+        message: fixture_text_problem(&name, &error),
+    })
 }
 
-/// The ids of the elements on the stage a scene change would be drawn on.
-fn stage_ids(state: &AppState, base: &Fixture) -> Vec<String> {
-    match &base.tv.elements {
+/// The ids of the elements on the stage a scene change would be drawn on, and the camera targets
+/// of the named characters of the layout of the backdrop the page shows (`region:<label>[:<shot>]`,
+/// `locate::shown_backdrop`).
+async fn stage_ids(state: &AppState, base: &Fixture) -> Vec<String> {
+    let mut ids: Vec<String> = match &base.tv.elements {
         ElementSource::Inline(items) => items.iter().map(|item| item.id.clone()).collect(),
         ElementSource::Live(_) => state
             .canvas()
             .elements()
             .map(|element| element.id.to_string())
             .collect(),
+    };
+    // A stored layout that does not read or is stale is not drawn by the page either
+    // (`attach_layout` leaves it off), so it has no targets; `media locate show` says why.
+    let shown = crate::locate::shown_backdrop(state, base).await;
+    if let Ok(Some(crate::locate::ShownBackdrop {
+        layout: Some(layout),
+        ..
+    })) = shown
+    {
+        ids.extend(
+            df_scene_layout::region_targets(&layout)
+                .into_iter()
+                .map(|(id, _)| id),
+        );
     }
+    ids
 }
 
 /// Why a scene change was not applied: the status a route answers with, and the words.
+///
+/// Transitional: the Director builds and reads its two fields, so it stays a struct until the
+/// Director moves onto a typed error; inside this module it is built only from typed sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SceneApplyError {
     pub(crate) status: StatusCode,
     pub(crate) message: String,
 }
 
-impl From<(StatusCode, String)> for SceneApplyError {
-    fn from((status, message): (StatusCode, String)) -> Self {
-        Self { status, message }
+impl From<FileError> for SceneApplyError {
+    fn from(error: FileError) -> Self {
+        Self {
+            status: error.status(),
+            message: error.to_string(),
+        }
     }
 }
 
@@ -278,7 +317,7 @@ fn refuse_scene_change(state: &AppState, reason: &'static str, message: String) 
 }
 
 /// Reads the fixture the live scene is drawn on, with the generation it was read at.
-async fn shown_fixture(state: &AppState) -> Result<(Fixture, u64), SceneApplyError> {
+pub(crate) async fn shown_fixture(state: &AppState) -> Result<(Fixture, u64), SceneApplyError> {
     let Some((name, generation)) = state.playground().scene_target() else {
         return Err(SceneApplyError {
             status: StatusCode::BAD_REQUEST,
@@ -293,7 +332,7 @@ async fn shown_fixture(state: &AppState) -> Result<(Fixture, u64), SceneApplyErr
 /// The ids of the elements on the stage the live scene is drawn on now.
 pub(crate) async fn current_stage_ids(state: &AppState) -> Result<Vec<String>, SceneApplyError> {
     let (base, _) = shown_fixture(state).await?;
-    Ok(stage_ids(state, &base))
+    Ok(stage_ids(state, &base).await)
 }
 
 /// Applies one change to the live scene, checked against the media library and the stage, and
@@ -304,18 +343,13 @@ pub(crate) async fn apply_scene_change(
     change: SceneChange,
 ) -> Result<ControlsReply, SceneApplyError> {
     let (base, generation) = shown_fixture(state).await?;
+    let change = with_backdrop_layout(state, change).await;
     let media_directory = media_directory(state.playground().files());
-    let library = tokio::task::spawn_blocking(move || media_entries(&media_directory))
-        .await
-        .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
-    let library = library.map_err(|problem| SceneApplyError {
-        status: problem.status(),
-        message: problem.message(),
-    })?;
+    let library = run_file_task(move || media_entries(&media_directory)).await?;
     if let Some(message) = media_problem(&change, &library) {
         return Err(refuse_scene_change(state, "no_such_media", message));
     }
-    if let Some(message) = camera_problem(&change, &stage_ids(state, &base)) {
+    if let Some(message) = camera_problem(&change, &stage_ids(state, &base).await) {
         return Err(refuse_scene_change(state, "no_such_element", message));
     }
     // The change is applied only if the fixture is still the one it was checked against.
@@ -327,7 +361,7 @@ pub(crate) async fn apply_scene_change(
         .map_err(|refusal| {
             state.record_line(reject_line(
                 RejectionCause::InvalidValue,
-                &[("reason", refusal.reason().to_owned())],
+                &[("reason", refusal.key().to_owned())],
             ));
             SceneApplyError {
                 status: refusal.status(),
@@ -337,16 +371,13 @@ pub(crate) async fn apply_scene_change(
 }
 
 async fn change_scene(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    let change: SceneChange = match serde_json::from_slice(&body) {
-        Ok(change) => change,
-        Err(error) => return reject_malformed(&state, &error),
+    let result = match parse_body::<SceneChange>(&body) {
+        Ok(change) => apply_scene_change(&state, change)
+            .await
+            .map_err(PlaygroundChangeError::from),
+        Err(error) => Err(reject_change_body(&state, error)),
     };
-    let response = match apply_scene_change(&state, change).await {
-        Ok(reply) => Json(reply).into_response(),
-        Err(error) => refused(error.status, error.message),
-    };
-    state.echo_new_lines();
-    response
+    reply(result)
 }
 
 /// Why a camera move cannot be made with the elements on the stage, or `None` when it can: the
@@ -372,14 +403,6 @@ pub fn camera_problem(change: &SceneChange, stage_ids: &[String]) -> Option<Stri
     })
 }
 
-/// A name for a temporary file that no other write of this host shares, so two writes of the same
-/// fixture at once each fill their own file and the last rename wins whole.
-fn temporary_name(file_name: &str) -> String {
-    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let ordinal = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    format!(".{file_name}.{}.{ordinal}.tmp", std::process::id())
-}
-
 /// Pulls the camera back to the whole stage if it looks at one of the elements in `gone`
 /// (despawned or cleared), as a recorded change: `PLAYGROUND camera_wide reason=target_gone
 /// element=.. over=0 serial=.. revision=..`. The caller announces it.
@@ -401,25 +424,16 @@ pub(crate) fn release_camera_from(state: &AppState, gone: &[String]) {
         });
 }
 
-/// Writes `text` to `directory/file_name` through a temporary file of its own, so a reader never
-/// sees half of it and a concurrent write of the same name never shares the file.
-fn write_fixture_file(directory: &Path, file_name: &str, text: &str) -> Result<(), FileProblem> {
-    std::fs::create_dir_all(directory).map_err(|error| problem_from(&error))?;
-    let temporary = directory.join(temporary_name(file_name));
-    std::fs::write(&temporary, text).map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        problem_from(&error)
-    })?;
-    std::fs::rename(&temporary, directory.join(file_name)).map_err(|error| {
-        let _ = std::fs::remove_file(&temporary);
-        problem_from(&error)
-    })
+/// Writes `text` to `directory/file_name` whole, through a temporary file of its own.
+fn write_fixture_file(directory: &Path, file_name: &str, text: &str) -> Result<(), FileError> {
+    crate::atomic_file::write_atomically(directory, file_name, text.as_bytes())
+        .map_err(FileError::from)
 }
 
 async fn write_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    let request: FixtureWrite = match serde_json::from_slice(&body) {
+    let request: FixtureWrite = match parse_body(&body) {
         Ok(request) => request,
-        Err(error) => return reject_malformed(&state, &error),
+        Err(error) => return reject_body(&state, &error),
     };
     let file_name = match fixture_file_name(&request.name) {
         Ok(file_name) => file_name,
@@ -430,99 +444,123 @@ async fn write_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Respo
             RejectionCause::InvalidValue,
             &[("fixture", file_name.clone())],
         ));
-        state.echo_new_lines();
         return refused(
             StatusCode::BAD_REQUEST,
-            format!(
-                "{file_name}, line {}, column {}: {}",
-                error.line, error.column, error.message
-            ),
+            fixture_text_problem(&file_name, &error),
         );
     }
     let directory = state.playground().files().assets().join(FIXTURE_DIRECTORY);
     let bytes = request.text.len();
     let name = file_name.clone();
-    let written =
-        tokio::task::spawn_blocking(move || write_fixture_file(&directory, &name, &request.text))
-            .await
-            .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())));
-    let response = match written {
-        Ok(()) => {
-            state.record_line(playground_line(
-                "fixture_write",
-                &[("name", file_name), ("bytes", bytes.to_string())],
-            ));
-            match reconcile_after_files_changed(&state).await {
-                Ok(()) => done(&state),
-                Err(problem) => refused(problem.status(), problem.message()),
-            }
-        }
-        Err(problem) => refused(problem.status(), problem.message()),
-    };
-    state.echo_new_lines();
-    response
+    let written = run_file_task(move || write_fixture_file(&directory, &name, &request.text)).await;
+    if let Err(error) = written {
+        return refuse_file(error);
+    }
+    state.record_line(playground_line(
+        "fixture_write",
+        &[("name", file_name), ("bytes", bytes.to_string())],
+    ));
+    match reconcile_after_files_changed(&state).await {
+        Ok(()) => done(&state),
+        Err(error) => refuse_file(error),
+    }
 }
 
 async fn remove_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Response {
-    let request: FixtureRemove = match serde_json::from_slice(&body) {
+    let request: FixtureRemove = match parse_body(&body) {
         Ok(request) => request,
-        Err(error) => return reject_malformed(&state, &error),
+        Err(error) => return reject_body(&state, &error),
     };
     let file_name = match fixture_file_name(&request.name) {
         Ok(file_name) => file_name,
         Err(error) => return refused(StatusCode::BAD_REQUEST, error.to_string()),
     };
-    let path = state
+    let fixture_path = state
         .playground()
         .files()
         .assets()
         .join(FIXTURE_DIRECTORY)
         .join(&file_name);
-    let removed = tokio::task::spawn_blocking(move || std::fs::remove_file(path))
-        .await
-        .unwrap_or_else(|error| Err(std::io::Error::other(error.to_string())));
-    let response = match removed {
-        Ok(()) => {
-            state.record_line(playground_line("fixture_remove", &[("name", file_name)]));
-            match reconcile_after_files_changed(&state).await {
-                Ok(()) => done(&state),
-                Err(problem) => refused(problem.status(), problem.message()),
-            }
+    let removed =
+        run_file_task(move || std::fs::remove_file(fixture_path).map_err(FileError::from)).await;
+    match removed {
+        Ok(()) => {}
+        Err(FileError::NotFound) => {
+            return refused(
+                StatusCode::BAD_REQUEST,
+                format!("there is no fixture '{file_name}'"),
+            );
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => refused(
-            StatusCode::BAD_REQUEST,
-            format!("there is no fixture '{file_name}'"),
-        ),
-        Err(error) => {
-            let problem = problem_from(&error);
-            refused(problem.status(), problem.message())
-        }
-    };
-    state.echo_new_lines();
-    response
+        Err(error) => return refuse_file(error),
+    }
+    state.record_line(playground_line("fixture_remove", &[("name", file_name)]));
+    match reconcile_after_files_changed(&state).await {
+        Ok(()) => done(&state),
+        Err(error) => refuse_file(error),
+    }
 }
 
 /// The playground's routes: its files, what it is showing, and the fixture commands. The page
 /// reads the canvas from the host's own `/canvas.json`.
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route(route::PLAYGROUND, get(files::page))
-        .route(route::PLAYGROUND_SLASH, get(files::page))
-        .route(route::PLAYGROUND_THEME, get(files::theme))
-        .route(route::PLAYGROUND_REVISION, get(files::revision_text))
-        .route(route::PLAYGROUND_FIXTURE_LIST, get(files::fixture_list))
-        .route(route::PLAYGROUND_FIXTURE, get(files::fixture))
-        .route(route::PLAYGROUND_PACKAGE_FILE, get(files::package_file))
-        .route(route::PLAYGROUND_CONTROLS, get(controls_json))
-        .route(route::DEV_PLAYGROUND_CONTROLS, post(change_controls))
+        .route(path::PLAYGROUND, get(files::page))
+        .route(path::PLAYGROUND_SLASH, get(files::page))
+        .route(path::PLAYGROUND_THEME, get(files::theme))
+        .route(path::PLAYGROUND_REVISION, get(files::revision_text))
+        .route(path::PLAYGROUND_FIXTURE_LIST, get(files::fixture_list))
+        .route(path::PLAYGROUND_FIXTURE, get(files::fixture))
+        .route(path::PLAYGROUND_PACKAGE_FILE, get(files::package_file))
+        .route(path::PLAYGROUND_CONTROLS, get(controls_json))
+        .route(path::DEV_PLAYGROUND_CONTROLS, post(change_controls))
         .route(
-            route::DEV_PLAYGROUND_CONTROLS_BATCH,
+            path::DEV_PLAYGROUND_CONTROLS_BATCH,
             post(change_controls_batch),
         )
-        .route(route::DEV_PLAYGROUND_SCENE, post(change_scene))
-        .route(route::PLAYGROUND_CLIENTS, get(clients::clients_json))
-        .route(route::DEV_CLIENT_REPORT, post(clients::receive_report))
-        .route(route::DEV_FIXTURE_WRITE, post(write_fixture))
-        .route(route::DEV_FIXTURE_REMOVE, post(remove_fixture))
+        .route(path::DEV_PLAYGROUND_SCENE, post(change_scene))
+        .route(path::PLAYGROUND_CLIENTS, get(clients::clients_json))
+        .route(path::DEV_CLIENT_REPORT, post(clients::receive_report))
+        .route(path::DEV_FIXTURE_WRITE, post(write_fixture))
+        .route(path::DEV_FIXTURE_REMOVE, post(remove_fixture))
         .with_state(state)
+}
+
+/// A live change of the backdrop picture carries that picture's current layout (`media locate`),
+/// so the characters stay anchored, the SAM layer stays drawn and camera targets stay reachable
+/// after the change. Any other change, or a picture with no current layout, is passed as it came.
+async fn with_backdrop_layout(state: &AppState, change: SceneChange) -> SceneChange {
+    let SceneChange::Image {
+        slot: ImageSlot::TvBackdrop,
+        media,
+        caption,
+        rotation_degrees,
+        slide,
+        layout: None,
+    } = change
+    else {
+        return change;
+    };
+    let files = state.playground().files();
+    let (media_folder, layouts) = (
+        media_directory(files),
+        files.assets().join(crate::locate::LAYOUT_DIRECTORY),
+    );
+    let picture = media.clone();
+    // A stale or unreadable layout is not attached: the picture then shows like one never scanned,
+    // and `media locate show` says why. A stopped task is treated the same way.
+    let layout = tokio::task::spawn_blocking(move || {
+        crate::locate::current_layout(&media_folder, &layouts, &picture)
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .flatten();
+    SceneChange::Image {
+        slot: ImageSlot::TvBackdrop,
+        media,
+        caption,
+        rotation_degrees,
+        slide,
+        layout,
+    }
 }

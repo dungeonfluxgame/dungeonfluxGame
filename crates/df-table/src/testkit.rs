@@ -18,7 +18,8 @@ use crate::identity::{
     Correlation, FactId, OperationId, RecoveryEpoch, SeatId, SessionRevision, TurnSeq,
 };
 use crate::kind::KindRegistry;
-use crate::kind_file::KindFile;
+use crate::kind::file::KindFile;
+use crate::limits::{MAXIMUM_RECORDED_EVENTS, MAXIMUM_REMEMBERED_REQUESTS};
 use crate::outcome::{Decline, DeclineCode};
 use crate::ports::{
     ActionId, Audience, Broker, Clock, CommittedOutcome, ConfirmationReason, Dice, Draw,
@@ -27,15 +28,6 @@ use crate::ports::{
     Resumption, RulesOwner, RulingAnswer, RulingRequest,
 };
 use crate::private_data::{Narration, PlayerText, Secret};
-
-/// The most events a `RecordingSink` keeps unless a test asks for fewer. Deliberately huge so it
-/// never limits a test; scope it down later (owner, 2026-11-02). The oldest are dropped first.
-pub const MAXIMUM_RECORDED_EVENTS: usize = 1_000_000;
-
-/// The most requests a `ScriptedBroker` remembers unless a test asks for fewer. Deliberately huge;
-/// scope it down later (owner, 2026-11-02). The oldest are forgotten first, and asking about a
-/// forgotten handle is `stale`.
-pub const MAXIMUM_REMEMBERED_REQUESTS: usize = 1_000_000;
 
 /// A kind with one of each field type, a label field and a color field.
 pub const CHARACTER_KIND: &str = r##"{

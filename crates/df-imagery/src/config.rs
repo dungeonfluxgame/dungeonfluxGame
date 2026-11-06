@@ -21,6 +21,8 @@ use crate::request::{Purpose, RequestError, RequestLimits};
 pub const CODEX_MAX_MESSAGE_BYTES_DEFAULT: u64 = 24 * 1024 * 1024;
 /// Stdout must hold the largest single protocol line plus the other turn events.
 pub const CODEX_MAX_STDOUT_BYTES_DEFAULT: u64 = 32 * 1024 * 1024;
+/// Stderr is drained and discarded; this only bounds how much is read before the drain stops.
+pub const CODEX_MAX_STDERR_BYTES_DEFAULT: u64 = 256 * 1024;
 /// JSON envelope allowance around one base64 image line.
 const CODEX_MESSAGE_ENVELOPE_BYTES: u64 = 64 * 1024;
 
@@ -178,7 +180,10 @@ impl ApiEndpoint {
         {
             return Err(ConfigError::InvalidField {
                 field: "endpoint",
-                reason: "an endpoint carries a valid http(s) authority and URI path without credentials, query, or fragment",
+                reason: concat!(
+                    "an endpoint carries a valid http(s) authority and URI path without ",
+                    "credentials, query, or fragment",
+                ),
             });
         }
         let parsed = url::Url::parse(trimmed).map_err(|_| ConfigError::InvalidField {
@@ -221,32 +226,36 @@ fn is_valid_endpoint_path(path: &str) -> bool {
             {
                 return false;
             }
-        } else if !byte.is_ascii_alphanumeric()
-            && !matches!(
-                byte,
-                b'-' | b'.'
-                    | b'_'
-                    | b'~'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b';'
-                    | b'='
-                    | b':'
-                    | b'@'
-                    | b'/'
-            )
-        {
+        } else if !is_uri_path_segment_byte(byte) && byte != b'/' {
             return false;
         }
     }
     true
+}
+
+/// RFC 3986 `pchar` bytes other than percent escapes: unreserved, sub-delims, `:` and `@`.
+/// The one byte set behind every endpoint path check in this crate.
+pub(crate) fn is_uri_path_segment_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'-' | b'.'
+                | b'_'
+                | b'~'
+                | b'!'
+                | b'$'
+                | b'&'
+                | b'\''
+                | b'('
+                | b')'
+                | b'*'
+                | b'+'
+                | b','
+                | b';'
+                | b'='
+                | b':'
+                | b'@'
+        )
 }
 
 /// Codex executable selection: a bare command resolved through `PATH`
@@ -634,7 +643,8 @@ pub struct SegmentationRoute {
     pub endpoint: ApiEndpoint,
 }
 
-/// Trusted, operator-configured analysis routes; request data cannot choose credential destinations.
+/// Trusted, operator-configured analysis routes; request data cannot choose credential
+/// destinations.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisSettings {
     pub preparation: AnalysisPreparationLimits,
@@ -711,7 +721,7 @@ pub struct ImageConfig {
 
 impl ImageConfig {
     /// Built-in defaults; the operator file and overrides replace them. The
-    /// enabled OpenAI backend and per-purpose defaults are placeholders the
+    /// enabled Codex CLI backend and per-purpose defaults are placeholders the
     /// coordinator must confirm before any dispatch is enabled.
     pub fn defaults() -> Result<Self, ConfigError> {
         let purposes = std::array::from_fn(|_| PurposeGate {
@@ -724,48 +734,18 @@ impl ImageConfig {
             model_override: None,
         });
         let account = AccountHandle::new("default")?;
+        // In `BackendId::index` order: OpenAI, fal, BFL, Codex CLI.
         let backends = [
-            BackendGate {
-                enabled: false,
-                account: account.clone(),
-                max_concurrent_jobs: 3,
-                model: None,
-                generation_model: None,
-                edit_model: None,
-                alpha_model: None,
-                endpoint: None,
-            },
-            BackendGate {
-                enabled: false,
-                account: account.clone(),
-                max_concurrent_jobs: 3,
-                model: None,
-                generation_model: None,
-                edit_model: None,
-                alpha_model: None,
-                endpoint: None,
-            },
-            BackendGate {
-                enabled: false,
-                account: account.clone(),
-                max_concurrent_jobs: 2,
-                model: None,
-                generation_model: None,
-                edit_model: None,
-                alpha_model: None,
-                endpoint: None,
-            },
-            BackendGate {
-                enabled: true,
-                account,
-                max_concurrent_jobs: 2,
-                model: None,
-                generation_model: None,
-                edit_model: None,
-                alpha_model: None,
-                endpoint: None,
-            },
+            default_backend_gate(&account, false, 3),
+            default_backend_gate(&account, false, 3),
+            default_backend_gate(&account, false, 2),
+            default_backend_gate(&account, true, 2),
         ];
+        let default_profile_name =
+            OutputProfileName::new("default").map_err(|_| ConfigError::InvalidField {
+                field: "outputs.default_profile",
+                reason: "the default profile names a listed profile",
+            })?;
         let config = Self {
             mode: GlobalMode::Live,
             default_backend: BackendId::CodexCli,
@@ -799,20 +779,12 @@ impl ImageConfig {
                 cli_profile: CliProfileRevision::new("codex-images-v1")?,
                 agent_model: None,
                 max_stdout_bytes: CODEX_MAX_STDOUT_BYTES_DEFAULT,
-                max_stderr_bytes: 256 * 1024,
+                max_stderr_bytes: CODEX_MAX_STDERR_BYTES_DEFAULT,
                 max_message_bytes: CODEX_MAX_MESSAGE_BYTES_DEFAULT,
             },
-            default_output_profile: OutputProfileName::new("default").map_err(|_| {
-                ConfigError::InvalidField {
-                    field: "outputs.default_profile",
-                    reason: "the default profile names a listed profile",
-                }
-            })?,
+            default_output_profile: default_profile_name.clone(),
             output_profiles: vec![NamedOutputProfile::new(
-                OutputProfileName::new("default").map_err(|_| ConfigError::InvalidField {
-                    field: "outputs.default_profile",
-                    reason: "the default profile names a listed profile",
-                })?,
+                default_profile_name,
                 default_profile_body()?,
             )],
             retry: RetryPolicy {
@@ -1073,6 +1045,24 @@ impl ImageConfig {
         self.retry
             .retry_deadline_secs
             .min(self.scheduler.job_deadline_secs)
+    }
+}
+
+/// One built-in backend gate: the shared default account, no model or endpoint selection.
+fn default_backend_gate(
+    account: &AccountHandle,
+    enabled: bool,
+    max_concurrent_jobs: u32,
+) -> BackendGate {
+    BackendGate {
+        enabled,
+        account: account.clone(),
+        max_concurrent_jobs,
+        model: None,
+        generation_model: None,
+        edit_model: None,
+        alpha_model: None,
+        endpoint: None,
     }
 }
 

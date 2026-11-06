@@ -5,9 +5,9 @@
 //! of `request` and prints their fields. Times are printed as seconds and tenths, from whole
 //! milliseconds. Player text never reaches it, because no reply holds any.
 
-use df_table::plate_buffer::BufferReport;
-use df_table::plate_cost::{CostBasis, CostView, StagePrice};
-use df_table::plate_scheduler::SchedulerReport;
+use df_table::plate::buffer::BufferReport;
+use df_table::plate::cost::{CostBasis, CostView, StagePrice};
+use df_table::plate::scheduler::SchedulerReport;
 
 use super::report::{AnchorReport, CardReport, JobReport, LocateReport, SceneReport};
 use super::request::{
@@ -49,10 +49,13 @@ fn outcome_text(outcome: &BuildOutcome) -> String {
             format!("the first plate was on screen after {}", seconds(*at_ms))
         }
         BuildOutcome::Ended { end, stage, cause } => match (stage, cause) {
-            (Some(stage), Some(cause)) => {
-                format!("the job ended {end}: the {stage} stage failed ({cause})")
-            }
-            _ => format!("the job ended {end}"),
+            (Some(stage), Some(cause)) => format!(
+                "the job ended {}: the {} stage failed ({})",
+                end.key(),
+                stage.key(),
+                cause.key()
+            ),
+            _ => format!("the job ended {}", end.key()),
         },
         BuildOutcome::NoPlate => "no plate came".to_owned(),
     }
@@ -65,17 +68,14 @@ pub fn format_build(reply: &BuildReply) -> String {
             seconds(after)
         )
     });
-    let ahead = reply
-        .lookahead
-        .as_ref()
-        .map_or_else(String::new, |outcome| {
-            format!("\nthe look-ahead found it: {outcome}")
-        });
+    let ahead = reply.lookahead.map_or_else(String::new, |take| {
+        format!("\nthe look-ahead found it: {}", take.key())
+    });
     format!(
         "scene {} (generation {}), {}: {}, {} in all{card}{ahead}\n{}",
         reply.scene,
         reply.generation,
-        reply.place,
+        reply.place.as_str(),
         outcome_text(&reply.outcome),
         seconds(reply.elapsed_ms),
         numbered(reply.lines.iter().map(timed))
@@ -136,19 +136,23 @@ fn job_line(job: &JobReport) -> String {
     let stored = if job.stored.is_empty() {
         "none".to_owned()
     } else {
-        job.stored.join(", ")
+        let keys: Vec<&str> = job.stored.iter().map(|stage| stage.key()).collect();
+        keys.join(", ")
     };
     let running = job
         .running
-        .as_deref()
-        .map_or_else(String::new, |stage| format!(", running {stage}"));
+        .map_or_else(String::new, |stage| format!(", running {}", stage.key()));
     let failed = job.failure.as_ref().map_or_else(String::new, |failure| {
-        format!(", failed at {} ({})", failure.stage, failure.cause)
+        format!(
+            ", failed at {} ({})",
+            failure.stage.key(),
+            failure.cause.key()
+        )
     });
     format!(
         "job {} ({}, tick at {}): {} figures, stored {stored}{running}{failed}",
         job.job,
-        job.cause,
+        job.reason.key(),
         seconds(job.tick_ms),
         job.figures
     )
@@ -271,7 +275,7 @@ fn scheduler_lines(scheduler: &SchedulerReport) -> Vec<String> {
         format!(
             "queued job {} ({}, tick at {})",
             job.job,
-            job.cause,
+            job.reason,
             seconds(job.tick_ms)
         )
     }));
@@ -398,7 +402,7 @@ pub fn format_run(reply: &RunReply) -> String {
         } else {
             ""
         },
-        reply.moment
+        reply.moment.key()
     );
     let lines = numbered(reply.lines.iter().map(timed));
     let buffer = numbered(buffer_lines(&reply.buffer));

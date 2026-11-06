@@ -11,11 +11,11 @@
 //!
 //! The shared `NativeHttp` transport cannot carry this provider: it only builds
 //! Bearer / fal / ElevenLabs credential headers (Marble needs `WLT-Api-Key`) and
-//! it caps responses at 16 MiB with a JSON content type, while a 500k PLY is
-//! 28 MB of binary. This module therefore builds its own `reqwest` client with
-//! the same posture (no redirects, no proxy, no retries, bounded connect / read
-//! / total timeouts, bounded headers and streamed bounded bodies) and validates
-//! its bounds through [`NativeHttpLimits`] / `NativeHttp` construction.
+//! it accepts only JSON or MPEG bodies, while a PLY is binary. This module
+//! therefore builds its own `reqwest` client from the shared hardened posture
+//! (no redirects, no proxy, no retries, bounded connect / read / total timeouts,
+//! bounded headers and streamed bounded bodies) and validates its bounds through
+//! `NativeHttp` construction.
 
 use std::{
     fmt,
@@ -26,17 +26,28 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 
-use crate::NativeHttpLimits;
-use crate::native_http::NativeHttp;
+use crate::native_http::{
+    MAXIMUM_CHUNKS, NativeHttp, hardened_client_builder, header_block_bytes, is_loopback_socket,
+    is_valid_credential,
+};
+use crate::output_fetch::{MAXIMUM_LOCATOR_BYTES, is_public};
+use crate::{HttpMethod, ProviderLimits};
 
 const LIVE_BASE: &str = "https://api.worldlabs.ai";
+// The image, display name and prompt bounds are the Marble request contract.
 const MAXIMUM_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAXIMUM_DISPLAY_NAME_CHARACTERS: usize = 64;
 const MAXIMUM_TEXT_PROMPT_CHARACTERS: usize = 4_000;
-const MAXIMUM_JSON_RESPONSE_BYTES: usize = 1024 * 1024;
+/// The largest request body sent, in bytes: a base64 image of [`MAXIMUM_IMAGE_BYTES`] and JSON.
+const MAXIMUM_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+/// The largest JSON answer kept, in bytes (operations are a few KiB).
+const MAXIMUM_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+/// The largest response header block, in bytes.
 const MAXIMUM_HEADER_BYTES: usize = 16 * 1024;
-const MAXIMUM_CHUNKS: usize = 65_536;
-const MAXIMUM_DOWNLOAD_BYTES: u64 = 256 * 1024 * 1024;
+/// The largest download a caller may ask for, in bytes: room for full-resolution PLY splats.
+const MAXIMUM_DOWNLOAD_BYTES: u64 = 1024 * 1024 * 1024;
+/// The longest operation failure message kept, in characters.
+const MAXIMUM_FAILURE_MESSAGE_CHARACTERS: usize = 512;
 const EXPORT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const DOWNLOAD_HOSTS: &[&str] = &["cdn.marble.worldlabs.ai", "wlt-ai-cdn.art"];
 
@@ -234,7 +245,7 @@ impl WorldLabsConfig {
 
     /// A literal loopback socket for tests.
     pub fn loopback_fixture(address: SocketAddr) -> Result<Self, WorldLabsError> {
-        if !address.ip().is_loopback() || address.port() == 0 {
+        if !is_loopback_socket(address) {
             return Err(WorldLabsError::InvalidRequest);
         }
         Ok(Self {
@@ -267,37 +278,20 @@ impl NativeWorldLabs {
         api_key: &str,
         total_timeout: Duration,
     ) -> Result<Self, WorldLabsError> {
-        if api_key.is_empty()
-            || api_key.len() > 4096
-            || !api_key.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-            || total_timeout.is_zero()
-            || total_timeout > Duration::from_secs(180)
-        {
+        if !is_valid_credential(api_key) {
             return Err(WorldLabsError::InvalidRequest);
         }
-        // Validate the bounds through the shared transport's own gate.
-        let limits = NativeHttpLimits {
-            connect_timeout: Duration::from_secs(5).min(total_timeout),
-            read_timeout: total_timeout,
+        let limits = ProviderLimits::new(
             total_timeout,
-            maximum_request_bytes: 16 * 1024 * 1024,
-            maximum_response_bytes: MAXIMUM_JSON_RESPONSE_BYTES,
-            maximum_header_bytes: MAXIMUM_HEADER_BYTES,
-            maximum_chunks: MAXIMUM_CHUNKS,
-        };
-        let _ = NativeHttp::new(limits, config.fixture.is_some())
+            MAXIMUM_REQUEST_BYTES,
+            MAXIMUM_JSON_RESPONSE_BYTES,
+        )
+        .header_bytes(MAXIMUM_HEADER_BYTES)
+        .build();
+        // Only the validation is wanted: the shared transport refuses a zero or over-long timeout.
+        NativeHttp::new(limits, config.fixture.is_some())
             .map_err(|_| WorldLabsError::InvalidRequest)?;
-        let client = reqwest::Client::builder()
-            .tls_backend_rustls()
-            .https_only(config.fixture.is_none())
-            .retry(reqwest::retry::never())
-            .redirect(reqwest::redirect::Policy::none())
-            .referer(false)
-            .connection_verbose(false)
-            .no_proxy()
-            .connect_timeout(limits.connect_timeout)
-            .read_timeout(limits.read_timeout)
-            .timeout(limits.total_timeout)
+        let client = hardened_client_builder(&limits, config.fixture.is_none())
             .build()
             .map_err(|_| WorldLabsError::InvalidRequest)?;
         Ok(Self {
@@ -317,7 +311,7 @@ impl NativeWorldLabs {
     pub async fn submit(&self, request: &WorldRequest<'_>) -> Result<OperationId, WorldLabsError> {
         let body = submit_body(request)?;
         let value = self
-            .api_json("POST", "/marble/v1/worlds:generate", Some(body))
+            .api_json(HttpMethod::Post, "/marble/v1/worlds:generate", Some(body))
             .await?;
         let id = value
             .get("operation_id")
@@ -330,7 +324,7 @@ impl NativeWorldLabs {
     pub async fn poll(&self, operation: &OperationId) -> Result<WorldPoll, WorldLabsError> {
         let value = self
             .api_json(
-                "GET",
+                HttpMethod::Get,
                 &format!("/marble/v1/operations/{}", operation.as_str()),
                 None,
             )
@@ -357,7 +351,7 @@ impl NativeWorldLabs {
         });
         let mut value = self
             .api_json(
-                "POST",
+                HttpMethod::Post,
                 &format!("/marble/v1/worlds/{world_id}:export"),
                 Some(body.to_string().into_bytes()),
             )
@@ -391,7 +385,11 @@ impl NativeWorldLabs {
             }
             tokio::time::sleep(EXPORT_POLL_INTERVAL).await;
             value = self
-                .api_json("GET", &format!("/marble/v1/operations/{next}"), None)
+                .api_json(
+                    HttpMethod::Get,
+                    &format!("/marble/v1/operations/{next}"),
+                    None,
+                )
                 .await?;
         }
     }
@@ -468,7 +466,7 @@ impl NativeWorldLabs {
     }
 
     fn resolve_download_url(&self, url: &str) -> Result<String, WorldLabsError> {
-        if url.is_empty() || url.len() > 8192 {
+        if url.is_empty() || url.len() > MAXIMUM_LOCATOR_BYTES {
             return Err(WorldLabsError::InvalidRequest);
         }
         if let Some(address) = self.fixture {
@@ -500,16 +498,18 @@ impl NativeWorldLabs {
         Ok(url.to_owned())
     }
 
+    /// One JSON exchange with the API, sent with exactly the given method.
     async fn api_json(
         &self,
-        method: &str,
+        method: HttpMethod,
         path: &str,
         body: Option<Vec<u8>>,
     ) -> Result<Value, WorldLabsError> {
         let url = format!("{}{path}", self.base);
         let mut builder = match method {
-            "GET" => self.client.get(&url),
-            _ => self.client.post(&url),
+            HttpMethod::Get => self.client.get(&url),
+            HttpMethod::Post => self.client.post(&url),
+            HttpMethod::Put => self.client.put(&url),
         }
         .header("WLT-Api-Key", &self.api_key)
         .header("Content-Type", "application/json");
@@ -584,67 +584,24 @@ async fn pinned_download_client(
             .map_err(|_| WorldLabsError::Timeout)?
             .map_err(|_| WorldLabsError::Transport)?
             .collect();
-    if resolved.is_empty()
-        || resolved
-            .iter()
-            .any(|address| !is_public_address(address.ip()))
-    {
+    if resolved.is_empty() || resolved.iter().any(|address| !is_public(address.ip())) {
         return Err(WorldLabsError::Transport);
     }
-    let pinned: Vec<SocketAddr> = resolved.clone();
-    let client = reqwest::Client::builder()
-        .tls_backend_rustls()
-        .https_only(true)
-        .retry(reqwest::retry::never())
-        .redirect(reqwest::redirect::Policy::none())
-        .referer(false)
-        .connection_verbose(false)
-        .no_proxy()
-        .connect_timeout(Duration::from_secs(5).min(total_timeout))
-        .read_timeout(total_timeout)
-        .timeout(total_timeout)
-        .resolve_to_addrs(host, &pinned)
+    // Only the timeouts shape the client; the download bound is enforced while reading.
+    let limits = ProviderLimits::new(
+        total_timeout,
+        MAXIMUM_REQUEST_BYTES,
+        MAXIMUM_JSON_RESPONSE_BYTES,
+    )
+    .build();
+    let client = hardened_client_builder(&limits, true)
+        .resolve_to_addrs(host, &resolved)
         .build()
         .map_err(|_| WorldLabsError::Transport)?;
     Ok((
         client,
         resolved.into_iter().map(|address| address.ip()).collect(),
     ))
-}
-
-fn is_public_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            let [a, b, c, _] = address.octets();
-            !(a == 0
-                || a == 10
-                || a == 127
-                || (a == 100 && (64..=127).contains(&b))
-                || (a == 169 && b == 254)
-                || (a == 172 && (16..=31).contains(&b))
-                || (a == 192 && b == 0 && c == 0)
-                || (a == 192 && b == 0 && c == 2)
-                || (a == 192 && b == 88 && c == 99)
-                || (a == 192 && b == 168)
-                || (a == 198 && (b == 18 || b == 19 || b == 51 && c == 100))
-                || (a == 203 && b == 0 && c == 113)
-                || a >= 224)
-        }
-        IpAddr::V6(address) => {
-            let segments = address.segments();
-            !((segments[0] & 0xe000) != 0x2000
-                || address.is_unspecified()
-                || address.is_loopback()
-                || (segments[0] & 0xfe00) == 0xfc00
-                || (segments[0] & 0xffc0) == 0xfe80
-                || (segments[0] & 0xff00) == 0xff00
-                || (segments[0] == 0x2001 && segments[1] <= 0x01ff)
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                || address
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| !is_public_address(IpAddr::V4(mapped))))
-        }
-    }
 }
 
 fn submit_body(request: &WorldRequest<'_>) -> Result<Vec<u8>, WorldLabsError> {
@@ -684,13 +641,7 @@ fn parse_json(bytes: &[u8]) -> Result<Value, WorldLabsError> {
 }
 
 fn check_header_bytes(response: &reqwest::Response) -> Result<(), WorldLabsError> {
-    let mut total = 0usize;
-    for (name, value) in response.headers() {
-        total = total
-            .checked_add(name.as_str().len() + value.as_bytes().len())
-            .ok_or(WorldLabsError::Transport)?;
-    }
-    if total > MAXIMUM_HEADER_BYTES {
+    if header_block_bytes(response.headers()).is_none_or(|bytes| bytes > MAXIMUM_HEADER_BYTES) {
         return Err(WorldLabsError::Transport);
     }
     Ok(())
@@ -760,7 +711,9 @@ fn operation_error(value: &Value) -> Option<String> {
 }
 
 fn truncate_failed(text: &str) -> String {
-    text.chars().take(512).collect()
+    text.chars()
+        .take(MAXIMUM_FAILURE_MESSAGE_CHARACTERS)
+        .collect()
 }
 
 fn export_url(value: &Value) -> Option<String> {
@@ -769,8 +722,20 @@ fn export_url(value: &Value) -> Option<String> {
         .and_then(|response| response.get("url"))
         .or_else(|| value.get("url"))
         .and_then(Value::as_str)
-        .filter(|url| !url.is_empty() && url.len() <= 8192)
+        .filter(|url| !url.is_empty() && url.len() <= MAXIMUM_LOCATOR_BYTES)
         .map(str::to_owned)
+}
+
+/// The credits a cost figure records: a whole number as is, a fractional one rounded up so spend
+/// is never under-recorded. A negative, non-finite or out-of-range figure records nothing rather
+/// than a fabricated zero.
+fn spent_credits(credits: &Value) -> Option<u64> {
+    if let Some(whole) = credits.as_u64() {
+        return Some(whole);
+    }
+    let figure = credits.as_f64()?.ceil();
+    // `u64::MAX as f64` rounds up to 2^64, so the strict bound keeps the conversion exact.
+    (figure.is_finite() && figure >= 0.0 && figure < u64::MAX as f64).then_some(figure as u64)
 }
 
 fn parse_poll(value: &Value) -> Result<WorldPoll, WorldLabsError> {
@@ -821,13 +786,10 @@ fn parse_poll(value: &Value) -> Result<WorldPoll, WorldLabsError> {
             .and_then(Value::as_f64)
             .filter(|number| number.is_finite())
     };
-    let credits = value.get("cost").and_then(|cost| {
-        cost.get("total_credits").and_then(|credits| {
-            credits
-                .as_u64()
-                .or_else(|| credits.as_f64().map(|n| n as u64))
-        })
-    });
+    let credits = value
+        .get("cost")
+        .and_then(|cost| cost.get("total_credits"))
+        .and_then(spent_credits);
     Ok(WorldPoll::Done(WorldResult {
         world_id,
         collider_url,
@@ -840,502 +802,4 @@ fn parse_poll(value: &Value) -> Result<WorldPoll, WorldLabsError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{
-        io::{Read, Write},
-        net::TcpListener,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
-        },
-        thread,
-        time::Instant,
-    };
-
-    const KEY: &str = "fixture-secret-key-123";
-
-    #[derive(Clone)]
-    struct Reply {
-        status: u16,
-        content_type: &'static str,
-        body: Vec<u8>,
-        location: Option<&'static str>,
-    }
-
-    fn json_reply(status: u16, value: Value) -> Reply {
-        Reply {
-            status,
-            content_type: "application/json",
-            body: serde_json::to_vec(&value).unwrap(),
-            location: None,
-        }
-    }
-
-    struct Seen {
-        method: String,
-        path: String,
-        key: Option<String>,
-        body: Vec<u8>,
-    }
-
-    struct Fixture {
-        address: SocketAddr,
-        seen: Arc<Mutex<Vec<Seen>>>,
-        stop: Arc<AtomicBool>,
-        join: Option<thread::JoinHandle<()>>,
-    }
-
-    impl Fixture {
-        fn new(replies: Vec<Reply>) -> Self {
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.set_nonblocking(true).unwrap();
-            let address = listener.local_addr().unwrap();
-            let seen = Arc::new(Mutex::new(Vec::new()));
-            let record = seen.clone();
-            let stop = Arc::new(AtomicBool::new(false));
-            let stopped = stop.clone();
-            let join = thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(15);
-                let mut index = 0usize;
-                while !stopped.load(Ordering::Acquire) && Instant::now() < deadline {
-                    let (mut socket, _) = match listener.accept() {
-                        Ok(pair) => pair,
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                            thread::sleep(Duration::from_millis(2));
-                            continue;
-                        }
-                        Err(error) => panic!("fixture accept: {error}"),
-                    };
-                    socket.set_nonblocking(false).unwrap();
-                    socket
-                        .set_read_timeout(Some(Duration::from_secs(2)))
-                        .unwrap();
-                    let mut data = Vec::new();
-                    let end = loop {
-                        let mut block = [0; 4096];
-                        let count = socket.read(&mut block).unwrap();
-                        assert!(count > 0);
-                        data.extend_from_slice(&block[..count]);
-                        if let Some(end) = data.windows(4).position(|w| w == b"\r\n\r\n") {
-                            break end + 4;
-                        }
-                    };
-                    let head = String::from_utf8(data[..end].to_vec()).unwrap();
-                    let length = head
-                        .lines()
-                        .find_map(|line| {
-                            line.to_ascii_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|value| value.trim().parse::<usize>().unwrap())
-                        })
-                        .unwrap_or(0);
-                    while data.len() - end < length {
-                        let mut block = [0; 4096];
-                        let count = socket.read(&mut block).unwrap();
-                        assert!(count > 0);
-                        data.extend_from_slice(&block[..count]);
-                    }
-                    let mut first = head.lines().next().unwrap().split_whitespace();
-                    let (method, path) = (
-                        first.next().unwrap().to_owned(),
-                        first.next().unwrap().to_owned(),
-                    );
-                    let key = head.lines().find_map(|line| {
-                        let lower = line.to_ascii_lowercase();
-                        lower
-                            .strip_prefix("wlt-api-key:")
-                            .map(|value| value.trim().to_owned())
-                    });
-                    record.lock().unwrap().push(Seen {
-                        method,
-                        path,
-                        key,
-                        body: data[end..].to_vec(),
-                    });
-                    let reply = replies[index.min(replies.len() - 1)].clone();
-                    index += 1;
-                    let location = reply
-                        .location
-                        .map(|value| format!("Location: {value}\r\n"))
-                        .unwrap_or_default();
-                    let header = format!(
-                        "HTTP/1.1 {} fixture\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n{location}\r\n",
-                        reply.status,
-                        reply.content_type,
-                        reply.body.len()
-                    );
-                    let _ = socket.write_all(header.as_bytes());
-                    let _ = socket.write_all(&reply.body);
-                }
-            });
-            Self {
-                address,
-                seen,
-                stop,
-                join: Some(join),
-            }
-        }
-
-        fn client(&self) -> NativeWorldLabs {
-            NativeWorldLabs::new(
-                WorldLabsConfig::loopback_fixture(self.address).unwrap(),
-                KEY,
-                Duration::from_secs(5),
-            )
-            .unwrap()
-        }
-
-        fn finish(&mut self) -> Vec<Seen> {
-            self.stop.store(true, Ordering::Release);
-            if let Some(join) = self.join.take() {
-                join.join().unwrap();
-            }
-            std::mem::take(&mut *self.seen.lock().unwrap())
-        }
-    }
-
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            self.stop.store(true, Ordering::Release);
-            if let Some(join) = self.join.take() {
-                let _ = join.join();
-            }
-        }
-    }
-
-    fn request() -> WorldRequest<'static> {
-        WorldRequest {
-            display_name: "cloth shop",
-            image_jpeg: b"\xff\xd8\xff\xe0jpeg-bytes",
-            text_prompt: "An empty period cloth shop, photographic.",
-            model: MarbleModel::Marble11,
-        }
-    }
-
-    fn done_operation() -> Value {
-        json!({
-            "operation_id": "op-1",
-            "done": true,
-            "error": null,
-            "response": {
-                "world_id": "world-1",
-                "assets": {
-                    "mesh": {"collider_mesh_url": "https://cdn.example/world-1/c.glb"},
-                    "splats": {"semantics_metadata": {"metric_scale_factor": 1.5014322, "ground_plane_offset": 1.2088797}},
-                    "thumbnail_url": "https://cdn.example/world-1/t.webp",
-                    "caption": "A cloth shop."
-                }
-            },
-            "cost": {"total_credits": 1580, "line_items": []}
-        })
-    }
-
-    #[test]
-    fn model_and_resolution_strings_are_the_api_names() {
-        assert_eq!(MarbleModel::Draft.as_str(), "marble-1.0-draft");
-        assert_eq!(MarbleModel::Marble11.as_str(), "marble-1.1");
-        assert_eq!(PlyResolution::K100.as_str(), "100k");
-        assert_eq!(PlyResolution::K500.as_str(), "500k");
-        assert_eq!(PlyResolution::FullRes.as_str(), "full_res");
-        assert_eq!(
-            WorldLabsError::InsufficientCredits.label(),
-            "insufficient_credits"
-        );
-        assert_eq!(WorldLabsError::Http(500).label(), "http_status");
-    }
-
-    #[test]
-    fn config_and_credential_validation() {
-        assert!(WorldLabsConfig::loopback_fixture("8.8.8.8:443".parse().unwrap()).is_err());
-        assert!(WorldLabsConfig::loopback_fixture("127.0.0.1:0".parse().unwrap()).is_err());
-        assert!(NativeWorldLabs::new(WorldLabsConfig::live(), "", Duration::from_secs(5)).is_err());
-        assert!(
-            NativeWorldLabs::new(WorldLabsConfig::live(), "has space", Duration::from_secs(5))
-                .is_err()
-        );
-        assert!(NativeWorldLabs::new(WorldLabsConfig::live(), KEY, Duration::ZERO).is_err());
-    }
-
-    #[test]
-    fn the_key_never_appears_in_debug_output() {
-        let mut fixture = Fixture::new(vec![json_reply(
-            200,
-            json!({"operation_id": "op-1", "done": false}),
-        )]);
-        let client = fixture.client();
-        let req = request();
-        let debug = format!("{client:?} {req:?}");
-        assert!(!debug.contains(KEY), "{debug}");
-        fixture.finish();
-    }
-
-    #[test]
-    fn parse_poll_reads_proof_scale_fields_and_draft_null() {
-        match parse_poll(&done_operation()).unwrap() {
-            WorldPoll::Done(result) => {
-                assert_eq!(result.metric_scale_factor, Some(1.5014322));
-                assert_eq!(result.ground_plane_offset, Some(1.2088797));
-                assert_eq!(result.credits, Some(1580));
-                assert_eq!(
-                    result.collider_url.as_deref(),
-                    Some("https://cdn.example/world-1/c.glb")
-                );
-            }
-            other => panic!("{other:?}"),
-        }
-        let draft = json!({
-            "done": true, "error": null,
-            "response": {"world_id": "w-draft", "assets": {"splats": {"semantics_metadata": null}, "caption": "x"}},
-            "cost": {"total_credits": 230}
-        });
-        match parse_poll(&draft).unwrap() {
-            WorldPoll::Done(result) => {
-                assert_eq!(result.metric_scale_factor, None);
-                assert_eq!(result.ground_plane_offset, None);
-            }
-            other => panic!("{other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn submit_sends_image_world_prompt_and_key_header() {
-        let mut fixture = Fixture::new(vec![json_reply(
-            200,
-            json!({"operation_id": "op-abc", "done": false, "error": null}),
-        )]);
-        let id = fixture.client().submit(&request()).await.unwrap();
-        assert_eq!(id.as_str(), "op-abc");
-        let seen = fixture.finish();
-        assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].method, "POST");
-        assert_eq!(seen[0].path, "/marble/v1/worlds:generate");
-        assert_eq!(seen[0].key.as_deref(), Some(KEY));
-        let sent: Value = serde_json::from_slice(&seen[0].body).unwrap();
-        assert_eq!(sent["model"], "marble-1.1");
-        assert_eq!(sent["display_name"], "cloth shop");
-        assert_eq!(sent["permission"]["public"], false);
-        assert_eq!(sent["world_prompt"]["type"], "image");
-        assert_eq!(sent["world_prompt"]["is_pano"], false);
-        assert_eq!(
-            sent["world_prompt"]["image_prompt"]["source"],
-            "data_base64"
-        );
-        assert_eq!(sent["world_prompt"]["image_prompt"]["extension"], "jpg");
-        assert!(
-            sent["world_prompt"]["image_prompt"]["data_base64"]
-                .as_str()
-                .unwrap()
-                .len()
-                > 8
-        );
-    }
-
-    #[tokio::test]
-    async fn poll_pending_then_done_parses_world() {
-        let mut fixture = Fixture::new(vec![
-            json_reply(
-                200,
-                json!({"operation_id": "op-1", "done": false, "error": null}),
-            ),
-            json_reply(200, done_operation()),
-        ]);
-        let client = fixture.client();
-        let op = OperationId::new("op-1").unwrap();
-        assert_eq!(client.poll(&op).await.unwrap(), WorldPoll::Pending);
-        match client.poll(&op).await.unwrap() {
-            WorldPoll::Done(result) => {
-                assert_eq!(result.world_id, "world-1");
-                assert_eq!(result.caption, "A cloth shop.");
-                assert_eq!(
-                    result.thumbnail_url.as_deref(),
-                    Some("https://cdn.example/world-1/t.webp")
-                );
-                assert_eq!(result.metric_scale_factor, Some(1.5014322));
-                assert_eq!(result.ground_plane_offset, Some(1.2088797));
-                assert_eq!(result.credits, Some(1580));
-            }
-            other => panic!("{other:?}"),
-        }
-        let seen = fixture.finish();
-        assert!(
-            seen.iter()
-                .all(|call| call.method == "GET" && call.path == "/marble/v1/operations/op-1")
-        );
-    }
-
-    #[tokio::test]
-    async fn poll_failed_operation_returns_message() {
-        let mut fixture = Fixture::new(vec![json_reply(
-            200,
-            json!({"operation_id": "op-1", "done": true, "error": {"code": 400, "message": "generation failed"}}),
-        )]);
-        let op = OperationId::new("op-1").unwrap();
-        assert_eq!(
-            fixture.client().poll(&op).await.unwrap(),
-            WorldPoll::Failed("generation failed".to_owned())
-        );
-        fixture.finish();
-    }
-
-    #[tokio::test]
-    async fn export_ply_returns_signed_url_and_sends_ply_request() {
-        let mut fixture = Fixture::new(vec![json_reply(
-            200,
-            json!({"operation_id": "exp-1", "done": true, "error": null, "response": {"asset_type": "splats", "format": "ply", "resolution": "500k", "url": "https://cdn.example/world-1/x.ply?sig=1"}}),
-        )]);
-        let url = fixture
-            .client()
-            .export_ply("world-1", PlyResolution::K500)
-            .await
-            .unwrap();
-        assert_eq!(url, "https://cdn.example/world-1/x.ply?sig=1");
-        let seen = fixture.finish();
-        assert_eq!(seen[0].path, "/marble/v1/worlds/world-1:export");
-        let sent: Value = serde_json::from_slice(&seen[0].body).unwrap();
-        assert_eq!(
-            sent,
-            json!({"asset_type": "splats", "format": "ply", "resolution": "500k"})
-        );
-    }
-
-    #[tokio::test]
-    async fn download_is_bounded_and_sends_no_key() {
-        let mut fixture = Fixture::new(vec![
-            Reply {
-                status: 200,
-                content_type: "application/octet-stream",
-                body: b"PLYDATA".to_vec(),
-                location: None,
-            },
-            Reply {
-                status: 200,
-                content_type: "application/octet-stream",
-                body: b"PLYDATA".to_vec(),
-                location: None,
-            },
-        ]);
-        let client = fixture.client();
-        let url = format!("http://{}/asset.ply", fixture.address);
-        assert_eq!(client.download(&url, 1024).await.unwrap(), b"PLYDATA");
-        assert_eq!(
-            client.download(&url, 4).await.unwrap_err(),
-            WorldLabsError::Transport
-        );
-        let seen = fixture.finish();
-        assert!(
-            seen.iter().all(|call| call.key.is_none()),
-            "download must not send the key"
-        );
-    }
-
-    #[test]
-    fn returned_download_urls_are_restricted_to_documented_https_hosts_and_default_port() {
-        let client =
-            NativeWorldLabs::new(WorldLabsConfig::live(), KEY, Duration::from_secs(5)).unwrap();
-        for allowed in [
-            "https://cdn.marble.worldlabs.ai/world/asset.ply?sig=secret",
-            "https://wlt-ai-cdn.art/example_exports/world.ply",
-            "https://wlt-ai-cdn.art:443/example_exports/world.ply",
-        ] {
-            assert_eq!(client.resolve_download_url(allowed).unwrap(), allowed);
-        }
-        for refused in [
-            "http://wlt-ai-cdn.art/world.ply",
-            "https://attacker.example/world.ply",
-            "https://wlt-ai-cdn.art:8443/world.ply",
-            "https://user@wlt-ai-cdn.art/world.ply",
-            "https://127.0.0.1/world.ply",
-            "https://[::1]/world.ply",
-        ] {
-            assert_eq!(
-                client.resolve_download_url(refused).unwrap_err(),
-                WorldLabsError::InvalidRequest,
-                "{refused}"
-            );
-        }
-    }
-
-    #[test]
-    fn destination_filter_refuses_private_link_local_and_reserved_addresses() {
-        for refused in [
-            "0.0.0.0",
-            "10.0.0.1",
-            "100.64.0.1",
-            "127.0.0.1",
-            "169.254.169.254",
-            "172.16.0.1",
-            "192.168.0.1",
-            "198.18.0.1",
-            "203.0.113.1",
-            "224.0.0.1",
-            "::",
-            "::1",
-            "fc00::1",
-            "fe80::1",
-            "2001:db8::1",
-        ] {
-            let address = refused.parse().unwrap();
-            assert!(!is_public_address(address), "{refused}");
-        }
-        for allowed in ["8.8.8.8", "2606:4700:4700::1111"] {
-            let address = allowed.parse().unwrap();
-            assert!(is_public_address(address), "{allowed}");
-        }
-    }
-
-    #[tokio::test]
-    async fn returned_download_redirect_is_refused() {
-        let mut redirect = json_reply(302, json!({}));
-        redirect.location = Some("https://attacker.example/x");
-        let mut fixture = Fixture::new(vec![redirect]);
-        let client = fixture.client();
-        let url = format!("http://{}/asset.ply", fixture.address);
-        assert_eq!(
-            client.download(&url, 1024).await.unwrap_err(),
-            WorldLabsError::Transport
-        );
-        assert_eq!(fixture.finish().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn status_mapping_402_429_401() {
-        for (status, expected) in [
-            (402, WorldLabsError::InsufficientCredits),
-            (429, WorldLabsError::RateLimited),
-            (401, WorldLabsError::Unauthorized),
-        ] {
-            let mut fixture = Fixture::new(vec![json_reply(status, json!({"detail": "x"}))]);
-            assert_eq!(
-                fixture.client().submit(&request()).await.unwrap_err(),
-                expected,
-                "status {status}"
-            );
-            fixture.finish();
-        }
-        // 400 with a content-policy detail maps to ContentPolicy.
-        let mut fixture = Fixture::new(vec![json_reply(
-            400,
-            json!({"detail": "Input violates content policy"}),
-        )]);
-        assert_eq!(
-            fixture.client().submit(&request()).await.unwrap_err(),
-            WorldLabsError::ContentPolicy
-        );
-        fixture.finish();
-    }
-
-    #[tokio::test]
-    async fn invalid_submit_sends_nothing() {
-        let mut fixture = Fixture::new(vec![json_reply(200, json!({"operation_id": "op-1"}))]);
-        let bad = WorldRequest {
-            image_jpeg: b"",
-            ..request()
-        };
-        assert_eq!(
-            fixture.client().submit(&bad).await.unwrap_err(),
-            WorldLabsError::InvalidRequest
-        );
-        assert!(fixture.finish().is_empty());
-    }
-}
+mod worldlabs_tests;

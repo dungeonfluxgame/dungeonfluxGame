@@ -8,8 +8,11 @@ use image::RgbaImage;
 
 use super::CancelCheck;
 use super::RasterError;
-use super::bounds::{self, LiveBudget};
+use super::bounds::{self, CANCEL_POLL_PIXELS, LiveBudget};
 use crate::transform::{BlurAlgorithm, BlurSpec, ColorEffect, ExposureStops, SharpenSpec};
+
+/// [`bounds::CANCEL_POLL_ROWS`] for the blur loops, which index rows as `usize`.
+const CANCEL_POLL_ROWS_USIZE: usize = bounds::CANCEL_POLL_ROWS as usize;
 
 /// Version tag of the color equations in this module; a change that alters
 /// output bytes requires a new revision in the recipe key. Revision 2 moves
@@ -67,7 +70,7 @@ pub(crate) fn apply_brightness(
     }
     let shift = offset.value();
     for (index, pixel) in image.pixels_mut().enumerate() {
-        if index % 4096 == 0 {
+        if index.is_multiple_of(CANCEL_POLL_PIXELS) {
             check_cancel()?;
         }
         for channel in 0..3 {
@@ -90,7 +93,7 @@ pub(crate) fn apply_exposure(
     }
     let gain = 2.0_f32.powf(stops.value());
     for (index, pixel) in image.pixels_mut().enumerate() {
-        if index % 4096 == 0 {
+        if index.is_multiple_of(CANCEL_POLL_PIXELS) {
             check_cancel()?;
         }
         for channel in 0..3 {
@@ -113,7 +116,7 @@ pub(crate) fn apply_color_effect(
     match effect {
         ColorEffect::Contrast { gain, pivot } => {
             for (index, pixel) in image.pixels_mut().enumerate() {
-                if index % 4096 == 0 {
+                if index.is_multiple_of(CANCEL_POLL_PIXELS) {
                     check_cancel()?;
                 }
                 for channel in 0..3 {
@@ -124,7 +127,7 @@ pub(crate) fn apply_color_effect(
         }
         ColorEffect::Saturation { factor } => {
             for (index, pixel) in image.pixels_mut().enumerate() {
-                if index % 4096 == 0 {
+                if index.is_multiple_of(CANCEL_POLL_PIXELS) {
                     check_cancel()?;
                 }
                 let channels = [
@@ -144,7 +147,7 @@ pub(crate) fn apply_color_effect(
             let radians = degrees.to_radians();
             let (cosine, sine) = (radians.cos(), radians.sin());
             for (index, pixel) in image.pixels_mut().enumerate() {
-                if index % 4096 == 0 {
+                if index.is_multiple_of(CANCEL_POLL_PIXELS) {
                     check_cancel()?;
                 }
                 let red = f32::from(pixel[0]) / 255.0;
@@ -162,7 +165,7 @@ pub(crate) fn apply_color_effect(
         }
         ColorEffect::Grayscale => {
             for (index, pixel) in image.pixels_mut().enumerate() {
-                if index % 4096 == 0 {
+                if index.is_multiple_of(CANCEL_POLL_PIXELS) {
                     check_cancel()?;
                 }
                 let luma = luma_rec709(
@@ -225,7 +228,7 @@ pub(crate) fn apply_sharpen(
     let amount = spec.amount_factor();
     let mut sharpened = image;
     for (index, (pixel, blur_pixel)) in sharpened.pixels_mut().zip(blurred.pixels()).enumerate() {
-        if index % 4096 == 0 {
+        if index.is_multiple_of(CANCEL_POLL_PIXELS) {
             check_cancel()?;
         }
         for channel in 0..3 {
@@ -285,7 +288,7 @@ fn box_blur_linear(
     let mut horizontal_sums = vec![[0.0_f32; 4]; width_len * height_len];
     let mut horizontal_counts = vec![0_u32; width_len * height_len];
     for row in 0..height_len {
-        if row % 16 == 0 {
+        if row.is_multiple_of(CANCEL_POLL_ROWS_USIZE) {
             check_cancel()?;
         }
         for col in 0..width_len {
@@ -306,7 +309,7 @@ fn box_blur_linear(
     }
     let mut blurred = RgbaImage::new(width_px, height_px);
     for row in 0..height_len {
-        if row % 16 == 0 {
+        if row.is_multiple_of(CANCEL_POLL_ROWS_USIZE) {
             check_cancel()?;
         }
         for col in 0..width_len {
@@ -377,7 +380,7 @@ fn gaussian_blur_linear(
     }
     let mut horizontal = vec![[0.0_f32; 4]; width_len * height_len];
     for row in 0..height_len {
-        if row % 16 == 0 {
+        if row.is_multiple_of(CANCEL_POLL_ROWS_USIZE) {
             check_cancel()?;
         }
         for col in 0..width_len {
@@ -397,7 +400,7 @@ fn gaussian_blur_linear(
     }
     let mut blurred = RgbaImage::new(width_px, height_px);
     for row in 0..height_len {
-        if row % 16 == 0 {
+        if row.is_multiple_of(CANCEL_POLL_ROWS_USIZE) {
             check_cancel()?;
         }
         for col in 0..width_len {

@@ -327,8 +327,9 @@ fn repl_clients_and_fixtures_with_stray_words_answer_with_their_usage_not_unknow
 
 #[test]
 fn the_help_text_and_the_errors_are_built_from_the_limit_constants() {
-    use df_playground::controls::MAXIMUM_TRANSITION_MS;
-    use df_playground::scene::{MAXIMUM_CAMERA_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT};
+    use df_playground::limits::{
+        MAXIMUM_CAMERA_MS, MAXIMUM_TRANSITION_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
+    };
     let help = usage_text();
     assert!(
         help.contains(&format!("ms=0-{MAXIMUM_TRANSITION_MS}")),
@@ -359,4 +360,107 @@ fn the_help_text_and_the_errors_are_built_from_the_limit_constants() {
         allowed.contains(&crate::limits::MAXIMUM_CYCLES.to_string()),
         "{allowed}"
     );
+}
+
+/// Every top-level verb table `parse` dispatches on, with its name for the failure message.
+fn verb_tables() -> [(&'static str, &'static [&'static str]); 4] {
+    [
+        ("command::VERBS", &crate::command::VERBS),
+        ("engine::VERBS", &crate::engine::VERBS),
+        (
+            "scene_builder::cli::VERBS",
+            &crate::scene_builder::cli::VERBS,
+        ),
+        ("director::cli::VERBS", &crate::director::cli::VERBS),
+    ]
+}
+
+#[test]
+fn no_top_level_verb_is_claimed_by_two_verb_tables() {
+    let mut owners = std::collections::BTreeMap::new();
+    for (table, verbs) in verb_tables() {
+        for verb in verbs {
+            if let Some(earlier) = owners.insert(*verb, table) {
+                panic!("'{verb}' is in both {earlier} and {table}");
+            }
+        }
+    }
+    for verb in crate::command::VERBS {
+        assert_ne!(
+            parse(&words(verb)),
+            Err(CommandError::Unknown(verb.to_owned())),
+            "{verb} is in command::VERBS but parse does not match it"
+        );
+    }
+}
+
+#[test]
+fn the_help_text_starts_an_entry_with_every_top_level_verb() {
+    let help = usage_text();
+    for (table, verbs) in verb_tables() {
+        for verb in verbs {
+            let entry_start = format!("\n  {verb}");
+            assert!(
+                help.contains(&entry_start),
+                "{verb} of {table} has no help entry"
+            );
+        }
+    }
+}
+
+/// Every sub-verb `scene` accepts.
+const SCENE_SUB_VERBS: [&str; 29] = [
+    "caption",
+    "caption-clear",
+    "party",
+    "choices",
+    "image",
+    "image-clear",
+    "slide",
+    "camera",
+    "camera-reset",
+    "camera-on",
+    "cast",
+    "cue",
+    "music",
+    "music-stop",
+    "sound",
+    "reset",
+    "narration",
+    "seat",
+    "seats",
+    "logo",
+    "lobby",
+    "loading",
+    "roleplay",
+    "pill",
+    "home",
+    "start",
+    "build",
+    "show",
+    "lookahead",
+];
+
+#[test]
+fn the_scene_usage_names_every_sub_verb_the_scene_parser_accepts() {
+    let Err(CommandError::Usage(scene_usage)) = parse(&words("scene")) else {
+        panic!("scene alone answers with its usage");
+    };
+    let named: Vec<&str> = scene_usage
+        .trim_start_matches("scene ")
+        .split(" | ")
+        .filter_map(|entry| entry.split_whitespace().next())
+        .collect();
+    for verb in SCENE_SUB_VERBS {
+        assert!(
+            named.contains(&verb),
+            "{verb} is missing from: {scene_usage}"
+        );
+        assert_ne!(
+            parse(&words(&format!("scene {verb}"))),
+            Err(CommandError::Usage(scene_usage)),
+            "scene {verb} is not accepted by the scene parser"
+        );
+    }
+    assert_eq!(named.len(), SCENE_SUB_VERBS.len(), "{named:?}");
 }

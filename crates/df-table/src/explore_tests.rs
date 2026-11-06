@@ -7,11 +7,11 @@ use crate::envelope::{PendingId, TimerName};
 use crate::explore::{AuthoredBeat, ExploreMachine};
 use crate::identity::{SceneId, TableId, TableScope};
 use crate::lobby_tests::{FIRST_SCENE, action, explore_for_neighbour, lobby, offered, seat};
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
-    CarryItem, Decision, Entry, EntryRefusal, Machine, MachineError, MachineInput, StepInput,
+    CarryItem, Decision, Entry, EntryError, Machine, MachineError, MachineInput, StepInput,
     StepOutcome, StepResult,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode, Outcome};
 use crate::ports::{Audience, Draw, DrawRequest, PortName, Preparation, Resolution};
 use crate::testkit::{QueuedDice, ScriptedBroker, ScriptedRulesOwner, correlation};
@@ -173,30 +173,30 @@ fn entering_needs_a_scene_the_table_is_in_and_seats_it_holds() {
     let machine = explore();
     let table = table_in_the_first_scene();
     let refusals = [
-        (Entry::empty(), EntryRefusal::MissingScene),
+        (Entry::empty(), EntryError::MissingScene),
         (
             Entry::carrying(vec![CarryItem::Seat(seat(1))]),
-            EntryRefusal::MissingScene,
+            EntryError::MissingScene,
         ),
         (
             Entry::carrying(vec![
                 CarryItem::Scene(SceneId::new(99)),
                 CarryItem::Seat(seat(1)),
             ]),
-            EntryRefusal::SceneNotActive {
+            EntryError::SceneNotActive {
                 scene: SceneId::new(99),
             },
         ),
         (
             Entry::carrying(vec![CarryItem::Scene(FIRST_SCENE)]),
-            EntryRefusal::NoSeats,
+            EntryError::NoSeats,
         ),
         (
             Entry::carrying(vec![
                 CarryItem::Scene(FIRST_SCENE),
                 CarryItem::Seat(seat(9)),
             ]),
-            EntryRefusal::SeatNotAtTable { seat: seat(9) },
+            EntryError::SeatNotAtTable { seat: seat(9) },
         ),
     ];
     for (entry, expected) in refusals {

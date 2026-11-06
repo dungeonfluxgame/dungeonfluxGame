@@ -27,12 +27,12 @@ use std::sync::Arc;
 
 use df_table::element::NameError;
 use df_table::identity::{SceneId, TableId, TableScope};
-use df_table::plate_job::{PlateJob, PlateJobId};
-use df_table::plate_scheduler::JobEnd;
-use df_table::plate_timing::{PlateTiming, SceneBuildKind};
-use df_table::scene_plan::{ReadyPlate, StageFailure, StageOutputs, StagePlan};
-use df_table::scene_plan_brief::SceneBrief;
-use df_table::scene_plan_card::{CardState, CardWatch, EstablishingCard};
+use df_table::plate::job::{PlateJob, PlateJobId};
+use df_table::plate::scheduler::JobEnd;
+use df_table::plate::timing::{PlateTiming, SceneBuildKind};
+use df_table::scene_plan::brief::SceneBrief;
+use df_table::scene_plan::card::{CardState, CardWatch, EstablishingCard};
+use df_table::scene_plan::{FailedStage, ReadyPlate, StageOutputs, StagePlan};
 use df_table::table_state::{SceneGeneration, TableSnapshot};
 
 use super::events::{SceneBuilderAudit, SceneBuilderEvent, StageSource};
@@ -60,7 +60,7 @@ pub struct JobOutcome {
     pub job: PlateJobId,
     pub scene: SceneId,
     pub end: JobEnd,
-    pub failure: Option<StageFailure>,
+    pub failure: Option<FailedStage>,
 }
 
 /// Why the builder refused a call.

@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::effects::BeatName;
 use crate::identity::{MachineId, SessionRevision};
-use crate::machine_slot::MachineSlot;
+use crate::machine::slot::MachineSlot;
 use crate::table_state::facts::Facts;
 
 const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -53,7 +53,7 @@ impl Digest {
     }
 
     /// A tag byte then the value, so `None` and `Some` never collide.
-    pub(super) fn option<T>(&mut self, value: &Option<T>, write: impl FnOnce(&mut Self, &T)) {
+    pub(super) fn option<T>(&mut self, value: Option<&T>, write: impl FnOnce(&mut Self, &T)) {
         match value {
             Some(value) => {
                 self.byte(1);
@@ -166,18 +166,22 @@ impl Facts {
             digest.text(id.as_str());
             entry.digest_into(digest);
         }
-        digest.option(focus, |digest, scene| digest.number(scene.get()));
+        digest.option(focus.as_ref(), |digest, scene| digest.number(scene.get()));
         digest.number(*last_generation);
         digest.number(*world_time_s);
         digest.text(status.key());
         if stamps {
-            digest.option(last_paused_at, |digest, at| digest.revision(*at));
+            digest.option(last_paused_at.as_ref(), |digest, at| digest.revision(*at));
             digest.revision(*revision);
         } else {
-            digest.option(last_paused_at, |digest, _| digest.byte(0));
+            digest.option(last_paused_at.as_ref(), |digest, _| digest.byte(0));
         }
-        digest.option(table_machine, |digest, machine| machine.digest_into(digest));
-        digest.option(last_hand_off, |digest, record| record.digest_into(digest));
+        digest.option(table_machine.as_ref(), |digest, machine| {
+            machine.digest_into(digest)
+        });
+        digest.option(last_hand_off.as_ref(), |digest, record| {
+            record.digest_into(digest)
+        });
         digest.text(split_policy.key());
     }
 }

@@ -72,11 +72,7 @@ use counted::{Book, Fifo, Ring};
 #[cfg(test)]
 pub(crate) use counted::{reset_touched_entries, touched_entries};
 pub use errors::{AdmitError, FinishError, QueueConfigError, RefusalReport, SeatError, ServeError};
-pub use lane::{
-    Lane, MAXIMUM_CONTROLS_LANE_LENGTH, MAXIMUM_ENGINE_LANE_LENGTH, MAXIMUM_IN_PROGRESS_MS,
-    MAXIMUM_REMEMBERED_OPERATIONS, MAXIMUM_SEAT_CONTROLS_PENDING, MAXIMUM_SEATS,
-    MAXIMUM_TIMERS_AND_RESULTS_LANE_LENGTH, NotDeclinedCause, QueueLimits,
-};
+pub use lane::{Lane, NotDeclinedCause, QueueLimits};
 pub use reports::{Admitted, InProgressOperation, OperationStatus, QueuePosition, ServedInput};
 use state::{
     Ending, EngineLane, FifoLane, InProgressEntry, OperationKey, OperationRecord, Placement,

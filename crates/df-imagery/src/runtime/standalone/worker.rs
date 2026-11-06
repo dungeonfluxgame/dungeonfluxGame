@@ -565,7 +565,7 @@ where
             prompt_index,
             maximum,
         );
-        let useful = matches!(&result, Ok(result) if !matches!(result, ImageAnalysisResult::PhotoInspection {assessment,..} if matches!(assessment.verdict,PhotoInspectionVerdict::Unjudged(_))));
+        let useful = result.as_ref().is_ok_and(carries_judgement);
         let quota_answer = response
             .status()
             .map_or(super::super::quota::QuotaAnswer::Inconclusive, |status| {
@@ -627,7 +627,7 @@ where
                 return Err(super::codec::supplier_failure(cause));
             }
         };
-        let usable = !matches!(&result, ImageAnalysisResult::PhotoInspection {assessment,..} if matches!(assessment.verdict,PhotoInspectionVerdict::Unjudged(_)));
+        let usable = carries_judgement(&result);
         raw = self
             .retain_usage(context, route, evidence, &units, Some(&retained), usable)
             .await?;

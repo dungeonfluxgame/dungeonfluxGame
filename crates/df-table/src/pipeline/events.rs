@@ -14,8 +14,8 @@ use std::fmt::{self, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::envelope::{CancelCause, PendingId};
+use crate::event::field::LineWriter;
 use crate::event::{EventClass, write_context};
-use crate::event_field::LineWriter;
 use crate::identity::{Correlation, SeatId, TableScope};
 use crate::listed::listed_enum;
 use crate::outcome::PendingKind;
@@ -435,7 +435,7 @@ impl PipelineEvent {
                 let mut line = LineWriter::start(out, "view_failed")?;
                 write_context(&mut line, scope, correlation)?;
                 line.field("part", part)?;
-                line.field_if_present("seat", seat)
+                line.field_if_present("seat", seat.as_ref())
             }
         }
     }

@@ -3,7 +3,7 @@ use tempfile::TempDir;
 use crate::client::get;
 use crate::limits::MAXIMUM_ASSET_FILE_BYTES;
 use crate::playground::{
-    FileProblem, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
+    FileError, PlaygroundFiles, content_type, fixture_names, is_plain_file_name, read_file,
     revision,
 };
 use crate::test_support::{STARTER_FILES, raw_exchange, start};
@@ -37,7 +37,7 @@ fn only_plain_names_can_reach_the_disk() {
         "a b.json",
         "c:x.json",
         "x\0.json",
-        &"a".repeat(df_playground::media::MAXIMUM_NAME_LENGTH + 1),
+        &"a".repeat(df_playground::limits::MAXIMUM_MEDIA_NAME_BYTES + 1),
     ] {
         assert!(!is_plain_file_name(bad), "{bad:?}");
     }
@@ -54,15 +54,15 @@ fn a_file_is_served_only_with_an_allowed_extension() {
     );
     assert_eq!(
         read_file(&directory.path().join("pkg"), "a.txt", &["js"]),
-        Err(FileProblem::BadName)
+        Err(FileError::InvalidName)
     );
     assert_eq!(
         read_file(&directory.path().join("pkg"), "../a.js", &["js"]),
-        Err(FileProblem::BadName)
+        Err(FileError::InvalidName)
     );
     assert_eq!(
         read_file(&directory.path().join("pkg"), "missing.js", &["js"]),
-        Err(FileProblem::NotFound)
+        Err(FileError::NotFound)
     );
 }
 
@@ -72,32 +72,47 @@ fn a_directory_named_like_a_file_is_not_served() {
     std::fs::create_dir_all(directory.path().join("folder.json")).expect("makes a directory");
     assert_eq!(
         read_file(directory.path(), "folder.json", &["json"]),
-        Err(FileProblem::NotFound)
+        Err(FileError::NotFound)
     );
 }
 
 #[test]
 fn the_size_limit_is_stated_in_the_problem() {
     assert!(
-        FileProblem::TooLarge {
+        FileError::TooLarge {
             maximum_bytes: MAXIMUM_ASSET_FILE_BYTES
         }
-        .message()
+        .to_string()
         .contains(&MAXIMUM_ASSET_FILE_BYTES.to_string())
     );
 }
 
 #[test]
-fn each_problem_has_a_status_and_a_message() {
-    for (problem, status) in [
-        (FileProblem::BadName, 404),
-        (FileProblem::NotFound, 404),
-        (FileProblem::TooLarge { maximum_bytes: 1 }, 413),
-        (FileProblem::Unreadable("denied".into()), 500),
+fn each_file_error_has_a_status_and_a_sentence() {
+    for (error, status) in [
+        (FileError::InvalidName, 404),
+        (FileError::NotFound, 404),
+        (FileError::TooLarge { maximum_bytes: 1 }, 413),
+        (FileError::Io(std::io::ErrorKind::PermissionDenied), 500),
+        (FileError::ModifiedBeforeEpoch, 500),
+        (FileError::Stopped, 500),
     ] {
-        assert_eq!(problem.status().as_u16(), status);
-        assert!(!problem.message().is_empty());
+        assert_eq!(error.status().as_u16(), status);
+        assert!(!error.to_string().is_empty());
     }
+}
+
+#[test]
+fn an_io_error_keeps_its_kind_and_a_missing_file_is_not_found() {
+    use std::io::{Error, ErrorKind};
+    assert_eq!(
+        FileError::from(Error::from(ErrorKind::NotFound)),
+        FileError::NotFound
+    );
+    assert_eq!(
+        FileError::from(Error::from(ErrorKind::PermissionDenied)),
+        FileError::Io(ErrorKind::PermissionDenied)
+    );
 }
 
 #[test]
@@ -213,7 +228,8 @@ async fn the_host_serves_the_page_theme_fixtures_and_package_with_their_media_ty
 
     let raw = raw_exchange(
         running.port,
-        "GET /playground/pkg/df_playground_bg.wasm HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        "GET /playground/pkg/df_playground_bg.wasm HTTP/1.1\r\n\
+         Host: 127.0.0.1\r\nConnection: close\r\n\r\n",
     )
     .await;
     let head = raw.to_ascii_lowercase();
@@ -271,4 +287,27 @@ async fn the_playground_is_behind_the_same_host_check_as_the_rest() {
     )
     .await;
     assert!(answer.starts_with("HTTP/1.1 403"));
+}
+
+#[tokio::test]
+async fn a_fixture_body_that_is_not_json_is_refused_with_its_typed_cause() {
+    use df_table::event::RejectionCause;
+
+    use crate::wire::{Reply, path};
+    let running = start(&STARTER_FILES).await;
+    for route in [
+        path::DEV_FIXTURE_WRITE,
+        path::DEV_FIXTURE_REMOVE,
+        path::DEV_MEDIA_REMOVE,
+    ] {
+        let response = crate::client::post_json(running.port, route, r#"{"name": 5}"#)
+            .await
+            .expect("answers");
+        assert_eq!(response.status, 400, "{route}");
+        let reply: Reply = serde_json::from_str(&response.body).expect("a reply");
+        let Reply::Rejected { cause, .. } = reply else {
+            panic!("{route}: a body that is not the request is refused");
+        };
+        assert_eq!(cause, Some(RejectionCause::MalformedRequest), "{route}");
+    }
 }

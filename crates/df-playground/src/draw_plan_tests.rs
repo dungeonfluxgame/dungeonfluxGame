@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::controls::{Controls, Device};
 use crate::copy::ReadingPace;
 use crate::draw_plan::{DrawPlan, Part, Snapshot, frame_action, wants_live};
-use crate::fixture::Fixture;
+use crate::fixture::{Fixture, FixtureTitle};
 use crate::scene::{ImageSlot, SceneChange, SceneOverlay, Target};
 
 const SCENE: &str = r##"{
@@ -32,7 +32,10 @@ fn fixture() -> Fixture {
 
 fn snapshot(fixture: &Fixture) -> Snapshot {
     Snapshot {
-        names: vec!["quay.json".to_owned()],
+        names: vec![FixtureTitle {
+            file: "quay.json".to_owned(),
+            title: Some("The quay".to_owned()),
+        }],
         controls: Controls {
             fixture: Some("quay.json".to_owned()),
             ..Controls::default()
@@ -40,6 +43,7 @@ fn snapshot(fixture: &Fixture) -> Snapshot {
         loaded_name: Some("quay.json".to_owned()),
         shown: Some(Rc::new(Ok(fixture.clone()))),
         connection_problem: None,
+        live_changes: false,
         audio_unlocked: false,
     }
 }
@@ -80,12 +84,12 @@ fn a_sound_music_or_a_transition_setting_draws_nothing() {
         SceneChange::Sound {
             media: "bell.wav".to_owned(),
             target: Target::Both,
-            volume: 80,
+            volume_percent: 80,
         },
         SceneChange::Music {
             media: "theme.ogg".to_owned(),
             target: Target::Both,
-            volume: 80,
+            volume_percent: 80,
             looping: true,
         },
         SceneChange::StopMusic {},
@@ -142,6 +146,7 @@ fn a_party_change_a_picture_and_a_choice_each_redraw_their_own_piece() {
             caption: None,
             rotation_degrees: 0,
             slide: None,
+            layout: None,
         },
         0,
     );
@@ -185,6 +190,7 @@ fn a_slide_that_is_only_further_along_is_not_a_new_picture() {
                     caption: None,
                     rotation_degrees: 0,
                     slide: Some(slide),
+                    layout: None,
                 },
                 &fixture(),
                 at_ms,
@@ -216,6 +222,7 @@ fn a_new_slide_is_a_new_picture() {
                         media: "map.png".to_owned(),
                         caption: None,
                         rotation_degrees: 0,
+                        layout: None,
                         slide: Some(crate::fixture::Slide {
                             from_percent: 0,
                             to_percent: 100,
@@ -293,8 +300,14 @@ fn a_toolbar_control_redraws_the_toolbar_and_a_cli_scene_change_does_not() {
     let plan = DrawPlan::between(Some(&old), &sound_on);
     assert!(plan.toolbar && plan.parts.is_empty());
     let mut names = old.clone();
-    names.names.push("tavern.json".to_owned());
+    names.names.push(FixtureTitle {
+        file: "tavern.json".to_owned(),
+        title: None,
+    });
     assert!(DrawPlan::between(Some(&old), &names).toolbar);
+    let mut retitled = old.clone();
+    retitled.names[0].title = Some("The quay at night".to_owned());
+    assert!(DrawPlan::between(Some(&old), &retitled).toolbar);
 }
 
 #[test]
@@ -440,7 +453,7 @@ mod transitions {
     use crate::controls::{Transition, TransitionStyle};
     use crate::draw_plan::{is_leaving, leaving_class, transition_for};
 
-    fn fade(ms: u32) -> Transition {
+    fn fade(ms: u64) -> Transition {
         Transition {
             style: TransitionStyle::Fade,
             duration_ms: ms,
@@ -509,7 +522,7 @@ fn a_command_during_a_transition_redraws_a_piece_and_never_the_devices_the_copy_
         SceneChange::Sound {
             media: "bell.wav".to_owned(),
             target: Target::Both,
-            volume: 80,
+            volume_percent: 80,
         },
         SceneChange::Camera {
             target: None,
@@ -521,4 +534,16 @@ fn a_command_during_a_transition_redraws_a_piece_and_never_the_devices_the_copy_
         let plan = DrawPlan::between(Some(&tavern), &next);
         assert!(!plan.devices && !plan.toolbar, "{change:?}");
     }
+}
+
+#[test]
+fn live_changes_starting_or_ending_redraw_the_notes() {
+    let quiet = snapshot(&fixture());
+    let live = Snapshot {
+        live_changes: true,
+        ..quiet.clone()
+    };
+    assert!(DrawPlan::between(Some(&quiet), &live).notes);
+    assert!(DrawPlan::between(Some(&live), &quiet).notes);
+    assert!(!DrawPlan::between(Some(&live), &live).notes);
 }

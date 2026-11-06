@@ -16,7 +16,7 @@ use base64::engine::general_purpose::STANDARD;
 use df_playground::media::media_kind;
 
 use crate::limits::{MAXIMUM_UPLOAD_KEY_BYTES, MAXIMUM_UPLOAD_NAME_BYTES};
-use crate::media_ingest::{IngestRefusal, MediaLimits};
+use crate::media_ingest::{IngestError, MediaLimits};
 
 const NAME_KEY: &[u8] = b"name";
 const DATA_KEY: &[u8] = b"data_base64";
@@ -24,17 +24,17 @@ const BASE64_GROUP_BYTES: usize = 4;
 
 /// What is wrong with the shape of an add request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EnvelopeProblem {
+pub(crate) enum EnvelopeCause {
     UnexpectedCharacter,
     UnknownField,
     DuplicateField,
     MissingField,
     NameTooLong,
-    BadNameText,
+    InvalidNameText,
     EndedEarly,
 }
 
-impl fmt::Display for EnvelopeProblem {
+impl fmt::Display for EnvelopeCause {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::UnexpectedCharacter => {
@@ -44,7 +44,7 @@ impl fmt::Display for EnvelopeProblem {
             Self::DuplicateField => "it names a field twice",
             Self::MissingField => "it lacks the name or the data_base64",
             Self::NameTooLong => "the name is far longer than a media name can be",
-            Self::BadNameText => "the name is not valid JSON text",
+            Self::InvalidNameText => "the name is not valid JSON text",
             Self::EndedEarly => "the request ended before the object was complete",
         })
     }
@@ -96,12 +96,12 @@ fn is_json_space(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\r' | b'\n')
 }
 
-fn unexpected() -> IngestRefusal {
-    IngestRefusal::MalformedRequest(EnvelopeProblem::UnexpectedCharacter)
+fn unexpected() -> IngestError {
+    IngestError::InvalidRequest(EnvelopeCause::UnexpectedCharacter)
 }
 
-fn malformed(problem: EnvelopeProblem) -> IngestRefusal {
-    IngestRefusal::MalformedRequest(problem)
+fn malformed(problem: EnvelopeCause) -> IngestError {
+    IngestError::InvalidRequest(problem)
 }
 
 impl EnvelopeParser {
@@ -120,7 +120,7 @@ impl EnvelopeParser {
     }
 
     /// Takes the next piece of the request, writing the file bytes it completes to `out`.
-    pub(crate) fn feed(&mut self, bytes: &[u8], out: &mut impl Write) -> Result<(), IngestRefusal> {
+    pub(crate) fn feed(&mut self, bytes: &[u8], out: &mut impl Write) -> Result<(), IngestError> {
         let received = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         self.request_bytes = self.request_bytes.saturating_add(received);
         if self.request_bytes > self.maximum_request_bytes {
@@ -151,26 +151,26 @@ impl EnvelopeParser {
     }
 
     /// The request after its last piece: it must be a complete object with both fields.
-    pub(crate) fn finish(self) -> Result<Envelope, IngestRefusal> {
+    pub(crate) fn finish(self) -> Result<Envelope, IngestError> {
         if !matches!(self.state, State::Done) {
-            return Err(malformed(EnvelopeProblem::EndedEarly));
+            return Err(malformed(EnvelopeCause::EndedEarly));
         }
         match self.name {
             Some(name) if self.saw_data => Ok(Envelope {
                 name,
                 file_bytes: self.file_bytes,
             }),
-            _ => Err(malformed(EnvelopeProblem::MissingField)),
+            _ => Err(malformed(EnvelopeCause::MissingField)),
         }
     }
 
-    fn too_large(&self) -> IngestRefusal {
-        IngestRefusal::TooLarge {
+    fn too_large(&self) -> IngestError {
+        IngestError::TooLarge {
             maximum_bytes: self.maximum_file_bytes,
         }
     }
 
-    fn step(&mut self, byte: u8) -> Result<(), IngestRefusal> {
+    fn step(&mut self, byte: u8) -> Result<(), IngestError> {
         let state = std::mem::replace(&mut self.state, State::Done);
         self.state = match state {
             State::Start if is_json_space(byte) => State::Start,
@@ -201,10 +201,10 @@ impl EnvelopeParser {
         Ok(())
     }
 
-    fn read_key(&mut self, mut key: Vec<u8>, byte: u8) -> Result<State, IngestRefusal> {
+    fn read_key(&mut self, mut key: Vec<u8>, byte: u8) -> Result<State, IngestError> {
         if byte != b'"' {
             if key.len() >= MAXIMUM_UPLOAD_KEY_BYTES {
-                return Err(malformed(EnvelopeProblem::UnknownField));
+                return Err(malformed(EnvelopeCause::UnknownField));
             }
             key.push(byte);
             return Ok(State::Key(key));
@@ -214,14 +214,14 @@ impl EnvelopeParser {
         } else if key == DATA_KEY {
             Field::Data
         } else {
-            return Err(malformed(EnvelopeProblem::UnknownField));
+            return Err(malformed(EnvelopeCause::UnknownField));
         };
         let repeated = match field {
             Field::Name => self.name.is_some(),
             Field::Data => self.saw_data,
         };
         if repeated {
-            return Err(malformed(EnvelopeProblem::DuplicateField));
+            return Err(malformed(EnvelopeCause::DuplicateField));
         }
         Ok(State::Colon(field))
     }
@@ -231,13 +231,13 @@ impl EnvelopeParser {
         mut raw: Vec<u8>,
         escaped: bool,
         byte: u8,
-    ) -> Result<State, IngestRefusal> {
+    ) -> Result<State, IngestError> {
         if !escaped && byte == b'"' {
             self.name = Some(parse_name(&raw)?);
             return Ok(State::AfterValue);
         }
         if raw.len() >= MAXIMUM_UPLOAD_NAME_BYTES {
-            return Err(malformed(EnvelopeProblem::NameTooLong));
+            return Err(malformed(EnvelopeCause::NameTooLong));
         }
         raw.push(byte);
         Ok(State::Name {
@@ -247,34 +247,34 @@ impl EnvelopeParser {
     }
 
     /// Decodes the whole groups in the carry, up to a group with padding (which must be the last).
-    fn push_data(&mut self, piece: &[u8], out: &mut impl Write) -> Result<(), IngestRefusal> {
+    fn push_data(&mut self, piece: &[u8], out: &mut impl Write) -> Result<(), IngestError> {
         self.carry.extend_from_slice(piece);
         let padding = self.carry.iter().position(|&byte| byte == b'=');
         let usable = padding.unwrap_or(self.carry.len());
         let usable = usable - usable % BASE64_GROUP_BYTES;
         if padding.is_some() && self.carry.len() - usable > BASE64_GROUP_BYTES {
-            return Err(IngestRefusal::NotBase64);
+            return Err(IngestError::InvalidBase64);
         }
         self.decode_front(usable, out)
     }
 
     /// The closing quote of the data: what is left must be one complete group.
-    fn finish_data(&mut self, out: &mut impl Write) -> Result<(), IngestRefusal> {
+    fn finish_data(&mut self, out: &mut impl Write) -> Result<(), IngestError> {
         if !self.carry.len().is_multiple_of(BASE64_GROUP_BYTES) {
-            return Err(IngestRefusal::NotBase64);
+            return Err(IngestError::InvalidBase64);
         }
         self.decode_front(self.carry.len(), out)
     }
 
-    fn decode_front(&mut self, count: usize, out: &mut impl Write) -> Result<(), IngestRefusal> {
+    fn decode_front(&mut self, count: usize, out: &mut impl Write) -> Result<(), IngestError> {
         if count == 0 {
             return Ok(());
         }
         self.decoded.clear();
-        let front = self.carry.get(..count).ok_or(IngestRefusal::NotBase64)?;
+        let front = self.carry.get(..count).ok_or(IngestError::InvalidBase64)?;
         STANDARD
             .decode_vec(front, &mut self.decoded)
-            .map_err(|_| IngestRefusal::NotBase64)?;
+            .map_err(|_| IngestError::InvalidBase64)?;
         self.carry.drain(..count);
         let written = u64::try_from(self.decoded.len()).unwrap_or(u64::MAX);
         self.file_bytes = self.file_bytes.saturating_add(written);
@@ -282,17 +282,17 @@ impl EnvelopeParser {
             return Err(self.too_large());
         }
         out.write_all(&self.decoded)
-            .map_err(|error| IngestRefusal::FileFailed(error.kind()))
+            .map_err(|error| IngestError::FileFailed(error.kind()))
     }
 }
 
 /// The name from its JSON string text (escapes included), checked to be a media name.
-fn parse_name(raw: &[u8]) -> Result<String, IngestRefusal> {
-    let text = std::str::from_utf8(raw).map_err(|_| malformed(EnvelopeProblem::BadNameText))?;
+fn parse_name(raw: &[u8]) -> Result<String, IngestError> {
+    let text = std::str::from_utf8(raw).map_err(|_| malformed(EnvelopeCause::InvalidNameText))?;
     let name: String = serde_json::from_str(&format!("\"{text}\""))
-        .map_err(|_| malformed(EnvelopeProblem::BadNameText))?;
+        .map_err(|_| malformed(EnvelopeCause::InvalidNameText))?;
     if media_kind(&name).is_none() {
-        return Err(IngestRefusal::NotAMediaName { name });
+        return Err(IngestError::InvalidMediaName { name });
     }
     Ok(name)
 }

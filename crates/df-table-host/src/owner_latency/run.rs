@@ -25,6 +25,7 @@ use df_table::identity::{OperationId, SeatId, TableId};
 use df_table::outcome::OutcomeKind;
 use df_table::owner_queue::{Lane, OwnerQueue};
 use df_table::ports::{ActionId, EventSink};
+use serde::{Deserialize, Serialize};
 
 use super::commit::{CommitMode, Committer};
 use super::error::HarnessError;
@@ -39,7 +40,8 @@ const SEAT_PENDING_LIMIT: u32 = 3;
 const UNLIMITED_RATE: u32 = 1_000_000;
 
 /// Whether a reader still holds the previous snapshot when `step` runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SnapshotMode {
     /// No reader holds it, so `step` mutates the state in place.
     InPlace,
@@ -48,11 +50,19 @@ pub enum SnapshotMode {
 }
 
 impl SnapshotMode {
-    pub fn name(self) -> &'static str {
+    pub const ALL: [Self; 2] = [Self::InPlace, Self::CopyOnWrite];
+
+    /// The serde name of the mode.
+    pub fn key(self) -> &'static str {
         match self {
             Self::InPlace => "in_place",
             Self::CopyOnWrite => "copy_on_write",
         }
+    }
+
+    /// The mode whose `key()` is `text`, if any.
+    pub fn from_key(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.key() == text)
     }
 }
 

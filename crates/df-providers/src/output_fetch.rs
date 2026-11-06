@@ -16,14 +16,21 @@ use crate::{
     ProviderRequestId, validate_fal_images,
 };
 
-const MAX_ENCODED_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_HEADER_BYTES: usize = 16 * 1024;
-const MAX_PIXELS: u64 = 16_777_216;
-const MAX_SIDE: u32 = 8_192;
-const MAX_RGBA_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_DECODE_RSS_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_DECODE_WALL_SECONDS: u8 = 5;
-const MAX_DNS_ANSWERS: usize = 16;
+// The encoded, header, pixel, RGBA, decoder and DNS bounds below are the D04 inspection policy's
+// security ceilings (decompression and resolver bombs), not tuning knobs.
+const MAXIMUM_ENCODED_BYTES: u64 = 16 * 1024 * 1024;
+const MAXIMUM_HEADER_BYTES: usize = 16 * 1024;
+/// The most pixels any provider picture or video frame may have (4096 x 4096).
+pub(crate) const MAXIMUM_IMAGE_PIXELS: u64 = 16_777_216;
+/// The longest side any provider picture, video frame or mask may have, in pixels.
+pub(crate) const MAXIMUM_IMAGE_SIDE_PX: u32 = 8_192;
+/// The longest provider locator (a fal media or delivery URL) any adapter reads, in bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const MAXIMUM_LOCATOR_BYTES: usize = 8192;
+const MAXIMUM_RGBA_BYTES: u64 = 64 * 1024 * 1024;
+const MAXIMUM_DECODE_RSS_BYTES: u64 = 128 * 1024 * 1024;
+const MAXIMUM_DECODE_WALL_SECONDS: u8 = 5;
+const MAXIMUM_DNS_ANSWERS: usize = 16;
 
 /// Stable, non-sensitive refusal classifications for a future bounded executor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,8 +205,11 @@ pub fn prepare_output_fetch_plan(
     {
         return Err(OutputFetchRefusal::RequestIdentityMismatch);
     }
-    if !matches!(observation, FalQueueObservation::Completed { request_id, .. } if request_id == expected_request_id)
-    {
+    let completed = matches!(
+        observation,
+        FalQueueObservation::Completed { request_id, .. } if request_id == expected_request_id
+    );
+    if !completed {
         return Err(OutputFetchRefusal::RequestNotCompleted);
     }
     validate_fal_images(
@@ -222,10 +232,10 @@ pub fn prepare_output_fetch_plan(
     let rgba_bytes = pixels
         .checked_mul(4)
         .ok_or(OutputFetchRefusal::DimensionsMismatch)?;
-    if image.width > MAX_SIDE
-        || image.height > MAX_SIDE
-        || pixels > MAX_PIXELS
-        || rgba_bytes > MAX_RGBA_BYTES
+    if image.width > MAXIMUM_IMAGE_SIDE_PX
+        || image.height > MAXIMUM_IMAGE_SIDE_PX
+        || pixels > MAXIMUM_IMAGE_PIXELS
+        || rgba_bytes > MAXIMUM_RGBA_BYTES
     {
         return Err(OutputFetchRefusal::DimensionsMismatch);
     }
@@ -247,19 +257,19 @@ pub fn prepare_output_fetch_plan(
             proxy_disabled: true,
             connect_timeout_seconds: 2,
             total_timeout_seconds: 15,
-            max_header_bytes: MAX_HEADER_BYTES,
-            max_encoded_bytes: maximum_bytes.min(MAX_ENCODED_BYTES),
+            max_header_bytes: MAXIMUM_HEADER_BYTES,
+            max_encoded_bytes: maximum_bytes.min(MAXIMUM_ENCODED_BYTES),
         },
         decoder: DecoderPolicy::DecoderUnavailable(DecoderRequirements {
             network: false,
             credentials: false,
             inherited_environment: false,
             writable_filesystem: false,
-            max_pixels: MAX_PIXELS,
-            max_side: MAX_SIDE,
-            rgba_bytes: MAX_RGBA_BYTES,
-            rss_bytes: MAX_DECODE_RSS_BYTES,
-            wall_seconds: MAX_DECODE_WALL_SECONDS,
+            max_pixels: MAXIMUM_IMAGE_PIXELS,
+            max_side: MAXIMUM_IMAGE_SIDE_PX,
+            rgba_bytes: MAXIMUM_RGBA_BYTES,
+            rss_bytes: MAXIMUM_DECODE_RSS_BYTES,
+            wall_seconds: MAXIMUM_DECODE_WALL_SECONDS,
         }),
     })
 }
@@ -330,10 +340,10 @@ pub fn inspect_decoded_image(
     let rgba = pixels
         .checked_mul(4)
         .ok_or(OutputFetchRefusal::DecodeRejected)?;
-    if pixels > MAX_PIXELS
-        || facts.width > MAX_SIDE
-        || facts.height > MAX_SIDE
-        || rgba > MAX_RGBA_BYTES
+    if pixels > MAXIMUM_IMAGE_PIXELS
+        || facts.width > MAXIMUM_IMAGE_SIDE_PX
+        || facts.height > MAXIMUM_IMAGE_SIDE_PX
+        || rgba > MAXIMUM_RGBA_BYTES
         || facts.frame_count != 1
         || facts.animated
         || facts.unsupported_metadata
@@ -365,7 +375,7 @@ pub fn decode_output(_plan: &OutputFetchPlan) -> Result<(), OutputFetchRefusal> 
 /// Empty, excessive, or mixed/private answers fail closed.
 pub fn inspect_dns_answers(candidates: &[IpAddr]) -> Result<DnsInspection, OutputFetchRefusal> {
     if candidates.is_empty()
-        || candidates.len() > MAX_DNS_ANSWERS
+        || candidates.len() > MAXIMUM_DNS_ANSWERS
         || candidates.iter().any(|address| !is_public(*address))
     {
         return Err(OutputFetchRefusal::DnsTargetRefused);
@@ -373,6 +383,17 @@ pub fn inspect_dns_answers(candidates: &[IpAddr]) -> Result<DnsInspection, Outpu
     Ok(DnsInspection {
         candidates: candidates.to_vec(),
     })
+}
+
+/// Whether a picture of `width` by `height` is within the provider picture bounds: both sides
+/// nonzero and at most [`MAXIMUM_IMAGE_SIDE_PX`], at most [`MAXIMUM_IMAGE_PIXELS`] in all.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn is_bounded_image_size(width: u32, height: u32) -> bool {
+    width > 0
+        && height > 0
+        && width <= MAXIMUM_IMAGE_SIDE_PX
+        && height <= MAXIMUM_IMAGE_SIDE_PX
+        && u64::from(width) * u64::from(height) <= MAXIMUM_IMAGE_PIXELS
 }
 
 pub(crate) fn strict_fal_locator(url: &str) -> bool {
@@ -440,7 +461,9 @@ fn valid_subdomain(value: &str) -> bool {
         })
 }
 
-fn is_public(address: IpAddr) -> bool {
+/// Whether `address` is publicly routable: not private, loopback, link-local, multicast,
+/// documentation, benchmarking, 6to4 or otherwise reserved. Every resolver pin uses this test.
+pub(crate) fn is_public(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(ip) => public_v4(ip),
         IpAddr::V6(ip) => public_v6(ip),

@@ -5,6 +5,15 @@ use std::fmt;
 use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value};
 
+/// The largest schema a caller may declare, in bytes.
+const MAXIMUM_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
+/// The deepest nesting a caller may allow (serde recursion stays well inside the stack).
+const MAXIMUM_DEPTH: usize = 64;
+/// The most JSON values a caller may allow in one document.
+const MAXIMUM_NODES: usize = 1_048_576;
+/// The longest schema name, in bytes (the Responses API name limit).
+const MAXIMUM_NAME_BYTES: usize = 64;
+
 /// Caller-selected retention bounds, with finite implementation ceilings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TextSchemaLimits {
@@ -13,6 +22,7 @@ pub struct TextSchemaLimits {
     pub maximum_nodes: usize,
 }
 
+/// Why a schema, its limits or a parsed output was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextSchemaError {
     InvalidLimits,
@@ -41,19 +51,20 @@ impl fmt::Debug for TextOutputSchema {
 }
 
 impl TextOutputSchema {
+    /// Checks `json` as a closed output schema named `name`, kept with its parse `limits`.
     pub fn new(name: &str, json: &[u8], limits: TextSchemaLimits) -> Result<Self, TextSchemaError> {
         if limits.maximum_schema_bytes == 0
-            || limits.maximum_schema_bytes > 1_048_576
+            || limits.maximum_schema_bytes > MAXIMUM_SCHEMA_BYTES
             || limits.maximum_depth == 0
-            || limits.maximum_depth > 64
+            || limits.maximum_depth > MAXIMUM_DEPTH
             || limits.maximum_nodes == 0
-            || limits.maximum_nodes > 65_536
+            || limits.maximum_nodes > MAXIMUM_NODES
             || json.len() > limits.maximum_schema_bytes
         {
             return Err(TextSchemaError::InvalidLimits);
         }
         if name.is_empty()
-            || name.len() > 64
+            || name.len() > MAXIMUM_NAME_BYTES
             || !name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
@@ -73,7 +84,12 @@ impl TextOutputSchema {
     }
 
     pub(crate) fn format(&self) -> Value {
-        serde_json::json!({"type":"json_schema","name":self.name,"strict":true,"schema":self.schema})
+        serde_json::json!({
+            "type": "json_schema",
+            "name": self.name,
+            "strict": true,
+            "schema": self.schema,
+        })
     }
 
     /// The validated schema, for adapters that provide their own transport.

@@ -31,6 +31,10 @@
 //!   step runs again), and a change of place or part of the day discards the build.
 //! - *Bounded.* The book and the list of expected scenes are held to large named maxima.
 
+pub(crate) mod candidate;
+pub mod settings;
+pub mod stamp;
+
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -38,18 +42,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::FailureCause;
 use crate::identity::SceneId;
+use crate::limits::MAXIMUM_BOOKED_SCENES;
 use crate::listed::listed_enum;
-use crate::lookahead_settings::LookaheadSettings;
-use crate::lookahead_stamp::{StampChange, WorldStamp};
+use crate::lookahead::settings::LookaheadSettings;
+use crate::lookahead::stamp::{StampChange, WorldStamp};
+use crate::scene_plan::brief::SceneBrief;
 use crate::scene_plan::{SceneStage, StageOutputs};
-use crate::scene_plan_brief::SceneBrief;
 
-/// Most scenes the book holds, built or building. Deliberately huge (owner, 2026-11-02).
-pub const MAXIMUM_BOOKED_SCENES: usize = 1_000_000;
-
-pub use crate::lookahead_candidate::{
-    CERTAIN_PERMILLE, Candidate, Expectation, Expected, LookaheadError, MAXIMUM_EXPECTED_SCENES,
-    lookahead_candidates,
+pub use crate::lookahead::candidate::{
+    CERTAIN_PERMILLE, Candidate, Expectation, Expected, LookaheadError, lookahead_candidates,
 };
 
 /// Names one build the planner started, so a late result for a cancelled build is recognised.
@@ -645,15 +646,21 @@ impl LookaheadPlanner {
 
 /// Read-only views of the planner, for `scene lookahead show`.
 mod view {
-    use super::{Candidate, LookaheadCounts, LookaheadPlanner, Phase, Slot};
+    use std::fmt;
+
     use serde::{Deserialize, Serialize};
+
+    use super::{Candidate, Expectation, LookaheadCounts, LookaheadPlanner, Phase, Slot};
+    use crate::event::FailureCause;
+    use crate::listed::listed_enum;
+    use crate::scene_plan::SceneStage;
 
     /// A scene the story expects.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     pub struct WantedReport {
         pub scene: u64,
         pub place: String,
-        pub expectation: String,
+        pub expectation: Expectation,
         pub certain: bool,
         pub likelihood_permille: u16,
     }
@@ -663,11 +670,52 @@ mod view {
     pub struct BookReport {
         pub scene: u64,
         pub token: u64,
-        pub expectation: String,
-        /// `building`, `ready` or `failed`.
-        pub state: String,
+        pub expectation: Expectation,
+        pub state: BookState,
         pub age_ms: u64,
-        pub failure: Option<String>,
+        pub failure: Option<FailedBuild>,
+    }
+
+    listed_enum! { keyed
+        /// Where a scene in the book stands.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum BookState {
+            Building,
+            Ready,
+            Failed,
+        }
+    }
+
+    impl BookState {
+        pub fn key(self) -> &'static str {
+            match self {
+                Self::Building => "building",
+                Self::Ready => "ready",
+                Self::Failed => "failed",
+            }
+        }
+    }
+
+    impl fmt::Display for BookState {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str(self.key())
+        }
+    }
+
+    /// Why a build in the book failed: the stage that failed, or none when its deadline ran out.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct FailedBuild {
+        pub stage: Option<SceneStage>,
+        pub cause: FailureCause,
+    }
+
+    impl fmt::Display for FailedBuild {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let stage = self.stage.map_or("deadline", SceneStage::key);
+            write!(formatter, "{stage} {}", self.cause.key())
+        }
     }
 
     /// The planner's settings, its expected scenes, its book and its counters.
@@ -688,7 +736,7 @@ mod view {
         WantedReport {
             scene: candidate.scene().get(),
             place: candidate.brief().place().as_str().to_owned(),
-            expectation: candidate.expectation().key().to_owned(),
+            expectation: candidate.expectation(),
             certain: candidate.is_certain(),
             likelihood_permille: candidate.likelihood_permille(),
         }
@@ -696,22 +744,21 @@ mod view {
 
     fn book_of(scene: u64, slot: &Slot, now_ms: u64) -> BookReport {
         let (state, failure) = match &slot.phase {
-            Phase::Building { .. } => ("building", None),
-            Phase::Ready { .. } => ("ready", None),
+            Phase::Building { .. } => (BookState::Building, None),
+            Phase::Ready { .. } => (BookState::Ready, None),
             Phase::Failed { stage, cause } => (
-                "failed",
-                Some(format!(
-                    "{} {}",
-                    stage.map_or("deadline", |stage| stage.key()),
-                    cause.key()
-                )),
+                BookState::Failed,
+                Some(FailedBuild {
+                    stage: *stage,
+                    cause: *cause,
+                }),
             ),
         };
         BookReport {
             scene,
             token: slot.token.get(),
-            expectation: slot.expectation.key().to_owned(),
-            state: state.to_owned(),
+            expectation: slot.expectation,
+            state,
             age_ms: now_ms.saturating_sub(slot.began_ms),
             failure,
         }
@@ -723,12 +770,12 @@ mod view {
             LookaheadReport {
                 enabled: settings.enabled(),
                 paused: self.is_paused(),
-                depth: settings.value_of(crate::lookahead_settings::LookaheadSetting::Depth),
-                start_s: settings.value_of(crate::lookahead_settings::LookaheadSetting::StartS),
+                depth: settings.value_of(crate::lookahead::settings::LookaheadSetting::Depth),
+                start_s: settings.value_of(crate::lookahead::settings::LookaheadSetting::StartS),
                 deadline_s: settings
-                    .value_of(crate::lookahead_settings::LookaheadSetting::DeadlineS),
+                    .value_of(crate::lookahead::settings::LookaheadSetting::DeadlineS),
                 book_age_s: settings
-                    .value_of(crate::lookahead_settings::LookaheadSetting::BookAgeS),
+                    .value_of(crate::lookahead::settings::LookaheadSetting::BookAgeS),
                 wanted: self.wanted.iter().map(wanted_of).collect(),
                 book: self
                     .slots
@@ -741,4 +788,4 @@ mod view {
     }
 }
 
-pub use view::{BookReport, LookaheadReport, WantedReport};
+pub use view::{BookReport, BookState, FailedBuild, LookaheadReport, WantedReport};

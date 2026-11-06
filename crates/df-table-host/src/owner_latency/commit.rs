@@ -12,7 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::error::HarnessError;
 use super::sha256::sha256;
@@ -26,7 +26,8 @@ const CHECKPOINT_FILE: &str = "checkpoint.json";
 const BUFFER_SLACK_BYTES: usize = 4_096;
 
 /// Where a committed checkpoint goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CommitMode {
     /// Serialise and hash only; no storage.
     Memory,
@@ -37,12 +38,20 @@ pub enum CommitMode {
 }
 
 impl CommitMode {
-    pub fn name(self) -> &'static str {
+    pub const ALL: [Self; 3] = [Self::Memory, Self::Fsync, Self::ModelledPostgres];
+
+    /// The serde name of the mode.
+    pub fn key(self) -> &'static str {
         match self {
             Self::Memory => "memory",
             Self::Fsync => "fsync",
-            Self::ModelledPostgres => "postgres20ms",
+            Self::ModelledPostgres => "modelled_postgres",
         }
+    }
+
+    /// The mode whose `key()` is `text`, if any.
+    pub fn from_key(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.key() == text)
     }
 }
 

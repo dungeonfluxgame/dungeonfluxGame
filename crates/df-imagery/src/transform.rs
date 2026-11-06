@@ -5,18 +5,21 @@
 //! and exposure are separate operations with separate units and neutrals.
 //! An empty step list is a valid encode-only transform.
 
-use crate::output::{Dimensions, MAXIMUM_OUTPUT_PIXELS, Rgb};
+use crate::output::{Dimensions, PixelBoundError, Rgb, check_pixel_bound};
 use crate::request::{RequestLimits, SourceRef};
 
+/// The only segmentation focus-mask recipe revision this build executes.
+pub(crate) const SEGMENTATION_MASK_CONTRACT_REVISION: u32 = 1;
+/// Full layer opacity; permille runs from 0 (invisible) to this value (opaque).
+const MAXIMUM_OPACITY_PERMILLE: u16 = 1000;
+/// Largest exact quarter-turn count; four turns would be the identity.
+const MAXIMUM_QUARTER_TURNS: u8 = 3;
+
 fn check_transform_pixels(width_px: u32, height_px: u32) -> Result<(), TransformError> {
-    if width_px == 0 || height_px == 0 {
-        return Err(TransformError::ZeroSize);
-    }
-    let pixels = u64::from(width_px) * u64::from(height_px);
-    if pixels > MAXIMUM_OUTPUT_PIXELS {
-        return Err(TransformError::TooManyPixels { pixels });
-    }
-    Ok(())
+    check_pixel_bound(width_px, height_px).map_err(|error| match error {
+        PixelBoundError::ZeroDimension => TransformError::ZeroSize,
+        PixelBoundError::TooManyPixels { pixels } => TransformError::TooManyPixels { pixels },
+    })
 }
 
 /// Source of a transform: a caller-claimed image pin, an explicitly sized
@@ -46,6 +49,7 @@ pub struct CanvasSpec {
 }
 
 impl CanvasSpec {
+    /// Refuses a zero axis or more than the shared output pixel ceiling.
     pub fn new(width_px: u32, height_px: u32, fill: Rgb) -> Result<Self, TransformError> {
         check_transform_pixels(width_px, height_px)?;
         Ok(Self {
@@ -88,6 +92,8 @@ pub struct PixelRect {
 }
 
 impl PixelRect {
+    /// Refuses a zero-sized or over-ceiling rectangle; bounds against the raster are checked
+    /// when the crop runs.
     pub fn new(
         x_px: u32,
         y_px: u32,
@@ -136,6 +142,7 @@ pub struct AlignAnchor {
 }
 
 impl AlignAnchor {
+    /// The neutral anchor: centered on both axes.
     pub fn center() -> Self {
         Self {
             x: Anchor1D::Center,
@@ -177,6 +184,7 @@ pub struct ResizeSpec {
 }
 
 impl ResizeSpec {
+    /// Refuses a zero or over-ceiling target, `Pad` without a fill, and a fill on other modes.
     pub fn new(
         width_px: u32,
         height_px: u32,
@@ -251,14 +259,18 @@ impl RotateSpec {
     pub(crate) fn validate(&self) -> Result<(), TransformError> {
         match self {
             Self::QuarterTurns(turns) => {
-                if *turns > 3 {
-                    return Err(TransformError::OutOfRange { field: "rotation" });
+                if *turns > MAXIMUM_QUARTER_TURNS {
+                    return Err(TransformError::OutOfRange {
+                        field: TransformField::Rotation,
+                    });
                 }
                 Ok(())
             }
             Self::Arbitrary { degrees, .. } => {
                 if !degrees.is_finite() {
-                    return Err(TransformError::NonFinite { field: "rotation" });
+                    return Err(TransformError::NonFinite {
+                        field: TransformField::Rotation,
+                    });
                 }
                 Ok(())
             }
@@ -282,10 +294,11 @@ pub struct BrightnessOffset(f32);
 pub struct ExposureStops(f32);
 
 impl BrightnessOffset {
+    /// Refuses a non-finite offset; any finite magnitude is representable.
     pub fn new(offset: f32) -> Result<Self, TransformError> {
         if !offset.is_finite() {
             return Err(TransformError::NonFinite {
-                field: "brightness",
+                field: TransformField::Brightness,
             });
         }
         Ok(Self(offset))
@@ -301,9 +314,12 @@ impl BrightnessOffset {
 }
 
 impl ExposureStops {
+    /// Refuses non-finite stops; any finite magnitude is representable.
     pub fn new(stops: f32) -> Result<Self, TransformError> {
         if !stops.is_finite() {
-            return Err(TransformError::NonFinite { field: "exposure" });
+            return Err(TransformError::NonFinite {
+                field: TransformField::Exposure,
+            });
         }
         Ok(Self(stops))
     }
@@ -329,33 +345,42 @@ pub enum ColorEffect {
 }
 
 impl ColorEffect {
+    /// Refuses non-finite values, a gain that is not positive and a pivot outside `0..=1`.
     pub fn contrast(gain: f32, pivot: f32) -> Result<Self, TransformError> {
         if !gain.is_finite() || !pivot.is_finite() {
-            return Err(TransformError::NonFinite { field: "contrast" });
+            return Err(TransformError::NonFinite {
+                field: TransformField::Contrast,
+            });
         }
         if gain <= 0.0 || !(0.0..=1.0).contains(&pivot) {
-            return Err(TransformError::OutOfRange { field: "contrast" });
+            return Err(TransformError::OutOfRange {
+                field: TransformField::Contrast,
+            });
         }
         Ok(Self::Contrast { gain, pivot })
     }
 
+    /// Refuses a non-finite or negative factor; zero is grayscale.
     pub fn saturation(factor: f32) -> Result<Self, TransformError> {
         if !factor.is_finite() {
             return Err(TransformError::NonFinite {
-                field: "saturation",
+                field: TransformField::Saturation,
             });
         }
         if factor < 0.0 {
             return Err(TransformError::OutOfRange {
-                field: "saturation",
+                field: TransformField::Saturation,
             });
         }
         Ok(Self::Saturation { factor })
     }
 
+    /// Refuses a non-finite angle; any finite angle wraps.
     pub fn hue_shift(degrees: f32) -> Result<Self, TransformError> {
         if !degrees.is_finite() {
-            return Err(TransformError::NonFinite { field: "hue" });
+            return Err(TransformError::NonFinite {
+                field: TransformField::Hue,
+            });
         }
         Ok(Self::HueShift { degrees })
     }
@@ -386,12 +411,17 @@ pub struct BlurSpec {
 }
 
 impl BlurSpec {
+    /// Refuses a non-finite or non-positive radius.
     pub fn new(radius_px: f32, algorithm: BlurAlgorithm) -> Result<Self, TransformError> {
         if !radius_px.is_finite() {
-            return Err(TransformError::NonFinite { field: "blur" });
+            return Err(TransformError::NonFinite {
+                field: TransformField::Blur,
+            });
         }
         if radius_px <= 0.0 {
-            return Err(TransformError::OutOfRange { field: "blur" });
+            return Err(TransformError::OutOfRange {
+                field: TransformField::Blur,
+            });
         }
         Ok(Self {
             radius_px,
@@ -417,16 +447,21 @@ pub struct SharpenSpec {
 }
 
 impl SharpenSpec {
+    /// Refuses non-finite values, a non-positive radius and a negative amount.
     pub fn new(
         radius_px: f32,
         amount_factor: f32,
         threshold_0_255: u8,
     ) -> Result<Self, TransformError> {
         if !radius_px.is_finite() || !amount_factor.is_finite() {
-            return Err(TransformError::NonFinite { field: "sharpen" });
+            return Err(TransformError::NonFinite {
+                field: TransformField::Sharpen,
+            });
         }
         if radius_px <= 0.0 || amount_factor < 0.0 {
-            return Err(TransformError::OutOfRange { field: "sharpen" });
+            return Err(TransformError::OutOfRange {
+                field: TransformField::Sharpen,
+            });
         }
         Ok(Self {
             radius_px,
@@ -484,6 +519,7 @@ pub struct MaskSpec {
 }
 
 impl MaskSpec {
+    /// Refuses a non-finite or negative feather radius.
     pub fn new(
         source: MaskSource,
         dimensions: Dimensions,
@@ -494,10 +530,14 @@ impl MaskSpec {
         mode: MaskMode,
     ) -> Result<Self, TransformError> {
         if !feather_radius_px.is_finite() {
-            return Err(TransformError::NonFinite { field: "mask" });
+            return Err(TransformError::NonFinite {
+                field: TransformField::Mask,
+            });
         }
         if feather_radius_px < 0.0 {
-            return Err(TransformError::OutOfRange { field: "mask" });
+            return Err(TransformError::OutOfRange {
+                field: TransformField::Mask,
+            });
         }
         Ok(Self {
             source,
@@ -565,6 +605,7 @@ pub struct CompositeLayer {
 }
 
 impl CompositeLayer {
+    /// Refuses opacity above 1000 permille; a position may place the layer partly off the raster.
     pub fn new(
         source: SourceRef,
         x_px: i32,
@@ -572,8 +613,10 @@ impl CompositeLayer {
         opacity_permille: u16,
         blend: BlendMode,
     ) -> Result<Self, TransformError> {
-        if opacity_permille > 1000 {
-            return Err(TransformError::OutOfRange { field: "opacity" });
+        if opacity_permille > MAXIMUM_OPACITY_PERMILLE {
+            return Err(TransformError::OutOfRange {
+                field: TransformField::Opacity,
+            });
         }
         Ok(Self {
             source,
@@ -615,6 +658,7 @@ pub struct PadSpec {
 }
 
 impl PadSpec {
+    /// Refuses a zero or over-ceiling canvas.
     pub fn new(
         width_px: u32,
         height_px: u32,
@@ -711,10 +755,10 @@ impl TransformSpec {
         if let TransformSource::SegmentationMask {
             contract_revision, ..
         } = &self.source
-            && *contract_revision != 1
+            && *contract_revision != SEGMENTATION_MASK_CONTRACT_REVISION
         {
             return Err(TransformError::OutOfRange {
-                field: "segmentation_mask_revision",
+                field: TransformField::SegmentationMaskRevision,
             });
         }
         if self.steps.len() > limits.max_transform_steps {
@@ -747,8 +791,43 @@ pub enum TransformError {
     TooManyLayers,
     ZeroSize,
     TooManyPixels { pixels: u64 },
-    NonFinite { field: &'static str },
-    OutOfRange { field: &'static str },
+    NonFinite { field: TransformField },
+    OutOfRange { field: TransformField },
     MissingPadFill,
     UnexpectedPadFill,
+}
+
+/// Which recipe value a refusal names; never the value itself.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransformField {
+    Rotation,
+    Brightness,
+    Exposure,
+    Contrast,
+    Saturation,
+    Hue,
+    Blur,
+    Sharpen,
+    Mask,
+    Opacity,
+    SegmentationMaskRevision,
+}
+
+impl TransformField {
+    /// Stable snake_case name for diagnostics.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rotation => "rotation",
+            Self::Brightness => "brightness",
+            Self::Exposure => "exposure",
+            Self::Contrast => "contrast",
+            Self::Saturation => "saturation",
+            Self::Hue => "hue",
+            Self::Blur => "blur",
+            Self::Sharpen => "sharpen",
+            Self::Mask => "mask",
+            Self::Opacity => "opacity",
+            Self::SegmentationMaskRevision => "segmentation_mask_revision",
+        }
+    }
 }

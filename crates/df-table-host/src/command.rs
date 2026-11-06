@@ -10,13 +10,6 @@
 mod media_generate;
 mod playground;
 mod scene;
-mod scene_home;
-mod scene_home_adventure;
-mod scene_home_campaigns;
-mod scene_home_configure;
-mod scene_lobby;
-mod scene_pills;
-mod scene_ui;
 mod usage;
 
 use std::collections::BTreeSet;
@@ -37,9 +30,38 @@ use self::usage::{
     CLIENTS_USAGE, DESPAWN_USAGE, EVENTS_USAGE, FIXTURES_USAGE, MOVE_USAGE, REPL_USAGE,
     ROTATE_USAGE, SCRIPT_USAGE, SET_USAGE, SPAWN_USAGE, STOP_USAGE, TRAVEL_USAGE, WAIT_USAGE,
 };
+pub use crate::locate::MediaLocate;
 
 /// Canvas units per second when `travel` is given no speed: the canvas in about five seconds.
 pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
+
+/// The top-level verbs `parse` matches by name. The verbs of `engine::VERBS`,
+/// `scene_builder::cli::VERBS` and `director::cli::VERBS` are matched after these, so no verb may
+/// be in two of the tables.
+pub const VERBS: [&str; 22] = [
+    "spawn",
+    "set",
+    "move",
+    "travel",
+    "rotate",
+    "stop",
+    "repl",
+    "despawn",
+    "clear",
+    "canvas",
+    "kinds",
+    "events",
+    "reload",
+    "playground",
+    "scene",
+    "wait",
+    "media",
+    "clients",
+    "fixtures",
+    "fixture",
+    "script",
+    "help",
+];
 
 /// A command for the running canvas.
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +109,10 @@ pub enum Command {
     MediaRemove(String),
     /// Make one picture from a prompt through the image service, or list the generations.
     MediaGenerate(MediaGenerate),
+    /// Scan a picture with SAM through the imagery API, show its layout or name a region.
+    MediaLocate(MediaLocate),
+    /// The characters of the shown scene: list them, cue one, or frame one.
+    Cast(crate::cast::CastCommand),
     /// What each open page says it is showing and playing.
     Clients,
     /// The names of the fixture files.
@@ -171,7 +197,7 @@ impl fmt::Display for CommandError {
 }
 
 /// A value that is not one of the choices of `key`; `allowed` says what is.
-fn bad_choice(key: &str, text: &str, allowed: impl Into<String>) -> CommandError {
+pub(crate) fn bad_choice(key: &str, text: &str, allowed: impl Into<String>) -> CommandError {
     CommandError::BadChoice {
         key: key.to_owned(),
         text: text.to_owned(),
@@ -412,12 +438,12 @@ fn truth(key: &str, text: &str) -> Result<bool, CommandError> {
 fn each_id(
     ids: &[String],
     usage: &'static str,
-    effect: impl Fn(&String) -> EffectRequest,
+    effect: impl Fn(&str) -> EffectRequest,
 ) -> Result<Command, CommandError> {
     if ids.is_empty() {
         return Err(CommandError::Usage(usage));
     }
-    Ok(Command::Effects(ids.iter().map(effect).collect()))
+    Ok(Command::Effects(ids.iter().map(|id| effect(id)).collect()))
 }
 
 /// A command that takes no words: the usage line, which is just its name, when any are given.
@@ -443,11 +469,11 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "travel" => travel(rest),
         "rotate" => rotate(rest),
         "stop" => each_id(rest, STOP_USAGE, |id| EffectRequest::Stop {
-            id: id.clone(),
+            id: id.to_owned(),
         }),
         "repl" => without_words(rest, REPL_USAGE, Command::Repl),
         "despawn" => each_id(rest, DESPAWN_USAGE, |id| EffectRequest::Despawn {
-            id: id.clone(),
+            id: id.to_owned(),
         }),
         "clear" => Ok(Command::Effects(vec![EffectRequest::Clear {}])),
         "canvas" => Ok(Command::Canvas),

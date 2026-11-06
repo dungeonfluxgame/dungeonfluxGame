@@ -23,7 +23,7 @@ use df_table::projection::ProjectionError;
 
 use crate::engine::audit::EngineAudit;
 use crate::engine::projection_adapter::{ViewError, project_machine_view};
-use crate::engine::report::EngineError;
+use crate::engine::report::{EngineError, ViewCause};
 use crate::engine::request::AudienceSpec;
 
 use super::Owner;
@@ -52,9 +52,11 @@ fn join_prompt<'a>(to_the_seat: &'a str, to_everyone: &str) -> Option<&'a str> {
         .filter(|prompt| !prompt.is_empty())
 }
 
-fn unavailable(what: impl ToString) -> EngineError {
+/// A view the projection refused, with the projection's sentence.
+fn unavailable(error: impl ToString) -> EngineError {
     EngineError::ViewUnavailable {
-        what: what.to_string(),
+        cause: ViewCause::Projection,
+        detail: error.to_string(),
     }
 }
 
@@ -89,7 +91,7 @@ impl Owner {
         let snapshot = table.facts().snapshot();
         let active = snapshot
             .focus_machine()
-            .ok_or_else(|| unavailable("no machine is running"))?;
+            .ok_or(EngineError::NoMachineRunning)?;
         let machine =
             self.registry
                 .machine(active.machine())
@@ -136,8 +138,12 @@ impl Owner {
                 offers,
             })),
         };
-        df_api::machine::check_machine_view(&view)
-            .map_err(|error| unavailable(format!("{error:?}")))?;
+        df_api::machine::check_machine_view(&view).map_err(|error| {
+            EngineError::ViewUnavailable {
+                cause: ViewCause::WireCheck,
+                detail: format!("{error:?}"),
+            }
+        })?;
         Ok(view)
     }
 }

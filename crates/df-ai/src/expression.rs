@@ -15,16 +15,22 @@ use df_provider_api::{
     CheckedRequest, RequestBinding, RequestError, RequestLimits, RequestOwnerState, RequestUsage,
 };
 
+/// Why an expression request could not be prepared or is no longer current.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ExpressionRequestError {
+    /// The speech permission changed or was refused.
     Speech(SpeechError),
+    /// The permitted selection holds no claim.
     Empty,
+    /// The request binding names another basis than the expression context.
     Binding,
+    /// The encoded input is larger than the request's byte limit.
     Capacity,
     Allocation,
     Request(RequestError),
 }
 
+/// Why a conversation expression request could not be prepared or is no longer current.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConversationExpressionError {
     Conversation(ConversationError),
@@ -76,8 +82,10 @@ pub struct PreparedExpression<'a> {
 }
 
 impl fmt::Debug for PreparedExpression<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PreparedExpression").finish_non_exhaustive()
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedExpression")
+            .finish_non_exhaustive()
     }
 }
 
@@ -126,13 +134,22 @@ fn append_bounded_bytes(
     Ok(())
 }
 
+/// Appends a length or element count as eight big-endian bytes.
+fn append_count(
+    bytes: &mut Vec<u8>,
+    count: usize,
+    maximum_bytes: usize,
+) -> Result<(), ExpressionRequestError> {
+    let count = u64::try_from(count).map_err(|_| ExpressionRequestError::Capacity)?;
+    append_bounded_bytes(bytes, &count.to_be_bytes(), maximum_bytes)
+}
+
 fn append_length_prefixed_bytes(
     bytes: &mut Vec<u8>,
     value: &[u8],
     maximum_bytes: usize,
 ) -> Result<(), ExpressionRequestError> {
-    let length = u64::try_from(value.len()).map_err(|_| ExpressionRequestError::Capacity)?;
-    append_bounded_bytes(bytes, &length.to_be_bytes(), maximum_bytes)?;
+    append_count(bytes, value.len(), maximum_bytes)?;
     append_bounded_bytes(bytes, value, maximum_bytes)
 }
 
@@ -170,9 +187,7 @@ fn encode_context(
         context.metadata().locale.as_bytes(),
         maximum_bytes,
     )?;
-    let count =
-        u64::try_from(context.claims().len()).map_err(|_| ExpressionRequestError::Capacity)?;
-    append_bounded_bytes(&mut bytes, &count.to_be_bytes(), maximum_bytes)?;
+    append_count(&mut bytes, context.claims().len(), maximum_bytes)?;
     for claim in context.claims() {
         append_length_prefixed_bytes(&mut bytes, claim.id.as_bytes(), maximum_bytes)?;
         append_length_prefixed_bytes(&mut bytes, claim.holder.as_bytes(), maximum_bytes)?;
@@ -187,9 +202,7 @@ fn encode_context(
         )?;
         append_length_prefixed_bytes(&mut bytes, claim.text.as_bytes(), maximum_bytes)?;
         // Retrieval keys are the same already-visible evidence, never a private query context.
-        let evidence =
-            u64::try_from(claim.evidence.len()).map_err(|_| ExpressionRequestError::Capacity)?;
-        append_bounded_bytes(&mut bytes, &evidence.to_be_bytes(), maximum_bytes)?;
+        append_count(&mut bytes, claim.evidence.len(), maximum_bytes)?;
         for id in claim.evidence {
             append_length_prefixed_bytes(&mut bytes, id.as_bytes(), maximum_bytes)?;
         }
@@ -204,9 +217,7 @@ fn encode_context(
             claim.source.entry.as_str().as_bytes(),
             maximum_bytes,
         )?;
-        let slots =
-            u64::try_from(claim.slots.len()).map_err(|_| ExpressionRequestError::Capacity)?;
-        append_bounded_bytes(&mut bytes, &slots.to_be_bytes(), maximum_bytes)?;
+        append_count(&mut bytes, claim.slots.len(), maximum_bytes)?;
         for slot in &claim.slots {
             append_bounded_bytes(&mut bytes, &[slot_byte(slot.kind)], maximum_bytes)?;
             append_length_prefixed_bytes(&mut bytes, slot.value.as_bytes(), maximum_bytes)?;
@@ -275,12 +286,14 @@ pub fn prepare_conversation_expression_request<'a>(
     })
 }
 
+/// One rendered slot value, compared exactly with the permitted claim's slot.
 #[derive(Clone, Eq, PartialEq)]
 pub struct GroundedValue {
     pub kind: SlotKind,
     pub value: String,
 }
 
+/// A candidate clause that claims to render one permitted claim exactly. Debug withholds its text.
 #[derive(Clone, Eq, PartialEq)]
 pub struct GroundedClause {
     pub claim_id: RecordId,
@@ -293,8 +306,10 @@ pub struct GroundedClause {
 }
 
 impl fmt::Debug for GroundedClause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GroundedClause").finish_non_exhaustive()
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GroundedClause")
+            .finish_non_exhaustive()
     }
 }
 
@@ -305,6 +320,7 @@ pub struct FlavorClause {
     pub local_text: String,
 }
 
+/// One structured candidate clause. Only grounded clauses can qualify.
 pub enum ExpressionClause {
     Grounded(GroundedClause),
     Flavor(FlavorClause),
@@ -316,11 +332,14 @@ pub struct SpeechEnvelope {
 }
 
 impl fmt::Debug for SpeechEnvelope {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SpeechEnvelope").finish_non_exhaustive()
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SpeechEnvelope")
+            .finish_non_exhaustive()
     }
 }
 
+/// Caller-chosen bounds on one candidate envelope; exceeding any refuses the whole envelope.
 #[derive(Clone, Copy, Debug)]
 pub struct QualificationLimits {
     pub maximum_clauses: usize,
@@ -328,16 +347,23 @@ pub struct QualificationLimits {
     pub maximum_slots: usize,
 }
 
+/// Why a candidate envelope did not qualify. Any refusal discards the whole envelope.
 #[derive(Debug, Eq, PartialEq)]
 pub enum QualificationError {
+    /// The prepared request is no longer current.
     Current(ExpressionRequestError),
+    /// The envelope passed a [`QualificationLimits`] bound.
     Capacity,
+    /// The envelope does not hold exactly one clause per permitted claim.
     ClauseCount,
+    /// A clause differs from its permitted claim, or is flavor not marked noncanonical.
     Rejected,
+    /// A clause is open flavor marked noncanonical, which this boundary never approves.
     Uncertain,
     Allocation,
 }
 
+/// Why a conversation candidate envelope did not qualify.
 #[derive(Debug, Eq, PartialEq)]
 pub enum ConversationQualificationError {
     Current(ConversationExpressionError),
@@ -349,8 +375,9 @@ pub struct QualifiedExpression {
     clauses: Vec<GroundedClause>,
 }
 impl fmt::Debug for QualifiedExpression {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QualifiedExpression")
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QualifiedExpression")
             .finish_non_exhaustive()
     }
 }

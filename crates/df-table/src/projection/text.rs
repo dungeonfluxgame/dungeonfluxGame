@@ -16,15 +16,15 @@ use crate::private_data::{LengthClass, Measured, Narration};
 
 /// A blank text was offered where a view needs words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BlankText;
+pub struct BlankTextError;
 
-impl fmt::Display for BlankText {
+impl fmt::Display for BlankTextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("a projection text cannot be blank")
     }
 }
 
-impl std::error::Error for BlankText {}
+impl std::error::Error for BlankTextError {}
 
 /// Text with at least one character that is not white space.
 #[derive(Clone, PartialEq, Eq, Serialize)]
@@ -35,9 +35,9 @@ impl NonEmptyText {
     /// What stands in when generated text could not be turned into words.
     const FALLBACK: &'static str = "Something happened.";
 
-    pub fn new(text: &str) -> Result<Self, BlankText> {
+    pub fn new(text: &str) -> Result<Self, BlankTextError> {
         if text.trim().is_empty() {
-            return Err(BlankText);
+            return Err(BlankTextError);
         }
         Ok(Self(Cow::Owned(text.to_owned())))
     }

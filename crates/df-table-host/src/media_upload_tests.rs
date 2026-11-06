@@ -3,8 +3,8 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
-use crate::media_ingest::{IngestRefusal, MediaLimits};
-use crate::media_upload::{Envelope, EnvelopeParser, EnvelopeProblem};
+use crate::media_ingest::{IngestError, MediaLimits};
+use crate::media_upload::{Envelope, EnvelopeCause, EnvelopeParser};
 use crate::wire::MediaAdd;
 
 /// Feeds `request` in pieces of `piece` bytes and returns the decoded file and the envelope.
@@ -12,7 +12,7 @@ fn read_in_pieces(
     request: &[u8],
     piece: usize,
     limits: &MediaLimits,
-) -> Result<(Vec<u8>, Envelope), IngestRefusal> {
+) -> Result<(Vec<u8>, Envelope), IngestError> {
     let mut parser = EnvelopeParser::new(limits);
     let mut file = Vec::new();
     for part in request.chunks(piece) {
@@ -29,8 +29,8 @@ fn request_for(name: &str, bytes: &[u8]) -> Vec<u8> {
     .expect("serialises")
 }
 
-fn malformed(problem: EnvelopeProblem) -> IngestRefusal {
-    IngestRefusal::MalformedRequest(problem)
+fn malformed(problem: EnvelopeCause) -> IngestError {
+    IngestError::InvalidRequest(problem)
 }
 
 #[test]
@@ -67,34 +67,34 @@ fn the_keys_may_come_in_either_order_with_whitespace_and_an_escaped_name() {
 #[test]
 fn a_request_that_is_not_the_expected_object_is_refused_with_the_reason() {
     for (request, problem) in [
-        (&br#"[1]"#[..], EnvelopeProblem::UnexpectedCharacter),
-        (&br#"{"name":5}"#[..], EnvelopeProblem::UnexpectedCharacter),
+        (&br#"[1]"#[..], EnvelopeCause::UnexpectedCharacter),
+        (&br#"{"name":5}"#[..], EnvelopeCause::UnexpectedCharacter),
         (
             &br#"{"name":"a.png","data_base64":"aGk=","extra":1}"#[..],
-            EnvelopeProblem::UnknownField,
+            EnvelopeCause::UnknownField,
         ),
         (
             &br#"{"name":"a.png","name":"b.png","data_base64":"aGk="}"#[..],
-            EnvelopeProblem::DuplicateField,
+            EnvelopeCause::DuplicateField,
         ),
         (
             &br#"{"name":"a.png","data_base64":"aGk=","data_base64":"aGk="}"#[..],
-            EnvelopeProblem::DuplicateField,
+            EnvelopeCause::DuplicateField,
         ),
-        (&br#"{"name":"a.png"}"#[..], EnvelopeProblem::MissingField),
-        (&br#"{}"#[..], EnvelopeProblem::MissingField),
+        (&br#"{"name":"a.png"}"#[..], EnvelopeCause::MissingField),
+        (&br#"{}"#[..], EnvelopeCause::MissingField),
         (
             &br#"{"name":"a.png","data_base64":"aGk=""#[..],
-            EnvelopeProblem::EndedEarly,
+            EnvelopeCause::EndedEarly,
         ),
-        (&br#""#[..], EnvelopeProblem::EndedEarly),
+        (&br#""#[..], EnvelopeCause::EndedEarly),
         (
             &br#"{"name":"a.png","data_base64":"aGk="} x"#[..],
-            EnvelopeProblem::UnexpectedCharacter,
+            EnvelopeCause::UnexpectedCharacter,
         ),
         (
             &br#"{"name":"a.png","data_base64":"aGk=",}"#[..],
-            EnvelopeProblem::UnexpectedCharacter,
+            EnvelopeCause::UnexpectedCharacter,
         ),
     ] {
         let refusal = read_in_pieces(request, 3, &MediaLimits::DEFAULT).expect_err("refused");
@@ -116,7 +116,7 @@ fn a_name_that_is_not_a_media_name_is_refused_as_soon_as_it_is_read_before_any_d
         .expect_err("refused");
     assert_eq!(
         refusal,
-        IngestRefusal::NotAMediaName {
+        IngestError::InvalidMediaName {
             name: "logo.svg".to_owned()
         }
     );
@@ -129,7 +129,7 @@ fn a_name_far_longer_than_a_name_can_be_is_refused_without_collecting_it() {
     let request = format!(r#"{{"name":"{long}.png","data_base64":""}}"#);
     assert_eq!(
         read_in_pieces(request.as_bytes(), 50, &MediaLimits::DEFAULT).expect_err("refused"),
-        malformed(EnvelopeProblem::NameTooLong)
+        malformed(EnvelopeCause::NameTooLong)
     );
 }
 
@@ -147,7 +147,7 @@ fn data_that_is_not_base64_is_refused_wherever_the_fault_is() {
         let request = format!(r#"{{"name":"a.png","data_base64":"{data}"}}"#);
         assert_eq!(
             read_in_pieces(request.as_bytes(), 4, &MediaLimits::DEFAULT).expect_err(data),
-            IngestRefusal::NotBase64,
+            IngestError::InvalidBase64,
             "{data}"
         );
     }
@@ -172,7 +172,7 @@ fn data_longer_than_the_limit_is_refused_when_the_limit_is_crossed_and_nothing_p
             Err(refusal) => break refusal,
         }
     };
-    assert_eq!(refusal, IngestRefusal::TooLarge { maximum_bytes: 30 });
+    assert_eq!(refusal, IngestError::TooLarge { maximum_bytes: 30 });
     assert!(file.len() <= 30, "{} bytes written", file.len());
     assert!(fed + 40 < request.len(), "read {fed} of {}", request.len());
 }
@@ -186,7 +186,7 @@ fn a_file_of_exactly_the_limit_is_accepted_and_one_byte_more_is_not() {
     assert!(read_in_pieces(&request_for("a.png", &[1; 30]), 9, &limits).is_ok());
     assert_eq!(
         read_in_pieces(&request_for("a.png", &[1; 31]), 9, &limits).expect_err("refused"),
-        IngestRefusal::TooLarge { maximum_bytes: 30 }
+        IngestError::TooLarge { maximum_bytes: 30 }
     );
 }
 
@@ -200,7 +200,7 @@ fn a_request_longer_than_the_largest_add_is_refused_whatever_it_holds() {
     let request = format!(r#"{{"name":"a.png","data_base64":"AAAA"}}{filler}"#);
     assert!(matches!(
         read_in_pieces(request.as_bytes(), 1000, &limits),
-        Err(IngestRefusal::TooLarge { .. })
+        Err(IngestError::TooLarge { .. })
     ));
 }
 

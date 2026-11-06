@@ -20,10 +20,11 @@ use std::sync::Arc;
 use df_table::ports::PurposeName;
 use df_table::private_data::Narration;
 use df_table::scene_plan::SceneStage;
-use df_table::scene_plan_locate::{Instance, LocatePrompt};
+use df_table::scene_plan::locate::{Instance, LocatePrompt};
 
 use super::answers::encode_locate_answer;
 use super::inputs::StageInputs;
+use super::limits::MAXIMUM_REMEMBERED_CALLS;
 use crate::broker::BrokerHub;
 use crate::broker::providers::{FakeOutcome, ScriptedCall};
 use crate::broker::purpose::{ResourceKind, SizeRule};
@@ -39,8 +40,6 @@ pub const DEFAULT_LOCATE_LATENCY_MS: u64 = 1_480;
 /// The size of the picture a fake makes, inside every picture purpose's size rule.
 pub const FAKE_PICTURE_WIDTH: u32 = 1_024;
 pub const FAKE_PICTURE_HEIGHT: u32 = 576;
-/// Most started calls remembered for `started`; the oldest are forgotten first. Deliberately huge.
-const MAXIMUM_REMEMBERED_CALLS: usize = 1_000_000;
 
 /// What the fake does: how long each purpose takes, what it answers and what it fails.
 #[derive(Debug, Clone)]

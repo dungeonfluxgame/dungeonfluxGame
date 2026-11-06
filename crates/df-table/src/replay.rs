@@ -36,7 +36,8 @@ use serde_json::Value;
 use crate::effects::TableEffect;
 use crate::envelope::{InputEnvelope, PendingId};
 use crate::identity::{Correlation, EvidenceRef, TableId};
-use crate::machine_slot::ErrorClass;
+use crate::limits::MAXIMUM_RECORDED_TURNS;
+use crate::machine::slot::ErrorClass;
 use crate::outcome::{DeclineCode, OutcomeKind};
 use crate::pending::StoredDraw;
 use crate::pipeline::TurnRecord;
@@ -50,11 +51,7 @@ pub use runner::{
 
 /// The schema version of `RecordedSession`. Raised when the saved shape changes; a recording of
 /// another version is refused and never read wrongly (H.12).
-pub const RECORDING_SCHEMA_VERSION: u32 = 1;
-
-/// The most turns one recording holds. Deliberately huge so it never limits a session; scope it
-/// down later (owner, 2026-11-02).
-pub const MAXIMUM_RECORDED_TURNS: usize = 1_000_000;
+pub(crate) const RECORDING_SCHEMA_VERSION: u32 = 1;
 
 /// Why a recording could not be made or was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

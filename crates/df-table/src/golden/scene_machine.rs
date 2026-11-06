@@ -14,13 +14,13 @@ use serde::{Deserialize, Serialize};
 use crate::effects::{BeatName, TableEffect, TableState};
 use crate::element::NameError;
 use crate::identity::SceneId;
+use crate::machine::slot::MachineSlot;
+use crate::machine::spec::InputClaim;
 use crate::machine::{
     Decision, Entry, HandOff, InspectReport, Machine, MachineError, MachineId, MachineInput,
     MachineReadout, MachineSpec, RequestKey, ResourceRequest, Scope, SpecError, StateName,
     StepInput, StepOutcome, StepResult, SuspendPolicy,
 };
-use crate::machine_slot::MachineSlot;
-use crate::machine_spec::InputClaim;
 use crate::outcome::{Decline, DeclineCode, Outcome, PendingKind};
 use crate::ports::{ActionId, Audience, PortName, PurposeName};
 use crate::table_state::MachineHome;
@@ -307,7 +307,7 @@ impl Machine for SceneMachine {
     fn wants_hand_off(&self, slot: &MachineSlot) -> Result<bool, MachineError> {
         if self.unable_to_say_if_finished {
             return Err(MachineError::Slot(
-                crate::machine_slot::SlotError::InvalidStateName(NameError::Empty),
+                crate::machine::slot::SlotError::InvalidStateName(NameError::Empty),
             ));
         }
         let turns = counters_of(&self.state_of(slot)?).turns;

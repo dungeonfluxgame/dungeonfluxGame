@@ -87,3 +87,18 @@ fn after_a_sequence_that_was_forgotten_starts_at_the_oldest_kept_line() {
     assert_eq!(last.len(), 1);
     assert_eq!(last[0].sequence, latest);
 }
+
+#[test]
+fn a_log_installed_as_the_audit_sink_takes_the_audit_lines_of_the_libraries() {
+    let log = std::sync::Arc::new(EventLog::default());
+    assert!(crate::event_log::install_as_audit_sink(&log));
+    df_observe::record_audit_line("TEST", "TEST probe key=1".to_owned());
+    let lines = log.newest(10);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].text.starts_with("TEST probe key=1"), "{lines:?}");
+    let later = std::sync::Arc::new(EventLog::default());
+    assert!(
+        !crate::event_log::install_as_audit_sink(&later),
+        "the first log keeps the lines"
+    );
+}

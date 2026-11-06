@@ -6,8 +6,9 @@
 //! canvas or interprets a file.
 
 use std::collections::hash_map::DefaultHasher;
+use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
@@ -27,6 +28,7 @@ pub(super) const FIXTURE_DIRECTORY: &str = "fixtures";
 pub(super) const FIXTURE_EXTENSIONS: [&str; 1] = ["json"];
 const PACKAGE_EXTENSIONS: [&str; 2] = ["js", "wasm"];
 const ASSET_EXTENSIONS: [&str; 2] = ["html", "css"];
+const LAYOUT_EXTENSIONS: [&str; 1] = ["json"];
 
 /// Where the playground's files are: the hand-written assets and the compiled package.
 #[derive(Debug, Clone)]
@@ -49,48 +51,82 @@ impl PlaygroundFiles {
     }
 }
 
-/// Why a file was not served.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileProblem {
+/// Why a playground or library file was not served, read or written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileError {
     /// The name is not a plain file name of an allowed type.
-    BadName,
+    InvalidName,
     NotFound,
     /// The file is larger than `maximum_bytes`, the most this kind of file may be.
     TooLarge {
         maximum_bytes: u64,
     },
-    Unreadable(String),
+    /// The file system refused the read or write for another reason.
+    Io(ErrorKind),
+    /// The file's modification time is before 1970, so it has no entity tag.
+    ModifiedBeforeEpoch,
+    /// The blocking task stopped without an answer (it panicked or the runtime is stopping).
+    Stopped,
 }
 
-impl FileProblem {
+impl FileError {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::BadName | Self::NotFound => StatusCode::NOT_FOUND,
+            Self::InvalidName | Self::NotFound => StatusCode::NOT_FOUND,
             Self::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
-            Self::Unreadable(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Io(_) | Self::ModifiedBeforeEpoch | Self::Stopped => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
+    /// Transitional: the sentence for the error, kept while `serve.rs` still calls it; new code
+    /// formats the error itself.
     pub fn message(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl fmt::Display for FileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BadName => "no such playground file".to_owned(),
-            Self::NotFound => {
-                "that playground file is missing (is the directory right? see df-table serve --help)"
-                    .to_owned()
-            }
+            Self::InvalidName => formatter.write_str("no such playground file"),
+            Self::NotFound => formatter.write_str(concat!(
+                "that playground file is missing ",
+                "(is the directory right? see df-table serve --help)"
+            )),
             Self::TooLarge { maximum_bytes } => {
-                format!("the file is larger than {maximum_bytes} bytes")
+                write!(formatter, "the file is larger than {maximum_bytes} bytes")
             }
-            Self::Unreadable(message) => format!("the file could not be read: {message}"),
+            Self::Io(kind) => write!(formatter, "the file could not be read or written: {kind}"),
+            Self::ModifiedBeforeEpoch => {
+                formatter.write_str("the file's modification time is before 1970")
+            }
+            Self::Stopped => formatter.write_str("the file task stopped without an answer"),
         }
     }
 }
 
-pub(crate) fn problem_from(error: &std::io::Error) -> FileProblem {
-    match error.kind() {
-        std::io::ErrorKind::NotFound => FileProblem::NotFound,
-        _ => FileProblem::Unreadable(error.to_string()),
+impl std::error::Error for FileError {}
+
+/// A missing file is `NotFound`; any other failure keeps its kind.
+impl From<std::io::Error> for FileError {
+    fn from(error: std::io::Error) -> Self {
+        match error.kind() {
+            ErrorKind::NotFound => Self::NotFound,
+            kind => Self::Io(kind),
+        }
     }
+}
+
+/// Runs blocking file work on the blocking pool; a task that stopped without an answer is
+/// `FileError::Stopped`.
+pub(crate) async fn run_file_task<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, FileError> + Send + 'static,
+) -> Result<T, FileError> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or(Err(FileError::Stopped))
 }
 
 pub use df_playground::media::is_plain_file_name;
@@ -118,22 +154,18 @@ pub fn content_type(name: &str) -> &'static str {
 /// Reads `name` from `directory` if it is a plain file name with one of `extensions`, and at most
 /// `MAXIMUM_ASSET_FILE_BYTES` long (a page, a theme or a fixture; the package is streamed, not
 /// read whole). A file that grows while it is read is refused the same way.
-pub fn read_file(
-    directory: &Path,
-    name: &str,
-    extensions: &[&str],
-) -> Result<Vec<u8>, FileProblem> {
+pub fn read_file(directory: &Path, name: &str, extensions: &[&str]) -> Result<Vec<u8>, FileError> {
     if !is_plain_file_name(name) || !has_extension(name, extensions) {
-        return Err(FileProblem::BadName);
+        return Err(FileError::InvalidName);
     }
     let file = open_plain_file(&directory.join(name), MAXIMUM_ASSET_FILE_BYTES)?;
     let mut bytes = Vec::new();
     // One byte past the limit shows that the file outgrew it after it was measured.
     file.take(MAXIMUM_ASSET_FILE_BYTES.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|error| problem_from(&error))?;
+        .map_err(FileError::from)?;
     if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAXIMUM_ASSET_FILE_BYTES {
-        return Err(FileProblem::TooLarge {
+        return Err(FileError::TooLarge {
             maximum_bytes: MAXIMUM_ASSET_FILE_BYTES,
         });
     }
@@ -141,15 +173,15 @@ pub fn read_file(
 }
 
 /// Opens `path` if it is a file of at most `maximum_bytes`.
-fn open_plain_file(path: &Path, maximum_bytes: u64) -> Result<std::fs::File, FileProblem> {
-    let metadata = std::fs::metadata(path).map_err(|error| problem_from(&error))?;
+fn open_plain_file(path: &Path, maximum_bytes: u64) -> Result<std::fs::File, FileError> {
+    let metadata = std::fs::metadata(path).map_err(FileError::from)?;
     if !metadata.is_file() {
-        return Err(FileProblem::NotFound);
+        return Err(FileError::NotFound);
     }
     if metadata.len() > maximum_bytes {
-        return Err(FileProblem::TooLarge { maximum_bytes });
+        return Err(FileError::TooLarge { maximum_bytes });
     }
-    std::fs::File::open(path).map_err(|error| problem_from(&error))
+    std::fs::File::open(path).map_err(FileError::from)
 }
 
 /// The plain files in `directory` with one of `extensions`, sorted by name. A missing directory
@@ -157,22 +189,22 @@ fn open_plain_file(path: &Path, maximum_bytes: u64) -> Result<std::fs::File, Fil
 fn plain_files(
     directory: &Path,
     extensions: &[&str],
-) -> Result<Vec<(String, std::fs::Metadata)>, FileProblem> {
+) -> Result<Vec<(String, std::fs::Metadata)>, FileError> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(problem_from(&error)),
+        Err(error) => return Err(error.into()),
     };
     let mut files = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| problem_from(&error))?;
+        let entry = entry.map_err(FileError::from)?;
         let Ok(name) = entry.file_name().into_string() else {
             continue;
         };
         if !is_plain_file_name(&name) || !has_extension(&name, extensions) {
             continue;
         }
-        let metadata = entry.metadata().map_err(|error| problem_from(&error))?;
+        let metadata = entry.metadata().map_err(FileError::from)?;
         if metadata.is_file() {
             files.push((name, metadata));
         }
@@ -182,7 +214,7 @@ fn plain_files(
 }
 
 /// The names of the fixture files, sorted.
-pub fn fixture_names(files: &PlaygroundFiles) -> Result<Vec<String>, FileProblem> {
+pub fn fixture_names(files: &PlaygroundFiles) -> Result<Vec<String>, FileError> {
     let directory = files.assets.join(FIXTURE_DIRECTORY);
     Ok(plain_files(&directory, &FIXTURE_EXTENSIONS)?
         .into_iter()
@@ -194,7 +226,7 @@ fn stamp(
     directory: &Path,
     extensions: &[&str],
     hasher: &mut DefaultHasher,
-) -> Result<(), FileProblem> {
+) -> Result<(), FileError> {
     for (name, metadata) in plain_files(directory, extensions)? {
         name.hash(hasher);
         metadata.len().hash(hasher);
@@ -210,12 +242,19 @@ fn stamp(
 
 /// A text that changes when any playground file does, as `<assets>.<package>`: the page reloads
 /// its styles and fixtures when the first part changes and reloads itself when the second does.
-pub fn revision(files: &PlaygroundFiles) -> Result<String, FileProblem> {
+pub fn revision(files: &PlaygroundFiles) -> Result<String, FileError> {
     let mut assets = DefaultHasher::new();
     stamp(&files.assets, &ASSET_EXTENSIONS, &mut assets)?;
     stamp(
         &files.assets.join(FIXTURE_DIRECTORY),
         &FIXTURE_EXTENSIONS,
+        &mut assets,
+    )?;
+    // A picture's scanned layout (`media locate`) is attached to the fixtures that show it, so a
+    // new scan or label is a new revision and the page reads its fixture again.
+    stamp(
+        &files.assets.join(crate::locate::LAYOUT_DIRECTORY),
+        &LAYOUT_EXTENSIONS,
         &mut assets,
     )?;
     let mut package = DefaultHasher::new();
@@ -227,13 +266,13 @@ pub fn revision(files: &PlaygroundFiles) -> Result<String, FileProblem> {
     ))
 }
 
-fn respond(result: Result<(Vec<u8>, &'static str), FileProblem>) -> Response {
+fn respond(result: Result<(Vec<u8>, &'static str), FileError>) -> Response {
     let (status, content_type, body) = match result {
         Ok((body, content_type)) => (StatusCode::OK, content_type, body),
-        Err(problem) => (
-            problem.status(),
+        Err(error) => (
+            error.status(),
             "text/plain; charset=utf-8",
-            problem.message().into_bytes(),
+            error.to_string().into_bytes(),
         ),
     };
     let mut response = (status, body).into_response();
@@ -245,13 +284,9 @@ fn respond(result: Result<(Vec<u8>, &'static str), FileProblem>) -> Response {
 
 /// Runs blocking file work off the async threads.
 async fn blocking(
-    work: impl FnOnce() -> Result<(Vec<u8>, &'static str), FileProblem> + Send + 'static,
+    work: impl FnOnce() -> Result<(Vec<u8>, &'static str), FileError> + Send + 'static,
 ) -> Response {
-    respond(
-        tokio::task::spawn_blocking(work)
-            .await
-            .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string()))),
-    )
+    respond(run_file_task(work).await)
 }
 
 async fn asset(files: PlaygroundFiles, name: &'static str) -> Response {
@@ -280,7 +315,14 @@ pub(super) async fn fixture(
             &name,
             &FIXTURE_EXTENSIONS,
         )
-        .map(|bytes| (bytes, content_type(&name)))
+        .map(|bytes| {
+            let layouts = files.assets.join(crate::locate::LAYOUT_DIRECTORY);
+            let media = crate::media_library::media_directory(&files);
+            (
+                crate::locate::attach_layout(bytes, &media, &layouts),
+                content_type(&name),
+            )
+        })
     })
     .await
 }
@@ -292,9 +334,7 @@ pub(super) async fn package_file(
     let files = state.playground().files().clone();
     let opened = {
         let name = name.clone();
-        tokio::task::spawn_blocking(move || open_package_file(&files.package, &name))
-            .await
-            .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())))
+        run_file_task(move || open_package_file(&files.package, &name)).await
     };
     match opened {
         Ok((file, length)) => {
@@ -309,18 +349,18 @@ pub(super) async fn package_file(
             headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
             response
         }
-        Err(problem) => respond(Err(problem)),
+        Err(error) => respond(Err(error)),
     }
 }
 
 /// Opens the package file `name` and measures it, if it is a plain name with a package extension
 /// and at most `MAXIMUM_PACKAGE_FILE_BYTES`.
-fn open_package_file(directory: &Path, name: &str) -> Result<(std::fs::File, u64), FileProblem> {
+fn open_package_file(directory: &Path, name: &str) -> Result<(std::fs::File, u64), FileError> {
     if !is_plain_file_name(name) || !has_extension(name, &PACKAGE_EXTENSIONS) {
-        return Err(FileProblem::BadName);
+        return Err(FileError::InvalidName);
     }
     let file = open_plain_file(&directory.join(name), MAXIMUM_PACKAGE_FILE_BYTES)?;
-    let length = file.metadata().map_err(|error| problem_from(&error))?.len();
+    let length = file.metadata().map_err(FileError::from)?.len();
     Ok((file, length))
 }
 
@@ -328,8 +368,9 @@ pub(super) async fn fixture_list(State(state): State<Arc<AppState>>) -> Response
     let files = state.playground().files().clone();
     blocking(move || {
         let names = fixture_names(&files)?;
-        let text = serde_json::to_string(&names)
-            .map_err(|error| FileProblem::Unreadable(error.to_string()))?;
+        // A list of strings always writes as JSON; the mapping only keeps the path panic-free.
+        let text =
+            serde_json::to_string(&names).map_err(|_| FileError::Io(ErrorKind::InvalidData))?;
         Ok((text.into_bytes(), content_type("list.json")))
     })
     .await
@@ -344,8 +385,6 @@ pub(super) async fn revision_text(State(state): State<Arc<AppState>>) -> Respons
 /// The fixture names, read off the async threads.
 pub(super) async fn current_fixture_names(
     files: PlaygroundFiles,
-) -> Result<Vec<String>, FileProblem> {
-    tokio::task::spawn_blocking(move || fixture_names(&files))
-        .await
-        .unwrap_or_else(|error| Err(FileProblem::Unreadable(error.to_string())))
+) -> Result<Vec<String>, FileError> {
+    run_file_task(move || fixture_names(&files)).await
 }

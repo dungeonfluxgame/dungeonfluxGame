@@ -69,7 +69,7 @@ fn native_factory_refuses_foreign_route_invalid_credentials_and_unbounded_transp
         ))
     ));
     invalid = limits();
-    invalid.total_timeout = Duration::from_secs(181);
+    invalid.total_timeout = df_providers::MAXIMUM_EXCHANGE_TIME + Duration::from_secs(1);
     assert!(matches!(
         registered_text_provider(
             CandidateRouteId::OpenAiResponsesText,

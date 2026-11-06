@@ -45,7 +45,10 @@ async fn with_library(running: &Running) {
     add(running, "bell.wav", WAV).await;
     running.write_asset(
         "fixtures/one.json",
-        r#"{"name":"One","tv":{"place":"Here","status":{"kind":"ok"},"elements":[]},"phone":{"hero":"Pip","status":{"kind":"ok"}}}"#,
+        concat!(
+            r#"{"name":"One","tv":{"place":"Here","status":{"kind":"ok"},"elements":[]},"#,
+            r#""phone":{"hero":"Pip","status":{"kind":"ok"}}}"#
+        ),
     );
     get(running.port, "/playground/controls.json")
         .await
@@ -71,6 +74,7 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
             caption: Some("The Flagon".into()),
             rotation_degrees: 0,
             slide: None,
+            layout: None,
         })
     );
     assert_eq!(
@@ -81,6 +85,7 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
             caption: None,
             rotation_degrees: 0,
             slide: None,
+            layout: None,
         })
     );
     assert_eq!(
@@ -110,7 +115,7 @@ fn music_and_sound_take_a_screen_a_volume_and_music_loops_unless_told_not_to() {
         Ok(SceneChange::Music {
             media: "ambience.wav".into(),
             target: Target::Both,
-            volume: DEFAULT_VOLUME,
+            volume_percent: DEFAULT_VOLUME,
             looping: true
         })
     );
@@ -119,7 +124,7 @@ fn music_and_sound_take_a_screen_a_volume_and_music_loops_unless_told_not_to() {
         Ok(SceneChange::Music {
             media: "a.wav".into(),
             target: Target::Tv,
-            volume: 30,
+            volume_percent: 30,
             looping: false
         })
     );
@@ -129,7 +134,7 @@ fn music_and_sound_take_a_screen_a_volume_and_music_loops_unless_told_not_to() {
         Ok(SceneChange::Sound {
             media: "bell.wav".into(),
             target: Target::Phone,
-            volume: 100
+            volume_percent: 100
         })
     );
 }
@@ -252,14 +257,20 @@ async fn a_file_that_has_not_changed_is_answered_with_a_short_not_modified() {
         .to_owned();
     let second = raw_exchange(
         running.port,
-        &format!("GET /playground/media/bell.wav HTTP/1.1\r\nHost: 127.0.0.1\r\nIf-None-Match: {tag}\r\nConnection: close\r\n\r\n"),
+        &format!(
+            "GET /playground/media/bell.wav HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+             If-None-Match: {tag}\r\nConnection: close\r\n\r\n"
+        ),
     )
     .await;
     assert!(second.starts_with("HTTP/1.1 304"), "{second}");
     add(&running, "bell.wav", b"RIFFa different and longer sound").await;
     let third = raw_exchange(
         running.port,
-        &format!("GET /playground/media/bell.wav HTTP/1.1\r\nHost: 127.0.0.1\r\nIf-None-Match: {tag}\r\nConnection: close\r\n\r\n"),
+        &format!(
+            "GET /playground/media/bell.wav HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+             If-None-Match: {tag}\r\nConnection: close\r\n\r\n"
+        ),
     )
     .await;
     assert!(
@@ -364,7 +375,7 @@ async fn a_picture_and_a_sound_are_shown_and_cued_from_the_library() {
         .await
         .expect("cues");
     let reply = shown(&running).await;
-    assert!(reply.scene.backdrop.is_some() && reply.scene.music.is_some());
+    assert!(!reply.scene.backdrop.is_keep() && !reply.scene.music.is_keep());
     assert_eq!(reply.scene.cue_count, 1);
     assert_eq!(reply.scene.cues[0].media, "bell.wav");
     assert!(
@@ -382,8 +393,11 @@ async fn a_media_name_that_is_missing_or_the_wrong_kind_is_refused_and_says_what
     let missing = run(&running, "scene image tv-card ghost.png")
         .await
         .expect_err("refused");
+    let DevError::Rejected(text) = &missing else {
+        panic!("{missing}");
+    };
     assert!(
-        matches!(&missing, DevError::Rejected(text) if text.contains("there is no picture 'ghost.png'") && text.contains("tavern.png")),
+        text.contains("there is no picture 'ghost.png'") && text.contains("tavern.png"),
         "{missing}"
     );
     let wrong = run(&running, "scene image tv-card bell.wav")
@@ -406,7 +420,13 @@ async fn a_media_name_that_is_missing_or_the_wrong_kind_is_refused_and_says_what
 #[tokio::test]
 async fn with_an_empty_library_the_refusal_says_how_to_add_one() {
     let running = start(&STARTER_FILES).await;
-    running.write_asset("fixtures/one.json", r#"{"name":"One","tv":{"place":"Here","status":{"kind":"ok"},"elements":[]},"phone":{"hero":"Pip","status":{"kind":"ok"}}}"#);
+    running.write_asset(
+        "fixtures/one.json",
+        concat!(
+            r#"{"name":"One","tv":{"place":"Here","status":{"kind":"ok"},"elements":[]},"#,
+            r#""phone":{"hero":"Pip","status":{"kind":"ok"}}}"#
+        ),
+    );
     get(running.port, "/playground/controls.json")
         .await
         .expect("answers");
@@ -438,7 +458,13 @@ fn the_library_check_is_only_for_changes_that_name_media() {
 async fn choosing_another_fixture_drops_pictures_but_cues_keep_counting() {
     let running = start(&STARTER_FILES).await;
     with_library(&running).await;
-    running.write_asset("fixtures/two.json", r#"{"name":"Two","tv":{"place":"There","status":{"kind":"ok"},"elements":[]},"phone":{"hero":"Pip","status":{"kind":"ok"}}}"#);
+    running.write_asset(
+        "fixtures/two.json",
+        concat!(
+            r#"{"name":"Two","tv":{"place":"There","status":{"kind":"ok"},"elements":[]},"#,
+            r#""phone":{"hero":"Pip","status":{"kind":"ok"}}}"#
+        ),
+    );
     run(&running, "scene image tv-card tavern.png")
         .await
         .expect("shows");
@@ -447,7 +473,7 @@ async fn choosing_another_fixture_drops_pictures_but_cues_keep_counting() {
         .await
         .expect("switches");
     let reply = shown(&running).await;
-    assert!(reply.scene.card.is_none());
+    assert!(reply.scene.card.is_keep());
     assert_eq!(
         reply.scene.cue_count, 1,
         "a page that played cue 1 must not replay it"
@@ -581,7 +607,7 @@ async fn only_the_newest_pages_are_remembered_past_the_maximum() {
 async fn a_report_keeps_only_its_newest_errors() {
     let running = start(&STARTER_FILES).await;
     let mut noisy = report(AudioState::Locked, 0);
-    let kept = df_playground::media::MAXIMUM_REPORTED_ERRORS;
+    let kept = df_playground::limits::MAXIMUM_REPORTED_ERRORS;
     noisy.errors = (0..kept + 12)
         .map(|index| format!("error {index}"))
         .collect();
@@ -602,10 +628,12 @@ async fn a_report_keeps_only_its_newest_errors() {
 async fn a_page_that_has_gone_quiet_is_forgotten() {
     let running = start(&STARTER_FILES).await;
     send_report(&running, "page-1", &report(AudioState::Locked, 0)).await;
-    let soon = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    assert_eq!(running.state.playground().clients_at(soon).len(), 1);
-    let later = std::time::Instant::now() + crate::limits::FORGET_CLIENT_AFTER;
-    assert!(running.state.playground().clients_at(later).is_empty());
+    let playground = running.state.playground();
+    let soon_ms = playground.clock_ms() + 10_000;
+    assert_eq!(playground.clients_at(soon_ms).len(), 1);
+    let forget_after_ms = u64::try_from(crate::limits::FORGET_CLIENT_AFTER.as_millis()).unwrap();
+    let later_ms = playground.clock_ms() + forget_after_ms;
+    assert!(playground.clients_at(later_ms).is_empty());
     assert!(
         running.state.playground().clients().is_empty(),
         "and it is gone from memory"
@@ -622,6 +650,7 @@ fn an_image_can_be_turned_with_rotate_and_a_bad_turn_is_refused() {
             caption: None,
             rotation_degrees: 180,
             slide: None,
+            layout: None,
         })
     );
     for bad in ["rotate=360", "rotate=-90", "rotate=upside", "rotate=1.5"] {
@@ -650,6 +679,7 @@ fn slide_sends_the_card_across_the_screen_with_defaults_from_left_to_right_over_
             caption: None,
             rotation_degrees: 180,
             slide: Some(DEFAULT_SLIDE),
+            layout: None,
         })
     );
 }
@@ -679,7 +709,7 @@ fn slide_refuses_a_bad_share_a_bad_length_an_unknown_key_and_a_missing_name() {
         "scene slide tv-card a.png over=0",
         &format!(
             "scene slide tv-card a.png over={}",
-            df_playground::scene::MAXIMUM_SLIDE_MS + 1
+            df_playground::limits::MAXIMUM_SLIDE_MS + 1
         ),
         "scene slide tv-card a.png over=slowly",
         "scene slide tv-card a.png rotate=360",

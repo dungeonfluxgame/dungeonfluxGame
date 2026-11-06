@@ -23,9 +23,9 @@ use std::collections::BTreeMap;
 use serde::{Serialize, Serializer};
 
 use crate::identity::{EvidenceRef, SeatId};
+use crate::limits::{NARRATION_BUDGET_BYTES, NOTE_BUDGET_BYTES, PHONE_NARRATION_LINES};
 use crate::private_data::{LengthClass, Measured};
 use crate::projection::attachments::{OfferEntry, OfferId, StoryEntry};
-use crate::projection::bounds::{NARRATION_BUDGET_BYTES, NOTE_BUDGET_BYTES, PHONE_NARRATION_LINES};
 use crate::projection::record::ProjectionWork;
 use crate::projection::status::ProjectionStatus;
 use crate::projection::text::NonEmptyText;

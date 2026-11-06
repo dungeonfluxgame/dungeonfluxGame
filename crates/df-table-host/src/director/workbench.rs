@@ -2,35 +2,25 @@
 //! translation of a verb into the Director's calls (O.14, G1).
 //!
 //! The workbench is synchronous bookkeeping around `df_table::director::Director`. It reads the
-//! time from a clock it owns (real elapsed time plus whatever `director advance` added, or only
-//! what `advance` added in a manual clock), builds the `StageView` the Director decides on from
+//! time from the clock it is given (the host's monotonic clock, or a manual one in a test) plus
+//! whatever `director advance` added, builds the `StageView` the Director decides on from
 //! the stage's element names and the operator's view edits, and returns the directions and audit
 //! lines of one verb. It never touches the playground: the routes apply a direction through the
 //! same `apply_scene_change` as `POST /dev/playground/scene`.
 
 use std::collections::BTreeSet;
-use tokio::time::Instant;
+use std::sync::Arc;
 
 use df_playground::scene::SceneChange;
+use df_table::director::reason::{MAXIMUM_CAMERA_MS, MINIMUM_ZOOM_PERCENT, Reason};
+use df_table::director::view::{BeatHold, BeatKind, PlateView, StageView, TargetView};
 use df_table::director::{Director, DirectorSettings, Request, StageDirection};
-use df_table::director_reason::{MAXIMUM_CAMERA_MS, MINIMUM_ZOOM_PERCENT, Reason};
-use df_table::director_view::{BeatHold, BeatKind, PlateView, StageView, TargetView};
 use df_table::element::ElementId;
 use df_table::inspect::InspectAudience;
+use df_table::ports::Clock;
 
-use super::request::{DirectorAct, DirectorFault, ShowReply, StartKind, ViewEdit, ViewSummary};
-
-/// Entries `director show` prints, newest last.
-pub const SHOWN_LOG_ENTRIES: usize = 40;
-
-/// Where the Director's time comes from.
-#[derive(Debug)]
-enum Clock {
-    /// Elapsed real time, so a hold runs out by itself.
-    Real(Instant),
-    /// Only `advance` moves it: for tests that must not depend on time.
-    Manual,
-}
+use super::limits::SHOWN_LOG_ENTRIES;
+use super::request::{DirectorAct, DirectorError, ShowReply, StartKind, ViewEdit, ViewSummary};
 
 /// What a verb decided: the moves to apply and the lines to write.
 #[derive(Debug, Default)]
@@ -54,25 +44,14 @@ struct ViewEdits {
 
 pub struct Workbench {
     director: Director,
-    clock: Clock,
+    clock: Arc<dyn Clock>,
+    /// What `director advance` added to the clock's time.
     skew_ms: u64,
     audience: InspectAudience,
     stage: Vec<ElementId>,
     /// The stage names the last refresh could not make into element names.
     refused: Vec<String>,
     edits: ViewEdits,
-}
-
-fn element(text: &str) -> Result<ElementId, DirectorFault> {
-    ElementId::new(text).map_err(|_| DirectorFault::BadElement {
-        text: text.to_owned(),
-    })
-}
-
-fn reason(text: &str) -> Result<Reason, DirectorFault> {
-    Reason::from_key(text).ok_or_else(|| DirectorFault::UnknownReason {
-        text: text.to_owned(),
-    })
 }
 
 /// The camera change a direction is, with the numbers the dev camera verbs check.
@@ -96,37 +75,36 @@ pub fn scene_change(direction: &StageDirection) -> SceneChange {
     }
 }
 
+/// `director show`'s words for the plate.
+fn plate_text(plate: &PlateView) -> String {
+    match plate {
+        PlateView::Card => "card (no plate, no anchors)".to_owned(),
+        PlateView::Plate {
+            width_px: Some(width),
+            ..
+        } => format!("plate {width} px wide"),
+        PlateView::Plate { width_px: None, .. } => "plate of unknown width".to_owned(),
+    }
+}
+
 impl Workbench {
-    /// A workbench on the real clock. `audience` says who reads: a local build is the operator.
-    pub fn new(audience: InspectAudience) -> Result<Self, DirectorFault> {
-        Self::build(audience, Clock::Real(Instant::now()))
-    }
-
-    /// A workbench whose clock only `advance` moves.
-    pub fn manual(audience: InspectAudience) -> Result<Self, DirectorFault> {
-        Self::build(audience, Clock::Manual)
-    }
-
-    fn build(audience: InspectAudience, clock: Clock) -> Result<Self, DirectorFault> {
-        Ok(Self {
-            director: Director::new(DirectorSettings::defaults())?,
+    /// A workbench reading `clock`. `audience` says who reads: a local build is the operator.
+    pub fn new(audience: InspectAudience, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            director: Director::new(DirectorSettings::default()),
             clock,
             skew_ms: 0,
             audience,
             stage: Vec::new(),
             refused: Vec::new(),
             edits: ViewEdits::default(),
-        })
+        }
     }
 
+    /// The clock's time plus what `advance` added, never earlier than the Director last saw.
     fn now_ms(&self) -> u64 {
-        let elapsed = match &self.clock {
-            Clock::Real(started) => {
-                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-            }
-            Clock::Manual => 0,
-        };
-        elapsed
+        self.clock
+            .now_ms()
             .saturating_add(self.skew_ms)
             .max(self.director.now_ms())
     }
@@ -174,7 +152,9 @@ impl Workbench {
 
     /// The camera was moved by something other than the Director and now looks at `target` (an
     /// element name) or at the whole stage. Returns whether a focus was forgotten.
-    pub fn camera_moved_elsewhere(&mut self, target: Option<&str>) -> Result<bool, DirectorFault> {
+    pub fn camera_moved_elsewhere(&mut self, target: Option<&str>) -> Result<bool, DirectorError> {
+        // A camera may look at a region, whose name is no element name: the Director then holds
+        // no element, which is what `None` tells it.
         let target = target.and_then(|name| ElementId::new(name).ok());
         Ok(self
             .director
@@ -226,22 +206,22 @@ impl Workbench {
 
     /// The Director's own decision for the time now, with nothing asked: a hold that ran out, a
     /// target that was hidden, a waiting direction whose turn came.
-    pub fn tick(&mut self) -> Result<Decided, DirectorFault> {
+    pub fn tick(&mut self) -> Result<Decided, DirectorError> {
         let view = self.view();
         let moves = self.director.tick(self.now_ms(), &view)?;
         Ok(self.collect(moves))
     }
 
-    fn edit_view(&mut self, edit: ViewEdit) -> Result<(), DirectorFault> {
+    fn edit_view(&mut self, edit: ViewEdit) {
         match edit {
-            ViewEdit::Hide { element: name } => {
-                self.edits.hidden.insert(element(&name)?);
+            ViewEdit::Hide { element } => {
+                self.edits.hidden.insert(element);
             }
-            ViewEdit::Unhide { element: name } => {
-                self.edits.hidden.remove(&element(&name)?);
+            ViewEdit::Unhide { element } => {
+                self.edits.hidden.remove(&element);
             }
-            ViewEdit::Hero { element: name } => {
-                self.edits.heroes.insert(element(&name)?);
+            ViewEdit::Hero { element } => {
+                self.edits.heroes.insert(element);
             }
             ViewEdit::Card => self.edits.card = true,
             ViewEdit::Plate { width_px, stage_px } => {
@@ -255,66 +235,58 @@ impl Workbench {
             ViewEdit::Reduced { on } => self.edits.reduced_effects = on,
             ViewEdit::Beat {
                 reveal,
-                ms,
-                element: name,
+                hold_ms,
+                element,
             } => {
-                let subject = name.as_deref().map(element).transpose()?;
                 self.edits.beat = Some(BeatHold {
                     kind: if reveal {
                         BeatKind::RevealBeat
                     } else {
                         BeatKind::ResultCard
                     },
-                    until_ms: self.now_ms().saturating_add(ms),
-                    subject,
+                    until_ms: self.now_ms().saturating_add(hold_ms),
+                    subject: element,
                 });
             }
             ViewEdit::Clear => self.edits = ViewEdits::default(),
         }
-        Ok(())
     }
 
     /// Runs one verb and then lets the Director decide for this tick, as the engine will each
     /// host tick: the moves to apply and the audit lines, in the order they were made.
-    pub fn act(&mut self, act: DirectorAct) -> Result<Decided, DirectorFault> {
+    pub fn act(&mut self, act: DirectorAct) -> Result<Decided, DirectorError> {
         let mut moves = Vec::new();
         match act {
             DirectorAct::Focus {
-                element: name,
-                reason: reason_key,
-                zoom,
-                over,
-                hold,
+                element,
+                reason,
+                zoom_percent,
+                over_ms,
+                hold_ms,
             } => {
-                let reason = reason_key.as_deref().map_or(Ok(Reason::Speaker), reason)?;
-                let mut request = Request::focus(reason, element(&name)?).driven();
-                request.zoom_percent = zoom;
-                request.over_ms = over;
-                request.hold_ms = hold;
+                let reason = reason.unwrap_or(Reason::Speaker);
+                let mut request = Request::focus(reason, element).driven();
+                request.zoom_percent = zoom_percent;
+                request.over_ms = over_ms;
+                request.hold_ms = hold_ms;
                 let view = self.view();
                 self.director.request(self.now_ms(), &view, request)?;
             }
-            DirectorAct::Wide { over } => {
+            DirectorAct::Wide { over_ms } => {
                 let view = self.view();
-                moves.push(self.director.pull_back(self.now_ms(), &view, over)?);
+                moves.push(self.director.pull_back(self.now_ms(), &view, over_ms)?);
             }
             DirectorAct::Pause => self.director.set_paused(true),
             DirectorAct::Resume => self.director.set_paused(false),
             DirectorAct::Auto { on } => self.director.set_auto_camera(on),
-            DirectorAct::Advance { ms } => {
-                if ms > u64::from(MAXIMUM_CAMERA_MS) {
-                    return Err(DirectorFault::Refused {
-                        reason: format!("a clock advance is 0 to {MAXIMUM_CAMERA_MS} ms, not {ms}"),
-                    });
+            DirectorAct::Advance { by_ms } => {
+                if by_ms > MAXIMUM_CAMERA_MS {
+                    return Err(DirectorError::InvalidAdvance { by_ms });
                 }
-                self.skew_ms = self.skew_ms.saturating_add(ms);
+                self.skew_ms = self.skew_ms.saturating_add(by_ms);
             }
-            DirectorAct::End {
-                reason: key,
-                element: name,
-            } => {
-                self.director
-                    .end(self.now_ms(), reason(&key)?, &element(&name)?)?;
+            DirectorAct::End { reason, element } => {
+                self.director.end(self.now_ms(), reason, &element)?;
             }
             DirectorAct::Start { what } => {
                 let now = self.now_ms();
@@ -324,50 +296,48 @@ impl Workbench {
                 };
                 moves.extend(direction);
             }
-            DirectorAct::View { edit } => self.edit_view(edit)?,
+            DirectorAct::View { edit } => self.edit_view(edit),
         }
         let view = self.view();
         moves.extend(self.director.tick(self.now_ms(), &view)?);
         Ok(self.collect(moves))
     }
 
+    /// `director show`'s words for the held beat, naming its subject only to an audience that may
+    /// be told it.
+    fn beat_text(&self, view: &StageView) -> Option<String> {
+        let beat = self.edits.beat.as_ref()?;
+        let kind = match beat.kind {
+            BeatKind::ResultCard => "result card",
+            BeatKind::RevealBeat => "reveal beat",
+        };
+        let about = beat
+            .subject
+            .as_ref()
+            .filter(|subject| {
+                self.audience.is_operator()
+                    || view
+                        .target(subject)
+                        .is_some_and(|target| target.focusable())
+            })
+            .map(|subject| format!(" about {subject}"))
+            .unwrap_or_default();
+        Some(format!("{kind}{about} until {} ms", beat.until_ms))
+    }
+
     /// `director show`: the report for this workbench's audience and what the Director sees.
     pub fn show(&self) -> ShowReply {
         let view = self.view();
         let names = |set: &BTreeSet<ElementId>| set.iter().map(ToString::to_string).collect();
-        let plate = match view.plate {
-            PlateView::Card => "card (no plate, no anchors)".to_owned(),
-            PlateView::Plate { width_px, .. } => match width_px {
-                Some(width) => format!("plate {width} px wide"),
-                None => "plate of unknown width".to_owned(),
-            },
-        };
-        let beat = self.edits.beat.as_ref().map(|beat| {
-            let kind = match beat.kind {
-                BeatKind::ResultCard => "result card",
-                BeatKind::RevealBeat => "reveal beat",
-            };
-            let about = beat
-                .subject
-                .as_ref()
-                .filter(|subject| {
-                    self.audience.is_operator()
-                        || view
-                            .target(subject)
-                            .is_some_and(|target| target.focusable())
-                })
-                .map(|subject| format!(" about {subject}"))
-                .unwrap_or_default();
-            format!("{kind}{about} until {} ms", beat.until_ms)
-        });
         ShowReply {
             report: self
                 .director
                 .report(self.audience, &view, SHOWN_LOG_ENTRIES),
             view: ViewSummary {
-                plate,
+                plate: plate_text(&view.plate),
                 stage_px: self.edits.stage_px,
-                // What is hidden from the table is the operator's to read, never the shared audience's.
+                // What is hidden from the table is the operator's to read, never the shared
+                // audience's.
                 hidden: if self.audience.is_operator() {
                     names(&self.edits.hidden)
                 } else {
@@ -376,7 +346,7 @@ impl Workbench {
                 heroes: names(&self.edits.heroes),
                 collapsed_beat: self.edits.collapsed_beat,
                 reduced_effects: self.edits.reduced_effects,
-                beat,
+                beat: self.beat_text(&view),
             },
         }
     }

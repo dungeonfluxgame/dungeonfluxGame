@@ -21,6 +21,7 @@ pub struct DiagnosticTrace {
 }
 
 impl DiagnosticTrace {
+    /// Rebuild a local span context carrying only the IDs and flags.
     pub fn span_context(self) -> SpanContext {
         SpanContext::new(
             self.trace_id,
@@ -126,6 +127,7 @@ impl NativeDiagnosticSink {
         })
     }
 
+    /// Counters at this moment; each is read independently, without a snapshot lock.
     pub fn health(&self) -> DiagnosticHealth {
         DiagnosticHealth {
             attempted: self.attempted.load(Ordering::Relaxed),

@@ -6,23 +6,27 @@
 //! retry policy; a backend returns one outcome. Logging goes through `TextObserver`, so the
 //! composition root decides where events land (the shared telemetry path), not this crate.
 
+use std::io;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 use crate::text_attempts::{AttemptStoreError, OperationKey};
 
-/// Default instruction budget, in bytes.
-pub const DEFAULT_INSTRUCTION_BYTES: usize = 64 * 1024;
-/// Default structured-facts budget, in serialized bytes.
-pub const DEFAULT_FACTS_BYTES: usize = 256 * 1024;
-/// Default deadline ceiling for one request.
-pub const DEFAULT_MAXIMUM_DEADLINE: Duration = Duration::from_secs(600);
+/// Default instruction budget, in bytes. Generous so development prompts are never cut short;
+/// the model's context window is the real bound, and the backend reports it.
+pub const DEFAULT_INSTRUCTION_BYTES: usize = 1024 * 1024;
+/// Default structured-facts budget, in serialized bytes. Generous for the same reason.
+pub const DEFAULT_FACTS_BYTES: usize = 16 * 1024 * 1024;
+/// Default deadline ceiling for one request. Long enough for a slow local model.
+pub const DEFAULT_MAXIMUM_DEADLINE: Duration = Duration::from_secs(60 * 60);
 
-/// Hard ceilings a composition root may not raise past.
-const CEILING_INSTRUCTION_BYTES: usize = 1024 * 1024;
-const CEILING_FACTS_BYTES: usize = 4 * 1024 * 1024;
-const CEILING_DEADLINE: Duration = Duration::from_secs(3600);
+/// The largest instruction budget a composition root may configure, in bytes.
+const CEILING_INSTRUCTION_BYTES: usize = 64 * 1024 * 1024;
+/// The largest facts budget a composition root may configure, in serialized bytes.
+const CEILING_FACTS_BYTES: usize = 256 * 1024 * 1024;
+/// The longest deadline a composition root may configure.
+const CEILING_DEADLINE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Request budgets. Built once by the composition root and fixed for the service's lifetime.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +44,7 @@ pub enum TextLimitsError {
 }
 
 impl TextLimits {
+    /// Zero budgets and budgets above the built-in ceilings are refused.
     pub fn new(
         maximum_instruction_bytes: usize,
         maximum_facts_bytes: usize,
@@ -89,6 +94,7 @@ impl Default for TextLimits {
 /// New purposes are added here as features adopt the service.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TextPurpose {
+    /// The storyteller: wording and creation for the game.
     Storyteller,
     /// Closed semantic judgments over listed options (intent, addressee, consent and similar).
     SemanticJudgment,
@@ -98,15 +104,20 @@ pub enum TextPurpose {
     SupportDraft,
     /// Operator fixture traffic from the development probe; never a game feature.
     DevProbe,
+    /// Which scanned person in a picture is which named character (the imagery API prepares the
+    /// pictures and checks the answer).
+    CharacterIdentity,
 }
 
 impl TextPurpose {
-    pub const ALL: [Self; 5] = [
+    /// Every purpose, in declaration order.
+    pub const ALL: [Self; 6] = [
         Self::Storyteller,
         Self::SemanticJudgment,
         Self::SupportJudgment,
         Self::SupportDraft,
         Self::DevProbe,
+        Self::CharacterIdentity,
     ];
 
     /// A stable label for logs and metrics; never prompt text.
@@ -117,6 +128,7 @@ impl TextPurpose {
             Self::SupportJudgment => "support_judgment",
             Self::SupportDraft => "support_draft",
             Self::DevProbe => "dev_probe",
+            Self::CharacterIdentity => "character_identity",
         }
     }
 
@@ -128,10 +140,10 @@ impl TextPurpose {
     }
 }
 
-/// The longest scope, profile or operation label, in bytes.
+/// The longest scope, profile, operation or output-name label, in bytes.
 pub const MAXIMUM_LABEL_BYTES: usize = 128;
 
-/// Why a label (scope, profile or operation id) was refused.
+/// Why a label (scope, profile, operation id or output name) was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LabelError {
     Empty,
@@ -139,6 +151,9 @@ pub enum LabelError {
     ControlCharacter,
 }
 
+/// A label is non-empty, at most [`MAXIMUM_LABEL_BYTES`] and free of control characters. The
+/// PostgreSQL attempt table bounds its label columns at 128 *characters*; a label within 128
+/// bytes always fits, so the byte bound here is the stricter one. Keep the two in step.
 pub(crate) fn checked_label(value: &str) -> Result<String, LabelError> {
     if value.is_empty() {
         return Err(LabelError::Empty);
@@ -158,6 +173,7 @@ pub(crate) fn checked_label(value: &str) -> Result<String, LabelError> {
 pub struct TextProfile(String);
 
 impl TextProfile {
+    /// A profile name follows the label rules ([`LabelError`]).
     pub fn new(value: &str) -> Result<Self, LabelError> {
         checked_label(value).map(Self)
     }
@@ -177,6 +193,53 @@ pub struct TextRequest {
     pub output_name: String,
     pub output_schema: Value,
     pub deadline: Duration,
+    /// Authorized pictures the model sees, in order, each introduced by its label. Empty for a
+    /// text-only request. A backend that cannot send pictures answers `Unavailable`.
+    pub images: Vec<TextImage>,
+}
+
+/// The most pictures one request carries.
+pub const MAXIMUM_IMAGES: usize = 1_024;
+/// The largest total size of all pictures in one request, in bytes.
+pub const MAXIMUM_IMAGE_BYTES: usize = 128 * 1024 * 1024;
+
+/// The media type of a picture part.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextImageType {
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl TextImageType {
+    /// The IANA media type sent with the picture.
+    pub fn mime(self) -> &'static str {
+        match self {
+            Self::Jpeg => "image/jpeg",
+            Self::Png => "image/png",
+            Self::Webp => "image/webp",
+        }
+    }
+}
+
+/// One picture part: a short label the instructions refer to (such as `Candidate 3`), its media
+/// type and its bytes. Debug output names the label and size, never the bytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct TextImage {
+    pub label: String,
+    pub media_type: TextImageType,
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for TextImage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TextImage")
+            .field("label", &self.label)
+            .field("media_type", &self.media_type)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
 }
 
 /// Why a request could not be served. Labels are stable and carry no request content.
@@ -189,6 +252,14 @@ pub enum UnavailableReason {
 }
 
 impl UnavailableReason {
+    const ALL: [Self; 4] = [
+        Self::Configuration,
+        Self::Authentication,
+        Self::UnsafeTools,
+        Self::Interrupted,
+    ];
+
+    /// A stable label for logs and stores; never request content.
     pub fn label(self) -> &'static str {
         match self {
             Self::Configuration => "configuration",
@@ -200,14 +271,7 @@ impl UnavailableReason {
 
     /// The inverse of [`Self::label`], for stores that persist the reason.
     pub fn parse(label: &str) -> Option<Self> {
-        [
-            Self::Configuration,
-            Self::Authentication,
-            Self::UnsafeTools,
-            Self::Interrupted,
-        ]
-        .into_iter()
-        .find(|reason| reason.label() == label)
+        Self::ALL.into_iter().find(|reason| reason.label() == label)
     }
 }
 
@@ -252,7 +316,11 @@ pub enum TextRequestError {
     InstructionsTooLarge,
     FactsTooLarge,
     InvalidDeadline,
+    /// The output schema is not a JSON object schema, or the output name breaks the label rules
+    /// ([`LabelError`]).
     InvalidSchema,
+    /// Too many pictures, too many picture bytes, an empty picture or an unlabelled one.
+    InvalidImages,
 }
 
 impl TextRequestError {
@@ -264,6 +332,7 @@ impl TextRequestError {
             Self::FactsTooLarge => "facts_too_large",
             Self::InvalidDeadline => "invalid_deadline",
             Self::InvalidSchema => "invalid_schema",
+            Self::InvalidImages => "invalid_images",
         }
     }
 }
@@ -300,6 +369,7 @@ impl From<TextOutcome> for TextReceipt {
 
 /// The backend port. Implementations are private to a composition root.
 pub trait TextBackend: Send + Sync {
+    /// Runs one request to one receipt within `request.deadline`. Never retries.
     fn complete(&self, request: &TextRequest) -> impl Future<Output = TextReceipt> + Send;
 }
 
@@ -338,6 +408,7 @@ pub enum TextEventKind {
 }
 
 impl TextEventKind {
+    /// A stable label for logs and metrics; never prompt or answer text.
     pub fn label(self) -> &'static str {
         match self {
             Self::Refused(error) => error.label(),
@@ -386,6 +457,7 @@ pub struct TextEvent {
 
 /// Receives one event per request. The default observer keeps nothing.
 pub trait TextObserver: Send + Sync {
+    /// Records one event. It runs on the caller's path, so it must not block.
     fn observe(&self, event: &TextEvent);
 }
 
@@ -420,6 +492,7 @@ pub struct TextService<B, O = NoTextObserver> {
 }
 
 impl<B: TextBackend> TextService<B> {
+    /// A service with the default limits and no observer.
     pub fn new(backend: B) -> Self {
         Self {
             backend,
@@ -430,11 +503,13 @@ impl<B: TextBackend> TextService<B> {
 }
 
 impl<B: TextBackend, O: TextObserver> TextService<B, O> {
+    /// Replaces the request budgets.
     pub fn with_limits(mut self, limits: TextLimits) -> Self {
         self.limits = limits;
         self
     }
 
+    /// Replaces the observer that receives one event per request.
     pub fn with_observer<P: TextObserver>(self, observer: P) -> TextService<B, P> {
         TextService {
             backend: self.backend,
@@ -468,9 +543,7 @@ impl<B: TextBackend, O: TextObserver> TextService<B, O> {
         if request.instructions.len() > self.limits.maximum_instruction_bytes {
             return Err(TextRequestError::InstructionsTooLarge);
         }
-        if serde_json::to_vec(&request.facts)
-            .map_or(true, |bytes| bytes.len() > self.limits.maximum_facts_bytes)
-        {
+        if !serializes_within(&request.facts, self.limits.maximum_facts_bytes) {
             return Err(TextRequestError::FactsTooLarge);
         }
         if request.deadline.is_zero() || request.deadline > self.limits.maximum_deadline {
@@ -478,8 +551,13 @@ impl<B: TextBackend, O: TextObserver> TextService<B, O> {
         }
         let object_schema =
             request.output_schema.get("type").and_then(Value::as_str) == Some("object");
-        if request.output_name.is_empty() || !object_schema {
+        // The output name is stored with the attempt, so it follows the label rules here instead
+        // of failing later as a store rejection after admission.
+        if checked_label(&request.output_name).is_err() || !object_schema {
             return Err(TextRequestError::InvalidSchema);
+        }
+        if !images_are_valid(&request.images) {
+            return Err(TextRequestError::InvalidImages);
         }
         Ok(())
     }
@@ -517,6 +595,47 @@ impl<B: TextBackend, O: TextObserver> TextService<B, O> {
             elapsed: started.elapsed(),
         });
     }
+}
+
+/// Whether `value` serializes to at most `maximum_bytes`. Serialization stops at the first byte
+/// past the budget, so an oversized value is never written out in full.
+fn serializes_within(value: &Value, maximum_bytes: usize) -> bool {
+    let mut counter = BoundedByteCounter {
+        remaining_bytes: maximum_bytes,
+    };
+    serde_json::to_writer(&mut counter, value).is_ok()
+}
+
+/// A writer that keeps no bytes and fails once more than its budget has been written.
+struct BoundedByteCounter {
+    remaining_bytes: usize,
+}
+
+impl io::Write for BoundedByteCounter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.remaining_bytes = self
+            .remaining_bytes
+            .checked_sub(buffer.len())
+            .ok_or_else(|| io::Error::other("serialized value is over its byte budget"))?;
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// At most [`MAXIMUM_IMAGES`] pictures of at most [`MAXIMUM_IMAGE_BYTES`] in total, each one
+/// labelled and non-empty.
+fn images_are_valid(images: &[TextImage]) -> bool {
+    let total_bytes = images
+        .iter()
+        .try_fold(0usize, |total, image| total.checked_add(image.bytes.len()));
+    images.len() <= MAXIMUM_IMAGES
+        && total_bytes.is_some_and(|total| total <= MAXIMUM_IMAGE_BYTES)
+        && images
+            .iter()
+            .all(|image| !image.bytes.is_empty() && !image.label.trim().is_empty())
 }
 
 pub(crate) fn kind_of(outcome: &TextOutcome) -> TextEventKind {

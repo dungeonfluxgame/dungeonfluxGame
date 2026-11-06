@@ -221,7 +221,8 @@ pub(crate) fn decode_analysis(bytes: &[u8]) -> Result<DecodedAnalysis, CodecErro
         expected_source_revision,
     };
     validate(&value, &PROTOCOL_LIMITS)?;
-    // Reject alternate encodings (including duplicate audience members) at the persistence boundary.
+    // Reject alternate encodings (including duplicate audience members) at the persistence
+    // boundary.
     if encode_analysis(&value)? != bytes {
         return Err(CodecError::Malformed);
     }

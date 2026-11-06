@@ -6,9 +6,11 @@
 //! counts and positions, and never a description, a phrase or any player text, except the place
 //! name, which is a short display name of the place and not something a player typed.
 
+use df_table::event::FailureCause;
+use df_table::plate::job::JobReason;
+use df_table::scene_plan::card::CardState;
+use df_table::scene_plan::locate::{Anchor, LocateOutcome};
 use df_table::scene_plan::{SceneStage, StageOutputs};
-use df_table::scene_plan_card::CardState;
-use df_table::scene_plan_locate::{Anchor, LocateOutcome};
 use df_table::table_state::{Placement, TableSnapshot};
 use serde::{Deserialize, Serialize};
 
@@ -110,8 +112,8 @@ impl LocateReport {
 /// A stage that failed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FailureReport {
-    pub stage: String,
-    pub cause: String,
+    pub stage: SceneStage,
+    pub cause: FailureCause,
 }
 
 /// One plate job in flight.
@@ -119,12 +121,13 @@ pub struct FailureReport {
 pub struct JobReport {
     pub job: u64,
     pub tick_ms: u64,
-    pub cause: String,
+    /// Why the job was taken.
+    pub reason: JobReason,
     pub figures: usize,
     /// The stage whose request is out.
-    pub running: Option<String>,
+    pub running: Option<SceneStage>,
     /// The stages with a stored output.
-    pub stored: Vec<String>,
+    pub stored: Vec<SceneStage>,
     pub failure: Option<FailureReport>,
     pub locate: Option<LocateReport>,
 }
@@ -159,11 +162,11 @@ pub struct SceneReport {
     pub jobs: Vec<JobReport>,
 }
 
-fn stored_stages(outputs: &StageOutputs) -> Vec<String> {
+fn stored_stages(outputs: &StageOutputs) -> Vec<SceneStage> {
     SceneStage::ALL
         .iter()
-        .filter(|stage| outputs.has(**stage))
-        .map(|stage| stage.key().to_owned())
+        .copied()
+        .filter(|stage| outputs.has(*stage))
         .collect()
 }
 
@@ -179,7 +182,7 @@ impl SceneBuilder {
             .map(|(scene, record)| {
                 let on_screen = plate_on_screen(*scene);
                 let state = record.watch.state(now_ms, on_screen);
-                let card = df_table::scene_plan_card::EstablishingCard::compose(
+                let card = df_table::scene_plan::card::EstablishingCard::compose(
                     &record.brief,
                     &record.outputs,
                     snapshot,
@@ -219,13 +222,13 @@ impl SceneBuilder {
                             JobReport {
                                 job: plan.job().id().get(),
                                 tick_ms: plan.job().tick_ms(),
-                                cause: plan.job().cause().key().to_owned(),
+                                reason: plan.job().reason(),
                                 figures: plan.job().figures().len(),
-                                running: plan.running().map(|stage| stage.key().to_owned()),
+                                running: plan.running(),
                                 stored: stored_stages(plan.outputs()),
                                 failure: plan.failure().map(|failure| FailureReport {
-                                    stage: failure.stage.key().to_owned(),
-                                    cause: failure.cause.key().to_owned(),
+                                    stage: failure.stage,
+                                    cause: failure.cause,
                                 }),
                                 locate: plan.outputs().locate.as_ref().map(LocateReport::of),
                             }

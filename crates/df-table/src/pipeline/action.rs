@@ -33,10 +33,10 @@ use crate::effects::{TableEffect, TableState};
 use crate::envelope::PendingId;
 use crate::event::{PipelineStep, TableEvent};
 use crate::identity::{SceneId, SeatId};
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
     Decision, Machine, MachineFailureCause, MachineInput, StepInput, StepOutcome, StepResult,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode, Outcome, OutcomeKind, PendingKind};
 use crate::pending::{RulingSource, ScopedRuling};
 use crate::ports::{ActionId, PlanSoFar, RulingAnswer, RulingKey, RulingScope};

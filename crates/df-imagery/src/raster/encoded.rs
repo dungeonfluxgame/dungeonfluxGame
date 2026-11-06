@@ -8,7 +8,7 @@
 
 use image::{DynamicImage, Pixel, Rgba, RgbaImage, imageops};
 
-use super::bounds::{LiveBudget, rgba_bytes};
+use super::bounds::{self, LiveBudget, rgba_bytes};
 use super::{CancelCheck, RasterError};
 use crate::output::{Dimensions, Rgb};
 use crate::transform::{EncodedAlphaBlend, EncodedFilter};
@@ -88,7 +88,7 @@ pub(super) fn matte(
 ) -> Result<RgbaImage, RasterError> {
     check_cancel()?;
     for row in 0..image.height() {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         for column in 0..image.width() {
@@ -120,7 +120,7 @@ pub(super) fn discard_alpha(
 ) -> Result<RgbaImage, RasterError> {
     check_cancel()?;
     for row in 0..image.height() {
-        if row % 16 == 0 {
+        if row.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         for column in 0..image.width() {
@@ -132,4 +132,4 @@ pub(super) fn discard_alpha(
 }
 
 #[cfg(test)]
-mod tests;
+mod encoded_tests;

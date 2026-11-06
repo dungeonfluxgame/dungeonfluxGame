@@ -1,6 +1,7 @@
+use crate::fixtures::assert_keys_are_serde_names;
+use crate::limits::{MAXIMUM_MEDIA_NAME_BYTES, MAXIMUM_REPORTED_ERRORS};
 use crate::media::{
-    AudioState, ClientReport, MAXIMUM_NAME_LENGTH, MAXIMUM_REPORTED_ERRORS, MediaKind,
-    content_type, is_plain_file_name, media_kind,
+    AudioState, ClientReport, MediaKind, content_type, is_plain_file_name, media_kind,
 };
 
 #[test]
@@ -16,7 +17,7 @@ fn only_plain_names_pass() {
         "a/b.png",
         "a\\b.png",
         "a b.png",
-        &"a".repeat(MAXIMUM_NAME_LENGTH + 1),
+        &"a".repeat(MAXIMUM_MEDIA_NAME_BYTES + 1),
     ] {
         assert!(!is_plain_file_name(bad), "{bad:?}");
     }
@@ -110,7 +111,7 @@ fn a_reports_texts_are_cut_to_their_length_and_its_pictures_to_their_count() {
     let report = ClientReport {
         audio: AudioState::Locked,
         last_cue: 0,
-        music: Some("m".repeat(MAXIMUM_NAME_LENGTH + 10)),
+        music: Some("m".repeat(MAXIMUM_MEDIA_NAME_BYTES + 10)),
         images_shown: (0..crate::limits::MAXIMUM_REPORTED_IMAGES + 5)
             .map(|index| format!("{index}.png"))
             .collect(),
@@ -123,7 +124,7 @@ fn a_reports_texts_are_cut_to_their_length_and_its_pictures_to_their_count() {
     );
     assert_eq!(
         report.music.map(|music| music.chars().count()),
-        Some(MAXIMUM_NAME_LENGTH)
+        Some(MAXIMUM_MEDIA_NAME_BYTES)
     );
     assert_eq!(
         report.images_shown.len(),
@@ -166,13 +167,31 @@ fn a_multibyte_text_is_cut_on_a_character_and_never_panics() {
     let report = ClientReport {
         audio: AudioState::Locked,
         last_cue: 0,
-        music: Some("\u{e9}".repeat(MAXIMUM_NAME_LENGTH + 1)),
+        music: Some("\u{e9}".repeat(MAXIMUM_MEDIA_NAME_BYTES + 1)),
         images_shown: Vec::new(),
         errors: Vec::new(),
     }
     .bounded();
     assert_eq!(
         report.music.map(|music| music.chars().count()),
-        Some(MAXIMUM_NAME_LENGTH)
+        Some(MAXIMUM_MEDIA_NAME_BYTES)
     );
+}
+
+#[test]
+fn the_keys_of_a_media_kind_are_its_serde_names() {
+    assert_keys_are_serde_names(&MediaKind::ALL, MediaKind::key, MediaKind::from_key);
+}
+
+#[test]
+fn the_keys_of_an_audio_state_are_its_serde_names() {
+    assert_keys_are_serde_names(&AudioState::ALL, AudioState::key, AudioState::from_key);
+}
+
+#[test]
+fn a_report_with_a_misspelt_key_is_refused() {
+    let report = r#"{"audio":"locked","last_cue":0,"music":null,"images_shown":[],"errors":[]}"#;
+    assert!(serde_json::from_str::<ClientReport>(report).is_ok());
+    let misspelt = report.replace("\"errors\":[]", "\"errors\":[],\"image_shown\":[]");
+    assert!(serde_json::from_str::<ClientReport>(&misspelt).is_err());
 }

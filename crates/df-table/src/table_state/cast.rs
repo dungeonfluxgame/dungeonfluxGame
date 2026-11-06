@@ -334,9 +334,9 @@ impl TryFrom<VitalsRecord> for Vitals {
 /// so it is exact and can be compared, which a floating point number cannot.
 const MILLI_UNITS_PER_UNIT: f32 = 1000.0;
 /// The canvas width in thousandths of a canvas unit (`CANVAS_WIDTH_UNITS`).
-const CANVAS_WIDTH_MILLI_UNITS: u32 = 100_000;
+pub(crate) const CANVAS_WIDTH_MILLI_UNITS: u32 = 100_000;
 /// The canvas height in thousandths of a canvas unit (`CANVAS_HEIGHT_UNITS`).
-const CANVAS_HEIGHT_MILLI_UNITS: u32 = 56_250;
+pub(crate) const CANVAS_HEIGHT_MILLI_UNITS: u32 = 56_250;
 
 /// Why a placement was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -546,7 +546,7 @@ impl CastEntry {
         digest.number(u64::from(vitals.hit_points()));
         digest.number(u64::from(vitals.maximum_hit_points()));
         digest.text(visibility.key());
-        digest.option(placement, |digest, placement| {
+        digest.option(placement.as_ref(), |digest, placement| {
             digest.number(u64::from(placement.x_milli_units));
             digest.number(u64::from(placement.y_milli_units));
         });
@@ -554,8 +554,10 @@ impl CastEntry {
         for condition in conditions {
             digest.text(condition.as_str());
         }
-        digest.option(portrait, |digest, portrait| digest.text(portrait.as_str()));
-        digest.option(color, |digest, color| digest.text(&color.to_hex()));
+        digest.option(portrait.as_ref(), |digest, portrait| {
+            digest.text(portrait.as_str())
+        });
+        digest.option(color.as_ref(), |digest, color| digest.text(&color.to_hex()));
     }
 
     pub(super) fn moved_to(&mut self, scene: SceneId) {

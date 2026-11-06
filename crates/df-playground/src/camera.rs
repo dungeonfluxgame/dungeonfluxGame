@@ -3,7 +3,7 @@
 //! The camera frames the world layer (the backdrop, the figures and the card) by scaling it about
 //! its top-left corner and sliding it so the target sits in the middle of the screen. The slide is
 //! held so the picture always covers the screen: a target near an edge is as near the middle as the
-//! edge allows. It never draws; `view_tv` puts these numbers into a style.
+//! edge allows. It never draws; `view::tv` puts these numbers into a style.
 
 use crate::fixture::{Camera, StageElement};
 use crate::layout::stage_percent;
@@ -51,11 +51,11 @@ impl Framing {
 
 /// How far a move of `duration_ms` has gone after `elapsed_ms`, from 0 to 1. A move that takes no
 /// time is done at once.
-pub fn progress(elapsed_ms: f64, duration_ms: u32) -> f32 {
+pub fn progress(elapsed_ms: f64, duration_ms: u64) -> f32 {
     if duration_ms == 0 {
         return 1.0;
     }
-    (elapsed_ms / f64::from(duration_ms)).clamp(0.0, 1.0) as f32
+    (elapsed_ms / duration_ms as f64).clamp(0.0, 1.0) as f32
 }
 
 /// The framing a camera asks for with the elements now on the stage. A camera without a target, a
@@ -78,8 +78,8 @@ pub fn zoom_ceiling_percent(plate_width_px: Option<u32>, stage_width_px: u32) ->
     u16::try_from(bearable.clamp(floor, ceiling)).unwrap_or(MAXIMUM_ZOOM_PERCENT)
 }
 
-/// The zoom that is drawn when `requested` is asked for under `ceiling`, and the ceiling itself when
-/// the request was cut (so the page can say so and not cut it silently).
+/// The zoom that is drawn when `requested` is asked for under `ceiling`, and the ceiling itself
+/// when the request was cut (so the page can say so and not cut it silently).
 pub fn clamped_zoom(requested: u16, ceiling: u16) -> (u16, Option<u16>) {
     if requested > ceiling {
         (ceiling, Some(ceiling))

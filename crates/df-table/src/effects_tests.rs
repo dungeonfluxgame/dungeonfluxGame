@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
 use crate::effects::{
-    ApplyOutcome, BeatName, ConversationOutcome, EffectRecord, EffectRefusal,
+    ApplyOutcome, BeatName, ConversationOutcome, EffectCause, EffectRecord,
     TABLE_EFFECT_SCHEMA_VERSION, TableEffect, TableEffectKind, TableState, TableStateError,
 };
 use crate::identity::{MachineId, SceneId, SeatId, TableId, TableScope};
-use crate::machine_slot::LoadFault;
+use crate::machine::slot::LoadCause;
 use crate::testkit::correlation;
 
 fn seat(number: u64) -> SeatId {
@@ -83,7 +83,7 @@ fn sample(kind: TableEffectKind) -> TableEffect {
         TableEffectKind::HandOffPushed => TableEffect::HandOffPushed {
             scene: SceneId::new(4),
             machine: machine("explore"),
-            slot: crate::machine_slot::MachineSlot::from_parts(
+            slot: crate::machine::slot::MachineSlot::from_parts(
                 machine("explore"),
                 1,
                 serde_json::json!({"phase": "presenting"}),
@@ -155,7 +155,7 @@ fn a_stamped_record_opens_and_a_newer_or_versionless_one_is_refused_with_its_fau
         let refused = record.open().expect_err("refused");
         assert_eq!(refused.found, version);
         assert_eq!(refused.expected, TABLE_EFFECT_SCHEMA_VERSION);
-        assert_eq!(refused.fault, LoadFault::UnsupportedVersion);
+        assert_eq!(refused.cause, LoadCause::UnsupportedVersion);
     }
 }
 
@@ -164,7 +164,7 @@ fn a_record_from_a_newer_engine_with_an_effect_this_one_does_not_know_is_a_versi
     let text = r#"{"schema_version":2,"effect":{"effect":"quest_started","quest":"q1"}}"#;
     let record: EffectRecord = serde_json::from_str(text).expect("the record itself parses");
     let refused = record.open().expect_err("refused");
-    assert_eq!(refused.fault, LoadFault::UnsupportedVersion);
+    assert_eq!(refused.cause, LoadCause::UnsupportedVersion);
     assert_eq!(
         (refused.found, refused.expected),
         (2, TABLE_EFFECT_SCHEMA_VERSION)
@@ -188,7 +188,7 @@ fn a_record_at_a_known_version_that_holds_no_effect_is_malformed_not_a_serde_err
         let refused = EffectRecord::from_parts(TABLE_EFFECT_SCHEMA_VERSION, effect)
             .open()
             .expect_err("refused");
-        assert_eq!(refused.fault, LoadFault::Malformed);
+        assert_eq!(refused.cause, LoadCause::Malformed);
         assert_eq!(refused.found, TABLE_EFFECT_SCHEMA_VERSION);
     }
 }
@@ -225,10 +225,10 @@ fn a_seat_joins_once_and_the_table_holds_only_its_capacity() {
     let twice = apply(&mut table, 2, &[TableEffect::SeatJoined { seat: seat(3) }]);
     assert_eq!(
         twice.expect_err("refused").cause,
-        EffectRefusal::SeatAlreadySeated
+        EffectCause::SeatAlreadySeated
     );
     let full = apply(&mut table, 3, &[TableEffect::SeatJoined { seat: seat(4) }]);
-    assert_eq!(full.expect_err("refused").cause, EffectRefusal::TableFull);
+    assert_eq!(full.expect_err("refused").cause, EffectCause::TableFull);
     assert_eq!(table.seats().len(), 3);
 }
 
@@ -237,7 +237,7 @@ fn a_seat_that_is_not_seated_cannot_leave() {
     let mut table = table();
     let left = apply(&mut table, 1, &[TableEffect::SeatLeft { seat: seat(9) }]);
     let error = left.expect_err("refused");
-    assert_eq!(error.cause, EffectRefusal::SeatNotSeated);
+    assert_eq!(error.cause, EffectCause::SeatNotSeated);
     assert_eq!(error.effect, TableEffectKind::SeatLeft);
 }
 
@@ -270,7 +270,7 @@ fn entering_a_scene_makes_it_active_and_clears_the_beat_and_a_beat_needs_its_sce
     );
     assert_eq!(
         early.expect_err("refused").cause,
-        EffectRefusal::SceneNotActive
+        EffectCause::SceneNotActive
     );
     apply(&mut table, 2, &[TableEffect::SceneEntered { scene }]).expect("applies");
     assert_eq!(table.active_scene(), Some(scene));
@@ -418,7 +418,7 @@ fn a_table_state_needs_a_real_capacity_and_a_seating_that_fits() {
         Some(TableStateError::ZeroCapacity)
     );
     assert_eq!(
-        TableState::new(crate::owner_queue::MAXIMUM_SEATS + 1).err(),
+        TableState::new(crate::limits::MAXIMUM_SEATS + 1).err(),
         Some(TableStateError::CapacityTooLarge)
     );
     assert_eq!(

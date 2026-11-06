@@ -1,3 +1,4 @@
+use crate::limits::{MAXIMUM_BATCH_FIELDS, MAXIMUM_MESSAGE_DEPTH, MAXIMUM_MESSAGE_FIELDS};
 use df_observe::{
     CaptureKey, ProducerId, RecordId, Signal, SourceSequence, TelemetryError, TelemetryLimits,
 };
@@ -9,6 +10,21 @@ use opentelemetry_proto::tonic::{
 };
 use prost::Message;
 
+/// Stored signal code shared by spool frames, digests and the SQLite `signal` column.
+pub(crate) fn signal_code(signal: Signal) -> u8 {
+    match signal {
+        Signal::Logs => 1,
+        Signal::Spans => 2,
+    }
+}
+/// Inverse of [`signal_code`]; any other code is not a signal this store wrote.
+pub(crate) fn signal_from_code(code: u8) -> Option<Signal> {
+    match code {
+        1 => Some(Signal::Logs),
+        2 => Some(Signal::Spans),
+        _ => None,
+    }
+}
 #[derive(Clone, Debug)]
 pub(crate) struct Record {
     pub key: CaptureKey,
@@ -292,7 +308,7 @@ fn scan(
     depth: usize,
     budget: &mut Budget,
 ) -> Result<(), TelemetryError> {
-    if depth > 12 {
+    if depth > MAXIMUM_MESSAGE_DEPTH {
         return Err(TelemetryError::Oversized);
     }
     if matches!(shape, Shape::Log | Shape::Span) {
@@ -306,11 +322,11 @@ fn scan(
     let mut local_fields = 0;
     while offset < bytes.len() {
         local_fields += 1;
-        if local_fields > 128 {
+        if local_fields > MAXIMUM_MESSAGE_FIELDS {
             return Err(TelemetryError::Oversized);
         }
         budget.fields += 1;
-        if budget.fields > 4096 {
+        if budget.fields > MAXIMUM_BATCH_FIELDS {
             return Err(TelemetryError::Oversized);
         }
         let tag = varint(bytes, &mut offset)?;

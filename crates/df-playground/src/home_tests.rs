@@ -4,12 +4,14 @@
 //! what the audit line may carry.
 
 use crate::fixture::Fixture;
-use crate::home_change::{BrandEdit, ButtonEdit, HomeEdit, NavEdit, TitleEdit, TopEdit};
-use crate::home_checks::HomeError;
-use crate::home_chrome::{BrandSize, bell_label, unread_text};
-use crate::home_glyph::{HomeGlyph, HomeIcon};
-use crate::home_model::{HomePart, HomeScene, MAXIMUM_NAV_ITEMS};
-use crate::home_nav::{ActionVariant, NavItem, NavRail};
+use crate::fixtures::assert_keys_are_serde_names;
+use crate::home::change::{BrandEdit, ButtonEdit, HomeEdit, NavEdit, TitleEdit, TopEdit};
+use crate::home::checks::HomeError;
+use crate::home::chrome::{BrandSize, bell_label, unread_text};
+use crate::home::glyph::{HomeGlyph, HomeIcon};
+use crate::home::model::{HomePart, HomeScene};
+use crate::home::nav::{ActionVariant, NavItem, NavRail};
+use crate::limits::{MAXIMUM_FOCUS_CHARACTERS, MAXIMUM_NAV_ITEMS};
 use crate::overlay::{Edit, Glyph};
 use crate::scene::{SceneChange, SceneError, SceneOverlay};
 
@@ -312,7 +314,7 @@ fn two_active_items_in_a_scene_file_are_refused() {
         ],
     };
     assert_eq!(
-        crate::home_checks::nav(&rail),
+        crate::home::checks::nav(&rail),
         Err(SceneError::Home(HomeError::ManyActive { count: 2 }))
     );
 }
@@ -330,7 +332,7 @@ fn the_navigation_rail_holds_a_very_large_number_of_items() {
             .collect(),
     };
     assert!(matches!(
-        crate::home_checks::nav(&rail),
+        crate::home::checks::nav(&rail),
         Err(SceneError::Home(HomeError::TooMany { .. }))
     ));
 }
@@ -455,15 +457,19 @@ fn the_audit_line_names_the_component_and_the_field_and_never_the_text() {
 fn a_page_change_redraws_the_panels_and_only_them() {
     let before = base();
     let mut after = base();
-    after.tv.home.as_mut().expect("home").top = Some(crate::home_chrome::HomeTopBar {
+    after.tv.home.as_mut().expect("home").top = Some(crate::home::chrome::HomeTopBar {
         bell: true,
         unread: Some(1),
     });
-    assert!(crate::overlay_changes::panels_differ(&before.tv, &after.tv));
-    assert!(!crate::overlay_changes::panels_differ(
+    assert!(crate::overlay::changes::panels_differ(
+        &before.tv, &after.tv
+    ));
+    assert!(!crate::overlay::changes::panels_differ(
         &before.tv, &before.tv
     ));
-    assert!(!crate::overlay_changes::pills_differ(&before.tv, &after.tv));
+    assert!(!crate::overlay::changes::pills_differ(
+        &before.tv, &after.tv
+    ));
 }
 
 #[test]
@@ -495,12 +501,13 @@ fn the_focus_defaults_to_the_first_primary_action_and_follows_an_explicit_id() {
 
 #[test]
 fn a_focus_id_that_needs_quoting_is_refused_and_changes_nothing() {
-    for id in ["", "Actions 1", "a\"b", "nav:2]", &"x".repeat(101)] {
+    let too_long = "x".repeat(MAXIMUM_FOCUS_CHARACTERS + 1);
+    for id in ["", "Actions 1", "a\"b", "nav:2]", &too_long] {
         let (overlay, result) = make(HomeEdit::Focus {
             id: Edit::Set(id.to_owned()),
         });
         assert!(
-            matches!(result, Err(SceneError::Home(HomeError::BadFocus(_)))),
+            matches!(result, Err(SceneError::Home(HomeError::InvalidFocus(_)))),
             "{id:?}: {result:?}"
         );
         assert!(overlay.is_empty());
@@ -524,4 +531,32 @@ fn a_focus_id_that_needs_quoting_is_refused_and_changes_nothing() {
         ]
     );
     assert!(pairs.contains(&("id", "nav:2".to_owned())));
+}
+
+#[test]
+fn the_keys_of_the_landing_page_are_their_serde_names() {
+    assert_keys_are_serde_names(&BrandSize::ALL, BrandSize::key, BrandSize::from_key);
+    assert_keys_are_serde_names(
+        &ActionVariant::ALL,
+        ActionVariant::key,
+        ActionVariant::from_key,
+    );
+    assert_keys_are_serde_names(&HomePart::ALL, HomePart::key, HomePart::from_key);
+}
+
+#[test]
+fn a_page_icon_is_written_by_its_snake_case_key() {
+    for glyph in HomeGlyph::ALL {
+        let written = serde_json::to_value(HomeIcon::Page(glyph)).expect("an icon serializes");
+        assert_eq!(written, serde_json::Value::from(glyph.key()));
+        assert!(
+            glyph
+                .key()
+                .chars()
+                .all(|character| character.is_ascii_lowercase() || character == '_'),
+            "{glyph:?}"
+        );
+        assert_eq!(HomeGlyph::from_key(glyph.key()), Some(glyph));
+    }
+    assert_eq!(HomeGlyph::from_key("chevron-down"), None);
 }

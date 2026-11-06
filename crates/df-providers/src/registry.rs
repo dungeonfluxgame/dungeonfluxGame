@@ -285,7 +285,10 @@ const ELEVEN_RATE: PublishedRate = PublishedRate {
 };
 
 const ELEVEN_LICENSE: LicenseEvidence = LicenseEvidence {
-    summary: "Paid-plan commercial use is subject to the customer terms and excludes Beta Services; the exact account, entity, voice and product rights remain unqualified.",
+    summary: concat!(
+        "Paid-plan commercial use is subject to the customer terms and excludes Beta Services; ",
+        "the exact account, entity, voice and product rights remain unqualified."
+    ),
     evidence: EvidenceReference {
         observed_on: OBSERVED_ON,
         url: "https://elevenlabs.io/terms-of-use",
@@ -303,7 +306,10 @@ const FAL_RATE: PublishedRate = PublishedRate {
 };
 
 const FAL_LICENSE: LicenseEvidence = LicenseEvidence {
-    summary: "The model page labels commercial use; fal terms retain customer responsibility for rights and provide no originality or noninfringement guarantee.",
+    summary: concat!(
+        "The model page labels commercial use; fal terms retain customer responsibility for ",
+        "rights and provide no originality or noninfringement guarantee."
+    ),
     evidence: EvidenceReference {
         observed_on: OBSERVED_ON,
         url: "https://fal.ai/legal/terms-of-service",

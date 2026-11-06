@@ -10,7 +10,7 @@ use crate::client::{get, post_json};
 use crate::command::split_words;
 use crate::dev::{DevError, run_dev};
 use crate::playground::{
-    ControlsRefusal, PlaygroundFiles, PlaygroundState, SceneRefusal, reconcile_fixtures,
+    ControlsChangeError, PlaygroundFiles, PlaygroundState, SceneChangeError, reconcile_fixtures,
 };
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::{ControlsBatch, ControlsReply, EventsReply, Frame};
@@ -52,8 +52,11 @@ async fn go_to_a_scene_that_does_not_exist_with_a_transition_changes_nothing() {
     let error = run(&running, "playground go castle transition=wipe ms=2000")
         .await
         .expect_err("refused");
+    let DevError::Rejected(text) = &error else {
+        panic!("{error}");
+    };
     assert!(
-        matches!(&error, DevError::Rejected(text) if text.contains("castle.json") && text.contains("quay.json")),
+        text.contains("castle.json") && text.contains("quay.json"),
         "{error}"
     );
     let after = shown(&running).await;
@@ -252,7 +255,7 @@ fn choose(
     state: &PlaygroundState,
     change: ControlsChange,
     names: &[String],
-) -> Result<ControlsReply, ControlsRefusal> {
+) -> Result<ControlsReply, ControlsChangeError> {
     state.change_all(vec![change], names, state.generation(), |_| {})
 }
 
@@ -278,11 +281,11 @@ fn a_scene_change_checked_against_one_fixture_is_refused_after_another_is_shown(
     let revision = state.revision();
     assert_eq!(
         state.change_scene(caption(), &base, generation, |_| {}),
-        Err(SceneRefusal::FixtureChanged)
+        Err(SceneChangeError::FixtureChanged)
     );
     assert_eq!(state.revision(), revision, "nothing was applied");
     assert_eq!(state.snapshot().scene, Default::default());
-    let refusal = SceneRefusal::FixtureChanged;
+    let refusal = SceneChangeError::FixtureChanged;
     assert!(refusal.to_string().contains("try again"));
     let (_, fresh) = state.scene_target().expect("shown");
     assert!(state.change_scene(caption(), &base, fresh, |_| {}).is_ok());
@@ -296,7 +299,7 @@ fn a_scene_change_is_refused_when_the_fixture_file_was_written_after_it_was_read
     state.fixture_files_changed();
     assert_eq!(
         state.change_scene(caption(), &base, generation, |_| {}),
-        Err(SceneRefusal::FixtureChanged)
+        Err(SceneChangeError::FixtureChanged)
     );
 }
 
@@ -307,7 +310,7 @@ fn choosing_a_fixture_that_is_not_there_is_a_typed_refusal_that_names_the_ones_t
         choose(&state, ControlsChange::Fixture("c.json".to_owned()), &names).expect_err("refused");
     assert_eq!(
         refusal,
-        ControlsRefusal::NoSuchFixture {
+        ControlsChangeError::NoSuchFixture {
             name: "c.json".to_owned(),
             available: names,
         }
@@ -395,9 +398,14 @@ async fn pictures_slides_and_sounds_write_the_media_slot_rotation_volume_and_cue
     let lines = log_lines(&running).await;
     let scene = scene_lines(&lines);
     assert_eq!(scene.len(), 4, "{scene:?}");
-    assert!(scene[0].starts_with(
-        "PLAYGROUND image slot=tv-card media=portrait.png rotate=180 slide=15-85/5000 serial=1 revision="
-    ), "{}", scene[0]);
+    assert!(
+        scene[0].starts_with(
+            "PLAYGROUND image slot=tv-card media=portrait.png rotate=180 slide=15-85/5000 serial=1 \
+         revision="
+        ),
+        "{}",
+        scene[0]
+    );
     assert!(
         scene[1].starts_with("PLAYGROUND sound media=bell.mp3 volume=80 on=tv cue=1 revision="),
         "{}",
@@ -453,4 +461,43 @@ async fn two_camera_moves_to_different_places_no_longer_write_the_same_line() {
         scene[1].replace("serial=2", "")
     );
     assert!(scene[0].contains("zoom=250") && scene[1].contains("zoom=200"));
+}
+
+/// A clock a test moves by hand.
+struct HandClock(std::sync::atomic::AtomicU64);
+
+impl df_table::ports::Clock for HandClock {
+    fn now_ms(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[test]
+fn a_page_ages_and_is_forgotten_on_the_playground_clock() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let clock = Arc::new(HandClock(AtomicU64::new(1_000)));
+    let state = PlaygroundState::new(
+        PlaygroundFiles::new("assets".into(), "pkg".into()),
+        "test-boot".to_owned(),
+    )
+    .with_clock(Arc::clone(&clock) as Arc<dyn df_table::ports::Clock>);
+    let report = df_playground::media::ClientReport {
+        audio: df_playground::media::AudioState::Locked,
+        last_cue: 0,
+        music: None,
+        images_shown: Vec::new(),
+        errors: Vec::new(),
+    };
+    state.record_client("page-1".to_owned(), report);
+    clock.0.store(1_250, Ordering::SeqCst);
+    let clients = state.clients();
+    assert_eq!(clients.len(), 1);
+    assert_eq!(clients[0].age_ms, 250);
+    let forget_after_ms = u64::try_from(crate::limits::FORGET_CLIENT_AFTER.as_millis()).unwrap();
+    clock.0.store(1_000 + forget_after_ms, Ordering::SeqCst);
+    assert!(
+        state.clients().is_empty(),
+        "a page silent that long is forgotten"
+    );
 }

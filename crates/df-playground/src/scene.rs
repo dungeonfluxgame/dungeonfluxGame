@@ -16,25 +16,12 @@ use crate::controls::Device;
 use crate::fixture::{
     Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide, UnavailableChoice,
 };
-use crate::limits::MAXIMUM_PIVOT_PERCENT;
-use crate::overlay::{Edit, Glyph, NarrationBox, NarrationPlacement, Progress, SeatStrip};
-
-pub use crate::limits::{
-    MAXIMUM_CAMERA_MS, MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CHOICES_PER_LIST, MAXIMUM_CUES_KEPT,
-    MAXIMUM_NAME_CHARACTERS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_ROTATION_DEGREES, MAXIMUM_SLIDE_MS,
-    MAXIMUM_VOLUME, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
+use crate::limits::{
+    MAXIMUM_CAMERA_MS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_PIVOT_PERCENT, MAXIMUM_ROTATION_DEGREES,
+    MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME_PERCENT, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
 };
-
-/// What the overlay does to one part of the scene: put something there, or take what is there away.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Override<T> {
-    Set(T),
-    Clear,
-}
-
-/// What the overlay does to the caption.
-pub type CaptionOverride = Override<Caption>;
+use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
+use crate::overlay::{Edit, Glyph, NarrationBox, NarrationPlacement, Progress, SeatStrip};
 
 /// Which screens a sound is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,13 +33,18 @@ pub enum Target {
 }
 
 impl Target {
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "both" => Some(Self::Both),
-            "tv" => Some(Self::Tv),
-            "phone" => Some(Self::Phone),
-            _ => None,
+    pub const ALL: [Self; 3] = [Self::Both, Self::Tv, Self::Phone];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Both => "both",
+            Self::Tv => "tv",
+            Self::Phone => "phone",
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
     }
 
     /// Whether a page showing `device` should play a sound meant for this target.
@@ -78,75 +70,105 @@ pub enum ImageSlot {
 }
 
 impl ImageSlot {
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "tv-backdrop" => Some(Self::TvBackdrop),
-            "tv-card" => Some(Self::TvCard),
-            "phone" => Some(Self::PhoneImage),
-            _ => None,
+    pub const ALL: [Self; 3] = [Self::TvBackdrop, Self::TvCard, Self::PhoneImage];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::TvBackdrop => "tv_backdrop",
+            Self::TvCard => "tv_card",
+            Self::PhoneImage => "phone_image",
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
     }
 }
 
 /// Music that plays until it is stopped or replaced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Track {
     pub media: String,
     pub target: Target,
     /// Percent, 0 to 100.
-    pub volume: u8,
+    pub volume_percent: u8,
     pub looping: bool,
 }
 
-/// A sound played once. Pages play each cue they have not played yet, by its id.
+/// A sound played once. Pages play each cue they have not played yet, by its id. A key this type
+/// does not know is refused, like every slot of the overlay that holds it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Cue {
     pub id: u64,
     pub target: Target,
     pub media: String,
-    pub volume: u8,
+    pub volume_percent: u8,
 }
 
-/// The changes drawn on top of a fixture. A field that is `None` leaves the fixture's own.
+/// The changes drawn on top of a fixture: one `Edit` per slot, where `Keep` leaves the fixture's
+/// own. A kept slot is left out of the JSON, and a key this type does not know is refused, so a
+/// reader of another version fails loudly instead of dropping a change.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct SceneOverlay {
-    pub caption: Option<CaptionOverride>,
-    pub party: Option<Vec<PartyMember>>,
-    pub suggested: Option<Vec<Choice>>,
-    pub groups: Option<Vec<ChoiceGroup>>,
-    pub unavailable: Option<Vec<UnavailableChoice>>,
-    pub backdrop: Option<Override<ImageRef>>,
-    pub card: Option<Override<ImageRef>>,
-    pub phone_image: Option<Override<ImageRef>>,
-    pub music: Option<Override<Track>>,
-    pub camera: Option<Camera>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub caption: Edit<Caption>,
+    /// The party strip's members; `Clear` draws no one.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub party: Edit<Vec<PartyMember>>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub backdrop: Edit<ImageRef>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub card: Edit<ImageRef>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub camera: Edit<Camera>,
     /// The narration box: set, or cleared so the fixture's own (or the caption) shows.
-    #[serde(default)]
-    pub narration: Option<Override<NarrationBox>>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub narration: Edit<NarrationBox>,
     /// The looks of the party strip's heroes and its open seats.
-    #[serde(default)]
-    pub seats: Option<SeatStrip>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub seats: Edit<SeatStrip>,
     /// Whether the logo is drawn.
-    #[serde(default)]
-    pub brand: Option<bool>,
-    /// The lobby, loading screen, roleplay card and top bar the dev CLI changed (`lobby_change`).
-    #[serde(default)]
-    pub screens: crate::lobby_change::ScreenOverlay,
-    /// The landing page: set whole, or cleared (see `home_change`).
-    #[serde(default)]
-    pub home: Option<Override<crate::home_model::HomeScene>>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub brand: Edit<bool>,
+    /// The player lobby the dev CLI changed (`lobby::change`).
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub lobby: Edit<LobbyScreen>,
+    /// The loading screen the dev CLI changed (`lobby::change`).
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub loading: Edit<LoadingScreen>,
+    /// The roleplay card the dev CLI changed (`lobby::change`).
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub roleplay: Edit<RoleplayScene>,
+    /// The top bar the dev CLI changed (`lobby::change`).
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub pills: Edit<TopBar>,
+    /// The landing page: set whole, or cleared (see `home::change`).
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub home: Edit<crate::home::model::HomeScene>,
+    /// The phone's suggested choices; `Clear` empties the list.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub suggested: Edit<Vec<Choice>>,
+    /// The phone's choice groups; `Clear` removes them all.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub groups: Edit<Vec<ChoiceGroup>>,
+    /// The phone's unavailable choices; `Clear` empties the list.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub unavailable: Edit<Vec<UnavailableChoice>>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub phone_image: Edit<ImageRef>,
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub music: Edit<Track>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
-    #[serde(default)]
     pub cue_count: u64,
     /// How many slides there have ever been; it only rises, like `cue_count`.
-    #[serde(default)]
     pub slide_count: u64,
     /// How many camera moves there have ever been; it only rises, like `slide_count`.
-    #[serde(default)]
     pub camera_count: u64,
     /// The newest cues, oldest first.
-    #[serde(default)]
     pub cues: Vec<Cue>,
 }
 
@@ -199,6 +221,10 @@ pub enum SceneChange {
         /// Slides the card across the shared screen. Only a `tv_card` may slide.
         #[serde(default)]
         slide: Option<Slide>,
+        /// The picture's scanned layout; the host adds it for a picture that has one, so a live
+        /// change of backdrop keeps its characters (anchors, the SAM layer, camera targets).
+        #[serde(default)]
+        layout: Option<crate::image_layout::ImageLayout>,
     },
     ClearImage {
         slot: ImageSlot,
@@ -207,7 +233,7 @@ pub enum SceneChange {
     Music {
         media: String,
         target: Target,
-        volume: u8,
+        volume_percent: u8,
         looping: bool,
     },
     StopMusic {},
@@ -215,13 +241,13 @@ pub enum SceneChange {
     Sound {
         media: String,
         target: Target,
-        volume: u8,
+        volume_percent: u8,
     },
     /// Moves the camera in on an element, or out to the whole stage when `target` is `None`.
     Camera {
         target: Option<String>,
         zoom_percent: u16,
-        duration_ms: u32,
+        duration_ms: u64,
     },
     /// Sets the narration box, or changes its fields: a field left out stays as it is, and the
     /// text is needed only when there is no narration box yet.
@@ -272,13 +298,13 @@ pub enum SceneChange {
     Brand {
         on: bool,
     },
-    /// Changes the lobby, the loading screen, the roleplay card or the top bar (`lobby_change`).
+    /// Changes the lobby, the loading screen, the roleplay card or the top bar (`lobby::change`).
     Screen {
-        edit: crate::lobby_change::ScreenEdit,
+        edit: crate::lobby::change::ScreenEdit,
     },
-    /// Changes the landing page (`home_change`).
+    /// Changes the landing page (`home::change`).
     Home {
-        edit: crate::home_change::HomeEdit,
+        edit: crate::home::change::HomeEdit,
     },
     /// Drops every change and returns to the fixture. Cues already made stay counted.
     Reset {},
@@ -298,17 +324,17 @@ pub enum SceneError {
     TooManyChoices {
         limit: usize,
     },
-    BadMaximum,
-    BadVolume(u8),
-    BadRotation(u16),
-    BadSlide,
+    InvalidMaximum,
+    InvalidVolume(u8),
+    InvalidRotation(u16),
+    InvalidSlide,
     SlideNeedsTheCard,
-    BadZoom(u16),
-    BadCameraTime(u32),
+    InvalidZoom(u16),
+    InvalidCameraTime(u64),
     /// A scenario file's camera looks at an element its own stage does not have.
     UnknownCameraTarget(String),
     /// A scenario file's figure turns about a point outside its own size.
-    BadPivot(u8),
+    InvalidPivot(u8),
     /// A scenario file sets a number only the host sets.
     HostOwned(&'static str),
     /// A list of overlay parts is longer than its very large limit.
@@ -317,7 +343,7 @@ pub enum SceneError {
         limit: usize,
     },
     /// A scene's number is 0 or past its total.
-    BadProgress {
+    InvalidProgress {
         index: u16,
         total: u16,
     },
@@ -328,9 +354,9 @@ pub enum SceneError {
     /// A narration box was asked for with no text and there is none to change.
     NoNarrationYet,
     /// A change to the lobby, loading screen, roleplay card or top bar is out of range.
-    Screen(crate::lobby_change::ScreenError),
+    Screen(crate::lobby::change::ScreenError),
     /// A change to the landing page, or a value of it, is out of range.
-    Home(crate::home_checks::HomeError),
+    Home(crate::home::checks::HomeError),
 }
 
 impl fmt::Display for SceneError {
@@ -349,19 +375,19 @@ impl fmt::Display for SceneError {
             Self::TooManyChoices { limit } => {
                 write!(formatter, "a list holds at most {limit} choices")
             }
-            Self::BadMaximum => formatter.write_str("maximum hit points must be at least 1"),
-            Self::BadSlide => write!(
+            Self::InvalidMaximum => formatter.write_str("maximum hit points must be at least 1"),
+            Self::InvalidSlide => write!(
                 formatter,
                 "a slide goes from and to a share of the screen from 0 to 100 percent and takes 1 to {MAXIMUM_SLIDE_MS} ms"
             ),
             Self::SlideNeedsTheCard => {
                 formatter.write_str("only the card on the shared screen can slide")
             }
-            Self::BadZoom(percent) => write!(
+            Self::InvalidZoom(percent) => write!(
                 formatter,
                 "a zoom is from {MINIMUM_ZOOM_PERCENT} to {MAXIMUM_ZOOM_PERCENT} percent, not {percent}"
             ),
-            Self::BadCameraTime(ms) => write!(
+            Self::InvalidCameraTime(ms) => write!(
                 formatter,
                 "a camera move takes 0 to {MAXIMUM_CAMERA_MS} ms, not {ms}"
             ),
@@ -375,18 +401,18 @@ impl fmt::Display for SceneError {
                 formatter,
                 "'{field}' is set by the host; leave it out of a scene file"
             ),
-            Self::BadPivot(percent) => write!(
+            Self::InvalidPivot(percent) => write!(
                 formatter,
                 "a pivot is from 0 to {MAXIMUM_PIVOT_PERCENT} percent of the figure, not {percent}"
             ),
-            Self::BadRotation(degrees) => write!(
+            Self::InvalidRotation(degrees) => write!(
                 formatter,
                 "a rotation is from 0 to {MAXIMUM_ROTATION_DEGREES} degrees, not {degrees}"
             ),
             Self::TooMany { what, limit } => {
                 write!(formatter, "{what} holds at most {limit} entries")
             }
-            Self::BadProgress { index, total } => write!(
+            Self::InvalidProgress { index, total } => write!(
                 formatter,
                 "scene {index} of {total} does not exist: a scene is counted from 1 up to the total"
             ),
@@ -401,15 +427,17 @@ impl fmt::Display for SceneError {
                 .write_str("there is no narration box to change: give the text to make one"),
             Self::Screen(error) => write!(formatter, "{error}"),
             Self::Home(error) => write!(formatter, "{error}"),
-            Self::BadVolume(volume) => {
+            Self::InvalidVolume(volume_percent) => {
                 write!(
                     formatter,
-                    "a volume is from 0 to {MAXIMUM_VOLUME} percent, not {volume}"
+                    "a volume is from 0 to {MAXIMUM_VOLUME_PERCENT} percent, not {volume_percent}"
                 )
             }
         }
     }
 }
+
+impl std::error::Error for SceneError {}
 
 impl SceneOverlay {
     /// The overlay with every change dropped but the counts, which only rise. Used when a scene is
@@ -425,20 +453,66 @@ impl SceneOverlay {
 
     /// True when the overlay changes nothing about what is drawn. Past cues do not count.
     pub fn is_empty(&self) -> bool {
-        Self {
-            cue_count: 0,
-            slide_count: 0,
-            camera_count: 0,
-            cues: Vec::new(),
-            ..self.clone()
-        } == Self::default()
+        self.changed_slots().is_empty()
+    }
+
+    /// The JSON names of the slots this overlay changes (every one that is not `Keep`), in field
+    /// order. Every slot is named, so a new one cannot be left out of the report.
+    pub fn changed_slots(&self) -> Vec<&'static str> {
+        let Self {
+            caption,
+            party,
+            backdrop,
+            card,
+            camera,
+            narration,
+            seats,
+            brand,
+            lobby,
+            loading,
+            roleplay,
+            pills,
+            home,
+            suggested,
+            groups,
+            unavailable,
+            phone_image,
+            music,
+            cue_count: _,
+            slide_count: _,
+            camera_count: _,
+            cues: _,
+        } = self;
+        [
+            ("caption", caption.is_keep()),
+            ("party", party.is_keep()),
+            ("backdrop", backdrop.is_keep()),
+            ("card", card.is_keep()),
+            ("camera", camera.is_keep()),
+            ("narration", narration.is_keep()),
+            ("seats", seats.is_keep()),
+            ("brand", brand.is_keep()),
+            ("lobby", lobby.is_keep()),
+            ("loading", loading.is_keep()),
+            ("roleplay", roleplay.is_keep()),
+            ("pills", pills.is_keep()),
+            ("home", home.is_keep()),
+            ("suggested", suggested.is_keep()),
+            ("groups", groups.is_keep()),
+            ("unavailable", unavailable.is_keep()),
+            ("phone_image", phone_image.is_keep()),
+            ("music", music.is_keep()),
+        ]
+        .into_iter()
+        .filter_map(|(name, kept)| (!kept).then_some(name))
+        .collect()
     }
 
     /// This overlay as a reader should see it `now_ms` after the host started: each move that is
     /// part of it says how long ago it began, so a page that opens mid-move carries on from there.
     pub fn at(&self, now_ms: u64) -> Self {
         let mut stamped = self.clone();
-        if let Some(camera) = &mut stamped.camera {
+        if let Edit::Set(camera) = &mut stamped.camera {
             camera.elapsed_ms = now_ms.saturating_sub(camera.began_ms);
         }
         for slot in [
@@ -446,7 +520,7 @@ impl SceneOverlay {
             &mut stamped.card,
             &mut stamped.phone_image,
         ] {
-            if let Some(Override::Set(image)) = slot
+            if let Edit::Set(image) = slot
                 && let Some(slide) = &mut image.slide
             {
                 slide.elapsed_ms = now_ms.saturating_sub(slide.began_ms);
@@ -455,60 +529,57 @@ impl SceneOverlay {
         stamped
     }
 
-    /// Draws the overlay onto a copy of the fixture.
-    pub fn apply_to(&self, fixture: &mut Fixture) {
-        match &self.caption {
-            Some(CaptionOverride::Set(caption)) => fixture.tv.caption = Some(caption.clone()),
-            Some(CaptionOverride::Clear) => fixture.tv.caption = None,
-            None => {}
-        }
-        if let Some(party) = &self.party {
-            fixture.tv.party.clone_from(party);
-        }
-        if let Some(suggested) = &self.suggested {
-            fixture.phone.suggested.clone_from(suggested);
-        }
-        if let Some(groups) = &self.groups {
-            fixture.phone.groups.clone_from(groups);
-        }
-        if let Some(unavailable) = &self.unavailable {
-            fixture.phone.unavailable.clone_from(unavailable);
-        }
-        match &self.music {
-            Some(Override::Set(track)) => fixture.music = Some(track.clone()),
-            Some(Override::Clear) => fixture.music = None,
-            None => {}
-        }
-        if let Some(camera) = &self.camera {
-            fixture.tv.camera = Some(camera.clone());
-        }
-        match &self.narration {
-            Some(Override::Set(narration)) => fixture.tv.narration = Some(narration.clone()),
-            Some(Override::Clear) => fixture.tv.narration = None,
-            None => {}
-        }
-        if let Some(seats) = &self.seats {
-            fixture.tv.seats = Some(seats.clone());
-        }
-        if let Some(on) = self.brand {
-            fixture.tv.brand = on;
-        }
-        self.screens.apply_to(&mut fixture.tv);
-        match &self.home {
-            Some(Override::Set(home)) => fixture.tv.home = Some(home.clone()),
-            Some(Override::Clear) => fixture.tv.home = None,
-            None => {}
-        }
-        apply_image(&self.backdrop, &mut fixture.tv.backdrop);
-        apply_image(&self.card, &mut fixture.tv.card);
-        apply_image(&self.phone_image, &mut fixture.phone.image);
+    /// The element the overlay's own camera looks at, if it set a camera that looks at one.
+    pub fn camera_target(&self) -> Option<&str> {
+        self.camera.set_value()?.target.as_deref()
     }
-}
 
-fn apply_image(change: &Option<Override<ImageRef>>, slot: &mut Option<ImageRef>) {
-    match change {
-        Some(Override::Set(image)) => *slot = Some(image.clone()),
-        Some(Override::Clear) => *slot = None,
-        None => {}
+    /// Draws the overlay onto a copy of the fixture. Every slot is named, so a new one cannot be
+    /// left undrawn.
+    pub fn apply_to(&self, fixture: &mut Fixture) {
+        let Self {
+            caption,
+            party,
+            backdrop,
+            card,
+            camera,
+            narration,
+            seats,
+            brand,
+            lobby,
+            loading,
+            roleplay,
+            pills,
+            home,
+            suggested,
+            groups,
+            unavailable,
+            phone_image,
+            music,
+            cue_count: _,
+            slide_count: _,
+            camera_count: _,
+            cues: _,
+        } = self;
+        let tv = &mut fixture.tv;
+        caption.apply_to(&mut tv.caption);
+        party.apply_to_value(&mut tv.party);
+        backdrop.apply_to(&mut tv.backdrop);
+        card.apply_to(&mut tv.card);
+        camera.apply_to(&mut tv.camera);
+        narration.apply_to(&mut tv.narration);
+        seats.apply_to(&mut tv.seats);
+        brand.apply_to_value(&mut tv.brand);
+        lobby.apply_to(&mut tv.lobby);
+        loading.apply_to(&mut tv.loading);
+        roleplay.apply_to(&mut tv.roleplay);
+        pills.apply_to(&mut tv.pills);
+        home.apply_to(&mut tv.home);
+        let phone = &mut fixture.phone;
+        suggested.apply_to_value(&mut phone.suggested);
+        groups.apply_to_value(&mut phone.groups);
+        unavailable.apply_to_value(&mut phone.unavailable);
+        phone_image.apply_to(&mut phone.image);
+        music.apply_to(&mut fixture.music);
     }
 }

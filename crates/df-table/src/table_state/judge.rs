@@ -3,9 +3,9 @@
 //!
 //! It owns the answers and their typed shapes: `split_party_decline` and `judge_split` (RES25,
 //! K.10), `PlayInput` and `judge_play_input` (D.3, RES29), `IdleClock`, `InFlight`, `IdleVerdict`
-//! and `judge_idle` (D.3), and `ResultStamp`, `StaleCause`, `StaleResult` and `judge_result` (D.2,
-//! RES42). Each is a pure function of a snapshot and the values handed in, so a test or the CLI
-//! asks the same question the pipeline does. The time and the number of pending resolutions and
+//! and `judge_idle` (D.3), and `ResultStamp`, `StaleCause`, `StaleResultError` and `judge_result`
+//! (D.2, RES42). Each is a pure function of a snapshot and the values handed in, so a test or the
+//! CLI asks the same question the pipeline does. The time and the number of pending resolutions and
 //! held turns arrive as arguments: the table reads no clock, and pending resolutions belong to
 //! the pending handler.
 //!
@@ -142,14 +142,27 @@ impl StaleCause {
 
 /// A result that is no longer current: stored as late and logged, never shown (D.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StaleResult {
+pub struct StaleResultError {
     pub cause: StaleCause,
     pub stamp: ResultStamp,
     /// The generation the scene has now, when it is open.
     pub current_generation: Option<SceneGeneration>,
 }
 
-impl StaleResult {
+impl std::fmt::Display for StaleResultError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a result of generation {} is no longer current ({})",
+            self.stamp.generation.get(),
+            self.cause.key()
+        )
+    }
+}
+
+impl std::error::Error for StaleResultError {}
+
+impl StaleResultError {
     /// The class A event that records the rejection, once, where it is handled.
     pub fn event(&self, scope: &TableScope, correlation: Correlation) -> TableEvent {
         TableEvent::TableState(TableStateEvent::ResultRejected {
@@ -208,9 +221,9 @@ impl TableSnapshot {
     }
 
     /// Whether a result started under `stamp` may still be used (D.2, D.3, RES42).
-    pub fn judge_result(&self, stamp: &ResultStamp) -> Result<(), StaleResult> {
+    pub fn judge_result(&self, stamp: &ResultStamp) -> Result<(), StaleResultError> {
         let current_generation = self.scene(stamp.scene).map(|record| record.generation());
-        let stale = |cause| StaleResult {
+        let stale = |cause| StaleResultError {
             cause,
             stamp: *stamp,
             current_generation,

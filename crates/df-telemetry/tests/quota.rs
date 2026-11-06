@@ -1,20 +1,21 @@
 #![cfg(not(target_arch = "wasm32"))]
+mod fixtures;
 use df_observe::{
     AnyValue, CapturedBatch, Durability, LogInput, NativeProducer, ProducerId, RecordId, Severity,
     SourceSequence, TelemetryError, TelemetryLimits,
 };
 use df_telemetry::{DiagnosticReader, QueryFilter, Readiness, Store};
 use df_types::BuildIdentity;
+use fixtures::FixtureRoot;
 use std::{
     fs,
-    path::PathBuf,
     time::{Duration, SystemTime},
 };
 
 const WAIT: Duration = Duration::from_secs(5);
 const SMALL_SQLITE_BYTES: u64 = 262_144;
 
-fn fixture_path(scenario: &str) -> PathBuf {
+fn fixture_path(scenario: &str) -> FixtureRoot {
     assert!(
         [
             "quota-spool-exact",
@@ -39,16 +40,14 @@ fn fixture_path(scenario: &str) -> PathBuf {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     );
-    let path =
-        PathBuf::from("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06")
-            .join(format!("ownedfixture-{namespace}-{scenario}"));
+    let path = fixtures::fixture_parent().join(format!("ownedfixture-{namespace}-{scenario}"));
     assert!(path.file_name().unwrap().len() <= 100);
     assert!(
         !path.exists(),
         "quota fixture must be fresh: {}",
         path.display()
     );
-    path
+    FixtureRoot::new(path)
 }
 
 fn create_producer(store: &Store, limits: TelemetryLimits, sequence: i64) -> NativeProducer {

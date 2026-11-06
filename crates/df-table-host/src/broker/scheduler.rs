@@ -30,6 +30,7 @@
 //! It records every change through `BrokerAudit`, in one place (`record`).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fmt;
 use std::sync::Arc;
 
 use df_table::event::FailureCause;
@@ -48,11 +49,16 @@ use super::limits::{
 use super::purpose::{PurposeSpec, PurposeTable, QueueClass, ResourceKind, SizeRule};
 use super::queues::{ClassQueues, Pushed, QueueBounds};
 use super::request::{
-    AttemptId, Completion, Epoch, NewRequest, ProviderFault, RequestError, RequestKey,
+    AttemptId, Completion, Epoch, NewRequest, ProviderCause, RequestError, RequestKey,
     RequestStatus, ResourceResult, WorkerId,
 };
 
 /// How many providers may run at once, and how many requests each class may keep waiting.
+///
+/// `new` checks the invariants: each lane has a slot, and the slots reserved for live text leave
+/// at least one text slot for the other classes. The fields are still public for one caller
+/// outside the broker (`scene_builder/lookahead/worker_tests.rs`); they become private when it
+/// builds through `new`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BrokerLimits {
     pub text_slots: usize,
@@ -73,6 +79,51 @@ impl Default for BrokerLimits {
 }
 
 impl BrokerLimits {
+    pub fn new(
+        text_slots: usize,
+        image_slots: usize,
+        reserved_live_text_slots: usize,
+        queues: QueueBounds,
+    ) -> Result<Self, BrokerLimitsError> {
+        if text_slots == 0 {
+            return Err(BrokerLimitsError::NoSlots {
+                kind: ResourceKind::Text,
+            });
+        }
+        if image_slots == 0 {
+            return Err(BrokerLimitsError::NoSlots {
+                kind: ResourceKind::Image,
+            });
+        }
+        if reserved_live_text_slots >= text_slots {
+            return Err(BrokerLimitsError::ReservedLiveTextSlotsLeaveNone {
+                reserved_live_text_slots,
+                text_slots,
+            });
+        }
+        Ok(Self {
+            text_slots,
+            image_slots,
+            reserved_live_text_slots,
+            queues,
+        })
+    }
+
+    /// These limits with `image_slots` image slots.
+    pub fn with_image_slots(self, image_slots: usize) -> Result<Self, BrokerLimitsError> {
+        Self::new(
+            self.text_slots,
+            image_slots,
+            self.reserved_live_text_slots,
+            self.queues,
+        )
+    }
+
+    /// These limits with `queues` as the class bounds.
+    pub fn with_queues(self, queues: QueueBounds) -> Self {
+        Self { queues, ..self }
+    }
+
     fn slots(self, kind: ResourceKind) -> usize {
         match kind {
             ResourceKind::Text => self.text_slots,
@@ -87,6 +138,47 @@ impl BrokerLimits {
         }
     }
 }
+
+/// Why broker limits could not be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerLimitsError {
+    /// A lane without a provider slot would never run a request of its kind.
+    NoSlots { kind: ResourceKind },
+    /// The text slots reserved for live work would leave none for the other classes.
+    ReservedLiveTextSlotsLeaveNone {
+        reserved_live_text_slots: usize,
+        text_slots: usize,
+    },
+    /// A class queue bound of zero.
+    ZeroQueueBound { class: QueueClass },
+}
+
+impl fmt::Display for BrokerLimitsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoSlots { kind } => {
+                write!(formatter, "the {} lane needs at least one slot", kind.key())
+            }
+            Self::ReservedLiveTextSlotsLeaveNone {
+                reserved_live_text_slots,
+                text_slots,
+            } => write!(
+                formatter,
+                "{reserved_live_text_slots} reserved live text slots leave none of the \
+                 {text_slots} text slots for the other classes"
+            ),
+            Self::ZeroQueueBound { class } => {
+                write!(
+                    formatter,
+                    "the {} queue needs a bound of at least one",
+                    class.key()
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for BrokerLimitsError {}
 
 /// The work a provider call is for, handed to the worker that claimed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -541,7 +633,7 @@ impl BrokerCore {
     pub fn complete(
         &mut self,
         attempt: AttemptId,
-        answer: Result<ResourceResult, ProviderFault>,
+        answer: Result<ResourceResult, ProviderCause>,
         now_ms: u64,
     ) -> CompleteOutcome {
         let Some(running) = self.in_flight.remove(&attempt) else {
@@ -571,7 +663,7 @@ impl BrokerCore {
         let answer = answer.and_then(|result| check_size(size, result));
         match answer {
             Ok(result) => self.finish_ready(running.handle, result, now_ms),
-            Err(fault) => self.after_failure(running.handle, fault, now_ms),
+            Err(cause) => self.after_failure(running.handle, cause, now_ms),
         }
         CompleteOutcome::Accepted
     }
@@ -609,18 +701,18 @@ impl BrokerCore {
         });
     }
 
-    fn after_failure(&mut self, handle: ResourceHandle, fault: ProviderFault, now_ms: u64) {
+    fn after_failure(&mut self, handle: ResourceHandle, cause: ProviderCause, now_ms: u64) {
         let Some(request) = self.requests.get_mut(&handle.get()) else {
             return;
         };
         let retry = request.retries.saturating_add(1);
         let backoff_ms =
             jittered_backoff(request.key, request.spec.retry().backoff_ms(retry), retry);
-        let may_retry = fault.is_retryable()
+        let may_retry = cause.is_retryable()
             && request.retries < request.spec.retry().maximum_retries
             && now_ms.saturating_add(backoff_ms) < request.deadline_ms;
         if !may_retry {
-            self.fail(handle, fault.cause(), now_ms, false);
+            self.fail(handle, cause.failure_cause(), now_ms, false);
             return;
         }
         request.retries = retry;
@@ -634,7 +726,7 @@ impl BrokerCore {
             purpose,
             retry,
             backoff_ms,
-            cause: fault.cause(),
+            cause: cause.failure_cause(),
         });
     }
 
@@ -707,7 +799,7 @@ impl BrokerCore {
 }
 
 /// Rejects an answer outside the purpose's size rule or of the wrong kind.
-fn check_size(rule: SizeRule, result: ResourceResult) -> Result<ResourceResult, ProviderFault> {
+fn check_size(rule: SizeRule, result: ResourceResult) -> Result<ResourceResult, ProviderCause> {
     let fits = match (&result, rule) {
         (ResourceResult::Text(text), SizeRule::TextCharacters { maximum }) => {
             let length = text.expose().chars().count();
@@ -725,7 +817,7 @@ fn check_size(rule: SizeRule, result: ResourceResult) -> Result<ResourceResult, 
     if fits {
         Ok(result)
     } else {
-        Err(ProviderFault::InvalidAnswer)
+        Err(ProviderCause::InvalidAnswer)
     }
 }
 

@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
+mod fixtures;
 use df_observe::{Durability, Signal, TelemetryError, TelemetryLimits};
 use df_telemetry::{BarrierStage, DiagnosticReader, FailureBarrier, QueryFilter, QueryPage, Store};
+use fixtures::FixtureRoot;
 use opentelemetry_proto::tonic::{
     collector::logs::v1::ExportLogsServiceRequest,
     common::v1::{AnyValue, KeyValue, any_value::Value},
@@ -38,9 +40,7 @@ fn fixture_root(namespace: &str, case: &str) -> PathBuf {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     );
-    let path =
-        PathBuf::from("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06")
-            .join(format!("ownedfixture-{namespace}-{case}"));
+    let path = fixtures::fixture_parent().join(format!("ownedfixture-{namespace}-{case}"));
     assert!(path.file_name().unwrap().len() <= 100);
     path
 }
@@ -433,7 +433,7 @@ fn recoverable_receipts_follow_disk_success_across_process_death_and_retry() {
     });
     // One parent test owns all six cases, so even default parallel libtest has one child.
     for case in DURABILITY_CASES {
-        let path = fixture_root(&namespace, case);
+        let path = FixtureRoot::new(fixture_root(&namespace, case));
         assert!(!path.exists(), "fixture must be fresh: {}", path.display());
         let child = FixtureProcess::spawn(&namespace, case, "initial");
         if case == "durable-spool-write-refusal" {

@@ -2,8 +2,9 @@
 //! the typed errors of asking.
 //!
 //! It owns plain data and the small rules on it (an epoch only moves forward, a status maps to the
-//! `Readiness` of the port). It never schedules anything: `scheduler` does. A result holds model text as
-//! `Narration`, whose `Debug` shows a length class only, so a request can be printed safely.
+//! `Readiness` of the port). It never schedules anything: `scheduler` does. A result holds model
+//! text as `Narration`, whose `Debug` shows a length class only, so a request can be printed
+//! safely.
 
 use std::fmt;
 
@@ -115,10 +116,11 @@ pub enum ResourceResult {
     Image { width: u32, height: u32, bytes: u64 },
 }
 
-/// How a provider call failed. The broker maps it to a `FailureCause` and decides on a retry.
+/// How a provider call failed: a closed cause the broker maps to a `FailureCause` and decides a
+/// retry on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProviderFault {
+pub enum ProviderCause {
     /// The provider could not be reached or had nothing to give.
     Unavailable,
     /// The provider refused. A refusal is never retried with other wording or another model.
@@ -129,8 +131,29 @@ pub enum ProviderFault {
     InvalidAnswer,
 }
 
-impl ProviderFault {
-    pub fn cause(self) -> FailureCause {
+impl ProviderCause {
+    pub const ALL: [Self; 4] = [
+        Self::Unavailable,
+        Self::Refused,
+        Self::TextInvalid,
+        Self::InvalidAnswer,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Refused => "refused",
+            Self::TextInvalid => "text_invalid",
+            Self::InvalidAnswer => "invalid_answer",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+
+    /// The table's closed cause of a failed resource.
+    pub fn failure_cause(self) -> FailureCause {
         match self {
             Self::Unavailable => FailureCause::Unavailable,
             Self::Refused => FailureCause::Refused,
@@ -145,6 +168,11 @@ impl ProviderFault {
         !matches!(self, Self::Refused | Self::InvalidAnswer)
     }
 }
+
+/// Transitional name of `ProviderCause`, kept only while the scene builder still imports it
+/// (`builder_tests`, `fakes`, `workbench`, `pacer_tests`, `lookahead/bench`,
+/// `lookahead/worker_tests`); the last of them removes it.
+pub type ProviderFault = ProviderCause;
 
 /// Where a request stands. It never holds a result: `take_result` does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

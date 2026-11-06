@@ -56,7 +56,10 @@ async fn actual_jev_transport_preserves_public_state_and_uses_only_closed_choice
         net::TcpListener,
         thread,
     };
-    let public = "{\"menu_appearance\":\"An adult fictional dwarf in work clothes\",\"public_visual_details\":\"big tits\"}";
+    let public = concat!(
+        r#"{"menu_appearance":"An adult fictional dwarf in work clothes","#,
+        r#""public_visual_details":"big tits"}"#
+    );
     for choice in ["o1", "o2", "o3", "o4", "o5", "o6", "o7", "o99"] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -114,7 +117,16 @@ async fn actual_jev_transport_preserves_public_state_and_uses_only_closed_choice
             assert!(value["state"].get("name").is_none());
             assert!(value["state"].get("backstory").is_none());
             let body = answer(choice).to_string();
-            write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            write!(
+                stream,
+                concat!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n",
+                    "Content-Length: {}\r\nConnection: close\r\n\r\n{}"
+                ),
+                body.len(),
+                body
+            )
+            .unwrap();
         });
         let creator = creator(&format!("http://{address}/v1/systemone"), public);
         let response = PreparedClassification::prepare(

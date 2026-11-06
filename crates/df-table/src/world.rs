@@ -20,17 +20,17 @@ use crate::element::{
 use crate::motion::{self, Motion};
 
 /// The fields of one element.
-pub type Fields = BTreeMap<FieldName, FieldValue>;
+pub(crate) type Fields = BTreeMap<FieldName, FieldValue>;
 
 /// What one tick of motion did, in names.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Travelled {
+pub(crate) struct Travelled {
     pub moved: usize,
     pub arrived: Vec<ElementId>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct World {
+pub(crate) struct World {
     entities: Entities,
     names: Store<ElementId>,
     kinds: Store<KindName>,
@@ -149,7 +149,7 @@ impl World {
     /// How many elements have been turned, so a test can see that a removal took the component.
     #[cfg(test)]
     pub(crate) fn rotation_count(&self) -> usize {
-        self.rotations.len()
+        self.rotations.iter().count()
     }
 
     /// Whether any element is travelling, so a host can skip ticking an idle canvas.

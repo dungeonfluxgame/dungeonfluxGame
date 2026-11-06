@@ -10,11 +10,11 @@ use serde_json::Value;
 use crate::effects::TableState;
 use crate::envelope::{PendingId, ProposalOrigin, ProposerRef, TimerName};
 use crate::identity::{MachineId, SeatId, TableId, TableScope};
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
     CarryItem, InputClaim, Machine, MachineError, MachineInput, RequestKey, ResourceOutcome,
     StepInput, StepOutcome, exited_event,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::Outcome;
 use crate::ports::ActionId;
 use crate::registry::{Enablement, RegistryBuilder, check_hand_off_route};

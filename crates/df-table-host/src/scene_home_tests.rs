@@ -4,11 +4,11 @@
 //! text, and the shipped landing script (the three-component page) run end to end.
 
 use df_playground::fixture::Fixture;
-use df_playground::home_change::{HomeEdit, NavEdit};
-use df_playground::home_chrome::BrandSize;
-use df_playground::home_glyph::{HomeGlyph, HomeIcon};
-use df_playground::home_model::HomePart;
-use df_playground::home_nav::ActionVariant;
+use df_playground::home::change::{HomeEdit, NavEdit};
+use df_playground::home::chrome::BrandSize;
+use df_playground::home::glyph::{HomeGlyph, HomeIcon};
+use df_playground::home::model::HomePart;
+use df_playground::home::nav::ActionVariant;
 use df_playground::overlay::Edit;
 use df_playground::scene::SceneChange;
 

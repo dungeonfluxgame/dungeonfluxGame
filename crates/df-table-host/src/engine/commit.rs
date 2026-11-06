@@ -11,12 +11,12 @@
 //! (`committer`), not the store: the owner waits for the write at most `commit_deadline_ms`, so a
 //! store that hangs costs one refused batch and never the owner thread.
 //!
-//! `CommitStore` is the port, with two implementations in the host: `MemoryCommitStore` (which keeps
-//! the newest checkpoint and the operations committed) and `ScriptedCommitStore` (scripted latency
-//! and failure, for tests and the `chaos` verb). A store may enforce the deadline itself, as a real
-//! one will with a timeout on the write (the scripted one does, with simulated latency), but the
-//! owner does not rely on it. Every attempt has its own id, burned whether it succeeded or not, so
-//! a write that lands late can never be mistaken for the next batch's.
+//! `CommitStore` is the port, with two implementations in the host: `MemoryCommitStore` (which
+//! keeps the newest checkpoint and the operations committed) and `ScriptedCommitStore` (scripted
+//! latency and failure, for tests and the `chaos` verb). A store may enforce the deadline itself,
+//! as a real one will with a timeout on the write (the scripted one does, with simulated latency),
+//! but the owner does not rely on it. Every attempt has its own id, burned whether it succeeded or
+//! not, so a write that lands late can never be mistaken for the next batch's.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -26,11 +26,7 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use super::limits::{BATCH_TIME_SLICE_MS, MAXIMUM_BATCH_INPUTS};
-
-/// Most commit records a store remembers. Deliberately huge; scope it down later (owner,
-/// 2026-11-02).
-pub const MAXIMUM_COMMIT_RECORDS: usize = 1_000_000;
+use super::limits::{BATCH_TIME_SLICE_MS, MAXIMUM_BATCH_INPUTS, MAXIMUM_COMMIT_RECORDS};
 
 /// How many inputs one commit covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -252,10 +248,18 @@ pub enum ScriptedCommit {
     FailsButLands(CommitError),
 }
 
+/// A run of identical scripted writes: `commit`, for each of the next `remaining` attempts. A run
+/// is one entry however long, so `chaos commit <fault> <count>` costs no memory per write.
+#[derive(Debug, Clone, Copy)]
+struct ScriptedRun {
+    commit: ScriptedCommit,
+    remaining: u64,
+}
+
 /// A store whose writes follow a script, one entry per attempt, then succeed at once.
 #[derive(Debug, Default)]
 pub struct ScriptedCommitStore {
-    script: Mutex<VecDeque<ScriptedCommit>>,
+    script: Mutex<VecDeque<ScriptedRun>>,
     memory: MemoryCommitStore,
     attempts: AtomicU64,
 }
@@ -263,17 +267,32 @@ pub struct ScriptedCommitStore {
 impl ScriptedCommitStore {
     pub fn scripted(script: impl IntoIterator<Item = ScriptedCommit>) -> Self {
         Self {
-            script: Mutex::new(script.into_iter().collect()),
+            script: Mutex::new(
+                script
+                    .into_iter()
+                    .map(|commit| ScriptedRun {
+                        commit,
+                        remaining: 1,
+                    })
+                    .collect(),
+            ),
             ..Self::default()
         }
     }
 
-    /// Adds scripted writes after those already waiting.
-    pub fn push(&self, scripted: ScriptedCommit) {
+    /// Adds `count` writes that each do `scripted`, after those already waiting. A count of 0
+    /// adds nothing.
+    pub fn push(&self, scripted: ScriptedCommit, count: u64) {
+        if count == 0 {
+            return;
+        }
         self.script
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push_back(scripted);
+            .push_back(ScriptedRun {
+                commit: scripted,
+                remaining: count,
+            });
     }
 
     /// How many writes were attempted, whether or not they succeeded.
@@ -298,11 +317,17 @@ impl CommitStore for ScriptedCommitStore {
         deadline_ms: u64,
     ) -> Result<CommitReceipt, CommitError> {
         self.attempts.fetch_add(1, Ordering::Relaxed);
-        let next = self
-            .script
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .pop_front();
+        let next = {
+            let mut script = self.script.lock().unwrap_or_else(PoisonError::into_inner);
+            match script.front_mut() {
+                Some(run) if run.remaining > 1 => {
+                    run.remaining -= 1;
+                    Some(run.commit)
+                }
+                Some(_) => script.pop_front().map(|run| run.commit),
+                None => None,
+            }
+        };
         match next {
             Some(ScriptedCommit::Fails(error)) => Err(error),
             Some(ScriptedCommit::FailsButLands(error)) => {
@@ -332,10 +357,12 @@ impl CommitStore for ScriptedCommitStore {
 
 impl ScriptedCommitStore {
     /// How many scripted writes still wait.
-    pub fn scripted_remaining(&self) -> usize {
+    pub fn scripted_remaining(&self) -> u64 {
         self.script
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .len()
+            .iter()
+            .map(|run| run.remaining)
+            .fold(0, u64::saturating_add)
     }
 }

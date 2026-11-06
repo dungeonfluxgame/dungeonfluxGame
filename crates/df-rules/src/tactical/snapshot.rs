@@ -2,13 +2,15 @@
 //! This codec grants no source, actor or persistence authority.
 use super::{
     Battle, BattleMap, RuleError,
-    state::{Combatant, HelpEffect, PendingMove},
+    species::MAXIMUM_SPECIES_DAMAGE_RECORDS,
+    state::{Combatant, HelpEffect, MAXIMUM_COMBATANTS, MAXIMUM_HELP_EFFECTS, PendingMove},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 const VERSION: u16 = 2;
-const MAXIMUM_BYTES: usize = 1024 * 1024;
+/// Largest snapshot `Battle::snapshot` emits and `Battle::from_snapshot` accepts, in bytes.
+const MAXIMUM_SNAPSHOT_BYTES: usize = 1024 * 1024;
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -58,7 +60,7 @@ impl Battle {
             needs_death_save: self.needs_death_save,
         })
         .map_err(|_| RuleError::SnapshotData)?;
-        if bytes.len() > MAXIMUM_BYTES {
+        if bytes.len() > MAXIMUM_SNAPSHOT_BYTES {
             return Err(RuleError::Capacity);
         }
         Ok(bytes)
@@ -67,7 +69,7 @@ impl Battle {
     /// Refuse incompatible or structurally invalid state; never manufacture missing fields.
     /// Caller must separately admit the immutable map revision and canonical actor bindings.
     pub fn from_snapshot(map: BattleMap, bytes: &[u8]) -> Result<Self, RuleError> {
-        if bytes.len() > MAXIMUM_BYTES {
+        if bytes.len() > MAXIMUM_SNAPSHOT_BYTES {
             return Err(RuleError::Capacity);
         }
         let state: Snapshot = serde_json::from_slice(bytes).map_err(|_| RuleError::SnapshotData)?;
@@ -85,10 +87,10 @@ impl Battle {
                 }
             || state.layout != map.id()
             || state.round == 0
-            || !(2..=64).contains(&state.actors.len())
+            || !(2..=MAXIMUM_COMBATANTS).contains(&state.actors.len())
             || state.order.len() != state.actors.len()
             || state.active >= state.order.len()
-            || state.helped_attacks.len() > 64
+            || state.helped_attacks.len() > MAXIMUM_HELP_EFFECTS
         {
             return Err(RuleError::SnapshotData);
         }
@@ -160,7 +162,7 @@ impl Battle {
                         || !actor.health.unconscious
                         || actor.health.dead))
                 || (actor.regeneration_inhibited && actor.spec.kind != super::CreatureKind::Troll)
-                || actor.frost_chill.len() > 64
+                || actor.frost_chill.len() > MAXIMUM_COMBATANTS
                 || actor.species_uses_spent
                     > actor
                         .spec
@@ -171,9 +173,9 @@ impl Battle {
                         actor.spec.species,
                         Some(super::HeroSpecies::Dragonborn | super::HeroSpecies::Goliath)
                     ))
-                || actor.slow.len() > 64
-                || actor.sap.len() > 64
-                || actor.vex.len() > 64
+                || actor.slow.len() > MAXIMUM_COMBATANTS
+                || actor.sap.len() > MAXIMUM_COMBATANTS
+                || actor.vex.len() > MAXIMUM_COMBATANTS
                 || (actor.health.dead && actor.health.hit_points != 0)
                 || (actor.health.unconscious && !actor.health.prone)
             {
@@ -299,7 +301,7 @@ impl Battle {
                 || pending.path.len() > 1024
                 || pending.next >= pending.path.len()
                 || (pending.eligible.is_empty() && state.species_damage.is_empty())
-                || pending.eligible.len() > 64
+                || pending.eligible.len() > MAXIMUM_COMBATANTS
                 || pending
                     .eligible
                     .iter()
@@ -327,7 +329,7 @@ impl Battle {
             helped_attacks: state.helped_attacks,
             needs_death_save: state.needs_death_save,
         };
-        if battle.species_damage.len() > 64
+        if battle.species_damage.len() > MAXIMUM_SPECIES_DAMAGE_RECORDS
             || battle.species_damage.iter().any(|event| {
                 event.source == event.target
                     || battle.actor(event.source).is_err()

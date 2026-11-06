@@ -1,21 +1,28 @@
 //! The dev verbs of the look-ahead worker: `scene lookahead show|pause|resume|clear|set|target`.
 //!
-//! They have the shape of the other scene verbs: words in, one typed `LookaheadCommand` out, a usage
-//! line on a mistake, a numbered answer. `command::scene` hands every `scene lookahead ...` line to
-//! `parse`, and `execute` runs one against a host on a port.
+//! They have the shape of the other scene verbs: words in, one typed `LookaheadCommand` out, a
+//! usage line on a mistake, a numbered answer. `command::scene` hands every `scene lookahead ...`
+//! line to `parse`, and `run` runs one against a host on a port.
 
 use df_table::lookahead::Expectation;
 
 use super::format::format_reply;
-use super::request::{LookaheadReply, LookaheadRequest, LookaheadSettingName};
-use crate::client;
+use super::request::{LookaheadReply, LookaheadRequest, LookaheadSettingName, is_built_ahead};
 use crate::command::CommandError;
 use crate::dev::DevError;
-use crate::limits::MAXIMUM_ECHOED_ANSWER;
-use crate::scene_builder::request::{DevStage, SceneReply, SlowStage};
+use crate::dev_client::{get_json, post_json};
+use crate::scene_builder::cli::{dev_stage, place, reply_value, slow_stage, whole_number};
 use crate::scene_builder::routes::path;
 
-pub const LOOKAHEAD_USAGE: &str = "scene lookahead show | pause | resume | clear | set <enabled|depth|start_s|deadline_s|book_age_s> <value> | target <place> [kind=authored_beat|travel_leg|exit_hint] [likelihood=<thousandths>] [fail=<describe|background>] [slow=<describe|background>:<seconds>]";
+pub const LOOKAHEAD_USAGE: &str = concat!(
+    "scene lookahead show | pause | resume | clear",
+    " | set <enabled|depth|start_s|deadline_s|book_age_s> <value>",
+    " | target <place> [kind=authored_beat|travel_leg|exit_hint] [likelihood=<thousandths>]",
+    " [fail=<describe|background>] [slow=<describe|background>:<seconds>]",
+);
+
+/// The stages a look-ahead build makes, for a refusal of any other.
+const BUILT_AHEAD: &str = "describe or background";
 
 /// A look-ahead verb.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,30 +34,22 @@ pub enum LookaheadCommand {
 /// The help text of these verbs, to follow the scene builder's in `help`.
 pub fn help_text() -> String {
     format!(
-        "\n  {LOOKAHEAD_USAGE}\n      the look-ahead worker builds the next scene's description and background on the lowest\n      broker class while the current scene plays; target says which scene the story expects next\n      (the one the next scene build makes), pause stops new builds, clear cancels them; set changes
-      a lookahead_* setting (enabled takes on or off, the others a whole number); show prints\n      the settings, the expected scene, the book of built scenes and the hit, miss and stale counts\n"
+        concat!(
+            "\n  {usage}\n",
+            "      the look-ahead worker builds the next scene's description and background\n",
+            "      on the lowest broker class while the current scene plays; target says\n",
+            "      which scene the story expects next (the one the next scene build makes),\n",
+            "      pause stops new builds, clear cancels them; set changes a lookahead_*\n",
+            "      setting (enabled takes on or off, the others a whole number); show prints\n",
+            "      the settings, the expected scene, the book of built scenes and the hit,\n",
+            "      miss and stale counts\n",
+        ),
+        usage = LOOKAHEAD_USAGE,
     )
 }
 
-fn whole_number(what: &'static str, text: &str) -> Result<u64, CommandError> {
-    text.parse::<u64>().map_err(|_| CommandError::BadCount {
-        what,
-        text: text.to_owned(),
-    })
-}
-
-fn stage(key: &str, text: &str) -> Result<DevStage, CommandError> {
-    DevStage::parse(text)
-        .filter(|stage| super::request::is_built_ahead(*stage))
-        .ok_or_else(|| CommandError::BadChoice {
-            key: key.to_owned(),
-            text: text.to_owned(),
-            allowed: "describe or background".to_owned(),
-        })
-}
-
 fn target(words: &[String]) -> Result<LookaheadCommand, CommandError> {
-    let [place, options @ ..] = words else {
+    let [name, options @ ..] = words else {
         return Err(CommandError::Usage(LOOKAHEAD_USAGE));
     };
     let mut kind = Expectation::AuthoredBeat;
@@ -63,7 +62,7 @@ fn target(words: &[String]) -> Result<LookaheadCommand, CommandError> {
             .ok_or_else(|| CommandError::BadPair(option.clone()))?;
         match key {
             "kind" => {
-                kind = Expectation::parse(value).ok_or_else(|| CommandError::BadChoice {
+                kind = Expectation::from_key(value).ok_or_else(|| CommandError::BadChoice {
                     key: "kind".to_owned(),
                     text: value.to_owned(),
                     allowed: "authored_beat, travel_leg or exit_hint".to_owned(),
@@ -82,18 +81,13 @@ fn target(words: &[String]) -> Result<LookaheadCommand, CommandError> {
                 }
             }
             "fail" => {
-                if fail.replace(stage("fail", value)?).is_some() {
+                let stage = dev_stage("fail", value, is_built_ahead, BUILT_AHEAD)?;
+                if fail.replace(stage).is_some() {
                     return Err(CommandError::DuplicateKey("fail".to_owned()));
                 }
             }
             "slow" => {
-                let (name, duration) = value
-                    .split_once(':')
-                    .ok_or_else(|| CommandError::BadPair(option.clone()))?;
-                let chosen = SlowStage {
-                    stage: stage("slow", name)?,
-                    seconds: whole_number("the seconds", duration)?,
-                };
+                let chosen = slow_stage(option, value, is_built_ahead, BUILT_AHEAD)?;
                 if slow.replace(chosen).is_some() {
                     return Err(CommandError::DuplicateKey("slow".to_owned()));
                 }
@@ -102,7 +96,7 @@ fn target(words: &[String]) -> Result<LookaheadCommand, CommandError> {
         }
     }
     Ok(LookaheadCommand::Change(LookaheadRequest::Target {
-        place: place.clone(),
+        place: place(name)?,
         kind,
         likelihood_permille,
         fail,
@@ -114,7 +108,7 @@ fn set(words: &[String]) -> Result<LookaheadCommand, CommandError> {
     let [name, value] = words else {
         return Err(CommandError::Usage(LOOKAHEAD_USAGE));
     };
-    let setting = LookaheadSettingName::parse(name).ok_or_else(|| CommandError::BadChoice {
+    let setting = LookaheadSettingName::from_key(name).ok_or_else(|| CommandError::BadChoice {
         key: "setting".to_owned(),
         text: name.clone(),
         allowed: "enabled, depth, start_s, deadline_s or book_age_s".to_owned(),
@@ -153,35 +147,13 @@ pub fn parse(words: &[String]) -> Result<LookaheadCommand, CommandError> {
     }
 }
 
-fn unreadable(response: &client::Response, reason: String) -> DevError {
-    DevError::UnexpectedAnswer {
-        status: response.status,
-        body: response.body.chars().take(MAXIMUM_ECHOED_ANSWER).collect(),
-        reason: Some(reason),
-    }
-}
-
-fn read(response: &client::Response) -> Result<LookaheadReply, DevError> {
-    let reply: SceneReply<LookaheadReply> = serde_json::from_str(&response.body)
-        .map_err(|error| unreadable(response, error.to_string()))?;
-    match reply {
-        SceneReply::Done { value } => Ok(value),
-        SceneReply::Rejected { message, .. } => Err(DevError::Rejected(message)),
-    }
-}
-
 /// Runs one look-ahead verb against the host on `port` and returns the text to print.
-pub async fn execute(port: u16, command: LookaheadCommand) -> Result<String, DevError> {
-    let response = match command {
-        LookaheadCommand::Show => client::get(port, path::LOOKAHEAD).await,
+pub async fn run(port: u16, command: LookaheadCommand) -> Result<String, DevError> {
+    let reply: LookaheadReply = match command {
+        LookaheadCommand::Show => reply_value(get_json(port, path::LOOKAHEAD).await?)?,
         LookaheadCommand::Change(request) => {
-            let body = serde_json::to_string(&request).map_err(|error| DevError::Unwritable {
-                what: "request",
-                reason: error.to_string(),
-            })?;
-            client::post_json(port, path::LOOKAHEAD, &body).await
+            reply_value(post_json(port, path::LOOKAHEAD, &request).await?)?
         }
-    }
-    .map_err(DevError::Client)?;
-    Ok(format_reply(&read(&response)?))
+    };
+    Ok(format_reply(&reply))
 }

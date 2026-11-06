@@ -53,10 +53,12 @@ pub fn on_click(event: &Event) {
     };
     let change = with_app(|app| match action.split_once(':') {
         Some(("device", key)) => Device::from_key(key).map(ControlsChange::Device),
+        Some(("pace", key)) => ReadingPace::from_key(key).map(ControlsChange::Pace),
         Some(("toggle", "unavailable")) => Some(ControlsChange::ShowUnavailable(
             !app.controls.show_unavailable,
         )),
         Some(("toggle", "grid")) => Some(ControlsChange::ShowGrid(!app.controls.show_grid)),
+        Some(("toggle", "sam")) => Some(ControlsChange::ShowSam(!app.controls.show_sam)),
         _ => None,
     });
     if let Some(change) = change {
@@ -75,7 +77,6 @@ pub fn on_change(event: &Event) {
     let change = match action.as_str() {
         "fixture" => Some(ControlsChange::Fixture(value)),
         "status" => Some(ControlsChange::Status(value)),
-        "pace" => ReadingPace::from_key(&value).map(ControlsChange::Pace),
         _ => None,
     };
     if let Some(change) = change {

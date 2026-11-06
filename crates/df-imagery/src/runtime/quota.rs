@@ -68,7 +68,8 @@ pub struct QuotaSummary {
     pub probing_accounts: u32,
 }
 
-/// Only actual new supplier responses yield these answers; transport/output failures are inconclusive.
+/// Only actual new supplier responses yield these answers; transport/output failures are
+/// inconclusive.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum QuotaAnswer {
     Succeeded,
@@ -120,6 +121,7 @@ pub(crate) struct QuotaPermit {
 }
 
 impl QuotaRegistry {
+    /// An empty registry reading time from `clock`; the host keeps one across workers.
     pub fn new(clock: Arc<dyn ServiceClock>) -> Self {
         Self {
             clock,
@@ -303,7 +305,8 @@ impl Drop for QuotaPermit {
             && let Some(entry) = &self.entry
             && let Some(generation) = self.probe_generation
         {
-            // Poisoned state already makes all future admission fail closed; Drop cannot report errors.
+            // Poisoned state already makes all future admission fail closed; Drop cannot report
+            // errors.
             if let Ok(mut state) = entry.state.lock() {
                 rearm_probe(
                     &mut state,

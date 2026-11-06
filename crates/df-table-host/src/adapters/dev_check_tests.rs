@@ -7,17 +7,20 @@ use std::sync::Arc;
 use df_table::ports::{ActionId, Dice, DrawRequest};
 use df_table::testkit::correlation;
 
+use axum::http::StatusCode;
+
 use crate::client;
 use crate::command::{CommandError, split_words};
 use crate::dev::{DevError, run_dev};
-use crate::engine::report::{EngineError, EngineReply};
+use crate::dev_http::{BodyCause, DevReply, RouteError};
 use crate::engine::routes::path;
 use crate::test_support::{STARTER_FILES, start};
 
+use super::action_book::DifficultyClass;
 use super::backend::{RulesBackend, dev_ports};
 use super::dev_check::{
-    RULES_CHECK_USAGE, RulesCheckKit, RulesCheckReport, RulesCheckRequest, audit_line,
-    format_rules_check, parse,
+    RULES_CHECK_USAGE, RulesCheckError, RulesCheckKit, RulesCheckReply, RulesCheckReport,
+    RulesCheckRequest, ask, audit_line, format_rules_check, parse, refusal_audit_line,
 };
 use super::dev_route;
 use super::dice::RecordedDice;
@@ -55,6 +58,7 @@ fn first_seeded_d20() -> u16 {
 }
 
 fn request(skill: Skill, actor: u64, dc: Option<u8>) -> RulesCheckRequest {
+    let dc = dc.map(|value| DifficultyClass::new(value).expect("a difficulty class"));
     RulesCheckRequest { skill, actor, dc }
 }
 
@@ -75,7 +79,7 @@ fn the_verb_reads_a_skill_a_seat_and_an_optional_dc() {
         Ok(request(Skill::Perception, 1, None))
     );
     assert_eq!(
-        parsed("rules check sleight-of-hand 3 dc=20"),
+        parsed("rules check sleight_of_hand 3 dc=20"),
         Ok(request(Skill::SleightOfHand, 3, Some(20)))
     );
 }
@@ -97,7 +101,7 @@ fn the_verb_names_its_usage_for_a_wrong_shape_and_the_choices_for_a_wrong_skill(
         panic!("a wrong skill is a bad choice");
     };
     assert_eq!((key.as_str(), text.as_str()), ("the skill", "lockpicking"));
-    assert!(allowed.contains("sleight-of-hand") && allowed.contains("animal-handling"));
+    assert!(allowed.contains("sleight_of_hand") && allowed.contains("animal_handling"));
     assert!(matches!(
         parsed("rules check perception one"),
         Err(CommandError::BadCount {
@@ -105,13 +109,18 @@ fn the_verb_names_its_usage_for_a_wrong_shape_and_the_choices_for_a_wrong_skill(
             ..
         })
     ));
-    assert!(matches!(
-        parsed("rules check perception 1 dc=high"),
-        Err(CommandError::BadCount {
-            what: "the difficulty class",
-            ..
-        })
-    ));
+    for dc in ["dc=high", "dc=0"] {
+        assert!(
+            matches!(
+                parsed(&format!("rules check perception 1 {dc}")),
+                Err(CommandError::BadCount {
+                    what: "the difficulty class",
+                    ..
+                })
+            ),
+            "{dc}"
+        );
+    }
 }
 
 #[test]
@@ -209,12 +218,10 @@ fn a_seat_with_no_hero_is_a_decline_and_draws_nothing() {
 }
 
 #[test]
-fn a_dc_of_zero_is_a_bad_request() {
-    let error = kit()
-        .run(&request(Skill::Perception, 1, Some(0)))
-        .expect_err("refused");
+fn a_dc_of_zero_never_reads_as_a_request() {
+    let read = serde_json::from_str::<RulesCheckRequest>(r#"{"skill":"stealth","actor":1,"dc":0}"#);
 
-    assert!(matches!(error, EngineError::BadRequest { .. }), "{error:?}");
+    assert!(read.is_err(), "{read:?}");
 }
 
 #[test]
@@ -234,7 +241,7 @@ fn the_answer_is_numbered_and_names_the_check_the_facts_and_the_recorded_draw() 
     let lines: Vec<_> = text.lines().collect();
     assert_eq!(
         lines[0],
-        format!("1: sleight-of-hand (dexterity) check for seat 1 against DC 15: {verdict}")
+        format!("1: sleight_of_hand (dexterity) check for seat 1 against DC 15: {verdict}")
     );
     assert!(
         lines[1].starts_with(&format!("2: natural_die={die} ability_bonus=2 ")),
@@ -263,7 +270,7 @@ fn the_audit_line_holds_closed_keys_and_numbers_only() {
     };
     assert_eq!(
         line,
-        format!("ENGINE rules_check skill=sleight-of-hand seat=1 result={result}")
+        format!("ENGINE rules_check skill=sleight_of_hand seat=1 result={result}")
     );
 }
 
@@ -271,7 +278,7 @@ fn the_audit_line_holds_closed_keys_and_numbers_only() {
 fn a_request_and_its_report_survive_json_and_an_unknown_field_is_refused() {
     let asked = request(Skill::AnimalHandling, 2, Some(12));
     let written = serde_json::to_string(&asked).expect("writes");
-    assert_eq!(written, r#"{"skill":"animal-handling","actor":2,"dc":12}"#);
+    assert_eq!(written, r#"{"skill":"animal_handling","actor":2,"dc":12}"#);
     assert_eq!(
         serde_json::from_str::<RulesCheckRequest>(&written).expect("reads"),
         asked
@@ -304,15 +311,15 @@ async fn the_route_runs_a_check_through_the_kit_answers_json_and_audits_one_line
     let reply = client::post_json(
         port,
         path::RULES_CHECK,
-        r#"{"skill":"sleight-of-hand","actor":1,"dc":15}"#,
+        r#"{"skill":"sleight_of_hand","actor":1,"dc":15}"#,
     )
     .await
     .expect("answered");
 
     serving.abort();
     assert_eq!(reply.status, 200, "{}", reply.body);
-    let parsed: EngineReply<RulesCheckReport> = serde_json::from_str(&reply.body).expect("a reply");
-    let EngineReply::Done { value } = parsed else {
+    let parsed: RulesCheckReply = serde_json::from_str(&reply.body).expect("a reply");
+    let DevReply::Done { value } = parsed else {
         panic!("rejected: {}", reply.body);
     };
     assert!(matches!(value, RulesCheckReport::Resolved { .. }));
@@ -321,7 +328,7 @@ async fn the_route_runs_a_check_through_the_kit_answers_json_and_audits_one_line
         .iter()
         .filter(|line| {
             line.text
-                .starts_with("ENGINE rules_check skill=sleight-of-hand seat=1 ")
+                .starts_with("ENGINE rules_check skill=sleight_of_hand seat=1 ")
         })
         .collect();
     assert_eq!(audit.len(), 1);
@@ -353,29 +360,52 @@ async fn the_route_with_no_kit_says_the_check_is_not_available_and_a_bad_body_is
     .expect("answered");
 
     serving.abort();
-    assert_eq!(unavailable.status, 400);
-    assert!(
-        unavailable.body.contains("not_available"),
-        "{}",
-        unavailable.body
+    let refusal = |body: &str| match serde_json::from_str::<RulesCheckReply>(body) {
+        Ok(DevReply::Rejected { error, .. }) => error,
+        other => panic!("not a refusal: {other:?}"),
+    };
+    assert_eq!(unavailable.status, StatusCode::CONFLICT.as_u16());
+    assert_eq!(refusal(&unavailable.body), RulesCheckError::ScriptedBackend);
+    assert_eq!(malformed.status, StatusCode::BAD_REQUEST.as_u16());
+    let RulesCheckError::InvalidBody(body_error) = refusal(&malformed.body) else {
+        panic!("not an invalid body: {}", malformed.body);
+    };
+    assert_eq!(body_error.cause, BodyCause::Data);
+    let logged = host.state.log().after_sequence(0, 100_000);
+    let refused: Vec<_> = logged
+        .iter()
+        .filter(|line| line.text.starts_with("ENGINE refused verb=rules_check "))
+        .map(|line| line.text.as_str())
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            "ENGINE refused verb=rules_check error=scripted_backend",
+            "ENGINE refused verb=rules_check error=invalid_body",
+        ]
     );
-    assert!(unavailable.body.contains("scripted rules backend"));
-    assert_eq!(malformed.status, 400);
-    assert!(malformed.body.contains("bad_request"), "{}", malformed.body);
 }
 
 #[tokio::test]
-async fn the_dev_command_line_reaches_the_verb_and_a_scripted_table_refuses_it_plainly() {
+async fn the_dev_command_line_reaches_the_verb_and_a_scripted_table_refuses_it_by_type() {
     let host = start(&STARTER_FILES).await;
+    let asked = parsed("rules check perception 1").expect("parses");
 
+    let reply = ask(host.port, &asked).await.expect("answered");
+
+    let DevReply::Rejected { error, message } = reply else {
+        panic!("not a rejection: {reply:?}");
+    };
+    assert_eq!(error, RulesCheckError::ScriptedBackend);
+    assert_eq!(message, error.to_string());
+    // The verb as typed at the dev command line reads the same refusal as its sentence.
     let refused = run_dev(host.port, &words("rules check perception 1"))
         .await
         .expect_err("the scripted backend has no check");
-
-    let DevError::Rejected(message) = refused else {
+    let DevError::Rejected(sentence) = refused else {
         panic!("not a rejection: {refused:?}");
     };
-    assert!(message.contains("scripted rules backend"), "{message}");
+    assert!(sentence.contains("scripted rules backend"), "{sentence}");
     let usage = run_dev(host.port, &words("rules check"))
         .await
         .expect_err("a usage error");
@@ -383,4 +413,45 @@ async fn the_dev_command_line_reaches_the_verb_and_a_scripted_table_refuses_it_p
         matches!(usage, DevError::Command(CommandError::Usage(_))),
         "{usage:?}"
     );
+}
+
+#[test]
+fn every_refusal_answers_its_status_and_its_key_is_its_serde_tag() {
+    let body_error =
+        crate::dev_http::parse_body::<RulesCheckRequest>(b"{").expect_err("a truncated body");
+    let errors = [
+        (
+            RulesCheckError::InvalidBody(body_error),
+            StatusCode::BAD_REQUEST,
+        ),
+        (RulesCheckError::ScriptedBackend, StatusCode::CONFLICT),
+        (
+            RulesCheckError::PortFailed {
+                port: df_table::ports::PortName::Dice,
+                cause: df_table::event::FailureCause::Unavailable,
+            },
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            RulesCheckError::UnexpectedResolution,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            RulesCheckError::NoVerdict,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+    ];
+    for (error, status) in errors {
+        assert_eq!(error.status(), status, "{error:?}");
+        let written = serde_json::to_value(&error).expect("writes");
+        assert_eq!(written["error"], error.key(), "{written}");
+        assert_eq!(
+            serde_json::from_value::<RulesCheckError>(written).expect("reads"),
+            error
+        );
+        assert_eq!(
+            refusal_audit_line(&error),
+            format!("ENGINE refused verb=rules_check error={}", error.key())
+        );
+    }
 }

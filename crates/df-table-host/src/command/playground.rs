@@ -7,8 +7,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use df_playground::controls::{ControlsChange, Device, MAXIMUM_TRANSITION_MS, TransitionStyle};
+use df_playground::controls::{ControlsChange, Device, TransitionStyle};
 use df_playground::copy::ReadingPace;
+use df_playground::limits::MAXIMUM_TRANSITION_MS;
 
 use super::usage::{FIXTURE_USAGE, MEDIA_USAGE, PLAYGROUND_USAGE, playground_keys};
 use super::{Command, CommandError, bad_choice, keyed, pair, truth};
@@ -32,7 +33,7 @@ fn playground_change(key: &str, value: &str) -> Result<ControlsChange, CommandEr
             .map(ControlsChange::TransitionStyle)
             .ok_or_else(|| bad_choice(key, value, "cut, fade or wipe")),
         "ms" => value
-            .parse::<u32>()
+            .parse::<u64>()
             .map_err(|_| CommandError::BadCount {
                 what: "ms",
                 text: value.to_owned(),
@@ -50,6 +51,7 @@ fn playground_change(key: &str, value: &str) -> Result<ControlsChange, CommandEr
             }),
         "unavailable" => truth(key, value).map(ControlsChange::ShowUnavailable),
         "grid" => truth(key, value).map(ControlsChange::ShowGrid),
+        "sam" => truth(key, value).map(ControlsChange::ShowSam),
         _ => Err(bad_choice("playground set", key, playground_keys())),
     }
 }
@@ -167,6 +169,7 @@ pub(super) fn media(words: &[String]) -> Result<Command, CommandError> {
             })
         }
         [verb, rest @ ..] if verb == "generate" => super::media_generate::parse(rest),
+        [verb, rest @ ..] if verb == "locate" => crate::locate::cli::parse(rest),
         _ => Err(CommandError::Usage(MEDIA_USAGE)),
     }
 }

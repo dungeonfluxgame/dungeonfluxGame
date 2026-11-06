@@ -5,11 +5,12 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlImageElement;
 
-use super::state::{REPORT_ADDRESS, log_error, with_app, with_app_mut};
+use super::state::{log_error, with_app, with_app_mut};
 use crate::audio;
 use crate::dom::{document, js_message};
 use crate::media::{ClientReport, ClientReportPost};
 use crate::net::post_json;
+use crate::path;
 
 /// The pictures on the page that loaded without error, by media name.
 fn images_shown() -> Vec<String> {
@@ -72,7 +73,7 @@ pub async fn send_report(force: bool) {
         }
         changed || force
     });
-    if send && let Err(error) = post_json(REPORT_ADDRESS, &text).await {
+    if send && let Err(error) = post_json(path::CLIENT_REPORT, &text).await {
         log_error(&format!("could not report to the host: {error}"));
     }
 }

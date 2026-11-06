@@ -1,4 +1,4 @@
-use crate::config::{SettingFault, SettingName};
+use crate::config::{SettingCause, SettingName};
 use crate::element::{Degrees, ElementId, FieldName, KindName, Percent};
 use crate::event::{
     AUDIT_LINE_CAPACITY_BYTES, EffectKind, EventClass, FailureCause, PipelineStep, RejectionCause,
@@ -217,7 +217,7 @@ fn engine_events() -> Vec<TableEvent> {
         },
         TableEvent::SettingRejected {
             name: SettingName::new("narration_late_s").expect("valid setting name"),
-            cause: SettingFault::OutOfRange,
+            cause: SettingCause::OutOfRange,
         },
         TableEvent::SettingKeysIgnored { count: 2 },
     ]
@@ -547,7 +547,7 @@ fn the_widest_possible_line_of_every_event_fits_the_reserved_capacity() {
         },
         TableEvent::SettingRejected {
             name: longest_name,
-            cause: SettingFault::InconsistentWith,
+            cause: SettingCause::InconsistentWithRelatedSetting,
         },
     ];
     for event in widest {

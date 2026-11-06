@@ -8,7 +8,7 @@
 //! leaves the window as it was, so a caller that fails afterwards has changed nothing.
 //!
 //! It fails with `WindowError` when built from offers nobody can answer, and with
-//! `AnswerRefusal` when an answer is not allowed: the seat has no offer, the choice is not one of
+//! `AnswerError` when an answer is not allowed: the seat has no offer, the choice is not one of
 //! its choices, or the seat already answered.
 
 use std::collections::BTreeSet;
@@ -74,11 +74,23 @@ impl std::error::Error for WindowError {}
 
 /// Why an answer was not taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnswerRefusal {
+pub enum AnswerError {
     NotEligible,
     NotOffered,
     AlreadyAnswered,
 }
+
+impl fmt::Display for AnswerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotEligible => "the seat has no offer in this window",
+            Self::NotOffered => "the choice is not one the seat was offered",
+            Self::AlreadyAnswered => "the seat has already answered",
+        })
+    }
+}
+
+impl std::error::Error for AnswerError {}
 
 /// The offers of a pending resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -128,13 +140,13 @@ impl ResolutionWindow {
     }
 
     /// A copy with the seat's answer taken, or why it is not.
-    pub fn answered(&self, seat: SeatId, choice: &ActionId) -> Result<Self, AnswerRefusal> {
-        let offer = self.offer_for(seat).ok_or(AnswerRefusal::NotEligible)?;
+    pub fn answered(&self, seat: SeatId, choice: &ActionId) -> Result<Self, AnswerError> {
+        let offer = self.offer_for(seat).ok_or(AnswerError::NotEligible)?;
         if offer.answer.is_some() {
-            return Err(AnswerRefusal::AlreadyAnswered);
+            return Err(AnswerError::AlreadyAnswered);
         }
         if !offer.choices.contains(choice) {
-            return Err(AnswerRefusal::NotOffered);
+            return Err(AnswerError::NotOffered);
         }
         let mut next = self.clone();
         for held in &mut next.offers {

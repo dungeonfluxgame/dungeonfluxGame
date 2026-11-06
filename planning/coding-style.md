@@ -199,6 +199,64 @@ specification of a judgement and is reviewed as one.
 - **`unsafe`** only in an isolated module with `SAFETY:` comments and focused tests. No `unsafe impl
   Send` or `Sync` to bypass wasm or runtime limits.
 
+### Interface shape (one convention per concern)
+
+Adopted 2026-11-06 from the interface-coherence audit. Every crate follows these; an existing
+deviation is fixed when its module is touched.
+
+- **Errors.** A type returned in `Err` is named `<Subject>Error` and implements `Display` (a lowercase
+  sentence) and `std::error::Error`. Its cause is typed: it wraps the source error
+  (`Name(NameError)`) or holds a closed `<Subject>Cause` enum in a field named `cause`. Never a
+  `String` cause, never a `From` impl that stringifies a typed source. Invalid input variants start
+  with `Invalid` (not `Bad`). An HTTP-facing error answers `fn status(&self) -> StatusCode`; a raw
+  `u16` status never crosses an interface.
+  - The suffix tells the role: `*Error` is returned in `Err`; `*Cause` is a closed why-it-failed enum
+    inside an error; `*Reason` is a closed why for a decision that is not a failure (`DropReason`,
+    `UnlocatedReason`); `*Problem` is one non-fatal finding in a list of findings. `Refusal`,
+    `Refused`, `Rejection`, `Fault` and `Failure` are not type suffixes.
+  - The `fmt` parameter is `formatter`.
+- **Closed keys.** A closed set is an enum with `serde(rename_all = "snake_case")`, an `ALL` list, an
+  exhaustive `fn key(self) -> &'static str` returning exactly its serde name, and
+  `fn from_key(&str) -> Option<Self>` built from `ALL` (df-table's `listed_enum!` generates these).
+  The accessor is `key()`, never `label()`, `name()`, `as_str()` or `id()`; `as_str()` stays only on
+  string newtypes. A key test asserts `key()` equals the serde name. Values that name a crate,
+  provider or published model (`"df-rules"`, `"gpt-6-luna"`) keep their published spelling.
+  Persisted data that used another spelling is read through `#[serde(alias = ..)]`, never by
+  changing what is written back.
+- **Units.** Spans are `Duration` or `_ms: u64`; a wall-clock instant is `_ms: u64` since the Unix
+  epoch. A signed instant needs a comment saying why (`pending.rs` `opened_ms`). Permille is `u16`,
+  percent `u8`/`u16`, widened only inside arithmetic.
+- **Construction.** A value with an invariant has private fields and a fallible
+  `new(..) -> Result<Self, <Subject>Error>` taking borrowed input (`&str`, `&[T]`). serde reads it
+  through that constructor (`#[serde(try_from = "<Subject>Record")]` with a `deny_unknown_fields`
+  record). Every inbound wire body or query is `deny_unknown_fields` and typed (enums, newtypes),
+  not a `String` re-parsed later. A partial update uses one patch type, `Edit<T>` (`Keep`, `Clear`,
+  `Set`), never `Option<Option<T>>` or a parallel `Override` type. Optional builder steps are
+  `with_<field>(self, ..) -> Self`.
+- **Dev routes and CLI (df-table-host).** A route module declares its paths in a `path` module and its
+  bodies and replies in `request.rs`. Every reply is tagged `"outcome"`: a success variant per result
+  and one `Rejected { error, message }` whose `error` is the module's typed error (tagged `"error"`).
+  Routes parse bodies with `dev_http::parse_body` and answer through the shared reply helper; the CLI
+  calls through `dev_client` and matches typed errors, never the message text. Usage strings are
+  `<VERB>_USAGE` constants beside their grammar.
+- **Module layout.** A module with children is `feature.rs` plus `feature/<child>.rs`: no `mod.rs`, no
+  `#[path]`, no prefix-flat sibling families (`view_*.rs` becomes `view/*.rs`). Host feature folders
+  use the fixed child names `request`, `routes`, `cli`, `format`, `report`, `events` and `limits`.
+  Tests are `<module>_tests.rs`, declared `#[cfg(test)] mod <module>_tests;`; shared test helpers are
+  `fixtures`. Each crate (or host feature) keeps its size, count and time bounds in one `limits.rs`.
+- **Async and IO.** Blocking work runs in `tokio::task::spawn_blocking`, one call per logical step;
+  never a nested runtime, never `std::fs` on an async worker. "Now" comes from an injected clock
+  (`df_table::ports::Clock` for monotonic time); async deadlines use `tokio::time::Instant`. Audit lines
+  go through the owning service's one recorder (`EventLog` in the host, installed as the df-observe
+  audit sink), never `println!`/`eprintln!`.
+- **Environment.** Only binaries read the environment, through `df_table_host::environment`; libraries
+  take configuration. Variable-name constants end in `_VARIABLE`. Exception: a safety kill switch
+  (`native_http`'s provider guards) is read by the library that enforces it, so no caller can bypass
+  it.
+- **Limits for dev work.** Size, count and time bounds that only protect against mistakes are generous
+  (hours, hundreds of MiB, millions of entries) and named with units. A bound tied to an external
+  contract (a database CHECK, a provider or protocol limit, a security rule) says so in its doc line.
+
 ## 7. Performance and async
 
 ### Owner thread and view path

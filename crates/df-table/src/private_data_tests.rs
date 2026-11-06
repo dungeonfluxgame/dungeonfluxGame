@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::marker::PhantomData;
 
 use crate::element::ElementId;
-use crate::event_field::EventField;
+use crate::event::field::EventField;
 use crate::identity::OperationId;
 use crate::private_data::{
     LengthClass, MEDIUM_TEXT_MAXIMUM_CHARS, Narration, PlayerText, SHORT_TEXT_MAXIMUM_CHARS, Secret,

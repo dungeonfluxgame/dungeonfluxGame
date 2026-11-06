@@ -201,7 +201,8 @@ impl fmt::Debug for DecisionObservation {
     }
 }
 
-/// Cheap immutable terminal decision identity; source bytes are qualified outside publication locks.
+/// Cheap immutable terminal decision identity; source bytes are qualified outside publication
+/// locks.
 #[derive(Clone, Eq, PartialEq)]
 pub struct DecisionReference {
     pub scope: ExecutionScope,

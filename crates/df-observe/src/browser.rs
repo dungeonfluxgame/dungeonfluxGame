@@ -1,4 +1,14 @@
-use crate::CaptureKey;
+use crate::{
+    CaptureKey,
+    capture::{
+        BUILD_REVISION_ATTRIBUTES, PRODUCER_ID_ATTRIBUTE, RECORD_ID_ATTRIBUTE, RESOURCE_SCHEMA_URL,
+        SCOPE_SCHEMA_URL, SCOPE_VERSION, SOURCE_SEQUENCE_ATTRIBUTE, lower_hex,
+    },
+    limits::{
+        MAXIMUM_BROWSER_BYTES, MAXIMUM_BROWSER_RECORD_BYTES, MAXIMUM_BROWSER_RECORDS,
+        MAXIMUM_BROWSER_TEXT_BYTES, MAXIMUM_UPLOAD_BYTES, MAXIMUM_UPLOAD_RECORDS, UPLOAD_DEADLINE,
+    },
+};
 use df_types::{BuildIdentity, BuildRevision, OperationId, SessionId};
 use opentelemetry::trace::SpanContext;
 use opentelemetry_proto::tonic::{
@@ -9,13 +19,6 @@ use opentelemetry_proto::tonic::{
 };
 use prost::Message;
 use std::{rc::Rc, time::Duration};
-
-const MAXIMUM_RECORDS: usize = 128;
-const MAXIMUM_BYTES: usize = 256 * 1024;
-const MAXIMUM_RECORD_BYTES: usize = 8192;
-const MAXIMUM_UPLOAD_RECORDS: usize = 32;
-const MAXIMUM_UPLOAD_BYTES: usize = 64 * 1024;
-const UPLOAD_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Browser capture selects only approved typed fields before standard OTLP encoding.
 /// Names/statuses come from static instrumentation, never runtime error or player text.
@@ -32,6 +35,7 @@ pub struct BrowserLog {
     pub trace: Option<SpanContext>,
 }
 
+/// Why the browser buffer refused a capture or upload step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BufferError {
     Empty,
@@ -101,7 +105,7 @@ struct RetainedRecord {
 pub struct BrowserBuffer {
     owner: Rc<u8>,
     generation: u64,
-    slots: [Option<RetainedRecord>; MAXIMUM_RECORDS],
+    slots: [Option<RetainedRecord>; MAXIMUM_BROWSER_RECORDS],
     head: usize,
     count: usize,
     bytes: usize,
@@ -111,6 +115,7 @@ pub struct BrowserBuffer {
     lease: Option<LeaseIdentity>,
 }
 impl BrowserBuffer {
+    /// An empty buffer bound to one page/binding generation.
     pub fn new(generation: u64) -> Self {
         Self {
             owner: Rc::new(0),
@@ -148,13 +153,15 @@ impl BrowserBuffer {
         if record.event_name.is_empty() {
             return Err(self.refuse(BufferError::Empty));
         }
-        if record.event_name.len() > 256 || record.status.len() > 256 {
+        if record.event_name.len() > MAXIMUM_BROWSER_TEXT_BYTES
+            || record.status.len() > MAXIMUM_BROWSER_TEXT_BYTES
+        {
             return Err(self.refuse(BufferError::Oversized));
         }
         if record.measured_bytes.is_some_and(|bytes| bytes < 0) {
             return Err(self.refuse(BufferError::InvalidMeasurement));
         }
-        if self.count == MAXIMUM_RECORDS {
+        if self.count == MAXIMUM_BROWSER_RECORDS {
             return Err(self.refuse(BufferError::Capacity));
         }
         let request = encode_log(build, key, record);
@@ -165,21 +172,21 @@ impl BrowserBuffer {
         if length == 0 {
             return Err(self.refuse(BufferError::Empty));
         }
-        if length > MAXIMUM_RECORD_BYTES {
+        if length > MAXIMUM_BROWSER_RECORD_BYTES {
             return Err(self.refuse(BufferError::Oversized));
         }
-        if self.count == MAXIMUM_RECORDS
+        if self.count == MAXIMUM_BROWSER_RECORDS
             || self
                 .bytes
                 .checked_add(length)
-                .is_none_or(|sum| sum > MAXIMUM_BYTES)
+                .is_none_or(|sum| sum > MAXIMUM_BROWSER_BYTES)
         {
             return Err(self.refuse(BufferError::Capacity));
         }
         if self.next_record == u64::MAX {
             return Err(self.refuse(BufferError::IdentityExhausted));
         }
-        let index = (self.head + self.count) % MAXIMUM_RECORDS;
+        let index = (self.head + self.count) % MAXIMUM_BROWSER_RECORDS;
         self.slots[index] = Some(RetainedRecord {
             ordinal: self.next_record,
             bytes: request.encode_to_vec().into_boxed_slice(),
@@ -207,7 +214,7 @@ impl BrowserBuffer {
         let mut bytes = 0;
         let mut records = 0;
         for offset in 0..self.count {
-            let record = self.slots[(self.head + offset) % MAXIMUM_RECORDS]
+            let record = self.slots[(self.head + offset) % MAXIMUM_BROWSER_RECORDS]
                 .as_ref()
                 .ok_or(BufferError::Empty)?;
             if records == MAXIMUM_UPLOAD_RECORDS
@@ -239,7 +246,7 @@ impl BrowserBuffer {
             || self.lease != Some(lease.identity)
             || self.count < lease.identity.records
             || (0..lease.identity.records)
-                .any(|offset| self.slots[(self.head + offset) % MAXIMUM_RECORDS].is_none())
+                .any(|offset| self.slots[(self.head + offset) % MAXIMUM_BROWSER_RECORDS].is_none())
             || self.slots[self.head].as_ref().map(|record| record.ordinal)
                 != Some(lease.identity.first_record)
         {
@@ -254,13 +261,14 @@ impl BrowserBuffer {
     ) -> Result<impl Iterator<Item = &'a [u8]>, BufferError> {
         self.check_lease(lease)?;
         Ok((0..lease.identity.records).filter_map(|offset| {
-            self.slots[(self.head + offset) % MAXIMUM_RECORDS]
+            self.slots[(self.head + offset) % MAXIMUM_BROWSER_RECORDS]
                 .as_ref()
                 .map(|record| record.bytes.as_ref())
         }))
     }
-    /// Local adapter seam: call only after matching full-prefix terminal Spooled/Committed receipt.
-    /// Pending/send/half-close/partial receipts must not call this. No RPC receipt is invented here.
+    /// Local adapter seam: call only after a matching full-prefix terminal Spooled/Committed
+    /// receipt. Pending/send/half-close/partial receipts must not call this. No RPC receipt is
+    /// invented here.
     pub fn acknowledge_durable(
         &mut self,
         lease: &UploadLease,
@@ -274,7 +282,7 @@ impl BrowserBuffer {
             if let Some(record) = self.slots[self.head].take() {
                 self.bytes -= record.bytes.len();
                 self.count -= 1;
-                self.head = (self.head + 1) % MAXIMUM_RECORDS;
+                self.head = (self.head + 1) % MAXIMUM_BROWSER_RECORDS;
             }
         }
         self.lease = None;
@@ -290,6 +298,7 @@ impl BrowserBuffer {
         self.lease = None;
         Ok(reason)
     }
+    /// End the active upload once `now` reaches its deadline; its records stay retained.
     pub fn expire_upload(&mut self, now: Duration) -> Result<(), BufferError> {
         let lease = self.lease.ok_or(BufferError::Empty)?;
         if now < lease.deadline {
@@ -317,18 +326,21 @@ fn attribute(name: &'static str, value: Value) -> KeyValue {
         value: Some(AnyValue { value: Some(value) }),
     }
 }
-fn identity_hex(bytes: &[u8; 16]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
 fn encode_log(
     build: &BuildIdentity,
     key: CaptureKey,
     input: BrowserLog,
 ) -> ExportLogsServiceRequest {
     let mut attributes = vec![
-        attribute("df.producer_id", Value::StringValue(key.producer.hex())),
-        attribute("df.record_id", Value::StringValue(key.record.hex())),
-        attribute("df.source_sequence", Value::IntValue(key.sequence.get())),
+        attribute(
+            PRODUCER_ID_ATTRIBUTE,
+            Value::StringValue(key.producer.hex()),
+        ),
+        attribute(RECORD_ID_ATTRIBUTE, Value::StringValue(key.record.hex())),
+        attribute(
+            SOURCE_SEQUENCE_ATTRIBUTE,
+            Value::IntValue(key.sequence.get()),
+        ),
         attribute(
             "fixture.build",
             Value::StringValue(build.revision(BuildRevision::Source).as_str().to_owned()),
@@ -345,13 +357,13 @@ fn encode_log(
     if let Some(session) = input.session {
         attributes.push(attribute(
             "df.session",
-            Value::StringValue(identity_hex(session.as_bytes())),
+            Value::StringValue(lower_hex(session.as_bytes())),
         ));
     }
     if let Some(operation) = input.operation {
         attributes.push(attribute(
             "df.operation",
-            Value::StringValue(identity_hex(operation.as_bytes())),
+            Value::StringValue(lower_hex(operation.as_bytes())),
         ));
     }
     // As in D01, malformed/invalid correlation becomes unparented, never authority.
@@ -384,20 +396,14 @@ fn encode_log(
             Value::StringValue("df-observe.browser".to_owned()),
         ))
         .chain(
-            [
-                ("df.build", BuildRevision::Source),
-                ("df.native", BuildRevision::Native),
-                ("df.wasm", BuildRevision::Wasm),
-                ("df.configuration", BuildRevision::Configuration),
-                ("df.content", BuildRevision::Content),
-            ]
-            .into_iter()
-            .map(|(name, revision)| {
-                attribute(
-                    name,
-                    Value::StringValue(build.revision(revision).as_str().to_owned()),
-                )
-            }),
+            BUILD_REVISION_ATTRIBUTES
+                .into_iter()
+                .map(|(name, revision)| {
+                    attribute(
+                        name,
+                        Value::StringValue(build.revision(revision).as_str().to_owned()),
+                    )
+                }),
         )
         .collect(),
         ..Default::default()
@@ -408,13 +414,13 @@ fn encode_log(
             scope_logs: vec![ScopeLogs {
                 scope: Some(InstrumentationScope {
                     name: "df-observe.browser".to_owned(),
-                    version: "0.1.0".to_owned(),
+                    version: SCOPE_VERSION.to_owned(),
                     ..Default::default()
                 }),
                 log_records: vec![record],
-                schema_url: "https://dungeonflux.local/telemetry/scope-v1".to_owned(),
+                schema_url: SCOPE_SCHEMA_URL.to_owned(),
             }],
-            schema_url: "https://dungeonflux.local/telemetry/native-v1".to_owned(),
+            schema_url: RESOURCE_SCHEMA_URL.to_owned(),
         }],
     }
 }
@@ -461,13 +467,13 @@ mod tests {
         // This does not claim that public static-name inputs can reach these larger lengths.
         let request = encoded_record(6000);
         let length = request.encoded_len();
-        assert!(length <= MAXIMUM_RECORD_BYTES);
+        assert!(length <= MAXIMUM_BROWSER_RECORD_BYTES);
         let mut buffer = BrowserBuffer::new(1);
-        while buffer.bytes + length <= MAXIMUM_BYTES {
+        while buffer.bytes + length <= MAXIMUM_BROWSER_BYTES {
             buffer.retain_encoded(&request).unwrap();
         }
         let before = buffer.snapshot();
-        assert!(before.retained_records < MAXIMUM_RECORDS);
+        assert!(before.retained_records < MAXIMUM_BROWSER_RECORDS);
         assert_eq!(buffer.retain_encoded(&request), Err(BufferError::Capacity));
         assert_eq!(buffer.snapshot().retained_bytes, before.retained_bytes);
         assert_eq!(buffer.snapshot().retained_records, before.retained_records);

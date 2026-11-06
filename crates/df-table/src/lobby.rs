@@ -26,12 +26,12 @@ use crate::effects::{TableEffect, TableState};
 use crate::element::NameError;
 use crate::identity::{SceneId, SeatId};
 use crate::listed::listed_enum;
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
     CarryItem, Entry, HandOff, InspectReport, Machine, MachineError, MachineId, MachineInput,
     MachineReadout, MachineSpec, Scope, SpecError, StandingOffers, StateName, StepInput,
     StepResult, SuspendPolicy,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode};
 use crate::ports::{ActionId, Audience};
 
@@ -39,6 +39,10 @@ const LOBBY_SCHEMA_VERSION: u32 = 1;
 const PHASE_TAG: &str = "phase";
 const GATHERING: &str = "gathering";
 const STARTED: &str = "started";
+/// The lobby machine's id, the name its spec registers and hand-offs name.
+pub const MACHINE_ID: &str = "lobby";
+/// The machine the lobby hands the table to when it starts, named by id only: machines never
+/// import one another (the isolation rule `machine_scan_tests` enforces).
 const NEXT_MACHINE: &str = "explore";
 
 const ALREADY_SEATED: &str = "You already have a seat.";
@@ -135,7 +139,7 @@ impl LobbyMachine {
         let ids = LobbyIds::new().map_err(SpecError::InvalidName)?;
         let join = ids.of(LobbyAction::Join).clone();
         let spec = MachineSpec::new(
-            "lobby",
+            MACHINE_ID,
             Scope::Table,
             LOBBY_SCHEMA_VERSION,
             &[GATHERING, STARTED],

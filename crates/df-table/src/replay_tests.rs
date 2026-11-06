@@ -536,5 +536,5 @@ fn the_inputs_of_a_golden_script_record_and_replay_like_any_other_script() {
             action: "Not A Name",
         },
     )]);
-    assert!(matches!(bad, Err(ReplayError::BadName(_))));
+    assert!(matches!(bad, Err(ReplayError::InvalidName(_))));
 }

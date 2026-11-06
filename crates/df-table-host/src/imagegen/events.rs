@@ -1,5 +1,6 @@
-//! What the picture generator records: one typed event for each request, each stored picture and
-//! each refusal, rendered as one `IMAGEGEN <verb> key=value ...` line for the audit log.
+//! What the picture generator records: one typed event for each request, each stored picture,
+//! each job that ended without one, each refusal and each setting that does not read, rendered as
+//! one `IMAGEGEN <verb> key=value` line for the audit log.
 //!
 //! The request and its outcome are only recorded: no budget, price or count of pictures ever
 //! blocks a request (owner decision: no spend caps). A line holds ids, closed keys, sizes and
@@ -7,7 +8,9 @@
 
 use std::time::Duration;
 
-use super::model::{Aspect, Purpose, RefusalCause};
+use super::limits::MAXIMUM_NAME_CHARS;
+use super::model::{Aspect, Purpose};
+use super::request::GenerateError;
 
 /// One thing the generator did.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,15 +41,22 @@ pub enum ImageGenEvent {
     Failed {
         job: u64,
         name: String,
-        cause: RefusalCause,
+        error: GenerateError,
         duration: Duration,
         backend: &'static str,
     },
-    /// The request never became a job.
+    /// The request never became a job. `name` is the name asked for, when the body had one; it
+    /// is written as a plain word, so a refused name cannot break the line's shape.
     Refused {
-        name: String,
-        cause: RefusalCause,
+        name: Option<String>,
+        error: GenerateError,
         backend: &'static str,
+    },
+    /// The setting in `variable` does not read, so `default` is used. The text of the setting is
+    /// not written: it was not checked to be one plain word.
+    InvalidSetting {
+        variable: &'static str,
+        default: Duration,
     },
 }
 
@@ -55,7 +65,7 @@ pub enum ImageGenEvent {
 fn plain_word(name: &str) -> String {
     let word: String = name
         .chars()
-        .take(super::model::MAXIMUM_NAME_CHARS)
+        .take(MAXIMUM_NAME_CHARS)
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
                 character
@@ -71,22 +81,22 @@ fn plain_word(name: &str) -> String {
     }
 }
 
-impl ImageGenEvent {
-    /// The event of a request that never became a job; the name is shown as a plain word.
-    pub fn refused(name: &str, cause: RefusalCause, backend: &'static str) -> Self {
-        Self::Refused {
-            name: plain_word(name),
-            cause,
-            backend,
-        }
+/// `error=<key>`, then ` cause=<key>` when the error has a typed cause.
+fn error_fields(error: &GenerateError) -> String {
+    match error.cause_key() {
+        Some(cause) => format!("error={} cause={cause}", error.key()),
+        None => format!("error={}", error.key()),
     }
+}
 
+impl ImageGenEvent {
     pub fn verb(&self) -> &'static str {
         match self {
             Self::Requested { .. } => "requested",
             Self::Stored { .. } => "stored",
             Self::Failed { .. } => "failed",
             Self::Refused { .. } => "refused",
+            Self::InvalidSetting { .. } => "setting",
         }
     }
 
@@ -103,9 +113,18 @@ impl ImageGenEvent {
                 deadline,
                 backend,
             } => format!(
-                "IMAGEGEN {verb} job={job} name={name} purpose={} aspect={aspect} prompt_chars={prompt_chars} deadline_s={} backend={backend}",
+                concat!(
+                    "IMAGEGEN {} job={} name={} purpose={} aspect={} prompt_chars={} ",
+                    "deadline_ms={} backend={}"
+                ),
+                verb,
+                job,
+                name,
                 purpose.key(),
-                deadline.as_secs()
+                aspect,
+                prompt_chars,
+                deadline.as_millis(),
+                backend
             ),
             Self::Stored {
                 job,
@@ -118,27 +137,44 @@ impl ImageGenEvent {
                 backend,
                 sha256_prefix,
             } => format!(
-                "IMAGEGEN {verb} job={job} name={name} file={file} bytes={bytes} size={width_px}x{height_px} duration_ms={} backend={backend} sha256={sha256_prefix}",
-                duration.as_millis()
+                concat!(
+                    "IMAGEGEN {} job={} name={} file={} bytes={} size={}x{} duration_ms={} ",
+                    "backend={} sha256={}"
+                ),
+                verb,
+                job,
+                name,
+                file,
+                bytes,
+                width_px,
+                height_px,
+                duration.as_millis(),
+                backend,
+                sha256_prefix
             ),
             Self::Failed {
                 job,
                 name,
-                cause,
+                error,
                 duration,
                 backend,
             } => format!(
-                "IMAGEGEN {verb} job={job} name={name} cause={} duration_ms={} backend={backend}",
-                cause.key(),
+                "IMAGEGEN {verb} job={job} name={name} {} duration_ms={} backend={backend}",
+                error_fields(error),
                 duration.as_millis()
             ),
             Self::Refused {
                 name,
-                cause,
+                error,
                 backend,
             } => format!(
-                "IMAGEGEN {verb} name={name} cause={} backend={backend}",
-                cause.key()
+                "IMAGEGEN {verb} verb=generate name={} {} backend={backend}",
+                name.as_deref().map_or_else(|| "_".to_owned(), plain_word),
+                error_fields(error)
+            ),
+            Self::InvalidSetting { variable, default } => format!(
+                "IMAGEGEN {verb} variable={variable} status=invalid default_ms={}",
+                default.as_millis()
             ),
         }
     }

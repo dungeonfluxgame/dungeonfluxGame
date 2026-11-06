@@ -23,3 +23,11 @@ path = "tests/invocation.rs"
 [[test]]
 name = "diagnostic_provenance"
 path = "tests/diagnostic_provenance.rs"
+
+[[test]]
+name = "controlled_draw_contract"
+path = "tests/controlled_draw_contract.rs"
+
+[[test]]
+name = "offer_expiry_contract"
+path = "tests/offer_expiry_contract.rs"

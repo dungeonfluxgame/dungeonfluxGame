@@ -5,6 +5,7 @@ use crate::{
     SourceRef, Urgency,
 };
 
+/// One analysis of an existing source, recorded and replayed like an image request.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImageAnalysisRequest {
     pub identity: OperationIdentity,
@@ -16,6 +17,7 @@ pub struct ImageAnalysisRequest {
     pub audience: Audience,
     pub expected_source_revision: u64,
 }
+/// The closed set of analyses; each names its source and its dependencies.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ImageAnalysisOperation {
     PhotoInspection(PhotoInspectionSpec),
@@ -24,16 +26,19 @@ pub enum ImageAnalysisOperation {
     StagingIdentity(StagingIdentitySpec),
     StagingFacing(StagingFacingSpec),
 }
+/// One named thing to look for, described in private text that never reaches logs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisTarget {
     pub id: PrivateImageText,
     pub description: PrivateImageText,
 }
+/// A reference picture of one named person for identity matching.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisReference {
     pub id: PrivateImageText,
     pub source: SourceRef,
 }
+/// Locate the heads of named targets in one source, optionally guided by a face picture.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HeadLocationsSpec {
     pub source: SourceRef,
@@ -41,6 +46,7 @@ pub struct HeadLocationsSpec {
     pub targets: Vec<AnalysisTarget>,
     pub contract_revision: u32,
 }
+/// The one noun a segmentation looks for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SegmentationPrompt {
     Person,
@@ -54,11 +60,13 @@ impl SegmentationPrompt {
         }
     }
 }
+/// How the source is prepared before segmentation: a figure cut-out or a whole plate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SegmentationPreparation {
     FigureMask,
     ScenePlate,
 }
+/// Segment one source into instance masks, one mask set per prompt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SegmentationSpec {
     pub preparation: SegmentationPreparation,
@@ -67,6 +75,7 @@ pub struct SegmentationSpec {
     pub maximum_masks: u32,
     pub contract_revision: u32,
 }
+/// Match the instances of a finished segmentation to reference pictures of named people.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StagingIdentitySpec {
     pub source: SourceRef,
@@ -75,6 +84,7 @@ pub struct StagingIdentitySpec {
     pub references: Vec<AnalysisReference>,
     pub contract_revision: u32,
 }
+/// Judge which way each identified instance of a segmentation faces.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StagingFacingSpec {
     pub source: SourceRef,
@@ -83,7 +93,8 @@ pub struct StagingFacingSpec {
     pub contract_revision: u32,
 }
 
-/// Finite unit-interval values retain exact source float bits; no geometry quantization is introduced.
+/// Finite unit-interval values retain exact source float bits; no geometry quantization is
+/// introduced.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct AnalysisUnit(u32);
 impl AnalysisUnit {
@@ -102,12 +113,14 @@ impl std::fmt::Debug for AnalysisUnit {
         self.get().fmt(f)
     }
 }
+/// Why an analysis value was refused: a coordinate, a box or a mask out of contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnalysisValueError {
     Coordinate,
     Box,
     Mask,
 }
+/// A box in unit coordinates of its picture: `left < right` and `top < bottom`, each 0 to 1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NormalizedImageBox {
     left: AnalysisUnit,
@@ -136,22 +149,26 @@ impl NormalizedImageBox {
         ]
     }
 }
+/// The head box of one named target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisLocatedHead {
     pub id: PrivateImageText,
     pub head: NormalizedImageBox,
 }
+/// A run of `length` mask pixels from zero-based row-major pixel `start`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AnalysisMaskRun {
     pub start: u32,
     pub length: u32,
 }
+/// One instance's mask: its supplier index, score and ordered, non-overlapping runs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisMask {
     pub index: u32,
     pub score: AnalysisUnit,
     pub runs: Vec<AnalysisMaskRun>,
 }
+/// The instance masks one prompt found, over a picture of `width_px` by `height_px`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisMaskSet {
     pub prompt: SegmentationPrompt,
@@ -184,11 +201,13 @@ impl AnalysisMaskSet {
         Ok(())
     }
 }
+/// The candidate instance (numbered from 1) matched to one reference, or none.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AnalysisIdentityMatch {
     pub reference_id: PrivateImageText,
     pub candidate: Option<u32>,
 }
+/// Which way an instance faces in the picture.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnalysisFacingDirection {
     Left,
@@ -196,6 +215,7 @@ pub enum AnalysisFacingDirection {
     TowardCamera,
     AwayFromCamera,
 }
+/// The facing of one candidate instance, or none when it could not be judged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AnalysisFacing {
     pub candidate: u32,
@@ -243,6 +263,7 @@ pub struct StoredAnalysisAuthorization<'a> {
     pub audience: &'a Audience,
     pub expected_source_revision: u64,
 }
+/// An authorized, finally selected analysis result and the job revision it was read at.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImageAnalysisObservation {
     pub job_revision: u64,
@@ -251,12 +272,14 @@ pub struct ImageAnalysisObservation {
     pub result: ImageAnalysisResult,
 }
 
+/// Inspect one generated photograph against references under a closed inspection policy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhotoInspectionSpec {
     pub source: SourceRef,
     pub references: Vec<SourceRef>,
     pub inspection: crate::ImageInspection,
 }
+/// The closed photographic defects an inspection can find.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhotoInspectionFailure {
     GridOrCollage,
@@ -271,6 +294,7 @@ pub enum PhotoInspectionFailure {
     HeroCount { expected: u8, seen: u64 },
     UnexpectedDrawnWeapon,
 }
+/// Why an inspection gave no judgement; an unjudged photograph is never a pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhotoInspectionUnjudgedReason {
     Preparation,
@@ -281,12 +305,14 @@ pub enum PhotoInspectionUnjudgedReason {
     Disabled,
     Cancelled,
 }
+/// The outcome of one photo inspection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PhotoInspectionVerdict {
     Pass,
     Failed(PhotoInspectionFailure),
     Unjudged(PhotoInspectionUnjudgedReason),
 }
+/// One visible feature the inspection recorded, with its region in permille of the picture.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhotoVisibleFeature {
     pub name: PrivateImageText,
@@ -294,11 +320,13 @@ pub struct PhotoVisibleFeature {
     pub region: [u16; 4],
     pub recorded_id: Option<PrivateImageText>,
 }
+/// The place and source hash the recorded features belong to.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhotoFeatureBinding {
     pub place: PrivateImageText,
     pub source_hash: PrivateImageText,
 }
+/// A photo inspection's verdict and the visible features it recorded.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PhotoInspectionAssessment {
     pub contract_revision: u32,

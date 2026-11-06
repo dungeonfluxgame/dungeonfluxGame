@@ -8,8 +8,8 @@ use std::{fmt, net::SocketAddr, time::Duration};
 
 use serde_json::{Value, json};
 
-use crate::native_http::NativeHttp;
-use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
+use crate::native_http::{NativeHttp, is_loopback_socket, is_valid_credential};
+use crate::{HttpRequest, NativeHttpRefusal, ProviderLimits, refusal_may_be_billed};
 
 const LIVE_ENDPOINT: &str = "https://api.openai.com/v1/embeddings";
 /// The width of every vector this adapter returns.
@@ -20,8 +20,12 @@ pub const EMBEDDING_MODEL_SMALL: &str = "text-embedding-3-small";
 pub const EMBEDDING_MAXIMUM_INPUTS: usize = 64;
 /// The longest text of one call, in characters (about 2000 tokens, far under the model's cap).
 pub const EMBEDDING_MAXIMUM_INPUT_CHARACTERS: usize = 8000;
-const MAXIMUM_REQUEST_BYTES: usize = 1024 * 1024;
-const MAXIMUM_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+/// The largest request body sent, in bytes. A full batch is 64 texts of 8000 characters; at up
+/// to six JSON bytes per character (an escaped control character) that is about 3 MB, which the
+/// old 1 MiB refused after local validation had accepted it.
+const MAXIMUM_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+/// The largest answer kept, in bytes (a full batch of vectors is about 2 MB of JSON).
+const MAXIMUM_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// The models that take a `dimensions` argument and so can return 1536 values.
 const MODELS: [&str; 2] = ["text-embedding-3-small", "text-embedding-3-large"];
 
@@ -37,7 +41,7 @@ impl EmbeddingConfig {
 
     /// A literal loopback socket for tests.
     pub fn loopback_fixture(address: SocketAddr) -> Result<Self, EmbeddingError> {
-        if !address.ip().is_loopback() || address.port() == 0 {
+        if !is_loopback_socket(address) {
             return Err(EmbeddingError::InvalidRequest);
         }
         Ok(Self {
@@ -60,15 +64,15 @@ pub enum EmbeddingError {
 }
 
 impl EmbeddingError {
-    /// Whether the request left this machine (and so may have been billed).
+    /// Whether the request left this machine (and so may have been billed). A transport refusal
+    /// counts as sent unless the transport refused it before sending (an oversized body, a
+    /// disabled provider, an invalid endpoint or configuration).
     pub const fn was_sent(self) -> bool {
-        !matches!(
-            self,
-            Self::InvalidRequest
-                | Self::Transport(
-                    NativeHttpRefusal::InvalidEndpoint | NativeHttpRefusal::ProviderDisabled
-                )
-        )
+        match self {
+            Self::InvalidRequest => false,
+            Self::Transport(refusal) => refusal_may_be_billed(refusal),
+            _ => true,
+        }
     }
 
     pub const fn label(self) -> &'static str {
@@ -127,22 +131,12 @@ impl NativeEmbeddingProvider {
         model: &str,
         total_timeout: Duration,
     ) -> Result<Self, EmbeddingError> {
-        if credential.is_empty()
-            || credential.len() > 8192
-            || !credential.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-            || !MODELS.contains(&model)
-        {
+        if !is_valid_credential(credential) || !MODELS.contains(&model) {
             return Err(EmbeddingError::InvalidRequest);
         }
-        let limits = NativeHttpLimits {
-            connect_timeout: Duration::from_secs(5).min(total_timeout),
-            read_timeout: total_timeout,
-            total_timeout,
-            maximum_request_bytes: MAXIMUM_REQUEST_BYTES,
-            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            maximum_header_bytes: 16 * 1024,
-            maximum_chunks: 8192,
-        };
+        let limits =
+            ProviderLimits::new(total_timeout, MAXIMUM_REQUEST_BYTES, MAXIMUM_RESPONSE_BYTES)
+                .build();
         let http = NativeHttp::new(limits, config.fixture.is_some())
             .map_err(|_| EmbeddingError::InvalidRequest)?;
         Ok(Self {
@@ -269,6 +263,24 @@ mod tests {
     fn disabled_provider_is_not_sent() {
         assert!(!EmbeddingError::Transport(NativeHttpRefusal::ProviderDisabled).was_sent());
         assert!(EmbeddingError::Transport(NativeHttpRefusal::Deadline).was_sent());
+    }
+
+    #[test]
+    fn a_body_the_transport_refused_before_sending_was_not_sent() {
+        assert!(!EmbeddingError::Transport(NativeHttpRefusal::RequestTooLarge).was_sent());
+        assert!(!EmbeddingError::Transport(NativeHttpRefusal::InvalidLimits).was_sent());
+    }
+
+    #[test]
+    fn a_full_batch_of_the_longest_escaped_texts_fits_the_request_bound() {
+        let text = "\u{1}".repeat(EMBEDDING_MAXIMUM_INPUT_CHARACTERS);
+        let inputs = vec![text; EMBEDDING_MAXIMUM_INPUTS];
+        let body = request_body(EMBEDDING_MODEL_SMALL, &inputs).unwrap();
+        assert!(
+            body.len() > 1024 * 1024,
+            "the batch exceeds the old 1 MiB bound"
+        );
+        assert!(body.len() <= MAXIMUM_REQUEST_BYTES);
     }
 
     fn answer(indexes: &[usize], width: usize) -> Vec<u8> {

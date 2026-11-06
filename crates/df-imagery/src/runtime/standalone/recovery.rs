@@ -81,7 +81,8 @@ where
             ) {
                 Ok(result) => result,
                 Err(_) if !raw.usable => {
-                    // A crash after raw retention still follows the same unusable-output settlement path.
+                    // A crash after raw retention still follows the same unusable-output settlement
+                    // path.
                     return match self
                         .finish_analysis_response(
                             &context,
@@ -112,7 +113,7 @@ where
                 }
                 Err(error) => return Err(error),
             };
-            let useful = !matches!(&result,ImageAnalysisResult::PhotoInspection {assessment,..} if matches!(assessment.verdict,PhotoInspectionVerdict::Unjudged(_)));
+            let useful = carries_judgement(&result);
             let usage = if raw.usable == useful {
                 raw
             } else {
@@ -202,7 +203,8 @@ where
                     .map_err(|_| RuntimeError::InvalidRecord)?,
             )?
         } else {
-            // A crash between POST receipt retention and queue-checkpoint retention resumes from that exact response.
+            // A crash between POST receipt retention and queue-checkpoint retention resumes from
+            // that exact response.
             let (status, body) = analysis::restore_response_bytes(
                 raw.raw_output
                     .as_deref()

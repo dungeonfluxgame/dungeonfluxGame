@@ -24,12 +24,12 @@ use serde::{Deserialize, Serialize};
 use crate::effects::{BeatName, TableEffect, TableState};
 use crate::element::NameError;
 use crate::identity::{SceneId, SeatId};
+use crate::machine::slot::MachineSlot;
 use crate::machine::{
-    CarryItem, Decision, Entry, EntryRefusal, HandOff, InspectReport, Machine, MachineError,
+    CarryItem, Decision, Entry, EntryError, HandOff, InspectReport, Machine, MachineError,
     MachineId, MachineInput, MachineReadout, MachineSpec, Scope, SpecError, StandingOffers,
     StateName, StepInput, StepOutcome, StepResult, SuspendPolicy, rules_action_offers,
 };
-use crate::machine_slot::MachineSlot;
 use crate::outcome::{Decline, DeclineCode};
 use crate::ports::{ActionId, Audience, PortName, Resolution};
 
@@ -38,6 +38,10 @@ const PHASE_TAG: &str = "phase";
 const PRESENTING: &str = "presenting";
 const AWAITING_ROLL: &str = "awaiting_roll";
 const RESOLVED: &str = "resolved";
+/// The explore machine's id, the name its spec registers and hand-offs name.
+pub const MACHINE_ID: &str = "explore";
+/// The machine explore hands back to by default, named by id only: machines never import one
+/// another (the isolation rule `machine_scan_tests` enforces).
 const NEXT_MACHINE: &str = "lobby";
 
 /// The authored content of the one beat: its id and the check it offers.
@@ -93,7 +97,7 @@ impl ExploreMachine {
     /// conversation) names the next scene machine here. The registry checks the target.
     pub fn followed_by(beat: AuthoredBeat, next: &str) -> Result<Self, SpecError> {
         let spec = MachineSpec::new(
-            "explore",
+            MACHINE_ID,
             Scope::Group,
             EXPLORE_SCHEMA_VERSION,
             &[PRESENTING, AWAITING_ROLL, RESOLVED],
@@ -159,16 +163,16 @@ impl Machine for ExploreMachine {
     }
 
     fn enter(&self, table: &TableState, entry: &Entry) -> Result<MachineSlot, MachineError> {
-        let scene = entry.scene().ok_or(EntryRefusal::MissingScene)?;
+        let scene = entry.scene().ok_or(EntryError::MissingScene)?;
         if table.active_scene() != Some(scene) {
-            return Err(EntryRefusal::SceneNotActive { scene }.into());
+            return Err(EntryError::SceneNotActive { scene }.into());
         }
         let mut seats = entry.seats().peekable();
         if seats.peek().is_none() {
-            return Err(EntryRefusal::NoSeats.into());
+            return Err(EntryError::NoSeats.into());
         }
         if let Some(seat) = seats.find(|seat| !table.seats().contains(seat)) {
-            return Err(EntryRefusal::SeatNotAtTable { seat }.into());
+            return Err(EntryError::SeatNotAtTable { seat }.into());
         }
         self.encode(&ExploreState::Presenting { scene })
     }

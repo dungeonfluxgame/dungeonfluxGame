@@ -57,6 +57,10 @@ impl Ability {
         }
     }
 
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|ability| ability.key() == key)
+    }
+
     /// Always below six, the length of every array indexed by an ability.
     fn index(self) -> usize {
         match self {
@@ -71,9 +75,10 @@ impl Ability {
 }
 
 /// The eighteen skills of the SRD 5.2.1 Skills table (page 9), with the ability each most often
-/// uses. The key is the kebab-case name `df-rules` uses for a skill (`animal-handling`).
+/// uses. The key is snake_case like every closed key (`animal_handling`); `df-rules`' content
+/// spells skills in kebab-case, which is mapped where that content is read, never here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "snake_case")]
 pub enum Skill {
     Acrobatics,
     AnimalHandling,
@@ -120,7 +125,7 @@ impl Skill {
     pub fn key(self) -> &'static str {
         match self {
             Self::Acrobatics => "acrobatics",
-            Self::AnimalHandling => "animal-handling",
+            Self::AnimalHandling => "animal_handling",
             Self::Arcana => "arcana",
             Self::Athletics => "athletics",
             Self::Deception => "deception",
@@ -134,7 +139,7 @@ impl Skill {
             Self::Performance => "performance",
             Self::Persuasion => "persuasion",
             Self::Religion => "religion",
-            Self::SleightOfHand => "sleight-of-hand",
+            Self::SleightOfHand => "sleight_of_hand",
             Self::Stealth => "stealth",
             Self::Survival => "survival",
         }

@@ -20,7 +20,7 @@ use df_table::private_data::Narration;
 use super::hub::BrokerHub;
 use super::limits::MAXIMUM_SCHEDULED_CALLS;
 use super::purpose::{ResourceKind, SizeRule};
-use super::request::{AttemptId, ProviderFault, ResourceResult, WorkerId};
+use super::request::{AttemptId, ProviderCause, ResourceResult, WorkerId};
 use super::scheduler::ClaimedCall;
 
 /// The length of the text a fake produces for a success: short, so a test and the dev engine never
@@ -31,7 +31,7 @@ const FAKE_TEXT_CHARACTERS: usize = 64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FakeOutcome {
     Succeeds,
-    Fails(ProviderFault),
+    Fails(ProviderCause),
     /// Never answers.
     Hangs,
     /// Answers with a result one past the size rule.
@@ -53,10 +53,10 @@ impl ScriptedCall {
         }
     }
 
-    pub fn fails_after(latency_ms: u64, fault: ProviderFault) -> Self {
+    pub fn fails_after(latency_ms: u64, cause: ProviderCause) -> Self {
         Self {
             latency_ms,
-            outcome: FakeOutcome::Fails(fault),
+            outcome: FakeOutcome::Fails(cause),
         }
     }
 
@@ -146,7 +146,7 @@ impl FakeProvider {
     }
 
     /// The answers due at `now_ms`, in the order they became ready.
-    pub fn due(&mut self, now_ms: u64) -> Vec<(AttemptId, Result<ResourceResult, ProviderFault>)> {
+    pub fn due(&mut self, now_ms: u64) -> Vec<(AttemptId, Result<ResourceResult, ProviderCause>)> {
         let (mut ready, waiting): (Vec<Scheduled>, Vec<Scheduled>) = self
             .scheduled
             .drain(..)
@@ -171,10 +171,10 @@ impl FakeProvider {
     }
 }
 
-fn answer_for(outcome: FakeOutcome, size: SizeRule) -> Result<ResourceResult, ProviderFault> {
+fn answer_for(outcome: FakeOutcome, size: SizeRule) -> Result<ResourceResult, ProviderCause> {
     match outcome {
-        FakeOutcome::Fails(fault) => Err(fault),
-        FakeOutcome::Hangs => Err(ProviderFault::Unavailable),
+        FakeOutcome::Fails(cause) => Err(cause),
+        FakeOutcome::Hangs => Err(ProviderCause::Unavailable),
         FakeOutcome::Succeeds => Ok(result_within(size)),
         FakeOutcome::ReturnsOversize => Ok(result_past(size)),
     }

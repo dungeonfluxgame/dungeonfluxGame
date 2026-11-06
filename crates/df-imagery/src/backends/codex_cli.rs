@@ -24,6 +24,9 @@ use tokio::sync::oneshot;
 
 use df_assets::MAX_UPLOAD_BYTES;
 
+use crate::config::{
+    CODEX_MAX_MESSAGE_BYTES_DEFAULT, CODEX_MAX_STDERR_BYTES_DEFAULT, CODEX_MAX_STDOUT_BYTES_DEFAULT,
+};
 use crate::output::{Dimensions, OutputFormat};
 use crate::request::{DEFAULT_MAX_PROMPT_CHARS, DEFAULT_MAX_REFERENCES, TextPrompt};
 
@@ -78,17 +81,18 @@ pub struct CodexCliConfig {
 }
 
 impl CodexCliConfig {
-    /// Defaults align with the request vocabulary and the asset admission
-    /// ceiling; the launcher replaces them with operator values.
+    /// Defaults align with the request vocabulary, the image configuration's
+    /// Codex stream defaults and the asset admission ceiling; the launcher
+    /// replaces them with operator values.
     pub fn new(executable: PathBuf) -> Result<Self, ConfigError> {
         let config = Self {
             executable,
             agent_model: None,
             max_prompt_chars: DEFAULT_MAX_PROMPT_CHARS,
             max_references: DEFAULT_MAX_REFERENCES,
-            max_message_bytes: 1024 * 1024,
-            max_stdout_bytes: 4 * 1024 * 1024,
-            max_stderr_bytes: 256 * 1024,
+            max_message_bytes: CODEX_MAX_MESSAGE_BYTES_DEFAULT,
+            max_stdout_bytes: CODEX_MAX_STDOUT_BYTES_DEFAULT,
+            max_stderr_bytes: CODEX_MAX_STDERR_BYTES_DEFAULT,
             max_artifact_bytes: MAX_UPLOAD_BYTES as u64,
         };
         config.validate()?;
@@ -644,18 +648,16 @@ where
         cancel,
     )
     .await;
-    match tokio::time::timeout_at(deadline_at.into(), session.finish()).await {
-        Ok(Ok(end)) => {
-            // Exit after a verified terminal receipt cannot invalidate its retained evidence.
-            let _exit_code = end.code;
-            outcome
-        }
-        Ok(Err(_)) => outcome,
-        Err(_) => {
-            let _ = session.kill().await;
-            outcome
-        }
+    // Neither the exit code nor a failed finish can change the decided outcome:
+    // exit after a verified terminal receipt cannot invalidate its retained
+    // evidence. Only a finish that outlives the deadline needs the tree kill.
+    if tokio::time::timeout_at(deadline_at.into(), session.finish())
+        .await
+        .is_err()
+    {
+        drive::kill_session(&mut session).await;
     }
+    outcome
 }
 
 fn operation_label(request: &CodexImageRequest) -> &'static str {

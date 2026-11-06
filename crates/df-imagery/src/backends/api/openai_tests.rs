@@ -5,7 +5,7 @@
 
 use super::openai::{OpenAiConfig, OpenAiExecutor};
 use super::{ApiError, ImageBackground, ImageEdit, ImageFormat, ImageModeration, ImageQuality};
-use super::{ImageEditModel, OperationalBounds};
+use super::{ImageEditModel, ImageUsage, OperationalBounds};
 use df_providers::NativeHttpRefusal;
 use std::{
     io::{Read, Write},
@@ -279,6 +279,41 @@ async fn an_actual_jpeg_result_preserves_bytes_dimensions_and_usage() {
     assert_eq!(image.usage.text_input_tokens, 7);
     assert_eq!(image.usage.image_input_tokens, 3);
     assert_eq!(image.usage.output_tokens, 11);
+    server.join().expect("server");
+}
+
+#[tokio::test]
+async fn a_partial_usage_report_on_a_delivered_image_stays_unknown_instead_of_reported_zeros() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let bytes = minimal_jpeg(1024, 1024);
+    let body = serde_json::json!({
+        "data": [{"b64_json": STANDARD.encode(&bytes)}],
+        "usage": {"input_tokens_details": {"text_tokens": 7}, "output_tokens": 11}
+    })
+    .to_string();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let _ = read_request(&mut stream);
+        reply(&mut stream, 200, body.as_bytes());
+    });
+    let executor = OpenAiExecutor::new(
+        OpenAiConfig::loopback_fixture(address).expect("config"),
+        "fixture-key",
+        bounds(),
+        Duration::from_secs(5),
+    )
+    .expect("executor");
+    let image = executor
+        .edit(
+            &edit("a tavern at dusk", ImageFormat::Jpeg),
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("image");
+    assert_eq!(image.bytes, bytes);
+    assert_eq!(image.usage, ImageUsage::default());
     server.join().expect("server");
 }
 

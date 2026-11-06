@@ -47,6 +47,7 @@ pub const DEPARTURES: &[&str] = &[
     "tactical.area-cell-centres-eight-directions",
 ];
 
+/// Why a tactical construction, decode or action was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuleError {
     Capacity,

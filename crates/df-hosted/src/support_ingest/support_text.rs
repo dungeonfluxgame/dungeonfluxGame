@@ -488,6 +488,7 @@ fn judge_request(wire: &Value) -> Option<TextRequest> {
         output_schema: json!({"type":"object","additionalProperties":false,
             "required":properties.keys().collect::<Vec<_>>(),"properties":properties}),
         deadline: JUDGE_DEADLINE,
+        images: Vec::new(),
     })
 }
 
@@ -502,6 +503,7 @@ fn draft_request(wire: &Value) -> Option<TextRequest> {
         output_name: DRAFT_OUTPUT.to_owned(),
         output_schema: wire.get("schema")?.clone(),
         deadline: DRAFT_DEADLINE,
+        images: Vec::new(),
     })
 }
 

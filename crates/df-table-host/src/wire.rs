@@ -15,9 +15,10 @@ use crate::limits::MAXIMUM_LISTED_PROBLEMS;
 use crate::view::FrameCanvas;
 
 /// The addresses of the API. `CANVAS` and `EVENTS` answer GET; `EFFECT` and `RELOAD` answer POST
-/// with JSON.
-pub mod route {
-    pub const CANVAS: &str = "/canvas.json";
+/// with JSON. The addresses the playground page asks for are `df_playground::path`'s, so the page
+/// and the router cannot drift apart.
+pub mod path {
+    pub const CANVAS: &str = df_playground::path::CANVAS;
     pub const EVENTS: &str = "/events.json";
     pub const EFFECT: &str = "/dev/effect";
     pub const RELOAD: &str = "/dev/reload";
@@ -25,31 +26,32 @@ pub mod route {
     /// The playground page, its theme, its fixtures and its compiled package (all GET).
     pub const PLAYGROUND: &str = "/playground";
     pub const PLAYGROUND_SLASH: &str = "/playground/";
-    pub const PLAYGROUND_THEME: &str = "/playground/theme.css";
+    pub const PLAYGROUND_THEME: &str = df_playground::path::THEME;
     /// Changes when any playground file does: `<assets>.<package>`.
-    pub const PLAYGROUND_REVISION: &str = "/playground/revision";
-    pub const PLAYGROUND_FIXTURE_LIST: &str = "/playground/fixtures.json";
-    pub const PLAYGROUND_FIXTURE: &str = "/playground/fixtures/{name}";
+    pub const PLAYGROUND_REVISION: &str = df_playground::path::REVISION;
+    pub const PLAYGROUND_FIXTURE_LIST: &str = df_playground::path::FIXTURE_LIST;
+    pub const PLAYGROUND_FIXTURE: &str = df_playground::path::FIXTURE_FILE;
     pub const PLAYGROUND_PACKAGE_FILE: &str = "/playground/pkg/{name}";
-    /// A long poll for the next frame (GET with `?after=N`): answers at once when the host has
-    /// changed since frame N, otherwise holds the request until it does or a wait runs out.
-    pub const PLAYGROUND_FRAME: &str = "/playground/frame";
+    /// A long poll for the next frame (GET with `?after=N&boot=B`): answers at once when the host
+    /// has changed since frame N or is not the run B, otherwise holds the request until it changes
+    /// or a wait runs out.
+    pub const PLAYGROUND_FRAME: &str = df_playground::path::FRAME;
     /// The media library: the list and each file (GET).
     pub const PLAYGROUND_MEDIA_LIST: &str = "/playground/media.json";
-    pub const PLAYGROUND_MEDIA_FILE: &str = "/playground/media/{name}";
+    pub const PLAYGROUND_MEDIA_FILE: &str = df_playground::path::MEDIA_FILE;
     /// What each open page says it is showing and playing (GET).
     pub const PLAYGROUND_CLIENTS: &str = "/playground/clients.json";
     /// A page tells the host what it is showing and playing (POST a `ClientReportPost`). It does
     /// not wake other pages.
-    pub const DEV_CLIENT_REPORT: &str = "/dev/playground/report";
+    pub const DEV_CLIENT_REPORT: &str = df_playground::path::CLIENT_REPORT;
     /// Adds or replaces a media file (POST a `MediaAdd`).
     pub const DEV_MEDIA_ADD: &str = "/dev/playground/media";
     /// Deletes a media file (POST a `MediaRemove`).
     pub const DEV_MEDIA_REMOVE: &str = "/dev/playground/media/remove";
     /// What the playground page is showing (GET), so the page and the dev CLI agree.
-    pub const PLAYGROUND_CONTROLS: &str = "/playground/controls.json";
+    pub const PLAYGROUND_CONTROLS: &str = df_playground::path::CONTROLS;
     /// Changes what the playground shows (POST a `ControlsChange`).
-    pub const DEV_PLAYGROUND_CONTROLS: &str = "/dev/playground/controls";
+    pub const DEV_PLAYGROUND_CONTROLS: &str = df_playground::path::CONTROLS_CHANGE;
     /// Several changes of what the playground shows, applied together or not at all (POST a
     /// `ControlsBatch`).
     pub const DEV_PLAYGROUND_CONTROLS_BATCH: &str = "/dev/playground/controls/batch";
@@ -61,15 +63,22 @@ pub mod route {
     pub const DEV_FIXTURE_REMOVE: &str = "/dev/playground/fixture/remove";
 }
 
-/// The query parameter of `route::PLAYGROUND_FRAME` that names the last frame already seen.
-pub const FRAME_AFTER_PARAMETER: &str = "after";
-/// The query parameter of `route::PLAYGROUND_FRAME` with which a page says it accepts an empty
+/// Transitional name of [`path`], kept while `server.rs`, `dev.rs`, `engine/cli_play.rs` and two
+/// route test files still say `route::`; the last of them removes it.
+pub use self::path as route;
+
+/// The query parameter of `path::PLAYGROUND_FRAME` that names the last frame already seen.
+pub const FRAME_AFTER_PARAMETER: &str = df_playground::path::FRAME_AFTER_PARAMETER;
+/// The query parameter of `path::PLAYGROUND_FRAME` that names the run of the host the last frame
+/// came from: a page that names another run is answered at once.
+pub const FRAME_BOOT_PARAMETER: &str = df_playground::path::FRAME_BOOT_PARAMETER;
+/// The query parameter of `path::PLAYGROUND_FRAME` with which a page says it accepts an empty
 /// answer when nothing changed before the wait ran out: `idle=204`. Without it the host answers
 /// the timeout with the whole frame, as it always did.
-pub const FRAME_IDLE_PARAMETER: &str = "idle";
+pub const FRAME_IDLE_PARAMETER: &str = df_playground::path::FRAME_IDLE_PARAMETER;
 /// The value of `FRAME_IDLE_PARAMETER` that asks for a bodiless 204 on a timeout.
-pub const FRAME_IDLE_NO_CONTENT: u16 = 204;
-/// The query parameter of `route::EVENTS` that names the last sequence already seen.
+pub const FRAME_IDLE_NO_CONTENT: u16 = df_playground::path::FRAME_IDLE_NO_CONTENT;
+/// The query parameter of `path::EVENTS` that names the last sequence already seen.
 pub const EVENTS_AFTER_PARAMETER: &str = "after";
 
 /// How the values in a request are written.
@@ -196,6 +205,19 @@ pub struct FixtureRemove {
 pub struct MediaAdd {
     pub name: String,
     pub data_base64: String,
+}
+
+impl MediaAdd {
+    /// The text around the base64 data of an add sent in pieces: the opening, which carries the
+    /// quoted name, and the closing. A streaming sender writes the opening, the encoded bytes and
+    /// the closing, so a file is never held whole.
+    pub fn streamed_ends(name: &str) -> Result<(String, &'static str), serde_json::Error> {
+        let quoted_name = serde_json::to_string(name)?;
+        Ok((
+            format!("{{\"name\":{quoted_name},\"data_base64\":\""),
+            "\"}",
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

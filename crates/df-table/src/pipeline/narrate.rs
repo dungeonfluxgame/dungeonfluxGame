@@ -32,8 +32,7 @@ use super::events::PipelineEvent;
 use super::record::applied_line;
 use super::table_access::PipelineTable;
 use super::turn::Turn;
-
-const MILLISECONDS_PER_SECOND: u64 = 1_000;
+use crate::units::MILLISECONDS_PER_SECOND;
 
 /// The narration an applied turn asks for: what the host gives the narrator after its commit.
 #[derive(Debug, Clone, PartialEq, Eq)]

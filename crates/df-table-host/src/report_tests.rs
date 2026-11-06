@@ -126,7 +126,7 @@ fn the_playground_is_printed_one_setting_per_line_with_the_fixtures() {
         crate::report::format_playground(&reply, &["a.json".to_owned(), "b.json".to_owned()]);
     assert_eq!(
         text,
-        "fixture: a.json\ndevice: both\npace: normal\nstatus: fixture\nunavailable: false\ngrid: false\ntransition: fade 700 ms\nscene: as the fixture has it\nrevision: 3\nfixtures: a.json, b.json"
+        "fixture: a.json\ndevice: both\npace: normal\nstatus: fixture\nunavailable: false\ngrid: false\nsam: true\ntransition: fade 700 ms\nscene: as the fixture has it\nrevision: 3\nfixtures: a.json, b.json"
     );
     let empty = crate::report::format_playground(
         &crate::wire::ControlsReply {
@@ -138,4 +138,30 @@ fn the_playground_is_printed_one_setting_per_line_with_the_fixtures() {
         &[],
     );
     assert!(empty.contains("fixture: (none)") && empty.contains("fixtures: (none)"));
+}
+
+#[test]
+fn a_camera_only_move_is_reported_as_the_one_changed_slot() {
+    let camera = df_playground::fixture::Camera {
+        target: Some("door".to_owned()),
+        zoom_percent: 150,
+        duration_ms: 400,
+        serial: 1,
+        began_ms: 0,
+        elapsed_ms: 0,
+    };
+    let reply = crate::wire::ControlsReply {
+        revision: 1,
+        boot_id: String::new(),
+        controls: df_playground::controls::Controls::default(),
+        scene: df_playground::scene::SceneOverlay {
+            camera: df_playground::overlay::Edit::Set(camera),
+            ..df_playground::scene::SceneOverlay::default()
+        },
+    };
+    let text = crate::report::format_playground(&reply, &[]);
+    assert!(
+        text.lines().any(|line| line == "scene: changed: camera"),
+        "{text}"
+    );
 }

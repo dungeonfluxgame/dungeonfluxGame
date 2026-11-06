@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+mod fixtures;
 
 use df_imagery::execution::{DispatchId, ExecutionStageId, StageKind};
 use df_imagery::telemetry::{
@@ -12,13 +13,13 @@ use df_observe::{
 };
 use df_telemetry::{DiagnosticReader, QueryFilter, Store};
 use df_types::{BuildIdentity, OperationId};
+use fixtures::FixtureRoot;
 use opentelemetry::trace::{SpanContext, SpanId, TraceFlags, TraceId, TraceState};
 use opentelemetry_proto::tonic::{
     collector::logs::v1::ExportLogsServiceRequest, common::v1::any_value::Value,
 };
 use prost::Message;
 use std::{
-    path::PathBuf,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -79,19 +80,14 @@ impl HeldIngress {
     }
 }
 
-fn root() -> PathBuf {
-    let parent = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("artifacts/tmp/imagery-finish-20261029/logging/telemetry-fixtures");
-    std::fs::create_dir_all(&parent).unwrap();
+fn root() -> FixtureRoot {
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    parent.join(format!("imagery-{}-{nonce}", std::process::id()))
+    FixtureRoot::new(
+        fixtures::fixture_parent().join(format!("imagery-{}-{nonce}", std::process::id())),
+    )
 }
 
 fn value<'a>(

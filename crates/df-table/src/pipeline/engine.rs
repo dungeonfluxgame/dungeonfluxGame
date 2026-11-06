@@ -29,11 +29,11 @@ use std::borrow::Cow;
 use crate::effects::TableEffect;
 use crate::envelope::{EngineControl, EngineInput, ProposalOrigin};
 use crate::event::{FailureCause, TableEvent};
+use crate::machine::spec::InputClaim;
 use crate::machine::{
     Entry, MachineFailureCause, MachineInput, ResourceOutcome, Scope, StepInput, StepOutcome,
     entered_event, exited_event,
 };
-use crate::machine_spec::InputClaim;
 use crate::outcome::{Decline, DeclineCode, Outcome};
 use crate::pending::PendingMark;
 use crate::ports::{PortName, Readiness};
@@ -46,8 +46,7 @@ use super::apply::{self, RulingChange, Staged};
 use super::events::PipelineEvent;
 use super::table_access::PipelineTable;
 use super::turn::Turn;
-
-const MILLISECONDS_PER_SECOND: u64 = 1_000;
+use crate::units::MILLISECONDS_PER_SECOND;
 
 pub(super) fn run_engine(
     turn: &mut Turn<'_, '_>,

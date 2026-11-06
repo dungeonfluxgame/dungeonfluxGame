@@ -9,15 +9,15 @@ fn cue(id: u64, target: Target) -> Cue {
         id,
         target,
         media: format!("sound-{id}.wav"),
-        volume: 80,
+        volume_percent: 80,
     }
 }
 
-fn track(media: &str, target: Target, volume: u8, looping: bool) -> Track {
+fn track(media: &str, target: Target, volume_percent: u8, looping: bool) -> Track {
     Track {
         media: media.to_owned(),
         target,
-        volume,
+        volume_percent,
         looping,
     }
 }
@@ -108,7 +108,7 @@ fn a_change_of_volume_or_loop_is_made_in_place_and_does_not_restart_the_song() {
             Some(&track("theme.ogg", Target::Both, 40, true))
         ),
         MusicChange::Update {
-            volume: 40,
+            volume_percent: 40,
             looping: true
         }
     );
@@ -118,7 +118,7 @@ fn a_change_of_volume_or_loop_is_made_in_place_and_does_not_restart_the_song() {
             Some(&track("theme.ogg", Target::Both, 80, false))
         ),
         MusicChange::Update {
-            volume: 80,
+            volume_percent: 80,
             looping: false
         }
     );

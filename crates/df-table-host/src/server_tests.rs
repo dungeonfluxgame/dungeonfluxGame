@@ -294,3 +294,44 @@ async fn an_unknown_route_is_a_404() {
         404
     );
 }
+
+/// A canvas with marker `m1` travelling two units at a hundred units a second.
+fn state_with_a_travelling_marker() -> (tempfile::TempDir, std::sync::Arc<crate::state::AppState>) {
+    use df_table::testkit::{MARKER_KIND, registry_from};
+    let directory = tempfile::TempDir::new().expect("makes a directory");
+    let log = std::sync::Arc::new(crate::event_log::EventLog::default());
+    let state = std::sync::Arc::new(crate::state::AppState::new(
+        df_table::canvas::Canvas::new(registry_from(&[MARKER_KIND])),
+        crate::sink::HostSink::new(log, true),
+        None,
+        directory.path().to_path_buf(),
+        crate::playground::PlaygroundFiles::new(
+            directory.path().join("assets"),
+            directory.path().join("pkg"),
+        ),
+    ));
+    for request in [
+        json!({"op": "spawn", "kind": "marker", "id": "m1", "x": 10.0, "y": 10.0}),
+        json!({"op": "travel", "id": "m1", "x": 12.0, "y": 10.0, "speed": 100.0}),
+    ] {
+        let request: crate::wire::EffectRequest =
+            serde_json::from_value(request).expect("an effect");
+        let mut canvas = state.canvas();
+        let effect = request.into_effect(&canvas).expect("converts");
+        canvas.apply(effect, state.sink()).expect("applies");
+    }
+    (directory, state)
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_clock_moves_travelling_elements_by_tokio_time_so_paused_time_drives_it() {
+    let (_directory, state) = state_with_a_travelling_marker();
+    assert!(state.is_moving());
+    let clock = crate::server::spawn_clock(std::sync::Arc::clone(&state));
+    // A tenth of a second of tokio's clock covers three ticks; at a hundred units a second the
+    // two units are crossed on the first full tick. The real time that passes is almost none.
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    clock.abort();
+    assert!(state.tick_count() > 0);
+    assert!(!state.is_moving(), "the marker arrived");
+}

@@ -4,9 +4,7 @@ use std::io::Cursor;
 use std::time::Duration;
 
 use crate::media_ingest::MediaLimits;
-use crate::video_container::{
-    FoundContent, UnreadableDuration, VideoFormat, VideoRefusal, inspect_video,
-};
+use crate::video_container::{DurationCause, FoundContent, VideoError, VideoFormat, inspect_video};
 use crate::video_fixtures::{
     SyntheticFile, WebmInfo, mp4_ffmpeg_default, mp4_ffmpeg_faststart, mp4_of_seconds,
     mp4_version_one, mp4_with_brand, mp4_with_large_size_mdat_before_moov,
@@ -18,7 +16,7 @@ use crate::video_fixtures::{
 
 const MIB: usize = 1024 * 1024;
 
-fn inspect(bytes: &[u8], format: VideoFormat) -> Result<Duration, VideoRefusal> {
+fn inspect(bytes: &[u8], format: VideoFormat) -> Result<Duration, VideoError> {
     inspect_video(&mut Cursor::new(bytes), format, &MediaLimits::DEFAULT).map(|info| info.duration)
 }
 
@@ -26,16 +24,16 @@ fn duration_of(bytes: &[u8], format: VideoFormat) -> Duration {
     inspect(bytes, format).expect("readable")
 }
 
-fn unreadable_reason(bytes: &[u8], format: VideoFormat) -> UnreadableDuration {
+fn unreadable_cause(bytes: &[u8], format: VideoFormat) -> DurationCause {
     match inspect(bytes, format) {
-        Err(VideoRefusal::DurationUnreadable { reason }) => reason,
+        Err(VideoError::DurationUnreadable { cause }) => cause,
         other => panic!("expected an unreadable duration, got {other:?}"),
     }
 }
 
 fn found(bytes: &[u8], format: VideoFormat) -> FoundContent {
     match inspect(bytes, format) {
-        Err(VideoRefusal::WrongContent { found }) => found,
+        Err(VideoError::WrongContent { found }) => found,
         other => panic!("expected wrong content, got {other:?}"),
     }
 }
@@ -184,7 +182,7 @@ fn a_huge_doc_type_claim_is_refused_with_a_short_name_after_reading_a_few_bytes(
     let mut file = SyntheticFile::new(webm_doc_type_head(claimed), Vec::new(), length, 0xFF);
     let refusal =
         inspect_video(&mut file, VideoFormat::Webm, &MediaLimits::DEFAULT).expect_err("refused");
-    let VideoRefusal::WrongContent { found } = refusal else {
+    let VideoError::WrongContent { found } = refusal else {
         panic!("expected wrong content, got {refusal:?}");
     };
     let FoundContent::EbmlDocType(doc_type) = &found else {
@@ -214,17 +212,17 @@ fn a_doc_type_that_starts_with_webm_but_is_longer_is_not_webm() {
 #[test]
 fn a_container_whose_duration_cannot_be_read_is_refused_with_the_reason() {
     assert_eq!(
-        unreadable_reason(&mp4_without_movie_header(), VideoFormat::Mp4),
-        UnreadableDuration::NoMovieHeader
+        unreadable_cause(&mp4_without_movie_header(), VideoFormat::Mp4),
+        DurationCause::NoMovieHeader
     );
     assert_eq!(
-        unreadable_reason(&mp4_with_brand(b"isom", 0, 5), VideoFormat::Mp4),
-        UnreadableDuration::ZeroTimescale
+        unreadable_cause(&mp4_with_brand(b"isom", 0, 5), VideoFormat::Mp4),
+        DurationCause::ZeroTimescale
     );
     for units in [0, u32::MAX] {
         assert_eq!(
-            unreadable_reason(&mp4_with_brand(b"isom", 1000, units), VideoFormat::Mp4),
-            UnreadableDuration::ZeroOrUnknownDuration
+            unreadable_cause(&mp4_with_brand(b"isom", 1000, units), VideoFormat::Mp4),
+            DurationCause::ZeroOrUnknownDuration
         );
     }
     let no_duration = webm_with(
@@ -236,8 +234,8 @@ fn a_container_whose_duration_cannot_be_read_is_refused_with_the_reason() {
         8,
     );
     assert_eq!(
-        unreadable_reason(&no_duration, VideoFormat::Webm),
-        UnreadableDuration::NoDuration
+        unreadable_cause(&no_duration, VideoFormat::Webm),
+        DurationCause::NoDuration
     );
 }
 
@@ -245,14 +243,14 @@ fn a_container_whose_duration_cannot_be_read_is_refused_with_the_reason() {
 fn a_webm_duration_that_is_zero_negative_or_not_a_number_is_unknown_and_infinity_is_out_of_range() {
     for ticks in [f64::NAN, -5.0, 0.0] {
         assert_eq!(
-            unreadable_reason(&webm_with_ticks(ticks), VideoFormat::Webm),
-            UnreadableDuration::ZeroOrUnknownDuration,
+            unreadable_cause(&webm_with_ticks(ticks), VideoFormat::Webm),
+            DurationCause::ZeroOrUnknownDuration,
             "{ticks}"
         );
     }
     assert_eq!(
-        unreadable_reason(&webm_with_ticks(f64::INFINITY), VideoFormat::Webm),
-        UnreadableDuration::DurationOutOfRange
+        unreadable_cause(&webm_with_ticks(f64::INFINITY), VideoFormat::Webm),
+        DurationCause::DurationOutOfRange
     );
 }
 
@@ -260,12 +258,12 @@ fn a_webm_duration_that_is_zero_negative_or_not_a_number_is_unknown_and_infinity
 fn a_webm_without_a_segment_or_an_info_says_which_is_missing() {
     let whole = webm_of_seconds(3);
     assert_eq!(
-        unreadable_reason(&whole[..26], VideoFormat::Webm),
-        UnreadableDuration::NoSegment
+        unreadable_cause(&whole[..26], VideoFormat::Webm),
+        DurationCause::NoSegment
     );
     assert_eq!(
-        unreadable_reason(&whole[..40], VideoFormat::Webm),
-        UnreadableDuration::NoInfo
+        unreadable_cause(&whole[..40], VideoFormat::Webm),
+        DurationCause::NoInfo
     );
 }
 
@@ -282,8 +280,8 @@ fn no_cut_of_a_valid_file_makes_the_reader_panic_and_a_cut_before_the_header_is_
     let mp4 = mp4_of_seconds(3);
     let cut_inside_moov = &mp4[..mp4.len() - 10];
     assert_eq!(
-        unreadable_reason(cut_inside_moov, VideoFormat::Mp4),
-        UnreadableDuration::NoMovieBox
+        unreadable_cause(cut_inside_moov, VideoFormat::Mp4),
+        DurationCause::NoMovieBox
     );
 }
 
@@ -300,8 +298,8 @@ fn a_box_that_claims_a_huge_size_does_not_overflow() {
     let mut first_box_huge = vec![0xFF, 0xFF, 0xFF, 0xFF];
     first_box_huge.extend_from_slice(b"ftypisom");
     assert_eq!(
-        unreadable_reason(&first_box_huge, VideoFormat::Mp4),
-        UnreadableDuration::NoMovieBox
+        unreadable_cause(&first_box_huge, VideoFormat::Mp4),
+        DurationCause::NoMovieBox
     );
 }
 
@@ -341,24 +339,23 @@ fn a_last_mdat_with_size_zero_runs_to_the_end_and_a_first_one_hides_the_moov() {
         Duration::from_secs(6)
     );
     assert_eq!(
-        unreadable_reason(
+        unreadable_cause(
             &mp4_with_open_ended_mdat_before_moov(6, 1024),
             VideoFormat::Mp4
         ),
-        UnreadableDuration::NoMovieBox
+        DurationCause::NoMovieBox
     );
 }
 
 #[test]
-fn a_moov_that_claims_more_than_the_file_holds_and_an_mvhd_that_claims_more_than_its_moov_are_refused()
- {
+fn a_moov_or_mvhd_that_claims_more_than_holds_it_is_refused() {
     assert_eq!(
-        unreadable_reason(&mp4_with_moov_past_the_end(10_000), VideoFormat::Mp4),
-        UnreadableDuration::NoMovieBox
+        unreadable_cause(&mp4_with_moov_past_the_end(10_000), VideoFormat::Mp4),
+        DurationCause::NoMovieBox
     );
     assert_eq!(
-        unreadable_reason(&mp4_with_mvhd_past_the_moov(10_000), VideoFormat::Mp4),
-        UnreadableDuration::NoMovieHeader
+        unreadable_cause(&mp4_with_mvhd_past_the_moov(10_000), VideoFormat::Mp4),
+        DurationCause::NoMovieHeader
     );
 }
 
@@ -392,8 +389,8 @@ fn a_webm_with_info_straight_after_the_header_is_read() {
 #[test]
 fn a_timecode_scale_written_in_more_than_eight_bytes_is_refused() {
     assert_eq!(
-        unreadable_reason(&webm_with_timecode_scale_bytes(9), VideoFormat::Webm),
-        UnreadableDuration::BadTimecodeScale
+        unreadable_cause(&webm_with_timecode_scale_bytes(9), VideoFormat::Webm),
+        DurationCause::InvalidTimecodeScale
     );
     assert_eq!(
         duration_of(&webm_with_timecode_scale_bytes(8), VideoFormat::Webm),
@@ -410,8 +407,8 @@ fn an_info_that_claims_more_than_the_file_holds_is_read_as_far_as_the_file_goes(
     );
     let cut_before_duration = webm_with_info_past_the_end(10_000, 5);
     assert_eq!(
-        unreadable_reason(&cut_before_duration, VideoFormat::Webm),
-        UnreadableDuration::NoDuration
+        unreadable_cause(&cut_before_duration, VideoFormat::Webm),
+        DurationCause::NoDuration
     );
 }
 
@@ -441,8 +438,8 @@ fn a_file_of_tiny_boxes_stops_at_the_element_limit_instead_of_walking_to_the_end
         .expect_err("refused");
     assert_eq!(
         refusal,
-        VideoRefusal::DurationUnreadable {
-            reason: UnreadableDuration::TooManyElements
+        VideoError::DurationUnreadable {
+            cause: DurationCause::TooManyElements
         }
     );
 }

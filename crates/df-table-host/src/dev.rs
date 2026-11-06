@@ -5,14 +5,15 @@
 //! prints and never starts a server.
 
 use std::fmt;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
-use std::path::{Path, PathBuf};
 
 use crate::client::{self, ClientError, Response};
 use crate::command::{self, Command, CommandError, usage_text};
-use crate::limits::MAXIMUM_ECHOED_ANSWER;
-use crate::playground::fixture_file_name;
+use crate::dev_client::{self, read_answer, request_body, unexpected_answer};
+use crate::limits::UPLOAD_PIECE_BYTES;
+use crate::playground::{ChangeReply, fixture_file_name};
 use crate::report::{
     describe_reply, format_canvas, format_clients, format_events, format_kinds, format_media,
     format_playground,
@@ -28,7 +29,7 @@ use crate::wire::{
 pub enum DevError {
     Command(CommandError),
     Client(ClientError),
-    /// The canvas understood the request and refused it; the text says why.
+    /// The canvas refused the request and said why in text only.
     Rejected(String),
     /// The canvas answered with something this program does not understand. `reason` is why the
     /// answer did not read, when it was text that should have been JSON of a known shape.
@@ -95,66 +96,60 @@ impl fmt::Display for DevError {
     }
 }
 
-fn shortened(text: &str) -> String {
-    text.chars().take(MAXIMUM_ECHOED_ANSWER).collect()
-}
-
-fn unexpected(response: &Response) -> DevError {
-    DevError::UnexpectedAnswer {
-        status: response.status,
-        body: shortened(&response.body),
-        reason: None,
-    }
-}
-
-/// An answer that should have read as JSON of a known shape and did not, with the reason.
-fn unreadable_answer(response: &Response, error: &serde_json::Error) -> DevError {
-    DevError::UnexpectedAnswer {
-        status: response.status,
-        body: shortened(&response.body),
-        reason: Some(error.to_string()),
-    }
-}
+impl std::error::Error for DevError {}
 
 /// Reads an answer that must be a success carrying `T`.
 fn read_json<T: serde::de::DeserializeOwned>(response: &Response) -> Result<T, DevError> {
     if response.status != 200 {
-        return Err(unexpected(response));
+        return Err(unexpected_answer(response, None));
     }
-    serde_json::from_str(&response.body).map_err(|error| unreadable_answer(response, &error))
+    read_answer(response)
+}
+
+/// GETs `path` and reads the answer as a success carrying `T`.
+async fn get_success<T: serde::de::DeserializeOwned>(port: u16, path: &str) -> Result<T, DevError> {
+    read_json(&dev_client::get(port, path).await?)
 }
 
 fn read_reply(response: &Response) -> Result<Result<String, String>, DevError> {
-    let reply: Reply = serde_json::from_str(&response.body)
-        .map_err(|error| unreadable_answer(response, &error))?;
+    let reply: Reply = read_answer(response)?;
     Ok(describe_reply(&reply))
 }
 
-/// Reads an answer to a change of the playground: the new controls, or a refusal.
+/// Reads an answer to a change of the playground: a `ChangeReply` with the new controls or the
+/// route's refusal. A refusal by the guard in front of every route is the host's `Reply`; an
+/// answer that is neither is reported with the reason it does not read.
 fn read_controls_reply(response: &Response) -> Result<Result<String, String>, DevError> {
-    if response.status == 200
-        && let Ok(reply) = serde_json::from_str::<ControlsReply>(&response.body)
-    {
-        return Ok(Ok(format!("ok (revision {})", reply.revision)));
+    match read_answer::<ChangeReply>(response) {
+        Ok(crate::dev_http::DevReply::Done { value }) => {
+            Ok(Ok(format!("ok (revision {})", value.revision)))
+        }
+        Ok(crate::dev_http::DevReply::Rejected { message, .. }) => Ok(Err(message)),
+        // The reason reported is why the answer is not a `ChangeReply`, not why it is not the
+        // guard's `Reply`.
+        Err(not_a_change_reply) => match serde_json::from_str::<Reply>(&response.body) {
+            Ok(refusal @ Reply::Rejected { .. }) => Ok(describe_reply(&refusal)),
+            Ok(Reply::Done { .. }) | Err(_) => Err(not_a_change_reply),
+        },
     }
-    read_reply(response)
 }
 
+/// How a route's answer is read: the text of a success, or the text of a refusal.
+type ReadAnswer = fn(&Response) -> Result<Result<String, String>, DevError>;
+
 /// Posts each body to `path` in order and reports every answer. A command with several bodies
-/// numbers them; one failure does not stop the rest, and any failure makes the command fail.
+/// numbers them; one refusal does not stop the rest, and any refusal makes the command fail.
 async fn send_each(
     port: u16,
     path: &str,
     label: &str,
     bodies: &[String],
-    read: fn(&Response) -> Result<Result<String, String>, DevError>,
+    read: ReadAnswer,
 ) -> Result<String, DevError> {
     let mut lines = Vec::new();
     let mut any_rejected = false;
     for body in bodies {
-        let response = client::post_json(port, path, body)
-            .await
-            .map_err(DevError::Client)?;
+        let response = dev_client::post(port, path, body).await?;
         match read(&response)? {
             Ok(text) => lines.push(text),
             Err(text) => {
@@ -171,10 +166,7 @@ async fn send_each(
             .enumerate()
             .map(|(index, text)| format!("{label} {}: {text}", index + 1))
             .collect::<Vec<_>>()
-            .join(
-                "
-",
-            )
+            .join("\n")
     };
     if any_rejected {
         Err(DevError::Rejected(text))
@@ -183,48 +175,30 @@ async fn send_each(
     }
 }
 
-fn to_body<T: serde::Serialize>(value: &T) -> Result<String, DevError> {
-    serde_json::to_string(value).map_err(|error| DevError::Unwritable {
-        what: "request",
-        reason: error.to_string(),
-    })
-}
-
-async fn fetch_fixture_names(port: u16) -> Result<Vec<String>, DevError> {
-    let response = client::get(port, route::PLAYGROUND_FIXTURE_LIST)
-        .await
-        .map_err(DevError::Client)?;
-    read_json(&response)
+/// Sends each of `requests` to `path` as its own body, in order (see `send_each`).
+async fn send_requests<R: serde::Serialize>(
+    port: u16,
+    path: &str,
+    label: &str,
+    requests: &[R],
+    read: ReadAnswer,
+) -> Result<String, DevError> {
+    let bodies = requests
+        .iter()
+        .map(request_body)
+        .collect::<Result<Vec<_>, _>>()?;
+    send_each(port, path, label, &bodies, read).await
 }
 
 async fn show_playground(port: u16) -> Result<String, DevError> {
-    let response = client::get(port, route::PLAYGROUND_CONTROLS)
-        .await
-        .map_err(DevError::Client)?;
-    let reply: ControlsReply = read_json(&response)?;
-    let mut text = format_playground(&reply, &fetch_fixture_names(port).await?);
+    let reply: ControlsReply = get_success(port, route::PLAYGROUND_CONTROLS).await?;
+    let fixtures: Vec<String> = get_success(port, route::PLAYGROUND_FIXTURE_LIST).await?;
+    let clients: Vec<ClientView> = get_success(port, route::PLAYGROUND_CLIENTS).await?;
+    let mut text = format_playground(&reply, &fixtures);
     text.push('\n');
-    text.push_str(&format_clients(&fetch_clients(port).await?));
+    text.push_str(&format_clients(&clients));
     Ok(text)
 }
-
-async fn fetch_clients(port: u16) -> Result<Vec<ClientView>, DevError> {
-    let response = client::get(port, route::PLAYGROUND_CLIENTS)
-        .await
-        .map_err(DevError::Client)?;
-    read_json(&response)
-}
-
-async fn fetch_media(port: u16) -> Result<Vec<df_playground::media::MediaEntry>, DevError> {
-    let response = client::get(port, route::PLAYGROUND_MEDIA_LIST)
-        .await
-        .map_err(DevError::Client)?;
-    read_json(&response)
-}
-
-/// Bytes of a local file read, encoded and sent at a time: a multiple of three, so every piece but
-/// the last encodes to base64 without padding.
-const UPLOAD_PIECE_BYTES: usize = 3 * 64 * 1024;
 
 /// The size of a local file, refusing one over `maximum_bytes` before any of it is read.
 pub(crate) fn checked_file_size(size: u64, maximum_bytes: u64) -> Result<u64, String> {
@@ -241,6 +215,18 @@ fn upload_body_length(envelope_bytes: usize, file_bytes: u64) -> Option<u64> {
         .div_ceil(3)
         .checked_mul(4)?
         .checked_add(u64::try_from(envelope_bytes).ok()?)
+}
+
+/// Opens a local file for upload and reads its size, on a blocking thread.
+async fn open_with_size(path: &Path) -> std::io::Result<(std::fs::File, u64)> {
+    let owned = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let file = std::fs::File::open(owned)?;
+        let size = file.metadata()?.len();
+        Ok((file, size))
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
 
 /// The next piece of `file`, up to `UPLOAD_PIECE_BYTES`, read on a blocking thread.
@@ -265,20 +251,16 @@ async fn upload_media(port: u16, name: String, path: &Path) -> Result<String, De
         path: path.to_path_buf(),
         message,
     };
-    let owned = path.to_path_buf();
-    let (file, size) = tokio::task::spawn_blocking(move || {
-        let file = std::fs::File::open(owned)?;
-        let size = file.metadata()?.len();
-        Ok::<_, std::io::Error>((file, size))
-    })
-    .await
-    .map_err(|error| unreadable(error.to_string()))?
-    .map_err(|error| unreadable(error.to_string()))?;
+    let (file, size) = open_with_size(path)
+        .await
+        .map_err(|error| unreadable(error.to_string()))?;
     let size =
         checked_file_size(size, crate::media_library::MAXIMUM_MEDIA_BYTES).map_err(&unreadable)?;
-    let quoted_name = to_body(&name)?;
-    let prefix = format!("{{\"name\":{quoted_name},\"data_base64\":\"");
-    let suffix = "\"}";
+    let (prefix, suffix) =
+        crate::wire::MediaAdd::streamed_ends(&name).map_err(|error| DevError::Unwritable {
+            what: "request",
+            reason: error.to_string(),
+        })?;
     let length = upload_body_length(prefix.len() + suffix.len(), size)
         .ok_or_else(|| unreadable("the file is too large to send".to_owned()))?;
     let mut post = client::StreamedPost::begin(port, route::DEV_MEDIA_ADD, length)
@@ -296,10 +278,7 @@ async fn upload_media(port: u16, name: String, path: &Path) -> Result<String, De
             });
         }
     };
-    match read_reply(&response)? {
-        Ok(text) => Ok(text),
-        Err(text) => Err(DevError::Rejected(text)),
-    }
+    read_reply(&response)?.map_err(DevError::Rejected)
 }
 
 /// Why sending a file stopped before its end.
@@ -336,20 +315,25 @@ async fn send_upload(
     post.send(suffix.as_bytes()).await.map_err(to_host)
 }
 
+/// The name a file is added to the library under: the one given, or the file's own name.
+fn media_name(path: &Path, name: Option<String>) -> Result<String, DevError> {
+    match name {
+        Some(name) => Ok(name),
+        None => path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .ok_or_else(|| DevError::Rejected(format!("{} has no file name", path.display()))),
+    }
+}
+
 /// Changes the playground to `changes` as one change: the host applies all of them or none.
 async fn go(
     port: u16,
     changes: Vec<df_playground::controls::ControlsChange>,
 ) -> Result<String, DevError> {
-    let body = to_body(&ControlsBatch { changes })?;
-    send_each(
-        port,
-        route::DEV_PLAYGROUND_CONTROLS_BATCH,
-        "change",
-        &[body],
-        read_controls_reply,
-    )
-    .await
+    let path = route::DEV_PLAYGROUND_CONTROLS_BATCH;
+    let batch = [ControlsBatch { changes }];
+    send_requests(port, path, "change", &batch, read_controls_reply).await
 }
 
 /// Goes to each of two scenes in turn, `times` rounds, pausing `hold_ms` between scenes (so
@@ -400,13 +384,13 @@ async fn show_fixture(port: u16, name: &str) -> Result<String, DevError> {
     let file_name =
         fixture_file_name(name).map_err(|error| DevError::Rejected(error.to_string()))?;
     let path = route::PLAYGROUND_FIXTURE.replace("{name}", &file_name);
-    let response = client::get(port, &path).await.map_err(DevError::Client)?;
+    let response = dev_client::get(port, &path).await?;
     match response.status {
         200 => Ok(response.body),
         404 => Err(DevError::Rejected(format!(
             "there is no fixture '{file_name}'"
         ))),
-        _ => Err(unexpected(&response)),
+        _ => Err(unexpected_answer(&response, None)),
     }
 }
 
@@ -422,60 +406,109 @@ async fn read_text_file(path: &Path) -> Result<String, DevError> {
         .map_err(|error| unreadable(error.to_string()))
 }
 
-async fn fetch_canvas(port: u16) -> Result<CanvasView, DevError> {
-    let response = client::get(port, route::CANVAS)
-        .await
-        .map_err(DevError::Client)?;
-    read_json(&response)
+async fn show_events(port: u16, after: Option<u64>) -> Result<String, DevError> {
+    let path = match after {
+        Some(after) => format!("{}?{EVENTS_AFTER_PARAMETER}={after}", route::EVENTS),
+        None => route::EVENTS.to_owned(),
+    };
+    let reply: EventsReply = get_success(port, &path).await?;
+    Ok(format_events(&reply, after))
 }
 
-/// Runs one parsed command: the groups of commands that talk about the playground or the library
-/// are run by their own functions.
+async fn show_canvas(port: u16) -> Result<String, DevError> {
+    let view: CanvasView = get_success(port, route::CANVAS).await?;
+    format_canvas(&view).map_err(|error| DevError::Unwritable {
+        what: "canvas",
+        reason: error.to_string(),
+    })
+}
+
+async fn write_fixture(port: u16, name: String, path: &Path) -> Result<String, DevError> {
+    let text = read_text_file(path).await?;
+    let request = [FixtureWrite { name, text }];
+    send_requests(
+        port,
+        route::DEV_FIXTURE_WRITE,
+        "fixture",
+        &request,
+        read_reply,
+    )
+    .await
+}
+
+/// Runs one parsed command. A feature with verbs of its own (engine, scene, director, media
+/// generate, media locate, cast) runs them in its own CLI module.
 async fn execute(port: u16, command: Command) -> Result<String, DevError> {
     match command {
-        Command::Playground
-        | Command::PlaygroundSet(_)
-        | Command::PlaygroundGo(_)
-        | Command::PlaygroundCycle { .. }
-        | Command::Scene(_)
-        | Command::Wait(_) => execute_playground(port, command).await,
-        Command::Media
-        | Command::MediaAdd { .. }
-        | Command::MediaRemove(_)
-        | Command::Clients
-        | Command::Fixtures
-        | Command::FixtureShow(_)
-        | Command::FixtureWrite { .. }
-        | Command::FixtureRemove(_) => execute_library(port, command).await,
+        Command::Playground => show_playground(port).await,
+        Command::PlaygroundSet(changes) => {
+            let path = route::DEV_PLAYGROUND_CONTROLS;
+            send_requests(port, path, "change", &changes, read_controls_reply).await
+        }
+        Command::PlaygroundGo(changes) => go(port, changes).await,
+        Command::PlaygroundCycle {
+            first,
+            second,
+            times,
+            hold_ms,
+            transition,
+        } => cycle(port, [first, second], times, hold_ms, &transition).await,
+        Command::Scene(change) => {
+            let path = route::DEV_PLAYGROUND_SCENE;
+            send_requests(port, path, "change", &[change], read_controls_reply).await
+        }
+        Command::Wait(ms) => {
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            Ok(format!("waited {ms} ms"))
+        }
+        Command::Media => {
+            let media: Vec<df_playground::media::MediaEntry> =
+                get_success(port, route::PLAYGROUND_MEDIA_LIST).await?;
+            Ok(format_media(&media))
+        }
+        Command::MediaAdd { path, name } => {
+            let name = media_name(&path, name)?;
+            upload_media(port, name, &path).await
+        }
+        Command::MediaRemove(name) => {
+            let request = [MediaRemove { name }];
+            send_requests(port, route::DEV_MEDIA_REMOVE, "media", &request, read_reply).await
+        }
         Command::MediaGenerate(command) => crate::imagegen::run(port, command).await,
+        Command::MediaLocate(command) => crate::locate::cli::run(port, command).await,
+        Command::Cast(command) => crate::cast::cli::run(port, command).await,
+        Command::Clients => {
+            let clients: Vec<ClientView> = get_success(port, route::PLAYGROUND_CLIENTS).await?;
+            Ok(format_clients(&clients))
+        }
+        Command::Fixtures => {
+            let names: Vec<String> = get_success(port, route::PLAYGROUND_FIXTURE_LIST).await?;
+            Ok(names.join("\n"))
+        }
+        Command::FixtureShow(name) => show_fixture(port, &name).await,
+        Command::FixtureWrite { name, path } => write_fixture(port, name, &path).await,
+        Command::FixtureRemove(name) => {
+            let request = [FixtureRemove { name }];
+            send_requests(
+                port,
+                route::DEV_FIXTURE_REMOVE,
+                "fixture",
+                &request,
+                read_reply,
+            )
+            .await
+        }
         Command::Effects(requests) => {
-            let bodies = requests
-                .iter()
-                .map(to_body)
-                .collect::<Result<Vec<_>, _>>()?;
-            send_each(port, route::EFFECT, "effect", &bodies, read_reply).await
+            send_requests(port, route::EFFECT, "effect", &requests, read_reply).await
         }
-        Command::Canvas => {
-            let view = fetch_canvas(port).await?;
-            format_canvas(&view).map_err(|error| DevError::Unwritable {
-                what: "canvas",
-                reason: error.to_string(),
-            })
+        Command::Canvas => show_canvas(port).await,
+        Command::Kinds => {
+            let view: CanvasView = get_success(port, route::CANVAS).await?;
+            Ok(format_kinds(&view))
         }
-        Command::Kinds => Ok(format_kinds(&fetch_canvas(port).await?)),
-        Command::Events { after } => {
-            let path = match after {
-                Some(after) => format!("{}?{EVENTS_AFTER_PARAMETER}={after}", route::EVENTS),
-                None => route::EVENTS.to_owned(),
-            };
-            let response = client::get(port, &path).await.map_err(DevError::Client)?;
-            let reply: EventsReply = read_json(&response)?;
-            Ok(format_events(&reply, after))
-        }
+        Command::Events { after } => show_events(port, after).await,
         Command::Reload => {
-            let response = client::post_json(port, route::RELOAD, "")
-                .await
-                .map_err(DevError::Client)?;
+            let response = dev_client::post(port, route::RELOAD, "").await?;
             read_reply(&response)?.map_err(DevError::Rejected)
         }
         Command::Help => Ok(usage_text()),
@@ -486,105 +519,6 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             "repl is started from the command line: df-table dev repl".to_owned(),
         )),
         Command::Script(path) => run_script(port, &path).await,
-    }
-}
-
-/// The commands that change or show what the playground shows, and `wait`.
-async fn execute_playground(port: u16, command: Command) -> Result<String, DevError> {
-    match command {
-        Command::Playground => show_playground(port).await,
-        Command::PlaygroundSet(changes) => {
-            let bodies = changes.iter().map(to_body).collect::<Result<Vec<_>, _>>()?;
-            send_each(
-                port,
-                route::DEV_PLAYGROUND_CONTROLS,
-                "change",
-                &bodies,
-                read_controls_reply,
-            )
-            .await
-        }
-        Command::PlaygroundGo(changes) => go(port, changes).await,
-        Command::Scene(change) => {
-            let body = to_body(&change)?;
-            send_each(
-                port,
-                route::DEV_PLAYGROUND_SCENE,
-                "change",
-                &[body],
-                read_controls_reply,
-            )
-            .await
-        }
-        Command::Wait(ms) => {
-            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-            Ok(format!("waited {ms} ms"))
-        }
-        Command::PlaygroundCycle {
-            first,
-            second,
-            times,
-            hold_ms,
-            transition,
-        } => cycle(port, [first, second], times, hold_ms, &transition).await,
-        other => Err(DevError::Rejected(format!(
-            "{other:?} is not a playground command"
-        ))),
-    }
-}
-
-/// The commands about the media library, the open pages and the fixture files.
-async fn execute_library(port: u16, command: Command) -> Result<String, DevError> {
-    match command {
-        Command::Media => Ok(format_media(&fetch_media(port).await?)),
-        Command::MediaAdd { path, name } => {
-            let name = match name {
-                Some(name) => name,
-                None => path
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .ok_or_else(|| {
-                        DevError::Rejected(format!("{} has no file name", path.display()))
-                    })?,
-            };
-            upload_media(port, name, &path).await
-        }
-        Command::MediaRemove(name) => {
-            let body = to_body(&MediaRemove { name })?;
-            send_each(port, route::DEV_MEDIA_REMOVE, "media", &[body], read_reply).await
-        }
-        Command::Clients => Ok(format_clients(&fetch_clients(port).await?)),
-        Command::Fixtures => Ok(fetch_fixture_names(port).await?.join(
-            "
-",
-        )),
-        Command::FixtureShow(name) => show_fixture(port, &name).await,
-        Command::FixtureWrite { name, path } => {
-            let text = read_text_file(&path).await?;
-            let body = to_body(&FixtureWrite { name, text })?;
-            send_each(
-                port,
-                route::DEV_FIXTURE_WRITE,
-                "fixture",
-                &[body],
-                read_reply,
-            )
-            .await
-        }
-        Command::FixtureRemove(name) => {
-            let body = to_body(&FixtureRemove { name })?;
-            send_each(
-                port,
-                route::DEV_FIXTURE_REMOVE,
-                "fixture",
-                &[body],
-                read_reply,
-            )
-            .await
-        }
-        other => Err(DevError::Rejected(format!(
-            "{other:?} is not a library command"
-        ))),
     }
 }
 

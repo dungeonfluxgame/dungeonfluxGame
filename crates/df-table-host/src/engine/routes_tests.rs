@@ -4,11 +4,12 @@
 use crate::client;
 use crate::command::split_words;
 use crate::dev::run_dev;
+use crate::dev_http::BodyCause;
 use crate::repl::{LineResult, run_line};
 use crate::test_support::{STARTER_FILES, post_request, raw_exchange, start};
 use crate::wire::EventsReply;
 
-use super::report::{EngineDump, EngineReply};
+use super::report::{EngineDump, EngineError, EngineReply};
 use super::routes::path;
 
 async fn dev(port: u16, line: &str) -> String {
@@ -194,7 +195,8 @@ async fn the_routes_are_behind_the_hosts_guard() {
     let not_json = raw_exchange(
         host.port,
         &format!(
-            "POST {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+            "POST {} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: text/plain\r\nContent-Length: \
+             2\r\nConnection: close\r\n\r\n{{}}",
             path::INPUT
         ),
     )
@@ -253,9 +255,11 @@ async fn a_bad_body_or_query_is_a_typed_refusal_not_a_failure() {
         .await
         .expect("answered");
     assert_eq!(bad_body.status, 400);
-    let reply: EngineReply<serde_json::Value> =
-        serde_json::from_str(&bad_body.body).expect("a reply");
-    assert!(matches!(reply, EngineReply::Rejected { .. }));
+    let error = rejected_with(&bad_body.body);
+    assert!(
+        matches!(&error, EngineError::InvalidBody(body) if body.cause == BodyCause::Data),
+        "{error:?}"
+    );
 
     let zero = client::post_json(
         host.port,
@@ -265,20 +269,21 @@ async fn a_bad_body_or_query_is_a_typed_refusal_not_a_failure() {
     .await
     .expect("answered");
     assert_eq!(zero.status, 400);
-    assert!(
-        zero.body.contains("an operation id is not zero"),
-        "{}",
-        zero.body
-    );
+    assert_eq!(rejected_with(&zero.body), EngineError::ZeroOperation);
 
     let no_seat = client::get(host.port, path::VIABLE)
         .await
         .expect("answered");
     assert_eq!(no_seat.status, 400);
+    let error = rejected_with(&no_seat.body);
+    assert!(matches!(error, EngineError::InvalidQuery(_)), "{error:?}");
     let unknown = client::get(host.port, &format!("{}?seat=99", path::VIABLE))
         .await
         .expect("answered");
-    assert!(unknown.body.contains("unknown_seat"), "{}", unknown.body);
+    assert_eq!(
+        rejected_with(&unknown.body),
+        EngineError::UnknownSeat { seat: 99 }
+    );
     let audience = client::get(
         host.port,
         &format!("{}?audience=everyone", path::PROJECTION),
@@ -286,6 +291,16 @@ async fn a_bad_body_or_query_is_a_typed_refusal_not_a_failure() {
     .await
     .expect("answered");
     assert_eq!(audience.status, 400);
+    let error = rejected_with(&audience.body);
+    assert!(matches!(error, EngineError::InvalidQuery(_)), "{error:?}");
+}
+
+/// The typed error of a refusal the routes answered.
+fn rejected_with(body: &str) -> EngineError {
+    match serde_json::from_str::<EngineReply<serde_json::Value>>(body) {
+        Ok(EngineReply::Rejected { error, .. }) => error,
+        other => panic!("a typed refusal, got {other:?} from {body}"),
+    }
 }
 
 #[tokio::test]
@@ -350,6 +365,24 @@ async fn the_broker_verbs_show_its_queues_its_ledger_and_a_request() {
 }
 
 #[tokio::test]
+async fn chaos_commit_with_the_largest_count_is_one_run_and_answers_at_once() {
+    let host = start(&STARTER_FILES).await;
+
+    // One scripted write per count would hold four billion entries on the owner thread.
+    let chaos = dev(host.port, &format!("chaos commit refused {}", u32::MAX)).await;
+
+    assert!(
+        chaos.contains(&format!("{} scripted writes wait", u32::MAX)),
+        "{chaos}"
+    );
+    let again = dev(host.port, "chaos commit unavailable 2").await;
+    assert!(
+        again.contains(&format!("{} scripted writes wait", u64::from(u32::MAX) + 2)),
+        "{again}"
+    );
+}
+
+#[tokio::test]
 async fn health_cost_clock_dice_and_chaos_are_dev_verbs_with_answers_and_log_lines() {
     let host = start(&STARTER_FILES).await;
 
@@ -395,4 +428,24 @@ async fn a_forced_name_with_a_newline_through_the_route_is_one_refused_line() {
     assert!(reply.starts_with("HTTP/1.1 4"), "{reply}");
     let log = dev(host.port, "events").await;
     assert!(!log.contains("commit=77"), "{log}");
+}
+
+#[tokio::test]
+async fn a_body_with_an_unknown_field_is_refused_typed() {
+    let host = start(&STARTER_FILES).await;
+
+    let answer = client::post_json(
+        host.port,
+        path::CLOCK,
+        r#"{"control":"advance","ms":5,"by":1}"#,
+    )
+    .await
+    .expect("answered");
+
+    assert_eq!(answer.status, 400);
+    let error = rejected_with(&answer.body);
+    assert!(
+        matches!(&error, EngineError::InvalidBody(body) if body.cause == BodyCause::Data),
+        "{error:?}"
+    );
 }

@@ -3,13 +3,13 @@
 
 use serde_json::{Value, json};
 
-use crate::outcome::{Decline, DeclineCode};
-use crate::ports::Audience;
-use crate::private_data::{Narration, Secret};
-use crate::projection::bounds::{
+use crate::limits::{
     MAXIMUM_TEXT_BYTES, NARRATION_BUDGET_BYTES, NOTE_BUDGET_BYTES, OFFERS_BUDGET_BYTES,
     PHONE_NARRATION_LINES,
 };
+use crate::outcome::{Decline, DeclineCode};
+use crate::ports::Audience;
+use crate::private_data::{Narration, Secret};
 use crate::projection::{
     AttachmentError, Attachments, OfferEntry, OfferId, ProjectionStatus, StoryLine, project_seat,
     project_shared,

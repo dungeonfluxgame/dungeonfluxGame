@@ -1,7 +1,7 @@
 use crate::event::FailureCause;
 use crate::plate_fixtures_tests::{element, instance, phrase, place};
-use crate::scene_plan_brief::{LocatePhrase, MAXIMUM_PHRASES_PER_ITEM, SetPiece};
-use crate::scene_plan_locate::{
+use crate::scene_plan::brief::{LocatePhrase, MAXIMUM_PHRASES_PER_ITEM, SetPiece};
+use crate::scene_plan::locate::{
     Anchor, FigureTarget, Instance, ItemTarget, LocateError, LocateOutcome, LocatePlan,
     LocatePrompt, Region, RegionError, UnlocatedReason,
 };
@@ -432,4 +432,35 @@ fn the_head_point_is_the_middle_of_the_top_edge_of_the_region() {
     let region = Region::new(10_000, 20_000, 30_000, 50_000).expect("a region");
     assert_eq!(region.head(), place(20, 20));
     assert_eq!(region.centre(), place(20, 35));
+}
+
+#[test]
+fn a_stored_region_or_instance_is_checked_when_read_and_keeps_only_its_bounds() {
+    let region = Region::new(10_000, 5_000, 30_000, 40_000).unwrap();
+    let stored = serde_json::to_value(region).unwrap();
+    assert_eq!(
+        stored,
+        serde_json::json!({
+            "x_min_milli_units": 10_000,
+            "y_min_milli_units": 5_000,
+            "x_max_milli_units": 30_000,
+            "y_max_milli_units": 40_000,
+        })
+    );
+    assert_eq!(serde_json::from_value::<Region>(stored).unwrap(), region);
+    for broken in [
+        serde_json::json!({"x_min_milli_units": 30_000, "y_min_milli_units": 5_000,
+            "x_max_milli_units": 10_000, "y_max_milli_units": 40_000}),
+        serde_json::json!({"x_min_milli_units": 10_000, "y_min_milli_units": 5_000,
+            "x_max_milli_units": 900_000, "y_max_milli_units": 40_000}),
+        serde_json::json!({"x_min_milli_units": 10_000, "y_min_milli_units": 5_000,
+            "x_max_milli_units": 30_000, "y_max_milli_units": 40_000, "centre": null}),
+    ] {
+        assert!(serde_json::from_value::<Region>(broken).is_err());
+    }
+    let over_one = serde_json::json!({
+        "region": serde_json::to_value(region).unwrap(),
+        "score_permille": 1_001,
+    });
+    assert!(serde_json::from_value::<Instance>(over_one).is_err());
 }

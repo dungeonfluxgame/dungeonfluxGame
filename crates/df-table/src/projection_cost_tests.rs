@@ -4,9 +4,9 @@
 
 use crate::effects::TableEffect;
 use crate::identity::FactId;
+use crate::limits::PHONE_NARRATION_LINES;
 use crate::ports::Audience;
 use crate::private_data::Secret;
-use crate::projection::bounds::PHONE_NARRATION_LINES;
 use crate::projection::{Attachments, ProjectionWork, project};
 use crate::projection_tests::{public_line, text};
 use crate::table_state::{CastEntry, CastKind, Controller, TableState, Vitals};
@@ -198,7 +198,7 @@ fn the_per_audience_record_total_adds_up_what_was_counted() {
 
 #[test]
 fn a_seats_work_is_bounded_by_its_note_window_however_many_facts_it_has_learned() {
-    use crate::projection::bounds::NOTE_BUDGET_BYTES;
+    use crate::limits::NOTE_BUDGET_BYTES;
     let table = table_of(10);
     let attachments = attachments_of(60_000, 0);
     let snapshot = table.snapshot();

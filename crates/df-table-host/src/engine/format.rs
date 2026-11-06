@@ -5,11 +5,13 @@
 //! reports of `report` and prints their fields. Player text never reaches it, because no report
 //! holds any.
 
+pub(super) mod observe;
+
 use crate::broker::ledger::{LedgerEnd, LedgerEntry};
 use crate::broker::purpose::Price;
 use crate::broker::report::{LedgerReport, QueuesReport};
 
-use super::format_observe::stream_lines;
+use self::observe::stream_lines;
 use super::report::{
     BrokerRequested, ChaosReport, ClockReport, CommitDisposition, CommitReport, Description,
     DiceReport, ForceReport, HealthReport, QueueReport, ServedReply, SubmissionReport, SubmitReply,
@@ -38,7 +40,7 @@ fn commit_text(commit: &CommitDisposition) -> String {
     match commit {
         CommitDisposition::Committed { id } => format!("committed as {id}"),
         CommitDisposition::NothingToCommit => "nothing to save".to_owned(),
-        CommitDisposition::Failed { cause } => format!("not saved ({cause})"),
+        CommitDisposition::Failed(error) => format!("not saved ({})", error.key()),
     }
 }
 
@@ -49,7 +51,11 @@ pub(super) fn submission_text(submission: &SubmissionReport) -> String {
     );
     match (&submission.refusal, submission.lane) {
         (Some(refusal), _) => {
-            let mut text = format!("{head}: refused ({}): {}", refusal.cause, refusal.detail);
+            let mut text = format!(
+                "{head}: refused ({}): {}",
+                refusal.cause.key(),
+                refusal.detail
+            );
             if let Some(retry) = refusal.retry_after_ms {
                 text.push_str(&format!("; retry in {retry} ms"));
             }
@@ -77,7 +83,8 @@ pub(super) fn turn_text(turn: &TurnReport) -> String {
         .map_or(String::new(), |class| format!(" narration={}", class.key()));
     let replayed = if turn.replayed { ", replayed" } else { "" };
     format!(
-        "turn {} {} {} from the {} lane after {} ms: {outcome}{action}, {}:{} -> {}:{}, {} effects, {}{narrated}{replayed}, \"{}\"",
+        "turn {} {} {} from the {} lane after {} ms: {outcome}{action}, {}:{} -> {}:{}, \
+         {} effects, {}{narrated}{replayed}, \"{}\"",
         turn.turn_seq,
         turn.sender,
         turn.kind,
@@ -173,7 +180,8 @@ pub fn format_queue(report: &QueueReport) -> String {
     let submissions = list_or_none(report.submissions.iter().map(submission_text), "none");
     let turns = list_or_none(report.turns.iter().map(turn_text), "none");
     format!(
-        "serving: {}, at {} ms\nlanes, in the order they are served:\n{lanes}\nin progress:\n{in_progress}\n\
+        "serving: {}, at {} ms\nlanes, in the order they are served:\n{lanes}\nin \
+         progress:\n{in_progress}\n\
          pending by seat:\n{seats}\noperations remembered: {}, last turn: {}\n{}\n\
          submissions, oldest first:\n{submissions}\nturns, oldest first:\n{turns}",
         report.serving,
@@ -210,7 +218,7 @@ pub fn format_description(description: &Description) -> String {
             line.words,
             line.effect,
             line.access,
-            line.host.key(),
+            line.host.describe(),
         )
     }));
     let not_built = list_or_none(
@@ -221,7 +229,10 @@ pub fn format_description(description: &Description) -> String {
         "none",
     );
     format!(
-        "machines:\n{machines}\nlanes, in the order they are served: {}\nports wired: {}\ncommit policy: {}\nverbs:\n{verbs}\nthe verb set of C7's inspect, and what this host has of it:\n{verb_set}\nH.16 verbs not built yet:\n{not_built}",
+        "machines:\n{machines}\nlanes, in the order they are served: {}\nports wired: {}\n\
+         commit policy: {}\nverbs:\n{verbs}\n\
+         the verb set of C7's inspect, and what this host has of it:\n{verb_set}\n\
+         H.16 verbs not built yet:\n{not_built}",
         lanes.join(", "),
         description.ports.join(", "),
         description.commit_policy,
@@ -264,7 +275,8 @@ pub fn format_broker_queues(report: &QueuesReport) -> String {
         "none",
     );
     format!(
-        "epoch {}{}; {} text slots, {} image slots\nclasses, in the order they are served:\n{classes}\nrunning:\n{running}",
+        "epoch {}{}; {} text slots, {} image slots\nclasses, in the order they are \
+         served:\n{classes}\nrunning:\n{running}",
         report.epoch,
         if report.closed { " (closed)" } else { "" },
         report.text_slots,
@@ -318,7 +330,8 @@ pub fn format_broker_ledger(report: &LedgerReport) -> String {
     );
     let entries = list_or_none(report.entries.iter().map(entry_text), "none");
     format!(
-        "spent so far, by purpose (recorded, never limited):\n{totals}\nnewest requests ({} older forgotten):\n{entries}",
+        "spent so far, by purpose (recorded, never limited):\n{totals}\nnewest requests ({} older \
+         forgotten):\n{entries}",
         report.forgotten_entries
     )
 }

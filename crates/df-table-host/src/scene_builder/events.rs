@@ -18,15 +18,16 @@ use std::fmt::{self, Write};
 use df_table::event::{FailureCause, TableEvent};
 use df_table::identity::SceneId;
 use df_table::lookahead::{CancelReason, Expectation};
-use df_table::plate_buffer::{RejectReason, Swap, WaitReason};
-use df_table::plate_job::{JobCause, PlateJobId};
-use df_table::plate_scheduler::{JobEnd, SkipReason};
-use df_table::plate_timing::SceneBuildKind;
+use df_table::plate::buffer::{PlateRejectError, Swap, WaitReason};
+use df_table::plate::job::{JobReason, PlateJobId};
+use df_table::plate::scheduler::{JobEnd, SkipReason};
+use df_table::plate::timing::SceneBuildKind;
 use df_table::ports::PurposeName;
 use df_table::scene_plan::SceneStage;
 use df_table::table_state::SceneGeneration;
 
 use super::purposes::BuildPriority;
+use super::request::BuildEnd;
 use crate::broker::purpose::Fallback;
 
 /// Where a stage's stored output came from.
@@ -133,7 +134,7 @@ pub enum SceneBuilderEvent {
         scene: SceneId,
         generation: SceneGeneration,
         job: PlateJobId,
-        cause: JobCause,
+        cause: JobReason,
     },
     TickSkipped {
         scene: SceneId,
@@ -159,7 +160,7 @@ pub enum SceneBuilderEvent {
         scene: SceneId,
         generation: SceneGeneration,
         job: PlateJobId,
-        reason: RejectReason,
+        reason: PlateRejectError,
     },
     Swapped {
         scene: SceneId,
@@ -418,7 +419,7 @@ impl SceneBuilderEvent {
             } => write!(
                 out,
                 "job_ended scene={scene} generation={generation} job={job} end={}",
-                end_key(*end)
+                BuildEnd::from(*end).key()
             ),
             Self::Table(_) => Ok(()),
             Self::TickQueued {
@@ -598,16 +599,6 @@ impl fmt::Display for OptionalNumber {
             Some(number) => write!(formatter, "{number}"),
             None => formatter.write_str("none"),
         }
-    }
-}
-
-/// The closed key of how a job ended.
-pub fn end_key(end: JobEnd) -> &'static str {
-    match end {
-        JobEnd::Ready => "ready",
-        JobEnd::Failed => "failed",
-        JobEnd::Dropped => "dropped",
-        JobEnd::Stale => "stale",
     }
 }
 

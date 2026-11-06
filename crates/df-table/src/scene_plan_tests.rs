@@ -1,8 +1,8 @@
 use crate::event::FailureCause;
 use crate::plate_fixtures_tests::{SCENE, market, picture, plan};
 use crate::private_data::Narration;
+use crate::scene_plan::locate::{LocateOutcome, UnlocatedReason};
 use crate::scene_plan::{PlanError, SceneStage, StageOutput, StageOutputs, StagePlan};
-use crate::scene_plan_locate::{LocateOutcome, UnlocatedReason};
 use crate::table_state::StaleCause;
 
 fn description() -> StageOutput {

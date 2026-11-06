@@ -1,18 +1,20 @@
-use df_table::plate_cost::{CostBasis, StagePrice};
-use df_table::plate_timing::PlateTiming;
+use df_table::event::FailureCause;
+use df_table::plate::cost::{CostBasis, StagePrice};
+use df_table::plate::timing::PlateTiming;
 
+use super::fixtures::name;
 use super::request::{
-    BuildOutcome, BuildRequest, DevMoment, DevStage, RunRequest, SceneError, SlowStage,
+    BuildOutcome, BuildRequest, DevMoment, DevStage, RunRequest, SceneBuilderError, SlowStage,
 };
 use super::workbench::Workbench;
 
 fn bench() -> Workbench {
-    Workbench::new(PlateTiming::defaults(), None).expect("a workbench")
+    Workbench::new(PlateTiming::default(), None).expect("a workbench")
 }
 
 fn request(place: &str) -> BuildRequest {
     BuildRequest {
-        place: place.to_owned(),
+        place: name(place),
         fail: None,
         slow: None,
     }
@@ -123,7 +125,7 @@ fn a_second_build_is_a_new_generation_built_inside_the_standard_budget_with_a_sl
     let mut bench = bench();
     let first = bench.build(&request("Harbor market")).expect("builds");
     let slow = BuildRequest {
-        place: "Quiet quay".to_owned(),
+        place: name("Quiet quay"),
         fail: None,
         slow: Some(SlowStage {
             stage: DevStage::Background,
@@ -147,7 +149,7 @@ fn a_stage_made_to_fail_ends_the_build_with_the_stage_and_the_cause() {
     for stage in DevStage::ALL {
         let reply = bench
             .build(&BuildRequest {
-                place: "Harbor market".to_owned(),
+                place: name("Harbor market"),
                 fail: Some(stage),
                 slow: None,
             })
@@ -171,8 +173,8 @@ fn a_stage_made_to_fail_ends_the_build_with_the_stage_and_the_cause() {
                     ..
                 },
             ) => {
-                assert_eq!(failed, stage.key());
-                assert_eq!(cause, "refused");
+                assert_eq!(*failed, stage.scene_stage());
+                assert_eq!(*cause, FailureCause::Refused);
             }
             other => panic!("{stage:?} gave {other:?}"),
         }
@@ -181,16 +183,15 @@ fn a_stage_made_to_fail_ends_the_build_with_the_stage_and_the_cause() {
 
 #[test]
 fn a_place_that_is_not_a_name_is_refused_and_a_run_before_any_build_says_so() {
+    let body = serde_json::json!({"place": "  "});
+    assert!(
+        serde_json::from_value::<BuildRequest>(body).is_err(),
+        "a blank place is not a body of scene build"
+    );
     let mut bench = bench();
     assert_eq!(
-        bench.build(&request("  ")),
-        Err(SceneError::InvalidName {
-            what: "the place".to_owned()
-        })
-    );
-    assert_eq!(
         bench.run(&run(10, false, DevMoment::LineBoundary)).err(),
-        Some(SceneError::NothingBuilt)
+        Some(SceneBuilderError::NothingBuilt)
     );
     assert!(bench.buffer_show().buffer.is_none());
     assert!(bench.show().scenes.is_empty());
@@ -229,7 +230,7 @@ fn a_screen_that_is_never_between_lines_holds_every_plate_and_reports_the_wait()
     let run = bench
         .run(&run(60, false, DevMoment::MidLine))
         .expect("runs");
-    assert_eq!(run.moment, "mid_line");
+    assert_eq!(run.moment, DevMoment::MidLine);
     assert_eq!(
         run.buffer.stats.swaps, 1,
         "nothing swapped in after the first plate"
@@ -292,8 +293,7 @@ fn the_plates_report_prices_the_interval_from_the_stages_purposes() {
 #[test]
 fn the_events_of_a_run_also_reach_the_hosts_log_without_any_text_of_the_scene() {
     let log = std::sync::Arc::new(crate::event_log::EventLog::default());
-    let mut bench =
-        Workbench::new(PlateTiming::defaults(), Some(log.clone())).expect("a workbench");
+    let mut bench = Workbench::new(PlateTiming::default(), Some(log.clone())).expect("a workbench");
     bench.build(&request("Harbor market")).expect("builds");
     let logged = log.after_sequence(0, usize::MAX);
     assert!(

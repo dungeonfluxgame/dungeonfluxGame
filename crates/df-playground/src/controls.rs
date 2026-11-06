@@ -12,8 +12,7 @@ use crate::copy::{ReadingPace, status_from_key};
 use crate::fixture::Status;
 use crate::scene::SceneOverlay;
 
-use crate::limits::DEFAULT_TRANSITION_MS;
-pub use crate::limits::MAXIMUM_TRANSITION_MS;
+use crate::limits::{DEFAULT_TRANSITION_MS, MAXIMUM_TRANSITION_MS};
 
 /// The key of the menu entry that keeps the fixture's own status.
 pub const FIXTURE_STATUS_KEY: &str = "fixture";
@@ -28,13 +27,10 @@ pub enum Device {
 }
 
 impl Device {
+    pub const ALL: [Self; 3] = [Self::Both, Self::Tv, Self::Phone];
+
     pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "both" => Some(Self::Both),
-            "tv" => Some(Self::Tv),
-            "phone" => Some(Self::Phone),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|value| value.key() == key)
     }
 
     pub fn key(self) -> &'static str {
@@ -67,13 +63,10 @@ pub enum TransitionStyle {
 }
 
 impl TransitionStyle {
+    pub const ALL: [Self; 3] = [Self::Cut, Self::Fade, Self::Wipe];
+
     pub fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "cut" => Some(Self::Cut),
-            "fade" => Some(Self::Fade),
-            "wipe" => Some(Self::Wipe),
-            _ => None,
-        }
+        Self::ALL.into_iter().find(|value| value.key() == key)
     }
 
     pub fn key(self) -> &'static str {
@@ -90,7 +83,7 @@ impl TransitionStyle {
 #[serde(deny_unknown_fields)]
 pub struct Transition {
     pub style: TransitionStyle,
-    pub duration_ms: u32,
+    pub duration_ms: u64,
 }
 
 impl Default for Transition {
@@ -113,9 +106,16 @@ pub struct Controls {
     pub status_key: String,
     pub show_unavailable: bool,
     pub show_grid: bool,
+    /// Whether the backdrop's scanned layout (SAM regions and head points) is drawn over it.
+    #[serde(default = "shown_by_default")]
+    pub show_sam: bool,
     /// How the next change of scene is drawn.
     #[serde(default)]
     pub transition: Transition,
+}
+
+fn shown_by_default() -> bool {
+    true
 }
 
 impl Default for Controls {
@@ -127,13 +127,14 @@ impl Default for Controls {
             status_key: FIXTURE_STATUS_KEY.to_owned(),
             show_unavailable: false,
             show_grid: false,
+            show_sam: true,
             transition: Transition::default(),
         }
     }
 }
 
-/// The controls, the scene changes and how many changes there have been, as the host answers: a reader that has the
-/// same revision has nothing new to draw.
+/// The controls, the scene changes and how many changes there have been, as the host answers: a
+/// reader that has the same revision has nothing new to draw.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControlsReply {
     pub revision: u64,
@@ -159,6 +160,32 @@ impl ControlsReply {
     }
 }
 
+/// The host's answer to a change of what the playground shows (`path::CONTROLS_CHANGE`), as far as
+/// the page reads it: `{"outcome":"done","value":..}` with the controls after the change, or
+/// `{"outcome":"rejected","error":{..},"message":".."}`. The page shows the host's sentence and
+/// does not read the typed `error`, which is for the dev CLI.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ControlsChangeReply {
+    /// Boxed: the controls are far larger than a refusal.
+    Done {
+        value: Box<ControlsReply>,
+    },
+    Rejected {
+        message: String,
+    },
+}
+
+impl ControlsChangeReply {
+    /// The controls after the change, or the host's sentence for its refusal.
+    pub fn into_result(self) -> Result<ControlsReply, String> {
+        match self {
+            Self::Done { value } => Ok(*value),
+            Self::Rejected { message } => Err(message),
+        }
+    }
+}
+
 /// One change to the controls, as the page and the dev CLI both send it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "change", content = "value", rename_all = "snake_case")]
@@ -170,10 +197,12 @@ pub enum ControlsChange {
     Status(String),
     ShowUnavailable(bool),
     ShowGrid(bool),
+    /// Shows or hides the backdrop's scanned layout.
+    ShowSam(bool),
     /// Sets how the next change of scene is drawn; the scene itself is not changed.
     TransitionStyle(TransitionStyle),
     /// Sets how long the next change of scene takes, up to `MAXIMUM_TRANSITION_MS`.
-    TransitionMs(u32),
+    TransitionMs(u64),
 }
 
 /// Why a change was refused.
@@ -181,7 +210,7 @@ pub enum ControlsChange {
 pub enum ControlsError {
     UnknownStatus(String),
     EmptyFixtureName,
-    TransitionTooLong(u32),
+    TransitionTooLong(u64),
 }
 
 impl fmt::Display for ControlsError {
@@ -200,6 +229,8 @@ impl fmt::Display for ControlsError {
         }
     }
 }
+
+impl std::error::Error for ControlsError {}
 
 impl Controls {
     /// The status to draw: the chosen one, or the fixture's own when none is chosen.
@@ -226,6 +257,7 @@ impl Controls {
             }
             ControlsChange::ShowUnavailable(shown) => self.show_unavailable = shown,
             ControlsChange::ShowGrid(shown) => self.show_grid = shown,
+            ControlsChange::ShowSam(shown) => self.show_sam = shown,
             ControlsChange::TransitionStyle(style) => self.transition.style = style,
             ControlsChange::TransitionMs(ms) => {
                 if ms > MAXIMUM_TRANSITION_MS {

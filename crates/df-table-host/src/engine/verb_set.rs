@@ -15,7 +15,7 @@ use df_table::inspect::{Verb, VerbAccess, VerbEffect, VerbSpec};
 use serde::{Deserialize, Serialize};
 
 use super::replay::REPLAY_NEEDS;
-use super::report_observe::NotBuiltVerb;
+use super::report::observe::NotBuiltVerb;
 
 /// What the host has of one verb of the set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,7 +30,23 @@ pub enum HostSupport {
 }
 
 impl HostSupport {
+    pub const ALL: [Self; 3] = [Self::Built, Self::Seam, Self::NotBuilt];
+
+    /// The serde name of the support.
     pub fn key(self) -> &'static str {
+        match self {
+            Self::Built => "built",
+            Self::Seam => "seam",
+            Self::NotBuilt => "not_built",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|support| support.key() == key)
+    }
+
+    /// The support as `describe` prints it.
+    pub fn describe(self) -> &'static str {
         match self {
             Self::Built => "built",
             Self::Seam => "seam only",
@@ -54,7 +70,8 @@ pub struct VerbLine {
     pub needs: Option<String>,
 }
 
-const PENDING_BOOKS_NEED: &str = "the pipeline's pending books and rulings served by a host route (C7's PendingReport and RulingsReport exist)";
+const PENDING_BOOKS_NEED: &str = "the pipeline's pending books and rulings served by a host route \
+     (C7's PendingReport and RulingsReport exist)";
 
 /// What the host has of `verb`. Exhaustive: a verb added to C7's set must be placed here.
 fn host_support(verb: Verb) -> (HostSupport, Option<&'static str>) {
@@ -135,11 +152,15 @@ const FAMILY_VERBS_WAITING: [(&str, &str); 4] = [
     ),
     (
         "camera frame|follow | director auto slide|cue | scene state",
-        "camera frame is O.13 T4 (G4) and camera follow needs the travelling elements of G2; the slide and cue classes of `director auto` come with their stages (A1, V4); scene state reads what the machines put on the screen (G2). `camera focus|wide` and `director show|pause|resume|auto camera|advance|end|start|view` are built (G1)",
+        "camera frame is O.13 T4 (G4) and camera follow needs the travelling elements of G2; \
+         the slide and cue classes of `director auto` come with their stages (A1, V4); scene \
+         state reads what the machines put on the screen (G2). `camera focus|wide` and \
+         `director show|pause|resume|auto camera|advance|end|start|view` are built (G1)",
     ),
     (
         "dump <machine|table> naming a machine or the table",
-        "per-machine dumps: `dump` today takes no name and prints the active machine and the table, as JSON",
+        "per-machine dumps: `dump` today takes no name and prints the active machine and the \
+         table, as JSON",
     ),
 ];
 

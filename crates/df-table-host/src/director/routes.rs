@@ -3,8 +3,8 @@
 //! They sit behind the same guard as every route of the host (loopback host names, JSON for any
 //! change, no foreign origin), because they are merged into the one router before its layers. A
 //! read is a GET and a verb is a POST of JSON; every answer is a `DirectorReply`, `done` with the
-//! value or `rejected` with a typed error and its message, and a refusal that is the caller's
-//! mistake is a 400.
+//! value or `rejected` with a `DirectorError` and its message, at the error's status. A refusal
+//! writes one `DIRECTOR refused` audit line; the guard's middleware echoes the request's lines.
 //!
 //! A decision and the application of its moves are one step. The apply gate (a `tokio` mutex) is
 //! held from the moment the Director decides until its last move is applied through
@@ -22,29 +22,48 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
+use axum::Router;
 use axum::body::Bytes;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
+use axum::extract::State;
+use axum::response::Response;
+use axum::routing::{get, post};
 use df_playground::controls::ControlsReply;
 use df_table::director::StageDirection;
 use df_table::inspect::InspectAudience;
-use serde::Serialize;
+use df_table::ports::Clock;
 use tokio::sync::Mutex as GateMutex;
+use tokio::time::Instant;
 
-use super::request::{ActReply, DirectorAct, DirectorFault, DirectorReply};
+use super::limits::HOST_TICK_MS;
+use super::request::{ActReply, DirectorAct, DirectorError};
 use super::workbench::{Decided, Workbench, scene_change};
+use crate::dev_http::{parse_body, reply};
 use crate::playground::{SceneApplyError, apply_scene_change, current_stage_ids};
 use crate::state::AppState;
-
-/// How often the Director is woken while it has something to decide, in milliseconds.
-pub const HOST_TICK_MS: u64 = 100;
 
 /// The addresses of the Director's dev API.
 pub mod path {
     pub const ACT: &str = "/dev/director/act";
     pub const SHOW: &str = "/dev/director/show";
+}
+
+/// Milliseconds since the routes were made, on the runtime's monotonic clock: the edge where the
+/// Director's time is read. It is `tokio`'s clock, so a test that pauses the runtime moves it.
+struct RuntimeClock {
+    started: Instant,
+}
+
+impl Clock for RuntimeClock {
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
+/// The runtime's clock from now, as the Director reads it.
+pub(super) fn runtime_clock() -> Arc<dyn Clock> {
+    Arc::new(RuntimeClock {
+        started: Instant::now(),
+    })
 }
 
 /// The playground's camera as the Director last left it. A camera that reads differently was
@@ -59,18 +78,14 @@ impl CameraMark {
     fn of(reply: &ControlsReply) -> Self {
         Self {
             count: reply.scene.camera_count,
-            target: reply
-                .scene
-                .camera
-                .as_ref()
-                .and_then(|camera| camera.target.clone()),
+            target: reply.scene.camera_target().map(str::to_owned),
         }
     }
 }
 
 pub(super) struct DirectorRoutes {
     app: Arc<AppState>,
-    workbench: Mutex<Result<Workbench, DirectorFault>>,
+    workbench: Mutex<Workbench>,
     /// The apply gate, with the camera as the Director last left it. Held across a decision and
     /// the application of every move it made.
     gate: GateMutex<CameraMark>,
@@ -79,7 +94,7 @@ pub(super) struct DirectorRoutes {
 }
 
 impl DirectorRoutes {
-    pub(super) fn new(app: Arc<AppState>, workbench: Result<Workbench, DirectorFault>) -> Self {
+    pub(super) fn new(app: Arc<AppState>, workbench: Workbench) -> Self {
         Self {
             app,
             workbench: Mutex::new(workbench),
@@ -89,33 +104,26 @@ impl DirectorRoutes {
         }
     }
 
-    fn workbench(&self) -> MutexGuard<'_, Result<Workbench, DirectorFault>> {
+    fn workbench(&self) -> MutexGuard<'_, Workbench> {
         self.workbench
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Runs `call` on the workbench, or reports why there is none.
-    pub(super) fn with<T>(
-        &self,
-        call: impl FnOnce(&mut Workbench) -> Result<T, DirectorFault>,
-    ) -> Result<T, DirectorFault> {
-        match self.workbench().as_mut() {
-            Ok(workbench) => call(workbench),
-            Err(error) => Err(error.clone()),
-        }
+    /// Runs `call` on the workbench, holding its lock for the call only.
+    pub(super) fn with<T>(&self, call: impl FnOnce(&mut Workbench) -> T) -> T {
+        call(&mut self.workbench())
     }
 
     /// Gives the Director the stage's names, and writes the line that says which it refused.
-    fn refresh_stage(&self, ids: &[String]) -> Result<(), DirectorFault> {
-        if let Some(line) = self.with(|workbench| Ok(workbench.refresh_stage(ids)))? {
+    fn refresh_stage(&self, ids: &[String]) {
+        if let Some(line) = self.with(|workbench| workbench.refresh_stage(ids)) {
             self.app.record_line(line);
         }
-        Ok(())
     }
 
     /// Tells the Director when the camera is no longer where it left it.
-    fn notice_outside_moves(&self, seen: &mut CameraMark) -> Result<(), DirectorFault> {
+    fn notice_outside_moves(&self, seen: &mut CameraMark) -> Result<(), DirectorError> {
         let current = CameraMark::of(&self.app.playground().snapshot());
         if *seen == current {
             return Ok(());
@@ -155,16 +163,10 @@ impl DirectorRoutes {
                         error.status.as_u16()
                     ));
                     problems.push(error.message);
-                    if let Err(fault) = self.with(|workbench| {
-                        workbench.apply_failed(direction);
-                        Ok(())
-                    }) {
-                        problems.push(fault.to_string());
-                    }
+                    self.with(|workbench| workbench.apply_failed(direction));
                 }
             }
         }
-        self.app.echo_new_lines();
         ActReply {
             lines: decided.lines,
             problems,
@@ -172,90 +174,79 @@ impl DirectorRoutes {
     }
 
     /// One verb: the Director decides and the moves are applied, as one step.
-    pub(super) async fn act(&self, act: DirectorAct) -> Result<ActReply, DirectorFault> {
+    pub(super) async fn act(&self, act: DirectorAct) -> Result<ActReply, DirectorError> {
         let mut seen = self.gate.lock().await;
         self.notice_outside_moves(&mut seen)?;
         let stage = current_stage_ids(&self.app).await;
-        if let Ok(ids) = &stage {
-            self.refresh_stage(ids)?;
-        }
-        let decided = self.with(|workbench| {
-            if let Err(error) = &stage
-                && matches!(act, DirectorAct::Focus { .. })
-            {
-                return Err(DirectorFault::NoStage {
-                    reason: error.message.clone(),
+        match &stage {
+            Ok(ids) => self.refresh_stage(ids),
+            Err(error) if matches!(act, DirectorAct::Focus { .. }) => {
+                return Err(DirectorError::NoStage {
+                    detail: error.message.clone(),
                 });
             }
-            workbench.act(act)
-        })?;
+            Err(_) => {}
+        }
+        let decided = self.with(|workbench| workbench.act(act))?;
         Ok(self.apply(decided, &mut seen).await)
     }
 
     /// One host tick: the Director decides for the time now, if it has anything to decide, and
-    /// the moves are applied, as one step.
+    /// the moves are applied, as one step. Nothing answers a tick, so a failure is a line with
+    /// the error's key and its sentence (the only record of why), and no request's middleware
+    /// echoes the tick's lines: it echoes them itself.
     pub(super) async fn host_tick(&self) {
         let mut seen = self.gate.lock().await;
-        if !matches!(self.with(|workbench| Ok(workbench.is_busy())), Ok(true)) {
+        if !self.with(|workbench| workbench.is_busy()) {
             return;
         }
-        let decided = match self.tick_decision(&mut seen).await {
-            Ok(decided) => decided,
-            Err(error) => {
-                self.app
-                    .record_line(format!("CAMERA tick_failed reason={error}"));
-                return;
+        match self.tick_decision(&mut seen).await {
+            Ok(decided) => {
+                self.apply(decided, &mut seen).await;
             }
-        };
-        self.apply(decided, &mut seen).await;
+            Err(error) => self.app.record_line(format!(
+                "CAMERA tick_failed error={} reason={error}",
+                error.key()
+            )),
+        }
+        self.app.echo_new_lines();
     }
 
-    async fn tick_decision(&self, seen: &mut CameraMark) -> Result<Decided, DirectorFault> {
+    async fn tick_decision(&self, seen: &mut CameraMark) -> Result<Decided, DirectorError> {
         self.notice_outside_moves(seen)?;
         if let Ok(ids) = current_stage_ids(&self.app).await {
-            self.refresh_stage(&ids)?;
+            self.refresh_stage(&ids);
         }
         self.with(Workbench::tick)
     }
-}
 
-type Shared = axum::extract::State<Arc<DirectorRoutes>>;
-
-fn status_of(error: &DirectorFault) -> StatusCode {
-    match error {
-        DirectorFault::Refused { .. }
-        | DirectorFault::BadElement { .. }
-        | DirectorFault::UnknownReason { .. }
-        | DirectorFault::BadRequest { .. }
-        | DirectorFault::NoStage { .. } => StatusCode::BAD_REQUEST,
+    /// Writes the refusal line of a call to `verb` that failed.
+    fn record_refusal<T>(&self, verb: &str, result: &Result<T, DirectorError>) {
+        if let Err(error) = result {
+            self.app.record_line(format!(
+                "DIRECTOR refused verb={verb} error={}",
+                error.key()
+            ));
+        }
     }
 }
 
-fn reply<T: Serialize>(result: Result<T, DirectorFault>) -> Response {
-    let status = result.as_ref().err().map_or(StatusCode::OK, status_of);
-    (status, Json(DirectorReply::from_result(result))).into_response()
-}
-
-async fn run_act(routes: &DirectorRoutes, bytes: &Bytes) -> Result<ActReply, DirectorFault> {
-    let act: DirectorAct =
-        serde_json::from_slice(bytes).map_err(|error| DirectorFault::BadRequest {
-            reason: format!("the request body is not valid: {error}"),
-        })?;
-    routes.act(act).await
-}
-
-async fn act(axum::extract::State(routes): Shared, bytes: Bytes) -> Response {
-    let result = run_act(&routes, &bytes).await;
+async fn act(State(routes): State<Arc<DirectorRoutes>>, bytes: Bytes) -> Response {
+    let result = match parse_body::<DirectorAct>(&bytes) {
+        Ok(act) => routes.act(act).await,
+        Err(error) => Err(DirectorError::from(error)),
+    };
+    routes.record_refusal("act", &result);
     reply(result)
 }
 
-async fn show(axum::extract::State(routes): Shared) -> Response {
-    if let Ok(ids) = current_stage_ids(&routes.app).await
-        && let Err(fault) = routes.refresh_stage(&ids)
-    {
-        return reply::<()>(Err(fault));
+async fn show(State(routes): State<Arc<DirectorRoutes>>) -> Response {
+    if let Ok(ids) = current_stage_ids(&routes.app).await {
+        routes.refresh_stage(&ids);
     }
-    reply(routes.with(|workbench| Ok(workbench.show())))
+    reply(Ok::<_, DirectorError>(
+        routes.with(|workbench| workbench.show()),
+    ))
 }
 
 fn spawn_host_tick(routes: &Arc<DirectorRoutes>) {
@@ -280,12 +271,14 @@ pub fn router(app: Arc<AppState>) -> Router {
     router_for(app, InspectAudience::Operator)
 }
 
-/// The same for `audience`: a shared audience is told nothing of what is hidden.
+/// The same for `audience`: a shared audience is told nothing of what is hidden. The Director's
+/// clock is the runtime's monotonic clock from now.
 pub fn router_for(app: Arc<AppState>, audience: InspectAudience) -> Router {
-    let routes = Arc::new(DirectorRoutes::new(app, Workbench::new(audience)));
+    let workbench = Workbench::new(audience, runtime_clock());
+    let routes = Arc::new(DirectorRoutes::new(app, workbench));
     spawn_host_tick(&routes);
     Router::new()
-        .route(path::ACT, axum::routing::post(act))
+        .route(path::ACT, post(act))
         .route(path::SHOW, get(show))
         .with_state(routes)
 }

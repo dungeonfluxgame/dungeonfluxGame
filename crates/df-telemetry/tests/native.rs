@@ -1,10 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
+mod fixtures;
 use df_observe::{
     AnyValue, Durability, LogInput, NativeProducer, ProducerId, RecordId, Severity, Signal,
     SourceSequence, SpanInput, TelemetryError, TelemetryLimits,
 };
 use df_telemetry::{BarrierStage, DiagnosticReader, FailureBarrier, QueryFilter, Readiness, Store};
 use df_types::BuildIdentity;
+use fixtures::FixtureRoot;
 use opentelemetry::{
     Context, KeyValue,
     logs::AnyValue as SdkValue,
@@ -19,7 +21,6 @@ use rusqlite::Connection;
 use std::{
     collections::HashMap,
     fs,
-    path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc,
@@ -27,7 +28,18 @@ use std::{
     time::{Duration, SystemTime},
 };
 const WAIT: Duration = Duration::from_secs(5);
-fn root(name: &str) -> PathBuf {
+/// Finest `SystemTime` step: Windows counts 100 ns intervals, other platforms nanoseconds.
+#[cfg(windows)]
+const SYSTEM_TIME_STEP_NANOS: u64 = 100;
+#[cfg(not(windows))]
+const SYSTEM_TIME_STEP_NANOS: u64 = 1;
+/// Latest observed time the clock represents: the fixed64 maximum where the step is 1 ns.
+const LATEST_OBSERVED_NANOS: u64 = u64::MAX / SYSTEM_TIME_STEP_NANOS * SYSTEM_TIME_STEP_NANOS;
+/// Latest source time, one clock step before the latest observed time.
+const LATEST_SOURCE_NANOS: u64 = LATEST_OBSERVED_NANOS - SYSTEM_TIME_STEP_NANOS;
+/// Span duration of 101 clock steps.
+const SPAN_DURATION_NANOS: u64 = 101 * SYSTEM_TIME_STEP_NANOS;
+fn root(name: &str) -> FixtureRoot {
     if let Ok(namespace) = std::env::var("DF_TELEMETRY_FIXTURE_NAMESPACE") {
         assert!(!namespace.is_empty());
         assert!(
@@ -59,32 +71,27 @@ fn root(name: &str) -> PathBuf {
             ]
             .contains(&name)
         );
-        let path = PathBuf::from(
-            "/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06",
-        )
-        .join(format!("ownedfixture-{namespace}-{name}"));
+        let path = fixtures::fixture_parent().join(format!("ownedfixture-{namespace}-{name}"));
         assert!(path.file_name().unwrap().len() <= 100);
         assert!(
             !path.exists(),
             "managed fixture root must be fresh: {}",
             path.display()
         );
-        return path;
+        return FixtureRoot::new(path);
     }
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let base =
-        PathBuf::from("/Users/earlcameron/Desktop/dungeonflux/development/runtime/telemetry-g06");
-    fs::create_dir_all(&base).unwrap();
-    base.join(format!(
+    let base = fixtures::fixture_parent();
+    FixtureRoot::new(base.join(format!(
         "ownedfixture-a2-{}-{nonce}-{}-{}",
         name,
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
-    ))
+    )))
 }
 fn build() -> BuildIdentity {
     BuildIdentity::new(
@@ -156,8 +163,8 @@ fn actual_sdk_typed_log_unsampled_correlation_and_span_causality_roundtrip() {
         TraceState::default(),
     );
     let mut input = log("unused");
-    input.timestamp = SystemTime::UNIX_EPOCH + Duration::from_nanos(u64::MAX - 1);
-    input.observed_timestamp = SystemTime::UNIX_EPOCH + Duration::from_nanos(u64::MAX);
+    input.timestamp = SystemTime::UNIX_EPOCH + Duration::from_nanos(LATEST_SOURCE_NANOS);
+    input.observed_timestamp = SystemTime::UNIX_EPOCH + Duration::from_nanos(LATEST_OBSERVED_NANOS);
     input.severity = Severity::Fatal;
     input.trace = Some(unsampled.clone());
     input.body = SdkValue::Map(Box::new(HashMap::from([
@@ -200,7 +207,7 @@ fn actual_sdk_typed_log_unsampled_correlation_and_span_causality_roundtrip() {
             SpanInput {
                 name: "native-parent-link".into(),
                 start,
-                end: start + Duration::from_nanos(101),
+                end: start + Duration::from_nanos(SPAN_DURATION_NANOS),
                 parent: Context::new().with_remote_span_context(parent),
                 links: vec![link],
                 attributes: vec![
@@ -221,8 +228,8 @@ fn actual_sdk_typed_log_unsampled_correlation_and_span_causality_roundtrip() {
     assert_eq!(page.records.len(), 2);
     assert!(page.unconfirmed_capture_gaps);
     let view = &page.records[0];
-    assert_eq!(view.source_time_unix_nanos, u64::MAX - 1);
-    assert_eq!(view.observed_time_unix_nanos, Some(u64::MAX));
+    assert_eq!(view.source_time_unix_nanos, LATEST_SOURCE_NANOS);
+    assert_eq!(view.observed_time_unix_nanos, Some(LATEST_OBSERVED_NANOS));
     let wire = ExportLogsServiceRequest::decode(view.otlp.as_slice()).unwrap();
     let resource = &wire.resource_logs[0];
     let scope = &resource.scope_logs[0];
@@ -307,12 +314,15 @@ fn actual_sdk_typed_log_unsampled_correlation_and_span_causality_roundtrip() {
     assert_eq!(span.parent_span_id, [4; 8]);
     assert_eq!(span.links[0].trace_id, [1; 16]);
     assert_eq!(span.links[0].span_id, [2; 8]);
-    assert_eq!(span.end_time_unix_nano - span.start_time_unix_nano, 101);
+    assert_eq!(
+        span.end_time_unix_nano - span.start_time_unix_nano,
+        SPAN_DURATION_NANOS
+    );
     let filtered = reader
         .query(
             &QueryFilter {
-                from_unix_nanos: Some(u64::MAX - 1),
-                through_unix_nanos: Some(u64::MAX),
+                from_unix_nanos: Some(LATEST_SOURCE_NANOS),
+                through_unix_nanos: Some(LATEST_OBSERVED_NANOS),
                 ..Default::default()
             },
             0,

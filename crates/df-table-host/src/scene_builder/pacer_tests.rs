@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use df_table::plate_buffer::{StageMoment, StepAction, Swap, WaitReason};
-use df_table::plate_scheduler::JobEnd;
-use df_table::plate_timing::{PlateTiming, SceneBuildKind};
+use df_table::plate::buffer::{StageMoment, StepAction, Swap, WaitReason};
+use df_table::plate::scheduler::JobEnd;
+use df_table::plate::timing::{PlateTiming, SceneBuildKind};
 
 use super::dev_world::dev_script;
 use super::events::{SceneBuilderAudit, SceneBuilderEvent};
 use super::fakes::StageScript;
+use super::fixtures::{Rig, STEP_MS};
 use super::pacer::{PacerError, ScenePacer};
-use super::tests_support::{Rig, STEP_MS};
 use crate::broker::providers::ScriptedCall;
 use crate::broker::request::ProviderFault;
 
@@ -27,7 +27,7 @@ impl PacerRig {
         let mut rig = Rig::unopened(script);
         let mut pacer = ScenePacer::new(
             rig.scene,
-            PlateTiming::defaults(),
+            PlateTiming::default(),
             Arc::clone(&rig.audit) as Arc<dyn SceneBuilderAudit>,
         );
         let snapshot = rig.world.snapshot();

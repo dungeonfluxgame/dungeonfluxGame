@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::element::{Appearance, Element, ElementId, FieldName, FieldValue, KindName, Position};
 use crate::field_type::ValueError;
 use crate::kind::KindRegistry;
-use crate::kind_file::{
+use crate::kind::file::{
     ChoiceProblem, FieldProblem, KindError, KindFile, KindProblem, UnusedOption,
 };
 use crate::limits::{MAXIMUM_CHOICES, MAXIMUM_FIELDS_PER_KIND, MAXIMUM_TEXT_LENGTH};
@@ -56,7 +56,7 @@ fn every_problem_across_several_files_is_reported_together() {
     assert!(
         errors
             .iter()
-            .any(|error| error.problem == KindProblem::BadSize)
+            .any(|error| error.problem == KindProblem::InvalidSize)
     );
     assert!(
         errors
@@ -78,7 +78,11 @@ fn a_height_taller_than_the_canvas_or_a_negative_or_nan_size_is_refused() {
         r#""width": 101, "height": 4"#,
     ] {
         let json = format!(r#"{{"name": "wall", "shape": "rect", {size}}}"#);
-        assert_eq!(errors_of(&json)[0].problem, KindProblem::BadSize, "{size}");
+        assert_eq!(
+            errors_of(&json)[0].problem,
+            KindProblem::InvalidSize,
+            "{size}"
+        );
     }
 }
 
@@ -108,7 +112,7 @@ fn a_default_that_does_not_fit_its_field_is_refused() {
     );
     assert!(matches!(
         field_problem(&json),
-        FieldProblem::BadDefault(ValueError::OutOfRange { .. })
+        FieldProblem::InvalidDefault(ValueError::OutOfRange { .. })
     ));
 }
 

@@ -24,14 +24,29 @@ pub const RESERVED_LIVE_TEXT_SLOTS: usize = 1;
 /// Most live requests waiting. The live class cannot drop (H.7), so a full queue refuses the new
 /// request with a typed error. Deliberately huge; scope it down later (owner, 2026-11-02).
 pub const MAXIMUM_QUEUED_LIVE: usize = 1_000_000;
-/// Most plate requests waiting; the oldest is dropped past it (J.4 and H.7: plate 4).
-pub const MAXIMUM_QUEUED_PLATES: usize = 4;
+/// Most plate requests waiting; the oldest is dropped past it (J.4 and H.7: plate 4). It is the
+/// engine's own plate queue bound, so the broker and the scheduler cannot disagree.
+pub const MAXIMUM_QUEUED_PLATES: usize = df_table::plate::scheduler::MAXIMUM_QUEUED_JOBS;
 /// Most look-ahead requests waiting; the oldest is dropped past it. The plan names no bound for
 /// the class SB-LA adds (its `lookahead_depth` is a setting). Deliberately huge; scope it down
 /// later (owner, 2026-11-02).
 pub const MAXIMUM_QUEUED_LOOKAHEAD: usize = 1_000_000;
 /// Most background (prefetch) requests waiting; the oldest is dropped past it (J.4: prefetch 8).
 pub const MAXIMUM_QUEUED_BACKGROUND: usize = 8;
+
+/// The deadline of an `interpret` request, in milliseconds: the lower end of the observed Codex
+/// text latency (H.5), so a slower lane times out and the seat gets buttons.
+pub const INTERPRET_DEADLINE_MS: u64 = 15_000;
+/// The deadline of narration, scene description, dress and staging text, in milliseconds: the
+/// upper end of the observed text latency (H.5).
+pub const TEXT_DEADLINE_MS: u64 = 45_000;
+/// The deadline of the current scene's background, in milliseconds: more than
+/// `scene_build_budget_s` of J.4 so a slow build still lands late, and the table plays on the
+/// establishing card meanwhile (K.2).
+pub const BACKGROUND_DEADLINE_MS: u64 = 120_000;
+/// The deadline of a plate or a portrait, in milliseconds: the upper end of the observed Codex
+/// image latency, 90 to 240 s (H.4).
+pub const IMAGE_DEADLINE_MS: u64 = 240_000;
 
 /// How long a claimed attempt is leased without a heartbeat, in milliseconds (J.4: job lease 60 s,
 /// H.9).

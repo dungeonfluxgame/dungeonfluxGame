@@ -109,3 +109,45 @@ fn a_record_costs_more_than_its_line_so_the_byte_bound_is_not_undercounted() {
     let record = stamped(&received(1));
     assert!(record.approximate_bytes() > record.audit_line.len());
 }
+
+#[test]
+fn every_closed_record_key_is_its_serde_name_and_reads_back() {
+    use super::EventLevel;
+
+    for class in RecordClass::ALL {
+        assert_eq!(
+            serde_json::to_string(&class).unwrap(),
+            format!("\"{}\"", class.key())
+        );
+        assert_eq!(RecordClass::from_key(class.key()), Some(class));
+    }
+    for severity in RecordSeverity::ALL {
+        assert_eq!(
+            serde_json::to_string(&severity).unwrap(),
+            format!("\"{}\"", severity.key())
+        );
+        assert_eq!(RecordSeverity::from_key(severity.key()), Some(severity));
+    }
+    for level in EventLevel::ALL {
+        assert_eq!(
+            serde_json::to_string(&level).unwrap(),
+            format!("\"{}\"", level.key())
+        );
+        assert_eq!(EventLevel::from_key(level.key()), Some(level));
+    }
+    assert_eq!(EventLevel::from_key("loud"), None);
+}
+
+#[test]
+fn an_unserializable_event_is_named_by_a_lowercase_category_key() {
+    use super::record::RecordError;
+
+    let error = RecordError::Unserializable {
+        cause: serde_json::error::Category::Data,
+    };
+
+    assert_eq!(
+        error.to_string(),
+        "the event could not be written (data error)"
+    );
+}

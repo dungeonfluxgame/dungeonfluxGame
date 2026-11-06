@@ -11,59 +11,54 @@
 use std::fmt;
 
 use super::report::EngineError;
-use super::report_observe::ReplayReport;
+use super::report::observe::ReplayReport;
 use super::request::ReplayRequest;
 
 /// What C7's replay is called through.
 pub trait Replayer: Send + Sync {
-    fn replay(&self, request: &ReplayRequest) -> Result<ReplayReport, ReplayRefusal>;
+    fn replay(&self, request: &ReplayRequest) -> Result<ReplayReport, ReplayError>;
 }
 
 /// Why a replay did not run, with what the caller does next in each variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ReplayRefusal {
+pub enum ReplayError {
     /// There is no replay behind the seam yet; `needs` names what it waits for.
     NotSupportedYet { needs: &'static str },
     /// No log of that name.
     UnknownLog { log: String },
-    /// The replay ran and failed.
-    Failed { reason: String },
 }
 
-impl fmt::Display for ReplayRefusal {
+impl fmt::Display for ReplayError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotSupportedYet { needs } => {
                 write!(formatter, "replay is not built yet: {needs}")
             }
             Self::UnknownLog { log } => write!(formatter, "there is no turn log '{log}'"),
-            Self::Failed { reason } => write!(formatter, "the replay failed: {reason}"),
         }
     }
 }
 
-impl std::error::Error for ReplayRefusal {}
+impl std::error::Error for ReplayError {}
 
-impl ReplayRefusal {
+impl ReplayError {
     /// The closed key the audit line carries.
     pub fn key(&self) -> &'static str {
         match self {
             Self::NotSupportedYet { .. } => "not_supported_yet",
             Self::UnknownLog { .. } => "unknown_log",
-            Self::Failed { .. } => "failed",
         }
     }
 }
 
-impl From<ReplayRefusal> for EngineError {
-    fn from(refusal: ReplayRefusal) -> Self {
-        match refusal {
-            ReplayRefusal::NotSupportedYet { needs } => Self::NotSupportedYet {
+impl From<ReplayError> for EngineError {
+    fn from(error: ReplayError) -> Self {
+        match error {
+            ReplayError::NotSupportedYet { needs } => Self::NotSupportedYet {
                 what: "replay".to_owned(),
                 needs: needs.to_owned(),
             },
-            ReplayRefusal::UnknownLog { log } => Self::UnknownLog { log },
-            ReplayRefusal::Failed { reason } => Self::ReplayFailed { reason },
+            ReplayError::UnknownLog { log } => Self::UnknownLog { log },
         }
     }
 }
@@ -77,8 +72,8 @@ pub const REPLAY_NEEDS: &str =
 pub struct PendingReplay;
 
 impl Replayer for PendingReplay {
-    fn replay(&self, _request: &ReplayRequest) -> Result<ReplayReport, ReplayRefusal> {
-        Err(ReplayRefusal::NotSupportedYet {
+    fn replay(&self, _request: &ReplayRequest) -> Result<ReplayReport, ReplayError> {
+        Err(ReplayError::NotSupportedYet {
             needs: REPLAY_NEEDS,
         })
     }

@@ -18,7 +18,7 @@ use crate::envelope::PendingId;
 use crate::identity::SceneId;
 use crate::identity::SeatId;
 use crate::inspect::{Inspect, InspectView, Needs, Visible};
-use crate::machine_slot::ErrorClass;
+use crate::machine::slot::ErrorClass;
 use crate::outcome::PendingKind;
 use crate::pending::{
     Completion, Continuation, PendingBook, PendingResolution, PendingStatus, RulingBook, SeatOffer,

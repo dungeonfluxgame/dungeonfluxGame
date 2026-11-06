@@ -52,14 +52,13 @@ impl Extras {
         let sink = match directory {
             None => sink,
             Some(directory) => {
-                std::fs::create_dir_all(&directory).map_err(|error| EngineStartError::Spool {
-                    reason: format!("{}: {error}", directory.display()),
-                })?;
-                let spool = FileSpool::open(&directory.join(SPOOL_FILE_NAME)).map_err(|error| {
-                    EngineStartError::Spool {
-                        reason: error.to_string(),
+                std::fs::create_dir_all(&directory).map_err(|error| {
+                    EngineStartError::SpoolDirectory {
+                        kind: error.kind(),
+                        directory: directory.clone(),
                     }
                 })?;
+                let spool = FileSpool::open(&directory.join(SPOOL_FILE_NAME))?;
                 sink.with_outlet(Arc::new(spool))
             }
         };
@@ -69,7 +68,5 @@ impl Extras {
 
 /// The directory `DF_TABLE_EVENT_SPOOL` names, if it is set to something.
 fn spool_directory_from_environment() -> Option<PathBuf> {
-    std::env::var_os(EVENT_SPOOL_ENVIRONMENT_VARIABLE)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    crate::environment::path(EVENT_SPOOL_ENVIRONMENT_VARIABLE)
 }

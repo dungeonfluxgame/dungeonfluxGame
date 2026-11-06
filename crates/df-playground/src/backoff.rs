@@ -4,13 +4,13 @@
 //! ten seconds instead of one every second, and a host that comes back is found again within that
 //! time. It never reads a clock and never touches the page.
 
-pub use crate::limits::{FIRST_RETRY_MS, LONGEST_RETRY_MS};
+use crate::limits::{FIRST_RETRY_MS, LONGEST_RETRY_MS};
 
 /// The wait after `failures` failures in a row (1 is the first failure). Zero failures wait the
 /// normal, shortest time.
-pub fn retry_delay_ms(failures: u32) -> u32 {
+pub fn retry_delay_ms(failures: u32) -> u64 {
     let doublings = failures.saturating_sub(1).min(16);
     FIRST_RETRY_MS
-        .saturating_mul(1_u32 << doublings)
+        .saturating_mul(1_u64 << doublings)
         .min(LONGEST_RETRY_MS)
 }

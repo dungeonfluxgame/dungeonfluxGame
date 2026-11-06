@@ -3,10 +3,10 @@
 //!
 //! It owns the lock discipline in one place. A route takes the canvas lock briefly and never across
 //! an `.await`, and queues new audit lines for the terminal only after the lock is released (the
-//! echo never waits for the terminal). It also owns what is shared between readers: the frame, built
-//! once for each change (the canvas half, off the runtime threads) and handed to every page as the
-//! same bytes, and the signal that wakes the host's clock when something starts to move. It decides nothing about requests: `server` and
-//! `playground` own their routes.
+//! echo never waits for the terminal). It also owns what is shared between readers: the frame,
+//! built once for each change (the canvas half, off the runtime threads) and handed to every page
+//! as the same bytes, and the signal that wakes the host's clock when something starts to move. It
+//! decides nothing about requests: `server` and `playground` own their routes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -69,7 +69,7 @@ pub(crate) enum FrameError {
     View(ViewError),
     Json(serde_json::Error),
     /// The thread that builds the canvas half did not finish.
-    Task(String),
+    Task(tokio::task::JoinError),
 }
 
 impl std::fmt::Display for FrameError {
@@ -78,6 +78,16 @@ impl std::fmt::Display for FrameError {
             Self::View(error) => write!(formatter, "{error}"),
             Self::Json(error) => write!(formatter, "the frame could not be written: {error}"),
             Self::Task(error) => write!(formatter, "the frame could not be built: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for FrameError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::View(_) => None,
+            Self::Json(error) => Some(error),
+            Self::Task(error) => Some(error),
         }
     }
 }
@@ -241,7 +251,7 @@ impl AppState {
                         let builder = Arc::clone(self);
                         let json = tokio::task::spawn_blocking(move || builder.build_canvas_json())
                             .await
-                            .map_err(|error| FrameError::Task(error.to_string()))??;
+                            .map_err(FrameError::Task)??;
                         *self.frame.lock().unwrap_or_else(PoisonError::into_inner) =
                             Some(CachedCanvas {
                                 count,
@@ -311,9 +321,20 @@ impl AppState {
         });
     }
 
-    /// Records one audit line that is not a table event, such as a playground change.
+    /// Records one audit line that is not a table event, such as a playground change. Inside a
+    /// request this is all a route does: the `guard_requests` middleware echoes the request's lines
+    /// once it has been answered. It takes no lock but the log's, so it may run under the canvas
+    /// lock.
     pub(crate) fn record_line(&self, text: String) {
         self.log().push(text);
+    }
+
+    /// Records one audit line and queues it for the terminal at once, for work that goes on after
+    /// its request was answered (a background job), which no middleware echoes. Call it with no
+    /// lock held.
+    pub(crate) fn record_line_and_echo(&self, text: String) {
+        self.record_line(text);
+        self.echo_new_lines();
     }
 
     /// Waits up to `patience` for the terminal echo to print what is queued, and stops it taking

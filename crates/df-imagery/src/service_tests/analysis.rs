@@ -1,4 +1,5 @@
-//! Same boundary tests for non-raster receipts; these infrastructure fixtures do not execute suppliers.
+//! Same boundary tests for non-raster receipts; these infrastructure fixtures do not execute
+//! suppliers.
 use super::*;
 use crate::{
     AccountHandle, ApiEndpoint, ImageAnalysisObservation, ImageAnalysisOperation,

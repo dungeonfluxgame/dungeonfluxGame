@@ -7,16 +7,19 @@
 
 use crate::checks;
 use crate::fixture::{Camera, UnavailableChoice};
-use crate::fixture::{Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide};
+use crate::fixture::{Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember};
 use crate::limits::{MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CUES_KEPT, MAXIMUM_PARTY_MEMBERS};
-use crate::scene::{
-    CaptionOverride, Cue, ImageSlot, Override, SceneChange, SceneError, SceneOverlay, Target, Track,
-};
+use crate::overlay::Edit;
+use crate::scene::{Cue, ImageSlot, SceneChange, SceneError, SceneOverlay, Target, Track};
+
+mod ui;
 
 impl SceneOverlay {
     /// The party as drawn: the overlay's, or the fixture's.
-    pub(crate) fn party_or<'a>(&'a self, base: &'a Fixture) -> &'a [PartyMember] {
-        self.party.as_deref().unwrap_or(&base.tv.party)
+    pub(crate) fn party_now(&self, base: &Fixture) -> Vec<PartyMember> {
+        let mut party = base.tv.party.clone();
+        self.party.apply_to_value(&mut party);
+        party
     }
 
     /// Makes one change. `base` is the fixture the overlay sits on, so a change to one member or
@@ -49,7 +52,7 @@ impl SceneOverlay {
         match change {
             SceneChange::Caption { speaker, text } => self.set_caption(speaker, text),
             SceneChange::ClearCaption {} => {
-                self.caption = Some(CaptionOverride::Clear);
+                self.caption = Edit::Clear;
                 Ok(())
             }
             SceneChange::PartyAdd { member } => self.add_member(member, base),
@@ -61,16 +64,16 @@ impl SceneOverlay {
             } => self.set_member(name, hit_points, maximum_hit_points, conditions, base),
             SceneChange::PartyRemove { name } => self.remove_member(name, base),
             SceneChange::PartyClear {} => {
-                self.party = Some(Vec::new());
+                self.party = Edit::Clear;
                 Ok(())
             }
             SceneChange::Suggested { choices } => self.set_suggested(choices),
             SceneChange::Group { name, choices } => self.set_group(name, choices, base),
             SceneChange::Unavailable { choices } => self.set_unavailable(choices),
             SceneChange::ClearChoices {} => {
-                self.suggested = Some(Vec::new());
-                self.groups = Some(Vec::new());
-                self.unavailable = Some(Vec::new());
+                self.suggested = Edit::Clear;
+                self.groups = Edit::Clear;
+                self.unavailable = Edit::Clear;
                 Ok(())
             }
             SceneChange::Image {
@@ -79,26 +82,37 @@ impl SceneOverlay {
                 caption,
                 rotation_degrees,
                 slide,
-            } => self.set_image(slot, media, caption, rotation_degrees, slide, now_ms),
+                layout,
+            } => self.set_image(
+                slot,
+                ImageRef {
+                    media,
+                    caption,
+                    rotation_degrees,
+                    slide,
+                    layout,
+                },
+                now_ms,
+            ),
             SceneChange::ClearImage { slot } => {
-                *self.image_slot_mut(slot) = Some(Override::Clear);
+                *self.image_slot_mut(slot) = Edit::Clear;
                 Ok(())
             }
             SceneChange::Music {
                 media,
                 target,
-                volume,
+                volume_percent,
                 looping,
-            } => self.start_music(media, target, volume, looping),
+            } => self.start_music(media, target, volume_percent, looping),
             SceneChange::StopMusic {} => {
-                self.music = Some(Override::Clear);
+                self.music = Edit::Clear;
                 Ok(())
             }
             SceneChange::Sound {
                 media,
                 target,
-                volume,
-            } => self.add_cue(media, target, volume),
+                volume_percent,
+            } => self.add_cue(media, target, volume_percent),
             SceneChange::Camera {
                 target,
                 zoom_percent,
@@ -111,7 +125,7 @@ impl SceneOverlay {
             | SceneChange::SeatsOpen { .. }
             | SceneChange::SeatsClear {}
             | SceneChange::Brand { .. }) => self.apply_ui(change, base),
-            SceneChange::Screen { edit } => self.screens.apply(edit, base),
+            SceneChange::Screen { edit } => self.apply_screen(edit, base),
             SceneChange::Home { edit } => self.apply_home(edit, base),
             SceneChange::Reset {} => {
                 *self = self.cleared();
@@ -125,13 +139,13 @@ impl SceneOverlay {
         if let Some(speaker) = &speaker {
             checks::labelled("the speaker", speaker)?;
         }
-        self.caption = Some(CaptionOverride::Set(Caption { speaker, text }));
+        self.caption = Edit::Set(Caption { speaker, text });
         Ok(())
     }
 
     fn add_member(&mut self, member: PartyMember, base: &Fixture) -> Result<(), SceneError> {
         checks::member(&member)?;
-        let mut party = self.party_or(base).to_vec();
+        let mut party = self.party_now(base);
         if party.iter().any(|existing| existing.name == member.name) {
             return Err(SceneError::DuplicateMember(member.name));
         }
@@ -139,7 +153,7 @@ impl SceneOverlay {
             return Err(SceneError::TooManyMembers);
         }
         party.push(member);
-        self.party = Some(party);
+        self.party = Edit::Set(party);
         Ok(())
     }
 
@@ -151,7 +165,7 @@ impl SceneOverlay {
         conditions: Option<Vec<String>>,
         base: &Fixture,
     ) -> Result<(), SceneError> {
-        let mut party = self.party_or(base).to_vec();
+        let mut party = self.party_now(base);
         let member = party
             .iter_mut()
             .find(|member| member.name == name)
@@ -166,25 +180,25 @@ impl SceneOverlay {
             member.conditions = conditions;
         }
         checks::member(member)?;
-        self.party = Some(party);
+        self.party = Edit::Set(party);
         Ok(())
     }
 
     fn remove_member(&mut self, name: String, base: &Fixture) -> Result<(), SceneError> {
-        let mut party = self.party_or(base).to_vec();
+        let mut party = self.party_now(base);
         let before = party.len();
         party.retain(|member| member.name != name);
         if party.len() == before {
             return Err(SceneError::UnknownMember(name));
         }
-        self.party = Some(party);
+        self.party = Edit::Set(party);
         Ok(())
     }
 
     fn set_suggested(&mut self, choices: Vec<Choice>) -> Result<(), SceneError> {
         checks::count(choices.len())?;
         choices.iter().try_for_each(checks::choice)?;
-        self.suggested = Some(choices);
+        self.suggested = Edit::Set(choices);
         Ok(())
     }
 
@@ -197,15 +211,13 @@ impl SceneOverlay {
         checks::labelled("a group name", &name)?;
         checks::count(choices.len())?;
         choices.iter().try_for_each(checks::choice)?;
-        let mut groups = self
-            .groups
-            .clone()
-            .unwrap_or_else(|| base.phone.groups.clone());
+        let mut groups = base.phone.groups.clone();
+        self.groups.apply_to_value(&mut groups);
         groups.retain(|group| group.name != name);
         if !choices.is_empty() {
             groups.push(ChoiceGroup { name, choices });
         }
-        self.groups = Some(groups);
+        self.groups = Edit::Set(groups);
         Ok(())
     }
 
@@ -215,25 +227,23 @@ impl SceneOverlay {
             checks::labelled("a choice label", &choice.label)?;
             checks::labelled("a reason", &choice.reason)?;
         }
-        self.unavailable = Some(choices);
+        self.unavailable = Edit::Set(choices);
         Ok(())
     }
 
+    /// Checks `image` for `slot` and shows it there; a slide starts now (`now_ms`).
     fn set_image(
         &mut self,
         slot: ImageSlot,
-        media: String,
-        caption: Option<String>,
-        rotation_degrees: u16,
-        slide: Option<Slide>,
+        image: ImageRef,
         now_ms: u64,
     ) -> Result<(), SceneError> {
-        checks::labelled("a media name", &media)?;
-        checks::rotation(rotation_degrees)?;
-        if let Some(caption) = &caption {
+        checks::labelled("a media name", &image.media)?;
+        checks::rotation(image.rotation_degrees)?;
+        if let Some(caption) = &image.caption {
             checks::labelled("a picture caption", caption)?;
         }
-        let slide = match slide {
+        let slide = match image.slide {
             None => None,
             Some(mut slide) => {
                 if slot != ImageSlot::TvCard {
@@ -247,12 +257,7 @@ impl SceneOverlay {
                 Some(slide)
             }
         };
-        *self.image_slot_mut(slot) = Some(Override::Set(ImageRef {
-            media,
-            caption,
-            rotation_degrees,
-            slide,
-        }));
+        *self.image_slot_mut(slot) = Edit::Set(ImageRef { slide, ..image });
         Ok(())
     }
 
@@ -260,29 +265,34 @@ impl SceneOverlay {
         &mut self,
         media: String,
         target: Target,
-        volume: u8,
+        volume_percent: u8,
         looping: bool,
     ) -> Result<(), SceneError> {
         checks::labelled("a media name", &media)?;
-        checks::volume(volume)?;
-        self.music = Some(Override::Set(Track {
+        checks::volume(volume_percent)?;
+        self.music = Edit::Set(Track {
             media,
             target,
-            volume,
+            volume_percent,
             looping,
-        }));
+        });
         Ok(())
     }
 
-    fn add_cue(&mut self, media: String, target: Target, volume: u8) -> Result<(), SceneError> {
+    fn add_cue(
+        &mut self,
+        media: String,
+        target: Target,
+        volume_percent: u8,
+    ) -> Result<(), SceneError> {
         checks::labelled("a media name", &media)?;
-        checks::volume(volume)?;
+        checks::volume(volume_percent)?;
         self.cue_count += 1;
         self.cues.push(Cue {
             id: self.cue_count,
             target,
             media,
-            volume,
+            volume_percent,
         });
         if self.cues.len() > MAXIMUM_CUES_KEPT {
             self.cues.remove(0);
@@ -294,12 +304,12 @@ impl SceneOverlay {
         &mut self,
         target: Option<String>,
         zoom_percent: u16,
-        duration_ms: u32,
+        duration_ms: u64,
         now_ms: u64,
     ) -> Result<(), SceneError> {
         checks::camera(target.as_deref(), zoom_percent, duration_ms)?;
         self.camera_count += 1;
-        self.camera = Some(Camera {
+        self.camera = Edit::Set(Camera {
             target,
             zoom_percent,
             duration_ms,
@@ -310,7 +320,7 @@ impl SceneOverlay {
         Ok(())
     }
 
-    fn image_slot_mut(&mut self, slot: ImageSlot) -> &mut Option<Override<ImageRef>> {
+    fn image_slot_mut(&mut self, slot: ImageSlot) -> &mut Edit<ImageRef> {
         match slot {
             ImageSlot::TvBackdrop => &mut self.backdrop,
             ImageSlot::TvCard => &mut self.card,

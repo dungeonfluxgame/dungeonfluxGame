@@ -64,7 +64,7 @@ pub fn lookup_replay<'a, Store: PreparedRead>(
 }
 
 fn resolve<'a, Key: Eq, Basis: Eq, Artifact, Failure>(
-    entry: Result<Option<ReadEntry<'a, Key, Basis, Artifact>>, Failure>,
+    entry: ReadResult<'a, Key, Basis, Artifact, Failure>,
     key: &Key,
     current_basis: &Basis,
 ) -> Result<&'a Artifact, LookupError<Failure>> {
@@ -108,6 +108,7 @@ pub enum AuthorizedLookupError<Failure, AuthorizationFailure> {
     Lookup(LookupError<Failure>),
 }
 
+/// The artifact, or the authorization or lookup refusal, for one authorized read of `Store`.
 pub type AuthorizedLookupResult<'a, Store> = Result<
     &'a <Store as PreparedRead>::Artifact,
     AuthorizedLookupError<

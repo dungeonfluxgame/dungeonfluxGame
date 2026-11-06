@@ -5,8 +5,12 @@ use crate::service::analysis_types::{AnalysisLocatedHead, AnalysisTarget, Normal
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 const HEAD_INSTRUCTION: &str = concat!(
-    "The first picture is a film still.{second} Find the head of each of these people in the still: {people}. ",
-    "Reply with only JSON {\"heads\":[{\"id\":\"name\",\"left\":0.0,\"top\":0.0,\"right\":0.0,\"bottom\":0.0}]}: the box of each head (hair to chin; for a person seen from behind, the back of the head), each number a fraction of the still's width (left, right) or height (top, bottom). ",
+    "The first picture is a film still.{second} Find the head of each of these people in the ",
+    "still: {people}. ",
+    "Reply with only JSON ",
+    "{\"heads\":[{\"id\":\"name\",\"left\":0.0,\"top\":0.0,\"right\":0.0,\"bottom\":0.0}]}: the ",
+    "box of each head (hair to chin; for a person seen from behind, the back of the head), each ",
+    "number a fraction of the still's width (left, right) or height (top, bottom). ",
     "Leave out anyone who is not in the still.",
 );
 const MAXIMUM_DESCRIPTION_CHARACTERS: usize = 300;

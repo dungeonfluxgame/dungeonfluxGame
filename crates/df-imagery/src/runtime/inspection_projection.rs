@@ -6,6 +6,7 @@ use crate::execution::{
 use crate::{ImageJob, PhotoInspectionAssessment};
 use sha2::{Digest, Sha256};
 
+/// The audience-safe assessment of the job's retained supplier inspection decision.
 pub fn project_inspection_decision(
     job: &ImageJob,
     decision: &DecisionObservation,
@@ -24,6 +25,7 @@ pub fn project_inspection_decision(
         .map_err(|_| RuntimeError::InvalidRecord)?;
     Ok(crate::backends::analysis::standalone::project_photo_assessment(&assessment))
 }
+/// The audience-safe assessment of the job's retained local inspection checkpoint.
 pub fn project_local_inspection(
     job: &ImageJob,
     local: &LocalInspectionCheckpoint,

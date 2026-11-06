@@ -27,18 +27,10 @@
 /// The prefix of every stable book call id derived from a dispatch id.
 pub const PINNED_CALL_PREFIX: &str = "img-";
 
-const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
-
 /// The stable book call id for a durable 16-byte dispatch id: `img-` plus 32 lowercase hex
 /// digits. Deterministic in the dispatch id alone, so a retry reuses it without randomness.
 pub fn pinned_call_id(dispatch: &[u8; 16]) -> String {
-    let mut id = String::with_capacity(PINNED_CALL_PREFIX.len() + 32);
-    id.push_str(PINNED_CALL_PREFIX);
-    for byte in dispatch {
-        id.push(HEX_DIGITS[usize::from(byte >> 4)] as char);
-        id.push(HEX_DIGITS[usize::from(byte & 0x0f)] as char);
-    }
-    id
+    format!("{PINNED_CALL_PREFIX}{}", crate::lower_hex(dispatch))
 }
 
 /// One durable dispatch attempt, by its 16-byte journal identity.
@@ -166,13 +158,16 @@ pub enum PinnedUnsent {
 #[derive(Clone, Eq, PartialEq)]
 pub struct PinnedCostReceipt {
     pub call_id: String,
+    /// The usage revision the Book holds for this call.
     pub revision: UsageRevision,
     pub route: CostRoute,
     pub evidence: UsageEvidence,
     pub units: Vec<CostUnits>,
+    /// False for billed work that produced nothing usable.
     pub usable: bool,
     /// None when any line is unpriced or no quantity was booked; never an invented zero.
     pub amount: Option<df_types::Money>,
+    /// True once the existing cost log has synced this revision.
     pub durable: bool,
 }
 
@@ -191,7 +186,9 @@ impl std::fmt::Debug for PinnedCostReceipt {
 /// Whether the existing cost log has durably stored a no-delivery tombstone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnsentDurability {
+    /// Sealed in memory only; not an acknowledgement, so the caller retries the same seal.
     Pending,
+    /// The tombstone is in the durable cost log.
     Durable,
 }
 

@@ -37,7 +37,8 @@ use crate::engine::audit::{EngineAudit, SubmitResult};
 use crate::engine::labels::sender_label;
 use crate::engine::limits::MAXIMUM_RECENT_SUBMISSIONS;
 use crate::engine::report::{
-    EngineError, RefusalReport as RefusalView, SubmissionReport, SubmitReply, TurnReport,
+    EngineError, RefusalCause, RefusalReport as RefusalView, SubmissionReport, SubmitReply,
+    TurnReport,
 };
 use crate::engine::request::{InputBody, InputRequest};
 
@@ -53,22 +54,6 @@ fn status_text(status: OperationStatus) -> String {
             format!("finished turn_seq={turn_seq} outcome={}", outcome.key())
         }
         OperationStatus::Abandoned { turn_seq } => format!("abandoned turn_seq={turn_seq}"),
-    }
-}
-
-fn origin_of(text: &str) -> Result<ProposalOrigin, EngineError> {
-    match text {
-        "npc" => Ok(ProposalOrigin::Npc),
-        "world" => Ok(ProposalOrigin::World),
-        "story" => Ok(ProposalOrigin::Story),
-        "encounter" => Ok(ProposalOrigin::Encounter),
-        "timer" => Ok(ProposalOrigin::Timer),
-        "machine" => Ok(ProposalOrigin::Machine),
-        other => Err(EngineError::BadRequest {
-            reason: format!(
-                "'{other}' is not a proposal origin (npc, world, story, encounter, timer, machine)"
-            ),
-        }),
     }
 }
 
@@ -176,7 +161,7 @@ impl Owner {
         let admitted = if self.aimed_at_replaced_machine(&request, &envelope) {
             self.refuse_stale_machine(&envelope);
             report.refusal = Some(RefusalView {
-                cause: DeclineCode::WindowClosed.key().to_owned(),
+                cause: RefusalCause::Declined(DeclineCode::WindowClosed),
                 detail: STALE_MACHINE_DETAIL.to_owned(),
                 retry_after_ms: None,
                 first_status: None,
@@ -185,7 +170,7 @@ impl Owner {
         } else if let Some(retry_after_ms) = self.backoff_remaining_ms(now_ms) {
             self.refuse_while_backing_off(&envelope, retry_after_ms);
             report.refusal = Some(RefusalView {
-                cause: DeclineCode::TableBusy.key().to_owned(),
+                cause: RefusalCause::Declined(DeclineCode::TableBusy),
                 detail: "the table is recovering from a failed save".to_owned(),
                 retry_after_ms: Some(retry_after_ms),
                 first_status: None,
@@ -282,9 +267,7 @@ impl Owner {
         match wide {
             Some(number) => NonZeroU128::new(number)
                 .map(OperationId::from_nonzero_u128)
-                .ok_or(EngineError::BadRequest {
-                    reason: "an operation id is not zero".to_owned(),
-                }),
+                .ok_or(EngineError::ZeroOperation),
             None => Ok(match request.input {
                 InputBody::Timer { .. } | InputBody::Proposal { .. } => {
                     self.mint_engine_operation()
@@ -358,7 +341,7 @@ impl Owner {
                 operation,
                 view,
                 EngineInput::Proposal {
-                    origin: origin_of(origin)?,
+                    origin: origin.origin(),
                     proposer: ProposerRef::new(proposer).map_err(|_| invalid_name(proposer))?,
                 },
             ),
@@ -437,11 +420,11 @@ fn partition_turns(turns: Vec<TurnReport>, waiting: &[Waiting]) -> Vec<Vec<TurnR
 
 fn refusal_report(error: &AdmitError) -> RefusalView {
     let cause = match error.report() {
-        RefusalReport::Declined(code) => code.key(),
-        RefusalReport::NotDeclined(cause) => cause.key(),
+        RefusalReport::Declined(code) => RefusalCause::Declined(code),
+        RefusalReport::NotDeclined(cause) => RefusalCause::NotDeclined(cause),
     };
     RefusalView {
-        cause: cause.to_owned(),
+        cause,
         detail: error.to_string(),
         retry_after_ms: match error {
             AdmitError::RateLimited { retry_after_ms } => Some(*retry_after_ms),

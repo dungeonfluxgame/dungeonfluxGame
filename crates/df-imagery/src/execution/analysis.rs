@@ -1,9 +1,11 @@
-//! Explicit standalone analytical results and immutable provenance, independent of media publication.
+//! Explicit standalone analytical results and immutable provenance, independent of media
+//! publication.
 use super::{DecisionKind, DecisionReference, StageBasis, StageScope};
 use crate::{OperationHandle, VersionedSnapshot};
 use std::fmt;
 
-/// One immutable result selected for an owned analytical job; selection requires runtime qualification.
+/// One immutable result selected for an owned analytical job; selection requires runtime
+/// qualification.
 #[derive(Clone, Eq, PartialEq)]
 pub struct AnalysisCheckpoint {
     pub scope: StageScope,

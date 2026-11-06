@@ -3,8 +3,8 @@
 //! recorded in the audit log with the component and the field, never the free text.
 
 use df_playground::fixture::Fixture;
-use df_playground::lobby_change::{LobbyLine, LobbyPart, PillPart, ScreenEdit};
-use df_playground::lobby_model::{LogoStyle, PartyCount, SeatState, SummaryIcon};
+use df_playground::lobby::change::{LobbyLine, LobbyPart, PillPart, ScreenEdit};
+use df_playground::lobby::model::{LogoStyle, PartyCount, SeatState, SummaryIcon};
 use df_playground::scene::SceneChange;
 
 use crate::client::get;
@@ -473,5 +473,19 @@ async fn pills_loading_and_roleplay_changes_are_drawn_and_reset_returns_to_the_f
         .await
         .expect("answers");
     let reply: ControlsReply = serde_json::from_str(&response.body).expect("controls");
-    assert!(reply.scene.screens.lobby.is_none() && reply.scene.screens.pills.is_none());
+    assert!(reply.scene.lobby.is_keep() && reply.scene.pills.is_keep());
+}
+
+#[test]
+fn a_reply_of_the_old_shape_with_a_screens_key_is_refused() {
+    let reply = ControlsReply {
+        revision: 1,
+        boot_id: String::new(),
+        controls: df_playground::controls::Controls::default(),
+        scene: df_playground::scene::SceneOverlay::default(),
+    };
+    let mut written = serde_json::to_value(&reply).expect("writes");
+    assert!(serde_json::from_value::<ControlsReply>(written.clone()).is_ok());
+    written["scene"]["screens"] = serde_json::json!({"lobby": null, "pills": null});
+    assert!(serde_json::from_value::<ControlsReply>(written).is_err());
 }

@@ -6,11 +6,13 @@
 //! it on the blocking pool.
 
 use std::fmt;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use df_table::kind::KindRegistry;
-use df_table::kind_file::{KindError, KindFile};
+use df_table::kind::file::{KindError, KindFile};
 
+use crate::dev_http::{BodyError, parse_body};
 use crate::limits::{MAXIMUM_KIND_FILE_BYTES, MAXIMUM_KIND_FILES};
 
 /// One thing wrong with the kind directory or one of its files.
@@ -18,14 +20,14 @@ use crate::limits::{MAXIMUM_KIND_FILE_BYTES, MAXIMUM_KIND_FILES};
 pub enum KindFileProblem {
     UnreadableDirectory {
         directory: PathBuf,
-        message: String,
+        kind: ErrorKind,
     },
     UnreadableEntry {
-        message: String,
+        kind: ErrorKind,
     },
     UnreadableFile {
         file: String,
-        message: String,
+        kind: ErrorKind,
     },
     FileTooLarge {
         file: String,
@@ -34,9 +36,11 @@ pub enum KindFileProblem {
     TooManyFiles {
         found: usize,
     },
+    /// The file is not a kind file's JSON. `error` is the reader's typed account (its category,
+    /// line and column), the same one a dev route gives for a request body.
     Parse {
         file: String,
-        message: String,
+        error: BodyError,
     },
     Kind(KindError),
     /// The blocking task that reads the files did not finish.
@@ -46,13 +50,11 @@ pub enum KindFileProblem {
 impl fmt::Display for KindFileProblem {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnreadableDirectory { directory, message } => {
-                write!(formatter, "cannot read {}: {message}", directory.display())
+            Self::UnreadableDirectory { directory, kind } => {
+                write!(formatter, "cannot read {}: {kind}", directory.display())
             }
-            Self::UnreadableEntry { message } => {
-                write!(formatter, "cannot read an entry: {message}")
-            }
-            Self::UnreadableFile { file, message } => write!(formatter, "{file}: {message}"),
+            Self::UnreadableEntry { kind } => write!(formatter, "cannot read an entry: {kind}"),
+            Self::UnreadableFile { file, kind } => write!(formatter, "cannot read {file}: {kind}"),
             Self::FileTooLarge { file, bytes } => write!(
                 formatter,
                 "{file}: {bytes} bytes; a kind file is at most {MAXIMUM_KIND_FILE_BYTES}"
@@ -61,7 +63,7 @@ impl fmt::Display for KindFileProblem {
                 formatter,
                 "{found} kind files; at most {MAXIMUM_KIND_FILES} are read"
             ),
-            Self::Parse { file, message } => write!(formatter, "{file}: {message}"),
+            Self::Parse { file, error } => write!(formatter, "{file}: {}", error.detail),
             Self::Kind(error) => write!(formatter, "{error}"),
             Self::ReadingStopped => formatter.write_str("reading the kind files was interrupted"),
         }
@@ -110,7 +112,7 @@ pub fn load_kind_files(directory: &Path) -> Result<KindRegistry, KindFileProblem
     let entries = std::fs::read_dir(directory).map_err(|error| {
         KindFileProblems(vec![KindFileProblem::UnreadableDirectory {
             directory: directory.to_path_buf(),
-            message: error.to_string(),
+            kind: error.kind(),
         }])
     })?;
     let mut problems = Vec::new();
@@ -119,9 +121,7 @@ pub fn load_kind_files(directory: &Path) -> Result<KindRegistry, KindFileProblem
         match entry {
             Ok(entry) if is_kind_file(&entry.path()) => paths.push(entry.path()),
             Ok(_) => {}
-            Err(error) => problems.push(KindFileProblem::UnreadableEntry {
-                message: error.to_string(),
-            }),
+            Err(error) => problems.push(KindFileProblem::UnreadableEntry { kind: error.kind() }),
         }
     }
     paths.sort();
@@ -145,22 +145,19 @@ pub fn load_kind_files(directory: &Path) -> Result<KindRegistry, KindFileProblem
             Err(error) => {
                 problems.push(KindFileProblem::UnreadableFile {
                     file,
-                    message: error.to_string(),
+                    kind: error.kind(),
                 });
                 continue;
             }
         }
         match std::fs::read_to_string(path) {
-            Ok(text) => match serde_json::from_str::<KindFile>(&text) {
+            Ok(text) => match parse_body::<KindFile>(text.as_bytes()) {
                 Ok(parsed) => files.push(parsed),
-                Err(error) => problems.push(KindFileProblem::Parse {
-                    file,
-                    message: error.to_string(),
-                }),
+                Err(error) => problems.push(KindFileProblem::Parse { file, error }),
             },
             Err(error) => problems.push(KindFileProblem::UnreadableFile {
                 file,
-                message: error.to_string(),
+                kind: error.kind(),
             }),
         }
     }

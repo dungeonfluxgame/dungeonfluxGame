@@ -1,18 +1,18 @@
 use crate::effects::TableEffect;
 use crate::event::FailureCause;
 use crate::identity::SceneId;
+use crate::limits::LARGE_LOOKAHEAD_MAXIMUM;
+use crate::lookahead::settings::{DEFAULT_LOOKAHEAD_DEPTH, LookaheadSetting, LookaheadSettings};
+use crate::lookahead::stamp::{DAY_PART_SECONDS, StampChange, WorldStamp};
 use crate::lookahead::{
-    Action, BuildOutcome, BuildToken, CERTAIN_PERMILLE, CancelReason, Candidate, Expectation,
-    Expected, LookaheadError, LookaheadPlanner, PlanView, Take, lookahead_candidates,
+    Action, BookState, BuildOutcome, BuildToken, CERTAIN_PERMILLE, CancelReason, Candidate,
+    Expectation, Expected, FailedBuild, LookaheadError, LookaheadPlanner, PlanView, Take,
+    lookahead_candidates,
 };
-use crate::lookahead_settings::{
-    DEFAULT_LOOKAHEAD_DEPTH, LARGE_LOOKAHEAD_MAXIMUM, LookaheadSetting, LookaheadSettings,
-};
-use crate::lookahead_stamp::{DAY_PART_SECONDS, StampChange, WorldStamp};
 use crate::plate_fixtures_tests::{World, display_name, market, picture, scene};
 use crate::private_data::Narration;
+use crate::scene_plan::brief::SceneBrief;
 use crate::scene_plan::{SceneStage, StageOutputs};
-use crate::scene_plan_brief::SceneBrief;
 
 const CURRENT: u64 = 10;
 const NEXT: u64 = 11;
@@ -38,7 +38,7 @@ fn candidates(world: &World, list: Vec<Expected>) -> Vec<Candidate> {
 }
 
 fn planner() -> LookaheadPlanner {
-    LookaheadPlanner::new(LookaheadSettings::defaults())
+    LookaheadPlanner::new(LookaheadSettings::default())
 }
 
 fn outputs() -> StageOutputs {
@@ -175,7 +175,7 @@ fn a_certain_next_scene_starts_at_once_and_only_once() {
 fn a_likely_scene_waits_for_the_current_scene_to_be_ready_and_the_start_delay() {
     let world = market();
     let mut planner = LookaheadPlanner::new(
-        LookaheadSettings::defaults()
+        LookaheadSettings::default()
             .with(LookaheadSetting::Depth, 2)
             .expect("depth"),
     );
@@ -222,7 +222,7 @@ fn depth_limits_how_many_scenes_are_built_at_once() {
         .collect();
     assert_eq!(first, vec![NEXT], "depth 1 builds the certain scene only");
     let mut three = LookaheadPlanner::new(
-        LookaheadSettings::defaults()
+        LookaheadSettings::default()
             .with(LookaheadSetting::Depth, 3)
             .expect("depth"),
     );
@@ -375,6 +375,18 @@ fn a_scene_nobody_built_is_a_miss_and_a_failed_build_says_why() {
             },
         )
         .expect("recorded");
+    let failure = FailedBuild {
+        stage: Some(SceneStage::Background),
+        cause: FailureCause::Refused,
+    };
+    let report = failing.report(400);
+    assert_eq!(report.book[0].state, BookState::Failed);
+    assert_eq!(report.book[0].failure, Some(failure));
+    assert_eq!(failure.to_string(), "background refused");
+    assert_eq!(
+        serde_json::to_value(&report.book[0]).expect("a book entry serializes")["failure"],
+        serde_json::json!({"stage": "background", "cause": "refused"})
+    );
     assert_eq!(
         failing.enter(scene(NEXT), &stamp_now(&world, NEXT)).take,
         Take::Failed {
@@ -444,7 +456,7 @@ fn a_result_of_a_replaced_build_is_refused_by_its_token() {
 fn entering_another_scene_cancels_running_builds_and_keeps_built_ones_for_reuse() {
     let world = market();
     let mut planner = LookaheadPlanner::new(
-        LookaheadSettings::defaults()
+        LookaheadSettings::default()
             .with(LookaheadSetting::Depth, 2)
             .expect("depth"),
     );
@@ -539,7 +551,7 @@ fn closing_the_table_cancels_every_build_and_turning_the_worker_off_does_too() {
     );
     assert_eq!(closing.booked(), 0);
     let (mut off, _) = building(&world);
-    off.set_settings(LookaheadSettings::defaults().with_enabled(false));
+    off.set_settings(LookaheadSettings::default().with_enabled(false));
     let actions = off.plan(1, PlanView::default());
     assert_eq!(
         cancelled(&actions),
@@ -549,7 +561,7 @@ fn closing_the_table_cancels_every_build_and_turning_the_worker_off_does_too() {
 
 #[test]
 fn settings_refuse_values_outside_their_range_and_name_the_setting() {
-    let defaults = LookaheadSettings::defaults();
+    let defaults = LookaheadSettings::default();
     let error = defaults.with(LookaheadSetting::Depth, 0).unwrap_err();
     assert_eq!(error.setting, LookaheadSetting::Depth);
     assert!(error.to_string().contains("lookahead_depth"));
@@ -581,10 +593,10 @@ fn the_report_lists_the_expected_scenes_the_book_and_the_counters() {
     let report = planner.report(2_000);
     assert!(report.enabled && !report.paused);
     assert_eq!(report.wanted.len(), 1);
-    assert_eq!(report.wanted[0].expectation, "authored_beat");
+    assert_eq!(report.wanted[0].expectation, Expectation::AuthoredBeat);
     assert!(report.wanted[0].certain);
     assert_eq!(report.book.len(), 1);
-    assert_eq!(report.book[0].state, "building");
+    assert_eq!(report.book[0].state, BookState::Building);
     assert_eq!(report.book[0].age_ms, 2_000);
     assert_eq!(report.counts.started, 1);
 }
@@ -708,7 +720,7 @@ fn an_unused_built_scene_stays_in_the_book_without_using_the_depth() {
         report
             .book
             .iter()
-            .any(|entry| entry.scene == NEXT && entry.state == "ready"),
+            .any(|entry| entry.scene == NEXT && entry.state == BookState::Ready),
         "the unused scene is still in the book"
     );
 }
@@ -745,4 +757,16 @@ fn a_full_depth_tick_changes_nothing_however_many_scenes_are_expected() {
     assert!(planner.plan(60_001, gate_open()).is_empty());
     assert_eq!(planner.wanted(), before.as_slice());
     assert_eq!(planner.counts().started, 1);
+}
+
+#[test]
+fn every_book_state_key_is_its_serde_name() {
+    for state in BookState::ALL {
+        assert_eq!(
+            serde_json::to_value(state).expect("a book state serializes"),
+            serde_json::Value::from(state.key())
+        );
+        assert_eq!(BookState::from_key(state.key()), Some(*state));
+    }
+    assert_eq!(BookState::from_key("built"), None);
 }

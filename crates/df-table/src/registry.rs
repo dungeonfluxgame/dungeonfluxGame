@@ -261,7 +261,7 @@ impl RegistryBuilder {
         self
     }
 
-    pub fn flags(mut self, flags: MachineFlags) -> Self {
+    pub fn with_flags(mut self, flags: MachineFlags) -> Self {
         self.flags = flags;
         self
     }
@@ -377,7 +377,7 @@ fn check_enabled_machine(
 
 /// Why the value a machine's `exit` returned cannot be applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HandOffRefusal {
+pub enum HandOffTargetError {
     /// The machine that is leaving is not registered and enabled.
     UnknownSource {
         machine: MachineId,
@@ -405,7 +405,7 @@ pub enum HandOffRefusal {
     },
 }
 
-impl fmt::Display for HandOffRefusal {
+impl fmt::Display for HandOffTargetError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownSource { machine } => {
@@ -439,32 +439,33 @@ impl fmt::Display for HandOffRefusal {
     }
 }
 
-impl std::error::Error for HandOffRefusal {}
+impl std::error::Error for HandOffTargetError {}
 
 /// Applies the declared-target, enabled and scope rules to a hand-off `from` returned. `lookup`
 /// answers for a machine id: its scope and whether it is enabled, or `None` when unknown.
-pub fn check_hand_off_route(
+pub(crate) fn check_hand_off_route(
     from: &MachineSpec,
     hand_off: &HandOff,
     lookup: impl Fn(&MachineId) -> Option<(Scope, Enablement)>,
-) -> Result<(), HandOffRefusal> {
+) -> Result<(), HandOffTargetError> {
     match hand_off.target() {
         HandOffTarget::Machine(target) => {
             if !from.hand_off_targets().contains(target) {
-                return Err(HandOffRefusal::UndeclaredTarget {
+                return Err(HandOffTargetError::UndeclaredTarget {
                     target: target.clone(),
                 });
             }
-            let (to, enablement) = lookup(target).ok_or_else(|| HandOffRefusal::UnknownTarget {
-                target: target.clone(),
-            })?;
+            let (to, enablement) =
+                lookup(target).ok_or_else(|| HandOffTargetError::UnknownTarget {
+                    target: target.clone(),
+                })?;
             if enablement == Enablement::Disabled {
-                return Err(HandOffRefusal::TargetDisabled {
+                return Err(HandOffTargetError::TargetDisabled {
                     target: target.clone(),
                 });
             }
             if !from.scope().may_hand_off_to(to) {
-                return Err(HandOffRefusal::ScopeRuleBroken {
+                return Err(HandOffTargetError::ScopeRuleBroken {
                     from: from.scope(),
                     to,
                 });
@@ -472,11 +473,11 @@ pub fn check_hand_off_route(
             Ok(())
         }
         HandOffTarget::ReleaseLane if from.scope() == Scope::Seat => Ok(()),
-        HandOffTarget::ReleaseLane => Err(HandOffRefusal::LaneNotReleasable {
+        HandOffTarget::ReleaseLane => Err(HandOffTargetError::LaneNotReleasable {
             scope: from.scope(),
         }),
         HandOffTarget::ReturnToFrameBelow if from.scope() == Scope::Group => Ok(()),
-        HandOffTarget::ReturnToFrameBelow => Err(HandOffRefusal::NothingBelow {
+        HandOffTarget::ReturnToFrameBelow => Err(HandOffTargetError::NothingBelow {
             scope: from.scope(),
         }),
     }
@@ -510,10 +511,10 @@ impl Registry {
         &self,
         from: &MachineId,
         hand_off: &HandOff,
-    ) -> Result<HandOffRoute<'_>, HandOffRefusal> {
+    ) -> Result<HandOffRoute<'_>, HandOffTargetError> {
         let source = self
             .machine(from)
-            .ok_or_else(|| HandOffRefusal::UnknownSource {
+            .ok_or_else(|| HandOffTargetError::UnknownSource {
                 machine: from.clone(),
             })?;
         check_hand_off_route(source.spec(), hand_off, |id| {
@@ -525,7 +526,7 @@ impl Registry {
             HandOffTarget::Machine(target) => match self.machine(target) {
                 Some(machine) => HandOffRoute::To(machine),
                 None => {
-                    return Err(HandOffRefusal::TargetDisabled {
+                    return Err(HandOffTargetError::TargetDisabled {
                         target: target.clone(),
                     });
                 }

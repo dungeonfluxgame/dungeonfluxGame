@@ -1,16 +1,14 @@
 //! The text of `director show` and of a verb's answer. The log rows are the audit lines of the
 //! entries themselves, so the screen and the event log cannot differ.
 
-use df_table::director_log::EndsReport;
+use df_table::director::log::EndsReport;
 use df_table::element::ElementId;
 
 use super::request::{ActReply, ShowReply};
 
 /// An element's name, or what is said in place of one the audience may not be told.
-fn name(element: &Option<ElementId>) -> String {
-    element
-        .as_ref()
-        .map_or_else(|| "(withheld)".to_owned(), ToString::to_string)
+fn name(element: Option<&ElementId>) -> String {
+    element.map_or_else(|| "(withheld)".to_owned(), ToString::to_string)
 }
 
 /// A verb's answer: the lines it wrote, or that nothing moved, and anything the playground refused.
@@ -49,7 +47,7 @@ pub fn format_show(show: &ShowReply) -> String {
             };
             text.push_str(&format!(
                 "  holding: {} for {} (move {}, {}%, since {} ms), {ends}\n",
-                name(&active.element),
+                name(active.element.as_ref()),
                 active.reason,
                 active.serial,
                 active.zoom_percent,
@@ -61,7 +59,7 @@ pub fn format_show(show: &ShowReply) -> String {
     match &report.waiting {
         Some(waiting) => text.push_str(&format!(
             "  waiting: {} for {} since {} ms\n",
-            name(&waiting.element),
+            name(waiting.element.as_ref()),
             waiting.reason,
             waiting.since_ms
         )),

@@ -29,6 +29,8 @@ impl fmt::Display for SpeedError {
     }
 }
 
+impl std::error::Error for SpeedError {}
+
 impl Speed {
     pub fn new(units_per_second: f32) -> Result<Self, SpeedError> {
         if units_per_second.is_finite()
@@ -55,7 +57,7 @@ pub struct Motion {
 
 /// What one tick of the motion system did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MotionReport {
+pub(crate) struct MotionReport {
     /// Entities whose position changed.
     pub moved: usize,
     /// Entities that reached their target; their motion is gone.
@@ -65,7 +67,7 @@ pub struct MotionReport {
 /// Moves every entity that has a motion toward its target by `seconds` of travel. An entity that
 /// would pass its target stops on it. A tick that is not a finite non-negative number, or is longer
 /// than `MAXIMUM_TICK_SECONDS`, is cut to the nearest allowed value.
-pub fn advance(
+pub(crate) fn advance(
     positions: &mut Store<Position>,
     motions: &mut Store<Motion>,
     seconds: f32,

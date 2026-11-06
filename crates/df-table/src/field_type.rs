@@ -35,6 +35,8 @@ impl fmt::Display for ValueError {
     }
 }
 
+impl std::error::Error for ValueError {}
+
 /// The type of one field.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FieldType {

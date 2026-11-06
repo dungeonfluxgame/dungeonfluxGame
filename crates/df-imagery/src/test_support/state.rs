@@ -254,8 +254,11 @@ impl Store {
             attempt: AttemptId::from_bytes(&attempt).map_err(|_| RuntimeError::InvalidRecord)?,
             write: WriteId::from_bytes(&self.ids.next_bytes())
                 .map_err(|_| RuntimeError::InvalidRecord)?,
-            version: ObjectVersion::new(format!("fixture-{}", hex(&self.ids.next_bytes())))
-                .ok_or(RuntimeError::InvalidRecord)?,
+            version: ObjectVersion::new(format!(
+                "fixture-{}",
+                crate::lower_hex(&self.ids.next_bytes())
+            ))
+            .ok_or(RuntimeError::InvalidRecord)?,
             suppression_generation: 0,
             retention: match &self.lock()?.owner {
                 ImageOwner::Draft { .. } => df_assets::RetentionClass::Personal,
@@ -269,13 +272,4 @@ impl Store {
             alpha,
         })
     }
-}
-pub(super) fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        text.push(char::from(DIGITS[usize::from(byte & 15)]));
-    }
-    text
 }

@@ -33,6 +33,7 @@ pub struct ArtworkSubjectKey {
 }
 
 impl ArtworkSubjectKey {
+    /// Refuses blank keys and keys over [`MAXIMUM_ARTWORK_SUBJECT_BYTES`].
     pub fn new(text: &str) -> Result<Self, ArtworkError> {
         if text.trim().is_empty() {
             return Err(ArtworkError::EmptySubject);
@@ -107,6 +108,7 @@ pub struct CampaignArtworkSpec {
 }
 
 impl CampaignArtworkSpec {
+    /// The identity encoding this build writes: always [`CAMPAIGN_ARTWORK_SPEC_VERSION`].
     pub fn version(&self) -> u32 {
         CAMPAIGN_ARTWORK_SPEC_VERSION
     }
@@ -163,5 +165,4 @@ impl ArtworkBinding {
 }
 
 #[cfg(test)]
-#[path = "artwork_tests.rs"]
-mod tests;
+mod artwork_tests;

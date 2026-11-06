@@ -5,6 +5,7 @@ use crate::execution::{DispatchState, DispatchView, ExecutionScope, StageBasis, 
 use crate::{ImageJob, ImageOwner};
 use sha2::{Digest, Sha256};
 
+/// A proof that a dispatch failed definitively with retained raw usage and no output.
 #[derive(Clone)]
 pub struct QualifiedNoOutput {
     owner: ImageOwner,
@@ -78,6 +79,7 @@ impl QualifiedNoOutput {
             && self.raw_sha256.as_ref() == raw_sha256
     }
 }
+/// Proves a definitive no-output failure from the dispatch, its basis and its retained usage.
 pub fn qualify_no_output(
     job: &ImageJob,
     dispatch: &DispatchView,

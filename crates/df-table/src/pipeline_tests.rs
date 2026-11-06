@@ -832,7 +832,7 @@ fn one_correlation_goes_through_every_port_call_of_an_input() {
 fn a_failed_machine_step_declines_and_records_the_machine_failure_once() {
     let mut world = wave_world();
     // A saved state the scene cannot read makes its step fail, as a damaged record would.
-    let broken = crate::machine_slot::MachineSlot::from_parts(
+    let broken = crate::machine::slot::MachineSlot::from_parts(
         crate::machine::MachineId::new("scene").expect("valid"),
         1,
         serde_json::json!({"phase": "gone"}),

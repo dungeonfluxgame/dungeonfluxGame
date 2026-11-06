@@ -17,12 +17,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use df_table::identity::SceneId;
-use df_table::plate_buffer::{Delivery, GenerationRegression, StageMoment, Step};
-use df_table::plate_job::{JobError, PlateJob};
-use df_table::plate_scheduler::{JobEnd, PlateScheduler, Tick, TickOutcome};
-use df_table::plate_timing::{PlateTiming, SceneBuildKind};
+use df_table::plate::buffer::{Delivery, GenerationRegressionError, StageMoment, Step};
+use df_table::plate::job::{JobError, PlateJob};
+use df_table::plate::scheduler::{JobEnd, PlateScheduler, Tick, TickOutcome};
+use df_table::plate::timing::{PlateTiming, SceneBuildKind};
 use df_table::scene_plan::StageOutputs;
-use df_table::scene_plan_brief::SceneBrief;
+use df_table::scene_plan::brief::SceneBrief;
 use df_table::table_state::{SceneGeneration, TableSnapshot};
 
 use super::builder::{BuilderError, BuilderOutput, JobOutcome, SceneBuilder};
@@ -36,7 +36,7 @@ pub enum PacerError {
     Job(JobError),
     Builder(BuilderError),
     /// The scene's generation is not after the one the screen already moved to (D.2).
-    Generation(GenerationRegression),
+    Generation(GenerationRegressionError),
 }
 
 impl fmt::Display for PacerError {
@@ -67,8 +67,8 @@ impl From<BuilderError> for PacerError {
     }
 }
 
-impl From<GenerationRegression> for PacerError {
-    fn from(error: GenerationRegression) -> Self {
+impl From<GenerationRegressionError> for PacerError {
+    fn from(error: GenerationRegressionError) -> Self {
         Self::Generation(error)
     }
 }
@@ -244,7 +244,7 @@ impl ScenePacer {
             (
                 TickOutcome::Queued {
                     job,
-                    cause,
+                    reason: cause,
                     dropped,
                 },
                 Some(generation),

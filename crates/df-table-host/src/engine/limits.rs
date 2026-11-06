@@ -19,6 +19,9 @@ pub const MAXIMUM_RECENT_SUBMISSIONS: usize = 100_000;
 pub const MAXIMUM_LINES_PER_ANSWER: usize = 10_000;
 /// Most broker ledger entries one `broker ledger` answer carries.
 pub const MAXIMUM_LEDGER_ENTRIES_PER_ANSWER: usize = 10_000;
+/// Most commit records a store remembers; the oldest are forgotten first. Deliberately huge;
+/// scope it down later (owner, 2026-11-02).
+pub const MAXIMUM_COMMIT_RECORDS: usize = 1_000_000;
 
 /// Seats the dev engine joins to the owner queue at start (the authenticated session's members,
 /// 1 to this number). The lobby then seats them at the table.

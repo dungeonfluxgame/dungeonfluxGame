@@ -1,6 +1,8 @@
-//! Protected standalone completion proofs. Only replay of actual retained observations constructs them.
+//! Protected standalone completion proofs. Only replay of actual retained observations constructs
+//! them.
 use super::*;
 
+/// A standalone analysis result proven by replaying its retained supplier observation.
 pub struct QualifiedAnalysis {
     checkpoint: AnalysisCheckpoint,
     job: ImageJob,
@@ -21,6 +23,8 @@ impl QualifiedAnalysis {
         &self.sources
     }
 }
+/// A standalone analysis computed locally from its retained analysis dependencies and checked
+/// against them, with the final selection it implies.
 pub struct QualifiedLocalAnalysis {
     checkpoint: LocalAnalysisCheckpoint,
     final_checkpoint: AnalysisCheckpoint,

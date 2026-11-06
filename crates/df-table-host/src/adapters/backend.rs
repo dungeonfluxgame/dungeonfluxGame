@@ -52,23 +52,28 @@ impl RulesBackend {
         }
     }
 
-    /// The backend a setting value names.
-    pub fn parse(text: &str) -> Result<Self, AdapterError> {
-        Self::ALL
-            .into_iter()
-            .find(|backend| backend.key() == text)
-            .ok_or_else(|| AdapterError::UnknownRulesBackend {
-                text: text.to_owned(),
-            })
+    /// The backend a setting value names. `df-rules` keeps the crate's published spelling.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|backend| backend.key() == key)
     }
 
-    /// The setting from the environment: `scripted` when it is not set, an error when it is set
-    /// to anything but a backend.
+    /// The setting from the environment, read by the host's one rule (`crate::environment`: the
+    /// value is trimmed, and empty or only whitespace is unset): `scripted` when it is unset, an
+    /// error when it is set to anything but a backend or to something that is not Unicode.
     pub fn from_environment() -> Result<Self, AdapterError> {
-        match std::env::var(RULES_BACKEND_VARIABLE) {
-            Ok(text) => Self::parse(&text),
-            Err(std::env::VarError::NotPresent) => Ok(Self::Scripted),
-            Err(std::env::VarError::NotUnicode(_)) => Err(AdapterError::RulesBackendNotText),
+        Self::from_setting(crate::environment::checked_text(RULES_BACKEND_VARIABLE))
+    }
+
+    /// The backend a read of the setting names.
+    pub(crate) fn from_setting(
+        setting: Result<Option<String>, crate::environment::NotTextError>,
+    ) -> Result<Self, AdapterError> {
+        match setting {
+            Ok(Some(text)) => {
+                Self::from_key(&text).ok_or(AdapterError::UnknownRulesBackend { text })
+            }
+            Ok(None) => Ok(Self::Scripted),
+            Err(_not_text) => Err(AdapterError::RulesBackendNotText),
         }
     }
 }

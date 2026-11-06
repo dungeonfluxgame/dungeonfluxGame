@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
+use crate::limits::MAXIMUM_ALTERNATIVES;
 use crate::outcome::{
-    Decline, DeclineCode, DeclineError, MAXIMUM_ALTERNATIVES, Outcome, OutcomeKind, PendingKind,
-    PublicClass,
+    Decline, DeclineCode, DeclineError, Outcome, OutcomeKind, PendingKind, PublicClass,
 };
 
 /// The plan's table (C.6, RES40), written out a second time with no wildcard: a code added to

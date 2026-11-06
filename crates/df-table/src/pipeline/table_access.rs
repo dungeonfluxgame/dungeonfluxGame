@@ -37,7 +37,7 @@ use crate::effects::{ApplyOutcome, EffectError, TableEffect, TableState};
 use crate::envelope::Sender;
 use crate::identity::{Correlation, SceneId, SeatId, SessionRevision, TableId, TableScope};
 use crate::machine::MachineId;
-use crate::machine_slot::MachineSlot;
+use crate::machine::slot::MachineSlot;
 use crate::pending::digest::Fnv;
 use crate::pending::{
     PendingBook, PendingLoadError, PendingRecord, RulingBook, RulingLoadError, RulingRecord,
@@ -507,7 +507,7 @@ impl PipelineTable {
 }
 
 /// The schema version of `PipelineRecord`.
-pub const PIPELINE_RECORD_VERSION: u32 = 3;
+pub(crate) const PIPELINE_RECORD_VERSION: u32 = 3;
 
 /// The saved form of everything the pipeline holds beside the table state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

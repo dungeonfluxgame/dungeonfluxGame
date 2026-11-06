@@ -13,8 +13,10 @@ use std::{fmt, net::SocketAddr, time::Duration};
 
 use serde_json::json;
 
-use crate::native_http::{NativeHttp, NativeResponseProfile};
-use crate::{HttpRequest, NativeHttpLimits, NativeHttpRefusal};
+use crate::native_http::{
+    NativeHttp, NativeResponseProfile, is_loopback_socket, is_valid_credential,
+};
+use crate::{HttpRequest, NativeHttpRefusal, ProviderLimits};
 
 const LIVE_BASE: &str = "https://api.elevenlabs.io";
 /// The model `/v1/music` is asked for.
@@ -22,13 +24,18 @@ pub const MUSIC_MODEL: &str = "music_v2";
 /// The model `/v1/sound-generation` is asked for.
 pub const SOUND_MODEL: &str = "eleven_text_to_sound_v2";
 const OUTPUT_FORMAT: &str = "mp3_44100_128";
-const MAXIMUM_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-const MAXIMUM_REQUEST_BYTES: usize = 32 * 1024;
+/// The largest audio answer kept, in bytes. The longest composition (10 minutes at the 128 kbit/s
+/// of `OUTPUT_FORMAT`) is 9.6 MB, so this leaves ample room; the old 8 MiB refused every
+/// composition longer than about 8.7 minutes.
+const MAXIMUM_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+/// The largest request body sent, in bytes (a prompt is at most a few KiB of JSON).
+const MAXIMUM_REQUEST_BYTES: usize = 1024 * 1024;
 /// `/v1/music` accepts prompts up to 4100 characters.
 pub const MUSIC_MAXIMUM_PROMPT_CHARACTERS: usize = 4_100;
-/// `/v1/music` composes 3 seconds to 10 minutes.
-pub const MUSIC_MINIMUM_LENGTH_MILLIS: u32 = 3_000;
-pub const MUSIC_MAXIMUM_LENGTH_MILLIS: u32 = 600_000;
+/// `/v1/music` composes 3 seconds to 10 minutes; the shortest, in milliseconds.
+pub const MUSIC_MINIMUM_LENGTH_MS: u32 = 3_000;
+/// The longest composition `/v1/music` makes, in milliseconds.
+pub const MUSIC_MAXIMUM_LENGTH_MS: u32 = 600_000;
 /// `/v1/sound-generation` makes at most 30 seconds.
 pub const AMBIENCE_MAXIMUM_SECONDS: u32 = 30;
 const AMBIENCE_MAXIMUM_CHARACTERS: usize = 1_000;
@@ -44,6 +51,7 @@ pub enum ElevenMusicError {
     Unauthorized,
     /// The supplier answered with another failure status, or was rate limited.
     Provider(u16),
+    /// The transport refused or failed the exchange.
     Transport(NativeHttpRefusal),
     /// A success answer with no audio in it.
     Output,
@@ -55,13 +63,14 @@ pub struct ElevenMusicConfig {
 }
 
 impl ElevenMusicConfig {
+    /// Calls go to the live ElevenLabs API.
     pub fn live() -> Self {
         Self { fixture: None }
     }
 
     /// A literal loopback socket for tests.
     pub fn loopback_fixture(address: SocketAddr) -> Result<Self, ElevenMusicError> {
-        if !address.ip().is_loopback() || address.port() == 0 {
+        if !is_loopback_socket(address) {
             return Err(ElevenMusicError::InvalidRequest);
         }
         Ok(Self {
@@ -84,6 +93,7 @@ impl fmt::Debug for GeneratedAudio {
     }
 }
 
+/// The music and ambience client; it never retries and holds no cache.
 pub struct NativeElevenMusicProvider {
     base: String,
     credential: String,
@@ -105,21 +115,12 @@ impl NativeElevenMusicProvider {
         credential: &str,
         total_timeout: Duration,
     ) -> Result<Self, ElevenMusicError> {
-        if credential.is_empty()
-            || credential.len() > 4096
-            || !credential.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-        {
+        if !is_valid_credential(credential) {
             return Err(ElevenMusicError::InvalidRequest);
         }
-        let limits = NativeHttpLimits {
-            connect_timeout: Duration::from_secs(5).min(total_timeout),
-            read_timeout: total_timeout,
-            total_timeout,
-            maximum_request_bytes: MAXIMUM_REQUEST_BYTES,
-            maximum_response_bytes: MAXIMUM_RESPONSE_BYTES,
-            maximum_header_bytes: 16 * 1024,
-            maximum_chunks: 65_536,
-        };
+        let limits =
+            ProviderLimits::new(total_timeout, MAXIMUM_REQUEST_BYTES, MAXIMUM_RESPONSE_BYTES)
+                .build();
         let http = NativeHttp::new(limits, config.fixture.is_some())
             .map_err(|_| ElevenMusicError::InvalidRequest)?;
         Ok(Self {
@@ -132,23 +133,23 @@ impl NativeElevenMusicProvider {
         })
     }
 
-    /// Composes an instrumental of `length_millis` from `prompt`; one call, never retried.
+    /// Composes an instrumental of `length_ms` from `prompt`; one call, never retried.
     /// `deadline` is the time this call may still take.
     pub async fn compose(
         &self,
         prompt: &str,
-        length_millis: u32,
+        length_ms: u32,
         deadline: Duration,
     ) -> Result<GeneratedAudio, ElevenMusicError> {
         if prompt.trim().is_empty()
             || prompt.chars().count() > MUSIC_MAXIMUM_PROMPT_CHARACTERS
-            || !(MUSIC_MINIMUM_LENGTH_MILLIS..=MUSIC_MAXIMUM_LENGTH_MILLIS).contains(&length_millis)
+            || !(MUSIC_MINIMUM_LENGTH_MS..=MUSIC_MAXIMUM_LENGTH_MS).contains(&length_ms)
         {
             return Err(ElevenMusicError::InvalidRequest);
         }
         let body = json!({
             "prompt": prompt,
-            "music_length_ms": length_millis,
+            "music_length_ms": length_ms,
             "model_id": MUSIC_MODEL,
             "force_instrumental": true,
         });

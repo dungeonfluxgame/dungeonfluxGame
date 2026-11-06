@@ -58,7 +58,7 @@ fn a_tick_moves_an_entity_toward_its_target_by_speed_times_time() {
         (at.x - 1.2).abs() < 1e-5 && (at.y - 1.6).abs() < 1e-5,
         "{at:?}"
     );
-    assert!(motions.contains(entity), "still travelling");
+    assert!(motions.get(entity).is_some(), "still travelling");
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn an_entity_that_would_pass_its_target_stops_on_it_and_loses_its_motion() {
     assert_eq!(report.arrived, vec![entity]);
     assert_eq!(report.moved, 1);
     assert_eq!(positions.get(entity), Some(&Position::new(1.0, 0.0)));
-    assert!(!motions.contains(entity));
+    assert!(motions.get(entity).is_none());
     let again = advance(&mut positions, &mut motions, 0.1);
     assert_eq!(
         (again.moved, again.arrived.len()),

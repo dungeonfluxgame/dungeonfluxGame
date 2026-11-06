@@ -5,7 +5,7 @@
 //! the canvas does.
 
 use std::fmt;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::sync::Arc;
 
 use df_table::canvas::Canvas;
@@ -14,7 +14,7 @@ use df_table::kind::KindRegistry;
 use df_table::ports::EventSink;
 use tokio::sync::Notify;
 
-use crate::event_log::EventLog;
+use crate::event_log::{EventLog, install_as_audit_sink};
 use crate::kind_files::load_kind_files_async;
 use crate::limits::SHUTDOWN_GRACE;
 use crate::options::ServeOptions;
@@ -33,28 +33,31 @@ impl Drop for StopWhenDropped {
 }
 
 /// Why serving stopped with a failure.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServeError {
     Listen {
         port: u16,
-        message: String,
+        kind: ErrorKind,
     },
     /// The interrupt handler could not be installed, so the host could not be stopped cleanly.
-    Interrupt(String),
-    Serving(String),
+    Interrupt(ErrorKind),
+    /// The listener or a connection failed while serving.
+    Serving(ErrorKind),
 }
 
 impl fmt::Display for ServeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Listen { port, message } => {
-                write!(formatter, "cannot listen on 127.0.0.1:{port}: {message}")
+            Self::Listen { port, kind } => {
+                write!(formatter, "cannot listen on 127.0.0.1:{port}: {kind}")
             }
-            Self::Interrupt(message) => write!(formatter, "cannot watch for Ctrl-C: {message}"),
-            Self::Serving(message) => formatter.write_str(message),
+            Self::Interrupt(kind) => write!(formatter, "cannot watch for Ctrl-C: {kind}"),
+            Self::Serving(kind) => write!(formatter, "serving stopped: {kind}"),
         }
     }
 }
+
+impl std::error::Error for ServeError {}
 
 /// Writes one line to the terminal. A closed terminal drops the line: it must not stop the table.
 pub fn write_terminal_line(line: &str) {
@@ -64,6 +67,9 @@ pub fn write_terminal_line(line: &str) {
 /// Starts the canvas and serves until interrupted. `announce` receives each startup line.
 pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result<(), ServeError> {
     let log = Arc::new(EventLog::default());
+    if !install_as_audit_sink(&log) {
+        announce("another log already takes the libraries' audit lines in this process");
+    }
     let sink = HostSink::new(Arc::clone(&log), options.records_moves);
     let registry = match load_kind_files_async(options.kind_directory.clone()).await {
         Ok(registry) => registry,
@@ -104,13 +110,14 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
         .await
         .map_err(|error| ServeError::Listen {
             port: options.port,
-            message: error.to_string(),
+            kind: error.kind(),
         })?;
     let address = listener
         .local_addr()
-        .map_err(|error| ServeError::Serving(error.to_string()))?;
+        .map_err(|error| ServeError::Serving(error.kind()))?;
     announce(&format!(
-        "df-table canvas on http://{address}/ with {kinds} kinds from {}\nplayground on http://{address}/playground",
+        "df-table canvas on http://{address}/ with {kinds} kinds from {}\n\
+         playground on http://{address}/playground",
         options.kind_directory.display()
     ));
 
@@ -123,13 +130,13 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
     });
     tokio::pin!(serving);
     let result = tokio::select! {
-        result = &mut serving => result.map_err(|error| ServeError::Serving(error.to_string())),
+        result = &mut serving => result.map_err(|error| ServeError::Serving(error.kind())),
         interrupt = tokio::signal::ctrl_c() => match interrupt {
-            Err(error) => Err(ServeError::Interrupt(error.to_string())),
+            Err(error) => Err(ServeError::Interrupt(error.kind())),
             Ok(()) => {
                 stop.notify_one();
                 if let Ok(result) = tokio::time::timeout(SHUTDOWN_GRACE, &mut serving).await {
-                    result.map_err(|error| ServeError::Serving(error.to_string()))
+                    result.map_err(|error| ServeError::Serving(error.kind()))
                 } else {
                     announce("open connections did not finish in time; closing them");
                     Ok(())

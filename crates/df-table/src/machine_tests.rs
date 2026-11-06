@@ -3,18 +3,18 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::effects::{EffectRefusal, TableEffectKind};
+use crate::effects::{EffectCause, TableEffectKind};
 use crate::element::NameError;
 use crate::event::{AUDIT_LINE_CAPACITY_BYTES, EventClass, TableEvent};
 use crate::identity::{Correlation, MachineId, OperationId, SceneId, SeatId, TableId, TableScope};
 use crate::identity::{RecoveryEpoch, SessionRevision, TurnSeq};
+use crate::limits::MAXIMUM_CARRY_ITEMS;
+use crate::machine::slot::{ErrorClass, LoadCause, LoadError, MachineSlot, RecordKind, SlotError};
 use crate::machine::{
-    CarryItem, Entry, HandOff, HandOffError, HandOffKind, HandOffTarget, InputClaim,
-    MAXIMUM_CARRY_ITEMS, MachineError, MachineFailureCause, MachineReadout, MachineSpec,
-    ReadoutError, RequestKey, Scope, SpecError, StateName, StepOutcome, StepResult, SuspendPolicy,
-    entered_event, exited_event, step_events,
+    CarryItem, Entry, HandOff, HandOffError, HandOffKind, HandOffTarget, InputClaim, MachineError,
+    MachineFailureCause, MachineReadout, MachineSpec, ReadoutError, RequestKey, Scope, SpecError,
+    StateName, StepOutcome, StepResult, SuspendPolicy, entered_event, exited_event, step_events,
 };
-use crate::machine_slot::{ErrorClass, LoadError, LoadFault, MachineSlot, RecordKind, SlotError};
 use crate::outcome::{Decline, DeclineCode, DeclineError, Outcome};
 use crate::ports::{ActionId, PortName};
 use crate::testkit::correlation;
@@ -316,8 +316,8 @@ fn a_saved_record_round_trips_through_json_and_rejects_unknown_fields() {
 #[test]
 fn every_load_fault_has_a_distinct_key_and_a_refusal_event_names_the_table_the_record_and_both_versions()
  {
-    let keys: BTreeSet<_> = LoadFault::ALL.iter().map(|fault| fault.key()).collect();
-    assert_eq!(keys.len(), LoadFault::ALL.len());
+    let keys: BTreeSet<_> = LoadCause::ALL.iter().map(|fault| fault.key()).collect();
+    assert_eq!(keys.len(), LoadCause::ALL.len());
     let kinds: BTreeSet<_> = RecordKind::ALL.iter().map(|kind| kind.key()).collect();
     assert_eq!(kinds.len(), RecordKind::ALL.len());
     let record = MachineSlot::from_parts(MachineId::new("sample").expect("valid id"), 9, json!({}));
@@ -332,7 +332,7 @@ fn every_load_fault_has_a_distinct_key_and_a_refusal_event_names_the_table_the_r
          cause=unsupported_version"
     );
     assert_eq!(event.class(), EventClass::Always);
-    assert_eq!(error.fault(), LoadFault::UnsupportedVersion);
+    assert_eq!(error.cause(), LoadCause::UnsupportedVersion);
     assert!(error.to_string().contains('9'));
 }
 
@@ -428,7 +428,7 @@ fn every_machine_error_maps_to_one_closed_cause_and_a_record_failure_keeps_its_f
             MachineFailureCause::SlotMalformed,
         ),
         (
-            MachineError::Entry(crate::machine::EntryRefusal::NoSeats),
+            MachineError::Entry(crate::machine::EntryError::NoSeats),
             MachineFailureCause::EntryRefused,
         ),
         (
@@ -450,7 +450,7 @@ fn every_machine_error_maps_to_one_closed_cause_and_a_record_failure_keeps_its_f
             MachineFailureCause::DeclineInvalid,
         ),
         (
-            MachineError::Result(crate::machine::ResultFault::FactsConflict),
+            MachineError::Result(crate::machine::ResultCause::FactsConflict),
             MachineFailureCause::ResultInvalid,
         ),
     ];
@@ -466,7 +466,7 @@ fn every_machine_error_maps_to_one_closed_cause_and_a_record_failure_keeps_its_f
         assert!(line.ends_with(&format!("cause={}", cause.key())), "{line}");
         assert!(!error.to_string().is_empty());
     }
-    for fault in LoadFault::ALL {
+    for fault in LoadCause::ALL {
         let cause = MachineFailureCause::from(*fault);
         assert!(cause.key().starts_with("slot_"));
     }
@@ -609,7 +609,7 @@ fn the_machine_effect_and_load_events_render_one_line_that_round_trips_through_j
             scope,
             correlation,
             effect: TableEffectKind::HandOffRecorded,
-            cause: EffectRefusal::SceneNotActive,
+            cause: EffectCause::SceneNotActive,
         },
         TableEvent::LoadRefused {
             table: TableId::new(u64::MAX),
@@ -617,7 +617,7 @@ fn the_machine_effect_and_load_events_render_one_line_that_round_trips_through_j
             machine: Some(machine),
             version: u64::MAX,
             expected: u64::MAX,
-            cause: LoadFault::UnsupportedVersion,
+            cause: LoadCause::UnsupportedVersion,
         },
     ];
     for event in events {
@@ -719,7 +719,7 @@ fn the_class_a_lines_of_every_machine_effect_and_load_event_are_pinned_in_full()
                 scope,
                 correlation,
                 effect: TableEffectKind::SeatJoined,
-                cause: EffectRefusal::TableFull,
+                cause: EffectCause::TableFull,
             },
             format!("EFFECT refused {CONTEXT} effect=seat_joined cause=table_full"),
         ),
@@ -730,7 +730,7 @@ fn the_class_a_lines_of_every_machine_effect_and_load_event_are_pinned_in_full()
                 machine: Some(lobby),
                 version: 9,
                 expected: 1,
-                cause: LoadFault::UnsupportedVersion,
+                cause: LoadCause::UnsupportedVersion,
             },
             "LOAD refused table=1 record=machine_slot machine=lobby version=9 expected=1 \
              cause=unsupported_version"
@@ -743,7 +743,7 @@ fn the_class_a_lines_of_every_machine_effect_and_load_event_are_pinned_in_full()
                 machine: None,
                 version: 2,
                 expected: 1,
-                cause: LoadFault::Malformed,
+                cause: LoadCause::Malformed,
             },
             "LOAD refused table=1 record=effect_intent version=2 expected=1 cause=malformed"
                 .to_owned(),

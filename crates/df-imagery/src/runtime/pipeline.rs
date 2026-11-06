@@ -390,29 +390,19 @@ where
             .ok_or(RuntimeError::InvalidRecord)?;
         let mut execution = frozen.execution_recipe().to_vec();
         execution.extend_from_slice(b"df-imagery/final-selection-v1");
-        let evidence=serde_json::json!({
-            "original_plan_digest":recipe_digest(plan),
-            "selected":candidate.scope.dispatch.as_bytes(),
-            "candidates":candidates.iter().map(candidate_value).collect::<Vec<_>>(),
-            "decisions":decisions.iter().map(|decision|serde_json::json!({
-                "stage":decision.scope.stage.as_bytes(),"dispatch":decision.scope.dispatch.as_bytes(),
-                "kind":decision.kind.label(),"observation_version":decision.observation_version,
-                "usage_revision":decision.receipt.usage_revision,"schema_revision":decision.basis.schema_revision,
-                "validator_revision":decision.basis.validator_revision,"payload":decision.payload(),
-            })).collect::<Vec<_>>(),
-            "local_inspections":local_inspections.iter().map(|local|serde_json::json!({
-                "stage":local.scope.stage.as_bytes(),"candidate_stage":local.candidate_scope.stage.as_bytes(),
-                "candidate_dispatch":local.candidate_scope.dispatch.as_bytes(),"source_digest":local.source_digest,
-                "candidate_observation_version":local.candidate_observation_version,"candidate_usage_revision":local.candidate_usage_revision,
-                "schema_revision":local.schema_revision,"validator_revision":local.validator_revision,"reason":local.reason.label(),
-                "observed_at_ms":local.observed_at_ms,"input_revision":local.basis.input_revision,
-                "input_digest":local.basis.input_digest,"config_revision":local.basis.config_revision,"config_digest":local.basis.config_digest,
-            })).collect::<Vec<_>>(),
-            "sources":sources.iter().map(|source|serde_json::json!({"asset":source.pin.asset.as_bytes(),
-                "digest":source.pin.digest.as_bytes(),"attempt":source.attempt.as_bytes(),"write":source.write.as_bytes(),
-                "version":source.version.as_str(),"suppression_generation":source.suppression_generation,
-                "retention":source.retention.label()})).collect::<Vec<_>>(),
-        }).to_string().into_bytes();
+        let evidence = serde_json::json!({
+            "original_plan_digest": recipe_digest(plan),
+            "selected": candidate.scope.dispatch.as_bytes(),
+            "candidates": candidates.iter().map(candidate_value).collect::<Vec<_>>(),
+            "decisions": decisions.iter().map(decision_value).collect::<Vec<_>>(),
+            "local_inspections": local_inspections
+                .iter()
+                .map(local_inspection_value)
+                .collect::<Vec<_>>(),
+            "sources": sources.iter().map(source_value).collect::<Vec<_>>(),
+        })
+        .to_string()
+        .into_bytes();
         execution.extend_from_slice(
             &u32::try_from(evidence.len())
                 .map_err(|_| RuntimeError::InvalidRecord)?
@@ -802,15 +792,69 @@ fn dependency_digest(candidate: &CandidateReceipt, kind: StageKind) -> [u8; 32] 
     digest.finalize().into()
 }
 fn candidate_value(candidate: &CandidateReceipt) -> serde_json::Value {
-    serde_json::json!({"stage":candidate.scope.stage.as_bytes(),"dispatch":candidate.scope.dispatch.as_bytes(),
-        "kind":candidate.basis.kind.label(),"input_digest":candidate.basis.input_digest,
-        "config_revision":candidate.basis.config_revision,"config_digest":candidate.basis.config_digest,
-        "parent":candidate.basis.parent_dispatch.map(|parent|*parent.as_bytes()),"observation_version":candidate.observation_version,
-        "usage_revision":candidate.receipt.usage_revision,"mime":candidate.descriptor.mime,
-        "width_px":candidate.descriptor.width_px,"height_px":candidate.descriptor.height_px,
-        "alpha":match candidate.descriptor.alpha {CheckpointAlpha::Opaque=>"opaque",CheckpointAlpha::Transparent=>"transparent"},
-        "byte_len":candidate.descriptor.byte_len,"sha256":candidate.descriptor.sha256,
-        "validator_revision":candidate.descriptor.validator_revision})
+    let alpha = match candidate.descriptor.alpha {
+        CheckpointAlpha::Opaque => "opaque",
+        CheckpointAlpha::Transparent => "transparent",
+    };
+    serde_json::json!({
+        "stage": candidate.scope.stage.as_bytes(),
+        "dispatch": candidate.scope.dispatch.as_bytes(),
+        "kind": candidate.basis.kind.label(),
+        "input_digest": candidate.basis.input_digest,
+        "config_revision": candidate.basis.config_revision,
+        "config_digest": candidate.basis.config_digest,
+        "parent": candidate.basis.parent_dispatch.map(|parent| *parent.as_bytes()),
+        "observation_version": candidate.observation_version,
+        "usage_revision": candidate.receipt.usage_revision,
+        "mime": candidate.descriptor.mime,
+        "width_px": candidate.descriptor.width_px,
+        "height_px": candidate.descriptor.height_px,
+        "alpha": alpha,
+        "byte_len": candidate.descriptor.byte_len,
+        "sha256": candidate.descriptor.sha256,
+        "validator_revision": candidate.descriptor.validator_revision,
+    })
+}
+fn decision_value(decision: &DecisionObservation) -> serde_json::Value {
+    serde_json::json!({
+        "stage": decision.scope.stage.as_bytes(),
+        "dispatch": decision.scope.dispatch.as_bytes(),
+        "kind": decision.kind.label(),
+        "observation_version": decision.observation_version,
+        "usage_revision": decision.receipt.usage_revision,
+        "schema_revision": decision.basis.schema_revision,
+        "validator_revision": decision.basis.validator_revision,
+        "payload": decision.payload(),
+    })
+}
+fn local_inspection_value(local: &LocalInspectionCheckpoint) -> serde_json::Value {
+    serde_json::json!({
+        "stage": local.scope.stage.as_bytes(),
+        "candidate_stage": local.candidate_scope.stage.as_bytes(),
+        "candidate_dispatch": local.candidate_scope.dispatch.as_bytes(),
+        "source_digest": local.source_digest,
+        "candidate_observation_version": local.candidate_observation_version,
+        "candidate_usage_revision": local.candidate_usage_revision,
+        "schema_revision": local.schema_revision,
+        "validator_revision": local.validator_revision,
+        "reason": local.reason.label(),
+        "observed_at_ms": local.observed_at_ms,
+        "input_revision": local.basis.input_revision,
+        "input_digest": local.basis.input_digest,
+        "config_revision": local.basis.config_revision,
+        "config_digest": local.basis.config_digest,
+    })
+}
+fn source_value(source: &SourceReceipt) -> serde_json::Value {
+    serde_json::json!({
+        "asset": source.pin.asset.as_bytes(),
+        "digest": source.pin.digest.as_bytes(),
+        "attempt": source.attempt.as_bytes(),
+        "write": source.write.as_bytes(),
+        "version": source.version.as_str(),
+        "suppression_generation": source.suppression_generation,
+        "retention": source.retention.label(),
+    })
 }
 
 #[cfg(test)]

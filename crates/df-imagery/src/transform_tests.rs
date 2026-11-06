@@ -4,6 +4,7 @@ use crate::request::{
     AssetDigest, DEFAULT_MAX_COMPOSITE_LAYERS, DEFAULT_MAX_TRANSFORM_STEPS, RequestLimits,
     SourceRef,
 };
+use crate::transform::TransformField;
 use df_assets::{AssetId, Audience};
 
 fn source_with(byte: u8) -> SourceRef {
@@ -102,13 +103,13 @@ fn non_finite_brightness_is_refused() {
     assert_eq!(
         BrightnessOffset::new(f32::NAN).unwrap_err(),
         TransformError::NonFinite {
-            field: "brightness"
+            field: TransformField::Brightness
         }
     );
     assert_eq!(
         BrightnessOffset::new(f32::INFINITY).unwrap_err(),
         TransformError::NonFinite {
-            field: "brightness"
+            field: TransformField::Brightness
         }
     );
 }
@@ -117,7 +118,9 @@ fn non_finite_brightness_is_refused() {
 fn non_finite_exposure_is_refused() {
     assert_eq!(
         ExposureStops::new(f32::NAN).unwrap_err(),
-        TransformError::NonFinite { field: "exposure" }
+        TransformError::NonFinite {
+            field: TransformField::Exposure
+        }
     );
 }
 
@@ -125,11 +128,15 @@ fn non_finite_exposure_is_refused() {
 fn blur_rejects_non_finite_radius_but_accepts_large_finite_radii() {
     assert_eq!(
         BlurSpec::new(f32::NAN, BlurAlgorithm::Gaussian).unwrap_err(),
-        TransformError::NonFinite { field: "blur" }
+        TransformError::NonFinite {
+            field: TransformField::Blur
+        }
     );
     assert_eq!(
         BlurSpec::new(0.0, BlurAlgorithm::Box).unwrap_err(),
-        TransformError::OutOfRange { field: "blur" }
+        TransformError::OutOfRange {
+            field: TransformField::Blur
+        }
     );
     BlurSpec::new(500.0, BlurAlgorithm::Gaussian).unwrap();
 }
@@ -138,11 +145,15 @@ fn blur_rejects_non_finite_radius_but_accepts_large_finite_radii() {
 fn sharpen_rejects_non_finite_and_negative_amount() {
     assert_eq!(
         SharpenSpec::new(f32::NAN, 1.0, 0).unwrap_err(),
-        TransformError::NonFinite { field: "sharpen" }
+        TransformError::NonFinite {
+            field: TransformField::Sharpen
+        }
     );
     assert_eq!(
         SharpenSpec::new(1.0, -1.0, 0).unwrap_err(),
-        TransformError::OutOfRange { field: "sharpen" }
+        TransformError::OutOfRange {
+            field: TransformField::Sharpen
+        }
     );
     SharpenSpec::new(200.0, 5.0, 255).unwrap();
 }
@@ -151,19 +162,27 @@ fn sharpen_rejects_non_finite_and_negative_amount() {
 fn contrast_rejects_non_finite_and_non_positive_gain() {
     assert_eq!(
         ColorEffect::contrast(f32::NAN, 0.5).unwrap_err(),
-        TransformError::NonFinite { field: "contrast" }
+        TransformError::NonFinite {
+            field: TransformField::Contrast
+        }
     );
     assert_eq!(
         ColorEffect::contrast(1.0, f32::NAN).unwrap_err(),
-        TransformError::NonFinite { field: "contrast" }
+        TransformError::NonFinite {
+            field: TransformField::Contrast
+        }
     );
     assert_eq!(
         ColorEffect::contrast(0.0, 0.5).unwrap_err(),
-        TransformError::OutOfRange { field: "contrast" }
+        TransformError::OutOfRange {
+            field: TransformField::Contrast
+        }
     );
     assert_eq!(
         ColorEffect::contrast(1.0, 1.5).unwrap_err(),
-        TransformError::OutOfRange { field: "contrast" }
+        TransformError::OutOfRange {
+            field: TransformField::Contrast
+        }
     );
     ColorEffect::contrast(100.0, 1.0).unwrap();
 }
@@ -173,13 +192,13 @@ fn saturation_rejects_non_finite_and_negative_factor() {
     assert_eq!(
         ColorEffect::saturation(f32::NAN).unwrap_err(),
         TransformError::NonFinite {
-            field: "saturation",
+            field: TransformField::Saturation,
         }
     );
     assert_eq!(
         ColorEffect::saturation(-0.5).unwrap_err(),
         TransformError::OutOfRange {
-            field: "saturation",
+            field: TransformField::Saturation,
         }
     );
     ColorEffect::saturation(8.0).unwrap();
@@ -189,7 +208,9 @@ fn saturation_rejects_non_finite_and_negative_factor() {
 fn hue_shift_rejects_non_finite_degrees_but_accepts_any_finite_turn() {
     assert_eq!(
         ColorEffect::hue_shift(f32::NAN).unwrap_err(),
-        TransformError::NonFinite { field: "hue" }
+        TransformError::NonFinite {
+            field: TransformField::Hue
+        }
     );
     ColorEffect::hue_shift(720.0).unwrap();
 }
@@ -229,7 +250,9 @@ fn literally_constructed_non_finite_rotation_is_refused_at_the_boundary() {
     };
     assert_eq!(
         spec.validate(&limits()).unwrap_err(),
-        TransformError::NonFinite { field: "rotation" }
+        TransformError::NonFinite {
+            field: TransformField::Rotation
+        }
     );
 }
 
@@ -261,7 +284,9 @@ fn quarter_turns_above_three_are_refused() {
     };
     assert_eq!(
         spec.validate(&limits()).unwrap_err(),
-        TransformError::OutOfRange { field: "rotation" }
+        TransformError::OutOfRange {
+            field: TransformField::Rotation
+        }
     );
 }
 
@@ -280,11 +305,15 @@ fn mask_rejects_non_finite_and_negative_feather() {
     };
     assert_eq!(
         mask(f32::NAN).unwrap_err(),
-        TransformError::NonFinite { field: "mask" }
+        TransformError::NonFinite {
+            field: TransformField::Mask
+        }
     );
     assert_eq!(
         mask(-1.0).unwrap_err(),
-        TransformError::OutOfRange { field: "mask" }
+        TransformError::OutOfRange {
+            field: TransformField::Mask
+        }
     );
     mask(400.0).unwrap();
 }
@@ -448,7 +477,9 @@ fn composite_layer_count_honors_injected_limits() {
 fn composite_opacity_above_permille_is_refused() {
     assert_eq!(
         CompositeLayer::new(source(), 0, 0, 1001, BlendMode::SourceOver).unwrap_err(),
-        TransformError::OutOfRange { field: "opacity" }
+        TransformError::OutOfRange {
+            field: TransformField::Opacity
+        }
     );
     CompositeLayer::new(source(), -4, 7, 1000, BlendMode::SourceOver).unwrap();
 }

@@ -1368,7 +1368,9 @@ fn provider_limits_build_the_transport_limits_with_the_shared_defaults() {
     assert_eq!(limits.maximum_request_bytes, 1024);
     assert_eq!(limits.maximum_response_bytes, 4096);
     assert_eq!(limits.maximum_header_bytes, 16 * 1024);
-    assert_eq!(limits.maximum_chunks, 4096);
+    // The default chunk bound is now the transport ceiling (it was 4096, which refused large
+    // bodies sent in small frames); the byte bound is what limits a response.
+    assert_eq!(limits.maximum_chunks, df_providers::MAXIMUM_CHUNKS);
     let short = df_providers::ProviderLimits::new(Duration::from_secs(2), 1, 1)
         .read_timeout(Duration::from_secs(1))
         .chunks(8)

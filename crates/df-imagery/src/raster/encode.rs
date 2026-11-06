@@ -12,7 +12,7 @@ use std::io::{Seek, SeekFrom, Write};
 use image::{ExtendedColorType, ImageEncoder, RgbImage, RgbaImage};
 
 use super::RasterError;
-use super::bounds::LiveBudget;
+use super::bounds::{self, LiveBudget};
 use super::color::{linear_to_srgb_byte, srgb_byte_to_linear};
 use crate::output::{AlphaHandling, Encoding, RasterOutputSpec};
 
@@ -48,10 +48,7 @@ impl BoundedWriter {
     fn check_capacity(&self, additional: usize) -> std::io::Result<()> {
         let end = (self.pos as u64).saturating_add(additional as u64);
         if end > self.limit {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::QuotaExceeded,
-                "output limit",
-            ));
+            return Err(output_limit_error());
         }
         Ok(())
     }
@@ -61,10 +58,7 @@ impl BoundedWriter {
         // so every growth requests exactly what the write needs. Failure
         // stays QuotaExceeded so the existing mapper reports OutputTooLarge.
         if self.buf.try_reserve_exact(additional).is_err() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::QuotaExceeded,
-                "output limit",
-            ));
+            return Err(output_limit_error());
         }
         Ok(())
     }
@@ -108,14 +102,16 @@ impl Seek for BoundedWriter {
                 .max(0) as u64,
         };
         if next > self.limit {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::QuotaExceeded,
-                "output limit",
-            ));
+            return Err(output_limit_error());
         }
         self.pos = next as usize;
         Ok(next)
     }
+}
+
+/// The bounded writer's only failure: the output quota.
+fn output_limit_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::QuotaExceeded, "output limit")
 }
 
 fn map_image_error(error: image::ImageError, budget: &LiveBudget) -> RasterError {
@@ -149,7 +145,7 @@ pub(crate) fn encode_output(
     let encoding = output.encoding();
     check_cancel()?;
     let (width_px, height_px) = image.dimensions();
-    let caller_rgba_bytes = super::bounds::rgba_bytes(width_px, height_px);
+    let caller_rgba_bytes = bounds::rgba_bytes(width_px, height_px);
     let (bytes, has_alpha) = match output.alpha() {
         AlphaHandling::PreserveAlpha => match encoding {
             Encoding::Png => (encode_png_rgba(image, budget, check_cancel)?, true),
@@ -221,7 +217,7 @@ fn encode_opaque(
     check_cancel()?;
     let mut rgb = RgbImage::new(width_px, height_px);
     for y in 0..height_px {
-        if y % 16 == 0 {
+        if y.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         for x in 0..width_px {
@@ -244,11 +240,7 @@ fn encode_opaque(
                 .encode_image(&rgb)
                 .map_err(|error| map_image_error(error, budget))?;
             let bytes = out.into_inner();
-            if (bytes.len() as u64) > budget.max_output_bytes() {
-                return Err(RasterError::OutputTooLarge {
-                    len_bytes: bytes.len() as u64,
-                });
-            }
+            budget.check_output_len(bytes.len() as u64)?;
             Ok(bytes)
         }
         Encoding::WebP { quality: None } => {
@@ -257,11 +249,7 @@ fn encode_opaque(
                 .encode(rgb.as_raw(), width_px, height_px, ExtendedColorType::Rgb8)
                 .map_err(|error| map_image_error(error, budget))?;
             let bytes = out.into_inner();
-            if (bytes.len() as u64) > budget.max_output_bytes() {
-                return Err(RasterError::OutputTooLarge {
-                    len_bytes: bytes.len() as u64,
-                });
-            }
+            budget.check_output_len(bytes.len() as u64)?;
             Ok(bytes)
         }
         Encoding::WebP {
@@ -275,11 +263,7 @@ fn encode_opaque(
                 check_cancel,
                 total_retained_bytes,
             )?;
-            if (bytes.len() as u64) > budget.max_output_bytes() {
-                return Err(RasterError::OutputTooLarge {
-                    len_bytes: bytes.len() as u64,
-                });
-            }
+            budget.check_output_len(bytes.len() as u64)?;
             Ok(bytes)
         }
     }
@@ -321,11 +305,7 @@ fn encode_webp_lossless(
         )
         .map_err(|error| map_image_error(error, budget))?;
     let bytes = out.into_inner();
-    if (bytes.len() as u64) > budget.max_output_bytes() {
-        return Err(RasterError::OutputTooLarge {
-            len_bytes: bytes.len() as u64,
-        });
-    }
+    budget.check_output_len(bytes.len() as u64)?;
     Ok(bytes)
 }
 
@@ -340,8 +320,8 @@ fn flatten_onto_matte(
 ) -> Result<RgbaImage, RasterError> {
     let (width_px, height_px) = image.dimensions();
     budget.check_retained(
-        super::bounds::rgba_bytes(width_px, height_px),
-        super::bounds::rgba_bytes(width_px, height_px),
+        bounds::rgba_bytes(width_px, height_px),
+        bounds::rgba_bytes(width_px, height_px),
     )?;
     check_cancel()?;
     let matte_linear = [
@@ -351,7 +331,7 @@ fn flatten_onto_matte(
     ];
     let mut flattened = RgbaImage::new(width_px, height_px);
     for y in 0..height_px {
-        if y % 16 == 0 {
+        if y.is_multiple_of(bounds::CANCEL_POLL_ROWS) {
             check_cancel()?;
         }
         for x in 0..width_px {
@@ -371,73 +351,4 @@ fn flatten_onto_matte(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::TransformLimits;
-    use crate::output::{Dimensions, LossyQuality, Rgb};
-
-    #[test]
-    fn lossy_admission_retains_source_rgb_and_matte_until_native_return() {
-        let width_px = 7;
-        let height_px = 5;
-        let pixels = u64::from(width_px) * u64::from(height_px);
-        for (alpha, retained_bytes_per_pixel) in [
-            (AlphaHandling::PreserveAlpha, 4),
-            (AlphaHandling::Opaque, 7),
-            (
-                AlphaHandling::Matte(Rgb {
-                    red: 0,
-                    green: 0,
-                    blue: 0,
-                }),
-                11,
-            ),
-        ] {
-            let source_alpha = if alpha == AlphaHandling::Opaque {
-                255
-            } else {
-                128
-            };
-            let image = RgbaImage::from_pixel(
-                width_px,
-                height_px,
-                image::Rgba([200, 30, 30, source_alpha]),
-            );
-            let output = RasterOutputSpec::new(
-                Dimensions::new(width_px, height_px).unwrap(),
-                alpha,
-                Encoding::WebP {
-                    quality: Some(LossyQuality::new(100).unwrap()),
-                },
-            )
-            .unwrap();
-            let required_bytes = super::super::webp_lossy::estimate_native_peak_bytes(
-                width_px,
-                height_px,
-                alpha == AlphaHandling::PreserveAlpha,
-                1_024,
-            ) + pixels * retained_bytes_per_pixel;
-            let mut limits = TransformLimits {
-                enabled: true,
-                max_concurrency: 1,
-                max_decoded_bytes: required_bytes - 1,
-                max_output_bytes: 1_024,
-                queue_capacity: 1,
-                deadline_secs: 30,
-            };
-            let check = || Ok(());
-            let refused =
-                encode_output(&image, &output, &LiveBudget::new(&limits).unwrap(), &check);
-            assert!(matches!(refused,
-                Err(RasterError::LiveBudgetExceeded { needed_bytes })
-                    if needed_bytes == required_bytes
-            ));
-            limits.max_decoded_bytes = required_bytes;
-            let encoded =
-                encode_output(&image, &output, &LiveBudget::new(&limits).unwrap(), &check).unwrap();
-            let decoded = image::load_from_memory(&encoded.bytes).unwrap();
-            assert_eq!(decoded.width(), width_px);
-            assert_eq!(decoded.height(), height_px);
-        }
-    }
-}
+mod encode_tests;

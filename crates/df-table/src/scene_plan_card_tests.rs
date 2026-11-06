@@ -1,9 +1,9 @@
+use crate::plate::timing::{PlateTiming, SceneBuildKind, TimingSetting};
 use crate::plate_fixtures_tests::{SCENE, brief, display_name, market, picture, scene};
-use crate::plate_timing::{PlateTiming, SceneBuildKind, TimingSetting};
 use crate::private_data::Narration;
 use crate::scene_plan::StageOutputs;
-use crate::scene_plan_brief::SceneBrief;
-use crate::scene_plan_card::{CardState, CardTag, CardWatch, EstablishingCard};
+use crate::scene_plan::brief::SceneBrief;
+use crate::scene_plan::card::{CardState, CardTag, CardWatch, EstablishingCard};
 
 #[test]
 fn the_card_shows_the_place_the_party_the_music_and_the_picture_on_its_way_tag() {
@@ -66,7 +66,7 @@ fn a_background_that_arrives_first_is_carried_on_the_card() {
 
 #[test]
 fn the_card_is_due_exactly_scene_build_budget_s_after_the_build_started() {
-    let watch = CardWatch::new(4_000, SceneBuildKind::Standard, PlateTiming::defaults());
+    let watch = CardWatch::new(4_000, SceneBuildKind::Standard, PlateTiming::default());
     assert_eq!(watch.due_at_ms(), 12_000, "4 s start plus the 8 s budget");
     assert_eq!(
         watch.state(11_999, false),
@@ -84,20 +84,20 @@ fn the_card_is_due_exactly_scene_build_budget_s_after_the_build_started() {
 
 #[test]
 fn a_plate_on_screen_retires_the_card_whenever_it_arrives() {
-    let watch = CardWatch::new(0, SceneBuildKind::Standard, PlateTiming::defaults());
+    let watch = CardWatch::new(0, SceneBuildKind::Standard, PlateTiming::default());
     assert_eq!(watch.state(3_000, true), CardState::Retired);
     assert_eq!(watch.state(60_000, true), CardState::Retired);
 }
 
 #[test]
 fn the_first_scene_may_be_held_up_to_twenty_seconds() {
-    let watch = CardWatch::new(0, SceneBuildKind::FirstScene, PlateTiming::defaults());
+    let watch = CardWatch::new(0, SceneBuildKind::FirstScene, PlateTiming::default());
     assert_eq!(watch.due_at_ms(), 20_000);
 }
 
 #[test]
 fn a_changed_budget_moves_the_due_time_and_the_first_scene_hold_is_never_below_it() {
-    let timing = PlateTiming::defaults()
+    let timing = PlateTiming::default()
         .with(TimingSetting::SceneBuildBudgetS, 30)
         .expect("in range");
     assert_eq!(

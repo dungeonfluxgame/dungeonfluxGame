@@ -41,15 +41,16 @@ pub use request::{
     DEFAULT_MAX_PROMPT_CHARS, DEFAULT_MAX_REFERENCES, DEFAULT_MAX_TRANSFORM_STEPS, EditSpec,
     ExecutionMode, Freshness, GenerateSpec, ImageContentRating, ImageInspection, ImageOperation,
     ImageOwner, ImagePipeline, ImageRequest, InspectionKind, InspectionRequirement,
-    OperationIdentity, PipelineError, PrivateImageText, ProviderModeration, Purpose, PurposedUse,
-    RequestError, RequestLimits, SourceRef, StagedIdentity, TextPrompt, Urgency, VariantRole,
+    OperationIdentity, PipelineError, PipelineTextField, PrivateImageText, ProviderModeration,
+    Purpose, PurposedUse, RequestError, RequestLimits, SourceRef, StagedIdentity, TextPrompt,
+    Urgency, VariantRole,
 };
 pub use transform::{
     AlignAnchor, Anchor1D, BlendMode, BlurAlgorithm, BlurSpec, BrightnessOffset, CanvasSpec,
     ColorEffect, CompositeLayer, CoverageRef, EncodedAlphaBlend, EncodedFilter, ExposureStops,
     FlipAxis, ImageTransform, Interpolation, MaskChannel, MaskMode, MaskSource, MaskSpec, PadSpec,
-    PixelRect, ResizeMode, ResizeSpec, RotateSpec, SharpenSpec, TransformError, TransformSource,
-    TransformSpec,
+    PixelRect, ResizeMode, ResizeSpec, RotateSpec, SharpenSpec, TransformError, TransformField,
+    TransformSource, TransformSpec,
 };
 
 #[cfg(test)]
@@ -128,6 +129,10 @@ pub mod execution;
 
 pub mod oneshot;
 
+pub mod identity_question;
+
+pub mod oneshot_segment;
+
 pub mod publication;
 
 pub mod runtime;
@@ -138,3 +143,15 @@ pub mod telemetry;
 /// Local-only infrastructure fixtures for consumer regression tests.
 #[cfg(feature = "test-support")]
 pub mod test_support;
+
+/// Lowercase hexadecimal text of `bytes`, two digits per byte: the one spelling of digests and
+/// ids in keys, paths and diagnostics.
+pub(crate) fn lower_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}

@@ -11,7 +11,7 @@ use crate::golden::{CountingDice, World};
 use crate::outcome::{Decline, DeclineCode, Outcome, PendingKind};
 use crate::pending::ScopedRuling;
 use crate::pending::bounded::{BoundedMap, copied_entries, reset_copied_entries};
-use crate::pipeline::{PipelineLimits, PipelineTable, TurnResult};
+use crate::pipeline::{PipelineLimit, PipelineLimits, PipelineTable, TurnResult};
 use crate::pipeline_fixtures_tests::{
     action, allows, d20, lines, narrated, ran, ruling_request, seat, world_of,
 };
@@ -535,10 +535,9 @@ fn the_table_and_the_result_book_cannot_disagree_about_a_forgotten_operation() {
         "wave",
     );
     let mut world = world_of(&["wave"], 1, rules);
-    world.limits = PipelineLimits {
-        maximum_remembered_results: 1,
-        ..PipelineLimits::default()
-    };
+    world.limits = PipelineLimits::default()
+        .with(PipelineLimit::MaximumRememberedResults, 1)
+        .expect("a limit that fits");
     world.table = PipelineTable::with_limits(
         crate::golden::TABLE,
         world.table.facts().clone(),

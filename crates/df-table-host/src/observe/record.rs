@@ -35,6 +35,12 @@ pub enum RecordClass {
 }
 
 impl RecordClass {
+    pub const ALL: [Self; 2] = [Self::Always, Self::Verbose];
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|class| class.key() == key)
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Always => "always",
@@ -72,6 +78,12 @@ pub enum RecordSeverity {
 }
 
 impl RecordSeverity {
+    pub const ALL: [Self; 4] = [Self::Debug, Self::Info, Self::Warn, Self::Error];
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|severity| severity.key() == key)
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Debug => "debug",
@@ -114,14 +126,14 @@ pub struct RecordScope {
 /// Why an event could not be made into a record. The audit line was still written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordError {
-    /// The event could not be written as typed fields.
-    Unserializable { reason: String },
+    /// The event could not be written as typed fields; `cause` is the JSON writer's category.
+    Unserializable { cause: serde_json::error::Category },
     /// The event's typed fields are not a map of named fields.
     NotAnObject,
     /// The event has no variant tag, so it cannot be named.
     MissingTag,
     /// A field every engine event shares (`scope`, `correlation`) is not what it should be.
-    BadField { field: &'static str },
+    InvalidField { field: &'static str },
     /// The event nests deeper than `MAXIMUM_ATTRIBUTE_DEPTH`.
     TooDeep,
 }
@@ -129,18 +141,30 @@ pub enum RecordError {
 impl fmt::Display for RecordError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unserializable { reason } => {
-                write!(formatter, "the event could not be written: {reason}")
-            }
+            Self::Unserializable { cause } => write!(
+                formatter,
+                "the event could not be written ({} error)",
+                category_key(*cause)
+            ),
             Self::NotAnObject => formatter.write_str("the event is not a map of fields"),
             Self::MissingTag => formatter.write_str("the event has no variant tag"),
-            Self::BadField { field } => write!(formatter, "the event's {field} is not valid"),
+            Self::InvalidField { field } => write!(formatter, "the event's {field} is not valid"),
             Self::TooDeep => formatter.write_str("the event nests too deeply to flatten"),
         }
     }
 }
 
 impl std::error::Error for RecordError {}
+
+/// The lowercase key of a JSON writer's error category, as `RecordError`'s sentence names it.
+fn category_key(category: serde_json::error::Category) -> &'static str {
+    match category {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "eof",
+    }
+}
 
 /// A record before it has an id and a time: everything the event itself says.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,7 +247,7 @@ impl RecordDraft {
     pub fn from_event(event: &TableEvent) -> Result<Self, RecordError> {
         let audit_line = event.render_audit_line();
         let value = serde_json::to_value(event).map_err(|error| RecordError::Unserializable {
-            reason: error.to_string(),
+            cause: error.classify(),
         })?;
         let Value::Object(mut map) = value else {
             return Err(RecordError::NotAnObject);
@@ -350,7 +374,7 @@ fn whole_field(
 ) -> Result<u64, RecordError> {
     map.get(key)
         .and_then(Value::as_u64)
-        .ok_or(RecordError::BadField { field })
+        .ok_or(RecordError::InvalidField { field })
 }
 
 fn optional_whole(
@@ -363,12 +387,12 @@ fn optional_whole(
         Some(value) => value
             .as_u64()
             .map(Some)
-            .ok_or(RecordError::BadField { field }),
+            .ok_or(RecordError::InvalidField { field }),
     }
 }
 
 fn scope_of(value: &Value) -> Result<RecordScope, RecordError> {
-    let bad = RecordError::BadField { field: "scope" };
+    let bad = RecordError::InvalidField { field: "scope" };
     let Value::Object(map) = value else {
         return Err(bad);
     };
@@ -385,7 +409,7 @@ fn scope_of(value: &Value) -> Result<RecordScope, RecordError> {
 }
 
 fn correlation_of(value: &Value) -> Result<RecordCorrelation, RecordError> {
-    let bad = || RecordError::BadField {
+    let bad = || RecordError::InvalidField {
         field: "correlation",
     };
     let Value::Object(map) = value else {

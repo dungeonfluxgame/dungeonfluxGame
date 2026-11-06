@@ -10,38 +10,36 @@
 //! keeps).
 
 use axum::body::Bytes;
+use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::response::Response;
-use serde::Deserialize;
 
+use crate::dev_http::{parse_body, reply};
 use crate::engine::fresh_id::random_u128;
-use crate::engine::machine_io::{WireIntentBody, receipt_report, view_report};
+use crate::engine::machine_io::{
+    WireIntentBody, WireReceiptReport, WireViewReport, receipt_report, view_report,
+};
 use crate::engine::report::EngineError;
-use crate::engine::request::AudienceSpec;
+use crate::engine::request::{AudienceQuery, AudienceSpec};
 
-use super::{EngineRoutes, audience_of, body, engine, reply};
-
-#[derive(Debug, Deserialize)]
-pub(super) struct ViewQuery {
-    audience: Option<String>,
-}
+use super::{EngineRoutes, engine, query};
 
 pub(super) async fn wire_view(
     State(routes): State<EngineRoutes>,
-    Query(query): Query<ViewQuery>,
+    audience_query: Result<Query<AudienceQuery>, QueryRejection>,
 ) -> Response {
     let result = async {
-        let audience = audience_of(query.audience.as_deref())?;
-        let view = engine(&routes)?.machine_view(audience).await?;
-        Ok(view_report(&view))
+        let AudienceQuery { audience } = query(audience_query)?;
+        let view = engine(&routes)?.machine_view(audience.0).await?;
+        Ok::<WireViewReport, EngineError>(view_report(&view))
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }
 
 pub(super) async fn wire_intent(State(routes): State<EngineRoutes>, bytes: Bytes) -> Response {
     let result = async {
-        let intent: WireIntentBody = body(&bytes)?;
+        let intent: WireIntentBody = parse_body(&bytes)?;
         let engine = engine(&routes)?;
         let view = engine
             .machine_view(AudienceSpec::Seat { seat: intent.seat })
@@ -53,18 +51,14 @@ pub(super) async fn wire_intent(State(routes): State<EngineRoutes>, bytes: Bytes
                 .unwrap_or_default()
         });
         let operation = match intent.operation {
-            Some(number) if number > 0 => u128::from(number),
-            Some(_) => {
-                return Err(EngineError::BadRequest {
-                    reason: "an operation id is not zero".to_owned(),
-                });
-            }
+            Some(0) => return Err(EngineError::ZeroOperation),
+            Some(number) => u128::from(number),
             None => random_u128(),
         };
         let request = intent.request(&machine, observed, operation);
         let response = engine.machine_intent(intent.seat, &request).await?;
-        Ok(receipt_report(&response))
+        Ok::<WireReceiptReport, EngineError>(receipt_report(&response))
     }
     .await;
-    reply(&routes, result)
+    reply(result)
 }

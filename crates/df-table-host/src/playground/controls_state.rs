@@ -5,18 +5,21 @@
 //! against a fixture that has since changed (a scene change, or a choice of fixture) is refused
 //! instead of applied to the wrong scene; and the audit line of a change is written by a callback
 //! that runs with the lock held, so the log is in revision order. Refusals are typed, so the routes
-//! answer with the right status, the log names the reason as a token, and a bug is not mistaken
+//! answer with the right status, the log names the reason as a key, and a bug is not mistaken
 //! for a refusal.
 
 use std::fmt;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use axum::http::StatusCode;
 use df_playground::controls::{Controls, ControlsChange, ControlsError, ControlsReply};
-use df_playground::fixture::{Camera, Fixture};
+use df_playground::fixture::{Camera, Fixture, ImageRef};
+use df_playground::limits::MINIMUM_ZOOM_PERCENT;
 use df_playground::media::ClientReport;
-use df_playground::scene::{MINIMUM_ZOOM_PERCENT, SceneChange, SceneError, SceneOverlay};
+use df_playground::overlay::Edit;
+use df_playground::scene::{SceneChange, SceneError, SceneOverlay};
+use df_table::ports::Clock;
 
 use super::clients::ClientTable;
 use super::files::PlaygroundFiles;
@@ -25,7 +28,7 @@ use crate::wire::ClientView;
 
 /// Why a change of the controls was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ControlsRefusal {
+pub enum ControlsChangeError {
     /// The fixture chosen is not among the files; `available` are the ones that are.
     NoSuchFixture {
         name: String,
@@ -37,38 +40,40 @@ pub enum ControlsRefusal {
     /// A batch with no change in it.
     EmptyBatch,
     /// A batch with more changes than `MAXIMUM_BATCH_CHANGES`.
-    TooManyChanges {
-        given: usize,
-    },
-    Refused(ControlsError),
+    TooManyChanges { given: usize },
+    /// The playground's own checks refuse the change.
+    Invalid(ControlsError),
 }
 
-impl ControlsRefusal {
+/// Transitional name of `ControlsChangeError`, for a test outside this area that still uses it.
+pub type ControlsRefusal = ControlsChangeError;
+
+impl ControlsChangeError {
     pub fn status(&self) -> StatusCode {
         match self {
             Self::FixtureChanged => StatusCode::CONFLICT,
             Self::NoSuchFixture { .. }
             | Self::EmptyBatch
             | Self::TooManyChanges { .. }
-            | Self::Refused(_) => StatusCode::BAD_REQUEST,
+            | Self::Invalid(_) => StatusCode::BAD_REQUEST,
         }
     }
 
     /// A closed word for the audit line, so a log says why without carrying free text.
-    pub fn reason(&self) -> &'static str {
+    pub fn key(&self) -> &'static str {
         match self {
             Self::NoSuchFixture { .. } => "no_such_fixture",
             Self::FixtureChanged => "fixture_changed",
             Self::EmptyBatch => "empty_batch",
             Self::TooManyChanges { .. } => "too_many_changes",
-            Self::Refused(ControlsError::UnknownStatus(_)) => "unknown_status",
-            Self::Refused(ControlsError::EmptyFixtureName) => "empty_fixture_name",
-            Self::Refused(ControlsError::TransitionTooLong(_)) => "transition_too_long",
+            Self::Invalid(ControlsError::UnknownStatus(_)) => "unknown_status",
+            Self::Invalid(ControlsError::EmptyFixtureName) => "empty_fixture_name",
+            Self::Invalid(ControlsError::TransitionTooLong(_)) => "transition_too_long",
         }
     }
 }
 
-impl fmt::Display for ControlsRefusal {
+impl fmt::Display for ControlsChangeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoSuchFixture { name, available } => write!(
@@ -88,58 +93,63 @@ impl fmt::Display for ControlsRefusal {
                 formatter,
                 "a batch holds at most {MAXIMUM_BATCH_CHANGES} changes, not {given}"
             ),
-            Self::Refused(error) => write!(formatter, "{error}"),
+            Self::Invalid(error) => write!(formatter, "{error}"),
         }
     }
 }
 
+impl std::error::Error for ControlsChangeError {}
+
 /// Why a change of the scene was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SceneRefusal {
-    Refused(SceneError),
+pub enum SceneChangeError {
+    /// The playground's own checks refuse the change.
+    Invalid(SceneError),
     /// The fixture shown changed (another was chosen, or its file was written or removed) between
     /// reading it and applying the change.
     FixtureChanged,
 }
 
-impl SceneRefusal {
+impl SceneChangeError {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::Refused(_) => StatusCode::BAD_REQUEST,
+            Self::Invalid(_) => StatusCode::BAD_REQUEST,
             Self::FixtureChanged => StatusCode::CONFLICT,
         }
     }
 
     /// A closed word for the audit line, so a log says why without carrying free text.
-    pub fn reason(&self) -> &'static str {
+    pub fn key(&self) -> &'static str {
         match self {
             Self::FixtureChanged => "fixture_changed",
-            Self::Refused(SceneError::Empty(_)) => "empty",
-            Self::Refused(SceneError::TooLong { .. }) => "too_long",
-            Self::Refused(SceneError::DuplicateMember(_)) => "duplicate_member",
-            Self::Refused(SceneError::UnknownMember(_)) => "unknown_member",
-            Self::Refused(SceneError::TooManyMembers) => "too_many_members",
-            Self::Refused(SceneError::TooManyChoices { .. }) => "too_many_choices",
-            Self::Refused(SceneError::BadVolume(_)) => "bad_volume",
-            Self::Refused(SceneError::BadRotation(_)) => "bad_rotation",
-            Self::Refused(SceneError::BadSlide | SceneError::SlideNeedsTheCard) => "bad_slide",
-            Self::Refused(SceneError::BadZoom(_)) => "bad_zoom",
-            Self::Refused(SceneError::BadCameraTime(_)) => "bad_camera_time",
-            Self::Refused(_) => "invalid_scene_change",
+            Self::Invalid(SceneError::Empty(_)) => "empty",
+            Self::Invalid(SceneError::TooLong { .. }) => "too_long",
+            Self::Invalid(SceneError::DuplicateMember(_)) => "duplicate_member",
+            Self::Invalid(SceneError::UnknownMember(_)) => "unknown_member",
+            Self::Invalid(SceneError::TooManyMembers) => "too_many_members",
+            Self::Invalid(SceneError::TooManyChoices { .. }) => "too_many_choices",
+            Self::Invalid(SceneError::InvalidVolume(_)) => "bad_volume",
+            Self::Invalid(SceneError::InvalidRotation(_)) => "bad_rotation",
+            Self::Invalid(SceneError::InvalidSlide | SceneError::SlideNeedsTheCard) => "bad_slide",
+            Self::Invalid(SceneError::InvalidZoom(_)) => "bad_zoom",
+            Self::Invalid(SceneError::InvalidCameraTime(_)) => "bad_camera_time",
+            Self::Invalid(_) => "invalid_scene_change",
         }
     }
 }
 
-impl fmt::Display for SceneRefusal {
+impl fmt::Display for SceneChangeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Refused(error) => write!(formatter, "{error}"),
+            Self::Invalid(error) => write!(formatter, "{error}"),
             Self::FixtureChanged => {
                 formatter.write_str("the scene changed while this was being checked, try again")
             }
         }
     }
 }
+
+impl std::error::Error for SceneChangeError {}
 
 /// What is shown, and which fixture it is built on.
 #[derive(Debug)]
@@ -150,17 +160,56 @@ struct Shown {
     generation: u64,
 }
 
+/// Milliseconds since this clock was made, from the monotonic system clock: the playground's
+/// default clock, read only here at the edge.
+#[derive(Debug, Clone, Copy)]
+pub struct RunClock {
+    started: Instant,
+}
+
+impl RunClock {
+    pub fn new() -> Self {
+        Self {
+            started: Instant::now(),
+        }
+    }
+}
+
+impl Default for RunClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clock for RunClock {
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+}
+
 /// What the playground is showing, the pages that are open, and where its files are.
-#[derive(Debug)]
 pub struct PlaygroundState {
     files: PlaygroundFiles,
     shown: Mutex<Shown>,
     clients: ClientTable,
-    /// When this run of the host began, so a move can say how long ago it started.
-    started: Instant,
+    /// Milliseconds of this run of the host, so a move can say how long ago it started and a page
+    /// how long ago it last spoke.
+    clock: Arc<dyn Clock>,
+}
+
+impl fmt::Debug for PlaygroundState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PlaygroundState")
+            .field("files", &self.files)
+            .field("shown", &self.shown)
+            .field("clients", &self.clients)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PlaygroundState {
+    /// The playground of this run, timed by a `RunClock` started now.
     pub fn new(files: PlaygroundFiles, boot_id: String) -> Self {
         Self {
             files,
@@ -174,13 +223,18 @@ impl PlaygroundState {
                 generation: 0,
             }),
             clients: ClientTable::default(),
-            started: Instant::now(),
+            clock: Arc::new(RunClock::new()),
         }
+    }
+
+    /// The same playground timed by `clock`, so a test moves time itself.
+    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Self {
+        Self { clock, ..self }
     }
 
     /// Milliseconds since this run of the host began.
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        self.clock.now_ms()
     }
 
     fn lock(&self) -> MutexGuard<'_, Shown> {
@@ -193,27 +247,42 @@ impl PlaygroundState {
 
     /// Remembers what a page said. See `ClientTable::record`.
     pub fn record_client(&self, client: String, report: ClientReport) {
-        self.clients.record(client, report);
+        self.clients.record(client, report, self.now_ms());
     }
 
     /// The pages heard from, by name, with how long ago each last spoke.
     pub fn clients(&self) -> Vec<ClientView> {
-        self.clients_at(Instant::now())
+        self.clients_at(self.now_ms())
     }
 
-    /// `clients` as of `now`, which tests move forward.
-    pub fn clients_at(&self, now: Instant) -> Vec<ClientView> {
-        self.clients.views_at(now)
+    /// `clients` as of `now_ms` on the playground's clock, which tests move forward.
+    pub fn clients_at(&self, now_ms: u64) -> Vec<ClientView> {
+        self.clients.views_at(now_ms)
+    }
+
+    /// Milliseconds on the playground's clock now.
+    pub fn clock_ms(&self) -> u64 {
+        self.now_ms()
     }
 
     pub fn revision(&self) -> u64 {
         self.lock().reply.revision
     }
 
+    /// Whether `boot_id` names this run of the host.
+    pub fn is_boot(&self, boot_id: &str) -> bool {
+        self.lock().reply.boot_id == boot_id
+    }
+
     /// What is shown now, as it is, without looking at the fixture files, with each move saying how
     /// long ago it began as of this moment. The frame and `controls.json` both answer with this.
     pub fn snapshot(&self) -> ControlsReply {
         self.lock().reply.at(self.now_ms())
+    }
+
+    /// The live scene's own change of the backdrop, or `Keep` while it shows the fixture's.
+    pub fn scene_backdrop(&self) -> Edit<ImageRef> {
+        self.lock().reply.scene.backdrop.clone()
     }
 
     /// The generation of the fixture files as the playground knows them. Read it before reading
@@ -245,14 +314,14 @@ impl PlaygroundState {
         base: &Fixture,
         generation: u64,
         on_applied: impl FnOnce(&ControlsReply),
-    ) -> Result<ControlsReply, SceneRefusal> {
+    ) -> Result<ControlsReply, SceneChangeError> {
         let mut shown = self.lock();
         if shown.generation != generation {
-            return Err(SceneRefusal::FixtureChanged);
+            return Err(SceneChangeError::FixtureChanged);
         }
         let mut next = shown.reply.scene.clone();
         next.apply_at(change, base, self.now_ms())
-            .map_err(SceneRefusal::Refused)?;
+            .map_err(SceneChangeError::Invalid)?;
         if next != shown.reply.scene {
             shown.reply.scene = next;
             shown.reply.revision += 1;
@@ -305,14 +374,13 @@ impl PlaygroundState {
         let target = shown
             .reply
             .scene
-            .camera
-            .as_ref()
-            .and_then(|camera| camera.target.clone())
-            .filter(|target| gone.contains(target))?;
+            .camera_target()
+            .filter(|target| gone.iter().any(|name| name == target))?
+            .to_owned();
         let now = self.now_ms();
         shown.reply.scene.camera_count += 1;
         let serial = shown.reply.scene.camera_count;
-        shown.reply.scene.camera = Some(Camera {
+        shown.reply.scene.camera = Edit::Set(Camera {
             target: None,
             zoom_percent: MINIMUM_ZOOM_PERCENT,
             duration_ms: 0,
@@ -328,12 +396,7 @@ impl PlaygroundState {
     /// The name of the element the camera looks at, if it looks at one. A cheap look, so a
     /// despawn can skip collecting names when there is nothing to release.
     pub fn camera_target(&self) -> Option<String> {
-        self.lock()
-            .reply
-            .scene
-            .camera
-            .as_ref()
-            .and_then(|camera| camera.target.clone())
+        self.lock().reply.scene.camera_target().map(str::to_owned)
     }
 
     /// Makes several changes as one: if any is refused none is applied, and the whole is one
@@ -348,12 +411,12 @@ impl PlaygroundState {
         names: &[String],
         generation: u64,
         on_applied: impl FnOnce(&ControlsReply),
-    ) -> Result<ControlsReply, ControlsRefusal> {
+    ) -> Result<ControlsReply, ControlsChangeError> {
         if changes.is_empty() {
-            return Err(ControlsRefusal::EmptyBatch);
+            return Err(ControlsChangeError::EmptyBatch);
         }
         if changes.len() > MAXIMUM_BATCH_CHANGES {
-            return Err(ControlsRefusal::TooManyChanges {
+            return Err(ControlsChangeError::TooManyChanges {
                 given: changes.len(),
             });
         }
@@ -362,13 +425,13 @@ impl PlaygroundState {
             .iter()
             .any(|change| matches!(change, ControlsChange::Fixture(_)));
         if chooses_fixture && shown.generation != generation {
-            return Err(ControlsRefusal::FixtureChanged);
+            return Err(ControlsChangeError::FixtureChanged);
         }
         for change in &changes {
             if let ControlsChange::Fixture(name) = change
                 && !names.contains(name)
             {
-                return Err(ControlsRefusal::NoSuchFixture {
+                return Err(ControlsChangeError::NoSuchFixture {
                     name: name.clone(),
                     available: names.to_vec(),
                 });
@@ -376,7 +439,7 @@ impl PlaygroundState {
         }
         let mut next = shown.reply.controls.clone();
         for change in changes {
-            next.apply(change).map_err(ControlsRefusal::Refused)?;
+            next.apply(change).map_err(ControlsChangeError::Invalid)?;
         }
         if next != shown.reply.controls {
             // Another scenario starts from its own file, without the last one's live changes.

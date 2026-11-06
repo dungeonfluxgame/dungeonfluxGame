@@ -8,7 +8,7 @@ use tempfile::TempDir;
 use crate::event_log::EventLog;
 
 use super::fixtures::{operation_of, received, step_finished};
-use super::{FileSpool, HostEventSink, ObservedRecord, OutletRefusal, RecordDraft, RecordOutlet};
+use super::{FileSpool, HostEventSink, ObservedRecord, OutletError, RecordDraft, RecordOutlet};
 
 const SETTLE: Duration = Duration::from_secs(10);
 
@@ -112,7 +112,7 @@ fn a_full_queue_refuses_at_once_counts_the_loss_and_never_blocks() {
 
     let refusal = spool.accept(&record(&received(1), 1, 10));
 
-    assert_eq!(refusal, Err(OutletRefusal::Full));
+    assert_eq!(refusal, Err(OutletError::Full));
     let status = spool.status(10);
     assert_eq!(
         (status.accepted, status.pending, status.lost_always),
@@ -154,8 +154,23 @@ fn a_spool_that_cannot_be_opened_is_a_typed_error() {
 
     let error = FileSpool::open(&path).err().expect("no such directory");
 
-    assert!(matches!(error, super::SpoolError::Open { .. }), "{error}");
-    assert!(error.to_string().contains("cannot be opened"), "{error}");
+    assert_eq!(
+        error,
+        super::SpoolError::Open {
+            path: path.clone(),
+            kind: std::io::ErrorKind::NotFound,
+        }
+    );
+}
+
+#[test]
+fn every_outlet_error_key_is_its_serde_name_and_reads_back() {
+    for error in OutletError::ALL {
+        let written = serde_json::to_string(&error).expect("writes");
+        assert_eq!(written, format!("\"{}\"", error.key()));
+        assert_eq!(OutletError::from_key(error.key()), Some(error));
+    }
+    assert_eq!(OutletError::from_key("rejected"), None);
 }
 
 #[test]
@@ -222,7 +237,8 @@ fn the_identity_holds_on_every_read_while_records_are_refused_and_lost_by_the_wr
         assert_eq!(
             status.accepted + refused,
             status.confirmed + status.pending + status.lost_always + status.lost_verbose,
-            "every offered record is confirmed, waiting, lost by the writer or refused: {status:?} refused={refused}"
+            "every offered record is confirmed, waiting, lost by the writer or refused: \
+             {status:?} refused={refused}"
         );
     }
     for feeder in feeders {

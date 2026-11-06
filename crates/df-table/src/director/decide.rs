@@ -5,9 +5,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Active, Director, Request, ResultMemory, StageDirection, Waiting};
-use crate::director_log::{Cause, DropReason, Outcome};
-use crate::director_reason::{Ends, WideReason};
-use crate::director_view::{StageView, clamped_zoom};
+use crate::director::log::{Cause, DropReason, Outcome};
+use crate::director::reason::{Ends, WideReason};
+use crate::director::view::{StageView, clamped_zoom};
 use crate::element::ElementId;
 
 impl Director {
@@ -192,17 +192,17 @@ impl Director {
         view: &StageView,
     ) -> StageDirection {
         let spec = self.settings.reasons.spec(request.reason);
-        let asked = request.zoom_percent.unwrap_or(spec.zoom_percent);
+        let asked = request.zoom_percent.unwrap_or(spec.zoom_percent());
         let (zoom, _) = clamped_zoom(asked, view.zoom_ceiling_percent());
         let clamped_from = (zoom != asked).then_some(asked);
         let over = if view.reduced_effects {
             0
         } else {
-            request.over_ms.unwrap_or(spec.over_ms)
+            request.over_ms.unwrap_or(spec.over_ms())
         };
         let deadline = self
             .now_ms
-            .saturating_add(self.hold_for(request, spec.ends));
+            .saturating_add(self.hold_for(request, spec.ends()));
         self.serial = self.serial.saturating_add(1);
         self.last_move_ms = Some(self.now_ms);
         self.owed_wide = None;
@@ -216,7 +216,7 @@ impl Director {
             zoom_percent: zoom,
             since_ms: self.now_ms,
             deadline_ms: deadline,
-            ends: spec.ends,
+            ends: spec.ends(),
             ended: false,
             generation: view.plate_generation(),
             replaced,
@@ -249,7 +249,7 @@ impl Director {
     pub(super) fn reaim(
         &mut self,
         generation: u64,
-        over_ms: u32,
+        over_ms: u64,
         view: &StageView,
     ) -> Option<StageDirection> {
         let (element, reason, asked) = {

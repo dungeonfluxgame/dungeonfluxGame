@@ -1,8 +1,10 @@
 use crate::copy::{
-    MINIMUM_CAPTION_DWELL_MS, ReadingPace, caption_dwell_ms, result_card_dwell_ms,
-    status_blocks_input, status_copy, word_count,
+    ReadingPace, caption_dwell_ms, result_card_dwell_ms, status_blocks_input, status_copy,
+    word_count,
 };
 use crate::fixture::Status;
+use crate::fixtures::assert_keys_are_serde_names;
+use crate::limits::{DWELL_MS_PER_WORD, MINIMUM_CAPTION_DWELL_MS};
 
 fn every_status() -> Vec<Status> {
     vec![
@@ -39,9 +41,16 @@ fn the_reading_pace_scales_every_dwell() {
 }
 
 #[test]
-fn a_huge_word_count_is_held_at_the_largest_dwell_and_never_wraps_short() {
-    assert_eq!(caption_dwell_ms(u32::MAX, ReadingPace::Slow), u32::MAX);
-    assert_eq!(caption_dwell_ms(u32::MAX, ReadingPace::Fast), u32::MAX);
+fn a_huge_word_count_keeps_its_whole_dwell_and_never_wraps_short() {
+    let normal_ms = u64::from(u32::MAX) * DWELL_MS_PER_WORD;
+    assert_eq!(
+        caption_dwell_ms(u32::MAX, ReadingPace::Slow),
+        normal_ms * 3 / 2
+    );
+    assert_eq!(
+        caption_dwell_ms(u32::MAX, ReadingPace::Fast),
+        normal_ms * 3 / 4
+    );
 }
 
 #[test]
@@ -104,4 +113,9 @@ fn every_status_key_in_the_menu_gives_a_status() {
         assert!(crate::copy::status_from_key(key).is_some(), "{key}");
     }
     assert!(crate::copy::status_from_key("sleepy").is_none());
+}
+
+#[test]
+fn the_keys_of_a_reading_pace_are_its_serde_names() {
+    assert_keys_are_serde_names(&ReadingPace::ALL, ReadingPace::key, ReadingPace::from_key);
 }

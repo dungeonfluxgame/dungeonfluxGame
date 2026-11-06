@@ -3,10 +3,10 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 use crate::config::{
-    LARGE_SETTING_MAXIMUM, LoadedSettings, SettingFault, SettingId, SettingName, SettingOwner,
-    SettingUnit, Settings,
+    LoadedSettings, SettingCause, SettingId, SettingName, SettingOwner, SettingUnit, Settings,
 };
 use crate::event::TableEvent;
+use crate::limits::LARGE_SETTING_MAXIMUM;
 
 fn configuration(value: Value) -> Map<String, Value> {
     match value {
@@ -32,7 +32,7 @@ fn load(raw: Value) -> LoadedSettings {
     Settings::load(&configuration(raw)).expect("the crate's own setting names are valid")
 }
 
-fn rejection(name: &str, cause: SettingFault) -> TableEvent {
+fn rejection(name: &str, cause: SettingCause) -> TableEvent {
     TableEvent::SettingRejected {
         name: SettingName::new(name).expect("valid setting name"),
         cause,
@@ -41,7 +41,7 @@ fn rejection(name: &str, cause: SettingFault) -> TableEvent {
 
 #[test]
 fn the_defaults_are_the_numbers_of_section_j4() {
-    let settings = Settings::defaults();
+    let settings = Settings::default();
     assert_eq!(settings.narration_late_s(), 8);
     assert_eq!(settings.narration_batch_s(), 4);
     assert_eq!(settings.seat_pending_limit(), 3);
@@ -112,8 +112,8 @@ fn an_out_of_range_value_falls_back_to_the_default_and_is_reported() {
     assert_eq!(
         loaded.events,
         [
-            rejection("narration_late_s", SettingFault::OutOfRange),
-            rejection("seat_pending_limit", SettingFault::OutOfRange),
+            rejection("narration_late_s", SettingCause::OutOfRange),
+            rejection("seat_pending_limit", SettingCause::OutOfRange),
         ]
     );
 }
@@ -136,7 +136,7 @@ fn a_value_that_is_not_a_whole_number_falls_back_and_is_reported() {
             loaded.events,
             [rejection(
                 "narration_batch_s",
-                SettingFault::NotAWholeNumber
+                SettingCause::NotAWholeNumber
             )],
             "{bad}"
         );
@@ -151,18 +151,18 @@ fn a_number_too_large_for_a_setting_is_out_of_range_not_a_wrap() {
     assert_eq!(loaded.settings.seat_rate_burst(), 3);
     assert_eq!(
         loaded.events,
-        [rejection("seat_rate_burst", SettingFault::OutOfRange)]
+        [rejection("seat_rate_burst", SettingCause::OutOfRange)]
     );
 }
 
 #[test]
 fn a_missing_value_takes_the_default_and_is_reported() {
     let loaded = load(json!({}));
-    assert_eq!(loaded.settings, Settings::defaults());
+    assert_eq!(loaded.settings, Settings::default());
     assert_eq!(loaded.events.len(), SettingId::ALL.len());
     assert_eq!(
         loaded.events[0],
-        rejection("narration_late_s", SettingFault::Missing)
+        rejection("narration_late_s", SettingCause::Missing)
     );
 }
 
@@ -176,8 +176,8 @@ fn unknown_names_are_reported_in_key_order_and_change_nothing() {
     assert_eq!(
         loaded.events,
         [
-            rejection("narration_early", SettingFault::UnknownSetting),
-            rejection("narration_late", SettingFault::UnknownSetting),
+            rejection("narration_early", SettingCause::UnknownSetting),
+            rejection("narration_late", SettingCause::UnknownSetting),
         ]
     );
 }
@@ -206,8 +206,14 @@ fn a_late_limit_below_the_batch_window_puts_both_back_to_their_defaults() {
     assert_eq!(
         loaded.events,
         [
-            rejection("narration_late_s", SettingFault::InconsistentWith),
-            rejection("narration_batch_s", SettingFault::InconsistentWith),
+            rejection(
+                "narration_late_s",
+                SettingCause::InconsistentWithRelatedSetting
+            ),
+            rejection(
+                "narration_batch_s",
+                SettingCause::InconsistentWithRelatedSetting
+            ),
         ]
     );
 }
@@ -233,9 +239,15 @@ fn a_batch_window_above_the_default_late_limit_is_judged_after_the_fallback() {
     assert_eq!(
         loaded.events,
         [
-            rejection("narration_late_s", SettingFault::OutOfRange),
-            rejection("narration_late_s", SettingFault::InconsistentWith),
-            rejection("narration_batch_s", SettingFault::InconsistentWith),
+            rejection("narration_late_s", SettingCause::OutOfRange),
+            rejection(
+                "narration_late_s",
+                SettingCause::InconsistentWithRelatedSetting
+            ),
+            rejection(
+                "narration_batch_s",
+                SettingCause::InconsistentWithRelatedSetting
+            ),
         ]
     );
 }
@@ -253,7 +265,7 @@ fn the_rate_settings_are_independent_because_j4_states_no_relation_between_them(
 
 #[test]
 fn a_rejected_setting_is_one_audit_line_with_its_name_and_cause() {
-    let event = rejection("narration_late_s", SettingFault::OutOfRange);
+    let event = rejection("narration_late_s", SettingCause::OutOfRange);
     assert_eq!(
         event.render_audit_line(),
         "SETTING rejected name=narration_late_s cause=out_of_range"
@@ -262,19 +274,19 @@ fn a_rejected_setting_is_one_audit_line_with_its_name_and_cause() {
 
 #[test]
 fn the_fault_keys_are_distinct_and_are_their_serialized_names() {
-    let faults = [
-        SettingFault::Missing,
-        SettingFault::NotAWholeNumber,
-        SettingFault::OutOfRange,
-        SettingFault::UnknownSetting,
-        SettingFault::InconsistentWith,
+    let causes = [
+        SettingCause::Missing,
+        SettingCause::NotAWholeNumber,
+        SettingCause::OutOfRange,
+        SettingCause::UnknownSetting,
+        SettingCause::InconsistentWithRelatedSetting,
     ];
-    let keys: BTreeSet<_> = faults.iter().map(|fault| fault.key()).collect();
-    assert_eq!(keys.len(), faults.len());
-    for fault in faults {
+    let keys: BTreeSet<_> = causes.iter().map(|cause| cause.key()).collect();
+    assert_eq!(keys.len(), causes.len());
+    for cause in causes {
         assert_eq!(
-            serde_json::to_string(&fault).expect("a fault serializes"),
-            format!("\"{}\"", fault.key())
+            serde_json::to_string(&cause).expect("a cause serializes"),
+            format!("\"{}\"", cause.key())
         );
     }
 }

@@ -11,14 +11,15 @@
 
 use std::sync::Arc;
 
+use df_table::element::NameError;
 use df_table::identity::SceneId;
+use df_table::lookahead::settings::LookaheadSettings;
 use df_table::lookahead::{
     CERTAIN_PERMILLE, Expectation, Expected, PlanView, Take, lookahead_candidates,
 };
-use df_table::lookahead_settings::LookaheadSettings;
-use df_table::ports::PurposeName;
-use df_table::scene_plan_brief::SceneBrief;
-use df_table::table_state::TableSnapshot;
+use df_table::scene_plan::brief::SceneBrief;
+use df_table::table_state::{DisplayName, TableSnapshot};
+use df_table::units::MILLISECONDS_PER_SECOND;
 
 use super::request::{LookaheadRequest, LookaheadSettingName, is_built_ahead};
 use super::worker::LookaheadWorker;
@@ -29,10 +30,9 @@ use crate::scene_builder::dev_world::dev_brief;
 use crate::scene_builder::events::{SceneBuilderAudit, SceneBuilderEvent};
 use crate::scene_builder::fakes::FakeStageWorker;
 use crate::scene_builder::inputs::StageInputs;
-use crate::scene_builder::purposes::{BuildPriority, StagePurposes};
-use crate::scene_builder::request::{DevStage, SceneError, SlowStage};
-
-const MILLISECONDS_PER_SECOND: u64 = 1_000;
+use crate::scene_builder::purposes::{BuildPriority, dev_stage_purpose};
+use crate::scene_builder::request::{DevStage, SceneBuilderError, SlowStage};
+use crate::scene_builder::workbench::WorkbenchError;
 
 /// What a verb needs from the workbench for one call.
 pub struct BenchContext<'a> {
@@ -52,25 +52,21 @@ pub struct LookaheadBench {
     audit: Arc<dyn SceneBuilderAudit>,
 }
 
-fn workbench_error(reason: impl std::fmt::Display) -> SceneError {
-    SceneError::Workbench {
-        reason: reason.to_string(),
+/// The likelihood of a target of `kind`: certain for a certain kind, which takes none, and the
+/// stated thousandths, 0 to 1,000, for a likely kind, which needs one.
+fn target_likelihood(
+    kind: Expectation,
+    likelihood_permille: Option<u16>,
+) -> Result<u16, SceneBuilderError> {
+    let invalid = SceneBuilderError::InvalidLikelihood {
+        kind,
+        likelihood_permille,
+    };
+    match (kind.is_certain(), likelihood_permille) {
+        (true, None) => Ok(CERTAIN_PERMILLE),
+        (false, Some(permille)) if permille <= CERTAIN_PERMILLE => Ok(permille),
+        (true, Some(_)) | (false, _) => Err(invalid),
     }
-}
-
-fn bad_request(reason: impl std::fmt::Display) -> SceneError {
-    SceneError::BadRequest {
-        reason: reason.to_string(),
-    }
-}
-
-fn purpose_of(stage: DevStage) -> Result<PurposeName, SceneError> {
-    let purposes =
-        StagePurposes::for_priority(BuildPriority::Lookahead).map_err(workbench_error)?;
-    purposes
-        .of(stage.scene_stage())
-        .cloned()
-        .ok_or_else(|| workbench_error("a dev stage has no purpose"))
 }
 
 impl LookaheadBench {
@@ -79,10 +75,9 @@ impl LookaheadBench {
         audit: Arc<dyn SceneBuilderAudit>,
         inputs: Arc<StageInputs>,
         settings: LookaheadSettings,
-    ) -> Result<Self, SceneError> {
+    ) -> Result<Self, NameError> {
         Ok(Self {
-            worker: LookaheadWorker::new(hub, Arc::clone(&audit), inputs, settings)
-                .map_err(workbench_error)?,
+            worker: LookaheadWorker::new(hub, Arc::clone(&audit), inputs, settings)?,
             audit,
         })
     }
@@ -112,7 +107,7 @@ impl LookaheadBench {
         &mut self,
         request: &LookaheadRequest,
         mut context: BenchContext<'_>,
-    ) -> Result<(), SceneError> {
+    ) -> Result<(), SceneBuilderError> {
         match request {
             LookaheadRequest::Pause => self.worker.pause(),
             LookaheadRequest::Resume => self.worker.resume(),
@@ -124,7 +119,7 @@ impl LookaheadBench {
                     context.current,
                     Vec::new(),
                 )
-                .map_err(workbench_error)?,
+                .map_err(WorkbenchError::failed)?,
             LookaheadRequest::Set { setting, value } => self.set(*setting, *value)?,
             LookaheadRequest::Target {
                 place,
@@ -147,64 +142,55 @@ impl LookaheadBench {
     }
 
     /// Changes one setting, or refuses a value outside its range naming the setting.
-    fn set(&mut self, setting: LookaheadSettingName, value: u64) -> Result<(), SceneError> {
+    fn set(&mut self, setting: LookaheadSettingName, value: u64) -> Result<(), SceneBuilderError> {
+        let invalid = SceneBuilderError::InvalidSetting { setting, value };
         let settings = self.worker.settings();
-        let changed = match setting.numeric() {
-            Some(numeric) => settings.with(numeric, value).map_err(bad_request)?,
-            None => match value {
-                0 => settings.with_enabled(false),
-                1 => settings.with_enabled(true),
-                _ => {
-                    return Err(bad_request(format!(
-                        "lookahead_enabled is 0 or 1, not {value}"
-                    )));
-                }
-            },
+        let changed = match (setting.numeric(), value) {
+            // The refusal names the same setting and value, so it says what the planner's would.
+            (Some(numeric), _) => settings.with(numeric, value).map_err(|_| invalid)?,
+            (None, 0) => settings.with_enabled(false),
+            (None, 1) => settings.with_enabled(true),
+            (None, _) => return Err(invalid),
         };
         self.worker.set_settings(changed);
         Ok(())
     }
 
+    /// States the scene the next `scene build` makes as the one the story expects, after checking
+    /// every value, and scripts its slow or failing stage.
     fn target(
         &mut self,
         context: &mut BenchContext<'_>,
-        place: &str,
+        place: &DisplayName,
         kind: Expectation,
         likelihood_permille: Option<u16>,
         fail: Option<DevStage>,
         slow: Option<&SlowStage>,
-    ) -> Result<(), SceneError> {
-        for stage in fail.iter().chain(slow.map(|slow| &slow.stage)) {
-            if !is_built_ahead(*stage) {
-                return Err(bad_request("only describe and background are built ahead"));
-            }
+    ) -> Result<(), SceneBuilderError> {
+        if let Some(stage) = fail
+            .into_iter()
+            .chain(slow.map(|slow| slow.stage))
+            .find(|stage| !is_built_ahead(*stage))
+        {
+            return Err(SceneBuilderError::InvalidLookaheadStage { stage });
         }
-        let permille = match (kind.is_certain(), likelihood_permille) {
-            (true, None) => CERTAIN_PERMILLE,
-            (true, Some(_)) => {
-                return Err(bad_request(format!(
-                    "a {} scene is certain and takes no likelihood",
-                    kind.key()
-                )));
-            }
-            (false, Some(permille)) => permille,
-            (false, None) => {
-                return Err(bad_request(format!(
-                    "a {} scene needs a likelihood in thousandths",
-                    kind.key()
-                )));
-            }
-        };
         let scene = SceneId::new(context.next_scene);
         let expected = Expected {
-            brief: dev_brief(scene, place).map_err(workbench_error)?,
+            brief: dev_brief(scene, place.as_str()).map_err(WorkbenchError::failed)?,
             expectation: kind,
-            likelihood_permille: permille,
+            likelihood_permille: target_likelihood(kind, likelihood_permille)?,
         };
         lookahead_candidates(context.snapshot, context.current, vec![expected.clone()])
-            .map_err(workbench_error)?;
-        let slow_purpose = slow.map(|slow| purpose_of(slow.stage)).transpose()?;
-        let fail_purpose = fail.map(purpose_of).transpose()?;
+            .map_err(WorkbenchError::failed)?;
+        let purpose_of = |stage| dev_stage_purpose(BuildPriority::Lookahead, stage);
+        let slow_purpose = slow
+            .map(|slow| purpose_of(slow.stage))
+            .transpose()
+            .map_err(WorkbenchError::failed)?;
+        let fail_purpose = fail
+            .map(purpose_of)
+            .transpose()
+            .map_err(WorkbenchError::failed)?;
         if let (Some(slow), Some(purpose)) = (slow, &slow_purpose) {
             let latency_ms = slow.seconds.saturating_mul(MILLISECONDS_PER_SECOND);
             context
@@ -232,6 +218,7 @@ impl LookaheadBench {
                 context.current,
                 vec![expected],
             )
-            .map_err(workbench_error)
+            .map_err(WorkbenchError::failed)?;
+        Ok(())
     }
 }

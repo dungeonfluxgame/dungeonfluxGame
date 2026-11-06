@@ -3,15 +3,15 @@ use std::collections::BTreeSet;
 use crate::effects::TableState;
 use crate::identity::MachineId;
 use crate::lobby_tests::{action, explore_for_neighbour, lobby};
+use crate::machine::slot::{LoadError, MachineSlot};
 use crate::machine::{
-    CarryItem, Entry, EntryRefusal, HandOff, HandOffTarget, InspectReport, Machine, MachineError,
+    CarryItem, Entry, EntryError, HandOff, HandOffTarget, InspectReport, Machine, MachineError,
     MachineInput, MachineReadout, MachineSpec, ReadoutError, Scope, StateName, StepInput,
     StepResult, SuspendPolicy,
 };
-use crate::machine_slot::{LoadError, MachineSlot};
 use crate::ports::{Audience, PortName};
 use crate::registry::{
-    Enablement, EnablementReason, FlagState, HandOffRefusal, HandOffRoute, MachineFlags,
+    Enablement, EnablementReason, FlagState, HandOffRoute, HandOffTargetError, MachineFlags,
     RegistryBuilder, RegistryError, RegistryErrorKind, check_hand_off_route,
 };
 
@@ -30,7 +30,7 @@ impl Machine for SpecOnly {
     }
 
     fn enter(&self, _table: &TableState, _entry: &Entry) -> Result<MachineSlot, MachineError> {
-        Err(EntryRefusal::NoSeats.into())
+        Err(EntryError::NoSeats.into())
     }
 
     fn accepts(&self, _table: &TableState, _input: &MachineInput, _state: &MachineSlot) -> bool {
@@ -50,19 +50,19 @@ impl Machine for SpecOnly {
     }
 
     fn wants_hand_off(&self, _state: &MachineSlot) -> Result<bool, MachineError> {
-        Err(EntryRefusal::NoSeats.into())
+        Err(EntryError::NoSeats.into())
     }
 
     fn exit(&self, _table: &TableState, _state: &MachineSlot) -> Result<HandOff, MachineError> {
-        Err(EntryRefusal::NoSeats.into())
+        Err(EntryError::NoSeats.into())
     }
 
     fn state_name(&self, _state: &MachineSlot) -> Result<StateName, MachineError> {
-        Err(EntryRefusal::NoSeats.into())
+        Err(EntryError::NoSeats.into())
     }
 
     fn validate(&self, _state: &MachineSlot) -> Result<(), MachineError> {
-        Err(EntryRefusal::NoSeats.into())
+        Err(EntryError::NoSeats.into())
     }
 
     fn project(
@@ -75,7 +75,7 @@ impl Machine for SpecOnly {
     }
 
     fn inspect(&self, _state: &MachineSlot) -> Result<InspectReport, MachineError> {
-        Err(EntryRefusal::NoSeats.into())
+        Err(EntryError::NoSeats.into())
     }
 }
 
@@ -150,7 +150,7 @@ fn a_flag_turns_a_machine_off_or_on_and_the_report_says_why() {
         RegistryBuilder::new()
             .register(lobby())
             .register(explore_for_neighbour())
-            .flags(flags),
+            .with_flags(flags),
     );
     assert_eq!(
         kinds(&errors),
@@ -167,7 +167,7 @@ fn a_flag_turns_a_machine_off_or_on_and_the_report_says_why() {
         .register(lobby())
         .register(explore_for_neighbour())
         .register(spec_only(stub_spec("spare", Scope::Group)))
-        .flags(flags)
+        .with_flags(flags)
         .build(PortName::ALL)
         .expect("valid registry");
     let report = registry.report();
@@ -200,7 +200,7 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
         RegistryBuilder::new()
             .register(lobby())
             .register(explore_for_neighbour())
-            .flags(MachineFlags::default().with_flag(id("ghost"), FlagState::Off)),
+            .with_flags(MachineFlags::default().with_flag(id("ghost"), FlagState::Off)),
     );
     let unknown_target = errors_of(
         RegistryBuilder::new()
@@ -212,7 +212,7 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
             .register(lobby())
             .register(explore_for_neighbour())
             .register(group_stub())
-            .flags(MachineFlags::default().with_flag(id("explore"), FlagState::Off)),
+            .with_flags(MachineFlags::default().with_flag(id("explore"), FlagState::Off)),
     );
     let scope = errors_of(
         RegistryBuilder::new()
@@ -239,7 +239,7 @@ fn scenarios() -> Vec<(RegistryErrorKind, Vec<RegistryError>)> {
         RegistryBuilder::new()
             .register(lobby())
             .register(explore_for_neighbour())
-            .flags(
+            .with_flags(
                 MachineFlags::default()
                     .with_flag(id("lobby"), FlagState::Off)
                     .with_flag(id("explore"), FlagState::Off),
@@ -348,7 +348,7 @@ fn every_problem_comes_back_at_once_in_a_fixed_order() {
     let errors = RegistryBuilder::new()
         .register(lobby())
         .register(spec_only(seat_lane_spec("ghost")))
-        .flags(MachineFlags::default().with_flag(id("phantom"), FlagState::Off))
+        .with_flags(MachineFlags::default().with_flag(id("phantom"), FlagState::Off))
         .build(&[])
         .err()
         .expect("the registry is refused");
@@ -393,11 +393,11 @@ fn the_hand_off_a_machine_returned_is_checked_against_the_declared_enabled_and_s
     ));
     assert_eq!(
         registry.check_hand_off(&id("lobby"), &to("lane")).err(),
-        Some(HandOffRefusal::UndeclaredTarget { target: id("lane") })
+        Some(HandOffTargetError::UndeclaredTarget { target: id("lane") })
     );
     assert_eq!(
         registry.check_hand_off(&id("ghost"), &to("lobby")).err(),
-        Some(HandOffRefusal::UnknownSource {
+        Some(HandOffTargetError::UnknownSource {
             machine: id("ghost")
         })
     );
@@ -411,7 +411,7 @@ fn the_route_rules_refuse_an_unknown_a_disabled_and_a_forbidden_target() {
     let lookup = |scope: Option<(Scope, Enablement)>| move |_: &MachineId| scope;
     assert_eq!(
         check_hand_off_route(from, &hand_off, lookup(None)),
-        Err(HandOffRefusal::UnknownTarget {
+        Err(HandOffTargetError::UnknownTarget {
             target: id("explore")
         })
     );
@@ -421,7 +421,7 @@ fn the_route_rules_refuse_an_unknown_a_disabled_and_a_forbidden_target() {
             &hand_off,
             lookup(Some((Scope::Group, Enablement::Disabled)))
         ),
-        Err(HandOffRefusal::TargetDisabled {
+        Err(HandOffTargetError::TargetDisabled {
             target: id("explore")
         })
     );
@@ -431,7 +431,7 @@ fn the_route_rules_refuse_an_unknown_a_disabled_and_a_forbidden_target() {
             &hand_off,
             lookup(Some((Scope::Seat, Enablement::Enabled)))
         ),
-        Err(HandOffRefusal::ScopeRuleBroken {
+        Err(HandOffTargetError::ScopeRuleBroken {
             from: Scope::Table,
             to: Scope::Seat
         })
@@ -462,19 +462,19 @@ fn a_seat_lane_ends_by_releasing_itself_and_a_group_machine_may_return_below() {
     for (from, scope) in [("lobby", Scope::Table), ("explore", Scope::Group)] {
         assert_eq!(
             registry.check_hand_off(&id(from), &release).err(),
-            Some(HandOffRefusal::LaneNotReleasable { scope }),
+            Some(HandOffTargetError::LaneNotReleasable { scope }),
             "{from}"
         );
     }
     for (from, scope) in [("lobby", Scope::Table), ("lane", Scope::Seat)] {
         assert_eq!(
             registry.check_hand_off(&id(from), &below).err(),
-            Some(HandOffRefusal::NothingBelow { scope }),
+            Some(HandOffTargetError::NothingBelow { scope }),
             "{from}"
         );
     }
     assert!(
-        !HandOffRefusal::NothingBelow { scope: Scope::Seat }
+        !HandOffTargetError::NothingBelow { scope: Scope::Seat }
             .to_string()
             .is_empty()
     );

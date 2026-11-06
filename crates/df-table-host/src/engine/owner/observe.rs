@@ -10,8 +10,6 @@
 //! the owner reads once at start (the three seat limits of the queue) is refused with a typed error
 //! and not accepted and ignored, because a value shown as set that does nothing would be a lie.
 
-use std::num::NonZeroU128;
-
 use df_table::config::{CostEffect, SettingId, SettingOwner, SettingUnit, Settings};
 use df_table::event::TableEvent;
 use df_table::identity::OperationId;
@@ -19,7 +17,7 @@ use serde_json::{Map, Value};
 
 use crate::engine::audit::EngineAudit;
 use crate::engine::report::EngineError;
-use crate::engine::report_observe::{
+use crate::engine::report::observe::{
     Applies, ConfigReport, EventView, HistoryReport, ReplayReport, RetentionView, SettingChange,
     SettingView, TraceReport,
 };
@@ -30,26 +28,6 @@ use crate::observe::{
 };
 
 use super::Owner;
-
-fn bad_request(reason: &str) -> EngineError {
-    EngineError::BadRequest {
-        reason: reason.to_owned(),
-    }
-}
-
-/// An operation as a person writes it: the number `--op` took, or the 32 hexadecimal digits the
-/// reports print.
-fn parse_operation(text: &str) -> Result<OperationId, EngineError> {
-    let invalid = || bad_request("an operation is a number or 32 hexadecimal digits");
-    if text.len() == 32 {
-        return OperationId::from_hex(text).map_err(|_| invalid());
-    }
-    text.parse::<u64>()
-        .ok()
-        .and_then(|number| NonZeroU128::new(u128::from(number)))
-        .map(OperationId::from_nonzero_u128)
-        .ok_or_else(invalid)
-}
 
 fn class_of(filter: ClassFilter) -> RecordClass {
     match filter {
@@ -135,8 +113,7 @@ impl Owner {
         report
     }
 
-    pub(super) fn trace(&self, operation: &str) -> Result<TraceReport, EngineError> {
-        let operation_id = parse_operation(operation)?;
+    pub(super) fn trace(&self, operation_id: OperationId) -> TraceReport {
         let hex = operation_id.to_string();
         let filter = HistoryFilter {
             operation: Some(hex.clone()),
@@ -166,12 +143,12 @@ impl Owner {
             operation: operation_id,
             events: report.events.len(),
         });
-        Ok(report)
+        report
     }
 
     pub(super) fn replay(&self, request: &ReplayRequest) -> Result<ReplayReport, EngineError> {
         if request.log.trim().is_empty() {
-            return Err(bad_request("a replay names the turn log to replay"));
+            return Err(EngineError::BlankLog);
         }
         match self.replayer.replay(request) {
             Ok(report) => {
@@ -266,13 +243,12 @@ impl Owner {
         }
         // The spec checks the value and the one rule between two settings; any complaint refuses
         // the whole change and leaves the settings as they were.
-        let loaded = Settings::load(&proposed).map_err(|error| {
+        let loaded = Settings::load(&proposed).map_err(|_| {
             self.refuse_setting(
                 Some(spec.name),
                 "spec_unreadable",
-                EngineError::SettingRefused {
+                EngineError::SettingSpecInvalid {
                     name: spec.name.to_owned(),
-                    cause: error.to_string(),
                 },
             )
         })?;
@@ -286,7 +262,7 @@ impl Owner {
                 cause.key(),
                 EngineError::SettingRefused {
                     name: spec.name.to_owned(),
-                    cause: cause.key().to_owned(),
+                    cause,
                 },
             ));
         }

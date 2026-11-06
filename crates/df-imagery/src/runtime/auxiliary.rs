@@ -622,12 +622,7 @@ where
             generation: stage.claim_generation,
         };
         let source_digest = super::source_receipts_digest(sources)?;
-        let intent = crate::intent_codec::decode_intent(
-            job.intent.bytes(),
-            &crate::service::PROTOCOL_LIMITS,
-            crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-        )
-        .map_err(|_| RuntimeError::InvalidRecord)?;
+        let intent = super::retained_intent(&job)?;
         let spec = intent
             .operation
             .pipeline()
@@ -753,12 +748,7 @@ where
         )
         .await?;
         self.project_usage_or_pending(raw).await?;
-        let intent = crate::intent_codec::decode_intent(
-            context.job.intent.bytes(),
-            &crate::service::PROTOCOL_LIMITS,
-            crate::service::PROTOCOL_MAX_SNAPSHOT_BYTES,
-        )
-        .map_err(|_| RuntimeError::InvalidRecord)?;
+        let intent = super::retained_intent(&context.job)?;
         let config = super::retained_config(&context.job)?;
         self.advance_inspection(context, &intent, &config, candidate, &decision, &assessment)
             .await

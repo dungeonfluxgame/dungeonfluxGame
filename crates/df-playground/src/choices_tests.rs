@@ -1,5 +1,6 @@
-use crate::choices::{MAXIMUM_SUGGESTED, Warning, build};
+use crate::choices::{Warning, build};
 use crate::fixture::{Choice, ChoiceGroup, PhoneScene, Status, UnavailableChoice};
+use crate::limits::MAXIMUM_SUGGESTED_CHOICES;
 
 fn choice(label: &str) -> Choice {
     Choice {
@@ -36,7 +37,7 @@ fn at_most_four_suggested_choices_are_shown_and_the_rest_are_counted_and_warned(
         .map(|index| choice(&format!("Option {index}")))
         .collect();
     let view = build(&scene, false);
-    assert_eq!(view.suggested.len(), MAXIMUM_SUGGESTED);
+    assert_eq!(view.suggested.len(), MAXIMUM_SUGGESTED_CHOICES);
     assert_eq!(view.left_out, 2);
     assert_eq!(view.warnings, vec![Warning::TooManySuggested { given: 6 }]);
 }

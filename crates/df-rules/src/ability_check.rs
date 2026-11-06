@@ -2,8 +2,10 @@
 //! The authority supplies the draw, applicable modifiers, and GM-selected DC.
 //! Advantage, Disadvantage, conditions, and other adjustments are not supported here.
 
+/// Pinned source clause of this check subset.
 pub const SOURCE_REVISION: &str = "SRD-5.2.1:page-6:D20-Tests:Ability-Checks";
 
+/// The supplied d20 face, modifiers and GM-selected DC of one ability check.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AbilityCheckInput {
     pub die: u8,
@@ -12,6 +14,7 @@ pub struct AbilityCheckInput {
     pub difficulty_class: u8,
 }
 
+/// A resolved check: the inputs, the total and whether it meets the DC.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AbilityCheckResult {
     pub die: u8,
@@ -22,6 +25,7 @@ pub struct AbilityCheckResult {
     pub succeeded: bool,
 }
 
+/// Which input falls outside the supported normal-check subset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbilityCheckError {
     InvalidDie,

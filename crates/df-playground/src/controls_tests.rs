@@ -1,9 +1,11 @@
 use crate::controls::{
-    Controls, ControlsChange, ControlsError, Device, FIXTURE_STATUS_KEY, MAXIMUM_TRANSITION_MS,
-    Transition, TransitionStyle,
+    Controls, ControlsChange, ControlsChangeReply, ControlsError, ControlsReply, Device,
+    FIXTURE_STATUS_KEY, Transition, TransitionStyle,
 };
 use crate::copy::ReadingPace;
 use crate::fixture::Status;
+use crate::fixtures::assert_keys_are_serde_names;
+use crate::limits::MAXIMUM_TRANSITION_MS;
 
 #[test]
 fn by_default_both_devices_show_and_the_fixtures_own_status_is_used() {
@@ -94,9 +96,26 @@ fn each_change_sets_its_own_control() {
             status_key: "rolling".into(),
             show_unavailable: true,
             show_grid: true,
+            show_sam: true,
             transition: Transition::default(),
         }
     );
+}
+
+#[test]
+fn the_sam_layer_is_shown_by_default_and_toggles() {
+    let mut controls = Controls::default();
+    assert!(controls.show_sam);
+    controls
+        .apply(ControlsChange::ShowSam(false))
+        .expect("applies");
+    assert!(!controls.show_sam);
+    // A controls record written before the layer existed reads as shown.
+    let old: Controls = serde_json::from_str(
+        r#"{"fixture":null,"device":"both","pace":"normal","status_key":"fixture","show_unavailable":false,"show_grid":false}"#,
+    )
+    .expect("reads");
+    assert!(old.show_sam);
 }
 
 #[test]
@@ -201,4 +220,47 @@ fn transition_styles_round_trip_by_key_and_by_json() {
             .transition,
         Transition::default()
     );
+}
+
+#[test]
+fn the_keys_of_a_device_and_a_transition_style_are_their_serde_names() {
+    assert_keys_are_serde_names(&Device::ALL, Device::key, Device::from_key);
+    assert_keys_are_serde_names(
+        &TransitionStyle::ALL,
+        TransitionStyle::key,
+        TransitionStyle::from_key,
+    );
+}
+
+#[test]
+fn a_change_reply_reads_the_controls_when_done_and_the_hosts_sentence_when_rejected() {
+    let controls = ControlsReply {
+        revision: 7,
+        boot_id: "run".to_owned(),
+        controls: Controls::default(),
+        scene: Default::default(),
+    };
+    let done = serde_json::json!({"outcome": "done", "value": controls});
+    let read: ControlsChangeReply = serde_json::from_value(done).expect("a done reply reads");
+    assert_eq!(read.into_result(), Ok(controls));
+    let rejected =
+        r#"{"outcome":"rejected","error":{"error":"invalid_change","detail":"no"},"message":"no"}"#;
+    let read: ControlsChangeReply = serde_json::from_str(rejected).expect("a refusal reads");
+    assert_eq!(read.into_result(), Err("no".to_owned()));
+    // The guard in front of every route refuses with the host's general reply.
+    let guarded = r#"{"outcome":"rejected","cause":null,"message":"not here","problems":[]}"#;
+    let read: ControlsChangeReply = serde_json::from_str(guarded).expect("a guard refusal reads");
+    assert_eq!(read.into_result(), Err("not here".to_owned()));
+}
+
+#[test]
+fn a_bare_controls_reply_is_not_a_change_reply() {
+    let bare = serde_json::to_string(&ControlsReply {
+        revision: 1,
+        boot_id: String::new(),
+        controls: Controls::default(),
+        scene: Default::default(),
+    })
+    .expect("writes");
+    assert!(serde_json::from_str::<ControlsChangeReply>(&bare).is_err());
 }
