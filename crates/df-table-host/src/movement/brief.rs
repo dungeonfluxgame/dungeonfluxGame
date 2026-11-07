@@ -160,7 +160,13 @@ pub struct BriefStyle {
 impl Default for BriefStyle {
     fn default() -> Self {
         Self {
-            direction: "A wide painted fantasy illustration, rich oil-painting detail, of".to_owned(),
+            direction: concat!(
+                "A wide cinematic live-action TV drama still, photorealistic, shot on 35mm with ",
+                "shallow depth of field, glossy soap-opera lighting and a Hollywood teal and ",
+                "orange film color grade, real actors with natural skin and grounded realistic ",
+                "costumes, not an illustration or painting, no fantasy art style, of"
+            )
+            .to_owned(),
             writing_ban: "No text, letters, captions, speech bubbles, logos or interface of any kind."
                 .to_owned(),
         }

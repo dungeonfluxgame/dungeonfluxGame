@@ -22,6 +22,7 @@ use crate::locate::request::{
     CharacterRequest, IdentifiedLayout, IdentifyRequest, LocateReply, LocateRequest, LocatedLayout,
 };
 use crate::locate::routes::path as locate_path;
+use crate::movement::brief::BriefStyle;
 use crate::playground::ChangeReply;
 use crate::wire::{ControlsReply, route};
 
@@ -64,12 +65,14 @@ pub(super) fn picture_prompt(table: &Table, history: &[Turn]) -> String {
         .iter()
         .map(|speaker| format!("{} ({})", speaker.display_name, speaker.job))
         .collect();
+    let style = BriefStyle::default();
     let mut text = format!(
         concat!(
-            "A wide painted fantasy illustration of a lamplit tavern interior at night, warm ",
-            "candlelight and deep shadow, rich oil-painting detail, everyone seated together at ",
-            "a long wooden table and facing the viewer. Seated, left to right: {}. "
+            "{} a lamplit tavern interior at night, warm candlelight and deep shadow, everyone ",
+            "seated together at a long wooden table and facing the viewer. Seated, left to ",
+            "right: {}. "
         ),
+        style.direction,
         people.join("; ")
     );
     let skip = history.len().saturating_sub(PICTURE_LINES);
@@ -81,10 +84,8 @@ pub(super) fn picture_prompt(table: &Table, history: &[Turn]) -> String {
         }
         text.push(' ');
     }
-    text.push_str(
-        "Show what they talk about as objects and mood in the room. No text, letters, captions, \
-         speech bubbles, logos or interface of any kind.",
-    );
+    text.push_str("Show what they talk about as objects and mood in the room. ");
+    text.push_str(&style.writing_ban);
     text
 }
 

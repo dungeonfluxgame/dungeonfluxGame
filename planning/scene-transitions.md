@@ -92,7 +92,8 @@ weather, time of day) must plug in without rewriting it. Every stage therefore h
   default `TableDesigner` reads a `DesignTable` content file. `DesignContext` has a `Default`
   and is built with struct-update syntax, so a new input (time, threat, weather) is a new field
   with a default, not a changed signature.
-- **Brief:** the art direction is a `BriefStyle` value with a default, so a campaign or scene can
+- **Brief:** the art direction is a `BriefStyle` value with a default (`movement/brief.rs`, the
+  single definition of the look; `persona converse plate=` reuses it), so a campaign or scene can
   change it; look sheets are a content file; references are a list, so another kind of reference
   (a prop, a place) is another card type, not another path.
 - **Transition:** stages and deadlines are data on the transition, records are plain typed
