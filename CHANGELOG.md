@@ -14,6 +14,17 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-06T15:56:58-05:00 to 2026-11-06T20:20:37-05:00
+
+Range: fd23133e..873f215f1650fccd0e916ba8b5bb52f20338f50d
+
+- f397c1c6 - Playground: a live caption sits above a roleplay card's caption bar instead of on top of it
+- a310283b - Agent rules: read before you write, no duplicates or inventions, workspace hygiene gate
+- fc6b50ef - Playground: bubbles never cover a face; eased camera glides; zoom_limit control
+- 873f215f1650fccd0e916ba8b5bb52f20338f50d - Persona system: authored NPC personas, edit/generate/backfill API and CLI, chat pipeline design
+
+The commits before f397c1c6 in this range are listed from the previous block's bookkeeping commit forward (fd23133e). The persona commit holds work reviewed independently; owed tests are marked TODO(DEV-12).
+
 ## 2026-11-06T14:25:21-05:00 to 2026-11-06T15:56:58-05:00
 
 Range: d0104f6a..3e8f1c7cb6f6497484db7d7ab453fe2117466c29
