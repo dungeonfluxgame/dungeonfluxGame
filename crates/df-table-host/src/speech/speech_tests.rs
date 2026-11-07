@@ -52,6 +52,7 @@ async fn speech_host(fake: FakePort) -> SpeechHost {
     running.write_asset("media/plate.png", "plate.png");
     running.write_asset("fixtures/one.json", FIXTURE);
     running.write_asset("voices.json", VOICES);
+    running.switch_speech_on();
     let fake = Arc::new(fake);
     let app = router_with(speech_over(&running.state, &fake));
     let listener = crate::server::bind(0).await.unwrap();
@@ -662,6 +663,7 @@ fn a_wav_of_16_khz_mono_16_bit_pcm_gives_its_samples_and_any_other_is_refused() 
 #[tokio::test]
 async fn the_running_servers_guard_lets_a_recording_reach_the_transcribe_handler() {
     let running = start(&STARTER_FILES).await;
+    running.switch_speech_on();
     let sent = client::post_bytes(
         running.port,
         path::SPEECH_TRANSCRIBE,

@@ -35,6 +35,23 @@ pub struct Running {
 }
 
 impl Running {
+    /// Turns the playground's voice switches on (`tts` and `stt` start off), for a test of the
+    /// calls that follow.
+    pub fn switch_speech_on(&self) {
+        self.state
+            .playground()
+            .change_all(
+                vec![
+                    df_playground::controls::ControlsChange::Tts(true),
+                    df_playground::controls::ControlsChange::Stt(true),
+                ],
+                &[],
+                0,
+                |_| {},
+            )
+            .expect("the switches are changed");
+    }
+
     /// Starts the host's real clock, for a test of travel that runs on its own.
     pub fn start_clock(&mut self) {
         if self.clock.is_none() {

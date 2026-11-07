@@ -542,7 +542,8 @@ async fn check_generated_source_bound(world: &World, receipt: &SourceReceipt) ->
     .await
     .unwrap();
     let source = &sources[0];
-    let expected = Some(ImageConfig::defaults().unwrap().transforms.max_output_bytes);
+    let max_output_bytes = ImageConfig::defaults().unwrap().transforms.max_output_bytes;
+    let expected = Some(max_output_bytes);
     assert_eq!(
         crate::imagery_publication::read_generated_source_bound_in(
             &tx,
@@ -601,7 +602,7 @@ async fn check_generated_source_bound(world: &World, receipt: &SourceReceipt) ->
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../artifacts/tmp/funding-native-sources")
             .join(world.scratch.config().get_dbname().unwrap()),
-        expected.unwrap(),
+        max_output_bytes,
     )
     .unwrap();
     df_assets::ObjectStore::get_version(

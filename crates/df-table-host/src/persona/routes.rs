@@ -316,8 +316,8 @@ fn cue_change(character: &str, kind: CueKind) -> SceneChange {
     }
 }
 
-/// The scene changes that take the bubbles of `others` away, so that one character at a time has
-/// the floor: a bubble left over from the last speaker would sit beside the next one's.
+/// The scene changes that take the bubbles of `others` away when a line is cued, so that one
+/// character at a time has the floor: the last speaker's bubble stays up until this one arrives.
 fn quiet_changes(others: &[String]) -> Vec<SceneChange> {
     others
         .iter()
@@ -332,16 +332,10 @@ fn others_of(scene: &ShownScene, character: &str) -> Vec<String> {
     names
 }
 
-/// Shows the wordless thinking indicator over `character` while the model and the voice work, and
-/// takes the bubbles of `others` away in the same scene change.
-async fn cue_thinking(
-    app: &AppState,
-    character: &str,
-    others: &[String],
-) -> Result<(), PersonaError> {
-    let mut changes = quiet_changes(others);
-    changes.push(cue_change(character, CueKind::Thinking));
-    crate::playground::apply_scene_changes(app, changes).await?;
+/// Shows the wordless thinking indicator over `character` while the model and the voice work. It
+/// takes nothing else away: the last speaker's bubble stays up until the next line replaces it.
+async fn cue_thinking(app: &AppState, character: &str) -> Result<(), PersonaError> {
+    crate::playground::apply_scene_change(app, cue_change(character, CueKind::Thinking)).await?;
     Ok(())
 }
 
@@ -411,7 +405,7 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
             let (scene, route, own) =
                 asked_of(&owned, &request.character, request.model.as_deref()).await?;
             let others = others_of(&scene, &request.character);
-            cue_thinking(&owned.app, &request.character, &others).await?;
+            cue_thinking(&owned.app, &request.character).await?;
             let occasion = Occasion {
                 situation: &request.situation,
                 question: None,
@@ -458,7 +452,7 @@ async fn ask(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
             let (scene, route, _) =
                 asked_of(&owned, &request.character, request.model.as_deref()).await?;
             let others = others_of(&scene, &request.character);
-            cue_thinking(&owned.app, &request.character, &others).await?;
+            cue_thinking(&owned.app, &request.character).await?;
             let at_ms = WallClock.now_ms();
             let considered = match consider(&owned.app, &route, &scene, &request, at_ms).await {
                 Ok(considered) => considered,

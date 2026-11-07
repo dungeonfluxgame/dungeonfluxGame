@@ -2220,13 +2220,12 @@ fn journal_port_serves_a_stage_end_to_end() {
             .set_execution_gate("live/generation", GATE_REVISION + 1, false, at(6))
             .await
             .expect("disable");
-        assert_eq!(
-            journal
+        assert!(
+            !journal
                 .read_execution_gate("live/generation")
                 .await
                 .expect("gate")
-                .enabled,
-            false
+                .enabled
         );
         assert_eq!(
             journal

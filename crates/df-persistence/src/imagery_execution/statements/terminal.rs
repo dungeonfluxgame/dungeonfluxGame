@@ -297,11 +297,10 @@ async fn check_tail(
             return Err(ExecutionError::Superseded);
         }
     }
-    if let Some(dispatch) = &tail.dispatch {
-        if tx.query_opt("SELECT 1 FROM imagery.image_execution_stage WHERE job_id=$1 AND parent_dispatch=$2 LIMIT 1",
+    if let Some(dispatch) = &tail.dispatch
+        && tx.query_opt("SELECT 1 FROM imagery.image_execution_stage WHERE job_id=$1 AND parent_dispatch=$2 LIMIT 1",
             &[&scope.job.as_bytes().as_slice(),&dispatch.dispatch.as_bytes().as_slice()]).await.map_err(map_db)?.is_some() {
             return Err(ExecutionError::Superseded)
-        }
     }
     if let Some(candidate) = command.candidate_dispatch {
         let start = tail

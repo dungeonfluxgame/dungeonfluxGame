@@ -739,8 +739,8 @@ body {
    speaker giving way to the next, reads as a change. `scale` is its own property: it composes with
    the camera's counter-scale in `transform` and leaves the tail's tip where it is. */
 @keyframes rp-bubble-in { from { opacity: 0; scale: .6; } to { opacity: 1; scale: 1; } }
-.tv-anchors .rp-bubble { animation: rp-bubble-in 320ms cubic-bezier(.2, .9, .3, 1.15) both; }
-@media (prefers-reduced-motion: reduce) { .tv-anchors .rp-bubble { animation: none; } }
+.tv-anchors .rp-bubble:not(.rp-settled) { animation: rp-bubble-in 320ms cubic-bezier(.2, .9, .3, 1.15) both; }
+@media (prefers-reduced-motion: reduce) { .tv-anchors .rp-bubble:not(.rp-settled) { animation: none; } }
 /* A bubble below its character's head hangs from the tail's tip at its top edge (`bubble_place`). */
 .tv-anchors .rp-bubble.rp-above { transform-origin: var(--tail-tip) 0; }
 .tv-anchors .rp-bubble.rp-tail-left { transform-origin: 0 var(--tail-tip-y); }

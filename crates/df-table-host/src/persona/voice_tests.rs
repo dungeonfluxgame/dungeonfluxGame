@@ -27,6 +27,7 @@ async fn host(answers: Vec<Value>, speech: FakePort) -> (ScriptedHost, Arc<FakeP
     write_persona(&host.directory(), &innkeeper()).unwrap();
     host.running
         .write_asset("voices.json", r#"{"voices": {"innkeeper": "marta-voice"}}"#);
+    host.running.switch_speech_on();
     (host, speech)
 }
 

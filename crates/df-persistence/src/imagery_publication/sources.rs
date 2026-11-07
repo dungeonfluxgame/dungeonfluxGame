@@ -486,11 +486,11 @@ async fn lock_with_owner_in(
             }
             Err(error) => return Err(error),
         };
-        if let Some(reason) = receipt_denial(&source, &receipt) {
-            if denial.is_none() {
-                denial = Some(reason);
-                denied_asset = Some(pin.asset);
-            }
+        if let Some(reason) = receipt_denial(&source, &receipt)
+            && denial.is_none()
+        {
+            denial = Some(reason);
+            denied_asset = Some(pin.asset);
         }
         bind_source(&mut binding, &source)?;
         sources.push(source);

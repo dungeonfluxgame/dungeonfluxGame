@@ -167,12 +167,12 @@ async fn enqueue_with_authority_in(
     if mixed || stored.is_some() && stored != command.planned_publication {
         return Err(ExecutionError::PlannedIdentityConflict);
     }
-    if stored.is_none() {
-        if let Some(publication) = command.planned_publication {
+    if stored.is_none()
+        && let Some(publication) = command.planned_publication
+    {
             tx.execute("UPDATE imagery.image_job SET planned_publication_asset=$2,planned_publication_attempt=$3,updated_at_ms=$4 WHERE job_id=$1",
                 &[&command.job.as_bytes().as_slice(),&publication.asset.as_slice(),&publication.attempt.as_slice(),&command.now_ms])
                 .await.map_err(map_db)?;
-        }
     }
     let planned = command.planned_publication;
     if let Some(row) = tx

@@ -137,11 +137,13 @@ pub struct Controls {
     /// Whether the backdrop's scanned layout (SAM regions and head points) is drawn over it.
     #[serde(default = "on_by_default")]
     pub show_sam: bool,
-    /// Whether the host voices lines (text to speech). Off, a line is shown and not spoken.
-    #[serde(default = "on_by_default")]
+    /// Whether the host voices lines (text to speech). Off, a line is shown and not spoken. Off
+    /// by default: voice costs money and needs a key, so a developer turns it on.
+    #[serde(default)]
     pub tts_on: bool,
-    /// Whether the host takes spoken questions (speech to text). Off, the microphone is off.
-    #[serde(default = "on_by_default")]
+    /// Whether the host takes spoken questions (speech to text). Off, the microphone is off. Off
+    /// by default, like `tts_on`.
+    #[serde(default)]
     pub stt_on: bool,
     /// How the next change of scene is drawn.
     #[serde(default)]
@@ -165,8 +167,8 @@ impl Default for Controls {
             show_unavailable: false,
             show_grid: false,
             show_sam: true,
-            tts_on: true,
-            stt_on: true,
+            tts_on: false,
+            stt_on: false,
             transition: Transition::default(),
             zoom_limit: ZoomLimit::default(),
         }
