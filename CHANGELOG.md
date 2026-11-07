@@ -14,7 +14,25 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
-## 2026-11-06T20:20:37-05:00 to 2026-11-06T23:39:28-05:00
+## 2026-11-06T23:47:06-05:00 to 2026-11-07T00:51:27-05:00
+
+Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..97de52bb195433ce449cac2c5b921ae81a04bc9d
+
+- a8fc2ff9 - CHANGELOG: record the wave 4 follow-through commit
+- f5ec7a30 - Speech switches default off; the last speech bubble stays until the next; no pop-in replay
+- 4073f6c8 - Workspace clippy is clean: dead test constants, a stale df-portal test, explicit allow reasons
+- a19190cb - df-campaign uses saturating_millis; handoff records why model names and one conversion stay
+- 97cfb976 - Camera framing takes one request struct instead of eight positional arguments
+- 70c11d18 - Owner decisions: interpret keeps a 15 s deadline; docs say 4096 characters
+- 501131b0 - Distinct public voices for four personas; table-talk notes
+- 1de8de39 - Handoff: the image service duplication is a project with its own plan
+- e5c0be21 - Handoff: the image copies have diverged (Custom model variant, two error vocabularies)
+- a69773a0 - Handoff: the df-providers image_edit copy has no consumers; deleting it or migrating is the owner's call
+- 97de52bb - Review fixes: one shot request, typed TableError traits, tests and docs that match the decisions
+
+Reviewed read-only against AGENTS.md; behavior tests owed are marked TODO(DEV-12) (thinking-cue two-character test, bubble settle browser test).
+
+## 2026-11-06T20:20:37-05:00 to 2026-11-06T23:47:06-05:00
 
 Range: 873f215f..a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8
 
@@ -23,8 +41,9 @@ Range: 873f215f..a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8
 - aa3d3d31 - Voice chat cleanup: one definition of the shared wire types, typed speech causes
 - fee59dff - Speech: the number of kept voice clips is a setting (DF_SPEECH_KEPT_CLIPS)
 - 5b8d3dbe - Elf and innkeeper talk by voice; bubbles clear of faces and one at a time
-- d2a4ccfbda1f88ae955ea27c3046752e89cfd470 - Wave 4: uncapped dev settings, one surface per concern, typed causes, TTS/STT switches
-- a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8 - Follow-through on the wave 4 review: timeline scan, typed launcher error, millis sweep, switch test
+- d2a4ccfb - Wave 4: uncapped dev settings, one surface per concern, typed causes, TTS/STT switches
+- e8d73131 - CHANGELOG: record the voice chat, elf and innkeeper, and wave 4 commits
+- a1ca615d - Follow-through on the wave 4 review: timeline scan, typed launcher error, millis sweep, switch test
 
 The wave 4 commit holds work from three implementing agents and the TTS/STT switches, reviewed read-only against AGENTS.md; the open review items are listed in development/cleanup-2026-11-06.md (Wave 4). Owed tests are marked TODO(DEV-12).
 
@@ -35,7 +54,7 @@ Range: fd23133e..873f215f1650fccd0e916ba8b5bb52f20338f50d
 - f397c1c6 - Playground: a live caption sits above a roleplay card's caption bar instead of on top of it
 - a310283b - Agent rules: read before you write, no duplicates or inventions, workspace hygiene gate
 - fc6b50ef - Playground: bubbles never cover a face; eased camera glides; zoom_limit control
-- 873f215f1650fccd0e916ba8b5bb52f20338f50d - Persona system: authored NPC personas, edit/generate/backfill API and CLI, chat pipeline design
+- 873f215f - Persona system: authored NPC personas, edit/generate/backfill API and CLI, chat pipeline design
 
 The commits before f397c1c6 in this range are listed from the previous block's bookkeeping commit forward (fd23133e). The persona commit holds work reviewed independently; owed tests are marked TODO(DEV-12).
 
@@ -44,7 +63,7 @@ The commits before f397c1c6 in this range are listed from the previous block's b
 Range: d0104f6a..3e8f1c7cb6f6497484db7d7ab453fe2117466c29
 
 - d0104f6a - CHANGELOG and handoff: record cleanup wave 3 (bookkeeping carried from the prior block)
-- 3e8f1c7cb6f6497484db7d7ab453fe2117466c29 - Logging and dev CLI reach: HTTP served lines, client and timing reports, read verbs
+- 3e8f1c7c - Logging and dev CLI reach: HTTP served lines, client and timing reports, read verbs
 
 At the owner's request this was stopped before every review and fix pass finished. The CLI-core unit was not independently reviewed. Integration checks passed.
 
@@ -53,13 +72,13 @@ At the owner's request this was stopped before every review and fix pass finishe
 Range: a3304bdc..7003ce990186e2ac4abbb5927af47c127ec44d0e
 
 - a3304bdc - CHANGELOG: record the cleanup integration block (bookkeeping carried from the prior block)
-- 7003ce990186e2ac4abbb5927af47c127ec44d0e - Cleanup wave 3: typed CLI refusals, StatusCode, key() everywhere, typed errors across crates
+- 7003ce99 - Cleanup wave 3: typed CLI refusals, StatusCode, key() everywhere, typed errors across crates
 
 ## 2026-11-03T13:01:12-05:00 to 2026-11-06T12:32:12-05:00
 
 Range: d0eba878..490ba5906d3beb4f96e5f7861ddcbe9b551a07a0
 
-- 490ba5906d3beb4f96e5f7861ddcbe9b551a07a0 - Cleanup pass: one surface per service, one interface convention, SAM scene layouts, testing studio
+- 490ba590 - Cleanup pass: one surface per service, one interface convention, SAM scene layouts, testing studio
 
 This one integration commit holds the SAM scene-layout work and the cleanup pass. The block starts at the baseline commit d0eba878 because the work session's start time was not recorded. Verification and follow-ups are recorded in development/cleanup-2026-11-06.md. Commits from d0eba878 back to the 2026-10-27 block were not recorded by their coordinator and are not covered here.
 
@@ -67,7 +86,7 @@ This one integration commit holds the SAM scene-layout work and the cleanup pass
 
 Range: 703267289d580d933e07b623fbea6fbba4ec4578..6d0ce07e1d775d8bff9f569b23826a0503e13035
 
-- 6d0ce07e1d775d8bff9f569b23826a0503e13035 - WIP: checkpoint unified imagery implementation and pause handoff
+- 6d0ce07e - WIP: checkpoint unified imagery implementation and pause handoff
 
 Explicit user-requested checkpoint of incomplete work; known compiler/test failures and remaining integration are recorded in planning/imagery-implementation/CONTINUATION.md. This block does not claim implementation approval.
 
