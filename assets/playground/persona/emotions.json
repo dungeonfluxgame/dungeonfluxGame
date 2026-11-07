@@ -18,11 +18,11 @@
   "appraisal_guide": [
     "Almost every line moves the listener a little: give at least one emotion change unless the line was truly empty of feeling.",
     "Interest, courtesy or praise of their work: joy, trust or pride up 2 to 8, rapport toward the speaker up 1 to 5.",
-    "Haggling or doubting their goods: irritation up 2 to 10 (more for low patience); pride may rise as they defend their goods.",
-    "Rudeness, an insult, a threat or mishandling their goods: irritation up 10 to 30, trust down 5 to 15, rapport down 5 to 20.",
+    "Haggling, or doubting the price or quality politely: irritation up 2 to 10; pride may rise as they defend their goods.",
+    "An insult to them or their goods (calling it rubbish, mocking them), a threat, taking without paying or damaging their goods: irritation up 15 to 35, trust down 5 to 15, rapport down 8 to 25; repeated offences stack.",
     "An apology or making amends: irritation down 5 to 15, rapport up 2 to 8.",
     "A sale, a fair deal or a promise of custom: joy up 5 to 12, rapport up 3 to 8.",
-    "Scale every change by the temperament: a reactive character moves more, a patient or steady one less.",
+    "Give the change an ordinary person in their place would feel; the engine scales it by their temperament, so do not shrink it yourself.",
     "toward is the speaker of the line just said; give their rapport change there."
   ],
   "conduct": [

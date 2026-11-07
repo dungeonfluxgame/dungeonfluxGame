@@ -96,3 +96,20 @@ baseline every turn, including the one being provoked; she called one bitten app
 (it is 3) in words without a quote object, then repeated her own mistake from recent.
 Changes: an emotion the appraisal pushes does not fade that turn (test added); the instruction
 requires every stated price or total to be given in quote too, so the clamp can check it.
+
+## Run 7 (temper again, provoked emotions no longer fade)
+
+Irritation reached 58 (run 6 peaked at 38) and her mood fell to 10: "You've done enough. Leave my
+stall, now." After the apology: "All right. Just keep your hands off my stall from here on." She
+stayed hostile toward the warrior (-33). Every stated price came with a quote (3 cp, checked).
+The appraisal data explained the slow climb: insults got irritation +7 and +6 from the model (the
+guide said 10 to 30 for insults, 2 to 10 for doubting goods, and the model filed "rubbish" under
+doubting), and the guide also told the model to scale by temperament while the engine scales by
+reactivity again: double damping. Changed in data (live): insults, taking without paying and
+damage are their own line at 15 to 35, stacking; polite doubt stays 2 to 10; the model gives what
+an ordinary person would feel and leaves the scaling to the engine. The code default is now
+generated from the shipped JSON so the two cannot drift.
+Script flaw found: the third beat column ("what Mara faces") asserted actions the speaker's
+persona refused to perform (the warrior would not steal), so Mara answered events that never
+happened ("Thank you for making it right. I'll take the payment" to "I won't pay"). Beats are now
+`speaker | goal`; Mara answers only the line actually said.

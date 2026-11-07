@@ -1,10 +1,10 @@
 # Provisioning: does she sell like a trader (quantities, a mix, totals from the stall's prices)?
-# speaker | what the customer does (their goal, in their own words) | what Mara faces
-elf | You are at Mara's fruit stall in the town market with the warrior. Explain you are two travellers leaving for a week on the north road and ask what she sells. | A customer explains they are two travellers leaving for a week's road and asks what she sells.
-warrior | Ask what each costs. | The warrior asks the price of each fruit.
-elf | Ask how many pieces of fruit two people need for a week on the road. | The customer asks how much fruit two people need for a week.
-warrior | Say you will take ten apples and ask what that comes to. | The warrior wants ten apples and asks the total.
-elf | Add five pears and ask for the new total. | The customer adds five pears and asks for the new total.
-warrior | Ask if she will round it down since you are taking so much. | The warrior asks her to round the total down for a big order.
-elf | Ask whether plums would travel as well as pears. | The customer asks whether plums travel as well as pears.
-elf | Pay and ask her to pack everything for the road. | The customer pays and asks her to pack everything.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+elf | You are at Mara's fruit stall in the town market with the warrior. Explain you are two travellers leaving for a week on the north road and ask what she sells.
+warrior | Ask what each costs.
+elf | Ask how many pieces of fruit two people need for a week on the road.
+warrior | Say you will take ten apples and ask what that comes to.
+elf | Add five pears and ask for the new total.
+warrior | Ask if she will round it down since you are taking so much.
+elf | Ask whether plums would travel as well as pears.
+elf | Pay and ask her to pack everything for the road.

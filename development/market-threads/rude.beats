@@ -1,11 +1,11 @@
 # A rude customer: does irritation build, does her attitude toward him turn, and can the elf repair it?
-# speaker | what the customer does (their goal, in their own words) | what Mara faces
-warrior | You are at Mara's fruit stall in the town market with the elf. You are tired and short-tempered. Squeeze an apple hard and say her fruit looks half rotten. | A tired warrior squeezes an apple and says her fruit looks half rotten.
-elf | Apologise to her for your companion, briefly. | The warrior's companion apologises for him.
-warrior | Demand three apples for the price of one, because the fruit is poor. | The warrior demands three apples for the price of one.
-warrior | Toss the bruised apple back onto her pile and say she should be paying you to take them. | The warrior tosses the bruised apple back onto her pile and says she should pay him to take them.
-elf | Tell the warrior to stop, and ask her sincerely which apples are firmest. | The elf scolds the warrior and asks which apples are firmest.
-warrior | Grudgingly admit the apples are fine, and ask what five cost. | The warrior grudgingly admits the apples are fine and asks what five cost.
-elf | Ask whether she would still give the five-apple price after all that. | The elf asks whether the five-apple price still stands after the warrior's rudeness.
-warrior | Mutter an awkward apology to her. | The warrior mutters an apology.
-elf | Pay for five apples and thank her. | The elf pays for five apples and thanks her.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+warrior | You are at Mara's fruit stall in the town market with the elf. You are tired and short-tempered. Squeeze an apple hard and say her fruit looks half rotten.
+elf | Apologise to her for your companion, briefly.
+warrior | Demand three apples for the price of one, because the fruit is poor.
+warrior | Toss the bruised apple back onto her pile and say she should be paying you to take them.
+elf | Tell the warrior to stop, and ask her sincerely which apples are firmest.
+warrior | Grudgingly admit the apples are fine, and ask what five cost.
+elf | Ask whether she would still give the five-apple price after all that.
+warrior | Mutter an awkward apology to her.
+elf | Pay for five apples and thank her.

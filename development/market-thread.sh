@@ -43,10 +43,12 @@ say_as() { # speaker, instruction
   sleep 3
 }
 
-mara() { # what is happening now
+# Mara answers the line actually said: she sees only what the speaker said, never what the beat
+# hoped they would do, so a speaker whose persona refuses a beat cannot put words in her mouth.
+mara() {
   local out line
   recent_args
-  out=$(timeout 280 $D dev --port $P persona ask fruit_vendor "from=$LAST_SPEAKER" "${RECENT[@]}" "situation=$1" "$LAST" 2>&1)
+  out=$(timeout 280 $D dev --port $P persona ask fruit_vendor "from=$LAST_SPEAKER" "${RECENT[@]}"     "situation=At her fruit stall in the town market." "$LAST" 2>&1)
   line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
   N=$((N + 1))
   printf '[%02d] fruit_vendor: %s\n' "$N" "${line:-<no line: $out>}"
@@ -55,11 +57,11 @@ mara() { # what is happening now
   sleep 3
 }
 
-# Each line of the beats file is `speaker | goal | what Mara faces`; `#` lines are comments.
+# Each line of the beats file is `speaker | goal`; `#` lines are comments.
 BEATS=${1:-development/market-threads/haggle.beats}
-while IFS="|" read -r -u 3 who goal situation; do
+while IFS="|" read -r -u 3 who goal; do
   who=$(printf '%s' "$who" | xargs)
   case "$who" in ''|'#'*) continue ;; esac
   say_as "$who" "$(printf '%s' "$goal" | sed 's/^ *//;s/ *$//')"
-  mara "$(printf '%s' "$situation" | sed 's/^ *//;s/ *$//')"
+  mara
 done 3< "$BEATS"

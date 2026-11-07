@@ -86,18 +86,19 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 8] = [
         " toward the speaker up 1 to 5.",
     ),
     concat!(
-        "Haggling or doubting their goods: irritation up 2 to 10 (more for low patience); ",
-        "pride may rise as they defend their goods.",
+        "Haggling, or doubting the price or quality politely: irritation up 2 to 10; pride ",
+        "may rise as they defend their goods.",
     ),
     concat!(
-        "Rudeness, an insult, a threat or mishandling their goods: irritation up 10 to 30, ",
-        "trust down 5 to 15, rapport down 5 to 20.",
+        "An insult to them or their goods (calling it rubbish, mocking them), a threat, ",
+        "taking without paying or damaging their goods: irritation up 15 to 35, trust down ",
+        "5 to 15, rapport down 8 to 25; repeated offences stack.",
     ),
     "An apology or making amends: irritation down 5 to 15, rapport up 2 to 8.",
     "A sale, a fair deal or a promise of custom: joy up 5 to 12, rapport up 3 to 8.",
     concat!(
-        "Scale every change by the temperament: a reactive character moves more, a patient ",
-        "or steady one less.",
+        "Give the change an ordinary person in their place would feel; the engine scales it",
+        " by their temperament, so do not shrink it yourself.",
     ),
     "toward is the speaker of the line just said; give their rapport change there.",
 ];
