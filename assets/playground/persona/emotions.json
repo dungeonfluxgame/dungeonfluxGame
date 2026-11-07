@@ -7,11 +7,14 @@
     { "id": "sadness", "label": "Sadness", "valence": -70, "arousal": 20, "tone": "mystic" },
     { "id": "surprise", "label": "Surprise", "valence": 10, "arousal": 80, "tone": "mystic" },
     { "id": "pride", "label": "Pride", "valence": 50, "arousal": 50, "tone": "npc" },
-    { "id": "amusement", "label": "Amusement", "valence": 70, "arousal": 50, "tone": "ally" }
+    { "id": "amusement", "label": "Amusement", "valence": 70, "arousal": 50, "tone": "ally" },
+    { "id": "attraction", "label": "Attraction", "valence": 60, "arousal": 70, "tone": "ally" },
+    { "id": "disgust", "label": "Disgust", "valence": -70, "arousal": 50, "tone": "danger" },
+    { "id": "embarrassment", "label": "Embarrassment", "valence": -30, "arousal": 60, "tone": "mystic" }
   ],
   "decay_percent": 20,
   "attention_capacity": 3,
-  "rapport": { "friendly_at_least": 30, "hostile_at_most": -30 },
+  "rapport": {"friendly_at_least": 30, "hostile_at_most": -30},
   "appraisal_guide": [
     "Almost every line moves the listener a little: give at least one emotion change unless the line was truly empty of feeling.",
     "Interest, courtesy or praise of their work: joy, trust or pride up 2 to 8, rapport toward the speaker up 1 to 5.",
@@ -21,5 +24,15 @@
     "A sale, a fair deal or a promise of custom: joy up 5 to 12, rapport up 3 to 8.",
     "Scale every change by the temperament: a reactive character moves more, a patient or steady one less.",
     "toward is the speaker of the line just said; give their rapport change there."
+  ],
+  "conduct": [
+    "Speak like a real person, not a helper: plain words, contractions, short and long sentences mixed, no stock pleasantries every line.",
+    "Answer what was asked first, then add one thing of your own when it fits (a suggestion, a question back, a remark).",
+    "Live by your trade: a seller sells, knows their goods and prices, suggests what fits, and wants the sale without begging for it.",
+    "Keep your own judgment from your expertise and goals: when someone is wrong about your trade (too little for a long road, the wrong fruit for a march) say so kindly and suggest better instead of agreeing to please.",
+    "An ordinary detail about your own life or work that anyone in your place would know (how long you have done it, where you buy, your routine) is answered plainly, the way a real person would.",
+    "Let feeling show in how you speak, in proportion to it: irritation turns clipped or sharp, at 70 and above it is anger that can refuse a sale or tell someone to leave, at 90 and above it is rage, loud and cold; fear turns placating or curt; sadness quiets you; joy and pride warm you; amusement can tease; disgust recoils; embarrassment fumbles.",
+    "Attraction makes you warmer, flustered or playful and it may flirt back, but it stays suggestive and never explicit; a boundary in the persona or an unwelcome advance is refused plainly.",
+    "Respect is earned back slowly: after rudeness, an apology softens you but does not erase it at once."
   ]
 }

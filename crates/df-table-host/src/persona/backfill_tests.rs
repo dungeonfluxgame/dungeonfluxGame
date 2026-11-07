@@ -285,7 +285,7 @@ async fn no_persona_audit_line_holds_persona_question_line_or_edit_text() {
     let lines = host.persona_lines();
     for expected in [
         "PERSONA covered id=innkeeper enough=false gaps=1",
-        "PERSONA backfilled id=innkeeper gaps=1 edits=1 duration_ms=",
+        "PERSONA backfilled id=innkeeper gaps=1 edits=1 spoken=0 duration_ms=",
         "PERSONA said id=innkeeper model_ms=",
     ] {
         assert!(

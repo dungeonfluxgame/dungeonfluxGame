@@ -150,7 +150,8 @@ fn the_persona_grammar_reads_every_verb() {
             model: None,
             speak: false,
             recent: Vec::new(),
-            asked_by: None
+            asked_by: None,
+            intent: None
         }
     );
     assert_eq!(
@@ -161,7 +162,8 @@ fn the_persona_grammar_reads_every_verb() {
             model: None,
             speak: true,
             recent: Vec::new(),
-            asked_by: None
+            asked_by: None,
+            intent: None
         }
     );
 }
@@ -782,6 +784,7 @@ fn backfill_record(edits: Vec<PersonaEdit>) -> super::request::BackfillRecord {
         gaps: vec![Gap {
             field: PersonaField::Backstory,
             topic: "childhood".to_owned(),
+            filled: None,
         }],
         edits,
         guidance: None,
@@ -1076,6 +1079,7 @@ fn the_debug_of_a_request_that_carries_a_question_or_a_situation_never_prints_it
         speak: false,
         recent: Vec::new(),
         asked_by: None,
+        intent: None,
     };
     let coverage = super::request::CoverageRequest {
         character: "innkeeper".to_owned(),

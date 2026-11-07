@@ -134,6 +134,10 @@ pub struct SayRequest {
     /// Who the line is said to (a persona id or a name), so triggers are judged by what they do.
     #[serde(default)]
     pub asked_by: Option<String>,
+    /// What the character sets out to do with this line ("ask her the price"), apart from the
+    /// situation they are in, so a line meant to ask asks and never answers itself.
+    #[serde(default)]
+    pub intent: Option<String>,
 }
 
 fn yes() -> bool {

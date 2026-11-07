@@ -32,7 +32,7 @@ recent_args() {
 say_as() { # speaker, instruction
   local who="$1" instruction="$2" out line
   recent_args
-  out=$(timeout 200 $D dev --port $P persona say "$who" "${RECENT[@]}" "$instruction" 2>&1)
+  out=$(timeout 200 $D dev --port $P persona say "$who" "${RECENT[@]}" "intent=$instruction"     "At Mara's fruit stall in the town market, with your travelling companion." 2>&1)
   line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
   N=$((N + 1))
   printf '[%02d] %s: %s\n' "$N" "$who" "${line:-<no line: $out>}"

@@ -459,6 +459,7 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
                 not_established: &[],
                 recent: &request.recent,
                 asked_by: request.asked_by.as_deref(),
+                intent: request.intent.as_deref(),
             };
             let said = match say_line(&owned.app, &route, &scene, &own, occasion).await {
                 Ok(said) => said,

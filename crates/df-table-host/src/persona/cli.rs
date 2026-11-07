@@ -64,7 +64,7 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
     "[model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
-    "[from=<id>] <situation...> | ",
+    "[from=<id>] [intent=<text>] <situation...> | ",
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
     "[model=<name>] [<topic...>] | ",
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
@@ -144,7 +144,7 @@ pub const PERSONA_GENERATE_USAGE: &str = concat!(
 /// `persona say`: a line from a character, cued on the scene.
 pub const PERSONA_SAY_USAGE: &str = concat!(
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... [from=<id>] ",
-    "<situation...>",
+    "[intent=<text>] <situation...>",
 );
 /// `persona converse`: the characters of the shown scene talk to each other.
 pub const PERSONA_CONVERSE_USAGE: &str = concat!(
@@ -227,6 +227,7 @@ pub enum PersonaCommand {
         speak: bool,
         recent: Vec<String>,
         asked_by: Option<String>,
+        intent: Option<String>,
     },
     /// Have the text service write only the voice, expertise and packs of a stored persona.
     VoiceGenerate {
@@ -385,7 +386,7 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let [character, rest @ ..] = words else {
         return Err(CommandError::Usage(PERSONA_SAY_USAGE));
     };
-    let (given, situation) = take_options(rest, &["model", "speak", "recent", "from"]);
+    let (given, situation) = take_options(rest, &["model", "speak", "recent", "from", "intent"]);
     let (recent, asked_by) = talk_from(&given)?;
     let mut speak = false;
     for (_, value) in given.iter().filter(|(key, _)| *key == "speak") {
@@ -398,6 +399,10 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
         speak,
         recent,
         asked_by,
+        intent: given
+            .iter()
+            .find(|(key, _)| *key == "intent")
+            .map(|(_, value)| value.to_string()),
     })
 }
 
@@ -526,6 +531,7 @@ fn gap_word(word: &str) -> Result<Gap, CommandError> {
     Ok(Gap {
         field,
         topic: topic.to_owned(),
+        filled: None,
     })
 }
 
@@ -860,7 +866,7 @@ async fn say(
     situation: String,
     model: Option<String>,
     speak: bool,
-    talk: (Vec<String>, Option<String>),
+    talk: (Vec<String>, Option<String>, Option<String>),
 ) -> Result<String, DevError> {
     let request = SayRequest {
         character: character.to_string(),
@@ -869,6 +875,7 @@ async fn say(
         speak,
         recent: talk.0,
         asked_by: talk.1,
+        intent: talk.2,
     };
     let spoken: Spoken = reply_value(post_json(port, path::PERSONA_SAY, &request).await?)?;
     Ok(format_spoken(&spoken))
@@ -1013,7 +1020,8 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             speak,
             recent,
             asked_by,
-        } => say(port, character, situation, model, speak, (recent, asked_by)).await,
+            intent,
+        } => say(port, character, situation, model, speak, (recent, asked_by, intent)).await,
         PersonaCommand::VoiceGenerate { id, model } => generate_voice(port, id, model).await,
         PersonaCommand::TemperamentGenerate { id, model } => {
             generate_temperament(port, id, model).await

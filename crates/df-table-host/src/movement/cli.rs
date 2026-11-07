@@ -216,6 +216,7 @@ async fn speak(port: u16, character: &str, situation: String) -> Result<String, 
         speak: false,
         recent: Vec::new(),
         asked_by: None,
+        intent: None,
     };
     let reply: PersonaReply<Spoken> = post_json(port, persona_path::PERSONA_SAY, &request).await?;
     let spoken = dev_client::reply_value(reply)?;

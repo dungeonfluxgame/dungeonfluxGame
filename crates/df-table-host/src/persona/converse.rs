@@ -293,6 +293,7 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             speak: request.speak,
             recent: Vec::new(),
             asked_by: None,
+            intent: None,
         };
         let spoken = match say_once(port, &say).await {
             Ok(spoken) => spoken,

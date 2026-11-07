@@ -43,7 +43,11 @@ const SAY_INSTRUCTION: &str = concat!(
     "character: never write another person's words or speak as the keeper when you are not. ",
     "Answer with one short line, in character, that follows their speech style and fits the ",
     "situation. ",
-    "When now holds a question, the line answers it. ",
+    "When now holds a question, the line answers it. When now holds an intent, the line carries ",
+    "it out and nothing else: an intent to ask is a question the character puts to someone; ",
+    "they never answer their own question, and never say what another person would reply. ",
+    "context.conduct says how characters behave and speak: follow it unless the character's ",
+    "persona, boundaries or the guidance say otherwise. ",
     "now.state is how the character feels at this moment. Mood and strong emotions color their ",
     "diction and pace, never the content of what they say or their boundaries. The line answers ",
     "what is in state.attention.focus first: react to what was actually said to them before ",
@@ -69,7 +73,12 @@ const SAY_INSTRUCTION: &str = concat!(
     "not know, do not recall or will not say. ",
     "gaps: name each thing the question needed that the character's brief and the world facts ",
     "do not state, by the persona field that would hold it and its topic; none when the brief ",
-    "and the world cover it. The line invents no specifics about a gap. ",
+    "and the world cover it. When the line answers a gap in a public field (backstory, ",
+    "personality) with a small plain detail that fits the brief, give that detail in the gap's ",
+    "filled, one sentence in the third person as it would be written in their persona. Never ",
+    "fill a private field, a secret, or a price, ",
+    "quantity or place (those come only from the world facts), never contradict the brief; leave ",
+    "filled null then, and the line says in character that they do not know or will not say. ",
     "Invent no game mechanics, statistics or rules, and write no one else's words. ",
     "The voice_layers run from the weakest to the strongest (community packs, then the ",
     "character's own voice, then the stance in force); a stronger layer wins. Use them for word ",
@@ -123,6 +132,8 @@ pub(super) struct Occasion<'a> {
     pub(super) recent: &'a [String],
     /// Who the line is said to, when known.
     pub(super) asked_by: Option<&'a str>,
+    /// What the character sets out to do with the line, when the caller says.
+    pub(super) intent: Option<&'a str>,
 }
 
 /// The emotions and tones the answer may name: the campaign's list, or the built-in one (recorded)
@@ -463,7 +474,7 @@ fn state_facts(state: &PersonaState) -> Value {
 /// The part of a line's facts that does not change from line to line, for a prefix cache.
 fn stable_facts(
     own: &Persona,
-    appraisal_guide: &[String],
+    (appraisal_guide, conduct): (&[String], &[String]),
     world: crate::world::WorldContext,
     listeners: Vec<PersonaBrief>,
     scene: &ShownScene,
@@ -474,6 +485,7 @@ fn stable_facts(
         "world": world.facts,
         "public_note": PUBLIC_NOTE,
         "appraisal_guide": appraisal_guide,
+        "conduct": conduct,
         "others": listeners,
         "scene": { "title": scene.title(), "description": scene.description() },
     })
@@ -497,6 +509,7 @@ fn live_facts(
         "present": present,
         "recent": bounded_recent(occasion.recent),
         "asked_by": occasion.asked_by,
+        "intent": occasion.intent,
         "situation": occasion.situation,
         "question": occasion.question,
         "guidance": occasion.guidance,
@@ -664,7 +677,8 @@ pub(super) async fn say_line(
     let by_state = state_triggers(own, &state);
     let present = present_speakers(scene, character, occasion.asked_by);
     let world = crate::world::context_for_viewer(app, own.voice_packs(), character);
-    let stable = stable_facts(own, &config.appraisal_guide, world, listeners, scene);
+    let guides = (config.appraisal_guide.as_slice(), config.conduct.as_slice());
+    let stable = stable_facts(own, guides, world, listeners, scene);
     let schema = with_leak_report(line_schema(&config));
     let lists = Lists {
         config: &config,

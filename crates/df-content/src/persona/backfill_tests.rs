@@ -368,6 +368,7 @@ fn the_backfill_facts_carry_the_guidance_and_the_listener_briefs_of_the_others_o
     let gaps = [Gap {
         field: PersonaField::Backstory,
         topic: "her childhood".to_owned(),
+        filled: None,
     }];
     let facts = backfill_facts(
         &persona,

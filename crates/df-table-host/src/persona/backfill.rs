@@ -206,19 +206,31 @@ async fn backfill(
     let latitude = job
         .guidance
         .map_or(Latitude::Open, |guidance| guidance.latitude);
-    let scene_text = format!("{}: {}", scene.title(), scene.description());
-    let mut facts = backfill_facts(own, &others, job.gaps, job.guidance, &scene_text);
-    facts["world"] = crate::world::context_for_viewer(app, own.voice_packs(), character).facts;
-    facts["public_note"] = json!(PUBLIC_NOTE);
     let started = Instant::now();
-    let edits = match ask_backfill(route, own, latitude, facts.clone()).await {
-        Err(PersonaError::AnswerRefused { cause, .. }) => {
-            app.record_line(format!("PERSONA backfill_retried id={character}"));
-            facts["previous_refusal"] = json!(cause.to_string());
-            ask_backfill(route, own, latitude, facts).await?
-        }
-        asked => asked?,
-    };
+    // What the line already filled in the moment is recorded as it said it; only the rest is
+    // asked of a backfill, and no model is asked when the line filled every gap.
+    let mut edits: Vec<PersonaEdit> = job.gaps.iter().filter_map(Gap::spoken_edit).collect();
+    let spoken = edits.len();
+    let asked: Vec<Gap> = job
+        .gaps
+        .iter()
+        .filter(|gap| gap.spoken_edit().is_none())
+        .cloned()
+        .collect();
+    if !asked.is_empty() {
+        let scene_text = format!("{}: {}", scene.title(), scene.description());
+        let mut facts = backfill_facts(own, &others, &asked, job.guidance, &scene_text);
+        facts["world"] = crate::world::context_for_viewer(app, own.voice_packs(), character).facts;
+        facts["public_note"] = json!(PUBLIC_NOTE);
+        edits.extend(match ask_backfill(route, own, latitude, facts.clone()).await {
+            Err(PersonaError::AnswerRefused { cause, .. }) => {
+                app.record_line(format!("PERSONA backfill_retried id={character}"));
+                facts["previous_refusal"] = json!(cause.to_string());
+                ask_backfill(route, own, latitude, facts).await?
+            }
+            answered => answered?,
+        });
+    }
     refuse_private_detail(app, route, own, &edits).await?;
     let profile = route.profile().as_str().to_owned();
     let record = BackfillRecord {
@@ -237,7 +249,7 @@ async fn backfill(
     )
     .await?;
     app.record_line(format!(
-        "PERSONA backfilled id={character} gaps={} edits={} duration_ms={}",
+        "PERSONA backfilled id={character} gaps={} edits={} spoken={spoken} duration_ms={}",
         job.gaps.len(),
         edits.len(),
         started.elapsed().as_millis()
@@ -495,6 +507,7 @@ pub(super) async fn consider(
         not_established: &[],
         recent: &request.recent,
         asked_by: request.asked_by.as_deref(),
+        intent: None,
     };
     if request.coverage {
         let filled = fill_gaps(app, route, scene, persona, request, at_ms).await;

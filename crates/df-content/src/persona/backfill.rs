@@ -166,6 +166,37 @@ pub struct NarrativeGuidance {
 pub struct Gap {
     pub field: PersonaField,
     pub topic: String,
+    /// A plain public detail the line itself gave to fill this gap (a backstory or personality
+    /// entry only), recorded after the line instead of asking a backfill for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filled: Option<String>,
+}
+
+/// The fields a line may fill in the moment: the public ones any listener may hear.
+pub const SPOKEN_FILLABLE: [PersonaField; 2] = [PersonaField::Backstory, PersonaField::Personality];
+
+/// The most characters of a detail a line fills in the moment.
+pub const MAXIMUM_SPOKEN_FILL_CHARS: usize = 300;
+
+impl Gap {
+    /// The edit that records what the line filled this gap with, when it filled a public field
+    /// with a detail of a sane length; `None` leaves the gap to a backfill.
+    pub fn spoken_edit(&self) -> Option<PersonaEdit> {
+        let text = self.filled.as_deref()?.trim();
+        let usable = !text.is_empty()
+            && text.chars().count() <= MAXIMUM_SPOKEN_FILL_CHARS
+            && SPOKEN_FILLABLE.contains(&self.field);
+        usable.then(|| match self.field {
+            PersonaField::Backstory => PersonaEdit::AppendText {
+                field: self.field,
+                text: text.to_owned(),
+            },
+            _ => PersonaEdit::AddEntry {
+                field: self.field,
+                text: text.to_owned(),
+            },
+        })
+    }
 }
 
 /// The coverage judgement of a persona for a question.
@@ -330,10 +361,11 @@ pub fn gaps_schema() -> Value {
         "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["field", "topic"],
+            "required": ["field", "topic", "filled"],
             "properties": {
                 "field": {"type": "string", "enum": fillable_keys()},
-                "topic": {"type": "string"}
+                "topic": {"type": "string"},
+                "filled": {"type": ["string", "null"]}
             }
         }
     })

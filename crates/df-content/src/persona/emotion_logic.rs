@@ -29,6 +29,49 @@ pub const DEFAULT_ATTENTION_CAPACITY: u8 = 3;
 
 /// How large an appraisal's changes are, in plain words a model reads with the persona's
 /// temperament: the content's calibration of feeling, editable in `emotions.json`.
+/// How characters behave and speak, in plain words a model reads with each line: the
+/// persona engine's tunable conduct, editable in `emotions.json` without a rebuild.
+pub const DEFAULT_CONDUCT: [&str; 8] = [
+    concat!(
+        "Speak like a real person, not a helper: plain words, contractions, short and long ",
+        "sentences mixed, no stock pleasantries every line.",
+    ),
+    concat!(
+        "Answer what was asked first, then add one thing of your own when it fits (a ",
+        "suggestion, a question back, a remark).",
+    ),
+    concat!(
+        "Live by your trade: a seller sells, knows their goods and prices, suggests what ",
+        "fits, and wants the sale without begging for it.",
+    ),
+    concat!(
+        "Keep your own judgment from your expertise and goals: when someone is wrong about ",
+        "your trade (too little for a long road, the wrong fruit for a march) say so kindly",
+        " and suggest better instead of agreeing to please.",
+    ),
+    concat!(
+        "An ordinary detail about your own life or work that anyone in your place would ",
+        "know (how long you have done it, where you buy, your routine) is answered plainly,",
+        " the way a real person would.",
+    ),
+    concat!(
+        "Let feeling show in how you speak, in proportion to it: irritation turns clipped ",
+        "or sharp, at 70 and above it is anger that can refuse a sale or tell someone to ",
+        "leave, at 90 and above it is rage, loud and cold; fear turns placating or curt; ",
+        "sadness quiets you; joy and pride warm you; amusement can tease; disgust recoils; ",
+        "embarrassment fumbles.",
+    ),
+    concat!(
+        "Attraction makes you warmer, flustered or playful and it may flirt back, but it ",
+        "stays suggestive and never explicit; a boundary in the persona or an unwelcome ",
+        "advance is refused plainly.",
+    ),
+    concat!(
+        "Respect is earned back slowly: after rudeness, an apology softens you but does not",
+        " erase it at once.",
+    ),
+];
+
 pub const DEFAULT_APPRAISAL_GUIDE: [&str; 8] = [
     concat!(
         "Almost every line moves the listener a little: give at least one emotion change ",
@@ -72,7 +115,7 @@ const DEFAULT_HOSTILE_AT_MOST: i8 = -30;
 
 /// The built-in emotions in the order of `DEFAULT_EMOTIONS`: id, label, valence, arousal and the
 /// bubble tone id.
-const DEFAULT_TABLE: [(&str, &str, i8, u8, &str); 8] = [
+const DEFAULT_TABLE: [(&str, &str, i8, u8, &str); 11] = [
     ("joy", "Joy", 80, 60, "ally"),
     ("trust", "Trust", 60, 30, "ally"),
     ("irritation", "Irritation", -60, 70, "danger"),
@@ -81,6 +124,9 @@ const DEFAULT_TABLE: [(&str, &str, i8, u8, &str); 8] = [
     ("surprise", "Surprise", 10, 80, "mystic"),
     ("pride", "Pride", 50, 50, "npc"),
     ("amusement", "Amusement", 70, 50, "ally"),
+    ("attraction", "Attraction", 60, 70, "ally"),
+    ("disgust", "Disgust", -70, 50, "danger"),
+    ("embarrassment", "Embarrassment", -30, 60, "mystic"),
 ];
 
 /// One emotion a campaign offers: how it reads and how it colours the mood and the bubble.
@@ -238,6 +284,8 @@ pub struct EmotionConfig {
     pub rapport: RapportThresholds,
     /// How large a model's appraisal changes are, in plain words.
     pub appraisal_guide: Vec<String>,
+    /// How characters behave and speak, in plain words.
+    pub conduct: Vec<String>,
 }
 
 impl Default for EmotionConfig {
@@ -257,6 +305,7 @@ impl Default for EmotionConfig {
             attention_capacity: DEFAULT_ATTENTION_CAPACITY,
             rapport: RapportThresholds::default(),
             appraisal_guide: DEFAULT_APPRAISAL_GUIDE.map(str::to_owned).to_vec(),
+            conduct: DEFAULT_CONDUCT.map(str::to_owned).to_vec(),
         }
     }
 }
