@@ -16,7 +16,7 @@ Do not invent a self-hash or silently discard metadata commits.
 
 ## 2026-11-06T20:20:37-05:00 to 2026-11-06T23:39:28-05:00
 
-Range: 873f215f..d2a4ccfbda1f88ae955ea27c3046752e89cfd470
+Range: 873f215f..a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8
 
 - 02ad7a55 - CHANGELOG and handoff: record the persona commit
 - ab0717df - Voice chat: talk to the innkeeper with speech to text and text to speech
@@ -24,8 +24,9 @@ Range: 873f215f..d2a4ccfbda1f88ae955ea27c3046752e89cfd470
 - fee59dff - Speech: the number of kept voice clips is a setting (DF_SPEECH_KEPT_CLIPS)
 - 5b8d3dbe - Elf and innkeeper talk by voice; bubbles clear of faces and one at a time
 - d2a4ccfbda1f88ae955ea27c3046752e89cfd470 - Wave 4: uncapped dev settings, one surface per concern, typed causes, TTS/STT switches
+- a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8 - Follow-through on the wave 4 review: timeline scan, typed launcher error, millis sweep, switch test
 
-The last commit holds work from three implementing agents and the TTS/STT switches, reviewed read-only against AGENTS.md; the open review items are listed in development/cleanup-2026-11-06.md (Wave 4). Owed tests are marked TODO(DEV-12).
+The wave 4 commit holds work from three implementing agents and the TTS/STT switches, reviewed read-only against AGENTS.md; the open review items are listed in development/cleanup-2026-11-06.md (Wave 4). Owed tests are marked TODO(DEV-12).
 
 ## 2026-11-06T15:56:58-05:00 to 2026-11-06T20:20:37-05:00
 
