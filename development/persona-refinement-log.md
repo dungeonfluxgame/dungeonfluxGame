@@ -263,10 +263,27 @@ I pull the crates under the canvas and wipe the apples dry while folks shake off
 "Thanks, that means a lot. Safe travels to you both!" She held her single-apple price ("I won't
 lower the price on just one") and gave the bulk price when asked.
 
+## Runs 18 and 19 (curious and heart on the final build, reset states)
+
+Curious: the reworded pear beat held ("One pear, please. How do you tell when it's ripe?" -> "A
+ripe pear gives just a little near the stem, and that one's 4 copper"), every ask beat came out as
+a question, rapport rose to 14, and the answers stayed concrete ("Rain slows folks down, so I draw
+the crates under the canvas and wipe the apples dry while they shake off their sleeves").
+Weak: asked to provision a week she said "a good share of apples", then "I can't total it without
+a quantity" (mechanical); "snug" came back in three answers.
+Heart: fear rose and eased (38 -> 27), trust grew (52 -> 59), the joke and the rat landed ("Oh!
+Shoo, you little thief"). Weaker than run 8: the orchard news got "That's kind of you to say" and
+only a small sadness rise (still 11 eight turns later, so it lingers, but it never ranked among
+her four strongest feelings); she promised all two hundred apples the day after her supplier
+burned; she accepted the warrior's invitation with no attraction or embarrassment recorded.
+Open for the next pass, all prompt or data: grief wording and a stronger loss band in the
+appraisal guide; stock promises checked against what she just learned; concrete provisioning
+amounts; a curb on recurring talking points.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->
 12:30 refinement 2 -> 12:39 refinement 3 -> 12:43 refinement 4 -> 12:53 refinement 5 -> 12:59
 refinement 6 -> 13:03 refinement 7 -> 13:10 refinement 8 -> 13:15 refinement 9 -> 13:20
-refinement 10 -> 13:28 refinement 11. Seventeen runs of the market thread over about 80 minutes,
-across six beat files (haggle, curious, temper, heart, supplies, rage).
+refinement 10 -> 13:28 refinement 11 -> runs 18 and 19. Nineteen runs of the market thread over
+about 90 minutes, across six beat files (haggle, curious, temper, heart, supplies, rage).
