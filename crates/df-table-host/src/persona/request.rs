@@ -8,6 +8,7 @@ use std::fmt;
 use axum::http::StatusCode;
 use df_content::persona::backfill::{BackfillError, Gap, NarrativeGuidance};
 use df_content::persona::generation::GenerationError;
+use df_content::persona::privacy::PrivacyError;
 use df_content::persona::{
     EditError, Persona, PersonaEdit, PersonaError as ContentError, PersonaField,
 };
@@ -309,9 +310,8 @@ pub struct BackfillRecord {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum Generation {
-    /// A new persona was written and stored. `leak_suspect` is true when its public texts share a
-    /// word with its private ones (a whole-word check, not a guarantee either way); nothing was
-    /// refused.
+    /// A new persona was written and stored. `leak_suspect` is true when the model judged that its
+    /// public texts give away its private side (the same call reports it); nothing was refused.
     Generated {
         persona: PersonaSummary,
         leak_suspect: bool,
@@ -395,9 +395,9 @@ pub struct SaidLine {
     pub fired_triggers: Vec<String>,
     /// The secret ids of this persona that the line gave away.
     pub revealed_secrets: Vec<String>,
-    /// True when the line has a whole word (4 letters or more) of the character's private side
-    /// that the public persona, the question and the situation do not use. It blocks nothing:
-    /// inflections and paraphrase pass the check, so it is a hint and not a guarantee.
+    /// True when the model judged, in the call that worded the line, that the line gives away the
+    /// character's private side beyond what the question and the situation already say. It blocks
+    /// nothing: it is the model's judgement, a hint and not a guarantee.
     pub leak_suspect: bool,
 }
 
@@ -478,6 +478,7 @@ pub enum AnswerError {
     Generation { error: GenerationError },
     Backfill { error: BackfillError },
     Line { error: LineError },
+    Privacy { error: PrivacyError },
 }
 
 impl fmt::Display for AnswerError {
@@ -486,6 +487,7 @@ impl fmt::Display for AnswerError {
             Self::Generation { error } => write!(formatter, "{error}"),
             Self::Backfill { error } => write!(formatter, "{error}"),
             Self::Line { error } => write!(formatter, "{error}"),
+            Self::Privacy { error } => write!(formatter, "{error}"),
         }
     }
 }
@@ -499,6 +501,12 @@ impl From<GenerationError> for AnswerError {
 impl From<BackfillError> for AnswerError {
     fn from(error: BackfillError) -> Self {
         Self::Backfill { error }
+    }
+}
+
+impl From<PrivacyError> for AnswerError {
+    fn from(error: PrivacyError) -> Self {
+        Self::Privacy { error }
     }
 }
 
@@ -560,9 +568,8 @@ pub enum PersonaError {
     NotFillable { field: PersonaField },
     /// A backfill named no gap.
     NoGaps,
-    /// A backfill has a word of the character's private side in a public field; nothing was
-    /// written. The check is of whole words: inflections and paraphrase pass it, so it reduces
-    /// accidents and is not a guarantee.
+    /// The model judged that a backfill gives away the character's private side in a public
+    /// field; nothing was written. The judgement is the model's, not a guarantee.
     #[serde(rename = "private_detail")]
     PrivateDetailInPublicField,
     /// The record of the backfills of `id` could not be read.
@@ -684,9 +691,8 @@ impl fmt::Display for PersonaError {
             ),
             Self::NoGaps => formatter.write_str("a backfill needs at least one gap"),
             Self::PrivateDetailInPublicField => formatter.write_str(concat!(
-                "the backfill has a word of the character's private side in a public field, ",
-                "so nothing was written (a whole-word check: inflections and paraphrase pass it, ",
-                "so it reduces accidents and is not a guarantee)"
+                "the model judged that the backfill gives away the character's private side in a ",
+                "public field, so nothing was written (a judgement of meaning, not a guarantee)"
             )),
             Self::BackfillsUnreadable { id, cause } => write!(
                 formatter,

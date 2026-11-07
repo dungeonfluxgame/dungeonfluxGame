@@ -36,6 +36,7 @@ use tokio::time::Instant;
 use crate::adapters::dev_route;
 use crate::adapters::{RulesBackend, RulesCheckKit, story_ports};
 use crate::dev_http::{parse_body, reply};
+use crate::locate::text_runtime;
 use crate::state::AppState;
 
 use super::adapters::{
@@ -45,6 +46,7 @@ use super::broker_fields::SinkBrokerAudit;
 use super::commit::ScriptedCommitStore;
 use super::extras::Extras;
 use super::handle::EngineHandle;
+use super::jev::JevInterpreter;
 use super::limits::COMMAND_MAILBOX_CAPACITY;
 use super::report::{EngineError, QueryError, UnreadableBodyCause};
 use super::request::{
@@ -123,11 +125,13 @@ struct Started {
 
 /// Starts the engine over the host's log: the first playable path (the lobby, the story scene and
 /// the conversation) and the real queue and pipeline, over the dev adapters.
-fn start_dev_engine(app: &AppState) -> Result<Started, EngineStartError> {
+fn start_dev_engine(app: &Arc<AppState>) -> Result<Started, EngineStartError> {
     let config = EngineConfig::first_playable();
     let log = Arc::clone(app.log());
     let clock = Arc::new(DevClock::starting_now());
-    let interpreter = Arc::new(ChaosInterpreter::default());
+    let interpreter = Arc::new(ChaosInterpreter::new(Arc::new(JevInterpreter::new(
+        text_runtime(app),
+    ))));
     let store = Arc::new(ScriptedCommitStore::default());
     let machines = machines_for(&config)?;
     let ports = story_ports(

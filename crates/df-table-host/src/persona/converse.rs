@@ -7,13 +7,18 @@
 //! and the instruction of the turn, never reads a player's words, and decides nothing about the
 //! story: the narrative engine will make the same choices for the production table.
 //!
-//! The next speaker is whoever the last line addressed by name, unless they spoke in the last
-//! [`TURNS_BEFORE_AGAIN`] turns, and then the character who has been quiet longest.
+//! The next speaker is whoever the last line was directed at, unless they spoke in the last
+//! [`TURNS_BEFORE_AGAIN`] turns, and then the character who has been quiet longest. Who a line is
+//! directed at is Jev's decision (`address`, `POST /dev/persona/addressed`), never a match of
+//! names.
 
 use std::time::Duration;
 
+use axum::http::StatusCode;
 use df_playground::copy::{ReadingPace, caption_dwell_ms, word_count};
+use serde::{Deserialize, Serialize};
 
+use super::address::{AddressReply, AddressRequest, PERSONA_ADDRESSED};
 use super::plate::make_plate;
 use super::request::{PersonaSummary, SayRequest, Spoken};
 use super::routes::path;
@@ -21,6 +26,7 @@ use crate::cast::request::CastList;
 use crate::cast::routes::path as cast_path;
 use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json};
+use crate::dev_http::DevReply;
 use crate::speech::Voiced;
 
 /// How many turns a conversation runs when it is not told.
@@ -35,51 +41,13 @@ const TURNS_BEFORE_AGAIN: usize = 3;
 const VOICE_BYTES_PER_SECOND: u64 = 4_000;
 /// The fewest characters at the table.
 const MINIMUM_SPEAKERS: usize = 2;
-/// Words that start a display name without being the character's own name.
-const TITLES: [&str; 13] = [
-    "the", "a", "an", "old", "young", "captain", "mother", "father", "sir", "lady", "lord",
-    "master", "doctor",
-];
-
 /// A character at the table.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Speaker {
     /// The persona id, which is the character's name in the scene.
     pub id: String,
     pub display_name: String,
     pub job: String,
-}
-
-impl Speaker {
-    /// The names the others call this character by, as lowercase words split the way a line is
-    /// split: the id's words ("braided woman"), the display name without a leading article or
-    /// title ("braided woman"), and its first word when that is a given name ("aldric" for "Aldric
-    /// Venn"; a title such as "Captain" or "Old" is not one).
-    fn names(&self) -> Vec<Vec<String>> {
-        let tokens = |text: &str| -> Vec<String> {
-            text.to_lowercase()
-                .split(|character: char| !character.is_alphanumeric())
-                .filter(|word| !word.is_empty())
-                .map(str::to_owned)
-                .collect()
-        };
-        let plain = |text: &str| {
-            let mut words = tokens(text);
-            if words.len() > 1 && TITLES.contains(&words[0].as_str()) {
-                words.remove(0);
-            }
-            words
-        };
-        let mut names = vec![plain(&self.id), plain(&self.display_name)];
-        let all = tokens(&self.display_name);
-        if all.len() > 1 && !TITLES.contains(&all[0].as_str()) {
-            names.push(vec![all[0].clone()]);
-        }
-        names.retain(|name| !name.is_empty());
-        names.sort();
-        names.dedup();
-        names
-    }
 }
 
 /// One line said at the table.
@@ -151,10 +119,10 @@ impl Table {
         }
     }
 
-    /// Who speaks after `history` (which must not be empty): the character the last line named,
-    /// unless they spoke in the last [`TURNS_BEFORE_AGAIN`] turns, and then whoever has been quiet
-    /// longest. It is never the last speaker.
-    pub fn next_speaker(&self, history: &[Turn]) -> &Speaker {
+    /// Who speaks after `history` (which must not be empty): the character `addressed` (the id the
+    /// last line was directed at), unless they spoke in the last [`TURNS_BEFORE_AGAIN`] turns, and
+    /// then whoever has been quiet longest. It is never the last speaker.
+    pub fn next_speaker(&self, history: &[Turn], addressed: Option<&str>) -> &Speaker {
         let last = history.last().map_or("", |turn| turn.speaker.as_str());
         let silent_for = |speaker: &Speaker| {
             history
@@ -163,8 +131,9 @@ impl Table {
                 .position(|turn| turn.speaker == speaker.id)
                 .unwrap_or(usize::MAX)
         };
-        let named = self
-            .addressed(history.last().map_or("", |turn| turn.line.as_str()), last)
+        let named = addressed
+            .and_then(|id| self.speakers.iter().find(|speaker| speaker.id == id))
+            .filter(|speaker| speaker.id != last)
             .filter(|speaker| silent_for(speaker) >= TURNS_BEFORE_AGAIN);
         named.unwrap_or_else(|| {
             // The quietest, the one seated furthest left among equals.
@@ -177,40 +146,20 @@ impl Table {
         })
     }
 
-    /// The character `line` names by one of their names as a whole word, other than `by`; the
-    /// first one named in the line. The line is a character's own, never a player's words.
-    fn addressed(&self, line: &str, by: &str) -> Option<&Speaker> {
-        let lower = line.to_lowercase();
-        let words: Vec<&str> = lower
-            .split(|character: char| !character.is_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .collect();
-        // Where, and by how long a name, the speaker is named: the earliest mention wins, and of
-        // two at the same place the longer name ("Aldric Stone" over "Aldric").
-        let mentioned = |speaker: &Speaker| {
-            speaker
-                .names()
-                .iter()
-                .filter_map(|name| {
-                    words
-                        .windows(name.len())
-                        .position(|window| {
-                            window
-                                .iter()
-                                .zip(name)
-                                .all(|(word, part)| *word == part.as_str())
-                        })
-                        .map(|at| (at, std::cmp::Reverse(name.len())))
-                })
-                .min()
-        };
-        self.speakers
+    /// The latest [`HISTORY_LINES`] lines of `history` as "Name: line", oldest first.
+    fn recent_lines(&self, history: &[Turn]) -> Vec<String> {
+        let skip = history.len().saturating_sub(HISTORY_LINES);
+        history[skip..]
             .iter()
-            .enumerate()
-            .filter(|(_, speaker)| speaker.id != by)
-            .filter_map(|(seat, speaker)| mentioned(speaker).map(|key| (key, seat, speaker)))
-            .min_by_key(|(key, seat, _)| (*key, *seat))
-            .map(|(_, _, speaker)| speaker)
+            .map(|turn| {
+                let name = self
+                    .speakers
+                    .iter()
+                    .find(|other| other.id == turn.speaker)
+                    .map_or(turn.speaker.as_str(), |other| other.display_name.as_str());
+                format!("{name}: {}", turn.line)
+            })
+            .collect()
     }
 
     /// What `speaker` is told for their turn: the setting, the topic when there is one, the latest
@@ -234,14 +183,8 @@ impl Table {
             return text;
         }
         text.push_str(" What was said, newest last:");
-        let skip = history.len().saturating_sub(HISTORY_LINES);
-        for turn in &history[skip..] {
-            let name = self
-                .speakers
-                .iter()
-                .find(|other| other.id == turn.speaker)
-                .map_or(turn.speaker.as_str(), |other| other.display_name.as_str());
-            text.push_str(&format!("\n{name}: {}", turn.line));
+        for line in self.recent_lines(history) {
+            text.push_str(&format!("\n{line}"));
         }
         text.push_str(
             "\nReact to the last thing said, in your own voice; you may address someone by name. \
@@ -303,6 +246,34 @@ async fn say_once(port: u16, say: &SayRequest) -> Result<Spoken, DevError> {
     super::cli::reply_value(post_json(port, path::PERSONA_SAY, say).await?)
 }
 
+/// Asks Jev (`POST /dev/persona/addressed`) who `line`, said by `speaker`, is directed at: the id
+/// of
+/// a character at the table, or none. A refusal is an unexpected answer carrying the route's key.
+async fn addressed_once(
+    port: u16,
+    table: &Table,
+    speaker: &Speaker,
+    line: &str,
+    history: &[Turn],
+    model: Option<&str>,
+) -> Result<Option<String>, DevError> {
+    let request = AddressRequest {
+        line: line.to_owned(),
+        speaker: speaker.id.clone(),
+        speakers: table.speakers().to_vec(),
+        recent: table.recent_lines(history),
+        model: model.map(str::to_owned),
+    };
+    match post_json::<_, AddressReply>(port, PERSONA_ADDRESSED, &request).await? {
+        DevReply::Done { value } => Ok(value.addressed),
+        DevReply::Rejected { error, message } => Err(DevError::UnexpectedAnswer {
+            status: StatusCode::BAD_GATEWAY,
+            body: message,
+            reason: Some(format!("addressed refused: {}", error.key())),
+        }),
+    }
+}
+
 /// Runs the conversation against the host on `port` and gives the transcript. A turn that fails
 /// stops it with the lines said so far (`DevError::ConverseStopped`).
 pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, DevError> {
@@ -338,14 +309,50 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
         if let Some(Voiced::Failed { error }) = &spoken.voice {
             transcript.push(format!("  voice failed: {}", error.key()));
         }
-        if request.pace {
-            tokio::time::sleep(pause_after(&spoken.said.line, spoken.voice.as_ref())).await;
-        }
+        // Who the line is directed at is asked while it is read or heard, so the pace is the
+        // longer of the two and not their sum. Nobody follows the last line.
+        let pause = request
+            .pace
+            .then(|| pause_after(&spoken.said.line, spoken.voice.as_ref()));
+        let line = spoken.said.line;
+        let following = turn + 1 < request.turns;
+        let (addressed, ()) = tokio::join!(
+            async {
+                if following {
+                    addressed_once(
+                        port,
+                        &table,
+                        &speaker,
+                        &line,
+                        &history,
+                        request.model.as_deref(),
+                    )
+                    .await
+                } else {
+                    Ok(None)
+                }
+            },
+            async {
+                if let Some(pause) = pause {
+                    tokio::time::sleep(pause).await;
+                }
+            }
+        );
+        let addressed = match addressed {
+            Ok(addressed) => addressed,
+            Err(error) => {
+                return Err(DevError::ConverseStopped {
+                    done: transcript,
+                    turn: turn + 1,
+                    error: Box::new(error),
+                });
+            }
+        };
         history.push(Turn {
             speaker: speaker.id.clone(),
-            line: spoken.said.line,
+            line,
         });
-        speaker = table.next_speaker(&history).clone();
+        speaker = table.next_speaker(&history, addressed.as_deref()).clone();
     }
     if let Some(name) = &request.plate {
         match make_plate(port, name, &table, &history).await {

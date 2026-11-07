@@ -40,7 +40,7 @@ pub(super) fn format_generation(character: &str, outcome: &CastOutcome) -> Strin
             persona.display_name,
             persona.job,
             if *leak_suspect {
-                "; leak suspect: its public texts share a word with its private ones"
+                "; leak suspect: the model judged its public texts give away its private side"
             } else {
                 ""
             }
@@ -65,7 +65,9 @@ pub(super) fn format_spoken(spoken: &Spoken) -> String {
         lines.push(format_voiced(voice));
     }
     if said.leak_suspect {
-        lines.push("  leak suspect: the line has a word of the private side".to_owned());
+        lines.push(
+            "  leak suspect: the model judged the line gives away the private side".to_owned(),
+        );
     }
     if let Some(behavior) = &said.behavior {
         lines.push(format!("  behavior: {behavior}"));

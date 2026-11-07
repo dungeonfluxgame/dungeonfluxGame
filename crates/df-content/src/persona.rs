@@ -23,6 +23,7 @@ pub mod backfill;
 pub mod edit;
 pub mod generation;
 pub mod policy;
+pub mod privacy;
 
 pub use edit::{EditError, PersonaEdit};
 pub use policy::{PersonaBehavior, PersonaSecret, PersonaTrigger, Sensitivity};
@@ -35,6 +36,8 @@ mod edit_tests;
 mod generation_tests;
 #[cfg(test)]
 mod policy_tests;
+#[cfg(test)]
+mod privacy_tests;
 
 /// The persona file format this reader understands.
 pub const SCHEMA_VERSION: u32 = 1;

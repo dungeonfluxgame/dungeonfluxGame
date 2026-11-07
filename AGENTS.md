@@ -140,6 +140,13 @@ private game data for clients to hide. Read `planning/client-architecture.md`.
 Read `planning/runtime-reliability.md` for authority, ownership, cancellation,
 reconnect, stream, and persistence requirements extracted from the old devlog.
 
+Never use string, keyword, word-list or whole-word matching to make a gameplay decision: what a
+player or character meant, who a line addresses, which action or branch applies, whether text
+reveals a secret. Those are Jev's (a model classification against a closed schema, with its
+answer validated in code against ids and enums). String matching stays only for protocol, ids,
+file formats and command-line grammar. Owner decision 2026-11-07; it supersedes any older
+whole-word guard or word-table stand-in.
+
 Each subsystem is a separate Rust crate with a small public interface and private
 implementation. Read `planning/subsystem-architecture.md`,
 `planning/subsystem-interfaces.md`, and `planning/feature-inventory.md` for the

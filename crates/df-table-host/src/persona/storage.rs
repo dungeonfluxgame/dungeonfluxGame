@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use df_content::persona::{Persona, PersonaId};
 
-use super::guard::copies_private_detail_into_public_text;
 use super::request::{BackfillRecord, PersonaError, PersonaSummary, summary_of};
 use crate::blocking::{WriteLock, run_blocking};
 use crate::dev_http::BodyError;
@@ -251,8 +250,9 @@ pub(super) fn commit_backfill(
 /// [`commit_backfill`] with the writer of the record file given, so a test can make it fail.
 ///
 /// All of it is under the persona write lock, against the persona as it is now: a change made
-/// while the question was asked is kept, an id that was taken meanwhile is refused, and the
-/// privacy guard sees the persona being committed. `record.sequence` is assigned here: one more
+/// while the question was asked is kept and an id that was taken meanwhile is refused (the
+/// privacy judgement is the caller's, before the commit). `record.sequence` is assigned here: one
+/// more
 /// than the highest in the record file. The record file is read before anything is written, so
 /// one that does not read stops the backfill. The persona is written first and its record after;
 /// if the record cannot be written the persona file is put back as it was (best effort) and the
@@ -267,9 +267,6 @@ pub(super) fn commit_backfill_with(
     let current = read_persona(directory, id)?
         .ok_or_else(|| PersonaError::UnknownPersona { id: id.to_string() })?;
     let mut records = read_backfills(directory, id)?;
-    if copies_private_detail_into_public_text(&current, &record.edits) {
-        return Err(PersonaError::PrivateDetailInPublicField);
-    }
     let updated = current
         .edit(&record.edits)
         .map_err(|cause| PersonaError::InvalidEdit { cause })?;

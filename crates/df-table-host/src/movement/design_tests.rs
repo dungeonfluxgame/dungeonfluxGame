@@ -202,7 +202,7 @@ fn a_mover_without_a_placement_or_placed_twice_is_refused() {
 
     let stranger = parse_design(
         &answer(vec![mover("elf", "left"), mover("rogue", "right")], vec![]),
-        &intent(&["elf"], "the market"),
+        &intent(&["elf", "warrior"], "the market"),
         &party(),
     )
     .unwrap_err();

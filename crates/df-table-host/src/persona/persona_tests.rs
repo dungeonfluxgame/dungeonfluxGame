@@ -437,7 +437,7 @@ fn every_persona_error_key_is_its_serde_tag_or_its_causes_and_reads_back() {
 fn the_private_detail_refusal_says_the_check_is_not_a_guarantee() {
     let text = PersonaError::PrivateDetailInPublicField.to_string();
     assert!(
-        text.contains("whole-word") && text.contains("not a guarantee"),
+        text.contains("judged") && text.contains("not a guarantee"),
         "{text}"
     );
 }
@@ -892,76 +892,6 @@ async fn a_backfill_naming_no_gap_or_a_field_it_cannot_fill_is_refused_before_an
         panic!("a persona with no backfills has an empty record");
     };
     assert_eq!(value, json!([]));
-}
-
-fn guarded_persona() -> Persona {
-    serde_json::from_value(json!({
-        "schema": 1, "id": "innkeeper", "display_name": "Marta Venn", "job": "Keeper of the inn",
-        "personality": ["warm but shrewd"],
-        "fears": ["the guild collector"],
-        "backstory": "Took over the Ember Roads inn from her father.",
-        "private_backstory": "Her brother Tomas vanished going north.",
-        "secrets": [{"id": "tomas", "text": "Tomas rode with a guild escort",
-                     "sensitivity": "high"}]
-    }))
-    .unwrap()
-}
-
-fn append(text: &str) -> PersonaEdit {
-    PersonaEdit::AppendText {
-        field: PersonaField::Backstory,
-        text: text.to_owned(),
-    }
-}
-
-#[test]
-fn a_backfill_that_copies_a_private_word_into_a_public_text_is_caught() {
-    use super::guard::copies_private_detail_into_public_text as copies;
-    let persona = guarded_persona();
-    assert!(copies(
-        &persona,
-        &[append("She misses her brother TOMAS, who rode north.")]
-    ));
-    assert!(copies(
-        &persona,
-        &[PersonaEdit::AddEntry {
-            field: PersonaField::Personality,
-            text: "wary of the guild".to_owned()
-        }]
-    ));
-    assert!(copies(&persona, &[append("Her fear is the collector.")]));
-}
-
-#[test]
-fn a_backfill_with_new_public_detail_or_private_only_additions_passes_the_guard() {
-    use super::guard::copies_private_detail_into_public_text as copies;
-    let persona = guarded_persona();
-    assert!(!copies(
-        &persona,
-        &[append("She learned to brew ale at nine.")]
-    ));
-    // A word the public side already uses is public, whatever the private side says.
-    assert!(!copies(
-        &persona,
-        &[append("The Ember Roads were her first road.")]
-    ));
-    // Short words and stop words are not private detail; a private list is not a public field.
-    assert!(!copies(
-        &persona,
-        &[append("She went with the cart, from the inn.")]
-    ));
-    assert!(!copies(
-        &persona,
-        &[PersonaEdit::AddEntry {
-            field: PersonaField::Fears,
-            text: "Tomas and the guild".to_owned()
-        }]
-    ));
-    // Whole words only: a longer word that contains a private one does not match.
-    assert!(!copies(
-        &persona,
-        &[append("Guildhall songs filled the evenings.")]
-    ));
 }
 
 #[test]

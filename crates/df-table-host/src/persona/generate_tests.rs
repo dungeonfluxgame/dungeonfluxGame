@@ -4,7 +4,8 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 use super::fixtures::{
-    CHARACTER, ScriptedHost, innkeeper, line_answer, scripted_host, scripted_host_cast,
+    CHARACTER, ScriptedHost, innkeeper, leaking_line_answer, line_answer, scripted_host,
+    scripted_host_cast,
 };
 use super::generate::operation_key;
 use super::request::{
@@ -35,7 +36,8 @@ fn persona_answer(backstory: &str, private_backstory: &str) -> Value {
         "personality": ["warm"], "motivations": [], "goals": [], "needs": [],
         "fears": ["debt"], "speech_style": "Dry.", "backstory": backstory,
         "private_backstory": private_backstory, "boundaries": [], "secrets": [],
-        "behaviors": [], "default_behavior": null, "triggers": []
+        "behaviors": [], "default_behavior": null, "triggers": [],
+        "leaks_private_side": false, "leaked_excerpt": null
     })
 }
 
@@ -63,12 +65,14 @@ async fn generating_without_overwrite_keeps_a_stored_persona_and_makes_no_model_
 }
 
 #[tokio::test]
-async fn a_generated_persona_is_stored_and_flags_a_word_its_public_and_private_texts_share() {
-    let host = scripted_host(vec![persona_answer(
+async fn a_generated_persona_is_stored_and_flags_a_leak_the_model_reported() {
+    let mut answer = persona_answer(
         "She keeps a ledger of every debt.",
         "The ledger hides a forged page.",
-    )])
-    .await;
+    );
+    answer["leaks_private_side"] = json!(true);
+    answer["leaked_excerpt"] = json!("a ledger of every debt");
+    let host = scripted_host(vec![answer]).await;
     let written = done(generate(&host, json!({"hint": "wary"})).await);
     let Generation::Generated {
         persona,
@@ -78,7 +82,7 @@ async fn a_generated_persona_is_stored_and_flags_a_word_its_public_and_private_t
         panic!("{written:?}");
     };
     assert_eq!(persona.id, CHARACTER);
-    assert!(leak_suspect, "the word ledger is in both sides");
+    assert!(leak_suspect, "the model reported a leak");
     assert_eq!(host.calls(), 1);
     assert!(host.file("innkeeper.persona.json").is_some());
     let lines = host.persona_lines();
@@ -130,9 +134,9 @@ async fn a_persona_that_appeared_while_the_model_was_asked_is_not_overwritten() 
 }
 
 #[tokio::test]
-async fn a_line_with_a_private_word_is_reported_as_a_suspect_and_still_cued() {
+async fn a_line_the_model_reports_as_leaking_is_a_suspect_and_still_cued() {
     let host = scripted_host(vec![
-        line_answer("Tomas went north, love."),
+        leaking_line_answer("Tomas went north, love."),
         line_answer("Welcome, love."),
     ])
     .await;
@@ -271,30 +275,6 @@ fn a_backfill_whose_record_cannot_be_written_puts_the_persona_file_back() {
         })
     );
     assert_eq!(read_persona(folder.path(), &id), Ok(Some(innkeeper())));
-    assert_eq!(read_backfills(folder.path(), &id), Ok(Vec::new()));
-}
-
-#[test]
-fn the_privacy_guard_runs_at_the_commit_against_the_persona_being_committed() {
-    let folder = tempfile::tempdir().unwrap();
-    let id = PersonaId::new(CHARACTER).unwrap();
-    // The text is clean for the persona as it was, but the stored persona gained a private word
-    // meanwhile; the commit sees the stored one.
-    let text = "She kept a lantern by the door.";
-    write_persona(folder.path(), &innkeeper()).unwrap();
-    let meanwhile = innkeeper()
-        .edit(&[PersonaEdit::AddEntry {
-            field: PersonaField::Fears,
-            text: "the lantern going out".to_owned(),
-        }])
-        .unwrap();
-    write_persona(folder.path(), &meanwhile).unwrap();
-    let refused =
-        commit_backfill_with(folder.path(), &id, record(vec![append(text)]), |_, _, _| {
-            Ok(())
-        });
-    assert_eq!(refused, Err(PersonaError::PrivateDetailInPublicField));
-    assert_eq!(read_persona(folder.path(), &id), Ok(Some(meanwhile)));
     assert_eq!(read_backfills(folder.path(), &id), Ok(Vec::new()));
 }
 

@@ -168,7 +168,8 @@ async fn a_character_with_no_voice_and_no_default_is_a_failed_voice_not_a_failed
 async fn a_turn_that_fails_clears_the_thinking_indicator() {
     let refused_line = json!({
         "line": "Two silver.", "behavior": "no-such-behavior",
-        "fired_triggers": [], "revealed_secrets": []
+        "fired_triggers": [], "revealed_secrets": [],
+        "leaks_private_side": false, "leaked_excerpt": null
     });
     let (host, speech) = host(vec![refused_line], FakePort::answering()).await;
     let before = revision(&host);

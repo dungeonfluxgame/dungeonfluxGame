@@ -162,10 +162,29 @@ pub(super) fn coverage_answer(gaps: &[(&str, &str)]) -> Value {
     })
 }
 
-/// The answer to a line question.
+/// The answer to a line question whose model judged that the line does not give away the private
+/// side.
 pub(super) fn line_answer(line: &str) -> Value {
     json!({
-        "line": line, "behavior": null, "fired_triggers": [], "revealed_secrets": []
+        "line": line, "behavior": null, "fired_triggers": [], "revealed_secrets": [],
+        "leaks_private_side": false, "leaked_excerpt": null
+    })
+}
+
+/// The answer to a line question whose model judged that the line gives away the private side.
+pub(super) fn leaking_line_answer(line: &str) -> Value {
+    let mut answer = line_answer(line);
+    answer["leaks_private_side"] = json!(true);
+    answer["leaked_excerpt"] = json!(line);
+    answer
+}
+
+/// The answer to a privacy question: whether the public additions give away the private side.
+pub(super) fn privacy_answer(leaks: bool) -> Value {
+    json!({
+        "leaks": leaks,
+        "excerpt": if leaks { json!("the offending words") } else { Value::Null },
+        "reason": "the judge's reason"
     })
 }
 

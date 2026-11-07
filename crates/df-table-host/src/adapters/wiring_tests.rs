@@ -6,11 +6,9 @@ use std::sync::Arc;
 use df_table::config::Settings;
 use df_table::outcome::OutcomeKind;
 use df_table::ports::{ActionId, Dice, RulesOwner};
-use df_table::testkit::ManualClock;
+use df_table::testkit::{ManualClock, ScriptedInterpreter};
 
-use crate::engine::adapters::{
-    Adapters, BrokerSide, DevControls, DevInterpreter, DevKnowledge, DevNarrator,
-};
+use crate::engine::adapters::{Adapters, BrokerSide, DevControls, DevKnowledge, DevNarrator};
 use crate::engine::audit::LogBrokerAudit;
 use crate::engine::commit::ScriptedCommitStore;
 use crate::engine::handle::EngineHandle;
@@ -63,7 +61,7 @@ fn start_with(rules: Arc<dyn RulesOwner>, dice: Arc<dyn Dice>) -> EngineHandle {
         .expect("the broker builds"),
         clock,
         rules,
-        interpreter: Arc::new(DevInterpreter),
+        interpreter: Arc::new(ScriptedInterpreter::default()),
         narrator: Arc::new(DevNarrator),
         dice,
         knowledge: Arc::new(DevKnowledge),

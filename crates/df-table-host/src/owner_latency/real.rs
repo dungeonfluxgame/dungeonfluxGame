@@ -34,16 +34,18 @@ use df_types::saturating_millis;
 use crate::adapters::{RulesBackend, story_ports};
 use crate::engine::EngineHandle as Handle;
 use crate::engine::adapters::{
-    Adapters, BrokerSide, ChaosInterpreter, DevClock, DevControls, DevKnowledge, DevNarrator,
+    Adapters, BrokerSide, DevClock, DevControls, DevKnowledge, DevNarrator,
 };
 use crate::engine::audit::LogBrokerAudit;
 use crate::engine::commit::{
     Checkpoint, CommitError, CommitReceipt, CommitStore, MemoryCommitStore, Restored,
 };
+use crate::engine::jev::JevInterpreter;
 use crate::engine::report::EngineError;
 use crate::engine::request::{AudienceSpec, InputBody, InputRequest};
 use crate::engine::setup::{EngineConfig, EngineStartError, machines_for};
 use crate::event_log::EventLog;
+use crate::text::TextRuntime;
 
 use super::commit::{CommitMode, MODELLED_POSTGRES_MS};
 use super::limits::COMMIT_DEADLINE_MS;
@@ -182,7 +184,10 @@ fn start(mode: CommitMode, directory: &std::path::Path) -> Result<Handle, RealEr
         )
         .map_err(EngineStartError::from)?,
         rules: ports.rules,
-        interpreter: Arc::new(ChaosInterpreter::default()),
+        // The harness only taps, so the interpreter is never asked.
+        interpreter: Arc::new(JevInterpreter::new(Arc::new(TextRuntime::from_environment(
+            Arc::new(|_| {}),
+        )))),
         narrator: Arc::new(DevNarrator),
         dice: ports.dice,
         knowledge: Arc::new(DevKnowledge),

@@ -8,12 +8,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use df_table::config::Settings;
-use df_table::ports::Clock;
-use df_table::testkit::ManualClock;
+use df_table::ports::{ActionId, Clock, Interpretation};
+use df_table::testkit::{ManualClock, ScriptedInterpreter};
 
 use crate::event_log::EventLog;
 
-use super::adapters::{Adapters, BrokerSide, DevDice, DevInterpreter, DevNarrator, DevRulesOwner};
+use super::adapters::{Adapters, BrokerSide, DevDice, DevNarrator, DevRulesOwner};
 use super::audit::LogBrokerAudit;
 use super::commit::{CommitPolicy, ScriptedCommit, ScriptedCommitStore};
 use super::handle::EngineHandle;
@@ -101,6 +101,27 @@ pub fn config(options: &RigOptions) -> EngineConfig {
     }
 }
 
+/// The interpreter of the rigs: the lines the engine tests type, each scripted to the reading a
+/// model would give it. A line a test types that is not here panics the owner, by the testkit's
+/// design, so a test adds its line here.
+fn scripted_interpreter() -> ScriptedInterpreter {
+    let action = |name: &str| Interpretation::Action(ActionId::new(name).expect("a valid name"));
+    ScriptedInterpreter::default()
+        .with_line("pick_lock", action("pick_lock"))
+        .with_line("persuade_guard", action("persuade_guard"))
+        .with_line(
+            "please open the gate for me",
+            Interpretation::NeedsClarification,
+        )
+        .with_line(
+            "Please, friend, we only need a minute",
+            Interpretation::NeedsClarification,
+        )
+        .with_line("ready", Interpretation::NeedsClarification)
+        .with_line("x", Interpretation::NeedsClarification)
+        .with_line("anything", Interpretation::NeedsClarification)
+}
+
 pub fn adapters(clock: Arc<dyn Clock>, log: &Arc<EventLog>) -> Adapters {
     let machines = dev_machines(EngineConfig::dev().first_scene).expect("the dev machines build");
     Adapters {
@@ -111,7 +132,7 @@ pub fn adapters(clock: Arc<dyn Clock>, log: &Arc<EventLog>) -> Adapters {
         .expect("the broker builds"),
         clock,
         rules: Arc::new(DevRulesOwner::new(machines.check)),
-        interpreter: Arc::new(DevInterpreter),
+        interpreter: Arc::new(scripted_interpreter()),
         narrator: Arc::new(DevNarrator),
         dice: Arc::new(DevDice::seeded(7)),
         knowledge: Arc::new(super::adapters::DevKnowledge),

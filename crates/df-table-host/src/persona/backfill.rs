@@ -9,7 +9,11 @@
 //! duration_ms=..` and `PERSONA backfill_failed id=.. error=<key>`; they never hold persona,
 //! question, guidance or edit text.
 
-use df_content::persona::Persona;
+use df_content::persona::privacy::{
+    PRIVACY_INSTRUCTION, PRIVACY_OUTPUT_NAME, parse_privacy, private_side, privacy_facts,
+    privacy_schema, public_additions,
+};
+use df_content::persona::{Persona, PersonaEdit};
 use df_content::persona::backfill::{
     BACKFILL_INSTRUCTION, BACKFILL_OUTPUT_NAME, COVERAGE_INSTRUCTION, COVERAGE_OUTPUT_NAME,
     Coverage, FILLABLE, Gap, Latitude, NarrativeGuidance, backfill_facts, backfill_schema,
@@ -104,6 +108,43 @@ pub(super) async fn backfill_persona(
     result
 }
 
+/// Asks the model whether the public additions of `edits` give away the private side of `own`
+/// (itself as the edits would leave it), and refuses the backfill when it says so. A judge call
+/// that fails is a refusal too, never an allowance. A backfill with no public addition has
+/// nothing to judge and makes no call.
+async fn refuse_private_detail(
+    app: &AppState,
+    route: &TextRoute,
+    own: &Persona,
+    edits: &[PersonaEdit],
+) -> Result<(), PersonaError> {
+    let public = public_additions(edits);
+    if public.is_empty() {
+        return Ok(());
+    }
+    let after = own
+        .edit(edits)
+        .map_err(|cause| PersonaError::InvalidEdit { cause })?;
+    let request = text_request(
+        route.profile(),
+        PRIVACY_INSTRUCTION,
+        privacy_facts(&public, &private_side(&after)),
+        PRIVACY_OUTPUT_NAME,
+        privacy_schema(),
+    );
+    let key = operation_key("privacy")?;
+    let verdict = route.ask(&key, &request, parse_privacy).await?.value;
+    app.record_line(format!(
+        "PERSONA privacy_judged id={} leaks={}",
+        own.id(),
+        verdict.leaks
+    ));
+    if verdict.leaks {
+        return Err(PersonaError::PrivateDetailInPublicField);
+    }
+    Ok(())
+}
+
 async fn backfill(
     app: &AppState,
     route: &TextRoute,
@@ -138,6 +179,7 @@ async fn backfill(
         })
         .await?
         .value;
+    refuse_private_detail(app, route, own, &edits).await?;
     let profile = route.profile().as_str().to_owned();
     let record = BackfillRecord {
         sequence: 0,

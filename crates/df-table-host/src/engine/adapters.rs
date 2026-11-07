@@ -3,10 +3,9 @@
 //!
 //! Each implements a port of `df-table` and answers from a rule a reader can state; none reaches
 //! a network, and none panics when asked something it cannot answer (the pure crate's testkit
-//! fakes panic by design, which a running host must not). The interpreter reads a line that is
-//! exactly one of the choices it was shown and otherwise asks the player to clarify: it is the
-//! stand-in for the Jev call (meaning comes from a schema judgement, never a word list), and a
-//! real adapter replaces it behind the same port. The clock is the only place the host reads
+//! fakes panic by design, which a running host must not). The interpreter port is served by
+//! `jev::JevInterpreter` (meaning comes from a schema judgement, never a word list), which
+//! `ChaosInterpreter` wraps with its down switch. The clock is the only place the host reads
 //! `Instant`; the pure crate never does.
 //!
 //! `Adapters` bundles one adapter per port for the owner, and `BrokerSide` pairs the broker's hub
@@ -119,38 +118,21 @@ impl Clock for DevClock {
     }
 }
 
-/// The stand-in for the Jev call: a line that is exactly one of the offered choices means that
-/// choice, and any other line needs clarifying.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct DevInterpreter;
-
-impl Interpreter for DevInterpreter {
-    fn interpret(
-        &self,
-        _correlation: Correlation,
-        _seat: SeatId,
-        text: &PlayerText,
-        legal_choices: &[ActionId],
-    ) -> Result<Interpretation, PortError> {
-        let line = text.expose().trim();
-        Ok(legal_choices
-            .iter()
-            .find(|choice| choice.as_str() == line)
-            .map_or(Interpretation::NeedsClarification, |choice| {
-                Interpretation::Action(choice.clone())
-            }))
-    }
-}
-
-/// The dev interpreter with a switch that takes it down, as a model that is unreachable is
-/// (H.16 `chaos interpreter`).
-#[derive(Debug, Default)]
+/// Any interpreter with a switch that takes it down, as a model that is unreachable is (H.16
+/// `chaos interpreter`).
 pub struct ChaosInterpreter {
-    inner: DevInterpreter,
+    inner: Arc<dyn Interpreter>,
     down: AtomicBool,
 }
 
 impl ChaosInterpreter {
+    pub fn new(inner: Arc<dyn Interpreter>) -> Self {
+        Self {
+            inner,
+            down: AtomicBool::new(false),
+        }
+    }
+
     pub fn set_down(&self, down: bool) {
         // Relaxed: the flag orders no other data.
         self.down.store(down, Ordering::Relaxed);

@@ -40,13 +40,13 @@
 //! call goes to the persona model (`DF_TEXT_PERSONA_MODEL`, else the default) unless its request
 //! names a `model` (see `text`).
 
+pub(crate) mod address;
 mod backfill;
 pub mod cli;
 mod converse;
 mod edit_verbs;
 mod format;
 pub(crate) mod generate;
-mod guard;
 pub(crate) mod options;
 mod plate;
 pub mod request;

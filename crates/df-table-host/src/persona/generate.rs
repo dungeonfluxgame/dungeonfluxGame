@@ -19,7 +19,10 @@ use df_ai::text::{TextProfile, TextPurpose, TextRequest};
 use df_ai::text_attempts::OperationKey;
 use df_content::persona::backfill::NarrativeGuidance;
 use df_content::persona::generation::{
-    self, GenerationRequest, INSTRUCTION, OUTPUT_NAME, SceneContext,
+    self, GenerationError, GenerationRequest, INSTRUCTION, OUTPUT_NAME, SceneContext,
+};
+use df_content::persona::privacy::{
+    LEAK_REPORT_INSTRUCTION, split_leak_report, with_leak_report,
 };
 use df_content::persona::{BriefScope, Persona, PersonaId};
 use futures_util::future::join_all;
@@ -27,7 +30,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
-use super::guard::{generated_persona_may_leak_private_detail, line_may_leak_private_detail};
 use super::request::{
     CastRow, Generation, LineError, LineIdKind, PersonaError, SaidLine, summary_of,
 };
@@ -267,10 +269,10 @@ async fn generate(
     };
     let request = text_request(
         route.profile(),
-        INSTRUCTION,
+        &format!("{INSTRUCTION} {LEAK_REPORT_INSTRUCTION}"),
         generation::facts(&asked),
         OUTPUT_NAME,
-        generation::output_schema(),
+        with_leak_report(generation::output_schema()),
     );
     let key = operation_key("generate")?;
     app.record_line(format!(
@@ -278,13 +280,19 @@ async fn generate(
         key.operation()
     ));
     let started = Instant::now();
-    let persona = route
+    let (persona, leak_suspect) = route
         .ask(&key, &request, |answer| {
-            generation::read_answer(answer, &asked)
+            let (persona_answer, report) =
+                split_leak_report(answer).map_err(|error| GenerationError::Malformed {
+                    detail: error.to_string(),
+                })?;
+            Ok::<_, GenerationError>((
+                generation::read_answer(&persona_answer, &asked)?,
+                report.leaks,
+            ))
         })
         .await?
         .value;
-    let leak_suspect = generated_persona_may_leak_private_detail(&persona);
     let overwrite = writing.overwrite;
     // The check for a persona that appeared meanwhile is made again at the write, under the lock.
     let existing = run_blocking(
@@ -377,10 +385,13 @@ fn check_ids<'a>(
     }
 }
 
-/// The line `answer` gives for `persona`, whose behaviors, triggers and secrets it may name.
-/// `given` are the texts the line answers (the question and the situation).
-fn read_line(answer: &Value, persona: &Persona, given: &[&str]) -> Result<SaidLine, LineError> {
-    let record = LineRecord::deserialize(answer).map_err(|error| LineError::Malformed {
+/// The line `answer` gives for `persona`, whose behaviors, triggers and secrets it may name. The
+/// answer also reports whether the line gives away the private side: the model's judgement.
+fn read_line(answer: &Value, persona: &Persona) -> Result<SaidLine, LineError> {
+    let (answer, report) = split_leak_report(answer).map_err(|error| LineError::Malformed {
+        detail: error.to_string(),
+    })?;
+    let record = LineRecord::deserialize(&answer).map_err(|error| LineError::Malformed {
         detail: error.to_string(),
     })?;
     let line = record.line.trim();
@@ -407,7 +418,7 @@ fn read_line(answer: &Value, persona: &Persona, given: &[&str]) -> Result<SaidLi
         behavior: record.behavior,
         fired_triggers: record.fired_triggers,
         revealed_secrets: record.revealed_secrets,
-        leak_suspect: line_may_leak_private_detail(persona, line, given),
+        leak_suspect: report.leaks,
     })
 }
 
@@ -449,25 +460,15 @@ pub(super) async fn say_line(
     });
     let request = text_request(
         route.profile(),
-        SAY_INSTRUCTION,
+        &format!("{SAY_INSTRUCTION} {LEAK_REPORT_INSTRUCTION}"),
         facts,
         LINE_OUTPUT_NAME,
-        line_schema(),
+        with_leak_report(line_schema()),
     );
     let key = operation_key("say")?;
-    // Words the caller supplied may be used in the line without counting as private detail.
-    let given: Vec<&str> = std::iter::once(occasion.situation)
-        .chain(occasion.question)
-        .chain(
-            occasion
-                .guidance
-                .into_iter()
-                .flat_map(|guidance| guidance.must_establish.iter().map(String::as_str)),
-        )
-        .collect();
     let started = Instant::now();
     let line = route
-        .ask(&key, &request, |answer| read_line(answer, own, &given))
+        .ask(&key, &request, |answer| read_line(answer, own))
         .await?
         .value;
     app.record_line(format!(

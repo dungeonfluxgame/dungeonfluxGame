@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::fixtures::{
     CHARACTER, ScriptedHost, append_backstory_answer, coverage_answer, innkeeper, line_answer,
-    scripted_host,
+    privacy_answer, scripted_host,
 };
 use super::request::{
     Answered, BackfillOutcome, BackfillRecord, Backfilled, Covered, PersonaError, PersonaReply,
@@ -68,6 +68,7 @@ async fn gaps_are_backfilled_with_an_addition_that_is_recorded_and_the_line_is_c
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         append_backstory_answer("She learned to brew ale at nine."),
+        privacy_answer(false),
         line_answer("Above the inn, love."),
     ])
     .await;
@@ -83,7 +84,11 @@ async fn gaps_are_backfilled_with_an_addition_that_is_recorded_and_the_line_is_c
         }
     );
     assert!(answered.spoken.revision > 0);
-    assert_eq!(host.calls(), 3);
+    assert_eq!(
+        host.calls(),
+        4,
+        "coverage, backfill, privacy judge and line"
+    );
     let stored: super::request::Edited = {
         let reply: PersonaReply<super::request::Edited> = post_json(
             host.port,
@@ -161,10 +166,11 @@ async fn a_backfill_answer_that_is_malformed_is_reported_and_the_line_is_still_s
 }
 
 #[tokio::test]
-async fn a_backfill_that_copies_a_private_word_into_the_backstory_writes_neither_file() {
+async fn a_backfill_the_model_judges_to_leak_private_detail_writes_neither_file() {
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         append_backstory_answer("Her brother Tomas rode north when she was nine."),
+        privacy_answer(true),
         line_answer("Above the inn, love."),
     ])
     .await;
@@ -224,6 +230,7 @@ async fn coverage_and_backfill_have_routes_of_their_own_and_refuse_what_they_can
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         append_backstory_answer("She learned to brew ale at nine."),
+        privacy_answer(false),
     ])
     .await;
     store_innkeeper(&host);
@@ -259,7 +266,7 @@ async fn coverage_and_backfill_have_routes_of_their_own_and_refuse_what_they_can
             ..
         }
     ));
-    assert_eq!(host.calls(), 2, "the refusal made no call");
+    assert_eq!(host.calls(), 3, "the refusal made no call");
 }
 
 #[tokio::test]
@@ -267,6 +274,7 @@ async fn no_persona_audit_line_holds_persona_question_line_or_edit_text() {
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         append_backstory_answer("She learned to brew ale at nine."),
+        privacy_answer(false),
         line_answer("Above the inn, love."),
     ])
     .await;
@@ -306,6 +314,7 @@ async fn guidance_reaches_the_coverage_question_the_backfill_and_the_spoken_line
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         append_backstory_answer("She learned to brew ale at nine."),
+        privacy_answer(false),
         line_answer("Above the inn, love."),
     ])
     .await;
@@ -318,8 +327,8 @@ async fn guidance_reaches_the_coverage_question_the_backfill_and_the_spoken_line
         "latitude": "strict"
     });
     done(ask(&host, json!({"guidance": guidance})).await);
-    assert_eq!(host.calls(), 3);
-    for (call, step) in [(0, "coverage"), (1, "backfill"), (2, "line")] {
+    assert_eq!(host.calls(), 4);
+    for (call, step) in [(0, "coverage"), (1, "backfill"), (3, "line")] {
         let facts = host.facts_of(call);
         assert_eq!(
             facts["guidance"]["must_establish"],
@@ -334,7 +343,7 @@ async fn guidance_reaches_the_coverage_question_the_backfill_and_the_spoken_line
         assert_eq!(facts["guidance"]["latitude"], "strict", "{step}");
         assert_eq!(facts["guidance"]["tone"], "dry", "{step}");
     }
-    let instructions = host.instructions_of(2);
+    let instructions = host.instructions_of(3);
     assert!(instructions.contains("must_establish"), "{instructions}");
     assert!(instructions.contains("must_avoid"), "{instructions}");
     assert!(instructions.contains("latitude"), "{instructions}");
@@ -362,6 +371,7 @@ async fn a_backfill_with_non_ascii_text_leaves_ascii_only_files_that_read_back()
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         append_backstory_answer(curly),
+        privacy_answer(false),
         line_answer("Above the inn, love."),
     ])
     .await;
@@ -451,12 +461,13 @@ async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established()
     let filled = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         append_backstory_answer("She learned to brew ale at nine."),
+        privacy_answer(false),
         line_answer("Above the inn, love."),
     ])
     .await;
     store_innkeeper(&filled);
     done(ask(&filled, json!({})).await);
-    assert_eq!(filled.facts_of(2)["not_established"], json!([]));
+    assert_eq!(filled.facts_of(3)["not_established"], json!([]));
     let covered = scripted_host(vec![coverage_answer(&[]), line_answer("Above the inn.")]).await;
     store_innkeeper(&covered);
     done(ask(&covered, json!({})).await);
