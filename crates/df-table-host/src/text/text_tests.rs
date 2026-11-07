@@ -65,6 +65,28 @@ fn the_outcome_table_matches_the_support_backends() {
             "a model that does not exist is a definite refusal ({status})"
         );
     }
+    // The real body of an account with no credit left (429 here; checked live).
+    let no_credit = concat!(
+        r#"{"error":{"message":"You have no credits remaining.","type":"insufficient_quota","#,
+        r#""param":null,"code":"credit_balance_exhausted"}}"#
+    )
+    .as_bytes();
+    for status in [400, 429] {
+        assert_eq!(
+            receipt(status, no_credit).outcome,
+            TextOutcome::Unavailable(UnavailableReason::Configuration),
+            "an account with no credit is a definite refusal ({status})"
+        );
+    }
+    assert_eq!(
+        receipt(
+            429,
+            br#"{"error":{"code":"rate_limit_exceeded","type":"requests"}}"#
+        )
+        .outcome,
+        TextOutcome::Invalid,
+        "a rate limit that waiting clears is not this"
+    );
     assert_eq!(
         receipt(400, br#"{"error":{"code":"invalid_prompt","message":"x"}}"#).outcome,
         TextOutcome::Invalid,

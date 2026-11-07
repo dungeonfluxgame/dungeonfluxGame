@@ -126,9 +126,10 @@ pub fn answer(response: &Value) -> Option<Value> {
 }
 
 /// The exchange's outcome, with the table `df-hosted`'s support backends use: 401 or 403 is an
-/// authentication refusal, a 400 or 404 whose error code is `model_not_found` a configuration
-/// refusal, any other 4xx or 5xx an invalid result, a 2xx body that is not the
-/// expected answer invalid, and anything else (never served) a configuration refusal.
+/// authentication refusal, a 400, 404 or 429 whose error says the model is missing or the
+/// account has no credit or quota a configuration refusal, any other 4xx or 5xx an invalid
+/// result, a 2xx body that is not the expected answer invalid, and anything else (never served) a
+/// configuration refusal.
 pub fn receipt(status: u16, body: &[u8]) -> TextReceipt {
     match status {
         401 | 403 => TextOutcome::Unavailable(UnavailableReason::Authentication).into(),
@@ -139,7 +140,7 @@ pub fn receipt(status: u16, body: &[u8]) -> TextReceipt {
                 usage: usage(&response),
             },
         },
-        400 | 404 if names_missing_model(body) => {
+        400 | 404 | 429 if account_cannot_serve(body) => {
             TextOutcome::Unavailable(UnavailableReason::Configuration).into()
         }
         400..=599 => TextOutcome::Invalid.into(),
@@ -147,19 +148,27 @@ pub fn receipt(status: u16, body: &[u8]) -> TextReceipt {
     }
 }
 
-/// Whether an error body says, by its structured code, that the model does not exist or the
-/// account cannot use it (`error.code` is `model_not_found`): a definite refusal of the route's
-/// configuration, as the Codex backend's unsupported model is.
-fn names_missing_model(body: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/error/code")
-                .and_then(Value::as_str)
-                .map(|code| code == "model_not_found")
-        })
-        .unwrap_or(false)
+/// The structured error codes that say the account cannot serve the question and waiting does not
+/// change that: the model does not exist or is not allowed, or the account has no credit or quota
+/// left. A definite refusal of the route's configuration, as the Codex backend's unsupported model.
+const ACCOUNT_CANNOT_SERVE_CODES: [&str; 3] = [
+    "model_not_found",
+    "insufficient_quota",
+    "credit_balance_exhausted",
+];
+
+/// Whether an error body says, by `error.code` or `error.type`, that the account cannot serve the
+/// question (see [`ACCOUNT_CANNOT_SERVE_CODES`]).
+fn account_cannot_serve(body: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    ["/error/code", "/error/type"].iter().any(|place| {
+        value
+            .pointer(place)
+            .and_then(Value::as_str)
+            .is_some_and(|code| ACCOUNT_CANNOT_SERVE_CODES.contains(&code))
+    })
 }
 
 fn failure(cause: NativeHttpCause) -> TextOutcome {
