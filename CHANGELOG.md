@@ -14,9 +14,9 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
-## 2026-11-06T23:47:06-05:00 to 2026-11-07T02:27:04-05:00
+## 2026-11-06T23:47:06-05:00 to 2026-11-07T02:44:49-05:00
 
-Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..e8a65bee70d1c91f94056d13d2be632ca9975037
+Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..a899307ceb88698f1fd7ac4d7c13654815592915
 
 - a8fc2ff9 - CHANGELOG: record the wave 4 follow-through commit
 - f5ec7a30 - Speech switches default off; the last speech bubble stays until the next; no pop-in replay
@@ -42,6 +42,9 @@ Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..e8a65bee70d1c91f94056d13d2be632
 - b5d17968 - CHANGELOG: record the persona hardening and bubble layer commit
 - d14720d3 - Handoff: persona hardening, spend switches and the bubble layer
 - e8a65bee - Persona and backfill: pin the guidance path and non-ASCII backfill; model_not_found on the HTTP backend
+- 48c2c66e - CHANGELOG: record the persona gap-closing commits
+- 5a23ec4b - Persona: tests for a line naming what the persona lacks and a strict latitude refusing a new secret
+- a899307c - Persona: tests for every reachable ask failure, generate-cast with a malformed answer, run_owned cancellation
 
 Reviewed read-only against AGENTS.md; behavior tests owed are marked TODO(DEV-12) (thinking-cue two-character test, bubble settle browser test).
 
