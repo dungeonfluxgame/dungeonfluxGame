@@ -26,6 +26,8 @@ use crate::text_attempts::{
 pub struct ScriptedBackend {
     receipts: Mutex<VecDeque<TextReceipt>>,
     calls: Arc<AtomicUsize>,
+    /// Every request the backend was asked, in order, when the caller keeps a copy.
+    asked: Option<Arc<Mutex<Vec<TextRequest>>>>,
 }
 
 impl ScriptedBackend {
@@ -37,13 +39,26 @@ impl ScriptedBackend {
         Self {
             receipts: Mutex::new(receipts.into_iter().map(Into::into).collect()),
             calls,
+            asked: None,
         }
+    }
+
+    /// Keeps a copy of every request in `asked`, so a test can read what the model was told.
+    pub fn recording(mut self, asked: Arc<Mutex<Vec<TextRequest>>>) -> Self {
+        self.asked = Some(asked);
+        self
     }
 }
 
 impl TextBackend for ScriptedBackend {
-    fn complete(&self, _: &TextRequest) -> impl Future<Output = TextReceipt> + Send {
+    fn complete(&self, request: &TextRequest) -> impl Future<Output = TextReceipt> + Send {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(asked) = &self.asked {
+            asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(request.clone());
+        }
         let receipt = self
             .receipts
             .lock()

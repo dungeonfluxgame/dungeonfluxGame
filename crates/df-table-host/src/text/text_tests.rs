@@ -54,6 +54,22 @@ fn the_outcome_table_matches_the_support_backends() {
         TextOutcome::Unavailable(UnavailableReason::Authentication)
     );
     assert_eq!(receipt(500, b"{}").outcome, TextOutcome::Invalid);
+    for status in [400, 404] {
+        assert_eq!(
+            receipt(
+                status,
+                br#"{"error":{"code":"model_not_found","message":"no such model"}}"#
+            )
+            .outcome,
+            TextOutcome::Unavailable(UnavailableReason::Configuration),
+            "a model that does not exist is a definite refusal ({status})"
+        );
+    }
+    assert_eq!(
+        receipt(400, br#"{"error":{"code":"invalid_prompt","message":"x"}}"#).outcome,
+        TextOutcome::Invalid,
+        "another 400 is still an invalid result"
+    );
     assert_eq!(receipt(200, b"not json").outcome, TextOutcome::Invalid);
     assert_eq!(
         receipt(302, b"").outcome,

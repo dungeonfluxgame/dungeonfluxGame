@@ -300,3 +300,94 @@ async fn no_persona_audit_line_holds_persona_question_line_or_edit_text() {
 
 // TODO(DEV-12): cancel-safety of `ask`: a client that drops the request between the coverage and
 // the backfill still gets its backfill committed (needs a scripted backend that waits).
+
+#[tokio::test]
+async fn guidance_reaches_the_coverage_question_the_backfill_and_the_spoken_line() {
+    let host = scripted_host(vec![
+        coverage_answer(&[("backstory", "childhood")]),
+        append_backstory_answer("She learned to brew ale at nine."),
+        line_answer("Above the inn, love."),
+    ])
+    .await;
+    store_innkeeper(&host);
+    let guidance = json!({
+        "arc": "the guild road",
+        "must_establish": ["she has walked the north road"],
+        "must_avoid": ["the missing brother"],
+        "tone": "dry",
+        "latitude": "strict"
+    });
+    done(ask(&host, json!({"guidance": guidance})).await);
+    assert_eq!(host.calls(), 3);
+    for (call, step) in [(0, "coverage"), (1, "backfill"), (2, "line")] {
+        let facts = host.facts_of(call);
+        assert_eq!(
+            facts["guidance"]["must_establish"],
+            json!(["she has walked the north road"]),
+            "the {step} question carries the guidance: {facts}"
+        );
+        assert_eq!(
+            facts["guidance"]["must_avoid"],
+            json!(["the missing brother"]),
+            "{step}"
+        );
+        assert_eq!(facts["guidance"]["latitude"], "strict", "{step}");
+        assert_eq!(facts["guidance"]["tone"], "dry", "{step}");
+    }
+    let instructions = host.instructions_of(2);
+    assert!(instructions.contains("must_establish"), "{instructions}");
+    assert!(instructions.contains("must_avoid"), "{instructions}");
+    assert!(instructions.contains("latitude"), "{instructions}");
+}
+
+#[tokio::test]
+async fn without_guidance_the_line_is_asked_with_none() {
+    let host = scripted_host(vec![
+        coverage_answer(&[]),
+        line_answer("Above the inn, love."),
+    ])
+    .await;
+    store_innkeeper(&host);
+    done(ask(&host, json!({})).await);
+    assert!(
+        host.facts_of(1)["guidance"].is_null(),
+        "{}",
+        host.facts_of(1)
+    );
+}
+
+#[tokio::test]
+async fn a_backfill_with_non_ascii_text_leaves_ascii_only_files_that_read_back() {
+    let curly = "She learned to brew ale at nine, in her father\u{2019}s cellar. Pony: Br\u{e1}n.";
+    let host = scripted_host(vec![
+        coverage_answer(&[("backstory", "childhood")]),
+        append_backstory_answer(curly),
+        line_answer("Above the inn, love."),
+    ])
+    .await;
+    store_innkeeper(&host);
+    done(ask(&host, json!({})).await);
+    let persona_file = host.file(PERSONA_FILE).expect("the persona file");
+    let record_file = host.file(RECORD_FILE).expect("the record file");
+    assert!(persona_file.is_ascii(), "{persona_file}");
+    assert!(record_file.is_ascii(), "{record_file}");
+    assert!(persona_file.contains(r"\u2019"), "{persona_file}");
+    // Read back through the route, the stored persona has the characters as written.
+    let stored: super::request::Edited = {
+        let reply: PersonaReply<super::request::Edited> = post_json(
+            host.port,
+            path::PERSONA_EDIT,
+            &json!({"id": CHARACTER, "edits": []}),
+        )
+        .await
+        .unwrap();
+        done(reply)
+    };
+    assert!(
+        stored.persona.backstory().ends_with(curly),
+        "{}",
+        stored.persona.backstory()
+    );
+    let records: Vec<BackfillRecord> = serde_json::from_str(&record_file).unwrap();
+    assert_eq!(records.len(), 1);
+}

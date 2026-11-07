@@ -126,7 +126,8 @@ pub fn answer(response: &Value) -> Option<Value> {
 }
 
 /// The exchange's outcome, with the table `df-hosted`'s support backends use: 401 or 403 is an
-/// authentication refusal, any other 4xx or 5xx an invalid result, a 2xx body that is not the
+/// authentication refusal, a 400 or 404 whose error code is `model_not_found` a configuration
+/// refusal, any other 4xx or 5xx an invalid result, a 2xx body that is not the
 /// expected answer invalid, and anything else (never served) a configuration refusal.
 pub fn receipt(status: u16, body: &[u8]) -> TextReceipt {
     match status {
@@ -138,9 +139,27 @@ pub fn receipt(status: u16, body: &[u8]) -> TextReceipt {
                 usage: usage(&response),
             },
         },
+        400 | 404 if names_missing_model(body) => {
+            TextOutcome::Unavailable(UnavailableReason::Configuration).into()
+        }
         400..=599 => TextOutcome::Invalid.into(),
         _ => TextOutcome::Unavailable(UnavailableReason::Configuration).into(),
     }
+}
+
+/// Whether an error body says, by its structured code, that the model does not exist or the
+/// account cannot use it (`error.code` is `model_not_found`): a definite refusal of the route's
+/// configuration, as the Codex backend's unsupported model is.
+fn names_missing_model(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .map(|code| code == "model_not_found")
+        })
+        .unwrap_or(false)
 }
 
 fn failure(cause: NativeHttpCause) -> TextOutcome {

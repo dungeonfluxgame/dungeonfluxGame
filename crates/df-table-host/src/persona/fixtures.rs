@@ -26,11 +26,23 @@ pub(super) struct ScriptedHost {
     pub(super) port: u16,
     /// How many questions the text backend was asked.
     pub(super) calls: Arc<AtomicUsize>,
+    /// Every request the text backend was asked, in order.
+    pub(super) asked: Arc<std::sync::Mutex<Vec<df_ai::text::TextRequest>>>,
 }
 
 impl ScriptedHost {
     pub(super) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// The facts of the `n`th question the text backend was asked (from 0).
+    pub(super) fn facts_of(&self, n: usize) -> Value {
+        self.asked.lock().unwrap()[n].facts.clone()
+    }
+
+    /// The instructions of the `n`th question the text backend was asked (from 0).
+    pub(super) fn instructions_of(&self, n: usize) -> String {
+        self.asked.lock().unwrap()[n].instructions.clone()
     }
 
     pub(super) fn directory(&self) -> PathBuf {
@@ -102,10 +114,12 @@ pub(super) async fn scripted_host_speaking(
         ),
     );
     let calls = Arc::new(AtomicUsize::new(0));
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
     let script = ScriptedBackend::new(
         answers.into_iter().map(TextOutcome::Answered),
         Arc::clone(&calls),
-    );
+    )
+    .recording(Arc::clone(&asked));
     let recorder = Arc::clone(&running.state);
     let text = TextRuntime::new(
         BackendChoice::Scripted(Arc::new(script), None),
@@ -126,6 +140,7 @@ pub(super) async fn scripted_host_speaking(
         running,
         port,
         calls,
+        asked,
     }
 }
 

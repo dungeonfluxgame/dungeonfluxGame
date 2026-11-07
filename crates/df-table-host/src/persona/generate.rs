@@ -413,8 +413,6 @@ fn read_line(answer: &Value, persona: &Persona, given: &[&str]) -> Result<SaidLi
 pub(super) struct Occasion<'a> {
     pub(super) situation: &'a str,
     pub(super) question: Option<&'a str>,
-    // TODO(DEV-12): a host test that the guidance reaches the line's facts (the scripted backend
-    // keeps no copy of what it was asked).
     /// What the narrative engine wants the line to serve, when it says.
     pub(super) guidance: Option<&'a NarrativeGuidance>,
 }
