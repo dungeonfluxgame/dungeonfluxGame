@@ -391,3 +391,29 @@ async fn a_backfill_with_non_ascii_text_leaves_ascii_only_files_that_read_back()
     let records: Vec<BackfillRecord> = serde_json::from_str(&record_file).unwrap();
     assert_eq!(records.len(), 1);
 }
+
+#[tokio::test]
+async fn a_strict_latitude_refuses_a_new_secret_and_the_line_is_still_said() {
+    let new_secret = json!({"edits": [{
+        "op": "put_secret", "field": null, "text": "She hides a second ledger.", "id": "ledger",
+        "sensitivity": "high", "reveal_conditions": [], "known_by": [],
+        "speech_style": null, "condition": null, "event": null, "behavior": null
+    }]});
+    let host = scripted_host(vec![
+        coverage_answer(&[("secrets", "what she hides")]),
+        new_secret,
+        line_answer("Nothing, love."),
+    ])
+    .await;
+    store_innkeeper(&host);
+    let before = host.file(PERSONA_FILE);
+    let answered = done(ask(&host, json!({"guidance": {"latitude": "strict"}})).await);
+    assert!(
+        matches!(answered.backfill, BackfillOutcome::BackfillFailed { .. }),
+        "{:?}",
+        answered.backfill
+    );
+    assert!(answered.spoken.revision > 0, "the line is still cued");
+    assert_eq!(host.file(PERSONA_FILE), before, "no secret was written");
+    assert_eq!(host.file(RECORD_FILE), None, "and no record");
+}

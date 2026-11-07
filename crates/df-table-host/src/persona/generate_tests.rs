@@ -292,3 +292,40 @@ fn the_privacy_guard_runs_at_the_commit_against_the_persona_being_committed() {
     assert_eq!(read_persona(folder.path(), &id), Ok(Some(meanwhile)));
     assert_eq!(read_backfills(folder.path(), &id), Ok(Vec::new()));
 }
+
+#[tokio::test]
+async fn a_line_naming_a_behavior_trigger_or_secret_the_persona_lacks_is_refused() {
+    let answers = ["behavior", "fired_triggers", "revealed_secrets"]
+        .into_iter()
+        .map(|field| {
+            let mut answer = line_answer("Welcome, love.");
+            answer[field] = if field == "behavior" {
+                json!("furious")
+            } else {
+                json!(["not-there"])
+            };
+            answer
+        })
+        .collect();
+    let host = scripted_host(answers).await;
+    write_persona(&host.directory(), &innkeeper()).unwrap();
+    for _ in 0..3 {
+        let body = json!({"character": CHARACTER, "situation": "a guest arrives"});
+        let reply: PersonaReply<Spoken> = post_json(host.port, path::PERSONA_SAY, &body)
+            .await
+            .unwrap();
+        let DevReply::Rejected { error, .. } = reply else {
+            panic!("a line naming something the persona lacks is refused");
+        };
+        assert!(
+            matches!(error, PersonaError::AnswerRefused { .. }),
+            "{error:?}"
+        );
+    }
+    let said = host
+        .persona_lines()
+        .into_iter()
+        .filter(|line| line.starts_with("PERSONA said"))
+        .count();
+    assert_eq!(said, 0, "no refused line is reported as said");
+}

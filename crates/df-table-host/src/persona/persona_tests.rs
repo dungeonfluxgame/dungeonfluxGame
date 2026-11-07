@@ -683,11 +683,8 @@ async fn generating_without_a_shown_scene_is_a_typed_refusal_and_never_a_model_c
 
 // TODO(DEV-12) owed: generate-cast on a scene with several characters, one of whose answers is
 // malformed (the others still written; needs a layout with several regions).
-// TODO(DEV-12) owed: say with a reply that names a behavior, trigger or secret the persona lacks
-// (refused as answer_refused, nothing cued).
 // TODO(DEV-12) owed: TextRuntime::ask on its own, one test per TextAskError variant (refused,
 // no answer, rejected before, in flight, lost, cancelled, not kept).
-// TODO(DEV-12) owed: a backfill under strict latitude refuses a new secret, behavior or trigger.
 
 fn args(text: &str) -> Asking {
     match command(&format!("persona coverage elf {text} a question")) {
