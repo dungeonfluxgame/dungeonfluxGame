@@ -1810,27 +1810,31 @@ impl Stage {
             let shot = self.scene.occupancy.as_ref().map_or_else(
                 || {
                     Some(framing::action_shot_from_with_dolly(
-                        &base,
-                        &self.rig.pose(),
-                        &actor_body,
-                        target_body.as_ref(),
-                        &also,
-                        &bystanders,
-                        framing::FRAMED_ASPECT,
-                        home_yaw,
+                        &framing::ActionShotRequest {
+                            style: &base,
+                            current: &self.rig.pose(),
+                            actor: &actor_body,
+                            target: target_body.as_ref(),
+                            also: &also,
+                            bystanders: &bystanders,
+                            aspect: framing::FRAMED_ASPECT,
+                            home_yaw,
+                        },
                         command.dolly,
                     ))
                 },
                 |occupancy| {
                     framing::action_shot_from_occupancy_with_dolly(
-                        &base,
-                        &self.rig.pose(),
-                        &actor_body,
-                        target_body.as_ref(),
-                        &also,
-                        &bystanders,
-                        framing::FRAMED_ASPECT,
-                        home_yaw,
+                        &framing::ActionShotRequest {
+                            style: &base,
+                            current: &self.rig.pose(),
+                            actor: &actor_body,
+                            target: target_body.as_ref(),
+                            also: &also,
+                            bystanders: &bystanders,
+                            aspect: framing::FRAMED_ASPECT,
+                            home_yaw,
+                        },
                         occupancy,
                         command.dolly,
                     )
@@ -2382,27 +2386,29 @@ impl Stage {
         let _ = ending;
         let shot = self.scene.occupancy.as_ref().map_or_else(
             || {
-                Some(framing::action_shot_from(
-                    &base,
-                    &self.rig.pose(),
-                    first,
-                    None,
-                    rest,
-                    &[],
-                    framing::FRAMED_ASPECT,
+                Some(framing::action_shot_from(&framing::ActionShotRequest {
+                    style: &base,
+                    current: &self.rig.pose(),
+                    actor: first,
+                    target: None,
+                    also: rest,
+                    bystanders: &[],
+                    aspect: framing::FRAMED_ASPECT,
                     home_yaw,
-                ))
+                }))
             },
             |occupancy| {
                 framing::action_shot_from_occupancy(
-                    &base,
-                    &self.rig.pose(),
-                    first,
-                    None,
-                    rest,
-                    &[],
-                    framing::FRAMED_ASPECT,
-                    home_yaw,
+                    &framing::ActionShotRequest {
+                        style: &base,
+                        current: &self.rig.pose(),
+                        actor: first,
+                        target: None,
+                        also: rest,
+                        bystanders: &[],
+                        aspect: framing::FRAMED_ASPECT,
+                        home_yaw,
+                    },
                     occupancy,
                 )
             },
@@ -5106,16 +5112,16 @@ mod tests {
             let attacker = body_of_figure(stage, "hero");
             let target = body_of_figure(stage, "enemy");
             let style = stage.scene().cameras[&ShotName::TurnFocus];
-            framing::action_shot_from(
-                &style,
-                &stage.rig.pose(),
-                &attacker,
-                Some(&target),
-                &[],
-                &[],
-                framing::FRAMED_ASPECT,
-                Some(stage.scene().cameras[&ShotName::Tactical].yaw_deg),
-            )
+            framing::action_shot_from(&framing::ActionShotRequest {
+                style: &style,
+                current: &stage.rig.pose(),
+                actor: &attacker,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[],
+                aspect: framing::FRAMED_ASPECT,
+                home_yaw: Some(stage.scene().cameras[&ShotName::Tactical].yaw_deg),
+            })
         };
         let first = pick(&stage);
         let near = CameraPose {
@@ -5653,16 +5659,16 @@ mod tests {
                     body_of_figure(&stage, attacker),
                     body_of_figure(&stage, target),
                 );
-                let shot = framing::action_shot_from(
-                    &style,
-                    &stage.rig.pose(),
-                    &a,
-                    Some(&t),
-                    &[],
-                    &others,
-                    framing::FRAMED_ASPECT,
-                    Some(home),
-                );
+                let shot = framing::action_shot_from(&framing::ActionShotRequest {
+                    style: &style,
+                    current: &stage.rig.pose(),
+                    actor: &a,
+                    target: Some(&t),
+                    also: &[],
+                    bystanders: &others,
+                    aspect: framing::FRAMED_ASPECT,
+                    home_yaw: Some(home),
+                });
                 for fighter in [a, t] {
                     assert!(
                         framing::in_safe_area(&shot.pose, framing::FRAMED_ASPECT, &fighter),

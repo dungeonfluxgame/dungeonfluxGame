@@ -255,82 +255,68 @@ pub fn action_shot(
     bystanders: &[Body],
     aspect: f32,
 ) -> ActionShot {
-    action_shot_from(
-        style, current, actor, target, also, bystanders, aspect, None,
-    )
+    action_shot_from(&ActionShotRequest {
+        style,
+        current,
+        actor,
+        target,
+        also,
+        bystanders,
+        aspect,
+        home_yaw: None,
+    })
 }
 
-/// As [`action_shot`], keeping the camera within [`MAX_HOME_DEVIATION_DEG`] of `home_yaw` (the
-/// scene's tactical heading) when given.
-#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
-pub fn action_shot_from(
-    style: &CameraPose,
-    current: &CameraPose,
-    actor: &Body,
-    target: Option<&Body>,
-    also: &[Body],
-    bystanders: &[Body],
-    aspect: f32,
-    home_yaw: Option<f32>,
-) -> ActionShot {
-    action_shot_from_with_dolly(
-        style, current, actor, target, also, bystanders, aspect, home_yaw, 1.0,
-    )
+/// What a shot is framed for: the arguments of [`action_shot`], and `home_yaw`, the scene's
+/// tactical heading that the camera stays within [`MAX_HOME_DEVIATION_DEG`] of when given.
+#[derive(Clone, Copy)]
+pub struct ActionShotRequest<'a> {
+    pub style: &'a CameraPose,
+    pub current: &'a CameraPose,
+    pub actor: &'a Body,
+    pub target: Option<&'a Body>,
+    pub also: &'a [Body],
+    pub bystanders: &'a [Body],
+    pub aspect: f32,
+    pub home_yaw: Option<f32>,
+}
+
+/// As [`action_shot`], keeping the camera within [`MAX_HOME_DEVIATION_DEG`] of the request's
+/// `home_yaw` when given.
+pub fn action_shot_from(request: &ActionShotRequest) -> ActionShot {
+    action_shot_from_with_dolly(request, 1.0)
 }
 
 /// As [`action_shot_from`], fitting the view after the requested dolly is applied.
-#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
-pub(super) fn action_shot_from_with_dolly(
-    style: &CameraPose,
-    current: &CameraPose,
-    actor: &Body,
-    target: Option<&Body>,
-    also: &[Body],
-    bystanders: &[Body],
-    aspect: f32,
-    home_yaw: Option<f32>,
-    dolly: f32,
-) -> ActionShot {
-    action_shot_from_inner(
-        style, current, actor, target, also, bystanders, aspect, home_yaw, None, dolly,
-    )
-    .expect("without an occupancy filter every candidate is accepted, so a pose is chosen")
+pub(super) fn action_shot_from_with_dolly(request: &ActionShotRequest, dolly: f32) -> ActionShot {
+    action_shot_from_inner(request, None, dolly)
+        .expect("without an occupancy filter every candidate is accepted, so a pose is chosen")
 }
 
 /// As [`action_shot_from`], rejecting poses whose view of either fighter crosses occupied scene
 /// geometry. Returns `None` when no framed, clear pose can be found.
-#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
 pub fn action_shot_from_occupancy(
-    style: &CameraPose,
-    current: &CameraPose,
-    actor: &Body,
-    target: Option<&Body>,
-    also: &[Body],
-    bystanders: &[Body],
-    aspect: f32,
-    home_yaw: Option<f32>,
+    request: &ActionShotRequest,
     occupancy: &Occupancy,
 ) -> Option<ActionShot> {
-    action_shot_from_occupancy_with_dolly(
-        style, current, actor, target, also, bystanders, aspect, home_yaw, occupancy, 0.85,
-    )
+    action_shot_from_occupancy_with_dolly(request, occupancy, 0.85)
 }
 
 /// As [`action_shot_from_occupancy`], fitting and checking the pose after `dolly` is applied.
-#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
 pub(super) fn action_shot_from_occupancy_with_dolly(
-    style: &CameraPose,
-    current: &CameraPose,
-    actor: &Body,
-    target: Option<&Body>,
-    also: &[Body],
-    bystanders: &[Body],
-    aspect: f32,
-    home_yaw: Option<f32>,
+    request: &ActionShotRequest,
     occupancy: &Occupancy,
     dolly: f32,
 ) -> Option<ActionShot> {
-    action_shot_from_inner(
+    action_shot_from_inner(request, Some(occupancy), dolly)
+}
+
+fn action_shot_from_inner(
+    request: &ActionShotRequest,
+    occupancy: Option<&Occupancy>,
+    fit_dolly: f32,
+) -> Option<ActionShot> {
+    let ActionShotRequest {
         style,
         current,
         actor,
@@ -339,24 +325,7 @@ pub(super) fn action_shot_from_occupancy_with_dolly(
         bystanders,
         aspect,
         home_yaw,
-        Some(occupancy),
-        dolly,
-    )
-}
-
-#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
-fn action_shot_from_inner(
-    style: &CameraPose,
-    current: &CameraPose,
-    actor: &Body,
-    target: Option<&Body>,
-    also: &[Body],
-    bystanders: &[Body],
-    aspect: f32,
-    home_yaw: Option<f32>,
-    occupancy: Option<&Occupancy>,
-    fit_dolly: f32,
-) -> Option<ActionShot> {
+    } = *request;
     let chest = |body: &Body| body.feet + Vec3::new(0.0, body.height_m * 0.5, 0.0);
     let other = target.copied().unwrap_or(*actor);
     // A little toward the target, so the frame leans over its shoulder.
@@ -554,14 +523,16 @@ mod tests {
     fn both_fighters_stay_in_frame_after_the_finishing_shot_pushes_in() {
         let (attacker, target) = (body(-7.0, 0.0), body(7.0, 0.0));
         let shot = action_shot_from_with_dolly(
-            &style(),
-            &current(0.0),
-            &attacker,
-            Some(&target),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-            None,
+            &ActionShotRequest {
+                style: &style(),
+                current: &current(0.0),
+                actor: &attacker,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            },
             0.8,
         );
         let pushed = shot.pose.dollied(0.8);
@@ -990,16 +961,16 @@ mod tests {
                 yaw_deg: current_yaw,
                 ..style()
             };
-            let shot = action_shot_from(
-                &style(),
-                &current,
-                &attacker,
-                Some(&target),
-                &[],
-                &[],
-                FRAMED_ASPECT,
-                Some(0.0),
-            );
+            let shot = action_shot_from(&ActionShotRequest {
+                style: &style(),
+                current: &current,
+                actor: &attacker,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: Some(0.0),
+            });
             let heading = wrap_deg(shot.pose.yaw_deg);
             assert!(
                 heading.abs() <= MAX_HOME_DEVIATION_DEG + 1e-3,
@@ -1030,14 +1001,16 @@ mod tests {
         assert!(!occupancy.segment_clear(eye, chest, 1.3, 1.0));
 
         let shot = action_shot_from_occupancy(
-            &style(),
-            &current(0.0),
-            &actor,
-            Some(&target),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-            None,
+            &ActionShotRequest {
+                style: &style(),
+                current: &current(0.0),
+                actor: &actor,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            },
             &occupancy,
         )
         .expect("another action angle has a clear view");
@@ -1057,14 +1030,16 @@ mod tests {
             Occupancy::empty(Vec3::new(-40.0, -40.0, -40.0), 1.0, [80, 80, 80]).unwrap();
 
         let shot = action_shot_from_occupancy(
-            &style(),
-            &current(0.0),
-            &actor,
-            Some(&target),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-            None,
+            &ActionShotRequest {
+                style: &style(),
+                current: &current(0.0),
+                actor: &actor,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            },
             &occupancy,
         )
         .expect("clear occupancy admits an action shot");
@@ -1086,14 +1061,16 @@ mod tests {
             Occupancy::empty(Vec3::new(-40.0, -40.0, -40.0), 1.0, [80, 80, 80]).unwrap();
 
         let shot = action_shot_from_occupancy_with_dolly(
-            &style(),
-            &current(0.0),
-            &actor,
-            Some(&target),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-            None,
+            &ActionShotRequest {
+                style: &style(),
+                current: &current(0.0),
+                actor: &actor,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            },
             &occupancy,
             0.78,
         )
