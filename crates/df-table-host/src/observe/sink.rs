@@ -29,6 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use df_table::event::TableEvent;
 use df_table::ports::{Clock, EventSink};
+use df_types::saturating_millis;
 use serde::{Deserialize, Serialize};
 
 use crate::event_log::EventLog;
@@ -74,9 +75,7 @@ impl Clock for WallClock {
     fn now_ms(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |since| {
-                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
-            })
+            .map_or(0, saturating_millis)
     }
 }
 

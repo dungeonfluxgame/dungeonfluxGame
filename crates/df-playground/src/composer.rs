@@ -120,6 +120,8 @@ pub enum SpeechAvailability {
     },
     /// The host could not be asked.
     HostDown,
+    /// The speech-to-text switch is off (`Controls::stt_on`).
+    TurnedOff,
 }
 
 /// A character the composer can talk to.
@@ -344,6 +346,7 @@ fn unavailable_reason(inputs: &ComposerInputs<'_>, has_target: bool) -> Option<S
     match inputs.speech {
         SpeechAvailability::Checking => Some("Checking the microphone...".to_owned()),
         SpeechAvailability::HostDown => Some("The host could not be reached".to_owned()),
+        SpeechAvailability::TurnedOff => Some("Speech to text is turned off".to_owned()),
         SpeechAvailability::NotConfigured { missing } => Some(match missing {
             Some(missing) => format!(
                 "Voice is not set up on the host (missing {})",

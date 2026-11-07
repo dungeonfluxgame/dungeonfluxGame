@@ -29,6 +29,7 @@ use df_table::canvas::{Canvas, CanvasEffect};
 use df_table::element::{Degrees, ElementId};
 use df_table::event::{EffectKind, RejectionCause, TableEvent};
 use df_table::ports::EventSink;
+use df_types::saturating_millis;
 use serde::Deserialize;
 
 use self::request::{EventsQuery, HostError, QueriedRoute, RequestMethod};
@@ -50,11 +51,6 @@ use crate::wire::{EffectRequest, EventsReply, FRAME_IDLE_NO_CONTENT, Reply, capp
 pub mod path {
     /// What the host's log, event sink and clock are doing (GET, a `HostReply<HostStatus>`).
     pub const HOST_STATUS: &str = "/dev/host/status";
-}
-
-/// A span as whole milliseconds.
-fn whole_ms(span: Duration) -> u64 {
-    u64::try_from(span.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn answer(status: StatusCode, reply: Reply) -> Response {
@@ -129,7 +125,7 @@ async fn record_served(
             "HTTP served method={} route={route} status={} duration_ms={}",
             method.key(),
             status.as_u16(),
-            whole_ms(started.elapsed())
+            saturating_millis(started.elapsed())
         ));
     }
     response
@@ -265,7 +261,7 @@ async fn frame_answer(
                     "FRAME served frame={} after={after} bytes={length} waited_ms={} \
                      source={source} client={client}",
                     built.count(),
-                    whole_ms(started.elapsed())
+                    saturating_millis(started.elapsed())
                 ));
             }
             let pieces = futures_util::stream::iter(
@@ -410,9 +406,7 @@ fn pivot_has_settled(
     match state.turn_settling(id) {
         Some(remaining) if changes_it => Err(RequestError::PivotDuringTurn {
             element: id.to_string(),
-            wait_ms: u64::try_from(remaining.as_millis())
-                .unwrap_or(u64::MAX)
-                .saturating_add(1),
+            wait_ms: saturating_millis(remaining).saturating_add(1),
         }),
         _ => Ok(()),
     }
@@ -570,7 +564,7 @@ pub fn spawn_clock(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
                 if ticks_since_woken > 0 {
                     state.record_line_and_echo(format!(
                         "HOST clock_idle ticks={ticks_since_woken} ran_ms={}",
-                        whole_ms(woken_at.elapsed())
+                        saturating_millis(woken_at.elapsed())
                     ));
                     ticks_since_woken = 0;
                 }
@@ -593,8 +587,8 @@ pub fn spawn_clock(state: Arc<AppState>) -> tokio::task::JoinHandle<()> {
             if gap > TRAVEL_TICK_CUT {
                 state.record_line_and_echo(format!(
                     "HOST clock_stall gap_ms={} cut_to_ms={}",
-                    whole_ms(gap),
-                    whole_ms(TRAVEL_TICK_CUT)
+                    saturating_millis(gap),
+                    saturating_millis(TRAVEL_TICK_CUT)
                 ));
             }
             last = now;

@@ -117,13 +117,14 @@ struct RetainedRecord {
     bytes: Box<[u8]>,
 }
 
-/// Best-effort page/binding memory, bounded to 128 records/256 KiB encoded payload.
+/// Best-effort page/binding memory, bounded to `MAXIMUM_BROWSER_RECORDS` records and
+/// `MAXIMUM_BROWSER_BYTES` of encoded payload.
 /// One prefix remains included in that bound until a matched terminal durable receipt.
 /// This owner does not implement upload RPCs, timers, browser crash storage, or retries.
 pub struct BrowserBuffer {
     owner: Rc<u8>,
     generation: u64,
-    slots: [Option<RetainedRecord>; MAXIMUM_BROWSER_RECORDS],
+    slots: Vec<Option<RetainedRecord>>,
     head: usize,
     count: usize,
     bytes: usize,
@@ -138,7 +139,9 @@ impl BrowserBuffer {
         Self {
             owner: Rc::new(0),
             generation,
-            slots: std::array::from_fn(|_| None),
+            slots: std::iter::repeat_with(|| None)
+                .take(MAXIMUM_BROWSER_RECORDS)
+                .collect(),
             head: 0,
             count: 0,
             bytes: 0,
@@ -329,7 +332,7 @@ impl BrowserBuffer {
     /// Counters never reset, including when a caller mistakenly reuses a generation.
     pub fn invalidate(&mut self, generation: u64) -> usize {
         let lost = self.count;
-        self.slots = std::array::from_fn(|_| None);
+        self.slots.fill_with(|| None);
         self.head = 0;
         self.count = 0;
         self.bytes = 0;

@@ -225,7 +225,8 @@ pub enum AnswerBound {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum BackfillError {
-    /// The answer is not the object the schema asks for; `detail` is the reader's sentence.
+    /// The answer is not the object the schema asks for. `detail` is the reader's own sentence
+    /// (it names the field or type it stopped at), which has no closed set to enumerate.
     Malformed { detail: String },
     /// A wire edit lacks a part its operation needs.
     MissingPart { index: usize, part: EditPart },

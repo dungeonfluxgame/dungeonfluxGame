@@ -10,7 +10,7 @@ pub(crate) const MAXIMUM_SPOOL_FILES: usize = MAXIMUM_ROOT_RECORDS;
 /// Free space kept below `sqlite_bytes` for WAL and index growth during one commit.
 pub(crate) const MAXIMUM_SQLITE_GROWTH_RESERVE_BYTES: u64 = 4 * 1024 * 1024;
 /// How long a statement waits for a competing SQLite lock before the sink reports unavailable.
-pub(crate) const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_millis(50);
+pub(crate) const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Emergency lines kept per store lifetime; later failures count as unconfirmed gaps.
 pub(crate) const MAXIMUM_EMERGENCY_RECORDS: u64 = 32;

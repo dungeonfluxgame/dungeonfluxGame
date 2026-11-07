@@ -10,7 +10,7 @@ use super::request::{
     GenerateError, GenerateReply, GenerateRequest, JobState, JobView, PictureCause, Sidecar,
 };
 use crate::dev_http::{BodyCause, RouteError, parse_body};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 
 fn every_error() -> Vec<GenerateError> {
     let body = parse_body::<GenerateRequest>(b"{}").expect_err("no prompt");

@@ -255,7 +255,7 @@ struct Billboard {
     effects: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "one argument per vec4 slot")]
 fn instance(
     place: [f32; 4],
     pose: [f32; 4],

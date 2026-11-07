@@ -19,12 +19,14 @@
 //! fn tenant_only(_: TenantId) {}
 //! tenant_only(AccountId::from_bytes(&[1; 16]).unwrap());
 //! ```
+mod duration;
 mod identity;
 mod locale;
 mod money;
 mod provenance;
 mod revision;
 
+pub use duration::saturating_millis;
 pub use identity::{
     AccountId, CampaignId, CheckoutId, ClientBindingId, IdentityError, MemberId, OperationId,
     OperatorId, PaidInvoiceId, PriceVersion, RunId, SessionId, SubscriptionId, TenantId,

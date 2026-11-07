@@ -5,7 +5,7 @@
 //! does not implement session commits or cancellation receipts.
 
 #[path = "../tests/support/candidate_fixture.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "each test binary uses a subset of the fixture")]
 pub(crate) mod candidate_fixture;
 
 use candidate_fixture::{

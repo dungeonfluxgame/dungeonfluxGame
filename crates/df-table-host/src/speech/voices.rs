@@ -18,7 +18,7 @@ use super::request::{SpeechError, VoiceCause, VoiceChanged, VoiceRow, VoicesCaus
 use crate::atomic_file::write_atomically;
 use crate::blocking::WriteLock;
 use crate::dev_http::BodyError;
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 use crate::state::AppState;
 
 /// The voices file's name.

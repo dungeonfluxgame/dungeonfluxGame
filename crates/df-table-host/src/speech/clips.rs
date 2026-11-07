@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::limits::kept_clips;
 use super::request::{ClipCause, ClipRow, SpeechError};
 use crate::blocking::{WriteLock, run_blocking};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 use crate::media_ingest::IngestError;
 use crate::media_library::{media_directory, store_bytes};
 use crate::media_store::AddError;

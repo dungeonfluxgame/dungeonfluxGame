@@ -26,11 +26,20 @@ pub(crate) fn write_atomically(
 ) -> std::io::Result<()> {
     std::fs::create_dir_all(directory)?;
     let temporary = temporary_path(directory, file_name);
-    std::fs::write(&temporary, bytes)
+    write_synced(&temporary, bytes)
         .and_then(|()| std::fs::rename(&temporary, directory.join(file_name)))
         .inspect_err(|_| {
             // The temporary file is ours; failure to remove it only leaves disk space used, and
             // the write's own error is what is reported.
             let _ = std::fs::remove_file(&temporary);
         })
+}
+
+/// Writes `bytes` to `path` and flushes them to disk, so a crash after the rename cannot leave an
+/// empty or short file under the final name.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }

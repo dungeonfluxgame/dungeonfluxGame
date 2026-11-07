@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use tempfile::TempDir;
 
 use super::backend::{BackendError, CodexBackend, CodexSettings, ImageBackend, backend_for};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 
 /// A signed-in-looking home: the login file is only looked for, so its content is irrelevant.
 fn home_with_login(root: &Path) -> PathBuf {

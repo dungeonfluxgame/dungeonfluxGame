@@ -22,7 +22,7 @@ use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use super::model::{BackendRequest, GeneratedImage};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 
 /// The login file a signed-in Codex home holds. Its presence is checked; it is never read.
 const LOGIN_FILE: &str = "auth.json";

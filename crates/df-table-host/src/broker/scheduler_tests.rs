@@ -5,6 +5,7 @@ use df_table::private_data::Narration;
 use super::events::{AbandonReason, BrokerEvent, RefusalKind, StaleReason};
 use super::fixtures::{RecordingAudit, core_over, core_with, facts, name, request_for};
 use super::ledger::LedgerEnd;
+use super::limits::{LEASE_MS, MAXIMUM_LEASE_ATTEMPTS};
 use super::purpose::{Price, PurposeFacts, PurposeSpec, PurposeTable, QueueClass, ResourceKind};
 use super::queues::QueueBounds;
 use super::request::{
@@ -14,6 +15,8 @@ use super::request::{
 use super::scheduler::{BrokerLimits, CancelOutcome, CompleteOutcome};
 
 const WORKER: WorkerId = WorkerId::new(1);
+/// A deadline past every lease the lease tests wait out.
+const LONG_DEADLINE_MS: u64 = u64::MAX / 2;
 
 fn text_ok() -> Result<ResourceResult, ProviderCause> {
     Ok(ResourceResult::Text(Narration::new("a line")))
@@ -736,30 +739,28 @@ fn an_answer_one_millisecond_inside_the_deadline_is_accepted() {
 }
 
 #[test]
-fn an_expired_lease_puts_an_unsent_call_back_up_to_three_attempts_and_then_fails_it() {
-    let (mut core, audit) = core_over(table_with_deadline(1_000_000), BrokerLimits::default());
+fn an_expired_lease_puts_an_unsent_call_back_up_to_the_maximum_attempts_and_then_fails_it() {
+    let (mut core, audit) = core_over(
+        table_with_deadline(LONG_DEADLINE_MS),
+        BrokerLimits::default(),
+    );
     let handle = core
         .request(request_for("text_live", 1, 1), 0)
         .expect("accepted");
 
-    let first = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
-    core.tick(60_000);
-    assert_eq!(
-        core.status(handle),
-        Some(RequestStatus::Queued {
-            class: QueueClass::Live
-        })
-    );
-    let second = core
-        .claim(ResourceKind::Text, WORKER, 60_000)
-        .expect("claimed again");
-    core.tick(120_000);
-    let third = core
-        .claim(ResourceKind::Text, WORKER, 120_000)
-        .expect("claimed a third time");
-    core.tick(180_000);
+    let mut numbers = Vec::new();
+    for attempt in 0..u64::from(MAXIMUM_LEASE_ATTEMPTS) {
+        let now_ms = attempt * LEASE_MS;
+        numbers.push(
+            core.claim(ResourceKind::Text, WORKER, now_ms)
+                .expect("claimed")
+                .number,
+        );
+        core.tick(now_ms + LEASE_MS);
+    }
 
-    assert_eq!((first.number, second.number, third.number), (1, 2, 3));
+    assert_eq!(numbers.len(), MAXIMUM_LEASE_ATTEMPTS as usize);
+    assert_eq!(numbers.first(), Some(&1));
     assert_eq!(
         core.status(handle),
         Some(RequestStatus::Failed {
@@ -768,21 +769,24 @@ fn an_expired_lease_puts_an_unsent_call_back_up_to_three_attempts_and_then_fails
     );
     assert_eq!(
         audit.count(|event| matches!(event, BrokerEvent::LeaseExpired { sent: false, .. })),
-        3
+        MAXIMUM_LEASE_ATTEMPTS as usize
     );
     assert_eq!(core.ledger().entry(handle).expect("recorded").calls_sent, 0);
 }
 
 #[test]
 fn an_expired_lease_of_a_call_that_was_sent_fails_as_an_unknown_dispatch_and_is_not_retried() {
-    let (mut core, audit) = core_over(table_with_deadline(1_000_000), BrokerLimits::default());
+    let (mut core, audit) = core_over(
+        table_with_deadline(LONG_DEADLINE_MS),
+        BrokerLimits::default(),
+    );
     let handle = core
         .request(request_for("text_live", 1, 1), 0)
         .expect("accepted");
     let call = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
     core.mark_sent(call.attempt).expect("known");
 
-    core.tick(60_000);
+    core.tick(LEASE_MS);
 
     assert_eq!(
         core.status(handle),
@@ -805,20 +809,23 @@ fn an_expired_lease_of_a_call_that_was_sent_fails_as_an_unknown_dispatch_and_is_
 
 #[test]
 fn a_heartbeat_renews_the_lease() {
-    let (mut core, _) = core_over(table_with_deadline(1_000_000), BrokerLimits::default());
+    let (mut core, _) = core_over(
+        table_with_deadline(LONG_DEADLINE_MS),
+        BrokerLimits::default(),
+    );
     let handle = core
         .request(request_for("text_live", 1, 1), 0)
         .expect("accepted");
     let call = core.claim(ResourceKind::Text, WORKER, 0).expect("claimed");
 
-    assert!(core.heartbeat(call.attempt, 50_000));
-    core.tick(100_000);
+    assert!(core.heartbeat(call.attempt, LEASE_MS / 2));
+    core.tick(LEASE_MS + 1);
 
     assert!(matches!(
         core.status(handle),
         Some(RequestStatus::InFlight { .. })
     ));
-    assert!(!core.heartbeat(AttemptId::new(999), 100_000));
+    assert!(!core.heartbeat(AttemptId::new(999), LEASE_MS + 1));
 }
 
 #[test]

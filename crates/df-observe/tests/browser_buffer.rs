@@ -12,6 +12,9 @@ use opentelemetry_proto::tonic::{
 use prost::Message;
 use std::time::Duration;
 
+/// Records the buffer retains before refusing new ones.
+const BROWSER_RECORDS: i64 = 100_000;
+
 fn build_identity() -> BuildIdentity {
     BuildIdentity::new(
         Some("source"),
@@ -118,20 +121,27 @@ fn standard_otlp_capture_contains_only_approved_typed_fields_and_identity() {
 #[test]
 fn item_overflow_is_visible_and_never_evicts_existing_records() {
     let mut buffer = BrowserBuffer::new(1);
-    for sequence in 1..=128 {
-        buffer
-            .retain_log(&build_identity(), capture_key(sequence), browser_log())
-            .unwrap();
-    }
+    let mut next = 1;
+    let refusal = loop {
+        match buffer.retain_log(&build_identity(), capture_key(next), browser_log()) {
+            Ok(()) => next += 1,
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(refusal, BufferError::Capacity);
+    let retained = usize::try_from(next - 1).unwrap();
+    assert!(retained > 10_000, "{retained}");
     let before = buffer.snapshot();
+    assert_eq!(before.retained_records, retained);
+    assert_eq!(before.refused_records, 1);
     assert_eq!(
-        buffer.retain_log(&build_identity(), capture_key(129), browser_log()),
+        buffer.retain_log(&build_identity(), capture_key(next), browser_log()),
         Err(BufferError::Capacity)
     );
     let after = buffer.snapshot();
-    assert_eq!(after.retained_records, 128);
+    assert_eq!(after.retained_records, retained);
     assert_eq!(after.retained_bytes, before.retained_bytes);
-    assert_eq!(after.refused_records, 1);
+    assert_eq!(after.refused_records, 2);
     let lease = buffer.begin_upload(Duration::ZERO).unwrap();
     assert_eq!(lease.records(), 32);
     assert!(lease.bytes() <= 65536);
@@ -166,22 +176,22 @@ fn deadline_failure_and_retry_preserve_original_bytes() {
         .next()
         .unwrap()
         .to_vec();
-    assert_eq!(first.deadline(), Duration::from_secs(12));
+    assert_eq!(first.deadline(), Duration::from_secs(62));
     assert_eq!(
-        buffer.expire_upload(Duration::from_secs(11)),
+        buffer.expire_upload(Duration::from_secs(61)),
         Err(BufferError::NotExpired)
     );
     assert_eq!(
-        buffer.acknowledge_durable(&first, Duration::from_secs(12)),
+        buffer.acknowledge_durable(&first, Duration::from_secs(62)),
         Err(BufferError::Deadline)
     );
-    buffer.expire_upload(Duration::from_secs(12)).unwrap();
+    buffer.expire_upload(Duration::from_secs(62)).unwrap();
     for outcome in [
         UploadCause::Transport,
         UploadCause::Cancelled,
         UploadCause::PartialOrRejected,
     ] {
-        let lease = buffer.begin_upload(Duration::from_secs(12)).unwrap();
+        let lease = buffer.begin_upload(Duration::from_secs(62)).unwrap();
         assert_eq!(
             buffer.upload_records(&lease).unwrap().next().unwrap(),
             original
@@ -189,41 +199,42 @@ fn deadline_failure_and_retry_preserve_original_bytes() {
         assert_eq!(buffer.fail_upload(&lease, outcome), Ok(outcome));
         assert_eq!(buffer.snapshot().retained_records, 1);
         assert_eq!(
-            buffer.acknowledge_durable(&lease, Duration::from_secs(13)),
+            buffer.acknowledge_durable(&lease, Duration::from_secs(63)),
             Err(BufferError::StaleLease)
         );
     }
-    let retry = buffer.begin_upload(Duration::from_secs(14)).unwrap();
+    let retry = buffer.begin_upload(Duration::from_secs(64)).unwrap();
     assert_eq!(
-        buffer.acknowledge_durable(&first, Duration::from_secs(15)),
+        buffer.acknowledge_durable(&first, Duration::from_secs(65)),
         Err(BufferError::StaleLease)
     );
     buffer
-        .acknowledge_durable(&retry, Duration::from_secs(15))
+        .acknowledge_durable(&retry, Duration::from_secs(65))
         .unwrap();
     assert_eq!(buffer.snapshot().retained_bytes, 0);
 }
 #[test]
 fn prefix_acknowledgment_preserves_later_append_and_fifo_wrap() {
     let mut buffer = BrowserBuffer::new(1);
-    for sequence in 1..=128 {
-        buffer
-            .retain_log(&build_identity(), capture_key(sequence), browser_log())
-            .unwrap();
-    }
-    for sequence in 129..=256 {
+    let mut next = 1;
+    let mut append = |buffer: &mut BrowserBuffer, count: i64| {
+        for _ in 0..count {
+            buffer
+                .retain_log(&build_identity(), capture_key(next), browser_log())
+                .unwrap();
+            next += 1;
+        }
+    };
+    append(&mut buffer, 32);
+    for _ in 0..BROWSER_RECORDS / 32 + 100 {
         let lease = buffer.begin_upload(Duration::ZERO).unwrap();
         buffer
             .acknowledge_durable(&lease, Duration::from_secs(1))
             .unwrap();
-        buffer
-            .retain_log(&build_identity(), capture_key(sequence), browser_log())
-            .unwrap();
+        append(&mut buffer, 32);
     }
     let lease = buffer.begin_upload(Duration::ZERO).unwrap();
-    buffer
-        .retain_log(&build_identity(), capture_key(257), browser_log())
-        .unwrap();
+    append(&mut buffer, 1);
     let before = buffer.snapshot().retained_records;
     buffer
         .acknowledge_durable(&lease, Duration::from_secs(1))

@@ -26,7 +26,7 @@ use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
-use super::limits::{BATCH_TIME_SLICE_MS, MAXIMUM_BATCH_INPUTS, MAXIMUM_COMMIT_RECORDS};
+use super::limits::{MAXIMUM_BATCH_INPUTS, MAXIMUM_COMMIT_RECORDS, batch_time_slice_ms};
 
 /// How many inputs one commit covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +44,7 @@ impl CommitPolicy {
     /// The default: per batch, with the large named bounds of `limits`.
     pub fn per_batch() -> Self {
         Self::PerBatch {
-            time_slice_ms: BATCH_TIME_SLICE_MS,
+            time_slice_ms: batch_time_slice_ms(),
             maximum_inputs: NonZeroUsize::new(MAXIMUM_BATCH_INPUTS).unwrap_or(NonZeroUsize::MIN),
         }
     }

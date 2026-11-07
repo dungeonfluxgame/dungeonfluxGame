@@ -42,7 +42,7 @@ use super::storage::{
 use crate::blocking::{run_blocking, run_owned};
 use crate::dev_http::{parse_body, reply};
 use crate::observe::WallClock;
-use crate::speech::{Speech, Voiced, sound_change};
+use crate::speech::{Speech, SpeechFeature, Voiced, sound_change};
 use crate::state::AppState;
 use crate::text::{TextRoute, TextRuntime};
 
@@ -362,7 +362,7 @@ async fn cue_line(
     speak: bool,
     others: &[String],
 ) -> Result<Spoken, PersonaError> {
-    let voice = if speak {
+    let voice = if speak && routes.speech.is_on(SpeechFeature::Tts) {
         Some(routes.speech.voice_line(&character, &said.line).await)
     } else {
         None

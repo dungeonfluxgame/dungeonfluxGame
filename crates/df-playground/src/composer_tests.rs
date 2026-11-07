@@ -206,6 +206,7 @@ fn the_microphone_is_enabled_only_when_the_host_says_speech_is_set_up() {
     for speech in [
         SpeechAvailability::Checking,
         SpeechAvailability::HostDown,
+        SpeechAvailability::TurnedOff,
         SpeechAvailability::NotConfigured {
             missing: Some(MissingSetting::SpeechKey),
         },

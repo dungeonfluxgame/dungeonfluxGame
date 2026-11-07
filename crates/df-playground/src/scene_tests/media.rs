@@ -221,10 +221,25 @@ fn a_volume_over_a_hundred_percent_is_refused_for_music_and_for_a_sound() {
 
 #[test]
 fn each_sound_is_a_numbered_cue_and_only_the_newest_are_kept() {
-    let mut overlay = SceneOverlay::default();
-    for _ in 0..MAXIMUM_CUES_KEPT + 4 {
+    // Every `apply` copies the overlay, so the kept cues are laid down at once: the test is of the
+    // bound, and filling it one sound at a time is quadratic.
+    let kept = MAXIMUM_CUES_KEPT as u64;
+    let mut overlay = SceneOverlay {
+        cue_count: kept,
+        cues: (1..=kept)
+            .map(|id| Cue {
+                id,
+                target: Target::Both,
+                media: "bell.wav".into(),
+                volume_percent: 80,
+            })
+            .collect(),
+        ..SceneOverlay::default()
+    };
+    let base = base();
+    for _ in 0..4 {
         overlay
-            .apply(sound("bell.wav", 80), &base())
+            .apply(sound("bell.wav", 80), &base)
             .expect("applies");
     }
     assert_eq!(overlay.cue_count, (MAXIMUM_CUES_KEPT + 4) as u64);

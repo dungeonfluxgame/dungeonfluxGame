@@ -104,7 +104,11 @@ pub fn composer_inputs(app: &App) -> (ComposerView, String) {
         state: voice.state,
         has_text: voice.has_text(),
         blocked,
-        speech: &voice.speech,
+        speech: if app.controls.stt_on {
+            &voice.speech
+        } else {
+            &SpeechAvailability::TurnedOff
+        },
         targets: &targets,
         chosen: voice.chosen.as_deref(),
         elapsed_ms: voice.elapsed_ms,

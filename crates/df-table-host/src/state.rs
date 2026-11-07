@@ -21,6 +21,7 @@ use df_table::canvas::Canvas;
 use df_table::element::ElementId;
 use df_table::event::{EffectKind, RejectionCause, TableEvent};
 use df_table::ports::EventSink;
+use df_types::saturating_millis;
 
 use crate::event_log::EventLog;
 use crate::limits::{TICK_INTERVAL, TURN_SETTLE};
@@ -418,7 +419,7 @@ impl AppState {
             clock: ClockStatus {
                 ticks: self.tick_count(),
                 moving: self.moving_count(),
-                tick_ms: u64::try_from(TICK_INTERVAL.as_millis()).unwrap_or(u64::MAX),
+                tick_ms: saturating_millis(TICK_INTERVAL),
             },
             engine_sink: None,
         }

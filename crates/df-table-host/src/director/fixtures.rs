@@ -2,6 +2,7 @@
 //! the camera demo, a command line run against it, and what the playground and the log show.
 
 use df_playground::fixture::Camera;
+use df_playground::path;
 
 use crate::client::get;
 use crate::command::split_words;
@@ -24,9 +25,7 @@ pub(super) async fn said(running: &Running, line: &str) -> String {
 }
 
 async fn shown(running: &Running) -> ControlsReply {
-    let response = get(running.port, "/playground/controls.json")
-        .await
-        .expect("answers");
+    let response = get(running.port, path::CONTROLS).await.expect("answers");
     serde_json::from_str(&response.body).expect("controls")
 }
 
@@ -61,9 +60,7 @@ pub(super) async fn with_three_avatars() -> Running {
     ])
     .await;
     running.write_asset("fixtures/camera_demo.json", CAMERA_DEMO);
-    get(running.port, "/playground/controls.json")
-        .await
-        .expect("answers");
+    get(running.port, path::CONTROLS).await.expect("answers");
     for line in [
         "spawn avatar finn x=30 y=30 name=Finn portrait=finn-alder.webp",
         "spawn avatar sigrun x=70 y=26 name=Sigrun portrait=sigrun.webp",

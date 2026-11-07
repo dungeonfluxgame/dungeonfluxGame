@@ -11,7 +11,8 @@ use axum::http::StatusCode;
 use df_content::persona::PersonaError as ContentError;
 // The page reads these, so the page owns them and the JSON is one.
 pub use df_playground::voice_wire::{
-    MissingSetting, SpeechErrorKind, SpeechLimits, SpeechStatus, Transcript, VoiceRow,
+    MissingSetting, SpeechErrorKind, SpeechFeature, SpeechLimits, SpeechStatus, Transcript,
+    VoiceRow,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +21,7 @@ use super::limits::{
     MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
 };
 use crate::dev_http::{BodyError, DevReply, RouteError};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 use crate::playground::PlaygroundChangeError;
 
 /// The answer of a speech route: its value, or why it was refused.
@@ -451,6 +452,10 @@ pub enum SpeechError {
     Cue {
         cause: PlaygroundChangeError,
     },
+    /// The feature is turned off in the playground's controls.
+    Disabled {
+        feature: SpeechFeature,
+    },
     /// The task stopped without an answer.
     Stopped,
 }
@@ -488,6 +493,7 @@ impl SpeechError {
             Self::ClipUnstored { .. } => SpeechErrorKind::ClipUnstored,
             Self::ClipsUnreadable { .. } => SpeechErrorKind::ClipsUnreadable,
             Self::Cue { .. } => SpeechErrorKind::Cue,
+            Self::Disabled { .. } => SpeechErrorKind::Disabled,
             Self::Stopped => SpeechErrorKind::Stopped,
         }
     }
@@ -568,6 +574,14 @@ impl fmt::Display for SpeechError {
                 write!(formatter, "the media library could not be listed: {cause}")
             }
             Self::Cue { cause } => write!(formatter, "the clip could not be played: {cause}"),
+            Self::Disabled { feature } => write!(
+                formatter,
+                "{} is turned off in the playground",
+                match feature {
+                    SpeechFeature::Tts => "text to speech",
+                    SpeechFeature::Stt => "speech to text",
+                }
+            ),
             Self::Stopped => formatter.write_str("the speech task stopped without an answer"),
         }
     }
@@ -596,6 +610,7 @@ impl RouteError for SpeechError {
             | Self::InvalidVoice { .. } => StatusCode::BAD_REQUEST,
             Self::AudioTooLong { .. } | Self::TextTooLong { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::NoVoice { .. } => StatusCode::NOT_FOUND,
+            Self::Disabled { .. } => StatusCode::CONFLICT,
             Self::NotConfigured { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::Provider { .. } => StatusCode::BAD_GATEWAY,
             Self::Cue { cause } => cause.status(),

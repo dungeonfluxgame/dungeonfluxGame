@@ -5,7 +5,7 @@ use crate::execution::{DispatchId, ExecutionStageId, StageKind, StageView};
 use crate::listed::listed_enum;
 use crate::{AssetId, BackendId, ImageInterestId, ImageJob, ImageJobId, ImageOwner, Purpose};
 use df_observe::{AnyValue, DiagnosticRecord, DiagnosticSink, LogInput, Severity};
-use df_types::{OperationId, RunId};
+use df_types::{OperationId, RunId, saturating_millis};
 use std::{
     sync::{
         Arc, Mutex,
@@ -682,9 +682,7 @@ impl SharedImageObserver {
         recent.next += 1;
         let at_unix_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| {
-                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-            });
+            .map_or(0, saturating_millis);
         let entry = RecentImageEvent {
             sequence: recent.next,
             at_unix_ms,
@@ -703,9 +701,7 @@ impl SharedImageObserver {
                 .context
                 .attempt
                 .map(|attempt| crate::lower_hex(attempt.as_bytes())),
-            elapsed_ms: event
-                .elapsed
-                .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)),
+            elapsed_ms: event.elapsed.map(saturating_millis),
             output_bytes: event.measurements.output_bytes,
         };
         if recent.events.len() == RECENT_EVENT_CAPACITY {

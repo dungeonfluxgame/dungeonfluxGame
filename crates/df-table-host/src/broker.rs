@@ -45,6 +45,8 @@ mod fixtures;
 #[cfg(test)]
 mod hub_tests;
 #[cfg(test)]
+mod limits_tests;
+#[cfg(test)]
 mod purpose_tests;
 #[cfg(test)]
 mod queues_tests;

@@ -19,6 +19,7 @@ use crate::{
     saves::{self, Adventure, SavedGame},
     server,
     settings::{DisplayScreen, DisplayTarget, FieldError, FullScreen, ServerMode, Settings},
+    table,
 };
 
 /// Requests from the controller to whatever shows it (the desktop windows, or nothing in the
@@ -1525,7 +1526,15 @@ pub fn parse_pending_rejoins(text: &str) -> Vec<PendingRejoin> {
 
 /// Asks the running game for its launcher status and reads the rejoin asks from it.
 pub fn fetch_pending_rejoins(display_url: &str, token: &str) -> Result<Vec<PendingRejoin>, String> {
-    let body = launcher_request(display_url, "GET", "/gameplay/launcher-status", token, None)?;
+    let body = table::request(
+        display_url,
+        "GET",
+        table::LAUNCHER_STATUS_PATH,
+        token,
+        None,
+        table::MAXIMUM_STATUS_BYTES,
+    )
+    .map_err(|error| game_failure(&error))?;
     Ok(parse_pending_rejoins(&String::from_utf8_lossy(&body)))
 }
 
@@ -1541,64 +1550,25 @@ fn post_rejoin_decision(
         "member={member}\nrequest={request}\nallow={}",
         u8::from(allow)
     );
-    launcher_request(
+    table::request(
         display_url,
         "POST",
         "/gameplay/launcher-rejoin",
         token,
         Some(body.as_bytes()),
+        table::MAXIMUM_STATUS_BYTES,
     )
     .map(|_| ())
+    .map_err(|error| game_failure(&error))
 }
 
-/// One short HTTP request to the game server's own address (from its display
-/// link), carrying the launcher token. The game answers 404 without it.
-fn launcher_request(
-    display_url: &str,
-    method: &str,
-    path: &str,
-    token: &str,
-    body: Option<&[u8]>,
-) -> Result<Vec<u8>, String> {
-    use std::{
-        io::{Read, Write},
-        net::ToSocketAddrs,
-    };
-    let authority = display_url
-        .strip_prefix("http://")
-        .and_then(|rest| rest.split('/').next())
-        .filter(|authority| !authority.is_empty())
-        .ok_or_else(|| "The game address is not readable.".to_owned())?;
-    let address = authority
-        .to_socket_addrs()
-        .map_err(|_| "The game could not be reached.".to_owned())?
-        .next()
-        .ok_or_else(|| "The game could not be reached.".to_owned())?;
-    let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_millis(700))
-        .map_err(|_| "The game could not be reached.".to_owned())?;
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(2500)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(2500)));
-    let length = body.map_or(0, <[u8]>::len);
-    write!(
-        stream,
-        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\nX-DungeonFlux-Launcher: {token}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
-    )
-    .and_then(|()| stream.write_all(body.unwrap_or_default()))
-    .map_err(|_| "The game could not be reached.".to_owned())?;
-    let mut response = Vec::new();
-    stream
-        .take(64 * 1024 + 16 * 1024)
-        .read_to_end(&mut response)
-        .map_err(|_| "The game did not answer.".to_owned())?;
-    let split = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| "The game did not answer.".to_owned())?;
-    let head = String::from_utf8_lossy(&response[..split]).to_ascii_lowercase();
-    if !head.starts_with("http/1.1 200") && !head.starts_with("http/1.0 200") {
-        return Err("The game did not take that. The ask may have just ended.".to_owned());
+/// What a failed request to the running game means to the host, in the launcher's words.
+fn game_failure(error: &io::Error) -> String {
+    if table::reason(error).starts_with("http_") {
+        "The game did not take that. The ask may have just ended.".to_owned()
+    } else {
+        "The game could not be reached.".to_owned()
     }
-    Ok(response[split + 4..].to_vec())
 }
 
 /// 32 random bytes in hex: the secret a started server answers launcher status requests with.
@@ -1717,7 +1687,7 @@ mod tests {
                         continue;
                     }
                     assert!(header.starts_with("POST /gameplay/launcher-rejoin HTTP/1.1"));
-                    assert!(header.contains("X-DungeonFlux-Launcher: test-token"));
+                    assert!(header.contains(&format!("{}: test-token", table::TOKEN_HEADER)));
                     assert_eq!(
                         &received[split + 4..],
                         format!(

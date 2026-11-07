@@ -39,6 +39,7 @@ use df_playground::controls::{ControlsChange, ControlsReply};
 use df_playground::fixture::{ElementSource, Fixture, FixtureError};
 use df_playground::scene::{ImageSlot, SceneChange};
 use df_table::event::RejectionCause;
+use df_types::saturating_millis;
 
 pub use self::audit::ChangeSource;
 pub(crate) use self::audit::{ChangeOrigin, playground_line};
@@ -630,7 +631,7 @@ async fn write_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Respo
     if let Err(error) = written {
         return refuse_fixture_file(&state, &file_name, error);
     }
-    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let duration_ms = saturating_millis(started.elapsed());
     state.record_line(playground_line(
         "fixture_write",
         &[

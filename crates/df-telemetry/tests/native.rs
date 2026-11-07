@@ -27,7 +27,8 @@ use std::{
     },
     time::{Duration, SystemTime},
 };
-const WAIT: Duration = Duration::from_secs(5);
+/// Longer than the SQLite busy timeout, so a commit blocked by a held lock fails before a wait.
+const WAIT: Duration = Duration::from_secs(30);
 /// Finest `SystemTime` step: Windows counts 100 ns intervals, other platforms nanoseconds.
 #[cfg(windows)]
 const SYSTEM_TIME_STEP_NANOS: u64 = 100;

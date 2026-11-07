@@ -19,6 +19,7 @@
 use std::time::{Duration, Instant};
 
 use df_providers::SendState;
+use df_types::saturating_millis;
 use sha2::{Digest, Sha256};
 
 use crate::backends::analysis::standalone::{
@@ -210,11 +211,6 @@ pub struct Segmented {
     pub phases: SegmentPhases,
 }
 
-/// The milliseconds since `started`, saturating.
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
 /// Scans one picture and returns its masks at the prepared picture's size, with the time each
 /// phase took.
 pub async fn segment(
@@ -242,7 +238,7 @@ pub async fn segment(
             .await
             // A preparation that panicked never produced a picture to send.
             .map_err(|_| SegmentError::unsent(SegmentCause::Picture))??;
-    let prepare_ms = elapsed_ms(started);
+    let prepare_ms = saturating_millis(started.elapsed());
     let (width_px, height_px) = (prepared.width_px, prepared.height_px);
     let started = Instant::now();
     // A failed submit may have reached the supplier: only an answer says it did.
@@ -250,7 +246,7 @@ pub async fn segment(
         .submit()
         .await
         .map_err(|error| SegmentError::from_runtime(&error, submit_send_state(&error)))?;
-    let submit_ms = elapsed_ms(started);
+    let submit_ms = saturating_millis(started.elapsed());
     // From here the supplier has answered the submit.
     let answered = |cause| SegmentError {
         cause,
@@ -275,7 +271,7 @@ pub async fn segment(
         phases: SegmentPhases {
             prepare_ms,
             submit_ms,
-            resume_ms: elapsed_ms(started),
+            resume_ms: saturating_millis(started.elapsed()),
         },
     })
 }

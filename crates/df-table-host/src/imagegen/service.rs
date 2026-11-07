@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use df_table::ports::Clock;
+use df_types::saturating_millis;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -29,7 +30,7 @@ use super::events::ImageGenEvent;
 use super::limits::{DEFAULT_DEADLINE, DEFAULT_GRACE, MAXIMUM_REMEMBERED_JOBS, PROVENANCE_SUFFIX};
 use super::model::{BackendRequest, GeneratedImage, ImageRequest};
 use super::request::{GenerateError, JobState, JobView, PictureCause, Provenance, Sidecar};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 use crate::media_library::{media_directory, store_bytes};
 use crate::state::AppState;
 
@@ -92,13 +93,8 @@ struct MonotonicClock {
 
 impl Clock for MonotonicClock {
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX)
+        saturating_millis(self.origin.elapsed())
     }
-}
-
-/// A duration in whole milliseconds, as views and provenance carry it.
-fn whole_ms(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The job's end as its waiter receives it: its stored picture or the reason it has none. The
@@ -131,7 +127,7 @@ impl JobRecord {
         JobView {
             job: self.job,
             name: self.name.clone(),
-            deadline_ms: whole_ms(self.deadline),
+            deadline_ms: saturating_millis(self.deadline),
             elapsed_ms: self
                 .elapsed_ms
                 .unwrap_or_else(|| now_ms.saturating_sub(self.started_ms)),
@@ -428,7 +424,7 @@ impl ImageGenerator {
             None => JobView {
                 job,
                 name: name.to_owned(),
-                deadline_ms: whole_ms(self.deadline),
+                deadline_ms: saturating_millis(self.deadline),
                 elapsed_ms: 0,
                 state,
             },
@@ -468,8 +464,8 @@ impl ImageGenerator {
             requested_height_px: height_px,
             prompt: request.prompt().to_owned(),
             sent_text: request.sent_text(),
-            duration_ms: whole_ms(image.duration),
-            deadline_ms: whole_ms(self.deadline),
+            duration_ms: saturating_millis(image.duration),
+            deadline_ms: saturating_millis(self.deadline),
             width_px: image.width_px,
             height_px: image.height_px,
             mime: image.mime.clone(),

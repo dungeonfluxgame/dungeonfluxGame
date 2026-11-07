@@ -4,6 +4,8 @@
 //! (and cited here) or a very large named constant to be scoped down when a measurement says so
 //! (owner, 2026-11-02). Spend is never bounded: the ledger records and never blocks.
 
+use super::purpose::RetryPolicy;
+
 /// Providers the text lane may run at once. Not measured and not in the plan: deliberately large,
 /// to be scoped down when the lane's real concurrency is measured (owner, 2026-11-02).
 /// `BrokerLimits` overrides it per hub.
@@ -34,26 +36,64 @@ pub const MAXIMUM_QUEUED_LOOKAHEAD: usize = 1_000_000;
 /// Most background (prefetch) requests waiting; the oldest is dropped past it (J.4: prefetch 8).
 pub const MAXIMUM_QUEUED_BACKGROUND: usize = 8;
 
-/// The deadline of an `interpret` request, in milliseconds: the lower end of the observed Codex
-/// text latency (H.5), so a slower lane times out and the seat gets buttons.
-pub const INTERPRET_DEADLINE_MS: u64 = 15_000;
-/// The deadline of narration, scene description, dress and staging text, in milliseconds: the
-/// upper end of the observed text latency (H.5).
-pub const TEXT_DEADLINE_MS: u64 = 45_000;
-/// The deadline of the current scene's background, in milliseconds: more than
-/// `scene_build_budget_s` of J.4 so a slow build still lands late, and the table plays on the
-/// establishing card meanwhile (K.2).
-pub const BACKGROUND_DEADLINE_MS: u64 = 120_000;
-/// The deadline of a plate or a portrait, in milliseconds: the upper end of the observed Codex
-/// image latency, 90 to 240 s (H.4).
-pub const IMAGE_DEADLINE_MS: u64 = 240_000;
+/// The default deadline of every provider call, in milliseconds. The plan cites observed
+/// latencies (H.5 text 15 to 45 s, H.4 pictures 90 to 240 s) and scene-build budgets (J.4, K.2);
+/// these defaults are deliberately far above them so a deadline never gets in the way of dev work,
+/// and the two variables below scope them down (owner, 2026-11-06).
+pub const DEFAULT_DEADLINE_MS: u64 = 3_600_000;
+/// The variable that sets the deadline of the text purposes (`interpret`, narration, scene
+/// description, dress and staging text), in whole seconds above zero.
+pub const TEXT_DEADLINE_SECONDS_VARIABLE: &str = "DF_BROKER_TEXT_DEADLINE_SECS";
+/// The variable that sets the deadline of the picture purposes (backgrounds, plates and
+/// portraits), in whole seconds above zero.
+pub const IMAGE_DEADLINE_SECONDS_VARIABLE: &str = "DF_BROKER_IMAGE_DEADLINE_SECS";
 
-/// How long a claimed attempt is leased without a heartbeat, in milliseconds (J.4: job lease 60 s,
-/// H.9).
-pub const LEASE_MS: u64 = 60_000;
+/// The deadline, in milliseconds, of the text purposes: `DF_BROKER_TEXT_DEADLINE_SECS` when a
+/// whole number of seconds above zero, else `DEFAULT_DEADLINE_MS`.
+pub fn text_deadline_ms() -> u64 {
+    deadline_ms(crate::environment::text(TEXT_DEADLINE_SECONDS_VARIABLE).as_deref())
+}
+
+/// The deadline, in milliseconds, of the picture purposes: `DF_BROKER_IMAGE_DEADLINE_SECS` when a
+/// whole number of seconds above zero, else `DEFAULT_DEADLINE_MS`.
+pub fn image_deadline_ms() -> u64 {
+    deadline_ms(crate::environment::text(IMAGE_DEADLINE_SECONDS_VARIABLE).as_deref())
+}
+
+/// The deadline a setting's text asks for, in milliseconds; no text, or text that is not a whole
+/// number of seconds above zero, is `DEFAULT_DEADLINE_MS`.
+pub(super) fn deadline_ms(text: Option<&str>) -> u64 {
+    text.and_then(|text| text.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map_or(DEFAULT_DEADLINE_MS, |seconds| seconds.saturating_mul(1_000))
+}
+
+/// How long a claimed attempt is leased without a heartbeat, in milliseconds (J.4 and H.9 give
+/// 60 s; the default is far above it so a slow dev call is not requeued, owner, 2026-11-06).
+pub const LEASE_MS: u64 = 3_600_000;
 /// How many times a request whose lease expired before its provider call was sent is put back in
-/// its queue before it fails (H.9: three attempts).
-pub const MAXIMUM_LEASE_ATTEMPTS: u8 = 3;
+/// its queue before it fails (H.9 gives three; the default is far above it, owner, 2026-11-06).
+pub const MAXIMUM_LEASE_ATTEMPTS: u32 = 1_000;
+
+/// The retries of H.8: two, with a backoff that starts at half a second and stops at eight.
+pub const DEFAULT_RETRY: RetryPolicy = RetryPolicy {
+    maximum_retries: 2,
+    initial_backoff_ms: 500,
+    maximum_backoff_ms: 8_000,
+};
+/// A purpose whose result a person waits for at once gets no retry past the first (C.7: one
+/// retry, then buttons).
+pub const SINGLE_RETRY: RetryPolicy = RetryPolicy {
+    maximum_retries: 1,
+    initial_backoff_ms: 250,
+    maximum_backoff_ms: 2_000,
+};
+/// J.4: SAM retries are one call retry. The backoff is the broker's short one for a text-lane call.
+pub const LOCATE_RETRY: RetryPolicy = RetryPolicy {
+    maximum_retries: 1,
+    initial_backoff_ms: 500,
+    maximum_backoff_ms: 2_000,
+};
 
 /// Most ledger entries kept; the oldest are forgotten first and the per-purpose totals survive.
 /// Deliberately huge; scope it down later (owner, 2026-11-02).

@@ -31,6 +31,7 @@ use base64::Engine;
 use df_playground::media::{MediaEntry, MediaKind, content_type, media_kind};
 use df_playground::scene::SceneChange;
 use df_table::event::RejectionCause;
+use df_types::saturating_millis;
 use futures_util::{Stream, StreamExt};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
@@ -552,7 +553,7 @@ async fn add_media(State(state): State<Arc<AppState>>, headers: HeaderMap, body:
         Ok(added) => {
             // A published file has a media name, so it has a kind; `-` only keeps this total.
             let kind = media_kind(&added.name).map_or("-", MediaKind::key);
-            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let duration_ms = saturating_millis(started.elapsed());
             state.record_line(playground_line(
                 "media_add",
                 &[

@@ -68,7 +68,8 @@ pub struct GenerationRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum GenerationError {
-    /// The answer is not the object the schema describes; `detail` is the reader's sentence.
+    /// The answer is not the object the schema describes. `detail` is the reader's own sentence
+    /// (it names the field or type it stopped at), which has no closed set to enumerate.
     Malformed { detail: String },
     /// The answer reads but is not a valid persona for the character.
     Persona { cause: PersonaError },

@@ -64,12 +64,12 @@ impl Credential {
         }
     }
 
-    /// Names accepted in `.env`, first match wins (matching `run-gameplay.sh`).
+    /// Names accepted in `.env`, first match wins (the order the table host reads them in).
     fn env_file_names(self) -> &'static [&'static str] {
         match self {
-            Self::Openai => &["OPENAI_API_KEY"],
-            Self::Elevenlabs => &["ELEVENLABS_API_KEY"],
-            Self::Fal => &["FAL_KEY", "DF_FAL_KEY"],
+            Self::Openai => &["DF_OPENAI_API_KEY", "OPENAI_API_KEY"],
+            Self::Elevenlabs => &["DF_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY"],
+            Self::Fal => &["DF_FAL_KEY", "FAL_KEY"],
             Self::Jev => &["DF_JEV_API_KEY"],
             Self::Bfl => &["BFL_API_KEY"],
             Self::Worldlabs => &["WORLDLABS_API_KEY"],
@@ -173,6 +173,24 @@ mod tests {
         assert_eq!(env_value(text, "DF_FAL_KEY").as_deref(), Some("fal-test"));
         assert_eq!(env_value(text, "BAD"), None);
         assert_eq!(env_value(text, "OPENAI_API"), None);
+    }
+
+    #[test]
+    fn env_file_names_are_read_in_the_order_the_table_host_reads_them() {
+        let text =
+            "OPENAI_API_KEY=plain\nDF_OPENAI_API_KEY=prefixed\nFAL_KEY=fal\nDF_FAL_KEY=df-fal\n";
+        let first = |credential: Credential| {
+            credential
+                .env_file_names()
+                .iter()
+                .find_map(|name| env_value(text, name))
+        };
+        assert_eq!(first(Credential::Openai).as_deref(), Some("prefixed"));
+        assert_eq!(first(Credential::Fal).as_deref(), Some("df-fal"));
+        assert_eq!(
+            Credential::Elevenlabs.env_file_names(),
+            ["DF_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY"]
+        );
     }
 
     #[test]

@@ -15,13 +15,13 @@ use crate::command::split_words;
 use crate::dev::{DevError, ReplyError, run_dev};
 use crate::event_log::EventLog;
 use crate::limits::{
-    ECHO_LINE_OVERHEAD_BYTES, FIGURE_GLIDE_MS, MAXIMUM_BATCH_CHANGES, MAXIMUM_REPORT_BYTES,
-    TURN_SETTLE,
+    ECHO_LINE_OVERHEAD_BYTES, FIGURE_GLIDE_MS, MAXIMUM_BATCH_CHANGES, TURN_SETTLE,
 };
 use crate::playground::{ControlsChangeError, PlaygroundFiles, PlaygroundState};
 use crate::sink::LineEcho;
 use crate::test_support::{Running, STARTER_FILES, start};
 use crate::wire::EventsReply;
+use df_playground::limits::MAXIMUM_REPORT_BYTES;
 
 const SCENE: &str = r#"{
     "name": "A scene",

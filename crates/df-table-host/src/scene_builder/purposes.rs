@@ -28,20 +28,16 @@ use df_table::scene_plan::brief::SceneBrief;
 
 use super::limits::LOCATE_DEADLINE_MS;
 use super::request::DevStage;
-use crate::broker::limits::MAXIMUM_TEXT_ANSWER_CHARACTERS;
+use crate::broker::limits::{
+    DEFAULT_RETRY, LOCATE_RETRY, MAXIMUM_TEXT_ANSWER_CHARACTERS, image_deadline_ms,
+};
 use crate::broker::purpose::{
-    Fallback, IMAGE_DEADLINE_MS, Price, PurposeError, PurposeFacts, PurposeSpec, PurposeTable,
-    QueueClass, ResourceKind, RetryPolicy, SizeRule,
+    Fallback, Price, PurposeError, PurposeFacts, PurposeSpec, PurposeTable, QueueClass,
+    ResourceKind, SizeRule,
 };
 
 /// The fal list price of one SAM 3.1 request, in micro-dollars (USD 0.01, `content/pricing.json`).
 pub const LOCATE_PRICE_MICRO_DOLLARS: u64 = 10_000;
-/// J.4: SAM retries are one call retry. The backoff is the broker's short one for a text-lane call.
-const LOCATE_RETRY: RetryPolicy = RetryPolicy {
-    maximum_retries: 1,
-    initial_backoff_ms: 500,
-    maximum_backoff_ms: 2_000,
-};
 
 const DESCRIBE: &str = "describe";
 const BACKGROUND: &str = "background";
@@ -156,16 +152,12 @@ fn lookahead_plate_spec() -> Result<PurposeSpec, PurposeError> {
         LOOKAHEAD_PLATE,
         PurposeFacts {
             kind: ResourceKind::Image,
-            deadline_ms: IMAGE_DEADLINE_MS,
+            deadline_ms: image_deadline_ms(),
             size: SizeRule::ImagePixels {
                 width,
                 height: width,
             },
-            retry: RetryPolicy {
-                maximum_retries: 2,
-                initial_backoff_ms: 500,
-                maximum_backoff_ms: 8_000,
-            },
+            retry: DEFAULT_RETRY,
             class: QueueClass::Lookahead,
             price: Price::Unpriced,
             fallback: Fallback::Nothing,

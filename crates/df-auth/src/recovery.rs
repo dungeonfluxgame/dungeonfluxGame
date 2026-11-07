@@ -6,7 +6,7 @@
 
 use df_types::{MemberId, OperationId};
 
-use crate::rotation::CredentialFence;
+use crate::rotation::{CredentialFence, RotationRefusal};
 
 /// Stable intent in the owner's account-command namespace, never identity proof.
 pub struct AccountOperation<'a, A: AccountAuthority> {
@@ -219,6 +219,8 @@ pub fn request_recovery<A: AccountAuthority>(
     authority: &mut A,
     lookup: &A::Lookup,
 ) -> RecoveryRequested {
+    // The result is ignored on purpose: the answer is the same whether or not the account exists
+    // or the source failed, so a caller cannot enumerate accounts.
     let _ = authority.request_challenge(lookup);
     RecoveryRequested
 }
@@ -274,7 +276,10 @@ pub fn recover_credentials<A: AccountAuthority>(
         record
             .credential
             .rotate(next)
-            .map_err(|_| AccountRefusal::CredentialRevoked)?;
+            .map_err(|refusal| match refusal {
+                RotationRefusal::Revoked => AccountRefusal::CredentialRevoked,
+                RotationRefusal::NonIncreasingGeneration => AccountRefusal::GenerationExhausted,
+            })?;
         *record.prior_bindings_active = false;
         *record.consumed = true;
         Ok(AccountReceipt::Recovered {

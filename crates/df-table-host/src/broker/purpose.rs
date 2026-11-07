@@ -20,13 +20,9 @@ use df_table::ports::PurposeName;
 use serde::{Deserialize, Serialize};
 
 use super::limits::{
-    BACKGROUND_DEADLINE_MS, INTERPRET_DEADLINE_MS, MAXIMUM_IMAGE_ANSWER_EDGE_PIXELS,
-    MAXIMUM_TEXT_ANSWER_CHARACTERS, TEXT_DEADLINE_MS,
+    DEFAULT_RETRY, MAXIMUM_IMAGE_ANSWER_EDGE_PIXELS, MAXIMUM_TEXT_ANSWER_CHARACTERS, SINGLE_RETRY,
+    image_deadline_ms, text_deadline_ms,
 };
-
-/// Transitional second path of `limits::IMAGE_DEADLINE_MS`, kept only while
-/// `scene_builder/purposes.rs` imports it from here; its last caller removes it.
-pub use super::limits::IMAGE_DEADLINE_MS;
 
 /// Whether a purpose goes to the text lane or the image lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -349,20 +345,6 @@ impl PurposeSpec {
     }
 }
 
-/// The retries of H.8: two, with a backoff that starts at half a second and stops at eight.
-const DEFAULT_RETRY: RetryPolicy = RetryPolicy {
-    maximum_retries: 2,
-    initial_backoff_ms: 500,
-    maximum_backoff_ms: 8_000,
-};
-/// A purpose whose result a person waits for at once gets no retry past the first: one retry
-/// would exceed its deadline (C.7: one retry, then buttons).
-const SINGLE_RETRY: RetryPolicy = RetryPolicy {
-    maximum_retries: 1,
-    initial_backoff_ms: 250,
-    maximum_backoff_ms: 2_000,
-};
-
 const TEXT_CHARACTERS: SizeRule = SizeRule::TextCharacters {
     maximum: MAXIMUM_TEXT_ANSWER_CHARACTERS,
 };
@@ -394,6 +376,8 @@ impl PurposeTable {
     /// The purposes H.5 lists as model calls, plus the plan's image purposes, each with the class
     /// of H.7 and the fallback of H.4.
     pub fn built_in() -> Result<Self, PurposeError> {
+        let text_deadline = text_deadline_ms();
+        let image_deadline = image_deadline_ms();
         let text = |deadline_ms, size, retry, class, fallback| PurposeFacts {
             kind: ResourceKind::Text,
             deadline_ms,
@@ -414,7 +398,7 @@ impl PurposeTable {
         };
         let live_text = |fallback| {
             text(
-                TEXT_DEADLINE_MS,
+                text_deadline,
                 TEXT_CHARACTERS,
                 DEFAULT_RETRY,
                 QueueClass::Live,
@@ -425,7 +409,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "interpret",
                 text(
-                    INTERPRET_DEADLINE_MS,
+                    text_deadline,
                     SHORT_TEXT_CHARACTERS,
                     SINGLE_RETRY,
                     QueueClass::Live,
@@ -443,7 +427,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "background",
                 image(
-                    BACKGROUND_DEADLINE_MS,
+                    image_deadline,
                     SCENE_PICTURE,
                     QueueClass::Live,
                     Fallback::EstablishingCard,
@@ -452,7 +436,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "plate",
                 image(
-                    IMAGE_DEADLINE_MS,
+                    image_deadline,
                     SCENE_PICTURE,
                     QueueClass::Plate,
                     Fallback::HoldLastPlate,
@@ -461,7 +445,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "lookahead_describe",
                 text(
-                    TEXT_DEADLINE_MS,
+                    text_deadline,
                     TEXT_CHARACTERS,
                     DEFAULT_RETRY,
                     QueueClass::Lookahead,
@@ -471,7 +455,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "lookahead_background",
                 image(
-                    IMAGE_DEADLINE_MS,
+                    image_deadline,
                     SCENE_PICTURE,
                     QueueClass::Lookahead,
                     Fallback::Nothing,
@@ -480,7 +464,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "portrait",
                 image(
-                    IMAGE_DEADLINE_MS,
+                    image_deadline,
                     PORTRAIT,
                     QueueClass::Background,
                     Fallback::TextInPlaceOfPicture,
@@ -489,7 +473,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "item_view",
                 image(
-                    IMAGE_DEADLINE_MS,
+                    image_deadline,
                     PORTRAIT,
                     QueueClass::Background,
                     Fallback::TextInPlaceOfPicture,

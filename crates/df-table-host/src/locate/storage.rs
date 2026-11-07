@@ -8,9 +8,10 @@ use df_playground::fixture::Fixture;
 use df_scene_layout::{SCHEMA_VERSION, SceneLayout};
 use serde::Deserialize;
 
-use super::request::{IoCause, LocateError};
+use super::request::LocateError;
 use super::validate::check_picture_name;
 use crate::blocking::WriteLock;
+use crate::io_cause::IoCause;
 use crate::media_library::media_directory;
 use crate::state::AppState;
 

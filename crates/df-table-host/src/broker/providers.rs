@@ -223,8 +223,8 @@ pub struct PumpReport {
 
 /// The stand-in for the worker that owns real provider tasks.
 ///
-/// It never heartbeats: a fake call finishes in well under a lease (`LEASE_MS`, 60 s). A real
-/// worker whose calls take longer (images take 120 to 240 s) must call `BrokerHub::heartbeat`
+/// It never heartbeats: a fake call finishes in well under a lease (`LEASE_MS`). A real
+/// worker whose calls take longer must call `BrokerHub::heartbeat`
 /// for each running attempt, or its calls fail as expired leases.
 pub struct FakeWorker {
     hub: Arc<BrokerHub>,

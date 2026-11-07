@@ -139,6 +139,8 @@ status: {}
 unavailable: {}
 grid: {}
 sam: {}
+tts: {}
+stt: {}
 zoom_limit: {}
 transition: {} {} ms
 scene: {scene}
@@ -148,6 +150,8 @@ fixtures: {listed}",
         controls.show_unavailable,
         controls.show_grid,
         controls.show_sam,
+        controls.tts_on,
+        controls.stt_on,
         controls.zoom_limit.key(),
         controls.transition.style.key(),
         controls.transition.duration_ms,

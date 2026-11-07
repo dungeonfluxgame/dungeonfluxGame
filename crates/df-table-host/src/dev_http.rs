@@ -66,8 +66,8 @@ impl BodyCause {
     }
 }
 
-/// A request body that is not the JSON the route reads. It is a wire value, so a route error can
-/// carry it whole (`InvalidBody(BodyError)`) and the CLI can match its `cause`.
+/// A request body (or stored file) that is not the JSON the reader reads. It is a wire value, so a
+/// route error can carry it whole (`InvalidBody(BodyError)`) and the CLI can match its `cause`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BodyError {

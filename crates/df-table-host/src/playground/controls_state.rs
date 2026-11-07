@@ -20,6 +20,7 @@ use df_playground::media::ClientReport;
 use df_playground::overlay::Edit;
 use df_playground::scene::{SceneChange, SceneError, SceneOverlay};
 use df_table::ports::Clock;
+use df_types::saturating_millis;
 
 use super::clients::ClientTable;
 use super::files::PlaygroundFiles;
@@ -183,7 +184,7 @@ impl Default for RunClock {
 
 impl Clock for RunClock {
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        saturating_millis(self.started.elapsed())
     }
 }
 

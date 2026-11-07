@@ -41,6 +41,7 @@ pub mod environment;
 pub mod event_log;
 pub mod guard;
 pub mod imagegen;
+pub mod io_cause;
 pub mod kind_files;
 pub mod limits;
 pub mod locate;

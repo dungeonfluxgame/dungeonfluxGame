@@ -31,6 +31,7 @@ use df_table::ports::{
     Preparation, Resolution, Resolved, Resumption, RulesOwner, RulingRequest,
 };
 use df_table::private_data::{Narration, PlayerText, Secret};
+use df_types::saturating_millis;
 
 use crate::broker::providers::{FakeProvider, FakeWorker};
 use crate::broker::request::WorkerId;
@@ -54,7 +55,7 @@ struct ClockState {
 
 impl ClockState {
     fn running_ms(&self) -> u64 {
-        let elapsed = u64::try_from(self.base.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let elapsed = saturating_millis(self.base.elapsed());
         self.base_ms.saturating_add(elapsed)
     }
 }

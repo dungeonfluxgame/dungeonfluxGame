@@ -42,7 +42,7 @@ impl fmt::Debug for TerminalActor {
 }
 #[derive(Clone, PartialEq)]
 // Public cross-crate enum built by df-persistence; boxing a variant would break that API.
-#[allow(clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant, reason = "df-persistence builds it")]
 pub enum TerminalAuthority {
     Claim(StageClaim),
     Recovery(RecoveryLease),

@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use df_table::config::{ConfigError, Settings};
 use df_table::ports::Clock;
+use df_types::saturating_millis;
 
 use crate::adapters::{RulesBackend, story_ports};
 use crate::engine::EngineHandle as Handle;
@@ -131,7 +132,7 @@ impl CommitStore for HarnessStore {
             }
             _ => {}
         }
-        let took_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let took_ms = saturating_millis(started.elapsed());
         if took_ms > deadline_ms {
             return Err(CommitError::DeadlineExceeded { deadline_ms });
         }

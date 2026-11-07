@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use df_playground::scene::{SceneChange, Target};
+use df_types::saturating_millis;
 
 use super::clips::{Clip, clips, store_clip};
 use super::limits::{
@@ -28,8 +29,8 @@ use super::provider::{
     ElevenLabsPort, PortStatus, STT_MODEL, SpeechPort, SynthesisCall, TTS_MODEL, TranscriptionCall,
 };
 use super::request::{
-    ClipPlayed, MissingSetting, QueryCause, SpeakRequest, SpeechError, SpeechStatus, Transcript,
-    Voiced, current_limits,
+    ClipPlayed, MissingSetting, QueryCause, SpeakRequest, SpeechError, SpeechFeature, SpeechStatus,
+    Transcript, Voiced, current_limits,
 };
 use super::voices::{ResolvedVoice, VoiceBook, check_character, voices_path};
 use crate::blocking::run_blocking;
@@ -38,11 +39,6 @@ use crate::persona::summaries_of;
 use crate::playground::apply_scene_changes;
 use crate::shown_scene::shown_cast;
 use crate::state::AppState;
-
-/// Whole milliseconds of `started` to now, as an audit line carries them.
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
 
 /// The host, and the supplier its speech is asked of.
 #[derive(Clone)]
@@ -77,6 +73,25 @@ impl SpeechVerb {
 impl Speech {
     pub fn new(app: Arc<AppState>, port: Arc<dyn SpeechPort>) -> Self {
         Self { app, port }
+    }
+
+    /// Whether the playground has `feature` turned on (`playground set tts=..` or `stt=..`).
+    pub fn is_on(&self, feature: SpeechFeature) -> bool {
+        let controls = self.app.playground().snapshot().controls;
+        match feature {
+            SpeechFeature::Tts => controls.tts_on,
+            SpeechFeature::Stt => controls.stt_on,
+        }
+    }
+
+    // TODO(DEV-12): a host test that `speak` and `transcribe` are refused with their switch off.
+    /// Refuses a call of a feature that is turned off.
+    fn require_on(&self, feature: SpeechFeature) -> Result<(), SpeechError> {
+        if self.is_on(feature) {
+            Ok(())
+        } else {
+            Err(SpeechError::Disabled { feature })
+        }
     }
 
     /// The speech service over the supplier this process's environment asks for.
@@ -165,6 +180,7 @@ impl Speech {
         pcm: Vec<u8>,
         terms: Vec<String>,
     ) -> Result<Transcript, SpeechError> {
+        self.require_on(SpeechFeature::Stt)?;
         let audio_ms = check_audio(&pcm)?;
         if let Some(cause) = terms.iter().find_map(|term| key_term_problem(term)) {
             return Err(SpeechError::InvalidQuery { cause });
@@ -186,7 +202,7 @@ impl Speech {
             .port
             .transcribe(TranscriptionCall { pcm, key_terms })
             .await;
-        let duration_ms = elapsed_ms(started);
+        let duration_ms = saturating_millis(started.elapsed());
         match heard {
             Ok(heard) => {
                 self.app.record_line(format!(
@@ -239,7 +255,7 @@ impl Speech {
                 voice: resolved.id,
             })
             .await;
-        let synthesis_ms = elapsed_ms(started);
+        let synthesis_ms = saturating_millis(started.elapsed());
         let made =
             made.inspect_err(|error| self.record_failure(SpeechVerb::Speak, error, synthesis_ms))?;
         let clip = store_clip(&self.app, &made.mp3).await?;
@@ -257,7 +273,11 @@ impl Speech {
     /// Voices a line `character` says and answers what came of it. A failure is the answer, not
     /// an error: a line is never blocked by its voice.
     pub(crate) async fn voice_line(&self, character: &str, line: &str) -> Voiced {
-        match self.synthesize(line, Some(character), None).await {
+        let voiced = match self.require_on(SpeechFeature::Tts) {
+            Ok(()) => self.synthesize(line, Some(character), None).await,
+            Err(error) => Err(error),
+        };
+        match voiced {
             Ok(made) => Voiced::Played {
                 clip: made.clip.name,
                 bytes: made.clip.bytes,
@@ -276,6 +296,7 @@ impl Speech {
 
     /// Voices the operator's text and cues the clip on the scene, as `scene sound` does.
     pub(super) async fn speak(&self, request: SpeakRequest) -> Result<ClipPlayed, SpeechError> {
+        self.require_on(SpeechFeature::Tts)?;
         let made = self
             .synthesize(
                 &request.text,

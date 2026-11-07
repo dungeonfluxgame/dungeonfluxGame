@@ -8,7 +8,9 @@ use df_playground::timeline::{
     TimelineQuery, TimelineRecord, ViewportPx,
 };
 
-use super::ClientTable;
+use std::collections::VecDeque;
+
+use super::{ClientTable, entry_of, push_entry};
 use crate::limits::{FORGET_CLIENT_AFTER, MAXIMUM_CLIENTS};
 
 fn report() -> ClientReport {
@@ -336,9 +338,9 @@ fn a_silent_page_is_gone_and_a_page_past_the_maximum_evicts_the_oldest() {
 }
 
 #[test]
-fn the_timeline_reads_by_kind_and_after_a_sequence_and_is_bounded() {
+fn the_timeline_reads_by_kind_and_after_a_sequence() {
     let (table, _) = heard();
-    let records = (1..=MAXIMUM_KEPT_TIMELINE_RECORDS as u64 + 3)
+    let records = (1..=10)
         .map(|seq| {
             let kind = if seq % 2 == 0 {
                 TimelineKind::Figure
@@ -348,24 +350,21 @@ fn the_timeline_reads_by_kind_and_after_a_sequence_and_is_bounded() {
             record(seq, kind, "a.png", seq)
         })
         .collect::<Vec<_>>();
-    for chunk in records.chunks(df_playground::limits::MAXIMUM_TIMELINE_RECORDS) {
-        let report = ClientReport {
-            timeline: chunk.to_vec(),
-            ..report()
-        };
-        table.record("page-1".to_owned(), report, 2_000);
-    }
+    let report = ClientReport {
+        timeline: records,
+        ..report()
+    };
+    table.record("page-1".to_owned(), report, 2_000);
     let all = table
         .timeline("page-1", TimelineQuery::default())
         .expect("open");
-    assert_eq!(all.entries.len(), MAXIMUM_KEPT_TIMELINE_RECORDS);
-    assert_eq!(all.entries[0].seq, 4, "the oldest go first");
+    assert_eq!(all.entries.len(), 10);
     let plates = table
         .timeline(
             "page-1",
             TimelineQuery {
                 kind: Some(TimelineKind::Plate),
-                after: Some(MAXIMUM_KEPT_TIMELINE_RECORDS as u64),
+                after: Some(7),
             },
         )
         .expect("open");
@@ -375,6 +374,21 @@ fn the_timeline_reads_by_kind_and_after_a_sequence_and_is_bounded() {
             .iter()
             .all(|entry| entry.kind == TimelineKind::Plate)
     );
-    assert_eq!(plates.entries.len(), 2);
+    assert_eq!(plates.entries.len(), 1);
     assert!(table.timeline("page-2", TimelineQuery::default()).is_none());
+}
+
+#[test]
+fn the_kept_timeline_is_bounded_and_the_oldest_go_first() {
+    // Each record a report adds looks for the entry it updates, so the bound is tested on the
+    // push itself: filling the kept timeline through reports is quadratic.
+    let mut timeline = VecDeque::new();
+    for seq in 1..=MAXIMUM_KEPT_TIMELINE_RECORDS as u64 + 3 {
+        push_entry(
+            &mut timeline,
+            entry_of(record(seq, TimelineKind::Figure, "a.png", seq), 0, None),
+        );
+    }
+    assert_eq!(timeline.len(), MAXIMUM_KEPT_TIMELINE_RECORDS);
+    assert_eq!(timeline[0].seq, 4);
 }

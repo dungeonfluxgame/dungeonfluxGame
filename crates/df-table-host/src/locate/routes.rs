@@ -20,6 +20,7 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::response::Response;
 use axum::routing::{get, post};
+use df_types::saturating_millis;
 use tokio::time::Instant;
 
 use super::request::{
@@ -457,7 +458,7 @@ async fn identify_characters(
     .await
     .map_err(|error| failure.record(app, LocateStageError::at(LocateStage::Store)(error)))?;
     record_stage(app, &picture, LocateStage::Store, storing);
-    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let duration_ms = saturating_millis(started.elapsed());
     let profile = text.identity_profile().as_str().to_owned();
     app.record_line(format!(
         concat!(

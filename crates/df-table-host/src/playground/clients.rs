@@ -26,6 +26,7 @@ use df_playground::timeline::{
     ClientError, ClientTimeline, TimelineDetail, TimelineEntry, TimelineKind, TimelineQuery,
     TimelineRecord,
 };
+use df_types::saturating_millis;
 
 pub use self::request::{ClientTimelineReply, ClientsError};
 pub(super) use self::routes::{clients_json, receive_report, timeline_json};
@@ -158,7 +159,7 @@ pub struct ClientTable {
 }
 
 fn forget_after_ms() -> u64 {
-    u64::try_from(FORGET_CLIENT_AFTER.as_millis()).unwrap_or(u64::MAX)
+    saturating_millis(FORGET_CLIENT_AFTER)
 }
 
 /// A page millisecond on the playground's clock, by the offset of the report that carried it.

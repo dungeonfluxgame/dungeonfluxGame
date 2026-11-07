@@ -20,7 +20,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-const FIXTURE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longer than the SQLite busy timeout, so a commit blocked by a held lock fails before a wait.
+const FIXTURE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAXIMUM_OUTPUT_BYTES: usize = 8192;
 const READY_MARKER: &[u8] = b"durability-ready\n";
 const DURABILITY_CASES: [&str; 6] = [

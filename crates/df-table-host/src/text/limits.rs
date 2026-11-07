@@ -10,7 +10,7 @@ pub const TEXT_DEADLINE: Duration = Duration::from_secs(600);
 /// cache of routes is bounded; more is a typed refusal.
 pub const MAXIMUM_MODEL_ROUTES: usize = 1_000;
 /// The most output kept from a Codex child's standard output or standard error, in bytes.
-pub const MAXIMUM_CODEX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+pub const MAXIMUM_CODEX_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
 /// The most tokens one Responses answer may use, reasoning included (the request's
 /// `max_output_tokens`).
 pub const MAXIMUM_RESPONSES_OUTPUT_TOKENS: u32 = 32_000;

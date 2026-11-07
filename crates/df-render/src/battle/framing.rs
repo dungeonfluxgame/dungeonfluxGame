@@ -262,7 +262,7 @@ pub fn action_shot(
 
 /// As [`action_shot`], keeping the camera within [`MAX_HOME_DEVIATION_DEG`] of `home_yaw` (the
 /// scene's tactical heading) when given.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
 pub fn action_shot_from(
     style: &CameraPose,
     current: &CameraPose,
@@ -279,7 +279,7 @@ pub fn action_shot_from(
 }
 
 /// As [`action_shot_from`], fitting the view after the requested dolly is applied.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
 pub(super) fn action_shot_from_with_dolly(
     style: &CameraPose,
     current: &CameraPose,
@@ -294,12 +294,12 @@ pub(super) fn action_shot_from_with_dolly(
     action_shot_from_inner(
         style, current, actor, target, also, bystanders, aspect, home_yaw, None, dolly,
     )
-    .expect("unfiltered action candidates always include a pose")
+    .expect("without an occupancy filter every candidate is accepted, so a pose is chosen")
 }
 
 /// As [`action_shot_from`], rejecting poses whose view of either fighter crosses occupied scene
 /// geometry. Returns `None` when no framed, clear pose can be found.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
 pub fn action_shot_from_occupancy(
     style: &CameraPose,
     current: &CameraPose,
@@ -317,7 +317,7 @@ pub fn action_shot_from_occupancy(
 }
 
 /// As [`action_shot_from_occupancy`], fitting and checking the pose after `dolly` is applied.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
 pub(super) fn action_shot_from_occupancy_with_dolly(
     style: &CameraPose,
     current: &CameraPose,
@@ -344,7 +344,7 @@ pub(super) fn action_shot_from_occupancy_with_dolly(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "independent poses and options")]
 fn action_shot_from_inner(
     style: &CameraPose,
     current: &CameraPose,

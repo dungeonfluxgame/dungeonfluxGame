@@ -329,7 +329,7 @@ pub enum OperationSlot {
 }
 
 // One message per user or network event, moved once into `Model::update`; see `Reply`.
-#[allow(clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant, reason = "one message per event")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Msg {
     /// The page loaded at this location; the viewer's zone is this many minutes east of UTC.
@@ -405,7 +405,7 @@ pub enum Effect {
 
 // One screen at a time in the model; boxing each screen would ripple through all state
 // handling for no runtime benefit.
-#[allow(clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant, reason = "one screen at a time")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Screen {
     Integration(Box<IntegrationScreen>),

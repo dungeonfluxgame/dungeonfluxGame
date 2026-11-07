@@ -6,7 +6,7 @@ use crate::TombstoneReason;
 use crate::audience::Audience;
 use crate::catalog_delivery::{
     DeliveryBudget, DraftDeliveryError, DraftDeliveryLimits, DraftDeliveryRequest,
-    DraftImageCandidate, DraftImageVariant, deliver_draft_image,
+    DraftImageCandidate, DraftImageVariant, SnapshotCause, deliver_draft_image,
 };
 use crate::catalog_record::{
     AssetKind, DedupeScope, Provenance, RetentionClass, StagedObjectRecord, Step,
@@ -1094,4 +1094,14 @@ fn retained_chunk_holds_its_permit_until_drop() {
     ))
     .unwrap();
     assert_eq!(candidate.bytes(), draft.display.as_slice());
+}
+
+#[test]
+fn a_snapshot_fault_is_an_outage_and_not_a_concealed_denial() {
+    for cause in SnapshotCause::ALL {
+        assert!(!DraftDeliveryError::Snapshot(cause).concealed());
+    }
+    assert!(DraftDeliveryError::NotFound.concealed());
+    let keys = SnapshotCause::ALL.map(SnapshotCause::key);
+    assert_eq!(keys, ["query", "column", "range", "clock"]);
 }

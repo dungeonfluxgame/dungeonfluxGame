@@ -88,7 +88,7 @@ const CONTRACT: &[(&str, &str, &str, &str, &str)] = &[
         "BrowserBuffer/UploadLease/BufferSnapshot/BrowserLog",
         "one page/binding generation",
         "retain_log/upload_records/acknowledge_durable local seam",
-        "128 records/256KiB;32/64KiB prefix;10s; owner/generation/attempt/prefix fences",
+        "100000 records/64MiB;32/64KiB prefix;60s; owner/generation/attempt/prefix fences",
     ),
     (
         "normal/failure/rights/privacy/recovery",

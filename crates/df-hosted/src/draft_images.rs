@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use df_assets::{
     ALLOWED_IMAGE_MIMES, AssetId, CatalogStore, Deadline, DeliveryBasis, DeliveryBudget,
     DraftDeliveryError, DraftDeliveryLimits, DraftDeliveryRequest, DraftImageCandidate,
-    DraftImageVariant, ObjectStore, deliver_draft_image,
+    DraftImageVariant, ObjectStore, SnapshotCause, deliver_draft_image,
 };
 use df_auth::web_session_policy::{SessionCheck, StoredSession, check_session};
 use df_customer::{AccountStatus, AccountStore, CustomerService, EmailSender};
@@ -124,16 +124,21 @@ impl<C: CatalogStore + 'static, O: ObjectStore + 'static> DraftImageAdapter<C, O
         let row = tokio::time::timeout(remaining, snapshot)
             .await
             .map_err(|_| DraftDeliveryError::DeadlineExceeded)?
-            .map_err(|_| DraftDeliveryError::Unavailable)?;
+            .map_err(query_failed)?;
         if deadline.has_passed() {
             return Err(DraftDeliveryError::DeadlineExceeded);
         }
         let now_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|_| DraftDeliveryError::Unavailable)
+            .map_err(|_: std::time::SystemTimeError| {
+                DraftDeliveryError::Snapshot(SnapshotCause::Clock)
+            })
             .and_then(|elapsed| {
-                u64::try_from(elapsed.as_millis().min(u128::from(u64::MAX)))
-                    .map_err(|_| DraftDeliveryError::Unavailable)
+                u64::try_from(elapsed.as_millis().min(u128::from(u64::MAX))).map_err(
+                    |_: std::num::TryFromIntError| {
+                        DraftDeliveryError::Snapshot(SnapshotCause::Clock)
+                    },
+                )
             })?;
         let Some(row) = row else {
             return Err(DraftDeliveryError::NotFound);
@@ -143,7 +148,30 @@ impl<C: CatalogStore + 'static, O: ObjectStore + 'static> DraftImageAdapter<C, O
 }
 
 fn as_u64(value: i64) -> Result<u64, DraftDeliveryError> {
-    u64::try_from(value).map_err(|_| DraftDeliveryError::NotFound)
+    u64::try_from(value)
+        .map_err(|_: std::num::TryFromIntError| DraftDeliveryError::Snapshot(SnapshotCause::Range))
+}
+
+/// A statement or connection failure: an outage, reported with its SQLSTATE and never as a denial.
+fn query_failed(error: tokio_postgres::Error) -> DraftDeliveryError {
+    snapshot_failed(SnapshotCause::Query, &error)
+}
+
+/// A column that is missing or has the wrong type: a schema fault, never "no such draft".
+fn column_failed(error: tokio_postgres::Error) -> DraftDeliveryError {
+    snapshot_failed(SnapshotCause::Column, &error)
+}
+
+fn snapshot_failed(cause: SnapshotCause, error: &tokio_postgres::Error) -> DraftDeliveryError {
+    df_observe::record_audit_line(
+        "hosted.draft_snapshot_failed",
+        format!(
+            "HOSTED draft_snapshot_failed cause={} sqlstate={}",
+            cause.key(),
+            error.code().map_or("none", |code| code.code())
+        ),
+    );
+    DraftDeliveryError::Snapshot(cause)
 }
 
 fn check_snapshot(
@@ -153,45 +181,43 @@ fn check_snapshot(
     sessions: df_auth::web_session_policy::SessionLifetimes,
     now_ms: u64,
 ) -> Result<(), DraftDeliveryError> {
-    let row_account: Vec<u8> = row.try_get(5).map_err(|_| DraftDeliveryError::NotFound)?;
+    let row_account: Vec<u8> = row.try_get(5).map_err(column_failed)?;
     if row_account.as_slice() != owner.as_bytes() {
         return Err(DraftDeliveryError::NotFound);
     }
-    let status: String = row.try_get(6).map_err(|_| DraftDeliveryError::NotFound)?;
+    let status: String = row.try_get(6).map_err(column_failed)?;
     if AccountStatus::parse(&status) != Some(AccountStatus::Active) {
         return Err(DraftDeliveryError::NotFound);
     }
     let stored = StoredSession {
-        created_at_ms: as_u64(row.try_get(1).map_err(|_| DraftDeliveryError::NotFound)?)?,
-        last_seen_at_ms: as_u64(row.try_get(2).map_err(|_| DraftDeliveryError::NotFound)?)?,
+        created_at_ms: as_u64(row.try_get(1).map_err(column_failed)?)?,
+        last_seen_at_ms: as_u64(row.try_get(2).map_err(column_failed)?)?,
         is_revoked: row
             .try_get::<_, Option<i64>>(3)
-            .map_err(|_| DraftDeliveryError::NotFound)?
+            .map_err(column_failed)?
             .is_some(),
-        credential_generation: as_u64(row.try_get(0).map_err(|_| DraftDeliveryError::NotFound)?)?,
+        credential_generation: as_u64(row.try_get(0).map_err(column_failed)?)?,
     };
-    let current_generation: u64 =
-        as_u64(row.try_get(7).map_err(|_| DraftDeliveryError::NotFound)?)?;
+    let current_generation: u64 = as_u64(row.try_get(7).map_err(column_failed)?)?;
     if !matches!(
         check_session(stored, current_generation, sessions, now_ms),
         SessionCheck::Active { .. }
     ) {
         return Err(DraftDeliveryError::NotFound);
     }
-    let absolute_expires_ms: u64 =
-        as_u64(row.try_get(4).map_err(|_| DraftDeliveryError::NotFound)?)?;
+    let absolute_expires_ms: u64 = as_u64(row.try_get(4).map_err(column_failed)?)?;
     if absolute_expires_ms <= now_ms {
         return Err(DraftDeliveryError::NotFound);
     }
     let text = |index: usize| -> Result<String, DraftDeliveryError> {
-        row.try_get(index).map_err(|_| DraftDeliveryError::NotFound)
+        row.try_get(index).map_err(column_failed)
     };
     if text(8)? != "ready"
         || text(9)? != "image"
         || text(10)? != "generated"
         || row
             .try_get::<_, Option<Vec<u8>>>(11)
-            .map_err(|_| DraftDeliveryError::NotFound)?
+            .map_err(column_failed)?
             .is_some()
     {
         return Err(DraftDeliveryError::NotFound);
@@ -199,27 +225,26 @@ fn check_snapshot(
     if text(12)? != "account" {
         return Err(DraftDeliveryError::NotFound);
     }
-    let scope: Vec<u8> = row.try_get(13).map_err(|_| DraftDeliveryError::NotFound)?;
+    let scope: Vec<u8> = row.try_get(13).map_err(column_failed)?;
     if scope.as_slice() != owner.as_bytes() {
         return Err(DraftDeliveryError::NotFound);
     }
-    let origin: Option<Vec<u8>> = row.try_get(14).map_err(|_| DraftDeliveryError::NotFound)?;
+    let origin: Option<Vec<u8>> = row.try_get(14).map_err(column_failed)?;
     if origin.as_deref() != Some(owner.as_bytes().as_slice()) {
         return Err(DraftDeliveryError::NotFound);
     }
     if text(15)? != "owner_private" {
         return Err(DraftDeliveryError::NotFound);
     }
-    let audience: Option<Vec<u8>> = row.try_get(16).map_err(|_| DraftDeliveryError::NotFound)?;
+    let audience: Option<Vec<u8>> = row.try_get(16).map_err(column_failed)?;
     if audience.as_deref() != Some(owner.as_bytes().as_slice()) {
         return Err(DraftDeliveryError::NotFound);
     }
-    let attempt: Vec<u8> = row.try_get(17).map_err(|_| DraftDeliveryError::NotFound)?;
+    let attempt: Vec<u8> = row.try_get(17).map_err(column_failed)?;
     if attempt.as_slice() != basis.attempt().as_bytes() {
         return Err(DraftDeliveryError::NotFound);
     }
-    let winners: Option<Vec<Vec<u8>>> =
-        row.try_get(18).map_err(|_| DraftDeliveryError::NotFound)?;
+    let winners: Option<Vec<Vec<u8>>> = row.try_get(18).map_err(column_failed)?;
     if !winners
         .unwrap_or_default()
         .iter()
@@ -227,7 +252,7 @@ fn check_snapshot(
     {
         return Err(DraftDeliveryError::NotFound);
     }
-    let mime: Option<String> = row.try_get(19).map_err(|_| DraftDeliveryError::NotFound)?;
+    let mime: Option<String> = row.try_get(19).map_err(column_failed)?;
     if mime.as_deref() != Some(basis.mime()) {
         return Err(DraftDeliveryError::NotFound);
     }
@@ -237,33 +262,29 @@ fn check_snapshot(
     {
         return Err(DraftDeliveryError::NotFound);
     }
-    let aggregate_len: Option<i64> = row.try_get(20).map_err(|_| DraftDeliveryError::NotFound)?;
+    let aggregate_len: Option<i64> = row.try_get(20).map_err(column_failed)?;
     if aggregate_len != i64::try_from(basis.published_byte_len()).ok() {
         return Err(DraftDeliveryError::NotFound);
     }
-    let aggregate_digest: Option<Vec<u8>> =
-        row.try_get(21).map_err(|_| DraftDeliveryError::NotFound)?;
+    let aggregate_digest: Option<Vec<u8>> = row.try_get(21).map_err(column_failed)?;
     if aggregate_digest.as_deref() != Some(basis.published_digest().as_slice()) {
         return Err(DraftDeliveryError::NotFound);
     }
-    if as_u64(row.try_get(22).map_err(|_| DraftDeliveryError::NotFound)?)?
-        != basis.suppression_generation()
-    {
+    if as_u64(row.try_get(22).map_err(column_failed)?)? != basis.suppression_generation() {
         return Err(DraftDeliveryError::NotFound);
     }
     if text(23)? != "written" || text(24)? != "private_media" {
         return Err(DraftDeliveryError::NotFound);
     }
-    let version: Option<String> = row.try_get(25).map_err(|_| DraftDeliveryError::NotFound)?;
+    let version: Option<String> = row.try_get(25).map_err(column_failed)?;
     if version.as_deref() != Some(basis.version()) {
         return Err(DraftDeliveryError::NotFound);
     }
-    let stored_len: Option<i64> = row.try_get(26).map_err(|_| DraftDeliveryError::NotFound)?;
+    let stored_len: Option<i64> = row.try_get(26).map_err(column_failed)?;
     if stored_len != i64::try_from(basis.byte_len()).ok() {
         return Err(DraftDeliveryError::NotFound);
     }
-    let stored_digest: Option<Vec<u8>> =
-        row.try_get(27).map_err(|_| DraftDeliveryError::NotFound)?;
+    let stored_digest: Option<Vec<u8>> = row.try_get(27).map_err(column_failed)?;
     if stored_digest.as_deref() != Some(basis.digest().as_slice()) {
         return Err(DraftDeliveryError::NotFound);
     }
@@ -323,11 +344,8 @@ pub(crate) async fn check_disclosure_reader(
          OR has_column_privilege(current_user, 'accounts.web_session', 'token_digest', 'SELECT') \
          OR has_column_privilege(current_user, 'accounts.web_session', 'csrf_secret', 'SELECT') \
          FROM pg_roles r WHERE r.rolname = current_user", &[],
-    ).await.map_err(|_| DraftDeliveryError::Unavailable)?;
-    if row
-        .try_get::<_, bool>(0)
-        .map_err(|_| DraftDeliveryError::Unavailable)?
-    {
+    ).await.map_err(query_failed)?;
+    if row.try_get::<_, bool>(0).map_err(column_failed)? {
         return Err(DraftDeliveryError::Unavailable);
     }
     let absent: &[u8] = &[];
@@ -338,7 +356,7 @@ pub(crate) async fn check_disclosure_reader(
             &[&absent, &absent, &"display", &absent, &absent],
         )
         .await
-        .map_err(|_| DraftDeliveryError::Unavailable)?;
+        .map_err(query_failed)?;
     Ok(())
 }
 

@@ -30,7 +30,7 @@ pub const MAXIMUM_VOICE_ID_BYTES: usize = 128;
 /// The variable that sets how many voice clips the host keeps, for dev work that wants more.
 pub const KEPT_CLIPS_VARIABLE: &str = "DF_SPEECH_KEPT_CLIPS";
 /// Most voice clips the host keeps in the media library by default; the oldest it made go first.
-pub const MAXIMUM_KEPT_CLIPS: usize = 500;
+pub const MAXIMUM_KEPT_CLIPS: usize = 100_000;
 
 /// How many voice clips the host keeps: `DF_SPEECH_KEPT_CLIPS` when a number, else the default.
 pub fn kept_clips() -> usize {
@@ -41,7 +41,7 @@ pub fn kept_clips() -> usize {
 /// Most characters with a voice of their own in the voices file.
 pub const MAXIMUM_VOICES: usize = 100_000;
 /// Largest voices file read, in bytes.
-pub const MAXIMUM_VOICES_FILE_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAXIMUM_VOICES_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// How long one speech call may take from admission to its answer.
 pub const SPEECH_DEADLINE: Duration = Duration::from_secs(5 * 60);

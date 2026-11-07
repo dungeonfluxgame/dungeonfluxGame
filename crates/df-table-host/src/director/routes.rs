@@ -32,6 +32,7 @@ use df_table::director::StageDirection;
 use df_table::director::reason::MINIMUM_ZOOM_PERCENT;
 use df_table::inspect::InspectAudience;
 use df_table::ports::Clock;
+use df_types::saturating_millis;
 use tokio::sync::Mutex as GateMutex;
 use tokio::time::Instant;
 
@@ -58,7 +59,7 @@ struct RuntimeClock {
 
 impl Clock for RuntimeClock {
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        saturating_millis(self.started.elapsed())
     }
 }
 
@@ -193,8 +194,7 @@ impl DirectorRoutes {
             match self.apply_one(direction).await {
                 Ok(reply) => {
                     *seen = CameraMark::of(&reply);
-                    let duration_ms =
-                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    let duration_ms = saturating_millis(started.elapsed());
                     self.app.record_line(applied_line(direction, duration_ms));
                 }
                 Err(error) => {

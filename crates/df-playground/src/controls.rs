@@ -135,8 +135,14 @@ pub struct Controls {
     pub show_unavailable: bool,
     pub show_grid: bool,
     /// Whether the backdrop's scanned layout (SAM regions and head points) is drawn over it.
-    #[serde(default = "shown_by_default")]
+    #[serde(default = "on_by_default")]
     pub show_sam: bool,
+    /// Whether the host voices lines (text to speech). Off, a line is shown and not spoken.
+    #[serde(default = "on_by_default")]
+    pub tts_on: bool,
+    /// Whether the host takes spoken questions (speech to text). Off, the microphone is off.
+    #[serde(default = "on_by_default")]
+    pub stt_on: bool,
     /// How the next change of scene is drawn.
     #[serde(default)]
     pub transition: Transition,
@@ -145,7 +151,7 @@ pub struct Controls {
     pub zoom_limit: ZoomLimit,
 }
 
-fn shown_by_default() -> bool {
+fn on_by_default() -> bool {
     true
 }
 
@@ -159,6 +165,8 @@ impl Default for Controls {
             show_unavailable: false,
             show_grid: false,
             show_sam: true,
+            tts_on: true,
+            stt_on: true,
             transition: Transition::default(),
             zoom_limit: ZoomLimit::default(),
         }
@@ -223,6 +231,10 @@ pub enum ControlsChange {
     ShowGrid(bool),
     /// Shows or hides the backdrop's scanned layout.
     ShowSam(bool),
+    /// Turns the voicing of lines on or off.
+    Tts(bool),
+    /// Turns the taking of spoken questions on or off.
+    Stt(bool),
     /// Sets how the next change of scene is drawn; the scene itself is not changed.
     TransitionStyle(TransitionStyle),
     /// Sets how long the next change of scene takes, up to `MAXIMUM_TRANSITION_MS`.
@@ -284,6 +296,8 @@ impl Controls {
             ControlsChange::ShowUnavailable(shown) => self.show_unavailable = shown,
             ControlsChange::ShowGrid(shown) => self.show_grid = shown,
             ControlsChange::ShowSam(shown) => self.show_sam = shown,
+            ControlsChange::Tts(on) => self.tts_on = on,
+            ControlsChange::Stt(on) => self.stt_on = on,
             ControlsChange::TransitionStyle(style) => self.transition.style = style,
             ControlsChange::TransitionMs(ms) => {
                 if ms > MAXIMUM_TRANSITION_MS {

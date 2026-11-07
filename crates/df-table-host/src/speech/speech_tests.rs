@@ -16,15 +16,15 @@ use super::fixtures::{FAKE_HEARD, FAKE_MP3, FakePort, speech_over};
 use super::limits::{AUDIO_CONTENT_TYPE, KEY_VARIABLES};
 use super::request::{
     ClipCause, ClipPlayed, ClipRow, ClipsCleared, MissingSetting, QueryCause, SpeechError,
-    SpeechErrorKind, SpeechProviderCause, SpeechReply, SpeechStatus, Transcript, VoiceCause,
-    VoiceChanged, VoicesCause,
+    SpeechErrorKind, SpeechFeature, SpeechProviderCause, SpeechReply, SpeechStatus, Transcript,
+    VoiceCause, VoiceChanged, VoicesCause,
 };
 use super::routes::{check_content_type, path, router_with};
 use super::voices::{VOICES_FILE, VoiceBook, VoiceSource, change_voice};
 use crate::client::{self, Response};
 use crate::command::{Command, CommandError, split_words};
 use crate::dev_http::{BodyCause, BodyError, DevReply, RouteError};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, start};
 use df_content::persona::PersonaError as ContentError;
@@ -700,6 +700,9 @@ fn every_error() -> Vec<SpeechError> {
         },
         SpeechError::Cue {
             cause: PlaygroundChangeError::InvalidBody(body_error()),
+        },
+        SpeechError::Disabled {
+            feature: SpeechFeature::Stt,
         },
         SpeechError::Stopped,
     ]

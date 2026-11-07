@@ -47,9 +47,10 @@ pub const CAPTURE_SAMPLE_RATE_HZ: u32 = 16_000;
 pub const MINIMUM_CAPTURE_MS: u64 = 100;
 /// Longest recording the speech-to-text adapter takes, in milliseconds (1,920,000 bytes of PCM).
 pub const MAXIMUM_CAPTURE_MS: u64 = 60_000;
-/// Most characters the question box takes (`planning/chat-pipeline.md` 8.6: what the text input
-/// holds).
-pub const MAXIMUM_QUESTION_CHARACTERS: usize = 800;
+/// Most characters the question box takes: the most one synthesis voices, the speech supplier
+/// adapter's contract (`df-table-host` speech `MAXIMUM_TEXT_CHARACTERS`), so a transcribed draft
+/// is never cut below what the supplier takes.
+pub const MAXIMUM_QUESTION_CHARACTERS: usize = 4096;
 
 // Very large caps. Each only keeps memory bounded by design.
 
@@ -63,7 +64,7 @@ pub const MAXIMUM_PARTY_MEMBERS: usize = 1_000;
 pub const MAXIMUM_CHOICES_PER_LIST: usize = 1_000;
 /// Most sound cues the host keeps for pages to collect; a page that was away longer misses the
 /// older ones.
-pub const MAXIMUM_CUES_KEPT: usize = 4_096;
+pub const MAXIMUM_CUES_KEPT: usize = 65_536;
 /// Longest a slide may take, in milliseconds (a day).
 pub const MAXIMUM_SLIDE_MS: u64 = 86_400_000;
 /// Longest a camera move may take, in milliseconds (a day).
@@ -84,13 +85,14 @@ pub const MAXIMUM_REPORTED_ERROR_CHARACTERS: usize = 8_192;
 /// Most pictures a client report lists.
 pub const MAXIMUM_REPORTED_IMAGES: usize = 10_000;
 /// Most a whole client report holds, in bytes of text: the bound that keeps a table of pages
-/// bounded by design, whatever the fields add up to.
-pub const MAXIMUM_REPORT_BYTES: usize = 1_048_576;
+/// bounded by design, whatever the fields add up to. It is also the largest report the host
+/// accepts (`MAXIMUM_CLIENTS` of them bound the client table, about 16 GiB).
+pub const MAXIMUM_REPORT_BYTES: usize = 16 * 1024 * 1024;
 /// Most timeline records a page holds before it has reported them, and so most a report carries;
 /// past it the oldest unreported go first.
-pub const MAXIMUM_TIMELINE_RECORDS: usize = 4_096;
+pub const MAXIMUM_TIMELINE_RECORDS: usize = 65_536;
 /// Most timeline records the host keeps of each page; past it the oldest go first.
-pub const MAXIMUM_KEPT_TIMELINE_RECORDS: usize = 16_384;
+pub const MAXIMUM_KEPT_TIMELINE_RECORDS: usize = 65_536;
 /// Longest id of a timeline record, and of each piece a draw record names, in characters. Ids are
 /// media names, figure ids, scene files and hashes, so this is the longest media name.
 pub const MAXIMUM_TIMELINE_ID_CHARACTERS: usize = MAXIMUM_MEDIA_NAME_BYTES;

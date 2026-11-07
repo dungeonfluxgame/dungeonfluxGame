@@ -102,7 +102,7 @@ pub enum SourceDenial {
 /// A native recheck closes only an actual current source refusal and revives no provider work.
 #[derive(Clone, Debug, Eq, PartialEq)]
 // Public cross-crate enum built by df-persistence; boxing a variant would break that API.
-#[allow(clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant, reason = "df-persistence builds it")]
 pub enum SourceClosure {
     Closed(NoDeliveryReceipt),
     PublicationAllowed,

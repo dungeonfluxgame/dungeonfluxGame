@@ -1,9 +1,10 @@
 use axum::http::StatusCode;
 
 use super::request::{
-    IdentityOutcome, IoCause, LocateError, QuestionCause, ScanCause, ScanPrompt, ScanSendState,
+    IdentityOutcome, LocateError, QuestionCause, ScanCause, ScanPrompt, ScanSendState,
 };
 use crate::dev_http::{BodyCause, BodyError, RouteError};
+use crate::io_cause::IoCause;
 use crate::text::TextServiceCause;
 
 fn every_error() -> Vec<LocateError> {

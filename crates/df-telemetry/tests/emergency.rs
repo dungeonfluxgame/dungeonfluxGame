@@ -18,7 +18,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-const WAIT: Duration = Duration::from_secs(5);
+/// Longer than the SQLite busy timeout, so a commit blocked by a held lock fails before a wait.
+const WAIT: Duration = Duration::from_secs(30);
 const PRIVATE_PAYLOAD: &str = "synthetic-private-payload-must-not-enter-emergency";
 
 /// The coordinator's preregistered namespace, or one fresh per run that child processes inherit.

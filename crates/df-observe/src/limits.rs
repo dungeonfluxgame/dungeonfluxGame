@@ -3,7 +3,9 @@ use std::time::Duration;
 
 // Per-record structure bounds of native capture. They keep caller input inside the ingress
 // decoder's field and depth budgets (df-telemetry `limits.rs`), so they are part of the wire
-// contract, not tunables.
+// contract, not tunables. The browser buffer, upload-lease and timing-buffer bounds below are
+// tunables: the buffer sizes are deliberately large for dev work (owner, 2026-11-06), while the
+// per-record, per-upload and per-batch sizes stay inside the 64 KiB bridge-batch contract.
 /// Most attributes on one log record, span or span link.
 pub(crate) const MAXIMUM_ATTRIBUTES: usize = 64;
 /// Most events on one completed span.
@@ -27,9 +29,9 @@ pub(crate) const MINIMUM_SQLITE_BYTES: u64 = 256 * 1024;
 pub(crate) const MAXIMUM_FIXTURE_SPANS: usize = 512;
 
 /// Records the browser buffer retains before refusing new ones.
-pub(crate) const MAXIMUM_BROWSER_RECORDS: usize = 128;
+pub(crate) const MAXIMUM_BROWSER_RECORDS: usize = 100_000;
 /// Encoded bytes the browser buffer retains across all records.
-pub(crate) const MAXIMUM_BROWSER_BYTES: usize = 256 * 1024;
+pub(crate) const MAXIMUM_BROWSER_BYTES: usize = 64 * 1024 * 1024;
 /// Largest encoded browser record.
 pub(crate) const MAXIMUM_BROWSER_RECORD_BYTES: usize = 8192;
 /// Longest browser event name or status; both come from static instrumentation.
@@ -39,10 +41,10 @@ pub(crate) const MAXIMUM_UPLOAD_RECORDS: usize = 32;
 /// Most encoded bytes one browser upload lease carries.
 pub(crate) const MAXIMUM_UPLOAD_BYTES: usize = 64 * 1024;
 /// How long a browser upload lease lasts; an expired lease's records stay retained.
-pub(crate) const UPLOAD_DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const UPLOAD_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Most timing events one page retains before refusing new ones.
-pub const MAXIMUM_TIMING_EVENTS: usize = 128;
+pub const MAXIMUM_TIMING_EVENTS: usize = 100_000;
 /// Most timing events in one upload batch.
 pub const MAXIMUM_TIMING_BATCH_EVENTS: usize = 32;
 /// Largest encoded timing upload batch: room for authenticated generated-RPC scope/identity

@@ -12,6 +12,7 @@ use axum::extract::{RawQuery, State};
 use axum::response::Response;
 use axum::routing::get;
 use df_imagery::oneshot_segment;
+use df_types::saturating_millis;
 
 use super::request::{
     ImageMode, ImagegenReport, LocateReport, ServicesError, ServicesReport, SpeechReport,
@@ -34,11 +35,6 @@ struct ServicesRoutes {
     text: Arc<TextRuntime>,
     generator: Arc<ImageGenerator>,
     speech: Speech,
-}
-
-/// A span in whole milliseconds, as reports carry it.
-fn whole_ms(duration: std::time::Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// A count as a report carries it.
@@ -106,7 +102,7 @@ impl ServicesRoutes {
                 } else {
                     ImageMode::Live
                 },
-                deadline_ms: whole_ms(generator.deadline()),
+                deadline_ms: saturating_millis(generator.deadline()),
                 provenance_dir_set: generator.provenance_directory_set(),
                 codex_home_set: generator.codex_home_set(),
                 running: count(generator.running()),
@@ -115,7 +111,7 @@ impl ServicesRoutes {
             locate: LocateReport {
                 model: oneshot_segment::DEFAULT_MODEL.to_owned(),
                 endpoint_host: endpoint_host(oneshot_segment::DEFAULT_ENDPOINT).to_owned(),
-                timeout_ms: whole_ms(SCAN_TIMEOUT),
+                timeout_ms: saturating_millis(SCAN_TIMEOUT),
                 // Read when asked, as a scan reads it when it starts; only its presence is shown.
                 key_present: crate::environment::first_text(&FAL_KEY_VARIABLES).is_some(),
                 min_confidence_permille: DEFAULT_MIN_CONFIDENCE_PERMILLE,

@@ -630,7 +630,7 @@ where
         result
     }
 
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, reason = "one ordered commit protocol")]
     fn commit_candidate_scoped(
         &mut self,
         operation: &R::Scope,

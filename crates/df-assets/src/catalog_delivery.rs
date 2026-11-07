@@ -367,6 +367,37 @@ pub enum DraftDeliveryError {
     Busy,
     /// The operation deadline passed before disclosure.
     DeadlineExceeded,
+    /// The authority snapshot could not be read or decoded: an outage or schema fault, never a
+    /// denial, so it is reported as 503 and not concealed as "no such draft".
+    Snapshot(SnapshotCause),
+}
+
+/// Why the disclosure authority snapshot could not be read or decoded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotCause {
+    /// The snapshot statement failed or the connection dropped.
+    Query,
+    /// A column was missing or had an unexpected type.
+    Column,
+    /// A stored integer was negative where an unsigned value is required.
+    Range,
+    /// The system clock was unreadable.
+    Clock,
+}
+
+impl SnapshotCause {
+    /// Every cause, in declaration order.
+    pub const ALL: [Self; 4] = [Self::Query, Self::Column, Self::Range, Self::Clock];
+
+    /// The stable lowercase name used in audit lines.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::Column => "column",
+            Self::Range => "range",
+            Self::Clock => "clock",
+        }
+    }
 }
 
 impl DraftDeliveryError {

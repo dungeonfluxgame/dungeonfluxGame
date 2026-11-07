@@ -301,7 +301,7 @@ impl BflExecutor {
         check_model_slug(&config.model_route)?;
         let http = NativeHttp::new(
             df_providers::ProviderLimits::new(
-                total_timeout.min(super::HTTP_TIMEOUT_CEILING),
+                total_timeout.min(df_providers::MAXIMUM_EXCHANGE_TIME),
                 64 * 1024,
                 64 * 1024,
             )

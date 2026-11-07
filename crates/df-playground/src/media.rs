@@ -240,24 +240,31 @@ impl ClientReport {
             let excess = self.timeline.len() - MAXIMUM_TIMELINE_RECORDS;
             self.timeline.drain(..excess);
         }
-        self.timeline = self
-            .timeline
+        let mut timeline: Vec<TimelineRecord> = std::mem::take(&mut self.timeline)
             .into_iter()
             .map(TimelineRecord::bounded)
             .collect();
-        while self.held_bytes() > MAXIMUM_REPORT_BYTES {
+        let timeline_bytes: usize = timeline.iter().map(TimelineRecord::held_bytes).sum();
+        while self.held_bytes() + timeline_bytes > MAXIMUM_REPORT_BYTES {
             if !self.errors.is_empty() {
                 self.errors.remove(0);
                 continue;
             }
-            if self.images_shown.pop().is_some() {
-                continue;
-            }
-            if self.timeline.is_empty() {
+            if self.images_shown.pop().is_none() {
                 break;
             }
-            self.timeline.remove(0);
         }
+        let mut excess = (self.held_bytes() + timeline_bytes).saturating_sub(MAXIMUM_REPORT_BYTES);
+        let oldest = timeline
+            .iter()
+            .take_while(|record| {
+                let more = excess > 0;
+                excess = excess.saturating_sub(record.held_bytes());
+                more
+            })
+            .count();
+        timeline.drain(..oldest);
+        self.timeline = timeline;
         self
     }
 }

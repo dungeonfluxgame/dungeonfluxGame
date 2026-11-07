@@ -34,10 +34,20 @@ pub const MAXIMUM_BATCH_INPUTS: usize = usize::MAX;
 /// commit after this long. Deliberately large (five seconds), so a burst is one commit and not
 /// several; to be tuned from measurement (S1 decision, owner 2026-11-02).
 pub const BATCH_TIME_SLICE_MS: u64 = 5_000;
+/// The variable that sets the batch time slice, in whole milliseconds, for dev work.
+pub const BATCH_TIME_SLICE_VARIABLE: &str = "DF_ENGINE_BATCH_SLICE_MS";
+
+/// The time slice that cuts a batch: `DF_ENGINE_BATCH_SLICE_MS` when a number, else the default.
+pub fn batch_time_slice_ms() -> u64 {
+    crate::environment::text(BATCH_TIME_SLICE_VARIABLE)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(BATCH_TIME_SLICE_MS)
+}
 
 /// How long one commit may take before the batch is refused `table_busy`, in milliseconds
-/// (`commit_deadline_ms`, S1 decision). A large default, to be tuned from measurement.
-pub const DEFAULT_COMMIT_DEADLINE_MS: u64 = 30_000;
+/// (`commit_deadline_ms`, S1 decision). Three hours, so a slow store never gets in the way of dev
+/// work; to be tuned from measurement.
+pub const DEFAULT_COMMIT_DEADLINE_MS: u64 = 10_800_000;
 /// How long after a failed commit the owner refuses new input `table_busy` and starts no batch,
 /// in milliseconds, so the queue does not pile up behind a stalled store (S1 decision).
 pub const DEFAULT_COMMIT_BACKOFF_MS: u64 = 1_000;

@@ -272,12 +272,13 @@ fn an_unreadable_stored_persona_is_a_typed_error_naming_its_id() {
     let folder = tempfile::tempdir().unwrap();
     let id = PersonaId::new("elf").unwrap();
     std::fs::write(folder.path().join(persona_file_name(&id)), "{ not json").unwrap();
-    let Err(PersonaError::StoredInvalid { id: named, detail }) = read_persona(folder.path(), &id)
+    let Err(PersonaError::StoredInvalid { id: named, cause }) = read_persona(folder.path(), &id)
     else {
         panic!("a damaged file is refused");
     };
     assert_eq!(named, "elf");
-    assert!(!detail.contains("not json"), "{detail}");
+    assert_eq!(cause.cause, BodyCause::Syntax);
+    assert!(!cause.detail.contains("not json"), "{}", cause.detail);
     let other = serde_json::to_string(&persona("dwarf")).unwrap();
     std::fs::write(folder.path().join(persona_file_name(&id)), other).unwrap();
     assert_eq!(
@@ -318,13 +319,14 @@ fn variant_number(error: &PersonaError) -> usize {
         PersonaError::BackfillsInvalid { .. } => 22,
         PersonaError::BackfillsUnwritable { .. } => 23,
         PersonaError::Stopped => 24,
+        PersonaError::BackfillSequenceExhausted { .. } => 25,
     }
 }
 
-const PERSONA_ERROR_VARIANTS: usize = 25;
+const PERSONA_ERROR_VARIANTS: usize = 26;
 
 fn every_persona_error() -> Vec<PersonaError> {
-    use crate::locate::IoCause;
+    use crate::io_cause::IoCause;
     use crate::shown_scene::ShownSceneError;
     use crate::text::{ModelCause, ServiceReason, TextServiceCause};
     let id = || "innkeeper".to_owned();
@@ -356,7 +358,7 @@ fn every_persona_error() -> Vec<PersonaError> {
         },
         PersonaError::StoredInvalid {
             id: id(),
-            detail: String::new(),
+            cause: crate::dev_http::parse_body::<Value>(b"{").unwrap_err(),
         },
         PersonaError::StoredIdMismatch {
             id: id(),
@@ -397,7 +399,7 @@ fn every_persona_error() -> Vec<PersonaError> {
         },
         PersonaError::BackfillsInvalid {
             id: id(),
-            detail: String::new(),
+            cause: crate::dev_http::parse_body::<Value>(b"{").unwrap_err(),
         },
         PersonaError::BackfillsUnwritable {
             id: id(),
@@ -405,6 +407,7 @@ fn every_persona_error() -> Vec<PersonaError> {
             persona_restored: false,
         },
         PersonaError::Stopped,
+        PersonaError::BackfillSequenceExhausted { id: id() },
     ]
 }
 
@@ -458,11 +461,7 @@ fn a_refusal_that_is_the_callers_is_400_and_the_edit_refusal_is_422() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
     assert_eq!(
-        PersonaError::BackfillsInvalid {
-            id: "a".to_owned(),
-            detail: String::new()
-        }
-        .status(),
+        PersonaError::BackfillSequenceExhausted { id: "a".to_owned() }.status(),
         StatusCode::INTERNAL_SERVER_ERROR
     );
 }

@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use df_types::saturating_millis;
+
 use crate::{HttpMethod, HttpRequest, ProviderFailureClass, ProviderName, ProviderRequestId};
 
 /// The longest any one exchange (connect, read or total) may be allowed to take: an hour, so a slow
@@ -24,14 +26,15 @@ pub(crate) const MAXIMUM_CREDENTIAL_BYTES: usize = 8192;
 const MAXIMUM_SUPPLIER_ID_BYTES: usize = 256;
 /// Safety kill switch (`on` or `off`): refuses every OpenAI API call before it is sent. Read here,
 /// not by the binary, so no caller can build a transport that skips it.
-const DISABLE_OPENAI_API_VARIABLE: &str = "DF_GAMEPLAY_DISABLE_OPENAI_API";
+pub const DISABLE_OPENAI_API_VARIABLE: &str = "DF_GAMEPLAY_DISABLE_OPENAI_API";
 /// Codex mode (`on` or `off`): when on, OpenAI API calls are refused like the kill switch above.
-const CODEX_MODE_VARIABLE: &str = "DF_GAMEPLAY_CODEX_MODE";
+pub const CODEX_MODE_VARIABLE: &str = "DF_GAMEPLAY_CODEX_MODE";
 
 /// Whether `credential` can travel as a header value: 1 to [`MAXIMUM_CREDENTIAL_BYTES`] bytes of
 /// printable ASCII with no space. Every native adapter constructor gates its credential here;
 /// the target-neutral request builders in `http_contract` check only that the key is non-empty.
-pub(crate) fn is_valid_credential(credential: &str) -> bool {
+/// Imagery gates its keys here too, so one rule decides what a key may be.
+pub fn is_valid_credential(credential: &str) -> bool {
     !credential.is_empty()
         && credential.len() <= MAXIMUM_CREDENTIAL_BYTES
         && credential.bytes().all(is_visible_ascii)
@@ -790,7 +793,7 @@ impl ExchangeRecord<'_> {
             self.sent.key(),
             self.request_bytes,
             self.response_bytes,
-            u64::try_from(self.duration.as_millis()).unwrap_or(u64::MAX),
+            saturating_millis(self.duration),
         )
     }
 }

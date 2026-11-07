@@ -13,7 +13,7 @@ use super::storage::{
 };
 use crate::dev_client::post_json;
 use crate::dev_http::DevReply;
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 
 fn done<T: std::fmt::Debug>(reply: PersonaReply<T>) -> T {
     match reply {

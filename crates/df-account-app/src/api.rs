@@ -224,7 +224,7 @@ pub enum ApiCall {
 /// A decoded answer; `Err` is the server's typed refusal or a transport failure.
 // One reply per request, moved once from the runtime into the model; boxing every variant
 // would ripple through all reply handling for no runtime benefit.
-#[allow(clippy::large_enum_variant)]
+#[allow(clippy::large_enum_variant, reason = "one reply per request")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Reply {
     Integration(integration::Answer),
@@ -479,12 +479,6 @@ impl ApiCall {
                 post(at(&format!("admin/review/{item_id}/decision")), request)
             }
             Self::Audit => get(at("admin/audit")),
-            other => other.campaign_request(),
-        }
-    }
-
-    fn campaign_request(&self) -> HttpRequest {
-        match self {
             Self::Dashboard => get(at("campaigns")),
             Self::PlayNow(request) => post(at("campaigns/play-now"), request),
             Self::CampaignSettings { campaign_id } => {
@@ -546,12 +540,6 @@ impl ApiCall {
                 campaign_id,
                 request,
             } => post(at(&format!("campaigns/{campaign_id}/lobby")), request),
-            other => other.session_request(),
-        }
-    }
-
-    fn session_request(&self) -> HttpRequest {
-        match self {
             Self::CancelLobby {
                 session_id,
                 request,
@@ -574,7 +562,6 @@ impl ApiCall {
             Self::JoinAccept(body) => post(at("join/accept"), body),
             Self::CodeLookup(body) => post(at("join/code/lookup"), body),
             Self::CodeRequest(body) => post(at("join/code/request"), body),
-            _ => unreachable!("every call is matched by `request`, `campaign_request` or here"),
         }
     }
 
@@ -584,9 +571,6 @@ impl ApiCall {
 
     /// Reads the server's answer.
     pub fn decode(&self, status: u16, body: &str) -> Reply {
-        if let Self::Integration(call) = self {
-            return Reply::Integration(call.decode(status, body));
-        }
         let is_mutation = self.is_mutation();
         macro_rules! read {
             () => {
@@ -594,6 +578,7 @@ impl ApiCall {
             };
         }
         match self {
+            Self::Integration(call) => Reply::Integration(call.decode(status, body)),
             Self::Session => Reply::Session(read!()),
             Self::Operation => Reply::Operation(read!()),
             Self::SignUp(_) => Reply::SignedUp(read!()),
@@ -646,18 +631,6 @@ impl ApiCall {
             Self::Providers => Reply::Providers(read!()),
             Self::ReviewQueue => Reply::ReviewQueue(read!()),
             Self::Audit => Reply::Audit(read!()),
-            other => other.decode_campaign(status, body),
-        }
-    }
-
-    fn decode_campaign(&self, status: u16, body: &str) -> Reply {
-        let is_mutation = self.is_mutation();
-        macro_rules! read {
-            () => {
-                decode(status, body, is_mutation)
-            };
-        }
-        match self {
             Self::Dashboard => Reply::Dashboard(read!()),
             Self::PlayNow(_) => Reply::PlayNow(read!()),
             Self::CampaignSettings { .. } | Self::SaveCampaignSettings { .. } => {
@@ -680,7 +653,6 @@ impl ApiCall {
             Self::JoinHold(_) => Reply::JoinHeld(read!()),
             Self::JoinAccept(_) => Reply::Joined(read!()),
             Self::CodeRequest(_) => Reply::CodeRequested(read!()),
-            _ => unreachable!("every account call is matched in `decode`"),
         }
     }
 

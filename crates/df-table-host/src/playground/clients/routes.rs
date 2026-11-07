@@ -20,8 +20,8 @@ use super::request::ClientsError;
 use super::{check_client_name, checked_client};
 use crate::blocking::run_blocking;
 use crate::dev_http::{parse_body, reply};
-use crate::limits::MAXIMUM_REPORT_BYTES;
 use crate::state::AppState;
+use df_playground::limits::MAXIMUM_REPORT_BYTES;
 
 /// Why a report was refused, as its audit line says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

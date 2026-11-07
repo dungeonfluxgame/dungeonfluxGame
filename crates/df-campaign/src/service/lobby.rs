@@ -6,7 +6,7 @@ use df_types::{CampaignId, MemberId, SessionId};
 
 use super::{CampaignService, Ports, refuse};
 use crate::{
-    audit::{AuditLine, failure_word},
+    audit::{AuditLine, failure_word, store_word},
     errors::{Failure, Outcome, Refusal, StoreError},
     lobby::CharacterChoice,
     lobby_state::{
@@ -159,6 +159,26 @@ impl<P: Ports> CampaignService<P> {
         seats
     }
 
+    /// F's start readiness. An answer that cannot be read counts as not ready (fail closed, so
+    /// Start stays blocked on `FundingNotReady`), and the failure is recorded.
+    async fn funding_readiness(
+        &self,
+        campaign: CampaignId,
+        session: SessionId,
+    ) -> Option<StartReadiness> {
+        match self.inner.funding.start_readiness(campaign, session).await {
+            Ok(readiness) => Some(readiness),
+            Err(error) => {
+                AuditLine::new("LOBBY", "funding_unreadable")
+                    .campaign(campaign)
+                    .session(session)
+                    .reason(store_word(error))
+                    .emit("lobby.funding_unreadable");
+                None
+            }
+        }
+    }
+
     fn blockers_of(
         &self,
         campaign: &CampaignRow,
@@ -233,12 +253,7 @@ impl<P: Ports> CampaignService<P> {
         let campaign_row = rows.campaign.clone();
         let displays = rows.displays.clone();
         let seats = self.seat_views(rows).await;
-        let funding = self
-            .inner
-            .funding
-            .start_readiness(campaign, session)
-            .await
-            .ok();
+        let funding = self.funding_readiness(campaign, session).await;
         let blockers = match self.blockers_of(&campaign_row, phase, &seats, displays.len(), funding)
         {
             Ok(_) => Vec::new(),
@@ -368,12 +383,7 @@ impl<P: Ports> CampaignService<P> {
         let campaign_row = rows.campaign.clone();
         let displays = rows.displays.len();
         let seats = self.seat_views(rows).await;
-        let funding = self
-            .inner
-            .funding
-            .start_readiness(campaign, session)
-            .await
-            .ok();
+        let funding = self.funding_readiness(campaign, session).await;
         let roster = match self.blockers_of(&campaign_row, phase, &seats, displays, funding) {
             Ok(roster) => roster,
             Err(blockers) => {

@@ -5,7 +5,6 @@
 //! [`LocateError`] whose fields name the picture, region or value at fault.
 
 use std::fmt;
-use std::io::ErrorKind;
 
 use axum::http::StatusCode;
 use df_imagery::identity_question::IdentifyError;
@@ -16,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::limits::MAXIMUM_PICTURE_NAME_BYTES;
 use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::io_cause::IoCause;
 use crate::text::TextServiceCause;
 
 /// The answer of a locate route: its value, or why it was refused.
@@ -176,59 +176,6 @@ impl IdentityOutcome {
 
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|outcome| outcome.key() == key)
-    }
-}
-
-/// Why a file of the locate feature could not be read or written, as the reply carries it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum IoCause {
-    PermissionDenied,
-    StorageFull,
-    /// The bytes are not what they must be (a file that is a directory included).
-    InvalidData,
-    Other,
-}
-
-impl IoCause {
-    pub const ALL: [Self; 4] = [
-        Self::PermissionDenied,
-        Self::StorageFull,
-        Self::InvalidData,
-        Self::Other,
-    ];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::PermissionDenied => "permission_denied",
-            Self::StorageFull => "storage_full",
-            Self::InvalidData => "invalid_data",
-            Self::Other => "other",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|cause| cause.key() == key)
-    }
-
-    pub fn from_kind(kind: ErrorKind) -> Self {
-        match kind {
-            ErrorKind::PermissionDenied => Self::PermissionDenied,
-            ErrorKind::StorageFull => Self::StorageFull,
-            ErrorKind::InvalidData | ErrorKind::IsADirectory => Self::InvalidData,
-            _ => Self::Other,
-        }
-    }
-}
-
-impl fmt::Display for IoCause {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::PermissionDenied => "permission denied",
-            Self::StorageFull => "the disk is full",
-            Self::InvalidData => "it is not a readable file",
-            Self::Other => "the file system refused it",
-        })
     }
 }
 

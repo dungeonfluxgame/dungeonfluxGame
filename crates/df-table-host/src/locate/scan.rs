@@ -9,6 +9,7 @@ use df_imagery::oneshot_segment::{
 use df_scene_layout::{
     FULL_PERMILLE, PictureBinding, RegionGeometry, RegionRef, SceneLayout, SceneRegion, region_id,
 };
+use df_types::saturating_millis;
 
 use super::limits::SCAN_TIMEOUT;
 use super::request::{LocateError, LocateRequest, LocateStage, LocateStageError, ScanPrompt};
@@ -273,7 +274,7 @@ async fn scan_masks(
         cause: error.cause.into(),
         send_state: error.send_state.into(),
     })?;
-    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let duration_ms = saturating_millis(started.elapsed());
     let (layout, left_out) = layout_from(&segmented.masks, "sam-3.1", prompt, binding);
     Ok(ScannedMasks {
         layout,

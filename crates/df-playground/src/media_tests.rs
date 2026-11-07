@@ -228,7 +228,7 @@ fn a_reports_timeline_is_held_to_its_count_keeping_the_newest() {
         .map(|seq| TimelineRecord {
             seq,
             kind: TimelineKind::Figure,
-            id: "x".repeat(crate::limits::MAXIMUM_TIMELINE_ID_CHARACTERS + 3),
+            id: "x".into(),
             start_page_ms: seq,
             end_page_ms: None,
             end_reason: None,
@@ -246,8 +246,57 @@ fn a_reports_timeline_is_held_to_its_count_keeping_the_newest() {
         crate::limits::MAXIMUM_TIMELINE_RECORDS
     );
     assert_eq!(report.timeline[0].seq, 5, "the oldest go first");
+}
+
+#[test]
+fn a_reports_timeline_ids_are_cut_to_their_length() {
+    let report = ClientReport {
+        timeline: vec![TimelineRecord {
+            seq: 1,
+            kind: TimelineKind::Figure,
+            id: "x".repeat(crate::limits::MAXIMUM_TIMELINE_ID_CHARACTERS + 3),
+            start_page_ms: 1,
+            end_page_ms: None,
+            end_reason: None,
+            planned_ms: None,
+            detail: None,
+        }],
+        ..ClientReport::default()
+    }
+    .bounded();
     assert_eq!(
         report.timeline[0].id.chars().count(),
         crate::limits::MAXIMUM_TIMELINE_ID_CHARACTERS
+    );
+}
+
+#[test]
+fn a_reports_timeline_is_held_to_the_report_bytes_keeping_the_newest() {
+    let id_characters = crate::limits::MAXIMUM_TIMELINE_ID_CHARACTERS;
+    let count = crate::limits::MAXIMUM_REPORT_BYTES / id_characters + 10;
+    let records = (0..count as u64)
+        .map(|seq| TimelineRecord {
+            seq,
+            kind: TimelineKind::Figure,
+            id: "x".repeat(id_characters),
+            start_page_ms: seq,
+            end_page_ms: None,
+            end_reason: None,
+            planned_ms: None,
+            detail: None,
+        })
+        .collect();
+    let report = ClientReport {
+        timeline: records,
+        ..ClientReport::default()
+    }
+    .bounded();
+    // The count bound and the byte bound both hold; the smaller one is what is kept.
+    let kept = (crate::limits::MAXIMUM_REPORT_BYTES / id_characters)
+        .min(crate::limits::MAXIMUM_TIMELINE_RECORDS);
+    assert_eq!(report.timeline.len(), kept);
+    assert_eq!(
+        report.timeline.last().map(|record| record.seq),
+        Some(count as u64 - 1)
     );
 }

@@ -14,7 +14,7 @@ use df_content::persona::{
 use serde::{Deserialize, Serialize};
 
 use crate::dev_http::{BodyError, DevReply, RouteError};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 use crate::playground::SceneApplyError;
 use crate::shown_scene::ShownSceneError;
 use crate::speech::Voiced;
@@ -381,7 +381,8 @@ pub struct PersonaRemoved {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum LineError {
-    /// The answer is not the object the schema describes; `detail` is the reader's sentence.
+    /// The answer is not the object the schema describes. `detail` is the reader's own sentence
+    /// (it names the field or type it stopped at), which has no closed set to enumerate.
     Malformed { detail: String },
     /// The line is blank.
     Blank,
@@ -475,7 +476,8 @@ impl From<LineError> for AnswerError {
 pub enum PersonaError {
     /// The request body is not the JSON the route reads, or its persona is not valid.
     InvalidBody(BodyError),
-    /// The query is not one the route reads; `detail` is the reader's sentence.
+    /// The query is not one the route reads. `detail` is the query reader's own sentence, which
+    /// has no closed set to enumerate.
     InvalidQuery { detail: String },
     /// A persona id is not valid.
     InvalidPersona { cause: ContentError },
@@ -492,8 +494,8 @@ pub enum PersonaError {
     FolderUnreadable { cause: IoCause },
     /// The file of `id` could not be read.
     Unreadable { id: String, cause: IoCause },
-    /// The file of `id` is not a valid persona; `detail` is the reader's sentence.
-    StoredInvalid { id: String, detail: String },
+    /// The file of `id` is not a valid persona; `cause` says where and why the reader stopped.
+    StoredInvalid { id: String, cause: BodyError },
     /// The file of `id` holds the persona `found`.
     StoredIdMismatch { id: String, found: String },
     /// The file of `id` could not be written or removed.
@@ -524,9 +526,12 @@ pub enum PersonaError {
     PrivateDetailInPublicField,
     /// The record of the backfills of `id` could not be read.
     BackfillsUnreadable { id: String, cause: IoCause },
-    /// The record of the backfills of `id` is not valid and is left as it is; `detail` is the
-    /// reader's sentence.
-    BackfillsInvalid { id: String, detail: String },
+    /// The record of the backfills of `id` is not valid and is left as it is; `cause` says where
+    /// and why the reader stopped.
+    BackfillsInvalid { id: String, cause: BodyError },
+    /// The record of the backfills of `id` already holds the largest sequence number, so no
+    /// further backfill can be recorded.
+    BackfillSequenceExhausted { id: String },
     /// The record of the backfills of `id` could not be written. `persona_restored` says whether
     /// the persona file the backfill had already written was put back as it was.
     BackfillsUnwritable {
@@ -565,6 +570,7 @@ impl PersonaError {
             Self::PrivateDetailInPublicField => "private_detail",
             Self::BackfillsUnreadable { .. } => "backfills_unreadable",
             Self::BackfillsInvalid { .. } => "backfills_invalid",
+            Self::BackfillSequenceExhausted { .. } => "backfill_sequence_exhausted",
             Self::BackfillsUnwritable { .. } => "backfills_unwritable",
             Self::Stopped => "stopped",
         }
@@ -600,9 +606,10 @@ impl fmt::Display for PersonaError {
                 formatter,
                 "the persona file of {id:?} could not be read: {cause}"
             ),
-            Self::StoredInvalid { id, detail } => write!(
+            Self::StoredInvalid { id, cause } => write!(
                 formatter,
-                "the stored persona {id:?} is not valid: {detail}"
+                "the stored persona {id:?} is not valid: {}",
+                cause.detail
             ),
             Self::StoredIdMismatch { id, found } => write!(
                 formatter,
@@ -644,9 +651,14 @@ impl fmt::Display for PersonaError {
                 formatter,
                 "the backfill record of {id:?} could not be read: {cause}"
             ),
-            Self::BackfillsInvalid { id, detail } => write!(
+            Self::BackfillsInvalid { id, cause } => write!(
                 formatter,
-                "the backfill record of {id:?} is not valid and is left as it is: {detail}"
+                "the backfill record of {id:?} is not valid and is left as it is: {}",
+                cause.detail
+            ),
+            Self::BackfillSequenceExhausted { id } => write!(
+                formatter,
+                "the backfill record of {id:?} cannot count further, so nothing was written"
             ),
             Self::BackfillsUnwritable {
                 id,
@@ -729,6 +741,7 @@ impl RouteError for PersonaError {
             | Self::Unwritable { .. }
             | Self::BackfillsUnreadable { .. }
             | Self::BackfillsInvalid { .. }
+            | Self::BackfillSequenceExhausted { .. }
             | Self::BackfillsUnwritable { .. }
             | Self::InvalidOperationKey
             | Self::Stopped => StatusCode::INTERNAL_SERVER_ERROR,

@@ -21,8 +21,8 @@
 //! - A failure the provider reports is retried up to the purpose's retries with a doubling backoff
 //!   plus a deterministic jitter, never for a refusal and never past the deadline.
 //! - An attempt holds a lease (`LEASE_MS`, renewed by `heartbeat`). An expired lease puts a call
-//!   that was never sent back in its queue (up to three attempts) and fails one that may have been
-//!   sent (H.9).
+//!   that was never sent back in its queue (up to `MAXIMUM_LEASE_ATTEMPTS`) and fails one that may
+//!   have been sent (H.9).
 //! - A second request for a key already in flight joins it and shares its handle; the flight
 //!   is cancelled only when every holder has cancelled.
 //! - The ledger records every request and every call sent and never refuses anything.
@@ -238,7 +238,7 @@ struct Request {
     status: RequestStatus,
     retries: u8,
     attempts: u32,
-    lease_requeues: u8,
+    lease_requeues: u32,
     holders: u32,
     result: Option<ResourceResult>,
 }

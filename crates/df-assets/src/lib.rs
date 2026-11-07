@@ -185,7 +185,7 @@ mod catalog_delivery;
 pub use catalog_delivery::{
     ALLOWED_IMAGE_MIMES, DRAFT_IMAGE_OPERATION_TIMEOUT, DeliveryBasis, DeliveryBudget,
     DeliveryPermit, DraftDeliveryError, DraftDeliveryLimits, DraftDeliveryRequest, DraftImageBody,
-    DraftImageCandidate, DraftImageVariant, deliver_draft_image,
+    DraftImageCandidate, DraftImageVariant, SnapshotCause, deliver_draft_image,
 };
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod catalog_delivery_tests;

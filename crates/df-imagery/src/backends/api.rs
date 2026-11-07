@@ -67,9 +67,6 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-/// `NativeHttp` refuses a total timeout above this. A stage budget can be longer, because every
-/// exchange is bounded by the transport and the budget is spent across exchanges.
-pub(crate) const HTTP_TIMEOUT_CEILING: std::time::Duration = std::time::Duration::from_secs(180);
 /// Default OpenAI edit models. Preserved constants; requests may also carry a
 /// validated configured identifier for a schema-compatible model.
 pub(crate) const GPT_25_FLARE_MODEL_ID: &str = "gpt-image-2.5-flare";
@@ -527,16 +524,14 @@ impl OperationalBounds {
     }
 }
 
-/// Shared credential gate: printable ASCII, 1..=4096 bytes. Secrets never
-/// reach diagnostics; only the refusal outcome survives.
+/// Shared credential gate, the providers crate's rule. Secrets never reach diagnostics; only the
+/// refusal outcome survives.
 pub(crate) fn check_credential(credential: &str) -> Result<(), ApiError> {
-    if credential.is_empty()
-        || credential.len() > 4096
-        || !credential.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
-    {
-        return Err(ApiError::InvalidRequest);
+    if df_providers::is_valid_credential(credential) {
+        Ok(())
+    } else {
+        Err(ApiError::InvalidRequest)
     }
-    Ok(())
 }
 
 #[cfg(test)]

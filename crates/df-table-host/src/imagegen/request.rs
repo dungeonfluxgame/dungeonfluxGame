@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::backend::BackendError;
 use super::model::{Aspect, GenerateRequestError, Purpose};
 use crate::dev_http::{BodyError, DevReply, RouteError};
-use crate::locate::IoCause;
+use crate::io_cause::IoCause;
 
 /// The answer of a picture generator route.
 pub type GenerateReply<T> = DevReply<T, GenerateError>;

@@ -9,10 +9,13 @@ use std::{
     time::Duration,
 };
 
-const TOKEN_HEADER: &str = "X-DungeonFlux-Launcher";
+/// The header that carries the run's secret; the game answers 404 without it.
+pub const TOKEN_HEADER: &str = "X-DungeonFlux-Launcher";
+/// Where the game reports its table and its pending rejoin asks.
+pub const LAUNCHER_STATUS_PATH: &str = "/gameplay/launcher-status";
 const CONNECT_LIMIT: Duration = Duration::from_millis(700);
 const READ_LIMIT: Duration = Duration::from_millis(2500);
-const MAXIMUM_STATUS_BYTES: usize = 64 * 1024;
+pub const MAXIMUM_STATUS_BYTES: usize = 64 * 1024;
 /// A creator portrait or canonical image; larger answers are refused.
 pub const PORTRAIT_BYTES_MAX: usize = 6 * 1024 * 1024;
 /// The party the server can seat (REF-062); extra lines are ignored.
@@ -53,10 +56,12 @@ impl TableStatus {
 }
 
 pub fn fetch(display_url: &str, token: &str) -> io::Result<TableStatus> {
-    let body = get(
+    let body = request(
         display_url,
-        "/gameplay/launcher-status",
+        "GET",
+        LAUNCHER_STATUS_PATH,
         token,
+        None,
         MAXIMUM_STATUS_BYTES,
     )?;
     Ok(parse(&String::from_utf8_lossy(&body)))
@@ -67,7 +72,7 @@ pub fn portrait(display_url: &str, token: &str, path: &str) -> io::Result<Vec<u8
     if !portrait_path(path) {
         return Err(io::Error::other("bad_path"));
     }
-    get(display_url, path, token, PORTRAIT_BYTES_MAX)
+    request(display_url, "GET", path, token, None, PORTRAIT_BYTES_MAX)
 }
 
 /// A short, loggable reason for a failed request: the reason codes above, or the kind of a
@@ -127,11 +132,14 @@ pub fn parse(text: &str) -> TableStatus {
     status
 }
 
-/// One HTTP/1.1 GET to the game server's own address (from its display link).
-fn get(
+/// One HTTP/1.1 request to the game server's own address (from its display link), carrying the
+/// launcher token. A `payload` is sent with its length; the answer must be a complete `200`.
+pub fn request(
     display_url: &str,
+    method: &str,
     path: &str,
     token: &str,
+    payload: Option<&[u8]>,
     maximum_body_bytes: usize,
 ) -> io::Result<Vec<u8>> {
     let authority = display_url
@@ -146,10 +154,15 @@ fn get(
     let mut stream = TcpStream::connect_timeout(&address, CONNECT_LIMIT)?;
     stream.set_read_timeout(Some(READ_LIMIT))?;
     stream.set_write_timeout(Some(READ_LIMIT))?;
+    let length = payload.map_or_else(String::new, |bytes| {
+        format!("Content-Length: {}\r\n", bytes.len())
+    });
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {authority}\r\n{TOKEN_HEADER}: {token}\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\n{TOKEN_HEADER}: {token}\r\n\
+         {length}Connection: close\r\n\r\n"
     )?;
+    stream.write_all(payload.unwrap_or_default())?;
     let mut response = Vec::new();
     stream
         .take(u64::try_from(maximum_body_bytes + 16 * 1024).unwrap_or(u64::MAX))

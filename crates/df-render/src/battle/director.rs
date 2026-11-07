@@ -1356,7 +1356,7 @@ fn walk_pace(steps: u32) -> Duration {
 
 /// Lunge or bow, contact (impact shot, shake, flash, number, recoil) and then either the fall
 /// and the finishing cue, or everyone settling back to formation. Returns when it is over.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "a strike's fighters and timing")]
 fn strike(
     builder: &mut Builder,
     attacker: &Token,

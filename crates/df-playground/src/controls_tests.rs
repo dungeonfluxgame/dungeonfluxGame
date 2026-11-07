@@ -97,10 +97,24 @@ fn each_change_sets_its_own_control() {
             show_unavailable: true,
             show_grid: true,
             show_sam: true,
+            tts_on: true,
+            stt_on: true,
             transition: Transition::default(),
             zoom_limit: ZoomLimit::default(),
         }
     );
+}
+
+#[test]
+fn the_speech_switches_are_on_by_default_and_toggle() {
+    let mut controls = Controls::default();
+    assert!(controls.tts_on && controls.stt_on);
+    controls.apply(ControlsChange::Tts(false)).expect("applies");
+    assert!(!controls.tts_on && controls.stt_on);
+    controls.apply(ControlsChange::Stt(false)).expect("applies");
+    assert!(!controls.tts_on && !controls.stt_on);
+    let wire = serde_json::to_value(ControlsChange::Tts(true)).expect("writes");
+    assert_eq!(wire, serde_json::json!({"change": "tts", "value": true}));
 }
 
 #[test]

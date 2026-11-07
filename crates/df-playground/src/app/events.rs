@@ -87,6 +87,8 @@ pub fn on_click(event: &Event) {
         )),
         Some(("toggle", "grid")) => Some(ControlsChange::ShowGrid(!app.controls.show_grid)),
         Some(("toggle", "sam")) => Some(ControlsChange::ShowSam(!app.controls.show_sam)),
+        Some(("toggle", "tts")) => Some(ControlsChange::Tts(!app.controls.tts_on)),
+        Some(("toggle", "stt")) => Some(ControlsChange::Stt(!app.controls.stt_on)),
         _ => None,
     });
     if let Some(change) = change {

@@ -173,6 +173,20 @@ fn simulate_group(document: &Document, app: &App) -> Result<Element, JsValue> {
     )
 }
 
+/// The two voice switches: lines spoken aloud (text to speech) and questions taken by voice
+/// (speech to text). The host keeps them, so the dev CLI and every page see the same ones.
+fn speech_switches(document: &Document, app: &App) -> Result<Element, JsValue> {
+    let controls = &app.controls;
+    group(
+        document,
+        "Speech",
+        &[
+            switch(document, "toggle:tts", "TTS", controls.tts_on)?,
+            switch(document, "toggle:stt", "STT", controls.stt_on)?,
+        ],
+    )
+}
+
 fn overlay_switches(document: &Document, app: &App) -> Result<Element, JsValue> {
     let controls = &app.controls;
     group(
@@ -214,5 +228,6 @@ pub fn toolbar(document: &Document, app: &App) -> Result<Element, JsValue> {
     append(&bar, &simulate_group(document, app)?)?;
     append(&bar, &overlay_switches(document, app)?)?;
     append(&bar, &sound_control(document)?)?;
+    append(&bar, &speech_switches(document, app)?)?;
     Ok(bar)
 }

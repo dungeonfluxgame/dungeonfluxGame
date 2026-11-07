@@ -63,9 +63,6 @@ pub const MAXIMUM_ASSET_FILE_BYTES: u64 = GIBIBYTE;
 /// Longest name of a fixture file, in bytes: the longest a common file system allows (an external
 /// limit, not a dev cap).
 pub const MAXIMUM_FIXTURE_NAME_LENGTH: usize = 255;
-/// Largest report a page may send about what it shows and plays, in bytes. With
-/// `MAXIMUM_CLIENTS` this bounds the whole client table (about 16 GiB), whatever a report holds.
-pub const MAXIMUM_REPORT_BYTES: usize = 16 * MEBIBYTE;
 /// Most open pages remembered at once; a page silent for `FORGET_CLIENT_AFTER` is forgotten
 /// first, so this bounds a flood of page names, not real pages.
 pub const MAXIMUM_CLIENTS: usize = 1_024;

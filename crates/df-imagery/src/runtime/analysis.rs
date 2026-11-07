@@ -126,7 +126,7 @@ impl PreparedClassification {
         }
         let http = NativeHttp::new(
             ProviderLimits::new(
-                timeout.min(crate::backends::api::HTTP_TIMEOUT_CEILING),
+                timeout.min(df_providers::MAXIMUM_EXCHANGE_TIME),
                 NATIVE_HTTP_MAXIMUM_BYTES,
                 maximum_response_bytes,
             )

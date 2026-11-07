@@ -77,10 +77,12 @@ fn inherited_setting(name: &str) -> bool {
         || name.starts_with("DUNGEONFLUX_")
         || matches!(
             name,
-            "OPENAI_API_KEY"
+            "DF_OPENAI_API_KEY"
+                | "OPENAI_API_KEY"
+                | "DF_ELEVENLABS_API_KEY"
                 | "ELEVENLABS_API_KEY"
-                | "FAL_KEY"
                 | "DF_FAL_KEY"
+                | "FAL_KEY"
                 | "BFL_API_KEY"
                 | "WORLDLABS_API_KEY"
         )
@@ -841,6 +843,9 @@ mod tests {
         assert!(inherited_setting("DF_GAMEPLAY_HOME_VIDEO"));
         assert!(inherited_setting("df_gameplay_creator_openai_key"));
         assert!(inherited_setting("openai_api_key"));
+        assert!(inherited_setting("DF_OPENAI_API_KEY"));
+        assert!(inherited_setting("df_elevenlabs_api_key"));
+        assert!(inherited_setting("FAL_KEY"));
         assert!(inherited_setting("WORLDLABS_API_KEY"));
         assert!(inherited_setting("DF_HOME_VIDEO_KEY_FILE"));
         assert!(!inherited_setting("PATH"));

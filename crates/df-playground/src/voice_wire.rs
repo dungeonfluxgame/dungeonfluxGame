@@ -122,11 +122,12 @@ pub enum SpeechErrorKind {
     ClipUnstored,
     ClipsUnreadable,
     Cue,
+    Disabled,
     Stopped,
 }
 
 impl SpeechErrorKind {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::InvalidBody,
         Self::InvalidQuery,
         Self::NotConfigured,
@@ -148,6 +149,7 @@ impl SpeechErrorKind {
         Self::ClipUnstored,
         Self::ClipsUnreadable,
         Self::Cue,
+        Self::Disabled,
         Self::Stopped,
     ];
 
@@ -174,12 +176,38 @@ impl SpeechErrorKind {
             Self::ClipUnstored => "clip_unstored",
             Self::ClipsUnreadable => "clips_unreadable",
             Self::Cue => "cue",
+            Self::Disabled => "disabled",
             Self::Stopped => "stopped",
         }
     }
 
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.key() == key)
+    }
+}
+
+/// A half of the voice pipeline the playground can turn off (`Controls::tts_on`, `stt_on`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpeechFeature {
+    /// Voicing lines (text to speech).
+    Tts,
+    /// Taking spoken questions (speech to text).
+    Stt,
+}
+
+impl SpeechFeature {
+    pub const ALL: [Self; 2] = [Self::Tts, Self::Stt];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Tts => "tts",
+            Self::Stt => "stt",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|feature| feature.key() == key)
     }
 }
 

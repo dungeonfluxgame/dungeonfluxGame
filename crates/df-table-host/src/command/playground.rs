@@ -52,6 +52,8 @@ fn playground_change(key: &str, value: &str) -> Result<ControlsChange, CommandEr
         "unavailable" => truth(key, value).map(ControlsChange::ShowUnavailable),
         "grid" => truth(key, value).map(ControlsChange::ShowGrid),
         "sam" => truth(key, value).map(ControlsChange::ShowSam),
+        "tts" => truth(key, value).map(ControlsChange::Tts),
+        "stt" => truth(key, value).map(ControlsChange::Stt),
         "zoom_limit" => ZoomLimit::from_key(value)
             .map(ControlsChange::ZoomLimit)
             .ok_or_else(|| bad_choice(key, value, "model or pixels")),

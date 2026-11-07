@@ -248,7 +248,8 @@ impl DrawPlan {
         self.mark(Part::PhoneChoices, choices_differ);
         self.mark(
             Part::PhoneComposer,
-            status_blocks_input(&status_before) != status_blocks_input(&status_after),
+            status_blocks_input(&status_before) != status_blocks_input(&status_after)
+                || before_controls.stt_on != after_controls.stt_on,
         );
         choices_differ
     }
@@ -274,6 +275,8 @@ fn toolbar_changed(old: &Snapshot, new: &Snapshot) -> bool {
             before.show_unavailable,
             before.show_grid,
             before.show_sam,
+            before.tts_on,
+            before.stt_on,
         ) != (
             &after.fixture,
             after.device,
@@ -282,6 +285,8 @@ fn toolbar_changed(old: &Snapshot, new: &Snapshot) -> bool {
             after.show_unavailable,
             after.show_grid,
             after.show_sam,
+            after.tts_on,
+            after.stt_on,
         )
 }
 

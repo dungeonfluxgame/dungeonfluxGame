@@ -25,6 +25,7 @@ use df_table::identity::{OperationId, SeatId, TableId};
 use df_table::outcome::OutcomeKind;
 use df_table::owner_queue::{Lane, OwnerQueue};
 use df_table::ports::{ActionId, EventSink};
+use df_types::saturating_millis;
 use serde::{Deserialize, Serialize};
 
 use super::commit::{CommitMode, Committer};
@@ -203,7 +204,7 @@ impl Owner {
     }
 
     fn now_ms(&self) -> u64 {
-        u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX)
+        saturating_millis(self.origin.elapsed())
     }
 
     fn admit(&mut self, submission: Submission) {

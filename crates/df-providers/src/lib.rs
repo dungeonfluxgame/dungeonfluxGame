@@ -48,9 +48,10 @@ pub use speech_adapter::{
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_http::{
-    MAXIMUM_BODY_BYTES, MAXIMUM_CHUNKS, MAXIMUM_EXCHANGE_TIME, MAXIMUM_HEADER_BYTES, NativeHttp,
-    NativeHttpCause, NativeHttpError, NativeHttpLimits, NativeHttpMetadata, NativeHttpResponse,
-    NativeRetryAfter, NativeRetryAfterValue, ProviderLimits, SendState,
+    CODEX_MODE_VARIABLE, DISABLE_OPENAI_API_VARIABLE, MAXIMUM_BODY_BYTES, MAXIMUM_CHUNKS,
+    MAXIMUM_EXCHANGE_TIME, MAXIMUM_HEADER_BYTES, NativeHttp, NativeHttpCause, NativeHttpError,
+    NativeHttpLimits, NativeHttpMetadata, NativeHttpResponse, NativeRetryAfter,
+    NativeRetryAfterValue, ProviderLimits, SendState, is_valid_credential,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use registry::registered_text_provider;

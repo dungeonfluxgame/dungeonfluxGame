@@ -8,7 +8,8 @@ use df_content::persona::{Persona, PersonaId};
 use super::guard::copies_private_detail_into_public_text;
 use super::request::{BackfillRecord, PersonaError, PersonaSummary, summary_of};
 use crate::blocking::{WriteLock, run_blocking};
-use crate::locate::IoCause;
+use crate::dev_http::BodyError;
+use crate::io_cause::IoCause;
 use crate::state::AppState;
 
 /// Held around every write or removal of a persona file and of a backfill record, so a removal, a
@@ -93,7 +94,7 @@ pub fn read_persona(directory: &Path, id: &PersonaId) -> Result<Option<Persona>,
     let persona: Persona =
         serde_json::from_str(&text).map_err(|error| PersonaError::StoredInvalid {
             id: id.to_string(),
-            detail: error.to_string(),
+            cause: BodyError::from_json(&error),
         })?;
     if persona.id() != id {
         return Err(PersonaError::StoredIdMismatch {
@@ -200,7 +201,7 @@ pub fn read_backfills(
     };
     serde_json::from_str(&text).map_err(|error| PersonaError::BackfillsInvalid {
         id: id.to_string(),
-        detail: error.to_string(),
+        cause: BodyError::from_json(&error),
     })
 }
 
@@ -254,10 +255,7 @@ pub(super) fn commit_backfill_with(
         .map(|seen| seen.sequence)
         .max()
         .map_or(Some(1), |highest| highest.checked_add(1))
-        .ok_or_else(|| PersonaError::BackfillsInvalid {
-            id: id.to_string(),
-            detail: "the record's sequence cannot count further".to_owned(),
-        })?;
+        .ok_or_else(|| PersonaError::BackfillSequenceExhausted { id: id.to_string() })?;
     record.sequence = sequence;
     write_persona(directory, &updated)?;
     records.push(record);

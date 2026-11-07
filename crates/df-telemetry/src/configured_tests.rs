@@ -5,6 +5,10 @@ use df_observe::{
 use rusqlite::Connection;
 use std::{fs, path::PathBuf, time::SystemTime};
 
+/// Longer than `SQLITE_BUSY_TIMEOUT`, so a commit blocked by the held lock fails before the wait
+/// does.
+const OUTAGE_WAIT: Duration = Duration::from_secs(30);
+
 fn root() -> PathBuf {
     let parent = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -63,11 +67,11 @@ fn configured_root_recovers_durable_spool_after_sqlite_outage_and_restart() {
             },
         )
         .unwrap();
-    let receipt = captured.pending.wait(Duration::from_secs(5)).unwrap();
+    let receipt = captured.pending.wait(OUTAGE_WAIT).unwrap();
     assert_eq!(receipt.durability, Durability::Spooled);
     assert!(caller_result.is_ok());
     assert_eq!(
-        store.flush(Duration::from_secs(5)),
+        store.flush(OUTAGE_WAIT),
         Err(TelemetryError::SinkUnavailable)
     );
     let health = store.health();
@@ -80,9 +84,9 @@ fn configured_root_recovers_durable_spool_after_sqlite_outage_and_restart() {
     let emergency = fs::read_to_string(path.join("emergency")).unwrap();
     assert!(emergency.contains("SinkUnavailable"));
     assert!(!emergency.contains("private-test-payload"));
-    producer.shutdown(Duration::from_secs(5)).unwrap();
+    producer.shutdown(OUTAGE_WAIT).unwrap();
     assert_eq!(
-        store.shutdown(Duration::from_secs(5)),
+        store.shutdown(OUTAGE_WAIT),
         Err(TelemetryError::SinkUnavailable)
     );
     drop(store);
