@@ -177,18 +177,26 @@ async fn the_context_holds_the_facts_of_the_active_place_and_the_named_packs() {
     assert_eq!(stall["keeper"], "fruit_vendor");
     let apple = &stall["items"][0];
     assert_eq!(apple["id"], "apple");
-    let quotes = apple["quotes"].as_array().unwrap();
+    let quoted: Vec<u64> = apple["quotes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|quote| quote["qty"].as_u64())
+        .collect();
     assert_eq!(
-        quotes.len(),
-        2,
-        "one unit, and the smallest lot of the one tier"
+        quoted,
+        [1, 2, 3, 5, 10, 15, 20],
+        "the common lots and the smallest lot of the one tier, once each, in order"
     );
-    assert_eq!(quotes[0]["qty"], 1);
-    assert_eq!(quotes[0]["ask_total_cp"], 3);
-    assert_eq!(quotes[1]["qty"], 5);
-    assert_eq!(quotes[1]["ask_total_cp"], 15);
-    assert_eq!(quotes[1]["tier_total_cp"], 14);
-    assert_eq!(quotes[1]["floor_total_cp"], 13);
+    assert_eq!(lot(apple, 1)["ask_total_cp"], 3);
+    assert_eq!(lot(apple, 5)["ask_total_cp"], 15);
+    assert_eq!(lot(apple, 5)["tier_total_cp"], 14);
+    assert_eq!(lot(apple, 5)["floor_total_cp"], 13);
+    assert_eq!(lot(apple, 10)["tier_total_cp"], 27);
+    assert!(
+        apple["rule"].as_str().unwrap().contains("from 5 on, 100 permille off"),
+        "the keeper's price rule is built from the bible's numbers"
+    );
     assert_eq!(context.facts["viewer_role"], "keeper");
 
     let packs = available_packs(&host.state);
@@ -305,7 +313,7 @@ async fn the_keeper_sees_the_floor_and_a_customer_sees_only_the_posted_facts() {
     assert!(keeper.get("note").is_none());
     assert_eq!(keeper["stalls"][0]["haggle_floor_permille"], 850);
     assert_eq!(
-        keeper["stalls"][0]["items"][0]["quotes"][1]["floor_total_cp"],
+        lot(&keeper["stalls"][0]["items"][0], 5)["floor_total_cp"],
         13
     );
 
@@ -351,7 +359,7 @@ async fn an_unposted_bulk_tier_is_hidden_from_a_customer_and_shown_to_the_keeper
     assert_eq!(quotes, [json!({"qty": 1, "ask_total_cp": 3})]);
     let keeper = context_for_viewer(&host.state, &[], "fruit_vendor").facts;
     assert_eq!(
-        keeper["stalls"][0]["items"][0]["quotes"][1]["tier_total_cp"],
+        lot(&keeper["stalls"][0]["items"][0], 5)["tier_total_cp"],
         14
     );
     assert_eq!(
@@ -436,4 +444,14 @@ fn the_verbs_read_their_words() {
             place: Some("market".to_owned())
         }))
     );
+}
+
+/// The quote of `item` for a lot of `qty`, found by its quantity, not its place in the list.
+fn lot(item: &Value, qty: u64) -> &Value {
+    item["quotes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|quote| quote["qty"] == qty)
+        .unwrap()
 }
