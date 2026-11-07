@@ -41,8 +41,14 @@ pub const MAXIMUM_QUEUED_BACKGROUND: usize = 8;
 /// these defaults are deliberately far above them so a deadline never gets in the way of dev work,
 /// and the two variables below scope them down (owner, 2026-11-06).
 pub const DEFAULT_DEADLINE_MS: u64 = 3_600_000;
-/// The variable that sets the deadline of the text purposes (`interpret`, narration, scene
-/// description, dress and staging text), in whole seconds above zero.
+/// The default deadline of `interpret`, in milliseconds: the lower end of the observed Codex text
+/// latency (H.5), so a slower lane times out and the seat gets buttons (C.7). Unlike the other
+/// deadlines it stays short on purpose: it is the trigger of that fallback (owner, 2026-11-06).
+pub const INTERPRET_DEADLINE_MS: u64 = 15_000;
+/// The variable that sets the deadline of `interpret`, in whole seconds above zero.
+pub const INTERPRET_DEADLINE_SECONDS_VARIABLE: &str = "DF_BROKER_INTERPRET_DEADLINE_SECS";
+/// The variable that sets the deadline of the other text purposes (narration, scene description,
+/// dress and staging text), in whole seconds above zero.
 pub const TEXT_DEADLINE_SECONDS_VARIABLE: &str = "DF_BROKER_TEXT_DEADLINE_SECS";
 /// The variable that sets the deadline of the picture purposes (backgrounds, plates and
 /// portraits), in whole seconds above zero.
@@ -54,6 +60,15 @@ pub fn text_deadline_ms() -> u64 {
     deadline_ms(crate::environment::text(TEXT_DEADLINE_SECONDS_VARIABLE).as_deref())
 }
 
+/// The deadline, in milliseconds, of `interpret`: `DF_BROKER_INTERPRET_DEADLINE_SECS` when a whole
+/// number of seconds above zero, else `INTERPRET_DEADLINE_MS`.
+pub fn interpret_deadline_ms() -> u64 {
+    deadline_ms_or(
+        crate::environment::text(INTERPRET_DEADLINE_SECONDS_VARIABLE).as_deref(),
+        INTERPRET_DEADLINE_MS,
+    )
+}
+
 /// The deadline, in milliseconds, of the picture purposes: `DF_BROKER_IMAGE_DEADLINE_SECS` when a
 /// whole number of seconds above zero, else `DEFAULT_DEADLINE_MS`.
 pub fn image_deadline_ms() -> u64 {
@@ -63,9 +78,15 @@ pub fn image_deadline_ms() -> u64 {
 /// The deadline a setting's text asks for, in milliseconds; no text, or text that is not a whole
 /// number of seconds above zero, is `DEFAULT_DEADLINE_MS`.
 pub(super) fn deadline_ms(text: Option<&str>) -> u64 {
+    deadline_ms_or(text, DEFAULT_DEADLINE_MS)
+}
+
+/// As [`deadline_ms`], with `default_ms` for no text or text that is not a whole number of seconds
+/// above zero.
+pub(super) fn deadline_ms_or(text: Option<&str>, default_ms: u64) -> u64 {
     text.and_then(|text| text.parse::<u64>().ok())
         .filter(|seconds| *seconds > 0)
-        .map_or(DEFAULT_DEADLINE_MS, |seconds| seconds.saturating_mul(1_000))
+        .map_or(default_ms, |seconds| seconds.saturating_mul(1_000))
 }
 
 /// How long a claimed attempt is leased without a heartbeat, in milliseconds (J.4 and H.9 give

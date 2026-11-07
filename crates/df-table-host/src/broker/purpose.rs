@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::limits::{
     DEFAULT_RETRY, MAXIMUM_IMAGE_ANSWER_EDGE_PIXELS, MAXIMUM_TEXT_ANSWER_CHARACTERS, SINGLE_RETRY,
-    image_deadline_ms, text_deadline_ms,
+    image_deadline_ms, interpret_deadline_ms, text_deadline_ms,
 };
 
 /// Whether a purpose goes to the text lane or the image lane.
@@ -377,6 +377,7 @@ impl PurposeTable {
     /// of H.7 and the fallback of H.4.
     pub fn built_in() -> Result<Self, PurposeError> {
         let text_deadline = text_deadline_ms();
+        let interpret_deadline = interpret_deadline_ms();
         let image_deadline = image_deadline_ms();
         let text = |deadline_ms, size, retry, class, fallback| PurposeFacts {
             kind: ResourceKind::Text,
@@ -409,7 +410,7 @@ impl PurposeTable {
             PurposeSpec::new(
                 "interpret",
                 text(
-                    text_deadline,
+                    interpret_deadline,
                     SHORT_TEXT_CHARACTERS,
                     SINGLE_RETRY,
                     QueueClass::Live,

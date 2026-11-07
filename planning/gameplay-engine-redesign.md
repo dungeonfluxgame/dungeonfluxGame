@@ -2595,7 +2595,7 @@ The private result opens as a note card on the phone that auto-hides after 10 se
 with the party" (a `PrivateMessage` to chosen seats or all) and "keep it to myself". Nothing about
 the note appears on any other seat.
 
-**K.16 Speech and voice (X16).** A `Say` input up to 800 characters is shown verbatim on the TV as the
+**K.16 Speech and voice (X16).** A `Say` input up to 4096 characters (raised from 800 by the owner on 2026-11-06 so the limit never gets in the way of dev work) is shown verbatim on the TV as the
 hero's line in up to three bubbles, and INTERPRET never rewrites spoken words; it only extracts
 intent and claims for the rules. (Action text keeps the 280-character cap of C.7.) Voice is
 hold-to-talk on the speaker's own phone only, so seat attribution is by device, with the transcript

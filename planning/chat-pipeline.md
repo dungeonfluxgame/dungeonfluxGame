@@ -107,7 +107,7 @@ model, and says so in its reads.
 
 | Step | Dev path does | Production path does | Shared |
 | --- | --- | --- | --- |
-| Admit | Loopback route, typed `seat` + `character` + text | `ADMIT` stage: member, binding, revision, `OperationId`, rate limit | Turn id shape (`OperationId`), `utterance` text rules (800 chars) |
+| Admit | Loopback route, typed `seat` + `character` + text | `ADMIT` stage: member, binding, revision, `OperationId`, rate limit | Turn id shape (`OperationId`), `utterance` text rules (4096 chars) |
 | Hear | Skipped: the verb names the character | The INTERPRET call every free line makes, extended with `addressee` | **Hear** question (pure) |
 | Appraise | Question + dev state | Question + engine validation + `react` / relationship / secrets | **Appraise** question and `Appraisal` type (pure) |
 | Commit | `DevPersonaState` in host memory | One fenced `df-session` commit (decision), a small utterance commit | `TurnEffects` (the list of state changes, pure) |
@@ -178,7 +178,7 @@ sequenceDiagram
 
 | # | Step | Owner and authority | Data crossing the boundary | Audience |
 | --- | --- | --- | --- | --- |
-| 0a | Typed input | Phone composer (`df-player`; `ActionDraft` keeps the draft and the operation key across reconnects, **Built**) | Text up to 800 chars (K.16) with an `utterance` id | Author only until sent |
+| 0a | Typed input | Phone composer (`df-player`; `ActionDraft` keeps the draft and the operation key across reconnects, **Built**) | Text up to 4096 chars (K.16, raised from 800 by the owner on 2026-11-06) with an `utterance` id | Author only until sent |
 | 0b | Spoken input | `df-audio` `CaptureSession` (**Built**, native only; browser capture **NEW**) after a deliberate press-and-hold and a capture lease; `VoiceService.Talk` (**Planned**) to `AudioService` `TranscribeBatch` (**Planned**; adapter **Built**) | PCM s16le 16 kHz mono, 100 ms to 60 s; key terms from listener-safe names (section 8) | Author only; request-lived memory |
 | 0c | Draft and confirm | Phone shows the transcript as an editable draft; a Send tap enters 1; a 2 s cancel-only window follows (K.16) | Final transcript text (never partials) | Author only |
 | 1 | Admit | `df-table` pipeline `ADMIT` (**Built**): member, binding, revision check, `OperationId`, at most 3 pending per seat, 3 per second burst | `MachineIntent{say}` (**Built** proto) | Server |
@@ -599,7 +599,7 @@ experiments; its reads state which view each stage used.
 | --- | --- | --- |
 | One NPC line per turn per speaker | 1 (a second sentence is part of the same line) | `client-architecture.md` Line machine: "At most one line in Opening/Speaking/Lingering" |
 | NPC line length | at most 45 words and 240 characters (proposed, tunable in a file) | derived from the dwell below (A5) |
-| Hero `Say` | up to 800 characters, shown verbatim, never rewritten | redesign K.16 |
+| Hero `Say` | up to 4096 characters (owner, 2026-11-06; was 800), shown verbatim, never rewritten | redesign K.16 |
 | Reading time (caption dwell) | `max(1800 ms, 330 ms x words)`, scaled by `reading_pace` Slow 150 / Normal 100 / Fast 75 percent | **Built** `df-playground/copy.rs::caption_dwell_ms`; matches redesign K.12 |
 | A voiced line stays up | the longer of dwell and the clip, then lingers | section 9 |
 | Gap before the next line opens | the previous line's close plus a gap (proposed 400 ms) | section 9 |
@@ -781,7 +781,7 @@ code; proposed 4000 ms (A8), after which the line opens as text.
    is native-only. Capture is Rust/WASM with generated browser glue (AGENTS.md allows glue only).
 2. **Format and length:** raw s16le 16 kHz mono PCM, 100 ms to 60 s (adapter bounds
    `speech_adapter.rs`: 3,200 B to 1,920,000 B, even length). Recommended UI cap 30 s (O14) because
-   the text input limit (800 chars) bounds what the draft can hold; the architecture's older "15/16
+   the text input limit (4096 chars) bounds what the draft can hold; the architecture's older "15/16
    second capture" is a prototype number (C13).
 3. **Transport:** `VoiceService.Talk` (**Planned**, bidirectional: Start, ordered Chunks, End /
    Cancel) into `AudioService::open_capture/push_capture/finish_capture`, then
