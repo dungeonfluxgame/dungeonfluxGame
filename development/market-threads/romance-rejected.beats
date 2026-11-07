@@ -1,0 +1,18 @@
+# The tables turned: Lena has grown to like Kael and lets him see it; tonight he gently turns her
+# down (he is leaving for good and will not start what he cannot finish). Lena should feel the
+# sting (embarrassment, a little hurt, pride stepping in) without turning cruel or begging, and
+# keep her dignity and her job.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper tavern_server
+@keeper_situation Working a quiet late shift at the bar; she likes Kael and has decided to tell him.
+@speaker_situation In the bar late at night, at the counter where the server Lena works; you like her, but you leave town for good in two days.
+@state attraction 60
+@state trust 70
+@state affection 30
+@rapport warrior 40
+warrior | Greet Lena and notice she seems to have something on her mind; ask her, as a question to her, what it is.
+warrior | Tell her gently that you like her too, but you leave town for good in two days and will not start what you cannot finish.
+warrior | Ask her, as a question to her, whether she is angry with you.
+warrior | Tell her she deserves someone who stays.
+warrior | Ask her, as a question to her, whether you can still come in for an ale tomorrow.
+warrior | Say goodnight and thank her for telling you how she felt.

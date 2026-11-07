@@ -97,7 +97,7 @@ pub const DEFAULT_CONDUCT: [&str; 13] = [
     ),
 ];
 
-pub const DEFAULT_APPRAISAL_GUIDE: [&str; 19] = [
+pub const DEFAULT_APPRAISAL_GUIDE: [&str; 20] = [
     concat!(
         "Almost every line moves the listener a little: give at least one emotion change ",
         "unless the line was truly empty of feeling.",
@@ -137,6 +137,11 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 19] = [
         "30 to 50 when it is their own livelihood, supplier or someone close; joy down 10 ",
         "to 25; shock adds surprise.",
     ),
+    concat!(
+        "Someone they care for leaving or going away: sadness up 15 to 35 and joy down 5 ",
+        "to 15, even when the parting is warm; a promise to write or return eases the ",
+        "sadness a little but does not turn it into joy.",
+    ),
     "Something unexpected (good or bad): surprise up 10 to 30, fading quickly.",
     concat!(
         "A joke or something absurd: amusement up 5 to 20 if it lands, or irritation up a ",
@@ -168,7 +173,8 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 19] = [
     concat!(
         "Someone they are drawn to giving attention to another, or praising a rival in ",
         "front of them: jealousy up 5 to 25, more the more attraction or affection they ",
-        "already feel, none when they feel none; being chosen over the rival eases it.",
+        "already feel, none when they feel none; it registers here even when they play it ",
+        "down or wave the person off in words, and being chosen over the rival eases it.",
     ),
     "Something foul (vermin, rot, filth) near them or their goods: disgust up 15 to 35.",
 ];
@@ -760,9 +766,24 @@ fn take_rapport(
     rapport_delta: i8,
     dropped: &mut Dropped,
 ) {
-    if !is_label(toward) || toward == state.id {
+    let Some(standing) = standing_toward(config, state, toward) else {
         dropped.relationships += 1;
         return;
+    };
+    let rapport = (i32::from(standing.rapport) + i32::from(rapport_delta)).clamp(-100, 100);
+    standing.rapport = i8::try_from(rapport).unwrap_or(0);
+    standing.attitude = config.attitude_for(standing.rapport);
+}
+
+/// The standing of `state` toward `toward`, a new indifferent one when it has none. None when
+/// `toward` is not a character name, is the character itself, or the standings are full.
+fn standing_toward<'a>(
+    config: &EmotionConfig,
+    state: &'a mut PersonaState,
+    toward: &str,
+) -> Option<&'a mut Relationship> {
+    if !is_label(toward) || toward == state.id {
+        return None;
     }
     let index = match state
         .relationships
@@ -778,15 +799,40 @@ fn take_rapport(
             });
             state.relationships.len() - 1
         }
-        None => {
-            dropped.relationships += 1;
-            return;
-        }
+        None => return None,
     };
-    let standing = &mut state.relationships[index];
-    let rapport = (i32::from(standing.rapport) + i32::from(rapport_delta)).clamp(-100, 100);
-    standing.rapport = i8::try_from(rapport).unwrap_or(0);
+    state.relationships.get_mut(index)
+}
+
+/// Sets the standing of `state` toward `toward` to `rapport` (clamped to -100..=100) and the
+/// attitude it comes to. False, and nothing changed, when `toward` is not a character name, is
+/// the character itself, or the standings are full.
+pub fn set_rapport(
+    config: &EmotionConfig,
+    state: &mut PersonaState,
+    toward: &str,
+    rapport: i8,
+) -> bool {
+    let Some(standing) = standing_toward(config, state, toward) else {
+        return false;
+    };
+    standing.rapport = rapport.clamp(-100, 100);
     standing.attitude = config.attitude_for(standing.rapport);
+    true
+}
+
+/// The level above which a rise lands with less force: a feeling already strong has less room to
+/// grow, so a push at 80 moves it half as far as at 50, and the top of the scale keeps its shades.
+pub const HEADROOM_FROM_LEVEL: u8 = 50;
+
+/// `rise` as it lands on a feeling at `level`: whole up to [`HEADROOM_FROM_LEVEL`], then scaled
+/// by the room left above it. A fall always lands whole.
+fn with_headroom(level: u8, rise: i32) -> i32 {
+    if rise <= 0 || level <= HEADROOM_FROM_LEVEL {
+        return rise;
+    }
+    let room = i32::from(MAXIMUM_LEVEL.saturating_sub(level));
+    rise * room / i32::from(MAXIMUM_LEVEL - HEADROOM_FROM_LEVEL)
 }
 
 /// Takes `appraisal` into `state` for a character with `temperament`, and answers the new state
@@ -838,7 +884,8 @@ pub fn apply_appraisal(
                 let scaled = (i32::from(change.delta) * reactivity
                     + i32::from(NEUTRAL_REACTIVITY) / 2 * i32::from(change.delta).signum())
                     / i32::from(NEUTRAL_REACTIVITY);
-                level.level = level_from(i32::from(level.level) + scaled);
+                level.level =
+                    level_from(i32::from(level.level) + with_headroom(level.level, scaled));
             }
             None => dropped.emotions += 1,
         }

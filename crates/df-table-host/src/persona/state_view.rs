@@ -14,6 +14,16 @@ pub struct StateTarget {
     pub id: String,
 }
 
+/// The body of `POST /dev/persona/state/rapport`: a hand-set standing toward another character
+/// (-100 to 100; the attitude follows), for a scene that starts mid-story.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetRapportRequest {
+    pub id: String,
+    pub toward: String,
+    pub rapport: i8,
+}
+
 /// The body of `POST /dev/persona/state/set`: a hand-set level, a developer's override.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

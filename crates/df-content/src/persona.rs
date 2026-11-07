@@ -37,7 +37,7 @@ pub use emotion::{
 pub use emotion_logic::{
     Dropped, EmotionConfig, EmotionConfigError, EmotionDefinition, EmotionSetting,
     RapportThresholds, TemperamentField, apply_appraisal, check_emotion_ids, derive_mood,
-    fresh_state, set_emotion, state_triggers,
+    fresh_state, set_emotion, set_rapport, state_triggers,
 };
 pub use policy::{PersonaBehavior, PersonaSecret, PersonaTrigger, Sensitivity};
 pub use voice::{Diction, Voice, VoiceField};

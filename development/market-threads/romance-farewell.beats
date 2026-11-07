@@ -9,6 +9,7 @@
 @state trust 80
 @state joy 60
 @state affection 45
+@rapport warrior 55
 warrior | Tell Lena you have news you have been putting off all night.
 warrior | Tell her you leave at dawn to guard a caravan to the far coast, and you will be gone for months.
 warrior | Ask her, as a question to her, whether she will think of you while you are gone.

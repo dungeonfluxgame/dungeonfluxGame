@@ -385,6 +385,77 @@ Change after these runs (data): nervous, clumsy sincerity reads as endearing (am
 little warmth, not irritation, unless it keeps pressing after a no). For the pushy test Kael
 gets a temporary `drunk-pushy` stance in the scratch copy only, dropped after the run.
 
+## Runs 30 and 31 (pushy with a drunk Kael; shy with the awkwardness line)
+
+Pushy (`run30-pushy.md`, Kael on a temporary `drunk-pushy` stance, dropped after): Lena reads
+like a real woman at work being pressed. "No, friend. I'm working, and that answer won't change
+with a ring." "I'm not yours, and you don't get to decide who looks at me." At the hand grab:
+"No. Keep your hands to yourself and step back, or leave." Fear rose with anger (to 54), the
+standing went hostile (-45) and stayed wary after his apology ("Keep your word, and we're
+square"). "You ignored my no, then blamed me for not warming to you."
+Shy (`run31-shy.md`): the fumbled braid compliment now gives irritation 32 -> 49 (66 before),
+amusement 69 -> 78, attraction rising to 41, embarrassment 24; "I'd rather hear what you meant
+than a practiced line"; yes to the river walk.
+
+## Refinement 15: standings set by hand
+
+Scenes that start mid-story set feelings with `@state`, but rapport always started at 0, so a
+Lena who said "I like you too" read as indifferent in her own facts. New: `persona state <id>
+rapport <toward> <-100..100>` (`POST /dev/persona/state/rapport`), one `set_rapport` beside the
+rapport the appraisal moves (they share the find-or-add of a standing; refused with
+`invalid_standing` toward oneself or a non-name), and `@rapport <toward> <value>` in beats files
+(jealous starts at 35, farewell at 55, rejected at 40). Two more scenes: `romance-rejected` (he
+gently turns her down) and `romance-dancer` (Rina, who flirts with the room as part of her act).
+
+## Runs 32 to 35 (preset standings; rejected; Rina) and refinement 16
+
+- Farewell (`run33`): "Take this ribbon from my apron, Kael. Keep it close, and come back to
+  me." Sadness 27 -> 56 inside affection 51 -> 100; friendly 57 -> 81.
+- Rejected (`run34`): dignity without coldness or begging: "I won't ask you to stay, Kael. But
+  I'd still like that evening, if you do." "I'm sad you're leaving, not angry with you." Sadness
+  41 and surprise 39 at the turn-down; no embarrassment recorded (expected a sting).
+- Rina (`run35`): flirts unlike Lena, warm and stage-confident: "I'm friendly with the room,
+  but I save my attention for the company I choose." "You needn't match me, dear; just let the
+  music find your feet." Attraction stays 0 while she flirts back: the flirting is her act. Kael's
+  persona again refused the hand-on-waist beat, so her touch boundary went untested.
+- Jealous (`run32`): she said "A little, maybe" but no jealousy was recorded (run 28 had 24):
+  words and state disagreed.
+- Across all four: joy, trust and attraction pin at 100 within a few lines (her
+  `seen-as-person` trigger, +18 trust and +10 joy, fires on almost every warm line), so the top
+  of the scale has no shades.
+- Reliability: one Codex call stalled; the host's 600 s text deadline with retries held the
+  run for about 30 minutes before a retry answered in 6.5 s, and the runner's `timeout 200`
+  did not stop it on Windows. A persona line needs a far shorter deadline (open, not changed).
+Refinement 16: above 50 a rise lands with the room left above it (a push at 80 moves half as
+far as at 50; a fall always lands whole; `HEADROOM_FROM_LEVEL`, test added), so strong feelings
+keep their shades; data: jealousy registers even when she plays it down in words.
+
+## Runs 36 to 38 (headroom, then the parting band)
+
+- Jealous with headroom (`run36`): nothing pins at 100 any more (trust 73 to 94, attraction 45
+  to 72, affection up to 28); jealousy registered at "Mind if I go dance with her?" (24) and
+  eased when he chose her ("I'd rather have your company than watch you dance"); "A little,
+  maybe. But I'm glad you chose to stay with me." Words and state agree again.
+- Farewell with headroom (`run37`): joy rose 62 -> 88 while he said he was leaving and sadness
+  stayed 25 to 36: the model read each promise to write or return as joy.
+- Data: someone they care for leaving is sadness +15 to 35 and joy -5 to 15 even when the
+  parting is warm; a promise eases the sadness a little but does not turn it into joy.
+- Farewell with the parting band (`run38`): sadness leads, 24 -> 72, above joy, while affection
+  grows 42 -> 68 and fear for him on the road appears (29); "Months is a long time, Kael. I'm
+  glad you told me, but I'll miss you." "Just don't make me regret letting you go."
+- Bug found: her keepsake was "Take five apples, Kael; they'll keep on the road." The world
+  bible has no bar, so the active world place is still the market and the fruit stall's goods
+  reach her facts. Open: a bar place in the bible, and the transition setting the world place.
+
+Where the romance work stands (goal hour 16:41 to 17:50): Lena deflects cheap lines, sets a
+boundary at crude ones and at a grab, warms to sincerity, says yes to a drink or a walk, shows
+jealousy sideways, grieves a farewell inside her affection, keeps her dignity when turned down;
+Rina flirts as a performer; the feelings now follow the words with shades left at the top.
+Open: her first reaction to a cheap line is still sharp (32 -> 55); the marriage proposal goes
+to 100; "mugs" and "keep it moving" recur; no embarrassment at being turned down; Rina's touch
+boundary untested (Kael's persona refuses the beat); a 600 s text deadline lets one stalled
+Codex call hold a scene for 30 minutes; the world place after a transition.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

@@ -328,6 +328,15 @@ pub(super) fn parse_state(words: &[String]) -> Result<PersonaCommand, CommandErr
             emotion: emotion.clone(),
             level: level_word(level)?,
         }),
+        [id, verb, toward, rapport] if verb == "rapport" => Ok(PersonaCommand::StateRapport {
+            id: id_word(id)?,
+            toward: toward.clone(),
+            rapport: rapport
+                .parse::<i8>()
+                .ok()
+                .filter(|rapport| (-100..=100).contains(rapport))
+                .ok_or(CommandError::Usage(PERSONA_STATE_USAGE))?,
+        }),
         _ => Err(CommandError::Usage(PERSONA_STATE_USAGE)),
     }
 }

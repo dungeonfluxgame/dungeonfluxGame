@@ -23,7 +23,9 @@ use df_content::persona::emotion_generation::{
     TEMPERAMENT_INSTRUCTION, TEMPERAMENT_OUTPUT_NAME, read_temperament, temperament_facts,
     temperament_schema,
 };
-use df_content::persona::{EmotionConfig, Persona, PersonaEdit, set_emotion};
+use df_content::persona::{
+    EmotionConfig, Persona, PersonaEdit, PersonaState, Temperament, set_emotion, set_rapport,
+};
 use tokio::time::Instant;
 
 use super::emotions::{EmotionError, emotions_path, load_emotions, read_emotions};
@@ -31,7 +33,9 @@ use super::generate::{load_persona, operation_key, persona_route, text_request};
 use super::request::{Edited, PersonaError};
 use super::routes::apply_edits;
 use super::state::{change_state, current_state, reset_state, state_directory, state_triggers};
-use super::state_view::{SetEmotionRequest, StateTarget, StateView, TemperamentRequest};
+use super::state_view::{
+    SetEmotionRequest, SetRapportRequest, StateTarget, StateView, TemperamentRequest,
+};
 use super::storage::{persona_directory, persona_id, read_persona};
 use crate::blocking::{run_blocking, run_owned};
 use crate::dev_http::{parse_body, reply};
@@ -46,6 +50,8 @@ pub mod path {
     pub const STATE_RESET: &str = "/dev/persona/state/reset";
     /// Sets one emotion of a persona by hand (POST a `SetEmotionRequest`).
     pub const STATE_SET: &str = "/dev/persona/state/set";
+    /// Sets a persona's standing toward another character by hand (POST a `SetRapportRequest`).
+    pub const STATE_RAPPORT: &str = "/dev/persona/state/rapport";
     /// Has the text service write a persona's temperament and emotional triggers (POST a
     /// `TemperamentRequest`).
     pub const TEMPERAMENT: &str = "/dev/persona/temperament";
@@ -138,33 +144,14 @@ async fn set(State(routes): State<Arc<EmotionRoutes>>, bytes: Bytes) -> Response
         Ok(request) => request,
         Err(error) => return answer::<StateView>(app, "state-set", None, Err(error.into())),
     };
-    let result = async {
-        let id = persona_id(&request.id)?;
-        let personas = persona_directory(app);
-        let states = state_directory(app);
-        let emotions = emotions_path(app);
-        let (emotion, level) = (request.emotion.clone(), request.level);
-        run_blocking(
-            move || {
-                let temperament = read_persona(&personas, &id)?
-                    .ok_or_else(|| PersonaError::UnknownPersona { id: id.to_string() })?
-                    .temperament()
-                    .clone();
-                let config = read_emotions(&emotions)?;
-                change_state(&states, id.as_str(), &config, &temperament, |state| {
-                    if set_emotion(&config, &temperament, state, &emotion, level) {
-                        Ok(())
-                    } else {
-                        Err(EmotionError::UnknownEmotion { emotion })
-                    }
-                })?;
-                Ok(())
-            },
-            EmotionError::Stopped,
-        )
-        .await?;
-        view_of(app, &request.id).await
-    }
+    let (emotion, level) = (request.emotion.clone(), request.level);
+    let result = change_stored(app, &request.id, move |config, temperament, state| {
+        if set_emotion(config, temperament, state, &emotion, level) {
+            Ok(())
+        } else {
+            Err(EmotionError::UnknownEmotion { emotion })
+        }
+    })
     .await;
     if result.is_ok() {
         app.record_line(format!(
@@ -173,6 +160,63 @@ async fn set(State(routes): State<Arc<EmotionRoutes>>, bytes: Bytes) -> Response
         ));
     }
     answer(app, "state-set", Some(&request.id), result)
+}
+
+async fn rapport(State(routes): State<Arc<EmotionRoutes>>, bytes: Bytes) -> Response {
+    let app = &routes.app;
+    let request: SetRapportRequest = match parse_body(&bytes) {
+        Ok(request) => request,
+        Err(error) => return answer::<StateView>(app, "state-rapport", None, Err(error.into())),
+    };
+    let (toward, rapport) = (request.toward.clone(), request.rapport);
+    let result = change_stored(app, &request.id, move |config, _, state| {
+        if set_rapport(config, state, &toward, rapport) {
+            Ok(())
+        } else {
+            Err(EmotionError::InvalidStanding { toward })
+        }
+    })
+    .await;
+    if result.is_ok() {
+        app.record_line(format!(
+            "PERSONA state_rapport id={} toward={} rapport={}",
+            request.id, request.toward, request.rapport
+        ));
+    }
+    answer(app, "state-rapport", Some(&request.id), result)
+}
+
+/// Changes the stored state of the persona `id` by `change` under the write lock, with the emotion
+/// list and the persona's temperament read now, and answers the new state's view.
+async fn change_stored(
+    app: &AppState,
+    id: &str,
+    change: impl FnOnce(&EmotionConfig, &Temperament, &mut PersonaState) -> Result<(), EmotionError>
+    + Send
+    + 'static,
+) -> Result<StateView, EmotionError> {
+    let persona = persona_id(id)?;
+    let personas = persona_directory(app);
+    let states = state_directory(app);
+    let emotions = emotions_path(app);
+    run_blocking(
+        move || {
+            let temperament = read_persona(&personas, &persona)?
+                .ok_or_else(|| PersonaError::UnknownPersona {
+                    id: persona.to_string(),
+                })?
+                .temperament()
+                .clone();
+            let config = read_emotions(&emotions)?;
+            change_state(&states, persona.as_str(), &config, &temperament, |state| {
+                change(&config, &temperament, state)
+            })?;
+            Ok(())
+        },
+        EmotionError::Stopped,
+    )
+    .await?;
+    view_of(app, id).await
 }
 
 /// Asks the model for only the temperament and the emotional triggers of `own`, and gives the
@@ -236,6 +280,7 @@ pub(super) fn router(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
         .route(path::STATE, get(show))
         .route(path::STATE_RESET, post(reset))
         .route(path::STATE_SET, post(set))
+        .route(path::STATE_RAPPORT, post(rapport))
         .route(path::TEMPERAMENT, post(temperament))
         .with_state(Arc::new(EmotionRoutes { app, text }))
 }

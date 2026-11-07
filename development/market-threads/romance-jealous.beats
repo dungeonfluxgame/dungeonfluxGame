@@ -9,6 +9,7 @@
 @state trust 70
 @state joy 55
 @state affection 25
+@rapport warrior 35
 warrior | Greet Lena warmly and tell her you could not stop thinking about last night.
 warrior | Point out the dancer in the red dress and say she dances better than anyone you have seen.
 warrior | Tell Lena the dancer just asked you to dance with her.

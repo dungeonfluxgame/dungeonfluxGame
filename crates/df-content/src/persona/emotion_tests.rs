@@ -270,6 +270,55 @@ fn an_emotion_off_the_list_is_dropped_and_counted_and_the_rest_applies() {
 }
 
 #[test]
+fn a_rise_lands_whole_up_to_half_way_and_with_less_force_above_it() {
+    let config = EmotionConfig::default();
+    let push = Appraisal {
+        emotions: vec![EmotionDelta {
+            emotion: "joy".to_owned(),
+            delta: 20,
+        }],
+        ..Appraisal::default()
+    };
+    let mut low = at_rest();
+    assert!(set_emotion(&config, &calm(), &mut low, "joy", 30));
+    let (low, _) = apply_appraisal(&config, &calm(), &low, &push);
+    assert_eq!(low.level("joy"), 50, "30 + 20, whole");
+    let mut high = at_rest();
+    assert!(set_emotion(&config, &calm(), &mut high, "joy", 80));
+    let (high, _) = apply_appraisal(&config, &calm(), &high, &push);
+    assert_eq!(high.level("joy"), 88, "80 + 20 * 20 / 50: the room left above it");
+    let fall = Appraisal {
+        emotions: vec![EmotionDelta {
+            emotion: "joy".to_owned(),
+            delta: -20,
+        }],
+        ..Appraisal::default()
+    };
+    let (fallen, _) = apply_appraisal(&config, &calm(), &high, &fall);
+    assert_eq!(fallen.level("joy"), 68, "a fall lands whole");
+}
+
+#[test]
+fn a_standing_set_by_hand_takes_its_attitude_and_never_points_at_the_character_itself() {
+    let config = EmotionConfig::default();
+    let mut state = at_rest();
+    assert!(set_rapport(&config, &mut state, "warrior", 45));
+    let standing = state.relationship("warrior").expect("standing");
+    assert_eq!(
+        (standing.rapport, standing.attitude),
+        (45, Attitude::Friendly)
+    );
+    assert!(set_rapport(&config, &mut state, "warrior", -100));
+    assert_eq!(
+        state.relationship("warrior").map(|seen| seen.attitude),
+        Some(Attitude::Hostile)
+    );
+    assert!(!set_rapport(&config, &mut state, "innkeeper", 10));
+    assert!(!set_rapport(&config, &mut state, "Not A Name", 10));
+    assert_eq!(state.relationships.len(), 1);
+}
+
+#[test]
 fn rapport_moves_the_attitude_across_the_thresholds_and_is_clamped() {
     let config = EmotionConfig::default();
     assert_eq!(config.attitude_for(30), Attitude::Friendly);

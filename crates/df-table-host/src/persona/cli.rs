@@ -40,7 +40,7 @@ use super::request::{
 };
 use super::routes::path;
 use super::state_view::{
-    SetEmotionRequest, StateTarget, StateView, TemperamentRequest, format_state,
+    SetEmotionRequest, SetRapportRequest, StateTarget, StateView, TemperamentRequest, format_state,
 };
 use super::storage::{RESERVED_IDS, persona_id};
 use crate::command::{CommandError, bad_choice};
@@ -60,7 +60,7 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona expertise <id> add|drop ... | ",
     "persona temperament <id> set|baseline|generate ... | ",
     "persona emotion <id> trigger add|drop ... | ",
-    "persona state <id> [reset | set <emotion> <level>] | ",
+    "persona state <id> [reset | set <emotion> <level> | rapport <toward> <-100..100>] | ",
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
     "[model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
@@ -129,8 +129,10 @@ pub const PERSONA_EMOTION_USAGE: &str = concat!(
     "persona emotion <id> trigger drop <trigger-id>",
 );
 /// `persona state`: show, reset or set by hand the live emotional state.
-pub const PERSONA_STATE_USAGE: &str =
-    "persona state <id> | persona state <id> reset | persona state <id> set <emotion> <level>";
+pub const PERSONA_STATE_USAGE: &str = concat!(
+    "persona state <id> | persona state <id> reset | persona state <id> set <emotion> <level> | ",
+    "persona state <id> rapport <toward> <-100..100>"
+);
 /// `persona expertise`: add or drop what a character knows from their trade or life.
 pub const PERSONA_EXPERTISE_USAGE: &str =
     "persona expertise <id> add <text...> | persona expertise <id> drop <index>";
@@ -249,6 +251,12 @@ pub enum PersonaCommand {
         id: PersonaId,
         emotion: String,
         level: u8,
+    },
+    /// Set a persona's standing toward another character by hand.
+    StateRapport {
+        id: PersonaId,
+        toward: String,
+        rapport: i8,
     },
     /// Have the characters of the shown scene talk to each other.
     Converse(ConverseRequest),
@@ -939,6 +947,22 @@ async fn set_state(
     Ok(format_state(&view))
 }
 
+async fn set_rapport_state(
+    port: u16,
+    id: PersonaId,
+    toward: String,
+    rapport: i8,
+) -> Result<String, DevError> {
+    let request = SetRapportRequest {
+        id: id.to_string(),
+        toward,
+        rapport,
+    };
+    let view: StateView =
+        emotion_value(post_json(port, emotion_path::STATE_RAPPORT, &request).await?)?;
+    Ok(format_state(&view))
+}
+
 async fn show(port: u16, id: PersonaId, audience: Audience) -> Result<String, DevError> {
     let address = show_path(&id, audience);
     Ok(match audience {
@@ -1021,7 +1045,17 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             recent,
             asked_by,
             intent,
-        } => say(port, character, situation, model, speak, (recent, asked_by, intent)).await,
+        } => {
+            say(
+                port,
+                character,
+                situation,
+                model,
+                speak,
+                (recent, asked_by, intent),
+            )
+            .await
+        }
         PersonaCommand::VoiceGenerate { id, model } => generate_voice(port, id, model).await,
         PersonaCommand::TemperamentGenerate { id, model } => {
             generate_temperament(port, id, model).await
@@ -1031,5 +1065,10 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
         PersonaCommand::StateSet { id, emotion, level } => {
             set_state(port, id, emotion, level).await
         }
+        PersonaCommand::StateRapport {
+            id,
+            toward,
+            rapport,
+        } => set_rapport_state(port, id, toward, rapport).await,
     }
 }

@@ -179,7 +179,8 @@ garbles the run. Run a copy for long batches. Reset both first: `persona state <
 record goes in `development/persona-transcripts/` (`py -3 development/persona-transcript.py
 <log> <out.md> <title> <header> [section=<beats>] warrior=Kael tavern_server=Lena`), its summary
 in `development/persona-refinement-log.md`. The romance edge cases are
-`market-threads/romance-{pushy,shy,jealous,farewell}.beats`; a speaker whose own persona refuses
+`market-threads/romance-{pushy,shy,jealous,farewell,rejected,dancer}.beats` (`@rapport <toward>
+<value>` presets a standing); a speaker whose own persona refuses
 a beat (Kael will not be pushy) needs a temporary stance in the scratch copy for that test
 (`persona behavior warrior add drunk-pushy ...` plus a trigger), dropped afterwards.
 

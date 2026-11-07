@@ -45,6 +45,9 @@ pub enum EmotionError {
     StateUnwritable { id: String, cause: IoCause },
     /// The emotion is not on the emotion list.
     UnknownEmotion { emotion: String },
+    /// A standing cannot be held toward `toward`: not a character name, the character itself, or
+    /// the standings are full.
+    InvalidStanding { toward: String },
     /// The persona, its edit or its generation failed.
     Persona { cause: Box<PersonaError> },
     /// The blocking task stopped without an answer.
@@ -64,6 +67,7 @@ impl EmotionError {
             Self::StateIdMismatch { .. } => "state_id_mismatch",
             Self::StateUnwritable { .. } => "state_unwritable",
             Self::UnknownEmotion { .. } => "unknown_emotion",
+            Self::InvalidStanding { .. } => "invalid_standing",
             Self::Persona { cause } => cause.key(),
             Self::Stopped => "stopped",
         }
@@ -114,6 +118,10 @@ impl fmt::Display for EmotionError {
                 formatter,
                 "{emotion:?} is not on the emotion list (see {EMOTIONS_DIRECTORY}/{EMOTIONS_FILE})"
             ),
+            Self::InvalidStanding { toward } => write!(
+                formatter,
+                "no standing can be held toward {toward:?}: give another character's name"
+            ),
             Self::Persona { cause } => write!(formatter, "{cause}"),
             Self::Stopped => write!(formatter, "the task stopped before it answered"),
         }
@@ -139,7 +147,9 @@ impl From<BodyError> for EmotionError {
 impl RouteError for EmotionError {
     fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidBody(_) | Self::UnknownEmotion { .. } => StatusCode::BAD_REQUEST,
+            Self::InvalidBody(_) | Self::UnknownEmotion { .. } | Self::InvalidStanding { .. } => {
+                StatusCode::BAD_REQUEST
+            }
             Self::Persona { cause } => cause.status(),
             Self::EmotionsUnreadable { .. }
             | Self::EmotionsInvalid { .. }

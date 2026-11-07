@@ -8,8 +8,9 @@
 # development/runbook-dev-playground.md). Usage: bash development/market-thread.sh [beats-file]
 # (default development/market-threads/haggle.beats; one file per variation). A beats file may set
 # who answers and where with `@keeper <id>`, `@keeper_situation <text>` and
-# `@speaker_situation <text>` lines, and where the keeper's feelings start with
-# `@state <emotion> <level>` lines; without them it is Mara at her fruit stall.
+# `@speaker_situation <text>` lines, and where the keeper's feelings and standing start with
+# `@state <emotion> <level>` and `@rapport <toward> <-100..100>` lines; without them it is Mara at
+# her fruit stall.
 cd "$(dirname "$0")/.."
 D=${DF_TABLE_EXE:-./artifacts/build/bubbles/debug/df-table.exe}
 P=${DF_TABLE_PORT:-7879}
@@ -28,13 +29,15 @@ while IFS= read -r setting; do
     '@keeper '*) KEEPER=$value ;;
     '@keeper_situation '*) KEEPER_SITUATION=$value ;;
     '@speaker_situation '*) SPEAKER_SITUATION=$value ;;
-    '@state '*) STARTING_STATE+=("$value") ;;
+    '@state '*) STARTING_STATE+=("set $value") ;;
+    '@rapport '*) STARTING_STATE+=("rapport $value") ;;
   esac
 done < <(grep '^@' "$BEATS")
-# `@state <emotion> <level>` lines set where the keeper's feelings start (a scene that begins
-# mid-story), through the same state API as `persona state <id> set`.
+# `@state <emotion> <level>` and `@rapport <toward> <-100..100>` lines set where the keeper's
+# feelings and standing start (a scene that begins mid-story), through the same state API as
+# `persona state <id> set|rapport`.
 for preset in "${STARTING_STATE[@]}"; do
-  $D dev --port $P persona state "$KEEPER" set $preset >/dev/null
+  $D dev --port $P persona state "$KEEPER" $preset >/dev/null
 done
 
 # Mara's discount rules live in her persona (a trigger is a statement the model judges, never a
