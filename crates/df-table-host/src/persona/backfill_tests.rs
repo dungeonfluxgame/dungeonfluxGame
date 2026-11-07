@@ -17,7 +17,8 @@ fn store_innkeeper(host: &ScriptedHost) {
 }
 
 async fn ask(host: &ScriptedHost, extra: Value) -> PersonaReply<Answered> {
-    let mut body = json!({"character": CHARACTER, "question": "Where did you grow up?"});
+    let mut body =
+        json!({"character": CHARACTER, "question": "Where did you grow up?", "coverage": true});
     for (key, value) in extra.as_object().into_iter().flatten() {
         body[key] = value.clone();
     }
@@ -285,7 +286,7 @@ async fn no_persona_audit_line_holds_persona_question_line_or_edit_text() {
     for expected in [
         "PERSONA covered id=innkeeper enough=false gaps=1",
         "PERSONA backfilled id=innkeeper gaps=1 edits=1 duration_ms=",
-        "PERSONA said id=innkeeper duration_ms=",
+        "PERSONA said id=innkeeper model_ms=",
     ] {
         assert!(
             lines.iter().any(|line| line.starts_with(expected)),
@@ -331,6 +332,11 @@ async fn guidance_reaches_the_coverage_question_the_backfill_and_the_spoken_line
     assert_eq!(host.calls(), 4);
     for (call, step) in [(0, "coverage"), (1, "backfill"), (3, "line")] {
         let facts = host.facts_of(call);
+        let facts = if step == "line" {
+            facts["now"].clone()
+        } else {
+            facts
+        };
         assert_eq!(
             facts["guidance"]["must_establish"],
             json!(["she has walked the north road"]),
@@ -443,7 +449,7 @@ async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established()
     store_innkeeper(&failed);
     done(ask(&failed, json!({})).await);
     assert_eq!(
-        failed.facts_of(3)["not_established"],
+        failed.facts_of(3)["now"]["not_established"],
         json!(["childhood", "first horse"])
     );
     assert!(failed.instructions_of(3).contains("not_established"));
@@ -457,7 +463,7 @@ async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established()
     store_innkeeper(&not_asked);
     done(ask(&not_asked, json!({"backfill": false})).await);
     assert_eq!(
-        not_asked.facts_of(1)["not_established"],
+        not_asked.facts_of(1)["now"]["not_established"],
         json!(["childhood"])
     );
     // A backfill that filled the gap, and a persona that held enough, leave nothing.
@@ -470,11 +476,11 @@ async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established()
     .await;
     store_innkeeper(&filled);
     done(ask(&filled, json!({})).await);
-    assert_eq!(filled.facts_of(3)["not_established"], json!([]));
+    assert!(filled.facts_of(3)["now"].get("not_established").is_none());
     let covered = scripted_host(vec![coverage_answer(&[]), line_answer("Above the inn.")]).await;
     store_innkeeper(&covered);
     done(ask(&covered, json!({})).await);
-    assert_eq!(covered.facts_of(1)["not_established"], json!([]));
+    assert!(covered.facts_of(1)["now"].get("not_established").is_none());
 }
 
 #[tokio::test]
@@ -503,17 +509,20 @@ async fn a_public_price_in_the_world_facts_reaches_the_judge_and_the_line_and_is
     assert_eq!(judge["known_public_world_facts"]["audience"], "public");
     let apple = &judge["known_public_world_facts"]["stalls"][0]["items"][0];
     assert_eq!(
-        (apple["id"].clone(), apple["quotes"][0]["total_cp"].clone()),
+        (
+            apple["id"].clone(),
+            apple["quotes"][0]["ask_total_cp"].clone()
+        ),
         (json!("apple"), json!(3))
     );
     assert!(host.instructions_of(2).contains("never a leak"));
     // The line is told the same facts, and is told to state a price when asked.
     let line = host.facts_of(3);
     assert_eq!(
-        line["world"]["stalls"][0]["items"][0]["quotes"][0]["total_cp"],
+        line["context"]["world"]["stalls"][0]["items"][0]["quotes"][0]["ask_total_cp"],
         3
     );
-    assert_eq!(line["world"]["audience"], "public");
+    assert_eq!(line["context"]["world"]["audience"], "public");
     let instructions = host.instructions_of(3);
     assert!(instructions.contains("always states them when asked"));
     assert!(instructions.contains("is never a leak"));

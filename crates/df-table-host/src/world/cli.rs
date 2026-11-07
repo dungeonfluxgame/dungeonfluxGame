@@ -4,9 +4,7 @@
 
 use df_content::world_bible::{MAXIMUM_ID_CHARS, PriceQuote};
 
-use super::request::{
-    PlaceRequest, PlaceSet, Quoted, Validated, WorldReply, WorldView,
-};
+use super::request::{PlaceRequest, PlaceSet, Quoted, Validated, WorldReply, WorldView};
 use super::routes::path;
 use crate::command::{CommandError, bad_choice};
 use crate::dev::DevError;
@@ -100,15 +98,17 @@ fn format_quote(quoted: &Quoted) -> String {
     let PriceQuote {
         qty,
         ask_each_cp,
-        bulk_each_cp,
         discount_permille,
-        floor_each_cp,
-        total_cp,
+        ask_total_cp,
+        tier_total_cp,
         floor_total_cp,
+        tier_each_cp,
+        floor_each_cp,
     } = quoted.quote;
     format!(
-        "{qty} x {} at {}: {bulk_each_cp} cp each (list {ask_each_cp}, bulk {discount_permille} \
-         permille off), asking {total_cp} cp, lowest {floor_total_cp} cp (each {floor_each_cp})",
+        "{qty} x {} at {}: ask {ask_total_cp} cp (list {ask_each_cp} each), \
+         tier {tier_total_cp} cp (bulk {discount_permille} permille off, {tier_each_cp} each), \
+         floor {floor_total_cp} cp ({floor_each_cp} each)",
         quoted.item, quoted.place
     )
 }

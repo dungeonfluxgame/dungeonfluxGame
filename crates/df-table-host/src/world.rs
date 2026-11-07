@@ -6,7 +6,9 @@
 //! is a typed [`WorldError`]. The active place is `<playground>/world/state.json`
 //! (`{"place": "<id>"}`).
 //!
-//! `context_for` is the single seam between the persona prompts and the bible. It answers an
+//! `context_for_viewer` (keeper sees ask, tiers and floor; anyone else only the posted facts) and
+//! `context_for` (keeper level, for tools) are the seams between the persona prompts and the
+//! bible, and `check_quote` clamps a quoted total. Each answers an
 //! empty context when there is nothing to say (no active place, an empty bible), and records one
 //! `WORLD context_unavailable error=<key>` line when the bible cannot be had, so persona prompts
 //! work without a bible and a broken one is visible in the log.
@@ -30,6 +32,8 @@ pub use self::cli::{WorldCommand, parse};
 pub use self::request::WorldError;
 pub use self::routes::router_with;
 
+use df_content::world_bible::clamp_quote;
+
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -49,16 +53,28 @@ impl WorldContext {
     }
 }
 
-/// The bible's context for a persona's prompt: the facts of the active place and the packs named
-/// by `pack_ids`. A pack the bible does not hold is left out.
+/// The bible's context at keeper level for every stall, for tools: the facts of the active place
+/// and the packs named by `pack_ids`. A pack the bible does not hold is left out.
 pub fn context_for(app: &AppState, pack_ids: &[String]) -> WorldContext {
+    context(app, pack_ids, None)
+}
+
+/// The bible's context for a persona's prompt as `viewer_id` sees it: the keeper of a stall sees
+/// all
+/// of it (ask, tiers, floor, haggle room), anyone else only what the stall posts, so a customer is
+/// never told the lowest price.
+pub fn context_for_viewer(app: &AppState, pack_ids: &[String], viewer_id: &str) -> WorldContext {
+    context(app, pack_ids, Some(viewer_id))
+}
+
+fn context(app: &AppState, pack_ids: &[String], viewer: Option<&str>) -> WorldContext {
     let directory = store::world_directory(app);
     let context = (|| {
         let bible = store::read_bible(&directory)?;
         let facts = match store::read_place(&directory)? {
-            Some(id) => bible
-                .place(&id)
-                .map_or(serde_json::Value::Null, |place| facts::place_facts(&bible, place)),
+            Some(id) => bible.place(&id).map_or(serde_json::Value::Null, |place| {
+                facts::place_facts(&bible, place, viewer)
+            }),
             None => serde_json::Value::Null,
         };
         let voice_packs = pack_ids
@@ -89,4 +105,34 @@ pub fn available_packs(app: &AppState) -> Vec<serde_json::Value> {
             Vec::new()
         }
     }
+}
+
+/// The result of checking a quoted total against the stall's rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuoteCheck {
+    pub proposed_total_cp: u32,
+    pub clamped_total_cp: u32,
+    pub floor_total_cp: u32,
+    pub ask_total_cp: u32,
+}
+
+/// Checks the total a character quoted for `qty` of `item` at the stall `keeper` keeps against the
+/// stall's floor and tier total, and clamps it between them. `ask_total_cp` is the tier total, what
+/// the keeper asks for this lot. `None` when the bible, read fresh, has no such stall or item.
+pub fn check_quote(
+    app: &AppState,
+    keeper: &str,
+    item: &str,
+    qty: u32,
+    proposed_total_cp: u32,
+) -> Option<QuoteCheck> {
+    let bible = store::read_bible(&store::world_directory(app)).ok()?;
+    let quote = bible.quote_for_keeper(keeper, item, qty)?;
+    let narrow = |cp: u64| u32::try_from(cp).unwrap_or(u32::MAX);
+    Some(QuoteCheck {
+        proposed_total_cp,
+        clamped_total_cp: narrow(clamp_quote(u64::from(proposed_total_cp), &quote)),
+        floor_total_cp: narrow(quote.floor_total_cp),
+        ask_total_cp: narrow(quote.tier_total_cp),
+    })
 }

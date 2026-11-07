@@ -53,7 +53,9 @@ pub(super) fn view(directory: &Path) -> Result<WorldView, WorldError> {
     let facts = place
         .as_deref()
         .and_then(|id| bible.place(id))
-        .map_or(serde_json::Value::Null, |place| place_facts(&bible, place));
+        .map_or(serde_json::Value::Null, |place| {
+            place_facts(&bible, place, None)
+        });
     Ok(WorldView {
         place,
         items: bible.items.iter().map(|item| item.id.clone()).collect(),

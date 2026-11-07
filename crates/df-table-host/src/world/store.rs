@@ -77,7 +77,8 @@ pub(super) fn write_place(directory: &Path, place: Option<&str>) -> Result<(), W
         place: place.map(str::to_owned),
     };
     let unwritable = |cause| WorldError::StateUnwritable { cause };
-    let text = serde_json::to_string_pretty(&state).map_err(|_| unwritable(IoCause::InvalidData))?;
+    let text =
+        serde_json::to_string_pretty(&state).map_err(|_| unwritable(IoCause::InvalidData))?;
     let _writing = WORLD_WRITES.lock();
     crate::atomic_file::write_atomically(directory, STATE_FILE, text.as_bytes())
         .map_err(|error| unwritable(IoCause::from_kind(error.kind())))

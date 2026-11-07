@@ -118,6 +118,7 @@ fn scripted_interpreter() -> ScriptedInterpreter {
             Interpretation::NeedsClarification,
         )
         .with_line("ready", Interpretation::NeedsClarification)
+        .with_line("hello there", Interpretation::NeedsClarification)
         .with_line("x", Interpretation::NeedsClarification)
         .with_line("anything", Interpretation::NeedsClarification)
 }

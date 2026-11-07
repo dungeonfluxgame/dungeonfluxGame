@@ -77,22 +77,38 @@ pub struct Validated {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum WorldError {
     InvalidBody(BodyError),
-    InvalidQuery { detail: String },
+    InvalidQuery {
+        detail: String,
+    },
     /// `world/bible.json` could not be read.
-    BibleUnreadable { cause: IoCause },
+    BibleUnreadable {
+        cause: IoCause,
+    },
     /// `world/bible.json` is not a valid bible; `cause` says where and why.
-    BibleInvalid { cause: BibleError },
+    BibleInvalid {
+        cause: BibleError,
+    },
     /// `world/state.json` could not be read.
-    StateUnreadable { cause: IoCause },
+    StateUnreadable {
+        cause: IoCause,
+    },
     /// `world/state.json` is not the state file.
-    StateInvalid { cause: BodyError },
-    StateUnwritable { cause: IoCause },
+    StateInvalid {
+        cause: BodyError,
+    },
+    StateUnwritable {
+        cause: IoCause,
+    },
     /// The place is not an id, or not in the bible.
-    UnknownPlace { id: String },
+    UnknownPlace {
+        id: String,
+    },
     /// A quote needs a place and none is active (`world place <id>`).
     NoActivePlace,
     /// The quote cannot be made.
-    Quote { cause: QuoteError },
+    Quote {
+        cause: QuoteError,
+    },
     Stopped,
 }
 
@@ -136,12 +152,12 @@ impl fmt::Display for WorldError {
             Self::StateUnwritable { cause } => {
                 write!(formatter, "world/state.json could not be written: {cause}")
             }
-            Self::UnknownPlace { id } => write!(
-                formatter,
-                "the bible has no place {id:?} (see: world show)"
-            ),
-            Self::NoActivePlace => formatter
-                .write_str("no place is active (set one with: world place <id>)"),
+            Self::UnknownPlace { id } => {
+                write!(formatter, "the bible has no place {id:?} (see: world show)")
+            }
+            Self::NoActivePlace => {
+                formatter.write_str("no place is active (set one with: world place <id>)")
+            }
             Self::Quote { cause } => write!(formatter, "{cause}"),
             Self::Stopped => formatter.write_str("the host stopped before the work finished"),
         }

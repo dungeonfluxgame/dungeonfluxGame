@@ -13,7 +13,7 @@
         {
           "keeper": "fruit_vendor",
           "sells": ["apple", "pear", "plum"],
-          "bulk": [{"min_qty": 5, "discount_permille": 100}],
+          "bulk": [{"min_qty": 5, "discount_permille": 100, "posted": true}],
           "haggle_floor_permille": 850
         }
       ]

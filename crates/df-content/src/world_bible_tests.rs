@@ -49,6 +49,7 @@ fn stall(bulk: &[(u32, u32)], floor: u32) -> Stall {
             .map(|&(min_qty, discount_permille)| BulkTier {
                 min_qty,
                 discount_permille,
+                posted: false,
             })
             .collect(),
         haggle_floor_permille: floor,
@@ -165,55 +166,82 @@ fn bulk_tiers_ascend_and_never_cost_more_per_unit_for_a_bigger_lot() {
 #[test]
 fn a_single_unit_costs_its_base_value() {
     let q = quote(&item(3), 1, &stall(&[(5, 100)], 850)).unwrap();
-    assert_eq!((q.ask_each_cp, q.bulk_each_cp, q.total_cp), (3, 3, 3));
-    assert_eq!(q.discount_permille, 0);
+    assert_eq!((q.ask_each_cp, q.ask_total_cp, q.tier_total_cp), (3, 3, 3));
+    assert_eq!((q.discount_permille, q.floor_total_cp), (0, 3));
     let many = quote(&item(7), 4, &stall(&[], 1000)).unwrap();
     assert_eq!(
-        (many.bulk_each_cp, many.total_cp, many.floor_total_cp),
-        (7, 28, 28)
+        (many.tier_total_cp, many.ask_total_cp, many.floor_total_cp),
+        (28, 28, 28)
     );
+    assert_eq!((many.tier_each_cp, many.floor_each_cp), (7, 7));
 }
 
 #[test]
 fn a_bulk_tier_applies_from_its_minimum_and_the_largest_reached_wins() {
     let s = stall(&[(5, 100), (20, 250)], 1000);
     let at = |qty| quote(&item(100), qty, &s).unwrap();
-    assert_eq!(at(4).bulk_each_cp, 100);
-    assert_eq!(at(5).bulk_each_cp, 90);
-    assert_eq!(at(19).bulk_each_cp, 90);
-    assert_eq!(at(20).bulk_each_cp, 75);
-    assert_eq!(at(20).total_cp, 1500);
+    assert_eq!(at(4).tier_total_cp, 400);
+    assert_eq!(at(5).tier_total_cp, 450);
+    assert_eq!(at(19).tier_total_cp, 1710);
+    assert_eq!(at(20).tier_total_cp, 1500);
+    assert_eq!(at(20).ask_total_cp, 2000);
     assert_eq!(at(20).discount_permille, 250);
+    assert_eq!(at(20).tier_each_cp, 75);
 }
 
 #[test]
-fn the_floor_is_a_share_of_what_is_asked_and_the_room_is_in_the_total() {
-    // Five apples at 3 cp: 15 cp asked, 85 percent of it is 12.75, so 13.
+fn the_discount_is_taken_on_the_total_so_five_apples_at_three_cost_fourteen() {
+    // 15 cp asked; ten percent off is 13.5, so 14; 85 percent of 15 is 12.75, so 13.
     let q = quote(&item(3), 5, &stall(&[(5, 100)], 850)).unwrap();
-    assert_eq!(q.bulk_each_cp, 3);
-    assert_eq!((q.total_cp, q.floor_total_cp), (15, 13));
-    // The floor per unit rounds up as well: 2.55 is 3.
-    assert_eq!(q.floor_each_cp, 3);
+    assert_eq!(
+        (q.ask_total_cp, q.tier_total_cp, q.floor_total_cp),
+        (15, 14, 13)
+    );
+    // Display only: 14 over 5 is 2.8, 13 over 5 is 2.6.
+    assert_eq!((q.tier_each_cp, q.floor_each_cp), (3, 3));
 }
 
 #[test]
-fn rounding_goes_up_and_nothing_is_ever_below_one_copper() {
-    let rounded = quote(&item(3), 5, &stall(&[(5, 100)], 1000)).unwrap();
-    assert_eq!(rounded.bulk_each_cp, 3, "2.7 rounds up to 3");
+fn rounding_goes_up_and_a_lot_is_never_below_one_copper_a_unit() {
     let cheap = quote(&item(1), 100, &stall(&[(2, 999)], 1)).unwrap();
-    assert_eq!(cheap.bulk_each_cp, 1);
-    assert_eq!(cheap.floor_each_cp, 1);
-    assert_eq!(cheap.total_cp, 100);
+    assert_eq!(cheap.ask_total_cp, 100);
+    assert_eq!(cheap.tier_total_cp, 100, "never below 1 cp each");
     assert_eq!(cheap.floor_total_cp, 1);
+    assert_eq!((cheap.tier_each_cp, cheap.floor_each_cp), (1, 1));
+    let one = quote(&item(1), 1, &stall(&[], 1)).unwrap();
+    assert_eq!((one.tier_total_cp, one.floor_total_cp), (1, 1));
+}
+
+#[test]
+fn a_quantity_below_every_tier_has_no_discount() {
+    let q = quote(&item(3), 4, &stall(&[(5, 100)], 850)).unwrap();
+    assert_eq!((q.discount_permille, q.ask_total_cp, q.tier_total_cp), (0, 12, 12));
+    assert_eq!(q.floor_total_cp, 11, "10.2 rounds up");
+}
+
+#[test]
+fn the_floor_is_never_above_the_tier_total() {
+    for floor in [1, 500, 850, 899, 900, 901, 1000] {
+        for qty in 1..=12 {
+            for base in [1, 2, 3, 7, 100] {
+                let q = quote(&item(base), qty, &stall(&[(5, 100)], floor)).unwrap();
+                assert!(q.floor_total_cp >= 1);
+                assert!(q.floor_total_cp <= q.tier_total_cp, "{floor} {qty} {base}");
+                assert!(q.tier_total_cp <= q.ask_total_cp);
+                assert!(q.tier_total_cp >= u64::from(qty));
+            }
+        }
+    }
 }
 
 #[test]
 fn quotes_saturate_instead_of_overflowing() {
     let q = quote(&item(u64::MAX), u32::MAX, &stall(&[(2, 1)], 1000)).unwrap();
-    assert_eq!(q.total_cp, u64::MAX);
-    assert_eq!(q.floor_total_cp, u64::MAX);
+    assert_eq!(q.ask_total_cp, u64::MAX);
+    assert!(q.tier_total_cp <= q.ask_total_cp && q.tier_total_cp > u64::MAX / 2);
+    assert_eq!(q.floor_total_cp, q.tier_total_cp);
     assert_eq!(q.ask_each_cp, u64::MAX);
-    assert!(q.bulk_each_cp >= 1);
+    assert!(q.tier_each_cp >= 1);
 }
 
 #[test]
@@ -236,7 +264,7 @@ fn a_quote_needs_a_unit_and_an_item_the_stall_sells() {
 fn a_quote_is_found_by_place_and_item() {
     let bible = parse(&good()).unwrap();
     let q = bible.quote_at("market", "pear", 5).unwrap();
-    assert_eq!((q.bulk_each_cp, q.total_cp), (4, 20));
+    assert_eq!((q.ask_total_cp, q.tier_total_cp), (20, 18));
     assert_eq!(
         bible.quote_at("harbor", "pear", 1),
         Err(QuoteError::UnknownPlace {
@@ -262,12 +290,32 @@ fn a_quote_is_found_by_place_and_item() {
 }
 
 #[test]
-fn a_proposal_is_held_between_the_floor_and_the_asking_total() {
+fn a_proposal_is_held_between_the_floor_and_the_tier_total() {
     let q = quote(&item(3), 5, &stall(&[(5, 100)], 850)).unwrap();
     assert_eq!(clamp_quote(0, &q), 13);
     assert_eq!(clamp_quote(12, &q), 13);
+    assert_eq!(clamp_quote(13, &q), 13);
     assert_eq!(clamp_quote(14, &q), 14);
-    assert_eq!(clamp_quote(15, &q), 15);
-    assert_eq!(clamp_quote(99, &q), 15);
-    assert_eq!(clamp_quote(u64::MAX, &q), 15);
+    assert_eq!(clamp_quote(15, &q), 14);
+    assert_eq!(clamp_quote(99, &q), 14);
+    assert_eq!(clamp_quote(u64::MAX, &q), 14);
+}
+
+#[test]
+fn a_quote_for_a_keeper_finds_their_stall_and_item_or_none() {
+    let bible = parse(&good()).unwrap();
+    let q = bible.quote_for_keeper("fruit_vendor", "apple", 5).unwrap();
+    assert_eq!((q.ask_total_cp, q.tier_total_cp, q.floor_total_cp), (15, 14, 13));
+    assert_eq!(bible.quote_for_keeper("fruit_vendor", "plum", 5), None);
+    assert_eq!(bible.quote_for_keeper("baker", "apple", 5), None);
+    assert_eq!(bible.quote_for_keeper("fruit_vendor", "apple", 0), None);
+}
+
+#[test]
+fn a_bulk_tier_is_unposted_unless_the_bible_says_so() {
+    let bible = parse(&good()).unwrap();
+    assert!(!bible.places[0].stalls[0].bulk[0].posted);
+    let mut posted = good();
+    posted["places"][0]["stalls"][0]["bulk"][0]["posted"] = json!(true);
+    assert!(parse(&posted).unwrap().places[0].stalls[0].bulk[0].posted);
 }

@@ -24,7 +24,7 @@ use crate::imagegen::request::{GenerateError, JobView};
 use crate::limits::UPLOAD_PIECE_BYTES;
 use crate::locate::request::LocateError;
 use crate::persona::request::PersonaError;
-use crate::persona::{ConverseError, PlateStep};
+use crate::persona::{ConverseError, EmotionError, PlateStep};
 use crate::world::WorldError;
 use crate::playground::{
     ChangeReply, ClientsError, FixtureNameError, PlaygroundChangeError, fixture_file_name,
@@ -62,6 +62,7 @@ pub enum ReplyError {
     Generate(GenerateError),
     Cast(CastError),
     Persona(PersonaError),
+    Emotion(EmotionError),
     Speech(SpeechError),
     World(WorldError),
     RulesCheck(RulesCheckError),
@@ -89,6 +90,7 @@ impl fmt::Display for ReplyError {
             Self::Generate(error) => write!(formatter, "{error}"),
             Self::Cast(error) => write!(formatter, "{error}"),
             Self::Persona(error) => write!(formatter, "{error}"),
+            Self::Emotion(error) => write!(formatter, "{error}"),
             Self::Speech(error) => write!(formatter, "{error}"),
             Self::World(error) => write!(formatter, "{error}"),
             Self::RulesCheck(error) => write!(formatter, "{error}"),
@@ -167,6 +169,12 @@ impl From<PersonaError> for ReplyError {
     }
 }
 
+impl From<EmotionError> for ReplyError {
+    fn from(error: EmotionError) -> Self {
+        Self::Emotion(error)
+    }
+}
+
 impl From<WorldError> for ReplyError {
     fn from(error: WorldError) -> Self {
         Self::World(error)
@@ -211,6 +219,7 @@ fn write_refusal(
         ReplyError::Locate(error) => error.key(),
         ReplyError::Cast(error) => error.key(),
         ReplyError::Persona(error) => error.key(),
+        ReplyError::Emotion(error) => error.key(),
         ReplyError::Speech(error) => error.key(),
         ReplyError::World(error) => error.key(),
         ReplyError::Host(error) => error.key(),

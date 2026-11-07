@@ -3,13 +3,14 @@
 //! of the one edit route.
 
 use df_content::persona::{
-    PersonaBehavior, PersonaEdit, PersonaField, PersonaSecret, PersonaTrigger, Sensitivity,
-    VoiceField,
+    EmotionDelta, EmotionalTrigger, PersonaBehavior, PersonaEdit, PersonaField, PersonaSecret,
+    PersonaTrigger, Sensitivity, StateCondition, TemperamentField, VoiceField,
 };
 
 use super::cli::{
-    PERSONA_BEHAVIOR_USAGE, PERSONA_EXPERTISE_USAGE, PERSONA_SECRET_USAGE, PERSONA_TRIGGER_USAGE,
-    PERSONA_VOICE_USAGE, PersonaCommand, edit, flag, free_text, id_word,
+    PERSONA_BEHAVIOR_USAGE, PERSONA_EMOTION_USAGE, PERSONA_EXPERTISE_USAGE, PERSONA_SECRET_USAGE,
+    PERSONA_STATE_USAGE, PERSONA_TEMPERAMENT_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_VOICE_USAGE,
+    PersonaCommand, edit, flag, free_text, id_word,
 };
 use super::options::{asking_from, take_options};
 use crate::command::{CommandError, bad_choice};
@@ -171,10 +172,9 @@ pub(super) fn parse_voice(words: &[String]) -> Result<PersonaCommand, CommandErr
                 index: entry_index(index)?,
             }],
         ),
-        [id, noun, verb, pack] if noun == "pack" && verb == "add" => edit(
-            id,
-            vec![PersonaEdit::AddVoicePack { pack: pack.clone() }],
-        ),
+        [id, noun, verb, pack] if noun == "pack" && verb == "add" => {
+            edit(id, vec![PersonaEdit::AddVoicePack { pack: pack.clone() }])
+        }
         [id, noun, verb, pack] if noun == "pack" && verb == "drop" => edit(
             id,
             vec![PersonaEdit::RemoveVoicePack { pack: pack.clone() }],
@@ -210,5 +210,124 @@ pub(super) fn parse_expertise(words: &[String]) -> Result<PersonaCommand, Comman
             }],
         ),
         _ => Err(CommandError::Usage(PERSONA_EXPERTISE_USAGE)),
+    }
+}
+
+fn level_word(word: &str) -> Result<u8, CommandError> {
+    word.parse::<u8>()
+        .ok()
+        .filter(|level| *level <= 100)
+        .ok_or_else(|| bad_choice("level", word, "a whole number from 0 to 100"))
+}
+
+fn delta_word(word: &str) -> Result<i8, CommandError> {
+    word.parse::<i8>()
+        .ok()
+        .filter(|delta| (-100..=100).contains(delta))
+        .ok_or_else(|| bad_choice("delta", word, "a whole number from -100 to 100"))
+}
+
+/// `value` as `<emotion>:<number>`, the number read by `number`.
+fn emotion_pair<T>(
+    key: &'static str,
+    value: &str,
+    number: fn(&str) -> Result<T, CommandError>,
+) -> Result<(String, T), CommandError> {
+    let (emotion, amount) = value
+        .split_once(':')
+        .ok_or_else(|| bad_choice(key, value, "<emotion>:<number>"))?;
+    Ok((emotion.to_owned(), number(amount)?))
+}
+
+pub(super) fn parse_temperament(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let usage = || CommandError::Usage(PERSONA_TEMPERAMENT_USAGE);
+    match words {
+        [id, verb, field, value] if verb == "set" => {
+            let field = TemperamentField::from_key(field).ok_or_else(|| {
+                let keys: Vec<&str> = TemperamentField::ALL.into_iter().map(|f| f.key()).collect();
+                bad_choice("temperament field", field, keys.join(", "))
+            })?;
+            let value = value
+                .parse::<u8>()
+                .map_err(|_| bad_choice("value", value, "a whole number from 0 to 100"))?;
+            edit(id, vec![PersonaEdit::SetTemperament { field, value }])
+        }
+        [id, verb, emotion, level] if verb == "baseline" => edit(
+            id,
+            vec![PersonaEdit::SetBaseline {
+                emotion: emotion.clone(),
+                level: level_word(level)?,
+            }],
+        ),
+        [id, verb, rest @ ..] if verb == "generate" => {
+            let (given, rest) = take_options(rest, &["model"]);
+            if !rest.is_empty() {
+                return Err(usage());
+            }
+            Ok(PersonaCommand::TemperamentGenerate {
+                id: id_word(id)?,
+                model: asking_from(&given)?.model,
+            })
+        }
+        _ => Err(usage()),
+    }
+}
+
+pub(super) fn parse_emotion(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let usage = || CommandError::Usage(PERSONA_EMOTION_USAGE);
+    match words {
+        [id, noun, verb, trigger, rest @ ..] if noun == "trigger" && verb == "add" => {
+            let (given, text) = take_options(rest, &["state", "set", "behavior", "event"]);
+            let mut put = EmotionalTrigger {
+                id: trigger.clone(),
+                when_state: None,
+                when_event: None,
+                sets: Vec::new(),
+                behavior: None,
+            };
+            let mut event: Vec<&str> = Vec::new();
+            for (key, value) in given {
+                match key {
+                    "state" => {
+                        let (emotion, at_least) = emotion_pair("state", value, level_word)?;
+                        put.when_state = Some(StateCondition { emotion, at_least });
+                    }
+                    "set" => {
+                        let (emotion, delta) = emotion_pair("set", value, delta_word)?;
+                        put.sets.push(EmotionDelta { emotion, delta });
+                    }
+                    "behavior" => put.behavior = Some(value.to_owned()),
+                    _ => event.push(value),
+                }
+            }
+            event.extend(text.iter().map(String::as_str));
+            if !event.is_empty() {
+                put.when_event = Some(event.join(" "));
+            }
+            if put.when_state.is_none() && put.when_event.is_none() {
+                return Err(usage());
+            }
+            edit(id, vec![PersonaEdit::PutEmotionalTrigger { trigger: put }])
+        }
+        [id, noun, verb, trigger] if noun == "trigger" && verb == "drop" => edit(
+            id,
+            vec![PersonaEdit::RemoveEmotionalTrigger {
+                id: trigger.clone(),
+            }],
+        ),
+        _ => Err(usage()),
+    }
+}
+
+pub(super) fn parse_state(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    match words {
+        [id] => Ok(PersonaCommand::State { id: id_word(id)? }),
+        [id, verb] if verb == "reset" => Ok(PersonaCommand::StateReset { id: id_word(id)? }),
+        [id, verb, emotion, level] if verb == "set" => Ok(PersonaCommand::StateSet {
+            id: id_word(id)?,
+            emotion: emotion.clone(),
+            level: level_word(level)?,
+        }),
+        _ => Err(CommandError::Usage(PERSONA_STATE_USAGE)),
     }
 }

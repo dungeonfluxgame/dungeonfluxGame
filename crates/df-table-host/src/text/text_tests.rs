@@ -205,6 +205,32 @@ fn every_backend_reads_usage_the_same_way() {
 }
 
 #[test]
+fn a_codex_run_is_lean_and_its_extra_arguments_come_last_and_split_on_spaces() {
+    use super::codex_text::{extra_arguments, lean_arguments};
+    let arguments = lean_arguments(std::path::Path::new(r"C:\work\instructions.txt"));
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["-c", "features.plugins=false"])
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["-c", "model_reasoning_effort=\"low\""])
+    );
+    assert_eq!(
+        arguments.last().map(String::as_str),
+        Some(r"model_instructions_file='C:\work\instructions.txt'")
+    );
+    assert!(!arguments.iter().any(|argument| argument == "--disable"));
+    assert_eq!(
+        extra_arguments(Some(" -c  model_reasoning_effort=\"high\" ")),
+        ["-c", "model_reasoning_effort=\"high\""]
+    );
+    assert!(extra_arguments(None).is_empty());
+}
+
+#[test]
 fn the_codex_prompt_carries_the_facts_and_the_order_of_the_pictures() {
     let text = super::codex_text::prompt(&request());
     assert!(text.starts_with("Match the people."));

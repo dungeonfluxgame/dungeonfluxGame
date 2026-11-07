@@ -160,8 +160,8 @@ async fn a_line_the_model_reports_as_leaking_is_a_suspect_and_still_cued() {
         .into_iter()
         .filter(|line| line.starts_with("PERSONA said"))
         .collect();
-    assert!(said[0].ends_with("leak_suspect=true"), "{said:?}");
-    assert!(said[1].ends_with("leak_suspect=false"), "{said:?}");
+    assert!(said[0].contains(" leak_suspect=true "), "{said:?}");
+    assert!(said[1].contains(" leak_suspect=false "), "{said:?}");
 }
 
 #[test]

@@ -34,8 +34,45 @@ use crate::environment;
 pub const EXECUTABLE_VARIABLE: &str = "DF_TEXT_CODEX_EXECUTABLE";
 /// The environment variable that names the folder Codex attempts run in.
 pub const WORK_DIRECTORY_VARIABLE: &str = "DF_TEXT_CODEX_WORKDIR";
+/// The environment variable of extra `codex exec` arguments (space separated), appended after the
+/// host's own so they win; it tunes the run without a rebuild.
+pub const EXTRA_ARGUMENTS_VARIABLE: &str = "DF_TEXT_CODEX_ARGS";
 /// The file in an attempt's folder that `codex exec -o` writes the run's last message to.
 pub(super) const LAST_MESSAGE_FILE: &str = "last-message.txt";
+/// The file in an attempt's folder that replaces Codex's own agent instructions.
+const INSTRUCTIONS_FILE: &str = "instructions.txt";
+/// What replaces Codex's agent instructions: the request's own prompt says everything else.
+const AGENT_INSTRUCTIONS: &str = "You answer in JSON only.";
+/// The features switched off: each adds a tool or prompt text a structured answer never uses
+/// (measured: about 24k input tokens per call shrink to about 10k). They are set with `-c
+/// features.<name>=false`, which a Codex version without that feature ignores (`--disable` fails).
+const DISABLED_FEATURES: [&str; 17] = [
+    "plugins",
+    "memories",
+    "apps",
+    "shell_tool",
+    "unified_exec",
+    "view_image",
+    "image_generation",
+    "skill_search",
+    "goals",
+    "tool_suggest",
+    "sleep_tool",
+    "browser_use",
+    "computer_use",
+    "in_app_browser",
+    "hooks",
+    "multi_agent",
+    "code_mode_host",
+];
+/// Configuration overrides that keep the run small and quick.
+const CONFIG_OVERRIDES: [&str; 5] = [
+    "web_search=\"disabled\"",
+    "include_environment_context=false",
+    "include_permissions_instructions=false",
+    "include_apps_instructions=false",
+    "model_reasoning_effort=\"low\"",
+];
 
 static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
@@ -344,6 +381,7 @@ impl std::error::Error for StepError {
 pub(super) struct PreparedAttempt {
     folder: AttemptFolder,
     schema: PathBuf,
+    instructions: PathBuf,
     last: PathBuf,
     pictures: Vec<PathBuf>,
 }
@@ -359,6 +397,9 @@ pub(super) fn prepare(
     let schema = folder.path.join("schema.json");
     let last = folder.path.join(LAST_MESSAGE_FILE);
     std::fs::write(&schema, schema_text).map_err(|error| RunStep::Schema.failed(error))?;
+    let instructions = folder.path.join(INSTRUCTIONS_FILE);
+    std::fs::write(&instructions, AGENT_INSTRUCTIONS)
+        .map_err(|error| RunStep::Schema.failed(error))?;
     let mut pictures = Vec::new();
     for (number, (extension, bytes)) in images.iter().enumerate() {
         let path = folder
@@ -370,6 +411,7 @@ pub(super) fn prepare(
     Ok(PreparedAttempt {
         folder,
         schema,
+        instructions,
         last,
         pictures,
     })
@@ -408,6 +450,31 @@ pub(super) async fn finish(attempt: PreparedAttempt) -> Finished {
     })
 }
 
+/// The words of the extra-arguments setting, in order.
+pub fn extra_arguments(setting: Option<&str>) -> Vec<String> {
+    setting
+        .map(|text| text.split_whitespace().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// The arguments that make a run lean, in the order they are given: the disabled features, the
+/// configuration overrides and the instructions file (a TOML literal string, so a Windows path
+/// needs no escaping).
+pub(super) fn lean_arguments(instructions: &Path) -> Vec<String> {
+    let mut arguments = Vec::new();
+    for feature in DISABLED_FEATURES {
+        arguments.extend(["-c".to_owned(), format!("features.{feature}=false")]);
+    }
+    for setting in CONFIG_OVERRIDES {
+        arguments.extend(["-c".to_owned(), setting.to_owned()]);
+    }
+    arguments.extend([
+        "-c".to_owned(),
+        format!("model_instructions_file='{}'", instructions.display()),
+    ]);
+    arguments
+}
+
 /// The `codex exec` command of one attempt.
 fn command(
     route: &CodexRoute,
@@ -420,6 +487,7 @@ fn command(
         .arg("exec")
         .args(["--skip-git-repo-check", "--ephemeral", "--json"])
         .args(["--sandbox", "read-only", "--color", "never"])
+        .args(lean_arguments(&attempt.instructions))
         .arg("--output-schema")
         .arg(&attempt.schema)
         .arg("--output-last-message")
@@ -427,6 +495,9 @@ fn command(
     if let Some(model) = &route.model {
         command.args(["--model", model]);
     }
+    command.args(extra_arguments(
+        environment::text(EXTRA_ARGUMENTS_VARIABLE).as_deref(),
+    ));
     command.arg(prompt(request));
     for picture in &attempt.pictures {
         command.arg("--image").arg(picture);

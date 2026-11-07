@@ -7,9 +7,10 @@
 //! whole: ids are lowercase letters, digits, `_` or `-` and unique within their list, every
 //! reference resolves, and every range is sane.
 //!
-//! Money is whole copper pieces (`cp`). A quote is integer math: the unit price after the bulk
-//! tier is rounded up, the floor is rounded up, nothing is ever below 1 cp, and every product
-//! saturates instead of overflowing.
+//! Money is whole copper pieces (`cp`). A quote is integer math on totals: the bulk discount and
+//! the
+//! haggle floor are taken off the lot and rounded up, a lot is never below 1 cp a unit, and every
+//! product saturates instead of overflowing.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -43,6 +44,10 @@ pub struct BulkTier {
     pub min_qty: u32,
     /// Off the unit price, from 1 to 999 (a hundred is ten percent).
     pub discount_permille: u32,
+    /// Whether the discount is posted where a customer can read it; an unposted tier is the
+    /// keeper's to offer.
+    #[serde(default)]
+    pub posted: bool,
 }
 
 /// One keeper's stall: what they sell and how far they will bargain.
@@ -334,6 +339,18 @@ impl WorldBible {
             })?;
         quote(item, qty, stall)
     }
+
+    /// The quote for `qty` of `item_id` at the stall `keeper` keeps; `None` when the bible has no
+    /// such stall, item or a zero quantity.
+    pub fn quote_for_keeper(&self, keeper: &str, item_id: &str, qty: u32) -> Option<PriceQuote> {
+        let item = self.item(item_id)?;
+        let stall = self
+            .places
+            .iter()
+            .flat_map(|place| &place.stalls)
+            .find(|stall| stall.keeper == keeper && stall.sells.contains(&item.id))?;
+        quote(item, qty, stall).ok()
+    }
 }
 
 fn check_stall(path: &str, stall: &Stall, item_ids: &BTreeSet<String>) -> Result<(), BibleError> {
@@ -447,29 +464,34 @@ impl fmt::Display for QuoteError {
 
 impl std::error::Error for QuoteError {}
 
-/// What `qty` units cost at a stall. All amounts are copper pieces.
+/// What `qty` units cost at a stall. All amounts are copper pieces. The three totals are the
+/// truth; the `*_each_cp` fields are display only (a total over `qty`, rounded up).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceQuote {
     pub qty: u32,
     /// The unit price before any bulk tier: the item's base value.
     pub ask_each_cp: u64,
-    /// The unit price at this quantity, after the bulk tier, rounded up and at least 1.
-    pub bulk_each_cp: u64,
     /// The discount applied, in permille; 0 when no tier is reached.
     pub discount_permille: u32,
-    /// The lowest unit price the keeper takes (`bulk_each_cp` times the haggle floor, rounded up).
-    pub floor_each_cp: u64,
-    /// `bulk_each_cp * qty`: what the keeper asks for the lot.
-    pub total_cp: u64,
-    /// The lowest total the keeper takes for the lot, rounded up and never above `total_cp`.
+    /// `ask_each_cp * qty`: the lot with no bulk discount.
+    pub ask_total_cp: u64,
+    /// The lot after the bulk tier, rounded up on the total, at least `qty` and never above
+    /// `ask_total_cp`: what the keeper asks.
+    pub tier_total_cp: u64,
+    /// The lowest total the keeper takes for the lot: the haggle floor of `ask_total_cp`, rounded
+    /// up, at least 1 and never above `tier_total_cp`.
     pub floor_total_cp: u64,
+    /// `tier_total_cp` over `qty`, rounded up (display only).
+    pub tier_each_cp: u64,
+    /// `floor_total_cp` over `qty`, rounded up (display only).
+    pub floor_each_cp: u64,
 }
 
-/// `value * permille / 1000`, rounded up, at least 1 and saturating.
+/// `value * permille / 1000`, rounded up and saturating.
 fn permille_of(value: u64, permille: u32) -> u64 {
     let scaled = u128::from(value) * u128::from(permille);
     let rounded = scaled.div_ceil(u128::from(WHOLE_PERMILLE));
-    u64::try_from(rounded).unwrap_or(u64::MAX).max(1)
+    u64::try_from(rounded).unwrap_or(u64::MAX)
 }
 
 /// The price of `qty` of `item` at `stall`. The item must be one the stall sells.
@@ -490,22 +512,30 @@ pub fn quote(item: &Item, qty: u32, stall: &Stall) -> Result<PriceQuote, QuoteEr
         .map(|tier| tier.discount_permille)
         .max()
         .unwrap_or(0);
-    let bulk_each_cp = permille_of(ask_each_cp, WHOLE_PERMILLE - discount_permille);
-    let total_cp = bulk_each_cp.saturating_mul(u64::from(qty));
-    let floor_permille = stall.haggle_floor_permille.min(WHOLE_PERMILLE);
+    let ask_total_cp = ask_each_cp.saturating_mul(u64::from(qty));
+    let tier_total_cp = permille_of(ask_total_cp, WHOLE_PERMILLE - discount_permille)
+        .max(u64::from(qty))
+        .min(ask_total_cp);
+    let floor_total_cp = permille_of(
+        ask_total_cp,
+        stall.haggle_floor_permille.min(WHOLE_PERMILLE),
+    )
+    .clamp(1, tier_total_cp);
+    let each = |total: u64| total.div_ceil(u64::from(qty));
     Ok(PriceQuote {
         qty,
         ask_each_cp,
-        bulk_each_cp,
         discount_permille,
-        floor_each_cp: permille_of(bulk_each_cp, floor_permille),
-        total_cp,
-        floor_total_cp: permille_of(total_cp, floor_permille),
+        ask_total_cp,
+        tier_total_cp,
+        floor_total_cp,
+        tier_each_cp: each(tier_total_cp),
+        floor_each_cp: each(floor_total_cp),
     })
 }
 
 /// `proposed_cp`, a total the model chose for the lot, held inside what the keeper allows: never
-/// below `floor_total_cp` and never above `total_cp`.
+/// below `floor_total_cp` and never above `tier_total_cp`.
 pub fn clamp_quote(proposed_cp: u64, quote: &PriceQuote) -> u64 {
-    proposed_cp.clamp(quote.floor_total_cp, quote.total_cp)
+    proposed_cp.clamp(quote.floor_total_cp, quote.tier_total_cp)
 }

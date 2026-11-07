@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::cli::{WorldCommand, parse};
 use super::request::{PlaceSet, Quoted, Validated, WorldReply, WorldView};
 use super::routes::path;
-use super::{available_packs, context_for};
+use super::{available_packs, check_quote, context_for, context_for_viewer};
 use crate::command::CommandError;
 use crate::dev_client::{get_json, post_json};
 use crate::dev_http::DevReply;
@@ -27,7 +27,7 @@ fn bible(price: u64) -> String {
             "id": "market", "name": "Market", "description": "Stalls.",
             "stalls": [{
                 "keeper": "fruit_vendor", "sells": ["apple", "pear"],
-                "bulk": [{"min_qty": 5, "discount_permille": 100}],
+                "bulk": [{"min_qty": 5, "discount_permille": 100, "posted": true}],
                 "haggle_floor_permille": 850
             }]
         }],
@@ -87,11 +87,28 @@ fn pack_ids(packs: Vec<Value>) -> Vec<String> {
 #[test]
 fn the_shipped_bible_is_valid_and_keys_its_packs_by_community() {
     let bible = df_content::world_bible::WorldBible::from_json_str(SHIPPED).unwrap();
-    let packs: Vec<&str> = bible.voice_packs.iter().map(|pack| pack.id.as_str()).collect();
-    assert_eq!(packs, ["market-trader", "road-weary-guard", "scholarly-traveller"]);
+    let packs: Vec<&str> = bible
+        .voice_packs
+        .iter()
+        .map(|pack| pack.id.as_str())
+        .collect();
+    assert_eq!(
+        packs,
+        ["market-trader", "road-weary-guard", "scholarly-traveller"]
+    );
     let quote = bible.quote_at("market", "apple", 5).unwrap();
-    assert_eq!((quote.total_cp, quote.floor_total_cp), (15, 13));
-    assert_eq!(bible.place("market").unwrap().stalls[0].keeper, "fruit_vendor");
+    assert_eq!(
+        (
+            quote.ask_total_cp,
+            quote.tier_total_cp,
+            quote.floor_total_cp
+        ),
+        (15, 14, 13)
+    );
+    assert_eq!(
+        bible.place("market").unwrap().stalls[0].keeper,
+        "fruit_vendor"
+    );
 }
 
 #[tokio::test]
@@ -147,7 +164,10 @@ async fn the_context_holds_the_facts_of_the_active_place_and_the_named_packs() {
     assert_eq!(context_for(&host.state, &[]).facts, Value::Null);
 
     done(set_place(&host, Some("market")).await);
-    let context = context_for(&host.state, &["market-trader".to_owned(), "nope".to_owned()]);
+    let context = context_for(
+        &host.state,
+        &["market-trader".to_owned(), "nope".to_owned()],
+    );
     assert_eq!(context.voice_packs.len(), 1);
     assert_eq!(context.voice_packs[0]["id"], "market-trader");
     assert_eq!(context.voice_packs[0]["samples"], json!(["Apples, dear?"]));
@@ -158,15 +178,24 @@ async fn the_context_holds_the_facts_of_the_active_place_and_the_named_packs() {
     let apple = &stall["items"][0];
     assert_eq!(apple["id"], "apple");
     let quotes = apple["quotes"].as_array().unwrap();
-    assert_eq!(quotes.len(), 2, "one unit, and the smallest lot of the one tier");
+    assert_eq!(
+        quotes.len(),
+        2,
+        "one unit, and the smallest lot of the one tier"
+    );
     assert_eq!(quotes[0]["qty"], 1);
-    assert_eq!(quotes[0]["total_cp"], 3);
+    assert_eq!(quotes[0]["ask_total_cp"], 3);
     assert_eq!(quotes[1]["qty"], 5);
-    assert_eq!(quotes[1]["total_cp"], 15);
+    assert_eq!(quotes[1]["ask_total_cp"], 15);
+    assert_eq!(quotes[1]["tier_total_cp"], 14);
     assert_eq!(quotes[1]["floor_total_cp"], 13);
+    assert_eq!(context.facts["viewer_role"], "keeper");
 
     let packs = available_packs(&host.state);
-    assert_eq!(packs[0], json!({"id": "market-trader", "description": "brisk"}));
+    assert_eq!(
+        packs[0],
+        json!({"id": "market-trader", "description": "brisk"})
+    );
 
     done(set_place(&host, None).await);
     assert_eq!(context_for(&host.state, &[]).facts, Value::Null);
@@ -178,7 +207,7 @@ async fn an_edit_of_a_price_shows_in_the_next_context_without_a_restart() {
     host.write_asset("world/bible.json", &bible(3));
     done(set_place(&host, Some("market")).await);
     let price = |host: &Running| {
-        context_for(&host.state, &[]).facts["stalls"][0]["items"][0]["quotes"][0]["total_cp"]
+        context_for(&host.state, &[]).facts["stalls"][0]["items"][0]["quotes"][0]["ask_total_cp"]
             .clone()
     };
     assert_eq!(price(&host), 3);
@@ -190,12 +219,21 @@ async fn an_edit_of_a_price_shows_in_the_next_context_without_a_restart() {
 async fn the_active_place_must_be_in_the_bible_and_none_clears_it() {
     let host = host().await;
     host.write_asset("world/bible.json", &bible(3));
-    assert_eq!(refusal(set_place(&host, Some("harbor")).await), "unknown_place");
-    assert_eq!(refusal(set_place(&host, Some("Market!")).await), "unknown_place");
+    assert_eq!(
+        refusal(set_place(&host, Some("harbor")).await),
+        "unknown_place"
+    );
+    assert_eq!(
+        refusal(set_place(&host, Some("Market!")).await),
+        "unknown_place"
+    );
     let set = done(set_place(&host, Some("market")).await);
     assert_eq!(set.place.as_deref(), Some("market"));
     let state = std::fs::read_to_string(host.playground_path("assets/world/state.json")).unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&state).unwrap(), json!({"place": "market"}));
+    assert_eq!(
+        serde_json::from_str::<Value>(&state).unwrap(),
+        json!({"place": "market"})
+    );
     let view: WorldView = done(get_json(host.port, path::WORLD).await.unwrap());
     assert_eq!(view.place.as_deref(), Some("market"));
     assert_eq!(view.facts["place"]["name"], "Market");
@@ -224,19 +262,130 @@ async fn a_quote_is_priced_at_the_active_place() {
     let quote = |item: &'static str, qty: u32| {
         let address = format!("{}?item={item}&qty={qty}", path::WORLD_QUOTE);
         let port = host.port;
-        async move { get_json::<WorldReply<Quoted>>(port, &address).await.unwrap() }
+        async move {
+            get_json::<WorldReply<Quoted>>(port, &address)
+                .await
+                .unwrap()
+        }
     };
     assert_eq!(refusal(quote("apple", 5).await), "no_active_place");
     done(set_place(&host, Some("market")).await);
     let quoted = done(quote("apple", 5).await);
-    assert_eq!((quoted.quote.bulk_each_cp, quoted.quote.total_cp), (3, 15));
-    assert_eq!(quoted.quote.floor_total_cp, 13);
+    let priced = quoted.quote;
+    assert_eq!(
+        (
+            priced.ask_total_cp,
+            priced.tier_total_cp,
+            priced.floor_total_cp
+        ),
+        (15, 14, 13)
+    );
     assert_eq!(refusal(quote("plum", 1).await), "unknown_item");
     assert_eq!(refusal(quote("apple", 0).await), "zero_quantity");
     let bad: WorldReply<Quoted> = get_json(host.port, &format!("{}?item=apple", path::WORLD_QUOTE))
         .await
         .unwrap();
     assert_eq!(refusal(bad), "invalid_query");
+}
+
+const MARKET_STATE: &str = r#"{"place": "market"}"#;
+
+async fn market_host(bible: &str) -> Running {
+    let host = host().await;
+    host.write_asset("world/bible.json", bible);
+    host.write_asset("world/state.json", MARKET_STATE);
+    host
+}
+
+#[tokio::test]
+async fn the_keeper_sees_the_floor_and_a_customer_sees_only_the_posted_facts() {
+    let host = market_host(&bible(3)).await;
+    let keeper = context_for_viewer(&host.state, &[], "fruit_vendor").facts;
+    assert_eq!(keeper["viewer_role"], "keeper");
+    assert!(keeper.get("note").is_none());
+    assert_eq!(keeper["stalls"][0]["haggle_floor_permille"], 850);
+    assert_eq!(
+        keeper["stalls"][0]["items"][0]["quotes"][1]["floor_total_cp"],
+        13
+    );
+
+    let customer = context_for_viewer(&host.state, &[], "mara").facts;
+    assert_eq!(customer["audience"], "public");
+    assert_eq!(customer["viewer_role"], "customer");
+    assert_eq!(
+        customer["note"],
+        "Ask the keeper for a quote; only the keeper quotes a price."
+    );
+    let stall = &customer["stalls"][0];
+    assert!(stall.get("haggle_floor_permille").is_none());
+    let apple = &stall["items"][0];
+    assert_eq!(
+        (apple["name"].clone(), apple["unit"].clone()),
+        (json!("apple"), json!("each"))
+    );
+    assert_eq!(apple["ask_each_cp"], 3);
+    assert_eq!(apple["quotes"][0], json!({"qty": 1, "ask_total_cp": 3}));
+    assert_eq!(
+        apple["quotes"][1],
+        json!({"qty": 5, "ask_total_cp": 15, "discount_permille": 100, "tier_total_cp": 14})
+    );
+    assert!(
+        apple["quotes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|lot| lot.get("floor_total_cp").is_none())
+    );
+}
+
+#[tokio::test]
+async fn an_unposted_bulk_tier_is_hidden_from_a_customer_and_shown_to_the_keeper() {
+    let mut unposted: Value = serde_json::from_str(&bible(3)).unwrap();
+    unposted["places"][0]["stalls"][0]["bulk"][0]["posted"] = json!(false);
+    let host = market_host(&unposted.to_string()).await;
+    let customer = context_for_viewer(&host.state, &[], "mara").facts;
+    let quotes = customer["stalls"][0]["items"][0]["quotes"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(quotes, [json!({"qty": 1, "ask_total_cp": 3})]);
+    let keeper = context_for_viewer(&host.state, &[], "fruit_vendor").facts;
+    assert_eq!(
+        keeper["stalls"][0]["items"][0]["quotes"][1]["tier_total_cp"],
+        14
+    );
+    assert_eq!(
+        context_for(&host.state, &[]).facts,
+        keeper,
+        "tools see keeper level"
+    );
+}
+
+#[tokio::test]
+async fn a_quote_check_clamps_a_proposal_into_the_floor_and_the_tier_total() {
+    let host = market_host(&bible(3)).await;
+    let check = |item, qty, proposed| check_quote(&host.state, "fruit_vendor", item, qty, proposed);
+    let low = check("apple", 5, 1).unwrap();
+    assert_eq!(
+        (
+            low.proposed_total_cp,
+            low.clamped_total_cp,
+            low.floor_total_cp,
+            low.ask_total_cp
+        ),
+        (1, 13, 13, 14)
+    );
+    assert_eq!(check("apple", 5, 99).unwrap().clamped_total_cp, 14);
+    assert_eq!(check("apple", 5, 14).unwrap().clamped_total_cp, 14);
+    assert_eq!(check("apple", 5, 13).unwrap().clamped_total_cp, 13);
+    assert_eq!(check("pear", 1, 4).unwrap().clamped_total_cp, 4);
+    assert_eq!(check("plum", 5, 14), None, "the stall does not sell it");
+    assert_eq!(check("apple", 0, 14), None);
+    assert_eq!(
+        check_quote(&host.state, "mara", "apple", 5, 14),
+        None,
+        "mara keeps no stall"
+    );
 }
 
 #[test]
@@ -250,7 +399,10 @@ fn the_verbs_read_their_words() {
             place: Some("market".to_owned())
         })
     );
-    assert_eq!(parse(&words("place -")), Ok(WorldCommand::Place { place: None }));
+    assert_eq!(
+        parse(&words("place -")),
+        Ok(WorldCommand::Place { place: None })
+    );
     assert_eq!(
         parse(&words("quote apple 5")),
         Ok(WorldCommand::Quote {
@@ -266,9 +418,18 @@ fn the_verbs_read_their_words() {
         parse(&words("place Market")),
         Err(CommandError::BadChoice { .. })
     ));
-    assert!(matches!(parse(&words("quote apple")), Err(CommandError::Usage(_))));
-    assert!(matches!(parse(&words("place")), Err(CommandError::Usage(_))));
-    assert!(matches!(parse(&words("sell apple")), Err(CommandError::Usage(_))));
+    assert!(matches!(
+        parse(&words("quote apple")),
+        Err(CommandError::Usage(_))
+    ));
+    assert!(matches!(
+        parse(&words("place")),
+        Err(CommandError::Usage(_))
+    ));
+    assert!(matches!(
+        parse(&words("sell apple")),
+        Err(CommandError::Usage(_))
+    ));
     assert_eq!(
         crate::command::parse(&words("world place market")),
         Ok(crate::command::Command::World(WorldCommand::Place {

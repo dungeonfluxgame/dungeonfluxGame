@@ -8,6 +8,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use super::emotion::{EmotionalTrigger, Temperament};
+use super::emotion_logic::TemperamentField;
 use super::policy::{PersonaBehavior, PersonaSecret, PersonaTrigger};
 use super::voice::{Voice, VoiceField};
 use super::{Persona, PersonaDraft, PersonaError, PersonaField};
@@ -64,6 +66,20 @@ pub enum PersonaEdit {
         voice_packs: Vec<String>,
         expertise: Vec<String>,
     },
+    /// Sets one number of the temperament, 0 to 100 (the attention capacity 1 to 5).
+    SetTemperament { field: TemperamentField, value: u8 },
+    /// Sets the level an emotion rests at, 0 to 100; 0 removes it.
+    SetBaseline { emotion: String, level: u8 },
+    /// Adds an emotional trigger, or replaces the one with its id.
+    PutEmotionalTrigger { trigger: EmotionalTrigger },
+    /// Removes an emotional trigger by id.
+    RemoveEmotionalTrigger { id: String },
+    /// Replaces the whole temperament and the emotional triggers, as a temperament question
+    /// answers.
+    ReplaceTemperament {
+        temperament: Temperament,
+        emotional_triggers: Vec<EmotionalTrigger>,
+    },
 }
 
 /// Why an edit list was refused.
@@ -86,6 +102,8 @@ pub enum EditError {
     NotAVoiceList { field: VoiceField },
     /// A list part of the voice has no entry at `index`.
     NoSuchVoiceEntry { field: VoiceField, index: usize },
+    /// The temperament or an emotional trigger names an emotion that is not on the emotion list.
+    UnknownEmotion { emotion: String },
 }
 
 impl fmt::Display for EditError {
@@ -123,8 +141,16 @@ impl fmt::Display for EditError {
                 field.key()
             ),
             Self::NoSuchVoiceEntry { field, index } => {
-                write!(formatter, "the voice's {} has no entry {index}", field.key())
+                write!(
+                    formatter,
+                    "the voice's {} has no entry {index}",
+                    field.key()
+                )
             }
+            Self::UnknownEmotion { emotion } => write!(
+                formatter,
+                "{emotion:?} is not on the emotion list (see persona/emotions.json)"
+            ),
         }
     }
 }
@@ -295,6 +321,30 @@ fn apply(draft: &mut PersonaDraft, edit: &PersonaEdit) -> Result<(), EditError> 
             draft.voice_packs = voice_packs.clone();
             draft.expertise = expertise.clone();
         }
+        PersonaEdit::SetTemperament { field, value } => draft.temperament.set(*field, *value),
+        PersonaEdit::SetBaseline { emotion, level } => {
+            draft.temperament.set_baseline(emotion.trim(), *level);
+        }
+        PersonaEdit::PutEmotionalTrigger { trigger } => {
+            put(&mut draft.emotional_triggers, trigger.clone(), |item| {
+                &item.id
+            });
+        }
+        PersonaEdit::RemoveEmotionalTrigger { id } => {
+            remove(
+                &mut draft.emotional_triggers,
+                PersonaField::EmotionalTriggers,
+                id,
+                |item| &item.id,
+            )?;
+        }
+        PersonaEdit::ReplaceTemperament {
+            temperament,
+            emotional_triggers,
+        } => {
+            draft.temperament = temperament.clone();
+            draft.emotional_triggers = emotional_triggers.clone();
+        }
     }
     Ok(())
 }
@@ -322,6 +372,8 @@ impl Persona {
             voice: self.voice.clone(),
             voice_packs: self.voice_packs.clone(),
             expertise: self.expertise.clone(),
+            temperament: self.temperament.clone(),
+            emotional_triggers: self.emotional_triggers.clone(),
         }
     }
 

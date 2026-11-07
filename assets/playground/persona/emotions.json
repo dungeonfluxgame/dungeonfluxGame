@@ -1,0 +1,15 @@
+{
+  "emotions": [
+    { "id": "joy", "label": "Joy", "valence": 80, "arousal": 60, "tone": "ally" },
+    { "id": "trust", "label": "Trust", "valence": 60, "arousal": 30, "tone": "ally" },
+    { "id": "irritation", "label": "Irritation", "valence": -60, "arousal": 70, "tone": "danger" },
+    { "id": "fear", "label": "Fear", "valence": -70, "arousal": 80, "tone": "danger" },
+    { "id": "sadness", "label": "Sadness", "valence": -70, "arousal": 20, "tone": "mystic" },
+    { "id": "surprise", "label": "Surprise", "valence": 10, "arousal": 80, "tone": "mystic" },
+    { "id": "pride", "label": "Pride", "valence": 50, "arousal": 50, "tone": "npc" },
+    { "id": "amusement", "label": "Amusement", "valence": 70, "arousal": 50, "tone": "ally" }
+  ],
+  "decay_percent": 20,
+  "attention_capacity": 3,
+  "rapport": { "friendly_at_least": 30, "hostile_at_most": -30 }
+}

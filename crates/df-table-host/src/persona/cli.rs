@@ -22,8 +22,11 @@ use serde::Deserialize;
 
 use super::converse::{ConverseRequest, DEFAULT_TURNS, MAXIMUM_TURNS, converse};
 use super::edit_verbs::{
-    parse_behavior, parse_expertise, parse_secret, parse_trigger, parse_voice,
+    parse_behavior, parse_emotion, parse_expertise, parse_secret, parse_state, parse_temperament,
+    parse_trigger, parse_voice,
 };
+use super::emotion_routes::path as emotion_path;
+use super::emotions::EmotionError;
 use super::format::{
     format_answered, format_backfilled, format_backfills, format_covered, format_generation,
     format_list, format_owner, format_public, format_spoken, format_voice_generated,
@@ -36,11 +39,14 @@ use super::request::{
     RemoveRequest, SayRequest, Spoken, VoiceRequest,
 };
 use super::routes::path;
+use super::state_view::{
+    SetEmotionRequest, StateTarget, StateView, TemperamentRequest, format_state,
+};
 use super::storage::{RESERVED_IDS, persona_id};
 use crate::command::{CommandError, bad_choice};
 use crate::dev::{DevError, ReplyError, read_text_file};
 use crate::dev_client::{self, get_json, post_json};
-use crate::dev_http::parse_body;
+use crate::dev_http::{DevReply, parse_body};
 use crate::imagegen::MAXIMUM_NAME_CHARS;
 use crate::imagegen::model::plain_name;
 
@@ -52,13 +58,16 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona behavior <id> add|drop ... | persona trigger <id> add|drop ... | ",
     "persona voice <id> set|add|drop|sample|pack|generate ... | ",
     "persona expertise <id> add|drop ... | ",
+    "persona temperament <id> set|baseline|generate ... | ",
+    "persona emotion <id> trigger add|drop ... | ",
+    "persona state <id> [reset | set <emotion> <level>] | ",
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
     "[model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
     "[from=<id>] <situation...> | ",
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
     "[model=<name>] [<topic...>] | ",
-    "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
+    "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...> | ",
     "persona coverage <character> [model=<name>] ",
@@ -105,6 +114,23 @@ pub const PERSONA_VOICE_USAGE: &str = concat!(
     "persona voice <id> sample add <text...> | persona voice <id> sample drop <index> | ",
     "persona voice <id> pack add|drop <pack-id> | persona voice <id> generate [model=<name>]",
 );
+/// `persona temperament`: set a number, set where an emotion rests, or have the text service write
+/// the temperament and the emotional triggers.
+pub const PERSONA_TEMPERAMENT_USAGE: &str = concat!(
+    "persona temperament <id> set reactivity|patience|warmth|pride|decay_percent|",
+    "attention_capacity|distractibility <0-100> | ",
+    "persona temperament <id> baseline <emotion> <level> | ",
+    "persona temperament <id> generate [model=<name>]",
+);
+/// `persona emotion`: add (or replace) or drop an emotional trigger.
+pub const PERSONA_EMOTION_USAGE: &str = concat!(
+    "persona emotion <id> trigger add <trigger-id> [state=<emotion>:<at_least>] ",
+    "[set=<emotion>:<delta>]... [behavior=<id>] [event=]<statement...> | ",
+    "persona emotion <id> trigger drop <trigger-id>",
+);
+/// `persona state`: show, reset or set by hand the live emotional state.
+pub const PERSONA_STATE_USAGE: &str =
+    "persona state <id> | persona state <id> reset | persona state <id> set <emotion> <level>";
 /// `persona expertise`: add or drop what a character knows from their trade or life.
 pub const PERSONA_EXPERTISE_USAGE: &str =
     "persona expertise <id> add <text...> | persona expertise <id> drop <index>";
@@ -127,7 +153,7 @@ pub const PERSONA_CONVERSE_USAGE: &str = concat!(
 );
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
-    "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
+    "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...>",
 );
@@ -207,6 +233,22 @@ pub enum PersonaCommand {
         id: PersonaId,
         model: Option<String>,
     },
+    /// Have the text service write only the temperament and emotional triggers of a stored
+    /// persona.
+    TemperamentGenerate {
+        id: PersonaId,
+        model: Option<String>,
+    },
+    /// Show the live emotional state of a persona.
+    State { id: PersonaId },
+    /// Forget the live emotional state of a persona.
+    StateReset { id: PersonaId },
+    /// Set one emotion of a persona's live state by hand.
+    StateSet {
+        id: PersonaId,
+        emotion: String,
+        level: u8,
+    },
     /// Have the characters of the shown scene talk to each other.
     Converse(ConverseRequest),
     /// Put a question to a character: coverage, backfill of gaps, then the line.
@@ -214,6 +256,7 @@ pub enum PersonaCommand {
         character: PersonaId,
         question: String,
         backfill: bool,
+        backfill_sync: bool,
         coverage: bool,
         speak: bool,
         situation: Option<String>,
@@ -428,10 +471,11 @@ fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
     .concat();
     let (given, question) = take_options(rest, &keys);
     let (recent, asked_by) = talk_from(&given)?;
-    let (mut backfill, mut coverage, mut speak) = (true, true, false);
+    let (mut backfill, mut backfill_sync, mut coverage, mut speak) = (true, false, false, false);
     let mut situation = None;
     for &(key, value) in &given {
         match key {
+            "backfill" if value == "sync" => backfill_sync = true,
             "backfill" => backfill = flag("backfill", value)?,
             "coverage" => coverage = flag("coverage", value)?,
             "speak" => speak = flag("speak", value)?,
@@ -443,6 +487,7 @@ fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
         character: id_word(character)?,
         question: free_text(question, PERSONA_ASK_USAGE)?,
         backfill,
+        backfill_sync,
         coverage,
         speak,
         situation,
@@ -560,6 +605,9 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("trigger", rest) => parse_trigger(rest),
         ("voice", rest) => parse_voice(rest),
         ("expertise", rest) => parse_expertise(rest),
+        ("temperament", rest) => parse_temperament(rest),
+        ("emotion", rest) => parse_emotion(rest),
+        ("state", rest) => parse_state(rest),
         ("edit", [id, file]) => Ok(PersonaCommand::EditFile {
             id: id_word(id)?,
             path: PathBuf::from(file),
@@ -590,6 +638,12 @@ fn refused(error: PersonaError) -> DevError {
 /// The value of a persona reply, or its refusal (the typed `PersonaError`) as the command's
 /// failure.
 pub(super) fn reply_value<T>(reply: PersonaReply<T>) -> Result<T, DevError> {
+    dev_client::reply_value(reply)
+}
+
+/// The value of an emotion route's reply, or its refusal (the typed `EmotionError`) as the
+/// command's failure.
+fn emotion_value<T>(reply: DevReply<T, EmotionError>) -> Result<T, DevError> {
     dev_client::reply_value(reply)
 }
 
@@ -725,6 +779,7 @@ async fn generate(
 /// What `persona ask` takes besides the model and the guidance.
 struct AskExtras {
     backfill: bool,
+    backfill_sync: bool,
     coverage: bool,
     speak: bool,
     situation: Option<String>,
@@ -745,6 +800,7 @@ async fn ask_character(
         guidance: guidance_of(asking.guidance).await?,
         model: asking.model,
         backfill: extras.backfill,
+        backfill_sync: extras.backfill_sync,
         coverage: extras.coverage,
         speak: extras.speak,
         situation: extras.situation,
@@ -831,6 +887,51 @@ async fn generate_voice(
     Ok(format_voice_generated(&edited.persona))
 }
 
+async fn generate_temperament(
+    port: u16,
+    id: PersonaId,
+    model: Option<String>,
+) -> Result<String, DevError> {
+    let request = TemperamentRequest {
+        id: id.to_string(),
+        model,
+    };
+    let edited: Edited =
+        emotion_value(post_json(port, emotion_path::TEMPERAMENT, &request).await?)?;
+    Ok(format!(
+        "ok temperament written for {}",
+        edited.persona.id()
+    ))
+}
+
+async fn show_state(port: u16, id: PersonaId) -> Result<String, DevError> {
+    let address = format!("{}?id={id}", emotion_path::STATE);
+    let view: StateView = emotion_value(get_json(port, &address).await?)?;
+    Ok(format_state(&view))
+}
+
+async fn reset_state(port: u16, id: PersonaId) -> Result<String, DevError> {
+    let request = StateTarget { id: id.to_string() };
+    let view: StateView =
+        emotion_value(post_json(port, emotion_path::STATE_RESET, &request).await?)?;
+    Ok(format_state(&view))
+}
+
+async fn set_state(
+    port: u16,
+    id: PersonaId,
+    emotion: String,
+    level: u8,
+) -> Result<String, DevError> {
+    let request = SetEmotionRequest {
+        id: id.to_string(),
+        emotion,
+        level,
+    };
+    let view: StateView = emotion_value(post_json(port, emotion_path::STATE_SET, &request).await?)?;
+    Ok(format_state(&view))
+}
+
 async fn show(port: u16, id: PersonaId, audience: Audience) -> Result<String, DevError> {
     let address = show_path(&id, audience);
     Ok(match audience {
@@ -874,6 +975,7 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             character,
             question,
             backfill,
+            backfill_sync,
             coverage,
             speak,
             situation,
@@ -883,6 +985,7 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
         } => {
             let extras = AskExtras {
                 backfill,
+                backfill_sync,
                 coverage,
                 speak,
                 situation,
@@ -912,5 +1015,13 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             asked_by,
         } => say(port, character, situation, model, speak, (recent, asked_by)).await,
         PersonaCommand::VoiceGenerate { id, model } => generate_voice(port, id, model).await,
+        PersonaCommand::TemperamentGenerate { id, model } => {
+            generate_temperament(port, id, model).await
+        }
+        PersonaCommand::State { id } => show_state(port, id).await,
+        PersonaCommand::StateReset { id } => reset_state(port, id).await,
+        PersonaCommand::StateSet { id, emotion, level } => {
+            set_state(port, id, emotion, level).await
+        }
     }
 }

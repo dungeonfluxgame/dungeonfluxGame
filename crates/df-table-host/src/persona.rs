@@ -45,16 +45,22 @@ mod backfill;
 pub mod cli;
 mod converse;
 mod edit_verbs;
+mod emotion_routes;
+mod emotions;
 mod format;
 pub(crate) mod generate;
+mod line;
 pub(crate) mod options;
 mod plate;
 pub mod request;
 pub mod routes;
+mod state;
+mod state_view;
 mod storage;
 
 pub use self::cli::{PersonaCommand, parse};
 pub use self::converse::ConverseError;
+pub use self::emotions::EmotionError;
 pub(crate) use self::plate::deliver_plate;
 pub use self::plate::PlateStep;
 pub use self::request::{PersonaError, PersonaSummary};
@@ -70,11 +76,15 @@ mod backfill_tests;
 #[cfg(test)]
 mod converse_tests;
 #[cfg(test)]
+mod emotion_state_tests;
+#[cfg(test)]
 mod fixtures;
 #[cfg(test)]
 mod generate_tests;
 #[cfg(test)]
 mod line_facts_tests;
+#[cfg(test)]
+mod line_tests;
 #[cfg(test)]
 mod persona_tests;
 #[cfg(test)]

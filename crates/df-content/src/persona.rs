@@ -21,12 +21,24 @@ use serde::{Deserialize, Serialize};
 
 pub mod backfill;
 pub mod edit;
+pub mod emotion;
+pub mod emotion_generation;
+pub mod emotion_logic;
 pub mod generation;
 pub mod policy;
 pub mod privacy;
 pub mod voice;
 
 pub use edit::{EditError, PersonaEdit};
+pub use emotion::{
+    Appraisal, Attention, Attitude, EmotionDelta, EmotionLevel, EmotionalTrigger, Mood, Noticed,
+    PersonaState, Relationship, StateCondition, Temperament,
+};
+pub use emotion_logic::{
+    Dropped, EmotionConfig, EmotionConfigError, EmotionDefinition, EmotionSetting,
+    RapportThresholds, TemperamentField, apply_appraisal, check_emotion_ids, derive_mood,
+    fresh_state, set_emotion, state_triggers,
+};
 pub use policy::{PersonaBehavior, PersonaSecret, PersonaTrigger, Sensitivity};
 pub use voice::{Diction, Voice, VoiceField};
 
@@ -34,6 +46,8 @@ pub use voice::{Diction, Voice, VoiceField};
 mod backfill_tests;
 #[cfg(test)]
 mod edit_tests;
+#[cfg(test)]
+mod emotion_tests;
 #[cfg(test)]
 mod generation_tests;
 #[cfg(test)]
@@ -77,11 +91,13 @@ pub enum PersonaField {
     Voice,
     VoicePacks,
     Expertise,
+    Temperament,
+    EmotionalTriggers,
 }
 
 impl PersonaField {
     /// Every field, in declaration order.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 21] = [
         Self::Id,
         Self::DisplayName,
         Self::Job,
@@ -101,6 +117,8 @@ impl PersonaField {
         Self::Voice,
         Self::VoicePacks,
         Self::Expertise,
+        Self::Temperament,
+        Self::EmotionalTriggers,
     ];
 
     /// The serde name.
@@ -125,6 +143,8 @@ impl PersonaField {
             Self::Voice => "voice",
             Self::VoicePacks => "voice_packs",
             Self::Expertise => "expertise",
+            Self::Temperament => "temperament",
+            Self::EmotionalTriggers => "emotional_triggers",
         }
     }
 
@@ -165,6 +185,13 @@ pub enum PersonaError {
     InvalidItemId { field: PersonaField, id: String },
     /// Two items of one list have the same id.
     DuplicateItemId { field: PersonaField, id: String },
+    /// A number of the temperament or of an emotional trigger is outside its range.
+    OutOfRange {
+        field: PersonaField,
+        value: i32,
+        minimum: i32,
+        maximum: i32,
+    },
     /// A trigger or the default names a behavior the persona does not have.
     UnknownBehavior {
         behavior: String,
@@ -228,6 +255,16 @@ impl fmt::Display for PersonaError {
             Self::DuplicateItemId { field, id } => write!(
                 formatter,
                 "the persona's {} has two items with the id {id:?}",
+                field.key()
+            ),
+            Self::OutOfRange {
+                field,
+                value,
+                minimum,
+                maximum,
+            } => write!(
+                formatter,
+                "the persona's {} has the number {value}; use {minimum} to {maximum}",
                 field.key()
             ),
             Self::UnknownBehavior {
@@ -352,6 +389,10 @@ pub struct PersonaDraft {
     pub voice_packs: Vec<String>,
     /// What they know from their trade or life: one fact or skill per entry.
     pub expertise: Vec<String>,
+    /// How they feel and react. The character's own: never public.
+    pub temperament: Temperament,
+    /// What moves them by feeling. The character's own.
+    pub emotional_triggers: Vec<EmotionalTrigger>,
 }
 
 /// The stored form of a [`Persona`].
@@ -394,6 +435,10 @@ struct PersonaRecord {
     voice_packs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     expertise: Vec<String>,
+    #[serde(default, skip_serializing_if = "Temperament::is_blank")]
+    temperament: Temperament,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    emotional_triggers: Vec<EmotionalTrigger>,
 }
 
 /// A character's persona. Its parts are checked when it is made, so a persona in hand is valid.
@@ -421,6 +466,8 @@ pub struct Persona {
     voice: Voice,
     voice_packs: Vec<String>,
     expertise: Vec<String>,
+    temperament: Temperament,
+    emotional_triggers: Vec<EmotionalTrigger>,
 }
 
 /// What a listener, the screen or another character's prompt may know of a persona.
@@ -468,6 +515,10 @@ pub struct PrivatePersona {
     pub default_behavior: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<PersonaTrigger>,
+    #[serde(skip_serializing_if = "Temperament::is_blank")]
+    pub temperament: Temperament,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub emotional_triggers: Vec<EmotionalTrigger>,
 }
 
 impl fmt::Debug for Persona {
@@ -601,6 +652,16 @@ impl Persona {
             draft.default_behavior.as_deref(),
             &draft.triggers,
         )?;
+        let known_behaviors = draft
+            .behaviors
+            .iter()
+            .map(|behavior| behavior.id.as_str())
+            .collect();
+        emotion_logic::check_emotional(
+            &draft.temperament,
+            &draft.emotional_triggers,
+            &known_behaviors,
+        )?;
         Ok(Self {
             id,
             display_name: draft.display_name,
@@ -621,6 +682,8 @@ impl Persona {
             voice: draft.voice,
             voice_packs: draft.voice_packs,
             expertise: draft.expertise,
+            temperament: draft.temperament,
+            emotional_triggers: draft.emotional_triggers,
         })
     }
 
@@ -719,6 +782,16 @@ impl Persona {
         &self.triggers
     }
 
+    /// How they feel and react. The character's own: never for another listener or a view.
+    pub fn temperament(&self) -> &Temperament {
+        &self.temperament
+    }
+
+    /// What moves them by feeling. The character's own.
+    pub fn emotional_triggers(&self) -> &[EmotionalTrigger] {
+        &self.emotional_triggers
+    }
+
     /// What a listener, the screen or another character's prompt may know of them.
     pub fn public_view(&self) -> PublicPersona {
         PublicPersona {
@@ -750,6 +823,8 @@ impl Persona {
             behaviors: self.behaviors.clone(),
             default_behavior: self.default_behavior.clone(),
             triggers: self.triggers.clone(),
+            temperament: self.temperament.clone(),
+            emotional_triggers: self.emotional_triggers.clone(),
         });
         PersonaBrief {
             public: self.public_view(),
@@ -787,6 +862,8 @@ impl TryFrom<PersonaRecord> for Persona {
             voice: record.voice,
             voice_packs: record.voice_packs,
             expertise: record.expertise,
+            temperament: record.temperament,
+            emotional_triggers: record.emotional_triggers,
         })
     }
 }
@@ -814,6 +891,8 @@ impl From<Persona> for PersonaRecord {
             voice: persona.voice,
             voice_packs: persona.voice_packs,
             expertise: persona.expertise,
+            temperament: persona.temperament,
+            emotional_triggers: persona.emotional_triggers,
         }
     }
 }

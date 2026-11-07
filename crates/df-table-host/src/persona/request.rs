@@ -10,7 +10,8 @@ use df_content::persona::backfill::{BackfillError, Gap, NarrativeGuidance};
 use df_content::persona::generation::GenerationError;
 use df_content::persona::privacy::PrivacyError;
 use df_content::persona::{
-    EditError, Persona, PersonaEdit, PersonaError as ContentError, PersonaField,
+    Appraisal, EditError, Persona, PersonaEdit, PersonaError as ContentError, PersonaField,
+    PersonaState,
 };
 use serde::{Deserialize, Serialize};
 
@@ -164,6 +165,7 @@ impl std::fmt::Debug for AskRequest {
             .field("has_guidance", &self.guidance.is_some())
             .field("model", &self.model)
             .field("backfill", &self.backfill)
+            .field("backfill_sync", &self.backfill_sync)
             .field("coverage", &self.coverage)
             .field("speak", &self.speak)
             .field("has_situation", &self.situation.is_some())
@@ -185,9 +187,10 @@ impl std::fmt::Debug for CoverageRequest {
     }
 }
 
-/// The body of `POST /dev/persona/ask`: put a question to a character. The text service judges
-/// whether the persona holds enough to answer, fills what it lacks (adding only), and the
-/// character answers in character. A dev tool: the narrative engine calls the same steps.
+/// The body of `POST /dev/persona/ask`: put a question to a character. One model call words the
+/// line and reports what the persona lacked (gaps) and how the exchange moved the character; the
+/// gaps are filled afterwards (adding only), off the critical path. A dev tool: the narrative
+/// engine calls the same steps.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AskRequest {
@@ -197,12 +200,15 @@ pub struct AskRequest {
     pub guidance: Option<NarrativeGuidance>,
     #[serde(default)]
     pub model: Option<String>,
-    /// Fill gaps before answering. On unless it says otherwise.
+    /// Fill the gaps the line reported, after it. On unless it says otherwise.
     #[serde(default = "yes")]
     pub backfill: bool,
-    /// Judge the persona's coverage of the question first. On unless it says otherwise; off
-    /// skips the coverage question and any backfill, so the turn is one model call.
-    #[serde(default = "yes")]
+    /// Wait for that backfill before answering (debug and tests). Off unless it says otherwise.
+    #[serde(default)]
+    pub backfill_sync: bool,
+    /// Run the old separate coverage call, and a backfill before the line, instead of the gaps the
+    /// line reports (debugging). Off unless it says otherwise.
+    #[serde(default)]
     pub coverage: bool,
     /// Voice the line and play it with its bubble. Off unless it says otherwise.
     #[serde(default)]
@@ -301,8 +307,13 @@ pub enum BackfillOutcome {
     BackfillFailed {
         error: PersonaError,
     },
-    /// The request skipped the coverage question (`coverage: false`).
-    CoverageSkipped,
+    /// The backfill runs after the line on a task of its own; `PERSONA backfill_done` records it
+    /// and `persona backfills` lists it as record `record`.
+    Running {
+        record: u64,
+    },
+    /// A backfill of this persona is already running, so this line's gaps are not queued.
+    Busy,
 }
 
 /// A character's answer to a question, with what was filled in first.
@@ -411,24 +422,94 @@ pub struct PersonaStored {
     pub replaced: bool,
 }
 
-/// A line a character said, and the stance and slips the model reported with it. The model only
-/// words and reports; the production engine, not the model, owns whether a secret is revealed.
+/// A line a character said, and the stance, slips, gaps and appraisal the model reported with it in
+/// the same call. The model only words and reports; the production engine, not the model, owns
+/// whether a secret is revealed, and code validates every id and number.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaidLine {
     pub line: String,
-    /// The behavior id the character took, when the model says one.
+    /// The behavior id the line took: a fired trigger's behavior wins over the model's own.
     pub behavior: Option<String>,
     /// The trigger ids of this persona that the model judged fired.
     pub fired_triggers: Vec<String>,
+    /// The emotional trigger ids that fired by event (the model's judgement) or by state (code's).
+    #[serde(default)]
+    pub fired_emotional_triggers: Vec<String>,
+    /// The emotional triggers whose state condition held before the line, checked by code.
+    #[serde(default)]
+    pub state_triggered: Vec<String>,
+    /// Set when the model's behavior disagreed with a fired trigger's and code took the trigger's.
+    #[serde(default)]
+    pub behavior_override: Option<BehaviorOverride>,
     /// The secret ids of this persona that the line gave away.
     pub revealed_secrets: Vec<String>,
-    /// The price in copper pieces the line quotes, when it quotes one.
+    /// The total in copper pieces the line quotes, held inside the stall's bounds when the bible
+    /// knows the stall; the unchecked number otherwise.
     #[serde(default)]
     pub quoted_cp: Option<u64>,
+    /// What the line quoted and what the bible allowed.
+    #[serde(default)]
+    pub quote: Option<QuoteReport>,
     /// True when the model judged, in the call that worded the line, that the line gives away the
     /// character's private side beyond what the question and the situation already say. It blocks
     /// nothing: it is the model's judgement, a hint and not a guarantee.
     pub leak_suspect: bool,
+    /// What the question needed that the persona and the world facts do not hold.
+    #[serde(default)]
+    pub gaps: Vec<Gap>,
+    /// How the model says the exchange moved the character, after code kept only what is valid.
+    #[serde(default)]
+    pub appraisal: Appraisal,
+    /// What of the answer code dropped as not valid (an emotion, speaker or tone that is not on
+    /// the lists), as `kind:id`.
+    #[serde(default)]
+    pub dropped: Vec<String>,
+    /// The bubble tone id of the line: the appraisal's when valid, else the character's usual.
+    #[serde(default)]
+    pub tone: Option<String>,
+    /// True when the line still reuses a phrase of `recent` after the one retry.
+    #[serde(default)]
+    pub repeats_recent: bool,
+    /// True when the first answer repeated `recent` and the line is the second.
+    #[serde(default)]
+    pub repeat_retried: bool,
+    /// The character's state after this line.
+    #[serde(default)]
+    pub state: PersonaState,
+    /// The time the model calls took, in milliseconds.
+    #[serde(default)]
+    pub model_ms: u64,
+    /// The time the whole line took, in milliseconds.
+    #[serde(default)]
+    pub total_ms: u64,
+}
+
+/// A fired trigger's behavior taken over a different one the model named.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BehaviorOverride {
+    /// The behavior the model named, when it named one.
+    pub model: Option<String>,
+    /// The fired trigger whose behavior the line took.
+    pub trigger: String,
+    pub took: String,
+}
+
+/// The bounds the bible gives a quote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuoteBounds {
+    pub clamped_total_cp: u32,
+    pub floor_total_cp: u32,
+    pub ask_total_cp: u32,
+}
+
+/// A quote a line made: the lot and the total the model proposed, and the bounds when the bible
+/// knows the speaker's stall and the item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuoteReport {
+    pub item: String,
+    pub qty: u32,
+    pub proposed_total_cp: u64,
+    pub bounds: Option<QuoteBounds>,
 }
 
 /// A line applied to the live scene as a cue.
@@ -459,6 +540,8 @@ pub enum LineError {
     Blank,
     /// The answer names a behavior, trigger or secret the persona does not have.
     UnknownId { kind: LineIdKind, id: String },
+    /// The answer's gaps are not gaps a backfill can fill.
+    Gaps { cause: BackfillError },
 }
 
 /// What an id of a line's answer names.
@@ -467,6 +550,7 @@ pub enum LineError {
 pub enum LineIdKind {
     Behavior,
     Trigger,
+    EmotionalTrigger,
     Secret,
 }
 
@@ -475,6 +559,7 @@ impl LineIdKind {
         match self {
             Self::Behavior => "behavior",
             Self::Trigger => "trigger",
+            Self::EmotionalTrigger => "emotional trigger",
             Self::Secret => "secret",
         }
     }
@@ -495,6 +580,7 @@ impl fmt::Display for LineError {
                 "the answer names the {} {id:?}, which they do not have",
                 kind.key()
             ),
+            Self::Gaps { cause } => write!(formatter, "the answer's gaps are not valid: {cause}"),
         }
     }
 }

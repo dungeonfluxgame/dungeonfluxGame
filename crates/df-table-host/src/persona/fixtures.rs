@@ -163,12 +163,46 @@ pub(super) fn coverage_answer(gaps: &[(&str, &str)]) -> Value {
 }
 
 /// The answer to a line question whose model judged that the line does not give away the private
-/// side.
+/// side, with no gap, no quote, no fired trigger and an appraisal that moves nothing.
 pub(super) fn line_answer(line: &str) -> Value {
     json!({
-        "line": line, "behavior": null, "fired_triggers": [], "revealed_secrets": [],
+        "line": line, "behavior": null, "fired_triggers": [], "fired_emotional_triggers": [],
+        "revealed_secrets": [], "quote": null, "gaps": [],
+        "appraisal": {
+            "emotions": [], "toward": null, "rapport_delta": null,
+            "attention": {"focus": null, "topic": null, "noticed": []}, "tone": null
+        },
+        "repeats_recent": false, "repeat_reason": null,
         "leaks_private_side": false, "leaked_excerpt": null
     })
+}
+
+/// [`line_answer`] that also reports `gaps` (field, topic).
+pub(super) fn line_answer_with_gaps(line: &str, gaps: &[(&str, &str)]) -> Value {
+    let mut answer = line_answer(line);
+    answer["gaps"] = coverage_answer(gaps)["gaps"].clone();
+    answer
+}
+
+/// A market bible with a fruit stall kept by `fruit_vendor` (apples at 10 cp, five or more at a
+/// posted tenth off, a floor of 85 percent) as the active place: five apples ask 45 cp, floor 43.
+pub(super) fn write_market(host: &ScriptedHost) {
+    let bible = json!({
+        "items": [{"id": "apple", "name": "apple", "unit": "each", "base_value_cp": 10}],
+        "places": [{
+            "id": "market", "name": "Market", "description": "Stalls.",
+            "stalls": [{
+                "keeper": "fruit_vendor", "sells": ["apple"],
+                "bulk": [{"min_qty": 5, "discount_permille": 100, "posted": true}],
+                "haggle_floor_permille": 850
+            }]
+        }],
+        "voice_packs": []
+    });
+    host.running
+        .write_asset("world/bible.json", &bible.to_string());
+    host.running
+        .write_asset("world/state.json", r#"{"place": "market"}"#);
 }
 
 /// The answer to a line question whose model judged that the line gives away the private side.

@@ -16,7 +16,8 @@ use crate::persona::cli::{
     PERSONA_BACKFILLS_USAGE, PERSONA_BEHAVIOR_USAGE, PERSONA_CONVERSE_USAGE,
     PERSONA_COVERAGE_USAGE, PERSONA_DROP_USAGE, PERSONA_EDIT_USAGE, PERSONA_GENERATE_USAGE,
     PERSONA_REMOVE_USAGE, PERSONA_SAY_USAGE, PERSONA_SECRET_USAGE, PERSONA_SET_USAGE,
-    PERSONA_EXPERTISE_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_USAGE, PERSONA_VOICE_USAGE,
+    PERSONA_EMOTION_USAGE, PERSONA_EXPERTISE_USAGE, PERSONA_STATE_USAGE,
+    PERSONA_TEMPERAMENT_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_USAGE, PERSONA_VOICE_USAGE,
 };
 use crate::services::SERVICES_USAGE;
 use crate::speech::SPEECH_USAGE;
@@ -252,6 +253,13 @@ pub fn usage_text() -> String {
          tics, idioms, samples are lists; samples are style only; generate asks the model for \
          only the voice, expertise and voice packs, packs chosen from the world bible's list)\
          \n      {PERSONA_EXPERTISE_USAGE}   (what the character knows from their trade or life)\
+         \n      {PERSONA_TEMPERAMENT_USAGE}   (where feelings rest and how strongly they move, \
+         0 to 100; generate asks the model for the temperament and its emotional triggers)\
+         \n      {PERSONA_EMOTION_USAGE}   (a trigger on a feeling: state=<emotion>:<at_least> is \
+         a number checked by code, the event is a statement a model judges; set= moves \
+         emotions, behavior= switches stance)\
+         \n      {PERSONA_STATE_USAGE}   (the live feelings, mood, attention and attitudes, kept \
+         in persona-state/<id>.json; the emotion list is persona/emotions.json, read fresh)\
          \n      {PERSONA_EDIT_USAGE}   applies a file {{\"edits\": [...]}} of any edits. Quote \
          a value with spaces. A trigger or a reveal condition is a plain statement a \
          model judges, never a keyword.\

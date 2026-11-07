@@ -318,20 +318,44 @@ pub fn coverage_schema() -> Value {
         "required": ["enough", "gaps"],
         "properties": {
             "enough": {"type": "boolean"},
-            "gaps": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["field", "topic"],
-                    "properties": {
-                        "field": {"type": "string", "enum": fillable_keys()},
-                        "topic": {"type": "string"}
-                    }
-                }
+            "gaps": gaps_schema()
+        }
+    })
+}
+
+/// The schema of a list of gaps, as a coverage answer or a line answer carries it.
+pub fn gaps_schema() -> Value {
+    json!({
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["field", "topic"],
+            "properties": {
+                "field": {"type": "string", "enum": fillable_keys()},
+                "topic": {"type": "string"}
             }
         }
     })
+}
+
+/// That `gaps` are within the bound, each in a field a backfill can fill and each with a topic.
+pub fn check_gaps(gaps: &[Gap]) -> Result<(), BackfillError> {
+    if gaps.len() > MAXIMUM_GAPS {
+        return Err(BackfillError::TooMany {
+            bound: AnswerBound::Gaps,
+            maximum: MAXIMUM_GAPS,
+        });
+    }
+    for gap in gaps {
+        if !FILLABLE.contains(&gap.field) {
+            return Err(BackfillError::UnfillableGap { field: gap.field });
+        }
+        if gap.topic.trim().is_empty() {
+            return Err(BackfillError::BlankGapTopic);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -349,20 +373,7 @@ pub fn read_coverage(answer: &Value) -> Result<Coverage, BackfillError> {
     let read = CoverageAnswer::deserialize(answer).map_err(|error| BackfillError::Malformed {
         detail: error.to_string(),
     })?;
-    if read.gaps.len() > MAXIMUM_GAPS {
-        return Err(BackfillError::TooMany {
-            bound: AnswerBound::Gaps,
-            maximum: MAXIMUM_GAPS,
-        });
-    }
-    for gap in &read.gaps {
-        if !FILLABLE.contains(&gap.field) {
-            return Err(BackfillError::UnfillableGap { field: gap.field });
-        }
-        if gap.topic.trim().is_empty() {
-            return Err(BackfillError::BlankGapTopic);
-        }
-    }
+    check_gaps(&read.gaps)?;
     Ok(Coverage {
         enough: read.gaps.is_empty(),
         gaps: read.gaps,

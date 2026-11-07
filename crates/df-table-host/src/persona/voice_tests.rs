@@ -72,9 +72,9 @@ async fn a_spoken_ask_without_coverage_thinks_then_cues_the_bubble_and_the_clip_
     assert_eq!(
         host.calls(),
         1,
-        "one model call: the coverage question was skipped"
+        "one model call: no separate coverage question"
     );
-    assert_eq!(answered.backfill, BackfillOutcome::CoverageSkipped);
+    assert_eq!(answered.backfill, BackfillOutcome::NotNeeded);
     assert_eq!(
         answered.spoken.revision,
         before + 2,
@@ -103,10 +103,7 @@ async fn a_spoken_ask_without_coverage_thinks_then_cues_the_bubble_and_the_clip_
 #[tokio::test]
 async fn an_ask_that_does_not_speak_cues_no_sound_and_asks_the_supplier_nothing() {
     let (host, speech) = host(
-        vec![
-            coverage_answer(&[]),
-            line_answer("Two silver a night, love."),
-        ],
+        vec![line_answer("Two silver a night, love.")],
         FakePort::answering(),
     )
     .await;

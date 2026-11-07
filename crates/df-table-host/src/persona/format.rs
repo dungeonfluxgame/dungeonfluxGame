@@ -3,14 +3,15 @@
 
 use df_content::persona::backfill::Gap;
 use df_content::persona::{
-    Persona, PersonaBehavior, PersonaId, PersonaSecret, PersonaTrigger, PublicPersona, Voice,
+    Attitude, Persona, PersonaBehavior, PersonaId, PersonaSecret, PersonaState, PersonaTrigger,
+    PublicPersona, Voice,
 };
 
 use crate::speech::format_voiced;
 
 use super::request::{
     Answered, BackfillOutcome, BackfillRecord, Backfilled, CastOutcome, Covered, PersonaSummary,
-    Spoken,
+    QuoteReport, SaidLine, Spoken,
 };
 
 pub(super) fn format_list(list: &[PersonaSummary]) -> String {
@@ -55,7 +56,88 @@ pub(super) fn format_generation(character: &str, outcome: &CastOutcome) -> Strin
     }
 }
 
-pub(super) fn format_spoken(spoken: &Spoken) -> String {
+/// The emotions above this level are shown in a reply.
+const SHOWN_EMOTION_LEVEL: u8 = 20;
+
+fn attitude_key(attitude: Attitude) -> &'static str {
+    match attitude {
+        Attitude::Friendly => "friendly",
+        Attitude::Indifferent => "indifferent",
+        Attitude::Hostile => "hostile",
+    }
+}
+
+/// What the character feels after the line: the emotions above 20, the mood, the standing toward
+/// each other character and the attention focus.
+fn format_felt(state: &PersonaState) -> String {
+    let mut felt: Vec<_> = state
+        .emotions
+        .iter()
+        .filter(|level| level.level > SHOWN_EMOTION_LEVEL)
+        .collect();
+    felt.sort_by_key(|level| std::cmp::Reverse(level.level));
+    let emotions = if felt.is_empty() {
+        "calm".to_owned()
+    } else {
+        felt.iter()
+            .map(|level| format!("{} {}", level.emotion, level.level))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut parts = vec![format!(
+        "{emotions}; mood {} valence, {} arousal",
+        state.mood.valence, state.mood.arousal
+    )];
+    for standing in &state.relationships {
+        parts.push(format!(
+            "toward {}: {} ({})",
+            standing.toward,
+            attitude_key(standing.attitude),
+            standing.rapport
+        ));
+    }
+    let attention = &state.attention;
+    if let Some(focus) = &attention.focus {
+        parts.push(match &attention.topic {
+            Some(topic) => format!("focus {focus} on {topic}"),
+            None => format!("focus {focus}"),
+        });
+    }
+    parts.join("; ")
+}
+
+fn format_quote(said: &SaidLine, quote: &QuoteReport) -> String {
+    let lot = format!("{} {}", quote.qty, quote.item);
+    match (said.quoted_cp, quote.bounds) {
+        (Some(quoted), Some(bounds))
+            if u64::from(bounds.clamped_total_cp) != quote.proposed_total_cp =>
+        {
+            format!(
+                concat!(
+                    "  quoted: {} cp for {}; the line said {} cp, held to {} cp ",
+                    "(floor {}, ask {})"
+                ),
+                quoted,
+                lot,
+                quote.proposed_total_cp,
+                bounds.clamped_total_cp,
+                bounds.floor_total_cp,
+                bounds.ask_total_cp
+            )
+        }
+        (Some(quoted), Some(bounds)) => format!(
+            "  quoted: {quoted} cp for {lot} (inside floor {}, ask {})",
+            bounds.floor_total_cp, bounds.ask_total_cp
+        ),
+        (Some(quoted), None) => {
+            format!("  quoted: {quoted} cp for {lot} (not checked: no stall of theirs sells it)")
+        }
+        (None, _) => format!("  quoted: {lot}"),
+    }
+}
+
+/// The lines about a spoken line; `after_line` is what follows "time: line Ns" (the backfill).
+fn spoken_lines(spoken: &Spoken, after_line: &str) -> Vec<String> {
     let said = &spoken.said;
     let mut lines = vec![format!(
         "ok (revision {}) {} says: {}",
@@ -64,8 +146,8 @@ pub(super) fn format_spoken(spoken: &Spoken) -> String {
     if let Some(voice) = &spoken.voice {
         lines.push(format_voiced(voice));
     }
-    if let Some(cents) = said.quoted_cp {
-        lines.push(format!("  quoted: {cents} cp"));
+    if let Some(quote) = &said.quote {
+        lines.push(format_quote(said, quote));
     }
     if said.leak_suspect {
         lines.push(
@@ -75,10 +157,29 @@ pub(super) fn format_spoken(spoken: &Spoken) -> String {
     if let Some(behavior) = &said.behavior {
         lines.push(format!("  behavior: {behavior}"));
     }
+    if let Some(over) = &said.behavior_override {
+        lines.push(format!(
+            "  behavior override: trigger {} fired, so the line took {}, not {}",
+            over.trigger,
+            over.took,
+            over.model.as_deref().unwrap_or("none")
+        ));
+    }
     if !said.fired_triggers.is_empty() {
         lines.push(format!(
             "  fired triggers: {}",
             said.fired_triggers.join(", ")
+        ));
+    }
+    if !said.fired_emotional_triggers.is_empty() {
+        lines.push(format!(
+            "  fired emotional triggers: {} (by state: {})",
+            said.fired_emotional_triggers.join(", "),
+            if said.state_triggered.is_empty() {
+                "none".to_owned()
+            } else {
+                said.state_triggered.join(", ")
+            }
         ));
     }
     if !said.revealed_secrets.is_empty() {
@@ -87,7 +188,35 @@ pub(super) fn format_spoken(spoken: &Spoken) -> String {
             said.revealed_secrets.join(", ")
         ));
     }
-    lines.join("\n")
+    if said.repeat_retried {
+        lines.push(format!(
+            "  repeat: the first line reused recent, worded again{}",
+            if said.repeats_recent {
+                "; the second still does"
+            } else {
+                ""
+            }
+        ));
+    }
+    if let Some(tone) = &said.tone {
+        lines.push(format!("  tone: {tone}"));
+    }
+    lines.push(format!("  feels: {}", format_felt(&said.state)));
+    if !said.dropped.is_empty() {
+        lines.push(format!(
+            "  dropped from the answer: {}",
+            said.dropped.join(", ")
+        ));
+    }
+    lines.push(format!(
+        "  time: line {:.1}s{after_line}",
+        said.model_ms as f64 / 1000.0
+    ));
+    lines
+}
+
+pub(super) fn format_spoken(spoken: &Spoken) -> String {
+    spoken_lines(spoken, "").join("\n")
 }
 
 /// The gaps as `field: topic` lines.
@@ -98,7 +227,14 @@ fn gap_lines(gaps: &[Gap]) -> Vec<String> {
 }
 
 pub(super) fn format_answered(answered: &Answered) -> String {
-    let mut lines = vec![format_spoken(&answered.spoken)];
+    let after_line = match &answered.backfill {
+        BackfillOutcome::Running { .. } => ", backfill started",
+        BackfillOutcome::Backfilled { .. } if !answered.spoken.said.gaps.is_empty() => {
+            ", backfill waited for"
+        }
+        _ => "",
+    };
+    let mut lines = spoken_lines(&answered.spoken, after_line);
     lines.push(format!(
         "  covered: {}{}",
         answered.covered,
@@ -124,7 +260,12 @@ pub(super) fn format_answered(answered: &Answered) -> String {
         BackfillOutcome::BackfillFailed { error } => {
             format!("  backfill: failed ({}): {error}", error.key())
         }
-        BackfillOutcome::CoverageSkipped => "  coverage: skipped (coverage=false)".to_owned(),
+        BackfillOutcome::Running { record } => {
+            format!("  backfill: running (record {record} when done)")
+        }
+        BackfillOutcome::Busy => {
+            "  backfill: a backfill of this persona is already running; these gaps wait".to_owned()
+        }
     });
     lines.push(format!("  model: {}", answered.profile));
     lines.join("\n")

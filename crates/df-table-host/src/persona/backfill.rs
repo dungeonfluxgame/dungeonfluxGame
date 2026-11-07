@@ -1,6 +1,10 @@
 //! What the text service does when a character is asked something their persona does not cover:
 //! judge whether the persona holds enough (coverage), fill what it lacks by adding detail
-//! (backfill), and record every committed backfill.
+//! (backfill), and record every committed backfill. A line now reports its own gaps, so the
+//! backfill normally runs after the line on a task of its own (`PERSONA backfill_done id=..
+//! record=..
+//! edits=.. duration_ms=..`); `coverage: true` keeps the old separate coverage call before the
+//! line.
 //!
 //! The questions are `df_content::persona::backfill`. A backfill can only add, and the stored
 //! persona is changed by applying its edits to the persona as it is when they are committed, with
@@ -14,30 +18,32 @@
 //! still answered. The world facts of the active place (`world`) are in the coverage and backfill
 //! facts: a price, a quantity or a place comes from them and a backfill never invents one.
 
-use df_content::persona::privacy::{
-    PRIVACY_INSTRUCTION, PRIVACY_OUTPUT_NAME, parse_privacy, private_side, privacy_facts,
-    privacy_schema, public_additions,
-};
-use df_content::persona::{Persona, PersonaEdit};
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex, PoisonError};
+
 use df_content::persona::backfill::{
     BACKFILL_INSTRUCTION, BACKFILL_OUTPUT_NAME, COVERAGE_INSTRUCTION, COVERAGE_OUTPUT_NAME,
     Coverage, FILLABLE, Gap, Latitude, NarrativeGuidance, backfill_facts, backfill_schema,
     coverage_facts, coverage_schema, read_backfill, read_coverage,
 };
+use df_content::persona::privacy::{
+    PRIVACY_INSTRUCTION, PRIVACY_OUTPUT_NAME, parse_privacy, privacy_facts, privacy_schema,
+    private_side, public_additions,
+};
+use df_content::persona::{Persona, PersonaEdit};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
-use crate::blocking::run_blocking;
-
 use super::generate::{
-    Occasion, PUBLIC_NOTE, ShownScene, load_persona, operation_key, other_personas, say_line,
-    text_request,
+    PUBLIC_NOTE, ShownScene, compact, load_persona, operation_key, other_personas, text_request,
 };
+use super::line::{Occasion, say_line};
 use super::request::{
     Answered, AskRequest, BackfillOutcome, BackfillRecord, Backfilled, PersonaError, SaidLine,
     Spoken,
 };
-use super::storage::{commit_backfill, persona_directory, persona_id};
+use super::storage::{commit_backfill, persona_directory, persona_id, read_backfills};
+use crate::blocking::run_blocking;
 use crate::state::AppState;
 use crate::text::TextRoute;
 
@@ -62,12 +68,12 @@ pub(super) async fn coverage_of(
 ) -> Result<Coverage, PersonaError> {
     let character = own.id().as_str();
     let mut facts = coverage_facts(own, question, guidance);
-    facts["world"] = crate::world::context_for(app, own.voice_packs()).facts;
+    facts["world"] = crate::world::context_for_viewer(app, own.voice_packs(), character).facts;
     facts["public_note"] = json!(PUBLIC_NOTE);
     let request = text_request(
         route.profile(),
         COVERAGE_INSTRUCTION,
-        facts,
+        compact(facts),
         COVERAGE_OUTPUT_NAME,
         coverage_schema(),
     );
@@ -138,11 +144,11 @@ async fn refuse_private_detail(
     let request = text_request(
         route.profile(),
         PRIVACY_INSTRUCTION,
-        privacy_facts(
+        compact(privacy_facts(
             &public,
             &private_side(&after),
-            &crate::world::context_for(app, after.voice_packs()).facts,
-        ),
+            &crate::world::context_for_viewer(app, after.voice_packs(), after.id().as_str()).facts,
+        )),
         PRIVACY_OUTPUT_NAME,
         privacy_schema(),
     );
@@ -169,13 +175,15 @@ async fn ask_backfill(
     let request = text_request(
         route.profile(),
         BACKFILL_INSTRUCTION,
-        facts,
+        compact(facts),
         BACKFILL_OUTPUT_NAME,
         backfill_schema(),
     );
     let key = operation_key("backfill")?;
     Ok(route
-        .ask(&key, &request, |answer| read_backfill(answer, own, latitude))
+        .ask(&key, &request, |answer| {
+            read_backfill(answer, own, latitude)
+        })
         .await?
         .value)
 }
@@ -200,7 +208,7 @@ async fn backfill(
         .map_or(Latitude::Open, |guidance| guidance.latitude);
     let scene_text = format!("{}: {}", scene.title(), scene.description());
     let mut facts = backfill_facts(own, &others, job.gaps, job.guidance, &scene_text);
-    facts["world"] = crate::world::context_for(app, own.voice_packs()).facts;
+    facts["world"] = crate::world::context_for_viewer(app, own.voice_packs(), character).facts;
     facts["public_note"] = json!(PUBLIC_NOTE);
     let started = Instant::now();
     let edits = match ask_backfill(route, own, latitude, facts.clone()).await {
@@ -275,9 +283,10 @@ struct Filled {
     persona: Persona,
 }
 
-/// Judges the coverage of `persona` for the question of `request` and, when it has gaps and the
-/// request asks, fills them. A coverage or backfill that fails is reported in the outcome and
-/// `persona` is left as it was: it never blocks the answer.
+/// The old way, asked for with `coverage: true`: judges the coverage of `persona` for the question
+/// of `request` with a call of its own and, when it has gaps and the request asks, fills them
+/// before the line. A coverage or backfill that fails is reported in the outcome and `persona` is
+/// left as it was: it never blocks the answer.
 async fn fill_gaps(
     app: &AppState,
     route: &TextRoute,
@@ -287,14 +296,6 @@ async fn fill_gaps(
     at_ms: u64,
 ) -> Filled {
     let guidance = request.guidance.as_ref();
-    if !request.coverage {
-        return Filled {
-            covered: false,
-            gaps: Vec::new(),
-            outcome: BackfillOutcome::CoverageSkipped,
-            persona,
-        };
-    }
     let coverage = match coverage_of(app, route, &persona, &request.question, guidance).await {
         Ok(coverage) => coverage,
         Err(error) => {
@@ -349,37 +350,184 @@ async fn fill_gaps(
     }
 }
 
-/// Puts `request.question` to its character: coverage, then a backfill of any gaps when asked,
-/// then the line, from the persona as it is after.
+/// The personas whose backfill is running, by personas folder and id, so a persona has one at a
+/// time: the task is bounded by the gaps of one line and a second line's gaps wait for the next
+/// ask.
+static RUNNING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// A claim on the running backfill of one persona, given up when it is dropped.
+struct RunningClaim(String);
+
+impl RunningClaim {
+    fn take(id: &str) -> Option<Self> {
+        let mut running = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
+        running.insert(id.to_owned()).then(|| Self(id.to_owned()))
+    }
+}
+
+impl Drop for RunningClaim {
+    fn drop(&mut self) {
+        RUNNING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.0);
+    }
+}
+
+/// What a backfill that runs after its line needs: owned, because the task outlives the request.
+struct Deferred {
+    app: Arc<AppState>,
+    route: Arc<TextRoute>,
+    character: String,
+    question: String,
+    gaps: Vec<Gap>,
+    guidance: Option<NarrativeGuidance>,
+    at_ms: u64,
+}
+
+impl Deferred {
+    /// Fills the gaps against the persona as it is now and the scene as it is now, and records
+    /// `PERSONA backfill_done`.
+    async fn run(self) -> Result<Backfilled, PersonaError> {
+        let started = Instant::now();
+        let result = async {
+            let scene = ShownScene::read(&self.app).await?;
+            let persona = load_persona(&self.app, &self.character).await?;
+            let job = BackfillJob {
+                question: Some(&self.question),
+                gaps: &self.gaps,
+                guidance: self.guidance.as_ref(),
+                at_ms: self.at_ms,
+            };
+            backfill_persona(&self.app, &self.route, &scene, &persona, job)
+                .await
+                .map(|committed| committed.done)
+        }
+        .await;
+        let outcome = match &result {
+            Ok(done) => format!("record={} edits={}", done.sequence, done.edits.len()),
+            Err(error) => format!("failed={}", error.key()),
+        };
+        self.app.record_line_and_echo(format!(
+            "PERSONA backfill_done id={} {outcome} duration_ms={}",
+            self.character,
+            started.elapsed().as_millis()
+        ));
+        result
+    }
+}
+
+/// The record number the next backfill of `id` will take.
+async fn next_record(app: &AppState, id: &str) -> Result<u64, PersonaError> {
+    let (directory, id) = (persona_directory(app), persona_id(id)?);
+    let records = run_blocking(
+        move || read_backfills(&directory, &id),
+        PersonaError::Stopped,
+    )
+    .await?;
+    Ok(records
+        .last()
+        .map_or(1, |last| last.sequence.saturating_add(1)))
+}
+
+/// Fills the gaps the line reported, off the line's critical path: the line is already worded and
+/// the backfill runs on a task of its own (it finishes even if the request goes away) and helps
+/// the next line. With `backfill_sync` the request waits for it.
+async fn fill_after_line(
+    app: &Arc<AppState>,
+    route: &Arc<TextRoute>,
+    request: &AskRequest,
+    gaps: &[Gap],
+    at_ms: u64,
+) -> BackfillOutcome {
+    let key = format!("{}/{}", persona_directory(app).display(), request.character);
+    let Some(claim) = RunningClaim::take(&key) else {
+        return BackfillOutcome::Busy;
+    };
+    let record = match next_record(app, &request.character).await {
+        Ok(record) => record,
+        Err(error) => return BackfillOutcome::BackfillFailed { error },
+    };
+    let deferred = Deferred {
+        app: Arc::clone(app),
+        route: Arc::clone(route),
+        character: request.character.clone(),
+        question: request.question.clone(),
+        gaps: gaps.to_vec(),
+        guidance: request.guidance.clone(),
+        at_ms,
+    };
+    let task = tokio::spawn(async move {
+        let _claim = claim;
+        deferred.run().await
+    });
+    if !request.backfill_sync {
+        return BackfillOutcome::Running { record };
+    }
+    match task.await {
+        Ok(Ok(done)) => BackfillOutcome::Backfilled {
+            edits: done.edits.len(),
+            sequence: done.sequence,
+        },
+        Ok(Err(error)) => BackfillOutcome::BackfillFailed { error },
+        Err(_) => BackfillOutcome::BackfillFailed {
+            error: PersonaError::Stopped,
+        },
+    }
+}
+
+/// Puts `request.question` to its character: one call words the line and reports the gaps and the
+/// appraisal; the gaps are then filled when asked, after the line. With `coverage: true` the old
+/// way runs instead: a coverage call, a backfill, then the line.
 pub(super) async fn consider(
-    app: &AppState,
-    route: &TextRoute,
+    app: &Arc<AppState>,
+    route: &Arc<TextRoute>,
     scene: &ShownScene,
     request: &AskRequest,
     at_ms: u64,
 ) -> Result<Considered, PersonaError> {
     let persona = load_persona(app, &request.character).await?;
-    let filled = fill_gaps(app, route, scene, persona, request, at_ms).await;
-    // What the persona lacks and the backfill did not fill (it failed or was not asked) is told
-    // to the line as not established, so the line cannot invent a fact the persona does not hold.
-    let not_established: Vec<String> = match filled.outcome {
-        BackfillOutcome::Backfilled { .. } | BackfillOutcome::NotNeeded => Vec::new(),
-        _ => filled.gaps.iter().map(|gap| gap.topic.clone()).collect(),
-    };
-    let occasion = Occasion {
+    let profile = route.profile().as_str().to_owned();
+    let mut occasion = Occasion {
         situation: request.situation.as_deref().unwrap_or(""),
         question: Some(&request.question),
         guidance: request.guidance.as_ref(),
-        not_established: &not_established,
+        not_established: &[],
         recent: &request.recent,
         asked_by: request.asked_by.as_deref(),
     };
-    let said = say_line(app, route, scene, &filled.persona, occasion).await?;
+    if request.coverage {
+        let filled = fill_gaps(app, route, scene, persona, request, at_ms).await;
+        // What the persona lacks and the backfill did not fill (it failed or was not asked) is told
+        // to the line as not established, so the line cannot invent a fact the persona does not
+        // hold.
+        let not_established: Vec<String> = match filled.outcome {
+            BackfillOutcome::Backfilled { .. } | BackfillOutcome::NotNeeded => Vec::new(),
+            _ => filled.gaps.iter().map(|gap| gap.topic.clone()).collect(),
+        };
+        occasion.not_established = &not_established;
+        let said = say_line(app, route, scene, &filled.persona, occasion).await?;
+        return Ok(Considered {
+            covered: filled.covered,
+            gaps: filled.gaps,
+            backfill: filled.outcome,
+            profile,
+            said,
+        });
+    }
+    let said = say_line(app, route, scene, &persona, occasion).await?;
+    let backfill = if said.gaps.is_empty() {
+        BackfillOutcome::NotNeeded
+    } else if request.backfill {
+        fill_after_line(app, route, request, &said.gaps, at_ms).await
+    } else {
+        BackfillOutcome::NotAsked
+    };
     Ok(Considered {
-        covered: filled.covered,
-        gaps: filled.gaps,
-        backfill: filled.outcome,
-        profile: route.profile().as_str().to_owned(),
+        covered: said.gaps.is_empty(),
+        gaps: said.gaps.clone(),
+        backfill,
+        profile,
         said,
     })
 }

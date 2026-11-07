@@ -11,11 +11,9 @@ use serde_json::{Value, json};
 use super::cli::PersonaCommand;
 use super::fixtures::{
     CHARACTER, ScriptedHost, append_backstory_answer, coverage_answer, innkeeper, line_answer,
-    privacy_answer, scripted_host,
+    privacy_answer, scripted_host, write_market,
 };
-use super::request::{
-    Answered, BackfillOutcome, Edited, PersonaError, PersonaReply, Spoken,
-};
+use super::request::{Answered, BackfillOutcome, Edited, PersonaError, PersonaReply, Spoken};
 use super::routes::path;
 use super::storage::write_persona;
 use crate::command::{Command, parse};
@@ -31,7 +29,8 @@ fn done<T: std::fmt::Debug>(reply: PersonaReply<T>) -> T {
 }
 
 async fn ask(host: &ScriptedHost, extra: Value) -> PersonaReply<Answered> {
-    let mut body = json!({"character": CHARACTER, "question": "What does a room cost?"});
+    let mut body =
+        json!({"character": CHARACTER, "question": "What does a room cost?", "coverage": true});
     for (key, value) in extra.as_object().into_iter().flatten() {
         body[key] = value.clone();
     }
@@ -70,7 +69,7 @@ fn voiced_innkeeper() -> df_content::persona::Persona {
 #[tokio::test]
 async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_public_note() {
     let mut answer = line_answer("Two silver, love.");
-    answer["quoted_cp"] = json!(200);
+    answer["quote"] = json!({"item": "room", "qty": 1, "total_cp": 200});
     let host = scripted_host(vec![answer]).await;
     write_persona(&host.directory(), &voiced_innkeeper()).unwrap();
     let answered = done(
@@ -85,21 +84,24 @@ async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_
     );
     assert_eq!(answered.spoken.said.quoted_cp, Some(200));
     let facts = host.facts_of(0);
-    assert_eq!(facts["asked_by"], "pip");
+    assert_eq!(facts["now"]["asked_by"], "pip");
     assert_eq!(
-        facts["recent"],
+        facts["now"]["recent"],
         json!(["Marta: Room's free.", "Pip: How much?"])
     );
-    let layers = facts["voice_layers"].as_array().unwrap();
-    let persona_layer = layers.iter().find(|layer| layer["layer"] == "persona").unwrap();
+    let layers = facts["context"]["voice_layers"].as_array().unwrap();
+    let persona_layer = layers
+        .iter()
+        .find(|layer| layer["layer"] == "persona")
+        .unwrap();
     assert_eq!(persona_layer["voice"]["rhythm"], "short and dry");
     assert_eq!(
-        facts["character"]["expertise"][0],
+        facts["context"]["character"]["expertise"][0],
         "Knows every traveller's boots."
     );
-    assert!(facts.get("world").is_some(), "{facts}");
+    assert!(facts["context"].get("public_note").is_some(), "{facts}");
     assert!(
-        facts["public_note"]
+        facts["context"]["public_note"]
             .as_str()
             .is_some_and(|note| note.contains("public"))
     );
@@ -110,7 +112,7 @@ async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_
         "never copy one verbatim",
         "never by merely accepting an offer",
         "come only from the world facts",
-        "quoted_cp",
+        "total_cp",
     ] {
         assert!(instructions.contains(needed), "{needed}");
     }
@@ -121,11 +123,23 @@ async fn the_recent_lines_of_a_prompt_are_bounded() {
     let host = scripted_host(vec![line_answer("Aye.")]).await;
     write_persona(&host.directory(), &innkeeper()).unwrap();
     let recent: Vec<String> = (0..20).map(|n| format!("{n}{}", "x".repeat(500))).collect();
-    done(ask(&host, json!({"coverage": false, "backfill": false, "recent": recent})).await);
-    let sent = host.facts_of(0)["recent"].as_array().unwrap().clone();
-    assert_eq!(sent.len(), 8, "only the latest lines");
-    assert!(sent[0].as_str().unwrap().starts_with("12"));
-    assert!(sent.iter().all(|line| line.as_str().unwrap().chars().count() <= 300));
+    done(
+        ask(
+            &host,
+            json!({"coverage": false, "backfill": false, "recent": recent}),
+        )
+        .await,
+    );
+    let sent = host.facts_of(0)["now"]["recent"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(sent.len(), 6, "only the latest lines");
+    assert!(sent[0].as_str().unwrap().starts_with("14"));
+    assert!(
+        sent.iter()
+            .all(|line| line.as_str().unwrap().chars().count() <= 200)
+    );
 }
 
 #[tokio::test]
@@ -141,14 +155,15 @@ async fn say_takes_recent_and_asked_by_too() {
         .unwrap();
     done(spoken);
     let facts = host.facts_of(0);
-    assert_eq!(facts["recent"], json!(["Pip: Hello."]));
-    assert_eq!(facts["asked_by"], "pip");
+    assert_eq!(facts["now"]["recent"], json!(["Pip: Hello."]));
+    assert_eq!(facts["now"]["asked_by"], "pip");
 }
 
 #[tokio::test]
 async fn coverage_sees_the_expertise_and_the_world_facts() {
     let host = scripted_host(vec![coverage_answer(&[]), line_answer("Aye.")]).await;
     write_persona(&host.directory(), &voiced_innkeeper()).unwrap();
+    write_market(&host);
     done(ask(&host, json!({})).await);
     let facts = host.facts_of(0);
     assert_eq!(
@@ -170,6 +185,7 @@ async fn a_refused_backfill_is_asked_once_more_with_the_reason_and_can_then_succ
     ])
     .await;
     write_persona(&host.directory(), &innkeeper()).unwrap();
+    write_market(&host);
     let answered = done(ask(&host, json!({})).await);
     assert!(
         matches!(answered.backfill, BackfillOutcome::Backfilled { .. }),
@@ -177,7 +193,10 @@ async fn a_refused_backfill_is_asked_once_more_with_the_reason_and_can_then_succ
         answered.backfill
     );
     assert!(host.facts_of(1).get("previous_refusal").is_none());
-    let reason = host.facts_of(2)["previous_refusal"].as_str().unwrap().to_owned();
+    let reason = host.facts_of(2)["previous_refusal"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(reason.contains("not the object asked for"), "{reason}");
     assert!(host.facts_of(1).get("world").is_some());
     assert!(
@@ -286,7 +305,10 @@ fn the_voice_and_expertise_verbs_build_typed_edits() {
     else {
         panic!("not a voice generate");
     };
-    assert_eq!((id.as_str(), model.as_deref()), ("mara", Some("gpt-6.1-sol")));
+    assert_eq!(
+        (id.as_str(), model.as_deref()),
+        ("mara", Some("gpt-6.1-sol"))
+    );
 }
 
 #[test]
@@ -303,12 +325,16 @@ fn ask_and_say_read_recent_and_from_before_the_free_text() {
     assert_eq!(recent, ["Pip:_hello", "Mara:_hi"]);
     assert_eq!(asked_by.as_deref(), Some("pip"));
     assert_eq!(question, "How much?");
-    let PersonaCommand::Say { recent, asked_by, .. } =
-        command("persona say mara from=pip recent=x A buyer waits")
+    let PersonaCommand::Say {
+        recent, asked_by, ..
+    } = command("persona say mara from=pip recent=x A buyer waits")
     else {
         panic!("not a say");
     };
-    assert_eq!((recent, asked_by.as_deref()), (vec!["x".to_owned()], Some("pip")));
+    assert_eq!(
+        (recent, asked_by.as_deref()),
+        (vec!["x".to_owned()], Some("pip"))
+    );
 }
 
 fn voice_answer(packs: Value) -> Value {
@@ -337,11 +363,17 @@ async fn voice_generate_changes_only_the_voice_the_expertise_and_the_packs() {
     assert_eq!(edited.persona.expertise(), ["Knows the road north."]);
     let before = innkeeper();
     assert_eq!(edited.persona.job(), before.job());
-    assert_eq!(edited.persona.private_backstory(), before.private_backstory());
+    assert_eq!(
+        edited.persona.private_backstory(),
+        before.private_backstory()
+    );
     assert_eq!(edited.persona.private_fears(), before.private_fears());
     let facts = host.facts_of(0);
     assert!(facts["available_packs"].is_array());
-    assert!(!facts.to_string().contains("Tomas"), "a listener's view only");
+    assert!(
+        !facts.to_string().contains("Tomas"),
+        "a listener's view only"
+    );
 }
 
 #[tokio::test]

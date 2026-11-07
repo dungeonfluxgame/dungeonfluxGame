@@ -6,9 +6,9 @@
 //! `backfill` and write their own lines. A line never holds persona text, a hint, a question, a
 //! situation or a spoken line.
 //!
-//! Every paid sequence (a generation, a coverage-backfill-line sequence, a line) runs on a task of
+//! Every paid sequence (a generation, a line and its backfill, a line) runs on a task of
 //! its own that the handler waits for, so a client that leaves cannot lose an answer already paid
-//! for or stop `ask` between its coverage and its backfill (`blocking::run_owned`).
+//! for or stop `ask` between its line and its backfill (`blocking::run_owned`).
 
 use std::sync::Arc;
 
@@ -18,17 +18,19 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use axum::routing::{get, post};
-use df_content::persona::{Persona, PersonaEdit, PersonaId};
+use df_content::persona::{Persona, PersonaEdit, PersonaId, check_emotion_ids};
 use df_playground::lobby::change::ScreenEdit;
 use df_playground::scene::SceneChange;
 use df_scene_layout::{CharacterCue, CueKind};
 use df_table::ports::Clock;
 
 use super::backfill::{BackfillJob, backfill_persona, check_gaps, consider, coverage_of};
+use super::emotion_routes;
+use super::emotions::load_emotions;
 use super::generate::{
-    Occasion, ShownScene, Writing, generate_cast, generate_character, load_persona, persona_route,
-    say_line, voice_edit,
+    ShownScene, Writing, generate_cast, generate_character, load_persona, persona_route, voice_edit,
 };
+use super::line::{Occasion, say_line};
 use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, BackfillsQuery,
     CastRow, CoverageRequest, Covered, EditRequest, Edited, GenerateCastRequest, GenerateRequest,
@@ -63,8 +65,8 @@ pub mod path {
     pub const PERSONA_GENERATE_CAST: &str = "/dev/persona/generate-cast";
     /// Has it word a line from a character and cues it (POST a `SayRequest`). A dev tool.
     pub const PERSONA_SAY: &str = "/dev/persona/say";
-    /// Puts a question to a character: coverage, backfill of gaps, then the line (POST an
-    /// `AskRequest`). A dev tool.
+    /// Puts a question to a character: one call words the line and reports its gaps, which are
+    /// then backfilled after it (POST an `AskRequest`). A dev tool.
     pub const PERSONA_ASK: &str = df_playground::path::PERSONA_ASK;
     /// Whether the persona holds enough to answer a question (POST a `CoverageRequest`).
     pub const PERSONA_COVERAGE: &str = "/dev/persona/coverage";
@@ -178,8 +180,10 @@ async fn write(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Respon
 }
 
 /// Applies `edits` to the stored persona `id`, all together or not at all, and records
-/// `PERSONA edited`.
-async fn apply_edits(
+/// `PERSONA edited`. When the edits change the temperament or the emotional triggers, every
+/// emotion they name must be on the emotion list; a list that does not read leaves that check
+/// undone and is recorded as `PERSONA emotions_unchecked error=<key>`.
+pub(super) async fn apply_edits(
     app: &AppState,
     id: &str,
     edits: Vec<PersonaEdit>,
@@ -187,6 +191,10 @@ async fn apply_edits(
     let id = persona_id(id)?;
     let directory = persona_directory(app);
     let count = edits.len();
+    let emotions = load_emotions(app);
+    if let Err(error) = &emotions {
+        app.record_line(format!("PERSONA emotions_unchecked error={}", error.key()));
+    }
     let edited = run_blocking(
         move || {
             let _writing = PERSONA_WRITES.lock();
@@ -194,6 +202,13 @@ async fn apply_edits(
             let after = before
                 .edit(&edits)
                 .map_err(|cause| PersonaError::InvalidEdit { cause })?;
+            if let Ok(config) = &emotions
+                && (after.temperament() != before.temperament()
+                    || after.emotional_triggers() != before.emotional_triggers())
+            {
+                check_emotion_ids(&after, config)
+                    .map_err(|cause| PersonaError::InvalidEdit { cause })?;
+            }
             let changed = after != before;
             if changed {
                 write_persona(&directory, &after)?;
@@ -628,5 +643,10 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -
         .route(path::PERSONA_COVERAGE, post(coverage))
         .route(path::PERSONA_BACKFILL, post(backfill))
         .route(path::PERSONA_BACKFILLS, get(backfills))
-        .with_state(Arc::new(PersonaRoutes { app, text, speech }))
+        .with_state(Arc::new(PersonaRoutes {
+            app: Arc::clone(&app),
+            text: Arc::clone(&text),
+            speech,
+        }))
+        .merge(emotion_routes::router(app, text))
 }

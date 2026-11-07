@@ -25,10 +25,12 @@ pub const BACKFILLS_SUFFIX: &str = ".backfills.json";
 
 /// The words no persona can be called: the last segments of the dev API's paths and the words of
 /// the persona command line, which would be read as a verb or as a route instead of an id.
-pub const RESERVED_IDS: [&str; 12] = [
+pub const RESERVED_IDS: [&str; 14] = [
     "remove",
     "edit",
     "voice",
+    "temperament",
+    "state",
     "generate",
     "generate-cast",
     "say",
