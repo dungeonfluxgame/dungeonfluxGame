@@ -21,7 +21,7 @@ use df_providers::{
     inspect_png_off_worker, parse_unique_json,
 };
 
-pub(crate) const BFL_FLUX3_IMAGE: &str = "flux-3-image";
+pub(crate) use df_providers::BFL_FLUX3_IMAGE;
 pub(crate) const LIVE_BFL_ORIGIN: &str = "https://api.bfl.ai";
 
 /// Explicit origin and model-route selection. Origins are the credential

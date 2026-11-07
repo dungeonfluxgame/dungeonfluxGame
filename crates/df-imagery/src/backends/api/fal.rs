@@ -39,9 +39,7 @@ const ALPHA_CHECKPOINT_KIND: &str = "fal-alpha-v2";
 const MAXIMUM_CHECKPOINT_BYTES: usize = 24_576;
 /// Maximum origin or origin-relative polling locator retained in a checkpoint.
 const MAXIMUM_LOCATOR_BYTES: usize = 8192;
-pub(crate) const FLUX_ULTRA: &str = "fal-ai/flux-pro/v1.1-ultra";
-pub(crate) const FLUX_KONTEXT_MULTI: &str = "fal-ai/flux-pro/kontext/max/multi";
-pub(crate) const BACKGROUND_REMOVAL: &str = "fal-ai/birefnet/v2";
+pub(crate) use df_providers::{BACKGROUND_REMOVAL, FLUX_KONTEXT_MULTI, FLUX_ULTRA};
 const ASPECT_RATIOS: [(&str, f64); 9] = [
     ("21:9", 21.0 / 9.0),
     ("16:9", 16.0 / 9.0),
