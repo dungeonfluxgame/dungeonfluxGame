@@ -217,18 +217,26 @@ fn a_codex_run_maps_to_one_outcome() {
         receipt(false, None, "", "Error: Not logged in").outcome,
         TextOutcome::Unavailable(UnavailableReason::Authentication)
     );
+    // The real failure, as `codex exec --json` writes it: a `turn.failed` event on stdout, and
+    // nothing useful on stderr.
+    let failed = concat!(
+        r#"{"type":"turn.failed","error":{"message":"The 'not-a-model' model is not supported "#,
+        r#"when using Codex with a ChatGPT account."}}"#
+    );
     for succeeded in [true, false] {
-        assert_eq!(
-            receipt(
-                succeeded,
-                None,
+        for (events, errors) in [
+            (failed, "Reading additional input from stdin..."),
+            (
                 "",
-                "ERROR: The 'not-a-model' model is not supported when using Codex"
-            )
-            .outcome,
-            TextOutcome::Unavailable(UnavailableReason::Configuration),
-            "an unsupported model is a definite refusal whatever the exit"
-        );
+                "ERROR: The 'not-a-model' model is not supported when using Codex",
+            ),
+        ] {
+            assert_eq!(
+                receipt(succeeded, None, events, errors).outcome,
+                TextOutcome::Unavailable(UnavailableReason::Configuration),
+                "an unsupported model is a definite refusal whatever the exit or the stream"
+            );
+        }
     }
     assert_eq!(
         receipt(false, None, "", "boom").outcome,
