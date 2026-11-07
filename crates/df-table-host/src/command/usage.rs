@@ -12,9 +12,10 @@ use crate::cast::cli::{CAMERA_ON_USAGE, CAST_USAGE, CUE_USAGE};
 use crate::locate::cli::MEDIA_LOCATE_USAGE;
 use crate::persona::cli::{
     GUIDANCE_OPTIONS, PERSONA_ADD_USAGE, PERSONA_ASK_USAGE, PERSONA_BACKFILL_USAGE,
-    PERSONA_BACKFILLS_USAGE, PERSONA_BEHAVIOR_USAGE, PERSONA_COVERAGE_USAGE, PERSONA_DROP_USAGE,
-    PERSONA_EDIT_USAGE, PERSONA_GENERATE_USAGE, PERSONA_REMOVE_USAGE, PERSONA_SAY_USAGE,
-    PERSONA_SECRET_USAGE, PERSONA_SET_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_USAGE,
+    PERSONA_BACKFILLS_USAGE, PERSONA_BEHAVIOR_USAGE, PERSONA_CONVERSE_USAGE,
+    PERSONA_COVERAGE_USAGE, PERSONA_DROP_USAGE, PERSONA_EDIT_USAGE, PERSONA_GENERATE_USAGE,
+    PERSONA_REMOVE_USAGE, PERSONA_SAY_USAGE, PERSONA_SECRET_USAGE, PERSONA_SET_USAGE,
+    PERSONA_TRIGGER_USAGE, PERSONA_USAGE,
 };
 use crate::services::SERVICES_USAGE;
 use crate::speech::SPEECH_USAGE;
@@ -250,6 +251,11 @@ pub fn usage_text() -> String {
          it on the scene (a dev tool: it reports the behavior, triggers and secrets the \
          model says the line used; the production engine, not the model, will own \
          secret reveals).\
+         \n      {PERSONA_CONVERSE_USAGE}   has the characters of the shown scene talk to each \
+         other, one `persona say` per turn: the next speaker is whoever the last line \
+         named (unless they spoke in the last three turns, then whoever has been quiet \
+         longest), each line waits for its reading time or its voice (pace=false does \
+         not), and a topic is the first thing on the table.\
          \n      {PERSONA_ASK_USAGE}   puts a question to a character: the text service judges \
          whether the persona holds enough to answer, fills what it lacks by adding \
          detail only (recorded in personas/<id>.backfills.json; a failed backfill still \

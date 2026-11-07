@@ -42,6 +42,7 @@
 
 mod backfill;
 pub mod cli;
+mod converse;
 mod edit_verbs;
 mod format;
 mod generate;
@@ -52,6 +53,7 @@ pub mod routes;
 mod storage;
 
 pub use self::cli::{PersonaCommand, parse};
+pub use self::converse::ConverseError;
 pub use self::request::{PersonaError, PersonaSummary};
 pub use self::routes::router_with;
 pub(crate) use self::storage::summaries_of;
@@ -60,6 +62,8 @@ pub(crate) use self::storage::write_persona;
 
 #[cfg(test)]
 mod backfill_tests;
+#[cfg(test)]
+mod converse_tests;
 #[cfg(test)]
 mod fixtures;
 #[cfg(test)]

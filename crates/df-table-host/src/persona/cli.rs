@@ -18,6 +18,7 @@ use df_content::persona::{
 };
 use serde::Deserialize;
 
+use super::converse::{ConverseRequest, DEFAULT_TURNS, MAXIMUM_TURNS, converse};
 use super::edit_verbs::{parse_behavior, parse_secret, parse_trigger};
 use super::format::{
     format_answered, format_backfilled, format_backfills, format_covered, format_generation,
@@ -46,6 +47,8 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
     "[model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] <situation...> | ",
+    "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
+    "[model=<name>] [<topic...>] | ",
     "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] <guidance options> <question...> | ",
     "persona coverage <character> [model=<name>] ",
@@ -94,6 +97,11 @@ pub const PERSONA_GENERATE_USAGE: &str = concat!(
 /// `persona say`: a line from a character, cued on the scene.
 pub const PERSONA_SAY_USAGE: &str =
     "persona say <character> [model=<name>] [speak=true|false] <situation...>";
+/// `persona converse`: the characters of the shown scene talk to each other.
+pub const PERSONA_CONVERSE_USAGE: &str = concat!(
+    "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
+    "[model=<name>] [<topic...>]",
+);
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
     "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
@@ -168,6 +176,8 @@ pub enum PersonaCommand {
         model: Option<String>,
         speak: bool,
     },
+    /// Have the characters of the shown scene talk to each other.
+    Converse(ConverseRequest),
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
@@ -294,6 +304,41 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
         model: asking_from(&given)?.model,
         speak,
     })
+}
+
+fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let (given, rest) = take_options(words, &["turns", "opener", "speak", "pace", "model"]);
+    let mut turns = DEFAULT_TURNS;
+    let (mut opener, mut speak, mut pace) = (None, false, true);
+    for (key, value) in &given {
+        match *key {
+            "turns" => {
+                turns = value
+                    .parse()
+                    .ok()
+                    .filter(|n| (1..=MAXIMUM_TURNS).contains(n))
+                    .ok_or_else(|| {
+                        bad_choice(
+                            key,
+                            value,
+                            format!("a whole number from 1 to {MAXIMUM_TURNS}"),
+                        )
+                    })?;
+            }
+            "opener" => opener = Some(id_word(value)?.to_string()),
+            "speak" => speak = flag("speak", value)?,
+            "pace" => pace = flag("pace", value)?,
+            _ => {}
+        }
+    }
+    Ok(PersonaCommand::Converse(ConverseRequest {
+        turns,
+        opener,
+        topic: (!rest.is_empty()).then(|| rest.join(" ")),
+        model: asking_from(&given)?.model,
+        speak,
+        pace,
+    }))
 }
 
 fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
@@ -446,6 +491,7 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("backfill", rest) => parse_backfill(rest),
         ("backfills", [id]) => Ok(PersonaCommand::Backfills { id: id_word(id)? }),
         ("backfills", _) => Err(CommandError::Usage(PERSONA_BACKFILLS_USAGE)),
+        ("converse", words) => parse_converse(words),
         ("remove", [id]) => Ok(PersonaCommand::Remove { id: id_word(id)? }),
         ("remove", _) => Err(CommandError::Usage(PERSONA_REMOVE_USAGE)),
         _ => Err(CommandError::Usage(PERSONA_USAGE)),
@@ -462,7 +508,7 @@ fn refused(error: PersonaError) -> DevError {
 
 /// The value of a persona reply, or its refusal (the typed `PersonaError`) as the command's
 /// failure.
-fn reply_value<T>(reply: PersonaReply<T>) -> Result<T, DevError> {
+pub(super) fn reply_value<T>(reply: PersonaReply<T>) -> Result<T, DevError> {
     dev_client::reply_value(reply)
 }
 
@@ -751,6 +797,7 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             asking,
         } => backfill_character(port, character, gaps, asking).await,
         PersonaCommand::Backfills { id } => show_backfills(port, id).await,
+        PersonaCommand::Converse(request) => converse(port, request).await,
         PersonaCommand::Say {
             character,
             situation,

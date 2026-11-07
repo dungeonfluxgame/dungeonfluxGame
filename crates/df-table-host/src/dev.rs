@@ -23,6 +23,7 @@ use crate::imagegen::format::{format_ended, format_refusal};
 use crate::imagegen::request::{GenerateError, JobView};
 use crate::limits::UPLOAD_PIECE_BYTES;
 use crate::locate::request::LocateError;
+use crate::persona::ConverseError;
 use crate::persona::request::PersonaError;
 use crate::playground::{
     ChangeReply, ClientsError, FixtureNameError, PlaygroundChangeError, fixture_file_name,
@@ -253,6 +254,8 @@ pub enum DevError {
     ReplOutsideCommandLine,
     /// A command of the first playable path refused by the command line itself.
     Play(PlayError),
+    /// `persona converse` that cannot start: too few characters, or an opener who is not one.
+    Converse(ConverseError),
     /// The canvas answered with something this program does not understand. `reason` is why the
     /// answer did not read, when it was text that should have been JSON of a known shape.
     UnexpectedAnswer {
@@ -329,6 +332,7 @@ impl fmt::Display for DevError {
                 formatter.write_str("repl is started from the command line: df-table dev repl")
             }
             Self::Play(error) => write!(formatter, "{error}"),
+            Self::Converse(error) => write!(formatter, "{error}"),
             Self::UnexpectedAnswer {
                 status,
                 body,
