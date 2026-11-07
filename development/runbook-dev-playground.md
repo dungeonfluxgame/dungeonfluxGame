@@ -1,6 +1,6 @@
 # Runbook: the dev playground, personas, move transitions and plates
 
-Verified live on 2026-11-07 against commit `19dfd7b4` (Windows ARM64, Git Bash). Every
+Verified live on 2026-11-07 against commit `f2a0160f` plus the market and residents work (Windows ARM64, Git Bash). Every
 recipe below was run end to end. This is a development runbook for the dev host, not the
 shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md).
 
@@ -11,7 +11,9 @@ shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md)
 | Persona coverage, ask, backfill, say, generate | `persona ...` | Codex text (Responses has failure handling only: the OpenAI key had no credit) |
 | Characters talk to each other, paced | `persona converse` | Codex text |
 | A character's line is read as a MOVE by Jev (a model call) | `move interpret\|design\|brief\|say\|act` | Codex text |
-| Scene design, image prompt and character cards from the move | `move design\|brief` | pure code |
+| Scene design and residents from the move | `move design` | Codex text |
+| A new character is invented for the place (a fruit vendor at a market), painted into the plate, found by the scan and given a persona you can talk to | `move act ... plate=NAME` then `persona ask\|converse` | Codex text + Codex images + fal |
+| Image prompt and character cards from the design | `move brief` | pure code |
 | New plate generated, characters found, backdrop swapped, spinner shown | `move act <who> plate=NAME ...` | Codex images + fal SAM scan + Codex text |
 | One art style for every plate | `BriefStyle` in `movement/brief.rs` | none |
 
@@ -93,6 +95,41 @@ Expected trace: `interpreting, designing, briefing, generating, locating, placin
 no error. Only the characters Jev says move are in the design and the prompt; the rest are
 `left behind` and are absent from the picture.
 
+## Walk-through: balcony to a market and a vendor you can talk to
+
+This is the run that came out well (2026-11-07). The point: one spoken line moves the party,
+the model invents who lives at the destination, and that person becomes a real character.
+
+1. **Start on the balcony.** After a host restart the scene is the tavern. Put the balcony
+   plate back (its layout is stored, so the cast is the elf and the warrior):
+   `$D dev --port 7879 scene image tv-backdrop balcony-real.png`, then `scene cast`.
+2. **Check the design first, text only (no image spend).** The elf speaks, Jev reads the
+   MOVE, the model designs the place and any residents:
+   `$D dev --port 7879 move act elf "You and the warrior have had enough of the balcony. You decide to take the warrior down into the town market to buy fruit for the road. Tell the table where you are going, in your own words."`
+   Expect: `reading: move ... who=elf, warrior to=the market`, a `design:` with
+   `place`, `mood`, `elements`, one `resident fruit_vendor (...)` with a visible look, and
+   the prompt naming all three. It stops with "give plate=NAME" and no image is made.
+3. **Run it for real** with the same line and `plate=market` (about 75 s; one image, one
+   scan, text calls). Expect the trace to end `live` and these lines:
+   `plate market: market.png is behind the scene (N regions found, 3 of 3 characters named)`
+   and `resident fruit_vendor: persona made; persona ask fruit_vendor "..." and persona
+   converse work with them now`.
+4. **Look at it.** Reload `http://localhost:7879/playground/`. `scene cast` lists the elf,
+   the warrior and `fruit_vendor`; `persona show fruit_vendor` shows the generated persona
+   (name, job, personality, speech style, backstory taken from the look the design gave).
+5. **Talk to the vendor.**
+   `$D dev --port 7879 persona converse turns=8 opener=fruit_vendor "the elf and the warrior are at the stall buying fruit for the road north"`
+   or put your own question: `$D dev --port 7879 persona ask fruit_vendor "What is ripe today?"`.
+   The speakers of `converse` are the cast members that have a persona, so the new vendor
+   joins automatically.
+
+How a resident becomes a character: the design (`POST /dev/move/design`) returns
+`residents` (id, name, job, visible look) and places them like the party; the brief paints
+them from that look; the plate is scanned and `identify` names the vendor's region from the
+same look; then `persona generate <id>` runs with the look as its hint (it will not overwrite
+an existing persona). A resident the scan cannot name gets no persona yet: the command says
+so, and `persona generate <id>` works once a region is named.
+
 ## Verify (browser pane)
 
 The browser pane repaints only on navigation or resize, so read the page, then reload:
@@ -123,13 +160,17 @@ set in `ui_roleplay_thought.json`: `roleplay.title: null`, `roleplay.caption: nu
 | `move act ...` prints `usage: move <id> <x> <y>` | stale binary or verb not routed | rebuild, confirm `Finished`; stage verbs are routed in `command.rs` |
 | build "succeeds" but behaviour is old | compile error hidden by `\| head` | run `cargo check` and read the errors |
 | `cargo build` fails to link | the host holds `df-table.exe` | stop your host first |
+| a resident has no persona after the plate | the scan did not name their region | `scene cast` to see who was found; rerun, or `persona generate <id>` after a region is named |
+| a character's head is cut off at the top of the picture | the image model's framing; the prompt does not control it | rerun the plate; a framing line in `BriefStyle` is the planned fix |
 | whole party moves on "we" | Jev had no context | `move act` passes the situation as context; real play passes recent lines |
 | OpenAI Responses `credit_balance_exhausted` | key has no credit | add credit or use `DF_TEXT_BACKEND=codex` |
 
 ## Known gaps
 
 Reference portraits for character consistency are not built (cards carry job lines only).
-The design step is a table of set kits, not the narrative engine. Owed tests are marked
+The design step is a model call (`POST /dev/move/design`) that may invent residents; their
+ids are not checked against the persona routes' reserved words (`list`, `all`, ...). Picture
+framing is not controlled (a face can be cut off by the frame). Owed tests are marked
 `TODO(DEV-12)`. The transition's Generating, Locating and Placing timings are written after
 the plate call returns. `persona converse` has no topic shifts. Each plate run spends an
 image generation and a fal scan.

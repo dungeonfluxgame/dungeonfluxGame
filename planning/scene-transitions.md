@@ -88,10 +88,12 @@ weather, time of day) must plug in without rewriting it. Every stage therefore h
 - **Interpret:** no word table; the stand-in reader is removed. Jev is the model call
   (`POST /dev/move/interpret`), which reads the line against the closed schema generated from the
   move kinds, and `parse_reading` checks its answer and the party.
-- **Design:** `SceneDesigner` is a trait, so the narrative engine implements it later; the
-  default `TableDesigner` reads a `DesignTable` content file. `DesignContext` has a `Default`
-  and is built with struct-update syntax, so a new input (time, threat, weather) is a new field
-  with a default, not a changed signature.
+- **Design:** no table of set kits. The designer is a model call (`POST /dev/move/design`) against
+  a closed schema, and `parse_design` checks its answer against the move and the party. The design
+  includes residents (non-party characters who belong to the destination, such as a market's fruit
+  vendor), placed in the picture; each is given a persona after the plate names them, so
+  `persona ask|say|converse` work with them. A new input (time, threat, weather) is more context
+  in the facts, not a changed signature.
 - **Brief:** the art direction is a `BriefStyle` value with a default (`movement/brief.rs`, the
   single definition of the look; `persona converse plate=` reuses it), so a campaign or scene can
   change it; look sheets are a content file; references are a list, so another kind of reference

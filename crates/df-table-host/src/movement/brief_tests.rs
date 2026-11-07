@@ -29,6 +29,7 @@ fn balcony() -> SceneDesign {
         place: "a stone balcony above a harbour".to_owned(),
         mood: "windy dusk".to_owned(),
         elements: vec!["lanterns".to_owned(), "a rope rail".to_owned()],
+        residents: vec![],
         placements: vec![
             placement("ana", Depth::Foreground, Side::Left, "leans on the rail"),
             placement("bran", Depth::Background, Side::Right, "watches the boats"),

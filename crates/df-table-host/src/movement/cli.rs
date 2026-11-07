@@ -12,11 +12,13 @@ use std::fmt;
 use std::time::Instant;
 
 use super::brief::{BriefCharacter, LookSheets, build_brief};
-use super::design::{DesignContext, DesignTable, SceneDesigner, TableDesigner};
-use super::routes::{InterpretReply, InterpretRequest, path as move_path};
+use super::routes::{
+    DesignReply, DesignRequest, InterpretReply, InterpretRequest, path as move_path,
+};
 use super::transition::{Deadlines, Transition, format_trace};
 use super::types::{
-    Depth, Interpreted, MoveIntent, PartyMember, PlateBrief, SceneDesign, Side, TransitionStage,
+    Depth, Interpreted, MoveIntent, PartyMember, PlateBrief, Resident, SceneDesign, Side,
+    TransitionStage,
 };
 use crate::cast::request::{CastList, CastReply};
 use crate::cast::routes::path as cast_path;
@@ -27,10 +29,12 @@ use crate::dev_http::DevReply;
 use crate::imagegen::MAXIMUM_NAME_CHARS;
 use crate::imagegen::model::plain_name;
 use crate::locate::request::CharacterRequest;
-use crate::persona::options::take_options;
-use crate::persona::request::{PersonaReply, PersonaSummary, SayRequest, Spoken};
-use crate::persona::routes::path as persona_path;
 use crate::persona::deliver_plate;
+use crate::persona::options::take_options;
+use crate::persona::request::{
+    GenerateRequest, Generation, PersonaReply, PersonaSummary, SayRequest, Spoken,
+};
+use crate::persona::routes::path as persona_path;
 
 /// Every `move` stage verb, for the unknown-verb refusal and the help.
 pub const MOVEMENT_USAGE: &str = concat!(
@@ -152,16 +156,52 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
             plate,
         } => {
             let line = speak(port, &character, situation.clone()).await?;
-            walk(port, &line, None, &present, Some(character.as_str()), Some(situation.as_str()), plate.as_deref()).await
+            walk(
+                port,
+                &line,
+                None,
+                &present,
+                Some(character.as_str()),
+                Some(situation.as_str()),
+                plate.as_deref(),
+            )
+            .await
         }
         MoveCommand::Interpret(line) => {
-            walk(port, &line, Some(TransitionStage::Interpreting), &present, None, None, None).await
+            walk(
+                port,
+                &line,
+                Some(TransitionStage::Interpreting),
+                &present,
+                None,
+                None,
+                None,
+            )
+            .await
         }
         MoveCommand::Design(line) => {
-            walk(port, &line, Some(TransitionStage::Designing), &present, None, None, None).await
+            walk(
+                port,
+                &line,
+                Some(TransitionStage::Designing),
+                &present,
+                None,
+                None,
+                None,
+            )
+            .await
         }
         MoveCommand::Brief(line) => {
-            walk(port, &line, Some(TransitionStage::Briefing), &present, None, None, None).await
+            walk(
+                port,
+                &line,
+                Some(TransitionStage::Briefing),
+                &present,
+                None,
+                None,
+                None,
+            )
+            .await
         }
     };
     outcome.map_err(DevError::Move)
@@ -175,8 +215,7 @@ async fn speak(port: u16, character: &str, situation: String) -> Result<String, 
         model: None,
         speak: false,
     };
-    let reply: PersonaReply<Spoken> =
-        post_json(port, persona_path::PERSONA_SAY, &request).await?;
+    let reply: PersonaReply<Spoken> = post_json(port, persona_path::PERSONA_SAY, &request).await?;
     let spoken = dev_client::reply_value(reply)?;
     Ok(spoken.said.line)
 }
@@ -283,25 +322,24 @@ async fn walk(
         party: party.clone(),
         model: None,
     };
-    let intent = match post_json::<_, InterpretReply>(port, move_path::MOVE_INTERPRET, &request)
-        .await
-    {
-        Ok(DevReply::Done {
-            value: Interpreted::Move { intent },
-        }) => intent,
-        Ok(DevReply::Done {
-            value: Interpreted::NotAMove,
-        }) => return Ok(walk.unmoved("not_a_move", "the line is not a movement")),
-        Ok(DevReply::Done {
-            value: Interpreted::NeedsClarification,
-        }) => {
-            return Ok(walk.unmoved("needs_clarification", "the movement names no destination"));
-        }
-        Ok(DevReply::Rejected { error, message }) => {
-            return Err(walk.failed(error.key(), &message));
-        }
-        Err(error) => return Err(walk.failed("route_unreachable", &error.to_string())),
-    };
+    let intent =
+        match post_json::<_, InterpretReply>(port, move_path::MOVE_INTERPRET, &request).await {
+            Ok(DevReply::Done {
+                value: Interpreted::Move { intent },
+            }) => intent,
+            Ok(DevReply::Done {
+                value: Interpreted::NotAMove,
+            }) => return Ok(walk.unmoved("not_a_move", "the line is not a movement")),
+            Ok(DevReply::Done {
+                value: Interpreted::NeedsClarification,
+            }) => {
+                return Ok(walk.unmoved("needs_clarification", "the movement names no destination"));
+            }
+            Ok(DevReply::Rejected { error, message }) => {
+                return Err(walk.failed(error.key(), &message));
+            }
+            Err(error) => return Err(walk.failed("route_unreachable", &error.to_string())),
+        };
     walk.report.push(reading_text(&intent));
     walk.advance(&format!(
         "kind={} who={} to={}",
@@ -313,26 +351,37 @@ async fn walk(
         return Ok(walk.finished());
     }
 
-    let design = match TableDesigner::new(DesignTable::builtin()).design(
-        &intent,
-        &party,
-        &DesignContext::default(),
-    ) {
-        Ok(design) => design,
-        Err(error) => return Err(walk.failed(error.key(), &error.to_string())),
+    let design_request = DesignRequest {
+        intent: intent.clone(),
+        party: party.clone(),
+        context: context.map(str::to_owned),
+        model: None,
     };
+    let design =
+        match post_json::<_, DesignReply>(port, move_path::MOVE_DESIGN, &design_request).await {
+            Ok(DevReply::Done { value }) => value,
+            Ok(DevReply::Rejected { error, message }) => {
+                return Err(walk.failed(error.key(), &message));
+            }
+            Err(error) => return Err(walk.failed("route_unreachable", &error.to_string())),
+        };
     walk.report.push(design_text(&design));
     walk.advance(&format!(
-        "place={} placements={} left_behind={}",
+        "place={} placements={} residents={} left_behind={}",
         design.place,
         design.placements.len(),
+        design.residents.len(),
         design.left_behind.len()
     ))?;
     if stop == Some(TransitionStage::Designing) {
         return Ok(walk.finished());
     }
 
-    let characters: Vec<BriefCharacter> = present.iter().map(brief_character).collect();
+    let characters: Vec<BriefCharacter> = present
+        .iter()
+        .map(brief_character)
+        .chain(design.residents.iter().map(resident_character))
+        .collect();
     let brief = match build_brief(&design, &characters, &LookSheets::empty()) {
         Ok(brief) => brief,
         Err(error) => return Err(walk.failed(error.key(), &error.to_string())),
@@ -356,10 +405,10 @@ async fn walk(
         .iter()
         .map(|placement| CharacterRequest {
             name: placement.character.clone(),
-            description: present
+            description: characters
                 .iter()
-                .find(|summary| summary.id == placement.character)
-                .map(|summary| summary.job.clone()),
+                .find(|character| character.id == placement.character)
+                .map(|character| character.job.clone()),
             portrait: None,
         })
         .collect();
@@ -371,7 +420,62 @@ async fn walk(
     walk.advance(&format!("plate={name} generated and stored"))?;
     walk.advance("characters located and named in the picture")?;
     walk.advance("backdrop swapped behind the scene")?;
+    // A resident has a persona only once the plate has named them in the scene.
+    for resident in &design.residents {
+        let line = resident_persona(port, resident, &design.place).await;
+        walk.report.push(line);
+    }
     Ok(walk.finished())
+}
+
+/// The persona of `resident`, made through the persona generate route as `persona generate <id>`
+/// does (a stored persona is kept), and the line that says so. A persona that could not be made is
+/// reported, not fatal.
+async fn resident_persona(port: u16, resident: &Resident, place: &str) -> String {
+    let request = GenerateRequest {
+        character: resident.id.clone(),
+        hint: Some(format!(
+            "{}, met at {place}. Look: {}.",
+            resident.job, resident.look
+        )),
+        guidance: None,
+        model: None,
+        overwrite: false,
+    };
+    let made: Result<Generation, DevError> = match post_json::<_, PersonaReply<Generation>>(
+        port,
+        persona_path::PERSONA_GENERATE,
+        &request,
+    )
+    .await
+    {
+        Ok(reply) => dev_client::reply_value(reply),
+        Err(error) => Err(error),
+    };
+    match made {
+        Ok(Generation::Generated { .. }) => format!(
+            concat!(
+                "resident {}: persona made; `persona ask {0} \"...\"` and `persona converse` ",
+                "work with them now"
+            ),
+            resident.id
+        ),
+        Ok(Generation::KeptExisting { .. }) => format!(
+            concat!(
+                "resident {}: kept the stored persona; `persona ask {0} \"...\"` and ",
+                "`persona converse` work with them"
+            ),
+            resident.id
+        ),
+        Err(error) => format!(
+            concat!(
+                "resident {}: no persona could be made ({}); run `persona generate {0}` ",
+                "once the scene names them"
+            ),
+            resident.id,
+            error
+        ),
+    }
 }
 
 fn brief_character(summary: &PersonaSummary) -> BriefCharacter {
@@ -379,6 +483,16 @@ fn brief_character(summary: &PersonaSummary) -> BriefCharacter {
         id: summary.id.clone(),
         display_name: summary.display_name.clone(),
         job: summary.job.clone(),
+        portrait: None,
+    }
+}
+
+/// A resident as the brief knows a character: the job text carries the job and the visible look.
+fn resident_character(resident: &Resident) -> BriefCharacter {
+    BriefCharacter {
+        id: resident.id.clone(),
+        display_name: resident.display_name.clone(),
+        job: format!("{}, {}", resident.job, resident.look),
         portrait: None,
     }
 }
@@ -397,6 +511,12 @@ fn design_text(design: &SceneDesign) -> String {
         format!("design: place={} mood={}", design.place, design.mood),
         format!("elements: {}", design.elements.join(", ")),
     ];
+    for resident in &design.residents {
+        lines.push(format!(
+            "resident {} ({}): {}, {}",
+            resident.id, resident.display_name, resident.job, resident.look
+        ));
+    }
     for placement in &design.placements {
         lines.push(format!(
             "  {}: {} {}, {}",

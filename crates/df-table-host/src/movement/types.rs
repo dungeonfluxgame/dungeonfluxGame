@@ -102,14 +102,28 @@ pub struct Placement {
     pub doing: String,
 }
 
+/// A character who belongs to the place a move arrives at and is not in the party (a fruit stand
+/// vendor at a market). `id` has the grammar of a persona id and a SAM label: lowercase letters,
+/// digits and `_`, starting with a letter. `look` is the concrete visible traits that let the same
+/// person be recognised in later pictures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resident {
+    pub id: String,
+    pub display_name: String,
+    pub job: String,
+    pub look: String,
+}
+
 /// The narrative engine's design of the scene a move arrives in. The place and mood are words for
-/// the picture; `placements` has one entry for each character who is in the scene, and
-/// `left_behind` names the characters who stayed in the one before.
+/// the picture; `placements` has one entry for each character who is in the scene, the party
+/// members who moved and the `residents` alike, and `left_behind` names the party members who
+/// stayed in the scene before.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneDesign {
     pub place: String,
     pub mood: String,
     pub elements: Vec<String>,
+    pub residents: Vec<Resident>,
     pub placements: Vec<Placement>,
     pub left_behind: Vec<String>,
 }

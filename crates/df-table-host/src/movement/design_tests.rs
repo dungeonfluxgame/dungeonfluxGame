@@ -1,18 +1,16 @@
 //! Tests of `design`.
 
-use crate::movement::design::{
-    DesignContext, DesignError, DesignTable, SceneDesigner, TableDesigner,
-};
+use crate::movement::design::{DesignError, design_facts, design_schema, parse_design};
 use crate::movement::types::{
-    Depth, MoveIntent, MoveKind, PartyMember, Placement, SceneDesign, Side,
+    Depth, MoveIntent, MoveKind, PartyMember, Placement, Resident, SceneDesign, Side,
 };
+use serde_json::{Value, json};
 
 fn party() -> Vec<PartyMember> {
     vec![
         member("elf", "Sindra"),
         member("warrior", "Brann"),
         member("rogue", "Wynn"),
-        member("cleric", "Oda"),
     ]
 }
 
@@ -23,166 +21,115 @@ fn member(id: &str, display_name: &str) -> PartyMember {
     }
 }
 
-fn intent(kind: MoveKind, who: &[&str], to: &str) -> MoveIntent {
+fn intent(who: &[&str], to: &str) -> MoveIntent {
     MoveIntent {
-        kind,
+        kind: MoveKind::Walk,
         who: who.iter().map(|id| (*id).to_owned()).collect(),
         to: to.to_owned(),
         line: format!("we go to {to}"),
     }
 }
 
-fn design(intent: &MoveIntent) -> Result<SceneDesign, DesignError> {
-    TableDesigner::new(DesignTable::builtin()).design(intent, &party(), &DesignContext::default())
+fn mover(character: &str, side: &str) -> Value {
+    json!({"character": character, "depth": "foreground", "side": side, "doing": "walks in"})
 }
 
-fn placement(character: &str, depth: Depth, side: Side, doing: &str) -> Placement {
-    Placement {
-        character: character.to_owned(),
-        depth,
-        side,
-        doing: doing.to_owned(),
-    }
+fn vendor(id: &str) -> Value {
+    json!({
+        "id": id,
+        "display_name": "Mara",
+        "job": "fruit stand vendor",
+        "look": "stout woman in her fifties, grey braid, green apron",
+        "depth": "middle",
+        "side": "right",
+        "doing": "arranges pears"
+    })
+}
+
+fn answer(placements: Vec<Value>, residents: Vec<Value>) -> Value {
+    json!({
+        "place": "a busy market street",
+        "mood": "bright and noisy",
+        "elements": ["striped awnings", "crates of fruit"],
+        "residents": residents,
+        "placements": placements
+    })
 }
 
 #[test]
-fn elf_and_warrior_to_the_balcony_are_placed_and_the_rest_left_behind() {
-    let scene = design(&intent(MoveKind::Walk, &["elf", "warrior"], "the balcony")).unwrap();
+fn a_valid_design_with_a_resident_places_everyone_and_computes_left_behind() {
+    let design = parse_design(
+        &answer(
+            vec![mover("warrior", "right"), mover("elf", "left")],
+            vec![vendor("fruit_vendor")],
+        ),
+        &intent(&["elf", "warrior"], "the market"),
+        &party(),
+    )
+    .unwrap();
 
     assert_eq!(
-        scene,
+        design,
         SceneDesign {
-            place: "the balcony".to_owned(),
-            mood: "cool night air".to_owned(),
-            elements: vec![
-                "stone balustrade".to_owned(),
-                "hanging lanterns".to_owned(),
-                "the city beyond".to_owned(),
-            ],
+            place: "a busy market street".to_owned(),
+            mood: "bright and noisy".to_owned(),
+            elements: vec!["striped awnings".to_owned(), "crates of fruit".to_owned()],
+            residents: vec![Resident {
+                id: "fruit_vendor".to_owned(),
+                display_name: "Mara".to_owned(),
+                job: "fruit stand vendor".to_owned(),
+                look: "stout woman in her fifties, grey braid, green apron".to_owned(),
+            }],
             placements: vec![
-                placement("elf", Depth::Foreground, Side::Left, "steps out"),
-                placement("warrior", Depth::Foreground, Side::Right, "steps out"),
+                Placement {
+                    character: "elf".to_owned(),
+                    depth: Depth::Foreground,
+                    side: Side::Left,
+                    doing: "walks in".to_owned(),
+                },
+                Placement {
+                    character: "warrior".to_owned(),
+                    depth: Depth::Foreground,
+                    side: Side::Right,
+                    doing: "walks in".to_owned(),
+                },
+                Placement {
+                    character: "fruit_vendor".to_owned(),
+                    depth: Depth::Middle,
+                    side: Side::Right,
+                    doing: "arranges pears".to_owned(),
+                },
             ],
-            left_behind: vec!["rogue".to_owned(), "cleric".to_owned()],
+            left_behind: vec!["rogue".to_owned()],
         }
     );
 }
 
 #[test]
-fn town_square_uses_the_square_kit() {
-    let scene = design(&intent(MoveKind::Walk, &["elf"], "the town square")).unwrap();
-
-    assert_eq!(scene.place, "the town square");
-    assert_eq!(scene.mood, "open and busy");
-    assert!(scene.elements.contains(&"a market well".to_owned()));
-}
-
-#[test]
-fn hidden_door_matches_the_door_word() {
-    let scene = design(&intent(MoveKind::Enter, &["rogue"], "the hidden door")).unwrap();
-
-    assert_eq!(scene.mood, "close and expectant");
-    assert!(scene.elements.contains(&"iron hinges".to_owned()));
-}
-
-#[test]
-fn word_match_ignores_case_and_follows_the_order_of_the_words() {
-    let scene = design(&intent(
-        MoveKind::Walk,
-        &["elf"],
-        "The Balcony by the Tavern",
-    ))
+fn a_balcony_has_no_residents() {
+    let design = parse_design(
+        &answer(vec![mover("elf", "centre")], vec![]),
+        &intent(&["elf"], "the balcony"),
+        &party(),
+    )
     .unwrap();
 
-    assert_eq!(scene.mood, "cool night air");
-}
-
-#[test]
-fn unmatched_destination_uses_the_fallback_kit() {
-    let scene = design(&intent(MoveKind::Walk, &["elf"], "the moonlit meadow")).unwrap();
-
-    assert_eq!(scene.mood, "even and unremarkable");
+    assert!(design.residents.is_empty());
+    assert_eq!(design.placements.len(), 1);
     assert_eq!(
-        scene.elements,
-        vec!["bare walls".to_owned(), "a plain floor".to_owned()]
+        design.left_behind,
+        vec!["warrior".to_owned(), "rogue".to_owned()]
     );
 }
 
 #[test]
-fn depth_and_side_follow_the_order_of_the_movers() {
-    let scene = design(&intent(
-        MoveKind::Enter,
-        &["elf", "warrior", "rogue", "cleric"],
-        "the tavern",
-    ))
-    .unwrap();
-
-    assert_eq!(
-        scene.placements,
-        vec![
-            placement("elf", Depth::Foreground, Side::Left, "enters"),
-            placement("warrior", Depth::Foreground, Side::Right, "enters"),
-            placement("rogue", Depth::Middle, Side::Centre, "enters"),
-            placement("cleric", Depth::Middle, Side::Left, "enters"),
-        ]
-    );
-    assert!(scene.left_behind.is_empty());
-}
-
-#[test]
-fn tone_replaces_the_mood_and_keeps_the_elements() {
-    let context = DesignContext {
-        tone: Some("tense and quiet".to_owned()),
-        ..Default::default()
-    };
-    let scene = TableDesigner::new(DesignTable::builtin())
-        .design(
-            &intent(MoveKind::Sneak, &["rogue"], "the cellar"),
-            &party(),
-            &context,
-        )
-        .unwrap();
-
-    assert_eq!(scene.mood, "tense and quiet");
-    assert!(scene.elements.contains(&"barrels on a rack".to_owned()));
-}
-
-#[test]
-fn time_of_day_and_weather_are_appended_to_the_mood() {
-    let context = DesignContext {
-        time_of_day: Some("late".to_owned()),
-        weather: Some("light rain".to_owned()),
-        ..Default::default()
-    };
-    let scene = TableDesigner::new(DesignTable::builtin())
-        .design(
-            &intent(MoveKind::Walk, &["elf"], "the balcony"),
-            &party(),
-            &context,
-        )
-        .unwrap();
-
-    assert_eq!(scene.mood, "cool night air, late, light rain");
-}
-
-#[test]
-fn the_same_move_gives_the_same_design() {
-    let move_intent = intent(MoveKind::Run, &["warrior", "elf"], "the hall");
-
-    assert_eq!(design(&move_intent).unwrap(), design(&move_intent).unwrap());
-}
-
-#[test]
-fn a_move_with_no_movers_is_refused() {
-    let error = design(&intent(MoveKind::Walk, &[], "the balcony")).unwrap_err();
-
-    assert_eq!(error, DesignError::NoMovers);
-    assert_eq!(error.key(), "no_movers");
-}
-
-#[test]
-fn a_mover_outside_the_party_is_refused() {
-    let error = design(&intent(MoveKind::Walk, &["elf", "ghost"], "the balcony")).unwrap_err();
+fn an_unknown_mover_in_the_move_is_refused() {
+    let error = parse_design(
+        &answer(vec![mover("elf", "left")], vec![]),
+        &intent(&["elf", "ghost"], "the market"),
+        &party(),
+    )
+    .unwrap_err();
 
     assert_eq!(
         error,
@@ -191,56 +138,118 @@ fn a_mover_outside_the_party_is_refused() {
         }
     );
     assert_eq!(error.key(), "unknown_mover");
-    assert_eq!(error.to_string(), "ghost is not in the party");
 }
 
 #[test]
-fn a_blank_destination_is_refused() {
-    let error = design(&intent(MoveKind::Walk, &["elf"], "   ")).unwrap_err();
-
-    assert_eq!(error, DesignError::EmptyDestination);
-    assert_eq!(error.key(), "empty_destination");
-}
-
-#[test]
-fn a_design_table_loads_from_json() {
-    let table = DesignTable::from_json_str(
-        r#"{
-            "kits": {
-                "dock": { "mood": "salt and tar", "elements": ["a creaking jetty"] }
-            },
-            "fallback": { "mood": "plain", "elements": [] }
-        }"#,
+fn a_resident_id_that_is_a_party_id_or_repeated_is_refused() {
+    let in_party = parse_design(
+        &answer(vec![mover("elf", "left")], vec![vendor("rogue")]),
+        &intent(&["elf"], "the market"),
+        &party(),
     )
-    .unwrap();
-    let scene = TableDesigner::new(table)
-        .design(
-            &intent(MoveKind::Walk, &["elf"], "the old dock"),
+    .unwrap_err();
+    assert_eq!(
+        in_party,
+        DesignError::BadResident {
+            id: "rogue".to_owned()
+        }
+    );
+    assert_eq!(in_party.key(), "bad_resident");
+
+    let twice = parse_design(
+        &answer(
+            vec![mover("elf", "left")],
+            vec![vendor("fruit_vendor"), vendor("fruit_vendor")],
+        ),
+        &intent(&["elf"], "the market"),
+        &party(),
+    )
+    .unwrap_err();
+    assert!(matches!(twice, DesignError::BadResident { .. }));
+}
+
+#[test]
+fn a_resident_id_outside_the_persona_id_grammar_is_refused() {
+    for id in ["Fruit_Vendor", "fruit-vendor", "1vendor", "fruit vendor", "_vendor"] {
+        let error = parse_design(
+            &answer(vec![mover("elf", "left")], vec![vendor(id)]),
+            &intent(&["elf"], "the market"),
             &party(),
-            &DesignContext::default(),
         )
-        .unwrap();
-
-    assert_eq!(scene.mood, "salt and tar");
-    assert_eq!(scene.elements, vec!["a creaking jetty".to_owned()]);
+        .unwrap_err();
+        assert_eq!(error, DesignError::BadResident { id: id.to_owned() });
+    }
 }
 
 #[test]
-fn a_malformed_design_table_is_refused() {
-    let malformed = DesignTable::from_json_str(r#"{ "kits": { "dock": "#).unwrap_err();
-    assert!(matches!(malformed, DesignError::BadTable { .. }));
-    assert_eq!(malformed.key(), "bad_table");
-
-    let unknown_field = DesignTable::from_json_str(
-        r#"{ "kits": {}, "fallback": { "mood": "plain", "elements": [] }, "extra": 1 }"#,
+fn a_mover_without_a_placement_or_placed_twice_is_refused() {
+    let missing = parse_design(
+        &answer(vec![mover("elf", "left")], vec![]),
+        &intent(&["elf", "warrior"], "the market"),
+        &party(),
     )
     .unwrap_err();
-    assert!(matches!(unknown_field, DesignError::BadTable { .. }));
+    assert_eq!(missing.key(), "malformed_design");
+    assert!(missing.to_string().contains("warrior"));
 
-    let capitalised_key = DesignTable::from_json_str(
-        r#"{ "kits": { "Dock": { "mood": "salt", "elements": [] } },
-            "fallback": { "mood": "plain", "elements": [] } }"#,
+    let twice = parse_design(
+        &answer(vec![mover("elf", "left"), mover("elf", "right")], vec![]),
+        &intent(&["elf", "warrior"], "the market"),
+        &party(),
     )
     .unwrap_err();
-    assert!(matches!(capitalised_key, DesignError::BadTable { .. }));
+    assert!(twice.to_string().contains("twice"));
+
+    let stranger = parse_design(
+        &answer(vec![mover("elf", "left"), mover("rogue", "right")], vec![]),
+        &intent(&["elf"], "the market"),
+        &party(),
+    )
+    .unwrap_err();
+    assert!(stranger.to_string().contains("does not move"));
+}
+
+#[test]
+fn a_word_outside_the_closed_enums_or_a_blank_text_is_refused() {
+    let mut bad_depth = mover("elf", "left");
+    bad_depth["depth"] = json!("far away");
+    let error = parse_design(
+        &answer(vec![bad_depth], vec![]),
+        &intent(&["elf"], "the market"),
+        &party(),
+    )
+    .unwrap_err();
+    assert_eq!(error.key(), "malformed_design");
+
+    let mut blank = answer(vec![mover("elf", "left")], vec![]);
+    blank["place"] = json!("   ");
+    let error = parse_design(&blank, &intent(&["elf"], "the market"), &party()).unwrap_err();
+    assert!(error.to_string().contains("'place' is blank"));
+}
+
+#[test]
+fn a_move_with_no_movers_or_no_destination_is_refused_before_the_answer_is_read() {
+    let none = parse_design(&json!(7), &intent(&[], "the market"), &party()).unwrap_err();
+    assert_eq!(none, DesignError::NoMovers);
+
+    let blank = parse_design(&json!(7), &intent(&["elf"], "  "), &party()).unwrap_err();
+    assert_eq!(blank, DesignError::EmptyDestination);
+
+    let not_object = parse_design(&json!(7), &intent(&["elf"], "x"), &party()).unwrap_err();
+    assert_eq!(not_object.key(), "malformed_design");
+}
+
+#[test]
+fn the_schema_is_closed_and_the_facts_carry_the_move_and_the_party() {
+    let schema = design_schema();
+    assert_eq!(schema["additionalProperties"], json!(false));
+    assert_eq!(
+        schema["required"],
+        json!(["place", "mood", "elements", "residents", "placements"])
+    );
+
+    let facts = design_facts(&intent(&["elf"], "the market"), &party(), Some("on the balcony"));
+    assert_eq!(facts["move"]["to"], json!("the market"));
+    assert_eq!(facts["party"][0]["id"], json!("elf"));
+    assert_eq!(facts["context"], json!("on the balcony"));
 }
