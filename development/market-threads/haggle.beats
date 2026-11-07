@@ -1,0 +1,12 @@
+# The haggle: name, apple origin, shelf life, price, a discount on one (refused), five (granted).
+# speaker | what the customer does (their goal, in their own words) | what Mara faces
+elf | You are at Mara's fruit stall in the town market with the warrior, buying fruit for the road north. Greet her warmly and ask her name, in your own words. | A customer greets her at her stall and asks her name.
+elf | Pick up an apple and ask her where her apples come from. | The customer asks where the apples come from.
+warrior | Step in gruffly: ask if the apples will survive a week on the road. | The warrior asks how long the apples keep.
+elf | Ask how much one apple costs. | The customer asks the price of one apple.
+elf | Ask for a discount on just that one apple. | The customer asks for a discount on one apple.
+warrior | Grumble that you are not made of coin; one apple at that price is robbery. | The warrior grumbles about the price.
+elf | Offer to buy five apples instead and ask for a discount on the five. | The customer now wants five apples and asks for a discount.
+elf | Ask what the five apples will cost with her discount. | The customer asks the total for five apples with the discount.
+warrior | Grunt that five is fine and you will carry the sack; ask her to pack them. | The warrior asks her to pack the five apples.
+elf | Thank her and ask once more for her name so you can find the stall again. | The customer thanks her and asks her name again and where to find the stall.

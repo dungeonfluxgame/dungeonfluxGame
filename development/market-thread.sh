@@ -5,7 +5,8 @@
 # `persona ask` (coverage, backfill), fully live. Every call gets the last lines of the thread
 # (`recent=`) and who is speaking to her (`from=`), so nobody repeats themselves; the standing
 # context is stated once, in the first beat. Needs the market scene up (see
-# development/runbook-dev-playground.md). Usage: bash development/market-thread.sh
+# development/runbook-dev-playground.md). Usage: bash development/market-thread.sh [beats-file]
+# (default development/market-threads/haggle.beats; one file per variation).
 cd "$(dirname "$0")/.."
 D=${DF_TABLE_EXE:-./artifacts/build/bubbles/debug/df-table.exe}
 P=${DF_TABLE_PORT:-7879}
@@ -54,23 +55,11 @@ mara() { # what is happening now
   sleep 3
 }
 
-say_as elf "You are at Mara's fruit stall in the town market with the warrior, buying fruit for the road north. Greet her warmly and ask her name, in your own words."
-mara "A customer greets her at her stall and asks her name."
-say_as elf "Pick up an apple and ask her where her apples come from."
-mara "The customer asks where the apples come from."
-say_as warrior "Step in gruffly: ask if the apples will survive a week on the road."
-mara "The warrior asks how long the apples keep."
-say_as elf "Ask how much one apple costs."
-mara "The customer asks the price of one apple."
-say_as elf "Ask for a discount on just that one apple."
-mara "The customer asks for a discount on one apple."
-say_as warrior "Grumble that you are not made of coin; one apple at that price is robbery."
-mara "The warrior grumbles about the price."
-say_as elf "Offer to buy five apples instead and ask for a discount on the five."
-mara "The customer now wants five apples and asks for a discount."
-say_as elf "Ask what the five apples will cost with her discount."
-mara "The customer asks the total for five apples with the discount."
-say_as warrior "Grunt that five is fine and you will carry the sack; ask her to pack them."
-mara "The warrior asks her to pack the five apples."
-say_as elf "Thank her and ask once more for her name so you can find the stall again."
-mara "The customer thanks her and asks her name again and where to find the stall."
+# Each line of the beats file is `speaker | goal | what Mara faces`; `#` lines are comments.
+BEATS=${1:-development/market-threads/haggle.beats}
+while IFS="|" read -r -u 3 who goal situation; do
+  who=$(printf '%s' "$who" | xargs)
+  case "$who" in ''|'#'*) continue ;; esac
+  say_as "$who" "$(printf '%s' "$goal" | sed 's/^ *//;s/ *$//')"
+  mara "$(printf '%s' "$situation" | sed 's/^ *//;s/ *$//')"
+done 3< "$BEATS"

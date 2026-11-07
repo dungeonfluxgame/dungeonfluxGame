@@ -107,7 +107,7 @@ async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_
     );
     let instructions = host.instructions_of(0);
     for needed in [
-        "never reuse a phrase",
+        "OWN earlier wording",
         "at most once in any three lines",
         "never copy one verbatim",
         "never by merely accepting an offer",

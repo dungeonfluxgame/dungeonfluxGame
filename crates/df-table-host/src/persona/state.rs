@@ -159,7 +159,8 @@ pub(crate) fn apply_appraisal(
     app.record_line(format!(
         concat!(
             "PERSONA state_applied id={} turn={} mood_valence={} mood_arousal={} ",
-            "dropped_emotions={} dropped_relationships={} dropped_noticed={}"
+            "dropped_emotions={} dropped_relationships={} dropped_noticed={} deltas={} toward={} ",
+            "rapport_delta={}"
         ),
         id,
         after.turn,
@@ -167,7 +168,10 @@ pub(crate) fn apply_appraisal(
         after.mood.arousal,
         dropped.emotions,
         dropped.relationships,
-        dropped.noticed
+        dropped.noticed,
+        delta_list(appraisal),
+        appraisal.toward.as_deref().unwrap_or("-"),
+        appraisal.rapport_delta.map_or_else(|| "-".to_owned(), |delta| delta.to_string()),
     ));
     after
 }
@@ -192,4 +196,17 @@ pub(super) fn change_state(
 pub(super) fn reset_state(directory: &Path, id: &str) -> Result<(), EmotionError> {
     let _writing = STATE_WRITES.lock();
     remove_state(directory, id)
+}
+
+/// The emotion changes of `appraisal` as the audit line writes them: `joy:+4,trust:+2`, or `-`.
+fn delta_list(appraisal: &Appraisal) -> String {
+    if appraisal.emotions.is_empty() {
+        return "-".to_owned();
+    }
+    appraisal
+        .emotions
+        .iter()
+        .map(|change| format!("{}:{:+}", change.emotion, change.delta))
+        .collect::<Vec<_>>()
+        .join(",")
 }

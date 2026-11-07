@@ -26,6 +26,34 @@ pub const DEFAULT_DECAY_PERCENT: u8 = 20;
 /// How many recent lines a character attends to when neither its temperament nor the emotion
 /// file says.
 pub const DEFAULT_ATTENTION_CAPACITY: u8 = 3;
+
+/// How large an appraisal's changes are, in plain words a model reads with the persona's
+/// temperament: the content's calibration of feeling, editable in `emotions.json`.
+pub const DEFAULT_APPRAISAL_GUIDE: [&str; 8] = [
+    concat!(
+        "Almost every line moves the listener a little: give at least one emotion change ",
+        "unless the line was truly empty of feeling.",
+    ),
+    concat!(
+        "Interest, courtesy or praise of their work: joy, trust or pride up 2 to 8, rapport",
+        " toward the speaker up 1 to 5.",
+    ),
+    concat!(
+        "Haggling or doubting their goods: irritation up 2 to 10 (more for low patience); ",
+        "pride may rise as they defend their goods.",
+    ),
+    concat!(
+        "Rudeness, an insult, a threat or mishandling their goods: irritation up 10 to 30, ",
+        "trust down 5 to 15, rapport down 5 to 20.",
+    ),
+    "An apology or making amends: irritation down 5 to 15, rapport up 2 to 8.",
+    "A sale, a fair deal or a promise of custom: joy up 5 to 12, rapport up 3 to 8.",
+    concat!(
+        "Scale every change by the temperament: a reactive character moves more, a patient ",
+        "or steady one less.",
+    ),
+    "toward is the speaker of the line just said; give their rapport change there.",
+];
 /// The most recent lines any character can attend to.
 pub const MAXIMUM_ATTENTION_CAPACITY: u8 = 5;
 /// The reactivity of a normal person: a change is scaled by reactivity over this.
@@ -208,6 +236,8 @@ pub struct EmotionConfig {
     /// How many recent lines a character attends to, when the temperament does not say.
     pub attention_capacity: u8,
     pub rapport: RapportThresholds,
+    /// How large a model's appraisal changes are, in plain words.
+    pub appraisal_guide: Vec<String>,
 }
 
 impl Default for EmotionConfig {
@@ -226,6 +256,7 @@ impl Default for EmotionConfig {
             decay_percent: DEFAULT_DECAY_PERCENT,
             attention_capacity: DEFAULT_ATTENTION_CAPACITY,
             rapport: RapportThresholds::default(),
+            appraisal_guide: DEFAULT_APPRAISAL_GUIDE.map(str::to_owned).to_vec(),
         }
     }
 }
