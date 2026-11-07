@@ -152,3 +152,31 @@ stall's total and the lowest (the same single retry as a repeat), so the spoken 
 held quote agree (test updated: corrected second answer kept, a still-wrong one clamped); the
 intent rule now says the intent is this character's own goal said to the person in front of
 them, and an asker never quotes a price they do not keep. Open: a list of quotes per line.
+
+## Run 10 (supplies again: verifying refinement 6)
+
+Every spoken total matched the stall and the held quote: fourteen apples "38 copper for the lot"
+(run 9 said 42), ten apples 27, five pears 18. Asked to round fourteen apples down she held her
+price: "I've already taken a little off for the lot. That's my fair price." (38 against a floor of
+36: a trader standing firm, not a pushover.) The customers asked at 3, 7, 9, 11 and 13 (the warrior
+said "What's the price for each?" where run 9 had "I'm not the keeper. Ask Mara"); only the elf's
+"how many for two for a week" beat still came out as her own answer (she is a traveller with her
+own view; open).
+The price retry cost one extra call where it fired (13 to 15 s for those lines); the reply had
+labelled it as a repeat. Change: the reply now says why a line was worded again (`worded again:
+<reason>`), from a `retry_reason` kept on the line.
+
+## Where it stands
+
+Across runs 1 to 10 the vendor went from stonewalling prices, repeating herself and flat affect at
+~14 to 23 s an answer, to a single ~6.5 s call that answers like a seller (prices from the bible,
+bulk totals that agree with the stall, specific advice, a firm floor), keeps facts consistent
+(name, orchard, stall years recorded when she first says them), shows feeling in proportion
+(irritation to 58 under insults, a hostile stance that softens slowly after an apology, grief and
+fear at bad news that linger while surprise passes, playful at flirting without being explicit),
+and stays a fruit seller through all of it. Behaviour is tuned in data (emotions.json: emotion
+list with fade rates, appraisal guide, conduct; bible.json: prices, stalls, packs) without a
+rebuild.
+Open: a list of quotes for a line naming several prices; the elf's intent on one beat; a
+character whose persona allows theft or violence, to test rage itself (the warrior's persona
+refuses those beats).

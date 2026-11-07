@@ -190,9 +190,10 @@ fn spoken_lines(spoken: &Spoken, after_line: &str) -> Vec<String> {
     }
     if said.repeat_retried {
         lines.push(format!(
-            "  repeat: the first line reused recent, worded again{}",
+            "  worded again: {}{}",
+            said.retry_reason.as_deref().unwrap_or("the first line was refused"),
             if said.repeats_recent {
-                "; the second still does"
+                "; the second still repeats recent"
             } else {
                 ""
             }

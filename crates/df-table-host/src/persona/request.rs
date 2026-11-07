@@ -474,9 +474,13 @@ pub struct SaidLine {
     /// True when the line still reuses a phrase of `recent` after the one retry.
     #[serde(default)]
     pub repeats_recent: bool,
-    /// True when the first answer repeated `recent` and the line is the second.
+    /// True when the first answer was worded again and the line is the second.
     #[serde(default)]
     pub repeat_retried: bool,
+    /// Why the first answer was worded again: a repeat of `recent`, or a total the stall would
+    /// not charge.
+    #[serde(default)]
+    pub retry_reason: Option<String>,
     /// The character's state after this line.
     #[serde(default)]
     pub state: PersonaState,

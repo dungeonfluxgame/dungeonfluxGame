@@ -728,7 +728,7 @@ pub(super) async fn say_line(
             _ => break answer,
         }
     };
-    let said = settle(app, own, &config, &by_state, answer, retry_reason.is_some());
+    let said = settle(app, own, &config, &by_state, answer, retry_reason);
     let said = SaidLine {
         model_ms,
         total_ms: millis(started),
@@ -757,7 +757,7 @@ fn settle(
     config: &EmotionConfig,
     by_state: &[&EmotionalTrigger],
     answer: Answer,
-    retried: bool,
+    retried_for: Option<String>,
 ) -> SaidLine {
     let emotional = fired_emotional(own, &answer.fired_emotional, by_state);
     let forced = forced_behavior(own, &answer.fired_triggers, &emotional);
@@ -796,7 +796,8 @@ fn settle(
         dropped,
         tone,
         repeats_recent: answer.repeat.is_some(),
-        repeat_retried: retried,
+        repeat_retried: retried_for.is_some(),
+        retry_reason: retried_for,
         state,
         model_ms: 0,
         total_ms: 0,
