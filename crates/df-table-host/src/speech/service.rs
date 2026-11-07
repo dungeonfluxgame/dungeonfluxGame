@@ -84,7 +84,6 @@ impl Speech {
         }
     }
 
-    // TODO(DEV-12): a host test that `speak` and `transcribe` are refused with their switch off.
     /// Refuses a call of a feature that is turned off.
     fn require_on(&self, feature: SpeechFeature) -> Result<(), SpeechError> {
         if self.is_on(feature) {

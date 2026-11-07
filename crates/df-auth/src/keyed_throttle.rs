@@ -7,6 +7,7 @@
 //! never evicted, so a flood of fresh keys cannot reset a real key's counter. Pure: the time is
 //! supplied, nothing is read from a clock.
 
+use df_types::saturating_millis;
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -88,7 +89,7 @@ impl<K: Eq + Hash> KeyedWindows<K> {
     }
 
     fn sweep_elapsed(&mut self, now_ms: u64) {
-        let window_ms = u64::try_from(self.policy.window.as_millis()).unwrap_or(u64::MAX);
+        let window_ms = saturating_millis(self.policy.window);
         self.windows
             .retain(|_, window| now_ms.saturating_sub(window.started_at_ms) < window_ms);
     }

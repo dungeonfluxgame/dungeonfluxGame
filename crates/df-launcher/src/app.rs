@@ -1563,8 +1563,8 @@ fn post_rejoin_decision(
 }
 
 /// What a failed request to the running game means to the host, in the launcher's words.
-fn game_failure(error: &io::Error) -> String {
-    if table::reason(error).starts_with("http_") {
+fn game_failure(error: &table::TableError) -> String {
+    if error.is_refusal() {
         "The game did not take that. The ask may have just ended.".to_owned()
     } else {
         "The game could not be reached.".to_owned()

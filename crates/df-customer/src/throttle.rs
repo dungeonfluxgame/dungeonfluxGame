@@ -4,6 +4,7 @@
 //! address, an account id or a client IP, so an unknown address throttles exactly like a known one
 //! and no address or IP is held in memory in the clear.
 
+use df_types::saturating_millis;
 use std::{collections::HashMap, net::IpAddr, sync::Mutex};
 
 use df_auth::throttle::{ThrottleDecision, ThrottlePolicy, Window, counted, decide};
@@ -200,7 +201,7 @@ impl Throttles {
 }
 
 fn evict(windows: &mut HashMap<Key, Window>, policy: ThrottlePolicy, now_ms: u64) {
-    let window_ms = u64::try_from(policy.window.as_millis()).unwrap_or(u64::MAX);
+    let window_ms = saturating_millis(policy.window);
     windows.retain(|_, window| now_ms.saturating_sub(window.started_at_ms) < window_ms);
     if windows.len() >= MAXIMUM_TRACKED_KEYS
         && let Some(oldest) = windows

@@ -938,7 +938,7 @@ fn duration_words(seconds: u64) -> String {
 static TABLE_STATE: std::sync::Mutex<(String, u64)> = std::sync::Mutex::new((String::new(), 0));
 static PORTRAIT_REFUSAL: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
-fn note_table_state(fetched: Result<usize, &std::io::Error>, ms: u128) {
+fn note_table_state(fetched: Result<usize, &crate::table::TableError>, ms: u128) {
     let state = match fetched {
         Ok(heroes) => format!("state=ok heroes={heroes}"),
         Err(error) => format!("state=failed reason={}", crate::table::reason(error)),

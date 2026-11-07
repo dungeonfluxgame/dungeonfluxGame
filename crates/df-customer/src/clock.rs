@@ -1,5 +1,6 @@
 //! The service's only source of "now". Tests use the fake clock; nothing else reads wall time.
 
+use df_types::saturating_millis;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub trait Clock: Send + Sync + 'static {
@@ -14,9 +15,7 @@ impl Clock for SystemClock {
         // A clock before 1970 reads as the epoch; a clock past u64 milliseconds cannot occur.
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| {
-                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-            })
+            .map_or(0, saturating_millis)
     }
 }
 

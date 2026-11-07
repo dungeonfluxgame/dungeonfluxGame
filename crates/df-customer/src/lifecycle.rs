@@ -1,6 +1,7 @@
 //! The account's own pages: profile, security history, data export and closure
 //! (commerce-service "Account and tenant lifecycle"; plan 7.5).
 
+use df_types::saturating_millis;
 use serde_json::{Value, json};
 
 use crate::{
@@ -218,8 +219,7 @@ impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
             return Ok(CloseResult::NotReauthenticated);
         }
         let now_ms = self.now_ms();
-        let window_ms =
-            u64::try_from(self.shared.tunables.closure_window.as_millis()).unwrap_or(u64::MAX);
+        let window_ms = saturating_millis(self.shared.tunables.closure_window);
         let delete_after_ms = now_ms.saturating_add(window_ms);
         let outcome = write(self.shared.store.close_account(
             caller.account.id,

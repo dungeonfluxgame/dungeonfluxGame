@@ -2,6 +2,7 @@
 //! receipts past 90 days, and the personal data of closed accounts whose reopening window ended.
 //! One owned task; each pass is one bounded store call.
 
+use df_types::saturating_millis;
 use std::{sync::Arc, time::Duration};
 
 use df_types::AccountId;
@@ -27,7 +28,7 @@ pub const TOKEN_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 pub const RECEIPT_RETENTION: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 
 fn ms(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+    saturating_millis(duration)
 }
 
 /// Sessions last used before this are idle-expired now.

@@ -28,6 +28,7 @@ use crate::io_cause::IoCause;
 use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, start};
 use df_content::persona::PersonaError as ContentError;
+use df_playground::controls::ControlsChange;
 
 const FIXTURE: &str = concat!(
     r#"{"name": "Roadside inn", "description": "A fire, a table, four travellers.", "#,
@@ -369,6 +370,52 @@ async fn speaking_refuses_blank_or_oversized_text_bad_voices_and_a_missing_voice
             character: Some("elf".to_owned())
         }
     );
+}
+
+#[tokio::test]
+async fn a_call_of_a_feature_that_is_switched_off_is_refused_before_the_supplier() {
+    let host = speech_host(FakePort::answering()).await;
+    let switch = |change: ControlsChange| {
+        host.running
+            .state
+            .playground()
+            .change_all(vec![change], &[], 0, |_| {})
+            .expect("applies");
+    };
+    switch(ControlsChange::Stt(false));
+    let answer = host
+        .transcribe(AUDIO_CONTENT_TYPE, &vec![0; ONE_SECOND], "")
+        .await;
+    assert_eq!(
+        refused(reply_of::<Transcript>(&answer)),
+        SpeechError::Disabled {
+            feature: SpeechFeature::Stt
+        }
+    );
+    assert_eq!(answer.status, StatusCode::CONFLICT);
+    // Speaking is a different switch, still on.
+    done(
+        host.speak(r#"{"text": "Welcome.", "character": "innkeeper"}"#)
+            .await,
+    );
+    switch(ControlsChange::Tts(false));
+    let refusal = refused(
+        host.speak(r#"{"text": "Welcome.", "character": "innkeeper"}"#)
+            .await,
+    );
+    assert_eq!(
+        refusal,
+        SpeechError::Disabled {
+            feature: SpeechFeature::Tts
+        }
+    );
+    assert!(host.fake.heard().is_empty(), "nothing reached the supplier");
+    switch(ControlsChange::Stt(true));
+    done(reply_of::<Transcript>(
+        &host
+            .transcribe(AUDIO_CONTENT_TYPE, &vec![0; ONE_SECOND], "")
+            .await,
+    ));
 }
 
 #[tokio::test]

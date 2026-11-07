@@ -2,6 +2,7 @@
 //! single-use and scoping rules as the PostgreSQL adapter (both pass `contract`), and a mail
 //! sender that records messages. Not for production.
 
+use df_types::saturating_millis;
 use std::{
     collections::HashMap,
     sync::{
@@ -351,7 +352,7 @@ pub struct MemoryAccountStore {
 impl MemoryAccountStore {
     /// Delays account-event writes so timing behavior can be tested against a slow store.
     pub fn set_event_write_delay(&self, delay: Duration) {
-        let millis = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+        let millis = saturating_millis(delay);
         self.event_write_delay_ms.store(millis, Ordering::Relaxed);
     }
 

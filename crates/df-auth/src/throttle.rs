@@ -4,6 +4,7 @@
 //! Pure: one key's window and the supplied time in, a decision out. The bounded map of keys lives
 //! with the native caller.
 
+use df_types::saturating_millis;
 use std::time::Duration;
 
 /// At most `limit` counted attempts per `window`.
@@ -27,7 +28,7 @@ pub enum ThrottleDecision {
 }
 
 fn window_ms(policy: ThrottlePolicy) -> u64 {
-    u64::try_from(policy.window.as_millis()).unwrap_or(u64::MAX)
+    saturating_millis(policy.window)
 }
 
 fn current(policy: ThrottlePolicy, window: Option<Window>, now_ms: u64) -> Option<Window> {

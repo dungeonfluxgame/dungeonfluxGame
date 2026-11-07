@@ -4,6 +4,7 @@
 //! (plan 6.3): signup always hashes and always queues exactly one message; login runs a dummy
 //! verification for unknown addresses; failure throttles are keyed on the address, not an account.
 
+use df_types::saturating_millis;
 use std::time::Instant;
 
 use df_auth::{
@@ -594,8 +595,7 @@ impl<S: AccountStore, M: EmailSender> CustomerService<S, M> {
     ) -> Result<(NewSession, SecretToken), ServiceError> {
         let token = SecretToken::generate()?;
         let now_ms = self.now_ms();
-        let absolute_ms =
-            u64::try_from(self.shared.tunables.sessions.absolute.as_millis()).unwrap_or(u64::MAX);
+        let absolute_ms = saturating_millis(self.shared.tunables.sessions.absolute);
         Ok((
             NewSession {
                 id: new_session_id()?,

@@ -105,6 +105,9 @@ struct Page {
     report: ClientReport,
     /// The newest error it reported, so each error is written once.
     last_error_seq: u64,
+    /// The newest sequence number of a record in `timeline`, so a record newer than every one
+    /// seen is known to be new without a scan of a timeline that can hold tens of thousands.
+    newest_seq: Option<u64>,
     /// What it showed and played, oldest first, at most `MAXIMUM_KEPT_TIMELINE_RECORDS`.
     timeline: VecDeque<TimelineEntry>,
 }
@@ -406,6 +409,7 @@ impl ClientTable {
                     heard_ms: now_ms,
                     report: baseline,
                     last_error_seq: 0,
+                    newest_seq: None,
                     timeline: VecDeque::new(),
                 },
             );
@@ -436,11 +440,15 @@ impl ClientTable {
             if record.kind == TimelineKind::Error {
                 continue;
             }
-            let known = page
-                .timeline
-                .iter_mut()
-                .rev()
-                .find(|entry| entry.seq == record.seq && entry.kind == record.kind);
+            let seen = page.newest_seq.is_some_and(|newest| record.seq <= newest);
+            let known = seen
+                .then(|| {
+                    page.timeline
+                        .iter_mut()
+                        .rev()
+                        .find(|entry| entry.seq == record.seq && entry.kind == record.kind)
+                })
+                .flatten();
             match known {
                 Some(entry) => {
                     let was_open = entry.end_ms.is_none();
@@ -450,6 +458,7 @@ impl ClientTable {
                     }
                 }
                 None => {
+                    page.newest_seq = page.newest_seq.max(Some(record.seq));
                     let entry = entry_of(record, offset_ms, None);
                     lines.extend(arrival_line(&client, &entry));
                     lines.extend(ending_line(&client, &entry));

@@ -55,7 +55,41 @@ impl TableStatus {
     }
 }
 
-pub fn fetch(display_url: &str, token: &str) -> io::Result<TableStatus> {
+/// Why a request to the running game failed.
+#[derive(Debug)]
+pub enum TableError {
+    /// A portrait path the game does not serve.
+    BadPath,
+    /// The game's address is not an `http://` address.
+    NotHttp,
+    /// The game's address names no host the launcher can connect to.
+    NoAddress,
+    /// The answer ended before its header did.
+    Incomplete,
+    /// The game answered with a status other than 200; `None` when the status line has no number.
+    Status(Option<u16>),
+    /// The body is longer than the request allows.
+    TooLarge,
+    /// A chunked body is malformed.
+    Chunk,
+    /// The connection failed.
+    Io(io::Error),
+}
+
+impl From<io::Error> for TableError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl TableError {
+    /// Whether the game answered and said no, as against not being reached or not understood.
+    pub fn is_refusal(&self) -> bool {
+        matches!(self, Self::Status(_))
+    }
+}
+
+pub fn fetch(display_url: &str, token: &str) -> Result<TableStatus, TableError> {
     let body = request(
         display_url,
         "GET",
@@ -68,24 +102,33 @@ pub fn fetch(display_url: &str, token: &str) -> io::Result<TableStatus> {
 }
 
 /// A hero portrait from the game server; only the server's own image routes are asked for.
-pub fn portrait(display_url: &str, token: &str, path: &str) -> io::Result<Vec<u8>> {
+pub fn portrait(display_url: &str, token: &str, path: &str) -> Result<Vec<u8>, TableError> {
     if !portrait_path(path) {
-        return Err(io::Error::other("bad_path"));
+        return Err(TableError::BadPath);
     }
     request(display_url, "GET", path, token, None, PORTRAIT_BYTES_MAX)
 }
 
 /// A short, loggable reason for a failed request: the reason codes above, or the kind of a
 /// connection error.
-pub fn reason(error: &io::Error) -> String {
-    match error.kind() {
-        io::ErrorKind::Other => error.to_string(),
-        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => "timeout".to_owned(),
-        io::ErrorKind::ConnectionRefused => "connection_refused".to_owned(),
-        io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => {
-            "connection_reset".to_owned()
-        }
-        kind => format!("{kind:?}").to_ascii_lowercase(),
+pub fn reason(error: &TableError) -> String {
+    match error {
+        TableError::BadPath => "bad_path".to_owned(),
+        TableError::NotHttp => "not_http".to_owned(),
+        TableError::NoAddress => "no_address".to_owned(),
+        TableError::Incomplete => "incomplete".to_owned(),
+        TableError::Status(Some(code)) => format!("http_{code}"),
+        TableError::Status(None) => "http_unknown".to_owned(),
+        TableError::TooLarge => "too_large".to_owned(),
+        TableError::Chunk => "chunk".to_owned(),
+        TableError::Io(error) => match error.kind() {
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => "timeout".to_owned(),
+            io::ErrorKind::ConnectionRefused => "connection_refused".to_owned(),
+            io::ErrorKind::ConnectionReset | io::ErrorKind::ConnectionAborted => {
+                "connection_reset".to_owned()
+            }
+            kind => format!("{kind:?}").to_ascii_lowercase(),
+        },
     }
 }
 
@@ -141,16 +184,16 @@ pub fn request(
     token: &str,
     payload: Option<&[u8]>,
     maximum_body_bytes: usize,
-) -> io::Result<Vec<u8>> {
+) -> Result<Vec<u8>, TableError> {
     let authority = display_url
         .strip_prefix("http://")
         .and_then(|rest| rest.split('/').next())
         .filter(|authority| !authority.is_empty())
-        .ok_or_else(|| io::Error::other("not_http"))?;
+        .ok_or(TableError::NotHttp)?;
     let address = authority
         .to_socket_addrs()?
         .next()
-        .ok_or_else(|| io::Error::other("no_address"))?;
+        .ok_or(TableError::NoAddress)?;
     let mut stream = TcpStream::connect_timeout(&address, CONNECT_LIMIT)?;
     stream.set_read_timeout(Some(READ_LIMIT))?;
     stream.set_write_timeout(Some(READ_LIMIT))?;
@@ -171,15 +214,18 @@ pub fn request(
 }
 
 /// The body of a complete `200` response, plain or chunked.
-fn body(response: &[u8], maximum_body_bytes: usize) -> io::Result<Vec<u8>> {
+fn body(response: &[u8], maximum_body_bytes: usize) -> Result<Vec<u8>, TableError> {
     let split = response
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| io::Error::other("incomplete"))?;
+        .ok_or(TableError::Incomplete)?;
     let head = String::from_utf8_lossy(&response[..split]).to_ascii_lowercase();
     if !head.starts_with("http/1.1 200") && !head.starts_with("http/1.0 200") {
-        let code = head.split_whitespace().nth(1).unwrap_or("unknown");
-        return Err(io::Error::other(format!("http_{code}")));
+        let code = head
+            .split_whitespace()
+            .nth(1)
+            .and_then(|text| text.parse().ok());
+        return Err(TableError::Status(code));
     }
     let rest = &response[split + 4..];
     let content = if head.contains("transfer-encoding: chunked") {
@@ -188,26 +234,26 @@ fn body(response: &[u8], maximum_body_bytes: usize) -> io::Result<Vec<u8>> {
         rest.to_vec()
     };
     if content.len() > maximum_body_bytes {
-        return Err(io::Error::other("too_large"));
+        return Err(TableError::TooLarge);
     }
     Ok(content)
 }
 
-fn dechunk(mut rest: &[u8]) -> io::Result<Vec<u8>> {
+fn dechunk(mut rest: &[u8]) -> Result<Vec<u8>, TableError> {
     let mut out = Vec::new();
     loop {
         let line_end = rest
             .windows(2)
             .position(|window| window == b"\r\n")
-            .ok_or_else(|| io::Error::other("chunk"))?;
+            .ok_or(TableError::Chunk)?;
         let size_text = String::from_utf8_lossy(&rest[..line_end]);
         let size = usize::from_str_radix(size_text.split(';').next().unwrap_or("").trim(), 16)
-            .map_err(|_| io::Error::other("chunk"))?;
+            .map_err(|_| TableError::Chunk)?;
         rest = &rest[line_end + 2..];
         if size == 0 {
             return Ok(out);
         }
-        let chunk = rest.get(..size).ok_or_else(|| io::Error::other("chunk"))?;
+        let chunk = rest.get(..size).ok_or(TableError::Chunk)?;
         out.extend_from_slice(chunk);
         rest = rest.get(size + 2..).unwrap_or_default();
     }
