@@ -65,21 +65,15 @@ pub struct RemoveRequest {
     pub id: String,
 }
 
-/// A stored persona in a list: who, and what they do. Nothing private.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PersonaSummary {
-    pub id: String,
-    pub display_name: String,
-    pub job: String,
-}
+// The page reads the list, so the page owns the summary and the JSON is one.
+pub use df_playground::voice_wire::PersonaSummary;
 
-impl From<&Persona> for PersonaSummary {
-    fn from(persona: &Persona) -> Self {
-        Self {
-            id: persona.id().as_str().to_owned(),
-            display_name: persona.display_name().to_owned(),
-            job: persona.job().to_owned(),
-        }
+/// Who `persona` is and what they do. Nothing private.
+pub(super) fn summary_of(persona: &Persona) -> PersonaSummary {
+    PersonaSummary {
+        id: persona.id().as_str().to_owned(),
+        display_name: persona.display_name().to_owned(),
+        job: persona.job().to_owned(),
     }
 }
 

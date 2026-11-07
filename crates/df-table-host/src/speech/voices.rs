@@ -14,9 +14,10 @@ use serde::{Deserialize, Serialize};
 
 use super::limits::{MAXIMUM_VOICE_ID_BYTES, MAXIMUM_VOICES, MAXIMUM_VOICES_FILE_BYTES};
 use super::provider::TTS_MODEL;
-use super::request::{SpeechError, VoiceCause, VoiceChanged, VoiceRow};
+use super::request::{SpeechError, VoiceCause, VoiceChanged, VoiceRow, VoicesCause};
 use crate::atomic_file::write_atomically;
 use crate::blocking::WriteLock;
+use crate::dev_http::BodyError;
 use crate::locate::IoCause;
 use crate::state::AppState;
 
@@ -102,8 +103,8 @@ pub(super) fn check_character(text: &str) -> Result<PersonaId, SpeechError> {
     PersonaId::new(text).map_err(|cause| SpeechError::InvalidCharacter { cause })
 }
 
-fn invalid(detail: String) -> SpeechError {
-    SpeechError::VoicesInvalid { detail }
+fn invalid(cause: VoicesCause) -> SpeechError {
+    SpeechError::VoicesInvalid { cause }
 }
 
 impl VoiceBook {
@@ -123,20 +124,19 @@ impl VoiceBook {
             }
         };
         if u64::try_from(bytes.len()).map_or(true, |length| length > MAXIMUM_VOICES_FILE_BYTES) {
-            return Err(invalid("the file is too large".to_owned()));
+            return Err(invalid(VoicesCause::TooLarge));
         }
-        let file: VoicesFile =
-            serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
+        let file: VoicesFile = serde_json::from_slice(&bytes)
+            .map_err(|error| invalid(VoicesCause::Malformed(BodyError::from_json(&error))))?;
         if file.voices.len() > MAXIMUM_VOICES {
-            return Err(invalid("the file names too many voices".to_owned()));
+            return Err(invalid(VoicesCause::TooManyVoices));
         }
         for (character, voice) in &file.voices {
-            check_character(character)
-                .map_err(|_| invalid("a character id is not valid".into()))?;
-            check_voice(voice).map_err(|_| invalid("a voice id is not valid".into()))?;
+            check_character(character).map_err(|_| invalid(VoicesCause::InvalidCharacterId))?;
+            check_voice(voice).map_err(|_| invalid(VoicesCause::InvalidVoiceId))?;
         }
         if let Some(voice) = &file.default {
-            check_voice(voice).map_err(|_| invalid("the default voice id is not valid".into()))?;
+            check_voice(voice).map_err(|_| invalid(VoicesCause::InvalidDefaultVoice))?;
         }
         Ok(Self { file })
     }
@@ -216,8 +216,8 @@ pub(super) fn change_voice(
     }
     let changed = book.file != before;
     if changed {
-        let mut text =
-            serde_json::to_string_pretty(&book.file).map_err(|error| invalid(error.to_string()))?;
+        let mut text = serde_json::to_string_pretty(&book.file)
+            .map_err(|error| invalid(VoicesCause::Malformed(BodyError::from_json(&error))))?;
         text.push('\n');
         let (directory, name) = split(path)?;
         write_atomically(directory, name, text.as_bytes()).map_err(|error| {

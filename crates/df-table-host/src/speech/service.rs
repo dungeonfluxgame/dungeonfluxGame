@@ -21,14 +21,15 @@ use df_playground::scene::{SceneChange, Target};
 
 use super::clips::{Clip, clips, store_clip};
 use super::limits::{
-    KEY_VARIABLES, MAXIMUM_AUDIO_MS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS,
-    MAXIMUM_KEY_TERMS, MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
+    MAXIMUM_AUDIO_MS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS, MAXIMUM_KEY_TERMS,
+    MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
 };
 use super::provider::{
     ElevenLabsPort, PortStatus, STT_MODEL, SpeechPort, SynthesisCall, TTS_MODEL, TranscriptionCall,
 };
 use super::request::{
-    ClipPlayed, SpeakRequest, SpeechError, SpeechLimits, SpeechStatus, Transcript, Voiced,
+    ClipPlayed, MissingSetting, QueryCause, SpeakRequest, SpeechError, SpeechStatus, Transcript,
+    Voiced, current_limits,
 };
 use super::voices::{ResolvedVoice, VoiceBook, check_character, voices_path};
 use crate::blocking::run_blocking;
@@ -57,6 +58,22 @@ pub(super) struct Synthesized {
     pub(super) synthesis_ms: u64,
 }
 
+/// Which speech call an audit line is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpeechVerb {
+    Transcribe,
+    Speak,
+}
+
+impl SpeechVerb {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Transcribe => "transcribe",
+            Self::Speak => "speak",
+        }
+    }
+}
+
 impl Speech {
     pub fn new(app: Arc<AppState>, port: Arc<dyn SpeechPort>) -> Self {
         Self { app, port }
@@ -82,9 +99,7 @@ impl Speech {
             Ok(())
         } else {
             Err(SpeechError::NotConfigured {
-                missing: status
-                    .missing
-                    .unwrap_or_else(|| KEY_VARIABLES[0].to_owned()),
+                missing: status.missing.unwrap_or(MissingSetting::SpeechKey),
             })
         }
     }
@@ -107,7 +122,7 @@ impl Speech {
             default_voice: book.default_voice().map(str::to_owned),
             voices: book.rows(),
             clips_kept: u64::try_from(kept.len()).unwrap_or(u64::MAX),
-            limits: SpeechLimits::current(),
+            limits: current_limits(),
         })
     }
 
@@ -151,12 +166,12 @@ impl Speech {
         terms: Vec<String>,
     ) -> Result<Transcript, SpeechError> {
         let audio_ms = check_audio(&pcm)?;
-        if let Some(detail) = terms.iter().find_map(|term| key_term_problem(term)) {
-            return Err(SpeechError::InvalidQuery { detail });
+        if let Some(cause) = terms.iter().find_map(|term| key_term_problem(term)) {
+            return Err(SpeechError::InvalidQuery { cause });
         }
         if terms.len() > MAXIMUM_KEY_TERMS {
             return Err(SpeechError::InvalidQuery {
-                detail: format!("at most {MAXIMUM_KEY_TERMS} key terms"),
+                cause: QueryCause::TooManyTerms,
             });
         }
         self.check_configured()?;
@@ -187,15 +202,16 @@ impl Speech {
                 })
             }
             Err(error) => {
-                self.record_failure("transcribe", &error, duration_ms);
+                self.record_failure(SpeechVerb::Transcribe, &error, duration_ms);
                 Err(error)
             }
         }
     }
 
-    fn record_failure(&self, verb: &str, error: &SpeechError, duration_ms: u64) {
+    fn record_failure(&self, verb: SpeechVerb, error: &SpeechError, duration_ms: u64) {
         self.app.record_line(format!(
-            "SPEECH failed verb={verb} error={} duration_ms={duration_ms}",
+            "SPEECH failed verb={} error={} duration_ms={duration_ms}",
+            verb.key(),
             error.key()
         ));
     }
@@ -224,7 +240,8 @@ impl Speech {
             })
             .await;
         let synthesis_ms = elapsed_ms(started);
-        let made = made.inspect_err(|error| self.record_failure("speak", error, synthesis_ms))?;
+        let made =
+            made.inspect_err(|error| self.record_failure(SpeechVerb::Speak, error, synthesis_ms))?;
         let clip = store_clip(&self.app, &made.mp3).await?;
         self.app.record_line(format!(
             "SPEECH synthesized clip={} bytes={} duration_ms={synthesis_ms} profile={profile}",
@@ -334,21 +351,17 @@ pub(super) fn check_text(text: &str) -> Result<(), SpeechError> {
 }
 
 /// What is wrong with `term` as a key term, or `None` when it is one the supplier takes.
-fn key_term_problem(term: &str) -> Option<String> {
+fn key_term_problem(term: &str) -> Option<QueryCause> {
     let bad_character =
         |c: char| c.is_control() || matches!(c, '<' | '>' | '{' | '}' | '[' | ']' | '\\');
     if term.trim().is_empty() {
-        Some("a key term is blank".to_owned())
+        Some(QueryCause::BlankTerm)
     } else if term.chars().count() > MAXIMUM_KEY_TERM_CHARACTERS {
-        Some(format!(
-            "a key term is more than {MAXIMUM_KEY_TERM_CHARACTERS} characters"
-        ))
+        Some(QueryCause::LongTerm)
     } else if term.split_whitespace().count() > MAXIMUM_KEY_TERM_WORDS {
-        Some(format!(
-            "a key term is more than {MAXIMUM_KEY_TERM_WORDS} words"
-        ))
+        Some(QueryCause::WordyTerm)
     } else if term.chars().any(bad_character) {
-        Some("a key term has a control or bracket character".to_owned())
+        Some(QueryCause::InvalidTermCharacters)
     } else {
         None
     }

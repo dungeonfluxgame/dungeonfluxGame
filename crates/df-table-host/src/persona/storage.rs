@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use df_content::persona::{Persona, PersonaId};
 
 use super::guard::copies_private_detail_into_public_text;
-use super::request::{BackfillRecord, PersonaError, PersonaSummary};
+use super::request::{BackfillRecord, PersonaError, PersonaSummary, summary_of};
 use crate::blocking::{WriteLock, run_blocking};
 use crate::locate::IoCause;
 use crate::state::AppState;
@@ -287,7 +287,7 @@ pub(crate) async fn summaries_of(app: &AppState, names: Vec<String>) -> Vec<Pers
                     continue;
                 };
                 match read_persona(&directory, &id) {
-                    Ok(Some(persona)) => summaries.push(PersonaSummary::from(&persona)),
+                    Ok(Some(persona)) => summaries.push(summary_of(&persona)),
                     Ok(None) => {}
                     Err(error) => damaged.push((name, error.key())),
                 }

@@ -1,6 +1,7 @@
 //! The addresses the page asks the host for, and the query of a frame request. The host's router
-//! (`df_table_host::wire::route`) serves every one of these constants and reads every query
-//! parameter here, so a rename breaks the build instead of a running page.
+//! (`df_table_host::wire::route`, and its speech and persona routes) serves every one of these
+//! constants and reads every query parameter here, so a rename breaks the build instead of a
+//! running page.
 
 /// The live canvas (GET).
 pub const CANVAS: &str = "/canvas.json";
@@ -26,7 +27,6 @@ pub const CONTROLS: &str = "/playground/controls.json";
 pub const CONTROLS_CHANGE: &str = "/dev/playground/controls";
 /// A page tells the host what it is showing and playing (POST a `media::ClientReportPost`).
 pub const CLIENT_REPORT: &str = "/dev/playground/report";
-// TODO(DEV-12): a host test that the speech and persona routes serve these four addresses.
 /// Whether speech to text is set up on the host (GET).
 pub const SPEECH_STATUS: &str = "/dev/speech/status";
 /// Turns a recording into text (POST raw 16 kHz mono signed 16-bit little-endian PCM).
@@ -35,7 +35,7 @@ pub const SPEECH_TRANSCRIBE: &str = "/dev/speech/transcribe";
 pub const SPEECH_CONTENT_TYPE: &str = "audio/L16;rate=16000";
 /// The stored personas, who each is (GET).
 pub const PERSONA_LIST: &str = "/dev/persona";
-/// Puts a question to a character of the shown scene (POST a `voice_wire::AskBody`).
+/// Puts a question to a character of the shown scene (POST a `voice_wire::AskRequest`).
 pub const PERSONA_ASK: &str = "/dev/persona/ask";
 
 /// The query parameter of `FRAME` that names the last frame already seen.

@@ -61,7 +61,7 @@ impl ServicesRoutes {
         match self.speech.status().await {
             Ok(status) => SpeechReport {
                 configured: status.configured,
-                missing: status.missing,
+                missing: status.missing.map(|setting| setting.variable().to_owned()),
                 tts_model: status.tts_model,
                 stt_model: status.stt_model,
                 voices: Some(count(status.voices.len())),
@@ -73,7 +73,7 @@ impl ServicesRoutes {
                 let port = self.speech.port_status();
                 SpeechReport {
                     configured: port.configured,
-                    missing: port.missing,
+                    missing: port.missing.map(|setting| setting.variable().to_owned()),
                     tts_model: crate::speech::provider::TTS_MODEL.to_owned(),
                     stt_model: crate::speech::provider::STT_MODEL.to_owned(),
                     voices: None,

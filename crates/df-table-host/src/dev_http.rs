@@ -10,6 +10,8 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+/// The answer of every dev route. The page owns the type, so the envelope is one.
+pub use df_playground::dev_reply::DevReply;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -20,49 +22,6 @@ use serde::{Deserialize, Serialize};
 pub trait RouteError: std::error::Error + Send + Sync + 'static {
     /// The status a refusal with this error is answered with.
     fn status(&self) -> StatusCode;
-}
-
-/// The answer of every dev route: `{"outcome":"done","value":..}` or
-/// `{"outcome":"rejected","error":{"error":"<key>",..},"message":".."}`.
-///
-/// How a route module adopts it:
-///
-/// 1. Give the module one `<Module>Error` tagged `"error"`, implement `RouteError` for it (its
-///    `status()`), and `From<BodyError>` into a variant that wraps the `BodyError`.
-/// 2. Replace the module's own reply enum by an alias, which keeps its wire JSON:
-///    `pub type EngineReply<T> = DevReply<T, EngineError>;`.
-/// 3. Read bodies with `parse_body(&bytes)?` and answer with `reply(result)`, which picks the
-///    status from the error and writes this envelope.
-/// 4. In the module's CLI, read the answer as the module's reply through `dev_client` and match
-///    the error's variant, never the message text.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum DevReply<T, E> {
-    Done {
-        value: T,
-    },
-    /// `message` is the error's `Display`, written by the host so a reader needs no table of
-    /// texts.
-    Rejected {
-        error: E,
-        message: String,
-    },
-}
-
-impl<T, E: std::fmt::Display> DevReply<T, E> {
-    /// The refusal of `error`, with its sentence as the message.
-    pub fn rejected(error: E) -> Self {
-        let message = error.to_string();
-        Self::Rejected { error, message }
-    }
-
-    /// `Done` with the value or `Rejected` with the error.
-    pub fn from_result(result: Result<T, E>) -> Self {
-        match result {
-            Ok(value) => Self::Done { value },
-            Err(error) => Self::rejected(error),
-        }
-    }
 }
 
 /// `body` as JSON with `status`.
@@ -121,7 +80,7 @@ pub struct BodyError {
 }
 
 impl BodyError {
-    fn from_json(error: &serde_json::Error) -> Self {
+    pub(crate) fn from_json(error: &serde_json::Error) -> Self {
         let cause = match error.classify() {
             serde_json::error::Category::Eof => BodyCause::Truncated,
             serde_json::error::Category::Data => BodyCause::Data,

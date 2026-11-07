@@ -32,8 +32,8 @@ use super::generate::{
 use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, BackfillsQuery,
     CastRow, CoverageRequest, Covered, EditRequest, Edited, GenerateCastRequest, GenerateRequest,
-    Generation, PersonaError, PersonaRemoved, PersonaStored, PersonaSummary, RemoveRequest,
-    SaidLine, SayRequest, ShowQuery, Spoken,
+    Generation, PersonaError, PersonaRemoved, PersonaStored, RemoveRequest, SaidLine, SayRequest,
+    ShowQuery, Spoken, summary_of,
 };
 use super::storage::{
     PERSONA_WRITES, check_reserved, list_personas, persona_directory, persona_id, read_backfills,
@@ -50,7 +50,7 @@ use crate::text::{TextRoute, TextRuntime};
 pub mod path {
     /// The stored personas (GET), or stores one, replacing a persona of the same id (POST a
     /// persona's JSON).
-    pub const PERSONA: &str = "/dev/persona";
+    pub const PERSONA: &str = df_playground::path::PERSONA_LIST;
     /// One persona (GET, with `?audience=public|owner`).
     pub const PERSONA_ONE: &str = "/dev/persona/{id}";
     /// Removes a persona (POST a `RemoveRequest`). Its backfill record stays.
@@ -65,7 +65,7 @@ pub mod path {
     pub const PERSONA_SAY: &str = "/dev/persona/say";
     /// Puts a question to a character: coverage, backfill of gaps, then the line (POST an
     /// `AskRequest`). A dev tool.
-    pub const PERSONA_ASK: &str = "/dev/persona/ask";
+    pub const PERSONA_ASK: &str = df_playground::path::PERSONA_ASK;
     /// Whether the persona holds enough to answer a question (POST a `CoverageRequest`).
     pub const PERSONA_COVERAGE: &str = "/dev/persona/coverage";
     /// Fills gaps of a persona by adding detail (POST a `BackfillRequest`).
@@ -113,12 +113,7 @@ async fn list(State(routes): State<Arc<PersonaRoutes>>) -> Response {
     let directory = persona_directory(&routes.app);
     let result = run_blocking(move || list_personas(&directory), PersonaError::Stopped)
         .await
-        .map(|personas| {
-            personas
-                .iter()
-                .map(PersonaSummary::from)
-                .collect::<Vec<_>>()
-        });
+        .map(|personas| personas.iter().map(summary_of).collect::<Vec<_>>());
     answer(&routes.app, "list", None, result)
 }
 
@@ -164,7 +159,7 @@ async fn write(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Respon
                 let _writing = PERSONA_WRITES.lock();
                 let replaced = write_persona(&directory, &persona)?;
                 Ok(PersonaStored {
-                    persona: PersonaSummary::from(&persona),
+                    persona: summary_of(&persona),
                     replaced,
                 })
             },

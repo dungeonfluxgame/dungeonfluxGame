@@ -20,8 +20,8 @@ use serde::Serialize;
 use super::clips::{clear_clips, clips};
 use super::limits::MAXIMUM_ADMITTED_AUDIO_BYTES;
 use super::request::{
-    ClipPlayed, ClipRow, ClipsCleared, SpeakRequest, SpeechError, SpeechStatus, Transcript,
-    VoiceChanged, VoiceRequest,
+    ClipPlayed, ClipRow, ClipsCleared, QueryCause, SpeakRequest, SpeechError, SpeechStatus,
+    Transcript, VoiceChanged, VoiceRequest,
 };
 use super::service::Speech;
 use super::voices::{change_voice, voices_path};
@@ -84,14 +84,14 @@ pub(super) fn check_content_type(headers: &HeaderMap) -> Result<(), SpeechError>
 fn key_terms(
     query: Result<Query<Vec<(String, String)>>, QueryRejection>,
 ) -> Result<Vec<String>, SpeechError> {
-    let Query(pairs) = query.map_err(|rejection| SpeechError::InvalidQuery {
-        detail: rejection.body_text(),
+    let Query(pairs) = query.map_err(|_| SpeechError::InvalidQuery {
+        cause: QueryCause::Unreadable,
     })?;
     let mut terms = Vec::new();
     for (key, value) in pairs {
         if key != "terms" {
             return Err(SpeechError::InvalidQuery {
-                detail: "the only query key is terms".to_owned(),
+                cause: QueryCause::UnknownKey,
             });
         }
         terms.push(value);

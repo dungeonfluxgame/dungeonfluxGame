@@ -39,7 +39,7 @@ use super::limits::{
     MAXIMUM_PROVIDER_REQUEST_BYTES, MAXIMUM_PROVIDER_RESPONSE_BYTES, MAXIMUM_TEXT_CHARACTERS,
     SPEECH_DEADLINE,
 };
-use super::request::{SpeechError, SpeechProviderCause};
+use super::request::{MissingSetting, SpeechError, SpeechProviderCause};
 use crate::environment;
 
 /// A future the port returns, so the port is usable as a trait object.
@@ -78,7 +78,7 @@ pub struct Transcription {
 pub struct PortStatus {
     pub configured: bool,
     /// The variable to set when it is not.
-    pub missing: Option<String>,
+    pub missing: Option<MissingSetting>,
 }
 
 /// The surface the host asks of a speech supplier.
@@ -157,7 +157,7 @@ impl ElevenLabsPort {
         match &self.state {
             PortState::Ready(providers) => Ok(providers),
             PortState::Missing => Err(SpeechError::NotConfigured {
-                missing: KEY_VARIABLES[0].to_owned(),
+                missing: MissingSetting::SpeechKey,
             }),
             PortState::Refused => Err(SpeechError::Provider {
                 cause: SpeechProviderCause::Credential,
@@ -172,7 +172,7 @@ impl SpeechPort for ElevenLabsPort {
             configured: matches!(self.state, PortState::Ready(_)),
             missing: match self.state {
                 PortState::Ready(_) => None,
-                PortState::Missing | PortState::Refused => Some(KEY_VARIABLES[0].to_owned()),
+                PortState::Missing | PortState::Refused => Some(MissingSetting::SpeechKey),
             },
         }
     }
@@ -189,9 +189,12 @@ impl SpeechPort for ElevenLabsPort {
     }
 }
 
-fn rejected<E>(_: E) -> SpeechError {
+/// The error of a request that could not be built. The builders' error types differ and name
+/// nothing a caller could act on (every input is fixed or already checked), so the cause says only
+/// that the request could not be built.
+fn unbuildable<E>(_: E) -> SpeechError {
     SpeechError::Provider {
-        cause: SpeechProviderCause::Rejected,
+        cause: SpeechProviderCause::Unbuildable,
     }
 }
 
@@ -207,15 +210,15 @@ fn identity() -> Result<RequestIdentity, SpeechError> {
     let ordinal = NEXT_JOB.fetch_add(1, Ordering::Relaxed).saturating_add(1);
     let mut job = [0_u8; 16];
     job[..8].copy_from_slice(&ordinal.to_le_bytes());
-    let epoch = RecoveryEpoch::new(1).map_err(rejected)?;
+    let epoch = RecoveryEpoch::new(1).map_err(unbuildable)?;
     Ok(RequestIdentity {
         basis: Basis {
-            session: SessionId::from_bytes(&[DEV_SESSION_BYTE; 16]).map_err(rejected)?,
-            run: RunId::from_bytes(&[DEV_RUN_BYTE; 16]).map_err(rejected)?,
+            session: SessionId::from_bytes(&[DEV_SESSION_BYTE; 16]).map_err(unbuildable)?,
+            run: RunId::from_bytes(&[DEV_RUN_BYTE; 16]).map_err(unbuildable)?,
             revision: SessionRevision::new(epoch, 0),
         },
-        job: JobId::from_bytes(&job).map_err(rejected)?,
-        operation: OperationId::from_bytes(&job).map_err(rejected)?,
+        job: JobId::from_bytes(&job).map_err(unbuildable)?,
+        operation: OperationId::from_bytes(&job).map_err(unbuildable)?,
         generation: 1,
     })
 }
@@ -228,8 +231,8 @@ fn basis<S>(
     Ok(RequestBasis {
         modality,
         source: ContentDigest([0; 32]),
-        rights_revision: RevisionLabel::new(Some(DEV_RIGHTS_REVISION)).map_err(rejected)?,
-        output_format_revision: RevisionLabel::new(Some(format_revision)).map_err(rejected)?,
+        rights_revision: RevisionLabel::new(Some(DEV_RIGHTS_REVISION)).map_err(unbuildable)?,
+        output_format_revision: RevisionLabel::new(Some(format_revision)).map_err(unbuildable)?,
         semantic,
     })
 }
@@ -263,7 +266,7 @@ fn owner<S>(binding: &RequestBinding<S>) -> RequestOwnerState<'_, S> {
 }
 
 fn locale(tag: &str) -> Result<LocaleTag, SpeechError> {
-    LocaleTag::parse(tag).map_err(rejected)
+    LocaleTag::parse(tag).map_err(unbuildable)
 }
 
 async fn speak(
@@ -299,10 +302,10 @@ async fn speak(
             Duration::ZERO,
             Usage::new(units(MAXIMUM_TEXT_CHARACTERS), UsageUnit::Character),
         )
-        .map_err(rejected)?,
+        .map_err(unbuildable)?,
         owner(&binding),
     )
-    .map_err(rejected)?;
+    .map_err(unbuildable)?;
     let prepared = provider
         .speak(&request, owner(&binding), pending())
         .await
@@ -322,7 +325,7 @@ async fn listen(
     provider: &NativeSpeechProvider,
     call: TranscriptionCall,
 ) -> Result<Transcription, SpeechError> {
-    let samples = u64::try_from(call.pcm.len() / 2).map_err(rejected)?;
+    let samples = u64::try_from(call.pcm.len() / 2).map_err(unbuildable)?;
     let audio = Duration::from_nanos(samples.saturating_mul(NANOSECONDS_PER_SAMPLE));
     let semantic = SttSemantics {
         locale: locale(ELEVEN_STT_LANGUAGE)?,
@@ -349,10 +352,10 @@ async fn listen(
             Duration::from_millis(MAXIMUM_AUDIO_MS),
             Usage::new(u128::from(MAXIMUM_AUDIO_MS), UsageUnit::AudioMillisecond),
         )
-        .map_err(rejected)?,
+        .map_err(unbuildable)?,
         owner(&binding),
     )
-    .map_err(rejected)?;
+    .map_err(unbuildable)?;
     let prepared = provider
         .transcribe(&request, owner(&binding), pending())
         .await

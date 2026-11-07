@@ -29,7 +29,7 @@ use tokio::time::Instant;
 
 use super::guard::{generated_persona_may_leak_private_detail, line_may_leak_private_detail};
 use super::request::{
-    CastRow, Generation, LineError, LineIdKind, PersonaError, PersonaSummary, SaidLine,
+    CastRow, Generation, LineError, LineIdKind, PersonaError, SaidLine, summary_of,
 };
 use super::storage::{persona_directory, persona_id, read_persona, store_generated};
 use crate::blocking::run_blocking;
@@ -222,7 +222,7 @@ pub(super) async fn generate_character(
 fn kept(app: &AppState, persona: &Persona) -> Generation {
     app.record_line(format!("PERSONA kept id={}", persona.id()));
     Generation::KeptExisting {
-        persona: PersonaSummary::from(persona),
+        persona: summary_of(persona),
     }
 }
 
@@ -282,7 +282,7 @@ async fn generate(
     let existing = run_blocking(
         move || {
             let existing = store_generated(&directory, &persona, overwrite)?;
-            Ok((existing, PersonaSummary::from(&persona)))
+            Ok((existing, summary_of(&persona)))
         },
         PersonaError::Stopped,
     )

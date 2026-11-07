@@ -116,14 +116,6 @@ ALLOWLIST = _allow([
     ("crates/df-imagery/src/backends/codex_cli/process.rs", "process", "Command::new", 1, "backend", PHASE_REASONS["backend"]),
     ("crates/df-table-host/src/text/codex_text.rs", "process", "Command::new", 1, "backend", PHASE_REASONS["backend"]),
     ("crates/df-table-host/src/text/responses_text.rs", "literal", "/v1/responses", 1, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "call", "NativeTextProvider.submit", 1, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "call", "registered_text_provider", 2, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "identifier", "NativeTextProvider", 1, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "import", "NativeTextProvider", 1, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/responses_text.rs", "import", "registered_text_provider", 1, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/systemone_text.rs", "call", "SystemOneChoiceProvider", 1, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/systemone_text.rs", "identifier", "SystemOneChoiceProvider", 1, "backend", PHASE_REASONS["backend"]),
-    ("crates/df-tools/src/gameplay/systemone_text.rs", "import", "SystemOneChoiceProvider", 1, "backend", PHASE_REASONS["backend"]),
     # provider-crate
     ("crates/df-providers/src/lib.rs", "import", "NativeTextProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/src/lib.rs", "import", "SystemOneChoiceProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
@@ -135,7 +127,7 @@ ALLOWLIST = _allow([
     ("crates/df-providers/src/systemone.rs", "literal", "/v1/systemone", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/src/text_response.rs", "call", "NativeTextProvider", 3, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/src/text_response.rs", "literal", "/v1/responses", 2, "provider-crate", PHASE_REASONS["provider-crate"]),
-    ("crates/df-providers/tests/metering.rs", "call", "SystemOneChoiceProvider", 5, "provider-crate", PHASE_REASONS["provider-crate"]),
+    ("crates/df-providers/tests/metering.rs", "call", "SystemOneChoiceProvider", 3, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/tests/metering.rs", "import", "SystemOneChoiceProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/tests/native_http.rs", "call", "registered_text_provider", 6, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/tests/native_http.rs", "import", "registered_text_provider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
@@ -145,8 +137,6 @@ ALLOWLIST = _allow([
     ("crates/df-providers/tests/text_response.rs", "import", "NativeTextProvider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
     ("crates/df-providers/tests/text_response.rs", "import", "registered_text_provider", 1, "provider-crate", PHASE_REASONS["provider-crate"]),
     # image-route-config
-    ("crates/df-tools/src/gameplay/image_configuration.rs", "literal", "/v1/chat/completions", 1, "image-route-config", PHASE_REASONS["image-route-config"]),
-    ("crates/df-tools/src/gameplay/image_configuration.rs", "literal", "/v1/systemone", 1, "image-route-config", PHASE_REASONS["image-route-config"]),
     # fixture
     ("crates/df-hosted/src/support_ingest/support_text.rs", "test-literal", "/v1/responses", 1, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-hosted/src/support_ingest/support_text.rs", "test-literal", "/v1/systemone", 3, "fixture", PHASE_REASONS["fixture"]),
@@ -161,15 +151,12 @@ ALLOWLIST = _allow([
     ("crates/df-providers/src/systemone.rs", "test-literal", "/v1/systemone", 1, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-providers/tests/text_response.rs", "test-literal", "/v1/responses", 1, "fixture", PHASE_REASONS["fixture"]),
     ("crates/df-providers/tests/provider_exchange.rs", "test-literal", "/v1/responses", 2, "fixture", PHASE_REASONS["fixture"]),
-    ("crates/df-tools/src/gameplay/creator_portrait_route_tests.rs", "test-literal", "/v1/systemone", 5, "fixture", PHASE_REASONS["fixture"]),
-    ("crates/df-tools/src/gameplay/imagery/mural_prompt.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
-    ("crates/df-tools/src/gameplay/imagery_tests.rs", "test-literal", "/v1/chat/completions", 3, "fixture", PHASE_REASONS["fixture"]),
-    ("crates/df-tools/src/gameplay/living_scenes/plates_tests.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
 ])
 # Allowlisted-hit ceiling per phase, fixed at the counts recorded when written.
 # provider-crate raised 56 -> 57 on 2026-11-06: three more calls in tests/metering.rs (the SystemOne
 # metering tests added with the provider cleanup), net of the stale entries removed since.
-PHASE_CEILINGS = {"backend": 12, "provider-crate": 57, "image-route-config": 2, "fixture": 31}
+# 2026-11-06: the df-tools entries were removed with the crate; the other ceilings now equal the recorded totals.
+PHASE_CEILINGS = {"backend": 5, "provider-crate": 57, "image-route-config": 0, "fixture": 23}
 
 
 def _is_ident(tok, value):

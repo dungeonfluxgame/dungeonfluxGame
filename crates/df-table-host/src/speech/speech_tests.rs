@@ -13,17 +13,21 @@ use serde::de::DeserializeOwned;
 use super::cli::{SpeechCommand, pcm_of_file};
 use super::clips::{clip_number, evict_clips, list_clips};
 use super::fixtures::{FAKE_HEARD, FAKE_MP3, FakePort, speech_over};
-use super::limits::AUDIO_CONTENT_TYPE;
+use super::limits::{AUDIO_CONTENT_TYPE, KEY_VARIABLES};
 use super::request::{
-    ClipPlayed, ClipRow, ClipsCleared, SpeechError, SpeechProviderCause, SpeechReply, SpeechStatus,
-    Transcript, VoiceCause, VoiceChanged,
+    ClipCause, ClipPlayed, ClipRow, ClipsCleared, MissingSetting, QueryCause, SpeechError,
+    SpeechErrorKind, SpeechProviderCause, SpeechReply, SpeechStatus, Transcript, VoiceCause,
+    VoiceChanged, VoicesCause,
 };
 use super::routes::{check_content_type, path, router_with};
 use super::voices::{VOICES_FILE, VoiceBook, VoiceSource, change_voice};
 use crate::client::{self, Response};
 use crate::command::{Command, CommandError, split_words};
-use crate::dev_http::{DevReply, RouteError};
+use crate::dev_http::{BodyCause, BodyError, DevReply, RouteError};
+use crate::locate::IoCause;
+use crate::playground::PlaygroundChangeError;
 use crate::test_support::{Running, STARTER_FILES, start};
+use df_content::persona::PersonaError as ContentError;
 
 const FIXTURE: &str = concat!(
     r#"{"name": "Roadside inn", "description": "A fire, a table, four travellers.", "#,
@@ -129,7 +133,7 @@ async fn the_status_says_whether_it_is_configured_and_lists_the_voices_and_limit
     let answer = client::get(host.port, path::SPEECH_STATUS).await.unwrap();
     let status: SpeechStatus = done(reply_of(&answer));
     assert!(!status.configured);
-    assert_eq!(status.missing.as_deref(), Some("DF_ELEVENLABS_API_KEY"));
+    assert_eq!(status.missing, Some(MissingSetting::SpeechKey));
 }
 
 #[tokio::test]
@@ -225,24 +229,36 @@ async fn a_recording_that_is_not_declared_or_not_sized_right_is_refused_before_t
 #[tokio::test]
 async fn a_transcription_refuses_unknown_query_keys_bad_terms_and_an_unset_service() {
     let host = speech_host(FakePort::answering()).await;
-    for query in ["?language=fr", "?terms=%3Cscript%3E", "?terms="] {
+    let cases = [
+        ("?language=fr", QueryCause::UnknownKey),
+        ("?terms=%3Cscript%3E", QueryCause::InvalidTermCharacters),
+        ("?terms=", QueryCause::BlankTerm),
+        (
+            "?terms=one%20two%20three%20four%20five%20six",
+            QueryCause::WordyTerm,
+        ),
+    ];
+    for (query, cause) in cases {
         let answer = host
             .transcribe(AUDIO_CONTENT_TYPE, &vec![0; ONE_SECOND], query)
             .await;
-        assert!(matches!(
+        assert_eq!(
             refused::<Transcript>(reply_of(&answer)),
-            SpeechError::InvalidQuery { .. }
-        ));
+            SpeechError::InvalidQuery { cause },
+            "{query}"
+        );
     }
     let unset = speech_host(FakePort::unconfigured()).await;
     let answer = unset
         .transcribe(AUDIO_CONTENT_TYPE, &vec![0; ONE_SECOND], "")
         .await;
     assert_eq!(answer.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert!(matches!(
+    assert_eq!(
         refused::<Transcript>(reply_of(&answer)),
-        SpeechError::NotConfigured { .. }
-    ));
+        SpeechError::NotConfigured {
+            missing: MissingSetting::SpeechKey
+        }
+    );
     assert!(
         unset
             .lines()
@@ -482,8 +498,20 @@ fn a_voice_is_set_cleared_and_resolved_from_a_file_written_whole() {
     std::fs::write(&file, r#"{"voices": {"elf": 7}}"#).unwrap();
     assert!(matches!(
         VoiceBook::read(&file),
-        Err(SpeechError::VoicesInvalid { .. })
+        Err(SpeechError::VoicesInvalid {
+            cause: VoicesCause::Malformed(BodyError {
+                cause: BodyCause::Data,
+                ..
+            })
+        })
     ));
+    std::fs::write(&file, r#"{"voices": {"elf": "has space"}}"#).unwrap();
+    assert_eq!(
+        VoiceBook::read(&file).err(),
+        Some(SpeechError::VoicesInvalid {
+            cause: VoicesCause::InvalidVoiceId
+        })
+    );
 }
 
 #[test]
@@ -605,4 +633,158 @@ async fn the_running_servers_guard_lets_a_recording_reach_the_transcribe_handler
         .unwrap();
     assert_eq!(as_json.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
     assert!(as_json.body.contains("audio/L16"));
+}
+
+fn body_error() -> BodyError {
+    BodyError {
+        cause: BodyCause::Data,
+        line: 1,
+        column: 2,
+        detail: "wrong shape".to_owned(),
+    }
+}
+
+/// One of every refusal.
+fn every_error() -> Vec<SpeechError> {
+    vec![
+        SpeechError::InvalidBody(body_error()),
+        SpeechError::InvalidQuery {
+            cause: QueryCause::UnknownKey,
+        },
+        SpeechError::NotConfigured {
+            missing: MissingSetting::SpeechKey,
+        },
+        SpeechError::UnsupportedContentType,
+        SpeechError::UnsupportedWav,
+        SpeechError::AudioEmpty,
+        SpeechError::AudioMisaligned,
+        SpeechError::AudioTooShort {
+            audio_ms: 1,
+            minimum_ms: 100,
+        },
+        SpeechError::AudioTooLong {
+            audio_ms: 70_000,
+            maximum_ms: 60_000,
+        },
+        SpeechError::TextBlank,
+        SpeechError::TextTooLong {
+            characters: 5_000,
+            maximum: 4_096,
+        },
+        SpeechError::InvalidCharacter {
+            cause: ContentError::InvalidId {
+                id: "bad name".to_owned(),
+            },
+        },
+        SpeechError::InvalidVoice {
+            cause: VoiceCause::Empty,
+        },
+        SpeechError::NoVoice { character: None },
+        SpeechError::VoicesUnreadable {
+            cause: IoCause::from_kind(std::io::ErrorKind::PermissionDenied),
+        },
+        SpeechError::VoicesInvalid {
+            cause: VoicesCause::TooLarge,
+        },
+        SpeechError::VoicesUnwritable {
+            cause: IoCause::from_kind(std::io::ErrorKind::PermissionDenied),
+        },
+        SpeechError::Provider {
+            cause: SpeechProviderCause::Capacity,
+        },
+        SpeechError::ClipUnstored {
+            cause: ClipCause::LibraryFull,
+        },
+        SpeechError::ClipsUnreadable {
+            cause: IoCause::from_kind(std::io::ErrorKind::NotFound),
+        },
+        SpeechError::Cue {
+            cause: PlaygroundChangeError::InvalidBody(body_error()),
+        },
+        SpeechError::LineWithheld,
+        SpeechError::Stopped,
+    ]
+}
+
+#[test]
+fn every_refusal_is_written_with_the_tag_of_its_kind() {
+    let errors = every_error();
+    for error in &errors {
+        let written = serde_json::to_value(error).unwrap();
+        assert_eq!(written["error"], error.kind().key(), "{error:?}");
+        let read: SpeechError = serde_json::from_value(written).unwrap();
+        assert_eq!(&read, error);
+    }
+    let kinds: Vec<SpeechErrorKind> = errors.iter().map(SpeechError::kind).collect();
+    for kind in SpeechErrorKind::ALL {
+        assert!(kinds.contains(&kind), "no sample error of kind {kind:?}");
+    }
+}
+
+#[test]
+fn the_audit_key_of_a_provider_failure_is_its_cause_and_any_other_is_its_kind() {
+    for error in every_error() {
+        match &error {
+            SpeechError::Provider { cause } => assert_eq!(error.key(), cause.key()),
+            other => assert_eq!(error.key(), other.kind().key()),
+        }
+    }
+}
+
+/// That `key()` is the serde name of each value, `from_key` reads it back and `ALL` lists every
+/// value once.
+fn assert_closed_keys<T>(all: &[T], key: fn(T) -> &'static str, from_key: fn(&str) -> Option<T>)
+where
+    T: Copy + PartialEq + std::fmt::Debug + serde::Serialize,
+{
+    for &value in all {
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            serde_json::json!(key(value))
+        );
+        assert_eq!(from_key(key(value)), Some(value));
+    }
+    assert_eq!(from_key("no_such_key"), None);
+}
+
+#[test]
+fn the_closed_causes_have_keys_equal_to_their_serde_names() {
+    assert_closed_keys(&VoiceCause::ALL, VoiceCause::key, VoiceCause::from_key);
+    assert_closed_keys(&ClipCause::ALL, ClipCause::key, ClipCause::from_key);
+    assert_closed_keys(&QueryCause::ALL, QueryCause::key, QueryCause::from_key);
+    assert_closed_keys(
+        &SpeechProviderCause::ALL,
+        SpeechProviderCause::key,
+        SpeechProviderCause::from_key,
+    );
+}
+
+#[test]
+fn a_voice_and_a_clip_cause_each_have_their_own_sentence() {
+    let error = SpeechError::InvalidVoice {
+        cause: VoiceCause::TooLong,
+    };
+    assert_eq!(
+        error.to_string(),
+        "the voice id is not valid: it is too long"
+    );
+    let error = SpeechError::ClipUnstored {
+        cause: ClipCause::LibraryFull,
+    };
+    assert_eq!(
+        error.to_string(),
+        "the voice clip could not be kept in the media library: the library is full"
+    );
+    let sentences: std::collections::HashSet<String> = VoiceCause::ALL
+        .iter()
+        .map(ToString::to_string)
+        .chain(ClipCause::ALL.iter().map(ToString::to_string))
+        .chain(QueryCause::ALL.iter().map(ToString::to_string))
+        .collect();
+    assert_eq!(sentences.len(), 3 + 3 + 7);
+}
+
+#[test]
+fn the_variable_a_missing_setting_names_is_the_first_the_host_reads() {
+    assert_eq!(MissingSetting::SpeechKey.variable(), KEY_VARIABLES[0]);
 }

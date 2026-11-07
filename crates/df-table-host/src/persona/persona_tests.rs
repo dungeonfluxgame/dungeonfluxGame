@@ -8,8 +8,8 @@ use super::cli::{GenerateTarget, PersonaCommand};
 use super::options::{Asking, GuidanceArgs};
 use super::parse as parse_persona;
 use super::request::{
-    AnswerError, Audience, CastOutcome, Edited, Generation, LineError, PersonaError, PersonaReply,
-    PersonaStored, PersonaSummary,
+    AnswerError, AskRequest, Audience, CastOutcome, Edited, Generation, LineError, PersonaError,
+    PersonaReply, PersonaStored, PersonaSummary,
 };
 use super::routes::path;
 use super::storage::{
@@ -19,6 +19,7 @@ use super::storage::{
 use crate::command::{Command, parse};
 use crate::dev_client::{get_json, post_json};
 use crate::dev_http::{BodyCause, DevReply, RouteError};
+use df_playground::voice_wire::AskRequest as SpokenQuestion;
 
 fn words(text: &str) -> Vec<String> {
     text.split_whitespace().map(str::to_owned).collect()
@@ -1069,4 +1070,14 @@ fn removing_a_persona_keeps_its_backfill_record_and_a_new_persona_continues_the_
     write_persona(folder.path(), &persona("innkeeper")).unwrap();
     let (_, sequence) = commit_backfill_with(folder.path(), &id, record(), write).unwrap();
     assert_eq!(sequence, 2);
+}
+
+#[test]
+fn the_spoken_question_the_page_sends_is_one_the_host_reads() {
+    let sent =
+        serde_json::to_vec(&SpokenQuestion::spoken("innkeeper", "How much for a room?")).unwrap();
+    let read: AskRequest = crate::dev_http::parse_body(&sent).unwrap();
+    assert_eq!(read.character, "innkeeper");
+    assert_eq!(read.question, "How much for a room?");
+    assert!(read.speak && !read.coverage && !read.backfill);
 }

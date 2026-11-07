@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use super::provider::{
     PortFuture, PortStatus, SpeechPort, Synthesis, SynthesisCall, Transcription, TranscriptionCall,
 };
-use super::request::{SpeechError, SpeechProviderCause};
+use super::request::{MissingSetting, SpeechError, SpeechProviderCause};
 use super::service::Speech;
 use crate::state::AppState;
 
@@ -86,7 +86,7 @@ impl SpeechPort for FakePort {
     fn status(&self) -> PortStatus {
         PortStatus {
             configured: self.configured,
-            missing: (!self.configured).then(|| "DF_ELEVENLABS_API_KEY".to_owned()),
+            missing: (!self.configured).then_some(MissingSetting::SpeechKey),
         }
     }
 

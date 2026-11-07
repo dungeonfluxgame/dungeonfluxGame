@@ -3,7 +3,7 @@ use crate::composer::{
     Target, TranscribeFailure, format_elapsed, resolve_target, step, targets_for,
 };
 use crate::voice_capture::MicrophoneError;
-use crate::voice_wire::PersonaSummary;
+use crate::voice_wire::{MissingSetting, PersonaSummary, SpeechErrorKind};
 
 use ComposerEvent as Event;
 use ComposerState as State;
@@ -12,6 +12,7 @@ fn persona(id: &str, name: &str) -> PersonaSummary {
     PersonaSummary {
         id: id.to_owned(),
         display_name: name.to_owned(),
+        job: String::new(),
     }
 }
 
@@ -206,7 +207,7 @@ fn the_microphone_is_enabled_only_when_the_host_says_speech_is_set_up() {
         SpeechAvailability::Checking,
         SpeechAvailability::HostDown,
         SpeechAvailability::NotConfigured {
-            missing: Some("ELEVENLABS_API_KEY".to_owned()),
+            missing: Some(MissingSetting::SpeechKey),
         },
     ] {
         let MicLook::Unavailable { reason } = view(State::Idle, false, &speech).mic else {
@@ -219,12 +220,15 @@ fn the_microphone_is_enabled_only_when_the_host_says_speech_is_set_up() {
 #[test]
 fn a_missing_setting_is_named_in_the_reason_the_microphone_is_off() {
     let speech = SpeechAvailability::NotConfigured {
-        missing: Some("ELEVENLABS_API_KEY".to_owned()),
+        missing: Some(MissingSetting::SpeechKey),
     };
     let MicLook::Unavailable { reason } = view(State::Idle, false, &speech).mic else {
         panic!("the microphone should be off");
     };
-    assert!(reason.contains("ELEVENLABS_API_KEY"), "{reason}");
+    assert!(
+        reason.contains(MissingSetting::SpeechKey.variable()),
+        "{reason}"
+    );
 }
 
 #[test]
@@ -322,17 +326,23 @@ fn the_note_says_why_in_a_short_sentence() {
 }
 
 #[test]
-fn a_host_refusal_key_maps_to_a_transcribe_failure() {
+fn a_host_refusal_kind_maps_to_a_transcribe_failure() {
+    let failure = TranscribeFailure::of_kind;
     assert_eq!(
-        TranscribeFailure::of_key("not_configured"),
+        failure(Some(SpeechErrorKind::NotConfigured)),
         TranscribeFailure::NotConfigured
     );
     assert_eq!(
-        TranscribeFailure::of_key("audio_too_short"),
+        failure(Some(SpeechErrorKind::AudioTooShort)),
         TranscribeFailure::TooShort
     );
     assert_eq!(
-        TranscribeFailure::of_key("something_else"),
+        failure(Some(SpeechErrorKind::AudioEmpty)),
+        TranscribeFailure::TooShort
+    );
+    assert_eq!(
+        failure(Some(SpeechErrorKind::Stopped)),
         TranscribeFailure::Host
     );
+    assert_eq!(failure(None), TranscribeFailure::Host);
 }

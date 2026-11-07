@@ -2,14 +2,15 @@
 //! verb's job is to show it; nothing else here carries what was said.
 
 use super::request::{
-    ClipPlayed, ClipRow, ClipsCleared, SpeechStatus, Transcript, VoiceChanged, Voiced,
+    ClipPlayed, ClipRow, ClipsCleared, MissingSetting, SpeechStatus, Transcript, VoiceChanged,
+    Voiced,
 };
 
 pub(super) fn format_status(status: &SpeechStatus) -> String {
     let mut lines = vec![format!(
         "speech: configured={} missing={} tts_model={} stt_model={} clips_kept={}",
         status.configured,
-        status.missing.as_deref().unwrap_or("-"),
+        status.missing.map_or("-", MissingSetting::variable),
         status.tts_model,
         status.stt_model,
         status.clips_kept

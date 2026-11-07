@@ -9,11 +9,15 @@ use std::fmt;
 
 use axum::http::StatusCode;
 use df_content::persona::PersonaError as ContentError;
+// The page reads these, so the page owns them and the JSON is one.
+pub use df_playground::voice_wire::{
+    MissingSetting, SpeechErrorKind, SpeechLimits, SpeechStatus, Transcript, VoiceRow,
+};
 use serde::{Deserialize, Serialize};
 
 use super::limits::{
-    MAXIMUM_AUDIO_MS, MAXIMUM_KEPT_CLIPS, MAXIMUM_KEY_TERMS, MAXIMUM_TEXT_CHARACTERS,
-    MINIMUM_AUDIO_MS,
+    MAXIMUM_AUDIO_MS, MAXIMUM_KEPT_CLIPS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS,
+    MAXIMUM_KEY_TERMS, MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
 };
 use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::locate::IoCause;
@@ -22,74 +26,20 @@ use crate::playground::PlaygroundChangeError;
 /// The answer of a speech route: its value, or why it was refused.
 pub type SpeechReply<T> = DevReply<T, SpeechError>;
 
-/// The characters with a voice of their own, and whose voice is which. The voice id is an opaque
-/// backend reference, not a permission or an identity.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VoiceRow {
-    pub character: String,
-    pub voice: String,
-}
-
-/// The bounds a caller works within.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SpeechLimits {
-    pub minimum_audio_ms: u64,
-    pub maximum_audio_ms: u64,
-    pub maximum_text_characters: u64,
-    pub maximum_key_terms: u64,
-    pub maximum_kept_clips: u64,
-}
-
-impl SpeechLimits {
-    pub(super) fn current() -> Self {
-        Self {
-            minimum_audio_ms: MINIMUM_AUDIO_MS,
-            maximum_audio_ms: MAXIMUM_AUDIO_MS,
-            maximum_text_characters: whole(MAXIMUM_TEXT_CHARACTERS),
-            maximum_key_terms: whole(MAXIMUM_KEY_TERMS),
-            maximum_kept_clips: whole(MAXIMUM_KEPT_CLIPS),
-        }
+/// The bounds a caller works within, as this host sets them.
+pub(super) fn current_limits() -> SpeechLimits {
+    SpeechLimits {
+        minimum_audio_ms: MINIMUM_AUDIO_MS,
+        maximum_audio_ms: MAXIMUM_AUDIO_MS,
+        maximum_text_characters: whole(MAXIMUM_TEXT_CHARACTERS),
+        maximum_key_terms: whole(MAXIMUM_KEY_TERMS),
+        maximum_kept_clips: whole(MAXIMUM_KEPT_CLIPS),
     }
 }
 
 /// A bound as a reply carries it.
 fn whole(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
-}
-
-/// How the speech service is set up and how it stands (`GET /dev/speech/status`). The page
-/// enables its microphone when `configured`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SpeechStatus {
-    pub configured: bool,
-    /// The variable to set when the service is not configured.
-    pub missing: Option<String>,
-    pub tts_model: String,
-    pub stt_model: String,
-    /// The voice a character without a voice of their own is spoken in, if one is set.
-    pub default_voice: Option<String>,
-    pub voices: Vec<VoiceRow>,
-    /// Voice clips in the media library now.
-    pub clips_kept: u64,
-    pub limits: SpeechLimits,
-}
-
-/// What a transcription found: the words, the language and how long it took. The recording and
-/// this text exist only for the request; nothing stores or logs them.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Transcript {
-    pub text: String,
-    pub language: String,
-    /// How long the recording was.
-    pub audio_ms: u64,
-    /// How long the supplier took.
-    pub duration_ms: u64,
-}
-
-impl fmt::Debug for Transcript {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("Transcript([REDACTED])")
-    }
 }
 
 /// The body of `POST /dev/speech/speak`: text the operator typed, or the host itself produced, to
@@ -182,6 +132,9 @@ pub enum SpeechProviderCause {
     Credential,
     /// The adapter refused the request before sending it.
     Rejected,
+    /// The request could not be built from the host's own fixed inputs (a defect of the host,
+    /// not of the caller or the supplier).
+    Unbuildable,
     /// The supplier answered with something unusable (no audio, a transcript that does not read).
     Unusable,
     Deadline,
@@ -200,9 +153,10 @@ pub enum SpeechProviderCause {
 }
 
 impl SpeechProviderCause {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Credential,
         Self::Rejected,
+        Self::Unbuildable,
         Self::Unusable,
         Self::Deadline,
         Self::Cancelled,
@@ -218,6 +172,7 @@ impl SpeechProviderCause {
         match self {
             Self::Credential => "credential",
             Self::Rejected => "rejected",
+            Self::Unbuildable => "unbuildable",
             Self::Unusable => "unusable",
             Self::Deadline => "deadline",
             Self::Cancelled => "cancelled",
@@ -240,6 +195,7 @@ impl fmt::Display for SpeechProviderCause {
         formatter.write_str(match self {
             Self::Credential => "the key is not a usable credential",
             Self::Rejected => "the request was refused before it was sent",
+            Self::Unbuildable => "the request could not be built",
             Self::Unusable => "the supplier's answer was not usable",
             Self::Deadline => "the call ran out of time",
             Self::Cancelled => "the call was cancelled",
@@ -264,12 +220,28 @@ pub enum VoiceCause {
 }
 
 impl VoiceCause {
+    pub const ALL: [Self; 3] = [Self::Empty, Self::TooLong, Self::InvalidCharacters];
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Empty => "empty",
             Self::TooLong => "too_long",
             Self::InvalidCharacters => "invalid_characters",
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+}
+
+impl fmt::Display for VoiceCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Empty => "it is empty",
+            Self::TooLong => "it is too long",
+            Self::InvalidCharacters => "it has a space or a control character",
+        })
     }
 }
 
@@ -285,11 +257,124 @@ pub enum ClipCause {
 }
 
 impl ClipCause {
+    pub const ALL: [Self; 3] = [Self::LibraryFull, Self::Refused, Self::Unwritable];
+
     pub fn key(self) -> &'static str {
         match self {
             Self::LibraryFull => "library_full",
             Self::Refused => "refused",
             Self::Unwritable => "unwritable",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+}
+
+impl fmt::Display for ClipCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::LibraryFull => "the library is full",
+            Self::Refused => "the library refused the file",
+            Self::Unwritable => "the library's folder could not be written",
+        })
+    }
+}
+
+/// What is wrong with the query of a transcription.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryCause {
+    /// The query string could not be read at all.
+    Unreadable,
+    /// A key other than `terms`.
+    UnknownKey,
+    TooManyTerms,
+    BlankTerm,
+    /// A term of more than `MAXIMUM_KEY_TERM_CHARACTERS` characters.
+    LongTerm,
+    /// A term of more than `MAXIMUM_KEY_TERM_WORDS` words.
+    WordyTerm,
+    /// A term with a control or bracket character.
+    InvalidTermCharacters,
+}
+
+impl QueryCause {
+    pub const ALL: [Self; 7] = [
+        Self::Unreadable,
+        Self::UnknownKey,
+        Self::TooManyTerms,
+        Self::BlankTerm,
+        Self::LongTerm,
+        Self::WordyTerm,
+        Self::InvalidTermCharacters,
+    ];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Unreadable => "unreadable",
+            Self::UnknownKey => "unknown_key",
+            Self::TooManyTerms => "too_many_terms",
+            Self::BlankTerm => "blank_term",
+            Self::LongTerm => "long_term",
+            Self::WordyTerm => "wordy_term",
+            Self::InvalidTermCharacters => "invalid_term_characters",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+}
+
+impl fmt::Display for QueryCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unreadable => formatter.write_str("the query could not be read"),
+            Self::UnknownKey => formatter.write_str("the only query key is terms"),
+            Self::TooManyTerms => write!(formatter, "at most {MAXIMUM_KEY_TERMS} key terms"),
+            Self::BlankTerm => formatter.write_str("a key term is blank"),
+            Self::LongTerm => write!(
+                formatter,
+                "a key term is more than {MAXIMUM_KEY_TERM_CHARACTERS} characters"
+            ),
+            Self::WordyTerm => write!(
+                formatter,
+                "a key term is more than {MAXIMUM_KEY_TERM_WORDS} words"
+            ),
+            Self::InvalidTermCharacters => {
+                formatter.write_str("a key term has a control or bracket character")
+            }
+        }
+    }
+}
+
+/// What is wrong with the voices file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoicesCause {
+    TooLarge,
+    TooManyVoices,
+    /// A character id in the file is not valid.
+    InvalidCharacterId,
+    /// A voice id in the file is not valid.
+    InvalidVoiceId,
+    /// The default voice id in the file is not valid.
+    InvalidDefaultVoice,
+    /// The file is not the JSON the host reads.
+    Malformed(BodyError),
+}
+
+impl fmt::Display for VoicesCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooLarge => formatter.write_str("the file is too large"),
+            Self::TooManyVoices => formatter.write_str("the file names too many voices"),
+            Self::InvalidCharacterId => formatter.write_str("a character id is not valid"),
+            Self::InvalidVoiceId => formatter.write_str("a voice id is not valid"),
+            Self::InvalidDefaultVoice => formatter.write_str("the default voice id is not valid"),
+            Self::Malformed(error) => formatter.write_str(&error.detail),
         }
     }
 }
@@ -300,13 +385,13 @@ impl ClipCause {
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum SpeechError {
     InvalidBody(BodyError),
-    /// The query is not one the route reads; `detail` is the reader's sentence.
+    /// The query is not one the route reads.
     InvalidQuery {
-        detail: String,
+        cause: QueryCause,
     },
     /// The speech service is not set up; `missing` says what to set.
     NotConfigured {
-        missing: String,
+        missing: MissingSetting,
     },
     /// The recording is not declared as `audio/L16;rate=16000`.
     UnsupportedContentType,
@@ -345,9 +430,9 @@ pub enum SpeechError {
     VoicesUnreadable {
         cause: IoCause,
     },
-    /// The voices file is not valid; `detail` is the reader's sentence.
+    /// The voices file is not valid.
     VoicesInvalid {
-        detail: String,
+        cause: VoicesCause,
     },
     VoicesUnwritable {
         cause: IoCause,
@@ -373,32 +458,40 @@ pub enum SpeechError {
 }
 
 impl SpeechError {
-    /// The error's key for the audit line: its serde tag, or its cause's for a provider failure.
+    /// The error's key for the audit line: its kind's key, or its cause's for a provider failure.
     pub(crate) fn key(&self) -> &'static str {
         match self {
-            Self::InvalidBody(_) => "invalid_body",
-            Self::InvalidQuery { .. } => "invalid_query",
-            Self::NotConfigured { .. } => "not_configured",
-            Self::UnsupportedContentType => "unsupported_content_type",
-            Self::UnsupportedWav => "unsupported_wav",
-            Self::AudioEmpty => "audio_empty",
-            Self::AudioMisaligned => "audio_misaligned",
-            Self::AudioTooShort { .. } => "audio_too_short",
-            Self::AudioTooLong { .. } => "audio_too_long",
-            Self::TextBlank => "text_blank",
-            Self::TextTooLong { .. } => "text_too_long",
-            Self::InvalidCharacter { .. } => "invalid_character",
-            Self::InvalidVoice { .. } => "invalid_voice",
-            Self::NoVoice { .. } => "no_voice",
-            Self::VoicesUnreadable { .. } => "voices_unreadable",
-            Self::VoicesInvalid { .. } => "voices_invalid",
-            Self::VoicesUnwritable { .. } => "voices_unwritable",
             Self::Provider { cause } => cause.key(),
-            Self::ClipUnstored { .. } => "clip_unstored",
-            Self::ClipsUnreadable { .. } => "clips_unreadable",
-            Self::Cue { .. } => "cue",
-            Self::LineWithheld => "line_withheld",
-            Self::Stopped => "stopped",
+            other => other.kind().key(),
+        }
+    }
+
+    /// Which refusal this is: the `"error"` tag it is written with.
+    pub fn kind(&self) -> SpeechErrorKind {
+        match self {
+            Self::InvalidBody(_) => SpeechErrorKind::InvalidBody,
+            Self::InvalidQuery { .. } => SpeechErrorKind::InvalidQuery,
+            Self::NotConfigured { .. } => SpeechErrorKind::NotConfigured,
+            Self::UnsupportedContentType => SpeechErrorKind::UnsupportedContentType,
+            Self::UnsupportedWav => SpeechErrorKind::UnsupportedWav,
+            Self::AudioEmpty => SpeechErrorKind::AudioEmpty,
+            Self::AudioMisaligned => SpeechErrorKind::AudioMisaligned,
+            Self::AudioTooShort { .. } => SpeechErrorKind::AudioTooShort,
+            Self::AudioTooLong { .. } => SpeechErrorKind::AudioTooLong,
+            Self::TextBlank => SpeechErrorKind::TextBlank,
+            Self::TextTooLong { .. } => SpeechErrorKind::TextTooLong,
+            Self::InvalidCharacter { .. } => SpeechErrorKind::InvalidCharacter,
+            Self::InvalidVoice { .. } => SpeechErrorKind::InvalidVoice,
+            Self::NoVoice { .. } => SpeechErrorKind::NoVoice,
+            Self::VoicesUnreadable { .. } => SpeechErrorKind::VoicesUnreadable,
+            Self::VoicesInvalid { .. } => SpeechErrorKind::VoicesInvalid,
+            Self::VoicesUnwritable { .. } => SpeechErrorKind::VoicesUnwritable,
+            Self::Provider { .. } => SpeechErrorKind::Provider,
+            Self::ClipUnstored { .. } => SpeechErrorKind::ClipUnstored,
+            Self::ClipsUnreadable { .. } => SpeechErrorKind::ClipsUnreadable,
+            Self::Cue { .. } => SpeechErrorKind::Cue,
+            Self::LineWithheld => SpeechErrorKind::LineWithheld,
+            Self::Stopped => SpeechErrorKind::Stopped,
         }
     }
 }
@@ -407,10 +500,12 @@ impl fmt::Display for SpeechError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::InvalidQuery { detail } => write!(formatter, "the query is not valid: {detail}"),
-            Self::NotConfigured { missing } => {
-                write!(formatter, "the speech service is not set up: set {missing}")
-            }
+            Self::InvalidQuery { cause } => write!(formatter, "the query is not valid: {cause}"),
+            Self::NotConfigured { missing } => write!(
+                formatter,
+                "the speech service is not set up: set {}",
+                missing.variable()
+            ),
             Self::UnsupportedContentType => write!(
                 formatter,
                 "the recording must be sent as {}",
@@ -446,11 +541,9 @@ impl fmt::Display for SpeechError {
                 "the text is {characters} characters, more than the {maximum} a voice takes"
             ),
             Self::InvalidCharacter { cause } => write!(formatter, "{cause}"),
-            Self::InvalidVoice { cause } => write!(
-                formatter,
-                "the voice id is not valid ({})",
-                cause.key().replace('_', " ")
-            ),
+            Self::InvalidVoice { cause } => {
+                write!(formatter, "the voice id is not valid: {cause}")
+            }
             Self::NoVoice {
                 character: Some(character),
             } => write!(
@@ -463,8 +556,8 @@ impl fmt::Display for SpeechError {
             Self::VoicesUnreadable { cause } => {
                 write!(formatter, "the voices file could not be read: {cause}")
             }
-            Self::VoicesInvalid { detail } => {
-                write!(formatter, "the voices file is not valid: {detail}")
+            Self::VoicesInvalid { cause } => {
+                write!(formatter, "the voices file is not valid: {cause}")
             }
             Self::VoicesUnwritable { cause } => {
                 write!(formatter, "the voices file could not be written: {cause}")
@@ -472,8 +565,7 @@ impl fmt::Display for SpeechError {
             Self::Provider { cause } => write!(formatter, "the speech supplier failed: {cause}"),
             Self::ClipUnstored { cause } => write!(
                 formatter,
-                "the voice clip could not be kept in the media library ({})",
-                cause.key().replace('_', " ")
+                "the voice clip could not be kept in the media library: {cause}"
             ),
             Self::ClipsUnreadable { cause } => {
                 write!(formatter, "the media library could not be listed: {cause}")

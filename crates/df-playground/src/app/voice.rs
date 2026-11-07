@@ -32,7 +32,7 @@ use crate::composer::{
     TranscribeFailure, step, targets_for,
 };
 use crate::copy::status_blocks_input;
-use crate::dev_reply::{DevReply, Rejection};
+use crate::dev_reply::{HostReply, Rejection};
 use crate::dom::js_message;
 use crate::image_layout::cast;
 use crate::limits::{CAPTURE_REFRESH_MS, COMPOSER_NOTE_MS, MAXIMUM_QUESTION_CHARACTERS};
@@ -42,7 +42,7 @@ use crate::path;
 use crate::timeline::{EndReason, ErrorSource, TimelineKind, cut};
 use crate::view;
 use crate::voice_capture::MicrophoneError;
-use crate::voice_wire::{AskRequest, PersonaSummary, SpeechStatus, Transcript};
+use crate::voice_wire::{AskRequest, PersonaSummary, SpeechErrorKind, SpeechStatus, Transcript};
 
 /// The id of the timeline record of a microphone recording.
 const CAPTURE_RECORD_ID: &str = "microphone";
@@ -345,7 +345,7 @@ fn stop_recording(reached_longest: bool) {
 
 /// Why a host request did not give a value.
 enum ReplyProblem {
-    /// The host refused, with the key of its typed error and its own sentence.
+    /// The host refused, with the kind of its typed error and its own sentence.
     Refused(Rejection),
     /// The host could not be reached.
     Unreachable,
@@ -361,7 +361,7 @@ fn read_reply<T: DeserializeOwned>(answer: Result<String, NetError>) -> Result<T
         Err(NetError::Status { body, .. }) => body,
         Err(_) => return Err(ReplyProblem::Unreachable),
     };
-    serde_json::from_str::<DevReply<T>>(&text)
+    serde_json::from_str::<HostReply<T>>(&text)
         .map_err(|_| ReplyProblem::Unreadable)?
         .into_result()
         .map_err(ReplyProblem::Refused)
@@ -388,7 +388,7 @@ async fn transcribe(mut recording: Vec<u8>, generation: u64) {
     match read_reply::<Transcript>(answer) {
         Ok(transcript) => accept_transcript(&transcript.text),
         Err(ReplyProblem::Refused(rejection)) => {
-            fail_transcribe(TranscribeFailure::of_key(&rejection.key));
+            fail_transcribe(TranscribeFailure::of_kind(rejection.kind));
         }
         Err(ReplyProblem::Unreachable) => fail_transcribe(TranscribeFailure::Unreachable),
         Err(ReplyProblem::Unreadable) => fail_transcribe(TranscribeFailure::Host),
@@ -517,7 +517,11 @@ fn ask_failed(problem: &ReplyProblem) {
     close_record(record, EndReason::Failed);
     let note = match problem {
         ReplyProblem::Refused(rejection) => {
-            note_failure(ErrorSource::Net, "question", &rejection.key);
+            note_failure(
+                ErrorSource::Net,
+                "question",
+                rejection.kind.map_or("refused", SpeechErrorKind::key),
+            );
             let mut message = rejection.message.clone();
             cut(&mut message, MAXIMUM_REFUSAL_CHARACTERS);
             Note::AskRefused(message)

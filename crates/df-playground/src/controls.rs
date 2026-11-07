@@ -9,7 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::copy::{ReadingPace, status_from_key};
-use crate::dev_reply::DevReply;
+use crate::dev_reply::HostReply;
 use crate::fixture::Status;
 use crate::scene::SceneOverlay;
 
@@ -193,12 +193,12 @@ impl ControlsReply {
 }
 
 /// The host's answer to a change of what the playground shows (`path::CONTROLS_CHANGE`), as far as
-/// the page reads it: the dev reply (`dev_reply::DevReply`) with the controls after the change, or
+/// the page reads it: the dev reply (`dev_reply::HostReply`) with the controls after the change, or
 /// the host's refusal. The page shows the host's sentence and does not read the typed `error`,
 /// which is for the dev CLI.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(transparent)]
-pub struct ControlsChangeReply(DevReply<Box<ControlsReply>>);
+pub struct ControlsChangeReply(HostReply<Box<ControlsReply>>);
 
 impl ControlsChangeReply {
     /// The controls after the change, or the host's sentence for its refusal.

@@ -10,7 +10,7 @@
 
 use crate::limits::{MAXIMUM_CAPTURE_MS, MAXIMUM_QUESTION_CHARACTERS};
 use crate::voice_capture::MicrophoneError;
-use crate::voice_wire::PersonaSummary;
+use crate::voice_wire::{MissingSetting, PersonaSummary, SpeechErrorKind};
 
 /// The character the composer talks to when it is on the scene and has a persona.
 pub const DEFAULT_TARGET: &str = "innkeeper";
@@ -116,7 +116,7 @@ pub enum SpeechAvailability {
     Ready,
     /// The host says it is not set up; `missing` is what it says to set.
     NotConfigured {
-        missing: Option<String>,
+        missing: Option<MissingSetting>,
     },
     /// The host could not be asked.
     HostDown,
@@ -171,11 +171,11 @@ pub enum TranscribeFailure {
 }
 
 impl TranscribeFailure {
-    /// The failure for the error key of a host refusal (`SpeechError` of the host).
-    pub fn of_key(key: &str) -> Self {
-        match key {
-            "not_configured" => Self::NotConfigured,
-            "audio_too_short" | "audio_empty" => Self::TooShort,
+    /// The failure for the kind of a host refusal (none when it is not a speech refusal).
+    pub fn of_kind(kind: Option<SpeechErrorKind>) -> Self {
+        match kind {
+            Some(SpeechErrorKind::NotConfigured) => Self::NotConfigured,
+            Some(SpeechErrorKind::AudioTooShort | SpeechErrorKind::AudioEmpty) => Self::TooShort,
             _ => Self::Host,
         }
     }
@@ -345,7 +345,10 @@ fn unavailable_reason(inputs: &ComposerInputs<'_>, has_target: bool) -> Option<S
         SpeechAvailability::Checking => Some("Checking the microphone...".to_owned()),
         SpeechAvailability::HostDown => Some("The host could not be reached".to_owned()),
         SpeechAvailability::NotConfigured { missing } => Some(match missing {
-            Some(missing) => format!("Voice is not set up on the host (missing {missing})"),
+            Some(missing) => format!(
+                "Voice is not set up on the host (missing {})",
+                missing.variable()
+            ),
             None => "Voice is not set up on the host".to_owned(),
         }),
         SpeechAvailability::Ready if !has_target => {

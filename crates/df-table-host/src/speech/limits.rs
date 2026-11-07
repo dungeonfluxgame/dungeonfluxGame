@@ -3,8 +3,10 @@
 
 use std::time::Duration;
 
+use df_playground::voice_wire::MissingSetting;
+
 /// The variables the speech supplier's key is read from, in order.
-pub const KEY_VARIABLES: [&str; 2] = ["DF_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY"];
+pub const KEY_VARIABLES: [&str; 2] = [MissingSetting::SpeechKey.variable(), "ELEVENLABS_API_KEY"];
 
 /// The content type of a transcription body: raw signed 16-bit little-endian mono PCM at 16 kHz.
 pub use df_playground::path::SPEECH_CONTENT_TYPE as AUDIO_CONTENT_TYPE;
