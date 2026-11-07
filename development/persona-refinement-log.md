@@ -113,3 +113,24 @@ Script flaw found: the third beat column ("what Mara faces") asserted actions th
 persona refused to perform (the warrior would not steal), so Mara answered events that never
 happened ("Thank you for making it right. I'll take the payment" to "I won't pay"). Beats are now
 `speaker | goal`; Mara answers only the line actually said.
+
+## Run 8 (heart: fear, sadness, a joke, flirting, a rat, good news)
+
+Median ~6.8 s. The most human run so far. "Oh... the orchard too? That's a hard loss. Thank you
+for telling me; I'll find out what I can about the apples." To a bad joke: "Poor thing. I'll keep
+it out of trouble, though it may need a better joke next time." To flirting: "That's a bold
+compliment. I'll be here till the fruit's sold; ask me again when the market's done." To a rat:
+"A rat? Shoo, you little thief; those plums are too soft to leave out." To a 200-apple order
+after her orchard burned: "I'll see what I can have ready by tomorrow" (no stock promised). Asked
+what she needs most, she kept her private worry (security) to herself and asked for help with
+the plums.
+Mid-run change, data only: the appraisal guide had no lines for fear, sadness, surprise,
+amusement, attraction or disgust (her fear rose only 20 -> 25 at a threat to her stall); added a
+line for each. The deltas then followed it: orchard news sadness +24, fear +18, joy -12; the rat
+disgust +18, surprise +12; flirting attraction +8, embarrassment +8.
+Failure: every emotion faded at one rate (her temperament's 30% a turn), so grief at losing her
+supplier was back to 2 within five lines.
+Change: each emotion has its own fade rate in emotions.json (sadness 5%, fear 10%, trust 10%,
+irritation 15%, pride 15%, attraction 15%, joy 20%, disgust 30%, amusement 40%, embarrassment 40%,
+surprise 60%), scaled by the character's decay against the ordinary one, so grief lingers,
+surprise passes, and a volatile character still cools faster than a steady one (tests added).

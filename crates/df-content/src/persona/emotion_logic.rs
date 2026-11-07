@@ -76,7 +76,7 @@ pub const DEFAULT_CONDUCT: [&str; 9] = [
     ),
 ];
 
-pub const DEFAULT_APPRAISAL_GUIDE: [&str; 8] = [
+pub const DEFAULT_APPRAISAL_GUIDE: [&str; 14] = [
     concat!(
         "Almost every line moves the listener a little: give at least one emotion change ",
         "unless the line was truly empty of feeling.",
@@ -101,6 +101,26 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 8] = [
         " by their temperament, so do not shrink it yourself.",
     ),
     "toward is the speaker of the line just said; give their rapport change there.",
+    concat!(
+        "A threat to them, their livelihood or someone they care for: fear up 15 to 40, ",
+        "more when it touches what their persona fears losing; trust in the one who warns ",
+        "them may rise.",
+    ),
+    concat!(
+        "A loss or bad news about what they love or depend on: sadness up 15 to 40, joy ",
+        "down 10 to 25; shock adds surprise.",
+    ),
+    "Something unexpected (good or bad): surprise up 10 to 30, fading quickly.",
+    concat!(
+        "A joke or something absurd: amusement up 5 to 20 if it lands, or irritation up a ",
+        "little if it is badly timed.",
+    ),
+    concat!(
+        "Flirting or a compliment to them as a person: attraction up 0 to 20 and ",
+        "embarrassment up 5 to 20 if they welcome it, irritation up instead if it is ",
+        "unwelcome or crosses a boundary.",
+    ),
+    "Something foul (vermin, rot, filth) near them or their goods: disgust up 15 to 35.",
 ];
 /// The most recent lines any character can attend to.
 pub const MAXIMUM_ATTENTION_CAPACITY: u8 = 5;
@@ -120,18 +140,18 @@ const DEFAULT_HOSTILE_AT_MOST: i8 = -30;
 
 /// The built-in emotions in the order of `DEFAULT_EMOTIONS`: id, label, valence, arousal and the
 /// bubble tone id.
-const DEFAULT_TABLE: [(&str, &str, i8, u8, &str); 11] = [
-    ("joy", "Joy", 80, 60, "ally"),
-    ("trust", "Trust", 60, 30, "ally"),
-    ("irritation", "Irritation", -60, 70, "danger"),
-    ("fear", "Fear", -70, 80, "danger"),
-    ("sadness", "Sadness", -70, 20, "mystic"),
-    ("surprise", "Surprise", 10, 80, "mystic"),
-    ("pride", "Pride", 50, 50, "npc"),
-    ("amusement", "Amusement", 70, 50, "ally"),
-    ("attraction", "Attraction", 60, 70, "ally"),
-    ("disgust", "Disgust", -70, 50, "danger"),
-    ("embarrassment", "Embarrassment", -30, 60, "mystic"),
+const DEFAULT_TABLE: [(&str, &str, i8, u8, &str, u8); 11] = [
+    ("joy", "Joy", 80, 60, "ally", 20),
+    ("trust", "Trust", 60, 30, "ally", 10),
+    ("irritation", "Irritation", -60, 70, "danger", 15),
+    ("fear", "Fear", -70, 80, "danger", 10),
+    ("sadness", "Sadness", -70, 20, "mystic", 5),
+    ("surprise", "Surprise", 10, 80, "mystic", 60),
+    ("pride", "Pride", 50, 50, "npc", 15),
+    ("amusement", "Amusement", 70, 50, "ally", 40),
+    ("attraction", "Attraction", 60, 70, "ally", 15),
+    ("disgust", "Disgust", -70, 50, "danger", 30),
+    ("embarrassment", "Embarrassment", -30, 60, "mystic", 40),
 ];
 
 /// One emotion a campaign offers: how it reads and how it colours the mood and the bubble.
@@ -146,6 +166,11 @@ pub struct EmotionDefinition {
     pub arousal: u8,
     /// The bubble or voice tone id a line in this emotion is shown with.
     pub tone: String,
+    /// How much of the gap to its baseline this emotion closes each turn for a character of
+    /// ordinary temperament (one whose decay is the config's); grief lingers, surprise passes. A
+    /// character's own decay scales it. `None` uses the config's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decay_percent: Option<u8>,
 }
 
 /// The rapport that moves a standing: at or above `friendly_at_least` a character is friendly, at
@@ -298,13 +323,16 @@ impl Default for EmotionConfig {
         Self {
             emotions: DEFAULT_TABLE
                 .iter()
-                .map(|(id, label, valence, arousal, tone)| EmotionDefinition {
-                    id: (*id).to_owned(),
-                    label: (*label).to_owned(),
-                    valence: *valence,
-                    arousal: *arousal,
-                    tone: (*tone).to_owned(),
-                })
+                .map(
+                    |(id, label, valence, arousal, tone, decay)| EmotionDefinition {
+                        id: (*id).to_owned(),
+                        label: (*label).to_owned(),
+                        valence: *valence,
+                        arousal: *arousal,
+                        tone: (*tone).to_owned(),
+                        decay_percent: Some(*decay),
+                    },
+                )
                 .collect(),
             decay_percent: DEFAULT_DECAY_PERCENT,
             attention_capacity: DEFAULT_ATTENTION_CAPACITY,
@@ -540,11 +568,21 @@ fn level_from(value: i32) -> u8 {
     u8::try_from(value.clamp(0, i32::from(MAXIMUM_LEVEL))).unwrap_or(MAXIMUM_LEVEL)
 }
 
-fn decay_of(config: &EmotionConfig, temperament: &Temperament) -> u8 {
-    temperament
-        .decay_percent
-        .unwrap_or(config.decay_percent)
-        .min(MAXIMUM_LEVEL)
+/// How much of the gap to its baseline `emotion` closes this turn: the emotion's own rate, scaled
+/// by how the character's decay compares with an ordinary one (the config's).
+fn decay_of(config: &EmotionConfig, temperament: &Temperament, emotion: &str) -> u8 {
+    let ordinary = u32::from(config.decay_percent);
+    let own = u32::from(temperament.decay_percent.unwrap_or(config.decay_percent));
+    let base = config
+        .definition(emotion)
+        .and_then(|definition| definition.decay_percent)
+        .map_or(own, u32::from);
+    let scaled = if ordinary == 0 {
+        base
+    } else {
+        base.saturating_mul(own) / ordinary
+    };
+    u8::try_from(scaled.min(u32::from(MAXIMUM_LEVEL))).unwrap_or(MAXIMUM_LEVEL)
 }
 
 fn capacity_of(config: &EmotionConfig, temperament: &Temperament) -> usize {
@@ -716,7 +754,6 @@ pub fn apply_appraisal(
 ) -> (PersonaState, Dropped) {
     let mut dropped = Dropped::default();
     let mut next = conform(config, temperament, state);
-    let decay = decay_of(config, temperament);
     // An emotion this appraisal pushes does not fade this turn: a person does not calm down
     // while they are still being provoked; the rest fade toward their baseline.
     let pushed = |emotion: &str| {
@@ -731,7 +768,8 @@ pub fn apply_appraisal(
         }
         let rest = i32::from(temperament.rest_of(&level.emotion).min(MAXIMUM_LEVEL));
         let now = i32::from(level.level);
-        level.level = level_from(now + fade_step(rest - now, decay));
+        level.level =
+            level_from(now + fade_step(rest - now, decay_of(config, temperament, &level.emotion)));
     }
     let reactivity = i32::from(
         temperament

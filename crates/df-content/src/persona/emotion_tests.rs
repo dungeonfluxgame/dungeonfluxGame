@@ -175,6 +175,30 @@ fn a_change_lands_scaled_by_the_reactivity_and_clamped() {
 }
 
 #[test]
+fn grief_lingers_while_surprise_passes_and_a_volatile_character_cools_faster() {
+    let config = EmotionConfig::default();
+    let at = |decay: u8| {
+        let temperament = Temperament {
+            decay_percent: Some(decay),
+            ..calm()
+        };
+        let mut state = fresh_state("innkeeper", &config, &temperament);
+        state.emotions.iter_mut().for_each(|seen| {
+            seen.level = match seen.emotion.as_str() {
+                "sadness" | "surprise" => 40,
+                _ => 0,
+            }
+        });
+        apply_appraisal(&config, &temperament, &state, &Appraisal::default()).0
+    };
+    let ordinary = at(20);
+    assert_eq!(ordinary.level("sadness"), 38, "40 - ceil(40 * 5%)");
+    assert_eq!(ordinary.level("surprise"), 16, "40 - ceil(40 * 60%)");
+    let volatile = at(40);
+    assert_eq!(volatile.level("sadness"), 36, "twice the ordinary rate: 40 - ceil(40 * 10%)");
+}
+
+#[test]
 fn an_emotion_still_being_provoked_does_not_fade_that_turn() {
     let config = EmotionConfig::default();
     let temperament = Temperament {
@@ -213,7 +237,7 @@ fn feelings_fade_toward_the_baseline_a_share_each_turn_and_always_arrive() {
     let nothing = Appraisal::default();
     let after = apply_appraisal(&config, &temperament, &state, &nothing).0;
     assert_eq!(after.level("joy"), 64);
-    assert_eq!(after.level("trust"), 18, "10 + ceil(40 * 20%)");
+    assert_eq!(after.level("trust"), 14, "10 + ceil(40 * 10%): trust fades at its own rate");
     assert_eq!(after.turn, 1);
     let mut settling = after;
     for _ in 0..60 {
@@ -448,6 +472,7 @@ fn a_stored_state_survives_an_added_or_dropped_emotion() {
         valence: 40,
         arousal: 60,
         tone: "mystic".to_owned(),
+        decay_percent: None,
     });
     let mut state = at_rest();
     state.emotions[3].level = 77;
@@ -742,6 +767,7 @@ fn emotion_ids_are_checked_against_the_list_as_data() {
         valence: 40,
         arousal: 60,
         tone: "mystic".to_owned(),
+        decay_percent: None,
     });
     assert_eq!(check_emotion_ids(&persona, &campaign), Ok(()));
 

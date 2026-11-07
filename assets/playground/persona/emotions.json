@@ -1,16 +1,16 @@
 {
   "emotions": [
-    { "id": "joy", "label": "Joy", "valence": 80, "arousal": 60, "tone": "ally" },
-    { "id": "trust", "label": "Trust", "valence": 60, "arousal": 30, "tone": "ally" },
-    { "id": "irritation", "label": "Irritation", "valence": -60, "arousal": 70, "tone": "danger" },
-    { "id": "fear", "label": "Fear", "valence": -70, "arousal": 80, "tone": "danger" },
-    { "id": "sadness", "label": "Sadness", "valence": -70, "arousal": 20, "tone": "mystic" },
-    { "id": "surprise", "label": "Surprise", "valence": 10, "arousal": 80, "tone": "mystic" },
-    { "id": "pride", "label": "Pride", "valence": 50, "arousal": 50, "tone": "npc" },
-    { "id": "amusement", "label": "Amusement", "valence": 70, "arousal": 50, "tone": "ally" },
-    { "id": "attraction", "label": "Attraction", "valence": 60, "arousal": 70, "tone": "ally" },
-    { "id": "disgust", "label": "Disgust", "valence": -70, "arousal": 50, "tone": "danger" },
-    { "id": "embarrassment", "label": "Embarrassment", "valence": -30, "arousal": 60, "tone": "mystic" }
+    { "id": "joy", "label": "Joy", "valence": 80, "arousal": 60, "tone": "ally", "decay_percent": 20 },
+    { "id": "trust", "label": "Trust", "valence": 60, "arousal": 30, "tone": "ally", "decay_percent": 10 },
+    { "id": "irritation", "label": "Irritation", "valence": -60, "arousal": 70, "tone": "danger", "decay_percent": 15 },
+    { "id": "fear", "label": "Fear", "valence": -70, "arousal": 80, "tone": "danger", "decay_percent": 10 },
+    { "id": "sadness", "label": "Sadness", "valence": -70, "arousal": 20, "tone": "mystic", "decay_percent": 5 },
+    { "id": "surprise", "label": "Surprise", "valence": 10, "arousal": 80, "tone": "mystic", "decay_percent": 60 },
+    { "id": "pride", "label": "Pride", "valence": 50, "arousal": 50, "tone": "npc", "decay_percent": 15 },
+    { "id": "amusement", "label": "Amusement", "valence": 70, "arousal": 50, "tone": "ally", "decay_percent": 40 },
+    { "id": "attraction", "label": "Attraction", "valence": 60, "arousal": 70, "tone": "ally", "decay_percent": 15 },
+    { "id": "disgust", "label": "Disgust", "valence": -70, "arousal": 50, "tone": "danger", "decay_percent": 30 },
+    { "id": "embarrassment", "label": "Embarrassment", "valence": -30, "arousal": 60, "tone": "mystic", "decay_percent": 40 }
   ],
   "decay_percent": 20,
   "attention_capacity": 3,
@@ -23,7 +23,13 @@
     "An apology or making amends: irritation down 5 to 15, rapport up 2 to 8.",
     "A sale, a fair deal or a promise of custom: joy up 5 to 12, rapport up 3 to 8.",
     "Give the change an ordinary person in their place would feel; the engine scales it by their temperament, so do not shrink it yourself.",
-    "toward is the speaker of the line just said; give their rapport change there."
+    "toward is the speaker of the line just said; give their rapport change there.",
+    "A threat to them, their livelihood or someone they care for: fear up 15 to 40, more when it touches what their persona fears losing; trust in the one who warns them may rise.",
+    "A loss or bad news about what they love or depend on: sadness up 15 to 40, joy down 10 to 25; shock adds surprise.",
+    "Something unexpected (good or bad): surprise up 10 to 30, fading quickly.",
+    "A joke or something absurd: amusement up 5 to 20 if it lands, or irritation up a little if it is badly timed.",
+    "Flirting or a compliment to them as a person: attraction up 0 to 20 and embarrassment up 5 to 20 if they welcome it, irritation up instead if it is unwelcome or crosses a boundary.",
+    "Something foul (vermin, rot, filth) near them or their goods: disgust up 15 to 35."
   ],
   "conduct": [
     "Speak like a real person, not a helper: plain words, contractions, short and long sentences mixed, no stock pleasantries every line.",
