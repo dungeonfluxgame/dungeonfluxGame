@@ -61,6 +61,8 @@ pub(crate) use self::storage::summaries_of;
 pub(crate) use self::storage::write_persona;
 
 #[cfg(test)]
+mod ask_tests;
+#[cfg(test)]
 mod backfill_tests;
 #[cfg(test)]
 mod converse_tests;

@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::routes::router_with;
 use crate::speech::fixtures::{FakePort, speech_over};
-use crate::test_support::{Running, STARTER_FILES, layout_of, start};
+use crate::test_support::{Running, STARTER_FILES, layout_of_cast, start};
 use crate::text::{BackendChoice, TextRuntime};
 
 /// The character the scene names.
@@ -96,12 +96,21 @@ pub(super) async fn scripted_host_speaking(
     answers: Vec<Value>,
     speech: Arc<FakePort>,
 ) -> ScriptedHost {
+    scripted_host_cast(&[CHARACTER], answers, speech).await
+}
+
+/// As [`scripted_host_speaking`], with a scene that names each of `cast`.
+pub(super) async fn scripted_host_cast(
+    cast: &[&str],
+    answers: Vec<Value>,
+    speech: Arc<FakePort>,
+) -> ScriptedHost {
     let running = start(&STARTER_FILES).await;
     running.write_asset("media/plate.png", "plate.png");
     crate::locate::write_layout(
         &running.playground_path("assets/layouts"),
         "plate.png",
-        &layout_of("plate.png", CHARACTER),
+        &layout_of_cast("plate.png", cast),
     )
     .unwrap();
     running.write_asset(

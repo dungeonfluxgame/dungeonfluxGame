@@ -298,8 +298,8 @@ async fn no_persona_audit_line_holds_persona_question_line_or_edit_text() {
     }
 }
 
-// TODO(DEV-12): cancel-safety of `ask`: a client that drops the request between the coverage and
-// the backfill still gets its backfill committed (needs a scripted backend that waits).
+// Cancel-safety of `ask`: every model-spending persona route runs its work through `run_owned`,
+// whose guarantee (the work finishes when the request is dropped) is tested in `blocking_tests`.
 
 #[tokio::test]
 async fn guidance_reaches_the_coverage_question_the_backfill_and_the_spoken_line() {

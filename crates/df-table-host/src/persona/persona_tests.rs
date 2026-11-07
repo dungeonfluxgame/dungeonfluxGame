@@ -681,11 +681,6 @@ async fn generating_without_a_shown_scene_is_a_typed_refusal_and_never_a_model_c
     assert!(matches!(outcome, CastOutcome::Failed { .. }));
 }
 
-// TODO(DEV-12) owed: generate-cast on a scene with several characters, one of whose answers is
-// malformed (the others still written; needs a layout with several regions).
-// TODO(DEV-12) owed: TextRuntime::ask on its own, one test per TextAskError variant (refused,
-// no answer, rejected before, in flight, lost, cancelled, not kept).
-
 fn args(text: &str) -> Asking {
     match command(&format!("persona coverage elf {text} a question")) {
         PersonaCommand::Coverage { asking, .. } => asking,
@@ -1132,4 +1127,32 @@ fn stored_persona_files_stay_ascii_and_read_back_as_written() {
         super::storage::ascii_only(r#"plain {"a": 1}"#),
         r#"plain {"a": 1}"#
     );
+}
+
+#[test]
+fn the_debug_of_a_request_that_carries_a_question_or_a_situation_never_prints_it() {
+    let ask: super::request::AskRequest = serde_json::from_value(json!({
+        "character": "innkeeper", "question": "my secret question", "situation": "a secret scene"
+    }))
+    .unwrap();
+    let say = super::request::SayRequest {
+        character: "innkeeper".to_owned(),
+        situation: "a secret scene".to_owned(),
+        model: None,
+        speak: false,
+    };
+    let coverage = super::request::CoverageRequest {
+        character: "innkeeper".to_owned(),
+        question: "my secret question".to_owned(),
+        guidance: None,
+        model: None,
+    };
+    for shown in [
+        format!("{ask:?}"),
+        format!("{say:?}"),
+        format!("{coverage:?}"),
+    ] {
+        assert!(!shown.contains("secret"), "{shown}");
+        assert!(shown.contains("innkeeper"), "{shown}");
+    }
 }

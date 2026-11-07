@@ -76,6 +76,8 @@ pub mod wire;
 #[cfg(test)]
 mod atomic_file_tests;
 #[cfg(test)]
+mod blocking_tests;
+#[cfg(test)]
 mod boot_tests;
 #[cfg(test)]
 mod camera_tests;

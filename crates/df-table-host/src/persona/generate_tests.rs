@@ -1,10 +1,14 @@
 use df_content::persona::{Persona, PersonaEdit, PersonaField, PersonaId};
 use serde_json::{Value, json};
 
-use super::fixtures::{CHARACTER, ScriptedHost, innkeeper, line_answer, scripted_host};
+use std::sync::Arc;
+
+use super::fixtures::{
+    CHARACTER, ScriptedHost, innkeeper, line_answer, scripted_host, scripted_host_cast,
+};
 use super::generate::operation_key;
 use super::request::{
-    BackfillRecord, Generation, PersonaError, PersonaReply, PersonaStored, Spoken,
+    BackfillRecord, CastOutcome, Generation, PersonaError, PersonaReply, PersonaStored, Spoken,
 };
 use super::routes::path;
 use super::storage::{
@@ -14,6 +18,7 @@ use super::storage::{
 use crate::dev_client::post_json;
 use crate::dev_http::DevReply;
 use crate::io_cause::IoCause;
+use crate::speech::fixtures::FakePort;
 
 fn done<T: std::fmt::Debug>(reply: PersonaReply<T>) -> T {
     match reply {
@@ -328,4 +333,56 @@ async fn a_line_naming_a_behavior_trigger_or_secret_the_persona_lacks_is_refused
         .filter(|line| line.starts_with("PERSONA said"))
         .count();
     assert_eq!(said, 0, "no refused line is reported as said");
+}
+
+#[tokio::test]
+async fn generate_cast_writes_the_characters_whose_answers_read_and_reports_the_one_that_does_not()
+{
+    let host = scripted_host_cast(
+        &["innkeeper", "cook", "elf"],
+        vec![
+            persona_answer("Keeps the inn.", "Owes the guild."),
+            json!({"job": "a malformed answer"}),
+            persona_answer("Maps the roads.", "Left home in shame."),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    let reply: PersonaReply<Vec<super::request::CastRow>> =
+        post_json(host.port, path::PERSONA_GENERATE_CAST, &json!({}))
+            .await
+            .unwrap();
+    let rows = done(reply);
+    assert_eq!(rows.len(), 3, "one row for each named character");
+    let generated = rows
+        .iter()
+        .filter(|row| matches!(row.outcome, CastOutcome::Generated { .. }))
+        .count();
+    let failed: Vec<&super::request::CastRow> = rows
+        .iter()
+        .filter(|row| matches!(row.outcome, CastOutcome::Failed { .. }))
+        .collect();
+    assert_eq!((generated, failed.len()), (2, 1), "{rows:?}");
+    assert!(
+        matches!(
+            failed[0].outcome,
+            CastOutcome::Failed {
+                error: PersonaError::AnswerRefused { .. }
+            }
+        ),
+        "{:?}",
+        failed[0].outcome
+    );
+    // The two that read are stored; the one that did not has no file.
+    let stored = |name: &str| host.file(&format!("{name}.persona.json")).is_some();
+    let files = ["innkeeper", "cook", "elf"]
+        .iter()
+        .filter(|n| stored(n))
+        .count();
+    assert_eq!(files, 2);
+    assert!(
+        !stored(&failed[0].character),
+        "no file for {}",
+        failed[0].character
+    );
 }

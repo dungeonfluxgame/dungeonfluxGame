@@ -114,7 +114,7 @@ pub struct GenerateCastRequest {
 
 /// The body of `POST /dev/persona/say`: a line from a character in a situation. A dev tool; the
 /// game feeds the same brief into the expression contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SayRequest {
     pub character: String,
@@ -132,12 +132,53 @@ fn yes() -> bool {
     true
 }
 
+// What a player says, and what a situation holds, is data for the model and never printed: the
+// Debug of a request that carries one shows its lengths, as the page's own request does.
+impl std::fmt::Debug for SayRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SayRequest")
+            .field("character", &self.character)
+            .field("situation_characters", &self.situation.chars().count())
+            .field("model", &self.model)
+            .field("speak", &self.speak)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for AskRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AskRequest")
+            .field("character", &self.character)
+            .field("question_characters", &self.question.chars().count())
+            .field("has_guidance", &self.guidance.is_some())
+            .field("model", &self.model)
+            .field("backfill", &self.backfill)
+            .field("coverage", &self.coverage)
+            .field("speak", &self.speak)
+            .field("has_situation", &self.situation.is_some())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CoverageRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CoverageRequest")
+            .field("character", &self.character)
+            .field("question_characters", &self.question.chars().count())
+            .field("has_guidance", &self.guidance.is_some())
+            .field("model", &self.model)
+            .finish()
+    }
+}
+
 /// The body of `POST /dev/persona/ask`: put a question to a character. The text service judges
 /// whether the persona holds enough to answer, fills what it lacks (adding only), and the
 /// character answers in character. A dev tool: the narrative engine calls the same steps.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-// TODO(DEV-12): redact `question` in Debug, as the page's copy does.
 pub struct AskRequest {
     pub character: String,
     pub question: String,
@@ -161,7 +202,7 @@ pub struct AskRequest {
 }
 
 /// The body of `POST /dev/persona/coverage`: does the persona hold enough to answer `question`?
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoverageRequest {
     pub character: String,
