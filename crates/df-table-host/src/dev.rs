@@ -256,6 +256,12 @@ pub enum DevError {
     Play(PlayError),
     /// `persona converse` that cannot start: too few characters, or an opener who is not one.
     Converse(ConverseError),
+    /// `persona converse` stopped at `turn`: the lines said before it, and why. They were said.
+    ConverseStopped {
+        done: Vec<String>,
+        turn: u32,
+        error: Box<DevError>,
+    },
     /// The canvas answered with something this program does not understand. `reason` is why the
     /// answer did not read, when it was text that should have been JSON of a known shape.
     UnexpectedAnswer {
@@ -333,6 +339,12 @@ impl fmt::Display for DevError {
             }
             Self::Play(error) => write!(formatter, "{error}"),
             Self::Converse(error) => write!(formatter, "{error}"),
+            Self::ConverseStopped { done, turn, error } => {
+                for line in done {
+                    writeln!(formatter, "{line}")?;
+                }
+                write!(formatter, "turn {turn} failed: {error}")
+            }
             Self::UnexpectedAnswer {
                 status,
                 body,

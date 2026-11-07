@@ -59,39 +59,147 @@ fn a_table_needs_two_characters_and_an_opener_must_sit_at_it() {
     );
 }
 
+/// The speaker `table` picks after `history`.
+fn next_after(table: &Table, history: &[Turn]) -> String {
+    table.next_speaker(history).id.clone()
+}
+
 #[test]
 fn the_character_a_line_names_answers_by_id_display_name_or_given_name() {
     let table = table();
-    for (line, answers) in [
-        ("Which road, Aldric?", "innkeeper"),
-        ("Ask the innkeeper.", "elf"),
-        ("What does the wizard say?", "wizard"),
-        ("Hand it to the braided woman, would you?", "braided_woman"),
+    // Seats: elf, innkeeper, braided_woman, wizard. With nobody named the leftmost speaker who is
+    // not the last one answers, so each case names someone else to show the name did the choosing.
+    for (by, line, answers) in [
+        ("elf", "What does the wizard say?", "wizard"),
+        (
+            "elf",
+            "Hand it to the braided woman, would you?",
+            "braided_woman",
+        ),
+        ("wizard", "Ask the innkeeper.", "innkeeper"),
+        ("wizard", "Which road, Aldric?", "innkeeper"),
+        ("braided_woman", "Wizard, a tale!", "wizard"),
     ] {
-        let history = [turn("elf", line)];
-        let by_elf = table.next_speaker(&history).id.clone();
-        // The speaker is never the one who named themself; the named one answers.
-        if answers == "elf" {
-            assert_ne!(by_elf, "elf", "{line}");
-        } else {
-            assert_eq!(by_elf, answers, "{line}");
-        }
+        assert_eq!(
+            next_after(&table, &[turn(by, line)]),
+            answers,
+            "{by}: {line}"
+        );
     }
+}
+
+#[test]
+fn with_nobody_named_the_leftmost_of_the_quietest_answers() {
+    let table = table();
+    assert_eq!(
+        next_after(&table, &[turn("elf", "A quiet evening.")]),
+        "innkeeper"
+    );
+    assert_eq!(
+        next_after(&table, &[turn("innkeeper", "A quiet evening.")]),
+        "elf"
+    );
+    // Everyone has spoken but the wizard, who has been silent longest of all.
+    let history = [
+        turn("elf", "One."),
+        turn("innkeeper", "Two."),
+        turn("braided_woman", "Three."),
+    ];
+    assert_eq!(next_after(&table, &history), "wizard");
 }
 
 #[test]
 fn the_first_name_in_a_line_is_the_one_who_answers() {
     let table = table();
     let history = [turn("elf", "Wizard, ask Aldric about the road.")];
-    assert_eq!(table.next_speaker(&history).id, "wizard");
+    assert_eq!(next_after(&table, &history), "wizard");
+    let history = [turn("elf", "Aldric, ask the wizard about the road.")];
+    assert_eq!(next_after(&table, &history), "innkeeper");
 }
 
 #[test]
 fn a_name_must_be_a_whole_word() {
     let table = table();
+    // "wizardry" is not "wizard": nobody is named, so the leftmost quiet speaker answers.
     let history = [turn("elf", "The wizardry of it is beyond me.")];
-    // No one is named, so the quietest speaker takes the turn.
-    assert_ne!(table.next_speaker(&history).id, "elf");
+    assert_eq!(next_after(&table, &history), "innkeeper");
+    let history = [turn("elf", "My aldrich ring is lost.")];
+    assert_eq!(next_after(&table, &history), "innkeeper");
+}
+
+#[test]
+fn a_line_that_names_only_the_speaker_names_nobody_else() {
+    let table = table();
+    let history = [turn("wizard", "I, the wizard, am tired.")];
+    assert_eq!(next_after(&table, &history), "elf");
+}
+
+#[test]
+fn ids_with_hyphens_names_with_apostrophes_and_titles_match_as_words() {
+    let table = Table::new(vec![
+        speaker("elf", "The Elf"),
+        speaker("braided-woman", "Mother O'Neill"),
+        speaker("tom", "Old Tom"),
+        speaker("wizard", "The Wizard"),
+    ])
+    .unwrap();
+    // The id's words, with the hyphen read as a space.
+    assert_eq!(
+        next_after(&table, &[turn("wizard", "Braided woman, your thread?")]),
+        "braided-woman"
+    );
+    // The display name split the way a line is split: "O'Neill" is "o" and "neill".
+    assert_eq!(
+        next_after(&table, &[turn("wizard", "Mother O'Neill, your thread?")]),
+        "braided-woman"
+    );
+    // "old" is a title, not Tom's given name: the old road names nobody, so the leftmost answers.
+    assert_eq!(
+        next_after(&table, &[turn("wizard", "Take the old road.")]),
+        "elf"
+    );
+    assert_eq!(
+        next_after(&table, &[turn("wizard", "Tom, take the road.")]),
+        "tom"
+    );
+}
+
+#[test]
+fn the_longer_name_wins_where_two_characters_share_a_given_name() {
+    let table = Table::new(vec![
+        speaker("elf", "The Elf"),
+        speaker("keeper", "Aldric Venn"),
+        speaker("smith", "Aldric Stone"),
+    ])
+    .unwrap();
+    assert_eq!(
+        next_after(&table, &[turn("elf", "Aldric Stone, a word?")]),
+        "smith"
+    );
+    assert_eq!(
+        next_after(&table, &[turn("elf", "Aldric Venn, a word?")]),
+        "keeper"
+    );
+    // The bare given name is shared: the seat furthest left answers.
+    assert_eq!(
+        next_after(&table, &[turn("elf", "Aldric, a word?")]),
+        "keeper"
+    );
+}
+
+#[test]
+fn at_a_table_of_two_the_other_always_answers_even_inside_the_cooldown() {
+    let table = Table::new(vec![
+        speaker("elf", "The Elf"),
+        speaker("keeper", "Aldric Venn"),
+    ])
+    .unwrap();
+    let history = [
+        turn("elf", "Aldric?"),
+        turn("keeper", "Yes, elf?"),
+        turn("elf", "Aldric, the road?"),
+    ];
+    assert_eq!(next_after(&table, &history), "keeper");
 }
 
 #[test]
