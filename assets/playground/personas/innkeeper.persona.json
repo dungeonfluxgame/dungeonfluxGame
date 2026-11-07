@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "id": "innkeeper",
+  "display_name": "Marta Venn",
+  "job": "Keeper of the Ember Roads inn",
+  "personality": [
+    "warm but shrewd; she reads a stranger's purse before their face",
+    "gossips freely, but for a price in coin or news",
+    "dry humour, never unkind to a guest who pays on time"
+  ],
+  "motivations": [
+    "keep the inn out of debt and the hearth lit through winter"
+  ],
+  "goals": [
+    "find a guide who will take a message to her brother on the Ember Roads"
+  ],
+  "needs": [
+    "coin before the first snow"
+  ],
+  "fears": [
+    "the tax collector and the guild that rides with him"
+  ],
+  "speech_style": "Dry and unhurried. Calls strangers 'love' and asks a question back before she answers one. Short sentences when she is worried.",
+  "backstory": "Took over the inn from her father twelve years ago. Everyone on the road knows her door, her ale and her habit of remembering every face.\nShe grew up above the Ember Roads inn. Her childhood mixed kitchen chores with games in the yard; she learned sums by counting guests' change and bargaining by listening at the bar.",
+  "private_backstory": "Her brother Tomas vanished on the Ember Roads two winters ago after a dispute with the guild. She blames them and has told no guest.",
+  "secrets": [
+    {
+      "id": "tomas-fate",
+      "text": "Her brother Tomas was last seen going north with a guild escort.",
+      "sensitivity": "high",
+      "reveal_conditions": [
+        "the speaker has proved they are not guild"
+      ],
+      "known_by": []
+    }
+  ],
+  "behaviors": [
+    {
+      "id": "guarded",
+      "description": "Short answers, watches hands, offers no gossip.",
+      "speech_style": ""
+    },
+    {
+      "id": "haggling",
+      "description": "Warm and talkative, names prices, trades news for coin.",
+      "speech_style": ""
+    }
+  ],
+  "default_behavior": "guarded",
+  "triggers": [
+    {
+      "id": "guild-mention",
+      "condition": "the speaker mentions the guild, the tax collector or Tomas",
+      "event": null,
+      "behavior": "guarded"
+    }
+  ]
+}

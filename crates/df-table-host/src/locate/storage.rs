@@ -2,7 +2,6 @@
 //! layout is bound to its picture as it is now, and attaching it to a fixture's backdrop.
 
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use df_imagery::oneshot_segment;
 use df_playground::fixture::Fixture;
@@ -11,13 +10,14 @@ use serde::Deserialize;
 
 use super::request::{IoCause, LocateError};
 use super::validate::check_picture_name;
+use crate::blocking::WriteLock;
 use crate::media_library::media_directory;
 use crate::state::AppState;
 
 /// Held around every read-modify-write of a layout file (scan, label, identify), so one never
-/// overwrites names or regions another stored meanwhile. Taken only inside blocking work, never
-/// across an `.await`; one lock for the folder, since layout writes are rare and short.
-static LAYOUT_WRITES: Mutex<()> = Mutex::new(());
+/// overwrites names or regions another stored meanwhile; one lock for the folder, since layout
+/// writes are rare and short.
+pub(super) static LAYOUT_WRITES: WriteLock = WriteLock::new();
 
 /// The folder of stored layouts under the playground's assets, apart from the media library.
 pub const LAYOUT_DIRECTORY: &str = "layouts";
@@ -27,12 +27,6 @@ pub const LAYOUT_SUFFIX: &str = ".layout.json";
 /// The layout file of `picture`.
 pub fn layout_file_name(picture: &str) -> String {
     format!("{picture}{LAYOUT_SUFFIX}")
-}
-
-/// Takes the layout write lock ([`LAYOUT_WRITES`]); a panic of an earlier holder left no file half
-/// written (`write_layout` is whole or not at all), so a poisoned lock is still good.
-pub(super) fn lock_layout_writes() -> MutexGuard<'static, ()> {
-    LAYOUT_WRITES.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// The bytes of `picture` in the media library: a missing file is `PictureMissing`, any other

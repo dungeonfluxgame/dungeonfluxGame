@@ -30,6 +30,11 @@ pub struct TextReport {
     pub profile: String,
     /// The model identity questions name; none when Codex uses its own default.
     pub identity_model: Option<String>,
+    /// The model persona calls use instead of the default (`DF_TEXT_PERSONA_MODEL`), if any.
+    pub persona_model: Option<String>,
+    /// The profile persona calls go under when they name no model; none when the persona model
+    /// is not a valid model name.
+    pub persona_profile: Option<String>,
     pub configured: bool,
     /// The environment variable to set when the backend is not configured.
     pub missing: Option<String>,

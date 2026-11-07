@@ -196,6 +196,8 @@ fn the_verb_prints_one_line_of_keys_per_service() {
             backend: BackendKind::Codex,
             profile: "codex".to_owned(),
             identity_model: None,
+            persona_model: Some("gpt-6.1-sol".to_owned()),
+            persona_profile: Some("codex:gpt-6.1-sol".to_owned()),
             configured: false,
             missing: Some("DF_TEXT_CODEX_EXECUTABLE".to_owned()),
             attempts_kept: 2,
@@ -221,7 +223,8 @@ fn the_verb_prints_one_line_of_keys_per_service() {
     assert_eq!(
         format_services(&report),
         concat!(
-            "text: backend=codex profile=codex model=- configured=false ",
+            "text: backend=codex profile=codex model=- persona_model=gpt-6.1-sol ",
+            "persona_profile=codex:gpt-6.1-sol configured=false ",
             "missing=DF_TEXT_CODEX_EXECUTABLE attempts_kept=2 in_flight=1\n",
             "imagegen: backend=codex-cli mode=live deadline_ms=900000 provenance_dir=set ",
             "codex_home=unset running=1 last_outcome=stored\n",

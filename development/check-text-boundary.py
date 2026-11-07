@@ -167,7 +167,9 @@ ALLOWLIST = _allow([
     ("crates/df-tools/src/gameplay/living_scenes/plates_tests.rs", "test-literal", "/v1/chat/completions", 1, "fixture", PHASE_REASONS["fixture"]),
 ])
 # Allowlisted-hit ceiling per phase, fixed at the counts recorded when written.
-PHASE_CEILINGS = {"backend": 12, "provider-crate": 56, "image-route-config": 2, "fixture": 31}
+# provider-crate raised 56 -> 57 on 2026-11-06: three more calls in tests/metering.rs (the SystemOne
+# metering tests added with the provider cleanup), net of the stale entries removed since.
+PHASE_CEILINGS = {"backend": 12, "provider-crate": 57, "image-route-config": 2, "fixture": 31}
 
 
 def _is_ident(tok, value):

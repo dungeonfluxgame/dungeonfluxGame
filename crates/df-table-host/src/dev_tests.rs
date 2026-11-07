@@ -390,7 +390,9 @@ async fn the_command_line_refuses_its_own_mistakes_by_type_before_asking_the_can
 #[test]
 fn a_refusal_prints_the_hosts_sentence_with_the_key_its_routes_show() {
     let cast = DevError::Rejected {
-        error: ReplyError::Cast(CastError::NoBackdrop),
+        error: ReplyError::Cast(CastError::Shown {
+            cause: crate::shown_scene::ShownSceneError::NoBackdrop,
+        }),
         message: "the shown scene has no backdrop picture".to_owned(),
     };
     assert_eq!(

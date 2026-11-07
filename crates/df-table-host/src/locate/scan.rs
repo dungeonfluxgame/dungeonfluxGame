@@ -12,7 +12,7 @@ use df_scene_layout::{
 
 use super::limits::SCAN_TIMEOUT;
 use super::request::{LocateError, LocateRequest, LocateStage, LocateStageError, ScanPrompt};
-use super::storage::{lock_layout_writes, read_layout, read_picture, write_layout};
+use super::storage::{LAYOUT_WRITES, read_layout, read_picture, write_layout};
 use super::validate::{check_label, check_masks, check_picture_name};
 
 /// The environment variables the supplier key is read from, in order.
@@ -297,7 +297,7 @@ async fn store_scan(
     } = scanned;
     let (layouts, picture) = (layouts.to_owned(), request.picture.clone());
     tokio::task::spawn_blocking(move || {
-        let _writing = lock_layout_writes();
+        let _writing = LAYOUT_WRITES.lock();
         // An old layout that does not read has no names anyone can use any more, and the scan is
         // already paid for: it is replaced, and the caller records that its names were lost.
         let (kept_labels, old_layout_unreadable) = match read_layout(&layouts, &picture) {

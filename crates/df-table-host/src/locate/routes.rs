@@ -27,8 +27,9 @@ use super::request::{
     LocateStageError, LocatedLayout, ShowQuery, StoredLayout,
 };
 use super::scan::{ScanSupplier, scan_stages};
-use super::storage::lock_layout_writes;
+use super::storage::LAYOUT_WRITES;
 use super::{check_picture_name, layout_file_name, relabel, write_layout};
+use crate::blocking::run_blocking;
 use crate::dev_http::{parse_body, reply};
 use crate::media_library::media_directory;
 use crate::state::AppState;
@@ -147,15 +148,6 @@ pub(super) fn failed_line(
         line.push_str(&format!(" operation={operation}"));
     }
     line
-}
-
-/// Runs locate work on the blocking pool; a task that stopped without an answer is `Stopped`.
-async fn run_locate_task<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, LocateError> + Send + 'static,
-) -> Result<T, LocateError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or(Err(LocateError::Stopped))
 }
 
 /// Runs a paid scan on a task of its own and waits for it, so the scan and the layout it stores
@@ -279,13 +271,16 @@ async fn show(
     };
     let picture = query.picture.clone();
     let (media_folder, directory) = (media(&app), layouts(&app));
-    let read = run_locate_task(move || {
-        check_picture_name(&query.picture)?;
-        stored(
-            &query.picture,
-            super::current_layout(&media_folder, &directory, &query.picture)?,
-        )
-    })
+    let read = run_blocking(
+        move || {
+            check_picture_name(&query.picture)?;
+            stored(
+                &query.picture,
+                super::current_layout(&media_folder, &directory, &query.picture)?,
+            )
+        },
+        LocateError::Stopped,
+    )
     .await;
     let result = read.map(|layout| StoredLayout {
         layout_file: layout_file_name(&picture),
@@ -319,21 +314,24 @@ async fn relabel_stored(
         request.label.clone(),
     );
     let (media_folder, directory) = (media(app), layouts(app));
-    let layout = run_locate_task(move || {
-        check_picture_name(&request.picture)?;
-        let _writing = lock_layout_writes();
-        let mut layout = stored(
-            &request.picture,
-            super::current_layout(&media_folder, &directory, &request.picture)?,
-        )?;
-        relabel(
-            &mut layout,
-            df_scene_layout::RegionRef::parse(&request.region),
-            request.label.as_deref(),
-        )?;
-        write_layout(&directory, &request.picture, &layout)?;
-        Ok(layout)
-    })
+    let layout = run_blocking(
+        move || {
+            check_picture_name(&request.picture)?;
+            let _writing = LAYOUT_WRITES.lock();
+            let mut layout = stored(
+                &request.picture,
+                super::current_layout(&media_folder, &directory, &request.picture)?,
+            )?;
+            relabel(
+                &mut layout,
+                df_scene_layout::RegionRef::parse(&request.region),
+                request.label.as_deref(),
+            )?;
+            write_layout(&directory, &request.picture, &layout)?;
+            Ok(layout)
+        },
+        LocateError::Stopped,
+    )
     .await?;
     app.record_line(format!(
         "LOCATE labelled picture={picture} region={region} label={}",
@@ -425,12 +423,12 @@ async fn identify_characters(
     };
     let (prepare_media, prepare_in) = (directory.clone(), stored_in.clone());
     let preparing = Instant::now();
-    let prepared =
-        run_locate_task(move || super::prepare_identity(&prepare_media, &prepare_in, &request))
-            .await
-            .map_err(|error| {
-                failure.record(app, LocateStageError::at(LocateStage::Prepare)(error))
-            })?;
+    let prepared = run_blocking(
+        move || super::prepare_identity(&prepare_media, &prepare_in, &request),
+        LocateError::Stopped,
+    )
+    .await
+    .map_err(|error| failure.record(app, LocateStageError::at(LocateStage::Prepare)(error)))?;
     record_stage(app, &picture, LocateStage::Prepare, preparing);
     let asking = Instant::now();
     let at_ask = LocateStageError::at(LocateStage::Ask);
@@ -443,16 +441,19 @@ async fn identify_characters(
     record_stage(app, &picture, LocateStage::Ask, asking);
     let storing = Instant::now();
     let store_picture = picture.clone();
-    let (layout, rows) = run_locate_task(move || {
-        super::store_identification(
-            &directory,
-            &stored_in,
-            &store_picture,
-            &prepared.layout,
-            &answered.found,
-            prepared.min_confidence,
-        )
-    })
+    let (layout, rows) = run_blocking(
+        move || {
+            super::store_identification(
+                &directory,
+                &stored_in,
+                &store_picture,
+                &prepared.layout,
+                &answered.found,
+                prepared.min_confidence,
+            )
+        },
+        LocateError::Stopped,
+    )
     .await
     .map_err(|error| failure.record(app, LocateStageError::at(LocateStage::Store)(error)))?;
     record_stage(app, &picture, LocateStage::Store, storing);

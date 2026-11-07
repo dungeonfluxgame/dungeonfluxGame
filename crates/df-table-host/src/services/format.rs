@@ -20,12 +20,14 @@ pub fn format_services(report: &ServicesReport) -> String {
     [
         format!(
             concat!(
-                "text: backend={} profile={} model={} configured={} missing={} ",
-                "attempts_kept={} in_flight={}"
+                "text: backend={} profile={} model={} persona_model={} persona_profile={} ",
+                "configured={} missing={} attempts_kept={} in_flight={}"
             ),
             text.backend.key(),
             text.profile,
             or_dash(text.identity_model.as_deref()),
+            or_dash(text.persona_model.as_deref()),
+            or_dash(text.persona_profile.as_deref()),
             text.configured,
             or_dash(text.missing.as_deref()),
             text.attempts_kept,

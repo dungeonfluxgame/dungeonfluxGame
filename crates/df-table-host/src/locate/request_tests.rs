@@ -2,9 +2,9 @@ use axum::http::StatusCode;
 
 use super::request::{
     IdentityOutcome, IoCause, LocateError, QuestionCause, ScanCause, ScanPrompt, ScanSendState,
-    TextServiceCause,
 };
 use crate::dev_http::{BodyCause, BodyError, RouteError};
+use crate::text::TextServiceCause;
 
 fn every_error() -> Vec<LocateError> {
     let picture = || "plate.webp".to_owned();

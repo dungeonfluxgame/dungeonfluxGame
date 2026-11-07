@@ -182,3 +182,26 @@ pub fn post_request(path: &str, body: &str, extra_headers: &str) -> String {
         body.len()
     )
 }
+
+/// A one-region layout naming `name`, bound to `picture` whose bytes are its own name.
+pub fn layout_of(picture: &str, name: &str) -> df_scene_layout::SceneLayout {
+    use df_scene_layout::{PictureBinding, RegionGeometry, SceneLayout, SceneRegion, region_id};
+    let binding = PictureBinding {
+        name: picture.to_owned(),
+        sha256: df_imagery::oneshot_segment::picture_sha256(picture.as_bytes()),
+        width_px: 100,
+        height_px: 50,
+    };
+    let geometry = RegionGeometry {
+        left_permille: 300,
+        top_permille: 200,
+        right_permille: 600,
+        bottom_permille: 1000,
+        head_x_permille: 450,
+        head_y_permille: 200,
+    };
+    let region = SceneRegion::new(region_id(name.as_bytes()), geometry, 900)
+        .unwrap()
+        .with_label(Some(name.to_owned()));
+    SceneLayout::new(binding, "sam-3.1", "person", vec![region])
+}

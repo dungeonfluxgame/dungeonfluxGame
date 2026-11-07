@@ -23,6 +23,7 @@ use crate::imagegen::format::{format_ended, format_refusal};
 use crate::imagegen::request::{GenerateError, JobView};
 use crate::limits::UPLOAD_PIECE_BYTES;
 use crate::locate::request::LocateError;
+use crate::persona::request::PersonaError;
 use crate::playground::{
     ChangeReply, ClientsError, FixtureNameError, PlaygroundChangeError, fixture_file_name,
 };
@@ -57,6 +58,7 @@ pub enum ReplyError {
     Locate(LocateError),
     Generate(GenerateError),
     Cast(CastError),
+    Persona(PersonaError),
     RulesCheck(RulesCheckError),
     /// A host route: the events query or the host status.
     Host(HostError),
@@ -81,6 +83,7 @@ impl fmt::Display for ReplyError {
             Self::Locate(error) => write!(formatter, "{error}"),
             Self::Generate(error) => write!(formatter, "{error}"),
             Self::Cast(error) => write!(formatter, "{error}"),
+            Self::Persona(error) => write!(formatter, "{error}"),
             Self::RulesCheck(error) => write!(formatter, "{error}"),
             Self::Host(error) => write!(formatter, "{error}"),
             Self::Clients(error) => write!(formatter, "{error}"),
@@ -151,6 +154,12 @@ impl From<CastError> for ReplyError {
     }
 }
 
+impl From<PersonaError> for ReplyError {
+    fn from(error: PersonaError) -> Self {
+        Self::Persona(error)
+    }
+}
+
 impl From<RulesCheckError> for ReplyError {
     fn from(error: RulesCheckError) -> Self {
         Self::RulesCheck(error)
@@ -182,6 +191,7 @@ fn write_refusal(
         ReplyError::SceneBuilder(error) => error.key(),
         ReplyError::Locate(error) => error.key(),
         ReplyError::Cast(error) => error.key(),
+        ReplyError::Persona(error) => error.key(),
         ReplyError::Host(error) => error.key(),
         ReplyError::Clients(error) => error.key(),
         ReplyError::Services(error) => error.key(),
@@ -662,7 +672,7 @@ async fn show_fixture(port: u16, name: &str) -> Result<String, DevError> {
     }
 }
 
-async fn read_text_file(path: &Path) -> Result<String, DevError> {
+pub(crate) async fn read_text_file(path: &Path) -> Result<String, DevError> {
     let owned = path.to_path_buf();
     let unreadable = |message: String| DevError::UnreadableFile {
         path: path.to_path_buf(),
@@ -696,7 +706,7 @@ async fn write_fixture(port: u16, name: String, path: &Path) -> Result<String, D
 }
 
 /// Runs one parsed command. A feature with verbs of its own (engine, scene, director, media
-/// generate, media locate, cast) runs them in its own CLI module.
+/// generate, media locate, cast, persona) runs them in its own CLI module.
 async fn execute(port: u16, command: Command) -> Result<String, DevError> {
     match command {
         Command::Playground => show_playground(port).await,
@@ -733,6 +743,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::MediaGenerate(command) => crate::imagegen::run(port, command).await,
         Command::MediaLocate(command) => crate::locate::cli::run(port, command).await,
         Command::Cast(command) => crate::cast::cli::run(port, command).await,
+        Command::Persona(command) => crate::persona::cli::run(port, command).await,
         Command::Clients => reads::show_clients(port).await,
         Command::ClientShow(client) => reads::show_client(port, &client).await,
         Command::ClientsTimeline(read) => reads::client_timeline(port, &read).await,

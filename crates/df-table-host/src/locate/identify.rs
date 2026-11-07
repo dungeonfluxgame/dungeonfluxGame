@@ -5,12 +5,11 @@ use std::path::Path;
 
 use df_scene_layout::{RegionRef, SceneLayout, SceneRegion};
 
-use super::request::{
-    IdentifyRequest, IdentityOutcome, IdentityRow, LocateError, QuestionCause, TextServiceCause,
-};
+use super::request::{IdentifyRequest, IdentityOutcome, IdentityRow, LocateError, QuestionCause};
 use super::scan::relabel;
-use super::storage::{current_layout, lock_layout_writes, read_picture, write_layout};
+use super::storage::{LAYOUT_WRITES, current_layout, read_picture, write_layout};
 use super::validate::{check_label, check_picture_name};
+use crate::text::TextServiceCause;
 
 /// How sure the model must be, in thousandths, for its match to name a region.
 pub const DEFAULT_MIN_CONFIDENCE_PERMILLE: u16 = 600;
@@ -64,7 +63,7 @@ pub fn store_identification(
     answers: &[df_imagery::identity_question::Identified],
     min_confidence: u16,
 ) -> Result<(SceneLayout, Vec<IdentityRow>), LocateError> {
-    let _writing = lock_layout_writes();
+    let _writing = LAYOUT_WRITES.lock();
     let changed = || LocateError::LayoutChanged {
         picture: picture.to_owned(),
     };
@@ -168,7 +167,7 @@ pub fn identity_request(
         facts: question.facts.clone(),
         output_name: df_imagery::identity_question::OUTPUT_NAME.to_owned(),
         output_schema: question.output_schema.clone(),
-        deadline: crate::text::IDENTITY_DEADLINE,
+        deadline: crate::text::TEXT_DEADLINE,
         images: question
             .pictures
             .iter()
@@ -230,74 +229,17 @@ pub async fn ask_identity(
     prepared: &PreparedIdentity,
     submission: &IdentitySubmission,
 ) -> Result<IdentityAnswer, LocateError> {
-    use df_ai::text::TextOutcome;
-    use df_ai::text_attempts::Submission;
-    use df_imagery::identity_question::read_answer;
     let IdentitySubmission { key, request } = submission;
-    let submitted = text
-        .submit(key, request)
-        .await
-        .map_err(|error| text_service(TextServiceCause::Refused, Some(format!("{error:?}"))))?;
-    match submitted {
-        Submission::Candidate { answer, .. } => {
-            qualify_candidate(text, key, request, &answer, prepared).await
-        }
-        Submission::Settled {
-            outcome: TextOutcome::Answered(answer),
-            replayed,
-            ..
-        } => read_answer(&answer, &prepared.question)
-            .map(|found| IdentityAnswer { found, replayed })
-            .map_err(|error| {
-                text_service(TextServiceCause::ReplayRefused, Some(error.to_string()))
-            }),
-        Submission::Settled { outcome, .. } => Err(text_service(
-            TextServiceCause::NoAnswer,
-            Some(format!("{outcome:?}")),
-        )),
-        Submission::Rejected { .. } => Err(text_service(TextServiceCause::RejectedBefore, None)),
-        Submission::InFlight => Err(text_service(TextServiceCause::InFlight, None)),
-        Submission::Unknown => Err(text_service(TextServiceCause::Lost, None)),
-        Submission::Cancelled => Err(text_service(TextServiceCause::Cancelled, None)),
-    }
-}
-
-/// Checks a fresh answer with the imagery API and tells the text service whether to keep it.
-async fn qualify_candidate(
-    text: &crate::text::TextRuntime,
-    key: &df_ai::text_attempts::OperationKey,
-    request: &df_ai::text::TextRequest,
-    answer: &serde_json::Value,
-    prepared: &PreparedIdentity,
-) -> Result<IdentityAnswer, LocateError> {
-    use df_ai::text_attempts::{Qualification, Verdict};
-    use df_imagery::identity_question::read_answer;
-    match read_answer(answer, &prepared.question) {
-        Ok(found) => match text
-            .service()
-            .qualify(key, request, Verdict::Accepted)
-            .await
-        {
-            Ok(Qualification::Qualified) => Ok(IdentityAnswer {
-                found,
-                replayed: false,
-            }),
-            other => Err(text_service(
-                TextServiceCause::NotKept,
-                Some(format!("{other:?}")),
-            )),
-        },
-        Err(error) => {
-            // The rejection only stops this answer from being reused; the error below reports
-            // the failure either way, and the service records the verdict event.
-            let _ = text
-                .service()
-                .qualify(key, request, Verdict::Rejected)
-                .await;
-            Err(text_service(
-                TextServiceCause::AnswerRefused,
-                Some(error.to_string()),
-            ))
-        }
-    }
+    text.ask(key, request, |answer| {
+        df_imagery::identity_question::read_answer(answer, &prepared.question)
+    })
+    .await
+    .map(|asked| IdentityAnswer {
+        found: asked.value,
+        replayed: asked.replayed,
+    })
+    .map_err(|error| {
+        let (cause, detail) = error.service_cause();
+        text_service(cause, detail)
+    })
 }

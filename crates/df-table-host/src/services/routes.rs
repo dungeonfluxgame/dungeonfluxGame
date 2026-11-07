@@ -61,6 +61,8 @@ impl ServicesRoutes {
                 backend: text.backend,
                 profile: text.profile,
                 identity_model: text.identity_model,
+                persona_model: text.persona_model,
+                persona_profile: text.persona_profile,
                 configured: text.configured,
                 missing: text.missing.map(str::to_owned),
                 attempts_kept: count(text.attempts_kept),
@@ -120,6 +122,10 @@ pub fn router_with(
         .route(path::SERVICES, get(services))
         .with_state(state)
         .merge(crate::imagegen::router_with(Arc::clone(&app), generator))
+        .merge(crate::persona::router_with(
+            Arc::clone(&app),
+            Arc::clone(&text),
+        ))
         .merge(crate::locate::router_with(app, text))
 }
 

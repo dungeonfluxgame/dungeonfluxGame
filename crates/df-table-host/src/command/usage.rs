@@ -10,6 +10,12 @@ use df_playground::limits::{
 use super::media_generate::MEDIA_GENERATE_USAGE;
 use crate::cast::cli::{CAMERA_ON_USAGE, CAST_USAGE, CUE_USAGE};
 use crate::locate::cli::MEDIA_LOCATE_USAGE;
+use crate::persona::cli::{
+    GUIDANCE_OPTIONS, PERSONA_ADD_USAGE, PERSONA_ASK_USAGE, PERSONA_BACKFILL_USAGE,
+    PERSONA_BACKFILLS_USAGE, PERSONA_BEHAVIOR_USAGE, PERSONA_COVERAGE_USAGE, PERSONA_DROP_USAGE,
+    PERSONA_EDIT_USAGE, PERSONA_GENERATE_USAGE, PERSONA_REMOVE_USAGE, PERSONA_SAY_USAGE,
+    PERSONA_SECRET_USAGE, PERSONA_SET_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_USAGE,
+};
 use crate::services::SERVICES_USAGE;
 
 pub(super) const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
@@ -216,6 +222,46 @@ pub fn usage_text() -> String {
          camera framing and draw, why, and how long it was meant to last\n\
          \n  {SERVICES_USAGE}\n      how the text, image and locate services are set up and stand \
          (backend, model, whether a key is\n      present, never the key)\n\
+         \n  {PERSONA_USAGE}\
+         \n      the personas of characters (who each is, their job, how they talk, what they \
+         keep back), one file each in the playground's personas folder, linked to a \
+         character of the shown scene by equal text: list them; show one (public is \
+         what any listener may know, owner also shows the private side, for the \
+         operator only); write one from a JSON file (replaces the same id); or change \
+         one with typed edits, applied all together or not at all:\
+         \n      {PERSONA_SET_USAGE}   (display_name, job, speech_style, backstory, \
+         private_backstory)\
+         \n      {PERSONA_ADD_USAGE}   {PERSONA_DROP_USAGE}   (personality, motivations, goals, \
+         needs, fears, boundaries)\
+         \n      {PERSONA_SECRET_USAGE}\
+         \n      {PERSONA_BEHAVIOR_USAGE}\
+         \n      {PERSONA_TRIGGER_USAGE}\
+         \n      {PERSONA_EDIT_USAGE}   applies a file {{\"edits\": [...]}} of any edits. Quote \
+         a value with spaces. A trigger or a reveal condition is a plain statement a \
+         model judges, never a keyword.\
+         \n      {PERSONA_GENERATE_USAGE}   has the text service write the persona of one named \
+         character of the shown scene, or of all of them at once, keeping a stored \
+         persona unless overwrite=true.\
+         \n      {PERSONA_SAY_USAGE}   has it word one line from a character's persona and cues \
+         it on the scene (a dev tool: it reports the behavior, triggers and secrets the \
+         model says the line used; the production engine, not the model, will own \
+         secret reveals).\
+         \n      {PERSONA_ASK_USAGE}   puts a question to a character: the text service judges \
+         whether the persona holds enough to answer, fills what it lacks by adding \
+         detail only (recorded in personas/<id>.backfills.json; a failed backfill still \
+         gets an answer), and the character answers in character, cued on the scene.\
+         \n      {PERSONA_COVERAGE_USAGE}   only judges. {PERSONA_BACKFILL_USAGE}   only fills \
+         the named gaps (fields: backstory, private_backstory, personality, \
+         motivations, goals, needs, fears, boundaries, secrets, behaviors, triggers). \
+         {PERSONA_BACKFILLS_USAGE}   lists what was added.\
+         \n      The guidance options, for generate, ask, coverage and backfill: \
+         {GUIDANCE_OPTIONS}. Keys given here replace the file's; hook, thread, \
+         establish and avoid repeat; without guidance a backfill is a generic story \
+         detail.\
+         \n      model=<name> asks that model instead of the default (gpt-6-luna, or \
+         DF_TEXT_PERSONA_MODEL); see services for the profile each uses.\
+         \n      {PERSONA_REMOVE_USAGE}   deletes one (its backfill record stays, as history). \
+         scene cast shows each cast member's job.\n\
          \n  {WAIT_USAGE}\n      pause here; stage scenes over time in a script or a session\n\
          \n  {FIXTURES_USAGE}\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\

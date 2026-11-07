@@ -7,12 +7,12 @@
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 
 use axum::body::Bytes;
 use axum::http::StatusCode;
 use tokio::sync::mpsc::Receiver;
 
+use crate::blocking::WriteLock;
 use crate::media_ingest::{IngestError, MediaLimits, UploadKind, check_content, check_room};
 use crate::media_library::media_entries;
 use crate::media_upload::EnvelopeParser;
@@ -20,7 +20,7 @@ use crate::playground::FileError;
 
 /// Held while the library's files are counted and a new one is renamed into place. One lock for
 /// the process: the library is one directory, and the dev API is a loopback tool.
-static LIBRARY_WRITE: Mutex<()> = Mutex::new(());
+static LIBRARY_WRITE: WriteLock = WriteLock::new();
 
 /// Why an add did not finish.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,7 +135,7 @@ fn publish(
     name: &str,
     limits: &MediaLimits,
 ) -> Result<(), AddError> {
-    let _writing = LIBRARY_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+    let _writing = LIBRARY_WRITE.lock();
     let existing = media_entries(directory).map_err(AddError::File)?;
     check_room(&existing, name, limits).map_err(AddError::Ingest)?;
     std::fs::rename(staged, directory.join(name)).map_err(|error| AddError::File(error.into()))

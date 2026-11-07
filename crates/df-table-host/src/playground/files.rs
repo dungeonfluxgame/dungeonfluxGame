@@ -22,6 +22,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use super::audit::playground_line;
+use crate::blocking::run_blocking;
 use crate::limits::{MAXIMUM_ASSET_FILE_BYTES, MAXIMUM_PACKAGE_FILE_BYTES};
 use crate::media_library::read_in_chunks;
 use crate::state::AppState;
@@ -133,16 +134,6 @@ impl From<std::io::Error> for FileError {
             kind => Self::Io(kind),
         }
     }
-}
-
-/// Runs blocking file work on the blocking pool; a task that stopped without an answer is
-/// `FileError::Stopped`.
-pub(crate) async fn run_file_task<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, FileError> + Send + 'static,
-) -> Result<T, FileError> {
-    tokio::task::spawn_blocking(work)
-        .await
-        .unwrap_or(Err(FileError::Stopped))
 }
 
 pub use df_playground::media::is_plain_file_name;
@@ -372,7 +363,12 @@ async fn blocking(
     name: Option<&str>,
     work: impl FnOnce() -> Result<(Vec<u8>, &'static str), FileError> + Send + 'static,
 ) -> Response {
-    respond(state, kind, name, run_file_task(work).await)
+    respond(
+        state,
+        kind,
+        name,
+        run_blocking(work, FileError::Stopped).await,
+    )
 }
 
 async fn asset(state: &AppState, kind: ServedFileKind, name: &'static str) -> Response {
@@ -423,7 +419,11 @@ pub(super) async fn package_file(
     let files = state.playground().files().clone();
     let opened = {
         let name = name.clone();
-        run_file_task(move || open_package_file(&files.package, &name)).await
+        run_blocking(
+            move || open_package_file(&files.package, &name),
+            FileError::Stopped,
+        )
+        .await
     };
     match opened {
         Ok((file, length)) => {
@@ -477,7 +477,7 @@ pub(super) async fn revision_text(State(state): State<Arc<AppState>>) -> Respons
 pub(super) async fn current_fixture_names(
     files: PlaygroundFiles,
 ) -> Result<Vec<String>, FileError> {
-    run_file_task(move || fixture_names(&files)).await
+    run_blocking(move || fixture_names(&files), FileError::Stopped).await
 }
 
 #[cfg(test)]

@@ -47,7 +47,6 @@ pub use self::clients::{ClientNameError, ClientTimelineReply, ClientsError, chec
 pub use self::controls_state::{
     ControlsChangeError, ControlsRefusal, PlaygroundState, SceneChangeError,
 };
-pub(crate) use self::files::run_file_task;
 use self::files::{FIXTURE_DIRECTORY, FIXTURE_EXTENSIONS, current_fixture_names};
 pub use self::files::{
     FileError, PlaygroundFiles, ServedFileKind, content_type, fixture_names, is_plain_file_name,
@@ -55,6 +54,7 @@ pub use self::files::{
 };
 pub use self::request::BodyReadCause;
 pub(crate) use self::request::{ChangeReply, PlaygroundChangeError};
+use crate::blocking::run_blocking;
 use crate::dev_http::{BodyError, parse_body, reply};
 use crate::limits::MAXIMUM_FIXTURE_NAME_LENGTH;
 use crate::media_library::{media_directory, media_entries, media_problem};
@@ -172,7 +172,7 @@ pub(crate) fn reconcile_fixtures(state: &AppState) -> Result<Option<ControlsRepl
 async fn reconcile_after_files_changed(state: &Arc<AppState>) -> Result<(), FileError> {
     state.playground().fixture_files_changed();
     let worker = Arc::clone(state);
-    run_file_task(move || reconcile_fixtures(&worker))
+    run_blocking(move || reconcile_fixtures(&worker), FileError::Stopped)
         .await
         .map(|_| ())
 }
@@ -315,8 +315,11 @@ async fn read_fixture(
     name: String,
 ) -> Result<Fixture, SceneApplyError> {
     let read_name = name.clone();
-    let bytes =
-        run_file_task(move || read_file(&directory, &read_name, &FIXTURE_EXTENSIONS)).await?;
+    let bytes = run_blocking(
+        move || read_file(&directory, &read_name, &FIXTURE_EXTENSIONS),
+        FileError::Stopped,
+    )
+    .await?;
     Fixture::parse(&String::from_utf8_lossy(&bytes)).map_err(|error| SceneApplyError {
         status: StatusCode::BAD_REQUEST,
         message: fixture_text_problem(&name, &error),
@@ -460,7 +463,7 @@ pub(crate) async fn apply_scene_change(
     };
     let change = with_backdrop_layout(state, change).await;
     let media_directory = media_directory(state.playground().files());
-    let library = run_file_task(move || media_entries(&media_directory))
+    let library = run_blocking(move || media_entries(&media_directory), FileError::Stopped)
         .await
         .map_err(|error| {
             state.record_line(file_reject_line(
@@ -600,7 +603,11 @@ async fn write_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Respo
     let directory = state.playground().files().assets().join(FIXTURE_DIRECTORY);
     let bytes = request.text.len();
     let name = file_name.clone();
-    let written = run_file_task(move || write_fixture_file(&directory, &name, &request.text)).await;
+    let written = run_blocking(
+        move || write_fixture_file(&directory, &name, &request.text),
+        FileError::Stopped,
+    )
+    .await;
     if let Err(error) = written {
         return refuse_fixture_file(&state, &file_name, error);
     }
@@ -634,8 +641,11 @@ async fn remove_fixture(State(state): State<Arc<AppState>>, body: Bytes) -> Resp
         .assets()
         .join(FIXTURE_DIRECTORY)
         .join(&file_name);
-    let removed =
-        run_file_task(move || std::fs::remove_file(fixture_path).map_err(FileError::from)).await;
+    let removed = run_blocking(
+        move || std::fs::remove_file(fixture_path).map_err(FileError::from),
+        FileError::Stopped,
+    )
+    .await;
     match removed {
         Ok(()) => {}
         Err(FileError::NotFound) => {

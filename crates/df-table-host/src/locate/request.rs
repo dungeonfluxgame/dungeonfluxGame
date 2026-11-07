@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use super::limits::MAXIMUM_PICTURE_NAME_BYTES;
 use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::text::TextServiceCause;
 
 /// The answer of a locate route: its value, or why it was refused.
 pub type LocateReply<T> = DevReply<T, LocateError>;
@@ -368,80 +369,6 @@ impl From<IdentifyError> for QuestionCause {
             IdentifyError::Picture => Self::Picture,
             IdentifyError::Malformed => Self::Malformed,
         }
-    }
-}
-
-/// Why the text service gave no usable answer to an identity question.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TextServiceCause {
-    /// It refused the question.
-    Refused,
-    /// It did not keep a checked answer.
-    NotKept,
-    /// Its answer was not one the imagery API accepts; the answer was rejected.
-    AnswerRefused,
-    /// It replayed an answer the imagery API refuses.
-    ReplayRefused,
-    /// It settled the question without an answer.
-    NoAnswer,
-    /// It rejected this exact question's answer before and does not ask again.
-    RejectedBefore,
-    /// It is still answering this question.
-    InFlight,
-    /// It sent the question but lost its result; it is never resent.
-    Lost,
-    Cancelled,
-}
-
-impl TextServiceCause {
-    pub const ALL: [Self; 9] = [
-        Self::Refused,
-        Self::NotKept,
-        Self::AnswerRefused,
-        Self::ReplayRefused,
-        Self::NoAnswer,
-        Self::RejectedBefore,
-        Self::InFlight,
-        Self::Lost,
-        Self::Cancelled,
-    ];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Refused => "refused",
-            Self::NotKept => "not_kept",
-            Self::AnswerRefused => "answer_refused",
-            Self::ReplayRefused => "replay_refused",
-            Self::NoAnswer => "no_answer",
-            Self::RejectedBefore => "rejected_before",
-            Self::InFlight => "in_flight",
-            Self::Lost => "lost",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|cause| cause.key() == key)
-    }
-}
-
-impl fmt::Display for TextServiceCause {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Refused => "refused the question",
-            Self::NotKept => "did not keep the answer",
-            Self::AnswerRefused => "gave an answer the imagery API refused; it was rejected",
-            Self::ReplayRefused => "replayed an answer the imagery API refuses",
-            Self::NoAnswer => "gave no answer",
-            Self::RejectedBefore => concat!(
-                "rejected this exact question's answer before and does not ask again; ",
-                "change the characters or rescan"
-            ),
-            Self::InFlight => "is still answering this question; try again shortly",
-            Self::Lost => "sent this question but its result was lost; it is never resent",
-            Self::Cancelled => "cancelled the question",
-        })
     }
 }
 

@@ -6,3 +6,8 @@ license.workspace = true
 
 [dependencies]
 df-types = { path = "../df-types" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+
+[dev-dependencies]
+df-scene-layout = { path = "../df-scene-layout" }

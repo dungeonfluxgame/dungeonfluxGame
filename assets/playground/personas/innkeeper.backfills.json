@@ -1,0 +1,41 @@
+[
+  {
+    "sequence": 1,
+    "at_ms": 1794010476268,
+    "question": "Where did you grow up and what was your childhood like?",
+    "gaps": [
+      {
+        "field": "backstory",
+        "topic": "Where she grew up"
+      },
+      {
+        "field": "backstory",
+        "topic": "What her childhood was like"
+      }
+    ],
+    "edits": [
+      {
+        "op": "append_text",
+        "field": "backstory",
+        "text": "She grew up above the Ember Roads inn. Her childhood mixed kitchen chores with games in the yard; she learned sums by counting guests' change and bargaining by listening at the bar."
+      }
+    ],
+    "guidance": {
+      "arc": "the guild road",
+      "phase": null,
+      "beat": null,
+      "hooks": [
+        "her missing brother"
+      ],
+      "threads": [],
+      "must_establish": [],
+      "must_avoid": [
+        "the guild is innocent"
+      ],
+      "tone": null,
+      "latitude": "guided",
+      "note": null
+    },
+    "profile": "codex"
+  }
+]

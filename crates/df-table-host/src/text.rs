@@ -16,20 +16,23 @@
 //! (the signed-in Codex CLI) hold only their own wire shapes. `DF_TEXT_BACKEND` picks one:
 //! `responses` or `codex`; without it, Responses when an OpenAI key is set, else Codex.
 
+mod ask;
+mod cause;
 pub mod codex_text;
 mod limits;
+mod model;
 pub mod responses_text;
 
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use df_ai::text::{
     TextBackend, TextEvent, TextObserver, TextProfile, TextReceipt, TextRequest, TextService,
     TextUsage,
 };
 use df_ai::text_attempts::{
-    AttemptOwner, AttemptScope, Basis, DurableTextError, DurableTextService, OperationKey,
-    Submission, TextAuthority,
+    AttemptOwner, AttemptScope, Basis, DurableTextService, OperationKey, TextAuthority,
 };
 use df_ai::text_fixture::MemoryAttemptStore;
 use serde::{Deserialize, Serialize};
@@ -38,7 +41,10 @@ use self::codex_text::{CodexRoute, CodexTextBackend};
 use self::responses_text::{ResponsesRoute, ResponsesTextBackend};
 use crate::environment;
 
-pub use self::limits::IDENTITY_DEADLINE;
+pub use self::ask::{Asked, TextAskError};
+pub use self::cause::{ServiceReason, TextServiceCause};
+pub use self::limits::{MAXIMUM_MODEL_ROUTES, TEXT_DEADLINE};
+pub use self::model::{MAXIMUM_MODEL_BYTES, ModelCause, check_model};
 
 /// The environment variable that picks the backend: `responses` or `codex`.
 pub const BACKEND_VARIABLE: &str = "DF_TEXT_BACKEND";
@@ -46,6 +52,10 @@ pub const BACKEND_VARIABLE: &str = "DF_TEXT_BACKEND";
 pub const KEY_VARIABLES: [&str; 2] = ["DF_OPENAI_API_KEY", "OPENAI_API_KEY"];
 /// The environment variable that picks the model for character identity.
 pub const IDENTITY_MODEL_VARIABLE: &str = "DF_TEXT_IDENTITY_MODEL";
+/// The environment variable that picks the model for persona calls only; without it they use
+/// [`DEFAULT_IDENTITY_MODEL`] (GPT-6 Luna) on either backend. A request can still name its own
+/// model, such as a smarter one.
+pub const PERSONA_MODEL_VARIABLE: &str = "DF_TEXT_PERSONA_MODEL";
 /// The cheap vision model the project prices (`content/pricing.json`): GPT-6 Luna. Responses uses
 /// it unless `IDENTITY_MODEL_VARIABLE` says otherwise; Codex uses its own default unless told.
 pub const DEFAULT_IDENTITY_MODEL: &str = "gpt-6-luna";
@@ -108,6 +118,9 @@ impl BackendKind {
 enum TextAdapter {
     Responses(ResponsesTextBackend),
     Codex(CodexTextBackend),
+    /// A script of answers, for the host's tests.
+    #[cfg(test)]
+    Scripted(Arc<df_ai::text_fixture::ScriptedBackend>),
 }
 
 /// The host's backend: one adapter, and the count of its calls under way.
@@ -140,14 +153,20 @@ impl TextBackend for HostTextBackend {
         match &self.adapter {
             TextAdapter::Responses(backend) => backend.complete(request).await,
             TextAdapter::Codex(backend) => backend.complete(request).await,
+            #[cfg(test)]
+            TextAdapter::Scripted(backend) => backend.complete(request).await,
         }
     }
 }
 
 /// Which backend a runtime is built over, and with what route (none: unconfigured).
+#[derive(Clone)]
 pub enum BackendChoice {
     Responses(Option<ResponsesRoute>),
     Codex(Option<CodexRoute>),
+    /// A script of answers and the model it is asked for, for the host's tests.
+    #[cfg(test)]
+    Scripted(Arc<df_ai::text_fixture::ScriptedBackend>, Option<String>),
 }
 
 impl BackendChoice {
@@ -174,6 +193,22 @@ impl BackendChoice {
         }
     }
 
+    /// This choice over `model` instead of its own: the same backend, key and executable.
+    fn with_model(&self, model: &str) -> Self {
+        match self {
+            Self::Responses(route) => Self::Responses(route.as_ref().map(|route| ResponsesRoute {
+                model: model.to_owned(),
+                key: route.key.clone(),
+            })),
+            Self::Codex(route) => Self::Codex(route.as_ref().map(|route| CodexRoute {
+                model: Some(model.to_owned()),
+                ..route.clone()
+            })),
+            #[cfg(test)]
+            Self::Scripted(script, _) => Self::Scripted(Arc::clone(script), Some(model.to_owned())),
+        }
+    }
+
     /// The profile label requests go under: backend and model, so answers of different models
     /// never replay for one another.
     fn profile_label(&self) -> String {
@@ -188,6 +223,11 @@ impl BackendChoice {
                 Some(model) => format!("codex:{model}"),
                 None => "codex".to_owned(),
             },
+            #[cfg(test)]
+            Self::Scripted(_, model) => match model {
+                Some(model) => format!("scripted:{model}"),
+                None => "scripted".to_owned(),
+            },
         }
     }
 
@@ -195,6 +235,8 @@ impl BackendChoice {
         match self {
             Self::Responses(route) => route.is_some(),
             Self::Codex(route) => route.is_some(),
+            #[cfg(test)]
+            Self::Scripted(..) => true,
         }
     }
 
@@ -202,6 +244,8 @@ impl BackendChoice {
         match self {
             Self::Responses(_) => BackendKind::Responses,
             Self::Codex(_) => BackendKind::Codex,
+            #[cfg(test)]
+            Self::Scripted(..) => BackendKind::Codex,
         }
     }
 
@@ -215,6 +259,8 @@ impl BackendChoice {
                     .to_owned(),
             ),
             Self::Codex(route) => route.as_ref().and_then(|route| route.model.clone()),
+            #[cfg(test)]
+            Self::Scripted(_, model) => model.clone(),
         }
     }
 
@@ -223,6 +269,8 @@ impl BackendChoice {
         match self {
             Self::Responses(_) => KEY_VARIABLES[1],
             Self::Codex(_) => codex_text::EXECUTABLE_VARIABLE,
+            #[cfg(test)]
+            Self::Scripted(..) => "",
         }
     }
 
@@ -240,6 +288,8 @@ impl BackendChoice {
                 "no Codex executable: set {} to the signed-in codex.exe, or put codex on the path",
                 codex_text::EXECUTABLE_VARIABLE
             ),
+            #[cfg(test)]
+            Self::Scripted(..) => String::new(),
         }
     }
 
@@ -251,6 +301,8 @@ impl BackendChoice {
         let adapter = match self {
             Self::Responses(route) => TextAdapter::Responses(ResponsesTextBackend::new(route)),
             Self::Codex(route) => TextAdapter::Codex(CodexTextBackend::new(route, record)),
+            #[cfg(test)]
+            Self::Scripted(script, _) => TextAdapter::Scripted(script),
         };
         HostTextBackend { adapter, in_flight }
     }
@@ -319,17 +371,63 @@ pub type HostTextService = DurableTextService<
     LineObserver,
 >;
 
-/// The composed text surface of one host run.
-pub struct TextRuntime {
+/// One text service over one model: the durable service, the profile its requests are made under
+/// and the recorder of its `TEXT started` lines. `ask` and `submit` are in `ask`.
+pub struct TextRoute {
     service: HostTextService,
-    identity_profile: TextProfile,
+    profile: TextProfile,
+    record: Arc<dyn Fn(String) + Send + Sync>,
+}
+
+impl TextRoute {
+    /// The profile (backend and model) this route's requests are made under.
+    pub fn profile(&self) -> &TextProfile {
+        &self.profile
+    }
+}
+
+/// What every route of a runtime shares: the recorder, the count of calls under way, and the
+/// store, authority and owner, so a route for another model is the same service over another
+/// adapter.
+struct RouteParts {
+    record: Arc<dyn Fn(String) + Send + Sync>,
+    in_flight: Arc<AtomicUsize>,
+    store: Arc<MemoryAttemptStore>,
+    authority: Arc<ProcessAuthority>,
+    owner: AttemptOwner,
+}
+
+impl RouteParts {
+    fn route(&self, choice: BackendChoice, profile: TextProfile) -> TextRoute {
+        let backend = choice.into_backend(Arc::clone(&self.record), Arc::clone(&self.in_flight));
+        let service = DurableTextService::new(
+            TextService::new(backend).with_observer(LineObserver {
+                record: Arc::clone(&self.record),
+            }),
+            Arc::clone(&self.store),
+            Arc::clone(&self.authority),
+            self.owner,
+        );
+        TextRoute {
+            service,
+            profile,
+            record: Arc::clone(&self.record),
+        }
+    }
+}
+
+/// The composed text surface of one host run: a route over the backend's default model, and one
+/// route for each other model a request names, built on its first use.
+pub struct TextRuntime {
+    default_route: Arc<TextRoute>,
+    other_routes: Mutex<HashMap<String, Arc<TextRoute>>>,
+    choice: BackendChoice,
+    persona_model: Option<String>,
     missing: Option<String>,
     kind: BackendKind,
     identity_model: Option<String>,
     missing_variable: Option<&'static str>,
-    store: Arc<MemoryAttemptStore>,
-    in_flight: Arc<AtomicUsize>,
-    record: Arc<dyn Fn(String) + Send + Sync>,
+    parts: RouteParts,
 }
 
 /// What a runtime is built over and how it stands, for the services report. It never holds a key.
@@ -338,6 +436,11 @@ pub struct TextStatus {
     pub backend: BackendKind,
     pub profile: String,
     pub identity_model: Option<String>,
+    /// The model persona calls use instead of the default, when `DF_TEXT_PERSONA_MODEL` says one.
+    pub persona_model: Option<String>,
+    /// The profile persona calls go under when they name no model: the persona model's, or the
+    /// default's. None when the persona model is not a valid model name (persona calls refuse).
+    pub persona_profile: Option<String>,
     pub configured: bool,
     /// The variable to set when the backend is not configured.
     pub missing: Option<&'static str>,
@@ -359,9 +462,12 @@ fn owner_token() -> AttemptOwner {
 }
 
 impl TextRuntime {
-    /// The text surface over the backend this process's environment chooses.
+    /// The text surface over the backend this process's environment chooses, with the persona
+    /// model this process's environment names, or GPT-6 Luna when it names none.
     pub fn from_environment(record: Arc<dyn Fn(String) + Send + Sync>) -> Self {
-        Self::new(BackendChoice::from_environment(), record)
+        let persona_model = environment::text(PERSONA_MODEL_VARIABLE)
+            .unwrap_or_else(|| DEFAULT_IDENTITY_MODEL.to_owned());
+        Self::new(BackendChoice::from_environment(), record).with_persona_model(Some(persona_model))
     }
 
     /// The text surface over `choice`.
@@ -382,70 +488,101 @@ impl TextRuntime {
         let owner = owner_token();
         let mut basis = [1_u8; 32];
         basis[..16].copy_from_slice(owner.as_bytes());
-        let (store, in_flight) = (
-            Arc::new(MemoryAttemptStore::default()),
-            Arc::new(AtomicUsize::new(0)),
-        );
-        let backend = choice.into_backend(Arc::clone(&record), Arc::clone(&in_flight));
-        let service = DurableTextService::new(
-            TextService::new(backend).with_observer(LineObserver {
-                record: Arc::clone(&record),
-            }),
-            Arc::clone(&store),
-            Arc::new(ProcessAuthority { basis }),
+        let parts = RouteParts {
+            record,
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            store: Arc::new(MemoryAttemptStore::default()),
+            authority: Arc::new(ProcessAuthority { basis }),
             owner,
-        );
+        };
+        let default_route = Arc::new(parts.route(choice.clone(), profile));
         Self {
-            service,
-            identity_profile: profile,
+            default_route,
+            other_routes: Mutex::new(HashMap::new()),
+            choice,
+            persona_model: None,
             missing,
             kind,
             identity_model,
             missing_variable,
-            store,
-            in_flight,
-            record,
+            parts,
         }
     }
 
-    /// Submits `request` under `key` to the service, after one `TEXT started` line naming the
-    /// operation and its deadline. Every host feature submits through here.
-    pub async fn submit(
-        &self,
-        key: &OperationKey,
-        request: &TextRequest,
-    ) -> Result<Submission, DurableTextError> {
-        (self.record)(format!(
-            "TEXT started purpose={} profile={} scope={} operation={} deadline_ms={}",
-            request.purpose.key(),
-            request.profile.as_str(),
-            key.scope().as_str(),
-            key.operation(),
-            request.deadline.as_millis()
-        ));
-        self.service.submit(key, request).await
+    /// This runtime with `model` as the model persona calls use unless they name their own.
+    #[must_use]
+    pub fn with_persona_model(mut self, model: Option<String>) -> Self {
+        self.persona_model = model;
+        self
+    }
+
+    /// The profile label of requests over `model`, when `model` is a valid model name: the
+    /// backend's label with the model in it, which `TextProfile` accepts for any name
+    /// [`check_model`] does.
+    fn model_profile(&self, model: &str) -> Result<TextProfile, ModelCause> {
+        check_model(model)?;
+        TextProfile::new(&self.choice.with_model(model).profile_label())
+            .map_err(|_| ModelCause::TooLong)
+    }
+
+    /// The route over `model`, built the first time it is asked for. A route is the same service
+    /// over another model, under its own profile, so its answers never replay for another
+    /// model's.
+    pub fn route_for_model(&self, model: &str) -> Result<Arc<TextRoute>, ModelCause> {
+        let profile = self.model_profile(model)?;
+        let mut routes = self
+            .other_routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(route) = routes.get(model) {
+            return Ok(Arc::clone(route));
+        }
+        if routes.len() >= MAXIMUM_MODEL_ROUTES {
+            return Err(ModelCause::TooManyModels);
+        }
+        let route = Arc::new(self.parts.route(self.choice.with_model(model), profile));
+        routes.insert(model.to_owned(), Arc::clone(&route));
+        Ok(route)
+    }
+
+    /// The route a persona call goes through: `requested` model if it names one, else the
+    /// persona model, else the default.
+    pub fn persona_route(&self, requested: Option<&str>) -> Result<Arc<TextRoute>, ModelCause> {
+        match requested.or(self.persona_model.as_deref()) {
+            Some(model) => self.route_for_model(model),
+            None => Ok(Arc::clone(&self.default_route)),
+        }
     }
 
     /// The backend, its profile and how it stands now.
     pub fn status(&self) -> TextStatus {
+        let persona_profile = match self.persona_model.as_deref() {
+            Some(model) => self
+                .model_profile(model)
+                .ok()
+                .map(|profile| profile.as_str().to_owned()),
+            None => Some(self.default_route.profile.as_str().to_owned()),
+        };
         TextStatus {
             backend: self.kind,
-            profile: self.identity_profile.as_str().to_owned(),
+            profile: self.default_route.profile.as_str().to_owned(),
             identity_model: self.identity_model.clone(),
+            persona_model: self.persona_model.clone(),
+            persona_profile,
             configured: self.missing.is_none(),
             missing: self.missing_variable,
-            attempts_kept: self.store.len(),
-            in_flight: self.in_flight.load(Ordering::Relaxed),
+            attempts_kept: self.parts.store.len(),
+            in_flight: self.parts.in_flight.load(Ordering::Relaxed),
         }
     }
 
     pub fn service(&self) -> &HostTextService {
-        &self.service
+        &self.default_route.service
     }
 
     /// The profile (backend and model) character-identity requests are made under.
     pub fn identity_profile(&self) -> &TextProfile {
-        &self.identity_profile
+        &self.default_route.profile
     }
 
     /// What to set before asking, when the chosen backend is not configured.

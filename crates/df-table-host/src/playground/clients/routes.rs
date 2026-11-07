@@ -15,9 +15,10 @@ use df_playground::path::CLIENT_HEADER;
 use df_playground::timeline::{ClientTimeline, TimelineQuery};
 
 use super::super::files::revision;
-use super::super::{done, refused, run_file_task};
+use super::super::{FileError, done, refused};
 use super::request::ClientsError;
 use super::{check_client_name, checked_client};
+use crate::blocking::run_blocking;
 use crate::dev_http::{parse_body, reply};
 use crate::limits::MAXIMUM_REPORT_BYTES;
 use crate::state::AppState;
@@ -123,7 +124,7 @@ pub(in crate::playground) async fn receive_report(
     if let Some(has) = recorded.check_revision {
         let files = playground.files().clone();
         // A revision the host cannot read is said by the files routes; this only compares.
-        if let Ok(host) = run_file_task(move || revision(&files)).await
+        if let Ok(host) = run_blocking(move || revision(&files), FileError::Stopped).await
             && host != has
         {
             state.record_line(format!(

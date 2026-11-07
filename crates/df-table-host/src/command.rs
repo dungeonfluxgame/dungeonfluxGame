@@ -41,7 +41,7 @@ pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
 /// The top-level verbs `parse` matches by name. The verbs of `engine::VERBS`,
 /// `scene_builder::cli::VERBS` and `director::cli::VERBS` are matched after these, so no verb may
 /// be in two of the tables.
-pub const VERBS: [&str; 25] = [
+pub const VERBS: [&str; 26] = [
     "spawn",
     "set",
     "move",
@@ -63,6 +63,7 @@ pub const VERBS: [&str; 25] = [
     "host",
     "frame",
     "services",
+    "persona",
     "fixtures",
     "fixture",
     "script",
@@ -129,6 +130,8 @@ pub enum Command {
     MediaLocate(MediaLocate),
     /// The characters of the shown scene: list them, cue one, or frame one.
     Cast(crate::cast::CastCommand),
+    /// The personas of characters: list, show, write, set a field or remove.
+    Persona(crate::persona::PersonaCommand),
     /// What each open page says it is showing and playing.
     Clients,
     /// What one open page says it is showing and playing.
@@ -495,6 +498,7 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "host" => host::host(rest),
         "frame" => host::frame(rest),
         "services" => crate::services::parse(rest).map(Command::Services),
+        "persona" => crate::persona::parse(rest).map(Command::Persona),
         "reload" => Ok(Command::Reload),
         "playground" => playground::playground(rest),
         "scene" => scene::scene(rest),

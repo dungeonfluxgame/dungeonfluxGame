@@ -459,3 +459,126 @@ fn the_responses_exchange_is_named_for_its_provider_line() {
         "{label}"
     );
 }
+
+fn responses_runtime() -> TextRuntime {
+    let route = super::responses_text::ResponsesRoute {
+        model: "gpt-6-luna".to_owned(),
+        key: "sk-test-never-shown".to_owned(),
+    };
+    TextRuntime::new(
+        BackendChoice::Responses(Some(route)),
+        Arc::new(|_line: String| {}),
+    )
+}
+
+#[test]
+fn a_persona_call_uses_the_default_model_unless_the_persona_model_or_the_request_says_another() {
+    let runtime = responses_runtime();
+    let profile = |route: std::sync::Arc<super::TextRoute>| route.profile().as_str().to_owned();
+    assert_eq!(
+        profile(runtime.persona_route(None).unwrap()),
+        "responses:gpt-6-luna"
+    );
+    assert_eq!(
+        profile(runtime.persona_route(Some("gpt-6.1-sol")).unwrap()),
+        "responses:gpt-6.1-sol"
+    );
+    let runtime = runtime.with_persona_model(Some("gpt-6.1-terra".to_owned()));
+    assert_eq!(
+        profile(runtime.persona_route(None).unwrap()),
+        "responses:gpt-6.1-terra"
+    );
+    assert_eq!(
+        profile(runtime.persona_route(Some("gpt-6.1-sol")).unwrap()),
+        "responses:gpt-6.1-sol"
+    );
+    // The identity calls keep the default model.
+    assert_eq!(runtime.identity_profile().as_str(), "responses:gpt-6-luna");
+    let status = runtime.status();
+    assert_eq!(status.persona_model.as_deref(), Some("gpt-6.1-terra"));
+    assert_eq!(
+        status.persona_profile.as_deref(),
+        Some("responses:gpt-6.1-terra")
+    );
+}
+
+#[test]
+fn a_route_for_a_model_is_built_once_and_a_codex_route_names_the_model_in_its_profile() {
+    let runtime = responses_runtime();
+    let first = runtime.route_for_model("gpt-6.1-sol").unwrap();
+    let second = runtime.route_for_model("gpt-6.1-sol").unwrap();
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+    let codex_route = super::codex_text::CodexRoute {
+        executable: std::path::PathBuf::from("codex.exe"),
+        work_root: std::path::PathBuf::from("work"),
+        model: None,
+    };
+    let codex = TextRuntime::new(
+        BackendChoice::Codex(Some(codex_route)),
+        Arc::new(|_line: String| {}),
+    );
+    assert_eq!(
+        codex
+            .persona_route(Some("gpt-6.1-sol"))
+            .unwrap()
+            .profile()
+            .as_str(),
+        "codex:gpt-6.1-sol"
+    );
+    assert_eq!(
+        codex.persona_route(None).unwrap().profile().as_str(),
+        "codex"
+    );
+}
+
+#[test]
+fn a_model_name_that_is_blank_too_long_or_has_a_control_character_is_refused() {
+    use super::{MAXIMUM_MODEL_BYTES, ModelCause};
+    let runtime = responses_runtime();
+    let refused = |model: &str| runtime.persona_route(Some(model)).err();
+    assert_eq!(refused("  "), Some(ModelCause::Blank));
+    assert_eq!(refused(""), Some(ModelCause::Blank));
+    assert_eq!(
+        refused(&"m".repeat(MAXIMUM_MODEL_BYTES + 1)),
+        Some(ModelCause::TooLong)
+    );
+    assert_eq!(refused("gpt\n6"), Some(ModelCause::InvalidCharacter));
+    assert_eq!(refused("gpt 6"), Some(ModelCause::InvalidCharacter));
+    assert_eq!(refused("gpt-6\u{e9}"), Some(ModelCause::InvalidCharacter));
+    assert_eq!(refused("-m"), Some(ModelCause::LeadingDash));
+    for allowed in ["gpt-6.1-sol", "org/model:v2_x", "A1"] {
+        assert!(refused(allowed).is_none(), "{allowed}");
+    }
+    assert!(refused(&"m".repeat(MAXIMUM_MODEL_BYTES)).is_none());
+    let bad = responses_runtime().with_persona_model(Some(String::new()));
+    assert_eq!(bad.status().persona_profile, None);
+    assert!(bad.persona_route(None).is_err());
+    for cause in ModelCause::ALL {
+        assert_eq!(ModelCause::from_key(cause.key()), Some(cause));
+        assert_eq!(serde_json::to_value(cause).unwrap(), json!(cause.key()));
+    }
+}
+
+#[test]
+fn the_routes_for_other_models_are_bounded_and_the_default_model_always_works() {
+    use super::{MAXIMUM_MODEL_ROUTES, ModelCause};
+    let runtime = responses_runtime();
+    for number in 0..MAXIMUM_MODEL_ROUTES {
+        runtime.route_for_model(&format!("model-{number}")).unwrap();
+    }
+    assert!(matches!(
+        runtime.route_for_model("one-too-many"),
+        Err(ModelCause::TooManyModels)
+    ));
+    // A model already served is still served, and the default needs no route.
+    assert!(runtime.route_for_model("model-0").is_ok());
+    assert!(runtime.persona_route(None).is_ok());
+}
+
+#[test]
+fn a_dotted_model_name_makes_a_valid_profile_label_without_loosening_the_label_rule() {
+    let runtime = responses_runtime();
+    let route = runtime.route_for_model("gpt-6.1-sol").unwrap();
+    assert_eq!(route.profile().as_str(), "responses:gpt-6.1-sol");
+    assert!(df_ai::text::TextProfile::new("responses:gpt-6.1-sol").is_ok());
+}

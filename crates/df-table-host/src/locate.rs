@@ -34,7 +34,7 @@ pub use self::limits::{MAXIMUM_PICTURE_NAME_BYTES, SCAN_TIMEOUT};
 pub use self::request::{
     CharacterRequest, IdentifiedLayout, IdentifyRequest, IdentityOutcome, IdentityRow, IoCause,
     LabelRequest, LocateError, LocateReply, LocateRequest, LocateStage, LocateStageError,
-    LocatedLayout, QuestionCause, ScanCause, ScanPrompt, ShowQuery, StoredLayout, TextServiceCause,
+    LocatedLayout, QuestionCause, ScanCause, ScanPrompt, ShowQuery, StoredLayout,
 };
 pub use self::routes::{router, router_with, text_runtime};
 pub use self::scan::{

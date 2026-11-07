@@ -536,7 +536,10 @@ dependencies = [
 name = "df-content"
 version = "0.1.0"
 dependencies = [
+ "df-scene-layout",
  "df-types",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1025,6 +1028,7 @@ dependencies = [
  "base64 0.22.1",
  "df-ai",
  "df-api",
+ "df-content",
  "df-imagery",
  "df-observe",
  "df-playground",

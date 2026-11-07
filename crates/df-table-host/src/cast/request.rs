@@ -10,8 +10,9 @@ use df_scene_layout::{CastMember, CharacterCue, Shot};
 use serde::{Deserialize, Serialize};
 
 use crate::dev_http::{BodyError, DevReply, RouteError};
-use crate::locate::LocateError;
-use crate::playground::PlaygroundChangeError;
+use crate::persona::PersonaSummary;
+use crate::playground::SceneApplyError;
+use crate::shown_scene::ShownSceneError;
 
 /// The answer of a cast route: its value, or why it was refused.
 pub(crate) type CastReply<T> = DevReply<T, CastError>;
@@ -28,11 +29,13 @@ pub struct CameraRequest {
     pub over_ms: Option<u64>,
 }
 
-/// The named characters of the shown scene's backdrop, left to right.
+/// The named characters of the shown scene's backdrop, left to right, and the summary of each that
+/// has a stored persona.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CastList {
     pub picture: String,
     pub members: Vec<CastMember>,
+    pub personas: Vec<PersonaSummary>,
 }
 
 /// A cue applied to the live scene.
@@ -57,32 +60,16 @@ pub struct CameraMoved {
 pub enum CastError {
     /// The request body is not the JSON the route reads.
     InvalidBody(BodyError),
-    /// The shown scene could not be read, or refused the change.
-    Scene { cause: PlaygroundChangeError },
-    /// The layout of the shown backdrop could not be read.
-    Layout { cause: LocateError },
-    /// The shown scene has no backdrop picture.
-    NoBackdrop,
-    /// The shown backdrop has no current layout.
-    NoLayout { picture: String },
-    /// `character` is not a named character of `picture`'s layout, whose named ones are `names`.
-    UnknownCharacter {
-        character: String,
-        picture: String,
-        names: Vec<String>,
-    },
+    /// The shown scene, its layout or the named character could not be had.
+    Shown { cause: ShownSceneError },
 }
 
 impl CastError {
-    /// The error's serde tag, for the audit line.
+    /// The error's key for the audit line: `invalid_body`, or the key of the shown-scene refusal.
     pub(crate) fn key(&self) -> &'static str {
         match self {
             Self::InvalidBody(_) => "invalid_body",
-            Self::Scene { .. } => "scene",
-            Self::Layout { .. } => "layout",
-            Self::NoBackdrop => "no_backdrop",
-            Self::NoLayout { .. } => "no_layout",
-            Self::UnknownCharacter { .. } => "unknown_character",
+            Self::Shown { cause } => cause.key(),
         }
     }
 }
@@ -91,30 +78,7 @@ impl fmt::Display for CastError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidBody(error) => write!(formatter, "{error}"),
-            Self::Scene { cause } => write!(formatter, "{cause}"),
-            Self::Layout { cause } => write!(formatter, "{cause}"),
-            Self::NoBackdrop => formatter.write_str("the shown scene has no backdrop picture"),
-            Self::NoLayout { picture } => write!(
-                formatter,
-                concat!(
-                    "the shown scene's backdrop ({0}) has no current layout; ",
-                    "scan it with: media locate {0}"
-                ),
-                picture
-            ),
-            Self::UnknownCharacter {
-                character,
-                picture,
-                names,
-            } => write!(
-                formatter,
-                "no character is named {character:?} in {picture}'s layout; the named ones are: {}",
-                if names.is_empty() {
-                    "(none: name them with media locate label or media locate identify)".to_owned()
-                } else {
-                    names.join(", ")
-                }
-            ),
+            Self::Shown { cause } => write!(formatter, "{cause}"),
         }
     }
 }
@@ -127,16 +91,16 @@ impl From<BodyError> for CastError {
     }
 }
 
-impl From<LocateError> for CastError {
-    fn from(cause: LocateError) -> Self {
-        Self::Layout { cause }
+impl From<ShownSceneError> for CastError {
+    fn from(cause: ShownSceneError) -> Self {
+        Self::Shown { cause }
     }
 }
 
-impl From<crate::playground::SceneApplyError> for CastError {
-    fn from(error: crate::playground::SceneApplyError) -> Self {
-        Self::Scene {
-            cause: PlaygroundChangeError::from(error),
+impl From<SceneApplyError> for CastError {
+    fn from(error: SceneApplyError) -> Self {
+        Self::Shown {
+            cause: ShownSceneError::from(error),
         }
     }
 }
@@ -145,11 +109,7 @@ impl RouteError for CastError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_) => StatusCode::BAD_REQUEST,
-            Self::Scene { cause } => cause.status(),
-            Self::Layout { cause } => cause.status(),
-            Self::NoBackdrop | Self::NoLayout { .. } | Self::UnknownCharacter { .. } => {
-                StatusCode::NOT_FOUND
-            }
+            Self::Shown { cause } => cause.status(),
         }
     }
 }

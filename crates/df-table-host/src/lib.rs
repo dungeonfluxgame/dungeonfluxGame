@@ -27,6 +27,7 @@
 
 pub mod adapters;
 mod atomic_file;
+mod blocking;
 pub mod broker;
 pub mod cast;
 pub mod client;
@@ -52,6 +53,7 @@ mod media_upload;
 pub mod observe;
 pub mod options;
 pub mod owner_latency;
+pub mod persona;
 pub mod playground;
 pub mod render;
 pub mod repl;
@@ -61,6 +63,7 @@ pub mod scene_builder;
 pub mod serve;
 pub mod server;
 pub mod services;
+pub mod shown_scene;
 pub mod sink;
 pub mod state;
 pub mod text;

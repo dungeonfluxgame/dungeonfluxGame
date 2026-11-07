@@ -114,7 +114,7 @@ fn explicit_bounded_admitted_upload_returns_exact_candidate_and_safe_diagnostics
     assert!(std::ptr::eq(candidate.format(), &FORMAT));
     assert_eq!(candidate.item_count(), 1);
     assert_eq!(ENTRIES[0].bytes(), b"private");
-    assert_eq!(graph().beats[0].next, &[]);
+    assert!(graph().beats[0].next.is_empty());
 }
 
 #[test]

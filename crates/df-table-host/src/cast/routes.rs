@@ -1,4 +1,4 @@
-//! The cast routes. Each resolves the shown scene's current layout once ([`shown_layout`]), works
+//! The cast routes. Each resolves the shown scene's current layout once ([`shown_cast`]), works
 //! by character name, and answers a `CastReply`; a refusal is a typed [`CastError`] naming the
 //! character and the names the layout does have. Cues and camera moves are applied through
 //! `playground::apply_scene_change`, which records its own refusals; a cast route records only
@@ -13,13 +13,12 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use df_playground::lobby::change::ScreenEdit;
 use df_playground::scene::SceneChange;
-use df_scene_layout::{
-    CharacterCue, SceneLayout, SceneRegion, Shot, cast, region_target, shot_zoom_percent,
-};
+use df_scene_layout::{CharacterCue, Shot, cast, region_target, shot_zoom_percent};
 
 use super::request::{CameraMoved, CameraRequest, CastError, CastList, Cued};
 use crate::dev_http::{parse_body, reply};
-use crate::locate::shown_backdrop;
+use crate::persona::summaries_of;
+use crate::shown_scene::{ShownCast, named, shown_cast};
 use crate::state::AppState;
 
 /// The addresses of the cast dev API.
@@ -45,34 +44,6 @@ fn answer<T: serde::Serialize>(
     reply(result)
 }
 
-/// The backdrop picture the page shows and its layout (`locate::shown_backdrop`).
-async fn shown_layout(app: &AppState) -> Result<(String, SceneLayout), CastError> {
-    let (fixture, _) = crate::playground::shown_fixture(app).await?;
-    let backdrop = shown_backdrop(app, &fixture)
-        .await?
-        .ok_or(CastError::NoBackdrop)?;
-    let picture = backdrop.picture;
-    match backdrop.layout {
-        Some(layout) => Ok((picture, layout)),
-        None => Err(CastError::NoLayout { picture }),
-    }
-}
-
-/// That `character` is a named character of `layout`, or the error naming the ones it has.
-fn named<'a>(
-    layout: &'a SceneLayout,
-    picture: &str,
-    character: &str,
-) -> Result<&'a SceneRegion, CastError> {
-    layout
-        .region(character)
-        .ok_or_else(|| CastError::UnknownCharacter {
-            character: character.to_owned(),
-            picture: picture.to_owned(),
-            names: layout.names().into_iter().map(str::to_owned).collect(),
-        })
-}
-
 /// Applies `change` and answers `applied` with its revision. A refusal is answered unrecorded:
 /// `playground::apply_scene_change` wrote its audit line.
 async fn apply<T: serde::Serialize>(
@@ -88,17 +59,29 @@ async fn apply<T: serde::Serialize>(
 }
 
 async fn list(State(app): State<Arc<AppState>>) -> Response {
-    let result = shown_layout(&app).await.map(|(picture, layout)| CastList {
-        picture,
-        members: cast(&layout),
-    });
-    answer(&app, "cast", result)
+    let listed = async {
+        let ShownCast {
+            picture, layout, ..
+        } = shown_cast(&app).await?;
+        let members = cast(&layout);
+        let names = members.iter().map(|member| member.name.clone()).collect();
+        let personas = summaries_of(&app, names).await;
+        Ok::<_, CastError>(CastList {
+            picture,
+            members,
+            personas,
+        })
+    }
+    .await;
+    answer(&app, "cast", listed)
 }
 
 async fn cue(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
     let checked = async {
         let cue: CharacterCue = parse_body(&bytes)?;
-        let (picture, layout) = shown_layout(&app).await?;
+        let ShownCast {
+            picture, layout, ..
+        } = shown_cast(&app).await?;
         named(&layout, &picture, &cue.character)?;
         Ok::<_, CastError>(cue)
     }
@@ -119,7 +102,9 @@ async fn camera_on(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
     let checked = async {
         let request: CameraRequest = parse_body(&bytes)?;
         let shot = request.shot.unwrap_or(Shot::Upper);
-        let (picture, layout) = shown_layout(&app).await?;
+        let ShownCast {
+            picture, layout, ..
+        } = shown_cast(&app).await?;
         let region = named(&layout, &picture, &request.character)?;
         let target = region_target(&request.character, Some(shot));
         let zoom_percent = shot_zoom_percent(region, shot);

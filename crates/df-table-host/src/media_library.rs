@@ -35,6 +35,7 @@ use futures_util::{Stream, StreamExt};
 use tokio::sync::mpsc::Sender;
 use tokio::task::JoinHandle;
 
+use crate::blocking::run_blocking;
 use crate::dev_http::parse_body;
 use crate::limits::{SERVE_CHUNK_BYTES, UPLOAD_PIECE_BYTES, UPLOAD_QUEUE_PIECES};
 use crate::media_ingest::{IngestError, MediaLimits};
@@ -46,7 +47,6 @@ use crate::media_range::{ByteSpan, RangeRequest, parse_range};
 use crate::media_store::{AddError, Added, ingest_upload};
 use crate::playground::{
     FileError, PlaygroundFiles, done, playground_line, refuse_file, refused, reject_body,
-    run_file_task,
 };
 use crate::state::AppState;
 use crate::wire::{MediaAdd, MediaRemove, path};
@@ -425,7 +425,11 @@ async fn media_file(
     let head = method == Method::HEAD;
     let served = {
         let name = name.clone();
-        run_file_task(move || open_media(&directory, &name, &conditions, head)).await
+        run_blocking(
+            move || open_media(&directory, &name, &conditions, head),
+            FileError::Stopped,
+        )
+        .await
     };
     match served {
         Ok(served) => served_response(served, content_type(&name)),
@@ -438,7 +442,7 @@ async fn media_file(
 
 async fn media_list(State(state): State<Arc<AppState>>) -> Response {
     let directory = media_directory(state.playground().files());
-    match run_file_task(move || media_entries(&directory)).await {
+    match run_blocking(move || media_entries(&directory), FileError::Stopped).await {
         Ok(entries) => Json(entries).into_response(),
         Err(error) => {
             state.record_line(playground_line(
@@ -632,8 +636,11 @@ async fn remove_media(State(state): State<Arc<AppState>>, body: Bytes) -> Respon
         );
     }
     let media_path = media_directory(state.playground().files()).join(&request.name);
-    let removed =
-        run_file_task(move || std::fs::remove_file(media_path).map_err(FileError::from)).await;
+    let removed = run_blocking(
+        move || std::fs::remove_file(media_path).map_err(FileError::from),
+        FileError::Stopped,
+    )
+    .await;
     match removed {
         Ok(()) => {
             state.record_line(playground_line("media_remove", &[("name", request.name)]));

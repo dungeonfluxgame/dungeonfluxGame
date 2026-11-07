@@ -123,8 +123,13 @@ fn format_cast(list: &CastList) -> String {
         .members
         .iter()
         .map(|member| {
+            let job = list
+                .personas
+                .iter()
+                .find(|persona| persona.id == member.name)
+                .map_or_else(String::new, |persona| format!(" ({})", persona.job));
             format!(
-                "  {} [{} #{}] head {} face {} centre {} %",
+                "  {}{job} [{} #{}] head {} face {} centre {} %",
                 member.name,
                 member.region_id,
                 member.number,
