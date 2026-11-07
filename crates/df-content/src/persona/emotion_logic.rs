@@ -95,7 +95,7 @@ pub const DEFAULT_CONDUCT: [&str; 13] = [
     ),
 ];
 
-pub const DEFAULT_APPRAISAL_GUIDE: [&str; 14] = [
+pub const DEFAULT_APPRAISAL_GUIDE: [&str; 15] = [
     concat!(
         "Almost every line moves the listener a little: give at least one emotion change ",
         "unless the line was truly empty of feeling.",
@@ -138,7 +138,14 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 14] = [
     concat!(
         "Flirting or a compliment to them as a person: if they welcome it (they smile, ",
         "play along or accept an invitation), attraction up 5 to 20 and embarrassment up ",
-        "5 to 15; if it is unwelcome or crosses a boundary, irritation up instead.",
+        "5 to 15; a cheap or routine line they did not welcome is irritation up only 2 to ",
+        "10 (amusement if it is funny); a crude remark or one that crosses a boundary is ",
+        "irritation up 15 to 30.",
+    ),
+    concat!(
+        "Romantic warmth toward one person (feeling at ease with them, liking how they ",
+        "treat you, saying yes to time together): attraction up 5 to 15 each time; it ",
+        "builds over a conversation and is not the same as trust.",
     ),
     "Something foul (vermin, rot, filth) near them or their goods: disgust up 15 to 35.",
 ];
@@ -597,11 +604,10 @@ fn decay_of(config: &EmotionConfig, temperament: &Temperament, emotion: &str) ->
         .definition(emotion)
         .and_then(|definition| definition.decay_percent)
         .map_or(own, u32::from);
-    let scaled = if ordinary == 0 {
-        base
-    } else {
-        base.saturating_mul(own) / ordinary
-    };
+    let scaled = base
+        .saturating_mul(own)
+        .checked_div(ordinary)
+        .unwrap_or(base);
     u8::try_from(scaled.min(u32::from(MAXIMUM_LEVEL))).unwrap_or(MAXIMUM_LEVEL)
 }
 

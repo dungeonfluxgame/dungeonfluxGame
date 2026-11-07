@@ -847,8 +847,10 @@ fn the_temperament_question_offers_the_list_and_the_behaviors_and_a_strict_schem
     let facts = temperament_facts(&persona, &EmotionConfig::default());
     assert_eq!(facts["emotions"][0]["id"], "joy");
     assert_eq!(facts["persona"]["private"]["behaviors"][0]["id"], "curt");
-    let schema = temperament_schema();
+    let schema = temperament_schema(&EmotionConfig::default());
     assert_eq!(schema["additionalProperties"], false);
+    let baseline = &schema["properties"]["temperament"]["properties"]["baseline"];
+    assert_eq!(baseline["items"]["properties"]["emotion"]["enum"][0], "joy");
     assert_eq!(
         schema["required"],
         json!(["temperament", "emotional_triggers"])

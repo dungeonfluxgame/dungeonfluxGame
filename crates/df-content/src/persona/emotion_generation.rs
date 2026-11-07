@@ -55,9 +55,15 @@ fn text_property(description: &str) -> Value {
     json!({ "type": "string", "description": description })
 }
 
+/// An emotion field: one id of the emotions on offer, so the answer cannot name another (a
+/// temperament number such as patience is not an emotion).
+fn emotion_property(emotion_ids: &[&str]) -> Value {
+    json!({ "type": "string", "enum": emotion_ids, "description": "An id from emotions." })
+}
+
 /// The two properties a temperament answer, and a persona answer, hold, ready to add to an object
-/// schema: `temperament` and `emotional_triggers`.
-pub(super) fn temperament_properties() -> [(&'static str, Value); 2] {
+/// schema: `temperament` and `emotional_triggers`, their emotion fields closed to `emotion_ids`.
+pub(super) fn temperament_properties(emotion_ids: &[&str]) -> [(&'static str, Value); 2] {
     [
         (
             "temperament",
@@ -78,7 +84,7 @@ pub(super) fn temperament_properties() -> [(&'static str, Value); 2] {
                             "additionalProperties": false,
                             "required": ["emotion", "level"],
                             "properties": {
-                                "emotion": text_property("An id from emotions."),
+                                "emotion": emotion_property(emotion_ids),
                                 "level": level_property("0 to 100."),
                             },
                         },
@@ -109,7 +115,7 @@ pub(super) fn temperament_properties() -> [(&'static str, Value); 2] {
                             "additionalProperties": false,
                             "required": ["emotion", "at_least"],
                             "properties": {
-                                "emotion": text_property("An id from emotions."),
+                                "emotion": emotion_property(emotion_ids),
                                 "at_least": level_property("The level, 0 to 100."),
                             },
                         },
@@ -124,7 +130,7 @@ pub(super) fn temperament_properties() -> [(&'static str, Value); 2] {
                                 "additionalProperties": false,
                                 "required": ["emotion", "delta"],
                                 "properties": {
-                                    "emotion": text_property("An id from emotions."),
+                                    "emotion": emotion_property(emotion_ids),
                                     "delta": level_property("-100 to 100."),
                                 },
                             },
@@ -161,9 +167,14 @@ pub fn temperament_facts(persona: &Persona, config: &EmotionConfig) -> Value {
     })
 }
 
-/// The strict schema of a temperament answer.
-pub fn temperament_schema() -> Value {
-    let properties: serde_json::Map<String, Value> = temperament_properties()
+/// The strict schema of a temperament answer, its emotion fields closed to `config`'s list.
+pub fn temperament_schema(config: &EmotionConfig) -> Value {
+    let emotion_ids: Vec<&str> = config
+        .emotions
+        .iter()
+        .map(|emotion| emotion.id.as_str())
+        .collect();
+    let properties: serde_json::Map<String, Value> = temperament_properties(&emotion_ids)
         .into_iter()
         .map(|(key, schema)| (key.to_owned(), schema))
         .collect();

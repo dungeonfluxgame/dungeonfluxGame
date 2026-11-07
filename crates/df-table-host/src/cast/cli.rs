@@ -127,7 +127,9 @@ fn format_cast(list: &CastList) -> String {
                 .personas
                 .iter()
                 .find(|persona| persona.id == member.name)
-                .map_or_else(String::new, |persona| format!(" ({})", persona.job));
+                .map_or_else(String::new, |persona| {
+                    format!(" {} ({})", persona.display_name, persona.job)
+                });
             format!(
                 "  {}{job} [{} #{}] head {} face {} centre {} %",
                 member.name,

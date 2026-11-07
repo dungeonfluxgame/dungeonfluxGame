@@ -125,18 +125,21 @@ pub fn keep_labels(old: &SceneLayout, new: &mut SceneLayout) -> usize {
             .max_by_key(|(overlap, _)| *overlap);
         if let Some((_, region)) = best {
             region.set_label(named.label().map(str::to_owned));
+            region.set_display_name(named.display_name().map(str::to_owned));
             kept += 1;
         }
     }
     kept
 }
 
-/// Names region `index` of `layout` `label`, or clears its name. A name is unique in a layout, so
-/// it moves off any other region that had it.
+/// Names region `index` of `layout` `label`, or clears its name, and gives the character the shown
+/// name `display_name` (kept only with a label). A name is unique in a layout, so it moves off any
+/// other region that had it.
 pub fn relabel(
     layout: &mut SceneLayout,
     reference: RegionRef<'_>,
     label: Option<&str>,
+    display_name: Option<String>,
 ) -> Result<(), LocateError> {
     let Some(index) = layout.find(reference) else {
         return Err(LocateError::UnknownRegion {
@@ -156,7 +159,9 @@ pub fn relabel(
             }
         }
     }
-    layout.regions_mut()[index].set_label(label.map(str::to_owned));
+    let region = &mut layout.regions_mut()[index];
+    region.set_label(label.map(str::to_owned));
+    region.set_display_name(label.and(display_name));
     Ok(())
 }
 

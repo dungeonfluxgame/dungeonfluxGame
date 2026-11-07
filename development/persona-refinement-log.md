@@ -294,10 +294,63 @@ Still open: sadness never showed among her top feelings (the appraisal under-rep
 the larger band); she still promised "two hundred apples snug for the road" after the fire, so
 the conduct line alone does not hold the stock promise, and "snug" (from her backstory) recurs.
 
+Correction (found during refinement 13): the host reads `emotions.json` from its scratch copy
+(`artifacts/tmp/persona-live/playground`), and refinement 12 was written only to `assets/`, so
+runs 20 and 21 ran without it. Their better orchard and provisioning answers were model
+variation, not the refinement. The copy is now synced and the trap is in the runbook.
+
+## Refinement 13 and runs 22 to 24 (the bar at night: Kael flirts with Lena)
+
+Setup: `move act warrior plate=bar` moved the warrior alone from the market to a packed bar;
+the design invented Lena (server), Tomas (fiddler), Rina and Elsa (dancers). Lena's persona was
+generated from the owner's guidance as a hint only: she is working, hears lines all night and
+takes none seriously, but may open up to a man who sees her as a person. The model turned that
+into data: a default `brisk-service` stance, an `open-hearted` stance, a `sincere-interest`
+trigger (model-judged), boundaries against unwanted touching and fake welcome, and a secret
+(the flirting wears on her) that needs a sincere question. Beats:
+`market-threads/flirt.beats` (20 rounds: cheap lines, a compliment, real questions, a crude
+remark, an apology, loneliness, an invitation, jealousy bait, goodnight). The runner now takes
+`@keeper` and situation settings from the beats file, so one script drives any scene.
+
+Fixes on the way:
+- Lena's first generation was refused: the model listed "patience" (a temperament number) as
+  an emotion. The persona and temperament schemas now close every emotion field to the emotion
+  ids (an enum), so the model cannot name another; code still validates.
+- Names: residents were generated as "Dancer One" and "The Fiddler" because the hint dropped
+  the design's name; it is now passed. The warrior is Kael, the elf Sylvi. A layout region
+  carries a shown name (set by `identify` from the transition, or at runtime with
+  `media locate label`); the SAM tag, the anchored speech bubble, `scene cast` and
+  `media locate show` all show it.
+
+Run 22 (stopped at round 10): the warrior introduced himself as "the Warrior"; rerun after
+naming him.
+Run 23 (`persona-transcripts/run23-flirt.md`): the words carried the arc well: deflection
+("That line won't pour a drink, friend"), a boundary at the crude remark ("If your route
+depends on my figure, you'd best get back to watching the road"), opening up when asked if the
+attention wears on her ("you asked like you mean me, not the apron"), yes to the drink, rapport
+to friendly (32). The feelings did not: irritation 66 at the first line, then 100 for the whole
+run. Cause: a state trigger (`patience-thins`, irritation >= 75, irritation +12) re-added its
+changes on every line while it held, and a pushed emotion does not fade, so it fed itself; it
+also forced her brisk stance in the middle of a warm moment. Attraction never registered.
+Refinement 13: a state trigger keeps its stance while it holds but adds its changes once, on the
+line that crosses its level (test added). Data (live): a cheap or routine unwelcome line is
+irritation +2 to 10, a crude one +15 to 30; romantic warmth toward one person (at ease, a yes to
+time together) is attraction +5 to 15 and is not trust.
+Run 24 (`persona-transcripts/run24-flirt.md`): feelings now follow the story: irritation falls
+from 100 to 46 as he earns it, attraction appears when she accepts the drink (29) and grows to
+35 at goodnight ("I'd like that; come by when I'm not carrying half the bar"), her stance moves
+from brisk to open-hearted at his loneliness line and stays there. Still open: irritation spikes
+too fast (93 by "Could I get an ale?"): her `another-advance` event trigger (+15) is judged to
+fire on ordinary lines and stacks with the appraisal; joy and trust saturate at 100; rapport
+ends lower (15) than run 23; one customer beat ("whether she ever dances") came out as a
+question about the dancer.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->
 12:30 refinement 2 -> 12:39 refinement 3 -> 12:43 refinement 4 -> 12:53 refinement 5 -> 12:59
 refinement 6 -> 13:03 refinement 7 -> 13:10 refinement 8 -> 13:15 refinement 9 -> 13:20
 refinement 10 -> 13:28 refinement 11 -> runs 18 and 19. Nineteen runs of the market thread over
-about 90 minutes, across six beat files (haggle, curious, temper, heart, supplies, rage).
+about 90 minutes, across six beat files (haggle, curious, temper, heart, supplies, rage). Then
+refinement 12 (runs 20 and 21, data not live, see the correction) and the bar at night:
+refinement 13 with runs 22 to 24 (flirt).

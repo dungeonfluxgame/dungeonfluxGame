@@ -5,7 +5,9 @@ use std::path::Path;
 
 use df_scene_layout::{RegionRef, SceneLayout, SceneRegion};
 
-use super::request::{IdentifyRequest, IdentityOutcome, IdentityRow, LocateError, QuestionCause};
+use super::request::{
+    CharacterRequest, IdentifyRequest, IdentityOutcome, IdentityRow, LocateError, QuestionCause,
+};
 use super::scan::relabel;
 use super::storage::{LAYOUT_WRITES, current_layout, read_picture, write_layout};
 use super::validate::{check_label, check_picture_name};
@@ -19,11 +21,13 @@ const FULL_CONFIDENCE_PERMILLE: u16 = 1000;
 pub const IDENTIFY_SCOPE: &str = "locate";
 
 /// Applies a checked answer to `layout`: a character placed with at least `min_confidence` and no
-/// conflict names its region (moving the name off any other region); every other character changes
-/// nothing, so a name given by hand stays.
+/// conflict names its region (moving the name off any other region) with the shown name the
+/// request gave them in `characters`; every other character changes nothing, so a name given by
+/// hand stays.
 pub fn apply_identification(
     layout: &mut SceneLayout,
     answers: &[df_imagery::identity_question::Identified],
+    characters: &[CharacterRequest],
     min_confidence: u16,
 ) -> Result<Vec<IdentityRow>, LocateError> {
     let mut rows = Vec::new();
@@ -39,7 +43,11 @@ pub fn apply_identification(
             IdentityOutcome::Named
         };
         if let (Some(index), IdentityOutcome::Named) = (region, outcome) {
-            relabel(layout, RegionRef::Number(index), Some(&answer.name))?;
+            let shown = characters
+                .iter()
+                .find(|character| character.name == answer.name)
+                .and_then(|character| character.display_name.clone());
+            relabel(layout, RegionRef::Number(index), Some(&answer.name), shown)?;
         }
         rows.push(IdentityRow {
             name: answer.name.clone(),
@@ -61,6 +69,7 @@ pub fn store_identification(
     picture: &str,
     asked: &SceneLayout,
     answers: &[df_imagery::identity_question::Identified],
+    characters: &[CharacterRequest],
     min_confidence: u16,
 ) -> Result<(SceneLayout, Vec<IdentityRow>), LocateError> {
     let _writing = LAYOUT_WRITES.lock();
@@ -76,7 +85,7 @@ pub fn store_identification(
     if layout.picture().sha256 != asked.picture().sha256 || !same_regions {
         return Err(changed());
     }
-    let rows = apply_identification(&mut layout, answers, min_confidence)?;
+    let rows = apply_identification(&mut layout, answers, characters, min_confidence)?;
     write_layout(layouts, picture, &layout)?;
     Ok((layout, rows))
 }

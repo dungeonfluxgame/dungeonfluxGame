@@ -189,15 +189,26 @@ fn a_label_reaches_its_region_by_number_id_or_name_and_moves_off_others() {
         region(None, 600, 800),
     ]);
     let id = named.regions()[1].id().to_string();
-    relabel(&mut named, RegionRef::parse(&id), Some("innkeeper")).unwrap();
+    relabel(&mut named, RegionRef::parse(&id), Some("innkeeper"), None).unwrap();
     assert_eq!(named.regions()[0].label(), None);
     assert_eq!(named.regions()[1].label(), Some("innkeeper"));
-    relabel(&mut named, RegionRef::parse("innkeeper"), Some("host")).unwrap();
+    relabel(
+        &mut named,
+        RegionRef::parse("innkeeper"),
+        Some("host"),
+        None,
+    )
+    .unwrap();
     assert_eq!(named.regions()[1].label(), Some("host"));
-    relabel(&mut named, RegionRef::parse("1"), None).unwrap();
+    let shown = Some("Lena".to_owned());
+    relabel(&mut named, RegionRef::parse("host"), Some("host"), shown).unwrap();
+    assert_eq!(named.regions()[1].display_name(), Some("Lena"));
+    relabel(&mut named, RegionRef::parse("1"), None, None).unwrap();
+    assert_eq!(named.regions()[1].display_name(), None);
     assert_eq!(named.regions()[1].label(), None);
     for reference in ["2", "bard"] {
-        let refused = relabel(&mut named, RegionRef::parse(reference), Some("x")).unwrap_err();
+        let refused =
+            relabel(&mut named, RegionRef::parse(reference), Some("x"), None).unwrap_err();
         assert_eq!(
             refused,
             LocateError::UnknownRegion {
@@ -208,7 +219,7 @@ fn a_label_reaches_its_region_by_number_id_or_name_and_moves_off_others() {
         );
     }
     assert_eq!(
-        relabel(&mut named, RegionRef::parse("0"), Some("not ok")).unwrap_err(),
+        relabel(&mut named, RegionRef::parse("0"), Some("not ok"), None).unwrap_err(),
         LocateError::InvalidLabel {
             label: "not ok".to_owned()
         }
@@ -371,6 +382,7 @@ fn an_identification_names_only_sure_unshared_matches_and_keeps_hand_names() {
             answer("bard", None, 0, false),
             answer("cook", None, 0, true),
         ],
+        &[],
         DEFAULT_MIN_CONFIDENCE_PERMILLE,
     )
     .unwrap();
@@ -408,6 +420,16 @@ fn the_media_locate_grammar() {
             picture: "plate.webp".to_owned(),
             region: "r1a2b3c4d".to_owned(),
             label: Some("innkeeper".to_owned()),
+            display_name: None,
+        })
+    );
+    assert_eq!(
+        parse(&words("media locate label plate.webp 3 tavern_server Lena Hart")).unwrap(),
+        Command::MediaLocate(MediaLocate::Label {
+            picture: "plate.webp".to_owned(),
+            region: "3".to_owned(),
+            label: Some("tavern_server".to_owned()),
+            display_name: Some("Lena Hart".to_owned()),
         })
     );
     assert_eq!(
@@ -416,6 +438,7 @@ fn the_media_locate_grammar() {
             picture: "plate.webp".to_owned(),
             region: "elf".to_owned(),
             label: None,
+            display_name: None,
         })
     );
     assert_eq!(
@@ -548,9 +571,18 @@ fn an_identification_is_stored_on_the_layout_as_it_is_now() {
         confidence_permille: 900,
         conflict: false,
     }];
+    let characters = [CharacterRequest {
+        name: "innkeeper".to_owned(),
+        display_name: Some("Bram".to_owned()),
+        description: None,
+        portrait: None,
+    }];
     let (stored, rows) =
-        store_identification(&media, &layouts, "plate.webp", &asked, &answers, 600).unwrap();
+        store_identification(&media, &layouts, "plate.webp", &asked, &answers, &characters, 600)
+            .unwrap();
     assert_eq!(rows[0].outcome, IdentityOutcome::Named);
+    let innkeeper = stored.region("innkeeper").unwrap();
+    assert_eq!(innkeeper.display_name(), Some("Bram"));
     assert_eq!(stored.names(), vec!["bard", "innkeeper"]);
     assert_eq!(
         read_layout(&layouts, "plate.webp").unwrap(),
@@ -561,7 +593,8 @@ fn an_identification_is_stored_on_the_layout_as_it_is_now() {
     let rescanned = bound(picture, vec![region(None, 200, 400)]);
     write_layout(&layouts, "plate.webp", &rescanned).unwrap();
     let refused =
-        store_identification(&media, &layouts, "plate.webp", &asked, &answers, 600).unwrap_err();
+        store_identification(&media, &layouts, "plate.webp", &asked, &answers, &characters, 600)
+            .unwrap_err();
     assert_eq!(
         refused,
         LocateError::LayoutChanged {

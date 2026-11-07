@@ -29,7 +29,7 @@ use super::generate::{
 use super::request::{
     BehaviorOverride, LineError, LineIdKind, PersonaError, QuoteBounds, QuoteReport, SaidLine,
 };
-use super::state::{apply_appraisal, load_state, state_triggers};
+use super::state::{apply_appraisal, crossing_triggers, load_state, state_triggers};
 use crate::state::AppState;
 use crate::text::TextRoute;
 
@@ -500,10 +500,10 @@ fn bounded_recent(recent: &[String]) -> Vec<String> {
 fn present_speakers(scene: &ShownScene, speaker: &str, asked_by: Option<&str>) -> Vec<String> {
     let mut present = scene.names();
     present.retain(|name| name != speaker);
-    if let Some(asker) = asked_by.filter(|asker| *asker != speaker) {
-        if !present.iter().any(|name| name == asker) {
-            present.push(asker.to_owned());
-        }
+    if let Some(asker) = asked_by.filter(|asker| *asker != speaker)
+        && !present.iter().any(|name| name == asker)
+    {
+        present.push(asker.to_owned());
     }
     present
 }
@@ -824,9 +824,21 @@ fn settle(
     let emotional = fired_emotional(own, &answer.fired_emotional, by_state);
     let forced = forced_behavior(own, &answer.fired_triggers, &emotional);
     let (behavior, behavior_override) = settle_behavior(answer.behavior, forced);
+    // A trigger the model judged fired by the event adds its changes now. One that fires by state
+    // keeps its stance while its condition holds, but its changes are felt once, on the line that
+    // carries the feeling over its level, never again on every line (irritation that feeds itself
+    // would never fade).
     let mut appraisal = answer.appraisal;
-    for trigger in &emotional {
+    for trigger in emotional
+        .iter()
+        .filter(|trigger| answer.fired_emotional.contains(&trigger.id))
+    {
         appraisal.emotions.extend(trigger.sets.iter().cloned());
+    }
+    for trigger in crossing_triggers(app, own, &appraisal) {
+        if !answer.fired_emotional.contains(&trigger.id) {
+            appraisal.emotions.extend(trigger.sets.iter().cloned());
+        }
     }
     let mut dropped = answer.dropped;
     let quotes: Vec<QuoteReport> = answer

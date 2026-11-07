@@ -1,10 +1,11 @@
 //! The SAM layer: the backdrop's scanned layout painted over it, for checking what the scan found.
 //!
 //! Each region is painted as its own mask (the silhouette SAM returned, in a colour of its own; a
-//! named region in gold), with a tag in the middle of the mask carrying its number, its name and
-//! the model's score, and a dot at its head point (where an anchored bubble's tail points). A
-//! region with no mask falls back to its box outline. The layer sits in the world layer with the
-//! backdrop, so it moves with the camera, and is shown or hidden by the `show_sam` control
+//! named region in gold), with a tag in the middle of the mask carrying its number, its character's
+//! shown name (the label when it has none) and the model's score, and a dot at its head point
+//! (where an anchored bubble's tail points). A region with no mask falls back to its box outline.
+//! The layer sits in the world layer with the backdrop, so it moves with the camera, and is shown
+//! or hidden by the `show_sam` control
 //! (`playground set sam=true|false`). A pure function of the layout; it never changes it.
 
 use wasm_bindgen::JsValue;
@@ -73,9 +74,10 @@ pub fn layer(document: &Document, layout: &ImageLayout) -> Result<Element, JsVal
                 append(&root, &frame)?;
             }
         }
-        let name = match region.label() {
-            Some(label) => format!("{number} {label}"),
-            None => number.to_string(),
+        let name = match (region.display_name(), region.label()) {
+            (Some(shown), _) => format!("{number} {shown}"),
+            (None, Some(label)) => format!("{number} {label}"),
+            (None, None) => number.to_string(),
         };
         let score = format!(
             "{}.{:02}",

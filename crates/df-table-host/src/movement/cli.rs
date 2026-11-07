@@ -406,13 +406,16 @@ async fn walk(
     let placed: Vec<CharacterRequest> = design
         .placements
         .iter()
-        .map(|placement| CharacterRequest {
-            name: placement.character.clone(),
-            description: characters
+        .map(|placement| {
+            let character = characters
                 .iter()
-                .find(|character| character.id == placement.character)
-                .map(|character| character.job.clone()),
-            portrait: None,
+                .find(|character| character.id == placement.character);
+            CharacterRequest {
+                name: placement.character.clone(),
+                display_name: character.map(|character| character.display_name.clone()),
+                description: character.map(|character| character.job.clone()),
+                portrait: None,
+            }
         })
         .collect();
     match deliver_plate(port, name, &brief.prompt, placed).await {
@@ -438,8 +441,8 @@ async fn resident_persona(port: u16, resident: &Resident, place: &str) -> String
     let request = GenerateRequest {
         character: resident.id.clone(),
         hint: Some(format!(
-            "{}, met at {place}. Look: {}.",
-            resident.job, resident.look
+            "{}, {}, met at {place}. Look: {}.",
+            resident.display_name, resident.job, resident.look
         )),
         guidance: None,
         model: None,

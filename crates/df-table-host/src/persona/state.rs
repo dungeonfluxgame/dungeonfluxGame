@@ -12,7 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use df_content::persona::{
-    Appraisal, EmotionConfig, Persona, PersonaId, PersonaState, Temperament, fresh_state,
+    Appraisal, EmotionConfig, EmotionalTrigger, Persona, PersonaId, PersonaState, Temperament,
+    fresh_state,
 };
 
 use super::emotions::{EmotionError, load_emotions};
@@ -174,6 +175,29 @@ pub(crate) fn apply_appraisal(
         appraisal.rapport_delta.map_or_else(|| "-".to_owned(), |delta| delta.to_string()),
     ));
     after
+}
+
+/// The emotional triggers of `persona` whose state condition `appraisal` makes start to hold:
+/// below their level now and at or above it once the appraisal is taken in. A preview only;
+/// nothing is kept.
+pub(crate) fn crossing_triggers<'a>(
+    app: &AppState,
+    persona: &'a Persona,
+    appraisal: &Appraisal,
+) -> Vec<&'a EmotionalTrigger> {
+    let id = persona.id().as_str();
+    let config = load_emotions(app).unwrap_or_else(|error| {
+        record_unavailable(app, id, &error);
+        EmotionConfig::default()
+    });
+    let before = load_state(app, id);
+    let (after, _) =
+        df_content::persona::apply_appraisal(&config, persona.temperament(), &before, appraisal);
+    let held = state_triggers(persona, &before);
+    state_triggers(persona, &after)
+        .into_iter()
+        .filter(|trigger| !held.iter().any(|seen| seen.id == trigger.id))
+        .collect()
 }
 
 /// Replaces the state of `id` with the one `change` makes of it, under the write lock, and answers

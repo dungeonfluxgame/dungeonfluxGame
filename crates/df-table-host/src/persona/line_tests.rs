@@ -16,7 +16,7 @@ use super::fixtures::{
     line_answer_with_gaps, privacy_answer, scripted_host, scripted_host_cast, write_market,
 };
 use super::request::{
-    Answered, BackfillOutcome, BackfillRecord, PersonaReply, Spoken,
+    Answered, BackfillOutcome, BackfillRecord, PersonaReply, SaidLine, Spoken,
 };
 use super::routes::path;
 use super::storage::write_persona;
@@ -280,6 +280,32 @@ async fn a_trigger_of_the_state_is_checked_by_code_passed_in_the_facts_and_fires
         second.behavior_override.map(|over| over.trigger),
         Some("scared".to_owned())
     );
+}
+
+#[tokio::test]
+async fn a_state_trigger_adds_its_changes_once_when_it_starts_to_hold_not_on_every_line() {
+    let mut persona = serde_json::to_value(vendor(CHARACTER)).unwrap();
+    persona["emotional_triggers"][1]["sets"] = json!([{"emotion": "irritation", "delta": 12}]);
+    let persona: Persona = serde_json::from_value(persona).unwrap();
+    let frightened = appraised(
+        line_answer("Please."),
+        json!({"emotions": [{"emotion": "fear", "delta": 70}], "toward": null,
+               "rapport_delta": null, "attention": no_attention(), "tone": null}),
+    );
+    let host = scripted_host(vec![frightened, line_answer("Go away.")]).await;
+    write_persona(&host.directory(), &persona).unwrap();
+    let irritation = |said: &SaidLine| {
+        said.appraisal
+            .emotions
+            .iter()
+            .filter(|change| change.emotion == "irritation")
+            .count()
+    };
+    let crossing = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(irritation(&crossing), 1, "fear crossed 50 on this line");
+    let holding = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(holding.state_triggered, ["scared"]);
+    assert_eq!(irritation(&holding), 0, "still afraid: the stance holds, no new change");
 }
 
 #[tokio::test]

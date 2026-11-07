@@ -4,7 +4,7 @@
 //! `media locate <picture> [prompt=person|head] [masks=1-32]`,
 //! `media locate show <picture>`, `media locate points <picture>`,
 //! `media locate identify <picture> <name>[=<description>] ... [portrait.<name>=<file>]
-//! [min=0-1000]`, `media locate label <picture> <region> <name|->`.
+//! [min=0-1000]`, `media locate label <picture> <region> <name|-> [<shown name...>]`.
 
 use df_scene_layout::{SceneLayout, percent_text};
 
@@ -23,7 +23,7 @@ pub const MEDIA_LOCATE_USAGE: &str = concat!(
     " | media locate points <picture>",
     " | media locate identify <picture> <name>[=<description>] ... [portrait.<name>=<file>]",
     " [min=0-1000]",
-    " | media locate label <picture> <number|id|name> <name|->"
+    " | media locate label <picture> <number|id|name> <name|-> [<shown name...>]"
 );
 
 /// A `media locate` command.
@@ -37,11 +37,13 @@ pub enum MediaLocate {
     },
     /// Print a picture's stored layout.
     Show { picture: String },
-    /// Name a region of a picture's layout (by number, id or current name), or clear its name.
+    /// Name a region of a picture's layout (by number, id or current name), or clear its name,
+    /// with the name the page shows for that character.
     Label {
         picture: String,
         region: String,
         label: Option<String>,
+        display_name: Option<String>,
     },
     /// Print every character point and camera shot of a picture's named characters.
     Points { picture: String },
@@ -63,10 +65,11 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         [verb, picture] if verb == "points" => MediaLocate::Points {
             picture: picture.clone(),
         },
-        [verb, picture, region, label] if verb == "label" => MediaLocate::Label {
+        [verb, picture, region, label, shown @ ..] if verb == "label" => MediaLocate::Label {
             picture: picture.clone(),
             region: region.clone(),
             label: (label != "-").then(|| label.clone()),
+            display_name: (!shown.is_empty()).then(|| shown.join(" ")),
         },
         [picture, options @ ..]
             if !matches!(picture.as_str(), "show" | "label" | "points" | "identify") =>
@@ -180,6 +183,7 @@ fn parse_character(
     }
     Ok(CharacterRequest {
         name: name.to_owned(),
+        display_name: None,
         description: description.filter(|text| !text.is_empty()),
         portrait: None,
     })
@@ -248,11 +252,13 @@ pub async fn run(port: u16, command: MediaLocate) -> Result<String, DevError> {
             picture,
             region,
             label,
+            display_name,
         } => {
             let request = LabelRequest {
                 picture,
                 region,
                 label,
+                display_name,
             };
             let stored: StoredLayout =
                 reply_value(post_json(port, path::LOCATE_LABEL, &request).await?)?;
@@ -360,8 +366,12 @@ pub fn format_regions(layout: &SceneLayout) -> String {
         .enumerate()
         .map(|(number, region)| {
             format!(
-                "  {number}: {} [{}] box {}..{} x {}..{} % head {},{} % score {}",
+                "  {number}: {}{} [{}] box {}..{} x {}..{} % head {},{} % score {}",
                 region.label().unwrap_or("(unnamed)"),
+                region
+                    .display_name()
+                    .map(|name| format!(" ({name})"))
+                    .unwrap_or_default(),
                 region.id(),
                 percent_text(region.left_permille()),
                 percent_text(region.right_permille()),

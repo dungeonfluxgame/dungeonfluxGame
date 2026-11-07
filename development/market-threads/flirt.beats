@@ -1,0 +1,28 @@
+# The bar at night: the warrior, alone, flirts with Lena the server through 20 rounds. Her persona
+# says she is working, hears lines all night and takes none seriously, but may open up to a man who
+# sees her as a person. Exercises amusement, irritation, attraction, embarrassment, trust, a
+# boundary, an apology and a secret that needs sincerity.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper tavern_server
+@keeper_situation Working a packed evening shift at the liveliest bar in town, a tray of mugs in hand.
+@speaker_situation In the packed bar in town at night, at the counter where the server works; you came alone.
+warrior | Catch the server's eye as she passes and try a cheap, overconfident pickup line on her.
+warrior | Laugh it off and ask her, as a question to her, for an ale.
+warrior | Tell her she has the prettiest eyes in the room.
+warrior | Tease her about how fast she moves through the crowd.
+warrior | Ask her, as a question to her, how she carries six full mugs without spilling a drop.
+warrior | Ask her, as a question to her, how her night is going so far.
+warrior | Tell her you can see she is busy and you will wait; there is no hurry.
+warrior | Tell her a short, self-deprecating joke about a guard who got lost guarding a road.
+warrior | Ask her, as a question to her, what her name is, and give her yours.
+warrior | Make a crude, too-forward remark about her figure.
+warrior | Apologise plainly for the remark; it was out of line.
+warrior | Ask her, as a question to her, what she would do with her evenings if she were not working here.
+warrior | Tell her something true about yourself: guarding travellers is lonely work and you rarely stay anywhere long.
+warrior | Ask her, as a question to her, whether the constant attention from men ever wears on her.
+warrior | Tell her sincerely that you like how she speaks to people: straight, with no pretending.
+warrior | Ask her, as a question to her, whether she would share a drink with you after her shift.
+warrior | Mention that one of the dancers has been eyeing you all night, to see how she reacts.
+warrior | Ask her, as a question to her, whether she ever dances when the band plays.
+warrior | Tell her you have not felt this easy talking to anyone in a long time.
+warrior | Say goodnight and promise to come back tomorrow, just to see her.

@@ -130,6 +130,34 @@ same look; then `persona generate <id>` runs with the look as its hint (it will 
 an existing persona). A resident the scan cannot name gets no persona yet: the command says
 so, and `persona generate <id>` works once a region is named.
 
+## Names (players and NPCs)
+
+Every character is shown by name, never by id. The name is the persona's `display_name`; the id
+(`warrior`, `tavern_server`) stays the key for routes, anchors and layouts.
+
+- Player characters: the warrior is Kael (the scene's hero card already uses that name) and the
+  elf is Sylvi, in `assets/playground/personas/*.persona.json` and in the host's scratch copy.
+- NPCs from a transition keep the name the design gave them (`resident tavern_server (Lena)`):
+  the resident's persona is generated with that name in its hint.
+- A transition passes each character's name to `identify`, so the same call that names a
+  region in the SAM layout stores its shown name (`display_name` on the region).
+- The page shows that name on the SAM tag (`10 Lena · 0.93`) and on the anchored speech bubble
+  (`Lena`), both from the layout region, so they always agree. `scene cast` and
+  `media locate show` print it next to the id.
+
+Runtime API, to name or rename someone in a live scene (no restart):
+
+```bash
+$D dev --port 7879 persona set warrior display_name Kael            # the persona's name
+$D dev --port 7879 media locate label bar.png warrior warrior Kael    # the SAM tag and bubble
+$D dev --port 7879 scene image tv-backdrop bar.png                   # push the scene again
+```
+
+`media locate label <picture> <region> <id|-> [<shown name...>]` is
+`POST /dev/media/locate/label` with `{"picture", "region", "label", "display_name"}`; a name
+stays with its label and goes when the label changes. A plate named before this existed has no
+shown names: set them once with the commands above. Reload the page to see them.
+
 ## The market thread (re-runnable persona and backfill exercise)
 
 `bash development/market-thread.sh` runs 20 messages at the fruit stall: her name, where the
@@ -140,6 +168,20 @@ lacks, then the answer). The script first adds her two discount rules to her per
 price on one piece, a bulk discount at five; triggers are statements the model judges). Needs
 the market scene up (the walk-through above). Output: `[NN] speaker: line`, then coverage and
 backfill result lines for Mara; `persona backfills fruit_vendor` lists what was added.
+
+Any scene can use the same runner: a beats file sets who answers and where with `@keeper <id>`,
+`@keeper_situation <text>` and `@speaker_situation <text>`. Example, the bar at night:
+`bash development/market-thread.sh development/market-threads/flirt.beats` (Kael flirts with
+Lena the server for 20 rounds). Reset both first: `persona state <id> reset`. Each run's full
+record goes in `development/persona-transcripts/`, its summary in
+`development/persona-refinement-log.md`.
+
+The bar scene came from one line at the market (one plate, about 90 s):
+`$D dev --port 7879 move act warrior plate=bar "Evening has fallen. You leave the elf at the
+market and head off alone to the liveliest bar in town, a packed place with a live band and
+women in skimpy, revealing evening dresses dancing and flirting with the crowd. Tell the table
+where you are going, in your own words."` Jev read a walk for the warrior alone, the design
+invented a server, a fiddler and two dancers, and each got a persona.
 
 First run (2026-11-07): name consistent (messages 2 and 20); the discount on one refused,
 on five granted; two backfills added facts (orchard origin, shelf life); one backfill refused
@@ -181,6 +223,8 @@ set in `ui_roleplay_thought.json`: `roleplay.title: null`, `roleplay.caption: nu
 | a character's head is cut off at the top of the picture | the image model's framing; the prompt does not control it | rerun the plate; a framing line in `BriefStyle` is the planned fix |
 | whole party moves on "we" | Jev had no context | `move act` passes the situation as context; real play passes recent lines |
 | OpenAI Responses `credit_balance_exhausted` | key has no credit | add credit or use `DF_TEXT_BACKEND=codex` |
+| an `emotions.json` or persona edit has no effect | the host reads its scratch copy (`artifacts/tmp/persona-live/playground`), not `assets/` | edit both, or copy the file into the scratch copy; no restart needed |
+| a SAM tag or bubble shows an id (`tavern_server`) | the plate was named before shown names, or the persona has no name | `persona set <id> display_name <Name>`, then `media locate label` (Names, above) |
 
 ## Known gaps
 

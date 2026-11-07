@@ -150,6 +150,7 @@ pub(super) async fn make_plate(
         .iter()
         .map(|speaker| CharacterRequest {
             name: speaker.id.clone(),
+            display_name: Some(speaker.display_name.clone()),
             description: Some(speaker.job.clone()),
             portrait: None,
         })

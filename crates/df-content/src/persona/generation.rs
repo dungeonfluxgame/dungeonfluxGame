@@ -223,7 +223,7 @@ pub fn output_schema() -> Value {
         properties.extend(
             voice_properties()
                 .into_iter()
-                .chain(temperament_properties())
+                .chain(temperament_properties(&DEFAULT_EMOTIONS))
                 .map(|(key, property)| (key.to_owned(), property)),
         );
     }

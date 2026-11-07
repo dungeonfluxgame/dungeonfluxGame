@@ -327,6 +327,7 @@ async fn relabel_stored(
                 &mut layout,
                 df_scene_layout::RegionRef::parse(&request.region),
                 request.label.as_deref(),
+                request.display_name,
             )?;
             write_layout(&directory, &request.picture, &layout)?;
             Ok(layout)
@@ -415,6 +416,7 @@ async fn identify_characters(
         request.characters.len()
     ));
     let (directory, stored_in) = (media(app), layouts(app));
+    let characters = request.characters.clone();
     let started = Instant::now();
     let mut failure = StageFailure {
         verb: "identify",
@@ -450,6 +452,7 @@ async fn identify_characters(
                 &store_picture,
                 &prepared.layout,
                 &answered.found,
+                &characters,
                 prepared.min_confidence,
             )
         },

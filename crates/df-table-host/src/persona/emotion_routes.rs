@@ -188,7 +188,7 @@ async fn temperament_edit(
         TEMPERAMENT_INSTRUCTION,
         temperament_facts(own, config),
         TEMPERAMENT_OUTPUT_NAME,
-        temperament_schema(),
+        temperament_schema(config),
     );
     let key = operation_key("temperament")?;
     let started = Instant::now();

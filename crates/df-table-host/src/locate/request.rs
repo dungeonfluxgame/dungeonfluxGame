@@ -66,7 +66,8 @@ pub struct LocateRequest {
     pub masks: Option<u32>,
 }
 
-/// A name for one region of a stored layout, or `None` to clear it.
+/// A name for one region of a stored layout, or `None` to clear it, and the name a page shows for
+/// that character (its persona's display name, such as `Lena`), which needs a label.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LabelRequest {
@@ -75,6 +76,8 @@ pub struct LabelRequest {
     pub region: String,
     #[serde(default)]
     pub label: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 /// The query of `GET /dev/media/locate/show`: the picture to show the stored layout of.
@@ -90,6 +93,9 @@ pub struct ShowQuery {
 #[serde(deny_unknown_fields)]
 pub struct CharacterRequest {
     pub name: String,
+    /// The name the story gives the character (`Lena`), shown on the page once a region is theirs.
+    #[serde(default)]
+    pub display_name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]

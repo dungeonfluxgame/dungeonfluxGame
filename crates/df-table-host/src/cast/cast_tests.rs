@@ -101,7 +101,7 @@ async fn the_cast_and_the_camera_follow_the_backdrop_the_scene_shows() {
     let run = |line: &'static str| async move { crate::dev::run_dev(port, &words(line)).await };
     let first = run("scene cast").await.unwrap();
     assert!(first.contains("elf") && !first.contains("dwarf"), "{first}");
-    assert!(first.contains("elf (Scout of the pass) ["), "{first}");
+    assert!(first.contains("elf Sylwen (Scout of the pass) ["), "{first}");
     let listed: CastReply<CastList> = crate::dev_client::get_json(port, path::CAST).await.unwrap();
     let DevReply::Done { value } = listed else {
         panic!("the cast is listed");

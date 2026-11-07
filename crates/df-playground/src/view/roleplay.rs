@@ -161,11 +161,18 @@ fn bubble_element(
             wrapper.set_attribute("data-face", &face_text(layout, region))?;
         }
     }
+    // A bubble anchored to a character carries the name its layout region shows (the SAM tag's),
+    // so a rename shows on both at once; any other bubble keeps its written speaker.
+    let speaker = bubble
+        .anchor
+        .as_ref()
+        .and_then(|anchor| layout?.region(&anchor.region)?.display_name())
+        .unwrap_or(&bubble.speaker);
     let body = element(document, "div", "rp-body")?;
     if bubble.tone == BubbleTone::Thought {
         // A thinking indicator shows no words: three pulsing dots, named for a screen reader.
         wrapper.set_attribute("role", "img")?;
-        wrapper.set_attribute("aria-label", &format!("{} is thinking", bubble.speaker))?;
+        wrapper.set_attribute("aria-label", &format!("{speaker} is thinking"))?;
         let dots = element(document, "div", "rp-think")?;
         for _ in 0..3 {
             append(&dots, &element(document, "span", "rp-think-dot")?)?;
@@ -179,7 +186,7 @@ fn bubble_element(
         document,
         "rp-face",
         bubble.portrait.as_deref(),
-        &bubble.speaker,
+        speaker,
     )? {
         Some(face) => append(&head, &face)?,
         None => {
@@ -190,7 +197,7 @@ fn bubble_element(
     }
     append(
         &head,
-        &text_element(document, "span", "rp-speaker", &bubble.speaker)?,
+        &text_element(document, "span", "rp-speaker", speaker)?,
     )?;
     append(&body, &head)?;
     append(

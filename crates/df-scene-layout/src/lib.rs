@@ -83,6 +83,10 @@ pub struct SceneRegion {
     id: RegionId,
     /// The character this region is, such as `innkeeper`.
     label: Option<String>,
+    /// The name the story gives that character, such as `Lena`, as a page shows it; it belongs to
+    /// the label and goes when the label changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
     /// The box's left edge, in thousandths of the picture's width.
     left_permille: u16,
     /// The box's top edge, in thousandths of the picture's height.
@@ -240,6 +244,8 @@ struct SceneRegionRecord {
     id: RegionId,
     #[serde(default)]
     label: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
     left_permille: u16,
     top_permille: u16,
     right_permille: u16,
@@ -265,6 +271,7 @@ impl TryFrom<SceneRegionRecord> for SceneRegion {
         };
         Ok(Self::new(record.id, geometry, record.score_permille)?
             .with_label(record.label)
+            .with_display_name(record.display_name)
             .with_mask(record.mask))
     }
 }
@@ -310,6 +317,7 @@ impl SceneRegion {
         Ok(Self {
             id,
             label: None,
+            display_name: None,
             left_permille,
             top_permille,
             right_permille,
@@ -327,15 +335,30 @@ impl SceneRegion {
         self
     }
 
+    /// This region with the shown name `display_name`, or none.
+    pub fn with_display_name(mut self, display_name: Option<String>) -> Self {
+        self.display_name = display_name;
+        self
+    }
+
     /// This region with the mask `mask` (a PNG data URL), or none.
     pub fn with_mask(mut self, mask: Option<String>) -> Self {
         self.mask = mask;
         self
     }
 
-    /// Names this region `label`, or clears its name.
+    /// Names this region `label`, or clears its name. A shown name belongs to the old label, so a
+    /// changed label drops it.
     pub fn set_label(&mut self, label: Option<String>) {
+        if self.label != label {
+            self.display_name = None;
+        }
         self.label = label;
+    }
+
+    /// Sets or clears the name a page shows for this region's character.
+    pub fn set_display_name(&mut self, display_name: Option<String>) {
+        self.display_name = display_name;
     }
 
     /// The region's id, stable for the same mask.
@@ -346,6 +369,11 @@ impl SceneRegion {
     /// The character this region is, such as `innkeeper`, if it is named.
     pub fn label(&self) -> Option<&str> {
         self.label.as_deref()
+    }
+
+    /// The name the story gives this region's character, such as `Lena`, when one is set.
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
     }
 
     /// The box's left edge, in thousandths of the picture's width.
