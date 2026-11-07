@@ -836,16 +836,16 @@ fn multipart(
         );
         body.write_all(part.as_bytes()).map_err(append_error)?;
     }
-    if !keyterms.is_empty() {
-        let serialized =
-            serde_json::to_string(keyterms).map_err(|_| error(SpeechAdapterCause::InvalidInput))?;
+    // The supplier takes one `keyterms` field per term; a JSON array in one field is refused
+    // ("invalid_keyword"), observed against the live API 2026-11-06.
+    for term in keyterms {
         let part = format!(
             concat!(
                 "--{boundary}\r\nContent-Disposition: form-data; name=\"keyterms\"\r\n\r\n",
-                "{serialized}\r\n"
+                "{term}\r\n"
             ),
             boundary = boundary,
-            serialized = serialized
+            term = term
         );
         body.write_all(part.as_bytes()).map_err(append_error)?;
     }

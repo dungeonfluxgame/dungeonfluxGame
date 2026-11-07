@@ -24,9 +24,12 @@
 //! - `POST /dev/persona/generate` and `generate-cast`: the text service writes the persona of a
 //!   named character of the shown scene, or of all of them at once.
 //! - `POST /dev/persona/say`: the text service words a line from a character, cued on the scene.
+//!   The character shows the wordless thinking indicator while it works; `speak: true` also
+//!   voices the line and starts its clip with its bubble (`speech`).
 //! - `POST /dev/persona/ask`, `coverage` and `backfill`, `GET /dev/persona/backfills?id=`: a
 //!   question to a character, the judgement of whether the persona answers it, the filling of what
-//!   it lacks by adding detail only, and the record of what was added.
+//!   it lacks by adding detail only, and the record of what was added. `coverage: false` skips
+//!   the coverage question and the backfill (one model call); `speak: true` voices the line.
 //!
 //! The dev CLI's `persona` verbs are these routes. `scene cast` also lists the summary of each
 //! cast member that has a stored persona; a persona file that does not read is left out of that
@@ -63,3 +66,5 @@ mod fixtures;
 mod generate_tests;
 #[cfg(test)]
 mod persona_tests;
+#[cfg(test)]
+mod voice_tests;

@@ -8,7 +8,7 @@
 //!
 //! Every paid sequence (a generation, a coverage-backfill-line sequence, a line) runs on a task of
 //! its own that the handler waits for, so a client that leaves cannot lose an answer already paid
-//! for or stop `ask` between its coverage and its backfill ([`run_owned`]).
+//! for or stop `ask` between its coverage and its backfill (`blocking::run_owned`).
 
 use std::sync::Arc;
 
@@ -39,9 +39,10 @@ use super::storage::{
     PERSONA_WRITES, check_reserved, list_personas, persona_directory, persona_id, read_backfills,
     read_persona, remove_persona, write_persona,
 };
-use crate::blocking::run_blocking;
+use crate::blocking::{run_blocking, run_owned};
 use crate::dev_http::{parse_body, reply};
 use crate::observe::WallClock;
+use crate::speech::{Speech, SpeechError, Voiced, sound_change};
 use crate::state::AppState;
 use crate::text::{TextRoute, TextRuntime};
 
@@ -73,10 +74,12 @@ pub mod path {
     pub const PERSONA_BACKFILLS: &str = "/dev/persona/backfills";
 }
 
-/// What every persona route works with: the host, and the text surface the questions go to.
+/// What every persona route works with: the host, the text surface the questions go to, and the
+/// speech service that voices a line when asked.
 struct PersonaRoutes {
     app: Arc<AppState>,
     text: Arc<TextRuntime>,
+    speech: Speech,
 }
 
 /// `text` when it is a persona id, so it can go into an audit line.
@@ -99,17 +102,6 @@ fn answer<T: serde::Serialize>(
         ));
     }
     reply(result)
-}
-
-/// Runs `work`, a paid sequence, on a task of its own and waits for it. A request that is dropped
-/// (the client left, or shutdown's grace ended) cannot cancel it: the answers already paid for are
-/// stored and recorded. A task that stopped without an answer is `Stopped`.
-async fn run_owned<T: Send + 'static>(
-    work: impl Future<Output = Result<T, PersonaError>> + Send + 'static,
-) -> Result<T, PersonaError> {
-    tokio::spawn(work)
-        .await
-        .unwrap_or(Err(PersonaError::Stopped))
 }
 
 /// The stored persona of `id`, or `UnknownPersona`.
@@ -267,18 +259,24 @@ async fn generate(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Res
     };
     let known = known_id(&request.character).map(str::to_owned);
     let owned = Arc::clone(&routes);
-    let result = run_owned(async move {
-        let scene = ShownScene::read(&owned.app).await?;
-        scene.check(&request.character)?;
-        let writing = Writing {
-            hint: request.hint.as_deref(),
-            guidance: request.guidance.as_ref(),
-            model: request.model.as_deref(),
-            overwrite: request.overwrite,
-        };
-        // A failure of the generation itself is recorded where it happened.
-        Ok(generate_character(&owned.app, &owned.text, &scene, &request.character, writing).await)
-    })
+    let result = run_owned(
+        async move {
+            let scene = ShownScene::read(&owned.app).await?;
+            scene.check(&request.character)?;
+            let writing = Writing {
+                hint: request.hint.as_deref(),
+                guidance: request.guidance.as_ref(),
+                model: request.model.as_deref(),
+                overwrite: request.overwrite,
+            };
+            // A failure of the generation itself is recorded where it happened.
+            Ok(
+                generate_character(&owned.app, &owned.text, &scene, &request.character, writing)
+                    .await,
+            )
+        },
+        PersonaError::Stopped,
+    )
     .await;
     match result {
         Ok(generation) => reply(generation),
@@ -294,41 +292,82 @@ async fn generate_scene_cast(State(routes): State<Arc<PersonaRoutes>>, bytes: By
         }
     };
     let owned = Arc::clone(&routes);
-    let result = run_owned(async move {
-        let scene = ShownScene::read(&owned.app).await?;
-        let writing = Writing {
-            hint: request.hint.as_deref(),
-            guidance: request.guidance.as_ref(),
-            model: request.model.as_deref(),
-            overwrite: request.overwrite,
-        };
-        Ok(generate_cast(&owned.app, &owned.text, &scene, writing).await)
-    })
+    let result = run_owned(
+        async move {
+            let scene = ShownScene::read(&owned.app).await?;
+            let writing = Writing {
+                hint: request.hint.as_deref(),
+                guidance: request.guidance.as_ref(),
+                model: request.model.as_deref(),
+                overwrite: request.overwrite,
+            };
+            Ok(generate_cast(&owned.app, &owned.text, &scene, writing).await)
+        },
+        PersonaError::Stopped,
+    )
     .await;
     answer(&routes.app, "generate-cast", None, result)
 }
 
-/// Applies `said` as the cue of `character` through the one scene path `scene cue` takes, which
-/// records its own refusals.
+/// The scene change that shows `kind` over `character`.
+fn cue_change(character: &str, kind: CueKind) -> SceneChange {
+    SceneChange::Screen {
+        edit: ScreenEdit::Cue {
+            cue: CharacterCue {
+                character: character.to_owned(),
+                kind,
+            },
+        },
+    }
+}
+
+/// Shows the wordless thinking indicator over `character` while the model and the voice work.
+async fn cue_thinking(app: &AppState, character: &str) -> Result<(), PersonaError> {
+    crate::playground::apply_scene_change(app, cue_change(character, CueKind::Thinking)).await?;
+    Ok(())
+}
+
+/// Takes the thinking indicator away after a turn that failed.
+async fn clear_thinking(app: &AppState, character: &str) {
+    // A refusal is recorded by the scene path, and the failure being reported is the turn's own.
+    let _ = crate::playground::apply_scene_change(app, cue_change(character, CueKind::Quiet)).await;
+}
+
+/// Applies `said` as the speaking cue of `character` through the one scene path `scene cue` takes,
+/// which records its own refusals. When `speak` is asked the line is voiced first and its sound
+/// is cued in the same scene change, so the bubble and the voice start together; a voice that
+/// fails is reported and the bubble is cued without it.
 async fn cue_line(
-    app: &AppState,
+    routes: &PersonaRoutes,
     character: String,
     said: SaidLine,
+    speak: bool,
 ) -> Result<Spoken, PersonaError> {
-    let cue = CharacterCue {
-        character: character.clone(),
-        kind: CueKind::Speaking {
+    // A line that may leak private detail is never sent to the voice supplier.
+    let voice = if !speak {
+        None
+    } else if said.leak_suspect {
+        Some(Voiced::Failed {
+            error: SpeechError::LineWithheld,
+        })
+    } else {
+        Some(routes.speech.voice_line(&character, &said.line).await)
+    };
+    let mut changes = vec![cue_change(
+        &character,
+        CueKind::Speaking {
             line: said.line.clone(),
         },
-    };
-    let change = SceneChange::Screen {
-        edit: ScreenEdit::Cue { cue },
-    };
-    let applied = crate::playground::apply_scene_change(app, change).await?;
+    )];
+    if let Some(Voiced::Played { clip, .. }) = &voice {
+        changes.push(sound_change(clip));
+    }
+    let applied = crate::playground::apply_scene_changes(&routes.app, changes).await?;
     Ok(Spoken {
         character,
         said,
         revision: applied.revision,
+        voice,
     })
 }
 
@@ -352,17 +391,31 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
     };
     let known = known_id(&request.character).map(str::to_owned);
     let owned = Arc::clone(&routes);
-    let result = run_owned(async move {
-        let (scene, route, own) =
-            asked_of(&owned, &request.character, request.model.as_deref()).await?;
-        let occasion = Occasion {
-            situation: &request.situation,
-            question: None,
-        };
-        let said = say_line(&owned.app, &route, &scene, &own, occasion).await?;
-        // The cue goes through the scene path, which records its own refusals.
-        Ok(cue_line(&owned.app, request.character, said).await)
-    })
+    let result = run_owned(
+        async move {
+            let (scene, route, own) =
+                asked_of(&owned, &request.character, request.model.as_deref()).await?;
+            cue_thinking(&owned.app, &request.character).await?;
+            let occasion = Occasion {
+                situation: &request.situation,
+                question: None,
+            };
+            let said = match say_line(&owned.app, &route, &scene, &own, occasion).await {
+                Ok(said) => said,
+                Err(error) => {
+                    clear_thinking(&owned.app, &request.character).await;
+                    return Err(error);
+                }
+            };
+            // The cue goes through the scene path, which records its own refusals.
+            let spoken = cue_line(&owned, request.character.clone(), said, request.speak).await;
+            if spoken.is_err() {
+                clear_thinking(&owned.app, &request.character).await;
+            }
+            Ok(spoken)
+        },
+        PersonaError::Stopped,
+    )
     .await;
     match result {
         Ok(spoken) => reply(spoken),
@@ -377,14 +430,28 @@ async fn ask(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
     };
     let known = known_id(&request.character).map(str::to_owned);
     let owned = Arc::clone(&routes);
-    let result = run_owned(async move {
-        let (scene, route, _) =
-            asked_of(&owned, &request.character, request.model.as_deref()).await?;
-        let at_ms = WallClock.now_ms();
-        let considered = consider(&owned.app, &route, &scene, &request, at_ms).await?;
-        let spoken = cue_line(&owned.app, request.character, considered.said.clone()).await;
-        Ok(spoken.map(|spoken| considered.answered(spoken)))
-    })
+    let result = run_owned(
+        async move {
+            let (scene, route, _) =
+                asked_of(&owned, &request.character, request.model.as_deref()).await?;
+            cue_thinking(&owned.app, &request.character).await?;
+            let at_ms = WallClock.now_ms();
+            let considered = match consider(&owned.app, &route, &scene, &request, at_ms).await {
+                Ok(considered) => considered,
+                Err(error) => {
+                    clear_thinking(&owned.app, &request.character).await;
+                    return Err(error);
+                }
+            };
+            let said = considered.said.clone();
+            let spoken = cue_line(&owned, request.character.clone(), said, request.speak).await;
+            if spoken.is_err() {
+                clear_thinking(&owned.app, &request.character).await;
+            }
+            Ok(spoken.map(|spoken| considered.answered(spoken)))
+        },
+        PersonaError::Stopped,
+    )
     .await;
     match result {
         Ok(answered) => reply(answered),
@@ -399,23 +466,26 @@ async fn coverage(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Res
     };
     let known = known_id(&request.character).map(str::to_owned);
     let owned = Arc::clone(&routes);
-    let result = run_owned(async move {
-        let (_, route, own) =
-            asked_of(&owned, &request.character, request.model.as_deref()).await?;
-        let found = coverage_of(
-            &owned.app,
-            &route,
-            &own,
-            &request.question,
-            request.guidance.as_ref(),
-        )
-        .await?;
-        Ok(Covered {
-            enough: found.enough,
-            gaps: found.gaps,
-            profile: route.profile().as_str().to_owned(),
-        })
-    })
+    let result = run_owned(
+        async move {
+            let (_, route, own) =
+                asked_of(&owned, &request.character, request.model.as_deref()).await?;
+            let found = coverage_of(
+                &owned.app,
+                &route,
+                &own,
+                &request.question,
+                request.guidance.as_ref(),
+            )
+            .await?;
+            Ok(Covered {
+                enough: found.enough,
+                gaps: found.gaps,
+                profile: route.profile().as_str().to_owned(),
+            })
+        },
+        PersonaError::Stopped,
+    )
     .await;
     answer(&routes.app, "coverage", known.as_deref(), result)
 }
@@ -432,20 +502,23 @@ async fn backfill(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Res
         return answer::<Backfilled>(&routes.app, "backfill", known.as_deref(), Err(error));
     }
     let owned = Arc::clone(&routes);
-    let result = run_owned(async move {
-        let (scene, route, own) =
-            asked_of(&owned, &request.character, request.model.as_deref()).await?;
-        let job = BackfillJob {
-            question: None,
-            gaps: &request.gaps,
-            guidance: request.guidance.as_ref(),
-            at_ms: WallClock.now_ms(),
-        };
-        // A failure of the backfill itself is recorded where it happened.
-        Ok(backfill_persona(&owned.app, &route, &scene, &own, job)
-            .await
-            .map(|committed| committed.done))
-    })
+    let result = run_owned(
+        async move {
+            let (scene, route, own) =
+                asked_of(&owned, &request.character, request.model.as_deref()).await?;
+            let job = BackfillJob {
+                question: None,
+                gaps: &request.gaps,
+                guidance: request.guidance.as_ref(),
+                at_ms: WallClock.now_ms(),
+            };
+            // A failure of the backfill itself is recorded where it happened.
+            Ok(backfill_persona(&owned.app, &route, &scene, &own, job)
+                .await
+                .map(|committed| committed.done))
+        },
+        PersonaError::Stopped,
+    )
     .await;
     match result {
         Ok(done) => reply(done),
@@ -480,8 +553,8 @@ async fn backfills(
     answer::<Vec<BackfillRecord>>(app, "backfills", known.as_deref(), read)
 }
 
-/// The persona routes, asking the text service of `text`.
-pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
+/// The persona routes, asking the text service of `text` and voicing lines with `speech`.
+pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -> Router {
     Router::new()
         .route(path::PERSONA, get(list).post(write))
         .route(path::PERSONA_ONE, get(show))
@@ -494,5 +567,5 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
         .route(path::PERSONA_COVERAGE, post(coverage))
         .route(path::PERSONA_BACKFILL, post(backfill))
         .route(path::PERSONA_BACKFILLS, get(backfills))
-        .with_state(Arc::new(PersonaRoutes { app, text }))
+        .with_state(Arc::new(PersonaRoutes { app, text, speech }))
 }

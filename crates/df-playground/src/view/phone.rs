@@ -1,5 +1,5 @@
 //! One player's phone: the hero and goal, what is happening, a private note, the choice list and
-//! the composer.
+//! the composer (`composer`).
 //!
 //! It turns a `PhoneScene` and the chosen controls into page elements. The choice rules (how many,
 //! which groups, what is hidden) come from `choices`; this module only draws what it returns, and
@@ -98,24 +98,6 @@ fn status_chip(document: &Document, status: &Status) -> Result<Option<Element>, 
         "phone-status"
     };
     text_element(document, "div", class, &copy).map(Some)
-}
-
-fn composer(document: &Document, blocked: bool) -> Result<Element, JsValue> {
-    let bar = element(document, "div", "composer")?;
-    let field = text_element(
-        document,
-        "div",
-        if blocked {
-            "composer-field composer-field-off"
-        } else {
-            "composer-field"
-        },
-        "Say or do something",
-    )?;
-    let send = text_element(document, "div", "composer-send", "Send")?;
-    append(&bar, &field)?;
-    append(&bar, &send)?;
-    Ok(bar)
 }
 
 /// The parts of a phone, in the order they are drawn.
@@ -223,7 +205,9 @@ pub fn build_part(
             let view = build(scene, controls.show_unavailable);
             choice_list(document, &view).map(Some)
         }
-        Part::PhoneComposer => composer(document, status_blocks_input(&status)).map(Some),
+        Part::PhoneComposer => Err(JsValue::from_str(
+            "the composer is drawn by view::composer, which needs the composer's state",
+        )),
         other => Err(JsValue::from_str(&format!(
             "{} is not a piece of a phone",
             other.dom_marker()

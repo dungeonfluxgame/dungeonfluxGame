@@ -10,7 +10,7 @@ use super::cli::{SERVICES_USAGE, Services, fetch, parse};
 use super::format::format_services;
 use super::request::{
     ImageMode, ImagegenReport, LocateReport, ServicesError, ServicesReply, ServicesReport,
-    TextReport,
+    SpeechReport, TextReport,
 };
 use super::routes::{path, router_with};
 use crate::command::CommandError;
@@ -30,6 +30,7 @@ async fn serve(running: &Running, text: TextRuntime, generator: ImageGenerator) 
         Arc::clone(&running.state),
         Arc::new(text),
         Arc::new(generator),
+        crate::speech::fixtures::silent_speech(&running.state),
     );
     let listener = server::bind(0).await.expect("binds an ephemeral port");
     let port = listener.local_addr().expect("has an address").port();
@@ -219,6 +220,14 @@ fn the_verb_prints_one_line_of_keys_per_service() {
             key_present: false,
             min_confidence_permille: 600,
         },
+        speech: SpeechReport {
+            configured: true,
+            missing: None,
+            tts_model: "eleven_flash_v2_5".to_owned(),
+            stt_model: "scribe_v2".to_owned(),
+            voices: Some(2),
+            clips_kept: None,
+        },
     };
     assert_eq!(
         format_services(&report),
@@ -229,7 +238,9 @@ fn the_verb_prints_one_line_of_keys_per_service() {
             "imagegen: backend=codex-cli mode=live deadline_ms=900000 provenance_dir=set ",
             "codex_home=unset running=1 last_outcome=stored\n",
             "locate: model=fal-ai/sam-3-1/image-rle endpoint_host=queue.fal.run ",
-            "timeout_ms=600000 key=missing min_confidence_permille=600"
+            "timeout_ms=600000 key=missing min_confidence_permille=600\n",
+            "speech: tts_model=eleven_flash_v2_5 stt_model=scribe_v2 configured=true ",
+            "missing=- voices=2 clips_kept=-"
         )
     );
 }

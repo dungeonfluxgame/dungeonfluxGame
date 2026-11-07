@@ -17,6 +17,7 @@ mod report;
 mod sound;
 mod state;
 mod toolbar;
+mod voice;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -24,7 +25,9 @@ use web_sys::Event;
 
 use crate::dom::{append, document, element};
 use crate::timeline::ErrorSource;
-use events::{note_gesture, on_animation_ended, on_change, on_click, on_media_event};
+use events::{
+    on_animation_ended, on_change, on_click, on_input, on_key, on_media_event, on_visibility_change,
+};
 use page::place_bubbles;
 use state::{ROOT_ID, THEME_ID, log_error, with_app_mut};
 
@@ -61,11 +64,21 @@ pub fn start() -> Result<(), JsValue> {
     root.add_event_listener_with_callback("change", change.as_ref().unchecked_ref())?;
     change.forget();
 
-    // A key press is a gesture too, and a picture says when it has loaded or failed. Those events
-    // do not bubble, so they are caught on the way down.
-    let key = Closure::<dyn FnMut(Event)>::new(|_: Event| note_gesture());
+    let input = Closure::<dyn FnMut(Event)>::new(|event: Event| on_input(&event));
+    root.add_event_listener_with_callback("input", input.as_ref().unchecked_ref())?;
+    input.forget();
+
+    // A key press is a gesture too (and Enter in the composer's box sends), and a picture says when
+    // it has loaded or failed. Those events do not bubble, so they are caught on the way down.
+    let key = Closure::<dyn FnMut(Event)>::new(|event: Event| on_key(&event));
     body.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref())?;
     key.forget();
+    let visibility = Closure::<dyn FnMut(Event)>::new(|_: Event| on_visibility_change());
+    document.add_event_listener_with_callback(
+        "visibilitychange",
+        visibility.as_ref().unchecked_ref(),
+    )?;
+    visibility.forget();
     let finished = Closure::<dyn FnMut(Event)>::new(|event: Event| on_animation_ended(&event));
     root.add_event_listener_with_callback("animationend", finished.as_ref().unchecked_ref())?;
     finished.forget();
@@ -88,6 +101,7 @@ pub fn start() -> Result<(), JsValue> {
     );
     crate::net::set_client(&client_id);
     with_app_mut(|app| app.client_id = client_id);
+    spawn_local(voice::refresh_host_state());
     spawn_local(frames::run());
     Ok(())
 }

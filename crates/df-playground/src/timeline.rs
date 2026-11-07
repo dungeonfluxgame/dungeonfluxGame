@@ -43,13 +43,21 @@ pub enum TimelineKind {
     Draw,
     /// A camera framing.
     Camera,
+    /// A microphone recording, from the moment it began to the moment it stopped. Its id is
+    /// `microphone`; the audio is never named or kept.
+    Capture,
+    /// A recording on its way to text, from the request to the answer. Its id is `speech`; the
+    /// text is never named.
+    Transcribe,
+    /// A question put to a character, from the request to the answer. Its id is the character's.
+    Ask,
     /// An error the page met. The page never sends this kind as a record; the host makes one from
     /// each error a report carries, so a timeline read shows errors in their place.
     Error,
 }
 
 impl TimelineKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 13] = [
         Self::Line,
         Self::Plate,
         Self::Figure,
@@ -59,6 +67,9 @@ impl TimelineKind {
         Self::Music,
         Self::Draw,
         Self::Camera,
+        Self::Capture,
+        Self::Transcribe,
+        Self::Ask,
         Self::Error,
     ];
 
@@ -74,6 +85,9 @@ impl TimelineKind {
             Self::Music => "music",
             Self::Draw => "draw",
             Self::Camera => "camera",
+            Self::Capture => "capture",
+            Self::Transcribe => "transcribe",
+            Self::Ask => "ask",
             Self::Error => "error",
         }
     }

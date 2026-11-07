@@ -1,0 +1,245 @@
+//! The voices file: which supplier voice speaks for which character.
+//!
+//! `voices.json` in the playground's assets folder holds `{"default": "<voice id>", "voices":
+//! {"<character>": "<voice id>"}}`. A missing file is "no voices", never an error; a file that
+//! does not read is a typed error. A voice id is an opaque reference to the supplier's voice: not
+//! a permission and not an identity, and it is never written to an audit line. A voice is fixed
+//! to a character by editing this file (`speech voice`), written whole or not at all.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use df_content::persona::PersonaId;
+use serde::{Deserialize, Serialize};
+
+use super::limits::{MAXIMUM_VOICE_ID_BYTES, MAXIMUM_VOICES, MAXIMUM_VOICES_FILE_BYTES};
+use super::provider::TTS_MODEL;
+use super::request::{SpeechError, VoiceCause, VoiceChanged, VoiceRow};
+use crate::atomic_file::write_atomically;
+use crate::blocking::WriteLock;
+use crate::locate::IoCause;
+use crate::state::AppState;
+
+/// The voices file's name.
+pub const VOICES_FILE: &str = "voices.json";
+
+/// Held around every write of the voices file, so two edits never overwrite one another.
+pub(super) static VOICE_WRITES: WriteLock = WriteLock::new();
+
+/// Whose voice a line was spoken in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VoiceSource {
+    /// A voice id the caller named.
+    Override,
+    /// The character's own voice.
+    Character,
+    /// The default voice.
+    Default,
+}
+
+impl VoiceSource {
+    pub(super) fn key(self) -> &'static str {
+        match self {
+            Self::Override => "override",
+            Self::Character => "character",
+            Self::Default => "default",
+        }
+    }
+}
+
+/// The voice a line is spoken in and where it came from.
+pub(super) struct ResolvedVoice {
+    pub(super) id: String,
+    pub(super) source: VoiceSource,
+}
+
+impl ResolvedVoice {
+    /// The label of the profile that spoke: the model and where the voice came from, never the
+    /// voice id.
+    pub(super) fn profile(&self) -> String {
+        format!("{TTS_MODEL}/{}", self.source.key())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VoicesFile {
+    #[serde(default)]
+    default: Option<String>,
+    #[serde(default)]
+    voices: BTreeMap<String, String>,
+}
+
+/// The voices file as it was read.
+pub(super) struct VoiceBook {
+    file: VoicesFile,
+}
+
+/// The voices file of the host's playground.
+pub(super) fn voices_path(app: &AppState) -> PathBuf {
+    app.playground().files().assets().join(VOICES_FILE)
+}
+
+/// That `voice` can be sent to the supplier as a voice id.
+pub(super) fn check_voice(voice: &str) -> Result<(), SpeechError> {
+    let cause = if voice.trim().is_empty() {
+        VoiceCause::Empty
+    } else if voice.len() > MAXIMUM_VOICE_ID_BYTES {
+        VoiceCause::TooLong
+    } else if voice
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        VoiceCause::InvalidCharacters
+    } else {
+        return Ok(());
+    };
+    Err(SpeechError::InvalidVoice { cause })
+}
+
+/// `text` as a character id, or the refusal naming the rule.
+pub(super) fn check_character(text: &str) -> Result<PersonaId, SpeechError> {
+    PersonaId::new(text).map_err(|cause| SpeechError::InvalidCharacter { cause })
+}
+
+fn invalid(detail: String) -> SpeechError {
+    SpeechError::VoicesInvalid { detail }
+}
+
+impl VoiceBook {
+    /// The book at `path`: empty when there is no file.
+    pub(super) fn read(path: &Path) -> Result<Self, SpeechError> {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    file: VoicesFile::default(),
+                });
+            }
+            Err(error) => {
+                return Err(SpeechError::VoicesUnreadable {
+                    cause: IoCause::from_kind(error.kind()),
+                });
+            }
+        };
+        if u64::try_from(bytes.len()).map_or(true, |length| length > MAXIMUM_VOICES_FILE_BYTES) {
+            return Err(invalid("the file is too large".to_owned()));
+        }
+        let file: VoicesFile =
+            serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))?;
+        if file.voices.len() > MAXIMUM_VOICES {
+            return Err(invalid("the file names too many voices".to_owned()));
+        }
+        for (character, voice) in &file.voices {
+            check_character(character)
+                .map_err(|_| invalid("a character id is not valid".into()))?;
+            check_voice(voice).map_err(|_| invalid("a voice id is not valid".into()))?;
+        }
+        if let Some(voice) = &file.default {
+            check_voice(voice).map_err(|_| invalid("the default voice id is not valid".into()))?;
+        }
+        Ok(Self { file })
+    }
+
+    /// The default voice, if one is set.
+    pub(super) fn default_voice(&self) -> Option<&str> {
+        self.file.default.as_deref()
+    }
+
+    /// The characters with a voice of their own, sorted by character.
+    pub(super) fn rows(&self) -> Vec<VoiceRow> {
+        self.file
+            .voices
+            .iter()
+            .map(|(character, voice)| VoiceRow {
+                character: character.clone(),
+                voice: voice.clone(),
+            })
+            .collect()
+    }
+
+    /// The voice to speak in: `named` when the caller gives one, else the character's, else the
+    /// default.
+    pub(super) fn resolve(
+        &self,
+        character: Option<&str>,
+        named: Option<&str>,
+    ) -> Result<ResolvedVoice, SpeechError> {
+        if let Some(voice) = named {
+            check_voice(voice)?;
+            return Ok(ResolvedVoice {
+                id: voice.to_owned(),
+                source: VoiceSource::Override,
+            });
+        }
+        if let Some(voice) = character.and_then(|character| self.file.voices.get(character)) {
+            return Ok(ResolvedVoice {
+                id: voice.clone(),
+                source: VoiceSource::Character,
+            });
+        }
+        match &self.file.default {
+            Some(voice) => Ok(ResolvedVoice {
+                id: voice.clone(),
+                source: VoiceSource::Default,
+            }),
+            None => Err(SpeechError::NoVoice {
+                character: character.map(str::to_owned),
+            }),
+        }
+    }
+}
+
+/// Gives `character` the voice `voice`, or takes theirs away when `voice` is `None`, and writes
+/// the file whole. Blocking; the caller holds no lock.
+pub(super) fn change_voice(
+    path: &Path,
+    character: &str,
+    voice: Option<&str>,
+) -> Result<VoiceChanged, SpeechError> {
+    let character = check_character(character)?;
+    if let Some(voice) = voice {
+        check_voice(voice)?;
+    }
+    let _writing = VOICE_WRITES.lock();
+    let mut book = VoiceBook::read(path)?;
+    let before = book.file.clone();
+    match voice {
+        Some(voice) => {
+            book.file
+                .voices
+                .insert(character.as_str().to_owned(), voice.to_owned());
+        }
+        None => {
+            book.file.voices.remove(character.as_str());
+        }
+    }
+    let changed = book.file != before;
+    if changed {
+        let mut text =
+            serde_json::to_string_pretty(&book.file).map_err(|error| invalid(error.to_string()))?;
+        text.push('\n');
+        let (directory, name) = split(path)?;
+        write_atomically(directory, name, text.as_bytes()).map_err(|error| {
+            SpeechError::VoicesUnwritable {
+                cause: IoCause::from_kind(error.kind()),
+            }
+        })?;
+    }
+    Ok(VoiceChanged {
+        character: character.to_string(),
+        has_voice: voice.is_some(),
+        changed,
+    })
+}
+
+/// The folder and file name of `path`.
+fn split(path: &Path) -> Result<(&Path, &str), SpeechError> {
+    let name = path.file_name().and_then(|name| name.to_str());
+    match (path.parent(), name) {
+        (Some(directory), Some(name)) => Ok((directory, name)),
+        _ => Err(SpeechError::VoicesUnwritable {
+            cause: IoCause::InvalidData,
+        }),
+    }
+}

@@ -18,6 +18,20 @@ where
         .unwrap_or(Err(stopped))
 }
 
+/// Runs `work`, a paid call, on a task of its own and waits for it. A request that is dropped (the
+/// client left, or shutdown's grace ended) cannot cancel it, so an answer already paid for is
+/// stored and recorded. A task that stopped without an answer is `stopped`.
+pub(crate) async fn run_owned<T, E>(
+    work: impl Future<Output = Result<T, E>> + Send + 'static,
+    stopped: E,
+) -> Result<T, E>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    tokio::spawn(work).await.unwrap_or(Err(stopped))
+}
+
 /// A lock held around the work that reads then writes one folder of files, so one never overwrites
 /// what another stored meanwhile. Taken only inside blocking work, never across an `.await`. A
 /// panic of an earlier holder left no file half written (every write of the host is whole or not

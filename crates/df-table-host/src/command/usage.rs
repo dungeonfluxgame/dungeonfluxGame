@@ -17,6 +17,8 @@ use crate::persona::cli::{
     PERSONA_SECRET_USAGE, PERSONA_SET_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_USAGE,
 };
 use crate::services::SERVICES_USAGE;
+use crate::speech::SPEECH_USAGE;
+use crate::speech::cli::{SPEECH_SPEAK_USAGE, SPEECH_TRANSCRIBE_USAGE, SPEECH_VOICE_USAGE};
 
 pub(super) const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
 pub(super) const SET_USAGE: &str = "set <id> <field>=<value> [<field>=<value> ...]";
@@ -81,7 +83,8 @@ pub(super) const FIXTURE_USAGE: &str =
 pub(super) const REPL_USAGE: &str = "repl";
 pub(super) const CLIENTS_USAGE: &str = concat!(
     "clients [<client>] | clients timeline <client> ",
-    "[kind=line|plate|figure|clip|scene|sound|music|draw|camera|error] [after=SEQ]",
+    "[kind=line|plate|figure|clip|scene|sound|music|draw|camera|capture|transcribe|ask|error] ",
+    "[after=SEQ]",
 );
 pub(super) const FIXTURES_USAGE: &str = "fixtures";
 
@@ -262,6 +265,15 @@ pub fn usage_text() -> String {
          DF_TEXT_PERSONA_MODEL); see services for the profile each uses.\
          \n      {PERSONA_REMOVE_USAGE}   deletes one (its backfill record stays, as history). \
          scene cast shows each cast member's job.\n\
+         \n  {SPEECH_USAGE}\
+         \n      voice chat through the speech service (see services): the status and the \
+         voices; {SPEECH_SPEAK_USAGE} voices operator text in a character's voice (- for the \
+         default voice), keeps it as a voice-<n>.mp3 clip in the media library and plays it \
+         as a scene sound; {SPEECH_TRANSCRIBE_USAGE} prints what a 16 kHz mono 16-bit PCM or \
+         WAV recording says; {SPEECH_VOICE_USAGE} sets or clears a character's voice in \
+         voices.json; clips lists the clips the host made and clear deletes them. persona \
+         ask and say take speak=true to voice the line and start it with its bubble, and \
+         ask takes coverage=false to skip the coverage question.\n\
          \n  {WAIT_USAGE}\n      pause here; stage scenes over time in a script or a session\n\
          \n  {FIXTURES_USAGE}\n      list the playground's fixture files\n\
          \n  {FIXTURE_USAGE}\n      read, write (checked first) or delete a fixture file\n\

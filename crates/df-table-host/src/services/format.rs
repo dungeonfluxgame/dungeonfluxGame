@@ -7,16 +7,22 @@ fn or_dash(value: Option<&str>) -> &str {
     value.unwrap_or("-")
 }
 
+/// A count that may be unknown, as a line writes it.
+fn count_or_dash(value: Option<u64>) -> String {
+    value.map_or_else(|| "-".to_owned(), |value| value.to_string())
+}
+
 /// `set` or `unset`.
 fn set(present: bool) -> &'static str {
     if present { "set" } else { "unset" }
 }
 
-/// One line per service: text, imagegen, locate.
+/// One line per service: text, imagegen, locate, speech.
 pub fn format_services(report: &ServicesReport) -> String {
     let text = &report.text;
     let image = &report.imagegen;
     let locate = &report.locate;
+    let speech = &report.speech;
     [
         format!(
             concat!(
@@ -60,6 +66,18 @@ pub fn format_services(report: &ServicesReport) -> String {
                 "missing"
             },
             locate.min_confidence_permille
+        ),
+        format!(
+            concat!(
+                "speech: tts_model={} stt_model={} configured={} missing={} voices={} ",
+                "clips_kept={}"
+            ),
+            speech.tts_model,
+            speech.stt_model,
+            speech.configured,
+            or_dash(speech.missing.as_deref()),
+            count_or_dash(speech.voices),
+            count_or_dash(speech.clips_kept)
         ),
     ]
     .join("\n")

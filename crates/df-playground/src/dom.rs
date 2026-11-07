@@ -78,6 +78,42 @@ pub fn text_element(
     Ok(element)
 }
 
+/// A button of class `class` with `label`, whose click asks for `action` (see `set_action`).
+pub fn button(
+    document: &Document,
+    class: &str,
+    label: &str,
+    action: &str,
+) -> Result<Element, JsValue> {
+    let button = text_element(document, "button", class, label)?;
+    button.set_attribute("type", "button")?;
+    set_action(&button, action)?;
+    Ok(button)
+}
+
+/// A menu whose change asks for `action`, named `label` for a screen reader.
+pub fn select(document: &Document, label: &str, action: &str) -> Result<Element, JsValue> {
+    let select = element(document, "select", "")?;
+    select.set_attribute("aria-label", label)?;
+    set_action(&select, action)?;
+    Ok(select)
+}
+
+/// An option of a menu, chosen when `selected`.
+pub fn option(
+    document: &Document,
+    value: &str,
+    label: &str,
+    selected: bool,
+) -> Result<Element, JsValue> {
+    let option = text_element(document, "option", "", label)?;
+    option.set_attribute("value", value)?;
+    if selected {
+        option.set_attribute("selected", "selected")?;
+    }
+    Ok(option)
+}
+
 pub fn append(parent: &Element, child: &Element) -> Result<(), JsValue> {
     parent.append_child(child).map(|_| ())
 }

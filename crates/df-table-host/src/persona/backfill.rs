@@ -213,6 +213,14 @@ async fn fill_gaps(
     at_ms: u64,
 ) -> Filled {
     let guidance = request.guidance.as_ref();
+    if !request.coverage {
+        return Filled {
+            covered: false,
+            gaps: Vec::new(),
+            outcome: BackfillOutcome::CoverageSkipped,
+            persona,
+        };
+    }
     let coverage = match coverage_of(app, route, &persona, &request.question, guidance).await {
         Ok(coverage) => coverage,
         Err(error) => {

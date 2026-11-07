@@ -9,6 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::copy::{ReadingPace, status_from_key};
+use crate::dev_reply::DevReply;
 use crate::fixture::Status;
 use crate::scene::SceneOverlay;
 
@@ -192,28 +193,20 @@ impl ControlsReply {
 }
 
 /// The host's answer to a change of what the playground shows (`path::CONTROLS_CHANGE`), as far as
-/// the page reads it: `{"outcome":"done","value":..}` with the controls after the change, or
-/// `{"outcome":"rejected","error":{..},"message":".."}`. The page shows the host's sentence and
-/// does not read the typed `error`, which is for the dev CLI.
+/// the page reads it: the dev reply (`dev_reply::DevReply`) with the controls after the change, or
+/// the host's refusal. The page shows the host's sentence and does not read the typed `error`,
+/// which is for the dev CLI.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(tag = "outcome", rename_all = "snake_case")]
-pub enum ControlsChangeReply {
-    /// Boxed: the controls are far larger than a refusal.
-    Done {
-        value: Box<ControlsReply>,
-    },
-    Rejected {
-        message: String,
-    },
-}
+#[serde(transparent)]
+pub struct ControlsChangeReply(DevReply<Box<ControlsReply>>);
 
 impl ControlsChangeReply {
     /// The controls after the change, or the host's sentence for its refusal.
     pub fn into_result(self) -> Result<ControlsReply, String> {
-        match self {
-            Self::Done { value } => Ok(*value),
-            Self::Rejected { message } => Err(message),
-        }
+        self.0
+            .into_result()
+            .map(|controls| *controls)
+            .map_err(|rejection| rejection.message)
     }
 }
 

@@ -10,6 +10,7 @@
 //! answers, in a `DevError::Rejected`.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use df_content::persona::backfill::{FILLABLE, Gap, NarrativeGuidance};
 use df_content::persona::{
@@ -44,9 +45,10 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona behavior <id> add|drop ... | persona trigger <id> add|drop ... | ",
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
     "[model=<name>] <guidance options> [hint <text...>] | ",
-    "persona say <character> [model=<name>] <situation...> | ",
-    "persona ask <character> [model=<name>] [backfill=true|false] [situation=<text>] ",
-    "<guidance options> <question...> | persona coverage <character> [model=<name>] ",
+    "persona say <character> [model=<name>] [speak=true|false] <situation...> | ",
+    "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
+    "[speak=true|false] [situation=<text>] <guidance options> <question...> | ",
+    "persona coverage <character> [model=<name>] ",
     "<guidance options> <question...> | persona backfill <character> gap=<field>:<topic>... ",
     "[model=<name>] <guidance options> | persona backfills <id> | persona remove <id>",
 );
@@ -90,11 +92,12 @@ pub const PERSONA_GENERATE_USAGE: &str = concat!(
     "[hint <text...>]",
 );
 /// `persona say`: a line from a character, cued on the scene.
-pub const PERSONA_SAY_USAGE: &str = "persona say <character> [model=<name>] <situation...>";
+pub const PERSONA_SAY_USAGE: &str =
+    "persona say <character> [model=<name>] [speak=true|false] <situation...>";
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
-    "persona ask <character> [model=<name>] [backfill=true|false] [situation=<text>] ",
-    "<guidance options> <question...>",
+    "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
+    "[speak=true|false] [situation=<text>] <guidance options> <question...>",
 );
 /// `persona coverage`: whether the persona holds enough to answer.
 pub const PERSONA_COVERAGE_USAGE: &str =
@@ -163,12 +166,15 @@ pub enum PersonaCommand {
         character: PersonaId,
         situation: String,
         model: Option<String>,
+        speak: bool,
     },
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
         question: String,
         backfill: bool,
+        coverage: bool,
+        speak: bool,
         situation: Option<String>,
         asking: Asking,
     },
@@ -277,11 +283,16 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let [character, rest @ ..] = words else {
         return Err(CommandError::Usage(PERSONA_SAY_USAGE));
     };
-    let (given, situation) = take_options(rest, &["model"]);
+    let (given, situation) = take_options(rest, &["model", "speak"]);
+    let mut speak = false;
+    for (_, value) in given.iter().filter(|(key, _)| *key == "speak") {
+        speak = flag("speak", value)?;
+    }
     Ok(PersonaCommand::Say {
         character: id_word(character)?,
         situation: free_text(situation, PERSONA_SAY_USAGE)?,
         model: asking_from(&given)?.model,
+        speak,
     })
 }
 
@@ -289,13 +300,19 @@ fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let [character, rest @ ..] = words else {
         return Err(CommandError::Usage(PERSONA_ASK_USAGE));
     };
-    let keys = [&["model", "backfill", "situation"][..], &GUIDANCE_KEYS].concat();
+    let keys = [
+        &["model", "backfill", "coverage", "speak", "situation"][..],
+        &GUIDANCE_KEYS,
+    ]
+    .concat();
     let (given, question) = take_options(rest, &keys);
-    let mut backfill = true;
+    let (mut backfill, mut coverage, mut speak) = (true, true, false);
     let mut situation = None;
     for &(key, value) in &given {
         match key {
             "backfill" => backfill = flag("backfill", value)?,
+            "coverage" => coverage = flag("coverage", value)?,
+            "speak" => speak = flag("speak", value)?,
             "situation" => situation = Some(value.to_owned()),
             _ => {}
         }
@@ -304,6 +321,8 @@ fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
         character: id_word(character)?,
         question: free_text(question, PERSONA_ASK_USAGE)?,
         backfill,
+        coverage,
+        speak,
         situation,
         asking: asking_from(&given)?,
     })
@@ -579,6 +598,8 @@ async fn generate(
 /// What `persona ask` takes besides the model and the guidance.
 struct AskExtras {
     backfill: bool,
+    coverage: bool,
+    speak: bool,
     situation: Option<String>,
 }
 
@@ -595,10 +616,17 @@ async fn ask_character(
         guidance: guidance_of(asking.guidance).await?,
         model: asking.model,
         backfill: extras.backfill,
+        coverage: extras.coverage,
+        speak: extras.speak,
         situation: extras.situation,
     };
+    let started = Instant::now();
     let answered: Answered = reply_value(post_json(port, path::PERSONA_ASK, &request).await?)?;
-    Ok(format_answered(&answered))
+    Ok(format!(
+        "{}\n  total: {} ms",
+        format_answered(&answered),
+        started.elapsed().as_millis()
+    ))
 }
 
 async fn cover(
@@ -644,11 +672,13 @@ async fn say(
     character: PersonaId,
     situation: String,
     model: Option<String>,
+    speak: bool,
 ) -> Result<String, DevError> {
     let request = SayRequest {
         character: character.to_string(),
         situation,
         model,
+        speak,
     };
     let spoken: Spoken = reply_value(post_json(port, path::PERSONA_SAY, &request).await?)?;
     Ok(format_spoken(&spoken))
@@ -697,11 +727,15 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             character,
             question,
             backfill,
+            coverage,
+            speak,
             situation,
             asking,
         } => {
             let extras = AskExtras {
                 backfill,
+                coverage,
+                speak,
                 situation,
             };
             ask_character(port, character, question, extras, asking).await
@@ -721,6 +755,7 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             character,
             situation,
             model,
-        } => say(port, character, situation, model).await,
+            speak,
+        } => say(port, character, situation, model, speak).await,
     }
 }

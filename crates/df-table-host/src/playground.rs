@@ -454,6 +454,16 @@ pub(crate) async fn apply_scene_change(
     state: &AppState,
     change: SceneChange,
 ) -> Result<ControlsReply, SceneApplyError> {
+    apply_scene_changes(state, vec![change]).await
+}
+
+/// Applies `changes` to the live scene as one numbered change, each checked as
+/// `apply_scene_change` checks it: a line's speaking cue and its sound start in the same
+/// revision. If any is refused none is applied. Each applied change writes its audit line.
+pub(crate) async fn apply_scene_changes(
+    state: &AppState,
+    changes: Vec<SceneChange>,
+) -> Result<ControlsReply, SceneApplyError> {
     let (base, generation, fixture) = match read_shown_fixture(state).await {
         Ok(shown) => shown,
         Err(error) => {
@@ -461,7 +471,11 @@ pub(crate) async fn apply_scene_change(
             return Err(error.into());
         }
     };
-    let change = with_backdrop_layout(state, change).await;
+    let mut changes_with_layout = Vec::with_capacity(changes.len());
+    for change in changes {
+        changes_with_layout.push(with_backdrop_layout(state, change).await);
+    }
+    let changes = changes_with_layout;
     let media_directory = media_directory(state.playground().files());
     let library = run_blocking(move || media_entries(&media_directory), FileError::Stopped)
         .await
@@ -472,17 +486,22 @@ pub(crate) async fn apply_scene_change(
             ));
             SceneApplyError::from(error)
         })?;
-    if let Some(message) = media_problem(&change, &library) {
-        return Err(refuse_scene_change(state, "no_such_media", message));
+    let stage = stage_ids(state, &base).await;
+    for change in &changes {
+        if let Some(message) = media_problem(change, &library) {
+            return Err(refuse_scene_change(state, "no_such_media", message));
+        }
+        if let Some(message) = camera_problem(change, &stage) {
+            return Err(refuse_scene_change(state, "no_such_element", message));
+        }
     }
-    if let Some(message) = camera_problem(&change, &stage_ids(state, &base).await) {
-        return Err(refuse_scene_change(state, "no_such_element", message));
-    }
-    // The change is applied only if the fixture is still the one it was checked against.
+    // The changes are applied only if the fixture is still the one they were checked against.
     state
         .playground()
-        .change_scene(change.clone(), &base, generation, |reply| {
-            state.record_line(scene_line(&change, &reply.scene, reply.revision));
+        .change_scenes(changes.clone(), &base, generation, |reply| {
+            for change in &changes {
+                state.record_line(scene_line(change, &reply.scene, reply.revision));
+            }
         })
         .map_err(|refusal| {
             state.record_line(reject_line(

@@ -12,29 +12,8 @@ use super::state::App;
 use crate::audio;
 use crate::controls::{Device, FIXTURE_STATUS_KEY};
 use crate::copy::{ReadingPace, STATUS_KEYS};
-use crate::dom::{append, element, set_action, text_element};
+use crate::dom::{append, button, element, option, select, text_element};
 use crate::media::AudioState;
-
-fn option(
-    document: &Document,
-    value: &str,
-    label: &str,
-    selected: bool,
-) -> Result<Element, JsValue> {
-    let option = text_element(document, "option", "", label)?;
-    option.set_attribute("value", value)?;
-    if selected {
-        option.set_attribute("selected", "selected")?;
-    }
-    Ok(option)
-}
-
-fn select(document: &Document, label: &str, action: &str) -> Result<Element, JsValue> {
-    let select = element(document, "select", "")?;
-    select.set_attribute("aria-label", label)?;
-    set_action(&select, action)?;
-    Ok(select)
-}
 
 /// A labelled control inside a group: the small label, then the control.
 fn field(document: &Document, label: &str, control: &Element) -> Result<Element, JsValue> {
@@ -88,26 +67,19 @@ fn segment_option(
     label: &str,
     chosen: bool,
 ) -> Result<Element, JsValue> {
-    let button = text_element(document, "button", "studio-option", label)?;
-    button.set_attribute("type", "button")?;
+    let button = button(document, "studio-option", label, action)?;
     button.set_attribute("aria-pressed", if chosen { "true" } else { "false" })?;
-    set_action(&button, action)?;
     Ok(button)
 }
 
 fn switch(document: &Document, action: &str, label: &str, on: bool) -> Result<Element, JsValue> {
-    let button = text_element(document, "button", "studio-switch", label)?;
-    button.set_attribute("type", "button")?;
+    let button = button(document, "studio-switch", label, action)?;
     button.set_attribute("aria-pressed", if on { "true" } else { "false" })?;
-    set_action(&button, action)?;
     Ok(button)
 }
 
 fn action_button(document: &Document, action: &str, label: &str) -> Result<Element, JsValue> {
-    let button = text_element(document, "button", "studio-action", label)?;
-    button.set_attribute("type", "button")?;
-    set_action(&button, action)?;
-    Ok(button)
+    button(document, "studio-action", label, action)
 }
 
 /// The scenario menu: each option shows the scenario's title, or its file name when the file is

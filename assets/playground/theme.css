@@ -551,10 +551,146 @@ body {
 .choice-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .choice-row .choice { width: auto; }
 .choice-off { display: flex; flex-direction: column; padding: 4px 0; color: #7f9296; }
-.composer { display: flex; gap: 8px; padding: 10px 16px 16px; border-top: 1px solid var(--line); }
-.composer-field { flex: 1 1 auto; padding: 10px 12px; border: 1px solid #51696e; border-radius: 22px; color: var(--muted); background: var(--panel); }
-.composer-field-off { opacity: .45; }
-.composer-send { padding: 10px 16px; border-radius: 22px; color: #102029; background: var(--brass); font-weight: 600; }
+/* The composer: who to talk to, a strip while the microphone is in use, a note, and the row with
+   the microphone, the box and Send. */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+.composer-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.composer-who select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid #51696e;
+  border-radius: 14px;
+  color: var(--ivory);
+  background: var(--panel);
+  font: inherit;
+}
+.composer-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-left: 2px solid var(--alarm);
+  background: #17343c;
+  color: var(--ivory);
+  font-size: 13px;
+}
+.composer-live-text {
+  flex: 1 1 auto;
+  font-variant-numeric: tabular-nums;
+}
+.composer-rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--alarm);
+}
+.composer[data-state="recording"] .composer-rec-dot {
+  animation: composer-pulse 1.2s ease-in-out infinite;
+}
+@keyframes composer-pulse {
+  50% { opacity: .35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer[data-state="recording"] .composer-rec-dot { animation: none; }
+}
+.composer-level {
+  flex: 0 0 48px;
+  height: 6px;
+  border-radius: 3px;
+  background: #0c1b24;
+  overflow: hidden;
+}
+.composer-level i {
+  display: block;
+  width: var(--level, 0%);
+  height: 100%;
+  background: var(--brass);
+}
+.composer-cancel {
+  padding: 2px 10px;
+  border: 1px solid var(--brass);
+  border-radius: 14px;
+  color: var(--ivory);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.composer-note {
+  color: var(--ember);
+  font-size: 13px;
+}
+.composer-note[data-hint] {
+  color: var(--muted);
+  font-size: 12px;
+}
+.composer [hidden] {
+  display: none;
+}
+.composer-row {
+  display: flex;
+  gap: 8px;
+}
+.composer-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #51696e;
+  border-radius: 22px;
+  color: var(--ivory);
+  background: var(--panel);
+  font: inherit;
+}
+.composer-field::placeholder {
+  color: var(--muted);
+}
+.composer-field:disabled {
+  opacity: .45;
+}
+.composer-mic {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  border: 1px solid var(--brass);
+  border-radius: 22px;
+  color: var(--ivory);
+  background: var(--panel);
+  font: inherit;
+  cursor: pointer;
+}
+.composer[data-state="recording"] .composer-mic {
+  border-color: var(--alarm);
+  background: var(--alarm);
+  color: #102029;
+  font-weight: 600;
+}
+.composer-send {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 22px;
+  color: #102029;
+  background: var(--brass);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.composer-mic:disabled,
+.composer-send:disabled {
+  opacity: .45;
+  cursor: default;
+}
 
 /* Pictures */
 .tv-backdrop { position: absolute; inset: 0; }

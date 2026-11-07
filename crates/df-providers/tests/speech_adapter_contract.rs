@@ -346,7 +346,12 @@ async fn scribe_registered_route_sends_exact_multipart_and_preserves_verbatim_fi
     ] {
         assert!(body.contains(&format!("name=\"{name}\"\r\n\r\n{value}\r\n")));
     }
-    assert!(body.contains("name=\"keyterms\"\r\n\r\n[\"Marek\",\"Captain Rook\"]\r\n"));
+    assert!(body.contains("name=\"keyterms\"\r\n\r\nMarek\r\n"));
+    assert!(body.contains("name=\"keyterms\"\r\n\r\nCaptain Rook\r\n"));
+    assert!(
+        !body.contains("[\"Marek\""),
+        "terms are separate fields, not a JSON array"
+    );
     assert!(seen.body.windows(pcm.len()).any(|w| w == pcm));
     for absent in ["source_url", "transcript_edit", "webhook_metadata"] {
         assert!(!body.contains(absent));

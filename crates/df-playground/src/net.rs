@@ -166,3 +166,26 @@ pub async fn post_json(address: &str, body: &str) -> Result<String, NetError> {
     let response = response_of(address, window.fetch_with_str_and_init(address, &init)).await?;
     read_body(address, response).await
 }
+
+/// Posts `bytes` to `address` as `content_type` and reads the answer as text. A refusal is an error
+/// that carries the host's own explanation. The browser's copy of the bytes is zeroed once the
+/// answer is in: a recording lives only as long as its request.
+pub async fn post_bytes(
+    address: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<String, NetError> {
+    let window = web_sys::window().ok_or(NetError::NoWindow)?;
+    let headers = request_headers()?;
+    headers
+        .set("Content-Type", content_type)
+        .map_err(request_error("set the content type"))?;
+    let body = js_sys::Uint8Array::from(bytes);
+    let init = RequestInit::new();
+    init.set_method("POST");
+    init.set_headers(&headers);
+    init.set_body(&body);
+    let answer = response_of(address, window.fetch_with_str_and_init(address, &init)).await;
+    body.fill(0, 0, body.length());
+    read_body(address, answer?).await
+}

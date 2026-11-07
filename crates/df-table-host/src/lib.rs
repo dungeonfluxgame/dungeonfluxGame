@@ -65,6 +65,7 @@ pub mod server;
 pub mod services;
 pub mod shown_scene;
 pub mod sink;
+pub mod speech;
 pub mod state;
 pub mod text;
 mod video_container;

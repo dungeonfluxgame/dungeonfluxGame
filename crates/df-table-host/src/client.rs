@@ -161,13 +161,34 @@ async fn request(
     body: &str,
     limit: usize,
 ) -> Result<Response, ClientError> {
-    let request = format!(
+    request_typed(
+        port,
+        method,
+        path,
+        "application/json",
+        body.as_bytes(),
+        limit,
+    )
+    .await
+}
+
+async fn request_typed(
+    port: u16,
+    method: &str,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+    limit: usize,
+) -> Result<Response, ClientError> {
+    let mut request = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
-         {CLIENT_HEADER}: {CLI_CLIENT_NAME}\r\nContent-Type: application/json\r\n\
-         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+         {CLIENT_HEADER}: {CLI_CLIENT_NAME}\r\nContent-Type: {content_type}\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
-    );
-    let answer = tokio::time::timeout(REQUEST_TIMEOUT, exchange(port, request.as_bytes(), limit))
+    )
+    .into_bytes();
+    request.extend_from_slice(body);
+    let answer = tokio::time::timeout(REQUEST_TIMEOUT, exchange(port, &request, limit))
         .await
         .map_err(|_| ClientError::TimedOut)??;
     parse_response(&answer)
@@ -181,6 +202,24 @@ pub async fn get(port: u16, path: &str) -> Result<Response, ClientError> {
 /// POST `body` (JSON, possibly empty) to `path` and read the whole answer.
 pub async fn post_json(port: u16, path: &str, body: &str) -> Result<Response, ClientError> {
     request(port, "POST", path, body, MAXIMUM_RESPONSE_BYTES).await
+}
+
+/// POST `body`, bytes of `content_type` (a recording, say), to `path` and read the whole answer.
+pub async fn post_bytes(
+    port: u16,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<Response, ClientError> {
+    request_typed(
+        port,
+        "POST",
+        path,
+        content_type,
+        body,
+        MAXIMUM_RESPONSE_BYTES,
+    )
+    .await
 }
 
 /// What a HEAD answered: the status and the headers `media head` prints. A HEAD answer has no

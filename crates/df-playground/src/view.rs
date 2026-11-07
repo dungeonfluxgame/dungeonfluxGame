@@ -4,6 +4,7 @@
 
 pub mod brand;
 pub mod bubble_layout;
+pub mod composer;
 pub mod home;
 pub mod icons;
 pub mod kit;

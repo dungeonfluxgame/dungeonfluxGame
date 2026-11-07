@@ -67,6 +67,19 @@ pub(crate) async fn post(port: u16, path: &str, body: &str) -> Result<Response, 
         .map_err(DevError::Client)
 }
 
+/// Posts `body`, bytes of `content_type`, to `path` on the host on `port` and returns the raw
+/// answer.
+pub(crate) async fn post_bytes(
+    port: u16,
+    path: &str,
+    content_type: &str,
+    body: &[u8],
+) -> Result<Response, DevError> {
+    client::post_bytes(port, path, content_type, body)
+        .await
+        .map_err(DevError::Client)
+}
+
 /// Sends a GET to `path` on the host on `port` and reads the answer as `Reply`.
 pub(crate) async fn get_json<Reply: DeserializeOwned>(
     port: u16,

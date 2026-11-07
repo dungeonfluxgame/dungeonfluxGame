@@ -28,7 +28,10 @@ pub struct TimelineRead {
 }
 
 const LEVEL_CHOICES: &str = "always or verbose";
-const KIND_CHOICES: &str = "line, plate, figure, clip, scene, sound, music, draw, camera or error";
+const KIND_CHOICES: &str = concat!(
+    "line, plate, figure, clip, scene, sound, music, draw, camera, capture, transcribe, ask ",
+    "or error"
+);
 
 fn events_after(text: &str) -> Result<u64, CommandError> {
     text.parse::<u64>().map_err(|_| CommandError::BadNumber {

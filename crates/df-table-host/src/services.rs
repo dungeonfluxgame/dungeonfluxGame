@@ -20,7 +20,7 @@ pub use self::cli::{SERVICES_USAGE, Services, fetch, parse};
 pub use self::format::format_services;
 pub use self::request::{
     ImageMode, ImagegenReport, LocateReport, ServicesError, ServicesReply, ServicesReport,
-    TextReport,
+    SpeechReport, TextReport,
 };
 pub use self::routes::{router, router_with};
 

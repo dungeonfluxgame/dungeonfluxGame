@@ -6,6 +6,8 @@ use df_content::persona::{
     Persona, PersonaBehavior, PersonaId, PersonaSecret, PersonaTrigger, PublicPersona,
 };
 
+use crate::speech::format_voiced;
+
 use super::request::{
     Answered, BackfillOutcome, BackfillRecord, Backfilled, CastOutcome, Covered, PersonaSummary,
     Spoken,
@@ -59,6 +61,9 @@ pub(super) fn format_spoken(spoken: &Spoken) -> String {
         "ok (revision {}) {} says: {}",
         spoken.revision, spoken.character, said.line
     )];
+    if let Some(voice) = &spoken.voice {
+        lines.push(format_voiced(voice));
+    }
     if said.leak_suspect {
         lines.push("  leak suspect: the line has a word of the private side".to_owned());
     }
@@ -114,6 +119,7 @@ pub(super) fn format_answered(answered: &Answered) -> String {
         BackfillOutcome::BackfillFailed { error } => {
             format!("  backfill: failed ({}): {error}", error.key())
         }
+        BackfillOutcome::CoverageSkipped => "  coverage: skipped (coverage=false)".to_owned(),
     });
     lines.push(format!("  model: {}", answered.profile));
     lines.join("\n")

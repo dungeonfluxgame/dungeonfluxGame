@@ -15,6 +15,7 @@ use super::page::{render, update_stage};
 use super::report::{schedule_forced_report, send_report};
 use super::sound::sync_audio;
 use super::state::{PageError, log_error, set_problem, with_app, with_app_mut};
+use super::voice;
 use crate::audio;
 use crate::backoff::retry_delay_ms;
 use crate::continuity::{Admit, canvas_accepts};
@@ -156,9 +157,10 @@ fn read_change_answer(answer: Result<String, NetError>) -> Result<ControlsReply,
             let NetError::Status { body, .. } = &error else {
                 return Err(error.into());
             };
-            match serde_json::from_str::<ControlsChangeReply>(body) {
-                Ok(ControlsChangeReply::Rejected { message }) => Err(refused(message)),
-                Ok(ControlsChangeReply::Done { .. }) | Err(_) => Err(error.into()),
+            match serde_json::from_str::<ControlsChangeReply>(body).map(|reply| reply.into_result())
+            {
+                Ok(Err(message)) => Err(refused(message)),
+                Ok(Ok(_)) | Err(_) => Err(error.into()),
             }
         }
     }
@@ -209,6 +211,7 @@ async fn apply_frame(frame: LiveFrame) {
         with_app_mut(|app| app.connection_problem = None);
         // The link is back: the host hears it at once.
         schedule_forced_report();
+        spawn_local(voice::refresh_host_state());
     }
     let mut reloaded = false;
     if with_app(|app| {
@@ -268,6 +271,7 @@ async fn follow_frames() {
                 if was_down {
                     render();
                     schedule_forced_report();
+                    spawn_local(voice::refresh_host_state());
                 }
             }
             Err(error) => {
@@ -278,6 +282,7 @@ async fn follow_frames() {
                 let first_failure = with_app(|app| app.connection_problem.is_none());
                 set_problem(error);
                 if first_failure {
+                    voice::on_host_lost();
                     render();
                     // The link went down: the report may still reach the host if only the frame
                     // poll failed.
@@ -341,6 +346,9 @@ async fn poll() {
     });
     // A change of the files is a change of the page's revision, which the host hears at once.
     send_report(beat || files_changed).await;
+    if beat {
+        voice::refresh_host_state().await;
+    }
 }
 
 pub async fn run() {

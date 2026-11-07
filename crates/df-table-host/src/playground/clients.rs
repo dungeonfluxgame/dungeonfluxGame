@@ -263,7 +263,13 @@ fn ending_line(client: &str, entry: &TimelineEntry) -> Option<String> {
     let id = checked(&entry.id);
     match (entry.kind, &entry.detail) {
         (
-            TimelineKind::Line | TimelineKind::Plate | TimelineKind::Figure | TimelineKind::Clip,
+            TimelineKind::Line
+            | TimelineKind::Plate
+            | TimelineKind::Figure
+            | TimelineKind::Clip
+            | TimelineKind::Capture
+            | TimelineKind::Transcribe
+            | TimelineKind::Ask,
             _,
         ) => Some(format!(
             "TIMING {} client={client} id={id} start_ms={} end_ms={end_ms} shown_ms={} \

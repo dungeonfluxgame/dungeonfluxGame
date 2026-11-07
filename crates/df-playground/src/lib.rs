@@ -14,11 +14,13 @@ pub mod bubble_place;
 pub mod camera;
 pub mod checks;
 pub mod choices;
+pub mod composer;
 pub mod continuity;
 pub mod contrast;
 pub mod controls;
 pub mod copy;
 pub mod decisions;
+pub mod dev_reply;
 pub mod draw_plan;
 pub mod figure;
 pub mod fixture;
@@ -38,6 +40,9 @@ mod scene_apply;
 pub mod sound_plan;
 pub mod style;
 pub mod timeline;
+pub mod voice_capture;
+pub mod voice_pcm;
+pub mod voice_wire;
 
 #[cfg(target_arch = "wasm32")]
 mod app;
@@ -64,6 +69,8 @@ mod camera_tests;
 #[cfg(test)]
 mod choices_tests;
 #[cfg(test)]
+mod composer_tests;
+#[cfg(test)]
 mod continuity_tests;
 #[cfg(test)]
 mod contrast_tests;
@@ -73,6 +80,8 @@ mod controls_tests;
 mod copy_tests;
 #[cfg(test)]
 mod decisions_tests;
+#[cfg(test)]
+mod dev_reply_tests;
 #[cfg(test)]
 mod draw_plan_tests;
 #[cfg(test)]
@@ -105,6 +114,12 @@ mod sound_plan_tests;
 mod style_tests;
 #[cfg(test)]
 mod timeline_tests;
+#[cfg(test)]
+mod voice_capture_tests;
+#[cfg(test)]
+mod voice_pcm_tests;
+#[cfg(test)]
+mod voice_wire_tests;
 
 /// Starts the playground when the page loads.
 #[cfg(target_arch = "wasm32")]

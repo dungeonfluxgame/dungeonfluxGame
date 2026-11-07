@@ -11,6 +11,7 @@ use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 use super::page::Page;
+use super::voice::Voice;
 use crate::continuity::ReplyGate;
 use crate::controls::{Controls, Transition};
 use crate::dom::BrowserError;
@@ -161,6 +162,8 @@ pub struct App {
     pub drawn: Option<Snapshot>,
     /// The pieces of the page, once it has been drawn.
     pub page: Option<Page>,
+    /// The phone's composer: its box, the microphone and the question.
+    pub voice: Voice,
 }
 
 thread_local! {

@@ -79,7 +79,7 @@ async fn guard_requests(
     request: Request,
     next: Next,
 ) -> Response {
-    let response = match guard::check(request.method(), request.headers()) {
+    let response = match guard::check(request.method(), request.uri().path(), request.headers()) {
         Ok(()) => next.run(request).await,
         Err(error) => {
             state.record_rejection(None, None, RejectionCause::ForbiddenRequest);

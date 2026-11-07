@@ -20,6 +20,7 @@ pub struct ServicesReport {
     pub text: TextReport,
     pub imagegen: ImagegenReport,
     pub locate: LocateReport,
+    pub speech: SpeechReport,
 }
 
 /// The text surface: its backend and model, whether it can send, and its attempts.
@@ -91,6 +92,19 @@ pub struct LocateReport {
     pub timeout_ms: u64,
     pub key_present: bool,
     pub min_confidence_permille: u16,
+}
+
+/// The speech service: the models, whether it is set up, and how many voices and clips it has.
+/// `voices` and `clips_kept` are none when the voices file or the media library could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpeechReport {
+    pub configured: bool,
+    /// The environment variable to set when the service is not configured.
+    pub missing: Option<String>,
+    pub tts_model: String,
+    pub stt_model: String,
+    pub voices: Option<u64>,
+    pub clips_kept: Option<u64>,
 }
 
 /// Why the services route refused.

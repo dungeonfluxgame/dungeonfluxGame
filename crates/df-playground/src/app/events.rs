@@ -9,6 +9,7 @@ use super::frames::send_change;
 use super::page::{on_animation_end, place_bubbles, render};
 use super::report::schedule_report;
 use super::state::with_app;
+use super::voice;
 use crate::audio;
 use crate::controls::{ControlsChange, Device};
 use crate::copy::ReadingPace;
@@ -29,6 +30,22 @@ pub fn note_gesture() {
         render();
         schedule_report();
     }
+}
+
+/// A key press is a gesture too, and Enter in the composer's box sends.
+pub fn on_key(event: &Event) {
+    note_gesture();
+    voice::on_enter(event);
+}
+
+/// Someone typed in the composer's box.
+pub fn on_input(event: &Event) {
+    voice::on_input(event);
+}
+
+/// The page was hidden or shown.
+pub fn on_visibility_change() {
+    voice::on_visibility_change();
 }
 
 pub fn on_media_event(event: &Event, failed: bool) {
@@ -59,6 +76,9 @@ pub fn on_click(event: &Event) {
     let Some((_, action)) = action else {
         return;
     };
+    if voice::on_action(&action) {
+        return;
+    }
     let change = with_app(|app| match action.split_once(':') {
         Some(("device", key)) => Device::from_key(key).map(ControlsChange::Device),
         Some(("pace", key)) => ReadingPace::from_key(key).map(ControlsChange::Pace),
@@ -82,6 +102,10 @@ pub fn on_change(event: &Event) {
         return;
     };
     let value = select.value();
+    if action == "talk-to" {
+        voice::select(value);
+        return;
+    }
     let change = match action.as_str() {
         "fixture" => Some(ControlsChange::Fixture(value)),
         "status" => Some(ControlsChange::Status(value)),

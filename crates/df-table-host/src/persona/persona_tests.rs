@@ -146,7 +146,17 @@ fn the_persona_grammar_reads_every_verb() {
         PersonaCommand::Say {
             character: id("elf"),
             situation: "Someone asks the price".to_owned(),
-            model: None
+            model: None,
+            speak: false
+        }
+    );
+    assert_eq!(
+        command("persona say elf speak=true The price"),
+        PersonaCommand::Say {
+            character: id("elf"),
+            situation: "The price".to_owned(),
+            model: None,
+            speak: true
         }
     );
 }
@@ -691,6 +701,8 @@ fn the_question_commands_read_the_model_and_the_guidance_keys_before_the_free_te
     let PersonaCommand::Ask {
         question,
         backfill,
+        coverage,
+        speak,
         situation,
         asking,
         ..
@@ -703,6 +715,10 @@ fn the_question_commands_read_the_model_and_the_guidance_keys_before_the_free_te
     };
     assert_eq!(question, "Where did you grow up?");
     assert!(!backfill);
+    assert!(
+        coverage && !speak,
+        "coverage is on and speak is off unless said"
+    );
     assert_eq!(situation.as_deref(), Some("rain"));
     assert_eq!(asking.model.as_deref(), Some("gpt-6.1-sol"));
     assert_eq!(asking.guidance.latitude, Some(Latitude::Strict));

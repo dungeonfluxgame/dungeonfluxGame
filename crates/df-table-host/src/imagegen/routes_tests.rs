@@ -29,7 +29,9 @@ use crate::wire::route;
 /// The route over `generator`, behind the host's own guard check, on an ephemeral port.
 async fn serve_route(running: &Running, generator: Arc<ImageGenerator>) -> u16 {
     async fn guarded(request: Request, next: Next) -> Response {
-        if let Err(refusal) = guard::check(request.method(), request.headers()) {
+        if let Err(refusal) =
+            guard::check(request.method(), request.uri().path(), request.headers())
+        {
             return (refusal.status(), refusal.message()).into_response();
         }
         next.run(request).await

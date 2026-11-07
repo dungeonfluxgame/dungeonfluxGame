@@ -320,13 +320,28 @@ impl PlaygroundState {
         generation: u64,
         on_applied: impl FnOnce(&ControlsReply),
     ) -> Result<ControlsReply, SceneChangeError> {
+        self.change_scenes(vec![change], base, generation, on_applied)
+    }
+
+    /// Makes several changes to the live scene as one numbered change (a cue and its sound start
+    /// together): if any is refused none is applied. Otherwise as `change_scene`.
+    pub fn change_scenes(
+        &self,
+        changes: Vec<SceneChange>,
+        base: &Fixture,
+        generation: u64,
+        on_applied: impl FnOnce(&ControlsReply),
+    ) -> Result<ControlsReply, SceneChangeError> {
         let mut shown = self.lock();
         if shown.generation != generation {
             return Err(SceneChangeError::FixtureChanged);
         }
         let mut next = shown.reply.scene.clone();
-        next.apply_at(change, base, self.now_ms())
-            .map_err(SceneChangeError::Invalid)?;
+        let now_ms = self.now_ms();
+        for change in changes {
+            next.apply_at(change, base, now_ms)
+                .map_err(SceneChangeError::Invalid)?;
+        }
         if next != shown.reply.scene {
             shown.reply.scene = next;
             shown.reply.revision += 1;

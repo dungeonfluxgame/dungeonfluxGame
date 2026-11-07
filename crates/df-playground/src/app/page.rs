@@ -97,6 +97,9 @@ fn build_part(
 ) -> Result<Option<Element>, JsValue> {
     if view::tv::PARTS.contains(&part) {
         view::tv::build_part(document, part, &fixture.tv, &app.controls)
+    } else if part == Part::PhoneComposer {
+        let (view, draft) = super::voice::composer_inputs(app);
+        view::composer::build(document, &view, &draft).map(Some)
     } else {
         view::phone::build_part(document, part, &fixture.phone, &app.controls)
     }

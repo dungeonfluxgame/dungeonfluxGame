@@ -11,6 +11,7 @@ use df_content::persona::Persona;
 use serde_json::{Value, json};
 
 use super::routes::router_with;
+use crate::speech::fixtures::{FakePort, speech_over};
 use crate::test_support::{Running, STARTER_FILES, layout_of, start};
 use crate::text::{BackendChoice, TextRuntime};
 
@@ -71,8 +72,18 @@ pub(super) fn innkeeper() -> Persona {
     .unwrap()
 }
 
-/// A host whose text backend answers with `answers`, in order.
+/// A host whose text backend answers with `answers`, in order, and whose speech supplier is not
+/// set up.
 pub(super) async fn scripted_host(answers: Vec<Value>) -> ScriptedHost {
+    scripted_host_speaking(answers, Arc::new(FakePort::unconfigured())).await
+}
+
+/// A host whose text backend answers with `answers`, in order, and whose speech supplier is
+/// `speech`.
+pub(super) async fn scripted_host_speaking(
+    answers: Vec<Value>,
+    speech: Arc<FakePort>,
+) -> ScriptedHost {
     let running = start(&STARTER_FILES).await;
     running.write_asset("media/plate.png", "plate.png");
     crate::locate::write_layout(
@@ -100,7 +111,11 @@ pub(super) async fn scripted_host(answers: Vec<Value>) -> ScriptedHost {
         BackendChoice::Scripted(Arc::new(script), None),
         Arc::new(move |line| recorder.record_line(line)),
     );
-    let app = router_with(Arc::clone(&running.state), Arc::new(text));
+    let app = router_with(
+        Arc::clone(&running.state),
+        Arc::new(text),
+        speech_over(&running.state, &speech),
+    );
     let listener = crate::server::bind(0).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {

@@ -40,6 +40,17 @@ pub const MAXIMUM_MEDIA_NAME_BYTES: usize = 255;
 /// and fires at once for a longer one).
 pub const LONGEST_BROWSER_TIMER_MS: u64 = 2_147_483_647;
 
+/// The sample rate the speech-to-text adapter reads, in hertz (raw signed 16-bit little-endian
+/// mono PCM, `planning/chat-pipeline.md` 8.6).
+pub const CAPTURE_SAMPLE_RATE_HZ: u32 = 16_000;
+/// Shortest recording the speech-to-text adapter takes, in milliseconds (3,200 bytes of PCM).
+pub const MINIMUM_CAPTURE_MS: u64 = 100;
+/// Longest recording the speech-to-text adapter takes, in milliseconds (1,920,000 bytes of PCM).
+pub const MAXIMUM_CAPTURE_MS: u64 = 60_000;
+/// Most characters the question box takes (`planning/chat-pipeline.md` 8.6: what the text input
+/// holds).
+pub const MAXIMUM_QUESTION_CHARACTERS: usize = 800;
+
 // Very large caps. Each only keeps memory bounded by design.
 
 /// Most characters in a caption line.
@@ -136,6 +147,13 @@ pub const CAMERA_GLIDE_MS: u64 = 90;
 /// one. A host that restarts with a clock set back has an older boot id than the run the page was
 /// following, and the page must not refuse it for ever.
 pub const OLDER_RUN_STRIKES: u8 = 3;
+
+/// Milliseconds between looks at a recording that is running, to update its time and level and to
+/// notice a lost microphone or the longest recording.
+pub const CAPTURE_REFRESH_MS: u64 = 200;
+/// How long the composer keeps a message about a refusal or a failure, in milliseconds. A message
+/// stays long enough to read at arm's length.
+pub const COMPOSER_NOTE_MS: u64 = 7_000;
 
 // Layout tuning of the overlay components. They are how the screen is composed, not caps.
 

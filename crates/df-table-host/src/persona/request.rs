@@ -17,6 +17,7 @@ use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::locate::IoCause;
 use crate::playground::SceneApplyError;
 use crate::shown_scene::ShownSceneError;
+use crate::speech::Voiced;
 use crate::text::{ModelCause, ServiceReason, TextAskError, TextServiceCause};
 
 /// The answer of a persona route: its value, or why it was refused.
@@ -128,6 +129,9 @@ pub struct SayRequest {
     /// The model to ask instead of the persona default.
     #[serde(default)]
     pub model: Option<String>,
+    /// Voice the line and play it with its bubble. Off unless it says otherwise.
+    #[serde(default)]
+    pub speak: bool,
 }
 
 fn yes() -> bool {
@@ -139,6 +143,7 @@ fn yes() -> bool {
 /// character answers in character. A dev tool: the narrative engine calls the same steps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+// TODO(DEV-12): redact `question` in Debug, as the page's copy does.
 pub struct AskRequest {
     pub character: String,
     pub question: String,
@@ -149,6 +154,13 @@ pub struct AskRequest {
     /// Fill gaps before answering. On unless it says otherwise.
     #[serde(default = "yes")]
     pub backfill: bool,
+    /// Judge the persona's coverage of the question first. On unless it says otherwise; off
+    /// skips the coverage question and any backfill, so the turn is one model call.
+    #[serde(default = "yes")]
+    pub coverage: bool,
+    /// Voice the line and play it with its bubble. Off unless it says otherwise.
+    #[serde(default)]
+    pub speak: bool,
     /// What is happening around the question; it is data for the model.
     #[serde(default)]
     pub situation: Option<String>,
@@ -226,6 +238,8 @@ pub enum BackfillOutcome {
     BackfillFailed {
         error: PersonaError,
     },
+    /// The request skipped the coverage question (`coverage: false`).
+    CoverageSkipped,
 }
 
 /// A character's answer to a question, with what was filled in first.
@@ -358,6 +372,9 @@ pub struct Spoken {
     pub character: String,
     pub said: SaidLine,
     pub revision: u64,
+    /// What voicing the line came to; none when the request did not ask for a voice.
+    #[serde(default)]
+    pub voice: Option<Voiced>,
 }
 
 /// A persona that was removed.
