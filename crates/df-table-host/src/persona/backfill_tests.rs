@@ -136,6 +136,7 @@ async fn a_backfill_answer_that_is_malformed_is_reported_and_the_line_is_still_s
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         json!({"edits": "not a list"}),
+        json!({"edits": "still not a list"}),
         line_answer("Above the inn, love."),
     ])
     .await;
@@ -411,6 +412,7 @@ async fn a_strict_latitude_refuses_a_new_secret_and_the_line_is_still_said() {
     }]});
     let host = scripted_host(vec![
         coverage_answer(&[("secrets", "what she hides")]),
+        new_secret.clone(),
         new_secret,
         line_answer("Nothing, love."),
     ])
@@ -434,17 +436,18 @@ async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established()
     let failed = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood"), ("backstory", "first horse")]),
         json!({"edits": "not a list"}),
+        json!({"edits": "still not a list"}),
         line_answer("I do not recall."),
     ])
     .await;
     store_innkeeper(&failed);
     done(ask(&failed, json!({})).await);
     assert_eq!(
-        failed.facts_of(2)["not_established"],
+        failed.facts_of(3)["not_established"],
         json!(["childhood", "first horse"])
     );
-    assert!(failed.instructions_of(2).contains("not_established"));
-    assert!(failed.instructions_of(2).contains("invent no"));
+    assert!(failed.instructions_of(3).contains("not_established"));
+    assert!(failed.instructions_of(3).contains("invent no"));
     // A backfill that was not asked for leaves the same topics not established.
     let not_asked = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
@@ -472,4 +475,46 @@ async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established()
     store_innkeeper(&covered);
     done(ask(&covered, json!({})).await);
     assert_eq!(covered.facts_of(1)["not_established"], json!([]));
+}
+
+#[tokio::test]
+async fn a_public_price_in_the_world_facts_reaches_the_judge_and_the_line_and_is_not_a_leak() {
+    let host = scripted_host(vec![
+        coverage_answer(&[("backstory", "childhood")]),
+        append_backstory_answer("She learned to brew ale at nine."),
+        privacy_answer(false),
+        line_answer("Three copper an apple, love."),
+    ])
+    .await;
+    store_innkeeper(&host);
+    host.running.write_asset(
+        "world/bible.json",
+        include_str!("../../../../assets/playground/world/bible.json"),
+    );
+    host.running
+        .write_asset("world/state.json", r#"{"place": "market"}"#);
+    let answered = done(ask(&host, json!({})).await);
+    assert!(
+        matches!(answered.backfill, BackfillOutcome::Backfilled { .. }),
+        "the judge's no-leak verdict lets the backfill commit"
+    );
+    // The judge is told the price is public, and is told the price.
+    let judge = host.facts_of(2);
+    assert_eq!(judge["known_public_world_facts"]["audience"], "public");
+    let apple = &judge["known_public_world_facts"]["stalls"][0]["items"][0];
+    assert_eq!(
+        (apple["id"].clone(), apple["quotes"][0]["total_cp"].clone()),
+        (json!("apple"), json!(3))
+    );
+    assert!(host.instructions_of(2).contains("never a leak"));
+    // The line is told the same facts, and is told to state a price when asked.
+    let line = host.facts_of(3);
+    assert_eq!(
+        line["world"]["stalls"][0]["items"][0]["quotes"][0]["total_cp"],
+        3
+    );
+    assert_eq!(line["world"]["audience"], "public");
+    let instructions = host.instructions_of(3);
+    assert!(instructions.contains("always states them when asked"));
+    assert!(instructions.contains("is never a leak"));
 }

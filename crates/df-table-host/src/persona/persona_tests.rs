@@ -148,7 +148,9 @@ fn the_persona_grammar_reads_every_verb() {
             character: id("elf"),
             situation: "Someone asks the price".to_owned(),
             model: None,
-            speak: false
+            speak: false,
+            recent: Vec::new(),
+            asked_by: None
         }
     );
     assert_eq!(
@@ -157,7 +159,9 @@ fn the_persona_grammar_reads_every_verb() {
             character: id("elf"),
             situation: "The price".to_owned(),
             model: None,
-            speak: true
+            speak: true,
+            recent: Vec::new(),
+            asked_by: None
         }
     );
 }
@@ -1070,6 +1074,8 @@ fn the_debug_of_a_request_that_carries_a_question_or_a_situation_never_prints_it
         situation: "a secret scene".to_owned(),
         model: None,
         speak: false,
+        recent: Vec::new(),
+        asked_by: None,
     };
     let coverage = super::request::CoverageRequest {
         character: "innkeeper".to_owned(),

@@ -20,6 +20,7 @@ fn request() -> GenerationRequest {
             arc: Some("the guild road".to_owned()),
             ..NarrativeGuidance::default()
         }),
+        available_packs: Vec::new(),
     }
 }
 

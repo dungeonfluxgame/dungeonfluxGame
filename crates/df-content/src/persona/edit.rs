@@ -9,6 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use super::policy::{PersonaBehavior, PersonaSecret, PersonaTrigger};
+use super::voice::{Voice, VoiceField};
 use super::{Persona, PersonaDraft, PersonaError, PersonaField};
 
 /// One change to a persona.
@@ -21,8 +22,8 @@ pub enum PersonaEdit {
     /// Adds `text` after a text field's existing text, on a new line; sets it when it is empty.
     /// For `backstory` and `private_backstory`: the old text stays as it was.
     AppendText { field: PersonaField, text: String },
-    /// Adds an entry to a list field: `personality`, `motivations`, `goals`, `needs`, `fears` or
-    /// `boundaries`.
+    /// Adds an entry to a list field: `personality`, `motivations`, `goals`, `needs`, `fears`,
+    /// `boundaries` or `expertise`.
     AddEntry { field: PersonaField, text: String },
     /// Replaces entry `index` (from 0) of a list field.
     SetEntry {
@@ -46,6 +47,23 @@ pub enum PersonaEdit {
     PutTrigger { trigger: PersonaTrigger },
     /// Removes a trigger by id.
     RemoveTrigger { id: String },
+    /// Replaces a text part of the voice: `rhythm`, `address` or `deflection`.
+    SetVoiceText { field: VoiceField, text: String },
+    /// Adds an entry to a list part of the voice: `favored`, `never`, `tics`, `idioms` or
+    /// `samples`.
+    AddVoiceEntry { field: VoiceField, text: String },
+    /// Removes entry `index` (from 0) of a list part of the voice.
+    RemoveVoiceEntry { field: VoiceField, index: usize },
+    /// Adds a voice pack by id.
+    AddVoicePack { pack: String },
+    /// Removes a voice pack by id.
+    RemoveVoicePack { pack: String },
+    /// Replaces the whole voice, the packs and the expertise, as a voice question answers.
+    ReplaceVoice {
+        voice: Voice,
+        voice_packs: Vec<String>,
+        expertise: Vec<String>,
+    },
 }
 
 /// Why an edit list was refused.
@@ -62,6 +80,12 @@ pub enum EditError {
     NoSuchEntry { field: PersonaField, index: usize },
     /// There is no item with `id` in `field`'s list.
     NoSuchItem { field: PersonaField, id: String },
+    /// `field` is not a text part of the voice.
+    NotAVoiceText { field: VoiceField },
+    /// `field` is not a list part of the voice.
+    NotAVoiceList { field: VoiceField },
+    /// A list part of the voice has no entry at `index`.
+    NoSuchVoiceEntry { field: VoiceField, index: usize },
 }
 
 impl fmt::Display for EditError {
@@ -88,6 +112,19 @@ impl fmt::Display for EditError {
                 "the persona's {} has no item {id:?}",
                 field.key()
             ),
+            Self::NotAVoiceText { field } => write!(
+                formatter,
+                "the voice's {} is not a text you can set",
+                field.key()
+            ),
+            Self::NotAVoiceList { field } => write!(
+                formatter,
+                "the voice's {} is not a list of entries",
+                field.key()
+            ),
+            Self::NoSuchVoiceEntry { field, index } => {
+                write!(formatter, "the voice's {} has no entry {index}", field.key())
+            }
         }
     }
 }
@@ -119,6 +156,7 @@ fn list_mut(draft: &mut PersonaDraft, field: PersonaField) -> Result<&mut Vec<St
         PersonaField::Needs => Ok(&mut draft.needs),
         PersonaField::Fears => Ok(&mut draft.fears),
         PersonaField::Boundaries => Ok(&mut draft.boundaries),
+        PersonaField::Expertise => Ok(&mut draft.expertise),
         _ => Err(EditError::NotAList { field }),
     }
 }
@@ -210,6 +248,53 @@ fn apply(draft: &mut PersonaDraft, edit: &PersonaEdit) -> Result<(), EditError> 
                 &item.id
             })?;
         }
+        PersonaEdit::SetVoiceText { field, text } => {
+            *draft
+                .voice
+                .text_mut(*field)
+                .ok_or(EditError::NotAVoiceText { field: *field })? = text.trim().to_owned();
+        }
+        PersonaEdit::AddVoiceEntry { field, text } => {
+            draft
+                .voice
+                .list_mut(*field)
+                .ok_or(EditError::NotAVoiceList { field: *field })?
+                .push(text.trim().to_owned());
+        }
+        PersonaEdit::RemoveVoiceEntry { field, index } => {
+            let list = draft
+                .voice
+                .list_mut(*field)
+                .ok_or(EditError::NotAVoiceList { field: *field })?;
+            if *index >= list.len() {
+                return Err(EditError::NoSuchVoiceEntry {
+                    field: *field,
+                    index: *index,
+                });
+            }
+            list.remove(*index);
+        }
+        PersonaEdit::AddVoicePack { pack } => draft.voice_packs.push(pack.trim().to_owned()),
+        PersonaEdit::RemoveVoicePack { pack } => {
+            let index = draft
+                .voice_packs
+                .iter()
+                .position(|seen| seen == pack)
+                .ok_or_else(|| EditError::NoSuchItem {
+                    field: PersonaField::VoicePacks,
+                    id: pack.clone(),
+                })?;
+            draft.voice_packs.remove(index);
+        }
+        PersonaEdit::ReplaceVoice {
+            voice,
+            voice_packs,
+            expertise,
+        } => {
+            draft.voice = voice.clone();
+            draft.voice_packs = voice_packs.clone();
+            draft.expertise = expertise.clone();
+        }
     }
     Ok(())
 }
@@ -234,6 +319,9 @@ impl Persona {
             behaviors: self.behaviors.clone(),
             default_behavior: self.default_behavior.clone(),
             triggers: self.triggers.clone(),
+            voice: self.voice.clone(),
+            voice_packs: self.voice_packs.clone(),
+            expertise: self.expertise.clone(),
         }
     }
 

@@ -57,3 +57,16 @@ fn the_leak_report_is_added_to_a_schema_and_split_from_an_answer() {
     );
     assert!(split_leak_report(&json!({"line": "hello"})).is_err());
 }
+
+#[test]
+fn public_world_facts_reach_the_judge_and_are_never_a_leak() {
+    use serde_json::Value;
+
+    let world = json!({"audience": "public", "stalls": [{"items": [{"id": "apple"}]}]});
+    let facts = privacy_facts(&["Three copper an apple.".to_owned()], "fears", &world);
+    assert_eq!(facts["known_public_world_facts"], world);
+    let none = privacy_facts(&[], "fears", &Value::Null);
+    assert!(none.get("known_public_world_facts").is_none());
+    assert!(PRIVACY_INSTRUCTION.contains("stating one is never a leak"));
+    assert!(LEAK_REPORT_INSTRUCTION.contains("is never a leak"));
+}

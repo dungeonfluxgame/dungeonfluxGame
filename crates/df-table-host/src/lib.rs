@@ -72,6 +72,7 @@ pub mod state;
 pub mod text;
 mod video_container;
 pub mod view;
+pub mod world;
 pub mod wire;
 
 #[cfg(test)]

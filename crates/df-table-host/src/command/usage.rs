@@ -16,11 +16,12 @@ use crate::persona::cli::{
     PERSONA_BACKFILLS_USAGE, PERSONA_BEHAVIOR_USAGE, PERSONA_CONVERSE_USAGE,
     PERSONA_COVERAGE_USAGE, PERSONA_DROP_USAGE, PERSONA_EDIT_USAGE, PERSONA_GENERATE_USAGE,
     PERSONA_REMOVE_USAGE, PERSONA_SAY_USAGE, PERSONA_SECRET_USAGE, PERSONA_SET_USAGE,
-    PERSONA_TRIGGER_USAGE, PERSONA_USAGE,
+    PERSONA_EXPERTISE_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_USAGE, PERSONA_VOICE_USAGE,
 };
 use crate::services::SERVICES_USAGE;
 use crate::speech::SPEECH_USAGE;
 use crate::speech::cli::{SPEECH_SPEAK_USAGE, SPEECH_TRANSCRIBE_USAGE, SPEECH_VOICE_USAGE};
+use crate::world::cli::{WORLD_PLACE_USAGE, WORLD_QUOTE_USAGE, WORLD_USAGE};
 
 pub(super) const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
 pub(super) const SET_USAGE: &str = "set <id> <field>=<value> [<field>=<value> ...]";
@@ -247,6 +248,10 @@ pub fn usage_text() -> String {
          \n      {PERSONA_SECRET_USAGE}\
          \n      {PERSONA_BEHAVIOR_USAGE}\
          \n      {PERSONA_TRIGGER_USAGE}\
+         \n      {PERSONA_VOICE_USAGE}   (rhythm, address, deflection are texts; favored, never, \
+         tics, idioms, samples are lists; samples are style only; generate asks the model for \
+         only the voice, expertise and voice packs, packs chosen from the world bible's list)\
+         \n      {PERSONA_EXPERTISE_USAGE}   (what the character knows from their trade or life)\
          \n      {PERSONA_EDIT_USAGE}   applies a file {{\"edits\": [...]}} of any edits. Quote \
          a value with spaces. A trigger or a reveal condition is a plain statement a \
          model judges, never a keyword.\
@@ -274,10 +279,22 @@ pub fn usage_text() -> String {
          {GUIDANCE_OPTIONS}. Keys given here replace the file's; hook, thread, \
          establish and avoid repeat; without guidance a backfill is a generic story \
          detail.\
+         \n      recent=<text> (repeat) gives say and ask the last lines of the talk so the \
+         character never reuses a phrase; from=<id> says who speaks to them, so triggers \
+         are judged by what the asker does and not by an accepted offer.\
          \n      model=<name> asks that model instead of the default (gpt-6-luna, or \
          DF_TEXT_PERSONA_MODEL); see services for the profile each uses.\
          \n      {PERSONA_REMOVE_USAGE}   deletes one (its backfill record stays, as history). \
          scene cast shows each cast member's job.\n\
+         \n  {WORLD_USAGE}\
+         \n      the world bible, canonical facts a designer edits as data in the playground's \
+         world/bible.json (read fresh on every call, no rebuild): items and their values in \
+         copper, places with stalls (keeper, items sold, bulk tiers, haggle floor) and voice \
+         packs. The persona prompts are given the facts of the active place and the packs a \
+         character belongs to. Prices are computed here; a persona voices them and never \
+         invents one. {WORLD_PLACE_USAGE} sets the active place (- clears it); \
+         {WORLD_QUOTE_USAGE} prices a lot at the active place (list, bulk, lowest the keeper \
+         takes); validate reads the bible now and reports what is wrong with it.\n\
          \n  {SPEECH_USAGE}\
          \n      voice chat through the speech service (see services): the status and the \
          voices; {SPEECH_SPEAK_USAGE} voices operator text in a character's voice (- for the \

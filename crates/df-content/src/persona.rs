@@ -24,9 +24,11 @@ pub mod edit;
 pub mod generation;
 pub mod policy;
 pub mod privacy;
+pub mod voice;
 
 pub use edit::{EditError, PersonaEdit};
 pub use policy::{PersonaBehavior, PersonaSecret, PersonaTrigger, Sensitivity};
+pub use voice::{Diction, Voice, VoiceField};
 
 #[cfg(test)]
 mod backfill_tests;
@@ -38,6 +40,8 @@ mod generation_tests;
 mod policy_tests;
 #[cfg(test)]
 mod privacy_tests;
+#[cfg(test)]
+mod voice_tests;
 
 /// The persona file format this reader understands.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -70,11 +74,14 @@ pub enum PersonaField {
     Behaviors,
     DefaultBehavior,
     Triggers,
+    Voice,
+    VoicePacks,
+    Expertise,
 }
 
 impl PersonaField {
     /// Every field, in declaration order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 19] = [
         Self::Id,
         Self::DisplayName,
         Self::Job,
@@ -91,6 +98,9 @@ impl PersonaField {
         Self::Behaviors,
         Self::DefaultBehavior,
         Self::Triggers,
+        Self::Voice,
+        Self::VoicePacks,
+        Self::Expertise,
     ];
 
     /// The serde name.
@@ -112,6 +122,9 @@ impl PersonaField {
             Self::Behaviors => "behaviors",
             Self::DefaultBehavior => "default_behavior",
             Self::Triggers => "triggers",
+            Self::Voice => "voice",
+            Self::VoicePacks => "voice_packs",
+            Self::Expertise => "expertise",
         }
     }
 
@@ -333,6 +346,12 @@ pub struct PersonaDraft {
     pub default_behavior: Option<String>,
     /// What moves them between behaviors. Private.
     pub triggers: Vec<PersonaTrigger>,
+    /// How they sound.
+    pub voice: Voice,
+    /// The communities whose voice packs they inherit, by id.
+    pub voice_packs: Vec<String>,
+    /// What they know from their trade or life: one fact or skill per entry.
+    pub expertise: Vec<String>,
 }
 
 /// The stored form of a [`Persona`].
@@ -369,6 +388,12 @@ struct PersonaRecord {
     default_behavior: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     triggers: Vec<PersonaTrigger>,
+    #[serde(default, skip_serializing_if = "Voice::is_blank")]
+    voice: Voice,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    voice_packs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    expertise: Vec<String>,
 }
 
 /// A character's persona. Its parts are checked when it is made, so a persona in hand is valid.
@@ -393,6 +418,9 @@ pub struct Persona {
     behaviors: Vec<PersonaBehavior>,
     default_behavior: Option<String>,
     triggers: Vec<PersonaTrigger>,
+    voice: Voice,
+    voice_packs: Vec<String>,
+    expertise: Vec<String>,
 }
 
 /// What a listener, the screen or another character's prompt may know of a persona.
@@ -404,6 +432,10 @@ pub struct PublicPersona {
     pub personality: Vec<String>,
     pub speech_style: String,
     pub backstory: String,
+    #[serde(default, skip_serializing_if = "Voice::is_blank")]
+    pub voice: Voice,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expertise: Vec<String>,
 }
 
 /// Whose prompt a persona is being written into.
@@ -560,6 +592,9 @@ impl Persona {
             false,
         )?;
         check_list(PersonaField::Boundaries, &draft.boundaries)?;
+        draft.voice.check()?;
+        voice::check_pack_ids(&draft.voice_packs)?;
+        check_list(PersonaField::Expertise, &draft.expertise)?;
         policy::check(
             &draft.secrets,
             &draft.behaviors,
@@ -583,6 +618,9 @@ impl Persona {
             behaviors: draft.behaviors,
             default_behavior: draft.default_behavior,
             triggers: draft.triggers,
+            voice: draft.voice,
+            voice_packs: draft.voice_packs,
+            expertise: draft.expertise,
         })
     }
 
@@ -614,6 +652,21 @@ impl Persona {
     /// The part of their past anyone in the scene could know.
     pub fn backstory(&self) -> &str {
         &self.backstory
+    }
+
+    /// How they sound.
+    pub fn voice(&self) -> &Voice {
+        &self.voice
+    }
+
+    /// The ids of the communities whose voice packs they inherit.
+    pub fn voice_packs(&self) -> &[String] {
+        &self.voice_packs
+    }
+
+    /// What they know from their trade or life.
+    pub fn expertise(&self) -> &[String] {
+        &self.expertise
     }
 
     /// What moves them. The character's own: never for another listener or a view.
@@ -675,6 +728,8 @@ impl Persona {
             personality: self.personality.clone(),
             speech_style: self.speech_style.clone(),
             backstory: self.backstory.clone(),
+            voice: self.voice.clone(),
+            expertise: self.expertise.clone(),
         }
     }
 }
@@ -729,6 +784,9 @@ impl TryFrom<PersonaRecord> for Persona {
             behaviors: record.behaviors,
             default_behavior: record.default_behavior,
             triggers: record.triggers,
+            voice: record.voice,
+            voice_packs: record.voice_packs,
+            expertise: record.expertise,
         })
     }
 }
@@ -753,6 +811,9 @@ impl From<Persona> for PersonaRecord {
             behaviors: persona.behaviors,
             default_behavior: persona.default_behavior,
             triggers: persona.triggers,
+            voice: persona.voice,
+            voice_packs: persona.voice_packs,
+            expertise: persona.expertise,
         }
     }
 }

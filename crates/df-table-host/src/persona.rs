@@ -74,6 +74,8 @@ mod fixtures;
 #[cfg(test)]
 mod generate_tests;
 #[cfg(test)]
+mod line_facts_tests;
+#[cfg(test)]
 mod persona_tests;
 #[cfg(test)]
 mod voice_tests;

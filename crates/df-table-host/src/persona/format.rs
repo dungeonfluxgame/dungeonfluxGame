@@ -3,7 +3,7 @@
 
 use df_content::persona::backfill::Gap;
 use df_content::persona::{
-    Persona, PersonaBehavior, PersonaId, PersonaSecret, PersonaTrigger, PublicPersona,
+    Persona, PersonaBehavior, PersonaId, PersonaSecret, PersonaTrigger, PublicPersona, Voice,
 };
 
 use crate::speech::format_voiced;
@@ -63,6 +63,9 @@ pub(super) fn format_spoken(spoken: &Spoken) -> String {
     )];
     if let Some(voice) = &spoken.voice {
         lines.push(format_voiced(voice));
+    }
+    if let Some(cents) = said.quoted_cp {
+        lines.push(format!("  quoted: {cents} cp"));
     }
     if said.leak_suspect {
         lines.push(
@@ -212,6 +215,45 @@ fn items_block<T>(label: &str, items: &[T], line: impl Fn(&T) -> String) -> Opti
     (!lines.is_empty()).then(|| format!("  {label}:\n{}", lines.join("\n")))
 }
 
+/// The voice as `  voice:` over its parts that say something.
+fn voice_block(voice: &Voice) -> Option<String> {
+    let text =
+        |label: &str, text: &str| (!text.trim().is_empty()).then(|| format!("{label}: {text}"));
+    let list = |label: &str, entries: &[String]| {
+        (!entries.is_empty()).then(|| format!("{label}: {}", entries.join(" | ")))
+    };
+    let parts: Vec<String> = [
+        text("rhythm", &voice.rhythm),
+        list("favored", &voice.diction.favored),
+        list("never", &voice.diction.never),
+        list("tics", &voice.tics),
+        text("address", &voice.address),
+        list("idioms", &voice.idioms),
+        text("deflection", &voice.deflection),
+        list("samples", &voice.samples),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|part| format!("    {part}"))
+    .collect();
+    (!parts.is_empty()).then(|| format!("  voice:\n{}", parts.join("\n")))
+}
+
+/// What `persona voice <id> generate` wrote.
+pub(super) fn format_voice_generated(persona: &Persona) -> String {
+    let packs = if persona.voice_packs().is_empty() {
+        "none".to_owned()
+    } else {
+        persona.voice_packs().join(", ")
+    };
+    format!(
+        "ok voice written for {} ({} samples, {} expertise entries, packs: {packs})",
+        persona.id(),
+        persona.voice().samples.len(),
+        persona.expertise().len()
+    )
+}
+
 pub(super) fn format_public(persona: &PublicPersona) -> String {
     let blocks = [
         Some(format!("persona {} (public)", persona.id)),
@@ -219,6 +261,8 @@ pub(super) fn format_public(persona: &PublicPersona) -> String {
         text_block("job", &persona.job),
         list_block("personality", &persona.personality),
         text_block("speech style", &persona.speech_style),
+        voice_block(&persona.voice),
+        list_block("expertise", &persona.expertise),
         text_block("backstory", &persona.backstory),
     ];
     blocks.into_iter().flatten().collect::<Vec<_>>().join("\n")
@@ -283,6 +327,9 @@ pub(super) fn format_owner(persona: &Persona) -> String {
         list_block("fears", persona.private_fears()),
         list_block("boundaries", persona.private_boundaries()),
         text_block("speech style", persona.speech_style()),
+        voice_block(persona.voice()),
+        list_block("voice packs", persona.voice_packs()),
+        list_block("expertise", persona.expertise()),
         text_block("backstory", persona.backstory()),
         text_block("private backstory", persona.private_backstory()),
         items_block("secrets", persona.private_secrets(), secret),

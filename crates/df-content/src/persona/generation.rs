@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::backfill::NarrativeGuidance;
+use super::voice::{Voice, check_packs_available, voice_properties};
 use super::{
     Persona, PersonaBehavior, PersonaDraft, PersonaError, PersonaId, PersonaSecret, PersonaTrigger,
     Sensitivity,
@@ -37,6 +38,12 @@ pub const INSTRUCTION: &str = concat!(
     "and who already knows it. ",
     "A trigger is a plain statement of when they move into a behavior, never a list of keywords, ",
     "and names a behavior you gave. Ids are short lowercase words joined by hyphens. ",
+    "Also write how they sound: a voice (rhythm, diction with favored and never words, tics, ",
+    "address, idioms, deflection and 3 to 5 samples that are style only and never facts, with ",
+    "dialect carried by word choice and never by phonetic spelling), their expertise (what they ",
+    "know from their trade or life, in plain sentences, with no price, quantity or place unless ",
+    "the scene states it) and voice_packs (ids chosen by meaning from available_packs only, ",
+    "empty when none fits). ",
     "Keep each entry short, one plain sentence or phrase. ",
     "The character's id is fixed and is not part of your answer. ",
     "Follow the narrative guidance when it is given; without it write a generic story persona. ",
@@ -62,6 +69,8 @@ pub struct GenerationRequest {
     pub cast: Vec<String>,
     /// What the narrative engine wants the persona to serve, when it says.
     pub guidance: Option<NarrativeGuidance>,
+    /// The voice packs on offer, each with an `id`; the persona's packs are chosen from them.
+    pub available_packs: Vec<Value>,
 }
 
 /// Why an answer is not a persona.
@@ -73,6 +82,8 @@ pub enum GenerationError {
     Malformed { detail: String },
     /// The answer reads but is not a valid persona for the character.
     Persona { cause: PersonaError },
+    /// The answer names a voice pack that is not on offer.
+    UnknownVoicePack { id: String },
 }
 
 impl fmt::Display for GenerationError {
@@ -85,6 +96,10 @@ impl fmt::Display for GenerationError {
             Self::Persona { cause } => {
                 write!(formatter, "the answer is not a valid persona: {cause}")
             }
+            Self::UnknownVoicePack { id } => write!(
+                formatter,
+                "the answer names the voice pack {id:?}, which is not in available_packs"
+            ),
         }
     }
 }
@@ -103,6 +118,7 @@ pub fn facts(request: &GenerationRequest) -> Value {
         "character": request.character.as_str(),
         "hint": request.hint,
         "guidance": request.guidance,
+        "available_packs": request.available_packs,
         "scene": {
             "title": request.scene.title,
             "description": request.scene.description,
@@ -149,13 +165,13 @@ fn items_property(description: &str, properties: Value) -> Value {
 /// The strict JSON schema of the answer object named [`OUTPUT_NAME`]. It has no id.
 pub fn output_schema() -> Value {
     let sensitivities: Vec<&str> = Sensitivity::ALL.iter().map(|level| level.key()).collect();
-    json!({
+    let mut schema = json!({
         "type": "object",
         "additionalProperties": false,
         "required": [
             "display_name", "job", "personality", "motivations", "goals", "needs", "fears",
             "speech_style", "backstory", "private_backstory", "boundaries", "secrets",
-            "behaviors", "default_behavior", "triggers"
+            "behaviors", "default_behavior", "triggers", "voice", "expertise", "voice_packs"
         ],
         "properties": {
             "display_name": text_property("The character's full name as the story would say it."),
@@ -189,7 +205,15 @@ pub fn output_schema() -> Value {
                 "behavior": text_property("The id of the behavior it moves them into."),
             })),
         },
-    })
+    });
+    if let Some(Value::Object(properties)) = schema.get_mut("properties") {
+        properties.extend(
+            voice_properties()
+                .into_iter()
+                .map(|(key, property)| (key.to_owned(), property)),
+        );
+    }
+    schema
 }
 
 /// The persona as the model writes it: everything but the id.
@@ -216,6 +240,12 @@ struct AnswerRecord {
     default_behavior: Option<String>,
     #[serde(default)]
     triggers: Vec<PersonaTrigger>,
+    #[serde(default)]
+    voice: Voice,
+    #[serde(default)]
+    expertise: Vec<String>,
+    #[serde(default)]
+    voice_packs: Vec<String>,
 }
 
 /// The persona of `request`'s character that `answer` describes. The id is the request's.
@@ -226,6 +256,7 @@ pub fn read_answer(
     let record = AnswerRecord::deserialize(answer).map_err(|error| GenerationError::Malformed {
         detail: error.to_string(),
     })?;
+    check_packs_available(&record.voice_packs, &request.available_packs)?;
     Ok(Persona::new(PersonaDraft {
         id: request.character.as_str().to_owned(),
         display_name: record.display_name,
@@ -243,5 +274,8 @@ pub fn read_answer(
         behaviors: record.behaviors,
         default_behavior: record.default_behavior,
         triggers: record.triggers,
+        voice: record.voice,
+        voice_packs: record.voice_packs,
+        expertise: record.expertise,
     })?)
 }

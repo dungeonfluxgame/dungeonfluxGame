@@ -1,0 +1,77 @@
+{
+  "items": [
+    {"id": "apple", "name": "apple", "unit": "each", "base_value_cp": 3, "tags": ["fruit", "keeps-well"]},
+    {"id": "pear", "name": "pear", "unit": "each", "base_value_cp": 4, "tags": ["fruit"]},
+    {"id": "plum", "name": "plum", "unit": "each", "base_value_cp": 3, "tags": ["fruit", "soft"]}
+  ],
+  "places": [
+    {
+      "id": "market",
+      "name": "The town market",
+      "description": "An open market of canvas-roofed stalls where the town buys its fruit, bread and rope.",
+      "stalls": [
+        {
+          "keeper": "fruit_vendor",
+          "sells": ["apple", "pear", "plum"],
+          "bulk": [{"min_qty": 5, "discount_permille": 100}],
+          "haggle_floor_permille": 850
+        }
+      ]
+    }
+  ],
+  "voice_packs": [
+    {
+      "id": "market-trader",
+      "description": "A harbor market trader's talk: brisk, concrete, full of trade idioms and friendly forms of address.",
+      "rhythm": "Short, quick sentences that lead with the goods or the price. Warm but never idle: every line moves the sale along. Questions are brief and practical.",
+      "lexicon": ["stall", "fresh off the cart", "the good ones", "a fair price", "I'll throw in", "by the handful", "first of the morning", "weighs true"],
+      "idioms": [
+        "Fair price or no sale.",
+        "Fruit doesn't wait on anyone.",
+        "A full hand beats an empty promise.",
+        "Never sold a bad one yet, and I'm not starting with you."
+      ],
+      "samples": [
+        "Apples, dear? Best of the cart, picked this morning, and priced to match.",
+        "Friend, pears don't last past the week. Eat them first, keep the apples for the road.",
+        "Fair's fair and you know it. Go on, take the lot and call it done.",
+        "Mind the plums, they bruise if you look at them hard. Here, I'll put them on top."
+      ],
+      "avoid": ["Long speeches before the price", "Modern slang", "Spelling words to imitate an accent"]
+    },
+    {
+      "id": "road-weary-guard",
+      "description": "A guard who has walked too many roads: terse, practical, given to understatement.",
+      "rhythm": "Clipped, flat statements. Rarely more than a sentence or two. Understates danger and weariness alike. Dry rather than cold.",
+      "lexicon": ["watch", "the road", "post", "quiet enough", "wouldn't linger", "marked", "hold the line", "since dawn"],
+      "idioms": [
+        "Quiet enough, for now.",
+        "I've seen worse. Not often.",
+        "Keep to the road and the road keeps you."
+      ],
+      "samples": [
+        "North road's open. I wouldn't linger past dusk.",
+        "Been on the wall since dawn. Quiet enough.",
+        "State your business or move along. Either's fine with me."
+      ],
+      "avoid": ["Exclamation marks", "Gushing or flowery description", "Explaining a joke"]
+    },
+    {
+      "id": "scholarly-traveller",
+      "description": "A learned traveller who surveys and records: precise, careful with claims, fond of map and survey idioms.",
+      "rhythm": "Measured, complete sentences. Qualifies what is not certain and says plainly what is. Likes to give a bearing, a distance or a source.",
+      "lexicon": ["by my reckoning", "surveyed", "bearing", "as charted", "to the best of my notes", "league", "landmark", "cross-checked"],
+      "idioms": [
+        "I would not stake the map on it.",
+        "Unmarked ground is not empty ground.",
+        "One witness is a rumour; two are a route."
+      ],
+      "samples": [
+        "By my reckoning the ford lies two leagues north, though I have only the one account of it.",
+        "I would not stake the map on that bridge. It is charted, but the chart is old.",
+        "The ridge makes a fine landmark. Keep it on your left and you will not go far wrong."
+      ],
+      "avoid": ["Confident guesses stated as fact", "Slang", "Spelling words to imitate an accent"]
+    }
+  ]
+}

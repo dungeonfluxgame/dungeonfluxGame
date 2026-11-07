@@ -25,6 +25,7 @@ use crate::limits::UPLOAD_PIECE_BYTES;
 use crate::locate::request::LocateError;
 use crate::persona::request::PersonaError;
 use crate::persona::{ConverseError, PlateStep};
+use crate::world::WorldError;
 use crate::playground::{
     ChangeReply, ClientsError, FixtureNameError, PlaygroundChangeError, fixture_file_name,
 };
@@ -62,6 +63,7 @@ pub enum ReplyError {
     Cast(CastError),
     Persona(PersonaError),
     Speech(SpeechError),
+    World(WorldError),
     RulesCheck(RulesCheckError),
     /// A host route: the events query or the host status.
     Host(HostError),
@@ -88,6 +90,7 @@ impl fmt::Display for ReplyError {
             Self::Cast(error) => write!(formatter, "{error}"),
             Self::Persona(error) => write!(formatter, "{error}"),
             Self::Speech(error) => write!(formatter, "{error}"),
+            Self::World(error) => write!(formatter, "{error}"),
             Self::RulesCheck(error) => write!(formatter, "{error}"),
             Self::Host(error) => write!(formatter, "{error}"),
             Self::Clients(error) => write!(formatter, "{error}"),
@@ -164,6 +167,12 @@ impl From<PersonaError> for ReplyError {
     }
 }
 
+impl From<WorldError> for ReplyError {
+    fn from(error: WorldError) -> Self {
+        Self::World(error)
+    }
+}
+
 impl From<SpeechError> for ReplyError {
     fn from(error: SpeechError) -> Self {
         Self::Speech(error)
@@ -203,6 +212,7 @@ fn write_refusal(
         ReplyError::Cast(error) => error.key(),
         ReplyError::Persona(error) => error.key(),
         ReplyError::Speech(error) => error.key(),
+        ReplyError::World(error) => error.key(),
         ReplyError::Host(error) => error.key(),
         ReplyError::Clients(error) => error.key(),
         ReplyError::Services(error) => error.key(),
@@ -793,6 +803,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::MediaLocate(command) => crate::locate::cli::run(port, command).await,
         Command::Cast(command) => crate::cast::cli::run(port, command).await,
         Command::Persona(command) => crate::persona::cli::run(port, command).await,
+        Command::World(command) => crate::world::cli::run(port, command).await,
         Command::Move(command) => crate::movement::cli::run(port, command).await,
         Command::Speech(command) => crate::speech::cli::run(port, command).await,
         Command::Clients => reads::show_clients(port).await,

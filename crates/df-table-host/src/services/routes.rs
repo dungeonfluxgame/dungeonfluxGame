@@ -164,6 +164,7 @@ pub fn router_with(
             Arc::clone(&text),
         ))
         .merge(crate::speech::router_with(speech))
+        .merge(crate::world::router_with(Arc::clone(&app)))
         .merge(crate::movement::routes::router_with(
             Arc::clone(&app),
             Arc::clone(&text),

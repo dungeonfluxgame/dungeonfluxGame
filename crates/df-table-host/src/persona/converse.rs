@@ -291,6 +291,8 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             situation: table.situation(&speaker, request.topic.as_deref(), &history),
             model: request.model.clone(),
             speak: request.speak,
+            recent: Vec::new(),
+            asked_by: None,
         };
         let spoken = match say_once(port, &say).await {
             Ok(spoken) => spoken,

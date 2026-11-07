@@ -127,6 +127,12 @@ pub struct SayRequest {
     /// Voice the line and play it with its bubble. Off unless it says otherwise.
     #[serde(default)]
     pub speak: bool,
+    /// The last lines of the conversation, oldest first, so the line does not repeat them.
+    #[serde(default)]
+    pub recent: Vec<String>,
+    /// Who the line is said to (a persona id or a name), so triggers are judged by what they do.
+    #[serde(default)]
+    pub asked_by: Option<String>,
 }
 
 fn yes() -> bool {
@@ -143,6 +149,8 @@ impl std::fmt::Debug for SayRequest {
             .field("situation_characters", &self.situation.chars().count())
             .field("model", &self.model)
             .field("speak", &self.speak)
+            .field("recent_lines", &self.recent.len())
+            .field("asked_by", &self.asked_by)
             .finish()
     }
 }
@@ -159,6 +167,8 @@ impl std::fmt::Debug for AskRequest {
             .field("coverage", &self.coverage)
             .field("speak", &self.speak)
             .field("has_situation", &self.situation.is_some())
+            .field("recent_lines", &self.recent.len())
+            .field("asked_by", &self.asked_by)
             .finish()
     }
 }
@@ -200,6 +210,23 @@ pub struct AskRequest {
     /// What is happening around the question; it is data for the model.
     #[serde(default)]
     pub situation: Option<String>,
+    /// The last lines of the conversation, oldest first, so the answer does not repeat them.
+    #[serde(default)]
+    pub recent: Vec<String>,
+    /// Who asks (a persona id or a name), so triggers are judged by what they do.
+    #[serde(default)]
+    pub asked_by: Option<String>,
+}
+
+/// The body of `POST /dev/persona/voice`: the text service writes only the voice, the expertise
+/// and the voice packs of the stored persona `id`; everything else of it is untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceRequest {
+    pub id: String,
+    /// The model to ask instead of the persona default.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// The body of `POST /dev/persona/coverage`: does the persona hold enough to answer `question`?
@@ -395,6 +422,9 @@ pub struct SaidLine {
     pub fired_triggers: Vec<String>,
     /// The secret ids of this persona that the line gave away.
     pub revealed_secrets: Vec<String>,
+    /// The price in copper pieces the line quotes, when it quotes one.
+    #[serde(default)]
+    pub quoted_cp: Option<u64>,
     /// True when the model judged, in the call that worded the line, that the line gives away the
     /// character's private side beyond what the question and the situation already say. It blocks
     /// nothing: it is the model's judgement, a hint and not a guarantee.

@@ -33,6 +33,8 @@ pub const PRIVACY_INSTRUCTION: &str = concat!(
     "private detail, even paraphrased or in other words. ",
     "A price, a quantity, a place, ordinary shop talk or a trait is not a leak merely because it ",
     "shares a common word with the private side. ",
+    "known_public_world_facts, when given, are the canonical facts of the place (the price and ",
+    "stock of goods offered for sale): they are public, so stating one is never a leak. ",
     "Judge by meaning and never by matching words. ",
     "When leaks is true, give the offending words of the public text as excerpt; otherwise ",
     "excerpt is null. Give a one-sentence reason either way. ",
@@ -54,7 +56,9 @@ pub const LEAK_REPORT_INSTRUCTION: &str = concat!(
     "offending ",
     "words as leaked_excerpt, otherwise false and null. A price, a place, ordinary talk or a ",
     "trait ",
-    "is not a leak merely because it shares a common word with the private side."
+    "is not a leak merely because it shares a common word with the private side. A public world ",
+    "fact in the facts (the price or stock of goods offered for sale) is never a leak, however ",
+    "often it is stated."
 );
 
 /// Why a privacy answer is refused.
@@ -118,12 +122,17 @@ pub fn privacy_schema() -> Value {
 }
 
 /// The facts of a privacy question: the texts anyone may read and the private side they are
-/// judged against.
-pub fn privacy_facts(public_texts: &[String], private_side: &str) -> Value {
-    json!({
+/// judged against, and the public world facts (`Value::Null` for none) the judge must treat as
+/// known to everyone.
+pub fn privacy_facts(public_texts: &[String], private_side: &str, world_facts: &Value) -> Value {
+    let mut facts = json!({
         "public_texts": public_texts,
         "private_side": private_side,
-    })
+    });
+    if !world_facts.is_null() {
+        facts["known_public_world_facts"] = world_facts.clone();
+    }
+    facts
 }
 
 /// Reads a privacy answer.

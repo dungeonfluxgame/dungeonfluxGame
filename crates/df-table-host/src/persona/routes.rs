@@ -18,7 +18,7 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use axum::routing::{get, post};
-use df_content::persona::{Persona, PersonaId};
+use df_content::persona::{Persona, PersonaEdit, PersonaId};
 use df_playground::lobby::change::ScreenEdit;
 use df_playground::scene::SceneChange;
 use df_scene_layout::{CharacterCue, CueKind};
@@ -27,13 +27,13 @@ use df_table::ports::Clock;
 use super::backfill::{BackfillJob, backfill_persona, check_gaps, consider, coverage_of};
 use super::generate::{
     Occasion, ShownScene, Writing, generate_cast, generate_character, load_persona, persona_route,
-    say_line,
+    say_line, voice_edit,
 };
 use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, BackfillsQuery,
     CastRow, CoverageRequest, Covered, EditRequest, Edited, GenerateCastRequest, GenerateRequest,
     Generation, PersonaError, PersonaRemoved, PersonaStored, RemoveRequest, SaidLine, SayRequest,
-    ShowQuery, Spoken, summary_of,
+    ShowQuery, Spoken, VoiceRequest, summary_of,
 };
 use super::storage::{
     PERSONA_WRITES, check_reserved, list_personas, persona_directory, persona_id, read_backfills,
@@ -68,6 +68,9 @@ pub mod path {
     pub const PERSONA_ASK: &str = df_playground::path::PERSONA_ASK;
     /// Whether the persona holds enough to answer a question (POST a `CoverageRequest`).
     pub const PERSONA_COVERAGE: &str = "/dev/persona/coverage";
+    /// Has the text service write only a persona's voice, expertise and packs (POST a
+    /// `VoiceRequest`).
+    pub const PERSONA_VOICE: &str = "/dev/persona/voice";
     /// Fills gaps of a persona by adding detail (POST a `BackfillRequest`).
     pub const PERSONA_BACKFILL: &str = "/dev/persona/backfill";
     /// The backfills committed to a persona (GET with `?id=`).
@@ -174,6 +177,43 @@ async fn write(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Respon
     answer(app, "write", None, written)
 }
 
+/// Applies `edits` to the stored persona `id`, all together or not at all, and records
+/// `PERSONA edited`.
+async fn apply_edits(
+    app: &AppState,
+    id: &str,
+    edits: Vec<PersonaEdit>,
+) -> Result<Edited, PersonaError> {
+    let id = persona_id(id)?;
+    let directory = persona_directory(app);
+    let count = edits.len();
+    let edited = run_blocking(
+        move || {
+            let _writing = PERSONA_WRITES.lock();
+            let before = stored(&directory, &id)?;
+            let after = before
+                .edit(&edits)
+                .map_err(|cause| PersonaError::InvalidEdit { cause })?;
+            let changed = after != before;
+            if changed {
+                write_persona(&directory, &after)?;
+            }
+            Ok(Edited {
+                persona: after,
+                changed,
+            })
+        },
+        PersonaError::Stopped,
+    )
+    .await?;
+    app.record_line(format!(
+        "PERSONA edited id={} edits={count} changed={}",
+        edited.persona.id(),
+        edited.changed
+    ));
+    Ok(edited)
+}
+
 async fn edit(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response {
     let app = &routes.app;
     let request: EditRequest = match parse_body(&bytes) {
@@ -181,38 +221,28 @@ async fn edit(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Respons
         Err(error) => return answer::<Edited>(app, "edit", None, Err(error.into())),
     };
     let known = known_id(&request.id).map(str::to_owned);
-    let edited = async {
-        let id = persona_id(&request.id)?;
-        let directory = persona_directory(app);
-        let edits = request.edits.len();
-        let edited = run_blocking(
-            move || {
-                let _writing = PERSONA_WRITES.lock();
-                let before = stored(&directory, &id)?;
-                let after = before
-                    .edit(&request.edits)
-                    .map_err(|cause| PersonaError::InvalidEdit { cause })?;
-                let changed = after != before;
-                if changed {
-                    write_persona(&directory, &after)?;
-                }
-                Ok(Edited {
-                    persona: after,
-                    changed,
-                })
-            },
-            PersonaError::Stopped,
-        )
-        .await?;
-        app.record_line(format!(
-            "PERSONA edited id={} edits={edits} changed={}",
-            edited.persona.id(),
-            edited.changed
-        ));
-        Ok::<_, PersonaError>(edited)
-    }
-    .await;
+    let edited = apply_edits(app, &request.id, request.edits).await;
     answer(app, "edit", known.as_deref(), edited)
+}
+
+async fn voice(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response {
+    let request: VoiceRequest = match parse_body(&bytes) {
+        Ok(request) => request,
+        Err(error) => return answer::<Edited>(&routes.app, "voice", None, Err(error.into())),
+    };
+    let known = known_id(&request.id).map(str::to_owned);
+    let owned = Arc::clone(&routes);
+    let result = run_owned(
+        async move {
+            let route = persona_route(&owned.text, request.model.as_deref())?;
+            let own = load_persona(&owned.app, &request.id).await?;
+            let edit = voice_edit(&owned.app, &route, &own).await?;
+            apply_edits(&owned.app, &request.id, vec![edit]).await
+        },
+        PersonaError::Stopped,
+    )
+    .await;
+    answer(&routes.app, "voice", known.as_deref(), result)
 }
 
 async fn remove(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response {
@@ -412,6 +442,8 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
                 question: None,
                 guidance: None,
                 not_established: &[],
+                recent: &request.recent,
+                asked_by: request.asked_by.as_deref(),
             };
             let said = match say_line(&owned.app, &route, &scene, &own, occasion).await {
                 Ok(said) => said,
@@ -588,6 +620,7 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -
         .route(path::PERSONA_ONE, get(show))
         .route(path::PERSONA_REMOVE, post(remove))
         .route(path::PERSONA_EDIT, post(edit))
+        .route(path::PERSONA_VOICE, post(voice))
         .route(path::PERSONA_GENERATE, post(generate))
         .route(path::PERSONA_GENERATE_CAST, post(generate_scene_cast))
         .route(path::PERSONA_SAY, post(say))

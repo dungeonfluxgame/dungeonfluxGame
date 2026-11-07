@@ -41,7 +41,7 @@ pub const DEFAULT_TRAVEL_SPEED: f32 = 20.0;
 /// The top-level verbs `parse` matches by name. The verbs of `engine::VERBS`,
 /// `scene_builder::cli::VERBS` and `director::cli::VERBS` are matched after these, so no verb may
 /// be in two of the tables.
-pub const VERBS: [&str; 27] = [
+pub const VERBS: [&str; 28] = [
     "spawn",
     "set",
     "move",
@@ -64,6 +64,7 @@ pub const VERBS: [&str; 27] = [
     "frame",
     "services",
     "persona",
+    "world",
     "speech",
     "fixtures",
     "fixture",
@@ -133,6 +134,8 @@ pub enum Command {
     Cast(crate::cast::CastCommand),
     /// The personas of characters: list, show, write, set a field or remove.
     Persona(crate::persona::PersonaCommand),
+    /// The world bible: the active place, price quotes and a check of the bible file.
+    World(crate::world::WorldCommand),
     /// A scene transition's stages from a movement line: `move say|interpret|design|brief`.
     Move(crate::movement::cli::MoveCommand),
     /// Voice chat: the speech service's status, a spoken line, a transcript, voices and clips.
@@ -509,6 +512,7 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
         "frame" => host::frame(rest),
         "services" => crate::services::parse(rest).map(Command::Services),
         "persona" => crate::persona::parse(rest).map(Command::Persona),
+        "world" => crate::world::parse(rest).map(Command::World),
         "speech" => crate::speech::parse(rest).map(Command::Speech),
         "reload" => Ok(Command::Reload),
         "playground" => playground::playground(rest),

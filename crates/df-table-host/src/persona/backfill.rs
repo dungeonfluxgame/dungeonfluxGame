@@ -6,8 +6,13 @@
 //! persona is changed by applying its edits to the persona as it is when they are committed, with
 //! a record of what was invented (`<id>.backfills.json`). The audit lines are
 //! `PERSONA covered id=.. enough=.. gaps=..`, `PERSONA backfilled id=.. gaps=.. edits=..
-//! duration_ms=..` and `PERSONA backfill_failed id=.. error=<key>`; they never hold persona,
-//! question, guidance or edit text.
+//! duration_ms=..`, `PERSONA backfill_retried id=..` and `PERSONA backfill_failed id=..
+//! error=<key>`; they never hold persona, question, guidance or edit text.
+//!
+//! A backfill answer the reader refuses is asked once more with the refusal's reason in the facts
+//! as `previous_refusal`; a second refusal is the backfill's failure, reported, and the line is
+//! still answered. The world facts of the active place (`world`) are in the coverage and backfill
+//! facts: a price, a quantity or a place comes from them and a backfill never invents one.
 
 use df_content::persona::privacy::{
     PRIVACY_INSTRUCTION, PRIVACY_OUTPUT_NAME, parse_privacy, private_side, privacy_facts,
@@ -19,12 +24,14 @@ use df_content::persona::backfill::{
     Coverage, FILLABLE, Gap, Latitude, NarrativeGuidance, backfill_facts, backfill_schema,
     coverage_facts, coverage_schema, read_backfill, read_coverage,
 };
+use serde_json::{Value, json};
 use tokio::time::Instant;
 
 use crate::blocking::run_blocking;
 
 use super::generate::{
-    Occasion, ShownScene, load_persona, operation_key, other_personas, say_line, text_request,
+    Occasion, PUBLIC_NOTE, ShownScene, load_persona, operation_key, other_personas, say_line,
+    text_request,
 };
 use super::request::{
     Answered, AskRequest, BackfillOutcome, BackfillRecord, Backfilled, PersonaError, SaidLine,
@@ -54,10 +61,13 @@ pub(super) async fn coverage_of(
     guidance: Option<&NarrativeGuidance>,
 ) -> Result<Coverage, PersonaError> {
     let character = own.id().as_str();
+    let mut facts = coverage_facts(own, question, guidance);
+    facts["world"] = crate::world::context_for(app, own.voice_packs()).facts;
+    facts["public_note"] = json!(PUBLIC_NOTE);
     let request = text_request(
         route.profile(),
         COVERAGE_INSTRUCTION,
-        coverage_facts(own, question, guidance),
+        facts,
         COVERAGE_OUTPUT_NAME,
         coverage_schema(),
     );
@@ -128,7 +138,11 @@ async fn refuse_private_detail(
     let request = text_request(
         route.profile(),
         PRIVACY_INSTRUCTION,
-        privacy_facts(&public, &private_side(&after)),
+        privacy_facts(
+            &public,
+            &private_side(&after),
+            &crate::world::context_for(app, after.voice_packs()).facts,
+        ),
         PRIVACY_OUTPUT_NAME,
         privacy_schema(),
     );
@@ -143,6 +157,27 @@ async fn refuse_private_detail(
         return Err(PersonaError::PrivateDetailInPublicField);
     }
     Ok(())
+}
+
+/// Asks the backfill question with `facts` and reads the edits of the answer.
+async fn ask_backfill(
+    route: &TextRoute,
+    own: &Persona,
+    latitude: Latitude,
+    facts: Value,
+) -> Result<Vec<PersonaEdit>, PersonaError> {
+    let request = text_request(
+        route.profile(),
+        BACKFILL_INSTRUCTION,
+        facts,
+        BACKFILL_OUTPUT_NAME,
+        backfill_schema(),
+    );
+    let key = operation_key("backfill")?;
+    Ok(route
+        .ask(&key, &request, |answer| read_backfill(answer, own, latitude))
+        .await?
+        .value)
 }
 
 async fn backfill(
@@ -164,21 +199,18 @@ async fn backfill(
         .guidance
         .map_or(Latitude::Open, |guidance| guidance.latitude);
     let scene_text = format!("{}: {}", scene.title(), scene.description());
-    let request = text_request(
-        route.profile(),
-        BACKFILL_INSTRUCTION,
-        backfill_facts(own, &others, job.gaps, job.guidance, &scene_text),
-        BACKFILL_OUTPUT_NAME,
-        backfill_schema(),
-    );
-    let key = operation_key("backfill")?;
+    let mut facts = backfill_facts(own, &others, job.gaps, job.guidance, &scene_text);
+    facts["world"] = crate::world::context_for(app, own.voice_packs()).facts;
+    facts["public_note"] = json!(PUBLIC_NOTE);
     let started = Instant::now();
-    let edits = route
-        .ask(&key, &request, |answer| {
-            read_backfill(answer, own, latitude)
-        })
-        .await?
-        .value;
+    let edits = match ask_backfill(route, own, latitude, facts.clone()).await {
+        Err(PersonaError::AnswerRefused { cause, .. }) => {
+            app.record_line(format!("PERSONA backfill_retried id={character}"));
+            facts["previous_refusal"] = json!(cause.to_string());
+            ask_backfill(route, own, latitude, facts).await?
+        }
+        asked => asked?,
+    };
     refuse_private_detail(app, route, own, &edits).await?;
     let profile = route.profile().as_str().to_owned();
     let record = BackfillRecord {
@@ -339,6 +371,8 @@ pub(super) async fn consider(
         question: Some(&request.question),
         guidance: request.guidance.as_ref(),
         not_established: &not_established,
+        recent: &request.recent,
+        asked_by: request.asked_by.as_deref(),
     };
     let said = say_line(app, route, scene, &filled.persona, occasion).await?;
     Ok(Considered {

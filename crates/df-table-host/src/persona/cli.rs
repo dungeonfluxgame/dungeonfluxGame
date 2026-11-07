@@ -2,9 +2,11 @@
 //! text of each answer.
 //!
 //! Every verb that changes a stored persona (`set`, `add`, `drop`, `secret`, `behavior`,
-//! `trigger`, `edit`) builds `PersonaEdit` values and sends them to the one edit route; the host
+//! `trigger`, `voice`, `expertise`, `edit`) builds `PersonaEdit` values and sends them to the one
+//! edit route; the host
 //! applies them all together or not at all. `write`, `generate`, `say`, `ask`, `coverage`,
-//! `backfill` and `backfills` have routes of their own. The questions to the model share the
+//! `backfill` and `backfills` have routes of their own, and so has `voice <id> generate`. The
+//! questions to the model share the
 //! options of `options` (`model=`, the guidance keys). A mistake in a file given to `write` or
 //! `edit` is found here before anything is sent, as the same typed `PersonaError` a route
 //! answers, in a `DevError::Rejected`.
@@ -19,17 +21,19 @@ use df_content::persona::{
 use serde::Deserialize;
 
 use super::converse::{ConverseRequest, DEFAULT_TURNS, MAXIMUM_TURNS, converse};
-use super::edit_verbs::{parse_behavior, parse_secret, parse_trigger};
+use super::edit_verbs::{
+    parse_behavior, parse_expertise, parse_secret, parse_trigger, parse_voice,
+};
 use super::format::{
     format_answered, format_backfilled, format_backfills, format_covered, format_generation,
-    format_list, format_owner, format_public, format_spoken,
+    format_list, format_owner, format_public, format_spoken, format_voice_generated,
 };
 use super::options::{Asking, GUIDANCE_KEYS, GuidanceArgs, asking_from, take_options};
 use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, CastOutcome,
     CastRow, CoverageRequest, Covered, EditRequest, Edited, GenerateCastRequest, GenerateRequest,
     Generation, PersonaError, PersonaRemoved, PersonaReply, PersonaStored, PersonaSummary,
-    RemoveRequest, SayRequest, Spoken,
+    RemoveRequest, SayRequest, Spoken, VoiceRequest,
 };
 use super::routes::path;
 use super::storage::{RESERVED_IDS, persona_id};
@@ -46,13 +50,17 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona set <id> <field> <text...> | persona add <id> <list-field> <text...> | ",
     "persona drop <id> <list-field> <index> | persona secret <id> add|drop ... | ",
     "persona behavior <id> add|drop ... | persona trigger <id> add|drop ... | ",
+    "persona voice <id> set|add|drop|sample|pack|generate ... | ",
+    "persona expertise <id> add|drop ... | ",
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
     "[model=<name>] <guidance options> [hint <text...>] | ",
-    "persona say <character> [model=<name>] [speak=true|false] <situation...> | ",
+    "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
+    "[from=<id>] <situation...> | ",
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
     "[model=<name>] [<topic...>] | ",
     "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
-    "[speak=true|false] [situation=<text>] <guidance options> <question...> | ",
+    "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
+    "<guidance options> <question...> | ",
     "persona coverage <character> [model=<name>] ",
     "<guidance options> <question...> | persona backfill <character> gap=<field>:<topic>... ",
     "[model=<name>] <guidance options> | persona backfills <id> | persona remove <id>",
@@ -89,6 +97,17 @@ pub const PERSONA_TRIGGER_USAGE: &str = concat!(
     "persona trigger <id> add <trigger-id> behavior=<behavior-id> [event=<key>] ",
     "<condition...> | persona trigger <id> drop <trigger-id>",
 );
+/// `persona voice`: change the voice, its packs, or have the text service write them.
+pub const PERSONA_VOICE_USAGE: &str = concat!(
+    "persona voice <id> set rhythm|address|deflection <text...> | ",
+    "persona voice <id> add favored|never|tics|idioms|samples <text...> | ",
+    "persona voice <id> drop favored|never|tics|idioms|samples <index> | ",
+    "persona voice <id> sample add <text...> | persona voice <id> sample drop <index> | ",
+    "persona voice <id> pack add|drop <pack-id> | persona voice <id> generate [model=<name>]",
+);
+/// `persona expertise`: add or drop what a character knows from their trade or life.
+pub const PERSONA_EXPERTISE_USAGE: &str =
+    "persona expertise <id> add <text...> | persona expertise <id> drop <index>";
 /// `persona edit`: apply the edits of a JSON file.
 pub const PERSONA_EDIT_USAGE: &str = "persona edit <id> <file.json>";
 /// `persona generate`: have the text service write personas.
@@ -97,8 +116,10 @@ pub const PERSONA_GENERATE_USAGE: &str = concat!(
     "[hint <text...>]",
 );
 /// `persona say`: a line from a character, cued on the scene.
-pub const PERSONA_SAY_USAGE: &str =
-    "persona say <character> [model=<name>] [speak=true|false] <situation...>";
+pub const PERSONA_SAY_USAGE: &str = concat!(
+    "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... [from=<id>] ",
+    "<situation...>",
+);
 /// `persona converse`: the characters of the shown scene talk to each other.
 pub const PERSONA_CONVERSE_USAGE: &str = concat!(
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
@@ -107,7 +128,8 @@ pub const PERSONA_CONVERSE_USAGE: &str = concat!(
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
     "persona ask <character> [model=<name>] [backfill=true|false] [coverage=true|false] ",
-    "[speak=true|false] [situation=<text>] <guidance options> <question...>",
+    "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
+    "<guidance options> <question...>",
 );
 /// `persona coverage`: whether the persona holds enough to answer.
 pub const PERSONA_COVERAGE_USAGE: &str =
@@ -177,6 +199,13 @@ pub enum PersonaCommand {
         situation: String,
         model: Option<String>,
         speak: bool,
+        recent: Vec<String>,
+        asked_by: Option<String>,
+    },
+    /// Have the text service write only the voice, expertise and packs of a stored persona.
+    VoiceGenerate {
+        id: PersonaId,
+        model: Option<String>,
     },
     /// Have the characters of the shown scene talk to each other.
     Converse(ConverseRequest),
@@ -188,6 +217,8 @@ pub enum PersonaCommand {
         coverage: bool,
         speak: bool,
         situation: Option<String>,
+        recent: Vec<String>,
+        asked_by: Option<String>,
         asking: Asking,
     },
     /// Ask whether a persona holds enough to answer a question.
@@ -214,7 +245,7 @@ struct EditFile {
 }
 
 /// `word` as a persona id, or the refusal naming the rule.
-fn id_word(word: &str) -> Result<PersonaId, CommandError> {
+pub(super) fn id_word(word: &str) -> Result<PersonaId, CommandError> {
     persona_id(word).map_err(|_| {
         bad_choice(
             "id",
@@ -291,11 +322,28 @@ fn parse_generate(words: &[String]) -> Result<PersonaCommand, CommandError> {
     })
 }
 
+/// The `recent=` lines and the `from=` speaker among `given`: the talk a line is said in.
+fn talk_from(given: &[(&str, &str)]) -> Result<(Vec<String>, Option<String>), CommandError> {
+    let recent = given
+        .iter()
+        .filter(|(key, _)| *key == "recent")
+        .map(|(_, value)| (*value).to_owned())
+        .collect();
+    let mut asked_by = None;
+    for (_, value) in given.iter().filter(|(key, _)| *key == "from") {
+        if asked_by.replace((*value).to_owned()).is_some() {
+            return Err(CommandError::DuplicateKey("from".to_owned()));
+        }
+    }
+    Ok((recent, asked_by))
+}
+
 fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let [character, rest @ ..] = words else {
         return Err(CommandError::Usage(PERSONA_SAY_USAGE));
     };
-    let (given, situation) = take_options(rest, &["model", "speak"]);
+    let (given, situation) = take_options(rest, &["model", "speak", "recent", "from"]);
+    let (recent, asked_by) = talk_from(&given)?;
     let mut speak = false;
     for (_, value) in given.iter().filter(|(key, _)| *key == "speak") {
         speak = flag("speak", value)?;
@@ -305,6 +353,8 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
         situation: free_text(situation, PERSONA_SAY_USAGE)?,
         model: asking_from(&given)?.model,
         speak,
+        recent,
+        asked_by,
     })
 }
 
@@ -364,11 +414,20 @@ fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
         return Err(CommandError::Usage(PERSONA_ASK_USAGE));
     };
     let keys = [
-        &["model", "backfill", "coverage", "speak", "situation"][..],
+        &[
+            "model",
+            "backfill",
+            "coverage",
+            "speak",
+            "situation",
+            "recent",
+            "from",
+        ][..],
         &GUIDANCE_KEYS,
     ]
     .concat();
     let (given, question) = take_options(rest, &keys);
+    let (recent, asked_by) = talk_from(&given)?;
     let (mut backfill, mut coverage, mut speak) = (true, true, false);
     let mut situation = None;
     for &(key, value) in &given {
@@ -387,6 +446,8 @@ fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
         coverage,
         speak,
         situation,
+        recent,
+        asked_by,
         asking: asking_from(&given)?,
     })
 }
@@ -497,6 +558,8 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("secret", rest) => parse_secret(rest),
         ("behavior", rest) => parse_behavior(rest),
         ("trigger", rest) => parse_trigger(rest),
+        ("voice", rest) => parse_voice(rest),
+        ("expertise", rest) => parse_expertise(rest),
         ("edit", [id, file]) => Ok(PersonaCommand::EditFile {
             id: id_word(id)?,
             path: PathBuf::from(file),
@@ -665,6 +728,8 @@ struct AskExtras {
     coverage: bool,
     speak: bool,
     situation: Option<String>,
+    recent: Vec<String>,
+    asked_by: Option<String>,
 }
 
 async fn ask_character(
@@ -683,6 +748,8 @@ async fn ask_character(
         coverage: extras.coverage,
         speak: extras.speak,
         situation: extras.situation,
+        recent: extras.recent,
+        asked_by: extras.asked_by,
     };
     let started = Instant::now();
     let answered: Answered = reply_value(post_json(port, path::PERSONA_ASK, &request).await?)?;
@@ -737,15 +804,31 @@ async fn say(
     situation: String,
     model: Option<String>,
     speak: bool,
+    talk: (Vec<String>, Option<String>),
 ) -> Result<String, DevError> {
     let request = SayRequest {
         character: character.to_string(),
         situation,
         model,
         speak,
+        recent: talk.0,
+        asked_by: talk.1,
     };
     let spoken: Spoken = reply_value(post_json(port, path::PERSONA_SAY, &request).await?)?;
     Ok(format_spoken(&spoken))
+}
+
+async fn generate_voice(
+    port: u16,
+    id: PersonaId,
+    model: Option<String>,
+) -> Result<String, DevError> {
+    let request = VoiceRequest {
+        id: id.to_string(),
+        model,
+    };
+    let edited: Edited = reply_value(post_json(port, path::PERSONA_VOICE, &request).await?)?;
+    Ok(format_voice_generated(&edited.persona))
 }
 
 async fn show(port: u16, id: PersonaId, audience: Audience) -> Result<String, DevError> {
@@ -794,6 +877,8 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             coverage,
             speak,
             situation,
+            recent,
+            asked_by,
             asking,
         } => {
             let extras = AskExtras {
@@ -801,6 +886,8 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
                 coverage,
                 speak,
                 situation,
+                recent,
+                asked_by,
             };
             ask_character(port, character, question, extras, asking).await
         }
@@ -821,6 +908,9 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             situation,
             model,
             speak,
-        } => say(port, character, situation, model, speak).await,
+            recent,
+            asked_by,
+        } => say(port, character, situation, model, speak, (recent, asked_by)).await,
+        PersonaCommand::VoiceGenerate { id, model } => generate_voice(port, id, model).await,
     }
 }
