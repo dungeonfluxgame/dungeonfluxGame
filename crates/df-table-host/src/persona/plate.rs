@@ -170,16 +170,57 @@ pub(crate) async fn deliver_plate(
     change(port, &title_change(UPDATING_TITLE, Glyph::Spinner))
         .await
         .map_err(at(PlateStep::Generate))?;
+    let present: Vec<String> = characters
+        .iter()
+        .map(|character| character.name.clone())
+        .collect();
     let made = build(port, name, prompt, characters).await;
+    let dropped = match &made {
+        Ok(_) => drop_stale_bubbles(port, &present).await,
+        Err(_) => Ok(()),
+    };
     let put_back = before.map_or_else(title_removed, |title| {
         title_change(&title.text, title.glyph)
     });
     let restored = change(port, &put_back).await;
-    match (made, restored) {
+    match (made, dropped.and(restored)) {
         (Ok(summary), Ok(())) => Ok(summary),
         (Err(failure), _) => Err(failure),
         (Ok(_), Err(error)) => Err(at(PlateStep::Backdrop)(error)),
     }
+}
+
+/// Takes away the bubbles anchored to a character who is not in the new picture: their region is
+/// gone from the layout, so they would fall back to a fixed spot over someone else.
+async fn drop_stale_bubbles(port: u16, present: &[String]) -> Result<(), DevError> {
+    let controls: ControlsReply = get_json(port, route::PLAYGROUND_CONTROLS).await?;
+    let Some(card) = controls.scene.roleplay.set_value() else {
+        return Ok(());
+    };
+    let stale: Vec<usize> = card
+        .bubbles
+        .iter()
+        .enumerate()
+        .filter(|(_, bubble)| {
+            bubble
+                .anchor
+                .as_ref()
+                .is_some_and(|anchor| !present.contains(&anchor.region))
+        })
+        .map(|(index, _)| index + 1)
+        .collect();
+    for number in stale.into_iter().rev() {
+        let removal = SceneChange::Screen {
+            edit: ScreenEdit::RoleplaySet {
+                roleplay: RoleplayEdit {
+                    bubble_remove: Some(number),
+                    ..RoleplayEdit::default()
+                },
+            },
+        };
+        change(port, &removal).await?;
+    }
+    Ok(())
 }
 
 async fn build(

@@ -23,6 +23,8 @@ pub struct RoleplayEdit {
     pub icon: Option<Glyph>,
     /// Takes the title bar away; `title` and `icon` given with it are ignored.
     pub title_remove: bool,
+    /// Takes the bubble of this number (from 1) away, before any other bubble field applies.
+    pub bubble_remove: Option<usize>,
     pub bubble: Option<usize>,
     pub speaker: Option<String>,
     pub line: Option<String>,
@@ -243,6 +245,9 @@ pub(super) fn roleplay_pairs(edit: &RoleplayEdit) -> Vec<(&'static str, String)>
     present(&mut pairs, "icon", edit.icon.as_ref());
     if let Some(bubble) = edit.bubble {
         pairs.push(("bubble", bubble.to_string()));
+    }
+    if let Some(bubble) = edit.bubble_remove {
+        pairs.push(("bubble_remove", bubble.to_string()));
     }
     present(&mut pairs, "speaker", edit.speaker.as_ref());
     present(&mut pairs, "line", edit.line.as_ref());

@@ -130,6 +130,23 @@ same look; then `persona generate <id>` runs with the look as its hint (it will 
 an existing persona). A resident the scan cannot name gets no persona yet: the command says
 so, and `persona generate <id>` works once a region is named.
 
+## The market thread (re-runnable persona and backfill exercise)
+
+`bash development/market-thread.sh` runs 20 messages at the fruit stall: her name, where the
+apples come from, the price, a discount on one apple (should be refused), a discount on five
+(should be granted). The elf and the warrior get one goal per beat and word their own lines
+(`persona say`); Mara is fully live (`persona ask`: coverage, then backfill of what her persona
+lacks, then the answer). The script first adds her two discount rules to her persona (a firm
+price on one piece, a bulk discount at five; triggers are statements the model judges). Needs
+the market scene up (the walk-through above). Output: `[NN] speaker: line`, then coverage and
+backfill result lines for Mara; `persona backfills fruit_vendor` lists what was added.
+
+First run (2026-11-07): name consistent (messages 2 and 20); the discount on one refused,
+on five granted; two backfills added facts (orchard origin, shelf life); one backfill refused
+a malformed model answer; two price backfills were blocked by the private-detail guard, so
+Mara never states an amount. That last point is why prices belong in a world bible, not in a
+persona (planned).
+
 ## Verify (browser pane)
 
 The browser pane repaints only on navigation or resize, so read the page, then reload:
