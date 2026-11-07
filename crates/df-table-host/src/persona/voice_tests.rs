@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use df_playground::controls::ControlsChange;
 use serde_json::{Value, json};
 
 use super::fixtures::{
@@ -200,5 +201,34 @@ async fn a_spoken_say_cues_the_bubble_and_the_clip_in_one_revision() {
     assert!(
         !lines.contains("Welcome"),
         "no audit line holds the spoken text"
+    );
+}
+
+#[tokio::test]
+async fn with_text_to_speech_off_a_spoken_say_and_ask_make_no_supplier_call() {
+    let (host, speech) = host(
+        vec![
+            line_answer("Welcome, love."),
+            coverage_answer(&[]),
+            line_answer("Two silver."),
+        ],
+        FakePort::answering(),
+    )
+    .await;
+    host.running
+        .state
+        .playground()
+        .change_all(vec![ControlsChange::Tts(false)], &[], 0, |_| {})
+        .expect("applies");
+    let body = json!({"character": CHARACTER, "situation": "A traveller arrives", "speak": true});
+    let said: PersonaReply<Spoken> = post_json(host.port, path::PERSONA_SAY, &body)
+        .await
+        .unwrap();
+    assert_eq!(done(said).voice, None, "the line is cued without a voice");
+    let asked = ask(&host, json!({"speak": true, "coverage": true})).await;
+    assert_eq!(done(asked).spoken.voice, None);
+    assert!(
+        speech.voices().is_empty(),
+        "nothing was sent to the voice supplier"
     );
 }

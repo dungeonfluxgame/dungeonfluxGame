@@ -105,6 +105,26 @@ pub fn read_persona(directory: &Path, id: &PersonaId) -> Result<Option<Persona>,
     Ok(Some(persona))
 }
 
+/// `json` with every non-ASCII character written as a `\uXXXX` escape (a surrogate pair above the
+/// Basic Multilingual Plane), so the stored files stay ASCII whatever a model wrote into them.
+/// Non-ASCII can only be inside a JSON string, where the escape reads back as the same character.
+pub(super) fn ascii_only(json: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(json.len());
+    for character in json.chars() {
+        if character.is_ascii() {
+            out.push(character);
+        } else {
+            let mut units = [0_u16; 2];
+            for unit in character.encode_utf16(&mut units) {
+                // Writing to a string cannot fail.
+                let _ = write!(out, "\\u{unit:04x}");
+            }
+        }
+    }
+    out
+}
+
 /// Writes `persona` as its file in the `personas` folder (made if missing), whole or not at all.
 /// Answers whether it replaced a file of the same id; a file whose presence could not be checked
 /// counts as not replaced, since the write itself reports every failure.
@@ -114,8 +134,9 @@ pub fn write_persona(directory: &Path, persona: &Persona) -> Result<bool, Person
         cause,
     };
     // A persona always writes as JSON; the mapping only keeps the path panic-free.
-    let text =
-        serde_json::to_string_pretty(persona).map_err(|_| unwritable(IoCause::InvalidData))?;
+    let text = serde_json::to_string_pretty(persona)
+        .map(|json| ascii_only(&json))
+        .map_err(|_| unwritable(IoCause::InvalidData))?;
     let file_name = persona_file_name(persona.id());
     let replaced = matches!(directory.join(&file_name).try_exists(), Ok(true));
     crate::atomic_file::write_atomically(directory, &file_name, text.as_bytes())
@@ -211,7 +232,9 @@ fn write_backfills(
     id: &PersonaId,
     records: &[BackfillRecord],
 ) -> Result<(), IoCause> {
-    let text = serde_json::to_string_pretty(records).map_err(|_| IoCause::InvalidData)?;
+    let text = serde_json::to_string_pretty(records)
+        .map(|json| ascii_only(&json))
+        .map_err(|_| IoCause::InvalidData)?;
     crate::atomic_file::write_atomically(directory, &backfills_file_name(id), text.as_bytes())
         .map_err(|error| IoCause::from_kind(error.kind()))
 }

@@ -311,6 +311,7 @@ fn leaving_copy(old: &Element, transition: Transition) -> Result<Element, JsValu
         }
     }
     freeze(old, &copy, ".tv-world", "transform", frozen_world_style)?;
+    freeze(old, &copy, ".tv-world-top", "transform", frozen_world_style)?;
     freeze(old, &copy, ".tv-card", "left", frozen_card_style)?;
     Ok(copy)
 }

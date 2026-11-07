@@ -239,6 +239,9 @@ impl Speech {
         character: Option<&str>,
         voice: Option<&str>,
     ) -> Result<Synthesized, SpeechError> {
+        // The one place the voice supplier is called, so the switch is checked here: nothing that
+        // costs money is sent while text to speech is off, whoever asks.
+        self.require_on(SpeechFeature::Tts)?;
         check_text(text)?;
         if let Some(character) = character {
             check_character(character)?;
@@ -272,11 +275,7 @@ impl Speech {
     /// Voices a line `character` says and answers what came of it. A failure is the answer, not
     /// an error: a line is never blocked by its voice.
     pub(crate) async fn voice_line(&self, character: &str, line: &str) -> Voiced {
-        let voiced = match self.require_on(SpeechFeature::Tts) {
-            Ok(()) => self.synthesize(line, Some(character), None).await,
-            Err(error) => Err(error),
-        };
-        match voiced {
+        match self.synthesize(line, Some(character), None).await {
             Ok(made) => Voiced::Played {
                 clip: made.clip.name,
                 bytes: made.clip.bytes,
@@ -295,7 +294,6 @@ impl Speech {
 
     /// Voices the operator's text and cues the clip on the scene, as `scene sound` does.
     pub(super) async fn speak(&self, request: SpeakRequest) -> Result<ClipPlayed, SpeechError> {
-        self.require_on(SpeechFeature::Tts)?;
         let made = self
             .synthesize(
                 &request.text,

@@ -410,7 +410,12 @@ async fn a_call_of_a_feature_that_is_switched_off_is_refused_before_the_supplier
             feature: SpeechFeature::Tts
         }
     );
-    assert!(host.fake.heard().is_empty(), "nothing reached the supplier");
+    // The one voice call is the speak made while text to speech was on.
+    assert_eq!(host.fake.voices().len(), 1, "no voice call while it is off");
+    assert!(
+        host.fake.heard().is_empty(),
+        "no transcription call while it is off"
+    );
     switch(ControlsChange::Stt(true));
     done(reply_of::<Transcript>(
         &host

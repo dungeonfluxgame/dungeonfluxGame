@@ -151,8 +151,9 @@ pub fn answer(message: &str) -> Option<Value> {
 
 /// The outcome of a finished run, from its exit, its last message and its event stream: an object
 /// answer is `Answered`; a run that said its login is missing or refused is an authentication
-/// refusal; a run that ended without an answer may have been served, so it is `Unknown` (never
-/// resent); a message that is not an object is `Invalid`.
+/// refusal; a run that said its model is not supported is a configuration refusal; a run that
+/// ended without an answer may have been served, so it is `Unknown` (never resent); a message
+/// that is not an object is `Invalid`.
 pub fn receipt(succeeded: bool, message: Option<&str>, events: &str, errors: &str) -> TextReceipt {
     let spent = usage(events);
     let outcome = match message.map(answer) {
@@ -167,6 +168,10 @@ pub fn receipt(succeeded: bool, message: Option<&str>, events: &str, errors: &st
                     || lowered.contains("401"))
             {
                 TextOutcome::Unavailable(UnavailableReason::Authentication)
+            } else if lowered.contains("model is not supported") {
+                // The run named a model the account cannot use and did no work: a definite
+                // refusal of the route's configuration, not an unknown outcome.
+                TextOutcome::Unavailable(UnavailableReason::Configuration)
             } else {
                 TextOutcome::Unknown
             }

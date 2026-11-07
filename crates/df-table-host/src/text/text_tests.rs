@@ -201,6 +201,19 @@ fn a_codex_run_maps_to_one_outcome() {
         receipt(false, None, "", "Error: Not logged in").outcome,
         TextOutcome::Unavailable(UnavailableReason::Authentication)
     );
+    for succeeded in [true, false] {
+        assert_eq!(
+            receipt(
+                succeeded,
+                None,
+                "",
+                "ERROR: The 'not-a-model' model is not supported when using Codex"
+            )
+            .outcome,
+            TextOutcome::Unavailable(UnavailableReason::Configuration),
+            "an unsupported model is a definite refusal whatever the exit"
+        );
+    }
     assert_eq!(
         receipt(false, None, "", "boom").outcome,
         TextOutcome::Unknown

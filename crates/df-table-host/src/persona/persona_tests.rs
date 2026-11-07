@@ -1105,3 +1105,34 @@ fn a_trigger_condition_that_starts_with_when_is_not_shown_with_a_second_when() {
     );
     assert!(!shown.contains("when When"), "{shown}");
 }
+
+#[test]
+fn stored_persona_files_stay_ascii_and_read_back_as_written() {
+    let folder = tempfile::tempdir().unwrap();
+    let persona = super::fixtures::innkeeper()
+        .edit(&[
+            PersonaEdit::SetText {
+                field: PersonaField::DisplayName,
+                text: "Br\u{e1}n O\u{2019}Neill".to_owned(),
+            },
+            PersonaEdit::AppendText {
+                field: PersonaField::Backstory,
+                text: "Rode a \u{1f40e} to the ford.".to_owned(),
+            },
+        ])
+        .unwrap();
+    write_persona(folder.path(), &persona).unwrap();
+    let text = std::fs::read_to_string(folder.path().join("innkeeper.persona.json")).unwrap();
+    assert!(text.is_ascii(), "{text}");
+    assert!(text.contains(r"\u2019"), "an apostrophe is escaped: {text}");
+    assert!(
+        text.contains(r"\ud83d\udc0e"),
+        "above the plane it is a surrogate pair"
+    );
+    let back: Persona = serde_json::from_str(&text).unwrap();
+    assert_eq!(back, persona);
+    assert_eq!(
+        super::storage::ascii_only(r#"plain {"a": 1}"#),
+        r#"plain {"a": 1}"#
+    );
+}

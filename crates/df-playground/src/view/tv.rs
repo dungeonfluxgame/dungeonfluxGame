@@ -210,6 +210,13 @@ fn update_figure(
 pub struct TvHandles {
     /// The layer the camera moves.
     world: Element,
+    // TODO(DEV-12): a browser-target test that `top` is the stage's last child, takes the camera's
+    // style with `world`, and that the leaving copy freezes both.
+    /// The layer of the anchored bubbles. It follows the camera exactly as `world` does, but it is
+    /// the last thing on the stage, so a bubble lies over the caption, the party strip and every
+    /// other overlay and never under them (they cannot be ordered between the pieces of `world`,
+    /// which is one layer for the picture and the bubbles).
+    top: Element,
     /// The layer the figures are in.
     layer: Element,
     figures: Figures,
@@ -327,15 +334,20 @@ impl TvHandles {
             CameraAction::Unchanged => {}
             CameraAction::Retarget => {
                 let transform = plan.to.transform();
-                let html = self
-                    .world
-                    .dyn_ref::<HtmlElement>()
-                    .ok_or_else(|| JsValue::from_str("the world layer is not an html element"))?;
-                let declarations = html.style();
-                declarations.set_property("--cam-to", &transform)?;
-                declarations.set_property("transform", &transform)?;
+                for layer in [&self.world, &self.top] {
+                    let html = layer
+                        .dyn_ref::<HtmlElement>()
+                        .ok_or_else(|| JsValue::from_str("a world layer is not an html element"))?;
+                    let declarations = html.style();
+                    declarations.set_property("--cam-to", &transform)?;
+                    declarations.set_property("transform", &transform)?;
+                }
             }
-            CameraAction::Restyle => set_style(&self.world, &camera_style(plan))?,
+            CameraAction::Restyle => {
+                let style = camera_style(plan);
+                set_style(&self.world, &style)?;
+                set_style(&self.top, &style)?;
+            }
         }
         self.camera_drawn = Some(CameraDrawn::of(plan));
         if self.bubbles.framing_moved(&plan.to) {
@@ -380,6 +392,8 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
     let stage = element(document, "div", "tv-stage")?;
     // The camera moves this layer; the place, card, status, caption and party stay on the screen.
     let world = element(document, "div", "tv-world")?;
+    // The same camera, lying over the caption and the rest of the screen, for the bubbles.
+    let top = element(document, "div", "tv-world-top")?;
     let layer = element(document, "div", "tv-figures")?;
     let mut slots = Vec::new();
     let mut backdrop = None;
@@ -389,7 +403,8 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
             backdrop = Some(holder.clone());
         }
         let parent = match part {
-            Part::TvBackdrop | Part::TvGrid | Part::TvSam | Part::TvAnchors => &world,
+            Part::TvBackdrop | Part::TvGrid | Part::TvSam => &world,
+            Part::TvAnchors => &top,
             _ => &stage,
         };
         // The figures come after the backdrop and the grid, and before everything on the screen.
@@ -400,11 +415,13 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
         append(parent, &holder)?;
         slots.push((part, holder));
     }
+    append(&stage, &top)?;
     append(&section, &stage)?;
     Ok(TvShell {
         section,
         handles: TvHandles {
             world,
+            top,
             layer,
             figures: Figures::default(),
             camera_drawn: None,
