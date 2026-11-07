@@ -204,3 +204,20 @@ warning you. Touch my stall again and you'll answer to the guard yourself." She 
 protecting her livelihood throughout.
 Mid-run change, data only: the warrior's first line had a stage direction in asterisks; a conduct
 line now says a line is only the words said aloud; the next line complied.
+
+## Run 13 (supplies, verifying refinement 8)
+
+Every spoken total matched the stall (ten apples 27, five pears 18, "forty-five altogether"), most
+after the one price retry (her first answers tend to use the list price; the retry costs ~14 s on
+those lines). A line naming several prices now carries one quote per item, each checked: "forty-five
+copper is fair, and I can't round it further" carried 27 cp for the apples and 18 cp for the pears.
+She held her floor and stayed in her trade ("Not as well; their skins are softer, so pears are the
+safer choice for the road").
+Failures: the warrior read the posted prices instead of asking (public prices are in a customer's
+facts, so the model treats them as known), and the elf still led with her own number before asking
+"Will that suffice?". The intent instruction alone does not hold it.
+Change: an intent self-check in the same call: the model reports `follows_intent` (false when an
+intent to ask is not put as a question or the line answers it itself) and `intent_miss`, and a miss
+gets the one retry, like a repeat or a wrong total. A model judgement, never a string test.
+Open: the price retry trusts the quantity the model reports (one first answer said 27 cp for 5
+apples; the final line dropped the number, so nothing wrong was said).

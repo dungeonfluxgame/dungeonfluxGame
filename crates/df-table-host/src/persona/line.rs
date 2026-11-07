@@ -91,6 +91,9 @@ const SAY_INSTRUCTION: &str = concat!(
     "say again what was already said. repeats_recent is true only when the line reuses this ",
     "character's OWN earlier wording in recent (a phrase, a tic, an opening or a sentence shape ",
     "they already used) or copies another speaker's sentence near verbatim; say what in ",
+    "follows_intent is false when now.intent is given and the line does not carry it out (an ",
+    "intent to ask that is not put as a question, or that the line answers itself); say how in ",
+    "intent_miss. With no intent it is true. ",
     "repeat_reason. Answering a greeting, or naming an item, a name or a price someone just said, ",
     "is not a repeat. ",
     "When asked_by is given the line is said to that person: judge the triggers by what the ",
@@ -228,7 +231,8 @@ fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
         "additionalProperties": false,
         "required": [
             "line", "behavior", "fired_triggers", "fired_emotional_triggers", "revealed_secrets",
-            "quotes", "gaps", "appraisal", "repeats_recent", "repeat_reason"
+            "quotes", "gaps", "appraisal", "repeats_recent", "repeat_reason", "follows_intent",
+            "intent_miss"
         ],
         "properties": {
             "line": { "type": "string", "description": "What the character says, one short line." },
@@ -258,6 +262,8 @@ fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
             "appraisal": appraisal_schema(config),
             "repeats_recent": { "type": "boolean" },
             "repeat_reason": nullable("string", "What of recent the line reuses, or null."),
+            "follows_intent": { "type": "boolean" },
+            "intent_miss": nullable("string", "How the line misses now.intent, or null."),
         },
     })
 }
@@ -283,6 +289,15 @@ struct LineRecord {
     appraisal: Appraisal,
     repeats_recent: bool,
     repeat_reason: Option<String>,
+    #[serde(default = "carried_out")]
+    follows_intent: bool,
+    #[serde(default)]
+    intent_miss: Option<String>,
+}
+
+/// An answer that does not say is taken to follow its intent (a line with no intent always does).
+fn carried_out() -> bool {
+    true
 }
 
 /// What the answer's ids are checked against.
@@ -305,6 +320,8 @@ struct Answer {
     dropped: Vec<String>,
     /// What of `recent` the model says the line reuses.
     repeat: Option<String>,
+    /// How the model says the line misses its intent, when it does.
+    intent_miss: Option<String>,
     leak_suspect: bool,
 }
 
@@ -417,6 +434,12 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
             .filter(|reason| !reason.trim().is_empty())
             .unwrap_or_else(|| "the line reuses a phrase or shape of recent".to_owned())
     });
+    let intent_miss = (!record.follows_intent).then(|| {
+        record
+            .intent_miss
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or_else(|| "the line does not carry out the intent".to_owned())
+    });
     Ok(Answer {
         line: line.to_owned(),
         behavior: record.behavior,
@@ -428,6 +451,7 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
         appraisal,
         dropped,
         repeat,
+        intent_miss,
         leak_suspect: report.leaks,
     })
 }
@@ -748,11 +772,12 @@ pub(super) async fn say_line(
         let facts = compact(json!({ "context": stable.clone(), "now": now }));
         let (answer, took) = ask_line(route, own, facts, schema.clone(), &lists).await?;
         model_ms += took;
-        // One more wording when the line repeats itself, or states a total the stall would not
-        // charge (the spoken number and the held quote would disagree).
+        // One more wording when the line misses its intent, repeats itself, or states a total
+        // the stall would not charge (the spoken number and the held quote would disagree).
         let reason = answer
-            .repeat
+            .intent_miss
             .clone()
+            .or_else(|| answer.repeat.clone())
             .or_else(|| quote_retry_reason(app, own.id().as_str(), &answer.quotes));
         match (reason, retry_reason.is_some()) {
             (Some(reason), false) => retry_reason = Some(reason),
