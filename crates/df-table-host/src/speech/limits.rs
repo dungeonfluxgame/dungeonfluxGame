@@ -27,8 +27,17 @@ pub const MAXIMUM_KEY_TERM_WORDS: usize = 5;
 pub const MAXIMUM_TEXT_CHARACTERS: usize = 4096;
 /// Longest voice id, in bytes (the supplier adapter's contract).
 pub const MAXIMUM_VOICE_ID_BYTES: usize = 128;
-/// Most voice clips the host keeps in the media library; the oldest it made go first.
+/// The variable that sets how many voice clips the host keeps, for dev work that wants more.
+pub const KEPT_CLIPS_VARIABLE: &str = "DF_SPEECH_KEPT_CLIPS";
+/// Most voice clips the host keeps in the media library by default; the oldest it made go first.
 pub const MAXIMUM_KEPT_CLIPS: usize = 500;
+
+/// How many voice clips the host keeps: `DF_SPEECH_KEPT_CLIPS` when a number, else the default.
+pub fn kept_clips() -> usize {
+    crate::environment::text(KEPT_CLIPS_VARIABLE)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(MAXIMUM_KEPT_CLIPS)
+}
 /// Most characters with a voice of their own in the voices file.
 pub const MAXIMUM_VOICES: usize = 100_000;
 /// Largest voices file read, in bytes.

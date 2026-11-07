@@ -16,8 +16,8 @@ pub use df_playground::voice_wire::{
 use serde::{Deserialize, Serialize};
 
 use super::limits::{
-    MAXIMUM_AUDIO_MS, MAXIMUM_KEPT_CLIPS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS,
-    MAXIMUM_KEY_TERMS, MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
+    MAXIMUM_AUDIO_MS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS, MAXIMUM_KEY_TERMS,
+    MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
 };
 use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::locate::IoCause;
@@ -33,7 +33,7 @@ pub(super) fn current_limits() -> SpeechLimits {
         maximum_audio_ms: MAXIMUM_AUDIO_MS,
         maximum_text_characters: whole(MAXIMUM_TEXT_CHARACTERS),
         maximum_key_terms: whole(MAXIMUM_KEY_TERMS),
-        maximum_kept_clips: whole(MAXIMUM_KEPT_CLIPS),
+        maximum_kept_clips: whole(super::limits::kept_clips()),
     }
 }
 

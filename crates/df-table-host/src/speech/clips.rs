@@ -2,14 +2,14 @@
 //! page's existing sound path plays them.
 //!
 //! A clip is stored through the library's one staged add (`media_library::store_bytes`). The host
-//! keeps at most `MAXIMUM_KEPT_CLIPS` and evicts the lowest-numbered first; only files named
+//! keeps at most `kept_clips()` and evicts the lowest-numbered first; only files named
 //! `voice-<digits>.mp3` are ever listed, counted or removed here, so no other media is touched.
 //! A clip is deliberately uncached by text: the same line voiced twice is two clips.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::limits::MAXIMUM_KEPT_CLIPS;
+use super::limits::kept_clips;
 use super::request::{ClipCause, ClipRow, SpeechError};
 use crate::blocking::{WriteLock, run_blocking};
 use crate::locate::IoCause;
@@ -130,7 +130,7 @@ pub(super) async fn store_clip(app: &AppState, mp3: &[u8]) -> Result<Clip, Speec
             },
         })?;
     let trimmed = run_blocking(
-        move || evict_clips(&directory, MAXIMUM_KEPT_CLIPS),
+        move || evict_clips(&directory, kept_clips()),
         SpeechError::Stopped,
     )
     .await;
