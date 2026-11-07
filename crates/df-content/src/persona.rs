@@ -150,7 +150,18 @@ pub enum PersonaError {
     /// Two items of one list have the same id.
     DuplicateItemId { field: PersonaField, id: String },
     /// A trigger or the default names a behavior the persona does not have.
-    UnknownBehavior { behavior: String },
+    UnknownBehavior {
+        behavior: String,
+        used_by: BehaviorUse,
+    },
+}
+
+/// What names a behavior: the persona's default, or one of its triggers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "by", rename_all = "snake_case")]
+pub enum BehaviorUse {
+    Default,
+    Trigger { id: String },
 }
 
 impl fmt::Display for PersonaError {
@@ -203,9 +214,28 @@ impl fmt::Display for PersonaError {
                 "the persona's {} has two items with the id {id:?}",
                 field.key()
             ),
-            Self::UnknownBehavior { behavior } => {
-                write!(formatter, "the persona has no behavior {behavior:?}")
-            }
+            Self::UnknownBehavior {
+                behavior,
+                used_by: BehaviorUse::Default,
+            } => write!(
+                formatter,
+                concat!(
+                    "the persona's default behavior {:?} is not one of its behaviors: add it ",
+                    "or set another default first"
+                ),
+                behavior
+            ),
+            Self::UnknownBehavior {
+                behavior,
+                used_by: BehaviorUse::Trigger { id },
+            } => write!(
+                formatter,
+                concat!(
+                    "the trigger {:?} moves into the behavior {:?}, which the persona does ",
+                    "not have: change or remove the trigger first"
+                ),
+                id, behavior
+            ),
         }
     }
 }

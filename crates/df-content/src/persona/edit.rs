@@ -159,10 +159,11 @@ fn apply(draft: &mut PersonaDraft, edit: &PersonaEdit) -> Result<(), EditError> 
             if !target.trim().is_empty() {
                 target.push('\n');
             }
-            target.push_str(text);
+            // A new line never starts or ends with the blanks a model puts round it.
+            target.push_str(text.trim());
         }
         PersonaEdit::AddEntry { field, text } => {
-            list_mut(draft, *field)?.push(text.clone());
+            list_mut(draft, *field)?.push(text.trim().to_owned());
         }
         PersonaEdit::SetEntry { field, index, text } => {
             let list = list_mut(draft, *field)?;
@@ -170,7 +171,7 @@ fn apply(draft: &mut PersonaDraft, edit: &PersonaEdit) -> Result<(), EditError> 
                 field: *field,
                 index: *index,
             })?;
-            *entry = text.clone();
+            *entry = text.trim().to_owned();
         }
         PersonaEdit::RemoveEntry { field, index } => {
             let list = list_mut(draft, *field)?;

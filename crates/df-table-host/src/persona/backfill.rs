@@ -289,6 +289,7 @@ pub(super) async fn consider(
     let occasion = Occasion {
         situation: request.situation.as_deref().unwrap_or(""),
         question: Some(&request.question),
+        guidance: request.guidance.as_ref(),
     };
     let said = say_line(app, route, scene, &filled.persona, occasion).await?;
     Ok(Considered {

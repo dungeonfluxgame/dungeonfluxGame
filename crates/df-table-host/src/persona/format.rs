@@ -259,9 +259,15 @@ pub(super) fn format_owner(persona: &Persona) -> String {
             .event
             .as_deref()
             .map_or_else(String::new, |event| format!(" or event {event}"));
+        // A condition a model wrote often starts with "When" itself.
+        let condition = trigger.condition.trim_start();
+        let condition = match condition.get(..5) {
+            Some(start) if start.eq_ignore_ascii_case("when ") => condition[5..].trim_start(),
+            _ => condition,
+        };
         format!(
-            "{} -> {}: when {}{event}",
-            trigger.id, trigger.behavior, trigger.condition
+            "{} -> {}: when {condition}{event}",
+            trigger.id, trigger.behavior
         )
     };
     let blocks = [

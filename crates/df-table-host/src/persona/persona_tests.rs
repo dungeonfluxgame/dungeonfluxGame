@@ -1080,3 +1080,28 @@ fn the_spoken_question_the_page_sends_is_one_the_host_reads() {
     assert_eq!(read.question, "How much for a room?");
     assert!(read.speak && !read.coverage && !read.backfill);
 }
+
+#[test]
+fn a_trigger_condition_that_starts_with_when_is_not_shown_with_a_second_when() {
+    let persona: df_content::persona::Persona = serde_json::from_value(json!({
+        "schema": 1, "id": "cook", "display_name": "Bram Holt", "job": "Cook",
+        "behaviors": [{"id": "warm", "description": "Chatty.", "speech_style": ""}],
+        "triggers": [
+            {"id": "quiet", "condition": "When the room falls quiet", "event": null,
+             "behavior": "warm"},
+            {"id": "praise", "condition": "the speaker praises the food", "event": null,
+             "behavior": "warm"}
+        ]
+    }))
+    .unwrap();
+    let shown = super::format::format_owner(&persona);
+    assert!(
+        shown.contains("quiet -> warm: when the room falls quiet"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("praise -> warm: when the speaker praises the food"),
+        "{shown}"
+    );
+    assert!(!shown.contains("when When"), "{shown}");
+}

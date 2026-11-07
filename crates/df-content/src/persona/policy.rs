@@ -15,8 +15,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    MAXIMUM_ENTRY_CHARS, MAXIMUM_LIST_ENTRIES, PersonaError, PersonaField, check_line, check_list,
-    is_label,
+    BehaviorUse, MAXIMUM_ENTRY_CHARS, MAXIMUM_LIST_ENTRIES, PersonaError, PersonaField, check_line,
+    check_list, is_label,
 };
 
 /// How much it would cost the character if a secret came out. A closed set.
@@ -205,6 +205,9 @@ fn check_triggers(
         if !known_behaviors.contains(trigger.behavior.as_str()) {
             return Err(PersonaError::UnknownBehavior {
                 behavior: trigger.behavior.clone(),
+                used_by: BehaviorUse::Trigger {
+                    id: trigger.id.clone(),
+                },
             });
         }
     }
@@ -226,6 +229,7 @@ pub(super) fn check(
     {
         return Err(PersonaError::UnknownBehavior {
             behavior: default.to_owned(),
+            used_by: BehaviorUse::Default,
         });
     }
     check_triggers(triggers, &known_behaviors)

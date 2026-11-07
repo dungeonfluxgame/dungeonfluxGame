@@ -410,6 +410,7 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
             let occasion = Occasion {
                 situation: &request.situation,
                 question: None,
+                guidance: None,
             };
             let said = match say_line(&owned.app, &route, &scene, &own, occasion).await {
                 Ok(said) => said,

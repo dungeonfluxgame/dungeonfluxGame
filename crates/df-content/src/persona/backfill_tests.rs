@@ -449,6 +449,7 @@ fn the_error_types_write_and_read_as_tagged_json_so_a_host_can_wrap_them() {
         cause: EditError::Persona {
             cause: PersonaError::UnknownBehavior {
                 behavior: "x".to_owned(),
+                used_by: BehaviorUse::Default,
             },
         },
     };

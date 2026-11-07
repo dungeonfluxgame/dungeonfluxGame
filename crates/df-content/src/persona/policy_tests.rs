@@ -87,15 +87,40 @@ fn a_trigger_or_default_naming_a_missing_behavior_is_refused() {
     assert_eq!(
         Persona::new(bad_trigger),
         Err(PersonaError::UnknownBehavior {
-            behavior: "frightened".to_owned()
+            behavior: "frightened".to_owned(),
+            used_by: BehaviorUse::Trigger { id: "t".to_owned() }
         })
     );
     let mut bad_default = draft();
     bad_default.default_behavior = Some("frightened".to_owned());
     assert!(matches!(
         Persona::new(bad_default),
-        Err(PersonaError::UnknownBehavior { .. })
+        Err(PersonaError::UnknownBehavior {
+            used_by: BehaviorUse::Default,
+            ..
+        })
     ));
+}
+
+#[test]
+fn the_refusal_says_what_names_the_missing_behavior_and_what_to_do() {
+    let mut bad_default = draft();
+    bad_default.default_behavior = Some("frightened".to_owned());
+    let default_error = Persona::new(bad_default).unwrap_err();
+    let sentence = default_error.to_string();
+    assert!(sentence.contains("default behavior"), "{sentence}");
+    assert!(sentence.contains("set another default first"), "{sentence}");
+    let mut bad_trigger = draft();
+    bad_trigger.triggers = vec![trigger("t", "frightened")];
+    let sentence = Persona::new(bad_trigger).unwrap_err().to_string();
+    assert!(sentence.contains("trigger \"t\""), "{sentence}");
+    assert!(
+        sentence.contains("change or remove the trigger"),
+        "{sentence}"
+    );
+    let wire = serde_json::to_value(&default_error).expect("writes");
+    assert_eq!(wire["error"], "unknown_behavior");
+    assert_eq!(wire["used_by"]["by"], "default");
 }
 
 #[test]

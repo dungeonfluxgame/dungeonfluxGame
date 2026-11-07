@@ -97,7 +97,10 @@ fn a_refused_edit_changes_nothing_and_the_error_says_why() {
         error,
         EditError::Persona {
             cause: PersonaError::UnknownBehavior {
-                behavior: "guarded".to_owned()
+                behavior: "guarded".to_owned(),
+                used_by: BehaviorUse::Trigger {
+                    id: "guild".to_owned()
+                }
             }
         }
     );
@@ -177,4 +180,32 @@ fn edits_read_from_json_and_refuse_an_unknown_op() {
 fn to_draft_and_new_give_back_the_same_persona() {
     let persona = persona();
     assert_eq!(Persona::new(persona.to_draft()).expect("valid"), persona);
+}
+
+#[test]
+fn appended_and_added_text_is_stored_without_the_blanks_round_it() {
+    let edited = persona()
+        .edit(&[
+            PersonaEdit::AppendText {
+                field: PersonaField::Backstory,
+                text: " Grew up above the taproom. ".to_owned(),
+            },
+            PersonaEdit::AppendText {
+                field: PersonaField::Backstory,
+                text: "
+Left at sixteen."
+                    .to_owned(),
+            },
+            PersonaEdit::AddEntry {
+                field: PersonaField::Fears,
+                text: "  winter ".to_owned(),
+            },
+        ])
+        .expect("applies");
+    assert_eq!(
+        edited.backstory(),
+        "Grew up above the taproom.
+Left at sixteen."
+    );
+    assert_eq!(edited.private_fears(), ["winter"]);
 }
