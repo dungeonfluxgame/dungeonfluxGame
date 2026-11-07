@@ -4,6 +4,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use df_types::saturating_millis;
+
 pub trait Clock: Send + Sync + 'static {
     /// Milliseconds since the Unix epoch.
     fn now_ms(&self) -> u64;
@@ -16,9 +18,7 @@ impl Clock for SystemClock {
         // A clock before 1970 reads as the epoch; a clock past u64 milliseconds cannot occur.
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| {
-                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-            })
+            .map_or(0, saturating_millis)
     }
 }
 
