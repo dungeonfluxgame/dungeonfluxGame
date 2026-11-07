@@ -14,9 +14,9 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
-## 2026-11-06T23:47:06-05:00 to 2026-11-07T02:58:13-05:00
+## 2026-11-06T23:47:06-05:00 to 2026-11-07T03:18:21-05:00
 
-Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..aca348a69b856382acd3165ffe1ac67a14acca48
+Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..750afe95a49cea93ee3dfb3a92f4cdeb2a88a109
 
 - a8fc2ff9 - CHANGELOG: record the wave 4 follow-through commit
 - f5ec7a30 - Speech switches default off; the last speech bubble stays until the next; no pop-in replay
@@ -49,6 +49,8 @@ Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..aca348a69b856382acd3165ffe1ac67
 - 57fd4579 - Codex bad model: read the failure from the event stream, where --json writes it
 - 7f032d56 - CHANGELOG: record the Codex bad-model event stream fix
 - aca348a6 - Persona ask: a backfill that did not fill a gap no longer lets the line invent the missing fact
+- 092c956b - CHANGELOG: record the not-established commit
+- 750afe95 - Responses backend: an account with no credit is a configuration refusal, found by a live run
 
 Reviewed read-only against AGENTS.md; behavior tests owed are marked TODO(DEV-12) (thinking-cue two-character test, bubble settle browser test).
 
