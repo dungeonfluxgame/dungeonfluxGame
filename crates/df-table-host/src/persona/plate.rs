@@ -31,8 +31,6 @@ use crate::wire::{ControlsReply, route};
 
 /// The title of the scene while the picture is made.
 const UPDATING_TITLE: &str = "Updating the scene...";
-/// The title when the scene had none to put back.
-const UPDATED_TITLE: &str = "Scene updated";
 /// How many of the latest lines the picture is told.
 const PICTURE_LINES: usize = 4;
 /// The most characters of one line the picture is told.
@@ -115,6 +113,18 @@ fn title_change(title: &str, glyph: Glyph) -> SceneChange {
     }
 }
 
+/// Takes the title bar away, for a scene that had none before the spinner.
+fn title_removed() -> SceneChange {
+    SceneChange::Screen {
+        edit: ScreenEdit::RoleplaySet {
+            roleplay: RoleplayEdit {
+                title_remove: true,
+                ..RoleplayEdit::default()
+            },
+        },
+    }
+}
+
 /// The title bar the scene shows now through a live change, if one is.
 async fn current_title(port: u16) -> Result<Option<SceneTitle>, DevError> {
     let controls: ControlsReply = get_json(port, route::PLAYGROUND_CONTROLS).await?;
@@ -160,10 +170,10 @@ pub(crate) async fn deliver_plate(
         .await
         .map_err(at(PlateStep::Generate))?;
     let made = build(port, name, prompt, characters).await;
-    let (title, glyph) = before.map_or((UPDATED_TITLE.to_owned(), Glyph::Check), |title| {
-        (title.text, title.glyph)
+    let put_back = before.map_or_else(title_removed, |title| {
+        title_change(&title.text, title.glyph)
     });
-    let restored = change(port, &title_change(&title, glyph)).await;
+    let restored = change(port, &put_back).await;
     match (made, restored) {
         (Ok(summary), Ok(())) => Ok(summary),
         (Err(failure), _) => Err(failure),

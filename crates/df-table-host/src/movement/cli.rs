@@ -349,7 +349,6 @@ async fn walk(
             .push("Generating, locating and placing were not run: give plate=NAME.".to_owned());
         return Ok(walk.finished());
     };
-    walk.advance(&format!("plate={name}"))?;
     let placed: Vec<CharacterRequest> = design
         .placements
         .iter()
@@ -367,9 +366,9 @@ async fn walk(
         Err((step, error)) => return Err(walk.failed(step.key(), &error.to_string())),
     }
     // deliver_plate runs the three stages in one call, so their records are written after it.
-    walk.advance("located and named in the picture")?;
+    walk.advance(&format!("plate={name} generated and stored"))?;
+    walk.advance("characters located and named in the picture")?;
     walk.advance("backdrop swapped behind the scene")?;
-    walk.advance("the new plate is on the scene")?;
     Ok(walk.finished())
 }
 

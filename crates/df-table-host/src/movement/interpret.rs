@@ -71,7 +71,7 @@ pub const JEV_INSTRUCTION: &str = concat!(
 /// The built-in verb words of the stand-in. A longer phrase wins over a shorter one at the same
 /// place, so "go down" is a descent and "go" alone is a walk.
 // TODO(DEV-12): a test row for "step out onto the balcony" -> the balcony (interpret_tests.rs).
-const BUILTIN_VERBS: [(&str, MoveKind); 17] = [
+const BUILTIN_VERBS: [(&str, MoveKind); 20] = [
     ("walk", MoveKind::Walk),
     ("go", MoveKind::Walk),
     ("head", MoveKind::Walk),
@@ -339,14 +339,17 @@ pub fn read_scripted_with(
         .whole_party
         .iter()
         .any(|label| phrase_at(&line_words, &phrase(label)).is_some());
-    let who = if says_whole_party {
+    // Naming a character wins over "we": "Warrior, we will take the balcony" sends the warrior (and,
+    // for a first-person line, the speaker: see `move act`), not the whole party.
+    let named: Vec<String> = party
+        .iter()
+        .filter(|member| is_named(member, &line_words))
+        .map(|member| member.id.clone())
+        .collect();
+    let who = if says_whole_party && named.is_empty() {
         Vec::new()
     } else {
-        party
-            .iter()
-            .filter(|member| is_named(member, &line_words))
-            .map(|member| member.id.clone())
-            .collect()
+        named
     };
     Ok(move_reading(kind, who, to, line, party))
 }

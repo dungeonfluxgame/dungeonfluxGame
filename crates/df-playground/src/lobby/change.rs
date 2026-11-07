@@ -542,7 +542,9 @@ impl SceneOverlay {
             .unwrap_or_default();
         let wants_bubble =
             edit.speaker.is_some() || edit.line.is_some() || edit.has_bubble_fields();
-        if edit.title.is_some() || edit.icon.is_some() {
+        if edit.title_remove {
+            card.title = None;
+        } else if edit.title.is_some() || edit.icon.is_some() {
             let mut title = card.title.take().unwrap_or(SceneTitle {
                 glyph: DEFAULT_TITLE_GLYPH,
                 text: String::new(),

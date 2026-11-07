@@ -21,6 +21,8 @@ use crate::scene::SceneError;
 pub struct RoleplayEdit {
     pub title: Option<String>,
     pub icon: Option<Glyph>,
+    /// Takes the title bar away; `title` and `icon` given with it are ignored.
+    pub title_remove: bool,
     pub bubble: Option<usize>,
     pub speaker: Option<String>,
     pub line: Option<String>,
