@@ -134,3 +134,21 @@ Change: each emotion has its own fade rate in emotions.json (sadness 5%, fear 10
 irritation 15%, pride 15%, attraction 15%, joy 20%, disgust 30%, amusement 40%, embarrassment 40%,
 surprise 60%), scaled by the character's decay against the ordinary one, so grief lingers,
 surprise passes, and a volatile character still cools faster than a steady one (tests added).
+
+## Run 9 (supplies: provisioning for two for a week)
+
+Median ~6.7 s. Good trade answers: "I've got apples, pears, and plums. For a week on the road, I'd
+take apples; they keep well." "Not quite; pears hold up better; plums bruise more easily on the
+road." She stated all three prices correctly when the warrior failed to ask.
+Failures: (1) her spoken totals ignored the bulk tier: "Fourteen apples will be 42 copper" (the
+stall's total is 38) and "five pears are 20" (18); the clamp held the quote at the right number
+but the line still said the wrong one, and she then contradicted herself ("I've taken a little
+off for the five" / "I haven't discounted the pears"). (2) the customers still quoted prices and
+answered their own questions (the warrior read "Ask what each costs" as an order to someone
+else: "I'm not the keeper. Ask Mara what each costs."). (3) `quote` holds one item, so a line
+naming three prices cannot have all of them checked.
+Changes: a line whose stated total the stall would not charge is worded once more, told the
+stall's total and the lowest (the same single retry as a repeat), so the spoken number and the
+held quote agree (test updated: corrected second answer kept, a still-wrong one clamped); the
+intent rule now says the intent is this character's own goal said to the person in front of
+them, and an asker never quotes a price they do not keep. Open: a list of quotes per line.

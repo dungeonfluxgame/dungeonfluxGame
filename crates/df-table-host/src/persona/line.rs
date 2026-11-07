@@ -43,9 +43,11 @@ const SAY_INSTRUCTION: &str = concat!(
     "character: never write another person's words or speak as the keeper when you are not. ",
     "Answer with one short line, in character, that follows their speech style and fits the ",
     "situation. ",
-    "When now holds a question, the line answers it. When now holds an intent, the line carries ",
-    "it out and nothing else: an intent to ask is a question the character puts to someone; ",
-    "they never answer their own question, and never say what another person would reply. ",
+    "When now holds a question, the line answers it. now.intent, when given, is this ",
+    "character's own goal for the line, said to the person in front of them; the line carries it ",
+    "out in their words and nothing else: an intent to ask is a question they put to that ",
+    "person, and they never answer it themselves, never quote a price they do not keep, and ",
+    "never say what another person would reply. ",
     "context.conduct says how characters behave and speak: follow it unless the character's ",
     "persona, boundaries or the guidance say otherwise. ",
     "now.state is how the character feels at this moment. Mood and strong emotions color their ",
@@ -588,6 +590,20 @@ fn fired_emotional<'a>(
     fired
 }
 
+/// Why the line must be worded again because the total it states is not one the stall charges:
+/// the clamp would change it, so the spoken number and the held quote would disagree.
+fn quote_retry_reason(app: &AppState, speaker: &str, record: &QuoteRecord) -> Option<String> {
+    let proposed = u32::try_from(record.total_cp).ok()?;
+    let checked = crate::world::check_quote(app, speaker, &record.item, record.qty, proposed)?;
+    (checked.clamped_total_cp != proposed).then(|| {
+        format!(
+            "you said {proposed} cp for {} {}; the stall's total for that lot is {} cp \
+             (lowest {}): say that total",
+            record.qty, record.item, checked.clamped_total_cp, checked.floor_total_cp
+        )
+    })
+}
+
 /// The quote the line made, with the bible's bounds when it knows `speaker`'s stall and the item;
 /// the total is held inside them, and both numbers are reported.
 fn report_quote(
@@ -699,8 +715,16 @@ pub(super) async fn say_line(
         let facts = compact(json!({ "context": stable.clone(), "now": now }));
         let (answer, took) = ask_line(route, own, facts, schema.clone(), &lists).await?;
         model_ms += took;
-        match (&answer.repeat, retry_reason.is_some()) {
-            (Some(reason), false) => retry_reason = Some(reason.clone()),
+        // One more wording when the line repeats itself, or states a total the stall would not
+        // charge (the spoken number and the held quote would disagree).
+        let reason = answer.repeat.clone().or_else(|| {
+            answer
+                .quote
+                .as_ref()
+                .and_then(|record| quote_retry_reason(app, own.id().as_str(), record))
+        });
+        match (reason, retry_reason.is_some()) {
+            (Some(reason), false) => retry_reason = Some(reason),
             _ => break answer,
         }
     };

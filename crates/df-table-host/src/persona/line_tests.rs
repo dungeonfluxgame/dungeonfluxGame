@@ -389,7 +389,9 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
     };
     let host = scripted_host_cast(
         &["fruit_vendor"],
-        vec![quote(30), quote(100), quote(44)],
+        // A total the stall would not charge is worded once more with the stall's total; a second
+        // answer is kept whatever it says, and held inside the bounds.
+        vec![quote(30), quote(43), quote(100), quote(100), quote(44)],
         Arc::new(FakePort::unconfigured()),
     )
     .await;
@@ -406,14 +408,18 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
     let low = done(say(&host, "fruit_vendor", json!({})).await).said;
     assert_eq!(
         quoted(&low),
-        (30, Some(43), Some(43)),
-        "raised to the floor"
+        (43, Some(43), Some(43)),
+        "worded again at the stall's total"
+    );
+    assert!(
+        host.facts_of(1).to_string().contains("the stall's total for that lot is 43 cp"),
+        "the retry names the stall's total"
     );
     let high = done(say(&host, "fruit_vendor", json!({})).await).said;
     assert_eq!(
         quoted(&high),
         (100, Some(45), Some(43)),
-        "lowered to the ask"
+        "still too high after the retry: lowered to the ask"
     );
     assert_eq!(high.quote.unwrap().bounds.unwrap().ask_total_cp, 45);
     let inside = done(say(&host, "fruit_vendor", json!({})).await).said;
