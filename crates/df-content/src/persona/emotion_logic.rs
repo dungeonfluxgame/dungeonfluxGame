@@ -31,7 +31,7 @@ pub const DEFAULT_ATTENTION_CAPACITY: u8 = 3;
 /// temperament: the content's calibration of feeling, editable in `emotions.json`.
 /// How characters behave and speak, in plain words a model reads with each line: the
 /// persona engine's tunable conduct, editable in `emotions.json` without a rebuild.
-pub const DEFAULT_CONDUCT: [&str; 8] = [
+pub const DEFAULT_CONDUCT: [&str; 9] = [
     concat!(
         "Speak like a real person, not a helper: plain words, contractions, short and long ",
         "sentences mixed, no stock pleasantries every line.",
@@ -69,6 +69,10 @@ pub const DEFAULT_CONDUCT: [&str; 8] = [
     concat!(
         "Respect is earned back slowly: after rudeness, an apology softens you but does not",
         " erase it at once.",
+    ),
+    concat!(
+        "Do not tack a selling point onto every answer: a detail you already said in this ",
+        "conversation (how you pack, where it comes from) is not said again unless asked.",
     ),
 ];
 
@@ -712,7 +716,18 @@ pub fn apply_appraisal(
     let mut dropped = Dropped::default();
     let mut next = conform(config, temperament, state);
     let decay = decay_of(config, temperament);
+    // An emotion this appraisal pushes does not fade this turn: a person does not calm down
+    // while they are still being provoked; the rest fade toward their baseline.
+    let pushed = |emotion: &str| {
+        appraisal
+            .emotions
+            .iter()
+            .any(|change| change.emotion == emotion && change.delta != 0)
+    };
     for level in &mut next.emotions {
+        if pushed(&level.emotion) {
+            continue;
+        }
         let rest = i32::from(temperament.rest_of(&level.emotion).min(MAXIMUM_LEVEL));
         let now = i32::from(level.level);
         level.level = level_from(now + fade_step(rest - now, decay));

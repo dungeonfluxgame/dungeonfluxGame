@@ -175,6 +175,26 @@ fn a_change_lands_scaled_by_the_reactivity_and_clamped() {
 }
 
 #[test]
+fn an_emotion_still_being_provoked_does_not_fade_that_turn() {
+    let config = EmotionConfig::default();
+    let temperament = Temperament {
+        decay_percent: Some(20),
+        ..calm()
+    };
+    let mut state = fresh_state("innkeeper", &config, &temperament);
+    state.emotions.iter_mut().for_each(|seen| {
+        seen.level = match seen.emotion.as_str() {
+            "irritation" | "joy" => 50,
+            _ => 0,
+        }
+    });
+    let provoked = appraise(vec![delta("irritation", 10)]);
+    let after = apply_appraisal(&config, &temperament, &state, &provoked).0;
+    assert_eq!(after.level("irritation"), 60, "50 + 10, with no fade while provoked");
+    assert_eq!(after.level("joy"), 40, "an emotion not pushed still fades");
+}
+
+#[test]
 fn feelings_fade_toward_the_baseline_a_share_each_turn_and_always_arrive() {
     let config = EmotionConfig::default();
     let temperament = Temperament {

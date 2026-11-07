@@ -62,3 +62,37 @@ list: attraction, disgust, embarrassment. Irritation 70+ is anger, 90+ rage (con
 Harder beats through the emotional range: anger and rage, fear, sadness, surprise, amusement,
 disgust, attraction and embarrassment; track whether her state and her words move together and
 whether she stays a fruit seller through it.
+
+## Run 5 (curious, with intent, spoken fills, conduct as data)
+
+Median ~6.5 s per answer. The customers asked instead of answering (intent works for both). The
+stall-years gap was answered ("I've kept this stall for years now") and recorded as a spoken fill
+(`backfilled ... spoken=1`, no backfill generation call; only the privacy judge, 4.8 s).
+Human answers: "Rain keeps me busy; I'll draw the crates under the canvas and wipe the apples dry
+while folks shake off their sleeves." "Apples keep longer; their skins hold up better on the road
+than plums do." For a vague order she named quantities and asked "How many pears shall I pack?"
+Mid-run change, data only (no rebuild): a conduct line against tacking a selling point onto every
+answer; the "snug" filler stopped immediately.
+Failures: buying advice stayed vague ("a good share of apples") because the instruction said
+quantities come only from the world facts; she said "15 copper" for five apples in words (bulk tier
+is 14) without returning a quote, so no clamp ran; attitude stays "indifferent" (rapport 16, the
+friendly threshold is 30).
+Changes: the instruction now separates prices, stock and places (world facts only) from how many
+someone should buy (her own advice, specific).
+
+## Run 6 (temper: insults, theft, damage, apology)
+
+Median ~6.6 s. Words and feeling moved together: a composed defence ("They're crisp and fairly
+priced; if you're not after apples, there are pears and plums"), then an edge ("Then grow better
+apples yourself"), then a boundary ("if you want fruit, take a look; otherwise, let me get on
+with selling"), a demand ("pay for them, please, or put the other back", 6 cp quoted, in bounds),
+attitude toward the warrior crossed into hostile (-39), and a grudging repair after his apology
+("All right. Let's leave it there, just don't knock over the fruit again") while staying hostile
+(-34): the conduct line "respect is earned back slowly" holds.
+The warrior's own persona refused to steal or smash (a hired guard of travellers): persona
+integrity over the script, which is right, but it blunted the escalation.
+Failures: irritation peaked at 38 and never reached anger: every emotion faded toward its
+baseline every turn, including the one being provoked; she called one bitten apple "six copper"
+(it is 3) in words without a quote object, then repeated her own mistake from recent.
+Changes: an emotion the appraisal pushes does not fade that turn (test added); the instruction
+requires every stated price or total to be given in quote too, so the clamp can check it.
