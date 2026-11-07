@@ -332,6 +332,7 @@ fn others_of(scene: &ShownScene, character: &str) -> Vec<String> {
     names
 }
 
+// TODO(DEV-12): a two-character host test that a thinking cue leaves the other's bubble up.
 /// Shows the wordless thinking indicator over `character` while the model and the voice work. It
 /// takes nothing else away: the last speaker's bubble stays up until the next line replaces it.
 async fn cue_thinking(app: &AppState, character: &str) -> Result<(), PersonaError> {

@@ -22,6 +22,24 @@ fn every_built_in_purpose_has_a_deadline_a_class_and_a_fallback() {
 }
 
 #[test]
+fn interpret_has_the_short_deadline_that_triggers_its_buttons_fallback() {
+    let table = PurposeTable::built_in().expect("valid");
+    let interpret = table
+        .get(&name("interpret"))
+        .expect("interpret is a purpose");
+    assert_eq!(
+        interpret.deadline_ms(),
+        super::limits::interpret_deadline_ms()
+    );
+    assert_eq!(interpret.fallback(), Fallback::ButtonsFromLegalChoices);
+    let narrate = table.get(&name("narrate")).expect("narrate is a purpose");
+    assert!(
+        narrate.deadline_ms() > interpret.deadline_ms(),
+        "only interpret is held to the short deadline"
+    );
+}
+
+#[test]
 fn the_plans_model_calls_and_pictures_are_all_purposes() {
     let table = PurposeTable::built_in().expect("valid");
     for purpose in [

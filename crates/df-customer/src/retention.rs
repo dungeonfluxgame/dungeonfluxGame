@@ -2,10 +2,9 @@
 //! receipts past 90 days, and the personal data of closed accounts whose reopening window ended.
 //! One owned task; each pass is one bounded store call.
 
-use df_types::saturating_millis;
 use std::{sync::Arc, time::Duration};
 
-use df_types::AccountId;
+use df_types::{AccountId, saturating_millis};
 
 use crate::{
     closure::CompletionOutcome,
@@ -27,23 +26,19 @@ pub const TOKEN_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 /// Operation receipts are kept this long; older operation ids are refused as expired.
 pub const RECEIPT_RETENTION: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 
-fn ms(duration: Duration) -> u64 {
-    saturating_millis(duration)
-}
-
 /// Sessions last used before this are idle-expired now.
 pub(crate) fn idle_before_ms(now_ms: u64, idle: Duration) -> u64 {
-    now_ms.saturating_sub(ms(idle))
+    now_ms.saturating_sub(saturating_millis(idle))
 }
 
 pub(crate) fn cutoffs(now_ms: u64, idle: Duration) -> RetentionCutoffs {
-    let ended_before_ms = now_ms.saturating_sub(ms(SESSION_RETENTION));
+    let ended_before_ms = now_ms.saturating_sub(saturating_millis(SESSION_RETENTION));
     RetentionCutoffs {
         now_ms,
         sessions_ended_before_ms: ended_before_ms,
-        sessions_last_seen_before_ms: ended_before_ms.saturating_sub(ms(idle)),
-        tokens_before_ms: now_ms.saturating_sub(ms(TOKEN_RETENTION)),
-        receipts_before_ms: now_ms.saturating_sub(ms(RECEIPT_RETENTION)),
+        sessions_last_seen_before_ms: ended_before_ms.saturating_sub(saturating_millis(idle)),
+        tokens_before_ms: now_ms.saturating_sub(saturating_millis(TOKEN_RETENTION)),
+        receipts_before_ms: now_ms.saturating_sub(saturating_millis(RECEIPT_RETENTION)),
     }
 }
 

@@ -246,29 +246,9 @@ fn blocked_by_bystanders(
 /// them all without moving. `bystanders` are everyone else on the field: of the camera angles that
 /// keep the swing small, the first with none of them standing in front of an involved fighter is
 /// taken, and a bystander is never part of what the frame is fitted to.
-pub fn action_shot(
-    style: &CameraPose,
-    current: &CameraPose,
-    actor: &Body,
-    target: Option<&Body>,
-    also: &[Body],
-    bystanders: &[Body],
-    aspect: f32,
-) -> ActionShot {
-    action_shot_from(&ActionShotRequest {
-        style,
-        current,
-        actor,
-        target,
-        also,
-        bystanders,
-        aspect,
-        home_yaw: None,
-    })
-}
-
-/// What a shot is framed for: the arguments of [`action_shot`], and `home_yaw`, the scene's
-/// tactical heading that the camera stays within [`MAX_HOME_DEVIATION_DEG`] of when given.
+///
+/// `home_yaw` is the scene's tactical heading; the camera stays within [`MAX_HOME_DEVIATION_DEG`]
+/// of it when given.
 #[derive(Clone, Copy)]
 pub struct ActionShotRequest<'a> {
     pub style: &'a CameraPose,
@@ -281,8 +261,7 @@ pub struct ActionShotRequest<'a> {
     pub home_yaw: Option<f32>,
 }
 
-/// As [`action_shot`], keeping the camera within [`MAX_HOME_DEVIATION_DEG`] of the request's
-/// `home_yaw` when given.
+/// The shot the request asks for.
 pub fn action_shot_from(request: &ActionShotRequest) -> ActionShot {
     action_shot_from_with_dolly(request, 1.0)
 }
@@ -499,15 +478,16 @@ mod tests {
     fn both_fighters_are_in_the_safe_area_whatever_their_distance_apart() {
         for gap in [1.4, 2.8, 5.0, 9.0, 14.0] {
             let (attacker, target) = (body(-gap / 2.0, 0.0), body(gap / 2.0, 0.0));
-            let shot = action_shot(
-                &style(),
-                &current(0.0),
-                &attacker,
-                Some(&target),
-                &[],
-                &[],
-                FRAMED_ASPECT,
-            );
+            let shot = action_shot_from(&ActionShotRequest {
+                style: &style(),
+                current: &current(0.0),
+                actor: &attacker,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            });
             assert!(
                 in_safe_area(&shot.pose, FRAMED_ASPECT, &attacker),
                 "gap {gap}"
@@ -548,15 +528,16 @@ mod tests {
     fn the_frame_also_holds_the_places_they_will_stand_later_in_the_beat() {
         let (attacker, target) = (body(-4.0, 0.0), body(1.0, 0.0));
         let later = [body(0.0, 0.8), body(1.6, -0.3)];
-        let shot = action_shot(
-            &style(),
-            &current(0.0),
-            &attacker,
-            Some(&target),
-            &later,
-            &[],
-            FRAMED_ASPECT,
-        );
+        let shot = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current(0.0),
+            actor: &attacker,
+            target: Some(&target),
+            also: &later,
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         for body in [attacker, target, later[0], later[1]] {
             assert!(in_safe_area(&shot.pose, FRAMED_ASPECT, &body));
         }
@@ -567,26 +548,28 @@ mod tests {
         // A hero strikes along +x; the camera ends up somewhere on one side of that line.
         let hero = body(-2.0, 0.0);
         let goblin = body(0.0, 0.0);
-        let first = action_shot(
-            &style(),
-            &current(32.0),
-            &hero,
-            Some(&goblin),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-        );
+        let first = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current(32.0),
+            actor: &hero,
+            target: Some(&goblin),
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         let side = |pose: &CameraPose| (pose.eye() - pose.target).z.signum();
         // The goblin answers: the line is reversed, the camera must not cross to the other side.
-        let answer = action_shot(
-            &style(),
-            &first.pose,
-            &goblin,
-            Some(&hero),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-        );
+        let answer = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &first.pose,
+            actor: &goblin,
+            target: Some(&hero),
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         assert_eq!(
             side(&first.pose),
             side(&answer.pose),
@@ -599,29 +582,31 @@ mod tests {
     #[test]
     fn a_big_change_of_subject_cuts_and_a_small_one_pans_the_short_way() {
         let (a, b) = (body(-3.0, 0.0), body(0.0, 0.0));
-        let near = action_shot(
-            &style(),
-            &current(60.0),
-            &a,
-            Some(&b),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-        );
+        let near = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current(60.0),
+            actor: &a,
+            target: Some(&b),
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         assert!(!near.cut, "{}", near.swing_deg);
         // However the line points, the choice of four angles keeps the swing at most 90 degrees
         // from the nearest, so a swing that needs more than the cap is a cut.
         let mut cuts = 0;
         for yaw in (-180..180).step_by(10) {
-            let shot = action_shot(
-                &style(),
-                &current(yaw as f32),
-                &a,
-                Some(&b),
-                &[],
-                &[],
-                FRAMED_ASPECT,
-            );
+            let shot = action_shot_from(&ActionShotRequest {
+                style: &style(),
+                current: &current(yaw as f32),
+                actor: &a,
+                target: Some(&b),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            });
             assert_eq!(shot.cut, shot.swing_deg > MAX_SWING_DEG);
             assert!(shot.swing_deg <= 90.0 + 1e-3, "{yaw}: {}", shot.swing_deg);
             // The pose is reached by the short way: its yaw is within the swing of the current.
@@ -636,26 +621,28 @@ mod tests {
     fn it_prefers_the_target_shoulder_but_stays_put_rather_than_swing_to_it() {
         let (attacker, target) = (body(-3.0, 0.0), body(0.0, 0.0));
         // The line heads along +x, heading 90: over the target is 145 or 35.
-        let on_target_side = action_shot(
-            &style(),
-            &current(35.0),
-            &attacker,
-            Some(&target),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-        );
+        let on_target_side = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current(35.0),
+            actor: &attacker,
+            target: Some(&target),
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         assert!(on_target_side.swing_deg < 1e-3);
         // Camera already over the attacker's shoulder on that side (heading 90 + 125 = 215 = -145):
-        let on_attacker_side = action_shot(
-            &style(),
-            &current(-145.0),
-            &attacker,
-            Some(&target),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-        );
+        let on_attacker_side = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current(-145.0),
+            actor: &attacker,
+            target: Some(&target),
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         assert!(
             on_attacker_side.swing_deg < 1e-3,
             "no swing to reach the other shoulder"
@@ -665,15 +652,16 @@ mod tests {
     #[test]
     fn coincident_fighters_do_not_break_the_framing() {
         let spot = body(1.0, 1.0);
-        let shot = action_shot(
-            &style(),
-            &current(10.0),
-            &spot,
-            Some(&spot),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-        );
+        let shot = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current(10.0),
+            actor: &spot,
+            target: Some(&spot),
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         assert!(shot.pose.validate().is_ok());
         assert!(in_safe_area(&shot.pose, FRAMED_ASPECT, &spot));
     }
@@ -734,18 +722,19 @@ mod tests {
                         };
                         let also = [at_contact, recoiled];
                         for yaw in [-120.0, 160.0] {
-                            let shot = action_shot(
-                                &style,
-                                &CameraPose {
+                            let shot = action_shot_from(&ActionShotRequest {
+                                style: &style,
+                                current: &CameraPose {
                                     yaw_deg: yaw,
                                     ..style
                                 },
-                                &attacker,
-                                Some(&target),
-                                &also,
-                                &[],
-                                FRAMED_ASPECT,
-                            );
+                                actor: &attacker,
+                                target: Some(&target),
+                                also: &also,
+                                bystanders: &[],
+                                aspect: FRAMED_ASPECT,
+                                home_yaw: None,
+                            });
                             worst_distance = worst_distance.max(shot.pose.distance);
                             for moment in [attacker, at_contact, target, recoiled] {
                                 assert!(
@@ -787,22 +776,32 @@ mod tests {
             fov_deg: 40.0,
         };
         let bystanders = [goblin, bystander];
-        let shot = action_shot(
-            &style(),
-            &current,
-            &actor,
-            None,
-            &[],
-            &bystanders,
-            FRAMED_ASPECT,
-        );
+        let shot = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current,
+            actor: &actor,
+            target: None,
+            also: &[],
+            bystanders: &bystanders,
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         assert!(in_safe_area(&shot.pose, FRAMED_ASPECT, &actor), "{shot:?}");
         assert!(
             !bystander_in_front(&shot.pose, FRAMED_ASPECT, &[actor], &bystanders),
             "no figure stands in front of the actor: {shot:?}"
         );
         // And the shot taken without the check would have been blocked, so the test has teeth.
-        let blind = action_shot(&style(), &current, &actor, None, &[], &[], FRAMED_ASPECT);
+        let blind = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current,
+            actor: &actor,
+            target: None,
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         let _ = blind;
         let in_the_way = CameraPose {
             yaw_deg: heading_deg(actor.feet, bystander.feet),
@@ -828,15 +827,16 @@ mod tests {
                 yaw_deg: yaw as f32,
                 ..style()
             };
-            let shot = action_shot(
-                &style(),
-                &current,
-                &attacker,
-                Some(&target),
-                &[],
-                &[bystander],
-                FRAMED_ASPECT,
-            );
+            let shot = action_shot_from(&ActionShotRequest {
+                style: &style(),
+                current: &current,
+                actor: &attacker,
+                target: Some(&target),
+                also: &[],
+                bystanders: &[bystander],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            });
             for fighter in [attacker, target] {
                 assert!(
                     in_safe_area(&shot.pose, FRAMED_ASPECT, &fighter),
@@ -866,15 +866,16 @@ mod tests {
                 yaw_deg: yaw as f32,
                 ..style()
             };
-            let shot = action_shot(
-                &style(),
-                &current,
-                &actor,
-                None,
-                &[],
-                &others,
-                FRAMED_ASPECT,
-            );
+            let shot = action_shot_from(&ActionShotRequest {
+                style: &style(),
+                current: &current,
+                actor: &actor,
+                target: None,
+                also: &[],
+                bystanders: &others,
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            });
             assert!(in_safe_area(&shot.pose, FRAMED_ASPECT, &actor), "yaw {yaw}");
         }
     }
@@ -895,15 +896,16 @@ mod tests {
                 yaw_deg: current_yaw,
                 ..style()
             };
-            let shot = action_shot(
-                &style(),
-                &current,
-                &brakka,
-                Some(&weasel),
-                &[],
-                &[],
-                FRAMED_ASPECT,
-            );
+            let shot = action_shot_from(&ActionShotRequest {
+                style: &style(),
+                current: &current,
+                actor: &brakka,
+                target: Some(&weasel),
+                also: &[],
+                bystanders: &[],
+                aspect: FRAMED_ASPECT,
+                home_yaw: None,
+            });
             assert!(
                 in_safe_area(&shot.pose, FRAMED_ASPECT, &brakka),
                 "{current_yaw}"
@@ -983,15 +985,16 @@ mod tests {
     fn action_pose_rejects_occupied_line_and_tries_a_clear_angle() {
         let actor = body(-1.0, 0.0);
         let target = body(1.0, 0.0);
-        let unfiltered = action_shot(
-            &style(),
-            &current(0.0),
-            &actor,
-            Some(&target),
-            &[],
-            &[],
-            FRAMED_ASPECT,
-        );
+        let unfiltered = action_shot_from(&ActionShotRequest {
+            style: &style(),
+            current: &current(0.0),
+            actor: &actor,
+            target: Some(&target),
+            also: &[],
+            bystanders: &[],
+            aspect: FRAMED_ASPECT,
+            home_yaw: None,
+        });
         let mut occupancy =
             Occupancy::empty(Vec3::new(-15.0, 0.0, -15.0), 1.0, [30, 20, 30]).unwrap();
         let eye_cell = occupancy.cell_of(unfiltered.pose.eye()).unwrap();

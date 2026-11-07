@@ -82,6 +82,21 @@ impl From<io::Error> for TableError {
     }
 }
 
+impl std::fmt::Display for TableError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&reason(self))
+    }
+}
+
+impl std::error::Error for TableError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 impl TableError {
     /// Whether the game answered and said no, as against not being reached or not understood.
     pub fn is_refusal(&self) -> bool {

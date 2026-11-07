@@ -39,7 +39,8 @@ pub const MAXIMUM_QUEUED_BACKGROUND: usize = 8;
 /// The default deadline of every provider call, in milliseconds. The plan cites observed
 /// latencies (H.5 text 15 to 45 s, H.4 pictures 90 to 240 s) and scene-build budgets (J.4, K.2);
 /// these defaults are deliberately far above them so a deadline never gets in the way of dev work,
-/// and the two variables below scope them down (owner, 2026-11-06).
+/// and the variables below scope them down (owner, 2026-11-06); `interpret` keeps its own short
+/// default.
 pub const DEFAULT_DEADLINE_MS: u64 = 3_600_000;
 /// The default deadline of `interpret`, in milliseconds: the lower end of the observed Codex text
 /// latency (H.5), so a slower lane times out and the seat gets buttons (C.7). Unlike the other

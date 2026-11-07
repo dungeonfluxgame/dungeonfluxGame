@@ -45,9 +45,9 @@ mod sql;
 pub mod story_memory;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub mod text_attempts;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod support_store;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod text_attempts;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use checkpoint_codec::CodecLimits as NativeCodecLimits;

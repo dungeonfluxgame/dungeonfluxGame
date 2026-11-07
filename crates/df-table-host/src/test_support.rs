@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use df_playground::controls::ControlsChange;
 use df_table::canvas::Canvas;
 use df_table::testkit::{CHARACTER_KIND, MARKER_KIND};
 use tempfile::TempDir;
@@ -41,10 +42,7 @@ impl Running {
         self.state
             .playground()
             .change_all(
-                vec![
-                    df_playground::controls::ControlsChange::Tts(true),
-                    df_playground::controls::ControlsChange::Stt(true),
-                ],
+                vec![ControlsChange::Tts(true), ControlsChange::Stt(true)],
                 &[],
                 0,
                 |_| {},

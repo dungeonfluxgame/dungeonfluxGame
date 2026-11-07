@@ -67,12 +67,7 @@ pub mod beat_timing {
         MOVE_SETTLE_HOLD, SETTLE_PAN, STEP, STOP, STRIKE_CAMERA_DELAY, STRIKE_END_HOLD,
         WINDUP_PUSH,
     };
-    use df_types::saturating_millis;
-    use std::time::Duration;
-
-    fn ms(duration: Duration) -> u64 {
-        saturating_millis(duration)
-    }
+    use df_types::saturating_millis as ms;
 
     fn walk_pace_ms(squares: u32) -> u64 {
         if squares == 0 || STEP * squares <= MAX_APPROACH {

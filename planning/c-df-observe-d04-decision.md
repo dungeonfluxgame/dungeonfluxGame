@@ -22,6 +22,7 @@ one in-flight prefix, and a single upload lease of at most 32 records / 64 KiB.
 > Amended 2026-11-06 (owner: limits stay out of the way of dev work): the page-side retained buffer
 > is 100,000 records / 64 MiB in `df-observe`'s `limits.rs`. The upload lease (32 records / 64 KiB) and the
 > 8192-byte single-record request are unchanged.
+
 Each encoded single-record request must be nonempty and at most 8192 bytes,
 matching `TelemetryLimits::default().record_bytes` and the native decoder.
 The 256 KiB limit is a payload bound, not a total process-memory claim. Normalize

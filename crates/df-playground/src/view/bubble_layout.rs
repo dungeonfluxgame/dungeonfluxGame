@@ -56,7 +56,7 @@ pub struct BubbleLayout {
     chosen: HashMap<String, Choice>,
     /// What each character's bubble showed when last placed: its kind and its words. A bubble the
     /// page draws again with the same content is not new, so it does not pop in a second time.
-    shown: HashMap<String, String>,
+    shown: HashMap<String, (bool, String)>,
     /// The framing the bubbles were last placed for.
     framing: Option<Framing>,
 }
@@ -105,7 +105,7 @@ impl BubbleLayout {
             )
         };
         let bubbles = self.measure_bubbles(stage, framing, (width, height))?;
-        self.settle_repeats(&bubbles)?;
+        self.settle_repeats(&bubbles);
         if bubbles.is_empty() {
             self.chosen.clear();
             return Ok(());
@@ -158,17 +158,18 @@ impl BubbleLayout {
     /// Marks the bubbles that show what their character's bubble already showed as settled, so
     /// the pop-in (`rp-bubble-in`) plays once per new bubble and not each time the layer is drawn
     /// again for another character's cue; then remembers what is shown now.
-    fn settle_repeats(&mut self, bubbles: &[Measured]) -> Result<(), JsValue> {
+    // TODO(DEV-12): a browser-target test that a bubble drawn again with the same content is
+    // marked settled and a changed one is not.
+    fn settle_repeats(&mut self, bubbles: &[Measured]) {
         let mut shown = HashMap::new();
         for bubble in bubbles {
-            let content = format!(
-                "{}|{}",
-                bubble.element.class_name().contains("rp-tone-thought"),
-                bubble.element.text_content().unwrap_or_default()
+            let classes = bubble.element.class_name();
+            let has = |wanted: &str| classes.split_whitespace().any(|class| class == wanted);
+            let content = (
+                has("rp-tone-thought"),
+                bubble.element.text_content().unwrap_or_default(),
             );
-            let repeated = self.shown.get(&bubble.character) == Some(&content);
-            if repeated && !bubble.element.class_name().contains("rp-settled") {
-                let classes = bubble.element.class_name();
+            if self.shown.get(&bubble.character) == Some(&content) && !has("rp-settled") {
                 bubble
                     .element
                     .set_class_name(&format!("{classes} rp-settled"));
@@ -176,7 +177,6 @@ impl BubbleLayout {
             shown.insert(bubble.character.clone(), content);
         }
         self.shown = shown;
-        Ok(())
     }
 
     /// Reads every anchored bubble of `stage`: where its head is on the stage for `framing`, how

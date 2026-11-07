@@ -153,7 +153,7 @@ fn sharing(byte: u8) -> SharingIdentity {
     SharingIdentity::from_bytes(&[byte; 32]).unwrap()
 }
 
-#[allow(clippy::too_many_arguments, reason = "a test fixture")]
+#[allow(clippy::too_many_arguments, reason = "inputs of a scenario")]
 fn create(
     owner: ImageOwner,
     op: u8,

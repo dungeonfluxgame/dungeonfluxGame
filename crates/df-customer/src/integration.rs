@@ -8,7 +8,7 @@ use crate::{
     Reauthentication, ServiceError, StoreResult,
     service::{read, write},
 };
-use df_types::AccountId;
+use df_types::{AccountId, saturating_millis};
 use std::future::Future;
 
 pub const MAXIMUM_ACTIVE_TOKENS: usize = 10;
@@ -182,8 +182,7 @@ impl<S: AccountStore + PersonalTokenStore, M: EmailSender> CustomerService<S, M>
                 .integration_sessions(account, after, limit.min(101)),
         )
         .await?;
-        let idle_ms = u64::try_from(self.shared.tunables.sessions.idle.as_millis())
-            .map_err(|_| ServiceError::InvalidRecord)?;
+        let idle_ms = saturating_millis(self.shared.tunables.sessions.idle);
         for session in &mut sessions {
             session.expires_at_ms = session.expires_at_ms.min(session.last_seen_at_ms.saturating_add(idle_ms));
         }

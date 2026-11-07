@@ -194,6 +194,9 @@ sequenceDiagram
 | 11 | Present | Ordered `ChatLine` to displays; Line machine opens it when the clip starts; camera; captions | `TableLine` (**Built** proto) + audio url or stream | By audience (section 10) |
 | 12 | Report | Client reports `Started`, `Ended`, `Blocked`, `Failed` (`ReportPresented` for the display credential, **Built**; `ClientService.Report` **Planned**) | Observations only, no authority | Server |
 
+> Owner decisions 2026-11-06: the dev build keeps tap-to-toggle with the speech service's 60 s limit (no 30 s cap yet); press-and-hold and the cap above remain the design target. The text and spoken question cap is 4096 characters, so the 800-character rationale for a 30 s cap no longer applies (O14).
+
+
 Private versus shared at each step: the player's words are private until the admit stage decides
 the line is public speech (the default) or a whisper (section 10); the appraisal never leaves the
 server; the `ExpressionContext` is projected per listener (`ObserverScope::Shared` for public
@@ -1438,7 +1441,7 @@ Voice is the next step, not part of the definition.
 | O11 | Hero lines are never voiced by TTS | Yes | "Raw player text" is not an input to `Speak` |
 | O12 | First playback path | `HtmlAudioElement` bridge | Already allowed by the architecture and used for music |
 | O13 | Voice binding and delivery | Separate `VoiceCast` record; voice id only in phase 2; typed `Delivery` enum later | Persona has no gender/age; the adapter sends no settings and vendor parameters are unverified here |
-| O14 | Voice capture cap | 30 s in the UI | A table utterance; the 800-character text limit bounds the draft |
+| O14 | Voice capture cap | 30 s in the UI | A table utterance; the 4096-character text limit (owner, 2026-11-06) bounds the draft |
 | O15 | Moderation and age safety | Closed `policy` verdict in Hear and Appraise; rating as a versioned instruction; provider refusal terminal; decide on a moderation call | No hook is defined anywhere |
 | O16 | Pacing authority without a display | The host's binding | A remote-only table needs one report that advances the sequence |
 | O17 | NPC-initiated speech | State always commits; words only when no turn is pending and no line is open; one per NPC per beat | Words are optional, player turns first |
