@@ -4,7 +4,7 @@ warrior | You are at Mara's fruit stall in the town market with the elf. You are
 elf | Apologise to her for your companion, briefly.
 warrior | Demand three apples for the price of one, because the fruit is poor.
 warrior | Toss the bruised apple back onto her pile and say she should be paying you to take them.
-elf | Tell the warrior to stop, and ask her sincerely which apples are firmest.
+elf | Tell the warrior to stop, and ask Mara, as a question to her, sincerely which apples are firmest.
 warrior | Grudgingly admit the apples are fine, and ask what five cost.
 elf | Ask Mara, as a question to her, whether she would still give the five-apple price after all that.
 warrior | Mutter an awkward apology to her.

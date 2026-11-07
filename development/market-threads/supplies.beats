@@ -7,4 +7,4 @@ warrior | Say you will take ten apples and ask what that comes to.
 elf | Add five pears and ask for the new total.
 warrior | Ask Mara, as a question to her, if she will round it down since you are taking so much.
 elf | Ask Mara, as a question to her, whether plums would travel as well as pears.
-elf | Pay and ask her to pack everything for the road.
+elf | Pay and ask Mara, as a question to her, to pack everything for the road.

@@ -247,3 +247,26 @@ lines with a price retry ~14 s.
 Open: at the close she reported the whole order's total (45) as the price of the five pears, the
 retry corrected it to 18, and the final line lost the 45; a quote needs a way to state a whole
 order's total (an order entry listing its lots) so the check does not force a lot's price onto it.
+
+## Refinement 11 and runs 16 to 17 (haggle and curious on the final build)
+
+Change: the keeper's facts carry a ready price table (lots of 1, 2, 3, 5, 10, 15, 20 and each
+tier's smallest lot) and a price rule generated from the bible's numbers for any other lot; a
+whole order's total is one quote entry per lot, never one entry of its own.
+Result over 38 messages: every spoken total right the first time (five apples "fifteen copper; I
+can make it fourteen for you", ten apples 27 "with the five-or-more discount"); the price retry
+never fired (one repeat retry in all); median 7.0 s per answer, max 14.3 s (the retry). The
+customers asked at every ask beat but one (the warrior's ripe-pear beat says "ask" mid-sentence,
+so it was not reworded; he stated the method, then asked the price; those beats are now reworded).
+Human answers: "Mara Vell, I'm here most market days, so you know where to find me." "On rainy days,
+I pull the crates under the canvas and wipe the apples dry while folks shake off their sleeves."
+"Thanks, that means a lot. Safe travels to you both!" She held her single-apple price ("I won't
+lower the price on just one") and gave the bulk price when asked.
+
+## Timeline (commit times, 2026-11-07)
+
+12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->
+12:30 refinement 2 -> 12:39 refinement 3 -> 12:43 refinement 4 -> 12:53 refinement 5 -> 12:59
+refinement 6 -> 13:03 refinement 7 -> 13:10 refinement 8 -> 13:15 refinement 9 -> 13:20
+refinement 10 -> 13:28 refinement 11. Seventeen runs of the market thread over about 80 minutes,
+across six beat files (haggle, curious, temper, heart, supplies, rage).
