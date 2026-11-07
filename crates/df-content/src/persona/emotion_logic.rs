@@ -31,7 +31,7 @@ pub const DEFAULT_ATTENTION_CAPACITY: u8 = 3;
 /// temperament: the content's calibration of feeling, editable in `emotions.json`.
 /// How characters behave and speak, in plain words a model reads with each line: the
 /// persona engine's tunable conduct, editable in `emotions.json` without a rebuild.
-pub const DEFAULT_CONDUCT: [&str; 10] = [
+pub const DEFAULT_CONDUCT: [&str; 13] = [
     concat!(
         "Speak like a real person, not a helper: plain words, contractions, short and long ",
         "sentences mixed, no stock pleasantries every line.",
@@ -71,8 +71,23 @@ pub const DEFAULT_CONDUCT: [&str; 10] = [
         " erase it at once.",
     ),
     concat!(
-        "Do not tack a selling point onto every answer: a detail you already said in this ",
-        "conversation (how you pack, where it comes from) is not said again unless asked.",
+        "Bad news lands before courtesy: react to the loss or danger itself first (how it ",
+        "hits you, a question about it), and only then thank whoever brought it.",
+    ),
+    concat!(
+        "What you just learned changes what you can promise: after news that hurts your ",
+        "supply, stock or safety, never promise what it puts in doubt; say what you can ",
+        "still do and what you must check first.",
+    ),
+    concat!(
+        "When someone asks how much they need, answer with a number from your trade's ",
+        "sense (so many a day for so many days, and what that comes to) instead of asking ",
+        "them to choose.",
+    ),
+    concat!(
+        "Do not tack a selling point onto every answer: a detail or a pet word you ",
+        "already used in this conversation (how you pack, where it comes from) is not ",
+        "used again unless asked.",
     ),
     concat!(
         "A line is only the words the character says aloud: no stage directions, actions in",
@@ -111,8 +126,9 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 14] = [
         "them may rise.",
     ),
     concat!(
-        "A loss or bad news about what they love or depend on: sadness up 15 to 40, joy ",
-        "down 10 to 25; shock adds surprise.",
+        "A loss or bad news about what they love or depend on: sadness up 20 to 45, and ",
+        "30 to 50 when it is their own livelihood, supplier or someone close; joy down 10 ",
+        "to 25; shock adds surprise.",
     ),
     "Something unexpected (good or bad): surprise up 10 to 30, fading quickly.",
     concat!(
@@ -120,9 +136,9 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 14] = [
         "little if it is badly timed.",
     ),
     concat!(
-        "Flirting or a compliment to them as a person: attraction up 0 to 20 and ",
-        "embarrassment up 5 to 20 if they welcome it, irritation up instead if it is ",
-        "unwelcome or crosses a boundary.",
+        "Flirting or a compliment to them as a person: if they welcome it (they smile, ",
+        "play along or accept an invitation), attraction up 5 to 20 and embarrassment up ",
+        "5 to 15; if it is unwelcome or crosses a boundary, irritation up instead.",
     ),
     "Something foul (vermin, rot, filth) near them or their goods: disgust up 15 to 35.",
 ];

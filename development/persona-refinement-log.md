@@ -280,6 +280,20 @@ Open for the next pass, all prompt or data: grief wording and a stronger loss ba
 appraisal guide; stock promises checked against what she just learned; concrete provisioning
 amounts; a curb on recurring talking points.
 
+## Refinement 12 and runs 20 to 21 (heart and supplies, data only)
+
+Change (emotions.json, no rebuild): loss band raised (sadness 20 to 45, 30 to 50 for their own
+livelihood or supplier); a welcomed flirt or accepted invitation gives attraction 5 to 20; conduct
+lines: bad news lands before courtesy, new news limits what you promise, answer "how much" with a
+number, no reused detail or pet word. Code defaults regenerated from the file (changed entries
+only); the shipped-file test passes.
+Better: the orchard news now gets "Oh, no, the little orchard I get my apples from? I hope
+everyone got out safely"; the invitation "That's sweet of you, but my mind's with the orchard folk
+just now"; provisioning "about fourteen apples for the week; they keep well on the road".
+Still open: sadness never showed among her top feelings (the appraisal under-reports it even with
+the larger band); she still promised "two hundred apples snug for the road" after the fire, so
+the conduct line alone does not hold the stock promise, and "snug" (from her backstory) recurs.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->
