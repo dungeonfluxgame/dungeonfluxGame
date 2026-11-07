@@ -64,7 +64,9 @@ pub const DEFAULT_CONDUCT: [&str; 13] = [
     concat!(
         "Attraction makes you warmer, flustered or playful and it may flirt back, but it ",
         "stays suggestive and never explicit; a boundary in the persona or an unwelcome ",
-        "advance is refused plainly.",
+        "advance is refused plainly. Affection makes you tender and a little protective; ",
+        "jealousy shows sideways (a dry remark, a cooler tone, a pointed question), never ",
+        "a scene or a claim on them.",
     ),
     concat!(
         "Respect is earned back slowly: after rudeness, an apology softens you but does not",
@@ -95,10 +97,15 @@ pub const DEFAULT_CONDUCT: [&str; 13] = [
     ),
 ];
 
-pub const DEFAULT_APPRAISAL_GUIDE: [&str; 15] = [
+pub const DEFAULT_APPRAISAL_GUIDE: [&str; 19] = [
     concat!(
         "Almost every line moves the listener a little: give at least one emotion change ",
         "unless the line was truly empty of feeling.",
+    ),
+    concat!(
+        "Appraise what the line just said does to them now: what an earlier line did was ",
+        "already felt and is not felt again, so a plain request after a flirt is a plain ",
+        "request (no new irritation) and good conduct after rudeness eases them.",
     ),
     concat!(
         "Interest, courtesy or praise of their work: joy, trust or pride up 2 to 8, rapport",
@@ -143,9 +150,25 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 15] = [
         "irritation up 15 to 30.",
     ),
     concat!(
-        "Romantic warmth toward one person (feeling at ease with them, liking how they ",
-        "treat you, saying yes to time together): attraction up 5 to 15 each time; it ",
-        "builds over a conversation and is not the same as trust.",
+        "Nervous, clumsy sincerity (stammering, a fumbled compliment, apologising too ",
+        "much, forgetting what they meant to say) reads as endearing: amusement up 5 to ",
+        "15 and a little warmth or attraction, not irritation, unless it keeps pressing ",
+        "after a no.",
+    ),
+    concat!(
+        "Romantic or physical pull toward one person (desire, feeling at ease with them, ",
+        "liking how they treat you, saying yes to time together): attraction up 5 to 15 ",
+        "each time; it builds over a conversation and is not trust, and not yet affection.",
+    ),
+    concat!(
+        "Tenderness for one person that grows from being cared for, understood, missed or ",
+        "chosen (never from one compliment): affection up 3 to 10; it builds slowly and ",
+        "lingers, and it is love, not desire.",
+    ),
+    concat!(
+        "Someone they are drawn to giving attention to another, or praising a rival in ",
+        "front of them: jealousy up 5 to 25, more the more attraction or affection they ",
+        "already feel, none when they feel none; being chosen over the rival eases it.",
     ),
     "Something foul (vermin, rot, filth) near them or their goods: disgust up 15 to 35.",
 ];
@@ -167,7 +190,7 @@ const DEFAULT_HOSTILE_AT_MOST: i8 = -30;
 
 /// The built-in emotions in the order of `DEFAULT_EMOTIONS`: id, label, valence, arousal and the
 /// bubble tone id.
-const DEFAULT_TABLE: [(&str, &str, i8, u8, &str, u8); 11] = [
+const DEFAULT_TABLE: [(&str, &str, i8, u8, &str, u8); 13] = [
     ("joy", "Joy", 80, 60, "ally", 20),
     ("trust", "Trust", 60, 30, "ally", 10),
     ("irritation", "Irritation", -60, 70, "danger", 15),
@@ -179,6 +202,8 @@ const DEFAULT_TABLE: [(&str, &str, i8, u8, &str, u8); 11] = [
     ("attraction", "Attraction", 60, 70, "ally", 15),
     ("disgust", "Disgust", -70, 50, "danger", 30),
     ("embarrassment", "Embarrassment", -30, 60, "mystic", 40),
+    ("affection", "Affection", 80, 30, "ally", 5),
+    ("jealousy", "Jealousy", -50, 70, "danger", 25),
 ];
 
 /// One emotion a campaign offers: how it reads and how it colours the mood and the bubble.

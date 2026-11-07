@@ -1,0 +1,15 @@
+# A shy, awkward suitor: he fumbles his words, gets a compliment wrong, apologises too much and
+# finally asks her out badly but sincerely. Lena should find it endearing: amusement, warmth,
+# attraction and a little embarrassment, teasing kindly rather than brushing him off.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper tavern_server
+@keeper_situation Working a packed evening shift at the liveliest bar in town, a tray of mugs in hand.
+@speaker_situation In the packed bar in town at night, at the counter where the server works; you came alone, and you are nervous around her.
+warrior | Try to order an ale but stumble over the words because she is looking at you.
+warrior | Try to compliment her braid and get the words wrong so it comes out awkward.
+warrior | Apologise for the compliment, then apologise for apologising.
+warrior | Admit you practised what to say to her on the walk over and forgot all of it.
+warrior | Ask her, as a question to her, whether she minds if you just sit here and watch the band.
+warrior | Tell her, blushing, that you came back tonight because she laughed at your joke last time.
+warrior | Ask her, as a question to her, very awkwardly, whether she would maybe walk with you by the river sometime.
+warrior | When she answers, thank her too many times and knock over your own mug.

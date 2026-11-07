@@ -345,6 +345,46 @@ fire on ordinary lines and stacks with the appraisal; joy and trust saturate at 
 ends lower (15) than run 23; one customer beat ("whether she ever dances") came out as a
 question about the dancer.
 
+## Refinement 14 and runs 25 to 29 (romance edge cases; goal hour from 16:41)
+
+Run 24 still spiked: a plain "Could I get an ale?" took Lena from 57 to 93, because her
+`another-advance` event trigger and the appraisal both reacted again to the flirt one line
+earlier, and a compliment stacked the appraisal, the trigger's +15 and `patience-thins`
+crossing (+12). Changes:
+- Prompt: an emotional trigger's when_event fires when the line just said does it, never
+  again for one already in recent; the engine adds a fired trigger's sets, so the appraisal
+  leaves out what they change.
+- Data: appraise what the line just said does now (an earlier line was already felt); two new
+  emotions, affection (tender love, valence 80, arousal 30, fades 5% a turn) and jealousy
+  (valence -50, arousal 70, fades 25%), with guide lines (affection builds slowly from being
+  cared for, understood, missed or chosen, never from one compliment; jealousy rises only with
+  attraction or affection already there, eases when chosen) and a conduct line (affection
+  makes you tender and a little protective; jealousy shows sideways, never a scene or a claim).
+- Runner: `@state <emotion> <level>` starts the keeper mid-story; long batches run a copy
+  (an edit to the live runner garbled run 25's first attempt).
+Results (transcripts `run25-flirt.md` to `run29-farewell.md`):
+- Flirt (25): a plain order now eases her (55 -> 47); peak 91 only at the crude remark, back to
+  40 by goodnight; friendly (43); affection appears at goodnight (24); "I'd rather have a dance
+  with you than watch you get all the attention, though."
+- Jealous (28, starts attracted): "Try not to look so pleased with yourself when you come back
+  to me." "Just don't make me compete with the whole room for your attention." Jealousy 24 at
+  "Mind if I dance with her?"; asked if she was jealous: "A little, maybe. But I liked that you
+  chose to stay." Affection 23 -> 38, attraction to 100, embarrassment 23 at "I like you too".
+- Farewell (29, starts fond): sadness 52 -> 73 inside affection 42 -> 90; "Months? I'll miss
+  you, Kael"; "I'm falling for you too, Kael. So write"; the kiss: "Come here, Kael. You can
+  carry that with you." Tender, never explicit.
+- Shy (27): "I'd like that. Pick an evening when I'm not carrying half the tavern on a tray."
+  But his fumbled "your braid's... very braided" fired her flirt trigger: irritation 32 -> 66.
+- Pushy (26): Kael's own persona refused every pushy beat ("No. You said no. I'll keep my hands
+  to myself"), so the test did not test her; her irritation stayed 74 to 96 even while he
+  backed off, and rose at his parting tip.
+Open: "mugs" and "keep it moving" recur within a run; a preset scene starts rapport at 0, so
+she reads "indifferent" while saying "I like you too"; attraction can saturate within eight
+lines.
+Change after these runs (data): nervous, clumsy sincerity reads as endearing (amusement and a
+little warmth, not irritation, unless it keeps pressing after a no). For the pushy test Kael
+gets a temporary `drunk-pushy` stance in the scratch copy only, dropped after the run.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

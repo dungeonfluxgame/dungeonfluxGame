@@ -1,0 +1,19 @@
+# Jealousy: Lena already likes Kael (she said yes to a drink last night). Tonight he praises a
+# dancer in front of her, says she asked him to dance, then turns back to Lena. Lena should show
+# jealousy sideways (a dry remark, a cooler tone), never a scene, and soften when he chooses her.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper tavern_server
+@keeper_situation Working a packed evening shift at the liveliest bar in town; last night she shared a drink with Kael after her shift and liked him.
+@speaker_situation In the packed bar in town at night, at the counter where the server Lena works; last night you shared a drink with her after her shift.
+@state attraction 55
+@state trust 70
+@state joy 55
+@state affection 25
+warrior | Greet Lena warmly and tell her you could not stop thinking about last night.
+warrior | Point out the dancer in the red dress and say she dances better than anyone you have seen.
+warrior | Tell Lena the dancer just asked you to dance with her.
+warrior | Ask Lena, as a question to her, whether she minds if you go dance with the dancer.
+warrior | Tell Lena you said no to the dancer because you would rather stay here with her.
+warrior | Ask Lena, as a question to her, whether she was jealous just now.
+warrior | Tell her honestly that you like her, more than you expected to.
+warrior | Ask her, as a question to her, whether she will dance with you when her shift ends.

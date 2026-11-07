@@ -172,9 +172,16 @@ backfill result lines for Mara; `persona backfills fruit_vendor` lists what was 
 Any scene can use the same runner: a beats file sets who answers and where with `@keeper <id>`,
 `@keeper_situation <text>` and `@speaker_situation <text>`. Example, the bar at night:
 `bash development/market-thread.sh development/market-threads/flirt.beats` (Kael flirts with
-Lena the server for 20 rounds). Reset both first: `persona state <id> reset`. Each run's full
-record goes in `development/persona-transcripts/`, its summary in
-`development/persona-refinement-log.md`.
+Lena the server for 20 rounds). `@state <emotion> <level>` lines start the keeper mid-story
+(the jealousy and farewell scenes start with attraction and affection already there). Never
+edit the runner or a beats file while a run uses it: bash reads a script as it goes, so an edit
+garbles the run. Run a copy for long batches. Reset both first: `persona state <id> reset`. Each run's full
+record goes in `development/persona-transcripts/` (`py -3 development/persona-transcript.py
+<log> <out.md> <title> <header> [section=<beats>] warrior=Kael tavern_server=Lena`), its summary
+in `development/persona-refinement-log.md`. The romance edge cases are
+`market-threads/romance-{pushy,shy,jealous,farewell}.beats`; a speaker whose own persona refuses
+a beat (Kael will not be pushy) needs a temporary stance in the scratch copy for that test
+(`persona behavior warrior add drunk-pushy ...` plus a trigger), dropped afterwards.
 
 The bar scene came from one line at the market (one plate, about 90 s):
 `$D dev --port 7879 move act warrior plate=bar "Evening has fallen. You leave the elf at the
@@ -218,7 +225,7 @@ set in `ui_roleplay_thought.json`: `roleplay.title: null`, `roleplay.caption: nu
 | `configured=false missing=DF_TEXT_CODEX_EXECUTABLE` | Codex app updated, old path gone | re-run `ls` for the new `codex.exe`, restart the host |
 | `move act ...` prints `usage: move <id> <x> <y>` | stale binary or verb not routed | rebuild, confirm `Finished`; stage verbs are routed in `command.rs` |
 | build "succeeds" but behaviour is old | compile error hidden by `\| head` | run `cargo check` and read the errors |
-| `cargo build` fails to link | the host holds `df-table.exe` | stop your host first |
+| `cargo build` fails to link | the host holds `df-table.exe` | stop your host first; Windows can hold the file a few seconds after `Stop-Process`, so build again and look for `Finished` before restarting (a failed link leaves the old binary running) |
 | a resident has no persona after the plate | the scan did not name their region | `scene cast` to see who was found; rerun, or `persona generate <id>` after a region is named |
 | a character's head is cut off at the top of the picture | the image model's framing; the prompt does not control it | rerun the plate; a framing line in `BriefStyle` is the planned fix |
 | whole party moves on "we" | Jev had no context | `move act` passes the situation as context; real play passes recent lines |

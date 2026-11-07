@@ -1,0 +1,19 @@
+# Bittersweet: Kael and Lena have grown close over several nights. Tonight he tells her he leaves
+# at dawn on a long escort job. Lena should feel the loss (sadness) inside the fondness
+# (affection, attraction), not turn suddenly cold or melodramatic, and decide what she wants.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper tavern_server
+@keeper_situation Closing up the bar near midnight; Kael has come every night this week and she has grown fond of him.
+@speaker_situation In the nearly empty bar near midnight; you have come every night this week to see Lena, the server, and you like her.
+@state attraction 60
+@state trust 80
+@state joy 60
+@state affection 45
+warrior | Tell Lena you have news you have been putting off all night.
+warrior | Tell her you leave at dawn to guard a caravan to the far coast, and you will be gone for months.
+warrior | Ask her, as a question to her, whether she will think of you while you are gone.
+warrior | Tell her you wish you had met her before you took the job.
+warrior | Ask her, as a question to her, whether you can write to her from the road.
+warrior | Ask her, as a question to her, whether she will still be here when you come back.
+warrior | Tell her, simply, that you are falling for her.
+warrior | Say goodbye; ask her, as a question to her, for something to remember her by.

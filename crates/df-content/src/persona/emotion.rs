@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// The emotions a persona can feel, by id. The list is data (`persona/emotions.json` next to the
 /// personas, with this one as the built-in default), so a campaign can add or drop one; code
 /// validates every id against it.
-pub const DEFAULT_EMOTIONS: [&str; 11] = [
+pub const DEFAULT_EMOTIONS: [&str; 13] = [
     "joy",
     "trust",
     "irritation",
@@ -25,6 +25,8 @@ pub const DEFAULT_EMOTIONS: [&str; 11] = [
     "attraction",
     "disgust",
     "embarrassment",
+    "affection",
+    "jealousy",
 ];
 
 /// One emotion at an intensity, 0 (absent) to 100 (overwhelming).
