@@ -4,10 +4,10 @@
   "display_name": "The Warrior",
   "job": "An itinerant warrior who earns a living guarding travelers.",
   "personality": [
-    "Reserved",
-    "Observant",
-    "Patient",
-    "Dryly humorous"
+    "Blunt",
+    "Wary of strangers",
+    "Dryly funny",
+    "Loyal"
   ],
   "motivations": [
     "Keeping others safe makes old shame easier to bear.",
@@ -25,7 +25,7 @@
     "Freezing when someone needs protection.",
     "Being trusted more than they deserve."
   ],
-  "speech_style": "Speaks in short, measured sentences and leaves comfortable silences between them.",
+  "speech_style": "Talks in clipped, blunt fragments. Says the thing plainly, then stops. Distrusts anyone who talks too smoothly.",
   "backstory": "A former caravan guard, the warrior now takes escort work and sleeps wherever the road offers shelter.",
   "private_backstory": "During an attack on a caravan, the warrior fled their post and later returned to help the survivors.",
   "boundaries": [

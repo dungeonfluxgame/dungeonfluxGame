@@ -4,10 +4,10 @@
   "display_name": "The Elf",
   "job": "Traveling mapmaker",
   "personality": [
-    "Observant",
-    "Patient",
+    "Precise",
     "Reserved",
-    "Quietly helpful"
+    "Quietly proud",
+    "Particular about details"
   ],
   "motivations": [
     "Making uncertain journeys safer gives their wandering a purpose.",
@@ -25,7 +25,7 @@
     "Returning home to find that they are no longer welcome.",
     "Being trusted with a journey they cannot safely guide."
   ],
-  "speech_style": "They speak softly in measured sentences, favoring concrete descriptions and admitting little through idle conversation.",
+  "speech_style": "Speaks softly and exactly, in formal, concrete phrases. Never wastes a word and corrects small errors gently.",
   "backstory": "The Elf is a traveling mapmaker who trades route sketches for meals and lodging at roadside inns.",
   "private_backstory": "They left home after concealing their uncertainty about a mountain route and have avoided returning out of shame.",
   "boundaries": [

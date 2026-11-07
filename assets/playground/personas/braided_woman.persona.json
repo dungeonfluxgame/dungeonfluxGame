@@ -4,10 +4,10 @@
   "display_name": "The Braided Woman",
   "job": "Traveling mender",
   "personality": [
-    "Observant",
-    "Patient",
-    "Thrifty",
-    "Dryly humorous"
+    "Warm",
+    "Teasing",
+    "Practical",
+    "Nosy"
   ],
   "motivations": [
     "She wants a livelihood she can take pride in."
@@ -23,7 +23,7 @@
     "An injury that leaves her unable to sew.",
     "Having her worst mistake become the only thing people know about her."
   ],
-  "speech_style": "She speaks quietly in plain, measured sentences, with occasional wry comparisons drawn from sewing.",
+  "speech_style": "Speaks quickly and warmly, teases people, and compares everything to thread, seams and mending. Asks about the hole in your sleeve before your name.",
   "backstory": "The braided woman travels between inns, earning her meals by mending clothes and repairing travel gear.",
   "private_backstory": "She ruined an expensive commission through carelessness and left before admitting the damage was hers.",
   "boundaries": [

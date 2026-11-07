@@ -4,10 +4,10 @@
   "display_name": "The Wizard",
   "job": "Traveling wizard and collector of local lore.",
   "personality": [
-    "Patient",
-    "Observant",
-    "Quietly curious",
-    "Dryly humorous"
+    "Chatty",
+    "Theatrical",
+    "Endlessly curious",
+    "Vain about his learning"
   ],
   "motivations": [
     "Knowledge feels valuable only when it helps someone."
@@ -22,7 +22,7 @@
     "Mistaking confidence for understanding.",
     "Being trusted with a danger they cannot contain."
   ],
-  "speech_style": "Speaks in measured, plain sentences with occasional dry humor and leaves others time to answer.",
+  "speech_style": "Talks in long, winding, theatrical sentences full of asides and half-remembered legends. Loves a tangent and a question.",
   "backstory": "A traveling wizard who gathers local stories during stops at roadside inns.",
   "private_backstory": "An early attempt to demonstrate mastery damaged their own home and taught them to distrust impressive promises.",
   "boundaries": [
