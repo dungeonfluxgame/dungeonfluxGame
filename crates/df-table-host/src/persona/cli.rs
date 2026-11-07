@@ -37,6 +37,8 @@ use crate::command::{CommandError, bad_choice};
 use crate::dev::{DevError, ReplyError, read_text_file};
 use crate::dev_client::{self, get_json, post_json};
 use crate::dev_http::parse_body;
+use crate::imagegen::MAXIMUM_NAME_CHARS;
+use crate::imagegen::model::plain_name;
 
 /// Every `persona` verb, for the unknown-verb refusal and the help.
 pub const PERSONA_USAGE: &str = concat!(
@@ -100,7 +102,7 @@ pub const PERSONA_SAY_USAGE: &str =
 /// `persona converse`: the characters of the shown scene talk to each other.
 pub const PERSONA_CONVERSE_USAGE: &str = concat!(
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
-    "[model=<name>] [<topic...>]",
+    "[plate=<name>] [model=<name>] [<topic...>]",
 );
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
@@ -307,9 +309,12 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
 }
 
 fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
-    let (given, rest) = take_options(words, &["turns", "opener", "speak", "pace", "model"]);
+    let (given, rest) = take_options(
+        words,
+        &["turns", "opener", "speak", "pace", "plate", "model"],
+    );
     let mut turns = DEFAULT_TURNS;
-    let (mut opener, mut speak, mut pace) = (None, false, true);
+    let (mut opener, mut plate, mut speak, mut pace) = (None, None, false, true);
     for (key, value) in &given {
         match *key {
             "turns" => {
@@ -328,6 +333,18 @@ fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
             "opener" => opener = Some(id_word(value)?.to_string()),
             "speak" => speak = flag("speak", value)?,
             "pace" => pace = flag("pace", value)?,
+            "plate" => {
+                if !plain_name(value) {
+                    return Err(bad_choice(
+                        key,
+                        value,
+                        format!(
+                            "1 to {MAXIMUM_NAME_CHARS} letters, digits, '-' or '_', with no                              extension"
+                        ),
+                    ));
+                }
+                plate = Some((*value).to_owned());
+            }
             _ => {}
         }
     }
@@ -338,6 +355,7 @@ fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         model: asking_from(&given)?.model,
         speak,
         pace,
+        plate,
     }))
 }
 

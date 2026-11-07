@@ -23,8 +23,8 @@ use crate::imagegen::format::{format_ended, format_refusal};
 use crate::imagegen::request::{GenerateError, JobView};
 use crate::limits::UPLOAD_PIECE_BYTES;
 use crate::locate::request::LocateError;
-use crate::persona::ConverseError;
 use crate::persona::request::PersonaError;
+use crate::persona::{ConverseError, PlateStep};
 use crate::playground::{
     ChangeReply, ClientsError, FixtureNameError, PlaygroundChangeError, fixture_file_name,
 };
@@ -262,6 +262,17 @@ pub enum DevError {
         turn: u32,
         error: Box<DevError>,
     },
+    /// `persona converse plate=NAME` talked to the end and then failed to make the plate at
+    /// `step`; the lines said are all in `done`.
+    PlateStopped {
+        done: Vec<String>,
+        step: PlateStep,
+        error: Box<DevError>,
+    },
+    /// The image service ended a plate without a stored picture.
+    PlateNotStored {
+        name: String,
+    },
     /// The canvas answered with something this program does not understand. `reason` is why the
     /// answer did not read, when it was text that should have been JSON of a known shape.
     UnexpectedAnswer {
@@ -344,6 +355,15 @@ impl fmt::Display for DevError {
                     writeln!(formatter, "{line}")?;
                 }
                 write!(formatter, "turn {turn} failed: {error}")
+            }
+            Self::PlateStopped { done, step, error } => {
+                for line in done {
+                    writeln!(formatter, "{line}")?;
+                }
+                write!(formatter, "the plate failed at {}: {error}", step.key())
+            }
+            Self::PlateNotStored { name } => {
+                write!(formatter, "the picture '{name}' was not stored")
             }
             Self::UnexpectedAnswer {
                 status,

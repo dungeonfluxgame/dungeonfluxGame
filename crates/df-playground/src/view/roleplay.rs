@@ -13,6 +13,7 @@ use crate::dom::{append, element, set_style, text_element};
 use crate::fixture::TvScene;
 use crate::image_layout::{ImageLayout, anchored_place, marker_place, percent_text};
 use crate::lobby::model::{Bubble, BubbleTone, RoleplayScene, tail_of};
+use crate::overlay::Glyph;
 use crate::view::kit::photo;
 use crate::view::kit::{glass, glyph};
 
@@ -33,7 +34,12 @@ fn card_element(
     let root = element(document, "div", "rp")?;
     if let Some(title) = &card.title {
         let (wrapper, panel) = glass(document, "rp-title-wrap", "rp-title")?;
-        append(&panel, &glyph(document, title.glyph, "rp-title-glyph")?)?;
+        let glyph_class = if title.glyph == Glyph::Spinner {
+            "rp-title-glyph rp-title-spin"
+        } else {
+            "rp-title-glyph"
+        };
+        append(&panel, &glyph(document, title.glyph, glyph_class)?)?;
         append(
             &panel,
             &text_element(document, "span", "rp-title-text", &title.text)?,

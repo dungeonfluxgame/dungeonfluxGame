@@ -40,11 +40,13 @@ pub enum Glyph {
     Check,
     Lock,
     Pencil,
+    /// An open ring a page turns while something is being made.
+    Spinner,
 }
 
 impl Glyph {
     /// Every glyph, in the order of its drawing.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Sword,
         Self::Shield,
         Self::Bow,
@@ -62,6 +64,7 @@ impl Glyph {
         Self::Check,
         Self::Lock,
         Self::Pencil,
+        Self::Spinner,
     ];
 
     /// The name a scene file and the command line use.
@@ -84,6 +87,7 @@ impl Glyph {
             Self::Check => "check",
             Self::Lock => "lock",
             Self::Pencil => "pencil",
+            Self::Spinner => "spinner",
         }
     }
 
@@ -140,6 +144,7 @@ impl Glyph {
                 r#"<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>"#
             }
             Self::Pencil => r#"<path d="M4 20l1-5L16 4l4 4L9 19z"/><path d="M14 6l4 4"/>"#,
+            Self::Spinner => r#"<path d="M12 3a9 9 0 1 0 9 9"/>"#,
         }
     }
 }

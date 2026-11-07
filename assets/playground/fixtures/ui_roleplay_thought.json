@@ -7,15 +7,15 @@
     "caption": null,
     "backdrop": { "media": "innkeeper-table-plate-clean.webp", "caption": null },
     "card": null,
-    "pills": { "logo": "inline", "session": "The Ember Roads", "party": { "joined": 4, "capacity": 6 } },
+    "pills": { "logo": "inline" },
     "party": [],
     "seats": null,
     "roleplay": {
-      "title": { "glyph": "mug", "text": "Gather information" },
+      "title": null,
       "bubbles": [
         { "speaker": "Innkeeper", "tone": "thought", "line": "", "left_percent": 80, "top_percent": 20, "width_percent": 7, "tail_x_percent": 87, "tail_y_percent": 40, "anchor": { "region": "innkeeper", "shift_percent": -3 } }
       ],
-      "caption": "The party questions a local about recent events on the Ember Roads."
+      "caption": null
     },
     "elements": []
   },

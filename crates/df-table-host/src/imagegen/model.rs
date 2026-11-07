@@ -237,7 +237,7 @@ impl fmt::Display for GenerateRequestError {
 
 impl std::error::Error for GenerateRequestError {}
 
-fn plain_name(name: &str) -> bool {
+pub(crate) fn plain_name(name: &str) -> bool {
     let count = name.chars().count();
     (1..=MAXIMUM_NAME_CHARS).contains(&count)
         && name

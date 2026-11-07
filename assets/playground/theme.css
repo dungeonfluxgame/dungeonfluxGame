@@ -859,6 +859,8 @@ body {
 .rp-title-wrap { position: absolute; left: 2.4cqw; top: 9.6%; --ui-glow: #0000; }
 .rp-title { --ui-cut: .8cqw; --ui-edge: .12cqw; --ui-rim: linear-gradient(90deg, #ffffff44, #ffffff14 60%, #ffffff08); --ui-fill: linear-gradient(90deg, #0c0a10ee, #0c0a10a8); display: flex; align-items: center; gap: 1cqw; padding: .7cqw 2.2cqw .7cqw 1.2cqw; }
 .rp-title-glyph { flex: 0 0 auto; width: 2.4cqw; height: 2.4cqw; color: #f1c96a; stroke-width: 1.5; }
+.rp-title-spin { animation: pl-spin 1.2s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .rp-title-spin { animation: none; } }
 .rp-title-text { font: 500 2.1cqw/1.1 var(--ui-lobby-display); color: #f6efe0; white-space: nowrap; }
 .rp-bubble {
   --tail-h: 1.7cqw; --tail-w: 1.1cqw; --cut: 1.1cqw; --rim: #f6b14e; --glow: #ff9a2a88; --icon: #f1c96a;

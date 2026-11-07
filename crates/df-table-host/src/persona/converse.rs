@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use df_playground::copy::{ReadingPace, caption_dwell_ms, word_count};
 
+use super::plate::make_plate;
 use super::request::{PersonaSummary, SayRequest, Spoken};
 use super::routes::path;
 use crate::cast::request::CastList;
@@ -129,6 +130,11 @@ impl Table {
             });
         }
         Ok(Self { speakers })
+    }
+
+    /// The characters, left to right.
+    pub(super) fn speakers(&self) -> &[Speaker] {
+        &self.speakers
     }
 
     /// The speaker called `id`, or the first when none is named.
@@ -266,6 +272,9 @@ pub struct ConverseRequest {
     pub speak: bool,
     /// Wait after each line so it can be read or heard before the next replaces its bubble.
     pub pace: bool,
+    /// The name of a new tv backdrop to make from the talk once it is over, and put behind the
+    /// scene (see `plate`).
+    pub plate: Option<String>,
 }
 
 /// The speakers of the shown scene: its named characters that have a stored persona.
@@ -337,6 +346,18 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             line: spoken.said.line,
         });
         speaker = table.next_speaker(&history).clone();
+    }
+    if let Some(name) = &request.plate {
+        match make_plate(port, name, &table, &history).await {
+            Ok(summary) => transcript.push(summary),
+            Err((step, error)) => {
+                return Err(DevError::PlateStopped {
+                    done: transcript,
+                    step,
+                    error,
+                });
+            }
+        }
     }
     Ok(transcript.join("\n"))
 }

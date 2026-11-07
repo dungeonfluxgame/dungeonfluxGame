@@ -255,7 +255,7 @@ pub fn usage_text() -> String {
          other, one `persona say` per turn: the next speaker is whoever the last line \
          named (unless they spoke in the last three turns, then whoever has been quiet \
          longest), each line waits for its reading time or its voice (pace=false does \
-         not), and a topic is the first thing on the table.\
+         not), and a topic is the first thing on the table; plate=NAME then has the image          service paint a new tv backdrop from the talk (it takes minutes, the scene shows a          spinner meanwhile), scans it for the people and names them, and puts it behind the          scene (needs the imagery and locate settings of media generate and media locate).\
          \n      {PERSONA_ASK_USAGE}   puts a question to a character: the text service judges \
          whether the persona holds enough to answer, fills what it lacks by adding \
          detail only (recorded in personas/<id>.backfills.json; a failed backfill still \
