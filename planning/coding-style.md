@@ -122,8 +122,8 @@ In this repository:
 - Good: rules citation, `df-rules/src/ability_check.rs:1-5` (SRD 5.2.1 page 6, `SOURCE_REVISION`).
 - Good: lock-scope invariant, `fact_backfill.rs:319-321` (why an async lock spans a provider await and
   what cancellation does).
-- Good: a module doc saying what it never does, `image_edit.rs:1-6` (never retries, rewords, reroutes
-  or logs prompts).
+- Good: a module doc saying what it never does, `df-imagery/src/backends/api/openai.rs:1-6` (never
+  retries, rewords, reroutes or logs prompts).
 - Bad: `plates.rs:76` documents "what the plate director needs to know about one scene" on
   `photo_context`, which is something else.
 - Bad: `TODO(scene-items)`, `TODO(scene-state)` (`freeform_action.rs:1936-1986`) and `TODO(hub)`
@@ -192,7 +192,8 @@ specification of a judgement and is reviewed as one.
   inside rules, ledgers or anything a test must replay.
 - **One typed error enum per module or boundary,** with variants a caller can branch on. Callers never
   parse error text to decide behaviour.
-  - Good: `ImageEditError` (`image_edit.rs:209`): each variant says what the caller does next.
+  - Good: `SpeechError` (`df-table-host/src/speech/request.rs:387`): each variant is documented with
+    the condition that raises it, and none carries a recording, a transcript or text to voice.
   - Good: `AbilityCheckError` (`ability_check.rs:26`) names each invalid input.
   - Bad: `.map_err(|_| CreationError::Model)` (`place_creation.rs:116,135,154,167`) drops the cause.
     Keep it in the variant or record it in an audit line before mapping.
@@ -290,7 +291,7 @@ deviation is fixed when its module is touched.
   `JoinHandle`, an abort-on-drop guard) and a stated cancel point. The hub does not spawn; the worker
   that owns a `JoinSet` runs its jobs (`resources.rs` "Who runs the work"; `plates.rs:17`).
 - **Every provider and network call has a deadline** passed by the caller, covering connect, read and
-  total time (`image_edit.rs:261-276`). A call without a timeout is a defect.
+  total time (`df-imagery/src/backends/api/openai.rs:112-120`). A call without a timeout is a defect.
 - **Queues and channels are bounded** with a stated overflow rule: drop and ask again later
   (`QUEUE_CAPACITY`, `plates.rs:62`) or reject. Never unbounded.
 - **Reject stale completions.** A result carries the generation or operation id it started under; a late

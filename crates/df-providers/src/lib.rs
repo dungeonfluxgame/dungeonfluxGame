@@ -127,13 +127,6 @@ pub use embeddings::{
     NativeEmbeddingProvider,
 };
 #[cfg(not(target_arch = "wasm32"))]
-mod image_edit;
-#[cfg(not(target_arch = "wasm32"))]
-pub use image_edit::{
-    GeneratedImage, ImageBackground, ImageEdit, ImageEditError, ImageEditModel, ImageFormat,
-    ImageModeration, ImageQuality, ImageUsage, ReferenceImage,
-};
-#[cfg(not(target_arch = "wasm32"))]
 mod bfl_image;
 #[cfg(not(target_arch = "wasm32"))]
 mod fal_image;

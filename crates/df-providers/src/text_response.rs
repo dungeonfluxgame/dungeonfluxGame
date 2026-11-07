@@ -734,7 +734,8 @@ fn classify_supplier_status(status: u16, json: &Value) -> ProviderFailureClass {
     let kind = error
         .and_then(|error| error.get("type"))
         .and_then(Value::as_str);
-    // An account with no credit or quota left: waiting does not clear it (as image_edit.rs).
+    // An account with no credit or quota left: waiting does not clear it (as the image backend
+    // in df-imagery).
     let out_of_credit = [code, kind].into_iter().flatten().any(|reason| {
         matches!(
             reason,

@@ -51,7 +51,7 @@ Video, speech, music, uploaded-image admission, display-only renderer effects, a
 | `creator_portraits.rs` | Private draft operation, polling, acceptance, generation | Keeps authentication, draft UI state and acceptance; generation workflow delegates |
 | `creator_classification.rs` and `creator_portrait_startup.rs` | Image routing classification and dedicated provider configuration | Image-specific classification/route policy in `df-imagery`; bootstrap supplies typed config |
 | `character_clips.rs` | Direct OpenAI guard/fallen frame generation, own cache and prior-attempt fence | Frames use the same API; video encoding/generation stays with clips |
-| `df-providers/image_edit.rs` | OpenAI generation/edit | Private image backend inside `df-imagery` |
+| `df-providers/image_edit.rs` | OpenAI generation/edit | Done: relocated to `df-imagery/backends/api/openai.rs`; the old file was removed on 2026-11-06 (no callers) |
 | `df-providers/fal_image.rs` | FLUX Ultra/Kontext; BiRefNet alpha extraction | Private image backend/stage inside `df-imagery` |
 | `df-providers/bfl_image.rs` | BFL submit/poll/download | Private image backend inside `df-imagery` |
 | `df-providers/fal_media.rs::submit_image` | Generic FLUX Schnell path; current callers found only in tests | Private disabled-by-default backend or delete if no supported use remains; never retain a public bypass |

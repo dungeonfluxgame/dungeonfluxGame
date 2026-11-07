@@ -1,9 +1,10 @@
 //! Private API image backends: OpenAI, fal and BFL execution.
 //!
 //! This module owns the relocated supplier execution previously in
-//! `df-providers::image_edit`, `df-providers::fal_image` and
-//! `df-providers::bfl_image`. Old files stay untouched until the coordinator
-//! migrates callers and removes the bypass. Nothing here is public outside
+//! `df-providers::image_edit` (removed 2026-11-06: it had no callers left),
+//! `df-providers::fal_image` and `df-providers::bfl_image`. The two latter
+//! files stay untouched until the coordinator migrates callers and removes the bypass. Nothing
+//! here is public outside
 //! `df-imagery`: the later service exposes behavior, never these executors.
 //!
 //! What this module never does: retry, reword after refusal, reroute to
