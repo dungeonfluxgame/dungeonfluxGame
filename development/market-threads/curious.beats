@@ -1,11 +1,11 @@
 # Small talk and trade questions: does Mara answer like a person who has kept this stall for years?
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
 elf | You are at Mara's fruit stall in the town market with the warrior. Greet her and ask how long she has kept this stall.
-elf | Ask which of her fruit is best this week, and why.
+elf | Ask Mara, as a question to her, which of her fruit is best this week, and why.
 warrior | Pick up a pear and ask, bluntly, how you tell if it is ripe.
-elf | Ask whether she grows the fruit herself or buys it in.
-elf | Ask what market days are like when it rains.
-warrior | Ask which keeps longer on a march, apples or plums.
-elf | Ask her what she would pack for two travellers on a week's road.
+elf | Ask Mara, as a question to her, whether she grows the fruit herself or buys it in.
+elf | Ask Mara, as a question to her, what market days are like when it rains.
+warrior | Ask Mara, as a question to her, which keeps longer on a march, apples or plums.
+elf | Ask Mara, as a question to her, what she would pack for two travellers on a week's road.
 warrior | Say that sounds right and ask what it all comes to.
 elf | Thank her and say you will tell other travellers about her stall.

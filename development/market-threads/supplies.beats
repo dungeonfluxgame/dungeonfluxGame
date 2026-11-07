@@ -1,10 +1,10 @@
 # Provisioning: does she sell like a trader (quantities, a mix, totals from the stall's prices)?
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
 elf | You are at Mara's fruit stall in the town market with the warrior. Explain you are two travellers leaving for a week on the north road and ask what she sells.
-warrior | Ask what each costs.
-elf | Ask how many pieces of fruit two people need for a week on the road.
+warrior | Ask Mara, as a question to her, what each costs.
+elf | Ask Mara, as a question to her, how many pieces of fruit two people need for a week on the road.
 warrior | Say you will take ten apples and ask what that comes to.
 elf | Add five pears and ask for the new total.
-warrior | Ask if she will round it down since you are taking so much.
-elf | Ask whether plums would travel as well as pears.
+warrior | Ask Mara, as a question to her, if she will round it down since you are taking so much.
+elf | Ask Mara, as a question to her, whether plums would travel as well as pears.
 elf | Pay and ask her to pack everything for the road.

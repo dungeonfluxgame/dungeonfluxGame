@@ -91,9 +91,10 @@ const SAY_INSTRUCTION: &str = concat!(
     "say again what was already said. repeats_recent is true only when the line reuses this ",
     "character's OWN earlier wording in recent (a phrase, a tic, an opening or a sentence shape ",
     "they already used) or copies another speaker's sentence near verbatim; say what in ",
-    "follows_intent is false when now.intent is given and the line does not carry it out (an ",
-    "intent to ask that is not put as a question, or that the line answers itself); say how in ",
-    "intent_miss. With no intent it is true. ",
+    "follows_intent is false when now.intent is given and the line does not carry it out: an ",
+    "intent to ask is missed when the line states the answer instead of asking, even when the ",
+    "character already knows it, and when it is not put as a question to that person; say how ",
+    "in intent_miss. With no intent it is true. ",
     "repeat_reason. Answering a greeting, or naming an item, a name or a price someone just said, ",
     "is not a repeat. ",
     "When asked_by is given the line is said to that person: judge the triggers by what the ",
@@ -638,7 +639,7 @@ fn fired_emotional<'a>(
 /// Why the line must be worded again because the total it states is not one the stall charges:
 /// the clamp would change it, so the spoken number and the held quote would disagree.
 fn quote_retry_reason(app: &AppState, speaker: &str, records: &[QuoteRecord]) -> Option<String> {
-    let off: Vec<String> = records
+    let mut off: Vec<String> = records
         .iter()
         .filter_map(|record| {
             let proposed = u32::try_from(record.total_cp).ok()?;
@@ -653,6 +654,8 @@ fn quote_retry_reason(app: &AppState, speaker: &str, records: &[QuoteRecord]) ->
             })
         })
         .collect();
+    // The model may list the same lot twice; it is named once.
+    off.dedup();
     (!off.is_empty()).then(|| format!("{}: say those totals", off.join("; ")))
 }
 

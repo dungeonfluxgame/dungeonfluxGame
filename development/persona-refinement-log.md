@@ -221,3 +221,16 @@ intent to ask is not put as a question or the line answers it itself) and `inten
 gets the one retry, like a repeat or a wrong total. A model judgement, never a string test.
 Open: the price retry trusts the quantity the model reports (one first answer said 27 cp for 5
 apples; the final line dropped the number, so nothing wrong was said).
+
+## Run 14 and direct checks (intent)
+
+The intent self-check as first written let "Apples are three copper each" pass as carrying out
+"Ask what each costs" (the warrior knows the posted prices). Sharpened: an ask is missed when the
+line states the answer instead of asking, even when the character knows it. Direct calls then:
+the elf asked in 2 of 2 ("How many pieces would you recommend for two people on the road for a
+week?"); the warrior still stated prices in 2 of 2, his persona speaks "plainly, then stops".
+With the beat worded as data ("Ask Mara, as a question to her, what each of her fruits costs")
+he asked in 2 of 2 ("Mara, what do your apples, pears, and plums cost each?"). Lesson: an ask
+beat names who is asked and that it is a question; the beat files are reworded so (data only).
+Also: the price retry reason named the same lot twice when the model listed it twice; now named
+once. Her totals in run 14 were again right after the retry (fourteen apples 38, not 42).

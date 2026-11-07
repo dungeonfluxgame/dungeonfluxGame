@@ -3,10 +3,10 @@
 elf | You are at Mara's fruit stall in the town market with the warrior, buying fruit for the road north. Greet her warmly and ask her name, in your own words.
 elf | Pick up an apple and ask her where her apples come from.
 warrior | Step in gruffly: ask if the apples will survive a week on the road.
-elf | Ask how much one apple costs.
-elf | Ask for a discount on just that one apple.
+elf | Ask Mara, as a question to her, how much one apple costs.
+elf | Ask Mara, as a question to her, for a discount on just that one apple.
 warrior | Grumble that you are not made of coin; one apple at that price is robbery.
 elf | Offer to buy five apples instead and ask for a discount on the five.
-elf | Ask what the five apples will cost with her discount.
+elf | Ask Mara, as a question to her, what the five apples will cost with her discount.
 warrior | Grunt that five is fine and you will carry the sack; ask her to pack them.
 elf | Thank her and ask once more for her name so you can find the stall again.
