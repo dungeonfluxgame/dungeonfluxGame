@@ -286,10 +286,17 @@ pub(super) async fn consider(
 ) -> Result<Considered, PersonaError> {
     let persona = load_persona(app, &request.character).await?;
     let filled = fill_gaps(app, route, scene, persona, request, at_ms).await;
+    // What the persona lacks and the backfill did not fill (it failed or was not asked) is told
+    // to the line as not established, so the line cannot invent a fact the persona does not hold.
+    let not_established: Vec<String> = match filled.outcome {
+        BackfillOutcome::Backfilled { .. } | BackfillOutcome::NotNeeded => Vec::new(),
+        _ => filled.gaps.iter().map(|gap| gap.topic.clone()).collect(),
+    };
     let occasion = Occasion {
         situation: request.situation.as_deref().unwrap_or(""),
         question: Some(&request.question),
         guidance: request.guidance.as_ref(),
+        not_established: &not_established,
     };
     let said = say_line(app, route, scene, &filled.persona, occasion).await?;
     Ok(Considered {

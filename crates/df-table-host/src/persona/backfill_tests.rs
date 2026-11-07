@@ -417,3 +417,48 @@ async fn a_strict_latitude_refuses_a_new_secret_and_the_line_is_still_said() {
     assert_eq!(host.file(PERSONA_FILE), before, "no secret was written");
     assert_eq!(host.file(RECORD_FILE), None, "and no record");
 }
+
+#[tokio::test]
+async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established() {
+    // A failed backfill: the line is asked with the topic the persona still lacks.
+    let failed = scripted_host(vec![
+        coverage_answer(&[("backstory", "childhood"), ("backstory", "first horse")]),
+        json!({"edits": "not a list"}),
+        line_answer("I do not recall."),
+    ])
+    .await;
+    store_innkeeper(&failed);
+    done(ask(&failed, json!({})).await);
+    assert_eq!(
+        failed.facts_of(2)["not_established"],
+        json!(["childhood", "first horse"])
+    );
+    assert!(failed.instructions_of(2).contains("not_established"));
+    assert!(failed.instructions_of(2).contains("invent no"));
+    // A backfill that was not asked for leaves the same topics not established.
+    let not_asked = scripted_host(vec![
+        coverage_answer(&[("backstory", "childhood")]),
+        line_answer("I do not recall."),
+    ])
+    .await;
+    store_innkeeper(&not_asked);
+    done(ask(&not_asked, json!({"backfill": false})).await);
+    assert_eq!(
+        not_asked.facts_of(1)["not_established"],
+        json!(["childhood"])
+    );
+    // A backfill that filled the gap, and a persona that held enough, leave nothing.
+    let filled = scripted_host(vec![
+        coverage_answer(&[("backstory", "childhood")]),
+        append_backstory_answer("She learned to brew ale at nine."),
+        line_answer("Above the inn, love."),
+    ])
+    .await;
+    store_innkeeper(&filled);
+    done(ask(&filled, json!({})).await);
+    assert_eq!(filled.facts_of(2)["not_established"], json!([]));
+    let covered = scripted_host(vec![coverage_answer(&[]), line_answer("Above the inn.")]).await;
+    store_innkeeper(&covered);
+    done(ask(&covered, json!({})).await);
+    assert_eq!(covered.facts_of(1)["not_established"], json!([]));
+}
