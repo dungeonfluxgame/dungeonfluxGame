@@ -701,7 +701,6 @@ fn every_error() -> Vec<SpeechError> {
         SpeechError::Cue {
             cause: PlaygroundChangeError::InvalidBody(body_error()),
         },
-        SpeechError::LineWithheld,
         SpeechError::Stopped,
     ]
 }

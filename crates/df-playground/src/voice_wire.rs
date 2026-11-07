@@ -122,12 +122,11 @@ pub enum SpeechErrorKind {
     ClipUnstored,
     ClipsUnreadable,
     Cue,
-    LineWithheld,
     Stopped,
 }
 
 impl SpeechErrorKind {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 22] = [
         Self::InvalidBody,
         Self::InvalidQuery,
         Self::NotConfigured,
@@ -149,7 +148,6 @@ impl SpeechErrorKind {
         Self::ClipUnstored,
         Self::ClipsUnreadable,
         Self::Cue,
-        Self::LineWithheld,
         Self::Stopped,
     ];
 
@@ -176,7 +174,6 @@ impl SpeechErrorKind {
             Self::ClipUnstored => "clip_unstored",
             Self::ClipsUnreadable => "clips_unreadable",
             Self::Cue => "cue",
-            Self::LineWithheld => "line_withheld",
             Self::Stopped => "stopped",
         }
     }

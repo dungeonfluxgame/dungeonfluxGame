@@ -344,5 +344,11 @@ fn a_face_box_runs_from_the_head_to_the_chin_inside_the_region() {
     assert!(face.right_permille <= region.right_permille());
     assert!(face.left_permille < region.head_x_permille());
     assert!(face.right_permille > region.head_x_permille());
+    // The box reaches past the chin: three drops from the head to the face point.
+    let drop = face_y - region.head_y_permille();
+    assert_eq!(
+        face.bottom_permille,
+        (region.head_y_permille() + 3 * drop).min(region.bottom_permille())
+    );
     // TODO(DEV-12): cover a region whose box is narrower than its face and a cut-off figure.
 }

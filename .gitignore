@@ -93,3 +93,6 @@ development/evidence/journey/journal.lock
 
 # Owner-only private notes (account logins, recovery codes); never committed
 /private/
+
+# Voice clips the host synthesises (regenerable)
+assets/playground/media/voice-*.mp3

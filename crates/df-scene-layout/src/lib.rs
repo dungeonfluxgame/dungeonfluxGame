@@ -720,8 +720,11 @@ pub fn point_of(region: &SceneRegion, point: CharacterPoint) -> (u16, u16) {
 }
 
 /// Where a character's face is, in thousandths of the picture: a box from the top of the head
-/// down to the chin (twice the drop from the head to the face point), as wide as a face that tall
-/// in this picture's proportions, kept inside the region's box. A bubble may never cover it.
+/// down past the chin and jaw (three times the drop from the head to the face point), as wide as
+/// a head that tall in this picture's proportions, kept inside the region's box. The
+/// extra half face under the chin is what a seated, leaning figure's chin really reaches in a
+/// scanned picture (measured on the elf of `innkeeper-table-plate-clean`), so a bubble hung under
+/// the box clears the whole face. A bubble may never cover it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FaceBox {
     pub left_permille: u16,
@@ -730,8 +733,13 @@ pub struct FaceBox {
     pub bottom_permille: u16,
 }
 
-/// A face is this wide for its height (chin to the top of the head), in thousandths.
-const FACE_WIDTH_PER_HEIGHT_PERMILLE: u32 = 820;
+/// The face box is this wide for its height (top of the head to below the chin), in thousandths.
+/// It is generous on purpose: a head turned in profile, with hair and a beard, is wider than a
+/// face seen straight on (measured on the innkeeper of `innkeeper-table-plate-clean`, whose
+/// profile reaches well past a narrow box).
+const FACE_WIDTH_PER_HEIGHT_PERMILLE: u32 = 1200;
+/// How many head-to-face drops the face box reaches below the top of the head: the chin and jaw.
+const CHIN_AND_JAW_DROPS: u16 = 3;
 
 /// The face box of `region` in a picture `width_px` by `height_px`.
 pub fn face_box(region: &SceneRegion, width_px: u32, height_px: u32) -> FaceBox {
@@ -739,7 +747,7 @@ pub fn face_box(region: &SceneRegion, width_px: u32, height_px: u32) -> FaceBox 
     let top = region.head_y_permille;
     let drop = face_y.saturating_sub(top);
     let bottom = top
-        .saturating_add(drop.saturating_mul(2))
+        .saturating_add(drop.saturating_mul(CHIN_AND_JAW_DROPS))
         .min(region.bottom_permille)
         .max(top.saturating_add(1));
     let height_px_of_face = u64::from(bottom - top) * u64::from(height_px) / 1000;

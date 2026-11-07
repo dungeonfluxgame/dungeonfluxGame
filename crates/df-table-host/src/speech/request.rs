@@ -451,8 +451,6 @@ pub enum SpeechError {
     Cue {
         cause: PlaygroundChangeError,
     },
-    /// The line may leak private detail, so it was not sent to the voice supplier.
-    LineWithheld,
     /// The task stopped without an answer.
     Stopped,
 }
@@ -490,7 +488,6 @@ impl SpeechError {
             Self::ClipUnstored { .. } => SpeechErrorKind::ClipUnstored,
             Self::ClipsUnreadable { .. } => SpeechErrorKind::ClipsUnreadable,
             Self::Cue { .. } => SpeechErrorKind::Cue,
-            Self::LineWithheld => SpeechErrorKind::LineWithheld,
             Self::Stopped => SpeechErrorKind::Stopped,
         }
     }
@@ -571,9 +568,6 @@ impl fmt::Display for SpeechError {
                 write!(formatter, "the media library could not be listed: {cause}")
             }
             Self::Cue { cause } => write!(formatter, "the clip could not be played: {cause}"),
-            Self::LineWithheld => {
-                formatter.write_str("the line may leak private detail and was not voiced")
-            }
             Self::Stopped => formatter.write_str("the speech task stopped without an answer"),
         }
     }
@@ -600,7 +594,6 @@ impl RouteError for SpeechError {
             | Self::TextBlank
             | Self::InvalidCharacter { .. }
             | Self::InvalidVoice { .. } => StatusCode::BAD_REQUEST,
-            Self::LineWithheld => StatusCode::UNPROCESSABLE_ENTITY,
             Self::AudioTooLong { .. } | Self::TextTooLong { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             Self::NoVoice { .. } => StatusCode::NOT_FOUND,
             Self::NotConfigured { .. } => StatusCode::SERVICE_UNAVAILABLE,

@@ -6,18 +6,18 @@
     "gaps": [
       {
         "field": "backstory",
-        "topic": "Where she grew up"
+        "topic": "Where he grew up"
       },
       {
         "field": "backstory",
-        "topic": "What her childhood was like"
+        "topic": "What his childhood was like"
       }
     ],
     "edits": [
       {
         "op": "append_text",
         "field": "backstory",
-        "text": "She grew up above the Ember Roads inn. Her childhood mixed kitchen chores with games in the yard; she learned sums by counting guests' change and bargaining by listening at the bar."
+        "text": "He grew up above the Ember Roads inn. His childhood mixed kitchen chores with games in the yard; he learned sums by counting guests' change and bargaining by listening at the bar."
       }
     ],
     "guidance": {
@@ -25,7 +25,7 @@
       "phase": null,
       "beat": null,
       "hooks": [
-        "her missing brother"
+        "his missing brother"
       ],
       "threads": [],
       "must_establish": [],

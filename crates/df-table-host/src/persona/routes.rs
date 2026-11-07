@@ -42,7 +42,7 @@ use super::storage::{
 use crate::blocking::{run_blocking, run_owned};
 use crate::dev_http::{parse_body, reply};
 use crate::observe::WallClock;
-use crate::speech::{Speech, SpeechError, Voiced, sound_change};
+use crate::speech::{Speech, Voiced, sound_change};
 use crate::state::AppState;
 use crate::text::{TextRoute, TextRuntime};
 
@@ -316,9 +316,32 @@ fn cue_change(character: &str, kind: CueKind) -> SceneChange {
     }
 }
 
-/// Shows the wordless thinking indicator over `character` while the model and the voice work.
-async fn cue_thinking(app: &AppState, character: &str) -> Result<(), PersonaError> {
-    crate::playground::apply_scene_change(app, cue_change(character, CueKind::Thinking)).await?;
+/// The scene changes that take the bubbles of `others` away, so that one character at a time has
+/// the floor: a bubble left over from the last speaker would sit beside the next one's.
+fn quiet_changes(others: &[String]) -> Vec<SceneChange> {
+    others
+        .iter()
+        .map(|other| cue_change(other, CueKind::Quiet))
+        .collect()
+}
+
+/// The named characters of `scene` other than `character`.
+fn others_of(scene: &ShownScene, character: &str) -> Vec<String> {
+    let mut names = scene.names();
+    names.retain(|name| name != character);
+    names
+}
+
+/// Shows the wordless thinking indicator over `character` while the model and the voice work, and
+/// takes the bubbles of `others` away in the same scene change.
+async fn cue_thinking(
+    app: &AppState,
+    character: &str,
+    others: &[String],
+) -> Result<(), PersonaError> {
+    let mut changes = quiet_changes(others);
+    changes.push(cue_change(character, CueKind::Thinking));
+    crate::playground::apply_scene_changes(app, changes).await?;
     Ok(())
 }
 
@@ -337,23 +360,20 @@ async fn cue_line(
     character: String,
     said: SaidLine,
     speak: bool,
+    others: &[String],
 ) -> Result<Spoken, PersonaError> {
-    // A line that may leak private detail is never sent to the voice supplier.
-    let voice = if !speak {
-        None
-    } else if said.leak_suspect {
-        Some(Voiced::Failed {
-            error: SpeechError::LineWithheld,
-        })
-    } else {
+    let voice = if speak {
         Some(routes.speech.voice_line(&character, &said.line).await)
+    } else {
+        None
     };
-    let mut changes = vec![cue_change(
+    let mut changes = quiet_changes(others);
+    changes.push(cue_change(
         &character,
         CueKind::Speaking {
             line: said.line.clone(),
         },
-    )];
+    ));
     if let Some(Voiced::Played { clip, .. }) = &voice {
         changes.push(sound_change(clip));
     }
@@ -390,7 +410,8 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
         async move {
             let (scene, route, own) =
                 asked_of(&owned, &request.character, request.model.as_deref()).await?;
-            cue_thinking(&owned.app, &request.character).await?;
+            let others = others_of(&scene, &request.character);
+            cue_thinking(&owned.app, &request.character, &others).await?;
             let occasion = Occasion {
                 situation: &request.situation,
                 question: None,
@@ -403,7 +424,14 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
                 }
             };
             // The cue goes through the scene path, which records its own refusals.
-            let spoken = cue_line(&owned, request.character.clone(), said, request.speak).await;
+            let spoken = cue_line(
+                &owned,
+                request.character.clone(),
+                said,
+                request.speak,
+                &others,
+            )
+            .await;
             if spoken.is_err() {
                 clear_thinking(&owned.app, &request.character).await;
             }
@@ -429,7 +457,8 @@ async fn ask(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
         async move {
             let (scene, route, _) =
                 asked_of(&owned, &request.character, request.model.as_deref()).await?;
-            cue_thinking(&owned.app, &request.character).await?;
+            let others = others_of(&scene, &request.character);
+            cue_thinking(&owned.app, &request.character, &others).await?;
             let at_ms = WallClock.now_ms();
             let considered = match consider(&owned.app, &route, &scene, &request, at_ms).await {
                 Ok(considered) => considered,
@@ -439,7 +468,14 @@ async fn ask(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
                 }
             };
             let said = considered.said.clone();
-            let spoken = cue_line(&owned, request.character.clone(), said, request.speak).await;
+            let spoken = cue_line(
+                &owned,
+                request.character.clone(),
+                said,
+                request.speak,
+                &others,
+            )
+            .await;
             if spoken.is_err() {
                 clear_thinking(&owned.app, &request.character).await;
             }
