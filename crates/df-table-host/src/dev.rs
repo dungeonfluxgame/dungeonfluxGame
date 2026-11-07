@@ -254,6 +254,8 @@ pub enum DevError {
     ReplOutsideCommandLine,
     /// A command of the first playable path refused by the command line itself.
     Play(PlayError),
+    /// `move` whose transition failed at a stage; the records up to it are in the report.
+    Move(crate::movement::cli::MoveError),
     /// `persona converse` that cannot start: too few characters, or an opener who is not one.
     Converse(ConverseError),
     /// `persona converse` stopped at `turn`: the lines said before it, and why. They were said.
@@ -349,6 +351,7 @@ impl fmt::Display for DevError {
                 formatter.write_str("repl is started from the command line: df-table dev repl")
             }
             Self::Play(error) => write!(formatter, "{error}"),
+            Self::Move(error) => write!(formatter, "{error}"),
             Self::Converse(error) => write!(formatter, "{error}"),
             Self::ConverseStopped { done, turn, error } => {
                 for line in done {
@@ -790,6 +793,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
         Command::MediaLocate(command) => crate::locate::cli::run(port, command).await,
         Command::Cast(command) => crate::cast::cli::run(port, command).await,
         Command::Persona(command) => crate::persona::cli::run(port, command).await,
+        Command::Move(command) => crate::movement::cli::run(port, command).await,
         Command::Speech(command) => crate::speech::cli::run(port, command).await,
         Command::Clients => reads::show_clients(port).await,
         Command::ClientShow(client) => reads::show_client(port, &client).await,

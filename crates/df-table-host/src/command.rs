@@ -133,6 +133,8 @@ pub enum Command {
     Cast(crate::cast::CastCommand),
     /// The personas of characters: list, show, write, set a field or remove.
     Persona(crate::persona::PersonaCommand),
+    /// A scene transition's stages from a movement line: `move say|interpret|design|brief`.
+    Move(crate::movement::cli::MoveCommand),
     /// Voice chat: the speech service's status, a spoken line, a transcript, voices and clips.
     Speech(crate::speech::SpeechCommand),
     /// What each open page says it is showing and playing.
@@ -484,7 +486,12 @@ pub fn parse(words: &[String]) -> Result<Command, CommandError> {
     match name.as_str() {
         "spawn" => spawn(rest),
         "set" => set(rest),
-        "move" => move_element(rest),
+        "move" => match rest.first().map(String::as_str) {
+            Some("say" | "act" | "interpret" | "design" | "brief") => {
+                crate::movement::cli::parse(rest).map(Command::Move)
+            }
+            _ => move_element(rest),
+        },
         "travel" => travel(rest),
         "rotate" => rotate(rest),
         "stop" => each_id(rest, STOP_USAGE, |id| EffectRequest::Stop {

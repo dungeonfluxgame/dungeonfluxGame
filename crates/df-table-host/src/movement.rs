@@ -10,6 +10,7 @@
 //! and none of them calls a provider; the provider calls belong to the dev verbs and the host.
 
 pub mod brief;
+pub mod cli;
 pub mod design;
 pub mod interpret;
 pub mod transition;

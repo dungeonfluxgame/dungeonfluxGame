@@ -91,7 +91,7 @@ pub(super) fn picture_prompt(table: &Table, history: &[Turn]) -> String {
 }
 
 /// The step that failed and why.
-pub(super) type PlateFailure = (PlateStep, Box<DevError>);
+pub(crate) type PlateFailure = (PlateStep, Box<DevError>);
 
 fn at(step: PlateStep) -> impl FnOnce(DevError) -> PlateFailure {
     move |error| (step, Box::new(error))
@@ -125,20 +125,41 @@ async fn current_title(port: u16) -> Result<Option<SceneTitle>, DevError> {
         .and_then(|card| card.title.clone()))
 }
 
-/// Makes the plate `name` from the talk and puts it behind the scene. The spinner title is shown
-/// from the start and the title that was there is put back at the end, also when a step failed;
-/// the failure is that of the step, and a title that could not be put back is not hidden by it.
+/// Makes the plate `name` from the talk and puts it behind the scene: the prompt is the talk's
+/// (see `picture_prompt`) and the characters are the table's.
 pub(super) async fn make_plate(
     port: u16,
     name: &str,
     table: &Table,
     history: &[Turn],
 ) -> Result<String, PlateFailure> {
+    let characters = table
+        .speakers()
+        .iter()
+        .map(|speaker| CharacterRequest {
+            name: speaker.id.clone(),
+            description: Some(speaker.job.clone()),
+            portrait: None,
+        })
+        .collect();
+    deliver_plate(port, name, &picture_prompt(table, history), characters).await
+}
+
+/// Makes the plate `name` from `prompt` and puts it behind the scene, with `characters` located and
+/// named in it. The spinner title is shown from the start and the title that was there is put back
+/// at the end, also when a step failed; the failure is that of the step, and a title that could not
+/// be put back is not hidden by it.
+pub(crate) async fn deliver_plate(
+    port: u16,
+    name: &str,
+    prompt: &str,
+    characters: Vec<CharacterRequest>,
+) -> Result<String, PlateFailure> {
     let before = current_title(port).await.map_err(at(PlateStep::Generate))?;
     change(port, &title_change(UPDATING_TITLE, Glyph::Spinner))
         .await
         .map_err(at(PlateStep::Generate))?;
-    let made = build(port, name, table, history).await;
+    let made = build(port, name, prompt, characters).await;
     let (title, glyph) = before.map_or((UPDATED_TITLE.to_owned(), Glyph::Check), |title| {
         (title.text, title.glyph)
     });
@@ -153,11 +174,11 @@ pub(super) async fn make_plate(
 async fn build(
     port: u16,
     name: &str,
-    table: &Table,
-    history: &[Turn],
+    prompt: &str,
+    characters: Vec<CharacterRequest>,
 ) -> Result<String, PlateFailure> {
     let request = GenerateRequest {
-        prompt: picture_prompt(table, history),
+        prompt: prompt.to_owned(),
         name: name.to_owned(),
         purpose: Some(Purpose::Plate),
         aspect: None,
@@ -186,15 +207,6 @@ async fn build(
     .await
     .map_err(at(PlateStep::Locate))?;
     let located = reply_value(located).map_err(at(PlateStep::Locate))?;
-    let characters = table
-        .speakers()
-        .iter()
-        .map(|speaker| CharacterRequest {
-            name: speaker.id.clone(),
-            description: Some(speaker.job.clone()),
-            portrait: None,
-        })
-        .collect();
     let identified: LocateReply<IdentifiedLayout> = post_json(
         port,
         locate_path::LOCATE_IDENTIFY,

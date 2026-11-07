@@ -264,11 +264,15 @@ capacity promises; selected bounds and payment/usage models require verified gat
   integration hooks and their owners, verification, and relevant known pitfalls.
   Preserve that brief for the attempt. Report missing prerequisites precisely;
   do not invent public contracts or silently substitute production stubs.
-- Use isolated worktrees for source implementation. Include shared schemas,
-  composition files, manifests, and layout foundations in edit-area conflicts.
-  Re-read affected source before edits or resumed work, and stage only the task's
-  paths. The coordinator
-  integrates sequentially and owns authoritative task state.
+- Never use git worktrees (or the Agent tool's `isolation: "worktree"`). All agents
+  work in the one shared checkout. Give each agent its own files, and include shared
+  schemas, composition files, manifests, and layout foundations in edit-area conflicts
+  so two agents never edit the same path. Do not clobber each other: before editing,
+  re-read the file as it is now and change only your task's paths with exact edits;
+  never reset, checkout, stash, or rewrite files you do not own; keep your files
+  compiling at every save, since a broken file stops everyone's build. A compile error
+  in a file you do not own is its owner's to fix: wait and retry, do not edit it.
+  The coordinator integrates sequentially and owns authoritative task state.
 - Make connecting work explicit. Registered executors, reachable callers,
   complete projections, mounted views, and real asset bytes are part of an
   integrated feature. A tested helper alone does not prove the feature works.

@@ -10,6 +10,7 @@ use df_playground::limits::{
 use super::media_generate::MEDIA_GENERATE_USAGE;
 use crate::cast::cli::{CAMERA_ON_USAGE, CAST_USAGE, CUE_USAGE};
 use crate::locate::cli::MEDIA_LOCATE_USAGE;
+use crate::movement::cli::MOVEMENT_USAGE;
 use crate::persona::cli::{
     GUIDANCE_OPTIONS, PERSONA_ADD_USAGE, PERSONA_ASK_USAGE, PERSONA_BACKFILL_USAGE,
     PERSONA_BACKFILLS_USAGE, PERSONA_BEHAVIOR_USAGE, PERSONA_CONVERSE_USAGE,
@@ -121,6 +122,11 @@ pub fn usage_text() -> String {
          field\n      called x or y can be changed with set)\n\
          \n  {SET_USAGE}\n      change fields of an element\n\
          \n  {MOVE_USAGE}\n      move an element at once (x 0 to 100, y 0 to 56.25)\n\
+         \n  {MOVEMENT_USAGE}\n      run a movement line through the scene transition: say runs every \
+         stage,\n      interpret, design and brief stop after that stage (no provider is called); \
+         plate=NAME\n      makes the new backdrop with the image service and shows the characters \
+         in it; act has\n      the character say a line (through persona say) and runs that line \
+         as a move, adding the\n      character to the movers when the line says \"I\" or \"we\"\n\
          \n  {TRAVEL_USAGE}\n      send an element toward a point; the host moves it a little \
          every tick, so it\n      glides there on its own (speed in canvas units per second, \
          default 20)\n\

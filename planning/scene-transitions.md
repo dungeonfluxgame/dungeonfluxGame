@@ -80,6 +80,28 @@ player line --> Jev (INTERPRET) --> MoveIntent --> rules (CHECK) --> APPLY: stat
 - **Flexible by data:** the label list, the design template and the look sheets are
   content files, not code.
 
+## Extensible for later gameplay
+
+The path is built for movement first, and later features (combat, social scenes, investigation,
+weather, time of day) must plug in without rewriting it. Every stage therefore has a seam:
+
+- **Interpret:** the label table (verb words and kinds) is data, loaded from a content file with a
+  built-in default; the closed schema and the instruction are generated from the label list, so a
+  new label is a table row. The stand-in reader and the real Jev call implement one small trait.
+- **Design:** `SceneDesigner` is a trait, so the narrative engine implements it later; the
+  default `TableDesigner` reads a `DesignTable` content file. `DesignContext` has a `Default`
+  and is built with struct-update syntax, so a new input (time, threat, weather) is a new field
+  with a default, not a changed signature.
+- **Brief:** the art direction is a `BriefStyle` value with a default, so a campaign or scene can
+  change it; look sheets are a content file; references are a list, so another kind of reference
+  (a prop, a place) is another card type, not another path.
+- **Transition:** stages and deadlines are data on the transition, records are plain typed
+  values, and the audit line is one formatter, so a new stage or consumer (telemetry, a replay
+  tool) reads the same records.
+- **Everywhere:** no hard-coded caps that block dev work, no `match` on strings, typed errors
+  with stable keys, and nothing in a stage that knows about movement beyond its own file.
+  Anything a later feature would need to vary is a field, a table row or a trait impl.
+
 ## Build order
 
 1. The typed `MoveIntent`, `SceneDesign` and `PlateBrief`, and the `move` dev verbs on

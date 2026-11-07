@@ -47,7 +47,7 @@ mod edit_verbs;
 mod format;
 mod generate;
 mod guard;
-mod options;
+pub(crate) mod options;
 mod plate;
 pub mod request;
 pub mod routes;
@@ -55,6 +55,7 @@ mod storage;
 
 pub use self::cli::{PersonaCommand, parse};
 pub use self::converse::ConverseError;
+pub(crate) use self::plate::deliver_plate;
 pub use self::plate::PlateStep;
 pub use self::request::{PersonaError, PersonaSummary};
 pub use self::routes::router_with;
