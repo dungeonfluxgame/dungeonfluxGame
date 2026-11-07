@@ -14,9 +14,9 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
-## 2026-11-06T23:47:06-05:00 to 2026-11-07T02:19:12-05:00
+## 2026-11-06T23:47:06-05:00 to 2026-11-07T02:27:04-05:00
 
-Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..f470261f82b3671e9836cf0e170c70f4840de226
+Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..e8a65bee70d1c91f94056d13d2be632ca9975037
 
 - a8fc2ff9 - CHANGELOG: record the wave 4 follow-through commit
 - f5ec7a30 - Speech switches default off; the last speech bubble stays until the next; no pop-in replay
@@ -39,6 +39,9 @@ Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..f470261f82b3671e9836cf0e170c70f
 - 637a422c - persona converse: fix what its independent review found
 - c2f0dbbc - CHANGELOG: record the persona test and converse review commits
 - f470261f - Persona hardening, spend switches checked at the one supplier call, bubbles over the caption
+- b5d17968 - CHANGELOG: record the persona hardening and bubble layer commit
+- d14720d3 - Handoff: persona hardening, spend switches and the bubble layer
+- e8a65bee - Persona and backfill: pin the guidance path and non-ASCII backfill; model_not_found on the HTTP backend
 
 Reviewed read-only against AGENTS.md; behavior tests owed are marked TODO(DEV-12) (thinking-cue two-character test, bubble settle browser test).
 
