@@ -46,6 +46,7 @@ pub mod kind_files;
 pub mod limits;
 pub mod locate;
 pub mod machine_wire;
+pub mod movement;
 mod media_ingest;
 pub mod media_library;
 mod media_range;
