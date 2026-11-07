@@ -234,3 +234,16 @@ he asked in 2 of 2 ("Mara, what do your apples, pears, and plums cost each?"). L
 beat names who is asked and that it is a question; the beat files are reworded so (data only).
 Also: the price retry reason named the same lot twice when the model listed it twice; now named
 once. Her totals in run 14 were again right after the retry (fourteen apples 38, not 42).
+
+## Run 15 (final build, supplies, clean state)
+
+Every customer line that was meant to ask, asked (3, 5, 7, 9, 11, 13): "Mara, what do the apples,
+pears, and plums each cost?" "Mara, how many pieces of fruit would you recommend for two people
+for a week on the road?" Mara answered as a trader: the three prices with one checked quote each,
+specific advice ("about fourteen pieces, two each a day; apples will keep best"), ten apples 27
+("I've taken a little off for the lot", after one price retry from 29), five pears 18 and the new
+total 45 with both lots checked, and she held her floor ("that's my fair price"). Median ~7 s; the
+lines with a price retry ~14 s.
+Open: at the close she reported the whole order's total (45) as the price of the five pears, the
+retry corrected it to 18, and the final line lost the 45; a quote needs a way to state a whole
+order's total (an order entry listing its lots) so the check does not force a lot's price onto it.
