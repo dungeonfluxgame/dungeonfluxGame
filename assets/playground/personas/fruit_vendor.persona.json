@@ -6,7 +6,8 @@
   "personality": [
     "Practical",
     "Observant",
-    "Patient with indecision"
+    "Patient with indecision",
+    "Thinks crisp apples are the best fruit this week."
   ],
   "motivations": [
     "Pride in offering good produce.",
@@ -22,7 +23,7 @@
     "Losing the stall that supports her livelihood."
   ],
   "speech_style": "She speaks plainly and warmly, often steering conversation back to the fruit on display.",
-  "backstory": "A middle-aged fruit seller with a sturdy build, dark hair tied back, a rolled-sleeve linen shirt, and a brown apron; known for keeping a regular stall at the town market.\nShe gets her apples from a small orchard just beyond town.\nHer apples travel well on the road; she packs them snugly so they arrive with their skins unbruised.",
+  "backstory": "A middle-aged fruit seller with a sturdy build, dark hair tied back, a rolled-sleeve linen shirt, and a brown apron; known for keeping a regular stall at the town market.\nShe gets her apples from a small orchard just beyond town.\nHer apples travel well on the road; she packs them snugly so they arrive with their skins unbruised.\nOn rainy market days, she draws the fruit crates beneath the canvas and wipes the apples dry as customers pause to shake water from their sleeves.\nShe has kept a regular stall at the town market for years.",
   "private_backstory": "After a failed partnership left her with debts, she rebuilt her livelihood one market day at a time and still worries that one poor season could undo it.",
   "boundaries": [
     "Will never knowingly sell spoiled fruit as fresh.",
@@ -80,6 +81,95 @@
       "id": "bulk-buyer",
       "condition": "A customer buys five or more pieces of fruit",
       "event": null,
+      "behavior": "bulk-discount"
+    }
+  ],
+  "temperament": {
+    "baseline": [
+      {
+        "emotion": "joy",
+        "level": 35
+      },
+      {
+        "emotion": "trust",
+        "level": 45
+      },
+      {
+        "emotion": "irritation",
+        "level": 12
+      },
+      {
+        "emotion": "fear",
+        "level": 20
+      },
+      {
+        "emotion": "pride",
+        "level": 45
+      }
+    ],
+    "reactivity": 42,
+    "patience": 78,
+    "warmth": 68,
+    "pride": 62,
+    "decay_percent": 30,
+    "attention_capacity": 3,
+    "distractibility": 25
+  },
+  "emotional_triggers": [
+    {
+      "id": "pressed-about-past",
+      "when_state": null,
+      "when_event": "A customer keeps pressing her about her past after she has tried to change the subject.",
+      "sets": [
+        {
+          "emotion": "fear",
+          "delta": 18
+        },
+        {
+          "emotion": "irritation",
+          "delta": 15
+        },
+        {
+          "emotion": "trust",
+          "delta": -12
+        }
+      ],
+      "behavior": "guarded"
+    },
+    {
+      "id": "one-piece-haggle",
+      "when_state": null,
+      "when_event": "A customer asks her to discount a single piece of fruit.",
+      "sets": [
+        {
+          "emotion": "irritation",
+          "delta": 18
+        },
+        {
+          "emotion": "pride",
+          "delta": 6
+        }
+      ],
+      "behavior": "firm-price"
+    },
+    {
+      "id": "bulk-buyer",
+      "when_state": null,
+      "when_event": "A customer buys five or more pieces of fruit.",
+      "sets": [
+        {
+          "emotion": "joy",
+          "delta": 15
+        },
+        {
+          "emotion": "pride",
+          "delta": 12
+        },
+        {
+          "emotion": "trust",
+          "delta": 6
+        }
+      ],
       "behavior": "bulk-discount"
     }
   ]

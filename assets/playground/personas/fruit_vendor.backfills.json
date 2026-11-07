@@ -38,5 +38,66 @@
     ],
     "guidance": null,
     "profile": "codex:gpt-6-luna"
+  },
+  {
+    "sequence": 3,
+    "at_ms": 1794072013526,
+    "question": "Which fruit is best this week, and why?",
+    "gaps": [
+      {
+        "field": "personality",
+        "topic": "which fruit is best this week"
+      }
+    ],
+    "edits": [
+      {
+        "op": "add_entry",
+        "field": "personality",
+        "text": "Thinks crisp apples are the best fruit this week."
+      }
+    ],
+    "guidance": null,
+    "profile": "codex:gpt-6-luna"
+  },
+  {
+    "sequence": 4,
+    "at_ms": 1794072077399,
+    "question": "I cannot say; I have not traded here in the rain.",
+    "gaps": [
+      {
+        "field": "backstory",
+        "topic": "what market days are like in the rain"
+      }
+    ],
+    "edits": [
+      {
+        "op": "append_text",
+        "field": "backstory",
+        "text": "On rainy market days, she draws the fruit crates beneath the canvas and wipes the apples dry as customers pause to shake water from their sleeves."
+      }
+    ],
+    "guidance": null,
+    "profile": "codex:gpt-6-luna"
+  },
+  {
+    "sequence": 5,
+    "at_ms": 1794072700279,
+    "question": "Good day. How long have you kept this stall?",
+    "gaps": [
+      {
+        "field": "backstory",
+        "topic": "duration of keeping the stall",
+        "filled": "She has kept a regular stall at the town market for years."
+      }
+    ],
+    "edits": [
+      {
+        "op": "append_text",
+        "field": "backstory",
+        "text": "She has kept a regular stall at the town market for years."
+      }
+    ],
+    "guidance": null,
+    "profile": "codex:gpt-6-luna"
   }
 ]

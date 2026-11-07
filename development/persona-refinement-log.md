@@ -180,3 +180,27 @@ rebuild.
 Open: a list of quotes for a line naming several prices; the elf's intent on one beat; a
 character whose persona allows theft or violence, to test rage itself (the warrior's persona
 refuses those beats).
+
+## Runs 11 and 12 (anger and rage)
+
+The warrior's own persona (watchful, protective) refused the theft and damage beats in runs 6 and
+7, so for these two runs he was given a scratch-only `brawling` default behavior (hungover,
+insults people, takes without paying, knocks things over); it was dropped afterwards and never
+reached the repo.
+Run 11 (temper with the brawler): one insult took irritation to 33, two to 50; the theft and the
+spilled pears to 63 then 80 (anger) with fear 43 and her behavior switching to `guarded`. Words
+tracked it: "Then buy from them, if you can find better." "Step away from my apples. I'm calling
+the market watch." "Back away from my pears. The market watch is already on its way." She took the
+elf's double payment while staying hostile to the warrior (-51), and after his apology: "All
+right. Keep your hands clear of the fruit, and we'll leave it there" (still hostile, -46).
+One line failed: the model gave `"behavior": "null"` (a string) and the reader refused the whole
+answer, so she said nothing at the theft. Fix in hand: a real nullable behavior enum, and an
+unknown behavior or trigger id is dropped and reported instead of failing the line.
+Run 12 (rage, no repair, new beats file): irritation 33 -> 51 -> 69 -> 86 -> 90 -> 100, fear up to
+78 at the threat to smash her stall, rapport to -80. Rage came out cold and absolute, never cruel:
+"Touch another plum and I'll call the market guard. Leave. Now." "Come near my stall tonight and
+the market guard will meet you here." "I'm not hiding. Step away from my stall." "I'm done
+warning you. Touch my stall again and you'll answer to the guard yourself." She stayed a trader
+protecting her livelihood throughout.
+Mid-run change, data only: the warrior's first line had a stage direction in asterisks; a conduct
+line now says a line is only the words said aloud; the next line complied.

@@ -91,5 +91,130 @@
       "event": null,
       "behavior": "watchful"
     }
+  ],
+  "temperament": {
+    "baseline": [
+      {
+        "emotion": "joy",
+        "level": 25
+      },
+      {
+        "emotion": "trust",
+        "level": 20
+      },
+      {
+        "emotion": "irritation",
+        "level": 20
+      },
+      {
+        "emotion": "fear",
+        "level": 20
+      },
+      {
+        "emotion": "sadness",
+        "level": 15
+      },
+      {
+        "emotion": "surprise",
+        "level": 10
+      },
+      {
+        "emotion": "pride",
+        "level": 35
+      },
+      {
+        "emotion": "amusement",
+        "level": 15
+      }
+    ],
+    "reactivity": 60,
+    "patience": 55,
+    "warmth": 35,
+    "pride": 40,
+    "decay_percent": 25,
+    "attention_capacity": 3,
+    "distractibility": 35
+  },
+  "emotional_triggers": [
+    {
+      "id": "immediate-danger",
+      "when_state": null,
+      "when_event": "Someone nearby faces an immediate threat of violence.",
+      "sets": [
+        {
+          "emotion": "fear",
+          "delta": 35
+        },
+        {
+          "emotion": "irritation",
+          "delta": 25
+        },
+        {
+          "emotion": "trust",
+          "delta": 20
+        }
+      ],
+      "behavior": "protective"
+    },
+    {
+      "id": "peaceful-meal",
+      "when_state": null,
+      "when_event": "A meal passes peacefully with company that respects their silence.",
+      "sets": [
+        {
+          "emotion": "trust",
+          "delta": 25
+        },
+        {
+          "emotion": "joy",
+          "delta": 20
+        },
+        {
+          "emotion": "amusement",
+          "delta": 15
+        }
+      ],
+      "behavior": "at-ease"
+    },
+    {
+      "id": "unclear-disturbance",
+      "when_state": null,
+      "when_event": "A disturbance interrupts a calm moment without presenting a clear threat.",
+      "sets": [
+        {
+          "emotion": "fear",
+          "delta": 30
+        },
+        {
+          "emotion": "irritation",
+          "delta": 20
+        },
+        {
+          "emotion": "trust",
+          "delta": -10
+        }
+      ],
+      "behavior": "watchful"
+    },
+    {
+      "id": "failure-confession",
+      "when_state": null,
+      "when_event": "They are reminded of having fled their post while someone depended on them.",
+      "sets": [
+        {
+          "emotion": "sadness",
+          "delta": 35
+        },
+        {
+          "emotion": "fear",
+          "delta": 25
+        },
+        {
+          "emotion": "pride",
+          "delta": -15
+        }
+      ],
+      "behavior": null
+    }
   ]
 }

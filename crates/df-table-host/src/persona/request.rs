@@ -447,13 +447,9 @@ pub struct SaidLine {
     pub behavior_override: Option<BehaviorOverride>,
     /// The secret ids of this persona that the line gave away.
     pub revealed_secrets: Vec<String>,
-    /// The total in copper pieces the line quotes, held inside the stall's bounds when the bible
-    /// knows the stall; the unchecked number otherwise.
+    /// What the line quoted, one entry per price or total it states, and what the bible allowed.
     #[serde(default)]
-    pub quoted_cp: Option<u64>,
-    /// What the line quoted and what the bible allowed.
-    #[serde(default)]
-    pub quote: Option<QuoteReport>,
+    pub quotes: Vec<QuoteReport>,
     /// True when the model judged, in the call that worded the line, that the line gives away the
     /// character's private side beyond what the question and the situation already say. It blocks
     /// nothing: it is the model's judgement, a hint and not a guarantee.

@@ -69,7 +69,7 @@ fn voiced_innkeeper() -> df_content::persona::Persona {
 #[tokio::test]
 async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_public_note() {
     let mut answer = line_answer("Two silver, love.");
-    answer["quote"] = json!({"item": "room", "qty": 1, "total_cp": 200});
+    answer["quotes"] = json!([{"item": "room", "qty": 1, "total_cp": 200}]);
     let host = scripted_host(vec![answer]).await;
     write_persona(&host.directory(), &voiced_innkeeper()).unwrap();
     let answered = done(
@@ -82,7 +82,7 @@ async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_
         )
         .await,
     );
-    assert_eq!(answered.spoken.said.quoted_cp, Some(200));
+    assert_eq!(answered.spoken.said.quotes[0].proposed_total_cp, 200);
     let facts = host.facts_of(0);
     assert_eq!(facts["now"]["asked_by"], "pip");
     assert_eq!(

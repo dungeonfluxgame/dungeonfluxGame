@@ -11,7 +11,7 @@ use crate::speech::format_voiced;
 
 use super::request::{
     Answered, BackfillOutcome, BackfillRecord, Backfilled, CastOutcome, Covered, PersonaSummary,
-    QuoteReport, SaidLine, Spoken,
+    QuoteReport, Spoken,
 };
 
 pub(super) fn format_list(list: &[PersonaSummary]) -> String {
@@ -106,12 +106,11 @@ fn format_felt(state: &PersonaState) -> String {
     parts.join("; ")
 }
 
-fn format_quote(said: &SaidLine, quote: &QuoteReport) -> String {
+fn format_quote(quote: &QuoteReport) -> String {
     let lot = format!("{} {}", quote.qty, quote.item);
-    match (said.quoted_cp, quote.bounds) {
-        (Some(quoted), Some(bounds))
-            if u64::from(bounds.clamped_total_cp) != quote.proposed_total_cp =>
-        {
+    match quote.bounds {
+        Some(bounds) if u64::from(bounds.clamped_total_cp) != quote.proposed_total_cp => {
+            let quoted = bounds.clamped_total_cp;
             format!(
                 concat!(
                     "  quoted: {} cp for {}; the line said {} cp, held to {} cp ",
@@ -125,14 +124,14 @@ fn format_quote(said: &SaidLine, quote: &QuoteReport) -> String {
                 bounds.ask_total_cp
             )
         }
-        (Some(quoted), Some(bounds)) => format!(
-            "  quoted: {quoted} cp for {lot} (inside floor {}, ask {})",
-            bounds.floor_total_cp, bounds.ask_total_cp
+        Some(bounds) => format!(
+            "  quoted: {} cp for {lot} (inside floor {}, ask {})",
+            bounds.clamped_total_cp, bounds.floor_total_cp, bounds.ask_total_cp
         ),
-        (Some(quoted), None) => {
-            format!("  quoted: {quoted} cp for {lot} (not checked: no stall of theirs sells it)")
-        }
-        (None, _) => format!("  quoted: {lot}"),
+        None => format!(
+            "  quoted: {} cp for {lot} (not checked: no stall of theirs sells it)",
+            quote.proposed_total_cp
+        ),
     }
 }
 
@@ -146,9 +145,7 @@ fn spoken_lines(spoken: &Spoken, after_line: &str) -> Vec<String> {
     if let Some(voice) = &spoken.voice {
         lines.push(format_voiced(voice));
     }
-    if let Some(quote) = &said.quote {
-        lines.push(format_quote(said, quote));
-    }
+    lines.extend(said.quotes.iter().map(format_quote));
     if said.leak_suspect {
         lines.push(
             "  leak suspect: the model judged the line gives away the private side".to_owned(),

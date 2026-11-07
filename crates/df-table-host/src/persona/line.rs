@@ -45,9 +45,10 @@ const SAY_INSTRUCTION: &str = concat!(
     "situation. ",
     "When now holds a question, the line answers it. now.intent, when given, is this ",
     "character's own goal for the line, said to the person in front of them; the line carries it ",
-    "out in their words and nothing else: an intent to ask is a question they put to that ",
-    "person, and they never answer it themselves, never quote a price they do not keep, and ",
-    "never say what another person would reply. ",
+    "out in their words and nothing else: an intent to ask is worded as a question to that ",
+    "person, holds no answer of the asker's own (even when they have an opinion, they keep it ",
+    "to themselves and ask) and ends with a question mark; they never quote a price they do ",
+    "not keep, and never say what another person would reply. ",
     "context.conduct says how characters behave and speak: follow it unless the character's ",
     "persona, boundaries or the guidance say otherwise. ",
     "now.state is how the character feels at this moment. Mood and strong emotions color their ",
@@ -105,10 +106,9 @@ const SAY_INSTRUCTION: &str = concat!(
     "back), and invents none. A customer asks the keeper for what it wants and never names a ",
     "price: only the keeper of a stall quotes one. What the character's expertise says ",
     "they know they may state in character. ",
-    "Give quote: the item id, the quantity (qty) and the total in copper pieces (total_cp) of ",
-    "the lot the line ",
-    "quotes, or null when it quotes none. Every price or total the line states is also given in ",
-    "quote, so it can be checked against the stall. ",
+    "Give quotes: for each lot the line prices, the item id, the quantity (qty) and the total ",
+    "in copper pieces (total_cp); empty when it quotes none. Every price or total the line ",
+    "states is one entry in quotes, so each can be checked against the stall. ",
     "appraisal: how what was just said moved this character: emotion deltas by id (positive or ",
     "negative, -100 to 100), who it was toward and the change in their rapport, the attention ",
     "(whom and what they are focused on, and what they registered in a few words) and the tone id ",
@@ -220,28 +220,38 @@ fn appraisal_schema(config: &EmotionConfig) -> Value {
     })
 }
 
-fn line_schema(config: &EmotionConfig) -> Value {
+fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
+    let mut behavior_ids: Vec<Value> = behaviors.into_iter().map(Value::from).collect();
+    behavior_ids.push(Value::Null);
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": [
             "line", "behavior", "fired_triggers", "fired_emotional_triggers", "revealed_secrets",
-            "quote", "gaps", "appraisal", "repeats_recent", "repeat_reason"
+            "quotes", "gaps", "appraisal", "repeats_recent", "repeat_reason"
         ],
         "properties": {
             "line": { "type": "string", "description": "What the character says, one short line." },
-            "behavior": nullable("string", "Id of the behavior the line takes, or null."),
+            "behavior": {
+                "type": ["string", "null"],
+                "enum": behavior_ids,
+                "description": "Id of the behavior the line takes, or null.",
+            },
             "fired_triggers": id_list("Ids of the triggers the situation fires."),
             "fired_emotional_triggers": id_list("Ids of the emotional triggers it fires."),
             "revealed_secrets": id_list("Ids of the secrets the line gives away."),
-            "quote": {
-                "type": ["object", "null"],
-                "additionalProperties": false,
-                "required": ["item", "qty", "total_cp"],
-                "properties": {
-                    "item": { "type": "string" },
-                    "qty": { "type": "integer" },
-                    "total_cp": { "type": "integer" },
+            "quotes": {
+                "type": "array",
+                "description": "One entry per price or total the line states; empty when none.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["item", "qty", "total_cp"],
+                    "properties": {
+                        "item": { "type": "string" },
+                        "qty": { "type": "integer" },
+                        "total_cp": { "type": "integer" },
+                    },
                 },
             },
             "gaps": gaps_schema(),
@@ -268,7 +278,7 @@ struct LineRecord {
     fired_triggers: Vec<String>,
     fired_emotional_triggers: Vec<String>,
     revealed_secrets: Vec<String>,
-    quote: Option<QuoteRecord>,
+    quotes: Vec<QuoteRecord>,
     gaps: Vec<Gap>,
     appraisal: Appraisal,
     repeats_recent: bool,
@@ -289,7 +299,7 @@ struct Answer {
     fired_triggers: Vec<String>,
     fired_emotional: Vec<String>,
     revealed_secrets: Vec<String>,
-    quote: Option<QuoteRecord>,
+    quotes: Vec<QuoteRecord>,
     gaps: Vec<Gap>,
     appraisal: Appraisal,
     dropped: Vec<String>,
@@ -361,35 +371,46 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
     let (answer, report) = split_leak_report(answer).map_err(|error| LineError::Malformed {
         detail: error.to_string(),
     })?;
-    let record = LineRecord::deserialize(&answer).map_err(|error| LineError::Malformed {
+    let mut record = LineRecord::deserialize(&answer).map_err(|error| LineError::Malformed {
         detail: error.to_string(),
     })?;
     let line = record.line.trim();
     if line.is_empty() {
         return Err(LineError::Blank);
     }
-    check_ids(
-        LineIdKind::Behavior,
-        record.behavior.as_slice(),
-        own.private_behaviors().iter().map(|item| item.id.as_str()),
-    )?;
-    check_ids(
-        LineIdKind::Trigger,
-        &record.fired_triggers,
-        own.private_triggers().iter().map(|item| item.id.as_str()),
-    )?;
-    check_ids(
-        LineIdKind::EmotionalTrigger,
-        &record.fired_emotional_triggers,
-        own.emotional_triggers().iter().map(|item| item.id.as_str()),
-    )?;
+    // An unknown behavior or trigger id is dropped and reported; the line is still said.
+    let mut dropped = Vec::new();
+    let behaviors = own.private_behaviors();
+    if let Some(id) = record
+        .behavior
+        .take_if(|id| !behaviors.iter().any(|item| item.id == *id))
+    {
+        dropped.push(format!("behavior:{id}"));
+    }
+    let triggers = own.private_triggers();
+    record.fired_triggers.retain(|id| {
+        let known = triggers.iter().any(|item| item.id == *id);
+        if !known {
+            dropped.push(format!("trigger:{id}"));
+        }
+        known
+    });
+    let emotional = own.emotional_triggers();
+    record.fired_emotional_triggers.retain(|id| {
+        let known = emotional.iter().any(|item| item.id == *id);
+        if !known {
+            dropped.push(format!("trigger:{id}"));
+        }
+        known
+    });
     check_ids(
         LineIdKind::Secret,
         &record.revealed_secrets,
         own.private_secrets().iter().map(|item| item.id.as_str()),
     )?;
     check_gaps(&record.gaps).map_err(|error| LineError::Gaps { cause: error })?;
-    let (appraisal, dropped) = check_appraisal(record.appraisal, lists);
+    let (appraisal, dropped_appraisal) = check_appraisal(record.appraisal, lists);
+    dropped.extend(dropped_appraisal);
     let repeat = record.repeats_recent.then(|| {
         record
             .repeat_reason
@@ -402,7 +423,7 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
         fired_triggers: record.fired_triggers,
         fired_emotional: record.fired_emotional_triggers,
         revealed_secrets: record.revealed_secrets,
-        quote: record.quote,
+        quotes: record.quotes,
         gaps: record.gaps,
         appraisal,
         dropped,
@@ -592,16 +613,23 @@ fn fired_emotional<'a>(
 
 /// Why the line must be worded again because the total it states is not one the stall charges:
 /// the clamp would change it, so the spoken number and the held quote would disagree.
-fn quote_retry_reason(app: &AppState, speaker: &str, record: &QuoteRecord) -> Option<String> {
-    let proposed = u32::try_from(record.total_cp).ok()?;
-    let checked = crate::world::check_quote(app, speaker, &record.item, record.qty, proposed)?;
-    (checked.clamped_total_cp != proposed).then(|| {
-        format!(
-            "you said {proposed} cp for {} {}; the stall's total for that lot is {} cp \
-             (lowest {}): say that total",
-            record.qty, record.item, checked.clamped_total_cp, checked.floor_total_cp
-        )
-    })
+fn quote_retry_reason(app: &AppState, speaker: &str, records: &[QuoteRecord]) -> Option<String> {
+    let off: Vec<String> = records
+        .iter()
+        .filter_map(|record| {
+            let proposed = u32::try_from(record.total_cp).ok()?;
+            let checked =
+                crate::world::check_quote(app, speaker, &record.item, record.qty, proposed)?;
+            (checked.clamped_total_cp != proposed).then(|| {
+                format!(
+                    "you said {proposed} cp for {} {}; the stall's total for that lot is {} cp \
+                     (lowest {})",
+                    record.qty, record.item, checked.clamped_total_cp, checked.floor_total_cp
+                )
+            })
+        })
+        .collect();
+    (!off.is_empty()).then(|| format!("{}: say those totals", off.join("; ")))
 }
 
 /// The quote the line made, with the bible's bounds when it knows `speaker`'s stall and the item;
@@ -697,7 +725,12 @@ pub(super) async fn say_line(
     let world = crate::world::context_for_viewer(app, own.voice_packs(), character);
     let guides = (config.appraisal_guide.as_slice(), config.conduct.as_slice());
     let stable = stable_facts(own, guides, world, listeners, scene);
-    let schema = with_leak_report(line_schema(&config));
+    let behavior_ids = own
+        .private_behaviors()
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    let schema = with_leak_report(line_schema(&config, behavior_ids));
     let lists = Lists {
         config: &config,
         present: &present,
@@ -717,12 +750,10 @@ pub(super) async fn say_line(
         model_ms += took;
         // One more wording when the line repeats itself, or states a total the stall would not
         // charge (the spoken number and the held quote would disagree).
-        let reason = answer.repeat.clone().or_else(|| {
-            answer
-                .quote
-                .as_ref()
-                .and_then(|record| quote_retry_reason(app, own.id().as_str(), record))
-        });
+        let reason = answer
+            .repeat
+            .clone()
+            .or_else(|| quote_retry_reason(app, own.id().as_str(), &answer.quotes));
         match (reason, retry_reason.is_some()) {
             (Some(reason), false) => retry_reason = Some(reason),
             _ => break answer,
@@ -767,14 +798,11 @@ fn settle(
         appraisal.emotions.extend(trigger.sets.iter().cloned());
     }
     let mut dropped = answer.dropped;
-    let quote = answer
-        .quote
-        .and_then(|record| report_quote(app, own.id().as_str(), record, &mut dropped));
-    let quoted_cp = quote.as_ref().map(|quote| {
-        quote.bounds.map_or(quote.proposed_total_cp, |bounds| {
-            u64::from(bounds.clamped_total_cp)
-        })
-    });
+    let quotes: Vec<QuoteReport> = answer
+        .quotes
+        .into_iter()
+        .filter_map(|record| report_quote(app, own.id().as_str(), record, &mut dropped))
+        .collect();
     let state = apply_appraisal(app, own, &appraisal);
     let tone = appraisal
         .tone
@@ -788,8 +816,7 @@ fn settle(
         state_triggered: by_state.iter().map(|trigger| trigger.id.clone()).collect(),
         behavior_override,
         revealed_secrets: answer.revealed_secrets,
-        quoted_cp,
-        quote,
+        quotes,
         leak_suspect: answer.leak_suspect,
         gaps: answer.gaps,
         appraisal,

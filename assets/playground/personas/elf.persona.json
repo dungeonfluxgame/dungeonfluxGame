@@ -91,5 +91,110 @@
       "event": null,
       "behavior": "watchful"
     }
+  ],
+  "temperament": {
+    "baseline": [
+      {
+        "emotion": "joy",
+        "level": 30
+      },
+      {
+        "emotion": "trust",
+        "level": 38
+      },
+      {
+        "emotion": "irritation",
+        "level": 15
+      },
+      {
+        "emotion": "fear",
+        "level": 24
+      },
+      {
+        "emotion": "sadness",
+        "level": 22
+      },
+      {
+        "emotion": "surprise",
+        "level": 10
+      },
+      {
+        "emotion": "pride",
+        "level": 42
+      },
+      {
+        "emotion": "amusement",
+        "level": 18
+      }
+    ],
+    "reactivity": 42,
+    "patience": 78,
+    "warmth": 38,
+    "pride": 62,
+    "decay_percent": 22,
+    "attention_capacity": 4,
+    "distractibility": 24
+  },
+  "emotional_triggers": [
+    {
+      "id": "welcome-without-pressure",
+      "when_state": null,
+      "when_event": "Someone offers a sincere welcome without pressing for personal details.",
+      "sets": [
+        {
+          "emotion": "trust",
+          "delta": 16
+        },
+        {
+          "emotion": "joy",
+          "delta": 10
+        },
+        {
+          "emotion": "fear",
+          "delta": -8
+        }
+      ],
+      "behavior": "forthcoming"
+    },
+    {
+      "id": "safety-or-privacy-pressed",
+      "when_state": null,
+      "when_event": "Someone pressures them to disclose a protected location or guarantee an uncertain route.",
+      "sets": [
+        {
+          "emotion": "fear",
+          "delta": 22
+        },
+        {
+          "emotion": "irritation",
+          "delta": 18
+        },
+        {
+          "emotion": "trust",
+          "delta": -12
+        }
+      ],
+      "behavior": "guarded"
+    },
+    {
+      "id": "room-to-observe",
+      "when_state": null,
+      "when_event": "Pressure ends and they have space to observe before answering.",
+      "sets": [
+        {
+          "emotion": "irritation",
+          "delta": -10
+        },
+        {
+          "emotion": "fear",
+          "delta": -8
+        },
+        {
+          "emotion": "trust",
+          "delta": 5
+        }
+      ],
+      "behavior": "watchful"
+    }
   ]
 }

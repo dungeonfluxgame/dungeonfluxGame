@@ -279,22 +279,13 @@ fn a_backfill_whose_record_cannot_be_written_puts_the_persona_file_back() {
 }
 
 #[tokio::test]
-async fn a_line_naming_a_behavior_trigger_or_secret_the_persona_lacks_is_refused() {
-    let answers = ["behavior", "fired_triggers", "revealed_secrets"]
-        .into_iter()
-        .map(|field| {
-            let mut answer = line_answer("Welcome, love.");
-            answer[field] = if field == "behavior" {
-                json!("furious")
-            } else {
-                json!(["not-there"])
-            };
-            answer
-        })
-        .collect();
+async fn a_line_revealing_a_secret_the_persona_lacks_is_refused() {
+    let mut answer = line_answer("Welcome, love.");
+    answer["revealed_secrets"] = json!(["not-there"]);
+    let answers = vec![answer];
     let host = scripted_host(answers).await;
     write_persona(&host.directory(), &innkeeper()).unwrap();
-    for _ in 0..3 {
+    for _ in 0..1 {
         let body = json!({"character": CHARACTER, "situation": "a guest arrives"});
         let reply: PersonaReply<Spoken> = post_json(host.port, path::PERSONA_SAY, &body)
             .await

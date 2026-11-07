@@ -31,7 +31,7 @@ pub const DEFAULT_ATTENTION_CAPACITY: u8 = 3;
 /// temperament: the content's calibration of feeling, editable in `emotions.json`.
 /// How characters behave and speak, in plain words a model reads with each line: the
 /// persona engine's tunable conduct, editable in `emotions.json` without a rebuild.
-pub const DEFAULT_CONDUCT: [&str; 9] = [
+pub const DEFAULT_CONDUCT: [&str; 10] = [
     concat!(
         "Speak like a real person, not a helper: plain words, contractions, short and long ",
         "sentences mixed, no stock pleasantries every line.",
@@ -73,6 +73,10 @@ pub const DEFAULT_CONDUCT: [&str; 9] = [
     concat!(
         "Do not tack a selling point onto every answer: a detail you already said in this ",
         "conversation (how you pack, where it comes from) is not said again unless asked.",
+    ),
+    concat!(
+        "A line is only the words the character says aloud: no stage directions, actions in",
+        " asterisks or narration; let the words carry what they do.",
     ),
 ];
 

@@ -167,7 +167,7 @@ pub(super) fn coverage_answer(gaps: &[(&str, &str)]) -> Value {
 pub(super) fn line_answer(line: &str) -> Value {
     json!({
         "line": line, "behavior": null, "fired_triggers": [], "fired_emotional_triggers": [],
-        "revealed_secrets": [], "quote": null, "gaps": [],
+        "revealed_secrets": [], "quotes": [], "gaps": [],
         "appraisal": {
             "emotions": [], "toward": null, "rapport_delta": null,
             "attention": {"focus": null, "topic": null, "noticed": []}, "tone": null

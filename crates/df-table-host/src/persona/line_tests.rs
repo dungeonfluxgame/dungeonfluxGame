@@ -16,7 +16,7 @@ use super::fixtures::{
     line_answer_with_gaps, privacy_answer, scripted_host, scripted_host_cast, write_market,
 };
 use super::request::{
-    Answered, BackfillOutcome, BackfillRecord, PersonaError, PersonaReply, Spoken,
+    Answered, BackfillOutcome, BackfillRecord, PersonaReply, Spoken,
 };
 use super::routes::path;
 use super::storage::write_persona;
@@ -160,25 +160,6 @@ async fn an_appraisal_naming_a_speaker_who_is_not_present_or_a_tone_not_offered_
 }
 
 #[tokio::test]
-async fn an_emotional_trigger_the_persona_does_not_have_is_refused() {
-    let mut answer = line_answer("Aye.");
-    answer["fired_emotional_triggers"] = json!(["no-such-trigger"]);
-    let host = scripted_host(vec![answer]).await;
-    write_persona(&host.directory(), &vendor(CHARACTER)).unwrap();
-    let reply = say(&host, CHARACTER, json!({})).await;
-    assert!(
-        matches!(
-            reply,
-            DevReply::Rejected {
-                error: PersonaError::AnswerRefused { .. },
-                ..
-            }
-        ),
-        "{reply:?}"
-    );
-}
-
-#[tokio::test]
 async fn the_appraisal_changes_the_state_the_next_line_carries() {
     let first = appraised(
         line_answer("Eight, and not a copper less."),
@@ -240,6 +221,27 @@ async fn a_fired_trigger_makes_its_behavior_the_lines_even_when_the_model_named_
         said.state.level("irritation"),
         40,
         "the trigger's change joined the appraisal"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_behavior_or_trigger_id_is_dropped_and_the_line_is_still_said() {
+    let mut answer = line_answer("Seven.");
+    answer["behavior"] = json!("null");
+    answer["fired_triggers"] = json!(["no-such-trigger", "haggled"]);
+    answer["fired_emotional_triggers"] = json!(["no-such-feeling"]);
+    let host = scripted_host(vec![answer]).await;
+    write_persona(&host.directory(), &vendor(CHARACTER)).unwrap();
+    let said = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(said.line, "Seven.");
+    assert_eq!(said.fired_triggers, ["haggled"]);
+    assert_eq!(
+        said.dropped,
+        [
+            "behavior:null",
+            "trigger:no-such-trigger",
+            "trigger:no-such-feeling"
+        ]
     );
 }
 
@@ -384,7 +386,7 @@ async fn backfill_sync_waits_for_the_backfill_before_answering() {
 async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
     let quote = |total: u64| {
         let mut answer = line_answer("Here you are.");
-        answer["quote"] = json!({"item": "apple", "qty": 5, "total_cp": total});
+        answer["quotes"] = json!([{"item": "apple", "qty": 5, "total_cp": total}]);
         answer
     };
     let host = scripted_host_cast(
@@ -398,10 +400,10 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
     write_persona(&host.directory(), &vendor("fruit_vendor")).unwrap();
     write_market(&host);
     let quoted = |said: &super::request::SaidLine| {
-        let quote = said.quote.clone().unwrap();
+        let quote = said.quotes[0].clone();
         (
             quote.proposed_total_cp,
-            said.quoted_cp,
+            quote.bounds.map(|bounds| u64::from(bounds.clamped_total_cp)),
             quote.bounds.map(|bounds| bounds.floor_total_cp),
         )
     };
@@ -421,7 +423,7 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
         (100, Some(45), Some(43)),
         "still too high after the retry: lowered to the ask"
     );
-    assert_eq!(high.quote.unwrap().bounds.unwrap().ask_total_cp, 45);
+    assert_eq!(high.quotes[0].bounds.unwrap().ask_total_cp, 45);
     let inside = done(say(&host, "fruit_vendor", json!({})).await).said;
     assert_eq!(quoted(&inside), (44, Some(44), Some(43)));
 }
@@ -429,13 +431,41 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
 #[tokio::test]
 async fn a_quote_by_someone_who_keeps_no_such_stall_is_reported_unchecked() {
     let mut answer = line_answer("Five for forty.");
-    answer["quote"] = json!({"item": "apple", "qty": 5, "total_cp": 40});
+    answer["quotes"] = json!([{"item": "apple", "qty": 5, "total_cp": 40}]);
     let host = scripted_host_cast(&["pip"], vec![answer], Arc::new(FakePort::unconfigured())).await;
     write_persona(&host.directory(), &vendor("pip")).unwrap();
     write_market(&host);
     let said = done(say(&host, "pip", json!({})).await).said;
-    assert_eq!(said.quoted_cp, Some(40));
-    assert_eq!(said.quote.unwrap().bounds, None);
+    assert_eq!(said.quotes[0].proposed_total_cp, 40);
+    assert_eq!(said.quotes[0].bounds, None);
+}
+
+#[tokio::test]
+async fn every_price_a_line_names_is_checked_and_one_wrong_total_is_worded_again() {
+    let prices = |five: u64| {
+        let mut answer = line_answer("Five apples and one more.");
+        answer["quotes"] = json!([
+            {"item": "apple", "qty": 5, "total_cp": five},
+            {"item": "apple", "qty": 1, "total_cp": 10}
+        ]);
+        answer
+    };
+    let host = scripted_host_cast(
+        &["fruit_vendor"],
+        vec![prices(30), prices(43)],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    write_persona(&host.directory(), &vendor("fruit_vendor")).unwrap();
+    write_market(&host);
+    let said = done(say(&host, "fruit_vendor", json!({})).await).said;
+    assert!(said.repeat_retried, "{:?}", said.retry_reason);
+    let reason = said.retry_reason.unwrap();
+    assert!(reason.contains("you said 30 cp for 5 apple"), "{reason}");
+    assert!(!reason.contains("1 apple"), "{reason}");
+    assert_eq!(said.quotes.len(), 2);
+    assert!(said.quotes.iter().all(|quote| quote.bounds.is_some()));
+    assert_eq!(said.quotes[0].proposed_total_cp, 43);
 }
 
 #[tokio::test]
