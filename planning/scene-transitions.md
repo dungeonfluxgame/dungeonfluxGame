@@ -85,9 +85,9 @@ player line --> Jev (INTERPRET) --> MoveIntent --> rules (CHECK) --> APPLY: stat
 The path is built for movement first, and later features (combat, social scenes, investigation,
 weather, time of day) must plug in without rewriting it. Every stage therefore has a seam:
 
-- **Interpret:** the label table (verb words and kinds) is data, loaded from a content file with a
-  built-in default; the closed schema and the instruction are generated from the label list, so a
-  new label is a table row. The stand-in reader and the real Jev call implement one small trait.
+- **Interpret:** no word table; the stand-in reader is removed. Jev is the model call
+  (`POST /dev/move/interpret`), which reads the line against the closed schema generated from the
+  move kinds, and `parse_reading` checks its answer and the party.
 - **Design:** `SceneDesigner` is a trait, so the narrative engine implements it later; the
   default `TableDesigner` reads a `DesignTable` content file. `DesignContext` has a `Default`
   and is built with struct-update syntax, so a new input (time, threat, weather) is a new field

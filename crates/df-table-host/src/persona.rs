@@ -45,7 +45,7 @@ pub mod cli;
 mod converse;
 mod edit_verbs;
 mod format;
-mod generate;
+pub(crate) mod generate;
 mod guard;
 pub(crate) mod options;
 mod plate;

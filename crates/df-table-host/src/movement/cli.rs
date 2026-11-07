@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use super::brief::{BriefCharacter, LookSheets, build_brief};
 use super::design::{DesignContext, DesignTable, SceneDesigner, TableDesigner};
-use super::interpret::{LabelTable, LineReader, ScriptedReader};
+use super::routes::{InterpretReply, InterpretRequest, path as move_path};
 use super::transition::{Deadlines, Transition, format_trace};
 use super::types::{
     Depth, Interpreted, MoveIntent, PartyMember, PlateBrief, SceneDesign, Side, TransitionStage,
@@ -23,6 +23,7 @@ use crate::cast::routes::path as cast_path;
 use crate::command::{CommandError, bad_choice};
 use crate::dev::DevError;
 use crate::dev_client::{self, get_json, post_json};
+use crate::dev_http::DevReply;
 use crate::imagegen::MAXIMUM_NAME_CHARS;
 use crate::imagegen::model::plain_name;
 use crate::locate::request::CharacterRequest;
@@ -143,24 +144,24 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
     let present = present_personas(&cast);
     let outcome = match command {
         MoveCommand::Say { line, plate } => {
-            walk(port, &line, None, &present, None, plate.as_deref()).await
+            walk(port, &line, None, &present, None, None, plate.as_deref()).await
         }
         MoveCommand::Act {
             character,
             situation,
             plate,
         } => {
-            let line = speak(port, &character, situation).await?;
-            walk(port, &line, None, &present, Some(character.as_str()), plate.as_deref()).await
+            let line = speak(port, &character, situation.clone()).await?;
+            walk(port, &line, None, &present, Some(character.as_str()), Some(situation.as_str()), plate.as_deref()).await
         }
         MoveCommand::Interpret(line) => {
-            walk(port, &line, Some(TransitionStage::Interpreting), &present, None, None).await
+            walk(port, &line, Some(TransitionStage::Interpreting), &present, None, None, None).await
         }
         MoveCommand::Design(line) => {
-            walk(port, &line, Some(TransitionStage::Designing), &present, None, None).await
+            walk(port, &line, Some(TransitionStage::Designing), &present, None, None, None).await
         }
         MoveCommand::Brief(line) => {
-            walk(port, &line, Some(TransitionStage::Briefing), &present, None, None).await
+            walk(port, &line, Some(TransitionStage::Briefing), &present, None, None, None).await
         }
     };
     outcome.map_err(DevError::Move)
@@ -178,13 +179,6 @@ async fn speak(port: u16, character: &str, situation: String) -> Result<String, 
         post_json(port, persona_path::PERSONA_SAY, &request).await?;
     let spoken = dev_client::reply_value(reply)?;
     Ok(spoken.said.line)
-}
-
-/// Whether `line` speaks in the first person: "I", "me", "we", "us", "my" or "I'll" as a word.
-fn speaks_first_person(line: &str) -> bool {
-    line.to_lowercase()
-        .split(|character: char| !(character.is_alphanumeric() || character == '\''))
-        .any(|word| matches!(word, "i" | "me" | "we" | "us" | "my" | "i'll"))
 }
 
 /// The shown scene's characters that have a stored persona, in the scene's order.
@@ -259,14 +253,15 @@ impl Walk {
 }
 
 /// The stages in order, stopping after `stop`; `None` runs the whole path (`move say`, `move act`).
-/// `speaker` is the character who said `line` in `move act`: the line is printed first, and a
-/// first-person line adds them to the movers. `plate` makes the plate and puts it on the scene.
+/// `speaker` is the character who said `line` in `move act`: the line is printed first, and Jev is
+/// told who said it. `plate` makes the plate and puts it on the scene.
 async fn walk(
     port: u16,
     line: &str,
     stop: Option<TransitionStage>,
     present: &[PersonaSummary],
     speaker: Option<&str>,
+    context: Option<&str>,
     plate: Option<&str>,
 ) -> Result<String, MoveError> {
     let party: Vec<PartyMember> = present
@@ -281,25 +276,32 @@ async fn walk(
         walk.report.push(format!("{speaker} says: {line}"));
     }
 
-    let mut intent = match ScriptedReader::new(LabelTable::builtin()).read(line, &party) {
-        Ok(Interpreted::Move { intent }) => intent,
-        Ok(Interpreted::NotAMove) => {
-            return Ok(walk.unmoved("not_a_move", "the line is not a movement"));
-        }
-        Ok(Interpreted::NeedsClarification) => {
+    let request = InterpretRequest {
+        line: line.to_owned(),
+        speaker: speaker.map(str::to_owned),
+        context: context.map(str::to_owned),
+        party: party.clone(),
+        model: None,
+    };
+    let intent = match post_json::<_, InterpretReply>(port, move_path::MOVE_INTERPRET, &request)
+        .await
+    {
+        Ok(DevReply::Done {
+            value: Interpreted::Move { intent },
+        }) => intent,
+        Ok(DevReply::Done {
+            value: Interpreted::NotAMove,
+        }) => return Ok(walk.unmoved("not_a_move", "the line is not a movement")),
+        Ok(DevReply::Done {
+            value: Interpreted::NeedsClarification,
+        }) => {
             return Ok(walk.unmoved("needs_clarification", "the movement names no destination"));
         }
-        Err(error) => return Err(walk.failed(error.key(), &error.to_string())),
-    };
-    if let Some(speaker) = speaker {
-        let speaks_in_party = party.iter().any(|member| member.id == speaker);
-        if speaks_in_party
-            && speaks_first_person(line)
-            && !intent.who.iter().any(|id| id == speaker)
-        {
-            intent.who.push(speaker.to_owned());
+        Ok(DevReply::Rejected { error, message }) => {
+            return Err(walk.failed(error.key(), &message));
         }
-    }
+        Err(error) => return Err(walk.failed("route_unreachable", &error.to_string())),
+    };
     walk.report.push(reading_text(&intent));
     walk.advance(&format!(
         "kind={} who={} to={}",

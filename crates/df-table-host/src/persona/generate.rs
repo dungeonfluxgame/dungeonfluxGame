@@ -73,7 +73,7 @@ static NEXT_OPERATION: AtomicU64 = AtomicU64::new(0);
 
 /// The operation key of one question of `kind`: new on every call. It holds the kind and the
 /// counter only, so it is always inside the 128-byte label rule whatever the character is called.
-pub(super) fn operation_key(kind: &str) -> Result<OperationKey, PersonaError> {
+pub(crate) fn operation_key(kind: &str) -> Result<OperationKey, PersonaError> {
     // Relaxed: the counter only has to hand out distinct numbers.
     let ordinal = NEXT_OPERATION.fetch_add(1, Ordering::Relaxed);
     TextRuntime::key(PERSONA_SCOPE, &format!("{kind}:{ordinal}"))
@@ -179,7 +179,7 @@ pub(super) async fn other_personas(
 }
 
 /// The text request of a question under `profile`.
-pub(super) fn text_request(
+pub(crate) fn text_request(
     profile: &TextProfile,
     instructions: &str,
     facts: Value,

@@ -1,9 +1,6 @@
 //! Tests of `interpret`.
 
-use crate::movement::interpret::{
-    InterpretError, LabelTable, LineReader, ScriptedReader, jev_facts, jev_schema, parse_reading,
-    read_scripted, read_scripted_with,
-};
+use crate::movement::interpret::{InterpretError, jev_facts, jev_schema, parse_reading};
 use crate::movement::types::{Interpreted, MoveIntent, MoveKind, PartyMember};
 use serde_json::{Value, json};
 
@@ -34,130 +31,6 @@ fn moves(kind: MoveKind, who: &[&str], to: &str, line: &str) -> Interpreted {
 }
 
 #[test]
-fn walk_line_moves_the_whole_party_to_the_square() {
-    let line = "we walk to the town square";
-    assert_eq!(
-        read_scripted(line, &party()),
-        Ok(moves(
-            MoveKind::Walk,
-            &["elf", "warrior", "wizard"],
-            "the town square",
-            line
-        ))
-    );
-}
-
-#[test]
-fn enter_line_keeps_the_article_of_the_destination() {
-    let line = "we enter the hidden door";
-    assert_eq!(
-        read_scripted(line, &party()),
-        Ok(moves(
-            MoveKind::Enter,
-            &["elf", "warrior", "wizard"],
-            "the hidden door",
-            line
-        ))
-    );
-}
-
-#[test]
-fn run_line_drops_the_leading_down() {
-    let line = "we run down the hallway";
-    assert_eq!(
-        read_scripted(line, &party()),
-        Ok(moves(
-            MoveKind::Run,
-            &["elf", "warrior", "wizard"],
-            "the hallway",
-            line
-        ))
-    );
-}
-
-#[test]
-fn go_down_is_a_descent() {
-    let line = "we go down the stairs";
-    assert_eq!(
-        read_scripted(line, &party()),
-        Ok(moves(
-            MoveKind::Descend,
-            &["elf", "warrior", "wizard"],
-            "the stairs",
-            line
-        ))
-    );
-}
-
-#[test]
-fn two_named_characters_move_alone() {
-    let line = "the elf and the warrior go out to the balcony";
-    assert_eq!(
-        read_scripted(line, &party()),
-        Ok(moves(
-            MoveKind::Walk,
-            &["elf", "warrior"],
-            "the balcony",
-            line
-        ))
-    );
-}
-
-#[test]
-fn display_name_names_a_character() {
-    let line = "Brann will climb the ladder";
-    assert_eq!(
-        read_scripted(line, &party()),
-        Ok(moves(MoveKind::Climb, &["warrior"], "the ladder", line))
-    );
-}
-
-#[test]
-fn a_name_must_match_whole_words() {
-    let line = "the wizardry scholar and the warrior go to the hall";
-    assert_eq!(
-        read_scripted(line, &party()),
-        Ok(moves(MoveKind::Walk, &["warrior"], "the hall", line))
-    );
-}
-
-#[test]
-fn a_line_without_a_movement_verb_is_not_a_move() {
-    assert_eq!(
-        read_scripted("what is the weather like in the square?", &party()),
-        Ok(Interpreted::NotAMove)
-    );
-}
-
-#[test]
-fn a_verb_without_a_destination_needs_clarification() {
-    assert_eq!(
-        read_scripted("we walk to", &party()),
-        Ok(Interpreted::NeedsClarification)
-    );
-    assert_eq!(
-        read_scripted("we descend", &party()),
-        Ok(Interpreted::NeedsClarification)
-    );
-}
-
-#[test]
-fn an_empty_line_is_an_error() {
-    assert_eq!(
-        read_scripted("   ", &party()),
-        Err(InterpretError::EmptyLine)
-    );
-}
-
-#[test]
-fn an_empty_party_has_nobody_to_move() {
-    assert_eq!(
-        read_scripted("we walk to the town square", &[]),
-        Ok(Interpreted::NeedsClarification)
-    );
-}
-
-#[test]
 fn a_valid_move_answer_is_accepted_with_its_destination_trimmed() {
     let line = "the elf runs to the hallway";
     let answer = json!({
@@ -170,6 +43,16 @@ fn a_valid_move_answer_is_accepted_with_its_destination_trimmed() {
     assert_eq!(
         parse_reading(&answer, line, &party()),
         Ok(moves(MoveKind::Run, &["elf"], "the hallway", line))
+    );
+}
+
+#[test]
+fn a_first_person_answer_lists_the_speaker_as_a_mover() {
+    let line = "I will walk to the balcony";
+    let answer = json!({"reading": "move", "kind": "walk", "who": ["elf"], "to": "the balcony"});
+    assert_eq!(
+        parse_reading(&answer, line, &party()),
+        Ok(moves(MoveKind::Walk, &["elf"], "the balcony", line))
     );
 }
 
@@ -189,11 +72,35 @@ fn an_empty_who_in_a_move_answer_moves_the_whole_party() {
 }
 
 #[test]
+fn a_duplicate_id_in_a_move_answer_is_listed_once() {
+    let line = "the elf and the elf walk to the square";
+    let answer = json!({
+        "reading": "move",
+        "kind": "walk",
+        "who": ["elf", "elf"],
+        "to": "the square"
+    });
+    assert_eq!(
+        parse_reading(&answer, line, &party()),
+        Ok(moves(MoveKind::Walk, &["elf"], "the square", line))
+    );
+}
+
+#[test]
 fn a_not_a_move_answer_is_accepted() {
     let answer = json!({"reading": "not_a_move", "kind": null, "who": [], "to": null});
     assert_eq!(
         parse_reading(&answer, "how are you?", &party()),
         Ok(Interpreted::NotAMove)
+    );
+}
+
+#[test]
+fn a_needs_clarification_answer_is_accepted() {
+    let answer = json!({"reading": "needs_clarification", "kind": null, "who": [], "to": null});
+    assert_eq!(
+        parse_reading(&answer, "we walk to", &party()),
+        Ok(Interpreted::NeedsClarification)
     );
 }
 
@@ -281,38 +188,6 @@ fn an_empty_line_is_refused_before_the_answer_is_read() {
 }
 
 #[test]
-fn a_verb_from_a_json_table_is_read_without_a_code_change() {
-    let table = LabelTable::from_json_str(
-        r#"{"verbs":[{"phrase":"sprint","kind":"run"}],
-            "prepositions":["to"],"whole_party":["we"]}"#,
-    )
-    .expect("the table is valid");
-    let line = "we sprint to the gate";
-    assert_eq!(
-        ScriptedReader::new(table.clone()).read(line, &party()),
-        Ok(moves(
-            MoveKind::Run,
-            &["elf", "warrior", "wizard"],
-            "the gate",
-            line
-        ))
-    );
-    assert_eq!(
-        read_scripted_with(&table, "we walk to the gate", &party()),
-        Ok(Interpreted::NotAMove)
-    );
-}
-
-#[test]
-fn a_table_with_an_unknown_kind_is_refused() {
-    let error = LabelTable::from_json_str(
-        r#"{"verbs":[{"phrase":"fly","kind":"soar"}],"prepositions":[],"whole_party":[]}"#,
-    )
-    .expect_err("'soar' is not a movement kind");
-    assert_eq!(error.key(), "invalid_label_table");
-}
-
-#[test]
 fn every_error_has_a_stable_key() {
     let keys = [
         (InterpretError::EmptyLine, "empty_line"),
@@ -328,10 +203,6 @@ fn every_error_has_a_stable_key() {
         (
             InterpretError::MalformedAnswer { reason: "x".into() },
             "malformed_answer",
-        ),
-        (
-            InterpretError::InvalidLabelTable { reason: "x".into() },
-            "invalid_label_table",
         ),
     ];
     for (error, key) in keys {
@@ -351,12 +222,20 @@ fn schema_lists_every_movement_kind_and_the_closed_fields() {
 }
 
 #[test]
-fn facts_carry_the_line_the_party_and_the_kinds() {
-    let facts = jev_facts("we walk to the square", &party());
-    assert_eq!(facts["line"], "we walk to the square");
+fn facts_carry_the_line_the_speaker_the_party_and_the_kinds() {
+    let facts = jev_facts("I walk to the square", Some("elf"), None, &party());
+    assert_eq!(facts["line"], "I walk to the square");
+    assert_eq!(facts["speaker"]["id"], "elf");
+    assert_eq!(facts["speaker"]["display_name"], "Lirael");
     assert_eq!(facts["party"].as_array().map(Vec::len), Some(3));
     assert_eq!(
         facts["kinds"].as_array().map(Vec::len),
         Some(MoveKind::ALL.len())
     );
+}
+
+#[test]
+fn facts_without_a_speaker_carry_none() {
+    let facts = jev_facts("we walk to the square", None, None, &party());
+    assert_eq!(facts["speaker"], Value::Null);
 }

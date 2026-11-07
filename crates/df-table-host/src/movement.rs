@@ -13,6 +13,7 @@ pub mod brief;
 pub mod cli;
 pub mod design;
 pub mod interpret;
+pub mod routes;
 pub mod transition;
 pub mod types;
 
