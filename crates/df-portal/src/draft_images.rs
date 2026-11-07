@@ -168,6 +168,7 @@ fn status_of(error: DraftDeliveryError) -> StatusCode {
     }
 }
 
+#[allow(clippy::result_large_err, reason = "the error is the response itself")]
 async fn caller<S: AccountStore, M: EmailSender>(
     service: &CustomerService<S, M>,
     headers: &HeaderMap,

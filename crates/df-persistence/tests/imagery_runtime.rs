@@ -8,9 +8,7 @@ use df_imagery::execution::*;
 use df_imagery::runtime::*;
 use df_imagery::*;
 use df_persistence::imagery_execution::PostgresImageExecution;
-use df_persistence::imagery_publication::{
-    IMAGERY_PUBLICATION_MIGRATION_SQL, PostgresImagePublication,
-};
+use df_persistence::imagery_publication::PostgresImagePublication;
 use df_persistence::imagery_publication::{
     NativeImagePublisher, RuntimePublicationPorts, RuntimePublicationSettings,
 };
@@ -26,51 +24,6 @@ use std::sync::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_postgres::{Client, Config, NoTls};
 const NOW: i64 = 1_700_000_000_000;
-const FINANCE_MIGRATIONS: [(&str, &str); 6] = [
-    (
-        "0020",
-        include_str!("../migrations/0020_finance_journal.sql"),
-    ),
-    (
-        "0021",
-        include_str!("../migrations/0021_finance_funding.sql"),
-    ),
-    (
-        "0022",
-        include_str!("../migrations/0022_finance_admission.sql"),
-    ),
-    (
-        "0023",
-        include_str!("../migrations/0023_finance_refunds_disputes.sql"),
-    ),
-    (
-        "0024",
-        include_str!("../migrations/0024_finance_boundary.sql"),
-    ),
-    (
-        "0025",
-        include_str!("../migrations/0025_finance_refunds_disputes_boundary.sql"),
-    ),
-];
-
-const MEDIA_MIGRATIONS: [(&str, &str); 5] = [
-    ("0010", include_str!("../migrations/0010_media_catalog.sql")),
-    (
-        "0011",
-        include_str!("../migrations/0011_character_library.sql"),
-    ),
-    ("0012", include_str!("../migrations/0012_media_exports.sql")),
-    (
-        "0013",
-        include_str!("../migrations/0013_recovery_journal.sql"),
-    ),
-    ("0014", include_str!("../migrations/0014_media_sweep.sql")),
-];
-
-const MIGRATION_0038: &str = include_str!("../migrations/0038_imagery_operations.sql");
-const MIGRATION_0039: &str = include_str!("../migrations/0039_imagery_admission_bindings.sql");
-const MIGRATION_0040: &str = include_str!("../migrations/0040_imagery_execution.sql");
-
 struct Connection {
     client: Client,
     task: tokio::task::JoinHandle<()>,
@@ -458,7 +411,7 @@ async fn run_local_pipeline(older_supplier: bool) {
     );
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../artifacts/tmp/runtime-test")
-        .join(format!("{}", config.get_dbname().unwrap()));
+        .join(config.get_dbname().unwrap());
     let objects = Arc::new(NativeFileStore::new(&root, 16_777_216).unwrap());
     let catalog = Arc::new(
         PostgresMediaCatalog::open_existing(config.clone(), transport.clone(), 2)
@@ -521,56 +474,57 @@ async fn run_local_pipeline(older_supplier: bool) {
         assert_eq!(row.get::<_, i64>(1), NOW + 10);
         assert_eq!(row.get::<_, i64>(2), 0);
     }
-    let records = diagnostic_sink.0.lock().unwrap();
-    let names = records
-        .iter()
-        .map(|record| record.event_name)
-        .collect::<Vec<_>>();
-    for name in [
-        "image.requested",
-        "image.queued",
-        "image.claimed",
-        "image.admitted",
-        "image.transform_started",
-        "image.transform_completed",
-        "image.output_stored",
-        "image.published",
-        "image.completed",
-    ] {
+    {
+        let records = diagnostic_sink.0.lock().unwrap();
+        let names = records
+            .iter()
+            .map(|record| record.event_name)
+            .collect::<Vec<_>>();
+        for name in [
+            "image.requested",
+            "image.queued",
+            "image.claimed",
+            "image.admitted",
+            "image.transform_started",
+            "image.transform_completed",
+            "image.output_stored",
+            "image.published",
+            "image.completed",
+        ] {
+            assert!(
+                names.contains(&name),
+                "missing actual pipeline event {name}: {names:?}"
+            );
+        }
+        let published = records
+            .iter()
+            .find(|record| record.event_name == "image.published")
+            .unwrap();
+        for key in [
+            "image.job_id",
+            "image.stage_id",
+            "image.attempt_id",
+            "image.asset_id",
+            "image.config_revision",
+            "image.purpose",
+        ] {
+            assert!(
+                published
+                    .input
+                    .attributes
+                    .iter()
+                    .any(|(name, _)| name == key),
+                "missing {key}"
+            );
+        }
         assert!(
-            names.contains(&name),
-            "missing actual pipeline event {name}: {names:?}"
-        );
-    }
-    let published = records
-        .iter()
-        .find(|record| record.event_name == "image.published")
-        .unwrap();
-    for key in [
-        "image.job_id",
-        "image.stage_id",
-        "image.attempt_id",
-        "image.asset_id",
-        "image.config_revision",
-        "image.purpose",
-    ] {
-        assert!(
-            published
+            !published
                 .input
                 .attributes
                 .iter()
-                .any(|(name, _)| name == key),
-            "missing {key}"
+                .any(|(name, _)| name == "image.backend")
         );
     }
-    assert!(
-        !published
-            .input
-            .attributes
-            .iter()
-            .any(|(name, _)| name == "image.backend")
-    );
-    drop(records);
     assert_eq!(
         observer.health().failures,
         1,
@@ -1853,7 +1807,12 @@ async fn live_codex_generation_publishes_through_the_service() {
             "SELECT recovery_state::text FROM imagery.image_dispatch_recovery",
         ] {
             let rows = client.query(query, &[]).await.unwrap();
-            eprintln!("STATE {query} => {:?}", rows.iter().map(|row| row.get::<_, String>(0)).collect::<Vec<_>>());
+            eprintln!(
+                "STATE {query} => {:?}",
+                rows.iter()
+                    .map(|row| row.get::<_, String>(0))
+                    .collect::<Vec<_>>()
+            );
         }
     }
     let published = published.expect("the live Codex image was not published");

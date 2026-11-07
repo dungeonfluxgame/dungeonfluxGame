@@ -40,52 +40,6 @@ const DISPLAY: &[u8] = &[
     2, 57, 0, 121, 107, 35, 42, 216, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
 
-const FINANCE_MIGRATIONS: [(&str, &str); 6] = [
-    (
-        "0020",
-        include_str!("../migrations/0020_finance_journal.sql"),
-    ),
-    (
-        "0021",
-        include_str!("../migrations/0021_finance_funding.sql"),
-    ),
-    (
-        "0022",
-        include_str!("../migrations/0022_finance_admission.sql"),
-    ),
-    (
-        "0023",
-        include_str!("../migrations/0023_finance_refunds_disputes.sql"),
-    ),
-    (
-        "0024",
-        include_str!("../migrations/0024_finance_boundary.sql"),
-    ),
-    (
-        "0025",
-        include_str!("../migrations/0025_finance_refunds_disputes_boundary.sql"),
-    ),
-];
-
-const MEDIA_MIGRATIONS: [(&str, &str); 5] = [
-    ("0010", include_str!("../migrations/0010_media_catalog.sql")),
-    (
-        "0011",
-        include_str!("../migrations/0011_character_library.sql"),
-    ),
-    ("0012", include_str!("../migrations/0012_media_exports.sql")),
-    (
-        "0013",
-        include_str!("../migrations/0013_recovery_journal.sql"),
-    ),
-    ("0014", include_str!("../migrations/0014_media_sweep.sql")),
-];
-
-const MIGRATION_0038: &str = include_str!("../migrations/0038_imagery_operations.sql");
-const MIGRATION_0039: &str = include_str!("../migrations/0039_imagery_admission_bindings.sql");
-const MIGRATION_0040: &str = include_str!("../migrations/0040_imagery_execution.sql");
-const MIGRATION_0044: &str = include_str!("../migrations/0044_imagery_usage.sql");
-
 struct Connection {
     client: Client,
     task: tokio::task::JoinHandle<()>,

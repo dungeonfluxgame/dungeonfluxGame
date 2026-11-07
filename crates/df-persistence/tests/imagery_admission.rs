@@ -454,6 +454,7 @@ impl World {
 
     /// Accepts a job under `operation` and freezes `recipe` under `key`.
     /// Returns the frozen job revision the port must expect.
+    #[allow(clippy::too_many_arguments, reason = "a test fixture")]
     async fn frozen_job(
         &self,
         journal: &PostgresImageJournal,
@@ -481,6 +482,7 @@ impl World {
         .await
     }
 
+    #[allow(clippy::too_many_arguments, reason = "a test fixture")]
     async fn frozen_job_for(
         &self,
         journal: &PostgresImageJournal,
@@ -558,6 +560,7 @@ impl World {
         }
     }
 
+    #[allow(clippy::too_many_arguments, reason = "a test fixture")]
     fn binding(
         &self,
         owner_scope: Vec<u8>,
@@ -585,6 +588,7 @@ impl World {
         }
     }
 
+    #[allow(clippy::too_many_arguments, reason = "a test fixture")]
     fn port(
         &self,
         admission: Admission,

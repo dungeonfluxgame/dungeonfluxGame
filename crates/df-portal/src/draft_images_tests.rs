@@ -32,8 +32,8 @@ use df_types::{AccountId, WebSessionId};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use super::{DraftImagePolicy, DraftImageSource, router};
 use crate::SESSION_COOKIE;
+use crate::draft_images::{DraftImagePolicy, DraftImageSource, router};
 
 const ORIGIN: &str = "http://127.0.0.1:8099";
 const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -54,8 +54,8 @@ struct FakeSource {
 impl FakeSource {
     fn serving(asset: AssetId, owner: AccountId, bytes: Vec<u8>) -> Self {
         let basis = DeliveryBasis::for_tests(df_assets::DeliveryBasisFixture {
-            asset: asset,
-            owner: owner,
+            asset,
+            owner,
             attempt: AttemptId::from_bytes(&[7; 16]).unwrap(),
             write: WriteId::from_bytes(&[8; 16]).unwrap(),
             variant: df_assets::AssetVariant::Display,
@@ -94,7 +94,8 @@ impl DraftImageSource for FakeSource {
         self.buffer_calls.fetch_add(1, Ordering::SeqCst);
         self.seen_owner.lock().unwrap().push(owner);
         self.seen_variant.lock().unwrap().push(variant);
-        if let Some(hook) = self.on_buffer.lock().unwrap().clone() {
+        let hook = self.on_buffer.lock().unwrap().clone();
+        if let Some(hook) = hook {
             hook().await;
         }
         match self.buffer.lock().unwrap().clone() {
@@ -114,7 +115,7 @@ impl DraftImageSource for FakeSource {
         if deadline.has_passed() {
             return Err(DraftDeliveryError::DeadlineExceeded);
         }
-        self.authorize.lock().unwrap().clone()
+        *self.authorize.lock().unwrap()
     }
 }
 
@@ -412,25 +413,39 @@ async fn anonymous_and_unknown_assets_are_concealed() {
     assert_eq!(reply.status, StatusCode::NOT_FOUND);
     assert!(reply.body.is_empty());
     private(&reply);
-    for path in [
-        "/app/api/draft-images/not-hex".to_owned(),
-        format!(
-            "/app/api/draft-images/{}",
-            AssetId::from_bytes(&[77; 16]).unwrap().to_hex()
-        ),
-    ] {
-        let reply = harness
-            .send(
-                Method::GET,
-                &path,
-                Some(&harness.cookie.clone()),
-                HashMap::new(),
-            )
-            .await;
-        assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
-        assert!(reply.body.is_empty());
-        private(&reply);
-    }
+    let reply = harness
+        .send(
+            Method::GET,
+            "/app/api/draft-images/not-hex",
+            Some(&harness.cookie.clone()),
+            HashMap::new(),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert!(reply.body.is_empty());
+    private(&reply);
+    // An asset the source does not know is concealed the same way (the fake answers for every
+    // asset, so this one is a source that does not have it).
+    let unknown = self::harness(FakeSource::answering(
+        Err(DraftDeliveryError::NotFound),
+        Ok(()),
+    ))
+    .await;
+    let path = format!(
+        "/app/api/draft-images/{}",
+        AssetId::from_bytes(&[77; 16]).unwrap().to_hex()
+    );
+    let reply = unknown
+        .send(
+            Method::GET,
+            &path,
+            Some(&unknown.cookie.clone()),
+            HashMap::new(),
+        )
+        .await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{path}");
+    assert!(reply.body.is_empty());
+    private(&reply);
 }
 
 #[tokio::test]
@@ -482,7 +497,7 @@ async fn request_account_claims_are_not_authority() {
     let path = format!(
         "/app/api/draft-images/{}?account={}",
         harness.asset.to_hex(),
-        AccountId::from_bytes(&[5; 16]).unwrap().to_hex()
+        "05".repeat(16)
     );
     let reply = harness
         .send(Method::GET, &path, Some(&harness.cookie.clone()), extra)
