@@ -14,9 +14,9 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
-## 2026-11-06T23:47:06-05:00 to 2026-11-07T01:46:40-05:00
+## 2026-11-06T23:47:06-05:00 to 2026-11-07T02:06:11-05:00
 
-Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..6b2e53c5da53912c420232105bf34318d4cf097b
+Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..637a422cca7d1187ab64666f806cee88bf46ac09
 
 - a8fc2ff9 - CHANGELOG: record the wave 4 follow-through commit
 - f5ec7a30 - Speech switches default off; the last speech bubble stays until the next; no pop-in replay
@@ -34,6 +34,9 @@ Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..6b2e53c5da53912c420232105bf3431
 - 4f7a65fe - Image route names are defined once: df-imagery re-exports df-providers' constants
 - 3489d7fc - CHANGELOG: record the image orphan removal and route constant commits
 - 6b2e53c5 - persona converse: the characters of the shown scene talk to each other
+- 80847cbc - CHANGELOG: record the persona converse commit
+- 3e31b996 - Persona and backfill live test: guidance reaches the spoken line; clearer errors; trimmed text
+- 637a422c - persona converse: fix what its independent review found
 
 Reviewed read-only against AGENTS.md; behavior tests owed are marked TODO(DEV-12) (thinking-cue two-character test, bubble settle browser test).
 
