@@ -1,0 +1,42 @@
+[
+  {
+    "sequence": 1,
+    "at_ms": 1794064696974,
+    "question": "Where do these apples come from, Mara? situation=You and your travelling companion are at Mara's fruit stall in the town market, buying fruit for the road north. She answers where the apples come from.",
+    "gaps": [
+      {
+        "field": "backstory",
+        "topic": "apples\u2019 source or origin"
+      }
+    ],
+    "edits": [
+      {
+        "op": "append_text",
+        "field": "backstory",
+        "text": "She gets her apples from a small orchard just beyond town."
+      }
+    ],
+    "guidance": null,
+    "profile": "codex:gpt-6-luna"
+  },
+  {
+    "sequence": 2,
+    "at_ms": 1794064725466,
+    "question": "These apples last a week on the road north? situation=You and your travelling companion are at Mara's fruit stall in the town market, buying fruit for the road north. She answers the warrior.",
+    "gaps": [
+      {
+        "field": "backstory",
+        "topic": "Road durability of apples"
+      }
+    ],
+    "edits": [
+      {
+        "op": "append_text",
+        "field": "backstory",
+        "text": "Her apples travel well on the road; she packs them snugly so they arrive with their skins unbruised."
+      }
+    ],
+    "guidance": null,
+    "profile": "codex:gpt-6-luna"
+  }
+]

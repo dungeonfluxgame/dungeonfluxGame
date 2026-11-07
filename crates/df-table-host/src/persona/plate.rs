@@ -18,6 +18,7 @@ use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json, reply_value};
 use crate::imagegen::request::{GenerateReply, GenerateRequest, JobState};
 use crate::imagegen::{Purpose, routes::path as image_path};
+use crate::locate::cli::show as show_layout;
 use crate::locate::request::{
     CharacterRequest, IdentifiedLayout, IdentifyRequest, LocateReply, LocateRequest, LocatedLayout,
 };
@@ -223,12 +224,42 @@ async fn drop_stale_bubbles(port: u16, present: &[String]) -> Result<(), DevErro
     Ok(())
 }
 
+/// Puts `picture` behind the scene.
+async fn put_backdrop(port: u16, picture: &str) -> Result<(), PlateFailure> {
+    change(
+        port,
+        &SceneChange::Image {
+            slot: ImageSlot::TvBackdrop,
+            media: picture.to_owned(),
+            caption: None,
+            rotation_degrees: 0,
+            slide: None,
+            layout: None,
+        },
+    )
+    .await
+    .map_err(at(PlateStep::Backdrop))
+}
+
 async fn build(
     port: u16,
     name: &str,
     prompt: &str,
     characters: Vec<CharacterRequest>,
 ) -> Result<String, PlateFailure> {
+    // A plate already in the library with its scan is kept, not rendered again: the name is its
+    // identity (a generated plate is stored as `<name>.png`). Use a new name to render a new one.
+    let kept = format!("{name}.png");
+    if show_layout(port, &kept).await.is_ok() {
+        put_backdrop(port, &kept).await?;
+        return Ok(format!(
+            concat!(
+                "plate {}: kept {} and its scan, not rendered again; the characters in it ",
+                "are as named before"
+            ),
+            name, kept
+        ));
+    }
     let request = GenerateRequest {
         prompt: prompt.to_owned(),
         name: name.to_owned(),
@@ -271,19 +302,7 @@ async fn build(
     .await
     .map_err(at(PlateStep::Identify))?;
     let identified = reply_value(identified).map_err(at(PlateStep::Identify))?;
-    change(
-        port,
-        &SceneChange::Image {
-            slot: ImageSlot::TvBackdrop,
-            media: picture.clone(),
-            caption: None,
-            rotation_degrees: 0,
-            slide: None,
-            layout: None,
-        },
-    )
-    .await
-    .map_err(at(PlateStep::Backdrop))?;
+    put_backdrop(port, &picture).await?;
     let named = identified
         .rows
         .iter()

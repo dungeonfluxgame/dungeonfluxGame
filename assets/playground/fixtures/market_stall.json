@@ -1,0 +1,49 @@
+{
+  "name": "Market: the fruit stall",
+  "description": "The elf, the warrior and Mara Vell at her fruit stall in the town market: a plate made by the move transition (market-two.png, with its scan and the three characters named). Used to re-run persona and backfill exercises without rendering a new picture.",
+  "tv": {
+    "place": "",
+    "status": {
+      "kind": "ok"
+    },
+    "caption": null,
+    "backdrop": {
+      "media": "market-two.png",
+      "caption": null
+    },
+    "card": null,
+    "pills": {
+      "logo": "inline"
+    },
+    "party": [],
+    "seats": null,
+    "roleplay": {
+      "title": null,
+      "bubbles": [],
+      "caption": null
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Kael",
+    "goal": "Find a guide to the Ember Roads",
+    "status": {
+      "kind": "ok"
+    },
+    "narration": [
+      "The innkeeper wipes a mug and waits for your answer."
+    ],
+    "suggested": [
+      {
+        "label": "Ask about the price"
+      },
+      {
+        "label": "Ask about the road"
+      }
+    ],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

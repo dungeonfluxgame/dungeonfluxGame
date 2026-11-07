@@ -207,7 +207,7 @@ fn reply_value<T>(reply: LocateReply<T>) -> Result<T, DevError> {
     dev_client::reply_value(reply)
 }
 
-async fn show(port: u16, picture: &str) -> Result<StoredLayout, DevError> {
+pub(crate) async fn show(port: u16, picture: &str) -> Result<StoredLayout, DevError> {
     reply_value(get_json(port, &show_address(picture)).await?)
 }
 
