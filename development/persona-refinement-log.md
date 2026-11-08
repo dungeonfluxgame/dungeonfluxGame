@@ -847,6 +847,13 @@ judged by the mayor, with a plotted backstory and personas for everyone interact
   - the runbook no longer cites `artifacts/` scripts;
   - a misplaced doc comment and a stale runner comment were fixed.
 
+Run 76 (`run76-judgement.md`, stopped at line 44):
+- Checked the review fixes. "Sergeant" is now only said to the sergeant (a title belongs to the
+  one whose brief gives it).
+- Frames keep what holds a person (bound, kneeling) through a new shot. No frame triggered in
+  44 lines.
+- A goal's speaker is always "you", never their own look.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->
