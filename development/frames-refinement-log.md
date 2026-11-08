@@ -67,6 +67,19 @@ Built:
   lips parted, Kael laughing in a blur at the edge. The judge had picked a two-shot; the close-up
   look now says "the face of whoever was just hit hardest".
 
+- Run 8 (`whiplash-live1`, `whiplash.events`, Kael and Lena, `parallel=2`): events files can now
+  run dev commands (`<turn> | ! <command>`), so Kael's cold stance switched on at turn 5 and off at
+  turn 9 inside the conversation. Words: "Kael, you made me believe you. Don't make a joke of that
+  where everyone can hear." "Ask like a person, not a bell." "Don't touch me, Kael. Keep your
+  hands to yourself and your apology, too." Lena ended angry (irritation 84), trust 75 -> 52,
+  affection 40 -> 18: the betrayal bands of refinement 17 held. Frames, two made at once and
+  shown in order: 1 after line 1 (two-shot, hands), 2 after line 3 (over-the-shoulder, holding
+  hands, Lena smiling), 3 after line 10 (two-shot: Kael slumped and ashamed, Lena turned away,
+  the next table laughing), each about 110 s. Miss: both slots were busy with the gentle early
+  beats, so the moment he turned on her (lines 5 to 8) got no frame of its own.
+  Proposed: a frame started while others are in flight must clear a higher gate, so a slot is
+  kept for the big moment.
+
 ## Open
 
 - Latency: Codex edits take 60 to 100 s, so a frame lands 6 to 10 lines after its moment; a

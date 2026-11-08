@@ -201,6 +201,20 @@ $D dev --port 7879 persona converse turns=14 opener=tavern_server with=warrior,t
   "scene=<what bar-period.png shows>" "a busy night at the tavern"
 ```
 
+An events file line may also be `<turn> | ! <dev command>`: the command runs before that turn's
+line, to switch a stance on or off mid-scene. `market-threads/whiplash.events` uses it: Kael
+flirts Lena to the top, turns cold for a few lines (a temporary `cold-contempt` stance and a
+trigger, added and dropped by the file itself), then is ashamed. Preset Lena first:
+
+```bash
+for e in "attraction 70" "trust 75" "affection 40" "joy 60"; do \
+  $D dev --port 7879 persona state tavern_server set $e; done
+$D dev --port 7879 persona state tavern_server rapport warrior 50
+$D dev --port 7879 persona converse turns=12 opener=tavern_server with=warrior,tavern_server \
+  events=development/market-threads/whiplash.events frames=<new-name> hold=15 parallel=2 \
+  max_frames=5 "scene=<what bar-period.png shows>" "a late shift at the tavern"
+```
+
 What happens goes in an events file, one `<turn> | <what happens>` a line (`#` comments). On
 that turn and the next, the speaker is told it is happening right now and reacts to it; the frame
 judge gets it as a seen line `(Happening now: ...)`, because dialogue alone never shows a spilled

@@ -255,16 +255,34 @@ pub struct ConverseRequest {
     pub events: Option<std::path::PathBuf>,
 }
 
-/// Something that happens at the table at a turn of the talk: the speakers of that turn and the
-/// next react to it, and the frame judge counts it as seen.
+/// Something that happens at a turn of the talk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneEvent {
     pub turn: u32,
-    pub what: String,
+    pub happens: Happening,
 }
 
-/// The events of an events file: one `<turn> | <what happens>` a line, `#` lines and blank lines
-/// skipped, in the order of their turns.
+/// What an event is: something seen at the table (the speakers of that turn and the next react to
+/// it, and the frame judge counts it as seen), or a dev command run before that turn's line (a
+/// stance switched on mid-scene), as its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Happening {
+    Seen(String),
+    Command(Vec<String>),
+}
+
+impl SceneEvent {
+    /// What is seen, when the event is something seen.
+    pub fn seen(&self) -> Option<&str> {
+        match &self.happens {
+            Happening::Seen(what) => Some(what),
+            Happening::Command(_) => None,
+        }
+    }
+}
+
+/// The events of an events file: one `<turn> | <what happens>` or `<turn> | ! <dev command>` a
+/// line, `#` lines and blank lines skipped, in the order of their turns.
 pub fn parse_events(text: &str) -> Result<Vec<SceneEvent>, ConverseError> {
     let mut events = Vec::new();
     for (index, raw) in text.lines().enumerate() {
@@ -279,10 +297,16 @@ pub fn parse_events(text: &str) -> Result<Vec<SceneEvent>, ConverseError> {
         if what.is_empty() {
             return Err(invalid());
         }
-        events.push(SceneEvent {
-            turn,
-            what: what.to_owned(),
-        });
+        let happens = match what.strip_prefix('!') {
+            Some(command) => Happening::Command(
+                crate::command::split_words(command.trim())
+                    .ok()
+                    .filter(|words| !words.is_empty())
+                    .ok_or_else(invalid)?,
+            ),
+            None => Happening::Seen(what.to_owned()),
+        };
+        events.push(SceneEvent { turn, happens });
     }
     events.sort_by_key(|event| event.turn);
     Ok(events)
@@ -379,21 +403,37 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
     let mut transcript = Vec::new();
     for turn in 0..request.turns {
         // An event is happening on its turn and the one after it, so the answer reacts to it too.
+        for event in events.iter().filter(|event| event.turn == turn) {
+            if let Happening::Command(words) = &event.happens {
+                // The command line is the dev CLI's own, so this is a call back into it.
+                let ran = Box::pin(crate::dev::run_dev(port, words)).await;
+                transcript.push(match ran {
+                    Ok(text) => format!(
+                        "  ! {}: {}",
+                        words.join(" "),
+                        text.lines().next().unwrap_or("ok")
+                    ),
+                    Err(error) => format!("  ! {} failed: {error}", words.join(" ")),
+                });
+            }
+        }
         let happening = events
             .iter()
             .rev()
+            .filter(|event| event.seen().is_some())
             .find(|event| event.turn <= turn && turn <= event.turn + 1);
         if let (Some(watch), Some(event)) = (frames.as_mut(), happening)
             && event.turn == turn
+            && let Some(seen) = event.seen()
         {
-            watch.note_event(&event.what);
+            watch.note_event(seen);
         }
         let say = SayRequest {
             character: speaker.id.clone(),
             situation: table.situation(
                 &speaker,
                 request.topic.as_deref(),
-                happening.map(|event| event.what.as_str()),
+                happening.and_then(SceneEvent::seen),
                 &history,
             ),
             model: request.model.clone(),

@@ -5,8 +5,8 @@ use serde_json::json;
 use super::address::{AddressError, address_schema, parse_address};
 use super::cli::{PersonaCommand, parse};
 use super::converse::{
-    ConverseError, ConverseRequest, DEFAULT_TURNS, MAXIMUM_TURNS, SceneEvent, Speaker, Table, Turn,
-    parse_events, pause_after,
+    ConverseError, ConverseRequest, DEFAULT_TURNS, Happening, MAXIMUM_TURNS, SceneEvent, Speaker,
+    Table, Turn, parse_events, pause_after,
 };
 use crate::speech::{SpeechError, Voiced};
 
@@ -216,23 +216,51 @@ fn the_command_reads_its_options_and_an_optional_topic() {
 
 #[test]
 fn an_events_file_reads_turns_and_happenings_in_order_and_names_a_bad_line() {
-    let events = parse_events("# a scene\n3 | Kael stands.\n\n0 | A drunk stumbles in.\n").unwrap();
+    let events = parse_events(
+        "# a scene
+3 | Kael stands.
+
+0 | A drunk stumbles in.
+2 | ! persona state elf reset
+",
+    )
+    .unwrap();
     assert_eq!(
         events,
         [
             SceneEvent {
                 turn: 0,
-                what: "A drunk stumbles in.".to_owned()
+                happens: Happening::Seen("A drunk stumbles in.".to_owned())
+            },
+            SceneEvent {
+                turn: 2,
+                happens: Happening::Command(
+                    ["persona", "state", "elf", "reset"]
+                        .map(str::to_owned)
+                        .to_vec()
+                )
             },
             SceneEvent {
                 turn: 3,
-                what: "Kael stands.".to_owned()
+                happens: Happening::Seen("Kael stands.".to_owned())
             },
         ]
     );
+    assert_eq!(events[1].seen(), None);
     assert_eq!(
-        parse_events("1 | fine\nnot an event\n"),
+        parse_events(
+            "1 | fine
+not an event
+"
+        ),
         Err(ConverseError::InvalidEvent { line: 2 })
+    );
+    assert_eq!(
+        parse_events(
+            "1 | !
+"
+        ),
+        Err(ConverseError::InvalidEvent { line: 1 })
     );
 }
 

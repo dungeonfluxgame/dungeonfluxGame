@@ -1,0 +1,15 @@
+# Whiplash in the tavern, for `persona converse with=warrior,tavern_server opener=tavern_server
+# events=...`: Lena opens (even turns), Kael answers (odd turns). He flirts her to the top, turns
+# cold and contemptuous with no warning (a temporary stance, switched on and off with `!` lines),
+# then is ashamed. Set Lena's starting feelings first (see the runbook).
+# turn | what happens, or ! <dev command> run before that turn's line
+0 | Kael has come back to the tavern again tonight just to see Lena; she smiles when she sees him at the counter.
+1 | Kael takes Lena's hand gently across the counter and looks into her eyes in the candlelight.
+3 | Kael leans close over the counter and tells Lena softly that he is falling for her.
+5 | ! persona behavior warrior add cold-contempt "Turns on her without warning tonight: contemptuous and belittling, mocks her feelings and her work, treats her as beneath him; never violent."
+5 | ! persona trigger warrior add turned-cold behavior=cold-contempt "He is in the tavern tonight"
+5 | Kael suddenly pulls his hand back from Lena's and laughs at her, loud enough for the next table to hear.
+7 | The next table laughs along as Kael snaps his fingers at Lena for another ale.
+9 | ! persona trigger warrior drop turned-cold
+9 | ! persona behavior warrior drop cold-contempt
+9 | Kael's laugh dies; he looks ashamed and reaches for her arm, and she pulls away.
