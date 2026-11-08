@@ -474,6 +474,30 @@ attraction and affection down, rapport down 20 to 40); after cruelty from someon
 apology brings trust back only 0 to 5 a line, and forgiveness is guarded and conditional. Rerun
 owed.
 
+## Refinement 18 and runs 40 to 43 (whiplash, the weaknesses of run 8)
+
+Owner review of run 8 (the live whiplash scene): strong words, but every Lena line opened with
+"Kael"; modern phrasing ("that's a lot to hear", "one evening at a time"); Kael's cruelty mild;
+shock (28) and public shame (21) barely registered.
+Changes (data, live): conduct lines to vary how a line opens (a name when it carries weight, not
+as a habit) and to speak as someone of this world, with no modern idioms or therapy talk; a shock
+band (a flip of manner: surprise 25 to 45 on that line) and a public-shame band (embarrassment 15
+to 35 on top of the anger). Scene: a crueler temporary stance for Kael, and an apology turn that
+names what he did.
+Runs 40 and 41 (`run40-41-whiplash.md`): openers fixed (1 of 6 with the name), no modern idioms,
+Kael's cruelty landed ("You were a fool to hope, Lena"). Run a stopped at turn 6: the addressee
+judge named the speaker, the answer was refused, and the refusal ended the talk (and would have
+left Kael's stance behind; run b's own drop removed it). Run b overshot: surprise 95, sadness 93,
+embarrassment 88 at the end, because the model added shock on every cruel line after the flip.
+Fixes: a refused or failed addressee reading falls back to taking turns (code); shock is only for
+what is new, and each further jab adds less shame (data).
+Runs 42 and 43 (`run42-43-whiplash.md`): both complete; openers 0 and 2 of 6 with the name
+("Kael. Don't touch me", where it carries weight); no modern idioms; "Don't laugh at me, Kael.
+Not after that." "Find another server; I'm done being your joke." "Your shame doesn't mend what
+you did in front of them." Surprise spiked and faded (28 and 54 at the end), embarrassment 43 and
+89 (b was shamed twice in public), trust down to 28 and 8, affection to 4. Open: Kael's apologies
+stay short ("I'm sorry. I won't touch you again"): his own terse persona.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

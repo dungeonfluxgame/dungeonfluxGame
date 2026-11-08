@@ -502,14 +502,15 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
         if let (Some(watch), Some(judged)) = (frames.as_mut(), judged) {
             watch.consider(port, turn, judged, &mut transcript).await;
         }
+        // Who the line was directed at only chooses the next speaker: a reading that failed (a
+        // refused answer included) falls back to taking turns, and the talk goes on.
         let addressed = match addressed {
             Ok(addressed) => addressed,
             Err(error) => {
-                return Err(DevError::ConverseStopped {
-                    done: transcript,
-                    turn: turn + 1,
-                    error: Box::new(error),
-                });
+                transcript.push(format!(
+                    "  addressee not read after line {turn} ({error}); next speaker by turn"
+                ));
+                None
             }
         };
         history.push(Turn {

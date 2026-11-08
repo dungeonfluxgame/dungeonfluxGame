@@ -31,7 +31,7 @@ pub const DEFAULT_ATTENTION_CAPACITY: u8 = 3;
 /// temperament: the content's calibration of feeling, editable in `emotions.json`.
 /// How characters behave and speak, in plain words a model reads with each line: the
 /// persona engine's tunable conduct, editable in `emotions.json` without a rebuild.
-pub const DEFAULT_CONDUCT: [&str; 13] = [
+pub const DEFAULT_CONDUCT: [&str; 15] = [
     concat!(
         "Speak like a real person, not a helper: plain words, contractions, short and long ",
         "sentences mixed, no stock pleasantries every line.",
@@ -93,12 +93,23 @@ pub const DEFAULT_CONDUCT: [&str; 13] = [
         "used again unless asked.",
     ),
     concat!(
+        "Vary how a line opens: do not begin line after line with the other person's ",
+        "name, the same word or the same sound (Ah, Well, Oh); use a name when it carries ",
+        "weight, not as a habit.",
+    ),
+    concat!(
+        "Speak as someone of this world and time, not of today: no modern idioms or ",
+        "therapy talk (no \"that's a lot\", \"one day at a time\", \"I hear you\", ",
+        "\"process this\", \"boundaries\", \"okay\"); plain, period-true speech with the ",
+        "feeling in it.",
+    ),
+    concat!(
         "A line is only the words the character says aloud: no stage directions, actions in",
         " asterisks or narration; let the words carry what they do.",
     ),
 ];
 
-pub const DEFAULT_APPRAISAL_GUIDE: [&str; 21] = [
+pub const DEFAULT_APPRAISAL_GUIDE: [&str; 23] = [
     concat!(
         "Almost every line moves the listener a little: give at least one emotion change ",
         "unless the line was truly empty of feeling.",
@@ -156,6 +167,17 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 21] = [
         "sadness a little but does not turn it into joy.",
     ),
     "Something unexpected (good or bad): surprise up 10 to 30, fading quickly.",
+    concat!(
+        "Shock: when someone's manner flips without warning (warmth to contempt, cruelty ",
+        "to kindness), surprise up 25 to 45 on that line, whatever else is felt; after ",
+        "that it is no longer new, so cruelty that goes on adds anger, hurt and shame but ",
+        "no more surprise.",
+    ),
+    concat!(
+        "Being mocked, belittled or shamed where others can see or hear: embarrassment up ",
+        "15 to 35 on top of the anger, more when the one doing it was close to them; each ",
+        "further jab adds less (5 to 10).",
+    ),
     concat!(
         "A joke or something absurd: amusement up 5 to 20 if it lands, or irritation up a ",
         "little if it is badly timed.",
