@@ -177,27 +177,59 @@ pub(crate) async fn deliver_plate(
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
 ) -> Result<String, PlateFailure> {
-    let before = current_title(port).await.map_err(at(PlateStep::Generate))?;
-    change(port, &title_change(UPDATING_TITLE, Glyph::Spinner))
-        .await
-        .map_err(at(PlateStep::Generate))?;
+    let before = start_spinner(port).await.map_err(at(PlateStep::Generate))?;
+    let made = make_frame(port, name, prompt, characters, base, None).await;
+    let restored = put_title_back(port, before).await;
+    match (made, restored) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Err(failure), _) => Err(failure),
+        (Ok(_), Err(error)) => Err(at(PlateStep::Backdrop)(error)),
+    }
+}
+
+/// Shows the spinner title on the scene and answers the title it replaced.
+pub(super) async fn start_spinner(port: u16) -> Result<Option<SceneTitle>, DevError> {
+    let before = current_title(port).await?;
+    change(port, &title_change(UPDATING_TITLE, Glyph::Spinner)).await?;
+    Ok(before)
+}
+
+/// Puts `before` back as the scene's title, or takes the title away when there was none.
+pub(super) async fn put_title_back(port: u16, before: Option<SceneTitle>) -> Result<(), DevError> {
+    let put_back = before.map_or_else(title_removed, |title| {
+        title_change(&title.text, title.glyph)
+    });
+    change(port, &put_back).await
+}
+
+/// Makes the plate `name` and puts it behind the scene, as `deliver_plate` does but without the
+/// spinner (its caller shows one), and only once `after` has fired: a frame made alongside an
+/// earlier one waits for that one to be shown, so an older picture never replaces a newer one.
+/// Bubbles of characters not in the new picture are taken away.
+pub(super) async fn make_frame(
+    port: u16,
+    name: &str,
+    prompt: &str,
+    characters: Vec<CharacterRequest>,
+    base: Option<&str>,
+    after: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> Result<String, PlateFailure> {
     let present: Vec<String> = characters
         .iter()
         .map(|character| character.name.clone())
         .collect();
-    let made = build(port, name, prompt, characters, base).await;
-    let dropped = match &made {
-        Ok(_) => drop_stale_bubbles(port, &present).await,
-        Err(_) => Ok(()),
-    };
-    let put_back = before.map_or_else(title_removed, |title| {
-        title_change(&title.text, title.glyph)
-    });
-    let restored = change(port, &put_back).await;
-    match (made, dropped.and(restored)) {
-        (Ok(summary), Ok(())) => Ok(summary),
-        (Err(failure), _) => Err(failure),
-        (Ok(_), Err(error)) => Err(at(PlateStep::Backdrop)(error)),
+    let summary = build(port, name, prompt, characters, base, after).await?;
+    drop_stale_bubbles(port, &present)
+        .await
+        .map_err(at(PlateStep::Backdrop))?;
+    Ok(summary)
+}
+
+/// Waits for `after` to fire, when there is one; a sender that went away (its frame failed) lets
+/// this one go on.
+async fn wait_turn(after: Option<tokio::sync::oneshot::Receiver<()>>) {
+    if let Some(after) = after {
+        let _ = after.await;
     }
 }
 
@@ -257,11 +289,13 @@ async fn build(
     prompt: &str,
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
+    after: Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<String, PlateFailure> {
     // A plate already in the library with its scan is kept, not rendered again: the name is its
     // identity (a generated plate is stored as `<name>.png`). Use a new name to render a new one.
     let kept = format!("{name}.png");
     if show_layout(port, &kept).await.is_ok() {
+        wait_turn(after).await;
         put_backdrop(port, &kept).await?;
         return Ok(format!(
             concat!(
@@ -314,6 +348,7 @@ async fn build(
     .await
     .map_err(at(PlateStep::Identify))?;
     let identified = reply_value(identified).map_err(at(PlateStep::Identify))?;
+    wait_turn(after).await;
     put_backdrop(port, &picture).await?;
     let named = identified
         .rows

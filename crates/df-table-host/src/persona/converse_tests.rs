@@ -5,7 +5,8 @@ use serde_json::json;
 use super::address::{AddressError, address_schema, parse_address};
 use super::cli::{PersonaCommand, parse};
 use super::converse::{
-    ConverseError, ConverseRequest, DEFAULT_TURNS, MAXIMUM_TURNS, Speaker, Table, Turn, pause_after,
+    ConverseError, ConverseRequest, DEFAULT_TURNS, MAXIMUM_TURNS, SceneEvent, Speaker, Table, Turn,
+    parse_events, pause_after,
 };
 use crate::speech::{SpeechError, Voiced};
 
@@ -157,7 +158,7 @@ fn the_next_speaker_is_never_the_last_one() {
 fn a_situation_tells_the_setting_the_topic_the_latest_lines_and_the_task() {
     let table = table();
     let speaker = table.opener(Some("wizard")).unwrap();
-    let opening = table.situation(speaker, Some("the guild road"), &[]);
+    let opening = table.situation(speaker, Some("the guild road"), None, &[]);
     assert!(opening.contains("Aldric Venn"));
     assert!(opening.contains("You are The Wizard"));
     assert!(opening.contains("the guild road"));
@@ -165,14 +166,17 @@ fn a_situation_tells_the_setting_the_topic_the_latest_lines_and_the_task() {
     let history: Vec<Turn> = (0..9)
         .map(|index| turn("elf", &format!("line number {index}")))
         .collect();
-    let later = table.situation(speaker, None, &history);
+    let later = table.situation(speaker, None, Some("A tankard falls."), &history);
+    assert!(later.contains("Happening right now, as you speak: A tankard falls."));
     assert!(later.contains("The Elf: line number 8"));
     assert!(later.contains("line number 3"));
     assert!(
         !later.contains("line number 2"),
         "only the latest six lines"
     );
-    assert!(later.contains("React to the last thing said"));
+    assert!(later.contains("React first to what is happening right now (A tankard falls.)"));
+    let quiet = table.situation(speaker, None, None, &history);
+    assert!(quiet.contains("React to the last thing said"));
 }
 
 #[test]
@@ -211,6 +215,28 @@ fn the_command_reads_its_options_and_an_optional_topic() {
 }
 
 #[test]
+fn an_events_file_reads_turns_and_happenings_in_order_and_names_a_bad_line() {
+    let events = parse_events("# a scene\n3 | Kael stands.\n\n0 | A drunk stumbles in.\n").unwrap();
+    assert_eq!(
+        events,
+        [
+            SceneEvent {
+                turn: 0,
+                what: "A drunk stumbles in.".to_owned()
+            },
+            SceneEvent {
+                turn: 3,
+                what: "Kael stands.".to_owned()
+            },
+        ]
+    );
+    assert_eq!(
+        parse_events("1 | fine\nnot an event\n"),
+        Err(ConverseError::InvalidEvent { line: 2 })
+    );
+}
+
+#[test]
 fn frame_options_are_read_with_frames_and_refused_without_it() {
     assert_eq!(request_of("converse").frames, None);
     let watched = request_of(
@@ -224,8 +250,18 @@ fn frame_options_are_read_with_frames_and_refused_without_it() {
     assert_eq!(watched.hold, Duration::from_secs(10));
     assert_eq!(watched.maximum_frames, 3);
     assert_eq!(watched.judge_model.as_deref(), Some("luna"));
-    assert!(!request_of("converse frames=x edit=false").frames.expect("frames").edit);
-    for bad in ["gate=30", "frames=x gate=101", "frames=x edit_from=middle", "frames=bad.name"] {
+    assert!(
+        !request_of("converse frames=x edit=false")
+            .frames
+            .expect("frames")
+            .edit
+    );
+    for bad in [
+        "gate=30",
+        "frames=x gate=101",
+        "frames=x edit_from=middle",
+        "frames=bad.name",
+    ] {
         assert!(
             parse(&words(&format!("converse {bad}"))).is_err(),
             "{bad} is refused"

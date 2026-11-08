@@ -58,7 +58,8 @@ pub const FRAME_INSTRUCTION: &str = concat!(
     "only grows as more are said. Count only ",
     "what a viewer would see: faces and expressions, who stands or sits where, who leans toward ",
     "or away from whom, what someone holds, props in the room, the light. Talk alone, a feeling ",
-    "nobody shows, or something only mentioned and not happening here changes nothing. ",
+    "nobody shows, or something only mentioned and not happening here changes nothing; a line ",
+    "\"(Happening now: ...)\" is something that happens in the room now and is seen. ",
     "changed_percent scores the change by scale. changes lists each visible change: the id of ",
     "the character in speakers it is about (null for the room), its kind from kinds, and now, a ",
     "few plain words on how it looks now. next_picture is the whole picture as it should look ",
@@ -126,7 +127,11 @@ impl Default for FrameConfig {
                 },
                 FrameShot {
                     id: "close-up".to_owned(),
-                    look: "a close-up on one face, filling the frame, to land a feeling".to_owned(),
+                    look: concat!(
+                        "a close-up on the face of whoever was just hit hardest by what happened ",
+                        "or was said, filling the frame, to land a feeling"
+                    )
+                    .to_owned(),
                 },
                 FrameShot {
                     id: "extreme-close-up".to_owned(),

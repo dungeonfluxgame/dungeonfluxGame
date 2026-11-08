@@ -189,7 +189,27 @@ may take, each an id and how it looks: two-shot, close-up, extreme close-up, ove
 telephoto, wide, Dutch angle, low angle, high angle). The judge picks the shot that tells the
 moment and is told the shot on screen, so it varies; the edit is told to frame it that way.
 `with=warrior,tavern_server` on `persona converse` chooses who talks (otherwise everyone in the
-scene with a persona talks, the band and dancers included). Command options override them for
+scene with a persona talks, the band and dancers included).
+
+A dramatic scene for shot variety (the recipe of 2026-11-07, on `bar-period.png`):
+
+```bash
+$D dev --port 7879 scene image tv-backdrop bar-period.png
+$D dev --port 7879 persona state warrior reset; $D dev --port 7879 persona state tavern_server reset
+$D dev --port 7879 persona converse turns=14 opener=tavern_server with=warrior,tavern_server \
+  events=development/market-threads/drama.events frames=<new-name> hold=20 max_frames=5 \
+  "scene=<what bar-period.png shows>" "a busy night at the tavern"
+```
+
+What happens goes in an events file, one `<turn> | <what happens>` a line (`#` comments). On
+that turn and the next, the speaker is told it is happening right now and reacts to it; the frame
+judge gets it as a seen line `(Happening now: ...)`, because dialogue alone never shows a spilled
+tray. Do not script events in the topic: a topic is what is on the table for every line, and one
+that listed events ("a drunk shoves Kael, then they make up", even "this happens now, in order")
+was played as already over ("You kept your sword sheathed. Good."). `hold=20` lets frames come
+closer together than the 30 s default, `parallel=2` lets two frames be made at once (shown in
+order, one spinner) so fast scenes lose fewer beats, and `max_frames` caps the spend (each frame
+is one image edit and one scan). Command options override them for
 one run. Frames are stored as `<frames>-1`, `<frames>-2`...; a name already in the library is
 kept, not made again, so give each run a new `frames=` name. `scene=` matters: it is what the
 judge compares the lines against. Without it the judge starts from the cast list alone. The
@@ -210,7 +230,9 @@ backfill result lines for Mara; `persona backfills fruit_vendor` lists what was 
 Any scene can use the same runner: a beats file sets who answers and where with `@keeper <id>`,
 `@keeper_situation <text>` and `@speaker_situation <text>`. Example, the bar at night:
 `bash development/market-thread.sh development/market-threads/flirt.beats` (Kael flirts with
-Lena the server for 20 rounds). `@state <emotion> <level>` lines start the keeper mid-story
+Lena the server for 20 rounds). `! <dev command>` lines run a dev command between beats
+(switch a stance on and off mid-scene, as `romance-whiplash.beats` does).
+`@state <emotion> <level>` lines start the keeper mid-story
 (the jealousy and farewell scenes start with attraction and affection already there). Never
 edit the runner or a beats file while a run uses it: bash reads a script as it goes, so an edit
 garbles the run. Run a copy for long batches. Reset both first: `persona state <id> reset`. Each run's full

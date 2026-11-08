@@ -31,7 +31,10 @@ use super::format::{
     format_answered, format_backfilled, format_backfills, format_covered, format_generation,
     format_list, format_owner, format_public, format_spoken, format_voice_generated,
 };
-use super::frame_watch::{DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions, judge_frame};
+use super::frame_watch::{
+    DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions, MAXIMUM_PARALLEL_FRAMES,
+    judge_frame,
+};
 use super::options::{Asking, GUIDANCE_KEYS, GuidanceArgs, asking_from, take_options};
 use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, CastOutcome,
@@ -153,9 +156,9 @@ pub const PERSONA_SAY_USAGE: &str = concat!(
 /// `persona converse`: the characters of the shown scene talk to each other.
 pub const PERSONA_CONVERSE_USAGE: &str = concat!(
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
-    "[plate=<name>] [model=<name>] [with=<id>,<id>...] ",
+    "[plate=<name>] [model=<name>] [with=<id>,<id>...] [events=<file of turn | what happens>] ",
     "[frames=<name> [gate=0-100] [scene=<what the picture shows>] ",
-    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [max_frames=N] ",
+    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [max_frames=N] [parallel=1-4] ",
     "[judge_model=<name>]] [<topic...>]",
 );
 /// `persona frame`: how much the picture would visibly change for these lines.
@@ -448,6 +451,8 @@ fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
             "max_frames",
             "judge_model",
             "with",
+            "events",
+            "parallel",
         ],
     );
     let mut turns = DEFAULT_TURNS;
@@ -506,6 +511,10 @@ fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
             })
             .transpose()?
             .unwrap_or_default(),
+        events: given
+            .iter()
+            .find(|(key, _)| *key == "events")
+            .map(|(_, path)| PathBuf::from(path)),
     }))
 }
 
@@ -522,7 +531,14 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         if let Some((key, _)) = given.iter().find(|(key, _)| {
             matches!(
                 *key,
-                "gate" | "scene" | "edit" | "edit_from" | "hold" | "max_frames" | "judge_model"
+                "gate"
+                    | "scene"
+                    | "edit"
+                    | "edit_from"
+                    | "hold"
+                    | "max_frames"
+                    | "parallel"
+                    | "judge_model"
             )
         }) {
             return Err(bad_choice(
@@ -560,6 +576,10 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         .map_or(DEFAULT_MAXIMUM_FRAMES, |most| {
             u32::try_from(most).unwrap_or(DEFAULT_MAXIMUM_FRAMES)
         });
+    let parallel = value("parallel")
+        .map(|text| number("parallel", text, MAXIMUM_PARALLEL_FRAMES as u64))
+        .transpose()?
+        .map_or(1, |parallel| usize::try_from(parallel).unwrap_or(1).max(1));
     let from_last = match value("edit_from") {
         None | Some("first") => false,
         Some("last") => true,
@@ -576,6 +596,7 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         from_last,
         hold: Duration::from_secs(hold),
         maximum_frames,
+        parallel,
         judge_model: value("judge_model").map(str::to_owned),
     }))
 }

@@ -67,6 +67,8 @@ pub enum ConverseError {
     UnknownOpener { opener: String },
     /// A character named to talk is not in the scene with a persona.
     UnknownSpeaker { id: String },
+    /// Line `line` of an events file is not `<turn> | <what happens>`.
+    InvalidEvent { line: usize },
 }
 
 impl std::fmt::Display for ConverseError {
@@ -83,6 +85,10 @@ impl std::fmt::Display for ConverseError {
             Self::UnknownSpeaker { id } => write!(
                 formatter,
                 "'{id}' is not a character of the shown scene with a persona"
+            ),
+            Self::InvalidEvent { line } => write!(
+                formatter,
+                "line {line} of the events file is not `<turn> | <what happens>`"
             ),
         }
     }
@@ -171,7 +177,13 @@ impl Table {
 
     /// What `speaker` is told for their turn: the setting, the topic when there is one, the latest
     /// lines, and the instruction.
-    pub fn situation(&self, speaker: &Speaker, topic: Option<&str>, history: &[Turn]) -> String {
+    pub fn situation(
+        &self,
+        speaker: &Speaker,
+        topic: Option<&str>,
+        happening: Option<&str>,
+        history: &[Turn],
+    ) -> String {
         let people: Vec<String> = self
             .speakers
             .iter()
@@ -185,6 +197,12 @@ impl Table {
         if let Some(topic) = topic {
             text.push_str(&format!(" What is on the table: {topic}"));
         }
+        if let Some(happening) = happening {
+            text.push_str(&format!(
+                " Happening right now, as you speak: {happening} Your line reacts to it as it \
+                 happens."
+            ));
+        }
         if history.is_empty() {
             text.push_str(" You speak first: open the conversation in your own voice.");
             return text;
@@ -193,10 +211,14 @@ impl Table {
         for line in self.recent_lines(history) {
             text.push_str(&format!("\n{line}"));
         }
-        text.push_str(
-            "\nReact to the last thing said, in your own voice; you may address someone by name. \
-             One or two short sentences. Do not repeat what was already said.",
-        );
+        let first = match happening {
+            Some(happening) => format!("React first to what is happening right now ({happening})"),
+            None => "React to the last thing said".to_owned(),
+        };
+        text.push_str(&format!(
+            "\n{first}, in your own voice; you may address someone by name. One or two short \
+             sentences. Do not repeat what was already said."
+        ));
         text
     }
 }
@@ -229,6 +251,41 @@ pub struct ConverseRequest {
     pub frames: Option<FrameOptions>,
     /// Who talks: these characters of the scene, by id; everyone with a persona when empty.
     pub with: Vec<String>,
+    /// A file of what happens while they talk, one `<turn> | <what happens>` a line.
+    pub events: Option<std::path::PathBuf>,
+}
+
+/// Something that happens at the table at a turn of the talk: the speakers of that turn and the
+/// next react to it, and the frame judge counts it as seen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneEvent {
+    pub turn: u32,
+    pub what: String,
+}
+
+/// The events of an events file: one `<turn> | <what happens>` a line, `#` lines and blank lines
+/// skipped, in the order of their turns.
+pub fn parse_events(text: &str) -> Result<Vec<SceneEvent>, ConverseError> {
+    let mut events = Vec::new();
+    for (index, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let invalid = || ConverseError::InvalidEvent { line: index + 1 };
+        let (turn, what) = line.split_once('|').ok_or_else(invalid)?;
+        let turn = turn.trim().parse::<u32>().map_err(|_| invalid())?;
+        let what = what.trim();
+        if what.is_empty() {
+            return Err(invalid());
+        }
+        events.push(SceneEvent {
+            turn,
+            what: what.to_owned(),
+        });
+    }
+    events.sort_by_key(|event| event.turn);
+    Ok(events)
 }
 
 /// The speakers of the shown scene: its named characters that have a stored persona.
@@ -304,6 +361,12 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
         speakers.retain(|speaker| request.with.contains(&speaker.id));
     }
     let table = Table::new(speakers).map_err(DevError::Converse)?;
+    let events = match &request.events {
+        Some(path) => {
+            parse_events(&crate::dev::read_text_file(path).await?).map_err(DevError::Converse)?
+        }
+        None => Vec::new(),
+    };
     let mut frames = request
         .frames
         .clone()
@@ -315,9 +378,24 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
     let mut history: Vec<Turn> = Vec::new();
     let mut transcript = Vec::new();
     for turn in 0..request.turns {
+        // An event is happening on its turn and the one after it, so the answer reacts to it too.
+        let happening = events
+            .iter()
+            .rev()
+            .find(|event| event.turn <= turn && turn <= event.turn + 1);
+        if let (Some(watch), Some(event)) = (frames.as_mut(), happening)
+            && event.turn == turn
+        {
+            watch.note_event(&event.what);
+        }
         let say = SayRequest {
             character: speaker.id.clone(),
-            situation: table.situation(&speaker, request.topic.as_deref(), &history),
+            situation: table.situation(
+                &speaker,
+                request.topic.as_deref(),
+                happening.map(|event| event.what.as_str()),
+                &history,
+            ),
             model: request.model.clone(),
             speak: request.speak,
             recent: Vec::new(),
@@ -382,7 +460,7 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             }
         );
         if let (Some(watch), Some(judged)) = (frames.as_mut(), judged) {
-            watch.consider(port, turn, judged, &mut transcript);
+            watch.consider(port, turn, judged, &mut transcript).await;
         }
         let addressed = match addressed {
             Ok(addressed) => addressed,
@@ -401,7 +479,7 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
         speaker = table.next_speaker(&history, addressed.as_deref()).clone();
     }
     if let Some(watch) = frames.as_mut() {
-        watch.finish(&mut transcript).await;
+        watch.finish(port, &mut transcript).await;
     }
     if let Some(name) = &request.plate {
         match make_plate(port, name, &table, &history).await {

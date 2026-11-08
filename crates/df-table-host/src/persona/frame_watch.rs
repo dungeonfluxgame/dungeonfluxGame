@@ -2,18 +2,24 @@
 //! the frame judge (`POST /dev/persona/frame`) reads what the picture shows and the lines said
 //! since it was made; when the visible change passes the gate, a new frame is made in the
 //! background (by default an edit of the scene's first picture, so faces and the room stay the
-//! same) while the talk goes on, and put behind the scene when it is ready. One frame is made at
-//! a time: lines said meanwhile wait for the next judgement. Every setting is a command option
+//! same) while the talk goes on, and put behind the scene when it is ready. Up to `parallel`
+//! frames are made at once (one by default); they are shown in the order they were started, each
+//! after the one before it, and the scene's spinner shows while any is being made. Lines said
+//! while no frame may start wait for the next judgement. Every setting is a command option
 //! over the defaults of `persona/frames.json`; the transcript says when each frame was judged,
 //! started and shown.
 
 use std::time::{Duration, Instant};
 
+use std::collections::VecDeque;
+
+use df_playground::lobby::model::SceneTitle;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use super::converse::{Speaker, speakers_of};
 use super::frame::{FrameJudgement, FrameReply, FrameRequest, PERSONA_FRAME};
-use super::plate::{PlateFailure, deliver_plate};
+use super::plate::{PlateFailure, make_frame, put_title_back, start_spinner};
 use crate::cast::request::CastList;
 use crate::cast::routes::path as cast_path;
 use crate::dev::DevError;
@@ -26,6 +32,8 @@ use crate::movement::brief::BriefStyle;
 pub const DEFAULT_HOLD_SECONDS: u64 = 30;
 /// How many frames one conversation makes at most, by default.
 pub const DEFAULT_MAXIMUM_FRAMES: u32 = 6;
+/// How many frames may be made at once, at most.
+pub const MAXIMUM_PARALLEL_FRAMES: usize = 4;
 
 /// The frame options of one `persona converse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +52,8 @@ pub struct FrameOptions {
     /// The least time between the start of one frame and the next.
     pub hold: Duration,
     pub maximum_frames: u32,
+    /// How many frames may be made at once, 1 to `MAXIMUM_PARALLEL_FRAMES`.
+    pub parallel: usize,
     /// The model the judge asks instead of the conversation's.
     pub judge_model: Option<String>,
 }
@@ -138,7 +148,12 @@ pub struct FrameWatch {
     /// The most change any judgement saw since the newest frame: the change since a picture only
     /// grows as more is said, so a quiet line never lowers it.
     peak_percent: u8,
-    in_flight: Option<InFlight>,
+    /// The frames being made, oldest first.
+    in_flight: VecDeque<InFlight>,
+    /// Fires when the newest frame started is shown (or failed): the next one waits for it.
+    newest_shown: Option<oneshot::Receiver<()>>,
+    /// The scene's title before the spinner, while frames are being made.
+    title_before: Option<Option<SceneTitle>>,
     last_start: Option<Instant>,
 }
 
@@ -172,14 +187,22 @@ impl FrameWatch {
             made: 0,
             last_shot: None,
             peak_percent: 0,
-            in_flight: None,
+            in_flight: VecDeque::new(),
+            newest_shown: None,
+            title_before: None,
             last_start: None,
         }
     }
 
-    /// Takes `line` said by `speaker` into the lines since the newest frame, collects a frame
-    /// that finished, and judges when a new one may start: none is being made, the hold has
-    /// passed and the most frames are not made yet. The judgement, if one was asked.
+    /// Takes something that happens at the table into the lines since the newest frame: unlike
+    /// talk, it is seen.
+    pub fn note_event(&mut self, what: &str) {
+        self.since.push(format!("(Happening now: {what})"));
+    }
+
+    /// Takes `line` said by `speaker` into the lines since the newest frame, collects the frames
+    /// that finished, and judges when a new one may start: fewer than `parallel` are being made,
+    /// the hold has passed and the most frames are not made yet. The judgement, if one was asked.
     pub async fn after_line(
         &mut self,
         port: u16,
@@ -189,17 +212,14 @@ impl FrameWatch {
     ) -> Option<Result<FrameJudgement, DevError>> {
         self.since
             .push(format!("{}: {}", speaker.display_name, line));
-        if self
-            .in_flight
-            .as_ref()
-            .is_some_and(|frame| frame.task.is_finished())
-        {
-            self.collect(transcript).await;
-        }
+        self.collect(port, false, transcript).await;
         let held = self
             .last_start
             .is_some_and(|started| started.elapsed() < self.options.hold);
-        if self.in_flight.is_some() || held || self.made >= self.options.maximum_frames {
+        if self.in_flight.len() >= self.options.parallel
+            || held
+            || self.made >= self.options.maximum_frames
+        {
             return None;
         }
         let request = FrameRequest {
@@ -214,7 +234,7 @@ impl FrameWatch {
     }
 
     /// Reports `judged` after line `turn` and, when it passed the gate, starts the next frame.
-    pub fn consider(
+    pub async fn consider(
         &mut self,
         port: u16,
         turn: u32,
@@ -293,17 +313,37 @@ impl FrameWatch {
                 |base| format!(", editing {base}")
             )
         ));
+        if self.in_flight.is_empty() {
+            match start_spinner(port).await {
+                Ok(before) => self.title_before = Some(before),
+                Err(error) => transcript.push(format!("  spinner not shown: {error}")),
+            }
+        }
         let characters = self.characters.clone();
         let task_name = name.clone();
+        let after = self.newest_shown.take();
+        let (shown, next_waits) = oneshot::channel();
+        self.newest_shown = Some(next_waits);
         let task = tokio::spawn(async move {
-            deliver_plate(port, &task_name, &prompt, characters, base.as_deref()).await
+            let made = make_frame(
+                port,
+                &task_name,
+                &prompt,
+                characters,
+                base.as_deref(),
+                after,
+            )
+            .await;
+            // The next frame goes on whether this one was shown or failed.
+            let _ = shown.send(());
+            made
         });
         self.picture = judgement.next_picture;
         self.last_shot = Some(judgement.shot);
         self.since.clear();
         self.peak_percent = 0;
         self.last_start = Some(Instant::now());
-        self.in_flight = Some(InFlight {
+        self.in_flight.push_back(InFlight {
             number,
             name,
             started: Instant::now(),
@@ -312,15 +352,32 @@ impl FrameWatch {
         });
     }
 
-    /// Waits for the frame being made, if one is, and reports it.
-    pub async fn finish(&mut self, transcript: &mut Vec<String>) {
-        self.collect(transcript).await;
+    /// Waits for the frames being made and reports them.
+    pub async fn finish(&mut self, port: u16, transcript: &mut Vec<String>) {
+        self.collect(port, true, transcript).await;
     }
 
-    async fn collect(&mut self, transcript: &mut Vec<String>) {
-        let Some(frame) = self.in_flight.take() else {
-            return;
-        };
+    /// Reports the frames that finished, oldest first (all of them when `wait`), and puts the
+    /// scene's title back once none is being made.
+    async fn collect(&mut self, port: u16, wait: bool, transcript: &mut Vec<String>) {
+        while self
+            .in_flight
+            .front()
+            .is_some_and(|frame| wait || frame.task.is_finished())
+        {
+            if let Some(frame) = self.in_flight.pop_front() {
+                self.report(frame, transcript).await;
+            }
+        }
+        if self.in_flight.is_empty()
+            && let Some(before) = self.title_before.take()
+            && let Err(error) = put_title_back(port, before).await
+        {
+            transcript.push(format!("  title not put back: {error}"));
+        }
+    }
+
+    async fn report(&mut self, frame: InFlight, transcript: &mut Vec<String>) {
         let made = frame.task.await;
         let waited = frame.started.elapsed().as_secs_f32();
         match made {

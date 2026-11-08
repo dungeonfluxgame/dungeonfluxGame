@@ -456,6 +456,24 @@ to 100; "mugs" and "keep it moving" recur; no embarrassment at being turned down
 boundary untested (Kael's persona refuses the beat); a 600 s text deadline lets one stalled
 Codex call hold a scene for 30 minutes; the world place after a transition.
 
+## Run 39 and refinement 17 (whiplash: flirt to the top, then contempt)
+
+Beats `romance-whiplash.beats`; Lena starts fond (attraction 70, affection 40, rapport 50). The
+runner can now switch a stance on mid-scene with `! <dev command>` lines; Kael got a temporary
+`cold-contempt` stance for three beats, dropped before his apology.
+Words: warm to the top ("I'm glad you said it, Kael. I think I'm falling for you, too"), then hurt
+("If that's all it was, Kael, you should've said so before I let myself believe you"), cold
+("Then pass along, Kael. I've got better company to tend to") and a boundary without stooping
+("Another ale, sure. You can quit calling me a wench while I'm at it").
+Feelings undershot: sadness only to 60, irritation to 60, no surprise and no embarrassment at
+being shamed in front of the room, and she stayed friendly (35); she forgave at once ("I can
+forgive you, Kael").
+Refinement 17 (data): sudden contempt or betrayal from someone trusted or loved has its own band
+(surprise, sadness and irritation up 20 to 45, embarrassment when others can hear, trust,
+attraction and affection down, rapport down 20 to 40); after cruelty from someone close an
+apology brings trust back only 0 to 5 a line, and forgiveness is guarded and conditional. Rerun
+owed.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

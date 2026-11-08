@@ -47,6 +47,26 @@ Built:
   Lena only): frame 1 two-shot (little change), frame 2 over-the-shoulder onto Lena seated, chin
   on hand, tray set aside, 64 s.
 
+- Run 6 (`bar-period-drama1`): the topic listed events, but the characters opened after them
+  ("that's one way to get us both a seat by the hearth") and circled "the road can wait"; one
+  frame (35%, sitting together). A topic is what is on the table for every line, not a script.
+- Events: `persona converse events=<file>` (`<turn> | <what happens>`): the speakers of that turn
+  and the next are told it is happening now, and the judge gets `(Happening now: ...)` as a seen
+  line. Run 7 (`bar-period-drama2`, `drama.events`): frame 1, a Dutch angle the judge chose for
+  the spill (Lena soaked, tankards tipped), 118 s; frame 2 two-shot, laughing, foreheads close,
+  Lena wringing ale from her braid, the drunk walking off behind, 118 s. Owner: "dutch angle is
+  nice". Misses: with one frame at a time and 2 minutes a frame, the sword-hilt standoff, Lena
+  stepping between them and the drunk backing off (turns 2 to 6) got no frame of their own; the
+  dialogue kept "keep clear, I've got him" because each line ended "react to the last thing said".
+  Changes: a line reacts first to what is happening now; `parallel=N` (1 to 4) makes up to N
+  frames at once, shown strictly in order (each waits for the one before it to be shown) with one
+  spinner for all of them. Not yet run live.
+- Whiplash close-up (owner: "I wanted to see Lena's face when she heard that"): the beats runner
+  makes no frames, so the moment was judged from the run's real lines (35%, "her smile is gone;
+  she looks hurt") and edited by hand as a close-up (`lena-betrayed.png`, 55 s): her eyes glassy,
+  lips parted, Kael laughing in a blur at the edge. The judge had picked a two-shot; the close-up
+  look now says "the face of whoever was just hit hardest".
+
 ## Open
 
 - Latency: Codex edits take 60 to 100 s, so a frame lands 6 to 10 lines after its moment; a
@@ -54,3 +74,6 @@ Built:
 - The first frame has no previous shot, so it tends to repeat the base framing.
 - The topic's events can be skipped: characters opened as if the shove had already happened.
 - The judge still scores some single-line changes low; tune the scale and gate in `frames.json`.
+- `parallel=` frames are unit-checked only; a live run is owed.
+- The beats runner (`market-thread.sh`) has no frames; a scripted keeper scene cannot show faces
+  as it plays.

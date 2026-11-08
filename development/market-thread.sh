@@ -86,9 +86,16 @@ keeper() {
   sleep 3
 }
 
-# Each line of the beats file is `speaker | goal`; `#` lines are comments, `@` lines settings.
-while IFS="|" read -r -u 3 who goal; do
-  case "$who" in '@'*) continue ;; esac
+# Each line of the beats file is `speaker | goal`; `#` lines are comments, `@` lines settings, and
+# a `! <dev command>` line runs that dev command between beats (a stance switched on mid-scene).
+while IFS= read -r -u 3 raw; do
+  case "$raw" in
+    '!'*) eval "$D dev --port $P ${raw#!}" | sed 's/^/       ! /'; continue ;;
+    '@'*|'#'*|'') continue ;;
+  esac
+  who=${raw%%|*}
+  goal=${raw#*|}
+  [ "$who" = "$raw" ] && goal=""
   who=$(printf '%s' "$who" | xargs)
   case "$who" in ''|'#'*) continue ;; esac
   say_as "$who" "$(printf '%s' "$goal" | sed 's/^ *//;s/ *$//')"

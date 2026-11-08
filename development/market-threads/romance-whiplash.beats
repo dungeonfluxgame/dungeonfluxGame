@@ -1,0 +1,26 @@
+# Whiplash: Lena is already fond of Kael; he flirts her to the top, then turns cold and
+# contemptuous with no warning, then apologises once. Lena should go from warm to hurt and angry
+# in one beat (betrayal stings more from someone she likes), hold her dignity and boundary, and
+# not forgive at once. Kael's own persona will not be cruel, so a temporary `cold-contempt`
+# stance is switched on in the scratch copy with `!` lines and dropped before the apology.
+# speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper tavern_server
+@keeper_situation Working a late shift at the tavern; she likes Kael and has let him see it.
+@speaker_situation In the tavern late at night, at the counter where the server Lena works; you have come every night this week to see her.
+@state attraction 70
+@state trust 75
+@state affection 40
+@state joy 60
+@rapport warrior 50
+warrior | Tell Lena she is the best part of your week, and that you came back just for her.
+warrior | Tell her you cannot stop looking at her eyes in the candlelight.
+warrior | Take her hand gently across the counter and ask her, as a question to her, if you may kiss it.
+warrior | Lean close and tell her softly that you are falling for her.
+! persona behavior warrior add cold-contempt style="Cold, sneering, loud enough for the room" "Turns on her without warning tonight: contemptuous and belittling, mocks her feelings and her work, treats her as beneath him; never violent."
+! persona trigger warrior add turned-cold behavior=cold-contempt "He is in the tavern tonight"
+warrior | Pull your hand back, laugh, and sneer that she is just a serving girl and you were only passing the time.
+warrior | Mock her, loud enough for the next table, for thinking a man like you would care about a tavern wench.
+warrior | Snap your fingers at her and tell her to fetch you another ale and stop looking at you like that.
+! persona trigger warrior drop turned-cold
+! persona behavior warrior drop cold-contempt
+warrior | Apologise to Lena: you were cruel and you did not mean it; ask her, as a question to her, if she can forgive you.

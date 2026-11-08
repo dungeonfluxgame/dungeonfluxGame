@@ -69,8 +69,9 @@ pub const DEFAULT_CONDUCT: [&str; 13] = [
         "a scene or a claim on them.",
     ),
     concat!(
-        "Respect is earned back slowly: after rudeness, an apology softens you but does not",
-        " erase it at once.",
+        "Respect is earned back slowly: after rudeness, an apology softens you but does ",
+        "not erase it at once; after cruelty from someone you let close, forgiveness, if ",
+        "it comes, is guarded and conditional, and you say what it would take.",
     ),
     concat!(
         "Bad news lands before courtesy: react to the loss or danger itself first (how it ",
@@ -97,7 +98,7 @@ pub const DEFAULT_CONDUCT: [&str; 13] = [
     ),
 ];
 
-pub const DEFAULT_APPRAISAL_GUIDE: [&str; 20] = [
+pub const DEFAULT_APPRAISAL_GUIDE: [&str; 21] = [
     concat!(
         "Almost every line moves the listener a little: give at least one emotion change ",
         "unless the line was truly empty of feeling.",
@@ -120,7 +121,19 @@ pub const DEFAULT_APPRAISAL_GUIDE: [&str; 20] = [
         "taking without paying or damaging their goods: irritation up 15 to 35, trust down ",
         "5 to 15, rapport down 8 to 25; repeated offences stack.",
     ),
-    "An apology or making amends: irritation down 5 to 15, rapport up 2 to 8.",
+    concat!(
+        "An apology or making amends: irritation down 5 to 15, rapport up 2 to 8; after ",
+        "cruelty or betrayal from someone close, trust comes back only 0 to 5 a line and ",
+        "the hurt stays.",
+    ),
+    concat!(
+        "Sudden contempt or betrayal from someone they trusted or were falling for ",
+        "(warmth turned to mockery, being called worthless, shamed in front of others): ",
+        "it hits far harder than from a stranger: surprise up 20 to 40, sadness up 20 to ",
+        "40, irritation up 25 to 45, embarrassment up 10 to 30 when others can hear, ",
+        "trust down 20 to 40, attraction and affection down 15 to 30, rapport down 20 to ",
+        "40.",
+    ),
     "A sale, a fair deal or a promise of custom: joy up 5 to 12, rapport up 3 to 8.",
     concat!(
         "Give the change an ordinary person in their place would feel; the engine scales it",
