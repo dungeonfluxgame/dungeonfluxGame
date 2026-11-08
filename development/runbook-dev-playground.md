@@ -295,6 +295,44 @@ judge compares the lines against. Without it the judge starts from the cast list
 transcript says when each frame was judged (and its changes), started and shown, and how long it
 took; the host logs `PERSONA frame_judged changed_percent=.. gate=.. triggered=.. duration_ms=..`.
 
+## The story behind a scene (`persona story`)
+
+The narrative engine's authoring step for the playground (`planning/narrative-engine.md`:
+an arc with phases and beats, the facts it rests on and a hook for each character). The full
+`df-narrative` director runs over session checkpoints and is not wired into this host; this is
+the storyteller's plot, handed to the persona engine through the guidance it already takes.
+
+```bash
+# Plot it: one storyteller call, closed schema, every id checked (the cast are persona ids)
+$D dev --port 7879 persona story plot cast=warrior,mara_adventurer,weapon_seller "<premise>"
+$D dev --port 7879 persona story show      # the plot, the truth included (operator view)
+# Hand it out: each character of the plot in the shown scene gets its own guidance only
+$D dev --port 7879 persona story apply
+```
+
+The plot holds the public charge, the truth (kept in `persona/story.json` for tooling, never in
+a character's prompt), the culprit and motive, the evidence with what gives each piece away, the
+beats of each scene (`arrest`, `march`, `judgement`) and, for every character, a
+`NarrativeGuidance` (phase, beat, hooks, threads, `must_establish`, `must_avoid`, tone, note) as
+it stands before the first scene: nobody remembers their own future (the first apply wrote the
+whole plot into Kael's private backstory as if it had happened; the instruction now forbids it).
+New characters get new name-free ids (`market_guard_bought`) that are no stored persona's id.
+`apply` generates a new character's persona from its guidance once it is in the shown scene (in
+the picture's scan, named: `media locate identify`), its name established by the guidance; a
+character with a persona gets it through a guided backfill of its private backstory, unless the
+coverage judge says it already holds it, so a second apply adds nothing. A character not in the
+scene yet is left for a later apply. Generation does not see the picture: check that a persona
+fits it (the first sergeant was written "he" for the woman on the plate).
+
+**The arrest story** (2026-11-08, story "The Nightglass Charge"), three scenes, each its own
+picture made by editing the one before so faces stay (`arrest-stall.png`, `arrest-march.png`,
+`arrest-hall.png`), scanned and named, then `persona story apply`:
+`market-threads/arrest.beats` (the guards and the accuser question Kael; he answers),
+`market-threads/arrest-march.beats` (dragged up the street; the sergeant answers Kael and his
+friends, a fruit seller calls out) and the judgement as a `persona converse` with
+`market-threads/arrest-judgement.events` (Kael on his knees before the mayor; evidence, witnesses
+and the defence).
+
 ## The market thread (re-runnable persona and backfill exercise)
 
 `bash development/market-thread.sh` runs 20 messages at the fruit stall: her name, where the
@@ -390,7 +428,15 @@ field, Hollywood teal and orange grade, real actors in lived-in medieval linen, 
 in a real set of timber, stone and candlelight; nothing modern and no high-fantasy art. History:
 the first bar plate drifted into an epic fantasy-film tavern (wide crowd shot); "not a fantasy
 film" then drifted into a modern bar (drum kit, glass mugs). Name the world and the period, and
-ban what is modern separately from what is high-fantasy. The bar plate in this look is
+ban what is modern separately from what is high-fantasy. 2026-11-08 (the arrest story): plates
+written by hand as "a medieval fantasy world" drifted into fantasy finery (gold-embroidered
+velvet, heraldic banners, cathedral light shafts, glowing runes), and every frame edited from
+them kept it. The direction now asks for costumes and light like a grounded historical drama and
+bans glowing runes, gilded finery, god-rays and cathedral grandeur. A plate made by hand must
+use the same words, and an edit that only says "change the look" keeps everything: say what to
+tone down (plainer wool and leather, timber and plaster, overcast daylight, no banners). The
+arrest plates in this look are `arrest-stall-real.png`, `arrest-march-real.png` and
+`arrest-hall-real.png` (edits of the first ones, faces kept). The bar plate in this look is
 `bar-period.png` (made with `media generate`, then `media locate`, `media locate identify` and
 `media locate label` for the names).
 

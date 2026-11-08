@@ -39,7 +39,7 @@ pub const DEFAULT_TURNS: u32 = 8;
 /// The most turns one command runs; far above any use, so only a typo is stopped.
 pub const MAXIMUM_TURNS: u32 = 10_000;
 /// How many of the latest lines a speaker is told.
-const HISTORY_LINES: usize = 6;
+const HISTORY_LINES: usize = 20;
 /// A character who spoke in the last this many turns lets the quietest one answer instead.
 const TURNS_BEFORE_AGAIN: usize = 3;
 /// Bytes of one second of the speech adapter's only output format (`mp3_22050_32`).
@@ -347,6 +347,31 @@ async fn addressed_once(
     };
     let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;
     Ok(crate::dev_client::reply_value(reply)?.addressed)
+}
+
+/// `persona addressed`: whom `line`, said by `speaker` in the shown scene after `recent`, is
+/// directed at, as the addressee judge reads it (a model call against the closed list of the
+/// scene's speakers): their id, or `nobody`. The market runner uses it so the one a line is put
+/// to answers it.
+pub(super) async fn who_is_addressed(
+    port: u16,
+    speaker: String,
+    line: String,
+    recent: Vec<String>,
+    model: Option<String>,
+) -> Result<String, DevError> {
+    let cast: CastList = super::cli::reply_value(get_json(port, cast_path::CAST).await?)?;
+    let request = AddressRequest {
+        line,
+        speaker,
+        speakers: speakers_of(cast),
+        recent,
+        model,
+    };
+    let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;
+    Ok(crate::dev_client::reply_value(reply)?
+        .addressed
+        .unwrap_or_else(|| "nobody".to_owned()))
 }
 
 /// Runs the conversation against the host on `port` and gives the transcript. A turn that fails

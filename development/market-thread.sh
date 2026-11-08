@@ -69,9 +69,10 @@ if [ "$KEEPER" = fruit_vendor ]; then
   $D dev --port $P persona trigger fruit_vendor add bulk-buyer behavior=bulk-discount "A customer buys five or more pieces of fruit" >/dev/null 2>&1
 fi
 
-# The last six lines of the thread, as repeated `recent=` options.
+# The last twenty lines of the thread, as repeated `recent=` options (a short window let lines
+# repeat what was said a few exchanges back).
 recent_args() {
-  local start=$(( ${#HISTORY[@]} > 6 ? ${#HISTORY[@]} - 6 : 0 )) i
+  local start=$(( ${#HISTORY[@]} > 20 ? ${#HISTORY[@]} - 20 : 0 )) i
   RECENT=()
   for ((i = start; i < ${#HISTORY[@]}; i++)); do RECENT+=("recent=${HISTORY[$i]}"); done
 }
@@ -94,17 +95,27 @@ say_as() { # speaker, instruction
 
 # The keeper answers the line actually said: they see only what the speaker said, never what the
 # beat hoped they would do, so a speaker whose persona refuses a beat cannot put words in theirs.
+# The one the line was put to answers it: the addressee judge (`persona addressed`, a model call
+# against the scene's speakers) reads whom it is directed at; nobody, the speaker themself or no
+# answer leaves it to the keeper.
 keeper() {
-  local out line
+  local out line answerer situation
   recent_args
-  out=$(timeout 280 $D dev --port $P persona ask "$KEEPER" "from=$LAST_SPEAKER" "${RECENT[@]}" \
-    "backfill=$KEEPER_BACKFILL" "situation=$KEEPER_SITUATION" "$LAST" 2>&1)
+  answerer=$(timeout 120 $D dev --port $P persona addressed "$LAST_SPEAKER" "${RECENT[@]}" \
+    "$LAST" 2>/dev/null | head -1)
+  case "$answerer" in
+    ''|nobody|"$LAST_SPEAKER"|*' '*) answerer=$KEEPER ;;
+  esac
+  situation=$SPEAKER_SITUATION
+  [ "$answerer" = "$KEEPER" ] && situation=$KEEPER_SITUATION
+  out=$(timeout 280 $D dev --port $P persona ask "$answerer" "from=$LAST_SPEAKER" "${RECENT[@]}" \
+    "backfill=$KEEPER_BACKFILL" "situation=$situation" "$LAST" 2>&1)
   line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
   N=$((N + 1))
-  printf '[%02d] %s: %s\n' "$N" "$KEEPER" "${line:-<no line: $out>}"
+  printf '[%02d] %s: %s\n' "$N" "$answerer" "${line:-<no line: $out>}"
   printf '%s\n' "$out" | sed -n '2,$p' | sed 's/^/       /'
-  HISTORY+=("$KEEPER: $line")
-  watch_line "$KEEPER" "$line"
+  HISTORY+=("$answerer: $line")
+  watch_line "$answerer" "$line"
   sleep 3
 }
 

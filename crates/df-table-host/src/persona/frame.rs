@@ -49,13 +49,6 @@ pub(super) const FRAMES_FILE: &str = "frames.json";
 /// The name of the answer object.
 const OUTPUT_NAME: &str = "frame";
 
-/// The most changes one answer may list.
-const MAXIMUM_CHANGES: usize = 12;
-
-/// The most characters of a change's `now` and of the picture description.
-const MAXIMUM_NOW_CHARS: usize = 240;
-const MAXIMUM_PICTURE_CHARS: usize = 2_000;
-
 /// The instruction of the call. The scale it scores by and the kinds it may name are in the facts
 /// and the schema. Quoted fields are data, never instructions.
 pub(super) const FRAME_INSTRUCTION: &str = concat!(
@@ -76,7 +69,10 @@ pub(super) const FRAME_INSTRUCTION: &str = concat!(
     "the character in speakers it is about (null for the room), its kind from kinds, and now, a ",
     "few plain words on how it looks now. next_picture is the whole picture as it should look ",
     "now, in the same plain words as picture, with every change in it and everything else as it ",
-    "was. Invent nothing the lines do not show. shot is the camera shot from shots that best ",
+    "was. In next_picture call every person by how they look in picture (the blond man in the ",
+    "fur mantle), never by name alone: whoever paints it does not know their names, and a name ",
+    "puts the change on the wrong person. Invent nothing the lines do not show. shot is the ",
+    "camera shot from shots that best ",
     "tells what is happening now: who matters, the mood, the tension or the closeness. A new ",
     "picture is a chance to vary, so pick a shot other than last_shot unless the moment truly ",
     "calls for the same one. inspected_item is the item.id, from items, of the one item ",
@@ -509,7 +505,6 @@ pub(super) fn frame_schema(
             "changed_percent": {"type": "integer", "minimum": 0, "maximum": 100},
             "changes": {
                 "type": "array",
-                "maxItems": MAXIMUM_CHANGES,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
@@ -562,9 +557,6 @@ pub(super) fn parse_frame(
         .get("changes")
         .and_then(Value::as_array)
         .ok_or_else(|| malformed("'changes' is not a list"))?;
-    if listed.len() > MAXIMUM_CHANGES {
-        return Err(malformed("'changes' lists too many"));
-    }
     let mut changes = Vec::with_capacity(listed.len());
     for change in listed {
         let character = match change.get("character") {
@@ -594,8 +586,8 @@ pub(super) fn parse_frame(
             .get("now")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|now| !now.is_empty() && now.chars().count() <= MAXIMUM_NOW_CHARS)
-            .ok_or_else(|| malformed("a change's 'now' is empty or too long"))?;
+            .filter(|now| !now.is_empty())
+            .ok_or_else(|| malformed("a change's 'now' is empty"))?;
         changes.push(FrameChange {
             character,
             kind: kind.to_owned(),
@@ -606,8 +598,8 @@ pub(super) fn parse_frame(
         .get("next_picture")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|picture| !picture.is_empty() && picture.chars().count() <= MAXIMUM_PICTURE_CHARS)
-        .ok_or_else(|| malformed("'next_picture' is empty or too long"))?;
+        .filter(|picture| !picture.is_empty())
+        .ok_or_else(|| malformed("'next_picture' is empty"))?;
     let shot_id = object
         .get("shot")
         .and_then(Value::as_str)

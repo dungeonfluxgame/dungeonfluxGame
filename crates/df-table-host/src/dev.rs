@@ -75,6 +75,8 @@ pub enum ReplyError {
     Address(crate::persona::address::AddressRouteError),
     /// The frame judge (`POST /dev/persona/frame`).
     Frame(crate::persona::frame::FrameRouteError),
+    /// The storyteller's plot (`/dev/persona/story`).
+    Story(crate::persona::story::StoryRouteError),
 }
 
 impl fmt::Display for ReplyError {
@@ -103,7 +105,14 @@ impl fmt::Display for ReplyError {
             Self::Services(error) => write!(formatter, "{error}"),
             Self::Address(error) => write!(formatter, "{error}"),
             Self::Frame(error) => write!(formatter, "{error}"),
+            Self::Story(error) => write!(formatter, "{error}"),
         }
+    }
+}
+
+impl From<crate::persona::story::StoryRouteError> for ReplyError {
+    fn from(error: crate::persona::story::StoryRouteError) -> Self {
+        Self::Story(error)
     }
 }
 
@@ -245,6 +254,7 @@ fn write_refusal(
         ReplyError::Services(error) => error.key(),
         ReplyError::Address(error) => error.key(),
         ReplyError::Frame(error) => error.key(),
+        ReplyError::Story(error) => error.key(),
     };
     write!(formatter, "refused ({key}): {message}")
 }

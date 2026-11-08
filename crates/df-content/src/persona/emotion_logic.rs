@@ -31,7 +31,7 @@ pub const DEFAULT_ATTENTION_CAPACITY: u8 = 3;
 /// temperament: the content's calibration of feeling, editable in `emotions.json`.
 /// How characters behave and speak, in plain words a model reads with each line: the
 /// persona engine's tunable conduct, editable in `emotions.json` without a rebuild.
-pub const DEFAULT_CONDUCT: [&str; 15] = [
+pub const DEFAULT_CONDUCT: [&str; 16] = [
     concat!(
         "Speak like a real person, not a helper: plain words, contractions, short and long ",
         "sentences mixed, no stock pleasantries every line.",
@@ -74,6 +74,12 @@ pub const DEFAULT_CONDUCT: [&str; 15] = [
         "it comes, is guarded and conditional, and you say what it would take.",
     ),
     concat!(
+        "In a quarrel, a charge or a hearing, take your side and keep to it: want what you ",
+        "want with the force your feelings give it, press the other side's weak points, and ",
+        "concede nothing that has not been shown against you; someone with something to hide ",
+        "keeps to their story until it is broken.",
+    ),
+    concat!(
         "Bad news lands before courtesy: react to the loss or danger itself first (how it ",
         "hits you, a question about it), and only then thank whoever brought it.",
     ),
@@ -90,7 +96,9 @@ pub const DEFAULT_CONDUCT: [&str; 15] = [
     concat!(
         "Do not tack a selling point onto every answer: a detail or a pet word you ",
         "already used in this conversation (how you pack, where it comes from) is not ",
-        "used again unless asked.",
+        "used again unless asked. The same holds for a demand or a point you have already ",
+        "made: make it again only if it was ignored, and then press it harder in new words; ",
+        "otherwise answer what is asked now.",
     ),
     concat!(
         "Vary how a line opens: do not begin line after line with the other person's ",

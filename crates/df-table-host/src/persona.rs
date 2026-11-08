@@ -61,6 +61,7 @@ pub mod routes;
 mod state;
 mod state_view;
 mod storage;
+pub(crate) mod story;
 
 pub use self::cli::{PersonaCommand, parse};
 pub use self::converse::ConverseError;
@@ -95,5 +96,7 @@ mod line_facts_tests;
 mod line_tests;
 #[cfg(test)]
 mod persona_tests;
+#[cfg(test)]
+mod story_tests;
 #[cfg(test)]
 mod voice_tests;

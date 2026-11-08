@@ -1,0 +1,13 @@
+# The judgement in the hall (story "The Nightglass Charge"): `persona converse` with this events
+# file, on `arrest-hall.png` (scanned and named, `persona story apply` run so the mayor has his
+# persona). Kael kneels bound before the mayor; the accuser presents his evidence, the guards and
+# the witnesses are heard, and Kael and his friends defend him. What happens is told to the
+# speaker as it happens; nothing here decides who wins.
+# turn | what happens
+0 | The guard forces Kael down onto his knees on the flagstones before the mayor's dais and keeps a hand pressed on his shoulder; the hall falls quiet.
+2 | The accuser holds up the near-black dagger with violet marks for the whole hall to see and names it the stolen Nightglass.
+5 | The accuser lays a torn strip of dark cloth on the floor before the dais, saying it came from the prisoner's cloak, found by the stall.
+9 | The bladesmith is called forward to the dais to look at the dagger.
+13 | The fruit seller rises from her bench and asks to be heard.
+17 | The crowd on the benches murmurs; someone calls out that the bought guard's purse is newly heavy.
+21 | The mayor strikes the arm of his chair for silence.

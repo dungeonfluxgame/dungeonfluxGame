@@ -167,9 +167,13 @@ impl Default for BriefStyle {
                 "key light with a warm glow on skin, creamy shallow depth of field, a Hollywood ",
                 "teal and orange color grade, real actors with natural skin in believable, ",
                 "lived-in medieval clothes of linen, wool and leather, in a real medieval set of ",
-                "timber, stone and candlelight; nothing modern (no electric light, glass mugs, ",
-                "drum kits or modern clothes) and no high-fantasy art (no glowing magic, ornate ",
-                "armor or painterly look), of"
+                "timber, stone and candlelight, costumed and lit like a grounded historical ",
+                "drama (plain wool, linen, mail and worn leather, natural daylight or ",
+                "candlelight, real faces with pores and creases); nothing modern (no electric ",
+                "light, glass mugs, drum kits or modern clothes) and no high-fantasy art (no ",
+                "glowing magic, ",
+                "glowing runes or sigils, gilded embroidery and fantasy finery, ornate armor, ",
+                "god-ray shafts of light, cathedral grandeur or painterly look), of"
             )
             .to_owned(),
             writing_ban: "No text, letters, captions, speech bubbles, logos or interface of any kind."

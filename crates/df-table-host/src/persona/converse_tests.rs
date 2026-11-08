@@ -163,7 +163,7 @@ fn a_situation_tells_the_topic_what_happens_and_the_task_and_no_one_by_id_or_nam
     // strangers; the free text never names or ids anyone, nor a fixed place.
     assert!(!opening.contains("innkeeper"));
     assert!(!opening.contains("inn"));
-    let history: Vec<Turn> = (0..9)
+    let history: Vec<Turn> = (0..25)
         .map(|index| turn("elf", &format!("line number {index}")))
         .collect();
     let later = Table::situation(None, Some("A tankard falls."), &history);
@@ -175,9 +175,9 @@ fn a_situation_tells_the_topic_what_happens_and_the_task_and_no_one_by_id_or_nam
     assert!(quiet.contains("React to the last thing said"));
     let table = table();
     let recent = table.recent_lines(&history);
-    assert_eq!(recent.len(), 6, "only the latest six lines");
+    assert_eq!(recent.len(), 20, "the latest twenty lines");
     assert_eq!(
-        recent[5], "elf: line number 8",
+        recent[19], "elf: line number 24",
         "labelled by id, for the handles to read"
     );
 }

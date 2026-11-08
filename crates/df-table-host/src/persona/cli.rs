@@ -75,6 +75,9 @@ pub const PERSONA_USAGE: &str = concat!(
     "[model=<name>] [frames=<name> <frame options>] [<topic...>] | ",
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
     "persona watch frames=<name> <frame options> (lines '<speaker id> | <line>' on stdin) | ",
+    "persona story plot [cast=<id>,<id>...] [model=<name>] <premise...> | persona story show | ",
+    "persona story apply [model=<name>] | ",
+    "persona addressed <speaker> [recent=<text>]... [model=<name>] <line...> | ",
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...> | ",
@@ -175,6 +178,15 @@ pub const PERSONA_WATCH_USAGE: &str = concat!(
     "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [insert_hold=<seconds>] ",
     "[max_frames=N] [parallel=1-4] ",
     "[judge_model=<name>], with one '<speaker id> | <line>' per line of standard input",
+);
+/// `persona addressed`: whom a line is directed at, by the addressee judge.
+pub const PERSONA_ADDRESSED_USAGE: &str =
+    "persona addressed <speaker> [recent=<text>]... [model=<name>] <line...>";
+/// `persona story`: the storyteller plots the story behind a scene, and hands each character its
+/// own guidance.
+pub const PERSONA_STORY_USAGE: &str = concat!(
+    "persona story plot [cast=<id>,<id>...] [model=<name>] <premise...> | persona story show | ",
+    "persona story apply [model=<name>]",
 );
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
@@ -298,6 +310,23 @@ pub enum PersonaCommand {
     },
     /// Make frames for lines said elsewhere, read from standard input.
     Watch(FrameOptions),
+    /// Plot the story behind a scene (the storyteller), with the personas already in it.
+    StoryPlot {
+        premise: String,
+        cast: Vec<String>,
+        model: Option<String>,
+    },
+    /// Show the plotted story, the truth included (operator view).
+    StoryShow,
+    /// Whom a line said in the shown scene is directed at (the addressee judge).
+    Addressed {
+        speaker: PersonaId,
+        line: String,
+        recent: Vec<String>,
+        model: Option<String>,
+    },
+    /// Give every character of the plot in the shown scene its own guidance.
+    StoryApply { model: Option<String> },
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
@@ -669,6 +698,61 @@ fn parse_frame(words: &[String]) -> Result<PersonaCommand, CommandError> {
     })
 }
 
+fn parse_addressed(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let [speaker, rest @ ..] = words else {
+        return Err(CommandError::Usage(PERSONA_ADDRESSED_USAGE));
+    };
+    let (given, line) = take_options(rest, &["recent", "model"]);
+    if line.is_empty() {
+        return Err(CommandError::Usage(PERSONA_ADDRESSED_USAGE));
+    }
+    Ok(PersonaCommand::Addressed {
+        speaker: id_word(speaker)?,
+        line: line.join(" "),
+        recent: given
+            .iter()
+            .filter(|(key, _)| *key == "recent")
+            .map(|(_, value)| (*value).to_owned())
+            .collect(),
+        model: given
+            .iter()
+            .find(|(key, _)| *key == "model")
+            .map(|(_, value)| (*value).to_owned()),
+    })
+}
+
+fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let Some((verb, rest)) = words.split_first() else {
+        return Err(CommandError::Usage(PERSONA_STORY_USAGE));
+    };
+    let (given, rest) = take_options(rest, &["cast", "model"]);
+    let value = |key: &str| {
+        given
+            .iter()
+            .find(|(seen, _)| *seen == key)
+            .map(|(_, value)| (*value).to_owned())
+    };
+    match (verb.as_str(), rest.is_empty()) {
+        ("plot", false) => Ok(PersonaCommand::StoryPlot {
+            premise: rest.join(" "),
+            cast: value("cast")
+                .map(|ids| {
+                    ids.split(',')
+                        .map(|id| id_word(id.trim()).map(|id| id.to_string()))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
+            model: value("model"),
+        }),
+        ("show", true) if given.is_empty() => Ok(PersonaCommand::StoryShow),
+        ("apply", true) => Ok(PersonaCommand::StoryApply {
+            model: value("model"),
+        }),
+        _ => Err(CommandError::Usage(PERSONA_STORY_USAGE)),
+    }
+}
+
 fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let (given, rest) = take_options(
         words,
@@ -863,6 +947,8 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("converse", words) => parse_converse(words),
         ("frame", words) => parse_frame(words),
         ("watch", words) => parse_watch(words),
+        ("story", words) => parse_story(words),
+        ("addressed", words) => parse_addressed(words),
         ("remove", [id]) => Ok(PersonaCommand::Remove { id: id_word(id)? }),
         ("remove", _) => Err(CommandError::Usage(PERSONA_REMOVE_USAGE)),
         _ => Err(CommandError::Usage(PERSONA_USAGE)),
@@ -1272,6 +1358,21 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             model,
         } => judge_frame(port, picture, lines, gate_percent, model).await,
         PersonaCommand::Watch(options) => watch_lines(port, options).await,
+        PersonaCommand::StoryPlot {
+            premise,
+            cast,
+            model,
+        } => super::story::plot_story(port, premise, cast, model).await,
+        PersonaCommand::StoryShow => super::story::show_story(port).await,
+        PersonaCommand::Addressed {
+            speaker,
+            line,
+            recent,
+            model,
+        } => {
+            super::converse::who_is_addressed(port, speaker.to_string(), line, recent, model).await
+        }
+        PersonaCommand::StoryApply { model } => super::story::apply_story(port, model).await,
         PersonaCommand::Say {
             character,
             situation,

@@ -123,7 +123,7 @@ async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_
 }
 
 #[tokio::test]
-async fn the_recent_lines_of_a_prompt_are_bounded() {
+async fn the_recent_lines_of_a_prompt_are_given_whole() {
     let host = scripted_host(vec![line_answer("Aye.")]).await;
     write_persona(&host.directory(), &innkeeper()).unwrap();
     let recent: Vec<String> = (0..20).map(|n| format!("{n}{}", "x".repeat(500))).collect();
@@ -138,11 +138,12 @@ async fn the_recent_lines_of_a_prompt_are_bounded() {
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(sent.len(), 6, "only the latest lines");
-    assert!(sent[0].as_str().unwrap().starts_with("14"));
+    // The caller chooses the window; nothing is cut (a short window let lines repeat).
+    assert_eq!(sent.len(), 20, "every line the caller sent");
+    assert!(sent[0].as_str().unwrap().starts_with('0'));
     assert!(
         sent.iter()
-            .all(|line| line.as_str().unwrap().chars().count() <= 200)
+            .all(|line| line.as_str().unwrap().chars().count() > 500)
     );
 }
 
