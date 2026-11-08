@@ -33,7 +33,7 @@ use super::format::{
 };
 use super::frame_watch::{
     DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions, MAXIMUM_PARALLEL_FRAMES,
-    judge_frame,
+    judge_frame, watch_lines,
 };
 use super::options::{Asking, GUIDANCE_KEYS, GuidanceArgs, asking_from, take_options};
 use super::request::{
@@ -74,6 +74,7 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
     "[model=<name>] [frames=<name> <frame options>] [<topic...>] | ",
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
+    "persona watch frames=<name> <frame options> (lines '<speaker id> | <line>' on stdin) | ",
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...> | ",
@@ -167,6 +168,12 @@ pub const PERSONA_CONVERSE_USAGE: &str = concat!(
 /// `persona frame`: how much the picture would visibly change for these lines.
 pub const PERSONA_FRAME_USAGE: &str =
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...>";
+/// `persona watch`: frames for lines said elsewhere, read from standard input.
+pub const PERSONA_WATCH_USAGE: &str = concat!(
+    "persona watch frames=<name> [gate=0-100] [scene=<what the picture shows>] ",
+    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [max_frames=N] [parallel=1-4] ",
+    "[judge_model=<name>], with one '<speaker id> | <line>' per line of standard input",
+);
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
@@ -287,6 +294,8 @@ pub enum PersonaCommand {
         gate_percent: Option<u8>,
         model: Option<String>,
     },
+    /// Make frames for lines said elsewhere, read from standard input.
+    Watch(FrameOptions),
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
@@ -652,6 +661,27 @@ fn parse_frame(words: &[String]) -> Result<PersonaCommand, CommandError> {
     })
 }
 
+fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let (given, rest) = take_options(
+        words,
+        &[
+            "frames",
+            "gate",
+            "scene",
+            "edit",
+            "edit_from",
+            "hold",
+            "max_frames",
+            "judge_model",
+            "parallel",
+        ],
+    );
+    match (frame_options(&given)?, rest.is_empty()) {
+        (Some(options), true) => Ok(PersonaCommand::Watch(options)),
+        _ => Err(CommandError::Usage(PERSONA_WATCH_USAGE)),
+    }
+}
+
 fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let [character, rest @ ..] = words else {
         return Err(CommandError::Usage(PERSONA_ASK_USAGE));
@@ -823,6 +853,7 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("backfills", _) => Err(CommandError::Usage(PERSONA_BACKFILLS_USAGE)),
         ("converse", words) => parse_converse(words),
         ("frame", words) => parse_frame(words),
+        ("watch", words) => parse_watch(words),
         ("remove", [id]) => Ok(PersonaCommand::Remove { id: id_word(id)? }),
         ("remove", _) => Err(CommandError::Usage(PERSONA_REMOVE_USAGE)),
         _ => Err(CommandError::Usage(PERSONA_USAGE)),
@@ -1231,6 +1262,7 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             gate_percent,
             model,
         } => judge_frame(port, picture, lines, gate_percent, model).await,
+        PersonaCommand::Watch(options) => watch_lines(port, options).await,
         PersonaCommand::Say {
             character,
             situation,

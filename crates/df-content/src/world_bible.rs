@@ -37,6 +37,17 @@ pub struct Item {
     pub tags: Vec<String>,
 }
 
+/// A coin of the world and what it is worth in copper pieces, the unit every amount of the bible
+/// is kept in (the 2024 rules' gold piece is 100, the silver piece 10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Coin {
+    pub id: String,
+    /// What follows a count when an amount is said ("gold" in "450 gold").
+    pub name: String,
+    pub value_cp: u64,
+}
+
 /// A discount when a customer takes at least `min_qty` units.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +115,9 @@ pub struct VoicePack {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorldBible {
+    /// The coins prices are said in; amounts are always kept in copper.
+    #[serde(default)]
+    pub coins: Vec<Coin>,
     #[serde(default)]
     pub items: Vec<Item>,
     #[serde(default)]
@@ -270,6 +284,17 @@ impl WorldBible {
 
     /// Checks ids, references and ranges.
     pub fn validate(&self) -> Result<(), BibleError> {
+        let mut coin_ids = BTreeSet::new();
+        for (index, coin) in self.coins.iter().enumerate() {
+            check_id("coins", &coin.id, &mut coin_ids)?;
+            check_text(format!("coins[{index}].name"), &coin.name)?;
+            check_range(
+                format!("coins[{index}].value_cp"),
+                coin.value_cp,
+                1,
+                u64::MAX,
+            )?;
+        }
         let mut item_ids = BTreeSet::new();
         for (index, item) in self.items.iter().enumerate() {
             check_id("items", &item.id, &mut item_ids)?;
@@ -338,6 +363,23 @@ impl WorldBible {
                 place: place.id.clone(),
             })?;
         quote(item, qty, stall)
+    }
+
+    /// `amount_cp` as it is said, in the largest coins that fit ("608 gold and 5 silver"); `None`
+    /// when the bible has no coins, or none small enough to make up the amount exactly.
+    pub fn spoken_amount(&self, amount_cp: u64) -> Option<String> {
+        let mut coins: Vec<&Coin> = self.coins.iter().collect();
+        coins.sort_by_key(|coin| std::cmp::Reverse(coin.value_cp));
+        let mut left = amount_cp;
+        let mut parts = Vec::new();
+        for coin in coins {
+            let count = left / coin.value_cp;
+            if count > 0 {
+                parts.push(format!("{count} {}", coin.name));
+                left -= count * coin.value_cp;
+            }
+        }
+        (left == 0 && !parts.is_empty()).then(|| parts.join(" and "))
     }
 
     /// The quote for `qty` of `item_id` at the stall `keeper` keeps; `None` when the bible has no

@@ -1,7 +1,8 @@
 //! The line pipeline over a scripted backend: one call per line that also reports the gaps and the
 //! appraisal, the checks of its ids, the state the next line carries, fired triggers taking their
 //! behavior, the one repeat retry, the backfill after the line, the quote held inside the stall,
-//! the world as each speaker sees it and the compact facts.
+//! the price slots filled with the totals held, the world as each speaker sees it and the compact
+//! facts.
 //!
 //! TODO(DEV-12): a concurrent ask of one persona while its backfill runs (the `Busy` outcome), and
 //! the tone cued on the scene once the cue carries one.
@@ -435,7 +436,7 @@ async fn backfill_sync_waits_for_the_backfill_before_answering() {
 #[tokio::test]
 async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
     let quote = |total: u64| {
-        let mut answer = line_answer("Here you are.");
+        let mut answer = line_answer("Here you are: {price:0}.");
         answer["quotes"] = json!([{"item": "apple", "qty": 5, "total_cp": total}]);
         answer
     };
@@ -474,13 +475,17 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
         "still too high after the retry: lowered to the ask"
     );
     assert_eq!(high.quotes[0].bounds.unwrap().ask_total_cp, 45);
+    assert_eq!(
+        high.line, "Here you are: 45 cp.",
+        "the slot says the total held"
+    );
     let inside = done(say(&host, "fruit_vendor", json!({})).await).said;
     assert_eq!(quoted(&inside), (44, Some(44), Some(43)));
 }
 
 #[tokio::test]
 async fn a_quote_by_someone_who_keeps_no_such_stall_is_reported_unchecked() {
-    let mut answer = line_answer("Five for forty.");
+    let mut answer = line_answer("Five for {price:0}.");
     answer["quotes"] = json!([{"item": "apple", "qty": 5, "total_cp": 40}]);
     let host = scripted_host_cast(&["pip"], vec![answer], Arc::new(FakePort::unconfigured())).await;
     write_persona(&host.directory(), &vendor("pip")).unwrap();
@@ -493,7 +498,7 @@ async fn a_quote_by_someone_who_keeps_no_such_stall_is_reported_unchecked() {
 #[tokio::test]
 async fn every_price_a_line_names_is_checked_and_one_wrong_total_is_worded_again() {
     let prices = |five: u64| {
-        let mut answer = line_answer("Five apples and one more.");
+        let mut answer = line_answer("Five apples for {price:0} and one more for {price:1}.");
         answer["quotes"] = json!([
             {"item": "apple", "qty": 5, "total_cp": five},
             {"item": "apple", "qty": 1, "total_cp": 10}
@@ -516,6 +521,42 @@ async fn every_price_a_line_names_is_checked_and_one_wrong_total_is_worded_again
     assert_eq!(said.quotes.len(), 2);
     assert!(said.quotes.iter().all(|quote| quote.bounds.is_some()));
     assert_eq!(said.quotes[0].proposed_total_cp, 43);
+}
+
+#[tokio::test]
+async fn an_order_total_is_the_sum_held_and_a_price_said_without_its_slot_is_worded_again() {
+    let order = |line: &str| {
+        let mut answer = line_answer(line);
+        answer["quotes"] = json!([
+            {"item": "apple", "qty": 5, "total_cp": 44},
+            {"item": "apple", "qty": 1, "total_cp": 10}
+        ]);
+        answer
+    };
+    let host = scripted_host_cast(
+        &["fruit_vendor"],
+        vec![
+            order("Both for fifty-four."),
+            order("Both come to {order_total}."),
+            order("That is {price:7}."),
+            order("A {bargain} for {order_total}."),
+        ],
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    write_persona(&host.directory(), &vendor("fruit_vendor")).unwrap();
+    write_market(&host);
+    let said = done(say(&host, "fruit_vendor", json!({})).await).said;
+    assert!(said.repeat_retried, "a number written out is worded again");
+    assert_eq!(said.line, "Both come to 54 cp.");
+    // A slot for a lot not quoted, then one that is no slot: kept as written after the one retry.
+    let kept = done(say(&host, "fruit_vendor", json!({})).await).said;
+    let reason = kept.retry_reason.unwrap();
+    assert!(
+        reason.contains("{price:7} names a lot you did not quote"),
+        "{reason}"
+    );
+    assert_eq!(kept.line, "A {bargain} for {order_total}.");
 }
 
 #[tokio::test]

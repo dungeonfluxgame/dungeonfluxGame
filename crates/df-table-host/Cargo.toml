@@ -35,7 +35,7 @@ prost.workspace = true
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
-tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time", "io-util", "sync", "signal", "macros", "process"] }
+tokio = { version = "=1.53.1", default-features = false, features = ["rt-multi-thread", "net", "time", "io-util", "io-std", "sync", "signal", "macros", "process"] }
 
 [dev-dependencies]
 df-table = { path = "../df-table", features = ["testkit"] }

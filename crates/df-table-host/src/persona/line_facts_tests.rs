@@ -68,7 +68,7 @@ fn voiced_innkeeper() -> df_content::persona::Persona {
 
 #[tokio::test]
 async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_public_note() {
-    let mut answer = line_answer("Two silver, love.");
+    let mut answer = line_answer("{price:0}, love.");
     answer["quotes"] = json!([{"item": "room", "qty": 1, "total_cp": 200}]);
     let host = scripted_host(vec![answer]).await;
     write_persona(&host.directory(), &voiced_innkeeper()).unwrap();

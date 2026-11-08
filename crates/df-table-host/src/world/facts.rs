@@ -48,6 +48,9 @@ pub(super) fn place_facts(bible: &WorldBible, place: &Place, viewer: Option<&str
         "place": {"id": place.id, "name": place.name, "description": place.description},
         "stalls": stalls,
     });
+    if !bible.coins.is_empty() {
+        facts["coins"] = json!(bible.coins);
+    }
     if place.stalls.iter().any(keeps) {
         facts["viewer_role"] = json!("keeper");
     } else {

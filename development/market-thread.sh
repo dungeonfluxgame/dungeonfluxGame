@@ -10,7 +10,10 @@
 # who answers and where with `@keeper <id>`, `@keeper_situation <text>` and
 # `@speaker_situation <text>` lines, and where the keeper's feelings and standing start with
 # `@state <emotion> <level>` and `@rapport <toward> <-100..100>` lines; without them it is Mara at
-# her fruit stall.
+# her fruit stall. `@frames <option>` lines (one `persona watch` option each: `frames=<name>`,
+# `scene=<what the picture shows>`, `hold=30`, ...) let the picture follow the thread: every line
+# said is handed to `persona watch`, whose transcript is printed at the end and kept in
+# $FRAMES_LOG.
 cd "$(dirname "$0")/.."
 D=${DF_TABLE_EXE:-./artifacts/build/bubbles/debug/df-table.exe}
 P=${DF_TABLE_PORT:-7879}
@@ -23,6 +26,7 @@ KEEPER=fruit_vendor
 KEEPER_SITUATION="At her fruit stall in the town market."
 SPEAKER_SITUATION="At Mara's fruit stall in the town market, with your travelling companion."
 STARTING_STATE=()
+FRAMES=()
 while IFS= read -r setting; do
   value=${setting#* }
   case "$setting" in
@@ -31,6 +35,7 @@ while IFS= read -r setting; do
     '@speaker_situation '*) SPEAKER_SITUATION=$value ;;
     '@state '*) STARTING_STATE+=("set $value") ;;
     '@rapport '*) STARTING_STATE+=("rapport $value") ;;
+    '@frames '*) FRAMES+=("$value") ;;
   esac
 done < <(grep '^@' "$BEATS")
 # `@state <emotion> <level>` and `@rapport <toward> <-100..100>` lines set where the keeper's
@@ -39,6 +44,18 @@ done < <(grep '^@' "$BEATS")
 for preset in "${STARTING_STATE[@]}"; do
   $D dev --port $P persona state "$KEEPER" $preset >/dev/null
 done
+
+# The frame watch reads one `<speaker id> | <line>` per line said, on fd 4.
+WATCH_PID=""
+if [ ${#FRAMES[@]} -gt 0 ]; then
+  FRAMES_LOG=${FRAMES_LOG:-artifacts/tmp/market/frames.log}
+  mkdir -p "$(dirname "$FRAMES_LOG")"
+  exec 4> >($D dev --port $P persona watch "${FRAMES[@]}" >"$FRAMES_LOG" 2>&1)
+  WATCH_PID=$!
+fi
+watch_line() { # speaker, line
+  [ -n "$WATCH_PID" ] && [ -n "$2" ] && printf '%s | %s\n' "$1" "$2" >&4
+}
 
 # Mara's discount rules live in her persona (a trigger is a statement the model judges, never a
 # keyword). Adding them again to a persona that has them is refused and ignored.
@@ -68,6 +85,7 @@ say_as() { # speaker, instruction
   LAST="$line"
   LAST_SPEAKER="$who"
   HISTORY+=("$who: $line")
+  watch_line "$who" "$line"
   sleep 3
 }
 
@@ -83,6 +101,7 @@ keeper() {
   printf '[%02d] %s: %s\n' "$N" "$KEEPER" "${line:-<no line: $out>}"
   printf '%s\n' "$out" | sed -n '2,$p' | sed 's/^/       /'
   HISTORY+=("$KEEPER: $line")
+  watch_line "$KEEPER" "$line"
   sleep 3
 }
 
@@ -101,3 +120,10 @@ while IFS= read -r -u 3 raw; do
   say_as "$who" "$(printf '%s' "$goal" | sed 's/^ *//;s/ *$//')"
   keeper
 done 3< "$BEATS"
+
+if [ -n "$WATCH_PID" ]; then
+  exec 4>&-
+  wait "$WATCH_PID"
+  printf '\n--- frames (%s) ---\n' "$FRAMES_LOG"
+  cat "$FRAMES_LOG"
+fi

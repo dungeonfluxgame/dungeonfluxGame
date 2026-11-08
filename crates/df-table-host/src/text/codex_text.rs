@@ -24,6 +24,7 @@ use df_ai::text::{
     TextBackend, TextOutcome, TextReceipt, TextRequest, TextUsage, UnavailableReason,
 };
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
 use tokio::time::Instant;
 
 use super::limits::MAXIMUM_CODEX_OUTPUT_BYTES;
@@ -476,11 +477,10 @@ pub(super) fn lean_arguments(instructions: &Path) -> Vec<String> {
 }
 
 /// The `codex exec` command of one attempt.
-fn command(
-    route: &CodexRoute,
-    request: &TextRequest,
-    attempt: &PreparedAttempt,
-) -> tokio::process::Command {
+/// The prompt argument that tells `codex exec` to read the prompt from standard input.
+const PROMPT_FROM_STDIN: &str = "-";
+
+fn command(route: &CodexRoute, attempt: &PreparedAttempt) -> tokio::process::Command {
     let mut command = tokio::process::Command::new(&route.executable);
     command
         .current_dir(&attempt.folder.path)
@@ -498,12 +498,14 @@ fn command(
     command.args(extra_arguments(
         environment::text(EXTRA_ARGUMENTS_VARIABLE).as_deref(),
     ));
-    command.arg(prompt(request));
+    // The prompt is read from standard input (`-`): as an argument it would be cut off by the
+    // command-line limit (32,767 characters on Windows), which a keeper's price tables reach.
+    command.arg(PROMPT_FROM_STDIN);
     for picture in &attempt.pictures {
         command.arg("--image").arg(picture);
     }
     command
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -554,7 +556,7 @@ impl CodexTextBackend {
             }
         };
         let spawning = Instant::now();
-        let child = match command(route, request, &attempt).spawn() {
+        let mut child = match command(route, &attempt).spawn() {
             Ok(child) => child,
             Err(error) => {
                 self.record_step(RunStep::Spawn, spawning, Some(&error));
@@ -563,6 +565,27 @@ impl CodexTextBackend {
                 return configuration();
             }
         };
+        // The prompt goes in whole, then standard input is closed so the run starts.
+        // A child that stops reading cannot hold the write past the request's deadline.
+        let written = match child.stdin.take() {
+            Some(mut input) => {
+                match tokio::time::timeout(
+                    request.deadline,
+                    input.write_all(prompt(request).as_bytes()),
+                )
+                .await
+                {
+                    Ok(written) => written,
+                    Err(_) => Err(std::io::Error::from(std::io::ErrorKind::TimedOut)),
+                }
+            }
+            None => Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+        };
+        if let Err(error) = written {
+            self.record_step(RunStep::Spawn, spawning, Some(&error));
+            self.finish_recorded(attempt).await;
+            return configuration();
+        }
         self.record_step(RunStep::Spawn, spawning, None);
         // The text service has already bounded the deadline (`df_ai::text::TextLimits`). The child
         // is killed when the timed-out future drops it.

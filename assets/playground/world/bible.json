@@ -1,20 +1,35 @@
 {
+  "coins": [
+    {"id": "gp", "name": "gold", "value_cp": 100},
+    {"id": "sp", "name": "silver", "value_cp": 10},
+    {"id": "cp", "name": "copper", "value_cp": 1}
+  ],
   "items": [
     {"id": "apple", "name": "apple", "unit": "each", "base_value_cp": 3, "tags": ["fruit", "keeps-well"]},
     {"id": "pear", "name": "pear", "unit": "each", "base_value_cp": 4, "tags": ["fruit"]},
-    {"id": "plum", "name": "plum", "unit": "each", "base_value_cp": 3, "tags": ["fruit", "soft"]}
+    {"id": "plum", "name": "plum", "unit": "each", "base_value_cp": 3, "tags": ["fruit", "soft"]},
+    {"id": "frostline_longsword", "name": "Frostline longsword", "unit": "each", "base_value_cp": 45000, "tags": ["weapon", "enchanted", "longsword", "frost-runes", "slender", "silver-steel"]},
+    {"id": "emberfang_scimitar", "name": "Emberfang scimitar", "unit": "each", "base_value_cp": 38000, "tags": ["weapon", "enchanted", "scimitar", "ember-runes", "dark-steel", "bronze-guard"]},
+    {"id": "verdant_bastard_sword", "name": "Verdant bastard sword", "unit": "each", "base_value_cp": 52000, "tags": ["weapon", "enchanted", "bastard-sword", "vine-etching", "gold-inlaid-guard"]},
+    {"id": "nightglass_dagger", "name": "Nightglass dagger", "unit": "each", "base_value_cp": 26000, "tags": ["weapon", "enchanted", "dagger", "violet-sigils", "near-black-steel", "bone-handle"]}
   ],
   "places": [
     {
       "id": "market",
       "name": "The town market",
-      "description": "An open market of canvas-roofed stalls where the town buys its fruit, bread and rope.",
+      "description": "An open market of canvas-roofed stalls where the town buys its fruit, bread and rope, and where one renowned stall sells enchanted steel.",
       "stalls": [
         {
           "keeper": "fruit_vendor",
           "sells": ["apple", "pear", "plum"],
           "bulk": [{"min_qty": 5, "discount_permille": 100, "posted": true}],
           "haggle_floor_permille": 850
+        },
+        {
+          "keeper": "weapon_seller",
+          "sells": ["frostline_longsword", "emberfang_scimitar", "verdant_bastard_sword", "nightglass_dagger"],
+          "bulk": [{"min_qty": 2, "discount_permille": 50, "posted": false}],
+          "haggle_floor_permille": 900
         }
       ]
     }

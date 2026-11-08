@@ -531,6 +531,71 @@ the new fields, and the owed frame tests are marked `TODO(DEV-12)`. Left as they
 patterns, noted): blocking state-file IO in the line path (as `apply_appraisal` already does),
 error names copied from the address judge, and an empty `display_name` as the stranger mark.
 
+## Refinement 20 and runs 47 to 54 (the blade gauntlet at Haldor Brask's stall)
+
+Owner ask: five adventurers each test the bladesmith with their own kind of question (expert,
+ignorant, suspicious, haggling, ready to buy); he must be able to sell and want to close; the
+responses recorded and graded for later refinement, with the 30 s display plate running.
+Scene: `weapons-stall-blades.png`, `world place market`, `market-threads/blade-gauntlet.beats`
+(12 beats, 24 lines; the band knows each other's names, Haldor knows none).
+
+Changes:
+- World bible: `coins` (gp 100, sp 10, cp 1; `name` is what follows a count), the four blades'
+  values and Haldor's stall (5% posted-off bulk for two of a kind, floor 90%).
+- Codex text: the prompt goes over standard input (`codex exec -`). Run 47 refused every Haldor
+  line as `configuration`: four price tables pushed the prompt past Windows' 32,767-character
+  command line.
+- Haldor's persona (scratch data): he forged the blades (fuller, clay-backed quench, runes cut
+  after the temper, woken by a scribe), edge-holding and care knowledge, a proof he can give
+  (chill off the flat, frost a cup of water, never cut anyone), and `closing-the-sale`: matches a
+  blade to the buyer, names the price, asks for the coin; gives ground slowly (about 5% first,
+  the floor only at the very last).
+- Price slots (code): a line never writes an amount. It writes `{price:N}` and `{order_total}`,
+  and code puts in the total held, in the largest coins that fit. The model could not add or
+  convert reliably: run 48 said 598g 50s for a pair, run 51 "722 gold and 5 silver" for
+  361 + 247, run 52 "36 gold and 100 silver" for 361, and its self-reported total
+  (`stated_total_cp`, tried in runs 50 to 52 and removed) did not match what it said. A
+  line that quotes without slots, or names a lot it did not quote, is worded again once.
+- Frames for the runner: `persona watch` reads `<speaker id> | <line>` from standard input and
+  drives the same frame watch as `persona converse frames=`; the runner's `@frames` lines start
+  it. The frame judge's instruction said "talk alone changes nothing", so a counter scene scored
+  0% on all 24 lines of run 50. It now counts what the words make plain and no more: lifting or
+  pointing at the thing answered about, a proof being given, grins at a gaffe, folded arms at a
+  doubt, a handshake on a bargain.
+
+Scorecard (Haldor's 12 lines per run; Y = right, n = wrong, - = not reached):
+
+| Check | 48 | 49 | 50 | 51 | 54 |
+| --- | --- | --- | --- | --- | --- |
+| Expert craft answer (fuller, quench, runes after) | Y | Y | Y | Y | Y |
+| Ignorant questions corrected kindly (hot blades, child's dagger) | Y | Y | Y | Y | Y |
+| Suspicion met with fact, proof shown not claimed | n (creepy) | Y | Y | Y (anvil flare invented) | Y |
+| Four prices right, in gold | Y | Y | Y | Y | Y |
+| Edge-holding answer (the Verdant) | n (hedged) | Y | Y | Y | Y |
+| First concession modest | Y (5%) | n (floor) | Y (5%) | Y (5%) | Y (5%) |
+| Pair total said = lots held | n (598.5 vs 640) | n (638 vs 640) | n (606.5 vs 608) | n (722.5 vs 608) | Y (608) |
+| Closes and asks for the coin | n | Y (floor) | Y (430) | Y (430) | Y (427.5) |
+| Care advice | Y | Y | Y | Y | Y |
+| Frames shown (gate 25, hold 30 s) | - | - | 0 | 4 | 2 |
+
+Frames: run 51 made four (lines 6, 12, 19, 24; each shown 110 to 132 s after it started; wide,
+over-the-shoulder, wide, over-the-shoulder), faces and blades kept. Run 54 made two (lines 13 and
+17), one a two-shot of Sella's palm flat on the Frostline with frost beading on the steel as
+Haldor offers the chill.
+
+Weaknesses to refine later:
+- Verbal tics: "friend" in all 12 Haldor lines; "Shall I wrap it?" closes two lines in a row.
+- The first wording often writes the number instead of the slot (2 of 4 priced lines in run 53),
+  costing a retry (about 7 s).
+- A concession is not always remembered: run 53a priced the Emberfang at 380 for "all four"
+  after giving 361 two lines before.
+- Frames come late in a quiet counter scene (none before line 13 in run 54); the judge is honest
+  about small changes, and the gate (25) is the owner's.
+- Small inventions under the appraisal stance: "the Emberfang flare on my anvil" (run 51).
+
+Transcripts: `persona-transcripts/run48-gauntlet.md` to `run54-gauntlet.md`
+(`run52-53-bundle.md` for the bundle checks).
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

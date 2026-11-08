@@ -198,6 +198,10 @@ $D dev --port 7879 persona converse turns=12 opener=warrior frames=bar-live1 gat
   "scene=<what the picture shows now>" edit=true edit_from=first hold=30 max_frames=6 \
   judge_model=<name> "<topic>"
 
+# Frames for lines said elsewhere (the market runner's `@frames` lines use this)
+printf 'warrior | Which blade suits narrow streets?\n' | \
+  $D dev --port 7879 persona watch frames=<new-name> hold=30 "scene=<what the picture shows>"
+
 # Any edit by hand
 $D dev --port 7879 media generate "Lena now laughs" as=bar-edit base=bar.png wait=true
 ```
@@ -269,7 +273,8 @@ Lena the server for 20 rounds). `! <dev command>` lines run a dev command betwee
 `@state <emotion> <level>` lines start the keeper mid-story
 (the jealousy and farewell scenes start with attraction and affection already there). Never
 edit the runner or a beats file while a run uses it: bash reads a script as it goes, so an edit
-garbles the run. Run a copy for long batches. Reset both first: `persona state <id> reset`. Each run's full
+garbles the run. Run a copy for long batches (the copy's `cd "$(dirname "$0")/.."` must be
+changed to the repository root, or it cannot find its beats file). Reset both first: `persona state <id> reset`. Each run's full
 record goes in `development/persona-transcripts/` (`py -3 development/persona-transcript.py
 <log> <out.md> <title> <header> [section=<beats>] warrior=Kael tavern_server=Lena`), its summary
 in `development/persona-refinement-log.md`. The romance edge cases are
@@ -277,6 +282,36 @@ in `development/persona-refinement-log.md`. The romance edge cases are
 <value>` presets a standing); a speaker whose own persona refuses
 a beat (Kael will not be pushy) needs a temporary stance in the scratch copy for that test
 (`persona behavior warrior add drunk-pushy ...` plus a trigger), dropped afterwards.
+
+**The blade gauntlet** (`market-threads/blade-gauntlet.beats`, on `weapons-stall-blades.png`
+with `world place market`): Kael and four adventurers test Haldor Brask, the bladesmith, with
+expert, ignorant, suspicious, haggling and ready-to-buy questions. The beats file resets all six,
+presets the band's names (`! persona state <id> knows <other>`: they travel together; Haldor
+knows nobody) and has the picture follow the talk with `@frames <option>` lines (one
+`persona watch` option each: `frames=<new name>`, `hold=30`, `max_frames=8`, `parallel=2`,
+`scene=<what the picture shows, who stands where>`). The runner hands every line said to
+`persona watch`, which judges and frames it as `persona converse frames=` does; its transcript
+(each judgement, frame started and shown, with seconds) is printed after the thread and kept in
+`$FRAMES_LOG` (default `artifacts/tmp/market/frames.log`). Give each run a new `frames=` name.
+Check, per Haldor line: the craft answer is right and his own (he forged them), the ignorant one
+is corrected kindly, proof is shown not claimed, every price is the bible's in gold, a concession
+is small at first and never below the floor, a bundle's spoken total equals its quoted lots, and
+he asks for the coin.
+
+Prices live in the world bible (`world/bible.json`): `items` carry `value_cp`, a `stalls` entry
+names its keeper, what it sells, `bulk` tiers and `haggle_floor_permille`, and `coins` (gp 100,
+sp 10, cp 1; `name` is what follows a count: "gold") say an amount in coins. A line never writes
+an amount: it writes `{price:N}` (lot N of its quotes) and `{order_total}` (its lots together),
+and code puts in the total held (clamped to the stall's bounds), in the largest coins that fit
+("608 gold and 5 silver"; `N cp` without coins). The model added and converted badly (it said
+"722 gold and 5 silver" for 361 + 247, and "36 gold and 100 silver" for 361), so the number said
+is now always the one charged. A line that quotes without slots, names a lot it did not quote,
+or writes braces that are no slot is worded again once; a total the stall would not charge is
+worded again too.
+
+The Codex text backend hands its prompt over standard input (`codex exec -`): a keeper with four
+price tables made a prompt longer than Windows' 32,767-character command line, and every line
+was refused as `configuration`.
 
 The bar scene came from one line at the market (one plate, about 90 s):
 `$D dev --port 7879 move act warrior plate=bar "Evening has fallen. You leave the elf at the

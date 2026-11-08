@@ -78,6 +78,41 @@ fn text_that_is_not_a_bible_is_a_typed_error_with_a_position() {
 }
 
 #[test]
+fn coins_read_with_their_copper_value_and_a_repeated_or_worthless_one_is_refused() {
+    let mut bible = good();
+    bible["coins"] = json!([
+        {"id": "gp", "name": "gold piece", "value_cp": 100},
+        {"id": "cp", "name": "copper piece", "value_cp": 1}
+    ]);
+    assert_eq!(parse(&bible).unwrap().coins[0].value_cp, 100);
+    let mut twice = bible.clone();
+    twice["coins"][1]["id"] = json!("gp");
+    assert_eq!(parse(&twice).unwrap_err().key(), "duplicate_id");
+    let mut worthless = bible;
+    worthless["coins"][0]["value_cp"] = json!(0);
+    assert_eq!(parse(&worthless).unwrap_err().key(), "out_of_range");
+}
+
+#[test]
+fn an_amount_is_said_in_the_largest_coins_that_fit_or_not_at_all_without_coins() {
+    let mut bible = good();
+    bible["coins"] = json!([
+        {"id": "cp", "name": "copper", "value_cp": 1},
+        {"id": "gp", "name": "gold", "value_cp": 100},
+        {"id": "sp", "name": "silver", "value_cp": 10}
+    ]);
+    let bible = parse(&bible).unwrap();
+    assert_eq!(
+        bible.spoken_amount(60850).as_deref(),
+        Some("608 gold and 5 silver")
+    );
+    assert_eq!(bible.spoken_amount(45000).as_deref(), Some("450 gold"));
+    assert_eq!(bible.spoken_amount(7).as_deref(), Some("7 copper"));
+    assert_eq!(bible.spoken_amount(0), None);
+    assert_eq!(parse(&good()).unwrap().spoken_amount(450), None);
+}
+
+#[test]
 fn ids_are_lowercase_letters_digits_underscore_and_hyphen_and_unique() {
     for bad in ["", "Apple", "a b", "a.b", &"x".repeat(65)] {
         let mut bible = good();

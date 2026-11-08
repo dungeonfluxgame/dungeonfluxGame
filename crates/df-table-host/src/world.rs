@@ -107,6 +107,15 @@ pub fn available_packs(app: &AppState) -> Vec<serde_json::Value> {
     }
 }
 
+/// `amount_cp` as a character says it, in the bible's coins ("608 gold and 5 silver"), or in
+/// copper pieces ("60850 cp") when the bible has no coins to say it in.
+pub fn spoken_amount(app: &AppState, amount_cp: u64) -> String {
+    store::read_bible(&store::world_directory(app))
+        .ok()
+        .and_then(|bible| bible.spoken_amount(amount_cp))
+        .unwrap_or_else(|| format!("{amount_cp} cp"))
+}
+
 /// The result of checking a quoted total against the stall's rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuoteCheck {

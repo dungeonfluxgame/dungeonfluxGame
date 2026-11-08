@@ -18,6 +18,8 @@ use df_content::persona::backfill::{Gap, NarrativeGuidance, check_gaps, gaps_sch
 use df_content::persona::privacy::{LEAK_REPORT_INSTRUCTION, split_leak_report, with_leak_report};
 use df_content::persona::{Appraisal, EmotionConfig, EmotionalTrigger, Persona, PersonaState};
 use df_content::persona::{BriefScope, PersonaBrief};
+use std::ops::Range;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
@@ -111,6 +113,7 @@ const SAY_INSTRUCTION: &str = concat!(
     "When asked_by is given the line is said to that person: judge the triggers by what the ",
     "asker actually does and asks for, and never by merely accepting an offer or restating a ",
     "price. ",
+    "Every amount in the world facts is in copper (currency cp). ",
     "Prices, stock and places come only from the world facts; how many someone should buy is ",
     "the character's own advice and may be specific. A world entry whose ",
     "audience is public (the default) may be stated by anyone. The price and stock of goods ",
@@ -122,11 +125,15 @@ const SAY_INSTRUCTION: &str = concat!(
     "price: only the keeper of a stall quotes one. What the character's expertise says ",
     "they know they may state in character. ",
     "Give quotes: for each lot the line prices, the item id, the quantity (qty) and the total ",
-    "in copper pieces (total_cp); empty when it quotes none. Every price or total the line ",
-    "states is one entry in quotes, so each can be checked against the stall. A whole order's ",
-    "total is not an entry of its own: give one entry per lot (each item with its quantity) and ",
-    "the line may say their sum. A keeper reads a lot's total from their quotes or works it out ",
-    "by their price rule, never from the unit price alone. ",
+    "in copper pieces (total_cp); empty when it quotes none. A whole order's total is not an ",
+    "entry of its own: give one entry per lot (each item with its quantity), each the price ",
+    "actually charged for that lot (a concession given goes into that entry); a bulk tier ",
+    "applies only to several of the same item, never to different items together. A keeper ",
+    "reads a lot's total from their quotes or works it out by their price rule, never from the ",
+    "unit price alone. The line never writes an amount itself: where it says a lot's price it ",
+    "writes {price:N}, N the lot's place in quotes counting from 0, and where it says what ",
+    "several lots come to together it writes {order_total}; the amounts are put in, in coins, ",
+    "when the line is shown. ",
     "appraisal: how what was just said moved this character: emotion deltas by id (positive or ",
     "negative, -100 to 100), who it was toward and the change in their rapport, the attention ",
     "(whom and what they are focused on, and what they registered in a few words) and the tone id ",
@@ -340,6 +347,8 @@ struct Answer {
     repeat: Option<String>,
     /// How the model says the line misses its intent, when it does.
     intent_miss: Option<String>,
+    /// How the line's price slots do not fit its quotes, when they do not.
+    slot_miss: Option<String>,
     /// The characters present whose name the character learned with this line.
     names_learned: Vec<String>,
     leak_suspect: bool,
@@ -467,6 +476,7 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
             .filter(|reason| !reason.trim().is_empty())
             .unwrap_or_else(|| "the line does not carry out the intent".to_owned())
     });
+    let slot_miss = price_slot_miss(line, record.quotes.len());
     Ok(Answer {
         line: line.to_owned(),
         behavior: record.behavior,
@@ -479,9 +489,105 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
         dropped,
         repeat,
         intent_miss,
+        slot_miss,
         names_learned: record.names_learned,
         leak_suspect: report.leaks,
     })
+}
+
+/// A price slot in a line: where the line says an amount, which code puts in from its quotes so
+/// the number said is always the one held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PriceSlot {
+    /// `{price:N}`: the total of the line's lot N.
+    Lot(usize),
+    /// `{order_total}`: what all the line's lots come to together.
+    OrderTotal,
+}
+
+const ORDER_TOTAL_SLOT: &str = "order_total";
+const LOT_SLOT_PREFIX: &str = "price:";
+
+/// The slots of `line` in order, each with its byte range (braces included), or the first text in
+/// braces that is no slot.
+fn price_slots(line: &str) -> Result<Vec<(Range<usize>, PriceSlot)>, String> {
+    let mut slots = Vec::new();
+    let mut from = 0;
+    while let Some(open) = line[from..].find('{').map(|at| from + at) {
+        let Some(close) = line[open..].find('}').map(|at| open + at) else {
+            return Err(line[open..].to_owned());
+        };
+        let inside = &line[open + 1..close];
+        let slot = match inside.strip_prefix(LOT_SLOT_PREFIX) {
+            Some(index) => index.parse().map(PriceSlot::Lot).ok(),
+            None => (inside == ORDER_TOTAL_SLOT).then_some(PriceSlot::OrderTotal),
+        };
+        match slot {
+            Some(slot) => slots.push((open..close + 1, slot)),
+            None => return Err(line[open..=close].to_owned()),
+        }
+        from = close + 1;
+    }
+    Ok(slots)
+}
+
+/// Why the line must be worded again because its price slots do not fit the `lots` it quoted: a
+/// text in braces that is no slot, a slot for a lot it did not quote, quoted lots it never says,
+/// or a total of fewer than two lots.
+fn price_slot_miss(line: &str, lots: usize) -> Option<String> {
+    let slots = match price_slots(line) {
+        Ok(slots) => slots,
+        Err(text) => {
+            return Some(format!(
+                "{text} is no price slot: write {{price:N}} or {{order_total}}"
+            ));
+        }
+    };
+    if let Some(index) = slots.iter().find_map(|(_, slot)| match slot {
+        PriceSlot::Lot(index) if *index >= lots => Some(*index),
+        _ => None,
+    }) {
+        return Some(format!(
+            "{{price:{index}}} names a lot you did not quote (you quoted {lots})"
+        ));
+    }
+    if lots > 0 && slots.is_empty() {
+        return Some(
+            "the line says a price without its slot: write {price:N} where it says a lot's \
+             price and {order_total} where it says what lots come to together, never the number"
+                .to_owned(),
+        );
+    }
+    let totals = slots.iter().any(|(_, slot)| *slot == PriceSlot::OrderTotal);
+    (totals && lots < 2).then(|| {
+        "{order_total} is for several lots together; say one lot's price with {price:0}".to_owned()
+    })
+}
+
+/// `line` with its price slots filled from `totals_cp` (each lot's held total by its place in the
+/// quotes, `None` for a lot that was dropped), each said in the bible's coins. A slot that does
+/// not fit, or needs a dropped lot, is left as written: the retry already asked for it to be
+/// fixed, and the line is reported as it is.
+fn fill_price_slots(app: &AppState, line: &str, totals_cp: &[Option<u64>]) -> String {
+    let Ok(slots) = price_slots(line) else {
+        return line.to_owned();
+    };
+    let mut filled = String::with_capacity(line.len());
+    let mut from = 0;
+    for (range, slot) in slots {
+        let amount = match slot {
+            PriceSlot::Lot(index) => totals_cp.get(index).copied().flatten(),
+            PriceSlot::OrderTotal => totals_cp.iter().copied().sum(),
+        };
+        filled.push_str(&line[from..range.start]);
+        match amount {
+            Some(cp) => filled.push_str(&crate::world::spoken_amount(app, cp)),
+            None => filled.push_str(&line[range.clone()]),
+        }
+        from = range.end;
+    }
+    filled.push_str(&line[from..]);
+    filled
 }
 
 /// The voice of a line as layers, weakest first: the packs the character belongs to, their own
@@ -823,6 +929,7 @@ pub(super) async fn say_line(
             .intent_miss
             .clone()
             .or_else(|| answer.repeat.clone())
+            .or_else(|| answer.slot_miss.clone())
             .or_else(|| quote_retry_reason(app, own.id().as_str(), &answer.quotes));
         match (reason, retry_reason.is_some()) {
             (Some(reason), false) => retry_reason = Some(reason),
@@ -880,11 +987,25 @@ fn settle(
         }
     }
     let mut dropped = answer.dropped;
-    let quotes: Vec<QuoteReport> = answer
+    // Each lot by its place in the line's quotes, so a price slot names the lot the model meant
+    // even when an invalid one before it is dropped; a slot fills with the total actually held.
+    let lots: Vec<Option<QuoteReport>> = answer
         .quotes
         .into_iter()
-        .filter_map(|record| report_quote(app, own.id().as_str(), record, &mut dropped))
+        .map(|record| report_quote(app, own.id().as_str(), record, &mut dropped))
         .collect();
+    let held_cp: Vec<Option<u64>> = lots
+        .iter()
+        .map(|lot| {
+            lot.as_ref().map(|lot| {
+                lot.bounds.map_or(lot.proposed_total_cp, |bounds| {
+                    u64::from(bounds.clamped_total_cp)
+                })
+            })
+        })
+        .collect();
+    let line = fill_price_slots(app, &answer.line, &held_cp);
+    let quotes: Vec<QuoteReport> = lots.into_iter().flatten().collect();
     learn_names(app, own, &answer.names_learned);
     let state = apply_appraisal(app, own, &appraisal);
     let tone = appraisal
@@ -892,7 +1013,7 @@ fn settle(
         .clone()
         .or_else(|| usual_tone(config, &state));
     SaidLine {
-        line: answer.line,
+        line,
         behavior,
         fired_triggers: answer.fired_triggers,
         fired_emotional_triggers: emotional.iter().map(|trigger| trigger.id.clone()).collect(),

@@ -18,6 +18,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use df_playground::lobby::model::SceneTitle;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -65,6 +66,52 @@ pub struct FrameOptions {
 async fn ask_judge(port: u16, request: &FrameRequest) -> Result<FrameJudgement, DevError> {
     let reply: FrameReply = post_json(port, PERSONA_FRAME, request).await?;
     reply_value(reply)
+}
+
+/// `persona watch`: frames for a talk spoken elsewhere, one `persona say` or `persona ask` per
+/// line (as `development/market-thread.sh` does). Each line of standard input is
+/// `<speaker id> | <line>`; it is judged and framed as in `persona converse frames=`. At the end of
+/// input the frames still being made are waited for, and the transcript is given.
+pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<String, DevError> {
+    let listed: crate::cast::request::CastReply<CastList> = get_json(port, cast_path::CAST).await?;
+    let cast = reply_value(listed)?;
+    let picture = cast.picture.clone();
+    let speakers = speakers_of(cast);
+    let mut watch = FrameWatch::new(options, &speakers, &picture);
+    let mut transcript = Vec::new();
+    let mut input = BufReader::new(tokio::io::stdin()).lines();
+    let mut turn = 0;
+    while let Some(entry) = input
+        .next_line()
+        .await
+        .map_err(|error| DevError::UnreadableFile {
+            path: "<stdin>".into(),
+            message: error.to_string(),
+        })?
+    {
+        let Some((id, line)) = entry.split_once(" | ") else {
+            transcript.push(format!("  not '<speaker id> | <line>', skipped: {entry}"));
+            continue;
+        };
+        let Some(speaker) = speakers.iter().find(|speaker| speaker.id == id.trim()) else {
+            transcript.push(format!("  {} is not in the scene, skipped", id.trim()));
+            continue;
+        };
+        turn += 1;
+        transcript.push(format!(
+            "[{turn:02}] {}: {}",
+            speaker.display_name,
+            line.trim()
+        ));
+        if let Some(judged) = watch
+            .after_line(port, speaker, line.trim(), &mut transcript)
+            .await
+        {
+            watch.consider(port, turn, judged, &mut transcript).await;
+        }
+    }
+    watch.finish(port, &mut transcript).await;
+    Ok(transcript.join("\n"))
 }
 
 /// `persona frame`: judges `lines` against the picture `picture` describes, for the characters
