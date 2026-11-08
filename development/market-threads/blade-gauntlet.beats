@@ -2,8 +2,8 @@
 # every kind of question about the craft (expert, ignorant, suspicious, haggling, ready to buy).
 # Haldor should answer as the bladesmith who forged the blades, quote real prices from the world
 # bible in gold, hold his floor, correct the ignorant kindly, prove nothing he cannot, and keep
-# moving toward closing the sale. Needs the weapons stall scene (`weapons-stall-blades.png`) and
-# `world place market`; the band knows each other's names, Haldor knows none of them. The picture
+# moving toward closing the sale. Needs the weapons stall scene (`playground go weapons_stall`,
+# on `weapons-stall-blades.png`; see the runbook) and `world place market`; the band knows each other's names, Haldor knows none of them. The picture
 # follows the haggling: a new frame at most every 30 s when the judge sees enough change, and a
 # close look at a blade cuts at once to an insert of it filling the screen. Haldor's missing
 # details of a blade (guard, grip, pommel) are backfilled before he answers (`@backfill sync`).
@@ -11,7 +11,7 @@
 @keeper weapon_seller
 @keeper_situation Behind the counter of his renowned enchanted-steel stall in the market, four of his blades laid out on red cloth; five adventurers have just walked up.
 @speaker_situation At the enchanted-steel stall in the market with your band of adventurers, four enchanted blades laid out on the counter in front of you.
-@frames frames=gauntlet-f
+@frames frames=gauntlet-m
 @frames hold=30
 @frames max_frames=10
 @backfill sync

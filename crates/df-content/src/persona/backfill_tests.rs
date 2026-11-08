@@ -370,13 +370,7 @@ fn the_backfill_facts_carry_the_guidance_and_the_listener_briefs_of_the_others_o
         topic: "her childhood".to_owned(),
         filled: None,
     }];
-    let facts = backfill_facts(
-        &persona,
-        &[other.public_view()],
-        &gaps,
-        Some(&guidance),
-        "The Ember Roads inn",
-    );
+    let facts = backfill_facts(&persona, &[other.public_view()], &gaps, Some(&guidance));
     let text = facts.to_string();
     assert!(text.contains("she hates the guild"));
     assert!(text.contains("her childhood"));
@@ -386,7 +380,7 @@ fn the_backfill_facts_carry_the_guidance_and_the_listener_briefs_of_the_others_o
         text.contains("He went north"),
         "the persona's own secrets are in its own brief"
     );
-    let without = backfill_facts(&persona, &[], &gaps, None, "x");
+    let without = backfill_facts(&persona, &[], &gaps, None);
     assert!(without["guidance"].is_null());
 }
 

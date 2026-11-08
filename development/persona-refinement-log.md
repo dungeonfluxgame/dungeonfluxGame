@@ -650,6 +650,65 @@ Open:
 - Bram's haggle beat was once worded backwards ("That's a fine blade, not a dear one").
 - While an insert is up, bubbles sit where the room's faces were.
 
+## Refinement 22 and runs 58 to 64 (no pile-up, no lost close looks, no name leaks)
+
+Owner asks: fix the repeated close-look opener and the backstory pile-up; then, after Haldor said
+"Mara" unprompted (run 59), make sure nothing in a scene leaks a name, nothing is hard-coded and
+no gameplay decision uses string matching: decisions go to Jev and into prompts and data.
+
+Changes, in the order the runs found them:
+- **Pile-up (run 57):** before an insert, the coverage judge is asked whether the keeper already
+  knows the item up close; only then the backfill (run 58: "already knew" on all four inserts,
+  the backstory unchanged at 1631 characters). The frame judge reads each keeper's backstory.
+- **Openers:** "Certainly, here, hilt first" (run 57), then "Aye" (run 58). Fixed as data: the
+  show-the-blade stance and Haldor's rhythm ("never two answers running with the same word").
+  Varied from run 59 on.
+- **Shots (run 58):** the judge took the insert shot for a gated frame. The insert is no longer
+  among the shots it picks from.
+- **Name leak (run 59): an audit of every path a name takes into a prompt.** Fixed:
+  - **Fixture words:** a scene fixture's title and description are no longer given to a line,
+    a backfill or a generation. They are author notes ("Mara Vell at her fruit stall"); the
+    world's place says where people are.
+  - **Ids that carry names (`mara_adventurer`):** a character never sees the id of someone whose
+    name it does not know. Everywhere the id would be, it sees a handle (`person-1`):
+    `present`, `asked_by`, `recent` labels, `others`, its own standings and attention, and the
+    keeper of a stall in the world facts. The model's answers are read back to ids in code
+    (`persona/handles.rs`); a `recent` label that is no one it knows becomes `someone`.
+  - **Backfill:** it was given the others' full public views (names included), and would store
+    a name for good. It now sees them as the line does, with the same handles in the same order.
+  - **`persona converse`:** it put ids and lines into free text, with a hard-coded "table at the
+    inn". It now sends `recent` as data and names no place.
+  - **Generation:** gets the world's place, and the cast as strangers.
+  - **The shared public note** tells every prompt that a handle is no name, never to be said or
+    written into a gap or detail.
+- **Lost close looks:** run 60 lost two to busy room slots, run 62 two more to a busy insert
+  slot. Inserts now have a pool of their own, wait for no room frame, and hold the screen; a
+  room frame that finishes meanwhile waits.
+- **Cast loss (run 61):** an extreme close-up named only the keeper, and three lines were
+  refused. A frame whose scan misses some of the cast is shown with the cast of the last full
+  picture.
+- **Into the judge and the data:**
+  - Whether a close look is new is the judge's `new_look`, not a code comparison.
+  - The insert hold, the least time on screen, the question asked of the keeper and the insert's
+    lead-in are `frames.json` `show`.
+- **Independent rules review (a reviewer agent on the diff):** the fixes above for titles, stall
+  keepers, unknown labels and generation; one stranger-view function, not two; one layout
+  helper, not three; weapon-specific words out of the generic frame instruction; stale docs.
+  One claim was refuted: the insert hold has a single clock, the task's finish.
+
+Run 64 (`run64-gauntlet.md`):
+- 30 lines answered, none refused, no name, handle or "someone" said.
+- Exactly one insert per close look (Verdant, Frostline, Nightglass), each "already known", so
+  nothing was backfilled.
+- A tight room frame (5 of 6 named) was shown with the full cast; inserts were up about 20 s.
+- Prices right (380 to 361, the pair 608, the Frostline 427 gold 5 silver).
+
+Open:
+- Run 63's judge took a care question as a new Nightglass look.
+- One insert in run 61 was lost to a transient image backend error (-32603); there is no retry.
+- A stranger's job, personality and speech style, the bible's place text and caller text (topic,
+  intent, events) are authored, and could name someone if written carelessly.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

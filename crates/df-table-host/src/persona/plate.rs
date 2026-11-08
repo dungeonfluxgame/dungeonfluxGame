@@ -8,6 +8,7 @@
 //! latest lines, with no model call, so it is the same for the same talk. The title chip of the
 //! scene is the spinner while the picture is made, and is put back whether the plate worked or not.
 
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use df_playground::lobby::change::{RoleplayEdit, ScreenEdit};
@@ -181,7 +182,14 @@ pub(crate) async fn deliver_plate(
     base: Option<&str>,
 ) -> Result<String, PlateFailure> {
     let before = start_spinner(port).await.map_err(at(PlateStep::Generate))?;
-    let made = make_frame(port, name, prompt, characters, base, None).await;
+    let alone = RoomTurn {
+        previous: None,
+        screen: SharedScreen::default(),
+        cast_from: None,
+    };
+    let made = make_frame(port, name, prompt, characters, base, alone)
+        .await
+        .map(|shown| shown.summary);
     let restored = put_title_back(port, before).await;
     match (made, restored) {
         (Ok(summary), Ok(())) => Ok(summary),
@@ -205,65 +213,121 @@ pub(super) async fn put_title_back(port: u16, before: Option<SceneTitle>) -> Res
     change(port, &put_back).await
 }
 
+/// When a frame of the room may go on screen: once the room frame started before it has been
+/// shown (`previous`; a sender that went away, its frame failed, lets it go on), and once the
+/// screen allows it (`screen`); and the picture whose cast it keeps when its own scan finds fewer
+/// of the characters than were asked for (`cast_from`).
+pub(super) struct RoomTurn {
+    pub previous: Option<tokio::sync::oneshot::Receiver<()>>,
+    pub screen: SharedScreen,
+    pub cast_from: Option<String>,
+}
+
+/// A frame put on screen: what was done, and whether it shows with its own scan (every character
+/// asked for named in it) rather than with the cast of the picture it replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Shown {
+    pub summary: String,
+    pub own_cast: bool,
+}
+
 /// Makes the plate `name` and puts it behind the scene, as `deliver_plate` does but without the
-/// spinner (its caller shows one), and only once `after` has fired: a frame made alongside an
-/// earlier one waits for that one to be shown, so an older picture never replaces a newer one.
-/// Bubbles of characters not in the new picture are taken away.
+/// spinner (its caller shows one), and only at its `turn`: a frame made alongside an earlier one
+/// waits for that one to be shown, so an older picture never replaces a newer one, and waits
+/// while an insert holds the screen. Bubbles of characters not in the new picture are taken away.
 pub(super) async fn make_frame(
     port: u16,
     name: &str,
     prompt: &str,
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
-    after: Option<tokio::sync::oneshot::Receiver<Instant>>,
-) -> Result<String, PlateFailure> {
+    turn: RoomTurn,
+) -> Result<Shown, PlateFailure> {
     let present: Vec<String> = characters
         .iter()
         .map(|character| character.name.clone())
         .collect();
-    let summary = build(port, name, prompt, characters, base, after).await?;
+    let shown = build(port, name, prompt, characters, base, turn).await?;
     drop_stale_bubbles(port, &present)
         .await
         .map_err(at(PlateStep::Backdrop))?;
-    Ok(summary)
+    Ok(shown)
 }
 
-/// Makes the insert `name` (a cut to an item filling the screen) and puts it behind the scene
-/// once `after` has fired. Nobody's face is in it, so it is not scanned: it is shown with the
-/// layout of `room`, the picture it cuts away from, so the scene keeps its cast (who may speak,
-/// and where their bubbles sit) while the camera is on the item.
+/// Makes the insert `name` (a cut to an item filling the screen) and puts it behind the scene as
+/// soon as it is made and the last picture has been up the screen's least time: it waits for no
+/// room frame, and holds the screen for `hold`, so a room frame that finishes meanwhile waits.
+/// Nobody's face is in it, so it is not scanned: it is shown with the layout of `room`, the
+/// picture it cuts away from, so the scene keeps its cast (who may speak, and where their bubbles
+/// sit) while the camera is on the item.
 pub(super) async fn make_insert(
     port: u16,
     name: &str,
     prompt: &str,
     base: Option<&str>,
     room: &str,
-    after: Option<tokio::sync::oneshot::Receiver<Instant>>,
+    (screen, hold): (&SharedScreen, Duration),
 ) -> Result<String, PlateFailure> {
     let picture = generate(port, name, prompt, base).await?;
-    let layout = show_layout(port, room)
-        .await
-        .map(|stored| stored.layout)
-        .map_err(at(PlateStep::Locate))?;
-    wait_turn(after).await;
+    let layout = layout_of(port, room).await?;
+    claim_screen(screen, false, Some(hold)).await;
     put_backdrop(port, &picture, Some(layout)).await?;
     Ok(format!(
         "insert {name}: {picture} is behind the scene, with the cast of {room}"
     ))
 }
 
-/// The least time a frame stays on screen before a later one, made alongside it, replaces it: a
-/// picture that flashed by would be a flicker nobody at the table could follow.
-const MINIMUM_SHOWN: Duration = Duration::from_secs(8);
+/// The screen, as the frames of one conversation share it: when the last picture went up, until
+/// when an insert holds it, and the least time a picture stays up before another replaces it
+/// (one that flashed by would be a flicker nobody at the table could follow; `frames.json`
+/// `show.minimum_shown_seconds`, set by the watch from each judgement).
+#[derive(Debug, Default)]
+pub(super) struct Screen {
+    last_shown: Option<Instant>,
+    held_until: Option<Instant>,
+    pub minimum_shown: Duration,
+}
 
-/// Waits for the frame before this one to be shown (when there is one) and then to have been up
-/// for `MINIMUM_SHOWN`; a sender that went away (its frame failed) lets this one go on at once.
-async fn wait_turn(after: Option<tokio::sync::oneshot::Receiver<Instant>>) {
-    if let Some(after) = after
-        && let Ok(shown_at) = after.await
-    {
-        tokio::time::sleep(MINIMUM_SHOWN.saturating_sub(shown_at.elapsed())).await;
+pub(super) type SharedScreen = Arc<Mutex<Screen>>;
+
+/// Waits until a new picture may go up and claims the screen for it: the screen's least time after
+/// the last picture and, when `respect_hold`, not while an insert holds it. The claim marks the
+/// picture as up now and holds the screen for `hold` (an insert) or releases it, under one lock,
+/// so two frames never pass together.
+pub(super) async fn claim_screen(
+    screen: &SharedScreen,
+    respect_hold: bool,
+    hold: Option<Duration>,
+) {
+    loop {
+        let wait = {
+            let mut state = screen.lock().unwrap_or_else(PoisonError::into_inner);
+            let now = Instant::now();
+            let shown_by = state.last_shown.map(|shown| shown + state.minimum_shown);
+            let free_at = if respect_hold {
+                shown_by.max(state.held_until)
+            } else {
+                shown_by
+            };
+            match free_at.filter(|free| *free > now) {
+                Some(free) => free - now,
+                None => {
+                    state.last_shown = Some(now);
+                    state.held_until = hold.map(|held| now + held);
+                    return;
+                }
+            }
+        };
+        tokio::time::sleep(wait).await;
     }
+}
+
+/// Waits for the room frame before this one (when there is one), then claims the screen.
+async fn wait_turn(turn: RoomTurn) {
+    if let Some(previous) = turn.previous {
+        let _ = previous.await;
+    }
+    claim_screen(&turn.screen, true, None).await;
 }
 
 /// Takes away the bubbles anchored to a character who is not in the new picture: their region is
@@ -299,9 +363,31 @@ async fn drop_stale_bubbles(port: u16, present: &[String]) -> Result<(), DevErro
     Ok(())
 }
 
+/// The stored scan of `picture`: who is in it and where.
+async fn layout_of(port: u16, picture: &str) -> Result<SceneLayout, PlateFailure> {
+    show_layout(port, picture)
+        .await
+        .map(|stored| stored.layout)
+        .map_err(at(PlateStep::Locate))
+}
+
+/// Puts `picture` behind the scene with the cast of `cast` (its own scan when it is `cast`).
+pub(super) async fn show_with_cast(
+    port: u16,
+    picture: &str,
+    cast: &str,
+) -> Result<(), PlateFailure> {
+    let layout = if picture == cast {
+        None
+    } else {
+        Some(layout_of(port, cast).await?)
+    };
+    put_backdrop(port, picture, layout).await
+}
+
 /// Puts `picture` behind the scene, with `layout` when given (otherwise the host attaches the
 /// picture's own scan, when it has one).
-pub(super) async fn put_backdrop(
+async fn put_backdrop(
     port: u16,
     picture: &str,
     layout: Option<SceneLayout>,
@@ -327,21 +413,24 @@ async fn build(
     prompt: &str,
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
-    after: Option<tokio::sync::oneshot::Receiver<Instant>>,
-) -> Result<String, PlateFailure> {
+    turn: RoomTurn,
+) -> Result<Shown, PlateFailure> {
     // A plate already in the library with its scan is kept, not rendered again: the name is its
     // identity (a generated plate is stored as `<name>.png`). Use a new name to render a new one.
     let kept = format!("{name}.png");
     if show_layout(port, &kept).await.is_ok() {
-        wait_turn(after).await;
+        wait_turn(turn).await;
         put_backdrop(port, &kept, None).await?;
-        return Ok(format!(
-            concat!(
-                "plate {}: kept {} and its scan, not rendered again; the characters in it ",
-                "are as named before"
+        return Ok(Shown {
+            summary: format!(
+                concat!(
+                    "plate {}: kept {} and its scan, not rendered again; the characters in it ",
+                    "are as named before"
+                ),
+                name, kept
             ),
-            name, kept
-        ));
+            own_cast: true,
+        });
     }
     let picture = generate(port, name, prompt, base).await?;
     let located: LocateReply<LocatedLayout> = post_json(
@@ -368,18 +457,33 @@ async fn build(
     .await
     .map_err(at(PlateStep::Identify))?;
     let identified = reply_value(identified).map_err(at(PlateStep::Identify))?;
-    wait_turn(after).await;
-    put_backdrop(port, &picture, None).await?;
     let named = identified
         .rows
         .iter()
         .filter(|row| row.region.is_some() && row.outcome.key() == "named")
         .count();
-    Ok(format!(
-        "plate {name}: {picture} is behind the scene ({} regions found, {named} of {} characters named)",
-        located.layout.regions().len(),
-        identified.rows.len()
-    ))
+    // A tighter shot that leaves someone out does not take them out of the scene: the frame is
+    // shown with the cast of the picture it replaces, so they can go on speaking (run 61: an
+    // extreme close-up named only the keeper, and three lines were refused).
+    let own_cast = named == identified.rows.len();
+    let kept_cast = match (&turn.cast_from, own_cast) {
+        (Some(room), false) => Some((room.clone(), layout_of(port, room).await?)),
+        _ => None,
+    };
+    wait_turn(turn).await;
+    let cast_note = kept_cast.as_ref().map_or_else(String::new, |(room, _)| {
+        format!(", with the cast of {room}")
+    });
+    put_backdrop(port, &picture, kept_cast.map(|(_, layout)| layout)).await?;
+    Ok(Shown {
+        summary: format!(
+            "plate {name}: {picture} is behind the scene ({} regions found, {named} of {} \
+             characters named){cast_note}",
+            located.layout.regions().len(),
+            identified.rows.len()
+        ),
+        own_cast,
+    })
 }
 
 /// Generates the plate `name` from `prompt` (an edit of `base` when given) and gives the stored

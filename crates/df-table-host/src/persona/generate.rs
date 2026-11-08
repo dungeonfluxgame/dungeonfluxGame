@@ -26,11 +26,12 @@ use df_content::persona::privacy::{LEAK_REPORT_INSTRUCTION, split_leak_report, w
 use df_content::persona::voice::{
     VOICE_INSTRUCTION, VOICE_OUTPUT_NAME, read_voice, voice_facts, voice_schema,
 };
-use df_content::persona::{Persona, PersonaEdit, PersonaId};
+use df_content::persona::{Persona, PersonaEdit, PersonaId, PersonaState};
 use futures_util::future::join_all;
 use serde_json::Value;
 use tokio::time::Instant;
 
+use super::handles::Handles;
 use super::request::{CastRow, Generation, PersonaError, summary_of};
 use super::storage::{persona_directory, persona_id, read_persona, store_generated};
 use crate::blocking::run_blocking;
@@ -46,7 +47,9 @@ pub const PERSONA_SCOPE: &str = "persona";
 /// the world bible is the designer's exception).
 pub(super) const PUBLIC_NOTE: &str = concat!(
     "Prices and stock of goods offered for sale are public: anyone in the scene may know and ",
-    "state them."
+    "state them. person-1, person-2 and so on, and someone, stand for people whose name the ",
+    "character does not know: they are no names, so never say one aloud or write one into a ",
+    "gap, a gist or a detail; speak of such a person by what can be seen of them."
 );
 
 /// Gives each question its own operation.
@@ -87,14 +90,6 @@ impl ShownScene {
         Ok(Self {
             cast: shown_cast(app).await?,
         })
-    }
-
-    pub(super) fn title(&self) -> &str {
-        &self.cast.fixture.name
-    }
-
-    pub(super) fn description(&self) -> &str {
-        &self.cast.fixture.description
     }
 
     /// The named characters, left to right.
@@ -240,6 +235,32 @@ pub(super) async fn generate_character(
     result
 }
 
+/// The world's active place as the scene a new character is written into: its name and
+/// description, both public; empty when no place is active.
+fn place_context(app: &AppState) -> SceneContext {
+    let facts = crate::world::context_for(app, &[]).facts;
+    let field = |key: &str| facts["place"][key].as_str().unwrap_or_default().to_owned();
+    SceneContext {
+        title: field("name"),
+        description: field("description"),
+    }
+}
+
+/// The others of `scene` as a new character, who knows no one yet, is told of them: handles.
+fn stranger_cast(id: &PersonaId, scene: &ShownScene) -> Vec<String> {
+    let names = scene.names();
+    let fresh = PersonaState {
+        id: id.to_string(),
+        ..PersonaState::default()
+    };
+    let handles = Handles::new(&fresh, names.iter().map(String::as_str));
+    names
+        .iter()
+        .filter(|name| name.as_str() != id.as_str())
+        .map(|name| handles.shown(name))
+        .collect()
+}
+
 /// The stored persona of `id` as a kept outcome, recorded as `PERSONA kept`.
 fn kept(app: &AppState, persona: &Persona) -> Generation {
     app.record_line(format!("PERSONA kept id={}", persona.id()));
@@ -272,11 +293,11 @@ async fn generate(
     let asked = GenerationRequest {
         character: id.clone(),
         hint: writing.hint.map(str::to_owned),
-        scene: SceneContext {
-            title: scene.title().to_owned(),
-            description: scene.description().to_owned(),
-        },
-        cast: scene.names(),
+        // Where they are is the world's active place, never the fixture's words (an author note
+        // that may name people); the others are strangers to a new character, so they are
+        // handles, as every prompt shows them (`handles`).
+        scene: place_context(app),
+        cast: stranger_cast(&id, scene),
         guidance: writing.guidance.cloned(),
         available_packs: crate::world::available_packs(app),
     };

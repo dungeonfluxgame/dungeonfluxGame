@@ -34,7 +34,9 @@ fn an_answer_is_kept_only_with_listed_characters_and_kinds_and_a_percent_to_100(
             "changed_percent": percent,
             "changes": [{"character": character, "kind": kind, "now": "smiling at Kael"}],
             "next_picture": "Lena smiles at Kael across the bar.",
-            "shot": "close-up"
+            "shot": "close-up",
+            "inspected_item": null,
+            "new_look": false
         })
     };
     let parsed = parse_frame(
@@ -103,7 +105,8 @@ fn an_inspected_item_is_one_offered_here_or_null() {
             "changes": [],
             "next_picture": "The Frostline fills the frame, frost runes along the fuller.",
             "shot": "wide",
-            "inspected_item": inspected
+            "inspected_item": inspected,
+            "new_look": true
         })
     };
     let parsed = parse_frame(
@@ -126,4 +129,13 @@ fn an_inspected_item_is_one_offered_here_or_null() {
         })
     );
     assert_eq!(config.inspect_shot.as_deref(), Some("insert"));
+    let mut chose_insert = answer(json!(null));
+    chose_insert["shot"] = json!("insert");
+    assert_eq!(
+        parse_frame(&chose_insert, &speakers(), &items, &config),
+        Err(FrameError::UnknownShot {
+            shot: "insert".to_owned()
+        }),
+        "the insert is code's for an inspection, never the judge's choice"
+    );
 }

@@ -414,20 +414,19 @@ pub fn read_coverage(answer: &Value) -> Result<Coverage, BackfillError> {
 
 /// The facts of a backfill question: the persona (its own brief), the other characters (their
 /// listener briefs, so the detail fits them without exposing their secrets), the gaps and the
-/// guidance. `scene` is the scene's title and description.
+/// guidance. Where they are is the caller's world facts, never a scene fixture's words, which
+/// may name people the character does not know.
 pub fn backfill_facts(
     persona: &Persona,
     others: &[PublicPersona],
     gaps: &[Gap],
     guidance: Option<&NarrativeGuidance>,
-    scene: &str,
 ) -> Value {
     json!({
         "persona": persona.brief(BriefScope::Own),
         "others": others,
         "gaps": gaps,
         "guidance": guidance,
-        "scene": scene,
     })
 }
 

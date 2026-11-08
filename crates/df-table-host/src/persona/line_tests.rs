@@ -99,7 +99,8 @@ fn no_attention() -> Value {
 #[tokio::test]
 async fn a_name_heard_in_the_line_is_learned_and_one_not_present_is_dropped() {
     let mut answer = line_answer("Pip, is it? Welcome.");
-    answer["names_learned"] = json!(["pip", "ghost"]);
+    // Pip is a stranger, shown as a handle; the handle reads back to the id.
+    answer["names_learned"] = json!(["person-1", "ghost"]);
     let host = scripted_host(vec![answer]).await;
     write_persona(&host.directory(), &vendor(CHARACTER)).unwrap();
     let first = done(
@@ -122,10 +123,13 @@ async fn one_call_carries_the_gaps_and_an_appraisal_that_only_keeps_what_is_vali
         line_answer_with_gaps("Eight a basket, love.", &[("backstory", "childhood")]),
         json!({
             "emotions": [{"emotion": "irritation", "delta": 30}, {"emotion": "bogus", "delta": 10}],
-            "toward": "pip", "rapport_delta": -5,
+            "toward": "person-1", "rapport_delta": -5,
             "attention": {
-                "focus": "pip", "topic": "the price",
-                "noticed": [{"speaker": "pip", "gist": "asked"}, {"speaker": "ghost", "gist": "x"}]
+                "focus": "person-1", "topic": "the price",
+                "noticed": [
+                    {"speaker": "person-1", "gist": "asked"},
+                    {"speaker": "ghost", "gist": "x"}
+                ]
             },
             "tone": "danger"
         }),
@@ -185,7 +189,7 @@ async fn the_appraisal_changes_the_state_the_next_line_carries() {
     let first = appraised(
         line_answer("Eight, and not a copper less."),
         json!({"emotions": [{"emotion": "irritation", "delta": 60}], "toward": null,
-               "rapport_delta": null, "attention": {"focus": "pip", "topic": "haggling",
+               "rapport_delta": null, "attention": {"focus": "person-1", "topic": "haggling",
                "noticed": []}, "tone": null}),
     );
     let host = scripted_host(vec![first, line_answer("Next.")]).await;
@@ -206,7 +210,11 @@ async fn the_appraisal_changes_the_state_the_next_line_carries() {
             .contains(&json!({"emotion": "irritation", "level": 60})),
         "{state}"
     );
-    assert_eq!(state["attention"]["focus"], "pip");
+    assert_eq!(
+        state["attention"]["focus"], "person-1",
+        "the state names the stranger by handle"
+    );
+    assert!(!host.facts_of(1).to_string().contains("\"pip\""));
     let instructions = host.instructions_of(1);
     assert!(instructions.contains("never the content"), "{instructions}");
     assert!(
@@ -631,9 +639,13 @@ async fn the_facts_are_compact_with_the_stable_part_first_and_the_changing_part_
         "no null, empty text, list or object: {facts}"
     );
     let context = facts["context"].as_object().unwrap();
-    for stable in ["character", "voice_layers", "public_note", "scene"] {
+    for stable in ["character", "voice_layers", "public_note"] {
         assert!(context.contains_key(stable), "{stable}");
     }
+    assert!(
+        !context.contains_key("scene"),
+        "a fixture's words may name people"
+    );
     for changing in ["recent", "asked_by", "situation", "state"] {
         assert!(facts["now"].get(changing).is_some(), "{changing}");
         assert!(!context.contains_key(changing), "{changing}");

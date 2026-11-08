@@ -77,17 +77,21 @@ async fn the_line_carries_voice_layers_recent_lines_the_asker_the_world_and_the_
             &host,
             json!({
                 "coverage": false, "backfill": false, "asked_by": "pip",
-                "recent": ["Marta: Room's free.", "Pip: How much?"]
+                "recent": ["innkeeper: Room's free.", "pip: How much?"]
             }),
         )
         .await,
     );
     assert_eq!(answered.spoken.said.quotes[0].proposed_total_cp, 200);
     let facts = host.facts_of(0);
-    assert_eq!(facts["now"]["asked_by"], "pip");
+    assert_eq!(
+        facts["now"]["asked_by"], "person-1",
+        "pip's name is not known, so neither is the id"
+    );
     assert_eq!(
         facts["now"]["recent"],
-        json!(["Marta: Room's free.", "Pip: How much?"])
+        json!(["innkeeper: Room's free.", "person-1: How much?"]),
+        "the speaker's own label stays, a stranger's is their handle"
     );
     let layers = facts["context"]["voice_layers"].as_array().unwrap();
     let persona_layer = layers
@@ -148,15 +152,22 @@ async fn say_takes_recent_and_asked_by_too() {
     write_persona(&host.directory(), &innkeeper()).unwrap();
     let body = json!({
         "character": CHARACTER, "situation": "A traveller waits.",
-        "recent": ["Pip: Hello."], "asked_by": "pip"
+        "recent": ["pip: Hello.", "Pip: Hello again."], "asked_by": "pip"
     });
     let spoken: PersonaReply<Spoken> = post_json(host.port, path::PERSONA_SAY, &body)
         .await
         .unwrap();
     done(spoken);
     let facts = host.facts_of(0);
-    assert_eq!(facts["now"]["recent"], json!(["Pip: Hello."]));
-    assert_eq!(facts["now"]["asked_by"], "pip");
+    assert_eq!(
+        facts["now"]["recent"],
+        json!(["person-1: Hello.", "someone: Hello again."]),
+        "a label that is no one the speaker knows (a display name here) is someone"
+    );
+    assert_eq!(
+        facts["now"]["asked_by"], "person-1",
+        "pip's name is not known, so neither is the id"
+    );
 }
 
 #[tokio::test]

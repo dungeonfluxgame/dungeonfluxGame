@@ -147,13 +147,21 @@ Every character is shown by name, never by id. The name is the persona's `displa
 
 Who knows whose name (owner rule, 2026-11-07: a name comes only from context, narrative or
 backstory, never from thin air). Each character's state keeps `known_names`, the ids whose name
-they know; a fresh state knows nobody. A character is told the others by who they are in the
-scene (`tavern_server`, `warrior`), with their trade, manner and speech, and with no name,
-backstory or voice samples until they know the name. Each line's model call reports
-`names_learned`: the ids whose name the character now knows from what was said aloud ("I'm
-Kael"), from the narrative (the situation or an events line says so, "Kael has come to see Lena
-every night") or from their own backstory; code keeps only ids present in the scene. `persona
-converse` labels lines and seats by id for the same reason. Check and preset it:
+they know; a fresh state knows nobody. An id can carry a name (`mara_adventurer`), so a
+character never sees the id of someone whose name it does not know: everywhere the id would be
+(`present`, `asked_by`, the labels of `recent` lines, the briefs in `others`, its own standings
+and attention) it sees a handle instead, `person-1`, `person-2` in the order the others are met,
+with their trade, manner and speech and no name, backstory, voice samples or expertise
+(`persona/handles.rs`). What the model answers with a handle (toward, focus, noticed,
+`names_learned`) is read back to the id in code. Each line's model call reports `names_learned`:
+whom the character now knows by name from what was said aloud ("I'm Kael"), from the narrative
+(the situation or an events line says so, "Kael has come to see Lena every night") or from their
+own backstory; code keeps only those present. A backfill is told the others the same way (it
+writes into the persona, so a name given there would be kept for good). `persona converse`
+labels recent lines by id, sends them as `recent` (never inside the situation text) and names no
+place in the situation. The shown scene's description is never given to a character or a
+backfill (only its title): it is the fixture's author note, and after a transition it still
+said "Mara Vell at her fruit stall" (run 59: Haldor said "Mara" from it). Check and preset it:
 
 ```bash
 $D dev --port 7879 persona state tavern_server            # "knows the names of: warrior"
@@ -214,22 +222,34 @@ telephoto, wide, Dutch angle, low angle, high angle). The judge picks the shot t
 moment and is told the shot on screen, so it varies; the edit is told to frame it that way.
 **The camera on an item.** The judge also names the item someone is looking at closely
 (`inspected_item`, an id from the items offered at the active place in the world bible, checked
-in code; null when nobody is). A new inspection (another item than the last judgement's) cuts at
-once to `inspect_shot` (`insert` in `frames.json`: the item fills the screen edge to edge),
+in code; null when nobody is) and whether that close look begins now (`new_look`, the judge's
+call, told the item looked at before). A new inspection cuts at once to `inspect_shot` (`insert` in `frames.json`: the item fills the screen edge to edge),
 whatever the gate and inside the hold, so the players at the table can see the item's quality.
+The insert is code's to take for a new inspection only: the judge is not offered it among the
+shots it picks from (run 58 took it for a gated frame, and the room later came back to a
+close-up).
 An insert is not scanned (nobody's face is in it) and is shown with the layout of the room it
 cuts away from, so the cast stays (who may speak, where their bubbles sit); run 55 showed why:
 with the insert's own empty scan every line said during it was refused `unknown_character`. The
 room comes back after `insert_hold=<seconds>` (20 by default, a `persona converse`/`watch`
 option) unless a new frame replaced the insert first, and the next room frame edits the room,
-never the insert. The judge writes the close-up from the item's bible tags
-and what was said about it, so a keeper who describes the guard, grip and runes puts them on
-screen. Before an insert is made, the backfill engine (`POST /dev/persona/backfill`) is asked
-about the item for the keeper of its stall (named in the bible): the making of it and how it
-looks up close (guard, grip, pommel, runes, finish). What it writes goes into the keeper's
-public backstory, the memory of his own work (expertise stays authored and is never backfilled),
-so his later lines agree with it, and into the insert's picture; the frames transcript says how
-many details were added. `@backfill sync` in a beats file has the keeper's line gaps filled
+never the insert. The same holds for any frame: the watch keeps the newest picture whose own
+scan names the whole cast, and a frame that leaves someone out (a close-up, an extreme close-up)
+is shown with that cast, so the camera never takes a character out of the scene (run 61: an
+extreme close-up named only the keeper and three lines were refused). An insert has a place of
+its own beside the `parallel` room frames, waits for no room frame, and holds the screen; a room
+frame that finishes meanwhile waits until the hold ends, and every picture stays up at least 8 s
+(run 60 lost two close looks while both room slots were busy). The judge writes the close-up
+from the item's bible tags and what was said about it, so a keeper who describes the guard, grip and runes puts them on
+screen. Before an insert is made, the coverage judge (`POST /dev/persona/coverage`) is asked
+whether the keeper of the item's stall (named in the bible) already knows the making of it and
+how it looks up close (guard, grip, pommel, runes, finish). Only when not is the backfill engine
+(`POST /dev/persona/backfill`) asked for it: what it writes goes into the keeper's public
+backstory, the memory of his own work (expertise stays authored and is never backfilled), so
+his later lines agree with it, and into the insert's picture. A second look at the same item
+adds nothing ("already knew ... nothing backfilled" in the frames transcript). The frame judge
+is given each keeper's backstory (`keepers` in its facts), so every close-up of an item shows it
+as its maker described it. `@backfill sync` in a beats file has the keeper's line gaps filled
 before he answers instead of after (`persona ask backfill=sync`). The judge is
 asked after every line now (not only after the hold), since an inspection may cut in at any time;
 the host logs `inspected=<id|-> inspection=true|false` on each `frame_judged` line.
@@ -305,7 +325,12 @@ a beat (Kael will not be pushy) needs a temporary stance in the scratch copy for
 (`persona behavior warrior add drunk-pushy ...` plus a trigger), dropped afterwards.
 
 **The blade gauntlet** (`market-threads/blade-gauntlet.beats`, on `weapons-stall-blades.png`
-with `world place market`): Kael and four adventurers test Haldor Brask, the bladesmith, with
+with `world place market`; start it with `playground go weapons_stall`, a scratch fixture copied
+from `market_stall.json` with the stall's own name, a nameless description and that backdrop,
+because in run 59 the scene's words still said "Mara Vell at her fruit stall" and Haldor called
+Mara by a name nobody had said; no character or backfill is given a fixture's words now, but the
+picture and its scan come from the fixture): Kael and four
+adventurers test Haldor Brask, the bladesmith, with
 expert, ignorant, suspicious, haggling and ready-to-buy questions. The beats file resets all six,
 presets the band's names (`! persona state <id> knows <other>`: they travel together; Haldor
 knows nobody) and has the picture follow the talk with `@frames <option>` lines (one

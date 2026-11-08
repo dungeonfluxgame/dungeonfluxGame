@@ -28,6 +28,7 @@ use super::emotions::load_emotions;
 use super::generate::{
     PUBLIC_NOTE, ShownScene, compact, operation_key, other_personas, text_request,
 };
+use super::handles::Handles;
 use super::request::{
     BehaviorOverride, LineError, LineIdKind, PersonaError, QuoteBounds, QuoteReport, SaidLine,
 };
@@ -590,6 +591,18 @@ fn fill_price_slots(app: &AppState, line: &str, totals_cp: &[Option<u64>]) -> St
     filled
 }
 
+/// `answer` with the handles it named (whom it is toward, attends to, noticed, learned the name
+/// of) read back to ids; it was checked against the handles the character was shown.
+fn with_ids(mut answer: Answer, handles: &Handles) -> Answer {
+    answer.appraisal = handles.appraisal_ids(answer.appraisal);
+    answer.names_learned = answer
+        .names_learned
+        .iter()
+        .filter_map(|called| handles.id_of(called))
+        .collect();
+    answer
+}
+
 /// The voice of a line as layers, weakest first: the packs the character belongs to, their own
 /// voice, then the stance of the behavior they start in.
 fn voice_layers(own: &Persona, packs: Vec<Value>) -> Vec<Value> {
@@ -654,59 +667,51 @@ fn state_facts(state: &PersonaState) -> Value {
     })
 }
 
-/// What the character of `state` is told of `persona`: its listener brief when they know its
-/// name, and otherwise only what anyone could see or hear of a stranger (who they are in the
-/// scene, their trade, their manner and how they speak), with no name, no backstory and no voice
-/// samples, which may carry the name.
-fn listener_brief(persona: &Persona, state: &PersonaState) -> PersonaBrief {
-    let mut brief = persona.brief(BriefScope::Listener);
-    if !state.known_names.contains(&brief.public.id) {
-        brief.public.display_name = String::new();
-        brief.public.backstory = String::new();
-        brief.public.voice = Default::default();
-        brief.public.expertise = Vec::new();
-    }
-    brief
-}
-
-/// The part of a line's facts that does not change from line to line, for a prefix cache.
+/// The part of a line's facts that does not change from line to line, for a prefix cache. The
+/// shown scene's fixture words are never given: they are an author note that may name people
+/// ("Mara Vell at her fruit stall", run 59; a title like "Garrick's Goods"); where the character is
+/// comes from the world facts, with every keeper shown as the character knows them.
 fn stable_facts(
     own: &Persona,
     (appraisal_guide, conduct): (&[String], &[String]),
     world: crate::world::WorldContext,
     listeners: Vec<PersonaBrief>,
-    scene: &ShownScene,
+    handles: &Handles,
 ) -> Value {
     json!({
         "character": own.brief(BriefScope::Own),
         "voice_layers": voice_layers(own, world.voice_packs),
-        "world": world.facts,
+        "world": handles.world_facts(world.facts),
         "public_note": PUBLIC_NOTE,
         "appraisal_guide": appraisal_guide,
         "conduct": conduct,
         "others": listeners,
-        "scene": { "title": scene.title(), "description": scene.description() },
     })
 }
 
-/// What changes with every line: how the character feels, the talk so far and what is asked.
+/// What changes with every line: how the character feels, the talk so far and what is asked, with
+/// everyone whose name the character does not know under their handle (`handles`).
 fn live_facts(
     occasion: &Occasion<'_>,
-    state: &PersonaState,
+    (state, handles): (&PersonaState, &Handles),
     state_triggered: &[&EmotionalTrigger],
     present: &[String],
     retry_reason: Option<&str>,
 ) -> Value {
+    let recent: Vec<String> = bounded_recent(occasion.recent)
+        .iter()
+        .map(|line| handles.recent_line(line))
+        .collect();
     let triggered: Vec<Value> = state_triggered
         .iter()
         .map(|trigger| json!({ "id": trigger.id, "behavior": trigger.behavior }))
         .collect();
     json!({
-        "state": state_facts(state),
+        "state": state_facts(&handles.state(state)),
         "state_triggered": triggered,
         "present": present,
-        "recent": bounded_recent(occasion.recent),
-        "asked_by": occasion.asked_by,
+        "recent": recent,
+        "asked_by": occasion.asked_by.map(|asker| handles.shown(asker)),
         "intent": occasion.intent,
         "situation": occasion.situation,
         "question": occasion.question,
@@ -889,17 +894,25 @@ pub(super) async fn say_line(
     let started = Instant::now();
     let character = own.id().as_str();
     let state = load_state(app, character);
-    let listeners: Vec<PersonaBrief> = other_personas(app, scene, character)
-        .await?
+    let others = other_personas(app, scene, character).await?;
+    let present_ids = present_speakers(scene, character, occasion.asked_by);
+    let handles = Handles::new(
+        &state,
+        present_ids
+            .iter()
+            .map(String::as_str)
+            .chain(others.iter().map(|persona| persona.id().as_str())),
+    );
+    let listeners: Vec<PersonaBrief> = others
         .iter()
-        .map(|persona| listener_brief(persona, &state))
+        .map(|persona| handles.listener_brief(persona.brief(BriefScope::Listener)))
         .collect();
     let config = emotion_config(app);
     let by_state = state_triggers(own, &state);
-    let present = present_speakers(scene, character, occasion.asked_by);
+    let present: Vec<String> = present_ids.iter().map(|id| handles.shown(id)).collect();
     let world = crate::world::context_for_viewer(app, own.voice_packs(), character);
     let guides = (config.appraisal_guide.as_slice(), config.conduct.as_slice());
-    let stable = stable_facts(own, guides, world, listeners, scene);
+    let stable = stable_facts(own, guides, world, listeners, &handles);
     let behavior_ids = own
         .private_behaviors()
         .iter()
@@ -915,13 +928,14 @@ pub(super) async fn say_line(
     let answer = loop {
         let now = live_facts(
             &occasion,
-            &state,
+            (&state, &handles),
             &by_state,
             &present,
             retry_reason.as_deref(),
         );
         let facts = compact(json!({ "context": stable.clone(), "now": now }));
         let (answer, took) = ask_line(route, own, facts, schema.clone(), &lists).await?;
+        let answer = with_ids(answer, &handles);
         model_ms += took;
         // One more wording when the line misses its intent, repeats itself, or states a total
         // the stall would not charge (the spoken number and the held quote would disagree).

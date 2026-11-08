@@ -155,31 +155,31 @@ fn the_next_speaker_is_never_the_last_one() {
 }
 
 #[test]
-fn a_situation_tells_the_setting_the_topic_the_latest_lines_and_the_task() {
-    let table = table();
-    let speaker = table.opener(Some("wizard")).unwrap();
-    let opening = table.situation(speaker, Some("the guild road"), None, &[]);
-    // The others are there by who they are in the scene, never by a name nobody gave.
-    assert!(opening.contains("innkeeper (a traveller)"));
-    assert!(!opening.contains("Aldric Venn"));
-    assert!(opening.contains("You are The Wizard"));
+fn a_situation_tells_the_topic_what_happens_and_the_task_and_no_one_by_id_or_name() {
+    let opening = Table::situation(Some("the guild road"), None, &[]);
     assert!(opening.contains("the guild road"));
     assert!(opening.contains("You speak first"));
+    // Who is here and what was said go as present, others and recent, under handles for
+    // strangers; the free text never names or ids anyone, nor a fixed place.
+    assert!(!opening.contains("innkeeper"));
+    assert!(!opening.contains("inn"));
     let history: Vec<Turn> = (0..9)
         .map(|index| turn("elf", &format!("line number {index}")))
         .collect();
-    let later = table.situation(speaker, None, Some("A tankard falls."), &history);
+    let later = Table::situation(None, Some("A tankard falls."), &history);
     assert!(later.contains("Happening right now, as you speak: A tankard falls."));
-    assert!(later.contains("elf: line number 8"));
-    assert!(!later.contains("The Elf"));
-    assert!(later.contains("line number 3"));
-    assert!(
-        !later.contains("line number 2"),
-        "only the latest six lines"
-    );
+    assert!(!later.contains("elf"));
+    assert!(!later.contains("line number"));
     assert!(later.contains("React first to what is happening right now (A tankard falls.)"));
-    let quiet = table.situation(speaker, None, None, &history);
+    let quiet = Table::situation(None, None, &history);
     assert!(quiet.contains("React to the last thing said"));
+    let table = table();
+    let recent = table.recent_lines(&history);
+    assert_eq!(recent.len(), 6, "only the latest six lines");
+    assert_eq!(
+        recent[5], "elf: line number 8",
+        "labelled by id, for the handles to read"
+    );
 }
 
 #[test]

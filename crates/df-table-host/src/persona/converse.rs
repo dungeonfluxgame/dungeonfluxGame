@@ -163,10 +163,10 @@ impl Table {
         })
     }
 
-    /// The latest [`HISTORY_LINES`] lines of `history` as "id: line", oldest first. Lines are
-    /// labelled by who the speaker is in the scene, never by name: a name is known only once it
-    /// was said or the character knows it (`known_names`), not from a label.
-    fn recent_lines(&self, history: &[Turn]) -> Vec<String> {
+    /// The latest [`HISTORY_LINES`] lines of `history` as "id: line", oldest first: the line's
+    /// `recent`. The line pipeline shows each label as the hearer knows that person (`handles`):
+    /// an id may carry a name.
+    pub(super) fn recent_lines(&self, history: &[Turn]) -> Vec<String> {
         let skip = history.len().saturating_sub(HISTORY_LINES);
         history[skip..]
             .iter()
@@ -174,27 +174,13 @@ impl Table {
             .collect()
     }
 
-    /// What `speaker` is told for their turn: the setting, the topic when there is one, the latest
-    /// lines, and the instruction.
-    pub fn situation(
-        &self,
-        speaker: &Speaker,
-        topic: Option<&str>,
-        happening: Option<&str>,
-        history: &[Turn],
-    ) -> String {
-        // The others by who they are in the scene and what they do, never by name.
-        let people: Vec<String> = self
-            .speakers
-            .iter()
-            .filter(|other| other.id != speaker.id)
-            .map(|other| format!("{} ({})", other.id, other.job))
-            .collect();
-        let mut text = format!(
-            "A table at the inn, everyone can hear everyone. Here with you: {}. You are {}.",
-            people.join("; "),
-            speaker.display_name
-        );
+    /// What a speaker is told for their turn: that everyone can hear, the topic when there is
+    /// one, what is happening, and the instruction. Who is here and the latest lines are not in
+    /// this text: they go as the line's `present`, `others` and `recent`, where someone whose name
+    /// the speaker does not know is a handle (an id may carry a name: `mara_adventurer`). No
+    /// place is named either: the place is the world's, not a fixed inn.
+    pub fn situation(topic: Option<&str>, happening: Option<&str>, history: &[Turn]) -> String {
+        let mut text = "Everyone here can hear everyone.".to_owned();
         if let Some(topic) = topic {
             text.push_str(&format!(" What is on the table: {topic}"));
         }
@@ -208,17 +194,13 @@ impl Table {
             text.push_str(" You speak first: open the conversation in your own voice.");
             return text;
         }
-        text.push_str(" What was said, newest last:");
-        for line in self.recent_lines(history) {
-            text.push_str(&format!("\n{line}"));
-        }
         let first = match happening {
             Some(happening) => format!("React first to what is happening right now ({happening})"),
-            None => "React to the last thing said".to_owned(),
+            None => "React to the last thing said (the newest of recent)".to_owned(),
         };
         text.push_str(&format!(
-            "\n{first}, in your own voice; you may address someone by name. One or two short \
-             sentences. Do not repeat what was already said."
+            " {first}, in your own voice; you may address someone by a name you know. One or \
+             two short sentences. Do not repeat what was already said."
         ));
         text
     }
@@ -431,15 +413,14 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
         }
         let say = SayRequest {
             character: speaker.id.clone(),
-            situation: table.situation(
-                &speaker,
+            situation: Table::situation(
                 request.topic.as_deref(),
                 happening.and_then(SceneEvent::seen),
                 &history,
             ),
             model: request.model.clone(),
             speak: request.speak,
-            recent: Vec::new(),
+            recent: table.recent_lines(&history),
             asked_by: None,
             intent: None,
         };

@@ -32,8 +32,8 @@ use super::format::{
     format_list, format_owner, format_public, format_spoken, format_voice_generated,
 };
 use super::frame_watch::{
-    DEFAULT_HOLD_SECONDS, DEFAULT_INSERT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions,
-    MAXIMUM_PARALLEL_FRAMES, judge_frame, watch_lines,
+    DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions, MAXIMUM_PARALLEL_FRAMES,
+    judge_frame, watch_lines,
 };
 use super::options::{Asking, GUIDANCE_KEYS, GuidanceArgs, asking_from, take_options};
 use super::request::{
@@ -594,8 +594,7 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         .unwrap_or(DEFAULT_HOLD_SECONDS);
     let insert_hold = value("insert_hold")
         .map(|text| number("insert_hold", text, 3_600))
-        .transpose()?
-        .unwrap_or(DEFAULT_INSERT_HOLD_SECONDS);
+        .transpose()?;
     let maximum_frames = value("max_frames")
         .map(|text| number("max_frames", text, 100))
         .transpose()?
@@ -631,7 +630,7 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
             .unwrap_or(true),
         from_last,
         hold: Duration::from_secs(hold),
-        insert_hold: Duration::from_secs(insert_hold),
+        insert_hold: insert_hold.map(Duration::from_secs),
         maximum_frames,
         parallel,
         judge_model: value("judge_model").map(str::to_owned),

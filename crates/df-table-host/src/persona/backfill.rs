@@ -37,11 +37,13 @@ use tokio::time::Instant;
 use super::generate::{
     PUBLIC_NOTE, ShownScene, compact, load_persona, operation_key, other_personas, text_request,
 };
+use super::handles::Handles;
 use super::line::{Occasion, say_line};
 use super::request::{
     Answered, AskRequest, BackfillOutcome, BackfillRecord, Backfilled, PersonaError, SaidLine,
     Spoken,
 };
+use super::state::load_state;
 use super::storage::{commit_backfill, persona_directory, persona_id, read_backfills};
 use crate::blocking::run_blocking;
 use crate::state::AppState;
@@ -196,10 +198,22 @@ async fn backfill(
     job: BackfillJob<'_>,
 ) -> Result<Committed, PersonaError> {
     let character = own.id().as_str();
-    let others: Vec<_> = other_personas(app, scene, character)
-        .await?
+    // The backfill writes into the persona, so it is told of the others as the character knows
+    // them: a stranger under a handle and without a name, or the name would be kept for good.
+    let met = other_personas(app, scene, character).await?;
+    let state = load_state(app, character);
+    // The scene's cast first, in its order, as the line's prompt has it: a handle means the same
+    // person in a line and in the backfill of its gaps.
+    let cast = scene.names();
+    let handles = Handles::new(
+        &state,
+        cast.iter()
+            .map(String::as_str)
+            .chain(met.iter().map(|persona| persona.id().as_str())),
+    );
+    let others: Vec<_> = met
         .iter()
-        .map(Persona::public_view)
+        .map(|persona| handles.public_view(persona.public_view()))
         .collect();
     // Owner decision 2026-11-06: no guidance means open latitude (a generic story backfill);
     // guidance without a latitude of its own means guided.
@@ -218,9 +232,12 @@ async fn backfill(
         .cloned()
         .collect();
     if !asked.is_empty() {
-        let scene_text = format!("{}: {}", scene.title(), scene.description());
-        let mut facts = backfill_facts(own, &others, &asked, job.guidance, &scene_text);
-        facts["world"] = crate::world::context_for_viewer(app, own.voice_packs(), character).facts;
+        // No fixture words, which may name people (see `line`): the world facts say where they
+        // are, with every keeper shown as the character knows them.
+        let mut facts = backfill_facts(own, &others, &asked, job.guidance);
+        facts["world"] = handles.world_facts(
+            crate::world::context_for_viewer(app, own.voice_packs(), character).facts,
+        );
         facts["public_note"] = json!(PUBLIC_NOTE);
         edits.extend(match ask_backfill(route, own, latitude, facts.clone()).await {
             Err(PersonaError::AnswerRefused { cause, .. }) => {

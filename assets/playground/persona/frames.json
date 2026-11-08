@@ -60,5 +60,11 @@
       "look": "an insert shot: the camera moves in until the one item looked at fills the whole frame edge to edge, sharp and lit to show its craft, nobody's face in view"
     }
   ],
-  "inspect_shot": "insert"
+  "inspect_shot": "insert",
+  "show": {
+    "minimum_shown_seconds": 8,
+    "insert_hold_seconds": 20,
+    "detail_topic": "The making of the item named below, and how it looks up close as its maker would point it out: each of its parts, its marks and their colour, its finish.",
+    "detail_lead": "Up close, as its maker knows it:"
+  }
 }

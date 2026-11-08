@@ -52,6 +52,7 @@ mod emotions;
 mod format;
 mod frame_watch;
 pub(crate) mod generate;
+mod handles;
 mod line;
 pub(crate) mod options;
 mod plate;
@@ -86,6 +87,8 @@ mod emotion_state_tests;
 mod fixtures;
 #[cfg(test)]
 mod generate_tests;
+#[cfg(test)]
+mod handles_tests;
 #[cfg(test)]
 mod line_facts_tests;
 #[cfg(test)]
