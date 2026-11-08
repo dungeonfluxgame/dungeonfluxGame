@@ -76,8 +76,9 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
     "persona watch frames=<name> <frame options> (lines '<speaker id> | <line>' on stdin) | ",
     "persona story plot [cast=<id>,<id>...] [model=<name>] <premise...> | persona story show | ",
-    "persona story apply [model=<name>] | ",
-    "persona addressed <speaker> [recent=<text>]... [model=<name>] <line...> | ",
+    "persona story apply [model=<name>] | persona story moves <scene> [model=<name>] | ",
+    "persona story beats <scene> | ",
+    "persona addressed <speaker> [recent=<text>]... [intent=<text>] [model=<name>] <line...> | ",
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...> | ",
@@ -181,12 +182,13 @@ pub const PERSONA_WATCH_USAGE: &str = concat!(
 );
 /// `persona addressed`: whom a line is directed at, by the addressee judge.
 pub const PERSONA_ADDRESSED_USAGE: &str =
-    "persona addressed <speaker> [recent=<text>]... [model=<name>] <line...>";
+    "persona addressed <speaker> [recent=<text>]... [intent=<text>] [model=<name>] <line...>";
 /// `persona story`: the storyteller plots the story behind a scene, and hands each character its
 /// own guidance.
 pub const PERSONA_STORY_USAGE: &str = concat!(
     "persona story plot [cast=<id>,<id>...] [model=<name>] <premise...> | persona story show | ",
-    "persona story apply [model=<name>]",
+    "persona story apply [model=<name>] | persona story moves <scene> [model=<name>] | ",
+    "persona story beats <scene>",
 );
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
@@ -323,10 +325,18 @@ pub enum PersonaCommand {
         speaker: PersonaId,
         line: String,
         recent: Vec<String>,
+        intent: Option<String>,
         model: Option<String>,
     },
     /// Give every character of the plot in the shown scene its own guidance.
     StoryApply { model: Option<String> },
+    /// The moves the plot gives a scene, as market-runner beats.
+    StoryBeats { scene: String },
+    /// Have the storyteller plot the moves of one scene of the stored story.
+    StoryMoves {
+        scene: String,
+        model: Option<String>,
+    },
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
@@ -702,7 +712,7 @@ fn parse_addressed(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let [speaker, rest @ ..] = words else {
         return Err(CommandError::Usage(PERSONA_ADDRESSED_USAGE));
     };
-    let (given, line) = take_options(rest, &["recent", "model"]);
+    let (given, line) = take_options(rest, &["recent", "intent", "model"]);
     if line.is_empty() {
         return Err(CommandError::Usage(PERSONA_ADDRESSED_USAGE));
     }
@@ -714,6 +724,10 @@ fn parse_addressed(words: &[String]) -> Result<PersonaCommand, CommandError> {
             .filter(|(key, _)| *key == "recent")
             .map(|(_, value)| (*value).to_owned())
             .collect(),
+        intent: given
+            .iter()
+            .find(|(key, _)| *key == "intent")
+            .map(|(_, value)| (*value).to_owned()),
         model: given
             .iter()
             .find(|(key, _)| *key == "model")
@@ -747,6 +761,13 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
         }),
         ("show", true) if given.is_empty() => Ok(PersonaCommand::StoryShow),
         ("apply", true) => Ok(PersonaCommand::StoryApply {
+            model: value("model"),
+        }),
+        ("beats", false) if given.is_empty() && rest.len() == 1 => Ok(PersonaCommand::StoryBeats {
+            scene: rest[0].clone(),
+        }),
+        ("moves", false) if rest.len() == 1 => Ok(PersonaCommand::StoryMoves {
+            scene: rest[0].clone(),
             model: value("model"),
         }),
         _ => Err(CommandError::Usage(PERSONA_STORY_USAGE)),
@@ -1364,13 +1385,24 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             model,
         } => super::story::plot_story(port, premise, cast, model).await,
         PersonaCommand::StoryShow => super::story::show_story(port).await,
+        PersonaCommand::StoryBeats { scene } => super::story::scene_beats(port, scene).await,
+        PersonaCommand::StoryMoves { scene, model } => {
+            super::story::plot_scene_moves(port, scene, model).await
+        }
         PersonaCommand::Addressed {
             speaker,
             line,
             recent,
+            intent,
             model,
         } => {
-            super::converse::who_is_addressed(port, speaker.to_string(), line, recent, model).await
+            super::converse::who_is_addressed(
+                port,
+                (speaker.to_string(), line),
+                (recent, intent),
+                model,
+            )
+            .await
         }
         PersonaCommand::StoryApply { model } => super::story::apply_story(port, model).await,
         PersonaCommand::Say {

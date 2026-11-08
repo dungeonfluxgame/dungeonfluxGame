@@ -343,6 +343,7 @@ async fn addressed_once(
         speaker: speaker.id.clone(),
         speakers: table.speakers().to_vec(),
         recent: table.recent_lines(history),
+        intent: None,
         model: model.map(str::to_owned),
     };
     let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;
@@ -355,9 +356,8 @@ async fn addressed_once(
 /// to answers it.
 pub(super) async fn who_is_addressed(
     port: u16,
-    speaker: String,
-    line: String,
-    recent: Vec<String>,
+    (speaker, line): (String, String),
+    (recent, intent): (Vec<String>, Option<String>),
     model: Option<String>,
 ) -> Result<String, DevError> {
     let cast: CastList = super::cli::reply_value(get_json(port, cast_path::CAST).await?)?;
@@ -366,6 +366,7 @@ pub(super) async fn who_is_addressed(
         speaker,
         speakers: speakers_of(cast),
         recent,
+        intent,
         model,
     };
     let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;

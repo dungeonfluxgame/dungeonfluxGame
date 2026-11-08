@@ -19,7 +19,7 @@ fn parsed(line: &str) -> Result<Command, CommandError> {
 fn media_generate_parses_a_prompt_with_options() {
     let command = parsed(concat!(
         "media generate a candlelit hall, at dusk: calm as=hall purpose=plate aspect=16:9 ",
-        "wait=true"
+        "wait=true look=none"
     ))
     .expect("parses");
     assert_eq!(
@@ -33,7 +33,7 @@ fn media_generate_parses_a_prompt_with_options() {
             base: None,
         }))
     );
-    let quoted = parsed("media generate \"one word=prompt\" as=x").expect("parses");
+    let quoted = parsed("media generate \"one word=prompt\" as=x look=none").expect("parses");
     assert_eq!(
         quoted,
         Command::MediaGenerate(MediaGenerate::Generate(GenerateRequest {
@@ -49,6 +49,23 @@ fn media_generate_parses_a_prompt_with_options() {
         parsed("media generate status").expect("parses"),
         Command::MediaGenerate(MediaGenerate::Status)
     );
+}
+
+#[test]
+fn media_generate_sends_the_prompt_inside_the_house_look_unless_told_not_to() {
+    let style = crate::movement::brief::BriefStyle::default();
+    let Ok(Command::MediaGenerate(MediaGenerate::Generate(request))) =
+        parsed("media generate a plain town hall as=hall")
+    else {
+        panic!("parses");
+    };
+    assert!(request.prompt.starts_with(&style.direction));
+    assert!(request.prompt.contains("a plain town hall"));
+    assert!(request.prompt.ends_with(&style.writing_ban));
+    assert!(matches!(
+        parsed("media generate a hall as=hall look=painted"),
+        Err(CommandError::BadChoice { .. })
+    ));
 }
 
 #[test]

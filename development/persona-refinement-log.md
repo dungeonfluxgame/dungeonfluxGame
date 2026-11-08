@@ -709,6 +709,83 @@ Open:
 - A stranger's job, personality and speech style, the bible's place text and caller text (topic,
   intent, events) are authored, and could name someone if written carelessly.
 
+## Refinement 23 and runs 65 to 69 (the arrest: the storyteller plots the Nightglass Charge)
+
+Goal (owner, 2026-11-08): Kael is framed and arrested at the stall, dragged through town and
+judged by the mayor, with a plotted backstory and personas for everyone interactive.
+
+- **The storyteller (`persona story`):**
+  - One plot call against a closed schema: the charge, the truth, the culprit, evidence with
+    flaws, beats per scene, and a `NarrativeGuidance` per character as it stands before the
+    first scene.
+  - `apply` hands each character only its own guidance, through generation or a guided
+    backfill. The first apply wrote the plot's future into Kael's backstory; nobody remembers
+    their own future now.
+- **Every interactive character has a persona and shows its name:**
+  - Sergeant Alwen Dorr, Tavin Rusk, Osric Pell, Nessa Vale, Mayor Edrin Vale.
+  - Their tags and bubbles show display names, never ids.
+- **The look:** grounded period drama. Plates remade as `-real` with explicit tone-down prompts.
+- **Runs 65 to 67 (`run65-arrest.md`, `run66-march.md`, `run67-judgement.md`):**
+  - The scenes held.
+  - The runner had the keeper answer questions put to others (fixed with the addressee judge,
+    told the speaker's goal, and a self-skip).
+  - The judgement was agreeable until a dispute conduct rule and stances went in.
+- **Run 68 (`run68-judgement.md`):** the acquittal is earned in play: the fake is ruled out and
+  the guard's sightline falls apart. Open:
+  - everyone calls the bought guard "Sergeant" after the mayor did;
+  - Kael answers twice where a question to him meets his own beat.
+- **Plotted moves (`persona story moves <scene>`), refined over six plots:**
+  - Each move is `speaker`, `to` (an id or `room`) and a goal: an order to the speaker, the
+    listener named by look.
+  - Code refuses: a move put to oneself (plot 1: the mayor asked himself); a judgement where the
+    accused has fewer than three moves (plot 3: one); anyone not in the shown picture (the arrest
+    plot had Mara plead to the mayor at the stall).
+  - Plot 2 and plot 4 came back word for word: the question carried the old moves. They are
+    cleared now.
+  - Plot 5 wrote "as a question to the bought guard", echoing the ids. The storyteller now sees
+    `person-N` handles, read back in code.
+  - Plot 6 scripted no answers and named no hidden part.
+  - Still open: the defence asks after "the fresh coin" in the guard's purse before anyone has
+    seen it (the plot's beat text says the purse gives him away; the beat should not say how it
+    ends).
+
+## Refinement 24 and runs 69 to 72 (the judgement from plotted moves; the photographic look)
+
+- **Run 69 (`run69-judgement.md`), the first played from plotted moves:**
+  - No name or handle leaked, and nothing was refused.
+  - Haldor, never shown the fake up close, swore it was his own blade ("not paint").
+  - Three double answers: a question to someone, then their own plotted move.
+  - The defence fished for "the fresh coin" in the guard's purse.
+- **Fixes:**
+  - The runner lets a beat by the one just asked stand as their answer.
+  - A refused moves answer is asked once more with `previous_refusal`.
+  - The moves rule says a hidden flaw (a payment) is left for play to find, and an answer-move
+    carries the aim of the answerer's own side.
+  - The plot's judgement beat had said how it ends ("the purse reveals a payment"; it was
+    edited out of the scratch plot).
+- **Exhibits:** evidence on show gets `up_close`, what anyone sees of it as it truly is.
+  - The runner adds it to every situation, so Haldor finds the loose handle and painted marks
+    himself (run 71, [08]).
+  - Open: the storyteller writes names into exhibits ("Haldor's handle", "Rusk claims"); they
+    were made name-free by hand for runs 71 and 72.
+- **Run 70 was stopped at line 33:** Kael "remembered" run 69's acquittal mid-hearing (his
+  attention held the mayor's verdict). The judgement now resets every participant first, then
+  presets the names each has learned.
+- **Run 71 (`run71-judgement.md`):** clean start, one verdict, no refusals. The mayor acquits
+  on all three flaws found in play. Open:
+  - a question inside a keeper's answer goes unanswered ([13], [16]);
+  - the plot told the bought guard to concede his blocked view;
+  - the accuser's invented chain of custody, contradicted by the sergeant, is never seized on.
+- **The look (owner: "too fantasy and painted", then "not photographic, it's like an
+  illustration"):**
+  - The house direction asked for a warm candlelit glow, creamy depth of field and teal and
+    orange, so frames came out golden and waxy. It is now an unretouched photograph from the
+    set of a TV drama: camera and lens named, natural light, real skin, neutral grade.
+  - An edit keeps its base's finish, so the hall is a fresh photographic plate
+    (`hall-photo-fresh.png`).
+  - `media generate` takes `look=house|none` (house by default).
+- **Run 72:** the judgement on the photographic hall (graded below when it ends).
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

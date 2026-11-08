@@ -1,17 +1,17 @@
 # The march to the hall (story "The Nightglass Charge"): the guards drag Kael, bound, up the
 # town's streets to the mayor; Kael and his friends press the sergeant on the charge, the bought
-# guard answers too fast, and a fruit seller calls out what she saw. Needs `arrest-march.png`
+# guard answers too fast, and a fruit seller calls out what she saw. Needs `arrest-march-real.png`
 # behind the scene (scanned and named, `persona story apply` run so the fruit seller has her
 # persona) after `arrest.beats`. States carry on from the arrest (no reset).
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
 @keeper market_guard_lawful
 @keeper_situation Walking ahead up a steep cobbled street toward the town hall with the sealed warrant and the prisoner's spear, while your fellow guard drags the bound prisoner behind you, the accuser at his side and the prisoner's four companions following; townsfolk stare from doorways.
 @speaker_situation On a steep cobbled street climbing toward the town hall, townsfolk staring from doorways, as two guards drag a bound sword for hire up the hill with the accuser beside him and his four companions close behind.
-@frames frames=arrest-march-a
+@frames frames=arrest-march-real-a
 @frames hold=30
 @frames max_frames=6
 @frames parallel=2
-@frames scene=A steep cobbled street climbing to a stone town hall with a bell tower, timber houses and staring townsfolk: the blond bearded man in a fur mantle, hands bound with rope, is dragged up the hill by the heavy-jawed guard with a moustache who grips his arm; the lean dark-haired woman sergeant walks ahead with the sealed warrant and his spear; the well-fed merchant in a fur-trimmed red velvet coat strides beside them; the four companions follow close behind; at the right a sturdy fruit seller woman in a headscarf at her apple barrow calls out.
+@frames scene=A steep cobbled street of timber-framed houses climbing to a plain stone town hall in soft overcast daylight, townsfolk staring from windows: the blond bearded man in a fur mantle, hands bound with rope, is dragged up the hill by the heavy-jawed guard with a moustache who grips his arm; the lean dark-haired woman sergeant walks ahead with the sealed warrant and his spear; the heavy merchant in a dark wool coat with a fur collar strides beside them; the four companions follow close behind; at the right a sturdy fruit seller woman in a headscarf at her apple barrow calls out.
 ! persona state market_witness reset
 ! persona state market_witness knows market_factor
 ! persona state market_witness knows market_guard_bought

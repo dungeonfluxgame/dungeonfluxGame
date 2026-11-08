@@ -1,18 +1,18 @@
 # The arrest at the stall (story "The Nightglass Charge", plotted with `persona story plot` and
 # handed out with `persona story apply`): two town guards and the accuser come for Kael at the
 # enchanted-steel stall and question him; Kael answers every question. Needs the arrest picture
-# (`scene image tv-backdrop arrest-stall.png` on `playground go weapons_stall`, scanned and named)
+# (`scene image tv-backdrop arrest-stall-real.png` on `playground go weapons_stall`, scanned and named)
 # and `world place market`. The guards and the accuser know Kael's name from the warrant; the band
 # knows each other; Kael knows none of the newcomers.
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
 @keeper warrior
 @keeper_situation At the enchanted-steel stall in the town market with your four companions and the bladesmith behind his counter, when two town guards and a well-dressed merchant push through the crowd to you; the black dagger with violet sigils is gone from the counter.
 @speaker_situation At the enchanted-steel stall in the town market, where a crowd gathers around a blond sword for hire in a fur mantle and his four companions; the black dagger with violet sigils is gone from the counter.
-@frames frames=arrest-a
+@frames frames=arrest-real-a
 @frames hold=30
 @frames max_frames=8
 @frames parallel=2
-@frames scene=At the enchanted-steel stall under a red awning: at the left a well-fed merchant in a fur-trimmed dark red velvet coat points an accusing finger; beside him a heavy-jawed guard with a moustache, steel cap and halberd, and a lean dark-haired woman sergeant in a steel cap and blue-grey tabard holding out a sealed warrant; then the four companions (two women with curly hair, a curly-haired young man, a man in a dark hooded cloak) and the blond bearded man in a fur mantle with a spear; at the right the grey-bearded bladesmith in a leather apron; on the red velvet three blades and an empty dent where the black dagger lay.
+@frames scene=At a plain market stall of rough timber and faded canvas in soft overcast daylight: at the left a heavy merchant in a dark wool coat with a fur collar points an accusing finger; beside him a heavy-jawed guard with a moustache, steel cap and halberd, and a lean dark-haired woman sergeant in a steel cap and blue-grey tabard holding out a sealed warrant; then the four companions (two women with curly hair, a curly-haired young man, a man in a dark hooded cloak) and the blond bearded man in a fur mantle with a spear; at the right the grey-bearded bladesmith in a leather apron; on the cloth three plain steel blades and an empty space where the black dagger lay.
 ! persona state warrior reset
 ! persona state mara_adventurer reset
 ! persona state jory_adventurer reset

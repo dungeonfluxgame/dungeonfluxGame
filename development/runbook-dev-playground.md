@@ -308,7 +308,31 @@ $D dev --port 7879 persona story plot cast=warrior,mara_adventurer,weapon_seller
 $D dev --port 7879 persona story show      # the plot, the truth included (operator view)
 # Hand it out: each character of the plot in the shown scene gets its own guidance only
 $D dev --port 7879 persona story apply
+# Plot (or plot again) one scene's moves for the stored story, then print them as runner beats
+$D dev --port 7879 persona story moves judgement
+$D dev --port 7879 persona story beats judgement > artifacts/tmp/<id>/judgement-moves.beats
 ```
+
+Each beat names who leads it and its moves: who acts (`speaker`), whom it is put to (`to`, an
+id or `room`, never the speaker; code refuses a move put to oneself) and the goal, an order to
+the speaker naming the listener by look and pronouns (from each persona's public side), never
+by name, id or hidden part, never their words and never anyone's answer; the verdict is played,
+not plotted. Code also refuses a judgement where the accused has fewer than three moves of his
+own. The moves question sees every character under a `person-N` handle, read back to ids in
+code: with the real ids it echoed them as descriptions ("as a question to the bought guard").
+It is asked with the scene's old moves cleared, or it copies them back word for word. Only the
+people in the shown picture are present (`scene cast`): show the scene's picture before plotting
+its moves. A refused answer is asked once more with why (`previous_refusal`). Each beat also
+names its exhibits, the evidence on show, with what anyone sees of it up close
+(`up_close`, so the false dagger shows its loose handle and painted marks to whoever examines
+it); `story beats` prints them as `@exhibit` lines and the runner adds them to every situation.
+Check that they name nobody: the storyteller still writes names into them. The runner lets a
+beat by the one a line was put to stand as their answer (no answering twice), and a judgement
+starts with every participant reset (`persona state <id> reset`, then `knows`): run 70's Kael
+"remembered" run 69's acquittal mid-hearing. `persona story beats <scene>` prints `@keeper <who leads>` and one `speaker | goal`
+a move; put the scene's `@keeper_situation`, `@speaker_situation`, `@frames` and `!` presets
+above them. The market runner has whoever a line was put to answer it (`persona addressed`,
+told the speaker's goal), the keeper when it was put to the room.
 
 The plot holds the public charge, the truth (kept in `persona/story.json` for tooling, never in
 a character's prompt), the culprit and motive, the evidence with what gives each piece away, the
@@ -439,6 +463,17 @@ arrest plates in this look are `arrest-stall-real.png`, `arrest-march-real.png` 
 `arrest-hall-real.png` (edits of the first ones, faces kept). The bar plate in this look is
 `bar-period.png` (made with `media generate`, then `media locate`, `media locate identify` and
 `media locate label` for the names).
+
+The look is a photograph (owner, 2026-11-08: "not photographic, it's like an illustration"). The
+house direction (`BriefStyle`) is written as an unretouched photograph from the set of a TV
+drama: a named camera and lens, natural light, real skin and worn cloth, a neutral grade, and a
+ban on painted, illustrated, waxy or golden looks. The old one asked for "candlelit key light
+with a warm glow on skin, creamy depth of field, teal and orange", and frames came out golden,
+waxy and painted. `media generate` now sends its prompt inside that direction (`look=house`,
+the default); `look=none` sends it as written. An edit keeps the finish of its base: an
+illustrated plate edited "into a photograph" stays an illustration, so make a fresh plate
+(`hall-photo-fresh.png`, scanned with `media locate <picture> masks=32` and named with `media
+locate label`) and fit each persona's look to it (`persona set <id> job <look>`).
 
 ## Keep the scene clean
 

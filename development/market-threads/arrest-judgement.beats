@@ -3,29 +3,82 @@
 # the witnesses are heard, and the mayor judges. Each beat is one side's move; whoever the line
 # is put to answers it (the addressee judge), the mayor when it is put to the hall. The verdict
 # is played, not scripted: the last beat asks the mayor for his judgement and he gives the one
-# the hearing has earned. Needs `arrest-hall-real.png` behind the scene (scanned, named, every
-# character with a persona) after `arrest.beats` and `arrest-march.beats` (no reset, but the
-# mayor's own).
+# the hearing has earned. Needs `hall-photo-fresh.png` (the photographic hall) behind the scene
+# (scanned, named, every character with a persona) after `arrest.beats` and `arrest-march.beats`;
+# everyone starts clean (below).
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
 @keeper town_mayor
 @keeper_situation Presiding from your raised chair in the town hall, the hall full of townsfolk, over the judgement of a sword for hire who kneels bound on the floor before you, charged with stealing the Nightglass dagger from the bladesmith's stall and cutting the watchman who tried to stop him.
 @speaker_situation In the town hall before the mayor on his raised chair, the hall full of townsfolk, at the judgement of a sword for hire who kneels bound on the floor, charged with stealing the Nightglass dagger from the bladesmith's stall and cutting the watchman who tried to stop him.
-@frames frames=arrest-judgement-a
+@frames frames=arrest-judgement-b
 @frames hold=30
 @frames max_frames=10
 @frames parallel=2
-@frames scene=A plain timber-and-plaster town hall with whitewashed walls, heavy beams, small windows and soft overcast daylight, townsfolk on benches; on a raised wooden chair the stern grey-haired mayor in a plain dark robe and a simple chain leans forward; in the centre the blond bearded man in a fur mantle kneels bound on the floor, the heavy-jawed guard with a moustache pressing his shoulder; the lean dark-haired woman sergeant in a steel cap holds the sealed warrant; at the left the heavy merchant in a dark wool coat with a fur collar holds up a dagger; the four companions and the grey-bearded bladesmith in a leather apron stand at a wooden rail; a sturdy fruit seller woman in a headscarf sits on a bench.
+@frames scene=A plain timber-and-plaster town hall with whitewashed walls, heavy beams, small leaded windows and flat grey daylight, townsfolk standing behind; on a raised wooden chair at the left the grey-haired mayor in a dark robe and a heavy chain; in front of him the heavy merchant in a dark coat with a fur collar holds up a dagger; the dark-haired woman sergeant in a steel cap and leather holds a sealed warrant; in the centre the blond bearded man in a fur mantle kneels bound with rope on the cobbles, the broad dark-bearded guard in mail and a steel cap gripping his shoulder; at a wooden rail to the right stand the four companions (a dark-bearded man, a young brown-haired woman, a red-bearded man, a dark-haired woman) and the grey-bearded bladesmith in a leather apron; at the bottom right a sturdy fruit seller woman in a headscarf sits with a basket of apples.
+# Everyone starts clean: what each remembers of earlier runs is reset (run 70: Kael "remembered"
+# run 69's acquittal mid-hearing), then each knows the names they learned by the end of the march.
+! persona state warrior reset
+! persona state warrior knows mara_adventurer
+! persona state warrior knows jory_adventurer
+! persona state warrior knows sella_adventurer
+! persona state warrior knows bram_adventurer
+! persona state mara_adventurer reset
+! persona state mara_adventurer knows warrior
+! persona state mara_adventurer knows jory_adventurer
+! persona state mara_adventurer knows sella_adventurer
+! persona state mara_adventurer knows bram_adventurer
+! persona state jory_adventurer reset
+! persona state jory_adventurer knows warrior
+! persona state jory_adventurer knows mara_adventurer
+! persona state jory_adventurer knows sella_adventurer
+! persona state jory_adventurer knows bram_adventurer
+! persona state sella_adventurer reset
+! persona state sella_adventurer knows warrior
+! persona state sella_adventurer knows mara_adventurer
+! persona state sella_adventurer knows jory_adventurer
+! persona state sella_adventurer knows bram_adventurer
+! persona state bram_adventurer reset
+! persona state bram_adventurer knows warrior
+! persona state bram_adventurer knows mara_adventurer
+! persona state bram_adventurer knows jory_adventurer
+! persona state bram_adventurer knows sella_adventurer
 ! persona state town_mayor reset
 ! persona state town_mayor knows warrior
 ! persona state town_mayor knows market_factor
 ! persona state town_mayor knows market_guard_lawful
 ! persona state town_mayor knows market_guard_bought
 ! persona state town_mayor knows weapon_seller
+! persona state market_guard_lawful reset
+! persona state market_guard_lawful knows warrior
+! persona state market_guard_lawful knows market_guard_bought
+! persona state market_guard_lawful knows market_factor
+! persona state market_guard_lawful knows town_mayor
+! persona state market_guard_bought reset
+! persona state market_guard_bought knows warrior
+! persona state market_guard_bought knows market_guard_lawful
+! persona state market_guard_bought knows market_factor
+! persona state market_guard_bought knows town_mayor
+! persona state market_factor reset
+! persona state market_factor knows warrior
+! persona state market_factor knows market_guard_lawful
+! persona state market_factor knows market_guard_bought
+! persona state market_factor knows town_mayor
+! persona state market_factor knows weapon_seller
+! persona state weapon_seller reset
+! persona state weapon_seller knows warrior
+! persona state weapon_seller knows market_factor
+! persona state weapon_seller knows market_guard_lawful
+! persona state weapon_seller knows town_mayor
+! persona state market_witness reset
+! persona state market_witness knows warrior
+! persona state market_witness knows market_factor
+! persona state market_witness knows market_guard_bought
+! persona state market_witness knows market_guard_lawful
+! persona state market_witness knows town_mayor
 town_mayor | Have the charge stated before the hall, and ask the kneeling man, as a question to him, how he answers it.
 market_factor | Hold the near-black dagger high for the hall, name it the stolen Nightglass taken from the prisoner, and ask the mayor, as a question to him, what more proof any honest town could need.
 warrior | From your knees, demand that the bladesmith who forged the Nightglass be let to look at that dagger, and ask the mayor, as a question to him, whether he fears what the smith will say.
-town_mayor | Call the bladesmith to the dais and ask him, as a question to him, whether the dagger the accuser holds is the one he forged.
-weapon_seller | Turn the dagger in your hands where all can see: its handle sits loose on the tang and its violet marks are painted on the steel, not cut and inlaid as yours are. Tell the mayor plainly what you find, then ask the accuser, as a question to him, where he truly got it.
+weapon_seller | Step up to the dais and take the dagger from the accuser. Turn it in your hands where all can see: its handle sits loose on the tang and its violet marks are painted on the steel, not cut and inlaid as yours are. Tell the mayor plainly what you find, then ask the accuser, as a question to him, where he truly got it.
 market_guard_bought | Swear before the whole hall that you saw the prisoner run from the stall with that dagger in his hand, and ask the mayor, as a question to him, whether a guard's oath now counts for nothing.
 mara_adventurer | Ask the guard, as a question to him, exactly where he stood when he says he saw Kael run, and what stood between him and the stall.
 market_factor | Lay a torn strip of dark cloth at the mayor's feet, saying it was found by the stall, and ask the prisoner, as a question to him, why his own cloak is torn.

@@ -161,19 +161,21 @@ impl Default for BriefStyle {
     fn default() -> Self {
         Self {
             direction: concat!(
-                "A still from a glossy TV period soap opera set in a medieval Dungeons and ",
-                "Dragons world, photorealistic live action shot on 35mm: an intimate medium shot ",
-                "framed on the main characters' faces and reactions, soft flattering candlelit ",
-                "key light with a warm glow on skin, creamy shallow depth of field, a Hollywood ",
-                "teal and orange color grade, real actors with natural skin in believable, ",
-                "lived-in medieval clothes of linen, wool and leather, in a real medieval set of ",
-                "timber, stone and candlelight, costumed and lit like a grounded historical ",
-                "drama (plain wool, linen, mail and worn leather, natural daylight or ",
-                "candlelight, real faces with pores and creases); nothing modern (no electric ",
-                "light, glass mugs, drum kits or modern clothes) and no high-fantasy art (no ",
-                "glowing magic, ",
-                "glowing runes or sigils, gilded embroidery and fantasy finery, ornate armor, ",
-                "god-ray shafts of light, cathedral grandeur or painterly look), of"
+                "An unretouched photograph taken on the set of a live-action historical TV ",
+                "drama set in a medieval world, shot on a Canon EOS R5 with a 35mm lens at f/4, ",
+                "ISO 800, framed on the main characters' faces and reactions; real actors with ",
+                "real skin (pores, stubble, blemishes, wrinkles, uneven tone), real heavy wool, ",
+                "linen, mail and scuffed leather with dirt and wear, a real set of timber, ",
+                "plaster and stone, lit by the light the place has (daylight from its windows, ",
+                "or a real candle or fire only where the scene has one), a neutral true-to-life ",
+                "color grade ",
+                "with fine sensor grain and the ordinary depth of field of a TV drama. It must ",
+                "look like a photograph of real people, never a painting, an illustration, ",
+                "digital art or a 3D render: no painterly brushwork, no airbrushed, waxy or ",
+                "glowing skin, no golden or teal-and-orange grade, no fantasy art (no glowing ",
+                "magic, glowing runes or sigils, gilded embroidery and fantasy finery, ornate ",
+                "armor, god-ray shafts of light or cathedral grandeur) and nothing modern (no ",
+                "electric light, glass mugs, drum kits or modern clothes), of"
             )
             .to_owned(),
             writing_ban: "No text, letters, captions, speech bubbles, logos or interface of any kind."

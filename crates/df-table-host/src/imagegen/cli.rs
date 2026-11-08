@@ -2,8 +2,11 @@
 //! request, read the typed answer, print it). It never prints and never starts a server.
 //!
 //! `media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H]
-//! [wait=true]`. Any word that is not one of the four keys is part of the prompt, in order, so a
-//! prompt with commas and colons needs no quoting (a prompt with `as=` or `wait=` inside it does).
+//! [wait=true] [base=<picture>] [look=house|none]`. Any word that is not one of the keys is
+//! part of the prompt, in order, so a prompt with commas and colons needs no quoting (a prompt
+//! with `as=` or `wait=` inside it does). `look=house` (the default) sends the prompt inside the
+//! house look the scene frames use (`BriefStyle`), so a plate made by hand matches them;
+//! `look=none` sends it as written.
 //! `media generate status` lists the generations so far.
 
 use std::collections::BTreeSet;
@@ -17,13 +20,30 @@ use crate::command::{CommandError, bad_choice};
 use crate::dev::DevError;
 use crate::dev_client;
 use crate::dev_http::DevReply;
+use crate::movement::brief::BriefStyle;
 
 pub const MEDIA_GENERATE_USAGE: &str = concat!(
     "media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H] ",
-    "[wait=true] [base=<picture to edit, such as bar.png>] | media generate status"
+    "[wait=true] [base=<picture to edit, such as bar.png>] [look=house|none] | ",
+    "media generate status"
 );
 
-const KEYS: [&str; 5] = ["as", "purpose", "aspect", "wait", "base"];
+const KEYS: [&str; 6] = ["as", "purpose", "aspect", "wait", "base", "look"];
+
+/// `prompt` as `look` asks: inside the house look (the default), or as written.
+fn with_look(prompt: String, look: Option<&str>) -> Result<String, CommandError> {
+    match look {
+        None | Some("house") => {
+            let style = BriefStyle::default();
+            Ok(format!(
+                "{} this scene: {prompt} {}",
+                style.direction, style.writing_ban
+            ))
+        }
+        Some("none") => Ok(prompt),
+        Some(other) => Err(bad_choice("look", other, "house or none".to_owned())),
+    }
+}
 
 /// A `media generate` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,7 +118,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
     let mut prompt_words = Vec::new();
     let mut seen = BTreeSet::new();
     let (mut name, mut purpose_key, mut aspect_text, mut wait_text) = (None, None, None, None);
-    let mut base = None;
+    let (mut base, mut look) = (None, None);
     for word in words {
         let Some((key, value)) = option_key(word) else {
             prompt_words.push(word.as_str());
@@ -112,12 +132,16 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
             "purpose" => &mut purpose_key,
             "aspect" => &mut aspect_text,
             "base" => &mut base,
+            "look" => &mut look,
             _ => &mut wait_text,
         };
         *slot = Some(value);
     }
+    if prompt_words.is_empty() {
+        return Err(CommandError::Usage(MEDIA_GENERATE_USAGE));
+    }
     let request = GenerateRequest {
-        prompt: prompt_words.join(" "),
+        prompt: with_look(prompt_words.join(" "), look)?,
         name: name
             .ok_or(CommandError::Usage(MEDIA_GENERATE_USAGE))?
             .to_owned(),

@@ -29,6 +29,7 @@ SPEAKER_SITUATION="At Mara's fruit stall in the town market, with your travellin
 STARTING_STATE=()
 FRAMES=()
 KEEPER_BACKFILL=true
+EXHIBITS=()
 while IFS= read -r setting; do
   value=${setting#* }
   case "$setting" in
@@ -39,8 +40,15 @@ while IFS= read -r setting; do
     '@rapport '*) STARTING_STATE+=("rapport $value") ;;
     '@frames '*) FRAMES+=("$value") ;;
     '@backfill '*) KEEPER_BACKFILL=$value ;;
+    '@exhibit '*) EXHIBITS+=("$value") ;;
   esac
 done < <(grep '^@' "$BEATS")
+# `@exhibit <what it is. Up close: what anyone sees>` lines (`persona story beats`) are on show
+# for everyone there: they join every situation, so whoever looks closely sees what it truly is.
+if [ "${#EXHIBITS[@]}" -gt 0 ]; then
+  KEEPER_SITUATION="$KEEPER_SITUATION On show before everyone: ${EXHIBITS[*]}"
+  SPEAKER_SITUATION="$SPEAKER_SITUATION On show before everyone: ${EXHIBITS[*]}"
+fi
 # `@state <emotion> <level>` and `@rapport <toward> <-100..100>` lines set where the keeper's
 # feelings and standing start (a scene that begins mid-story), through the same state API as
 # `persona state <id> set|rapport`.
@@ -88,6 +96,7 @@ say_as() { # speaker, instruction
   printf '%s\n' "$out" | sed -n '2,$p' | grep -E 'quoted|fired triggers' | sed 's/^/       /'
   LAST="$line"
   LAST_SPEAKER="$who"
+  LAST_INTENT="$instruction"
   HISTORY+=("$who: $line")
   watch_line "$who" "$line"
   sleep 3
@@ -97,15 +106,21 @@ say_as() { # speaker, instruction
 # beat hoped they would do, so a speaker whose persona refuses a beat cannot put words in theirs.
 # The one the line was put to answers it: the addressee judge (`persona addressed`, a model call
 # against the scene's speakers) reads whom it is directed at; nobody, the speaker themself or no
-# answer leaves it to the keeper.
+# answer leaves it to the keeper. When the next beat is theirs, that beat is their answer, so they
+# do not answer twice (run 69: a question to the smith, then his own examination).
 keeper() {
   local out line answerer situation
   recent_args
+  # The judge is told what the speaker set out to do (the beat's goal, where they are): whom
+  # they meant the line for counts as much as its words.
   answerer=$(timeout 120 $D dev --port $P persona addressed "$LAST_SPEAKER" "${RECENT[@]}" \
-    "$LAST" 2>/dev/null | head -1)
+    "intent=$SPEAKER_SITUATION $LAST_INTENT" "$LAST" 2>/dev/null | head -1)
   case "$answerer" in
     ''|nobody|"$LAST_SPEAKER"|*' '*) answerer=$KEEPER ;;
   esac
+  # A line the keeper put to no one is not answered by the keeper themself.
+  [ "$answerer" = "$LAST_SPEAKER" ] && return
+  [ "$answerer" = "$NEXT_SPEAKER" ] && return
   situation=$SPEAKER_SITUATION
   [ "$answerer" = "$KEEPER" ] && situation=$KEEPER_SITUATION
   out=$(timeout 280 $D dev --port $P persona ask "$answerer" "from=$LAST_SPEAKER" "${RECENT[@]}" \
@@ -121,9 +136,25 @@ keeper() {
 
 # Each line of the beats file is `speaker | goal`; `#` lines are comments, `@` lines settings, and
 # a `! <dev command>` line runs that dev command between beats (a stance switched on mid-scene).
-while IFS= read -r -u 3 raw; do
+mapfile -t LINES < "$BEATS"
+
+# The speaker of the first beat after line $1 of the beats file, or nothing.
+next_speaker() {
+  local next=$(($1 + 1)) raw
+  while [ "$next" -lt "${#LINES[@]}" ]; do
+    raw=${LINES[$next]}
+    case "$raw" in
+      '!'*|'@'*|'#'*|'') next=$((next + 1)); continue ;;
+    esac
+    printf '%s' "${raw%%|*}" | xargs
+    return
+  done
+}
+
+for index in "${!LINES[@]}"; do
+  raw=${LINES[$index]}
   case "$raw" in
-    '!'*) eval "$D dev --port $P ${raw#!}" | sed 's/^/       ! /'; continue ;;
+    '!'*) eval "$D dev --port $P ${raw#!}" < /dev/null | sed 's/^/       ! /'; continue ;;
     '@'*|'#'*|'') continue ;;
   esac
   who=${raw%%|*}
@@ -132,8 +163,9 @@ while IFS= read -r -u 3 raw; do
   who=$(printf '%s' "$who" | xargs)
   case "$who" in ''|'#'*) continue ;; esac
   say_as "$who" "$(printf '%s' "$goal" | sed 's/^ *//;s/ *$//')"
+  NEXT_SPEAKER=$(next_speaker "$index")
   keeper
-done 3< "$BEATS"
+done
 
 if [ -n "$WATCH_PID" ]; then
   exec 4>&-

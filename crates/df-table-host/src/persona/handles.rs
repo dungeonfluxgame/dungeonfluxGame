@@ -64,6 +64,21 @@ impl Handles {
         }
     }
 
+    /// What the storyteller calls each of `ids`, in order: everyone by a handle, since an id may
+    /// carry a name or a hidden part (`market_guard_bought`) the prose it writes must never echo.
+    pub(super) fn author<'a>(ids: impl IntoIterator<Item = &'a str>) -> Self {
+        let shown = ids
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| (id.to_owned(), format!("{HANDLE_PREFIX}{}", index + 1)))
+            .collect();
+        Self {
+            own: String::new(),
+            known: Vec::new(),
+            shown,
+        }
+    }
+
     /// What the character calls `id`: itself and anyone whose name it knows by their id, a
     /// stranger it was told of by their handle, and anyone else `someone`.
     pub(super) fn shown(&self, id: &str) -> String {
