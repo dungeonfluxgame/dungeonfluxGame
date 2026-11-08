@@ -155,18 +155,27 @@ pub(super) async fn make_plate(
             portrait: None,
         })
         .collect();
-    deliver_plate(port, name, &picture_prompt(table, history), characters).await
+    deliver_plate(
+        port,
+        name,
+        &picture_prompt(table, history),
+        characters,
+        None,
+    )
+    .await
 }
 
-/// Makes the plate `name` from `prompt` and puts it behind the scene, with `characters` located and
-/// named in it. The spinner title is shown from the start and the title that was there is put back
-/// at the end, also when a step failed; the failure is that of the step, and a title that could not
-/// be put back is not hidden by it.
+/// Makes the plate `name` from `prompt` (an edit of `base`, a picture of the media library, when
+/// given) and puts it behind the scene, with `characters` located and named in it. The spinner
+/// title is shown from the start and the title that was there is put back at the end, also when a
+/// step failed; the failure is that of the step, and a title that could not be put back is not
+/// hidden by it.
 pub(crate) async fn deliver_plate(
     port: u16,
     name: &str,
     prompt: &str,
     characters: Vec<CharacterRequest>,
+    base: Option<&str>,
 ) -> Result<String, PlateFailure> {
     let before = current_title(port).await.map_err(at(PlateStep::Generate))?;
     change(port, &title_change(UPDATING_TITLE, Glyph::Spinner))
@@ -176,7 +185,7 @@ pub(crate) async fn deliver_plate(
         .iter()
         .map(|character| character.name.clone())
         .collect();
-    let made = build(port, name, prompt, characters).await;
+    let made = build(port, name, prompt, characters, base).await;
     let dropped = match &made {
         Ok(_) => drop_stale_bubbles(port, &present).await,
         Err(_) => Ok(()),
@@ -247,6 +256,7 @@ async fn build(
     name: &str,
     prompt: &str,
     characters: Vec<CharacterRequest>,
+    base: Option<&str>,
 ) -> Result<String, PlateFailure> {
     // A plate already in the library with its scan is kept, not rendered again: the name is its
     // identity (a generated plate is stored as `<name>.png`). Use a new name to render a new one.
@@ -267,6 +277,7 @@ async fn build(
         purpose: Some(Purpose::Plate),
         aspect: None,
         wait: true,
+        base: base.map(str::to_owned),
     };
     let generated: GenerateReply<crate::imagegen::request::JobView> =
         post_json(port, image_path::GENERATE, &request)

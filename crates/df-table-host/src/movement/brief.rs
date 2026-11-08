@@ -161,10 +161,15 @@ impl Default for BriefStyle {
     fn default() -> Self {
         Self {
             direction: concat!(
-                "A wide cinematic live-action TV drama still, photorealistic, shot on 35mm with ",
-                "shallow depth of field, glossy soap-opera lighting and a Hollywood teal and ",
-                "orange film color grade, real actors with natural skin and grounded realistic ",
-                "costumes, not an illustration or painting, no fantasy art style, of"
+                "A still from a glossy TV period soap opera set in a medieval Dungeons and ",
+                "Dragons world, photorealistic live action shot on 35mm: an intimate medium shot ",
+                "framed on the main characters' faces and reactions, soft flattering candlelit ",
+                "key light with a warm glow on skin, creamy shallow depth of field, a Hollywood ",
+                "teal and orange color grade, real actors with natural skin in believable, ",
+                "lived-in medieval clothes of linen, wool and leather, in a real medieval set of ",
+                "timber, stone and candlelight; nothing modern (no electric light, glass mugs, ",
+                "drum kits or modern clothes) and no high-fantasy art (no glowing magic, ornate ",
+                "armor or painterly look), of"
             )
             .to_owned(),
             writing_ban: "No text, letters, captions, speech bubbles, logos or interface of any kind."

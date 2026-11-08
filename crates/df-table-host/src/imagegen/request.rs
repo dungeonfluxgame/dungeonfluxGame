@@ -34,6 +34,9 @@ pub struct GenerateRequest {
     pub aspect: Option<Aspect>,
     #[serde(default)]
     pub wait: bool,
+    /// A picture of the media library to edit instead of making a new one (`bar.png`).
+    #[serde(default)]
+    pub base: Option<String>,
 }
 
 /// One job as the routes show it.
@@ -163,6 +166,12 @@ pub enum GenerateError {
     /// The media library did not take the picture. `detail` is the library's sentence: its
     /// `media_store::AddError` is not a wire type yet.
     StoreFailed { job: u64, detail: String },
+    /// The picture to edit could not be read from the media library.
+    BaseUnreadable {
+        job: u64,
+        base: String,
+        cause: IoCause,
+    },
     /// A blocking task of the job stopped without an answer (it panicked or the runtime is
     /// stopping).
     Stopped { job: Option<u64> },
@@ -178,6 +187,7 @@ impl GenerateError {
             Self::Backend { .. } => "backend",
             Self::InvalidPicture { .. } => "invalid_picture",
             Self::StoreFailed { .. } => "store_failed",
+            Self::BaseUnreadable { .. } => "base_unreadable",
             Self::Stopped { .. } => "stopped",
         }
     }
@@ -189,6 +199,7 @@ impl GenerateError {
             Self::InvalidRequest(error) => Some(error.key()),
             Self::Backend { backend, .. } => Some(backend.key()),
             Self::InvalidPicture { cause, .. } => Some(cause.key()),
+            Self::BaseUnreadable { cause, .. } => Some(cause.key()),
             Self::NameBusy { .. } | Self::StoreFailed { .. } | Self::Stopped { .. } => None,
         }
     }
@@ -197,7 +208,9 @@ impl GenerateError {
     pub fn job(&self) -> Option<u64> {
         match self {
             Self::Backend { job, .. } | Self::Stopped { job } => *job,
-            Self::InvalidPicture { job, .. } | Self::StoreFailed { job, .. } => Some(*job),
+            Self::InvalidPicture { job, .. }
+            | Self::StoreFailed { job, .. }
+            | Self::BaseUnreadable { job, .. } => Some(*job),
             Self::InvalidBody(_) | Self::InvalidRequest(_) | Self::NameBusy { .. } => None,
         }
     }
@@ -226,6 +239,10 @@ impl fmt::Display for GenerateError {
                     "the media library did not take the picture: {detail}"
                 )
             }
+            Self::BaseUnreadable { base, cause, .. } => write!(
+                formatter,
+                "the picture to edit, {base}, could not be read from the media library: {cause}"
+            ),
             Self::Stopped { .. } => {
                 formatter.write_str("a task of the generation stopped without an answer")
             }
@@ -242,6 +259,7 @@ impl RouteError for GenerateError {
             Self::NameBusy { .. } => StatusCode::CONFLICT,
             Self::Backend { backend, .. } => backend.status(),
             Self::InvalidPicture { .. } => StatusCode::BAD_GATEWAY,
+            Self::BaseUnreadable { .. } => StatusCode::BAD_REQUEST,
             Self::StoreFailed { .. } | Self::Stopped { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

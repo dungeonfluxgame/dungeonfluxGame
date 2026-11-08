@@ -211,6 +211,29 @@ fn the_command_reads_its_options_and_an_optional_topic() {
 }
 
 #[test]
+fn frame_options_are_read_with_frames_and_refused_without_it() {
+    assert_eq!(request_of("converse").frames, None);
+    let watched = request_of(
+        "converse frames=bar-talk gate=40 edit_from=last hold=10 max_frames=3 judge_model=luna",
+    )
+    .frames
+    .expect("frames");
+    assert_eq!(watched.name, "bar-talk");
+    assert_eq!(watched.gate_percent, Some(40));
+    assert!(watched.edit && watched.from_last);
+    assert_eq!(watched.hold, Duration::from_secs(10));
+    assert_eq!(watched.maximum_frames, 3);
+    assert_eq!(watched.judge_model.as_deref(), Some("luna"));
+    assert!(!request_of("converse frames=x edit=false").frames.expect("frames").edit);
+    for bad in ["gate=30", "frames=x gate=101", "frames=x edit_from=middle", "frames=bad.name"] {
+        assert!(
+            parse(&words(&format!("converse {bad}"))).is_err(),
+            "{bad} is refused"
+        );
+    }
+}
+
+#[test]
 fn the_command_refuses_a_turn_count_that_is_not_a_whole_number_in_range() {
     for bad in ["turns=0", "turns=x", "turns=-3", "turns=10001"] {
         assert!(

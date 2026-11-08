@@ -20,10 +20,10 @@ use crate::dev_http::DevReply;
 
 pub const MEDIA_GENERATE_USAGE: &str = concat!(
     "media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H] ",
-    "[wait=true] | media generate status"
+    "[wait=true] [base=<picture to edit, such as bar.png>] | media generate status"
 );
 
-const KEYS: [&str; 4] = ["as", "purpose", "aspect", "wait"];
+const KEYS: [&str; 5] = ["as", "purpose", "aspect", "wait", "base"];
 
 /// A `media generate` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +82,11 @@ fn request_error(error: GenerateRequestError) -> CommandError {
             &name,
             format!("1 to {MAXIMUM_NAME_CHARS} letters, digits, '-' or '_', with no extension"),
         ),
+        GenerateRequestError::InvalidBase { base } => bad_choice(
+            "base",
+            &base,
+            "a picture file of the media library, such as bar.png".to_owned(),
+        ),
     }
 }
 
@@ -93,6 +98,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
     let mut prompt_words = Vec::new();
     let mut seen = BTreeSet::new();
     let (mut name, mut purpose_key, mut aspect_text, mut wait_text) = (None, None, None, None);
+    let mut base = None;
     for word in words {
         let Some((key, value)) = option_key(word) else {
             prompt_words.push(word.as_str());
@@ -105,6 +111,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
             "as" => &mut name,
             "purpose" => &mut purpose_key,
             "aspect" => &mut aspect_text,
+            "base" => &mut base,
             _ => &mut wait_text,
         };
         *slot = Some(value);
@@ -117,14 +124,18 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
         purpose: purpose_key.map(purpose).transpose()?,
         aspect: aspect_text.map(aspect).transpose()?,
         wait: wait_text.map(wait).transpose()?.unwrap_or(false),
+        base: base.map(str::to_owned),
     };
-    ImageRequest::new(
+    let checked = ImageRequest::new(
         &request.prompt,
         &request.name,
         request.purpose,
         request.aspect,
     )
     .map_err(request_error)?;
+    if let Some(base) = &request.base {
+        checked.editing(base).map_err(request_error)?;
+    }
     Ok(MediaGenerate::Generate(request))
 }
 

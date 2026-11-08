@@ -29,6 +29,9 @@ const TIP_INSET: f32 = 0.1;
 const TOUCH: f32 = 0.01;
 /// How much worse a covered face is than the same area of other overlap, when nothing fits.
 const FACE_WEIGHT: f32 = 1000.0;
+/// How much worse the part of a bubble off the stage is: words nobody can see are worse than words
+/// over a face, so a head at the top of the picture gets its bubble below it, not off the screen.
+const OUTSIDE_WEIGHT: f32 = 10.0 * FACE_WEIGHT;
 /// Where down a box beside a face its tail's tip may sit (fractions of its height), best first.
 const BESIDE_TIPS: [f32; 5] = [0.5, 0.3, 0.7, 0.15, 0.85];
 
@@ -287,7 +290,7 @@ struct Overlap {
 
 impl Overlap {
     fn total(&self) -> f32 {
-        self.outside + self.others + FACE_WEIGHT * self.faces
+        OUTSIDE_WEIGHT * self.outside + self.others + FACE_WEIGHT * self.faces
     }
 
     fn clean(&self) -> bool {

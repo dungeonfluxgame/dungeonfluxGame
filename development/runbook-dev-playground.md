@@ -158,6 +158,44 @@ $D dev --port 7879 scene image tv-backdrop bar.png                   # push the 
 stays with its label and goes when the label changes. A plate named before this existed has no
 shown names: set them once with the commands above. Reload the page to see them.
 
+## Frames that follow the talk
+
+The picture updates during a conversation when enough has visibly changed. After each line, a
+judge (one model call, closed schema: `POST /dev/persona/frame`) reads what the picture shows
+and the lines said since it was made. It answers how much would visibly change (0 to 100), each
+change (who, a kind from the closed list, how it looks now) and the picture as it should look
+now. Above the gate a new frame is made in the background while the talk goes on: by default an
+edit of the scene's first picture, so faces and the room stay the same. One frame at a time;
+lines said meanwhile wait for the next judgement.
+
+```bash
+# The judge alone: what would change, and does it pass the gate?
+$D dev --port 7879 persona frame "line=Kael: Dance with me?" "line=Lena: Fine, hold my tray." \
+  "A packed bar at night; Kael stands front left; Lena walks through the crowd with a tray."
+
+# A conversation with frames (every option but frames= is optional)
+$D dev --port 7879 persona converse turns=12 opener=warrior frames=bar-live1 gate=25 \
+  "scene=<what the picture shows now>" edit=true edit_from=first hold=30 max_frames=6 \
+  judge_model=<name> "<topic>"
+
+# Any edit by hand
+$D dev --port 7879 media generate "Lena now laughs" as=bar-edit base=bar.png wait=true
+```
+
+Settings, re-read on every call (no rebuild): `persona/frames.json`: `gate_percent`, `kinds`
+(the closed list the judge may name), `scale` (what each percentage means; the model scores by
+it), `edit_rule` (how an edited frame keeps the picture) and `shots` (the camera shots a frame
+may take, each an id and how it looks: two-shot, close-up, extreme close-up, over-the-shoulder,
+telephoto, wide, Dutch angle, low angle, high angle). The judge picks the shot that tells the
+moment and is told the shot on screen, so it varies; the edit is told to frame it that way.
+`with=warrior,tavern_server` on `persona converse` chooses who talks (otherwise everyone in the
+scene with a persona talks, the band and dancers included). Command options override them for
+one run. Frames are stored as `<frames>-1`, `<frames>-2`...; a name already in the library is
+kept, not made again, so give each run a new `frames=` name. `scene=` matters: it is what the
+judge compares the lines against. Without it the judge starts from the cast list alone. The
+transcript says when each frame was judged (and its changes), started and shown, and how long it
+took; the host logs `PERSONA frame_judged changed_percent=.. gate=.. triggered=.. duration_ms=..`.
+
 ## The market thread (re-runnable persona and backfill exercise)
 
 `bash development/market-thread.sh` runs 20 messages at the fruit stall: her name, where the
@@ -207,9 +245,17 @@ lists the characters found in it.
 ## The look (one place)
 
 `BriefStyle::default()` in `crates/df-table-host/src/movement/brief.rs`: `direction` (the
-look) and `writing_ban`. Every plate, including `persona converse plate=`, uses it. Today:
-live-action TV drama still, photorealistic, 35mm, soap-opera lighting, Hollywood teal and
-orange grade, real actors, not an illustration.
+look) and `writing_ban`. Every plate, including `persona converse plate=`, uses it, and every
+frame edit restates it. Today (2026-11-07): a still from a glossy TV period soap opera set in
+a medieval Dungeons and Dragons world, photorealistic, 35mm, an intimate medium shot on the main
+characters' faces and reactions, soft flattering candlelit key light, creamy shallow depth of
+field, Hollywood teal and orange grade, real actors in lived-in medieval linen, wool and leather
+in a real set of timber, stone and candlelight; nothing modern and no high-fantasy art. History:
+the first bar plate drifted into an epic fantasy-film tavern (wide crowd shot); "not a fantasy
+film" then drifted into a modern bar (drum kit, glass mugs). Name the world and the period, and
+ban what is modern separately from what is high-fantasy. The bar plate in this look is
+`bar-period.png` (made with `media generate`, then `media locate`, `media locate identify` and
+`media locate label` for the names).
 
 ## Keep the scene clean
 

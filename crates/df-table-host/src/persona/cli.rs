@@ -12,7 +12,7 @@
 //! answers, in a `DevError::Rejected`.
 
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use df_content::persona::backfill::{FILLABLE, Gap, NarrativeGuidance};
 use df_content::persona::{
@@ -31,6 +31,7 @@ use super::format::{
     format_answered, format_backfilled, format_backfills, format_covered, format_generation,
     format_list, format_owner, format_public, format_spoken, format_voice_generated,
 };
+use super::frame_watch::{DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions, judge_frame};
 use super::options::{Asking, GUIDANCE_KEYS, GuidanceArgs, asking_from, take_options};
 use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, CastOutcome,
@@ -66,7 +67,8 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
     "[from=<id>] [intent=<text>] <situation...> | ",
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
-    "[model=<name>] [<topic...>] | ",
+    "[model=<name>] [frames=<name> <frame options>] [<topic...>] | ",
+    "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...> | ",
@@ -151,8 +153,14 @@ pub const PERSONA_SAY_USAGE: &str = concat!(
 /// `persona converse`: the characters of the shown scene talk to each other.
 pub const PERSONA_CONVERSE_USAGE: &str = concat!(
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
-    "[plate=<name>] [model=<name>] [<topic...>]",
+    "[plate=<name>] [model=<name>] [with=<id>,<id>...] ",
+    "[frames=<name> [gate=0-100] [scene=<what the picture shows>] ",
+    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [max_frames=N] ",
+    "[judge_model=<name>]] [<topic...>]",
 );
+/// `persona frame`: how much the picture would visibly change for these lines.
+pub const PERSONA_FRAME_USAGE: &str =
+    "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...>";
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
@@ -260,6 +268,13 @@ pub enum PersonaCommand {
     },
     /// Have the characters of the shown scene talk to each other.
     Converse(ConverseRequest),
+    /// Judge how much the picture would visibly change for some lines.
+    Frame {
+        picture: String,
+        lines: Vec<String>,
+        gate_percent: Option<u8>,
+        model: Option<String>,
+    },
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
@@ -417,10 +432,27 @@ fn parse_say(words: &[String]) -> Result<PersonaCommand, CommandError> {
 fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let (given, rest) = take_options(
         words,
-        &["turns", "opener", "speak", "pace", "plate", "model"],
+        &[
+            "turns",
+            "opener",
+            "speak",
+            "pace",
+            "plate",
+            "model",
+            "frames",
+            "gate",
+            "scene",
+            "edit",
+            "edit_from",
+            "hold",
+            "max_frames",
+            "judge_model",
+            "with",
+        ],
     );
     let mut turns = DEFAULT_TURNS;
     let (mut opener, mut plate, mut speak, mut pace) = (None, None, false, true);
+    let frames = frame_options(&given)?;
     for (key, value) in &given {
         match *key {
             "turns" => {
@@ -445,7 +477,8 @@ fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
                         key,
                         value,
                         format!(
-                            "1 to {MAXIMUM_NAME_CHARS} letters, digits, '-' or '_', with no                              extension"
+                            "1 to {MAXIMUM_NAME_CHARS} letters, digits, '-' or '_', with no \
+                             extension"
                         ),
                     ));
                 }
@@ -462,7 +495,121 @@ fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         speak,
         pace,
         plate,
+        frames,
+        with: given
+            .iter()
+            .find(|(key, _)| *key == "with")
+            .map(|(_, ids)| {
+                ids.split(',')
+                    .map(|id| id_word(id.trim()).map(|id| id.to_string()))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default(),
     }))
+}
+
+/// The frame options of `persona converse`: none without `frames=`, and a frame option without it
+/// is refused, so a typo never runs a talk without the frames it asked for.
+fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, CommandError> {
+    let value = |key: &str| {
+        given
+            .iter()
+            .find(|(seen, _)| *seen == key)
+            .map(|(_, value)| *value)
+    };
+    let Some(name) = value("frames") else {
+        if let Some((key, _)) = given.iter().find(|(key, _)| {
+            matches!(
+                *key,
+                "gate" | "scene" | "edit" | "edit_from" | "hold" | "max_frames" | "judge_model"
+            )
+        }) {
+            return Err(bad_choice(
+                key,
+                "without frames=",
+                "frames=<name> with it".to_owned(),
+            ));
+        }
+        return Ok(None);
+    };
+    if !plain_name(name) {
+        return Err(bad_choice(
+            "frames",
+            name,
+            format!("1 to {MAXIMUM_NAME_CHARS} letters, digits, '-' or '_'"),
+        ));
+    }
+    let number = |key: &'static str, text: &str, most: u64| {
+        text.parse::<u64>()
+            .ok()
+            .filter(|number| *number <= most)
+            .ok_or_else(|| bad_choice(key, text, format!("a whole number from 0 to {most}")))
+    };
+    let gate_percent = value("gate")
+        .map(|text| number("gate", text, 100))
+        .transpose()?
+        .map(|gate| u8::try_from(gate).unwrap_or(100));
+    let hold = value("hold")
+        .map(|text| number("hold", text, 3_600))
+        .transpose()?
+        .unwrap_or(DEFAULT_HOLD_SECONDS);
+    let maximum_frames = value("max_frames")
+        .map(|text| number("max_frames", text, 100))
+        .transpose()?
+        .map_or(DEFAULT_MAXIMUM_FRAMES, |most| {
+            u32::try_from(most).unwrap_or(DEFAULT_MAXIMUM_FRAMES)
+        });
+    let from_last = match value("edit_from") {
+        None | Some("first") => false,
+        Some("last") => true,
+        Some(other) => return Err(bad_choice("edit_from", other, "first or last".to_owned())),
+    };
+    Ok(Some(FrameOptions {
+        name: name.to_owned(),
+        gate_percent,
+        scene: value("scene").map(str::to_owned),
+        edit: value("edit")
+            .map(|text| flag("edit", text))
+            .transpose()?
+            .unwrap_or(true),
+        from_last,
+        hold: Duration::from_secs(hold),
+        maximum_frames,
+        judge_model: value("judge_model").map(str::to_owned),
+    }))
+}
+
+fn parse_frame(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let mut lines = Vec::new();
+    let (mut gate_percent, mut model, mut rest) = (None, None, words);
+    while let Some((word, after)) = rest.split_first() {
+        match word.split_once('=') {
+            Some(("line", line)) => lines.push(line.to_owned()),
+            Some(("model", name)) => model = Some(name.to_owned()),
+            Some(("gate", text)) => {
+                gate_percent = Some(
+                    text.parse::<u8>()
+                        .ok()
+                        .filter(|gate| *gate <= 100)
+                        .ok_or_else(|| {
+                            bad_choice("gate", text, "a whole number from 0 to 100".to_owned())
+                        })?,
+                );
+            }
+            _ => break,
+        }
+        rest = after;
+    }
+    if rest.is_empty() || lines.is_empty() {
+        return Err(CommandError::Usage(PERSONA_FRAME_USAGE));
+    }
+    Ok(PersonaCommand::Frame {
+        picture: rest.join(" "),
+        lines,
+        gate_percent,
+        model,
+    })
 }
 
 fn parse_ask(words: &[String]) -> Result<PersonaCommand, CommandError> {
@@ -635,6 +782,7 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("backfills", [id]) => Ok(PersonaCommand::Backfills { id: id_word(id)? }),
         ("backfills", _) => Err(CommandError::Usage(PERSONA_BACKFILLS_USAGE)),
         ("converse", words) => parse_converse(words),
+        ("frame", words) => parse_frame(words),
         ("remove", [id]) => Ok(PersonaCommand::Remove { id: id_word(id)? }),
         ("remove", _) => Err(CommandError::Usage(PERSONA_REMOVE_USAGE)),
         _ => Err(CommandError::Usage(PERSONA_USAGE)),
@@ -1037,6 +1185,12 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
         } => backfill_character(port, character, gaps, asking).await,
         PersonaCommand::Backfills { id } => show_backfills(port, id).await,
         PersonaCommand::Converse(request) => converse(port, request).await,
+        PersonaCommand::Frame {
+            picture,
+            lines,
+            gate_percent,
+            model,
+        } => judge_frame(port, picture, lines, gate_percent, model).await,
         PersonaCommand::Say {
             character,
             situation,

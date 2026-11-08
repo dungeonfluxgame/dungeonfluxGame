@@ -41,6 +41,7 @@
 //! names a `model` (see `text`).
 
 pub(crate) mod address;
+pub(crate) mod frame;
 mod backfill;
 pub mod cli;
 mod converse;
@@ -48,6 +49,7 @@ mod edit_verbs;
 mod emotion_routes;
 mod emotions;
 mod format;
+mod frame_watch;
 pub(crate) mod generate;
 mod line;
 pub(crate) mod options;
@@ -75,6 +77,8 @@ mod ask_tests;
 mod backfill_tests;
 #[cfg(test)]
 mod converse_tests;
+#[cfg(test)]
+mod frame_tests;
 #[cfg(test)]
 mod emotion_state_tests;
 #[cfg(test)]

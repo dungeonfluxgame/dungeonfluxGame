@@ -1,0 +1,59 @@
+{
+  "gate_percent": 25,
+  "kinds": [
+    "expression",
+    "pose",
+    "position",
+    "item",
+    "prop",
+    "light"
+  ],
+  "scale": [
+    "0: nothing visible changed.",
+    "10: one face changed expression.",
+    "25: a few faces changed.",
+    "30: one person moved, changed pose, or picked up or put down something.",
+    "40: two people moved or changed pose, or one moved and someone took or gave something.",
+    "50: several people changed pose or hold new things, or someone came or left.",
+    "100: a different scene."
+  ],
+  "edit_rule": "Edit this picture. Keep the place, the light, every person's face, hair, build and clothes exactly as they are; the camera may move to the shot asked for; change only what the scene now says is different.",
+  "shots": [
+    {
+      "id": "two-shot",
+      "look": "an intimate medium two-shot of the two people at the heart of the moment"
+    },
+    {
+      "id": "close-up",
+      "look": "a close-up on one face, filling the frame, to land a feeling"
+    },
+    {
+      "id": "extreme-close-up",
+      "look": "an extreme close-up on eyes, lips or hands, for a charged beat"
+    },
+    {
+      "id": "over-the-shoulder",
+      "look": "an over-the-shoulder shot from behind one person toward the other's face"
+    },
+    {
+      "id": "telephoto",
+      "look": "a long telephoto shot from across the room, the pair compressed and isolated in a blur of crowd"
+    },
+    {
+      "id": "wide",
+      "look": "a wide shot of the whole room, to show the crowd and where everyone is"
+    },
+    {
+      "id": "dutch-angle",
+      "look": "a tilted Dutch angle, for tension, unease or drunken chaos"
+    },
+    {
+      "id": "low-angle",
+      "look": "a low angle looking up, so someone looms proud or threatening"
+    },
+    {
+      "id": "high-angle",
+      "look": "a high angle looking down, so someone looks small, lost or overwhelmed"
+    }
+  ]
+}

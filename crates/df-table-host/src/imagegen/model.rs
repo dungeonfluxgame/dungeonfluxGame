@@ -199,6 +199,10 @@ pub enum GenerateRequestError {
     InvalidName {
         name: String,
     },
+    /// The picture to edit is not a plain picture file name of the media library.
+    InvalidBase {
+        base: String,
+    },
 }
 
 impl GenerateRequestError {
@@ -208,6 +212,7 @@ impl GenerateRequestError {
             Self::EmptyPrompt => "empty_prompt",
             Self::PromptTooLong { .. } => "prompt_too_long",
             Self::InvalidName { .. } => "invalid_name",
+            Self::InvalidBase { .. } => "invalid_base",
         }
     }
 }
@@ -231,6 +236,10 @@ impl fmt::Display for GenerateRequestError {
                 ),
                 name, MAXIMUM_NAME_CHARS
             ),
+            Self::InvalidBase { base } => write!(
+                formatter,
+                "'{base}' is not a picture file of the media library, such as bar.png"
+            ),
         }
     }
 }
@@ -249,13 +258,14 @@ pub(crate) fn plain_name(name: &str) -> bool {
 const DIRECTION_SEPARATOR: &str = "\n\n";
 
 /// One checked request: a prompt, the name the picture is stored under (without its extension),
-/// what it is for and its shape.
+/// what it is for, its shape, and the picture of the media library it edits, when it is an edit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageRequest {
     prompt: String,
     name: String,
     purpose: Purpose,
     aspect: Aspect,
+    base: Option<String>,
 }
 
 impl ImageRequest {
@@ -290,7 +300,25 @@ impl ImageRequest {
             name: name.to_owned(),
             purpose,
             aspect: aspect.unwrap_or_else(|| purpose.default_aspect()),
+            base: None,
         })
+    }
+
+    /// This request as an edit of `base`, a picture file of the media library (`bar.png`): the
+    /// new picture keeps it and changes what the prompt says.
+    pub fn editing(mut self, base: &str) -> Result<Self, GenerateRequestError> {
+        if crate::locate::check_picture_name(base).is_err() {
+            return Err(GenerateRequestError::InvalidBase {
+                base: base.to_owned(),
+            });
+        }
+        self.base = Some(base.to_owned());
+        Ok(self)
+    }
+
+    /// The picture of the media library this request edits, when it is an edit.
+    pub fn base(&self) -> Option<&str> {
+        self.base.as_deref()
     }
 
     pub fn prompt(&self) -> &str {
@@ -332,6 +360,8 @@ pub struct BackendRequest {
     pub text: String,
     pub width_px: u32,
     pub height_px: u32,
+    /// The bytes of the picture to edit, when it is an edit.
+    pub base: Option<Vec<u8>>,
 }
 
 /// A picture a backend delivered, with what it can say about how it was made.

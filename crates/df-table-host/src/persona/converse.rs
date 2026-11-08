@@ -19,6 +19,7 @@ use df_playground::copy::{ReadingPace, caption_dwell_ms, word_count};
 use serde::{Deserialize, Serialize};
 
 use super::address::{AddressReply, AddressRequest, PERSONA_ADDRESSED};
+use super::frame_watch::{FrameOptions, FrameWatch};
 use super::plate::make_plate;
 use super::request::{PersonaSummary, SayRequest, Spoken};
 use super::routes::path;
@@ -64,6 +65,8 @@ pub enum ConverseError {
     TooFewSpeakers { found: usize },
     /// The opener is not a character at the table.
     UnknownOpener { opener: String },
+    /// A character named to talk is not in the scene with a persona.
+    UnknownSpeaker { id: String },
 }
 
 impl std::fmt::Display for ConverseError {
@@ -77,6 +80,10 @@ impl std::fmt::Display for ConverseError {
             Self::UnknownOpener { opener } => {
                 write!(formatter, "'{opener}' is not a character at the table")
             }
+            Self::UnknownSpeaker { id } => write!(
+                formatter,
+                "'{id}' is not a character of the shown scene with a persona"
+            ),
         }
     }
 }
@@ -218,10 +225,14 @@ pub struct ConverseRequest {
     /// The name of a new tv backdrop to make from the talk once it is over, and put behind the
     /// scene (see `plate`).
     pub plate: Option<String>,
+    /// New frames during the talk, when the picture would visibly change (see `frame_watch`).
+    pub frames: Option<FrameOptions>,
+    /// Who talks: these characters of the scene, by id; everyone with a persona when empty.
+    pub with: Vec<String>,
 }
 
 /// The speakers of the shown scene: its named characters that have a stored persona.
-fn speakers_of(cast: CastList) -> Vec<Speaker> {
+pub(super) fn speakers_of(cast: CastList) -> Vec<Speaker> {
     cast.members
         .iter()
         .filter_map(|member| {
@@ -278,7 +289,25 @@ async fn addressed_once(
 /// stops it with the lines said so far (`DevError::ConverseStopped`).
 pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, DevError> {
     let cast: CastList = super::cli::reply_value(get_json(port, cast_path::CAST).await?)?;
-    let table = Table::new(speakers_of(cast)).map_err(DevError::Converse)?;
+    let picture = cast.picture.clone();
+    let mut speakers = speakers_of(cast);
+    if !request.with.is_empty() {
+        if let Some(missing) = request
+            .with
+            .iter()
+            .find(|id| !speakers.iter().any(|speaker| speaker.id == **id))
+        {
+            return Err(DevError::Converse(ConverseError::UnknownSpeaker {
+                id: missing.clone(),
+            }));
+        }
+        speakers.retain(|speaker| request.with.contains(&speaker.id));
+    }
+    let table = Table::new(speakers).map_err(DevError::Converse)?;
+    let mut frames = request
+        .frames
+        .clone()
+        .map(|options| FrameWatch::new(options, table.speakers(), &picture));
     let mut speaker = table
         .opener(request.opener.as_deref())
         .map_err(DevError::Converse)?
@@ -319,7 +348,8 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             .then(|| pause_after(&spoken.said.line, spoken.voice.as_ref()));
         let line = spoken.said.line;
         let following = turn + 1 < request.turns;
-        let (addressed, ()) = tokio::join!(
+        // The frame judge reads the line while it is read too, next to who it is directed at.
+        let (addressed, (), judged) = tokio::join!(
             async {
                 if following {
                     addressed_once(
@@ -339,8 +369,21 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
                 if let Some(pause) = pause {
                     tokio::time::sleep(pause).await;
                 }
+            },
+            async {
+                match frames.as_mut() {
+                    Some(watch) => {
+                        watch
+                            .after_line(port, &speaker, &line, &mut transcript)
+                            .await
+                    }
+                    None => None,
+                }
             }
         );
+        if let (Some(watch), Some(judged)) = (frames.as_mut(), judged) {
+            watch.consider(port, turn, judged, &mut transcript);
+        }
         let addressed = match addressed {
             Ok(addressed) => addressed,
             Err(error) => {
@@ -356,6 +399,9 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             line,
         });
         speaker = table.next_speaker(&history, addressed.as_deref()).clone();
+    }
+    if let Some(watch) = frames.as_mut() {
+        watch.finish(&mut transcript).await;
     }
     if let Some(name) = &request.plate {
         match make_plate(port, name, &table, &history).await {

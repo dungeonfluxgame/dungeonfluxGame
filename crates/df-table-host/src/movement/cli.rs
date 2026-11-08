@@ -418,7 +418,7 @@ async fn walk(
             }
         })
         .collect();
-    match deliver_plate(port, name, &brief.prompt, placed).await {
+    match deliver_plate(port, name, &brief.prompt, placed, None).await {
         Ok(summary) => walk.report.push(summary),
         Err((step, error)) => return Err(walk.failed(step.key(), &error.to_string())),
     }

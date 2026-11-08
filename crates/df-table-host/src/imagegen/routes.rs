@@ -38,6 +38,10 @@ impl GenerateRoutes {
     /// Starts the job `body` asks for and, when it asks to wait, waits for the job to end.
     async fn generate(&self, body: GenerateRequest) -> Result<JobView, GenerateError> {
         let request = ImageRequest::new(&body.prompt, &body.name, body.purpose, body.aspect)?;
+        let request = match &body.base {
+            Some(base) => request.editing(base)?,
+            None => request,
+        };
         let started = self.generator.start(&self.app, request).await?;
         if !body.wait {
             return Ok(started.view);

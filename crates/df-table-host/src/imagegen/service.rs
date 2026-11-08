@@ -438,10 +438,15 @@ impl ImageGenerator {
         request: &ImageRequest,
     ) -> Result<(Provenance, Option<Sidecar>), GenerateError> {
         let (width_px, height_px) = request.aspect().requested_size();
+        let base = match request.base() {
+            Some(base) => Some(read_base(app, job, base).await?),
+            None => None,
+        };
         let backend_request = BackendRequest {
             text: request.sent_text(),
             width_px,
             height_px,
+            base,
         };
         let image = self.generate(job, backend_request).await?;
         if let Some(cause) = image.cleanup {
@@ -544,6 +549,20 @@ fn extension_of(mime: &str) -> &'static str {
         "image/jpeg" => "jpg",
         _ => "png",
     }
+}
+
+/// The bytes of `base`, a picture of the host's media library, read on the blocking pool.
+async fn read_base(app: &AppState, job: u64, base: &str) -> Result<Vec<u8>, GenerateError> {
+    let path = media_directory(app.playground().files()).join(base);
+    let name = base.to_owned();
+    tokio::task::spawn_blocking(move || std::fs::read(path))
+        .await
+        .map_err(|_| GenerateError::Stopped { job: Some(job) })?
+        .map_err(|error| GenerateError::BaseUnreadable {
+            job,
+            base: name,
+            cause: IoCause::from_kind(error.kind()),
+        })
 }
 
 fn stored_as_delivered_note(mime: &str) -> String {

@@ -30,6 +30,7 @@ fn media_generate_parses_a_prompt_with_options() {
             purpose: Some(Purpose::Plate),
             aspect: Some(Aspect::WIDE),
             wait: true,
+            base: None,
         }))
     );
     let quoted = parsed("media generate \"one word=prompt\" as=x").expect("parses");
@@ -41,6 +42,7 @@ fn media_generate_parses_a_prompt_with_options() {
             purpose: None,
             aspect: None,
             wait: false,
+            base: None,
         }))
     );
     assert_eq!(

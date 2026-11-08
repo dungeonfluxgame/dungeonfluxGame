@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use crate::backends::codex_cli::process::TokioProcessRunner;
 use crate::backends::codex_cli::{
     AlphaRequirement, AttemptDirs, CodexCliConfig, CodexError, CodexImageRequest, CodexOutcome,
-    GenerationFailureKind, ImageKind, UnknownReason, execute,
+    GenerationFailureKind, ImageKind, StagedReference, UnknownReason, execute,
 };
 use crate::listed::listed_enum;
 use crate::output::{Dimensions, OutputFormat};
@@ -75,6 +75,9 @@ pub struct OneShotRequest {
     /// The size asked for. The Codex image tool decides the real size.
     pub width_px: u32,
     pub height_px: u32,
+    /// A picture to edit instead of making a new one: the result keeps it and changes what the
+    /// prompt says. PNG, JPEG or WebP bytes.
+    pub base: Option<Vec<u8>>,
 }
 
 /// A verified picture and what is known about how it was made.
@@ -382,15 +385,26 @@ pub async fn generate(
         .map_err(|_| OneShotError::InvalidConfig("the backend limits are not usable"))?;
     let prompt = TextPrompt::new(&request.prompt, 1)
         .map_err(|_| OneShotError::InvalidRequest("the prompt is empty"))?;
+    let dimensions = dimensions(request)?;
+    let (folder, attempt) = AttemptFolder::create(&config.work_root).await?;
+    let (kind, references) = match &request.base {
+        None => (ImageKind::Generate, Vec::new()),
+        Some(base) => match stage_base(attempt.inputs(), base).await {
+            Ok(staged) => (ImageKind::Edit, vec![staged]),
+            Err(error) => {
+                record_unreturned_cleanup(folder.remove().await, &error);
+                return Err(error);
+            }
+        },
+    };
     let backend_request = CodexImageRequest::new(
         prompt,
-        ImageKind::Generate,
-        Vec::new(),
-        dimensions(request)?,
+        kind,
+        references,
+        dimensions,
         AlphaRequirement::Either,
         OutputFormat::Png,
     );
-    let (folder, attempt) = AttemptFolder::create(&config.work_root).await?;
     let started = Instant::now();
     let outcome = execute(
         &backend,
@@ -434,6 +448,27 @@ pub async fn generate(
         output_tokens,
         cleanup,
     })
+}
+
+/// Stages `base` in the attempt's inputs as the picture to edit, under a name with its own type's
+/// extension and with its digest, so the backend's preflight checks it like any staged reference.
+async fn stage_base(inputs: &Path, base: &[u8]) -> Result<StagedReference, OneShotError> {
+    let (mime, _, _) = describe(base).ok_or(OneShotError::InvalidRequest(
+        "the base is not a readable picture",
+    ))?;
+    let extension = match mime {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        _ => "png",
+    };
+    let path = inputs.join(format!("base.{extension}"));
+    let digest = crate::lower_hex(&Sha256::digest(base));
+    let (target, bytes) = (path.clone(), base.to_vec());
+    tokio::task::spawn_blocking(move || std::fs::write(target, bytes))
+        .await
+        .map_err(|_| OneShotError::Internal)?
+        .map_err(|error| map_work_folder_failure(error.kind()))?;
+    StagedReference::new(path, &digest).map_err(|_| OneShotError::Internal)
 }
 
 /// A failed attempt returns only its error, so a folder it also left behind is recorded here:
@@ -489,6 +524,7 @@ mod tests {
             prompt: "a lake".to_owned(),
             width_px: 16,
             height_px: 9,
+            base: None,
         };
         assert_send(&generate(&config, &request));
     }
@@ -521,6 +557,7 @@ mod tests {
             prompt: "a lake".to_owned(),
             width_px: 16,
             height_px: 9,
+            base: None,
         };
         let error = generate(&config, &request)
             .await
@@ -542,6 +579,7 @@ mod tests {
             prompt: "a lake".to_owned(),
             width_px: 16,
             height_px: 9,
+            base: None,
         };
         let error = generate(&config, &request)
             .await
@@ -568,6 +606,7 @@ mod tests {
             prompt: "a lake".to_owned(),
             width_px: 16,
             height_px: 9,
+            base: None,
         };
         let error = generate(&config, &request)
             .await

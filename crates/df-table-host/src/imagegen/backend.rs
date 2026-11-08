@@ -462,6 +462,7 @@ impl ImageBackend for CodexBackend {
                 prompt: request.text.clone(),
                 width_px: request.width_px,
                 height_px: request.height_px,
+                base: request.base.clone(),
             };
             let image = oneshot::generate(&config, &one_shot)
                 .await
