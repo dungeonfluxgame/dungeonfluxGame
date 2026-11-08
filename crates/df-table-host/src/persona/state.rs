@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use df_content::persona::{
     Appraisal, EmotionConfig, EmotionalTrigger, Persona, PersonaId, PersonaState, Temperament,
-    fresh_state,
+    fresh_state, set_known_name,
 };
 
 use super::emotions::{EmotionError, load_emotions};
@@ -172,9 +172,46 @@ pub(crate) fn apply_appraisal(
         dropped.noticed,
         delta_list(appraisal),
         appraisal.toward.as_deref().unwrap_or("-"),
-        appraisal.rapport_delta.map_or_else(|| "-".to_owned(), |delta| delta.to_string()),
+        appraisal
+            .rapport_delta
+            .map_or_else(|| "-".to_owned(), |delta| delta.to_string()),
     ));
     after
+}
+
+/// Adds `ids` to the names `persona` knows, under the write lock, each once, and records it. A
+/// state that cannot be written is recorded, never fatal: the line is still said.
+pub(crate) fn learn_names(app: &AppState, persona: &Persona, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let id = persona.id().as_str();
+    let config = load_emotions(app).unwrap_or_else(|error| {
+        record_unavailable(app, id, &error);
+        EmotionConfig::default()
+    });
+    let learned = ids.to_vec();
+    let changed = change_state(
+        &state_directory(app),
+        id,
+        &config,
+        persona.temperament(),
+        |state| {
+            // A name that cannot be kept (not a character, the character itself, or the list is
+            // full) is left out; the line is still said.
+            for name in &learned {
+                set_known_name(state, name, true);
+            }
+            Ok(())
+        },
+    );
+    match changed {
+        Ok(_) => app.record_line(format!(
+            "PERSONA names_learned id={id} learned={}",
+            ids.join(",")
+        )),
+        Err(error) => record_unavailable(app, id, &error),
+    }
 }
 
 /// The emotional triggers of `persona` whose state condition `appraisal` makes start to hold:

@@ -96,6 +96,26 @@ fn no_attention() -> Value {
 }
 
 #[tokio::test]
+async fn a_name_heard_in_the_line_is_learned_and_one_not_present_is_dropped() {
+    let mut answer = line_answer("Pip, is it? Welcome.");
+    answer["names_learned"] = json!(["pip", "ghost"]);
+    let host = scripted_host(vec![answer]).await;
+    write_persona(&host.directory(), &vendor(CHARACTER)).unwrap();
+    let first = done(
+        ask(
+            &host,
+            CHARACTER,
+            json!({"asked_by": "pip", "backfill": false}),
+        )
+        .await,
+    );
+    let said = first.spoken.said;
+    assert_eq!(said.names_learned, ["pip"]);
+    assert!(said.dropped.contains(&"name:ghost".to_owned()));
+    assert_eq!(said.state.known_names, ["pip"]);
+}
+
+#[tokio::test]
 async fn one_call_carries_the_gaps_and_an_appraisal_that_only_keeps_what_is_valid() {
     let answer = appraised(
         line_answer_with_gaps("Eight a basket, love.", &[("backstory", "childhood")]),
@@ -305,7 +325,11 @@ async fn a_state_trigger_adds_its_changes_once_when_it_starts_to_hold_not_on_eve
     assert_eq!(irritation(&crossing), 1, "fear crossed 50 on this line");
     let holding = done(say(&host, CHARACTER, json!({})).await).said;
     assert_eq!(holding.state_triggered, ["scared"]);
-    assert_eq!(irritation(&holding), 0, "still afraid: the stance holds, no new change");
+    assert_eq!(
+        irritation(&holding),
+        0,
+        "still afraid: the stance holds, no new change"
+    );
 }
 
 #[tokio::test]

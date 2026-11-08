@@ -10,11 +10,16 @@
 //! The next speaker is whoever the last line was directed at, unless they spoke in the last
 //! [`TURNS_BEFORE_AGAIN`] turns, and then the character who has been quiet longest. Who a line is
 //! directed at is Jev's decision (`address`, `POST /dev/persona/addressed`), never a match of
-//! names.
+//! names; a reading that fails falls back to taking turns.
+//!
+//! `with=` chooses who talks; `events=` is a file of what happens at which turn (something seen,
+//! which the speakers of that turn and the next react to first, or a dev command run before the
+//! turn's line); `frames=` lets the picture follow the talk (`frame_watch`). A character is told
+//! the others by who they are in the scene, never by a name they have not learned
+//! (`known_names` in their state).
 
 use std::time::Duration;
 
-use axum::http::StatusCode;
 use df_playground::copy::{ReadingPace, caption_dwell_ms, word_count};
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +32,6 @@ use crate::cast::request::CastList;
 use crate::cast::routes::path as cast_path;
 use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json};
-use crate::dev_http::DevReply;
 use crate::speech::Voiced;
 
 /// How many turns a conversation runs when it is not told.
@@ -159,19 +163,14 @@ impl Table {
         })
     }
 
-    /// The latest [`HISTORY_LINES`] lines of `history` as "Name: line", oldest first.
+    /// The latest [`HISTORY_LINES`] lines of `history` as "id: line", oldest first. Lines are
+    /// labelled by who the speaker is in the scene, never by name: a name is known only once it
+    /// was said or the character knows it (`known_names`), not from a label.
     fn recent_lines(&self, history: &[Turn]) -> Vec<String> {
         let skip = history.len().saturating_sub(HISTORY_LINES);
         history[skip..]
             .iter()
-            .map(|turn| {
-                let name = self
-                    .speakers
-                    .iter()
-                    .find(|other| other.id == turn.speaker)
-                    .map_or(turn.speaker.as_str(), |other| other.display_name.as_str());
-                format!("{name}: {}", turn.line)
-            })
+            .map(|turn| format!("{}: {}", turn.speaker, turn.line))
             .collect()
     }
 
@@ -184,13 +183,15 @@ impl Table {
         happening: Option<&str>,
         history: &[Turn],
     ) -> String {
+        // The others by who they are in the scene and what they do, never by name.
         let people: Vec<String> = self
             .speakers
             .iter()
-            .map(|other| format!("{} ({})", other.display_name, other.job))
+            .filter(|other| other.id != speaker.id)
+            .map(|other| format!("{} ({})", other.id, other.job))
             .collect();
         let mut text = format!(
-            "A table at the inn, everyone can hear everyone. Seated here: {}. You are {}.",
+            "A table at the inn, everyone can hear everyone. Here with you: {}. You are {}.",
             people.join("; "),
             speaker.display_name
         );
@@ -301,7 +302,7 @@ pub fn parse_events(text: &str) -> Result<Vec<SceneEvent>, ConverseError> {
             Some(command) => Happening::Command(
                 crate::command::split_words(command.trim())
                     .ok()
-                    .filter(|words| !words.is_empty())
+                    .filter(|words| !words.is_empty() && !starts_a_conversation(words))
                     .ok_or_else(invalid)?,
             ),
             None => Happening::Seen(what.to_owned()),
@@ -310,6 +311,12 @@ pub fn parse_events(text: &str) -> Result<Vec<SceneEvent>, ConverseError> {
     }
     events.sort_by_key(|event| event.turn);
     Ok(events)
+}
+
+/// Whether `words` is a `persona converse` command: an events file may switch stances and set
+/// state, but never start a conversation of its own, which could run the same file again.
+fn starts_a_conversation(words: &[String]) -> bool {
+    matches!(words, [verb, sub, ..] if verb == "persona" && sub == "converse")
 }
 
 /// The speakers of the shown scene: its named characters that have a stored persona.
@@ -356,14 +363,8 @@ async fn addressed_once(
         recent: table.recent_lines(history),
         model: model.map(str::to_owned),
     };
-    match post_json::<_, AddressReply>(port, PERSONA_ADDRESSED, &request).await? {
-        DevReply::Done { value } => Ok(value.addressed),
-        DevReply::Rejected { error, message } => Err(DevError::UnexpectedAnswer {
-            status: StatusCode::BAD_GATEWAY,
-            body: message,
-            reason: Some(format!("addressed refused: {}", error.key())),
-        }),
-    }
+    let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;
+    Ok(crate::dev_client::reply_value(reply)?.addressed)
 }
 
 /// Runs the conversation against the host on `port` and gives the transcript. A turn that fails

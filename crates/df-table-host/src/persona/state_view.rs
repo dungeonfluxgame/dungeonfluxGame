@@ -14,6 +14,16 @@ pub struct StateTarget {
     pub id: String,
 }
 
+/// The body of `POST /dev/persona/state/knows`: whether a persona knows another character's name
+/// (true for a scene that starts with them acquainted).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetKnownRequest {
+    pub id: String,
+    pub toward: String,
+    pub known: bool,
+}
+
 /// The body of `POST /dev/persona/state/rapport`: a hand-set standing toward another character
 /// (-100 to 100; the attitude follows), for a scene that starts mid-story.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +113,15 @@ pub(super) fn format_state(view: &StateView) -> String {
             standing.rapport
         );
     }
+    let _ = write!(
+        text,
+        "\n  knows the names of: {}",
+        if state.known_names.is_empty() {
+            "nobody".to_owned()
+        } else {
+            state.known_names.join(" ")
+        }
+    );
     if !view.holding.is_empty() {
         let _ = write!(text, "\n  triggers holding: {}", view.holding.join(" "));
     }

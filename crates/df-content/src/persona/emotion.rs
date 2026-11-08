@@ -112,6 +112,10 @@ pub struct PersonaState {
     pub mood: Mood,
     pub attention: Attention,
     pub relationships: Vec<Relationship>,
+    /// The other characters, by id, whose name this character knows: learned from what was said,
+    /// the scene's narrative or their own backstory, never given for free. A name not here is not
+    /// shown to them.
+    pub known_names: Vec<String>,
 }
 
 /// A change to one emotion, in points (-100 to 100), before the temperament scales it.

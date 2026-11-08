@@ -185,6 +185,12 @@ fn spoken_lines(spoken: &Spoken, after_line: &str) -> Vec<String> {
             said.revealed_secrets.join(", ")
         ));
     }
+    if !said.names_learned.is_empty() {
+        lines.push(format!(
+            "  learned the name of: {}",
+            said.names_learned.join(", ")
+        ));
+    }
     if said.repeat_retried {
         lines.push(format!(
             "  worded again: {}{}",

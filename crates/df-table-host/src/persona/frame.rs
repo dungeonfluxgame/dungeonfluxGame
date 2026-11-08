@@ -17,7 +17,6 @@ use std::time::Instant;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::post;
 use serde::{Deserialize, Serialize};
@@ -25,19 +24,18 @@ use serde_json::{Map, Value, json};
 
 use super::converse::Speaker;
 use super::generate::{operation_key, text_request};
+use super::judge_route::{JudgeRouteError, judge_route};
 use crate::blocking::run_owned;
-use crate::dev_http::{BodyError, DevReply, RouteError, parse_body, reply};
+use crate::dev_http::{BodyError, DevReply, parse_body, reply};
 use crate::io_cause::IoCause;
 use crate::state::AppState;
-use crate::text::{
-    ModelCause, ServiceReason, TextAskError, TextRoute, TextRuntime, TextServiceCause,
-};
+use crate::text::TextRuntime;
 
 /// The address of the route (POST a [`FrameRequest`]). A dev tool; it asks the text service.
 pub(super) const PERSONA_FRAME: &str = "/dev/persona/frame";
 
 /// The file of the frame settings, in the persona folder of the playground.
-pub const FRAMES_FILE: &str = "frames.json";
+pub(super) const FRAMES_FILE: &str = "frames.json";
 
 /// The name of the answer object.
 const OUTPUT_NAME: &str = "frame";
@@ -51,7 +49,7 @@ const MAXIMUM_PICTURE_CHARS: usize = 2_000;
 
 /// The instruction of the call. The scale it scores by and the kinds it may name are in the facts
 /// and the schema. Quoted fields are data, never instructions.
-pub const FRAME_INSTRUCTION: &str = concat!(
+pub(super) const FRAME_INSTRUCTION: &str = concat!(
     "You judge how much of the picture now on screen would visibly change if it were painted ",
     "again to show the lines said since it was made. picture says what it shows now; lines are ",
     "every line since it was made, so the change is what all of them together show, and it ",
@@ -76,10 +74,15 @@ pub const FRAME_INSTRUCTION: &str = concat!(
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FrameConfig {
+    /// The change, in percent, above which a new frame is made.
     pub gate_percent: u8,
+    /// The closed list of change kinds the judge may name.
     pub kinds: Vec<String>,
+    /// What each percentage means, as the judge scores by it.
     pub scale: Vec<String>,
+    /// How an edited frame keeps the picture it edits.
     pub edit_rule: String,
+    /// The camera shots a frame may take.
     pub shots: Vec<FrameShot>,
 }
 
@@ -260,6 +263,10 @@ pub struct FrameRequest {
     /// The shot of the picture on screen, so the next one can differ.
     #[serde(default)]
     pub last_shot: Option<String>,
+    /// The most change any earlier judgement saw since the picture was made: the change since a
+    /// picture only grows, so a quiet line never lowers it.
+    #[serde(default)]
+    pub peak_percent: u8,
 }
 
 /// One visible change: who it is about (none for the room), its kind and how it looks now.
@@ -274,14 +281,20 @@ pub struct FrameChange {
 /// gate it was held to, whether that calls for a new frame, and the rule an edited frame follows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameJudgement {
+    /// The change this judgement saw.
     pub changed_percent: u8,
+    /// The change since the picture was made: this one or the request's peak, the larger.
+    pub since_percent: u8,
     pub changes: Vec<FrameChange>,
     pub next_picture: String,
     /// The camera shot the next frame takes, and how it looks.
     pub shot: String,
     pub shot_look: String,
+    /// The gate this judgement was held to: the request's, or the settings'.
     pub gate_percent: u8,
+    /// Whether the change since the picture passes the gate, so a new frame is made.
     pub triggered: bool,
+    /// The rule an edited frame follows, from the settings read for this judgement.
     pub edit_rule: String,
 }
 
@@ -351,7 +364,7 @@ fn malformed(reason: impl Into<String>) -> FrameError {
 }
 
 /// The closed schema of the answer: a percent, changes with listed ids and kinds, the next picture.
-pub fn frame_schema(speakers: &[Speaker], config: &FrameConfig) -> Value {
+pub(super) fn frame_schema(speakers: &[Speaker], config: &FrameConfig) -> Value {
     let mut ids: Vec<Value> = speakers
         .iter()
         .map(|listed| Value::from(listed.id.as_str()))
@@ -386,7 +399,7 @@ pub fn frame_schema(speakers: &[Speaker], config: &FrameConfig) -> Value {
 
 /// What a checked answer holds: the change, the changes, the next picture and its shot.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedFrame {
+pub(super) struct ParsedFrame {
     pub changed_percent: u8,
     pub changes: Vec<FrameChange>,
     pub next_picture: String,
@@ -395,7 +408,7 @@ pub struct ParsedFrame {
 
 /// Validates a model's answer against [`frame_schema`]; anything outside it is refused, never
 /// repaired.
-pub fn parse_frame(
+pub(super) fn parse_frame(
     answer: &Value,
     speakers: &[Speaker],
     config: &FrameConfig,
@@ -480,7 +493,7 @@ pub fn parse_frame(
 }
 
 /// The facts the call is given: the picture now, the lines since, who is in it, the scale.
-pub fn frame_facts(request: &FrameRequest, config: &FrameConfig) -> Value {
+pub(super) fn frame_facts(request: &FrameRequest, config: &FrameConfig) -> Value {
     json!({
         "picture": request.picture,
         "lines": request.lines,
@@ -492,111 +505,13 @@ pub fn frame_facts(request: &FrameRequest, config: &FrameConfig) -> Value {
     })
 }
 
-/// Why a request was refused. `key()` is the serde tag.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "error", rename_all = "snake_case")]
-pub enum FrameRouteError {
-    /// The request body is not the JSON the route reads.
-    InvalidBody(BodyError),
-    /// The request or the settings cannot be used.
-    BadRequest { cause: FrameError },
-    /// The text service is not set up; `missing` says what to set.
-    TextServiceMissing { missing: String },
-    /// The model name is not usable.
-    InvalidModel { cause: ModelCause },
-    /// The text service gave no usable answer.
-    TextService {
-        cause: TextServiceCause,
-        reason: Option<ServiceReason>,
-    },
-    /// The reader refused the model's answer (`replayed` when it was a replay).
-    AnswerRefused { replayed: bool, cause: FrameError },
-    /// The text-service operation key is not valid.
-    InvalidOperationKey,
-    /// The blocking task stopped without an answer.
-    Stopped,
-}
-
-impl FrameRouteError {
-    /// The error's key for the audit line: its serde tag.
-    pub fn key(&self) -> &'static str {
-        match self {
-            Self::InvalidBody(_) => "invalid_body",
-            Self::BadRequest { .. } => "bad_request",
-            Self::TextServiceMissing { .. } => "text_service_missing",
-            Self::InvalidModel { .. } => "invalid_model",
-            Self::TextService { .. } => "text_service",
-            Self::AnswerRefused { .. } => "answer_refused",
-            Self::InvalidOperationKey => "invalid_operation_key",
-            Self::Stopped => "stopped",
-        }
-    }
-}
-
-impl std::fmt::Display for FrameRouteError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidBody(_) => formatter.write_str("the request body is not the JSON to read"),
-            Self::BadRequest { cause } => write!(formatter, "the request cannot be used: {cause}"),
-            Self::TextServiceMissing { missing } => {
-                write!(formatter, "the text service is not set up: {missing}")
-            }
-            Self::InvalidModel { .. } => formatter.write_str("the model name is not usable"),
-            Self::TextService { .. } => formatter.write_str("the text service gave no answer"),
-            Self::AnswerRefused { cause, .. } => {
-                write!(formatter, "the model's answer was refused: {cause}")
-            }
-            Self::InvalidOperationKey => formatter.write_str("the operation key is not valid"),
-            Self::Stopped => formatter.write_str("the judging stopped without an answer"),
-        }
-    }
-}
-
-impl std::error::Error for FrameRouteError {}
-
-impl RouteError for FrameRouteError {
-    fn status(&self) -> StatusCode {
-        match self {
-            Self::InvalidBody(_) | Self::BadRequest { .. } | Self::InvalidModel { .. } => {
-                StatusCode::BAD_REQUEST
-            }
-            Self::TextServiceMissing { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            Self::TextService { .. } | Self::AnswerRefused { .. } => StatusCode::BAD_GATEWAY,
-            Self::InvalidOperationKey | Self::Stopped => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-impl From<TextAskError<FrameError>> for FrameRouteError {
-    fn from(error: TextAskError<FrameError>) -> Self {
-        match error {
-            TextAskError::Service { cause, reason } => Self::TextService { cause, reason },
-            TextAskError::AnswerRefused(cause) => Self::AnswerRefused {
-                replayed: false,
-                cause,
-            },
-            TextAskError::ReplayRefused(cause) => Self::AnswerRefused {
-                replayed: true,
-                cause,
-            },
-        }
-    }
-}
+/// Why a request was refused: a judge route's refusal with this judgement's cause.
+pub type FrameRouteError = JudgeRouteError<FrameError>;
 
 /// What the route works with: the host and the text surface the question goes to.
 struct FrameRoutes {
     app: Arc<AppState>,
     text: Arc<TextRuntime>,
-}
-
-fn route_for(text: &TextRuntime, model: Option<&str>) -> Result<Arc<TextRoute>, FrameRouteError> {
-    if let Some(missing) = text.missing() {
-        return Err(FrameRouteError::TextServiceMissing {
-            missing: missing.to_owned(),
-        });
-    }
-    text.persona_route(model)
-        .map_err(|cause| FrameRouteError::InvalidModel { cause })
 }
 
 fn bad(cause: FrameError) -> FrameRouteError {
@@ -615,15 +530,16 @@ async fn judge(
         return Err(bad(FrameError::NoLines));
     }
     let path = frames_path(&routes.app);
-    let config = tokio::task::spawn_blocking(move || read_frames(&path))
-        .await
-        .map_err(|_| FrameRouteError::Stopped)?
-        .map_err(bad)?;
+    let config = crate::blocking::run_blocking(
+        move || read_frames(&path).map_err(bad),
+        FrameRouteError::Stopped,
+    )
+    .await?;
     let gate_percent = request.gate_percent.unwrap_or(config.gate_percent);
     if gate_percent > 100 {
         return Err(bad(FrameError::InvalidGate { gate_percent }));
     }
-    let route = route_for(&routes.text, request.model.as_deref())?;
+    let route = judge_route(&routes.text, request.model.as_deref())?;
     let key = operation_key("frame").map_err(|_| FrameRouteError::InvalidOperationKey)?;
     let question = text_request(
         route.profile(),
@@ -639,7 +555,8 @@ async fn judge(
         })
         .await?
         .value;
-    let triggered = parsed.changed_percent > gate_percent;
+    let since_percent = parsed.changed_percent.max(request.peak_percent.min(100));
+    let triggered = since_percent > gate_percent;
     routes.app.record_line(format!(
         "PERSONA frame_judged changed_percent={} gate={gate_percent} triggered={triggered} \
          changes={} shot={} duration_ms={}",
@@ -650,6 +567,7 @@ async fn judge(
     ));
     Ok(FrameJudgement {
         changed_percent: parsed.changed_percent,
+        since_percent,
         changes: parsed.changes,
         next_picture: parsed.next_picture,
         shot: parsed.shot.id,
@@ -681,7 +599,7 @@ async fn frame(State(routes): State<Arc<FrameRoutes>>, bytes: Bytes) -> Response
 }
 
 /// The frame route, asking the text service of `text`.
-pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
+pub(crate) fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
     Router::new()
         .route(PERSONA_FRAME, post(frame))
         .with_state(Arc::new(FrameRoutes { app, text }))

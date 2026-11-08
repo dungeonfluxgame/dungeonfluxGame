@@ -9,9 +9,13 @@
 //! over the defaults of `persona/frames.json`; the transcript says when each frame was judged,
 //! started and shown.
 
-use std::time::{Duration, Instant};
+// TODO(DEV-12): tests on a fake host: frames made in parallel are shown in the order they were
+// started (a later one that finishes first waits for the one before it), the spinner shows once
+// and the title is put back when the last frame lands, the change since a frame only grows, and
+// the hold and the most frames are kept.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 use df_playground::lobby::model::SceneTitle;
 use tokio::sync::oneshot;
@@ -24,16 +28,15 @@ use crate::cast::request::CastList;
 use crate::cast::routes::path as cast_path;
 use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json, reply_value};
-use crate::dev_http::DevReply;
 use crate::locate::request::CharacterRequest;
 use crate::movement::brief::BriefStyle;
 
 /// How long a frame stays at least before the next one starts, by default.
-pub const DEFAULT_HOLD_SECONDS: u64 = 30;
+pub(super) const DEFAULT_HOLD_SECONDS: u64 = 30;
 /// How many frames one conversation makes at most, by default.
-pub const DEFAULT_MAXIMUM_FRAMES: u32 = 6;
+pub(super) const DEFAULT_MAXIMUM_FRAMES: u32 = 6;
 /// How many frames may be made at once, at most.
-pub const MAXIMUM_PARALLEL_FRAMES: usize = 4;
+pub(super) const MAXIMUM_PARALLEL_FRAMES: usize = 4;
 
 /// The frame options of one `persona converse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,21 +61,15 @@ pub struct FrameOptions {
     pub judge_model: Option<String>,
 }
 
-/// The frame judge's answer to `request`; a refusal is an unexpected answer carrying its key.
+/// The frame judge's answer to `request`, or its typed refusal.
 async fn ask_judge(port: u16, request: &FrameRequest) -> Result<FrameJudgement, DevError> {
-    match post_json::<_, FrameReply>(port, PERSONA_FRAME, request).await? {
-        DevReply::Done { value } => Ok(value),
-        DevReply::Rejected { error, message } => Err(DevError::UnexpectedAnswer {
-            status: axum::http::StatusCode::BAD_GATEWAY,
-            body: message,
-            reason: Some(format!("frame refused: {}", error.key())),
-        }),
-    }
+    let reply: FrameReply = post_json(port, PERSONA_FRAME, request).await?;
+    reply_value(reply)
 }
 
 /// `persona frame`: judges `lines` against the picture `picture` describes, for the characters
 /// of the shown scene, and says what changed and whether it passes the gate.
-pub async fn judge_frame(
+pub(super) async fn judge_frame(
     port: u16,
     picture: String,
     lines: Vec<String>,
@@ -89,6 +86,7 @@ pub async fn judge_frame(
         gate_percent,
         model,
         last_shot: None,
+        peak_percent: 0,
     };
     let judged = ask_judge(port, &request).await?;
     let mut text = vec![format!(
@@ -131,7 +129,7 @@ struct InFlight {
 }
 
 /// The state of the frames of one conversation.
-pub struct FrameWatch {
+pub(super) struct FrameWatch {
     options: FrameOptions,
     speakers: Vec<Speaker>,
     characters: Vec<CharacterRequest>,
@@ -157,9 +155,19 @@ pub struct FrameWatch {
     last_start: Option<Instant>,
 }
 
+/// A conversation that ends early (a turn failed) drops its watch: the frames still being made
+/// are stopped, so no picture lands after the talk and nothing runs unowned.
+impl Drop for FrameWatch {
+    fn drop(&mut self) {
+        for frame in &self.in_flight {
+            frame.task.abort();
+        }
+    }
+}
+
 impl FrameWatch {
     /// A watch over the scene whose backdrop is `picture`, with these speakers.
-    pub fn new(options: FrameOptions, speakers: &[Speaker], picture: &str) -> Self {
+    pub(super) fn new(options: FrameOptions, speakers: &[Speaker], picture: &str) -> Self {
         let people: Vec<String> = speakers
             .iter()
             .map(|speaker| format!("{} ({})", speaker.display_name, speaker.job))
@@ -196,14 +204,14 @@ impl FrameWatch {
 
     /// Takes something that happens at the table into the lines since the newest frame: unlike
     /// talk, it is seen.
-    pub fn note_event(&mut self, what: &str) {
+    pub(super) fn note_event(&mut self, what: &str) {
         self.since.push(format!("(Happening now: {what})"));
     }
 
     /// Takes `line` said by `speaker` into the lines since the newest frame, collects the frames
     /// that finished, and judges when a new one may start: fewer than `parallel` are being made,
     /// the hold has passed and the most frames are not made yet. The judgement, if one was asked.
-    pub async fn after_line(
+    pub(super) async fn after_line(
         &mut self,
         port: u16,
         speaker: &Speaker,
@@ -229,12 +237,13 @@ impl FrameWatch {
             gate_percent: self.options.gate_percent,
             model: self.options.judge_model.clone(),
             last_shot: self.last_shot.clone(),
+            peak_percent: self.peak_percent,
         };
         Some(ask_judge(port, &request).await)
     }
 
     /// Reports `judged` after line `turn` and, when it passed the gate, starts the next frame.
-    pub async fn consider(
+    pub(super) async fn consider(
         &mut self,
         port: u16,
         turn: u32,
@@ -263,7 +272,7 @@ impl FrameWatch {
         transcript.push(format!(
             "  frame judge after line {turn}: {}% changed, {}% since the frame (gate {}){}",
             judgement.changed_percent,
-            self.peak_percent.max(judgement.changed_percent),
+            judgement.since_percent,
             judgement.gate_percent,
             if changes.is_empty() {
                 String::new()
@@ -271,8 +280,8 @@ impl FrameWatch {
                 format!("; {}", changes.join("; "))
             }
         ));
-        self.peak_percent = self.peak_percent.max(judgement.changed_percent);
-        if self.peak_percent <= judgement.gate_percent {
+        self.peak_percent = judgement.since_percent;
+        if !judgement.triggered {
             return;
         }
         self.made += 1;
@@ -353,7 +362,7 @@ impl FrameWatch {
     }
 
     /// Waits for the frames being made and reports them.
-    pub async fn finish(&mut self, port: u16, transcript: &mut Vec<String>) {
+    pub(super) async fn finish(&mut self, port: u16, transcript: &mut Vec<String>) {
         self.collect(port, true, transcript).await;
     }
 

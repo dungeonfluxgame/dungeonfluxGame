@@ -3,6 +3,8 @@
 # cold and contemptuous with no warning (a temporary stance, switched on and off with `!` lines),
 # then is ashamed. Set Lena's starting feelings first (see the runbook).
 # turn | what happens, or ! <dev command> run before that turn's line
+0 | ! persona state tavern_server knows warrior
+0 | ! persona state warrior knows tavern_server
 0 | Kael has come back to the tavern again tonight just to see Lena; she smiles when she sees him at the counter.
 1 | Kael takes Lena's hand gently across the counter and looks into her eyes in the candlelight.
 3 | Kael leans close over the counter and tells Lena softly that he is falling for her.

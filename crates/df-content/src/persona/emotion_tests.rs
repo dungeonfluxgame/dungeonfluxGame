@@ -299,6 +299,22 @@ fn a_rise_lands_whole_up_to_half_way_and_with_less_force_above_it() {
 }
 
 #[test]
+fn a_known_name_is_kept_once_can_be_forgotten_and_never_points_at_the_character_itself() {
+    let mut state = at_rest();
+    assert!(
+        state.known_names.is_empty(),
+        "nobody's name is known for free"
+    );
+    assert!(set_known_name(&mut state, "warrior", true));
+    assert!(set_known_name(&mut state, "warrior", true));
+    assert_eq!(state.known_names, ["warrior"]);
+    assert!(set_known_name(&mut state, "warrior", false));
+    assert!(state.known_names.is_empty());
+    assert!(!set_known_name(&mut state, "innkeeper", true));
+    assert!(!set_known_name(&mut state, "Not A Name", true));
+}
+
+#[test]
 fn a_standing_set_by_hand_takes_its_attitude_and_never_points_at_the_character_itself() {
     let config = EmotionConfig::default();
     let mut state = at_rest();

@@ -145,6 +145,26 @@ Every character is shown by name, never by id. The name is the persona's `displa
   (`Lena`), both from the layout region, so they always agree. `scene cast` and
   `media locate show` print it next to the id.
 
+Who knows whose name (owner rule, 2026-11-07: a name comes only from context, narrative or
+backstory, never from thin air). Each character's state keeps `known_names`, the ids whose name
+they know; a fresh state knows nobody. A character is told the others by who they are in the
+scene (`tavern_server`, `warrior`), with their trade, manner and speech, and with no name,
+backstory or voice samples until they know the name. Each line's model call reports
+`names_learned`: the ids whose name the character now knows from what was said aloud ("I'm
+Kael"), from the narrative (the situation or an events line says so, "Kael has come to see Lena
+every night") or from their own backstory; code keeps only ids present in the scene. `persona
+converse` labels lines and seats by id for the same reason. Check and preset it:
+
+```bash
+$D dev --port 7879 persona state tavern_server            # "knows the names of: warrior"
+$D dev --port 7879 persona state tavern_server knows warrior        # they have met
+$D dev --port 7879 persona state tavern_server knows warrior false  # forget it
+```
+
+In an events file: `0 | ! persona state tavern_server knows warrior`. Write scene text with care:
+an events line or topic that names someone gives that name to everyone who hears it (the first
+strangers run leaked "Lena" through "sits down at Lena's counter").
+
 Runtime API, to name or rename someone in a live scene (no restart):
 
 ```bash

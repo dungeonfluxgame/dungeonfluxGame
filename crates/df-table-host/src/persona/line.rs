@@ -29,7 +29,7 @@ use super::generate::{
 use super::request::{
     BehaviorOverride, LineError, LineIdKind, PersonaError, QuoteBounds, QuoteReport, SaidLine,
 };
-use super::state::{apply_appraisal, crossing_triggers, load_state, state_triggers};
+use super::state::{apply_appraisal, crossing_triggers, learn_names, load_state, state_triggers};
 use crate::state::AppState;
 use crate::text::TextRoute;
 
@@ -69,7 +69,14 @@ const SAY_INSTRUCTION: &str = concat!(
     "already in recent (a plain order after a flirt is not another flirt). The engine adds the ",
     "sets of every emotional trigger that fires to your appraisal, so the appraisal leaves out ",
     "what those sets already change. ",
-    "The other cast's briefs are what anyone knows of them; the line may address them. ",
+    "The other cast's briefs are what anyone knows of them; the line may address them. A name is ",
+    "never known from thin air: an other whose display_name is empty is someone whose name this ",
+    "character has not been told, so the line never calls them by a name or invents one and ",
+    "speaks to them as anyone would (by their trade, their look, sir, friend), unless the name ",
+    "was said aloud in recent or now. names_learned lists the ids in others whose name the ",
+    "character now knows from context (said aloud in recent or now: a name given, or one person ",
+    "calling another by it), from the narrative (the situation says they know them) or from their ",
+    "own backstory; empty when none. ",
     "When now holds narrative guidance, the line serves it: every fact in must_establish is ",
     "true of the character and the line never contradicts one, nothing in must_avoid is stated, ",
     "implied or contradicted, the tone applies, and latitude says how closely to follow it ",
@@ -240,7 +247,7 @@ fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
         "required": [
             "line", "behavior", "fired_triggers", "fired_emotional_triggers", "revealed_secrets",
             "quotes", "gaps", "appraisal", "repeats_recent", "repeat_reason", "follows_intent",
-            "intent_miss"
+            "intent_miss", "names_learned"
         ],
         "properties": {
             "line": { "type": "string", "description": "What the character says, one short line." },
@@ -272,6 +279,7 @@ fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
             "repeat_reason": nullable("string", "What of recent the line reuses, or null."),
             "follows_intent": { "type": "boolean" },
             "intent_miss": nullable("string", "How the line misses now.intent, or null."),
+            "names_learned": id_list("Ids in others whose name the character now knows."),
         },
     })
 }
@@ -301,6 +309,8 @@ struct LineRecord {
     follows_intent: bool,
     #[serde(default)]
     intent_miss: Option<String>,
+    #[serde(default)]
+    names_learned: Vec<String>,
 }
 
 /// An answer that does not say is taken to follow its intent (a line with no intent always does).
@@ -330,6 +340,8 @@ struct Answer {
     repeat: Option<String>,
     /// How the model says the line misses its intent, when it does.
     intent_miss: Option<String>,
+    /// The characters present whose name the character learned with this line.
+    names_learned: Vec<String>,
     leak_suspect: bool,
 }
 
@@ -436,6 +448,13 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
     check_gaps(&record.gaps).map_err(|error| LineError::Gaps { cause: error })?;
     let (appraisal, dropped_appraisal) = check_appraisal(record.appraisal, lists);
     dropped.extend(dropped_appraisal);
+    record.names_learned.retain(|id| {
+        let present = lists.present.iter().any(|seen| seen == id);
+        if !present {
+            dropped.push(format!("name:{id}"));
+        }
+        present
+    });
     let repeat = record.repeats_recent.then(|| {
         record
             .repeat_reason
@@ -460,6 +479,7 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
         dropped,
         repeat,
         intent_miss,
+        names_learned: record.names_learned,
         leak_suspect: report.leaks,
     })
 }
@@ -526,6 +546,21 @@ fn state_facts(state: &PersonaState) -> Value {
         "attention": state.attention,
         "relationships": state.relationships,
     })
+}
+
+/// What the character of `state` is told of `persona`: its listener brief when they know its
+/// name, and otherwise only what anyone could see or hear of a stranger (who they are in the
+/// scene, their trade, their manner and how they speak), with no name, no backstory and no voice
+/// samples, which may carry the name.
+fn listener_brief(persona: &Persona, state: &PersonaState) -> PersonaBrief {
+    let mut brief = persona.brief(BriefScope::Listener);
+    if !state.known_names.contains(&brief.public.id) {
+        brief.public.display_name = String::new();
+        brief.public.backstory = String::new();
+        brief.public.voice = Default::default();
+        brief.public.expertise = Vec::new();
+    }
+    brief
 }
 
 /// The part of a line's facts that does not change from line to line, for a prefix cache.
@@ -747,13 +782,13 @@ pub(super) async fn say_line(
 ) -> Result<SaidLine, PersonaError> {
     let started = Instant::now();
     let character = own.id().as_str();
+    let state = load_state(app, character);
     let listeners: Vec<PersonaBrief> = other_personas(app, scene, character)
         .await?
         .iter()
-        .map(|persona| persona.brief(BriefScope::Listener))
+        .map(|persona| listener_brief(persona, &state))
         .collect();
     let config = emotion_config(app);
-    let state = load_state(app, character);
     let by_state = state_triggers(own, &state);
     let present = present_speakers(scene, character, occasion.asked_by);
     let world = crate::world::context_for_viewer(app, own.voice_packs(), character);
@@ -850,6 +885,7 @@ fn settle(
         .into_iter()
         .filter_map(|record| report_quote(app, own.id().as_str(), record, &mut dropped))
         .collect();
+    learn_names(app, own, &answer.names_learned);
     let state = apply_appraisal(app, own, &appraisal);
     let tone = appraisal
         .tone
@@ -872,6 +908,7 @@ fn settle(
         repeats_recent: answer.repeat.is_some(),
         repeat_retried: retried_for.is_some(),
         retry_reason: retried_for,
+        names_learned: answer.names_learned,
         state,
         model_ms: 0,
         total_ms: 0,

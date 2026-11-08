@@ -724,6 +724,7 @@ pub fn fresh_state(id: &str, config: &EmotionConfig, temperament: &Temperament) 
         emotions,
         attention: Attention::default(),
         relationships: Vec::new(),
+        known_names: Vec::new(),
     }
 }
 
@@ -837,6 +838,28 @@ fn standing_toward<'a>(
         None => return None,
     };
     state.relationships.get_mut(index)
+}
+
+/// The most names one character knows.
+pub const MAXIMUM_KNOWN_NAMES: usize = 64;
+
+/// Says whether the character of `state` knows the name of `toward` (a scene that starts with
+/// them acquainted, or a name forgotten). False, and nothing changed, when `toward` is not a
+/// character name, is the character itself, or is new and [`MAXIMUM_KNOWN_NAMES`] are known.
+pub fn set_known_name(state: &mut PersonaState, toward: &str, known: bool) -> bool {
+    if !is_label(toward) || toward == state.id {
+        return false;
+    }
+    let listed = state.known_names.iter().any(|name| name == toward);
+    if known && !listed && state.known_names.len() >= MAXIMUM_KNOWN_NAMES {
+        return false;
+    }
+    if known && !listed {
+        state.known_names.push(toward.to_owned());
+    } else if !known {
+        state.known_names.retain(|name| name != toward);
+    }
+    true
 }
 
 /// Sets the standing of `state` toward `toward` to `rapport` (clamped to -100..=100) and the

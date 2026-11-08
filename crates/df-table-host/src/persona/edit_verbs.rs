@@ -328,6 +328,16 @@ pub(super) fn parse_state(words: &[String]) -> Result<PersonaCommand, CommandErr
             emotion: emotion.clone(),
             level: level_word(level)?,
         }),
+        [id, verb, toward] if verb == "knows" => Ok(PersonaCommand::StateKnows {
+            id: id_word(id)?,
+            toward: toward.clone(),
+            known: true,
+        }),
+        [id, verb, toward, known] if verb == "knows" => Ok(PersonaCommand::StateKnows {
+            id: id_word(id)?,
+            toward: toward.clone(),
+            known: super::cli::flag("known", known)?,
+        }),
         [id, verb, toward, rapport] if verb == "rapport" => Ok(PersonaCommand::StateRapport {
             id: id_word(id)?,
             toward: toward.clone(),

@@ -71,6 +71,10 @@ pub enum ReplyError {
     /// A page's timeline read.
     Clients(ClientsError),
     Services(ServicesError),
+    /// The addressee judge (`POST /dev/persona/addressed`).
+    Address(crate::persona::address::AddressRouteError),
+    /// The frame judge (`POST /dev/persona/frame`).
+    Frame(crate::persona::frame::FrameRouteError),
 }
 
 impl fmt::Display for ReplyError {
@@ -97,7 +101,21 @@ impl fmt::Display for ReplyError {
             Self::Host(error) => write!(formatter, "{error}"),
             Self::Clients(error) => write!(formatter, "{error}"),
             Self::Services(error) => write!(formatter, "{error}"),
+            Self::Address(error) => write!(formatter, "{error}"),
+            Self::Frame(error) => write!(formatter, "{error}"),
         }
+    }
+}
+
+impl From<crate::persona::address::AddressRouteError> for ReplyError {
+    fn from(error: crate::persona::address::AddressRouteError) -> Self {
+        Self::Address(error)
+    }
+}
+
+impl From<crate::persona::frame::FrameRouteError> for ReplyError {
+    fn from(error: crate::persona::frame::FrameRouteError) -> Self {
+        Self::Frame(error)
     }
 }
 
@@ -225,6 +243,8 @@ fn write_refusal(
         ReplyError::Host(error) => error.key(),
         ReplyError::Clients(error) => error.key(),
         ReplyError::Services(error) => error.key(),
+        ReplyError::Address(error) => error.key(),
+        ReplyError::Frame(error) => error.key(),
     };
     write!(formatter, "refused ({key}): {message}")
 }

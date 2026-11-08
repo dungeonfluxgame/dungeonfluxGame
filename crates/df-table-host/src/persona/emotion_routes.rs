@@ -24,7 +24,8 @@ use df_content::persona::emotion_generation::{
     temperament_schema,
 };
 use df_content::persona::{
-    EmotionConfig, Persona, PersonaEdit, PersonaState, Temperament, set_emotion, set_rapport,
+    EmotionConfig, Persona, PersonaEdit, PersonaState, Temperament, set_emotion, set_known_name,
+    set_rapport,
 };
 use tokio::time::Instant;
 
@@ -34,7 +35,8 @@ use super::request::{Edited, PersonaError};
 use super::routes::apply_edits;
 use super::state::{change_state, current_state, reset_state, state_directory, state_triggers};
 use super::state_view::{
-    SetEmotionRequest, SetRapportRequest, StateTarget, StateView, TemperamentRequest,
+    SetEmotionRequest, SetKnownRequest, SetRapportRequest, StateTarget, StateView,
+    TemperamentRequest,
 };
 use super::storage::{persona_directory, persona_id, read_persona};
 use crate::blocking::{run_blocking, run_owned};
@@ -52,6 +54,8 @@ pub mod path {
     pub const STATE_SET: &str = "/dev/persona/state/set";
     /// Sets a persona's standing toward another character by hand (POST a `SetRapportRequest`).
     pub const STATE_RAPPORT: &str = "/dev/persona/state/rapport";
+    /// Says whether a persona knows another character's name (POST a `SetKnownRequest`).
+    pub const STATE_KNOWS: &str = "/dev/persona/state/knows";
     /// Has the text service write a persona's temperament and emotional triggers (POST a
     /// `TemperamentRequest`).
     pub const TEMPERAMENT: &str = "/dev/persona/temperament";
@@ -186,6 +190,30 @@ async fn rapport(State(routes): State<Arc<EmotionRoutes>>, bytes: Bytes) -> Resp
     answer(app, "state-rapport", Some(&request.id), result)
 }
 
+async fn knows(State(routes): State<Arc<EmotionRoutes>>, bytes: Bytes) -> Response {
+    let app = &routes.app;
+    let request: SetKnownRequest = match parse_body(&bytes) {
+        Ok(request) => request,
+        Err(error) => return answer::<StateView>(app, "state-knows", None, Err(error.into())),
+    };
+    let (toward, known) = (request.toward.clone(), request.known);
+    let result = change_stored(app, &request.id, move |_, _, state| {
+        if set_known_name(state, &toward, known) {
+            Ok(())
+        } else {
+            Err(EmotionError::InvalidStanding { toward })
+        }
+    })
+    .await;
+    if result.is_ok() {
+        app.record_line(format!(
+            "PERSONA state_knows id={} toward={} known={}",
+            request.id, request.toward, request.known
+        ));
+    }
+    answer(app, "state-knows", Some(&request.id), result)
+}
+
 /// Changes the stored state of the persona `id` by `change` under the write lock, with the emotion
 /// list and the persona's temperament read now, and answers the new state's view.
 async fn change_stored(
@@ -281,6 +309,7 @@ pub(super) fn router(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
         .route(path::STATE_RESET, post(reset))
         .route(path::STATE_SET, post(set))
         .route(path::STATE_RAPPORT, post(rapport))
+        .route(path::STATE_KNOWS, post(knows))
         .route(path::TEMPERAMENT, post(temperament))
         .with_state(Arc::new(EmotionRoutes { app, text }))
 }

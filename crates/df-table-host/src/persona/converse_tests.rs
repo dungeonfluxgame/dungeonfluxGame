@@ -159,7 +159,9 @@ fn a_situation_tells_the_setting_the_topic_the_latest_lines_and_the_task() {
     let table = table();
     let speaker = table.opener(Some("wizard")).unwrap();
     let opening = table.situation(speaker, Some("the guild road"), None, &[]);
-    assert!(opening.contains("Aldric Venn"));
+    // The others are there by who they are in the scene, never by a name nobody gave.
+    assert!(opening.contains("innkeeper (a traveller)"));
+    assert!(!opening.contains("Aldric Venn"));
     assert!(opening.contains("You are The Wizard"));
     assert!(opening.contains("the guild road"));
     assert!(opening.contains("You speak first"));
@@ -168,7 +170,8 @@ fn a_situation_tells_the_setting_the_topic_the_latest_lines_and_the_task() {
         .collect();
     let later = table.situation(speaker, None, Some("A tankard falls."), &history);
     assert!(later.contains("Happening right now, as you speak: A tankard falls."));
-    assert!(later.contains("The Elf: line number 8"));
+    assert!(later.contains("elf: line number 8"));
+    assert!(!later.contains("The Elf"));
     assert!(later.contains("line number 3"));
     assert!(
         !later.contains("line number 2"),
@@ -289,6 +292,8 @@ fn frame_options_are_read_with_frames_and_refused_without_it() {
         "frames=x gate=101",
         "frames=x edit_from=middle",
         "frames=bad.name",
+        "frames=x parallel=0",
+        "frames=x parallel=5",
     ] {
         assert!(
             parse(&words(&format!("converse {bad}"))).is_err(),

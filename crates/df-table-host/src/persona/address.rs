@@ -13,7 +13,6 @@ use std::time::Instant;
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::post;
 use serde::{Deserialize, Serialize};
@@ -21,12 +20,11 @@ use serde_json::{Map, Value, json};
 
 use super::converse::Speaker;
 use super::generate::{operation_key, text_request};
+use super::judge_route::{JudgeRouteError, judge_route};
 use crate::blocking::run_owned;
-use crate::dev_http::{BodyError, DevReply, RouteError, parse_body, reply};
+use crate::dev_http::{DevReply, parse_body, reply};
 use crate::state::AppState;
-use crate::text::{
-    ModelCause, ServiceReason, TextAskError, TextRoute, TextRuntime, TextServiceCause,
-};
+use crate::text::TextRuntime;
 
 /// The address of the route (POST an [`AddressRequest`]). A dev tool; it asks the text service.
 pub(super) const PERSONA_ADDRESSED: &str = "/dev/persona/addressed";
@@ -181,112 +179,13 @@ pub fn address_facts(
     })
 }
 
-/// Why a request was refused. `key()` is the serde tag.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "error", rename_all = "snake_case")]
-pub enum AddressRouteError {
-    /// The request body is not the JSON the route reads.
-    InvalidBody(BodyError),
-    /// The line is empty or the speaker is not listed.
-    BadRequest { cause: AddressError },
-    /// The text service is not set up; `missing` says what to set.
-    TextServiceMissing { missing: String },
-    /// The model name is not usable.
-    InvalidModel { cause: ModelCause },
-    /// The text service gave no usable answer.
-    TextService {
-        cause: TextServiceCause,
-        reason: Option<ServiceReason>,
-    },
-    /// The reader refused the model's answer (`replayed` when it was a replay).
-    AnswerRefused { replayed: bool, cause: AddressError },
-    /// The text-service operation key is not valid.
-    InvalidOperationKey,
-    /// The blocking task stopped without an answer.
-    Stopped,
-}
-
-impl AddressRouteError {
-    /// The error's key for the audit line: its serde tag.
-    pub fn key(&self) -> &'static str {
-        match self {
-            Self::InvalidBody(_) => "invalid_body",
-            Self::BadRequest { .. } => "bad_request",
-            Self::TextServiceMissing { .. } => "text_service_missing",
-            Self::InvalidModel { .. } => "invalid_model",
-            Self::TextService { .. } => "text_service",
-            Self::AnswerRefused { .. } => "answer_refused",
-            Self::InvalidOperationKey => "invalid_operation_key",
-            Self::Stopped => "stopped",
-        }
-    }
-}
-
-impl std::fmt::Display for AddressRouteError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidBody(_) => formatter.write_str("the request body is not the JSON to read"),
-            Self::BadRequest { cause } => write!(formatter, "the request cannot be read: {cause}"),
-            Self::TextServiceMissing { missing } => {
-                write!(formatter, "the text service is not set up: {missing}")
-            }
-            Self::InvalidModel { .. } => formatter.write_str("the model name is not usable"),
-            Self::TextService { .. } => formatter.write_str("the text service gave no answer"),
-            Self::AnswerRefused { cause, .. } => {
-                write!(formatter, "the model's answer was refused: {cause}")
-            }
-            Self::InvalidOperationKey => formatter.write_str("the operation key is not valid"),
-            Self::Stopped => formatter.write_str("the reading stopped without an answer"),
-        }
-    }
-}
-
-impl std::error::Error for AddressRouteError {}
-
-impl RouteError for AddressRouteError {
-    fn status(&self) -> StatusCode {
-        match self {
-            Self::InvalidBody(_) | Self::BadRequest { .. } | Self::InvalidModel { .. } => {
-                StatusCode::BAD_REQUEST
-            }
-            Self::TextServiceMissing { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            Self::TextService { .. } | Self::AnswerRefused { .. } => StatusCode::BAD_GATEWAY,
-            Self::InvalidOperationKey | Self::Stopped => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-}
-
-impl From<TextAskError<AddressError>> for AddressRouteError {
-    fn from(error: TextAskError<AddressError>) -> Self {
-        match error {
-            TextAskError::Service { cause, reason } => Self::TextService { cause, reason },
-            TextAskError::AnswerRefused(cause) => Self::AnswerRefused {
-                replayed: false,
-                cause,
-            },
-            TextAskError::ReplayRefused(cause) => Self::AnswerRefused {
-                replayed: true,
-                cause,
-            },
-        }
-    }
-}
+/// Why a request was refused: a judge route's refusal with this judgement's cause.
+pub type AddressRouteError = JudgeRouteError<AddressError>;
 
 /// What the route works with: the host and the text surface the question goes to.
 struct AddressRoutes {
     app: Arc<AppState>,
     text: Arc<TextRuntime>,
-}
-
-/// The route the question is asked of: the default persona model, or the one the request names.
-fn route_for(text: &TextRuntime, model: Option<&str>) -> Result<Arc<TextRoute>, AddressRouteError> {
-    if let Some(missing) = text.missing() {
-        return Err(AddressRouteError::TextServiceMissing {
-            missing: missing.to_owned(),
-        });
-    }
-    text.persona_route(model)
-        .map_err(|cause| AddressRouteError::InvalidModel { cause })
 }
 
 /// Asks the model who `request.line` is directed at and checks its answer.
@@ -296,7 +195,7 @@ async fn address_line(
 ) -> Result<Addressed, AddressRouteError> {
     check_request(&request.line, &request.speaker, &request.speakers)
         .map_err(|cause| AddressRouteError::BadRequest { cause })?;
-    let route = route_for(&routes.text, request.model.as_deref())?;
+    let route = judge_route(&routes.text, request.model.as_deref())?;
     let key = operation_key("addressed").map_err(|_| AddressRouteError::InvalidOperationKey)?;
     let facts = address_facts(
         &request.line,

@@ -1,0 +1,6 @@
+# Strangers in the tavern, for `persona converse with=warrior,tavern_server opener=tavern_server
+# events=...` from reset states: Lena and Kael have never met, so neither knows the other's name
+# until it is said. Watch that nobody uses a name before it is given (lines are labelled by role).
+# turn | what happens, or ! <dev command> run before that turn's line
+0 | A traveller in a worn leather jerkin with a sword at his hip sits down at the server's counter for the first time.
+3 | The traveller tells the server his name is Kael and asks hers.

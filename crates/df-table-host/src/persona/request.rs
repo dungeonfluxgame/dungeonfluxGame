@@ -477,6 +477,9 @@ pub struct SaidLine {
     /// not charge.
     #[serde(default)]
     pub retry_reason: Option<String>,
+    /// The characters present whose name the character learned with this line.
+    #[serde(default)]
+    pub names_learned: Vec<String>,
     /// The character's state after this line.
     #[serde(default)]
     pub state: PersonaState,

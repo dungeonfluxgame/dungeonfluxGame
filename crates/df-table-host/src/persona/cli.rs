@@ -44,7 +44,8 @@ use super::request::{
 };
 use super::routes::path;
 use super::state_view::{
-    SetEmotionRequest, SetRapportRequest, StateTarget, StateView, TemperamentRequest, format_state,
+    SetEmotionRequest, SetKnownRequest, SetRapportRequest, StateTarget, StateView,
+    TemperamentRequest, format_state,
 };
 use super::storage::{RESERVED_IDS, persona_id};
 use crate::command::{CommandError, bad_choice};
@@ -64,7 +65,8 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona expertise <id> add|drop ... | ",
     "persona temperament <id> set|baseline|generate ... | ",
     "persona emotion <id> trigger add|drop ... | ",
-    "persona state <id> [reset | set <emotion> <level> | rapport <toward> <-100..100>] | ",
+    "persona state <id> [reset | set <emotion> <level> | rapport <toward> <-100..100> | ",
+    "knows <toward> [true|false]] | ",
     "persona edit <id> <file.json> | persona generate <character|all> [overwrite=true|false] ",
     "[model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
@@ -136,7 +138,8 @@ pub const PERSONA_EMOTION_USAGE: &str = concat!(
 /// `persona state`: show, reset or set by hand the live emotional state.
 pub const PERSONA_STATE_USAGE: &str = concat!(
     "persona state <id> | persona state <id> reset | persona state <id> set <emotion> <level> | ",
-    "persona state <id> rapport <toward> <-100..100>"
+    "persona state <id> rapport <toward> <-100..100> | ",
+    "persona state <id> knows <toward> [true|false]"
 );
 /// `persona expertise`: add or drop what a character knows from their trade or life.
 pub const PERSONA_EXPERTISE_USAGE: &str =
@@ -268,6 +271,12 @@ pub enum PersonaCommand {
         id: PersonaId,
         toward: String,
         rapport: i8,
+    },
+    /// Say whether a persona knows another character's name.
+    StateKnows {
+        id: PersonaId,
+        toward: String,
+        known: bool,
     },
     /// Have the characters of the shown scene talk to each other.
     Converse(ConverseRequest),
@@ -576,10 +585,20 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         .map_or(DEFAULT_MAXIMUM_FRAMES, |most| {
             u32::try_from(most).unwrap_or(DEFAULT_MAXIMUM_FRAMES)
         });
-    let parallel = value("parallel")
-        .map(|text| number("parallel", text, MAXIMUM_PARALLEL_FRAMES as u64))
-        .transpose()?
-        .map_or(1, |parallel| usize::try_from(parallel).unwrap_or(1).max(1));
+    let parallel = match value("parallel") {
+        None => 1,
+        Some(text) => text
+            .parse::<usize>()
+            .ok()
+            .filter(|parallel| (1..=MAXIMUM_PARALLEL_FRAMES).contains(parallel))
+            .ok_or_else(|| {
+                bad_choice(
+                    "parallel",
+                    text,
+                    format!("a whole number from 1 to {MAXIMUM_PARALLEL_FRAMES}"),
+                )
+            })?,
+    };
     let from_last = match value("edit_from") {
         None | Some("first") => false,
         Some("last") => true,
@@ -1245,5 +1264,15 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             toward,
             rapport,
         } => set_rapport_state(port, id, toward, rapport).await,
+        PersonaCommand::StateKnows { id, toward, known } => {
+            let request = SetKnownRequest {
+                id: id.to_string(),
+                toward,
+                known,
+            };
+            let view: StateView =
+                emotion_value(post_json(port, emotion_path::STATE_KNOWS, &request).await?)?;
+            Ok(format_state(&view))
+        }
     }
 }

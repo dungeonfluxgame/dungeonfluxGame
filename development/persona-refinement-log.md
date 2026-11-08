@@ -498,6 +498,39 @@ you did in front of them." Surprise spiked and faded (28 and 54 at the end), emb
 89 (b was shamed twice in public), trust down to 28 and 8, affection to 4. Open: Kael's apologies
 stay short ("I'm sorry. I won't touch you again"): his own terse persona.
 
+## Refinement 19: names are learned, never given (and a rules pass)
+
+Owner question: "how did she know his name was Kael?" Every line was handed the others' public
+persona (name, job, backstory) and `persona converse` labelled lines with names, so a stranger
+knew a name nobody said. Owner rule: a name comes only from context, narrative or backstory.
+Changes: a character's state keeps `known_names` (fresh: nobody, at most 64); each line's model
+call reports `names_learned` (ids present in the scene, checked in code) from what was said aloud,
+the situation or events, or their own backstory; someone whose name is not known reaches the
+line with no name, no backstory, no voice samples and no expertise (only trade, manner and
+speech: what anyone could see or hear); converse labels lines and seats by id; `persona state
+<id> knows <other> [true|false]` presets it. Tests: a learned name is kept and an id not present
+is dropped; a known name is kept once, can be forgotten, never points at oneself.
+Runs 44 to 46 (`strangers.events`, and a topic saying they have known each other for years):
+- First strangers run: Lena right ("First time at my counter, friend?"), but Kael said "Lena" at
+  once: her public backstory begins "Lena is a young server". Stranger briefs now drop backstory,
+  voice and expertise.
+- Second: Kael still said "Lena": the events line read "sits down at Lena's counter", which is
+  narrative and so a fair source. Reworded to "the server's counter".
+- Third: right both ways ("Evening, friend" ... "Kael. And you are?" "Lena. Keep that eye on the
+  door, Kael."); the narrative run learned both names from the topic alone.
+Found: in the narrative run Kael called Lena "Mara": the line facts carry the shown scene's
+description, still the market fixture's ("the elf, the warrior and Mara Vell at her fruit
+stall"), because a transition swaps the picture but not the scene's words. Open.
+Rules pass (independent review against AGENTS.md): no string matching for gameplay, no
+input-driven panics, no leftovers. Fixed: frame tasks are stopped when a conversation ends early;
+the frame and addressee judges share one route error (`persona/judge_route.rs`) instead of a
+copy; the CLI gets their typed refusals through `reply_value`; the frame gate is decided by the
+server from the peak the CLI sends; `learn_names` reuses `set_known_name`; an events file cannot
+start `persona converse`; `parallel=0` is refused, not turned into 1; narrower visibility, docs on
+the new fields, and the owed frame tests are marked `TODO(DEV-12)`. Left as they are (older
+patterns, noted): blocking state-file IO in the line path (as `apply_appraisal` already does),
+error names copied from the address judge, and an empty `display_name` as the stranger mark.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->
