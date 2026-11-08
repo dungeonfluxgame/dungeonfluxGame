@@ -1,18 +1,18 @@
 # The arrest at the stall (story "The Nightglass Charge", plotted with `persona story plot` and
 # handed out with `persona story apply`): two town guards and the accuser come for Kael at the
 # enchanted-steel stall and question him; Kael answers every question. Needs the arrest picture
-# (`scene image tv-backdrop arrest-stall-real.png` on `playground go weapons_stall`, scanned and named)
+# (`scene image tv-backdrop stall-photo-fresh.png` on `playground go weapons_stall`, scanned and named)
 # and `world place market`. The guards and the accuser know Kael's name from the warrant; the band
 # knows each other; Kael knows none of the newcomers.
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
 @keeper warrior
 @keeper_situation At the enchanted-steel stall in the town market with your four companions and the bladesmith behind his counter, when two town guards and a well-dressed merchant push through the crowd to you; the black dagger with violet sigils is gone from the counter.
 @speaker_situation At the enchanted-steel stall in the town market, where a crowd gathers around a blond sword for hire in a fur mantle and his four companions; the black dagger with violet sigils is gone from the counter.
-@frames frames=arrest-real-a
+@frames frames=arrest-photo-a
 @frames hold=30
 @frames max_frames=8
 @frames parallel=2
-@frames scene=At a plain market stall of rough timber and faded canvas in soft overcast daylight: at the left a heavy merchant in a dark wool coat with a fur collar points an accusing finger; beside him a heavy-jawed guard with a moustache, steel cap and halberd, and a lean dark-haired woman sergeant in a steel cap and blue-grey tabard holding out a sealed warrant; then the four companions (two women with curly hair, a curly-haired young man, a man in a dark hooded cloak) and the blond bearded man in a fur mantle with a spear; at the right the grey-bearded bladesmith in a leather apron; on the cloth three plain steel blades and an empty space where the black dagger lay.
+@frames scene=At a plain market stall of rough timber and faded canvas hung with blades, in flat grey daylight, townsfolk staring: at the left the broad dark-bearded guard in mail, a dark cloak and a steel cap; beside him the heavy bearded merchant in a long dark coat with a thick fur collar points an accusing finger at the blond bearded man in a shaggy fur mantle, who stands at the right with his hands open; the lean dark-haired woman sergeant in a steel cap and dark leather holds out a sealed warrant; behind the counter a grey-bearded bladesmith in a leather apron looks on; at the right the four companions (a dark-bearded man in a cloak, a young brown-haired woman with a braid, a red-bearded man, a dark-haired woman) stand close behind the blond man.
 ! persona state warrior reset
 ! persona state mara_adventurer reset
 ! persona state jory_adventurer reset
@@ -20,8 +20,8 @@
 ! persona state bram_adventurer reset
 ! persona state weapon_seller reset
 ! persona state market_factor reset
-! persona state market_guard_lawful reset
-! persona state market_guard_bought reset
+! persona state town_sergeant reset
+! persona state town_guard reset
 ! persona state mara_adventurer knows warrior
 ! persona state mara_adventurer knows jory_adventurer
 ! persona state mara_adventurer knows sella_adventurer
@@ -42,23 +42,23 @@
 ! persona state warrior knows jory_adventurer
 ! persona state warrior knows sella_adventurer
 ! persona state warrior knows bram_adventurer
-! persona state market_guard_lawful knows warrior
-! persona state market_guard_lawful knows market_factor
-! persona state market_guard_lawful knows market_guard_bought
-! persona state market_guard_bought knows warrior
-! persona state market_guard_bought knows market_factor
-! persona state market_guard_bought knows market_guard_lawful
+! persona state town_sergeant knows warrior
+! persona state town_sergeant knows market_factor
+! persona state town_sergeant knows town_guard
+! persona state town_guard knows warrior
+! persona state town_guard knows market_factor
+! persona state town_guard knows town_sergeant
 ! persona state market_factor knows warrior
 ! persona state market_factor knows weapon_seller
-! persona state market_factor knows market_guard_bought
+! persona state market_factor knows town_guard
 ! persona state weapon_seller knows market_factor
-market_guard_lawful | Step up to the blond man in the fur mantle, say you come under the mayor's warrant, and ask him, as a question to him, whether he is the sword for hire called Kael.
+town_sergeant | Step up to the blond man in the fur mantle, say you come under the mayor's warrant, and ask him, as a question to him, whether he is the sword for hire called Kael.
 market_factor | Point at him before the crowd and accuse him, as a question to him, of taking the Nightglass from this stall and cutting the watchman who tried to stop him.
-market_guard_lawful | Ask him, as a question to him, where he was and what he did this past hour, and who can speak for it.
+town_sergeant | Ask him, as a question to him, where he was and what he did this past hour, and who can speak for it.
 weapon_seller | Tell the sergeant the Nightglass lay on your counter until the crush a little while ago, and ask her, as a question to her, what proof they carry against this man.
-market_guard_bought | Hold up a near-black dagger with violet marks as the one found, say you saw him run from the stall with it, and ask him, as a question to him, how he explains that.
+town_guard | Hold up a near-black dagger with violet marks as the one found, say you saw him run from the stall with it, and ask him, as a question to him, how he explains that.
 mara_adventurer | Tell the guards Kael has not left this stall since you came, and ask the sergeant, as a question to her, who else saw him run.
 market_factor | Sneer that his friends would swear to anything, and ask him, as a question to him, why a torn scrap of his cloak lay by the stall.
-market_guard_lawful | Ask him, as a question to him, to hand over his sword and spear and come before the mayor without a fight.
-market_guard_bought | Seize his arm and twist it behind him, and ask him, as a question to him, whether he means to resist the town's law.
+town_sergeant | Ask him, as a question to him, to hand over his sword and spear and come before the mayor without a fight.
+town_guard | Seize his arm and twist it behind him, and ask him, as a question to him, whether he means to resist the town's law.
 bram_adventurer | Tell the guards you will all follow to the hall, and ask the sergeant, as a question to her, whether he may be heard fairly there.

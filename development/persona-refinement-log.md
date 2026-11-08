@@ -784,7 +784,68 @@ judged by the mayor, with a plotted backstory and personas for everyone interact
   - An edit keeps its base's finish, so the hall is a fresh photographic plate
     (`hall-photo-fresh.png`).
   - `media generate` takes `look=house|none` (house by default).
-- **Run 72:** the judgement on the photographic hall (graded below when it ends).
+- **Run 72 (`run72-judgement.md`):** the judgement on the photographic hall. Haldor finds the
+  fake at once and a photographic camera insert shows the dagger in his hands; acquittal, no
+  refusals. Open: a keeper's question went unanswered. The runner now gives an answer's own
+  question one reply.
+
+## Runs 73 to 75 (the whole story in order, on photographic plates)
+
+- **Setup:**
+  - Fresh plates for the stall and the march, with the hall's cast described in the same
+    words (`stall-photo-fresh.png`, `march-photo-fresh.png`).
+  - Each plate is scanned and named, and each scene's moves are plotted with its plate shown.
+  - Code now refuses a plot that leaves someone present silent: the first arrest plot had five
+    moves and no question for Kael.
+  - `artifacts/tmp/arrest/seq/play.sh` plays the three scenes back to back. The first resets
+    everyone; the judgement resets only the mayor.
+- **Run 73, the arrest (`run73-arrest.md`, 32 lines in 10 minutes):**
+  - The guards and the accuser question Kael and he answers.
+  - Haldor calls the shown dagger false at the stall.
+  - The sergeant admits the charge rests on a report, then arrests him.
+  - Kael catches the bought guard naming only what anyone can see of the dagger.
+- **Run 74, the march (`run74-march.md`, 28 lines in 8.5 minutes):**
+  - The bought guard turns the crowd with talk of the blade's magic, and Nessa calls out the
+    timing.
+  - Kael calls the guard "Dark-beard", a name by look.
+  - The accuser hardens his story.
+- **Run 75, the judgement (`run75-judgement.md`, 47 lines):**
+  - The accuser's chain of custody contradicts the sergeant's.
+  - Haldor exposes the fake; the guard concedes his blocked view and holds to his story.
+  - Kael's last word sets out what the evidence does and does not show, and the mayor acquits.
+  - No refusals in any of the three scenes, and 17 frames in all.
+- **Fixed during the sequence (in effect from the next plot or run):**
+  - Repeated answers (Haldor thrice, Nessa thrice). The conduct rule now has someone asked
+    again say they have answered and add only what is new; Nessa's later answers were short.
+  - A goal's "you" read as its speaker (Jory spoke as if accused). "You" is now only ever the
+    speaker.
+  - A reply followed up although it asked nothing (the sergeant restated her order). The
+    addressee judge is told a reply is put to someone only if it leaves a question waiting.
+- **Open:**
+  - The mayor calls the bought guard "Sergeant" (as in run 68).
+  - Exhibit text named people: fixed after a rules review (below).
+  - A two-shot once showed Kael standing unbound.
+
+## Rules review of refinements 23 and 24 (an independent reviewer on the diff)
+
+- **Names in goals and exhibits:** the moves question now blanks names and old exhibit text. A
+  names judge (closed schema: the index of each text that calls someone by name) refuses such
+  an answer, which is asked once more with why. Live: the first answer refused, the second had
+  0 of 32 texts naming anyone.
+- **Hidden part in an id:** `market_guard_bought` was shown to everyone who knew Tavin's name.
+  The guards are now `town_guard` and `town_sergeant` (scratch data and beats migrated; past
+  transcripts keep the old ids), and new plot ids may carry no hidden part.
+- **The follow-up rule was sent as intent data:** it is now a `reply` field of the addressee
+  request, with its rule in the instruction.
+- **The retry was copied rather than shared:** it is now one helper (`ask_moves`) that also
+  retries replayed refusals.
+- **Smaller fixes:**
+  - an empty lead is kept empty through the handle swap;
+  - `story moves` and `story apply` refuse `cast=`;
+  - the `moves` usage puts options first;
+  - parse tests for the story and addressee verbs, and for the names reader;
+  - the runbook no longer cites `artifacts/` scripts;
+  - a misplaced doc comment and a stale runner comment were fixed.
 
 ## Timeline (commit times, 2026-11-07)
 

@@ -326,13 +326,39 @@ its moves. A refused answer is asked once more with why (`previous_refusal`). Ea
 names its exhibits, the evidence on show, with what anyone sees of it up close
 (`up_close`, so the false dagger shows its loose handle and painted marks to whoever examines
 it); `story beats` prints them as `@exhibit` lines and the runner adds them to every situation.
-Check that they name nobody: the storyteller still writes names into them. The runner lets a
+Names never reach them: the moves question is asked with every name and old exhibit text
+blanked, and a names judge (a model call against a closed schema, `PERSONA story_names
+scene=.. texts=.. named=..`) refuses an answer whose goals or exhibits call someone by name,
+which is then asked once more with why (`PERSONA story_moves_retried`). The runner lets a
 beat by the one a line was put to stand as their answer (no answering twice), and a judgement
 starts with every participant reset (`persona state <id> reset`, then `knows`): run 70's Kael
-"remembered" run 69's acquittal mid-hearing. `persona story beats <scene>` prints `@keeper <who leads>` and one `speaker | goal`
-a move; put the scene's `@keeper_situation`, `@speaker_situation`, `@frames` and `!` presets
-above them. The market runner has whoever a line was put to answer it (`persona addressed`,
-told the speaker's goal), the keeper when it was put to the room.
+"remembered" run 69's acquittal mid-hearing. Every character in the shown picture makes at
+least one move of their own (code refuses a plot that leaves one silent: the first arrest plot
+had five moves and no questions for Kael). `persona story beats <scene>` prints `@keeper <who
+leads>` and one `speaker | goal` a move; put the scene's `@keeper_situation`,
+`@speaker_situation`, `@frames` and `!` presets above them. The market runner has whoever a line
+was put to answer it (`persona addressed`, told the speaker's goal), the keeper when it was put
+to the room, and an answer that itself puts a question to someone gets one reply from them.
+
+**What works: a scene from the plot to the screen** (runs 71 and 72: acquittals earned on the
+flaws found in play; photographic frames and a camera insert on the dagger):
+
+1. Plate. Make each scene's plate fresh, never by editing an illustrated one: `media generate
+   "<the scene, every person by look> Medium-wide shot at eye level." as=<plate>
+   purpose=plate aspect=16:9 wait=true` (the house look is added). Describe each cast member
+   with the same words on every plate (one shell variable per person, used in each prompt).
+2. Names. `media locate <plate>.png masks=32`, then `media locate label <plate>.png <region>
+   <id> <Display Name>` for each character, and `persona set <id> job <look>` where a persona's
+   look differs from the picture. Show it: `scene image tv-backdrop <plate>.png`.
+3. Plot. `persona story moves <scene>` with that plate shown (who is there is who it holds), then
+   `persona story beats <scene>`.
+4. Beats file. The scene's header (situations, `@frames frames=<new name>` and a `scene=` that
+   describes the plate, presets), the exhibits, the plotted moves, and for the judgement a last
+   beat asking for the verdict. The first scene of a story resets everyone and sets who knows
+   whom; a scene replayed alone resets everyone it holds; a later scene of a sequence resets only
+   newcomers, so what was learned carries. To play a story, show each scene's plate (`scene
+   image tv-backdrop`) and run that scene's beats with a copy of the runner, one after another.
+5. Run a copy of the runner (a running script must not be edited) and grade the transcript.
 
 The plot holds the public charge, the truth (kept in `persona/story.json` for tooling, never in
 a character's prompt), the culprit and motive, the evidence with what gives each piece away, the
@@ -340,7 +366,10 @@ beats of each scene (`arrest`, `march`, `judgement`) and, for every character, a
 `NarrativeGuidance` (phase, beat, hooks, threads, `must_establish`, `must_avoid`, tone, note) as
 it stands before the first scene: nobody remembers their own future (the first apply wrote the
 whole plot into Kael's private backstory as if it had happened; the instruction now forbids it).
-New characters get new name-free ids (`market_guard_bought`) that are no stored persona's id.
+New characters get new ids that carry no name and no hidden part, and are no stored persona's
+id: an id is shown to whoever learns that person's name, so the first plot's
+`market_guard_bought` told everyone who knew Tavin that he was bought (renamed `town_guard`,
+and the lawful sergeant `town_sergeant`).
 `apply` generates a new character's persona from its guidance once it is in the shown scene (in
 the picture's scan, named: `media locate identify`), its name established by the guidance; a
 character with a persona gets it through a guided backfill of its private backstory, unless the
@@ -348,14 +377,14 @@ coverage judge says it already holds it, so a second apply adds nothing. A chara
 scene yet is left for a later apply. Generation does not see the picture: check that a persona
 fits it (the first sergeant was written "he" for the woman on the plate).
 
-**The arrest story** (2026-11-08, story "The Nightglass Charge"), three scenes, each its own
-picture made by editing the one before so faces stay (`arrest-stall.png`, `arrest-march.png`,
-`arrest-hall.png`), scanned and named, then `persona story apply`:
-`market-threads/arrest.beats` (the guards and the accuser question Kael; he answers),
-`market-threads/arrest-march.beats` (dragged up the street; the sergeant answers Kael and his
-friends, a fruit seller calls out) and the judgement as a `persona converse` with
-`market-threads/arrest-judgement.events` (Kael on his knees before the mayor; evidence, witnesses
-and the defence).
+**The arrest story** (2026-11-08, story "The Nightglass Charge"), three scenes on photographic
+plates made fresh with one cast description (`stall-photo-fresh.png`, `march-photo-fresh.png`,
+`hall-photo-fresh.png`; the first illustrated ones, `arrest-*-real.png`, are retired), scanned and
+named, then `persona story apply`: `market-threads/arrest.beats` (the guards and the accuser
+question Kael; he answers), `market-threads/arrest-march.beats` (dragged up the street; Kael and
+his friends press the guards, a fruit seller calls out) and `market-threads/arrest-judgement.beats`
+(Kael on his knees before the mayor; evidence, witnesses and the defence). Their moves come from
+the plot (`persona story moves`); the hand-written moves in those files are the fallback.
 
 ## The market thread (re-runnable persona and backfill exercise)
 

@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::handles::Handles;
-use super::story::{StoryError, parse_moves, parse_story, with_ids};
+use super::story::{StoryError, parse_moves, parse_story, read_names, with_ids};
 
 fn guidance(establish: &str) -> Value {
     json!({
@@ -125,9 +125,13 @@ fn an_answer_that_leaves_out_the_cast_or_names_no_character_is_refused() {
 #[test]
 fn a_scenes_moves_fill_its_beats_and_name_only_characters() {
     let story = parse_story(&answer(), &["warrior".to_owned()], &[]).unwrap();
+    // Three moves by `speaker` put to `to`, and `to`'s reply when it is someone.
     let moves = |speaker: &str, to: &str, id: &str| {
-        let beat = json!({"id": id, "leads": "warrior", "moves": defence(speaker, to, 3),
-                           "exhibits": []});
+        let mut list = defence(speaker, to, 3).as_array().unwrap().clone();
+        if to != "room" {
+            list.push(json!({"speaker": to, "to": speaker, "goal": "Answer the charge."}));
+        }
+        let beat = json!({"id": id, "leads": "warrior", "moves": list, "exhibits": []});
         json!({ "beats": [beat] })
     };
     let both = ["warrior".to_owned(), "harbour_merchant".to_owned()];
@@ -181,6 +185,10 @@ fn a_scenes_moves_fill_its_beats_and_name_only_characters() {
         ),
         "nobody is put a move who is not there"
     );
+    assert!(
+        refused(&moves("warrior", "room", "trial")),
+        "everyone there makes a move of their own"
+    );
 }
 
 #[test]
@@ -198,10 +206,15 @@ fn the_storyteller_sees_handles_for_ids_and_its_moves_come_back_under_the_ids() 
         "no hidden part in the ids it is asked with"
     );
     assert_eq!(asked.beats[2].moves[0].to, "person-2");
-    let answered = json!({"beats": [{"id": "trial", "leads": "person-1",
-                                     "moves": defence("person-1", "person-2", 3),
-                                     "exhibits": [{"id": "seal_in_pack",
-                                                   "up_close": "The seal's wax is fresh."}]}]});
+    // The accused's three moves, and the merchant's reply.
+    let mut moves = defence("person-1", "person-2", 3)
+        .as_array()
+        .unwrap()
+        .clone();
+    moves.push(defence("person-2", "person-1", 1)[0].clone());
+    let exhibits = json!([{"id": "seal_in_pack", "up_close": "The seal's wax is fresh."}]);
+    let answered = json!({"beats": [{"id": "trial", "leads": "person-1", "moves": moves,
+                                     "exhibits": exhibits}]});
     let here = ["person-1".to_owned(), "person-2".to_owned()];
     let played = parse_moves(&answered, &asked, ("judgement", &here)).unwrap();
     let back = with_ids(played, |called| {
@@ -209,18 +222,26 @@ fn the_storyteller_sees_handles_for_ids_and_its_moves_come_back_under_the_ids() 
     });
     assert_eq!(back.culprit, "harbour_merchant");
     assert_eq!(back.evidence[0].up_close, "The seal's wax is fresh.");
-    let trial_exhibits = &back
-        .beats
-        .iter()
-        .find(|beat| beat.id == "trial")
-        .unwrap()
-        .exhibits;
-    assert_eq!(trial_exhibits, &["seal_in_pack".to_owned()]);
     let trial = back.beats.iter().find(|beat| beat.id == "trial").unwrap();
+    assert_eq!(trial.exhibits, ["seal_in_pack".to_owned()]);
     assert_eq!(trial.moves[0].speaker, "warrior");
     assert_eq!(trial.moves[0].to, "harbour_merchant");
     assert_eq!(
         back.beats[0], story.beats[0],
         "other scenes come back as they were"
     );
+}
+
+#[test]
+fn the_names_judge_answer_lists_texts_by_index_and_refuses_one_that_is_no_text() {
+    let answer = json!({"naming": [{"index": 1, "name": "Haldor"}]});
+    assert_eq!(
+        read_names(&answer, 2).unwrap(),
+        vec![(1, "Haldor".to_owned())]
+    );
+    assert!(read_names(&json!({"naming": []}), 2).unwrap().is_empty());
+    assert!(matches!(
+        read_names(&json!({"naming": [{"index": 2, "name": "Haldor"}]}), 2),
+        Err(StoryError::MalformedAnswer { .. })
+    ));
 }

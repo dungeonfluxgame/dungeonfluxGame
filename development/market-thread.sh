@@ -43,8 +43,9 @@ while IFS= read -r setting; do
     '@exhibit '*) EXHIBITS+=("$value") ;;
   esac
 done < <(grep '^@' "$BEATS")
-# `@exhibit <what it is. Up close: what anyone sees>` lines (`persona story beats`) are on show
-# for everyone there: they join every situation, so whoever looks closely sees what it truly is.
+# `@exhibit <what it is shown as and what anyone sees up close>` lines (`persona story beats`)
+# are on show for everyone there: they join every situation, so whoever looks closely sees what
+# it truly is.
 if [ "${#EXHIBITS[@]}" -gt 0 ]; then
   KEEPER_SITUATION="$KEEPER_SITUATION On show before everyone: ${EXHIBITS[*]}"
   SPEAKER_SITUATION="$SPEAKER_SITUATION On show before everyone: ${EXHIBITS[*]}"
@@ -107,16 +108,24 @@ say_as() { # speaker, instruction
 # The one the line was put to answers it: the addressee judge (`persona addressed`, a model call
 # against the scene's speakers) reads whom it is directed at; nobody, the speaker themself or no
 # answer leaves it to the keeper. When the next beat is theirs, that beat is their answer, so they
-# do not answer twice (run 69: a question to the smith, then his own examination).
-keeper() {
-  local out line answerer situation
+# do not answer twice (run 69: a question to the smith, then his own examination). An answer that
+# itself puts a question to someone gets one reply from them (`keeper follow`; run 71: the mayor
+# asked Kael what he saw and the next beat moved on), and only when the judge names someone.
+keeper() { # [follow]
+  local follow=$1 out line answerer situation
   recent_args
   # The judge is told what the speaker set out to do (the beat's goal, where they are): whom
-  # they meant the line for counts as much as its words.
+  # they meant the line for counts as much as its words. A reply (`reply=true`) is put to someone
+  # only when it leaves them a question or a demand to answer (run 73: the sergeant restated her
+  # order after Kael simply agreed to it).
+  local reply=false
+  [ -n "$follow" ] && reply=true
   answerer=$(timeout 120 $D dev --port $P persona addressed "$LAST_SPEAKER" "${RECENT[@]}" \
-    "intent=$SPEAKER_SITUATION $LAST_INTENT" "$LAST" 2>/dev/null | head -1)
+    "intent=$SPEAKER_SITUATION $LAST_INTENT" "reply=$reply" "$LAST" 2>/dev/null | head -1)
   case "$answerer" in
-    ''|nobody|"$LAST_SPEAKER"|*' '*) answerer=$KEEPER ;;
+    ''|nobody|"$LAST_SPEAKER"|*' '*)
+      [ -n "$follow" ] && return
+      answerer=$KEEPER ;;
   esac
   # A line the keeper put to no one is not answered by the keeper themself.
   [ "$answerer" = "$LAST_SPEAKER" ] && return
@@ -132,6 +141,11 @@ keeper() {
   HISTORY+=("$answerer: $line")
   watch_line "$answerer" "$line"
   sleep 3
+  [ -n "$follow" ] || [ -z "$line" ] && return
+  LAST="$line"
+  LAST_SPEAKER="$answerer"
+  LAST_INTENT=""
+  keeper follow
 }
 
 # Each line of the beats file is `speaker | goal`; `#` lines are comments, `@` lines settings, and

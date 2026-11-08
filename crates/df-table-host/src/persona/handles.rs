@@ -65,7 +65,7 @@ impl Handles {
     }
 
     /// What the storyteller calls each of `ids`, in order: everyone by a handle, since an id may
-    /// carry a name or a hidden part (`market_guard_bought`) the prose it writes must never echo.
+    /// carry a name or a hidden part (`bought_guard`) the prose it writes must never echo.
     pub(super) fn author<'a>(ids: impl IntoIterator<Item = &'a str>) -> Self {
         let shown = ids
             .into_iter()

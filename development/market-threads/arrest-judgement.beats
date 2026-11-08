@@ -45,45 +45,45 @@
 ! persona state town_mayor reset
 ! persona state town_mayor knows warrior
 ! persona state town_mayor knows market_factor
-! persona state town_mayor knows market_guard_lawful
-! persona state town_mayor knows market_guard_bought
+! persona state town_mayor knows town_sergeant
+! persona state town_mayor knows town_guard
 ! persona state town_mayor knows weapon_seller
-! persona state market_guard_lawful reset
-! persona state market_guard_lawful knows warrior
-! persona state market_guard_lawful knows market_guard_bought
-! persona state market_guard_lawful knows market_factor
-! persona state market_guard_lawful knows town_mayor
-! persona state market_guard_bought reset
-! persona state market_guard_bought knows warrior
-! persona state market_guard_bought knows market_guard_lawful
-! persona state market_guard_bought knows market_factor
-! persona state market_guard_bought knows town_mayor
+! persona state town_sergeant reset
+! persona state town_sergeant knows warrior
+! persona state town_sergeant knows town_guard
+! persona state town_sergeant knows market_factor
+! persona state town_sergeant knows town_mayor
+! persona state town_guard reset
+! persona state town_guard knows warrior
+! persona state town_guard knows town_sergeant
+! persona state town_guard knows market_factor
+! persona state town_guard knows town_mayor
 ! persona state market_factor reset
 ! persona state market_factor knows warrior
-! persona state market_factor knows market_guard_lawful
-! persona state market_factor knows market_guard_bought
+! persona state market_factor knows town_sergeant
+! persona state market_factor knows town_guard
 ! persona state market_factor knows town_mayor
 ! persona state market_factor knows weapon_seller
 ! persona state weapon_seller reset
 ! persona state weapon_seller knows warrior
 ! persona state weapon_seller knows market_factor
-! persona state weapon_seller knows market_guard_lawful
+! persona state weapon_seller knows town_sergeant
 ! persona state weapon_seller knows town_mayor
 ! persona state market_witness reset
 ! persona state market_witness knows warrior
 ! persona state market_witness knows market_factor
-! persona state market_witness knows market_guard_bought
-! persona state market_witness knows market_guard_lawful
+! persona state market_witness knows town_guard
+! persona state market_witness knows town_sergeant
 ! persona state market_witness knows town_mayor
 town_mayor | Have the charge stated before the hall, and ask the kneeling man, as a question to him, how he answers it.
 market_factor | Hold the near-black dagger high for the hall, name it the stolen Nightglass taken from the prisoner, and ask the mayor, as a question to him, what more proof any honest town could need.
 warrior | From your knees, demand that the bladesmith who forged the Nightglass be let to look at that dagger, and ask the mayor, as a question to him, whether he fears what the smith will say.
 weapon_seller | Step up to the dais and take the dagger from the accuser. Turn it in your hands where all can see: its handle sits loose on the tang and its violet marks are painted on the steel, not cut and inlaid as yours are. Tell the mayor plainly what you find, then ask the accuser, as a question to him, where he truly got it.
-market_guard_bought | Swear before the whole hall that you saw the prisoner run from the stall with that dagger in his hand, and ask the mayor, as a question to him, whether a guard's oath now counts for nothing.
+town_guard | Swear before the whole hall that you saw the prisoner run from the stall with that dagger in his hand, and ask the mayor, as a question to him, whether a guard's oath now counts for nothing.
 mara_adventurer | Ask the guard, as a question to him, exactly where he stood when he says he saw Kael run, and what stood between him and the stall.
 market_factor | Lay a torn strip of dark cloth at the mayor's feet, saying it was found by the stall, and ask the prisoner, as a question to him, why his own cloak is torn.
 warrior | Ask the accuser, as a question to him, who found that strip and when, since no one searched you and nobody saw it taken from you.
-market_guard_lawful | Tell the mayor plainly what you saw yourself and what was only reported to you, and ask him, as a question to him, whether the evidence was ever entered with a witness to its finding.
+town_sergeant | Tell the mayor plainly what you saw yourself and what was only reported to you, and ask him, as a question to him, whether the evidence was ever entered with a witness to its finding.
 market_witness | Rise from your bench and tell the mayor that the market bell rang late today and you saw the watchman already clutching his bleeding arm before the guards took this man, and ask him, as a question to him, why nobody asked you before.
 town_mayor | Press the guard who swore he saw the prisoner run: ask him, as a question to him, at what hour exactly, and how he saw it through the canvas and the crowd.
 bram_adventurer | Ask the guard, as a question to him, why his purse is newly heavy this morning, and who filled it.

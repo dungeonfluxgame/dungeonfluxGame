@@ -344,6 +344,7 @@ async fn addressed_once(
         speakers: table.speakers().to_vec(),
         recent: table.recent_lines(history),
         intent: None,
+        reply: false,
         model: model.map(str::to_owned),
     };
     let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;
@@ -356,19 +357,10 @@ async fn addressed_once(
 /// to answers it.
 pub(super) async fn who_is_addressed(
     port: u16,
-    (speaker, line): (String, String),
-    (recent, intent): (Vec<String>, Option<String>),
-    model: Option<String>,
+    mut request: AddressRequest,
 ) -> Result<String, DevError> {
     let cast: CastList = super::cli::reply_value(get_json(port, cast_path::CAST).await?)?;
-    let request = AddressRequest {
-        line,
-        speaker,
-        speakers: speakers_of(cast),
-        recent,
-        intent,
-        model,
-    };
+    request.speakers = speakers_of(cast);
     let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;
     Ok(crate::dev_client::reply_value(reply)?
         .addressed

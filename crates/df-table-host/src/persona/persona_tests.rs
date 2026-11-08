@@ -1096,3 +1096,37 @@ fn the_debug_of_a_request_that_carries_a_question_or_a_situation_never_prints_it
         assert!(shown.contains("innkeeper"), "{shown}");
     }
 }
+
+#[test]
+fn the_story_and_addressee_verbs_read_their_scene_and_reply() {
+    assert_eq!(
+        command("persona story moves model=gpt-5.5 judgement"),
+        PersonaCommand::StoryMoves {
+            scene: "judgement".to_owned(),
+            model: Some("gpt-5.5".to_owned()),
+        }
+    );
+    assert_eq!(
+        command("persona story beats arrest"),
+        PersonaCommand::StoryBeats {
+            scene: "arrest".to_owned(),
+        }
+    );
+    assert!(
+        parse(&words("persona story moves judgement cast=warrior")).is_err(),
+        "the moves of a scene take no cast"
+    );
+    assert_eq!(
+        command(
+            "persona addressed town_mayor recent=warrior:_I_did_not intent=judge reply=true Speak."
+        ),
+        PersonaCommand::Addressed {
+            speaker: PersonaId::new("town_mayor").unwrap(),
+            line: "Speak.".to_owned(),
+            recent: vec!["warrior:_I_did_not".to_owned()],
+            intent: Some("judge".to_owned()),
+            reply: true,
+            model: None,
+        }
+    );
+}
