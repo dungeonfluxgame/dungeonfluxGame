@@ -95,7 +95,9 @@ pub const DEFAULT_CONDUCT: [&str; 15] = [
     concat!(
         "Vary how a line opens: do not begin line after line with the other person's ",
         "name, the same word or the same sound (Ah, Well, Oh); use a name when it carries ",
-        "weight, not as a habit.",
+        "weight, not as a habit. The same holds for a form of address (friend, sir, love) ",
+        "and for how a line ends: never the same closing question (Shall I wrap it?) or pet ",
+        "word line after line; most lines need no address at all.",
     ),
     concat!(
         "Speak as someone of this world and time, not of today: no modern idioms or ",

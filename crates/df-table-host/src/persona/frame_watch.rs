@@ -7,16 +7,26 @@
 //! after the one before it, and the scene's spinner shows while any is being made. Lines said
 //! while no frame may start wait for the next judgement. Every setting is a command option
 //! over the defaults of `persona/frames.json`; the transcript says when each frame was judged,
-//! started and shown.
+//! started and shown. A new inspection (the judge names an item someone is looking at closely)
+//! cuts to an insert of the item at once, inside the hold; the picture the next frame starts from
+//! stays the room's, so the cut comes back to the scene. An insert is not scanned (nobody's face
+//! is in it): it is shown with the room's layout, so the cast can go on speaking, and the room
+//! comes back after `insert_hold` unless a new frame replaced it first. Before an insert is made,
+//! the backfill engine is asked how the item looks up close, as the keeper of its stall knows it:
+//! what it adds stays in the keeper's backstory, and it goes into the insert's picture.
 
 // TODO(DEV-12): tests on a fake host: frames made in parallel are shown in the order they were
 // started (a later one that finishes first waits for the one before it), the spinner shows once
 // and the title is put back when the last frame lands, the change since a frame only grows, and
-// the hold and the most frames are kept.
+// the hold and the most frames are kept; a frame stays up `MINIMUM_SHOWN` before the next made
+// alongside it; an insert cuts in inside the hold, keeps the room's cast, comes back to the
+// newest room after `insert_hold` (whole, at the end too) and carries the keeper's backfill.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use df_content::persona::backfill::Gap;
+use df_content::persona::{PersonaEdit, PersonaField};
 use df_playground::lobby::model::SceneTitle;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::oneshot;
@@ -24,13 +34,18 @@ use tokio::task::JoinHandle;
 
 use super::converse::{Speaker, speakers_of};
 use super::frame::{FrameJudgement, FrameReply, FrameRequest, PERSONA_FRAME};
-use super::plate::{PlateFailure, make_frame, put_title_back, start_spinner};
+use super::plate::{
+    PlateFailure, make_frame, make_insert, put_backdrop, put_title_back, start_spinner,
+};
+use super::request::{BackfillRequest, Backfilled, PersonaReply};
+use super::routes::path as persona_path;
 use crate::cast::request::CastList;
 use crate::cast::routes::path as cast_path;
 use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json, reply_value};
 use crate::locate::request::CharacterRequest;
 use crate::movement::brief::BriefStyle;
+use crate::world::PlaceItem;
 
 /// How long a frame stays at least before the next one starts, by default.
 pub(super) const DEFAULT_HOLD_SECONDS: u64 = 30;
@@ -38,6 +53,8 @@ pub(super) const DEFAULT_HOLD_SECONDS: u64 = 30;
 pub(super) const DEFAULT_MAXIMUM_FRAMES: u32 = 6;
 /// How many frames may be made at once, at most.
 pub(super) const MAXIMUM_PARALLEL_FRAMES: usize = 4;
+/// How long an insert of an item stays on screen before the room comes back, by default.
+pub(super) const DEFAULT_INSERT_HOLD_SECONDS: u64 = 20;
 
 /// The frame options of one `persona converse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +75,8 @@ pub struct FrameOptions {
     pub maximum_frames: u32,
     /// How many frames may be made at once, 1 to `MAXIMUM_PARALLEL_FRAMES`.
     pub parallel: usize,
+    /// How long an insert of an item stays on screen before the room comes back.
+    pub insert_hold: Duration,
     /// The model the judge asks instead of the conversation's.
     pub judge_model: Option<String>,
 }
@@ -114,6 +133,39 @@ pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<Stri
     Ok(transcript.join("\n"))
 }
 
+/// What the backfill engine adds to the keeper of `item`'s stall about making it and how it looks
+/// up close (the text it wrote). It goes into the keeper's public backstory, the memory of their
+/// own work (expertise stays authored and is never backfilled, as
+/// `planning/persona-voice-and-world-bible.md` has it), so later lines and inserts agree.
+async fn keeper_details(port: u16, offered: &PlaceItem) -> Result<Vec<String>, DevError> {
+    let request = BackfillRequest {
+        character: offered.keeper.clone(),
+        gaps: vec![Gap {
+            field: PersonaField::Backstory,
+            topic: format!(
+                "the making of the {}, and how it looks up close as its maker would point it \
+                 out: the blade or body, guard, grip and pommel, its runes or marks and their \
+                 colour, the finish",
+                offered.item.name
+            ),
+            filled: None,
+        }],
+        guidance: None,
+        model: None,
+    };
+    let reply: PersonaReply<Backfilled> =
+        post_json(port, persona_path::PERSONA_BACKFILL, &request).await?;
+    Ok(reply_value(reply)?
+        .edits
+        .into_iter()
+        // A backfill only adds: its edits are added entries or appended text.
+        .filter_map(|edit| match edit {
+            PersonaEdit::AddEntry { text, .. } | PersonaEdit::AppendText { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect())
+}
+
 /// `persona frame`: judges `lines` against the picture `picture` describes, for the characters
 /// of the shown scene, and says what changed and whether it passes the gate.
 pub(super) async fn judge_frame(
@@ -134,6 +186,7 @@ pub(super) async fn judge_frame(
         model,
         last_shot: None,
         peak_percent: 0,
+        last_inspected: None,
     };
     let judged = ask_judge(port, &request).await?;
     let mut text = vec![format!(
@@ -154,6 +207,12 @@ pub(super) async fn judge_frame(
             change.now
         ));
     }
+    if let Some(offered) = &judged.inspecting {
+        text.push(format!(
+            "  inspecting: {} ({})",
+            offered.item.name, offered.item.id
+        ));
+    }
     text.push(format!("  shot: {} ({})", judged.shot, judged.shot_look));
     text.push(format!("  next picture: {}", judged.next_picture));
     Ok(text.join("\n"))
@@ -170,9 +229,12 @@ fn shown_name<'a>(speakers: &'a [Speaker], character: Option<&str>) -> &'a str {
 struct InFlight {
     number: u32,
     name: String,
+    /// Whether it is an insert (a cut to an item) rather than a frame of the room.
+    insert: bool,
     started: Instant,
     after_turn: u32,
-    task: JoinHandle<Result<String, PlateFailure>>,
+    /// What making it came to, and when it finished (for a frame made, when it went on screen).
+    task: JoinHandle<(Result<String, PlateFailure>, Instant)>,
 }
 
 /// The state of the frames of one conversation.
@@ -196,10 +258,15 @@ pub(super) struct FrameWatch {
     /// The frames being made, oldest first.
     in_flight: VecDeque<InFlight>,
     /// Fires when the newest frame started is shown (or failed): the next one waits for it.
-    newest_shown: Option<oneshot::Receiver<()>>,
+    newest_shown: Option<oneshot::Receiver<Instant>>,
     /// The scene's title before the spinner, while frames are being made.
     title_before: Option<Option<SceneTitle>>,
     last_start: Option<Instant>,
+    /// The item the last judgement said was being looked at closely, so the same look makes no
+    /// second insert.
+    last_inspected: Option<String>,
+    /// When the insert on screen was shown.
+    insert_shown: Option<Instant>,
 }
 
 /// A conversation that ends early (a turn failed) drops its watch: the frames still being made
@@ -246,6 +313,8 @@ impl FrameWatch {
             newest_shown: None,
             title_before: None,
             last_start: None,
+            last_inspected: None,
+            insert_shown: None,
         }
     }
 
@@ -256,8 +325,9 @@ impl FrameWatch {
     }
 
     /// Takes `line` said by `speaker` into the lines since the newest frame, collects the frames
-    /// that finished, and judges when a new one may start: fewer than `parallel` are being made,
-    /// the hold has passed and the most frames are not made yet. The judgement, if one was asked.
+    /// that finished, and judges when a new one may start: fewer than `parallel` are being made
+    /// and the most frames are not made yet. It is judged inside the hold too, since an inspection
+    /// cuts in at once. The judgement, if one was asked.
     pub(super) async fn after_line(
         &mut self,
         port: u16,
@@ -268,12 +338,8 @@ impl FrameWatch {
         self.since
             .push(format!("{}: {}", speaker.display_name, line));
         self.collect(port, false, transcript).await;
-        let held = self
-            .last_start
-            .is_some_and(|started| started.elapsed() < self.options.hold);
-        if self.in_flight.len() >= self.options.parallel
-            || held
-            || self.made >= self.options.maximum_frames
+        self.end_insert(port, false, transcript).await;
+        if self.in_flight.len() >= self.options.parallel || self.made >= self.options.maximum_frames
         {
             return None;
         }
@@ -285,11 +351,13 @@ impl FrameWatch {
             model: self.options.judge_model.clone(),
             last_shot: self.last_shot.clone(),
             peak_percent: self.peak_percent,
+            last_inspected: self.last_inspected.clone(),
         };
         Some(ask_judge(port, &request).await)
     }
 
-    /// Reports `judged` after line `turn` and, when it passed the gate, starts the next frame.
+    /// Reports `judged` after line `turn` and starts the next frame when it calls for one: a new
+    /// inspection at once, a change past the gate once the hold has passed.
     pub(super) async fn consider(
         &mut self,
         port: u16,
@@ -328,7 +396,14 @@ impl FrameWatch {
             }
         ));
         self.peak_percent = judgement.since_percent;
-        if !judgement.triggered {
+        self.last_inspected = judgement
+            .inspecting
+            .as_ref()
+            .map(|offered| offered.item.id.clone());
+        let held = self
+            .last_start
+            .is_some_and(|started| started.elapsed() < self.options.hold);
+        if !judgement.triggered || (held && !judgement.inspection) {
             return;
         }
         self.made += 1;
@@ -362,8 +437,13 @@ impl FrameWatch {
             )
         };
         transcript.push(format!(
-            "  frame {number} ({name}) started after line {turn}, shot {}{}",
+            "  frame {number} ({name}) started after line {turn}, shot {}{}{}",
             judgement.shot,
+            judgement
+                .inspecting
+                .as_ref()
+                .filter(|_| judgement.inspection)
+                .map_or_else(String::new, |offered| format!(" on {}", offered.item.name)),
             base.as_deref().map_or_else(
                 || ", painted anew".to_owned(),
                 |base| format!(", editing {base}")
@@ -380,21 +460,60 @@ impl FrameWatch {
         let after = self.newest_shown.take();
         let (shown, next_waits) = oneshot::channel();
         self.newest_shown = Some(next_waits);
+        // An insert takes the cast of the newest room picture, the one it cuts away from.
+        let insert = judgement.inspection;
+        let cut = insert
+            .then(|| self.newest_picture.clone())
+            .zip(judgement.inspecting.clone());
         let task = tokio::spawn(async move {
-            let made = make_frame(
-                port,
-                &task_name,
-                &prompt,
-                characters,
-                base.as_deref(),
-                after,
-            )
-            .await;
-            // The next frame goes on whether this one was shown or failed.
-            let _ = shown.send(());
-            made
+            let made = match cut {
+                Some((room, offered)) => {
+                    // The insert waits for the item's details: a failed backfill still cuts to
+                    // the item, from the judge's picture alone, and says so.
+                    let details = keeper_details(port, &offered).await;
+                    let prompt = match &details {
+                        Ok(details) if !details.is_empty() => format!(
+                            "{prompt} Up close, as its maker knows it: {}",
+                            details.join(" ")
+                        ),
+                        _ => prompt,
+                    };
+                    let made =
+                        make_insert(port, &task_name, &prompt, base.as_deref(), &room, after).await;
+                    made.map(|summary| match details {
+                        Ok(details) => format!(
+                            "{summary}; {} detail(s) of the {} backfilled into {}",
+                            details.len(),
+                            offered.item.name,
+                            offered.keeper
+                        ),
+                        Err(error) => format!("{summary}; no details backfilled ({error})"),
+                    })
+                }
+                None => {
+                    make_frame(
+                        port,
+                        &task_name,
+                        &prompt,
+                        characters,
+                        base.as_deref(),
+                        after,
+                    )
+                    .await
+                }
+            };
+            // The next frame waits for this one to have been up a while; a failed one lets it go
+            // at once (the sender is dropped).
+            let shown_at = Instant::now();
+            if made.is_ok() {
+                let _ = shown.send(shown_at);
+            }
+            (made, shown_at)
         });
-        self.picture = judgement.next_picture;
+        // An insert is a cut to the item: the next frame starts again from the room as it was.
+        if !judgement.inspection {
+            self.picture = judgement.next_picture;
+        }
         self.last_shot = Some(judgement.shot);
         self.since.clear();
         self.peak_percent = 0;
@@ -402,15 +521,43 @@ impl FrameWatch {
         self.in_flight.push_back(InFlight {
             number,
             name,
+            insert,
             started: Instant::now(),
             after_turn: turn,
             task,
         });
     }
 
-    /// Waits for the frames being made and reports them.
+    /// Waits for the frames being made and reports them, and brings the room back after an
+    /// insert still on screen once it has been up for its whole hold.
     pub(super) async fn finish(&mut self, port: u16, transcript: &mut Vec<String>) {
         self.collect(port, true, transcript).await;
+        self.end_insert(port, true, transcript).await;
+    }
+
+    /// Puts the newest room picture back after the insert on screen once it has been up for
+    /// `insert_hold`; when `finishing`, waits out what is left of the hold first.
+    async fn end_insert(&mut self, port: u16, finishing: bool, transcript: &mut Vec<String>) {
+        let Some(shown) = self.insert_shown else {
+            return;
+        };
+        let left = self.options.insert_hold.saturating_sub(shown.elapsed());
+        if !left.is_zero() {
+            if !finishing {
+                return;
+            }
+            tokio::time::sleep(left).await;
+        }
+        let up = shown.elapsed().as_secs_f32();
+        let room = self.newest_picture.clone();
+        match put_backdrop(port, &room, None).await {
+            Ok(()) => transcript.push(format!("  back to {room} after the insert ({up:.1} s up)")),
+            Err((step, error)) => transcript.push(format!(
+                "  {room} not put back after the insert at {}: {error}",
+                step.key()
+            )),
+        }
+        self.insert_shown = None;
     }
 
     /// Reports the frames that finished, oldest first (all of them when `wait`), and puts the
@@ -437,14 +584,21 @@ impl FrameWatch {
         let made = frame.task.await;
         let waited = frame.started.elapsed().as_secs_f32();
         match made {
-            Ok(Ok(_)) => {
-                self.newest_picture = format!("{}.png", frame.name);
+            Ok((Ok(summary), shown_at)) => {
+                // An insert is a cut away from the room: the room stays the newest picture.
+                if frame.insert {
+                    transcript.push(format!("  {summary}"));
+                    self.insert_shown = Some(shown_at);
+                } else {
+                    self.newest_picture = format!("{}.png", frame.name);
+                    self.insert_shown = None;
+                }
                 transcript.push(format!(
                     "  frame {} ({}) shown {waited:.1} s after it started at line {}",
                     frame.number, frame.name, frame.after_turn
                 ));
             }
-            Ok(Err((step, error))) => transcript.push(format!(
+            Ok((Err((step, error)), _)) => transcript.push(format!(
                 "  frame {} ({}) failed at {} after {waited:.1} s: {error}",
                 frame.number,
                 frame.name,

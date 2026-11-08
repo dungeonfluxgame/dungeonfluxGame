@@ -54,6 +54,11 @@
     {
       "id": "high-angle",
       "look": "a high angle looking down, so someone looks small, lost or overwhelmed"
+    },
+    {
+      "id": "insert",
+      "look": "an insert shot: the camera moves in until the one item looked at fills the whole frame edge to edge, sharp and lit to show its craft, nobody's face in view"
     }
-  ]
+  ],
+  "inspect_shot": "insert"
 }

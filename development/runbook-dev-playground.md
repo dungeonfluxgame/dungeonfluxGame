@@ -212,6 +212,27 @@ it), `edit_rule` (how an edited frame keeps the picture) and `shots` (the camera
 may take, each an id and how it looks: two-shot, close-up, extreme close-up, over-the-shoulder,
 telephoto, wide, Dutch angle, low angle, high angle). The judge picks the shot that tells the
 moment and is told the shot on screen, so it varies; the edit is told to frame it that way.
+**The camera on an item.** The judge also names the item someone is looking at closely
+(`inspected_item`, an id from the items offered at the active place in the world bible, checked
+in code; null when nobody is). A new inspection (another item than the last judgement's) cuts at
+once to `inspect_shot` (`insert` in `frames.json`: the item fills the screen edge to edge),
+whatever the gate and inside the hold, so the players at the table can see the item's quality.
+An insert is not scanned (nobody's face is in it) and is shown with the layout of the room it
+cuts away from, so the cast stays (who may speak, where their bubbles sit); run 55 showed why:
+with the insert's own empty scan every line said during it was refused `unknown_character`. The
+room comes back after `insert_hold=<seconds>` (20 by default, a `persona converse`/`watch`
+option) unless a new frame replaced the insert first, and the next room frame edits the room,
+never the insert. The judge writes the close-up from the item's bible tags
+and what was said about it, so a keeper who describes the guard, grip and runes puts them on
+screen. Before an insert is made, the backfill engine (`POST /dev/persona/backfill`) is asked
+about the item for the keeper of its stall (named in the bible): the making of it and how it
+looks up close (guard, grip, pommel, runes, finish). What it writes goes into the keeper's
+public backstory, the memory of his own work (expertise stays authored and is never backfilled),
+so his later lines agree with it, and into the insert's picture; the frames transcript says how
+many details were added. `@backfill sync` in a beats file has the keeper's line gaps filled
+before he answers instead of after (`persona ask backfill=sync`). The judge is
+asked after every line now (not only after the hold), since an inspection may cut in at any time;
+the host logs `inspected=<id|-> inspection=true|false` on each `frame_judged` line.
 `with=warrior,tavern_server` on `persona converse` chooses who talks (otherwise everyone in the
 scene with a persona talks, the band and dancers included).
 

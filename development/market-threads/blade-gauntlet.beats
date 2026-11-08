@@ -4,14 +4,17 @@
 # bible in gold, hold his floor, correct the ignorant kindly, prove nothing he cannot, and keep
 # moving toward closing the sale. Needs the weapons stall scene (`weapons-stall-blades.png`) and
 # `world place market`; the band knows each other's names, Haldor knows none of them. The picture
-# follows the haggling: a new frame at most every 30 s when the judge sees enough change.
+# follows the haggling: a new frame at most every 30 s when the judge sees enough change, and a
+# close look at a blade cuts at once to an insert of it filling the screen. Haldor's missing
+# details of a blade (guard, grip, pommel) are backfilled before he answers (`@backfill sync`).
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
 @keeper weapon_seller
 @keeper_situation Behind the counter of his renowned enchanted-steel stall in the market, four of his blades laid out on red cloth; five adventurers have just walked up.
 @speaker_situation At the enchanted-steel stall in the market with your band of adventurers, four enchanted blades laid out on the counter in front of you.
-@frames frames=gauntlet-c
+@frames frames=gauntlet-f
 @frames hold=30
-@frames max_frames=8
+@frames max_frames=10
+@backfill sync
 @frames parallel=2
 @frames scene=Market day at Haldor Brask's enchanted-steel stall under a red awning: Haldor, dark hair tied back, greying beard, leather apron, leans in at the right with a hand on the counter; four blades lie on red velvet (a blue-runed longsword, a green-runed bastard sword, an ember-runed scimitar, a violet-runed black dagger); from the left Mara and Sella (two curly-haired women), Jory (a curly-haired young man), Bram (dark cloak, a hand at his chin) and Kael (blond-bearded, in furs, holding a spear) crowd the counter looking them over.
 ! persona state weapon_seller reset
@@ -45,10 +48,13 @@ jory_adventurer | Ask the seller, as a question to him, an ignorant question: wh
 sella_adventurer | Ask the seller, as a question to him, a suspicious question: whether the runes are real enchantments or painted glow to fleece travellers.
 bram_adventurer | Ask the seller, as a question to him, what each of the four blades costs.
 mara_adventurer | Ask the seller, as a question to him, which blade would hold an edge best on a long road.
+mara_adventurer | Ask the seller, as a question to him, to hold the Verdant up to the light so you can study its vine etching and its gold-inlaid guard up close.
 jory_adventurer | Ask the seller, as a question to him, whether the little black dagger is meant for children since it is so small.
 bram_adventurer | Haggle: tell the seller the scimitar is far too dear and ask him, as a question to him, to take a lot less for it.
 sella_adventurer | Ask the seller, as a question to him, to prove right here that the frost runes really work.
+sella_adventurer | Ask the seller, as a question to him, to let you hold the Frostline and look closely at it: the frost runes along the fuller, the guard and the grip.
 warrior | Ask the seller, as a question to him, which of the four would suit a guard who fights in narrow streets.
+warrior | Ask the seller, as a question to him, to show you the Nightglass dagger up close: its violet sigils, its edge and its bone handle.
 bram_adventurer | Ask the seller, as a question to him, what he would take for the scimitar and the dagger together.
 warrior | Tell the seller you will take the longsword if he gives you a fair price today, and ask him, as a question to him, what his best price is.
 mara_adventurer | Ask the seller, as a question to him, how to care for the frost runes on the road.

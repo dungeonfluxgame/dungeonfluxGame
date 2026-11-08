@@ -116,6 +116,45 @@ pub fn spoken_amount(app: &AppState, amount_cp: u64) -> String {
         .unwrap_or_else(|| format!("{amount_cp} cp"))
 }
 
+/// An item offered at the active place, and the keeper of the first stall that sells it (who
+/// knows how it looks up close).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlaceItem {
+    pub item: df_content::world_bible::Item,
+    pub keeper: String,
+}
+
+/// The items offered at the active place (every stall, each once, in the bible's order), for a
+/// judge that names one by id; empty with no place, or when the bible cannot be had.
+pub fn place_items(app: &AppState) -> Vec<PlaceItem> {
+    let directory = store::world_directory(app);
+    let items = (|| {
+        let bible = store::read_bible(&directory)?;
+        let Some(place) = store::read_place(&directory)?.and_then(|id| bible.place(&id).cloned())
+        else {
+            return Ok(Vec::new());
+        };
+        let mut items: Vec<PlaceItem> = Vec::new();
+        for stall in &place.stalls {
+            for id in &stall.sells {
+                if let Some(item) = bible.item(id)
+                    && !items.iter().any(|seen| seen.item.id == item.id)
+                {
+                    items.push(PlaceItem {
+                        item: item.clone(),
+                        keeper: stall.keeper.clone(),
+                    });
+                }
+            }
+        }
+        Ok::<_, WorldError>(items)
+    })();
+    items.unwrap_or_else(|error| {
+        app.record_line(format!("WORLD items_unavailable error={}", error.key()));
+        Vec::new()
+    })
+}
+
 /// The result of checking a quoted total against the stall's rules.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct QuoteCheck {

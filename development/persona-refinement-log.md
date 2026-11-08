@@ -596,6 +596,60 @@ Weaknesses to refine later:
 Transcripts: `persona-transcripts/run48-gauntlet.md` to `run54-gauntlet.md`
 (`run52-53-bundle.md` for the bundle checks).
 
+## Refinement 21 and runs 55 to 57 (Haldor's voice; the camera on an item)
+
+Owner ask: refine the weaknesses of refinement 20, and add the camera: when someone inspects an
+item, the display plate fills the screen with it so the players at the table can see its quality,
+with the backfill engine giving more detail about the item.
+
+Voice (data): the shared conduct rule on openings now covers forms of address and closing
+questions (no "friend" or "Shall I wrap it?" as a habit; most lines need no address). Haldor's
+address is "now and then 'friend' when he means it"; new samples; "proud of his own craft" and "a
+dry, warm humour"; four stances, each with a trigger the model judges: `stung-pride` (his work
+doubted), `shop-talk` (a question only a smith would ask), `patient-tease` (an ignorant question)
+and `show-the-blade` (a close look asked for).
+
+Camera (code):
+- The frame judge names `inspected_item`, an id from the items offered at the active place
+  (`world::place_items`, checked in code; null when nobody looks closely). A new inspection cuts
+  at once, whatever the gate and inside the hold, to `inspect_shot` (`insert` in `frames.json`:
+  the item fills the frame edge to edge). The judge writes the close-up from the item's tags and
+  what was said.
+- An insert is not scanned and is shown with the room's layout, so the cast stays; the room
+  comes back after `insert_hold` (20 s, a CLI option), and the next room frame edits the room.
+- Before an insert, the backfill engine is asked, for the keeper of the item's stall, about the
+  making of it and how it looks up close; the text goes into his public backstory (expertise
+  stays authored, per the persona design) and into the insert's prompt.
+- A frame stays up at least 8 s before one made alongside it replaces it.
+
+Runs:
+- Run 55 (`run55-gauntlet.md`): the voice landed. "Cook supper on it? You'd spoil a fine blade
+  and a poor stew." "Painted? I forged these myself." No habitual "friend". Inserts for the
+  Verdant, Frostline and Nightglass. Found: an insert's own (empty) scan emptied the cast, and
+  three adventurer lines after it were refused `unknown_character`.
+- Run 56 (`run56-gauntlet.md`): no line refused through four inserts; the room back after about
+  21 s. Found:
+  - A room frame flashed by when an insert queued behind it.
+  - The cut came back to an older room.
+  - The last insert was taken down at once.
+  - The item backfill was refused `not_fillable`: expertise is not a backfill field, by design.
+- Run 57 (`run57-gauntlet.md`): every line answered. Three inserts, each with one backfilled
+  detail: "the Frostline's slender silver-steel blade was folded and pattern-welded ... the
+  guard is plain and firm, the grip wrapped for a sure hold, and the rounded pommel balances the
+  blade"; the Nightglass's "near-black blade, its violet sigils dimming in shadow ... the bone
+  handle fitted close to the tang". Measured: a frame up 8.1 s before the next replaced it;
+  inserts up 20.2 and 24.6 s; frames made in 67 to 134 s.
+
+Open:
+- "Certainly, here, hilt first" opens all three close-look answers: a stance's habit the
+  conduct rule does not reach yet.
+- The Frostline insert shows silver runes where the stall plate glows blue: the backfill wrote
+  "catch the light in silver".
+- Each run appends another backfilled paragraph per item to Haldor's backstory, because the
+  backfill does not know it described the blade before.
+- Bram's haggle beat was once worded backwards ("That's a fine blade, not a dear one").
+- While an insert is up, bubbles sit where the room's faces were.
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

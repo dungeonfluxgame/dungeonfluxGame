@@ -13,7 +13,8 @@
 # her fruit stall. `@frames <option>` lines (one `persona watch` option each: `frames=<name>`,
 # `scene=<what the picture shows>`, `hold=30`, ...) let the picture follow the thread: every line
 # said is handed to `persona watch`, whose transcript is printed at the end and kept in
-# $FRAMES_LOG.
+# $FRAMES_LOG. `@backfill sync` has the keeper's missing details (how a blade looks up close)
+# backfilled before the answer, so the answer can say them (`persona ask backfill=sync`).
 cd "$(dirname "$0")/.."
 D=${DF_TABLE_EXE:-./artifacts/build/bubbles/debug/df-table.exe}
 P=${DF_TABLE_PORT:-7879}
@@ -27,6 +28,7 @@ KEEPER_SITUATION="At her fruit stall in the town market."
 SPEAKER_SITUATION="At Mara's fruit stall in the town market, with your travelling companion."
 STARTING_STATE=()
 FRAMES=()
+KEEPER_BACKFILL=true
 while IFS= read -r setting; do
   value=${setting#* }
   case "$setting" in
@@ -36,6 +38,7 @@ while IFS= read -r setting; do
     '@state '*) STARTING_STATE+=("set $value") ;;
     '@rapport '*) STARTING_STATE+=("rapport $value") ;;
     '@frames '*) FRAMES+=("$value") ;;
+    '@backfill '*) KEEPER_BACKFILL=$value ;;
   esac
 done < <(grep '^@' "$BEATS")
 # `@state <emotion> <level>` and `@rapport <toward> <-100..100>` lines set where the keeper's
@@ -95,7 +98,7 @@ keeper() {
   local out line
   recent_args
   out=$(timeout 280 $D dev --port $P persona ask "$KEEPER" "from=$LAST_SPEAKER" "${RECENT[@]}" \
-    "situation=$KEEPER_SITUATION" "$LAST" 2>&1)
+    "backfill=$KEEPER_BACKFILL" "situation=$KEEPER_SITUATION" "$LAST" 2>&1)
   line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
   N=$((N + 1))
   printf '[%02d] %s: %s\n' "$N" "$KEEPER" "${line:-<no line: $out>}"

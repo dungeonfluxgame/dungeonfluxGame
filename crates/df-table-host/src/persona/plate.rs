@@ -8,10 +8,13 @@
 //! latest lines, with no model call, so it is the same for the same talk. The title chip of the
 //! scene is the spinner while the picture is made, and is put back whether the plate worked or not.
 
+use std::time::{Duration, Instant};
+
 use df_playground::lobby::change::{RoleplayEdit, ScreenEdit};
 use df_playground::lobby::model::SceneTitle;
 use df_playground::overlay::Glyph;
 use df_playground::scene::{ImageSlot, SceneChange};
+use df_scene_layout::SceneLayout;
 
 use super::converse::{Table, Turn};
 use crate::dev::DevError;
@@ -212,7 +215,7 @@ pub(super) async fn make_frame(
     prompt: &str,
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
-    after: Option<tokio::sync::oneshot::Receiver<()>>,
+    after: Option<tokio::sync::oneshot::Receiver<Instant>>,
 ) -> Result<String, PlateFailure> {
     let present: Vec<String> = characters
         .iter()
@@ -225,11 +228,41 @@ pub(super) async fn make_frame(
     Ok(summary)
 }
 
-/// Waits for `after` to fire, when there is one; a sender that went away (its frame failed) lets
-/// this one go on.
-async fn wait_turn(after: Option<tokio::sync::oneshot::Receiver<()>>) {
-    if let Some(after) = after {
-        let _ = after.await;
+/// Makes the insert `name` (a cut to an item filling the screen) and puts it behind the scene
+/// once `after` has fired. Nobody's face is in it, so it is not scanned: it is shown with the
+/// layout of `room`, the picture it cuts away from, so the scene keeps its cast (who may speak,
+/// and where their bubbles sit) while the camera is on the item.
+pub(super) async fn make_insert(
+    port: u16,
+    name: &str,
+    prompt: &str,
+    base: Option<&str>,
+    room: &str,
+    after: Option<tokio::sync::oneshot::Receiver<Instant>>,
+) -> Result<String, PlateFailure> {
+    let picture = generate(port, name, prompt, base).await?;
+    let layout = show_layout(port, room)
+        .await
+        .map(|stored| stored.layout)
+        .map_err(at(PlateStep::Locate))?;
+    wait_turn(after).await;
+    put_backdrop(port, &picture, Some(layout)).await?;
+    Ok(format!(
+        "insert {name}: {picture} is behind the scene, with the cast of {room}"
+    ))
+}
+
+/// The least time a frame stays on screen before a later one, made alongside it, replaces it: a
+/// picture that flashed by would be a flicker nobody at the table could follow.
+const MINIMUM_SHOWN: Duration = Duration::from_secs(8);
+
+/// Waits for the frame before this one to be shown (when there is one) and then to have been up
+/// for `MINIMUM_SHOWN`; a sender that went away (its frame failed) lets this one go on at once.
+async fn wait_turn(after: Option<tokio::sync::oneshot::Receiver<Instant>>) {
+    if let Some(after) = after
+        && let Ok(shown_at) = after.await
+    {
+        tokio::time::sleep(MINIMUM_SHOWN.saturating_sub(shown_at.elapsed())).await;
     }
 }
 
@@ -266,8 +299,13 @@ async fn drop_stale_bubbles(port: u16, present: &[String]) -> Result<(), DevErro
     Ok(())
 }
 
-/// Puts `picture` behind the scene.
-async fn put_backdrop(port: u16, picture: &str) -> Result<(), PlateFailure> {
+/// Puts `picture` behind the scene, with `layout` when given (otherwise the host attaches the
+/// picture's own scan, when it has one).
+pub(super) async fn put_backdrop(
+    port: u16,
+    picture: &str,
+    layout: Option<SceneLayout>,
+) -> Result<(), PlateFailure> {
     change(
         port,
         &SceneChange::Image {
@@ -276,7 +314,7 @@ async fn put_backdrop(port: u16, picture: &str) -> Result<(), PlateFailure> {
             caption: None,
             rotation_degrees: 0,
             slide: None,
-            layout: None,
+            layout,
         },
     )
     .await
@@ -289,14 +327,14 @@ async fn build(
     prompt: &str,
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
-    after: Option<tokio::sync::oneshot::Receiver<()>>,
+    after: Option<tokio::sync::oneshot::Receiver<Instant>>,
 ) -> Result<String, PlateFailure> {
     // A plate already in the library with its scan is kept, not rendered again: the name is its
     // identity (a generated plate is stored as `<name>.png`). Use a new name to render a new one.
     let kept = format!("{name}.png");
     if show_layout(port, &kept).await.is_ok() {
         wait_turn(after).await;
-        put_backdrop(port, &kept).await?;
+        put_backdrop(port, &kept, None).await?;
         return Ok(format!(
             concat!(
                 "plate {}: kept {} and its scan, not rendered again; the characters in it ",
@@ -305,25 +343,7 @@ async fn build(
             name, kept
         ));
     }
-    let request = GenerateRequest {
-        prompt: prompt.to_owned(),
-        name: name.to_owned(),
-        purpose: Some(Purpose::Plate),
-        aspect: None,
-        wait: true,
-        base: base.map(str::to_owned),
-    };
-    let generated: GenerateReply<crate::imagegen::request::JobView> =
-        post_json(port, image_path::GENERATE, &request)
-            .await
-            .map_err(at(PlateStep::Generate))?;
-    let job = reply_value(generated).map_err(at(PlateStep::Generate))?;
-    let JobState::Stored { provenance, .. } = job.state else {
-        return Err(at(PlateStep::Generate)(DevError::PlateNotStored {
-            name: job.name,
-        }));
-    };
-    let picture = provenance.media_file;
+    let picture = generate(port, name, prompt, base).await?;
     let located: LocateReply<LocatedLayout> = post_json(
         port,
         locate_path::LOCATE,
@@ -349,7 +369,7 @@ async fn build(
     .map_err(at(PlateStep::Identify))?;
     let identified = reply_value(identified).map_err(at(PlateStep::Identify))?;
     wait_turn(after).await;
-    put_backdrop(port, &picture).await?;
+    put_backdrop(port, &picture, None).await?;
     let named = identified
         .rows
         .iter()
@@ -360,4 +380,33 @@ async fn build(
         located.layout.regions().len(),
         identified.rows.len()
     ))
+}
+
+/// Generates the plate `name` from `prompt` (an edit of `base` when given) and gives the stored
+/// picture's file name.
+async fn generate(
+    port: u16,
+    name: &str,
+    prompt: &str,
+    base: Option<&str>,
+) -> Result<String, PlateFailure> {
+    let request = GenerateRequest {
+        prompt: prompt.to_owned(),
+        name: name.to_owned(),
+        purpose: Some(Purpose::Plate),
+        aspect: None,
+        wait: true,
+        base: base.map(str::to_owned),
+    };
+    let generated: GenerateReply<crate::imagegen::request::JobView> =
+        post_json(port, image_path::GENERATE, &request)
+            .await
+            .map_err(at(PlateStep::Generate))?;
+    let job = reply_value(generated).map_err(at(PlateStep::Generate))?;
+    let JobState::Stored { provenance, .. } = job.state else {
+        return Err(at(PlateStep::Generate)(DevError::PlateNotStored {
+            name: job.name,
+        }));
+    };
+    Ok(provenance.media_file)
 }

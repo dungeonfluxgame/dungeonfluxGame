@@ -32,8 +32,8 @@ use super::format::{
     format_list, format_owner, format_public, format_spoken, format_voice_generated,
 };
 use super::frame_watch::{
-    DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions, MAXIMUM_PARALLEL_FRAMES,
-    judge_frame, watch_lines,
+    DEFAULT_HOLD_SECONDS, DEFAULT_INSERT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions,
+    MAXIMUM_PARALLEL_FRAMES, judge_frame, watch_lines,
 };
 use super::options::{Asking, GUIDANCE_KEYS, GuidanceArgs, asking_from, take_options};
 use super::request::{
@@ -162,7 +162,8 @@ pub const PERSONA_CONVERSE_USAGE: &str = concat!(
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
     "[plate=<name>] [model=<name>] [with=<id>,<id>...] [events=<file of turn | what happens>] ",
     "[frames=<name> [gate=0-100] [scene=<what the picture shows>] ",
-    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [max_frames=N] [parallel=1-4] ",
+    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [insert_hold=<seconds>] ",
+    "[max_frames=N] [parallel=1-4] ",
     "[judge_model=<name>]] [<topic...>]",
 );
 /// `persona frame`: how much the picture would visibly change for these lines.
@@ -171,7 +172,8 @@ pub const PERSONA_FRAME_USAGE: &str =
 /// `persona watch`: frames for lines said elsewhere, read from standard input.
 pub const PERSONA_WATCH_USAGE: &str = concat!(
     "persona watch frames=<name> [gate=0-100] [scene=<what the picture shows>] ",
-    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [max_frames=N] [parallel=1-4] ",
+    "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [insert_hold=<seconds>] ",
+    "[max_frames=N] [parallel=1-4] ",
     "[judge_model=<name>], with one '<speaker id> | <line>' per line of standard input",
 );
 /// `persona ask`: coverage, backfill of gaps, then the line.
@@ -466,6 +468,7 @@ fn parse_converse(words: &[String]) -> Result<PersonaCommand, CommandError> {
             "edit",
             "edit_from",
             "hold",
+            "insert_hold",
             "max_frames",
             "judge_model",
             "with",
@@ -554,6 +557,7 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
                     | "edit"
                     | "edit_from"
                     | "hold"
+                    | "insert_hold"
                     | "max_frames"
                     | "parallel"
                     | "judge_model"
@@ -588,6 +592,10 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         .map(|text| number("hold", text, 3_600))
         .transpose()?
         .unwrap_or(DEFAULT_HOLD_SECONDS);
+    let insert_hold = value("insert_hold")
+        .map(|text| number("insert_hold", text, 3_600))
+        .transpose()?
+        .unwrap_or(DEFAULT_INSERT_HOLD_SECONDS);
     let maximum_frames = value("max_frames")
         .map(|text| number("max_frames", text, 100))
         .transpose()?
@@ -623,6 +631,7 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
             .unwrap_or(true),
         from_last,
         hold: Duration::from_secs(hold),
+        insert_hold: Duration::from_secs(insert_hold),
         maximum_frames,
         parallel,
         judge_model: value("judge_model").map(str::to_owned),
@@ -671,6 +680,7 @@ fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
             "edit",
             "edit_from",
             "hold",
+            "insert_hold",
             "max_frames",
             "judge_model",
             "parallel",
