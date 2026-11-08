@@ -125,3 +125,10 @@ fn a_stall_keeper_in_the_world_facts_is_shown_as_the_character_knows_them() {
         "the keeper's own stall"
     );
 }
+
+#[test]
+fn a_text_carrying_a_storyteller_handle_is_seen() {
+    let handles = Handles::author(["warrior", "harbour_merchant"]);
+    assert!(handles.carried_by("Ask person-2 where he was."));
+    assert!(!handles.carried_by("Ask the merchant where he was."));
+}

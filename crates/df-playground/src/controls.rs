@@ -134,8 +134,9 @@ pub struct Controls {
     pub status_key: String,
     pub show_unavailable: bool,
     pub show_grid: bool,
-    /// Whether the backdrop's scanned layout (SAM regions and head points) is drawn over it.
-    #[serde(default = "on_by_default")]
+    /// Whether the backdrop's scanned layout (SAM regions and head points) is drawn over it. Off
+    /// by default (owner, 2026-11-08): the plate is shown clean, and a developer turns it on.
+    #[serde(default)]
     pub show_sam: bool,
     /// Whether the host voices lines (text to speech). Off, a line is shown and not spoken. Off
     /// by default: voice costs money and needs a key, so a developer turns it on.
@@ -153,10 +154,6 @@ pub struct Controls {
     pub zoom_limit: ZoomLimit,
 }
 
-fn on_by_default() -> bool {
-    true
-}
-
 impl Default for Controls {
     fn default() -> Self {
         Self {
@@ -166,7 +163,7 @@ impl Default for Controls {
             status_key: FIXTURE_STATUS_KEY.to_owned(),
             show_unavailable: false,
             show_grid: false,
-            show_sam: true,
+            show_sam: false,
             tts_on: false,
             stt_on: false,
             transition: Transition::default(),

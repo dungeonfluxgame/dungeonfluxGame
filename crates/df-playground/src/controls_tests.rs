@@ -96,7 +96,7 @@ fn each_change_sets_its_own_control() {
             status_key: "rolling".into(),
             show_unavailable: true,
             show_grid: true,
-            show_sam: true,
+            show_sam: false,
             tts_on: false,
             stt_on: false,
             transition: Transition::default(),
@@ -118,19 +118,19 @@ fn the_speech_switches_are_off_by_default_and_toggle() {
 }
 
 #[test]
-fn the_sam_layer_is_shown_by_default_and_toggles() {
+fn the_sam_layer_is_hidden_by_default_and_toggles() {
     let mut controls = Controls::default();
-    assert!(controls.show_sam);
-    controls
-        .apply(ControlsChange::ShowSam(false))
-        .expect("applies");
     assert!(!controls.show_sam);
-    // A controls record written before the layer existed reads as shown.
+    controls
+        .apply(ControlsChange::ShowSam(true))
+        .expect("applies");
+    assert!(controls.show_sam);
+    // A controls record written before the layer existed reads as hidden.
     let old: Controls = serde_json::from_str(
         r#"{"fixture":null,"device":"both","pace":"normal","status_key":"fixture","show_unavailable":false,"show_grid":false}"#,
     )
     .expect("reads");
-    assert!(old.show_sam);
+    assert!(!old.show_sam);
 }
 
 #[test]

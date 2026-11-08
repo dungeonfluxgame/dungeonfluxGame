@@ -1,0 +1,78 @@
+# The Lantern Bait (story plotted by `persona story plot`, scenes arrival, bar, graveyard): four
+# broke travellers ride into town, look round the market, go to the inn, flirt with the barmaid,
+# overhear a well-dressed stranger's graveyard mystery and reward, question him, and go to the
+# graveyard by night, where they find it was a trap for outsiders. Nothing is scripted: each move
+# comes from the storyteller at the table (`persona story next`), from what has been said.
+# Needs `quest-market.png`, `quest-inn.png` and `quest-graveyard.png` (scanned and named) and
+# `persona story apply` run on each, so every character has a persona and its secrets.
+@flow arrival
+@frames frames=quest-a
+@frames hold=30
+@frames max_frames=8
+@frames parallel=2
+@place arrival quest-market.png
+@place_keeper arrival market_witness
+@place_keeper_situation arrival At your fruit stall in the town market at dusk, packing up the last apples as the stalls close, when four dusty travellers come in leading their tired horses.
+@place_situation arrival In the town market at dusk as the canvas stalls close and a watch lantern is lit; four travellers have just ridden in, purses empty, and townsfolk are packing up.
+@place_scene arrival A small medieval market square at dusk, canvas stalls closing up, half-packed fruit baskets, a darkening lane between timber houses, a watch lantern lit on a post: at the left the blond bearded man in a fur mantle, the dark-haired woman in a green hooded cloak, the red-bearded man and the young woman with a long braid lead their horses; in the middle a sturdy fruit seller in a headscarf packs apples beside a thin grey-haired fruit vendor in a linen cap; the heavy bearded merchant in a fur-collared coat watches; at the right under the lantern the broad dark-bearded guard in mail and the lean dark-haired woman sergeant in a steel cap.
+@place bar quest-inn.png
+@place_keeper bar tavern_server
+@place_keeper_situation bar Serving ale in the low-beamed taproom of the Ember Roads inn at night, the hearth lit and a fiddler playing, four travellers at a table and a well-dressed stranger at the next.
+@place_situation bar In the low-beamed taproom of the Ember Roads inn at night, the hearth lit and a fiddler by it, travellers and townsfolk drinking, a well-dressed stranger with muddy boots talking to the room.
+@place_scene bar The low-beamed taproom of a medieval inn at night, firelight and candles, a shuttered window: at the left the four travellers at a rough table (the blond bearded man in a fur mantle, the dark-haired woman in a green hood, the red-bearded man, the young woman with a long braid); the sturdy barmaid with rolled sleeves sets down mugs; by the hearth the wiry young fiddler; in the middle the well-dressed stranger in a dark blue doublet and cloak, his boots caked with pale mud, holds up a small black-wax token; at the right behind the counter the stout balding innkeeper in a leather apron.
+@place graveyard quest-graveyard.png
+@place_keeper graveyard groundsman
+@place_keeper_situation graveyard In the old graveyard beyond the town wall at night, by the yew, as four travellers come through the gate with a lantern.
+@place_situation graveyard In the old graveyard beyond the town wall at night under a cloudy moon, among leaning headstones and a great yew, with a lantern for light.
+@place_scene graveyard An old graveyard beyond a town wall at night under a cloudy moon, leaning headstones, a crooked wooden grave marker, wheel ruts in the mud by the gate, a great yew: at the left the four travellers come through the gate, the young woman with the long braid holding up a lantern; in the middle, half hidden by the yew, the gaunt groundsman in a stained smock with a spade; at the back right by a tall tomb the thin grey-haired man in a dark scholar's robe stands in shadow; a low lantern glows behind a broken stone; dark shapes crouch on the wall.
+# Everyone starts clean, and knows the names they would: the four travel together; the townsfolk
+# of the market, of the inn and of the graveyard plot know their own.
+! persona state warrior reset
+! persona state mara_adventurer reset
+! persona state jory_adventurer reset
+! persona state sella_adventurer reset
+! persona state market_witness reset
+! persona state fruit_vendor reset
+! persona state market_factor reset
+! persona state town_guard reset
+! persona state town_sergeant reset
+! persona state tavern_server reset
+! persona state innkeeper reset
+! persona state fiddler reset
+! persona state inn_stranger reset
+! persona state groundsman reset
+! persona state antiquarian reset
+! persona state warrior knows mara_adventurer
+! persona state warrior knows jory_adventurer
+! persona state warrior knows sella_adventurer
+! persona state mara_adventurer knows warrior
+! persona state mara_adventurer knows jory_adventurer
+! persona state mara_adventurer knows sella_adventurer
+! persona state jory_adventurer knows warrior
+! persona state jory_adventurer knows mara_adventurer
+! persona state jory_adventurer knows sella_adventurer
+! persona state sella_adventurer knows warrior
+! persona state sella_adventurer knows mara_adventurer
+! persona state sella_adventurer knows jory_adventurer
+! persona state market_witness knows fruit_vendor
+! persona state market_witness knows market_factor
+! persona state market_witness knows town_guard
+! persona state market_witness knows town_sergeant
+! persona state fruit_vendor knows market_witness
+! persona state fruit_vendor knows market_factor
+! persona state market_factor knows market_witness
+! persona state market_factor knows fruit_vendor
+! persona state town_guard knows town_sergeant
+! persona state town_sergeant knows town_guard
+! persona state tavern_server knows innkeeper
+! persona state tavern_server knows fiddler
+! persona state innkeeper knows tavern_server
+! persona state innkeeper knows fiddler
+! persona state fiddler knows tavern_server
+! persona state fiddler knows innkeeper
+! persona state inn_stranger knows antiquarian
+! persona state inn_stranger knows groundsman
+! persona state groundsman knows antiquarian
+! persona state groundsman knows inn_stranger
+! persona state antiquarian knows inn_stranger
+! persona state antiquarian knows groundsman

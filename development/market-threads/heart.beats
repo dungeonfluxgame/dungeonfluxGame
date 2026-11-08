@@ -1,5 +1,14 @@
 # Fear, sadness, surprise, amusement, attraction, embarrassment, disgust: the rest of the range, then back to business.
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper fruit_vendor
+@keeper_situation At her fruit stall in the town market.
+@speaker_situation At Mara's fruit stall in the town market, with your travelling companion.
+# Mara's discount rules live in her persona (a trigger is a statement the model judges, never a
+# keyword); adding them again to a persona that has them is refused and ignored.
+! persona behavior fruit_vendor add firm-price "Holds her price on a single piece of fruit and politely refuses any discount on just one; she says each piece is already priced fairly."
+! persona behavior fruit_vendor add bulk-discount "Offers a modest discount, warmly and with a little pride, when a customer buys five or more pieces of fruit."
+! persona trigger fruit_vendor add one-piece-haggle behavior=firm-price "A customer asks for a discount on a single piece of fruit"
+! persona trigger fruit_vendor add bulk-buyer behavior=bulk-discount "A customer buys five or more pieces of fruit"
 elf | Lean in and warn her quietly that the men who burned the mill last week were asking about her stall.
 warrior | Tell her not to worry, you will stand by the stall a while.
 elf | Tell her gently that the orchard beyond town was among the farms that burned.

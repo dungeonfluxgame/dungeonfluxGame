@@ -1,5 +1,14 @@
 # Small talk and trade questions: does Mara answer like a person who has kept this stall for years?
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper fruit_vendor
+@keeper_situation At her fruit stall in the town market.
+@speaker_situation At Mara's fruit stall in the town market, with your travelling companion.
+# Mara's discount rules live in her persona (a trigger is a statement the model judges, never a
+# keyword); adding them again to a persona that has them is refused and ignored.
+! persona behavior fruit_vendor add firm-price "Holds her price on a single piece of fruit and politely refuses any discount on just one; she says each piece is already priced fairly."
+! persona behavior fruit_vendor add bulk-discount "Offers a modest discount, warmly and with a little pride, when a customer buys five or more pieces of fruit."
+! persona trigger fruit_vendor add one-piece-haggle behavior=firm-price "A customer asks for a discount on a single piece of fruit"
+! persona trigger fruit_vendor add bulk-buyer behavior=bulk-discount "A customer buys five or more pieces of fruit"
 elf | You are at Mara's fruit stall in the town market with the warrior. Greet her and ask how long she has kept this stall.
 elf | Ask Mara, as a question to her, which of her fruit is best this week, and why.
 warrior | Pick up a pear and ask, bluntly, how you tell if it is ripe.

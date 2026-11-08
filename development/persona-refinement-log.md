@@ -854,6 +854,55 @@ Run 76 (`run76-judgement.md`, stopped at line 44):
   44 lines.
 - A goal's speaker is always "you", never their own look.
 
+## Refinement 25 and runs 77 to 86 (the quest "The Lantern Bait": a story that flows)
+
+Goal (owner, 2026-11-08): four broke players ride into town, look round the market, go to the
+inn, flirt, overhear a stranger's reward for a graveyard mystery, question him, and find at the
+graveyard that it was a trap for outsiders. The narrative engine designs the backstory,
+characters, personas and secrets ahead; play flows and is never scripted ("the narrative engine
+should just flow and not predetermine scenes").
+
+- **The storyteller, for any story:**
+  - scenes come with the request, each with its place, dressing (for the camera) and danger;
+  - the hook replaces the arrest's charge;
+  - characters carry secrets with reveal conditions and who knows them, which `apply` puts
+    into the personas;
+  - existing personas may be cast;
+  - the plot plans no moves.
+  The arrest-only check (three moves for the accused at a judgement) and story-specific prompt
+  examples were removed ("remember not to hard code story details into the engine").
+- **Plates:** fresh photographic plates for the market, the inn and the graveyard, made with
+  one cast description, scanned, named and evaluated. The SAM layer is now off by default in
+  the playground.
+- **The live game master (`persona story next`):** one move at a time from what has been said.
+  Each problem a run showed, with its fix:
+  - run 77: secrets let out unasked, and townsfolk led → the reveal judge, and players lead;
+  - runs 77 and 78: one player had every move, and answers went to the wrong person → the last
+    speaker waits, and whoever a move is put to answers;
+  - runs 78 and 81: a player asked after "lights" nobody had mentioned → the knowledge judge,
+    told who is there and how they look (run 80), made strict;
+  - runs 79 and 81: townsfolk moved while players waited → play in rounds, judged over all
+    players;
+  - runs 82 to 84: no move could be found, as every attempt sent a newcomer to ask about the
+    graveyard → three attempts, and the people already there open a place.
+- **A rules review (independent reviewer), fixed:**
+  - the reveal judge's reason could carry raw ids into a character's prompt, and a second
+    early wording was still released;
+  - plot ids carried hidden parts (`graveyard_lure`), renamed and now refused by code;
+  - a goal could carry a storyteller handle;
+  - the live step had copied the moves question's setup (now one `AuthorView`);
+  - CLI verbs silently ignored options they don't take.
+  - The runner had the fruit-stall scenario hard-coded (its default keeper, situations and
+    discount rules); they moved into the beats files.
+- **Run 85, what worked:** the fruit seller kept her secret ("only market talk") until a player
+  asked gently and promised the watch would hear her without blame, exactly her conditions;
+  then she told of the hooded lantern-carrier, a clue reached by play.
+- **Open:**
+  - no run has yet reached the inn or the graveyard;
+  - Kael's ill-tempered style has not been seen in play;
+  - small slips ("sir" to a woman) are left alone, as the owner prefers ("accidents can be ok,
+    it feels more human").
+
 ## Timeline (commit times, 2026-11-07)
 
 12:11 persona engine (emotion layer, one call per line, lean Codex) -> 12:18 refinement 1 ->

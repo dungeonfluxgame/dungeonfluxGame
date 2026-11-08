@@ -75,10 +75,14 @@ pub const PERSONA_USAGE: &str = concat!(
     "[model=<name>] [frames=<name> <frame options>] [<topic...>] | ",
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
     "persona watch frames=<name> <frame options> (lines '<speaker id> | <line>' on stdin) | ",
-    "persona story plot [cast=<id>,<id>...] [model=<name>] <premise...> | persona story show | ",
+    "persona story plot [cast=<id>,<id>...] scenes=<id>,<id>... [model=<name>] <premise...> | ",
+    "persona story show | ",
     "persona story apply [model=<name>] | persona story moves [model=<name>] <scene> | ",
     "persona story beats <scene> | ",
-    "persona addressed <speaker> [recent=<text>]... [intent=<text>] [model=<name>] <line...> | ",
+    "persona story next [opening=true] [after=<id>] [recent=<line>]... ",
+    "[model=<name>] <place> | ",
+    "persona addressed <speaker> [recent=<text>]... [intent=<text>] [reply=true|false] ",
+    "[model=<name>] <line...> | ",
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...> | ",
@@ -188,9 +192,12 @@ pub const PERSONA_ADDRESSED_USAGE: &str = concat!(
 /// `persona story`: the storyteller plots the story behind a scene, and hands each character its
 /// own guidance.
 pub const PERSONA_STORY_USAGE: &str = concat!(
-    "persona story plot [cast=<id>,<id>...] [model=<name>] <premise...> | persona story show | ",
+    "persona story plot [cast=<id>,<id>...] scenes=<id>,<id>... [model=<name>] <premise...> | ",
+    "persona story show | ",
     "persona story apply [model=<name>] | persona story moves [model=<name>] <scene> | ",
-    "persona story beats <scene>",
+    "persona story beats <scene> | ",
+    "persona story next [opening=true] [after=<id>] [recent=<line>]... ",
+    "[model=<name>] <place>",
 );
 /// `persona ask`: coverage, backfill of gaps, then the line.
 pub const PERSONA_ASK_USAGE: &str = concat!(
@@ -318,6 +325,8 @@ pub enum PersonaCommand {
     StoryPlot {
         premise: String,
         cast: Vec<String>,
+        /// The scenes the story plays out over, in order.
+        scenes: Vec<String>,
         model: Option<String>,
     },
     /// Show the plotted story, the truth included (operator view).
@@ -336,6 +345,16 @@ pub enum PersonaCommand {
     StoryApply { model: Option<String> },
     /// The moves the plot gives a scene, as market-runner beats.
     StoryBeats { scene: String },
+    /// The game master's next move where play is, from the lines said so far.
+    StoryNext {
+        place: String,
+        recent: Vec<String>,
+        /// The first move at the place.
+        opening: bool,
+        /// Who made the last move.
+        after: Option<String>,
+        model: Option<String>,
+    },
     /// Have the storyteller plot the moves of one scene of the stored story.
     StoryMoves {
         scene: String,
@@ -749,36 +768,61 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let Some((verb, rest)) = words.split_first() else {
         return Err(CommandError::Usage(PERSONA_STORY_USAGE));
     };
-    let (given, rest) = take_options(rest, &["cast", "model"]);
+    let (given, rest) = take_options(
+        rest,
+        &["cast", "scenes", "recent", "after", "opening", "model"],
+    );
+    // A verb takes only its own options: one it does not take is refused, never ignored.
+    let only = |allowed: &[&str]| given.iter().all(|(key, _)| allowed.contains(key));
+    let plain = |word: &str| id_word(word).map(|id| id.to_string());
     let value = |key: &str| {
         given
             .iter()
             .find(|(seen, _)| *seen == key)
             .map(|(_, value)| (*value).to_owned())
     };
+    // A comma list of plain ids (`cast=`, `scenes=`).
+    let ids = |key: &str| {
+        value(key)
+            .map(|ids| {
+                ids.split(',')
+                    .map(|id| id_word(id.trim()).map(|id| id.to_string()))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
     match (verb.as_str(), rest.is_empty()) {
-        ("plot", false) => Ok(PersonaCommand::StoryPlot {
+        ("plot", false) if only(&["cast", "scenes", "model"]) => Ok(PersonaCommand::StoryPlot {
             premise: rest.join(" "),
-            cast: value("cast")
-                .map(|ids| {
-                    ids.split(',')
-                        .map(|id| id_word(id.trim()).map(|id| id.to_string()))
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .transpose()?
-                .unwrap_or_default(),
+            cast: ids("cast")?,
+            scenes: ids("scenes")?,
             model: value("model"),
         }),
         ("show", true) if given.is_empty() => Ok(PersonaCommand::StoryShow),
-        ("apply", true) if value("cast").is_none() => Ok(PersonaCommand::StoryApply {
+        ("apply", true) if only(&["model"]) => Ok(PersonaCommand::StoryApply {
             model: value("model"),
         }),
         ("beats", false) if given.is_empty() && rest.len() == 1 => Ok(PersonaCommand::StoryBeats {
-            scene: rest[0].clone(),
+            scene: plain(&rest[0])?,
         }),
-        ("moves", false) if rest.len() == 1 && value("cast").is_none() => {
-            Ok(PersonaCommand::StoryMoves {
-                scene: rest[0].clone(),
+        ("moves", false) if rest.len() == 1 && only(&["model"]) => Ok(PersonaCommand::StoryMoves {
+            scene: plain(&rest[0])?,
+            model: value("model"),
+        }),
+        ("next", false) if rest.len() == 1 && only(&["recent", "after", "opening", "model"]) => {
+            Ok(PersonaCommand::StoryNext {
+                place: plain(&rest[0])?,
+                recent: given
+                    .iter()
+                    .filter(|(key, _)| *key == "recent")
+                    .map(|(_, line)| (*line).to_owned())
+                    .collect(),
+                opening: value("opening")
+                    .map(|text| flag("opening", &text))
+                    .transpose()?
+                    .unwrap_or(false),
+                after: value("after").map(|id| plain(&id)).transpose()?,
                 model: value("model"),
             })
         }
@@ -1048,7 +1092,7 @@ async fn write_file(port: u16, id: &PersonaId, file: &Path) -> Result<String, De
 }
 
 /// Sends `edits` to the edit route and tells what came of them.
-async fn send_edits(
+pub(super) async fn send_edits(
     port: u16,
     id: &PersonaId,
     edits: Vec<PersonaEdit>,
@@ -1394,10 +1438,36 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
         PersonaCommand::StoryPlot {
             premise,
             cast,
+            scenes,
             model,
-        } => super::story::plot_story(port, premise, cast, model).await,
+        } => {
+            let request = super::story::StoryRequest {
+                premise,
+                cast,
+                scenes,
+                model,
+            };
+            super::story::plot_story(port, request).await
+        }
         PersonaCommand::StoryShow => super::story::show_story(port).await,
         PersonaCommand::StoryBeats { scene } => super::story::scene_beats(port, scene).await,
+        PersonaCommand::StoryNext {
+            place,
+            recent,
+            opening,
+            after,
+            model,
+        } => {
+            let request = super::story_next::NextRequest {
+                place,
+                present: Vec::new(),
+                recent,
+                opening,
+                after,
+                model,
+            };
+            super::story_next::next_story_move(port, request).await
+        }
         PersonaCommand::StoryMoves { scene, model } => {
             super::story::plot_scene_moves(port, scene, model).await
         }

@@ -79,6 +79,14 @@ impl Handles {
         }
     }
 
+    /// Whether `text` carries one of these handles: written for one prompt's numbering, a
+    /// handle points at someone else in another's (a goal handed on to a speaker).
+    pub(super) fn carried_by(&self, text: &str) -> bool {
+        self.shown
+            .iter()
+            .any(|(_, called)| called.starts_with(HANDLE_PREFIX) && text.contains(called.as_str()))
+    }
+
     /// What the character calls `id`: itself and anyone whose name it knows by their id, a
     /// stranger it was told of by their handle, and anyone else `someone`.
     pub(super) fn shown(&self, id: &str) -> String {

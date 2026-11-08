@@ -1,5 +1,14 @@
 # Provisioning: does she sell like a trader (quantities, a mix, totals from the stall's prices)?
 # speaker | what the speaker sets out to do (their goal; they word it themselves)
+@keeper fruit_vendor
+@keeper_situation At her fruit stall in the town market.
+@speaker_situation At Mara's fruit stall in the town market, with your travelling companion.
+# Mara's discount rules live in her persona (a trigger is a statement the model judges, never a
+# keyword); adding them again to a persona that has them is refused and ignored.
+! persona behavior fruit_vendor add firm-price "Holds her price on a single piece of fruit and politely refuses any discount on just one; she says each piece is already priced fairly."
+! persona behavior fruit_vendor add bulk-discount "Offers a modest discount, warmly and with a little pride, when a customer buys five or more pieces of fruit."
+! persona trigger fruit_vendor add one-piece-haggle behavior=firm-price "A customer asks for a discount on a single piece of fruit"
+! persona trigger fruit_vendor add bulk-buyer behavior=bulk-discount "A customer buys five or more pieces of fruit"
 elf | You are at Mara's fruit stall in the town market with the warrior. Explain you are two travellers leaving for a week on the north road and ask what she sells.
 warrior | Ask Mara, as a question to her, what each costs.
 elf | Ask Mara, as a question to her, how many pieces of fruit two people need for a week on the road.

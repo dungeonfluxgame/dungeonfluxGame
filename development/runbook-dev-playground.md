@@ -360,6 +360,49 @@ flaws found in play; photographic frames and a camera insert on the dagger):
    image tv-backdrop`) and run that scene's beats with a copy of the runner, one after another.
 5. Run a copy of the runner (a running script must not be edited) and grade the transcript.
 
+**Flowing play: the story is prepared, never scripted** (owner, 2026-11-08: "the narrative
+engine should just flow and not predetermine scenes"; quest "The Lantern Bait", runs 77 to 86).
+
+- **Prepared ahead, by `persona story plot cast=<ids> scenes=<ids> <premise>`:** the hook, the
+  truth and who is behind it, the places (each with its dressing, things a camera can show, and
+  its danger, for the storyteller only), the beats (what each place offers and turns on, no
+  moves), clues (`evidence`, with what a close look shows) and every character's guidance and
+  secrets (text, sensitivity, reveal conditions, who else knows). Existing personas may be cast
+  under their own ids. A new id names a public place, never a hidden part (code refuses
+  `harbour_framer`; an id is shown to whoever learns that name). `persona story apply`, with each
+  place's plate shown in turn, writes the new personas and puts each character's secrets into
+  their persona.
+- **Played live, by `persona story next [opening=true] [after=<id>] [recent=<line>]...
+  <place>`:** the storyteller as game master gives one move at a time from what has been said:
+  who acts, whom it is put to, a goal, whether the players now set off for another place, and
+  whether the end is reached. Code decides who may move (`turn_speakers`):
+  - someone already there opens a place;
+  - after someone who is no player, a player moves;
+  - nobody moves twice running;
+  - play goes in rounds, the players who have spoken least first.
+
+  Three judges, each a model call against a closed schema, refuse a goal; it is asked again with
+  every reason, three tries in all:
+  - the names judge, for a goal that names someone;
+  - a goal carrying a storyteller handle (`person-N`) is refused too;
+  - the knowledge judge, for a goal that holds what its speaker could not know from their
+    guidance, their secrets, what was said, what is in sight and who is there.
+- **Secrets:** every line that lets a secret out is weighed by the reveal judge against that
+  secret's conditions, on what the speaker was shown. Out too early, the line is worded again;
+  a second early wording is refused. Run 77's opening lines let out two secrets unasked; since
+  then each reveal has come only when a condition held (run 85: the fruit seller told what she
+  saw once she was asked gently and promised no blame, exactly her conditions).
+- **Running it:** a beats file with `@flow <first place>` and, for each place, `@place <id>
+  <plate>`, `@place_keeper`, `@place_keeper_situation`, `@place_situation` and `@place_scene`
+  lines, plus the presets (`development/market-threads/lantern-bait.beats`). The runner prints
+  each move (`> <speaker> to <listener>: <goal>`) before its line, so a line can be checked
+  against what it was asked; the one a move is put to answers it.
+- **Players' styles:** each player has a default stance whose speech style is their kind of
+  question (`persona behavior <id> add <stance> default=true style=<how they ask> ...`), and a
+  goal leaves the manner to the speaker unless the approach is what will move someone.
+- **The runner holds no story:** every scene, keeper, situation and rule is in its beats file,
+  and a scripted file must name its `@keeper` and situations.
+
 The plot holds the public charge, the truth (kept in `persona/story.json` for tooling, never in
 a character's prompt), the culprit and motive, the evidence with what gives each piece away, the
 beats of each scene (`arrest`, `march`, `judgement`) and, for every character, a
@@ -388,12 +431,14 @@ the plot (`persona story moves`); the hand-written moves in those files are the 
 
 ## The market thread (re-runnable persona and backfill exercise)
 
-`bash development/market-thread.sh` runs 20 messages at the fruit stall: her name, where the
-apples come from, the price, a discount on one apple (should be refused), a discount on five
+`bash development/market-thread.sh development/market-threads/haggle.beats` (the runner takes
+no default: the beats file holds the scene, its keeper and its rules) runs 20 messages at the
+fruit stall: her name, where the apples come from, the price, a discount on one apple (should be refused), a discount on five
 (should be granted). The elf and the warrior get one goal per beat and word their own lines
 (`persona say`); Mara is fully live (`persona ask`: coverage, then backfill of what her persona
-lacks, then the answer). The script first adds her two discount rules to her persona (a firm
-price on one piece, a bulk discount at five; triggers are statements the model judges). Needs
+lacks, then the answer). Its beats file first adds her two discount rules to her persona (`!`
+lines: a firm price on one piece, a bulk discount at five; triggers are statements the model
+judges). Needs
 the market scene up (the walk-through above). Output: `[NN] speaker: line`, then coverage and
 backfill result lines for Mara; `persona backfills fruit_vendor` lists what was added.
 

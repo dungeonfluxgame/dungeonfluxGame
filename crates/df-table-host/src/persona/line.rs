@@ -32,6 +32,7 @@ use super::handles::Handles;
 use super::request::{
     BehaviorOverride, LineError, LineIdKind, PersonaError, QuoteBounds, QuoteReport, SaidLine,
 };
+use super::reveal::{RevealQuestion, early_reveals};
 use super::state::{apply_appraisal, crossing_triggers, learn_names, load_state, state_triggers};
 use crate::state::AppState;
 use crate::text::TextRoute;
@@ -67,14 +68,14 @@ const SAY_INSTRUCTION: &str = concat!(
     "line gives away, using the ids in their brief. A fired trigger's behavior is the one the ",
     "line takes. Judge triggers over recent and the current situation or question together, ",
     "never the last line alone: a quantity or an intent stated earlier still holds until it is ",
-    "changed (a customer who said five apples is still buying five). An emotional trigger's ",
+    "changed (a customer who asked for five is still buying five). An emotional trigger's ",
     "when_event is an event: it fires when the line just said does it, never again for one ",
     "already in recent (a plain order after a flirt is not another flirt). The engine adds the ",
     "sets of every emotional trigger that fires to your appraisal, so the appraisal leaves out ",
     "what those sets already change. ",
     "The other cast's briefs are what anyone knows of them; the line may address them. A title ",
     "or rank (Sergeant, Master) is only for the one whose brief gives it: never call one person ",
-    "by another's title (run 75: the mayor called the town guard Sergeant). A name is ",
+    "by another's title. A name is ",
     "never known from thin air: an other whose display_name is empty is someone whose name this ",
     "character has not been told, so the line never calls them by a name or invents one and ",
     "speaks to them as anyone would (by their trade, their look, sir, friend), unless the name ",
@@ -916,6 +917,12 @@ pub(super) async fn say_line(
     };
     let mut model_ms = 0;
     let mut retry_reason = None;
+    let shown_recent: Vec<String> = occasion
+        .recent
+        .iter()
+        .map(|line| handles.recent_line(line))
+        .collect();
+    let shown_asked = occasion.asked_by.map(|id| handles.shown(id));
     let answer = loop {
         let now = live_facts(
             &occasion,
@@ -928,11 +935,44 @@ pub(super) async fn say_line(
         let (answer, took) = ask_line(route, own, facts, schema.clone(), &lists).await?;
         let answer = with_ids(answer, &handles);
         model_ms += took;
-        // One more wording when the line misses its intent, repeats itself, or states a total
-        // the stall would not charge (the spoken number and the held quote would disagree).
-        let reason = answer
-            .intent_miss
-            .clone()
+        // A secret the line lets out is weighed against its reveal conditions (`reveal.rs`), on
+        // what this character was shown (handles, never ids it has not learned).
+        let question = RevealQuestion {
+            secrets: own
+                .private_secrets()
+                .iter()
+                .filter(|secret| answer.revealed_secrets.contains(&secret.id))
+                .collect(),
+            recent: &shown_recent,
+            asked_by: shown_asked.as_deref(),
+            situation: occasion.situation,
+        };
+        let early = early_reveals(app, route, character, &question).await?;
+        // A second wording that still lets a secret out early is refused, never released.
+        if !early.is_empty() && retry_reason.is_some() {
+            return Err(PersonaError::AnswerRefused {
+                replayed: false,
+                cause: LineError::Malformed {
+                    detail: "the line still lets a secret out before its conditions hold"
+                        .to_owned(),
+                }
+                .into(),
+            });
+        }
+        // The retry names only the character's own secrets, never the judge's words.
+        let early = (!early.is_empty()).then(|| {
+            let ids: Vec<&str> = early.iter().map(|(id, _)| id.as_str()).collect();
+            format!(
+                "the line lets out {} before any of its reveal conditions holds; keep it back \
+                 and answer without it",
+                ids.join(", ")
+            )
+        });
+        // One more wording when the line lets a secret out too early, misses its intent,
+        // repeats itself, or states a total the stall would not charge (the spoken number and the
+        // held quote would disagree).
+        let reason = early
+            .or_else(|| answer.intent_miss.clone())
             .or_else(|| answer.repeat.clone())
             .or_else(|| answer.slot_miss.clone())
             .or_else(|| quote_retry_reason(app, own.id().as_str(), &answer.quotes));

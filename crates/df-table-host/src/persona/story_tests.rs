@@ -20,19 +20,35 @@ fn defence(speaker: &str, to: &str, count: usize) -> Value {
     Value::Array(vec![one; count])
 }
 
+/// The scenes the test story is asked to play out over, in order.
+fn scenes() -> Vec<String> {
+    ["arrest", "march", "judgement"].map(str::to_owned).to_vec()
+}
+
+fn place(id: &str) -> Value {
+    json!({"id": id, "place": "The market square.", "dressing": ["a counting-house sign"],
+           "danger": "The watch is quick to the cudgel."})
+}
+
 fn answer() -> Value {
     json!({
         "title": "The Stolen Seal",
-        "accusation": "Theft of the town seal from the counting house.",
+        "hook": "Theft of the town seal from the counting house.",
+        "scenes": [place("march"), place("arrest"), place("judgement")],
         "truth": "The harbour merchant took the seal and hid it in the warrior's pack.",
         "culprit": "harbour_merchant",
         "motive": "The warrior saw him bribe the gate.",
         "characters": [
             {"id": "warrior", "name": "Kael", "new": false, "part": "accused",
-             "role": "A travelling sword for hire.", "guidance": guidance("He is innocent.")},
+             "role": "A travelling sword for hire.", "guidance": guidance("He is innocent."),
+             "secrets": []},
             {"id": "harbour_merchant", "name": "Oswin Tarr", "new": true, "part": "framer",
              "role": "A merchant with a ledger of debts.",
-             "guidance": guidance("He planted the seal.")}
+             "guidance": guidance("He planted the seal."),
+             "secrets": [{"id": "planted_seal", "text": "He hid the seal in the pack.",
+                          "sensitivity": "critical",
+                          "reveal_conditions": ["he is shown the gate's ledger"],
+                          "known_by": ["harbour_merchant"]}]}
         ],
         "evidence": [
             {"id": "seal_in_pack", "what": "The seal found in Kael's pack.",
@@ -42,38 +58,37 @@ fn answer() -> Value {
         ],
         "beats": [
             {"id": "charge", "scene": "arrest", "happens": "The guards read the charge.",
-             "turns_on": "Kael keeps his temper.", "leads": "warrior",
-             "moves": [{"speaker": "harbour_merchant", "to": "warrior",
-                        "goal": "Accuse the sword for hire, as a question to him."}]},
+             "turns_on": "Kael keeps his temper."},
             {"id": "street", "scene": "march", "happens": "The town watches.",
-             "turns_on": "A witness looks away.", "leads": "warrior",
-             "moves": [{"speaker": "warrior", "to": "harbour_merchant",
-                        "goal": "Ask the merchant, as a question to him, why."}]},
+             "turns_on": "A witness looks away."},
             {"id": "trial", "scene": "judgement", "happens": "The mayor hears the case.",
-             "turns_on": "The stable boy's word.", "leads": "warrior",
-             "moves": defence("warrior", "harbour_merchant", 3)}
+             "turns_on": "The stable boy's word."}
         ]
     })
 }
 
 #[test]
 fn a_plot_is_read_with_each_character_given_guided_guidance_under_the_title() {
-    let story = parse_story(&answer(), &["warrior".to_owned()], &[]).unwrap();
+    let story = parse_story(&answer(), (&["warrior".to_owned()], &[]), &scenes()).unwrap();
     assert_eq!(story.culprit, "harbour_merchant");
     let framer = &story.characters[1];
     assert!(framer.new);
     assert_eq!(framer.guidance.arc.as_deref(), Some("The Stolen Seal"));
     assert_eq!(framer.guidance.must_establish, ["He planted the seal."]);
     assert_eq!(story.beats.len(), 3);
-    assert_eq!(story.beats[0].moves[0].speaker, "harbour_merchant");
-    let mut unheard = answer();
-    unheard["beats"][2]["moves"] = defence("warrior", "harbour_merchant", 1);
     assert!(
-        matches!(
-            parse_story(&unheard, &["warrior".to_owned()], &[]),
-            Err(StoryError::MalformedAnswer { .. })
-        ),
-        "a plot whose judgement leaves the accused unheard"
+        story.beats.iter().all(|beat| beat.moves.is_empty()),
+        "a plot scripts no moves: play flows"
+    );
+    let ids: Vec<&str> = story.scenes.iter().map(|place| place.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["arrest", "march", "judgement"],
+        "scenes in the order asked for"
+    );
+    assert_eq!(
+        framer.secrets[0].reveal_conditions,
+        ["he is shown the gate's ledger"]
     );
 }
 
@@ -82,7 +97,7 @@ fn an_answer_that_leaves_out_the_cast_or_names_no_character_is_refused() {
     let refused = |answer: &Value, cast: &[&str]| {
         let cast: Vec<String> = cast.iter().map(|id| (*id).to_owned()).collect();
         matches!(
-            parse_story(answer, &cast, &["fruit_vendor".to_owned()]),
+            parse_story(answer, (&cast, &["fruit_vendor".to_owned()]), &scenes()),
             Err(StoryError::MalformedAnswer { .. })
         )
     };
@@ -111,11 +126,33 @@ fn an_answer_that_leaves_out_the_cast_or_names_no_character_is_refused() {
         refused(&reused, &["warrior"]),
         "a new character takes no stored persona's id"
     );
-    let mut stranger_move = answer();
-    stranger_move["beats"][0]["moves"][0]["speaker"] = json!("ghost");
+    // Someone who already lives in the world may be cast under their own id, never as new.
+    let mut townsfolk = answer();
+    let mut seller = townsfolk["characters"][1].clone();
+    seller["id"] = json!("fruit_vendor");
+    seller["new"] = json!(false);
+    seller["secrets"] = json!([]);
+    townsfolk["characters"].as_array_mut().unwrap().push(seller);
+    let others = ["fruit_vendor".to_owned()];
+    let cast_from_town = parse_story(&townsfolk, (&["warrior".to_owned()], &others), &scenes());
+    assert!(!cast_from_town.unwrap().characters[2].new);
+    let mut stranger_knows = answer();
+    stranger_knows["characters"][1]["secrets"][0]["known_by"] = json!(["ghost"]);
     assert!(
-        refused(&stranger_move, &["warrior"]),
-        "a move is made by a character"
+        refused(&stranger_knows, &["warrior"]),
+        "a secret is known only by characters"
+    );
+    let mut undescribed = answer();
+    undescribed["scenes"] = json!([place("arrest"), place("march")]);
+    assert!(
+        refused(&undescribed, &["warrior"]),
+        "every scene asked for is described"
+    );
+    let mut telling_id = answer();
+    telling_id["characters"][1]["id"] = json!("harbour_framer");
+    assert!(
+        refused(&telling_id, &["warrior"]),
+        "a new id names no part its character hides"
     );
     let mut bad_part = answer();
     bad_part["characters"][1]["part"] = json!("villain");
@@ -124,7 +161,7 @@ fn an_answer_that_leaves_out_the_cast_or_names_no_character_is_refused() {
 
 #[test]
 fn a_scenes_moves_fill_its_beats_and_name_only_characters() {
-    let story = parse_story(&answer(), &["warrior".to_owned()], &[]).unwrap();
+    let story = parse_story(&answer(), (&["warrior".to_owned()], &[]), &scenes()).unwrap();
     // Three moves by `speaker` put to `to`, and `to`'s reply when it is someone.
     let moves = |speaker: &str, to: &str, id: &str| {
         let mut list = defence(speaker, to, 3).as_array().unwrap().clone();
@@ -163,17 +200,6 @@ fn a_scenes_moves_fill_its_beats_and_name_only_characters() {
         refused(&moves("warrior", "room", "charge")),
         "a beat of another scene"
     );
-    let unheard = json!({"beats": [{"id": "trial", "leads": "warrior",
-                                    "moves": defence("warrior", "room", 2),
-                                    "exhibits": []}]});
-    assert!(
-        refused(&unheard),
-        "the accused speaks for himself at least three times"
-    );
-    let accused_silent = json!({"beats": [{"id": "trial", "leads": "warrior",
-                                           "moves": defence("harbour_merchant", "room", 3),
-                                           "exhibits": []}]});
-    assert!(refused(&accused_silent));
     assert!(
         matches!(
             parse_moves(
@@ -193,7 +219,7 @@ fn a_scenes_moves_fill_its_beats_and_name_only_characters() {
 
 #[test]
 fn the_storyteller_sees_handles_for_ids_and_its_moves_come_back_under_the_ids() {
-    let story = parse_story(&answer(), &["warrior".to_owned()], &[]).unwrap();
+    let story = parse_story(&answer(), (&["warrior".to_owned()], &[]), &scenes()).unwrap();
     let handles = Handles::author(
         story
             .characters
@@ -205,7 +231,6 @@ fn the_storyteller_sees_handles_for_ids_and_its_moves_come_back_under_the_ids() 
         asked.culprit, "person-2",
         "no hidden part in the ids it is asked with"
     );
-    assert_eq!(asked.beats[2].moves[0].to, "person-2");
     // The accused's three moves, and the merchant's reply.
     let mut moves = defence("person-1", "person-2", 3)
         .as_array()
