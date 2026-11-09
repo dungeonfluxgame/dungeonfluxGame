@@ -200,6 +200,7 @@ fn every_reserved_word_is_refused_as_a_persona_id_and_covers_the_routes_last_seg
         path::PERSONA_COVERAGE,
         path::PERSONA_BACKFILL,
         path::PERSONA_BACKFILLS,
+        path::PERSONA_GUIDE,
     ] {
         let last = route.rsplit('/').next().unwrap();
         assert!(RESERVED_IDS.contains(&last), "{last} is a route segment");

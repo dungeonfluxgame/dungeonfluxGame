@@ -151,7 +151,8 @@ fn the_persona_grammar_reads_every_verb() {
             speak: false,
             recent: Vec::new(),
             asked_by: None,
-            intent: None
+            intent: None,
+            strike: false
         }
     );
     assert_eq!(
@@ -163,7 +164,8 @@ fn the_persona_grammar_reads_every_verb() {
             speak: true,
             recent: Vec::new(),
             asked_by: None,
-            intent: None
+            intent: None,
+            strike: false
         }
     );
 }
@@ -249,6 +251,7 @@ fn every_persona_usage_is_part_of_the_group_usage() {
         PERSONA_EDIT_USAGE,
         PERSONA_GENERATE_USAGE,
         PERSONA_SAY_USAGE,
+        PERSONA_NARRATE_USAGE,
         PERSONA_REMOVE_USAGE,
     ] {
         assert!(PERSONA_USAGE.contains(usage), "{usage}");
@@ -326,10 +329,14 @@ fn variant_number(error: &PersonaError) -> usize {
         PersonaError::BackfillsUnwritable { .. } => 23,
         PersonaError::Stopped => 24,
         PersonaError::BackfillSequenceExhausted { .. } => 25,
+        PersonaError::EmptyLine => 26,
+        PersonaError::GuidanceUnreadable { .. } => 27,
+        PersonaError::GuidanceInvalid { .. } => 28,
+        PersonaError::GuidanceUnwritable { .. } => 29,
     }
 }
 
-const PERSONA_ERROR_VARIANTS: usize = 26;
+const PERSONA_ERROR_VARIANTS: usize = 30;
 
 fn every_persona_error() -> Vec<PersonaError> {
     use crate::io_cause::IoCause;
@@ -414,6 +421,19 @@ fn every_persona_error() -> Vec<PersonaError> {
         },
         PersonaError::Stopped,
         PersonaError::BackfillSequenceExhausted { id: id() },
+        PersonaError::EmptyLine,
+        PersonaError::GuidanceUnreadable {
+            id: id(),
+            cause: IoCause::Other,
+        },
+        PersonaError::GuidanceInvalid {
+            id: id(),
+            cause: crate::dev_http::parse_body::<Value>(b"{").unwrap_err(),
+        },
+        PersonaError::GuidanceUnwritable {
+            id: id(),
+            cause: IoCause::StorageFull,
+        },
     ]
 }
 
@@ -1080,6 +1100,7 @@ fn the_debug_of_a_request_that_carries_a_question_or_a_situation_never_prints_it
         recent: Vec::new(),
         asked_by: None,
         intent: None,
+        strike: false,
     };
     let coverage = super::request::CoverageRequest {
         character: "innkeeper".to_owned(),
@@ -1127,10 +1148,65 @@ fn the_story_and_addressee_verbs_read_their_scene_and_reply() {
             model: None,
         }
     );
+    assert_eq!(
+        command("persona story clues vault warrior: The wax is fresh."),
+        PersonaCommand::StoryClues {
+            place: "vault".to_owned(),
+            line: "warrior: The wax is fresh.".to_owned(),
+            model: None,
+        }
+    );
+    assert_eq!(command("persona story reset"), PersonaCommand::StoryReset);
+    // What play has found is the host's: no route takes it from the command line.
+    for bad in [
+        "persona story next seen=seal bar",
+        "persona story clues worked_out=seal vault warrior: The wax is fresh.",
+        "persona story narrate seen=seal vault found",
+        "persona story reset vault",
+    ] {
+        assert!(parse(&words(bad)).is_err(), "{bad} should be refused");
+    }
+    assert!(
+        parse(&words("persona story clues vault")).is_err(),
+        "the clues of a line need the line"
+    );
     assert!(
         parse(&words("persona story next arrived=some bar")).is_err(),
         "arrived is a count of lines"
     );
+    assert_eq!(
+        command("persona story narrate recent=warrior:_Look model=m vault worked_out"),
+        PersonaCommand::StoryNarrate {
+            place: "vault".to_owned(),
+            moment: super::story_narrate::Moment::WorkedOut,
+            recent: vec!["warrior:_Look".to_owned()],
+            model: Some("m".to_owned()),
+        }
+    );
+    for bad in [
+        "persona story narrate vault",
+        "persona story narrate vault ending",
+        "persona story narrate after=warrior vault arrival",
+    ] {
+        assert!(parse(&words(bad)).is_err(), "{bad} should be refused");
+    }
+    assert_eq!(
+        command("persona narrate speak=true The rain has stopped."),
+        PersonaCommand::Narrate {
+            text: "The rain has stopped.".to_owned(),
+            speak: true,
+        }
+    );
+    assert_eq!(
+        command("persona narrate A bell rings."),
+        PersonaCommand::Narrate {
+            text: "A bell rings.".to_owned(),
+            speak: false,
+        }
+    );
+    for bad in ["persona narrate", "persona narrate speak=loud Hello."] {
+        assert!(parse(&words(bad)).is_err(), "{bad} should be refused");
+    }
     assert_eq!(
         command(
             "persona addressed town_mayor recent=warrior:_I_did_not intent=judge reply=true Speak."

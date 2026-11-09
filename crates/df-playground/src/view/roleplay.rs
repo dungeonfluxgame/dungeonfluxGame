@@ -1,21 +1,29 @@
-//! The roleplay card: a title bar, speech bubbles whose tails point at whoever is speaking, and a
-//! caption.
+//! The roleplay card: speech bubbles whose tails point at whoever is speaking, and the
+//! lower third: the off-picture speaker's card and the caption bar, or on a close-up the item's
+//! title card.
 //!
 //! A pure function of the scene's data (`lobby::model`). A bubble's place and tail come from the
 //! scene as percents of the screen and are written to the style as numbers only; where the tail
-//! sits on its box is decided by `lobby::model::tail_of`. The caption sits above the party strip,
+//! sits on its box is decided by `lobby::model::tail_of`. The lower third is the kit's
+//! (`kit::speaker`, `kit::caption_bar`, `kit::title_card`); the caption sits above the party strip,
 //! which this card never covers.
 
 use wasm_bindgen::JsValue;
 use web_sys::{Document, Element};
 
+use crate::closeup::{CloseUp, scene_closeup};
 use crate::dom::{append, element, set_style, text_element};
 use crate::fixture::TvScene;
+use crate::home::glyph::HomeIcon;
 use crate::image_layout::{ImageLayout, anchored_place, marker_place, percent_text, speaker_masks};
+use crate::kit::KitPanels;
+use crate::kit::caption_bar::CaptionBar;
+use crate::kit::speaker::SpeakerPanel;
+use crate::kit::speech::{NameStyle, SpeechBubble, TailLean, TailSide};
+use crate::kit::title_card::TitleCard;
 use crate::lobby::model::{Bubble, BubbleTone, RoleplayScene, tail_of};
-use crate::overlay::Glyph;
-use crate::view::kit::photo;
-use crate::view::kit::{glass, glyph};
+use crate::speaker_card::{SpeakerCard, scene_card as speaker_card, scene_twin};
+use crate::view::kit::glyph;
 
 /// The roleplay card of `scene`, or `None` when it has none.
 pub fn build(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
@@ -23,40 +31,75 @@ pub fn build(document: &Document, scene: &TvScene) -> Result<Option<Element>, Js
         return Ok(None);
     };
     let layout = scene.backdrop_layout();
-    card_element(document, card, layout).map(Some)
+    card_element(
+        document,
+        card,
+        layout,
+        speaker_card(scene).or_else(|| scene_twin(scene)).as_ref(),
+        scene_closeup(scene).as_ref(),
+    )
+    .map(Some)
 }
 
 fn card_element(
     document: &Document,
     card: &RoleplayScene,
     layout: Option<&ImageLayout>,
+    speaker: Option<&SpeakerCard>,
+    closeup: Option<&CloseUp>,
 ) -> Result<Element, JsValue> {
     let root = element(document, "div", "rp")?;
-    if let Some(title) = &card.title {
-        let (wrapper, panel) = glass(document, "rp-title-wrap", "rp-title")?;
-        let glyph_class = if title.glyph == Glyph::Spinner {
-            "rp-title-glyph rp-title-spin"
-        } else {
-            "rp-title-glyph"
-        };
-        append(&panel, &glyph(document, title.glyph, glyph_class)?)?;
-        append(
-            &panel,
-            &text_element(document, "span", "rp-title-text", &title.text)?,
-        )?;
-        append(&root, &wrapper)?;
-    }
     // A bubble anchored to a character is drawn in the world layer (`anchored`), so it follows the
     // camera; here are only the bubbles that keep their own place on the screen.
+    // A bubble anchored to a character who is not in the picture is not drawn: that speaker has
+    // the card below instead.
     for bubble in &card.bubbles {
-        if anchored_place(bubble, layout).is_none() {
+        if bubble.anchor.is_none() {
             append(&root, &bubble_element(document, bubble, layout)?)?;
         }
     }
-    if let Some(caption) = &card.caption {
-        append(&root, &text_element(document, "p", "rp-caption", caption)?)?;
+    if let Some(lower_third) = lower_third(document, card, speaker, closeup)? {
+        append(&root, &lower_third)?;
     }
     Ok(root)
+}
+
+/// The kit layer of the card's lower third, or `None` when it has nothing in it. On a close-up the
+/// caption is the item's title card, not the bar (`closeup`). The speaker card and the title card
+/// carry their keys, which say whether a later draw shows the same card again
+/// (`overlays::carry_over`).
+fn lower_third(
+    document: &Document,
+    card: &RoleplayScene,
+    speaker: Option<&SpeakerCard>,
+    closeup: Option<&CloseUp>,
+) -> Result<Option<Element>, JsValue> {
+    let layer = crate::kit::draw::panels(
+        document,
+        &KitPanels {
+            speaker: speaker.map(SpeakerPanel::from),
+            caption: match closeup {
+                Some(_) => None,
+                None => CaptionBar::from_roleplay(card),
+            },
+            title_cards: closeup.map(TitleCard::from).into_iter().collect(),
+            ..KitPanels::default()
+        },
+        None,
+    )?;
+    if layer.child_element_count() == 0 {
+        return Ok(None);
+    }
+    if let (Some(root), Some(speaker)) = (layer.query_selector(".kit-speaker")?, speaker) {
+        root.set_attribute("data-character", &speaker.character)?;
+        root.set_attribute("data-card", &speaker.card_identity())?;
+        root.set_attribute("role", "status")?;
+    }
+    if let (Some(root), Some(closeup)) = (layer.query_selector(".kit-tc")?, closeup) {
+        root.set_attribute("data-closeup", &closeup.card_identity())?;
+        root.set_attribute("role", "status")?;
+    }
+    Ok(Some(layer))
 }
 
 /// The items of `scene`'s roleplay card that are tied to characters of the backdrop's layout (the
@@ -67,14 +110,6 @@ pub fn anchored(document: &Document, scene: &TvScene) -> Result<Option<Element>,
         return Ok(None);
     };
     let root = element(document, "div", "tv-anchors")?;
-    // Every named face, so the page keeps every bubble off every face (`view::bubble_layout`).
-    let faces: Vec<String> = layout
-        .regions()
-        .iter()
-        .filter(|region| region.label().is_some())
-        .map(|region| face_text(layout, region))
-        .collect();
-    root.set_attribute("data-faces", &faces.join(";"))?;
     let mut any = false;
     // The speakers' outlines come first, so every bubble is over them.
     for (character, mask) in speaker_masks(&card.bubbles, Some(layout)) {
@@ -139,7 +174,7 @@ fn bubble_element(
     layout: Option<&ImageLayout>,
 ) -> Result<Element, JsValue> {
     let placed = anchored_place(bubble, layout);
-    let (side, style) = match placed {
+    let (side, style, tail, lean) = match placed {
         // Anchored: the box's bottom edge is the tail's tip, just above the scanned head point.
         // This is the first place; the page moves it clear of the chrome and the other bubbles
         // (`view::bubble_layout`).
@@ -153,6 +188,8 @@ fn bubble_element(
                 place.root_percent,
                 place.tip_percent
             ),
+            TailSide::Below,
+            lean_of(place.root_percent, place.tip_percent),
         ),
         None => {
             let tail = tail_of(bubble);
@@ -166,6 +203,12 @@ fn bubble_element(
                     tail.root_percent,
                     tail.tip_percent
                 ),
+                if tail.below {
+                    TailSide::Below
+                } else {
+                    TailSide::Above
+                },
+                lean_of(tail.root_percent, tail.tip_percent),
             )
         }
     };
@@ -196,45 +239,85 @@ fn bubble_element(
         .as_ref()
         .and_then(|anchor| layout?.region(&anchor.region)?.display_name())
         .unwrap_or(&bubble.speaker);
-    let body = element(document, "div", "rp-body")?;
     if bubble.tone == BubbleTone::Thought {
-        // A thinking indicator shows no words: three pulsing dots, named for a screen reader.
+        // A thinking indicator shows no words: the kit's cue (three pulsing dots), named for a
+        // screen reader. The wrapper keeps the bubble's anchoring and placement.
         wrapper.set_attribute("role", "img")?;
         wrapper.set_attribute("aria-label", &format!("{speaker} is thinking"))?;
-        let dots = element(document, "div", "rp-think")?;
-        for _ in 0..3 {
-            append(&dots, &element(document, "span", "rp-think-dot")?)?;
-        }
-        append(&body, &dots)?;
-        append(&wrapper, &body)?;
+        let cue = SpeechBubble {
+            speaker: speaker.to_owned(),
+            line: None,
+            emphasis: None,
+            glyph: None,
+            portrait: None,
+            tone: BubbleTone::Thought,
+            accent: None,
+            name_style: NameStyle::Head,
+            tail: TailSide::Below,
+            lean: None,
+            place: None,
+        };
+        append(
+            &wrapper,
+            &crate::kit::draw::panels(
+                document,
+                &KitPanels {
+                    bubbles: vec![cue],
+                    ..KitPanels::default()
+                },
+                None,
+            )?,
+        )?;
         return Ok(wrapper);
     }
-    let head = element(document, "div", "rp-head")?;
-    match photo(document, "rp-face", bubble.portrait.as_deref(), speaker)? {
-        Some(face) => append(&head, &face)?,
-        None => {
-            if let Some(mark) = bubble.glyph {
-                append(&head, &glyph(document, mark, "rp-speaker-glyph")?)?;
-            }
-        }
-    }
+    // The kit draws the bubble; the page's layout still places the frame and, as it changes the
+    // side, keeps the kit's tail shape in step (`view::bubble_layout`).
+    let said = SpeechBubble {
+        speaker: speaker.to_owned(),
+        line: Some(bubble.line.clone()),
+        emphasis: bubble.emphasis.clone(),
+        glyph: bubble.glyph.map(HomeIcon::Overlay),
+        portrait: bubble.portrait.clone(),
+        tone: bubble.tone,
+        accent: None,
+        name_style: NameStyle::Head,
+        tail,
+        lean: Some(lean),
+        place: None,
+    };
     append(
-        &head,
-        &text_element(document, "span", "rp-speaker", speaker)?,
+        &wrapper,
+        &crate::kit::draw::panels(
+            document,
+            &KitPanels {
+                bubbles: vec![said],
+                ..KitPanels::default()
+            },
+            None,
+        )?,
     )?;
-    append(&body, &head)?;
-    append(
-        &body,
-        &text_element(document, "p", "rp-line", &bubble.line)?,
-    )?;
-    if let Some(emphasis) = &bubble.emphasis {
-        append(
-            &body,
-            &text_element(document, "p", "rp-line rp-emphasis", emphasis)?,
-        )?;
-    }
-    append(&wrapper, &body)?;
     Ok(wrapper)
+}
+
+/// Which way a tail's tip leans: toward the start of its edge when it is before the root.
+fn lean_of(root_percent: u8, tip_percent: u8) -> TailLean {
+    if tip_percent < root_percent {
+        TailLean::Left
+    } else {
+        TailLean::Right
+    }
+}
+
+/// Every named character's face box of `layout` as `face_text` gives it, joined with `;`: what the
+/// page keeps every bubble and the clue board off (`view::bubble_layout`).
+pub fn named_faces(layout: &ImageLayout) -> String {
+    layout
+        .regions()
+        .iter()
+        .filter(|region| region.label().is_some())
+        .map(|region| face_text(layout, region))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 /// A character's face box as `left,top,right,bottom` in thousandths of the picture.

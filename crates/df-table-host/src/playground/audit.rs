@@ -7,7 +7,7 @@
 
 use axum::http::HeaderMap;
 use df_playground::controls::ControlsChange;
-use df_playground::fixture::Slide;
+use df_playground::fixture::{PlateKind, Slide};
 use df_playground::path::CLIENT_HEADER;
 use df_playground::scene::{ImageSlot, SceneChange, SceneOverlay, Target};
 use df_table::event::RejectionCause;
@@ -260,6 +260,7 @@ fn scene_fields(
             media,
             rotation_degrees,
             slide,
+            plate,
             ..
         } => {
             let mut pairs = vec![
@@ -267,6 +268,9 @@ fn scene_fields(
                 ("media", value(media)),
                 ("rotate", rotation_degrees.to_string()),
             ];
+            if *plate != PlateKind::Room {
+                pairs.push(("plate", plate.key().to_owned()));
+            }
             if let Some(slide) = slide {
                 pairs.push(("slide", slide_text(slide)));
                 pairs.push(("serial", scene.slide_count.to_string()));
@@ -291,6 +295,21 @@ fn scene_fields(
             ],
         ),
         SceneChange::StopMusic {} => ("music_stop", Vec::new()),
+        SceneChange::Clues { notes } => (
+            "clues",
+            vec![
+                ("notes", notes.len().to_string()),
+                (
+                    "worked_out",
+                    notes
+                        .iter()
+                        .filter(|note| note.worked_out)
+                        .count()
+                        .to_string(),
+                ),
+            ],
+        ),
+        SceneChange::ClearClues {} => ("clues_clear", Vec::new()),
         SceneChange::Sound {
             media,
             target,

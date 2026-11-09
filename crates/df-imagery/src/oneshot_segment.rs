@@ -354,6 +354,96 @@ pub struct InstanceGeometry {
     pub head_y: u32,
 }
 
+/// `mask` cut down to its figure: the one 8-connected piece holding the head point (the mean
+/// column of the topmost `head_rows` rows, on the top row), or the piece nearest to it when none
+/// holds it. Separate pieces elsewhere in the picture are dropped, so the box, the head point and
+/// the PNG taken from the result all agree. `None` for an empty mask or runs that do not fit the
+/// picture.
+pub fn figure_of(
+    set: &AnalysisMaskSet,
+    mask: &AnalysisMask,
+    head_rows: u32,
+) -> Option<AnalysisMask> {
+    let rows = df_providers::MaskRows::from_runs(
+        set.width_px,
+        set.height_px,
+        mask.runs
+            .iter()
+            .map(|run| df_providers::MaskRun {
+                start: run.start,
+                length: run.length,
+            })
+            .collect(),
+    )
+    .ok()?;
+    let (head_x, head_y) = rows.top_centre(head_rows)?;
+    let width = usize::try_from(set.width_px).ok()?;
+    let height = usize::try_from(set.height_px).ok()?;
+    let mut labels = vec![0u32; width.checked_mul(height)?];
+    for run in &mask.runs {
+        let start = usize::try_from(run.start).ok()?;
+        labels[start..start + usize::try_from(run.length).ok()?].fill(u32::MAX);
+    }
+    let mut components = 0u32;
+    let mut pending = Vec::new();
+    for seed in 0..labels.len() {
+        if labels[seed] != u32::MAX {
+            continue;
+        }
+        components += 1;
+        labels[seed] = components;
+        pending.push(seed);
+        while let Some(at) = pending.pop() {
+            let (x, y) = (at % width, at / width);
+            for ny in y.saturating_sub(1)..=(y + 1).min(height - 1) {
+                for nx in x.saturating_sub(1)..=(x + 1).min(width - 1) {
+                    let next = ny * width + nx;
+                    if labels[next] == u32::MAX {
+                        labels[next] = components;
+                        pending.push(next);
+                    }
+                }
+            }
+        }
+    }
+    let head_column = (head_x.round().max(0.0) as usize).min(width - 1);
+    let head_row = usize::try_from(head_y).ok()?.min(height - 1);
+    let held = labels[head_row * width + head_column];
+    let kept = if held != 0 {
+        held
+    } else {
+        let squared = |at: usize| {
+            let dx = (at % width).abs_diff(head_column) as u64;
+            let dy = (at / width).abs_diff(head_row) as u64;
+            dx * dx + dy * dy
+        };
+        let nearest = (0..labels.len())
+            .filter(|&at| labels[at] != 0)
+            .min_by_key(|&at| squared(at))?;
+        labels[nearest]
+    };
+    let mut runs: Vec<AnalysisMaskRun> = Vec::new();
+    for (at, _) in labels
+        .iter()
+        .enumerate()
+        .filter(|(_, label)| **label == kept)
+    {
+        let at = u32::try_from(at).ok()?;
+        match runs.last_mut() {
+            Some(run) if run.start + run.length == at => run.length += 1,
+            _ => runs.push(AnalysisMaskRun {
+                start: at,
+                length: 1,
+            }),
+        }
+    }
+    Some(AnalysisMask {
+        index: mask.index,
+        score: mask.score,
+        runs,
+    })
+}
+
 /// The geometry of `mask` in `set`, or `None` for an empty or unreadable mask. `head_rows` is how
 /// many of the topmost rows are averaged for the head point.
 pub fn instance_geometry(
@@ -613,6 +703,65 @@ mod tests {
         );
         assert_eq!(geometry.head_y, 1);
         assert!((geometry.head_x - 5.0).abs() < 0.01);
+    }
+
+    fn mask_of(runs: &[(u32, u32)]) -> (AnalysisMaskSet, AnalysisMask) {
+        let set = AnalysisMaskSet {
+            prompt: SegmentationPrompt::Person,
+            width_px: 20,
+            height_px: 10,
+            instances: Vec::new(),
+        };
+        let mask = AnalysisMask {
+            index: 0,
+            score: AnalysisUnit::new(0.9).unwrap(),
+            runs: runs
+                .iter()
+                .map(|&(start, length)| AnalysisMaskRun { start, length })
+                .collect(),
+        };
+        (set, mask)
+    }
+
+    #[test]
+    fn a_detached_blob_far_from_the_figure_is_dropped() {
+        // The figure: columns 2..5 of rows 0 and 1. The blob: columns 17..19 of row 8.
+        let (set, mask) = mask_of(&[(2, 3), (22, 3), (177, 2)]);
+        let figure = figure_of(&set, &mask, 1).unwrap();
+        assert_eq!(figure.runs.len(), 2);
+        let geometry = instance_geometry(&set, &figure, 1).unwrap();
+        assert_eq!(
+            (geometry.left, geometry.top, geometry.right, geometry.bottom),
+            (2, 0, 5, 2)
+        );
+    }
+
+    #[test]
+    fn a_single_piece_is_unchanged_and_diagonal_pixels_join() {
+        // Row 0 columns 2..5, row 1 columns 5..7: they touch only at a corner.
+        let (set, mask) = mask_of(&[(2, 3), (25, 2)]);
+        assert_eq!(figure_of(&set, &mask, 1).unwrap(), mask);
+    }
+
+    #[test]
+    fn a_head_point_outside_every_piece_keeps_the_nearest() {
+        // Row 0 holds columns 0 and 19 only, so the head column 10 is in neither piece; the
+        // right piece (columns 19 of rows 0 and 1) is 9 away and the left one 10.
+        let (set, mask) = mask_of(&[(0, 1), (19, 1), (39, 1)]);
+        let figure = figure_of(&set, &mask, 1).unwrap();
+        assert_eq!(
+            figure.runs,
+            vec![
+                AnalysisMaskRun {
+                    start: 19,
+                    length: 1
+                },
+                AnalysisMaskRun {
+                    start: 39,
+                    length: 1
+                }
+            ]
+        );
     }
 
     #[test]

@@ -133,38 +133,32 @@ async fn gaps_are_backfilled_with_an_addition_that_is_recorded_and_the_line_is_c
 }
 
 #[tokio::test]
-async fn a_backfill_answer_that_is_malformed_is_reported_and_the_line_is_still_said() {
+async fn a_backfill_answer_that_is_malformed_is_asked_again_until_one_reads() {
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         json!({"edits": "not a list"}),
         json!({"edits": "still not a list"}),
+        append_backstory_answer("She learned to brew ale at nine."),
+        privacy_answer(false),
         line_answer("Above the inn, love."),
     ])
     .await;
     store_innkeeper(&host);
-    let before = host.file(PERSONA_FILE);
     let answered = done(ask(&host, json!({})).await);
-    let BackfillOutcome::BackfillFailed { error } = &answered.backfill else {
-        panic!("{:?}", answered.backfill);
-    };
-    assert!(
-        matches!(
-            error,
-            PersonaError::AnswerRefused {
-                replayed: false,
-                ..
-            }
-        ),
-        "{error:?}"
+    assert_eq!(
+        answered.backfill,
+        BackfillOutcome::Backfilled {
+            edits: 1,
+            sequence: 1
+        }
     );
     assert_eq!(answered.spoken.said.line, "Above the inn, love.");
-    assert_eq!(host.file(PERSONA_FILE), before);
-    assert_eq!(host.file(RECORD_FILE), None);
-    assert!(
-        host.persona_lines()
-            .iter()
-            .any(|line| line == "PERSONA backfill_failed id=innkeeper error=answer_refused")
-    );
+    let retried = host
+        .persona_lines()
+        .iter()
+        .filter(|line| *line == "PERSONA backfill_retried id=innkeeper")
+        .count();
+    assert_eq!(retried, 2, "each refused answer is asked again");
 }
 
 #[tokio::test]
@@ -410,7 +404,7 @@ async fn a_backfill_with_non_ascii_text_leaves_ascii_only_files_that_read_back()
 }
 
 #[tokio::test]
-async fn a_strict_latitude_refuses_a_new_secret_and_the_line_is_still_said() {
+async fn a_strict_latitude_refuses_a_new_secret_until_the_backfill_adds_none() {
     let new_secret = json!({"edits": [{
         "op": "put_secret", "field": null, "text": "She hides a second ledger.", "id": "ledger",
         "sensitivity": "high", "reveal_conditions": [], "known_by": [],
@@ -420,29 +414,38 @@ async fn a_strict_latitude_refuses_a_new_secret_and_the_line_is_still_said() {
         coverage_answer(&[("secrets", "what she hides")]),
         new_secret.clone(),
         new_secret,
+        json!({"edits": []}),
         line_answer("Nothing, love."),
     ])
     .await;
     store_innkeeper(&host);
-    let before = host.file(PERSONA_FILE);
     let answered = done(ask(&host, json!({"guidance": {"latitude": "strict"}})).await);
     assert!(
-        matches!(answered.backfill, BackfillOutcome::BackfillFailed { .. }),
+        matches!(
+            answered.backfill,
+            BackfillOutcome::Backfilled { edits: 0, .. }
+        ),
         "{:?}",
         answered.backfill
     );
     assert!(answered.spoken.revision > 0, "the line is still cued");
-    assert_eq!(host.file(PERSONA_FILE), before, "no secret was written");
-    assert_eq!(host.file(RECORD_FILE), None, "and no record");
+    assert!(
+        !host
+            .file(PERSONA_FILE)
+            .unwrap_or_default()
+            .contains("second ledger"),
+        "no secret was written"
+    );
 }
 
 #[tokio::test]
 async fn what_the_backfill_did_not_fill_is_told_to_the_line_as_not_established() {
-    // A failed backfill: the line is asked with the topic the persona still lacks.
+    // A failed backfill (it would have leaked a private detail): the line is asked with the
+    // topic the persona still lacks.
     let failed = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood"), ("backstory", "first horse")]),
-        json!({"edits": "not a list"}),
-        json!({"edits": "still not a list"}),
+        append_backstory_answer("Her brother Tomas rode north when she was nine."),
+        privacy_answer(true),
         line_answer("I do not recall."),
     ])
     .await;

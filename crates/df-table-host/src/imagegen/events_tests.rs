@@ -125,6 +125,30 @@ fn the_stored_and_failed_lines_carry_ids_sizes_and_milliseconds() {
 }
 
 #[test]
+fn a_forge_refusal_line_quotes_forge_s_reason() {
+    let failed = ImageGenEvent::Failed {
+        job: 77,
+        name: "hall".to_owned(),
+        error: GenerateError::Backend {
+            job: Some(77),
+            backend: BackendError::ForgeFailed {
+                detail: "rejected: Image description must contain 1–4000 characters.".to_owned(),
+            },
+        },
+        duration: Duration::from_millis(198),
+        backend: "forge",
+    };
+    assert_eq!(
+        failed.line(),
+        concat!(
+            "IMAGEGEN failed job=77 name=hall error=backend cause=forge_failed ",
+            "detail=\"rejected: Image description must contain 1–4000 characters.\" ",
+            "duration_ms=198 backend=forge"
+        )
+    );
+}
+
+#[test]
 fn a_setting_that_does_not_read_names_its_variable_and_the_default_in_milliseconds() {
     let line = ImageGenEvent::InvalidSetting {
         variable: "DF_IMAGEGEN_DEADLINE_SECS",

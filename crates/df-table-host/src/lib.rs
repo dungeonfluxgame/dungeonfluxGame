@@ -53,6 +53,7 @@ pub mod media_library;
 mod media_range;
 mod media_store;
 mod media_upload;
+pub mod music;
 pub mod observe;
 pub mod options;
 pub mod owner_latency;

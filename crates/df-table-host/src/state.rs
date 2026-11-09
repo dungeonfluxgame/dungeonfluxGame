@@ -23,6 +23,7 @@ use df_table::event::{EffectKind, RejectionCause, TableEvent};
 use df_table::ports::EventSink;
 use df_types::saturating_millis;
 
+use crate::cast::routes::SpeakerRest;
 use crate::event_log::EventLog;
 use crate::limits::{TICK_INTERVAL, TURN_SETTLE};
 use crate::observe::HostEventSink;
@@ -145,6 +146,11 @@ pub struct AppState {
     /// One more than the newest `last_content_change` a `FRAME served` line was written for (0:
     /// none), so each change is logged once however many pages read it.
     frame_logged: AtomicU64,
+    /// The pending pull-back of the camera after the last spoken line (`cast::routes`).
+    speaker_rest: SpeakerRest,
+    /// The pending clearing of the dungeon master's box after its last line (`persona narrate`),
+    /// one rest timer like the camera's.
+    narration_rest: SpeakerRest,
 }
 
 impl AppState {
@@ -170,7 +176,19 @@ impl AppState {
             ticks: AtomicU64::new(0),
             last_content_change: AtomicU64::new(0),
             frame_logged: AtomicU64::new(0),
+            speaker_rest: SpeakerRest::default(),
+            narration_rest: SpeakerRest::default(),
         }
+    }
+
+    /// The pending pull-back of the camera after the last spoken line.
+    pub(crate) fn speaker_rest(&self) -> &SpeakerRest {
+        &self.speaker_rest
+    }
+
+    /// The pending clearing of the dungeon master's box after its last line.
+    pub(crate) fn narration_rest(&self) -> &SpeakerRest {
+        &self.narration_rest
     }
 
     /// Says that something a reader could see has changed. A reader waiting on `changes` wakes.

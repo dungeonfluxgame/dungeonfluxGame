@@ -11,7 +11,8 @@ use crate::dev_client::{self, get_json, post_json};
 
 pub const CAST_USAGE: &str = "scene cast";
 pub const CUE_USAGE: &str = "scene cue <character> think | speak <line...> | quiet";
-pub const CAMERA_ON_USAGE: &str = "scene camera-on <character> [shot=face|upper|full] [over=MS]";
+pub const CAMERA_ON_USAGE: &str =
+    "scene camera-on <character> [shot=face|upper|full|speaker] [over=MS]";
 
 /// A cast command of the dev CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -3,6 +3,7 @@
 use axum::http::StatusCode;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use df_playground::fixture::PlateKind;
 use df_playground::media::{AudioState, ClientReport};
 use df_playground::scene::{ImageSlot, SceneChange, Target};
 use serde_json::json;
@@ -77,6 +78,7 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
             rotation_degrees: 0,
             slide: None,
             layout: None,
+            plate: PlateKind::Room,
         })
     );
     assert_eq!(
@@ -88,6 +90,7 @@ fn an_image_names_a_slot_a_file_and_an_optional_caption() {
             rotation_degrees: 0,
             slide: None,
             layout: None,
+            plate: PlateKind::Room,
         })
     );
     assert_eq!(
@@ -692,6 +695,7 @@ fn an_image_can_be_turned_with_rotate_and_a_bad_turn_is_refused() {
             rotation_degrees: 180,
             slide: None,
             layout: None,
+            plate: PlateKind::Room,
         })
     );
     for bad in ["rotate=360", "rotate=-90", "rotate=upside", "rotate=1.5"] {
@@ -721,6 +725,7 @@ fn slide_sends_the_card_across_the_screen_with_defaults_from_left_to_right_over_
             rotation_degrees: 180,
             slide: Some(DEFAULT_SLIDE),
             layout: None,
+            plate: PlateKind::Room,
         })
     );
 }

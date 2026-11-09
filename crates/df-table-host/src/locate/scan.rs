@@ -52,8 +52,13 @@ pub fn layout_from(
     let head_rows = (set.height_px / HEAD_ROWS_DIVISOR).max(1);
     let mut left_out = 0;
     let mut regions: Vec<SceneRegion> = Vec::new();
-    for mask in &set.instances {
-        // An instance with no pixels has no geometry: there is nothing to leave out.
+    for whole in &set.instances {
+        // An instance with no pixels has no figure: there is nothing to leave out. Only the
+        // figure's own piece becomes the region, so its box, head box and mask agree.
+        let Some(figure) = oneshot_segment::figure_of(set, whole, head_rows) else {
+            continue;
+        };
+        let mask = &figure;
         let Some(geometry) = oneshot_segment::instance_geometry(set, mask, head_rows) else {
             continue;
         };

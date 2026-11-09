@@ -105,7 +105,7 @@ pub fn build_brief(
 }
 
 /// The fixed template: the style's direction, the place, mood and elements, one sentence per
-/// placed character, and the style's ban on writing.
+/// placed character, and how writing shows; the brief carries what the picture must not show.
 pub fn build_brief_with(
     style: &BriefStyle,
     design: &SceneDesign,
@@ -142,44 +142,88 @@ pub fn build_brief_with(
             portrait: entry.character.portrait.clone(),
         })
         .collect();
-    Ok(PlateBrief { prompt, references })
+    Ok(PlateBrief {
+        prompt,
+        avoid: style.avoid.clone(),
+        references,
+    })
 }
 
 fn look_or_job<'a>(looks: &'a LookSheets, character: &'a BriefCharacter) -> &'a str {
     looks.look_of(&character.id).unwrap_or(&character.job)
 }
 
-/// The words that frame every picture: how it is painted and the ban on writing in it. A campaign
-/// or scene can set its own without a code change.
+/// The words that frame every picture, split as image backends take them: how it looks, said as
+/// what it is (`direction`, and `writing`: writing a thing carries shows as unreadable ink, never
+/// as nothing), and what no picture shows (`avoid`, plain terms), which a backend with a negative
+/// prompt takes there and any other reads as a line of the text (`ImageRequest::avoiding`). A
+/// campaign or scene can set its own without a code change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BriefStyle {
     pub direction: String,
-    pub writing_ban: String,
+    pub writing: String,
+    pub avoid: Vec<String>,
 }
 
 impl Default for BriefStyle {
     fn default() -> Self {
         Self {
+            // Every rule in few words: the Forge studio takes 4000 characters of text in all, and
+            // a room plate also carries its scene, its things and the references' lines.
             direction: concat!(
-                "An unretouched photograph taken on the set of a live-action historical TV ",
-                "drama set in a medieval world, shot on a Canon EOS R5 with a 35mm lens at f/4, ",
-                "ISO 800, framed on the main characters' faces and reactions; real actors with ",
-                "real skin (pores, stubble, blemishes, wrinkles, uneven tone), real heavy wool, ",
-                "linen, mail and scuffed leather with dirt and wear, a real set of timber, ",
-                "plaster and stone, lit by the light the place has (daylight from its windows, ",
-                "or a real candle or fire only where the scene has one), a neutral true-to-life ",
-                "color grade ",
-                "with fine sensor grain and the ordinary depth of field of a TV drama. It must ",
-                "look like a photograph of real people, never a painting, an illustration, ",
-                "digital art or a 3D render: no painterly brushwork, no airbrushed, waxy or ",
-                "glowing skin, no golden or teal-and-orange grade, no fantasy art (no glowing ",
-                "magic, glowing runes or sigils, gilded embroidery and fantasy finery, ornate ",
-                "armor, god-ray shafts of light or cathedral grandeur) and nothing modern (no ",
-                "electric light, glass mugs, drum kits or modern clothes), of"
+                "Unretouched photo, live-action medieval TV drama set, 35mm f/4, ISO 800; candid ",
+                "mid-scene, on the main faces and reactions, people turned to each other or their ",
+                "task. Real skin: pores, fine hairs, stubble, blemishes, wrinkles, uneven tone. ",
+                "Worn wool, linen, fur, mail, leather, weave and dirt showing; timber, plaster, ",
+                "stone; only the place's daylight, candle or fire. Natural lens sharpness and ",
+                "contrast; fine grain; TV depth of field; neutral grade. Metal and wet stone ",
+                "dull; skin, cloth, wood, leather, vellum, paper matte and dry; only water and ",
+                "what it wets look wet. Plain, worn, everyday things of the time. A still of"
             )
             .to_owned(),
-            writing_ban: "No text, letters, captions, speech bubbles, logos or interface of any kind."
-                .to_owned(),
+            writing: concat!(
+                "A thing's own writing (page, seal, carved sign) is faded, smudged ink, ",
+                "unreadable but there."
+            )
+            .to_owned(),
+            avoid: [
+                "painting",
+                "brushwork",
+                "illustration",
+                "digital art",
+                "3D render",
+                "airbrushed, waxy, plastic or glowing skin",
+                "HDR",
+                "clarity or smoothing filter",
+                "amber, golden or teal-orange grade",
+                "sparkles",
+                "star glints",
+                "glossy sheen",
+                "strong highlights",
+                "fantasy art",
+                "glowing magic",
+                "runes",
+                "sigils",
+                "gilding",
+                "finery",
+                "ornate armor",
+                "god rays",
+                "cathedral grandeur",
+                "electric light",
+                "glass mugs",
+                "drum kits",
+                "modern clothes",
+                "people posed in a row",
+                "people looking at the camera",
+                "extra people beyond those described (crowds, bystanders)",
+                "captions",
+                "speech bubbles",
+                "logos",
+                "interface",
+                "readable text",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
         }
     }
 }
@@ -200,7 +244,7 @@ fn prompt_text(
         text.push_str(&placement_sentence(entry));
         text.push(' ');
     }
-    text.push_str(&style.writing_ban);
+    text.push_str(&style.writing);
     text
 }
 

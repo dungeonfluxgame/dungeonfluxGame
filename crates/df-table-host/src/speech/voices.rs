@@ -4,7 +4,8 @@
 //! {"<character>": "<voice id>"}}`. A missing file is "no voices", never an error; a file that
 //! does not read is a typed error. A voice id is an opaque reference to the supplier's voice: not
 //! a permission and not an identity, and it is never written to an audit line. A voice is fixed
-//! to a character by editing this file (`speech voice`), written whole or not at all.
+//! to a character by editing this file (`speech voice`, or a cast: `speech cast` and the first
+//! line of a character who has none), written whole or not at all.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -145,6 +146,23 @@ impl VoiceBook {
         self.file.default.as_deref()
     }
 
+    /// The voice of `character`'s own, if they have one.
+    pub(super) fn voice_of(&self, character: &str) -> Option<&str> {
+        self.file.voices.get(character).map(String::as_str)
+    }
+
+    /// The voices someone other than `character` speaks in: the other characters' and the
+    /// default.
+    pub(super) fn voices_in_use(&self, character: &str) -> Vec<&str> {
+        self.file
+            .voices
+            .iter()
+            .filter(|(other, _)| other.as_str() != character)
+            .map(|(_, voice)| voice.as_str())
+            .chain(self.file.default.as_deref())
+            .collect()
+    }
+
     /// The characters with a voice of their own, sorted by character.
     pub(super) fn rows(&self) -> Vec<VoiceRow> {
         self.file
@@ -215,20 +233,60 @@ pub(super) fn change_voice(
     }
     let changed = book.file != before;
     if changed {
-        let mut text = serde_json::to_string_pretty(&book.file)
-            .map_err(|error| invalid(VoicesCause::Malformed(BodyError::from_json(&error))))?;
-        text.push('\n');
-        let (directory, name) = split(path)?;
-        write_atomically(directory, name, text.as_bytes()).map_err(|error| {
-            SpeechError::VoicesUnwritable {
-                cause: IoCause::from_kind(error.kind()),
-            }
-        })?;
+        write_book(path, &book.file)?;
     }
     Ok(VoiceChanged {
         character: character.to_string(),
         has_voice: voice.is_some(),
         changed,
+    })
+}
+
+/// The voice `character` speaks in after a claim: `voice` when they had none, or their own when
+/// someone gave them one first, which a claim never replaces.
+pub(super) struct Claimed {
+    pub(super) voice: String,
+    pub(super) given: bool,
+}
+
+/// Gives `character` the voice `voice` unless they have one already, and writes the file whole.
+/// The check and the write are under the write lock, so a voice set while `voice` was chosen is
+/// kept. Blocking; the caller holds no lock.
+pub(super) fn claim_voice(
+    path: &Path,
+    character: &str,
+    voice: &str,
+) -> Result<Claimed, SpeechError> {
+    let character = check_character(character)?;
+    check_voice(voice)?;
+    let _writing = VOICE_WRITES.lock();
+    let mut book = VoiceBook::read(path)?;
+    if let Some(own) = book.voice_of(character.as_str()) {
+        return Ok(Claimed {
+            voice: own.to_owned(),
+            given: false,
+        });
+    }
+    book.file
+        .voices
+        .insert(character.as_str().to_owned(), voice.to_owned());
+    write_book(path, &book.file)?;
+    Ok(Claimed {
+        voice: voice.to_owned(),
+        given: true,
+    })
+}
+
+/// Writes `file` at `path` whole or not at all. The caller holds the write lock.
+fn write_book(path: &Path, file: &VoicesFile) -> Result<(), SpeechError> {
+    let mut text = serde_json::to_string_pretty(file)
+        .map_err(|error| invalid(VoicesCause::Malformed(BodyError::from_json(&error))))?;
+    text.push('\n');
+    let (directory, name) = split(path)?;
+    write_atomically(directory, name, text.as_bytes()).map_err(|error| {
+        SpeechError::VoicesUnwritable {
+            cause: IoCause::from_kind(error.kind()),
+        }
     })
 }
 

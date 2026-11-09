@@ -1,9 +1,9 @@
 //! The grammar of `media generate`: a prompt in words, then `key=value` options.
 
-use super::cli::{MEDIA_GENERATE_USAGE, MediaGenerate, parse};
+use super::cli::{MEDIA_BACKEND_USAGE, MEDIA_GENERATE_USAGE, MediaGenerate, parse};
 use super::limits::MAXIMUM_SENT_TEXT_CHARS;
 use super::model::{Aspect, Purpose};
-use super::request::GenerateRequest;
+use super::request::{BackendSwitch, GenerateRequest};
 use crate::command::{self, Command, CommandError, split_words};
 
 fn words(line: &str) -> Vec<String> {
@@ -31,6 +31,9 @@ fn media_generate_parses_a_prompt_with_options() {
             aspect: Some(Aspect::WIDE),
             wait: true,
             base: None,
+            references: Vec::new(),
+            things: Vec::new(),
+            avoid: Vec::new(),
         }))
     );
     let quoted = parsed("media generate \"one word=prompt\" as=x look=none").expect("parses");
@@ -43,12 +46,41 @@ fn media_generate_parses_a_prompt_with_options() {
             aspect: None,
             wait: false,
             base: None,
+            references: Vec::new(),
+            things: Vec::new(),
+            avoid: Vec::new(),
         }))
     );
     assert_eq!(
         parsed("media generate status").expect("parses"),
         Command::MediaGenerate(MediaGenerate::Status)
     );
+}
+
+#[test]
+fn media_generate_reads_references_in_order() {
+    let Ok(Command::MediaGenerate(MediaGenerate::Generate(request))) = parsed(concat!(
+        "media generate the two at the door as=door look=none ",
+        "refs=ref-warrior.png,ref-mara_adventurer.png"
+    )) else {
+        panic!("parses");
+    };
+    assert_eq!(
+        request.references,
+        ["ref-warrior.png", "ref-mara_adventurer.png"]
+    );
+    assert_eq!(request.prompt, "the two at the door");
+    for line in [
+        "media generate a as=hall refs=ref-warrior",
+        "media generate a as=hall refs=ref-warrior.png,",
+        "media generate a as=hall refs=../ref.png",
+        "media generate a as=hall base=b.png refs=1.png,2.png,3.png,4.png,5.png,6.png,7.png,8.png",
+    ] {
+        assert!(
+            matches!(parsed(line), Err(CommandError::BadChoice { key, .. }) if key == "refs"),
+            "{line}"
+        );
+    }
 }
 
 #[test]
@@ -61,7 +93,8 @@ fn media_generate_sends_the_prompt_inside_the_house_look_unless_told_not_to() {
     };
     assert!(request.prompt.starts_with(&style.direction));
     assert!(request.prompt.contains("a plain town hall"));
-    assert!(request.prompt.ends_with(&style.writing_ban));
+    assert!(request.prompt.ends_with(&style.writing));
+    assert_eq!(request.avoid, style.avoid);
     assert!(matches!(
         parsed("media generate a hall as=hall look=painted"),
         Err(CommandError::BadChoice { .. })
@@ -113,4 +146,64 @@ fn media_generate_is_in_the_help() {
     let help = command::usage_text();
     assert!(help.contains("media generate <prompt...> as=NAME"));
     assert!(help.contains(MEDIA_GENERATE_USAGE));
+}
+
+#[test]
+fn media_backend_shows_or_switches_the_image_backend() {
+    let switch = |line: &str| match parsed(line) {
+        Ok(Command::MediaGenerate(MediaGenerate::SwitchBackend(switch))) => switch,
+        other => panic!("{line}: {other:?}"),
+    };
+    assert_eq!(
+        parsed("media backend").expect("parses"),
+        Command::MediaGenerate(MediaGenerate::Backend)
+    );
+    assert_eq!(
+        switch("media backend codex-cli"),
+        BackendSwitch::CodexCli {}
+    );
+    assert_eq!(
+        switch("media backend forge"),
+        BackendSwitch::Forge {
+            url: None,
+            project: None
+        }
+    );
+    assert_eq!(
+        switch("media backend forge url=http://127.0.0.1:5174 project=abc"),
+        BackendSwitch::Forge {
+            url: Some("http://127.0.0.1:5174".to_owned()),
+            project: Some("abc".to_owned())
+        }
+    );
+    assert!(matches!(
+        parsed("media backend dall-e"),
+        Err(CommandError::BadChoice { key, .. }) if key == "backend"
+    ));
+    for line in [
+        "media backend codex-cli url=http://127.0.0.1:5173",
+        "media backend forge seed=3",
+    ] {
+        assert!(
+            matches!(parsed(line), Err(CommandError::Usage(MEDIA_BACKEND_USAGE))),
+            "{line}"
+        );
+    }
+    assert!(matches!(
+        parsed("media backend forge project=a project=b"),
+        Err(CommandError::DuplicateKey(key)) if key == "project"
+    ));
+    assert!(command::usage_text().contains(MEDIA_BACKEND_USAGE));
+    for switch in [
+        BackendSwitch::CodexCli {},
+        BackendSwitch::Forge {
+            url: None,
+            project: None,
+        },
+    ] {
+        assert_eq!(
+            serde_json::to_value(&switch).expect("writes")["backend"],
+            switch.key()
+        );
+    }
 }

@@ -124,12 +124,21 @@ pub const MAXIMUM_BADGE_CHARACTERS: usize = 1_000;
 pub const MAXIMUM_FOCUS_CHARACTERS: usize = 1_000;
 /// Most seats a lobby, or chips a loading screen, holds.
 pub const MAXIMUM_LOBBY_SEATS: usize = 1_000;
+/// Most notes on the clue board.
+pub const MAXIMUM_CLUE_NOTES: usize = 1_000;
 /// Most speech bubbles on a roleplay card.
 pub const MAXIMUM_SPEECH_BUBBLES: usize = 1_000;
 /// Most character markers on a roleplay card.
 pub const MAXIMUM_CHARACTER_MARKERS: usize = 1_000;
 
 // Tuning values. These are not caps; they are how often and how long.
+
+/// Most notes on the clue board that are all drawn with their picture and name; past it the older
+/// notes are drawn smaller.
+pub const CLUE_NOTES_BEFORE_COMPACT: usize = 5;
+/// How long the clue board stays open after it changes before it eases down to a strip, in
+/// milliseconds.
+pub const CLUE_BOARD_OPEN_MS: u64 = 10_000;
 
 /// Milliseconds between looks at the server for changed files, a rebuilt package and a changed
 /// fixture list. The canvas and the controls do not wait for this.

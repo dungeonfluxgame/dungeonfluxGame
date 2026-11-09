@@ -45,6 +45,9 @@ pub const MAXIMUM_VOICES_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// How long one speech call may take from admission to its answer.
 pub const SPEECH_DEADLINE: Duration = Duration::from_secs(5 * 60);
+/// How long listing the supplier's voices may take; the first line of a character waits on it
+/// when their voice is cast.
+pub const VOICE_LIST_DEADLINE: Duration = Duration::from_secs(60);
 /// Largest request one speech call sends, in bytes (60 s of audio is 1.92 MB plus its envelope).
 pub const MAXIMUM_PROVIDER_REQUEST_BYTES: usize = 8 * 1024 * 1024;
 /// Largest answer one speech call keeps, in bytes.

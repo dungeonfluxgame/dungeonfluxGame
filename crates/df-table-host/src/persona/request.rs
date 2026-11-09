@@ -138,6 +138,10 @@ pub struct SayRequest {
     /// situation they are in, so a line meant to ask asks and never answers itself.
     #[serde(default)]
     pub intent: Option<String>,
+    /// Whether this line is the story's strike (`story next`'s `strike`): the moment the
+    /// character's purpose shows, so what hides it is lifted for this line only.
+    #[serde(default)]
+    pub strike: bool,
 }
 
 fn yes() -> bool {
@@ -156,6 +160,7 @@ impl std::fmt::Debug for SayRequest {
             .field("speak", &self.speak)
             .field("recent_lines", &self.recent.len())
             .field("asked_by", &self.asked_by)
+            .field("strike", &self.strike)
             .finish()
     }
 }
@@ -261,6 +266,41 @@ pub struct BackfillRequest {
     pub guidance: Option<NarrativeGuidance>,
     #[serde(default)]
     pub model: Option<String>,
+}
+
+/// The body of `POST /dev/persona/guide`: give a persona its story `guidance`, about `topic`
+/// (what a backfill fills when the coverage judge names no gap).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuideRequest {
+    pub character: String,
+    pub topic: String,
+    pub guidance: NarrativeGuidance,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// The story guidance a persona was given, kept in its `<id>.guidance.json` until the persona is
+/// written whole again or removed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GivenGuidance {
+    pub guidance: NarrativeGuidance,
+    /// When it was given, in milliseconds since the Unix epoch.
+    pub at_ms: u64,
+}
+
+/// What giving a persona its story guidance did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Guided {
+    /// The persona was given this exact guidance before and not written whole since; no model
+    /// was asked.
+    AlreadyGiven,
+    /// The coverage judge found the persona already holds it.
+    Held,
+    /// The gaps the coverage judge named were filled from it.
+    Backfilled { edits: usize, sequence: u64 },
 }
 
 /// The query of `GET /dev/persona/backfills`.
@@ -685,6 +725,8 @@ pub enum PersonaError {
     AnswerRefused { replayed: bool, cause: AnswerError },
     /// The text-service operation key is not valid.
     InvalidOperationKey,
+    /// A line to show or voice has no words (`persona narrate`).
+    EmptyLine,
     /// The model name is not usable.
     InvalidModel { cause: ModelCause },
     /// A gap names a field a backfill cannot fill.
@@ -710,6 +752,13 @@ pub enum PersonaError {
         cause: IoCause,
         persona_restored: bool,
     },
+    /// The file of the story guidance `id` was given could not be read.
+    GuidanceUnreadable { id: String, cause: IoCause },
+    /// The file of the story guidance `id` was given is not valid; `cause` says where and why
+    /// the reader stopped.
+    GuidanceInvalid { id: String, cause: BodyError },
+    /// The file of the story guidance `id` was given could not be written or removed.
+    GuidanceUnwritable { id: String, cause: IoCause },
     /// The blocking task stopped without an answer.
     Stopped,
 }
@@ -735,6 +784,7 @@ impl PersonaError {
             Self::TextService { .. } => "text_service",
             Self::AnswerRefused { .. } => "answer_refused",
             Self::InvalidOperationKey => "invalid_operation_key",
+            Self::EmptyLine => "empty_line",
             Self::InvalidModel { .. } => "invalid_model",
             Self::NotFillable { .. } => "not_fillable",
             Self::NoGaps => "no_gaps",
@@ -743,6 +793,9 @@ impl PersonaError {
             Self::BackfillsInvalid { .. } => "backfills_invalid",
             Self::BackfillSequenceExhausted { .. } => "backfill_sequence_exhausted",
             Self::BackfillsUnwritable { .. } => "backfills_unwritable",
+            Self::GuidanceUnreadable { .. } => "guidance_unreadable",
+            Self::GuidanceInvalid { .. } => "guidance_invalid",
+            Self::GuidanceUnwritable { .. } => "guidance_unwritable",
             Self::Stopped => "stopped",
         }
     }
@@ -806,6 +859,7 @@ impl fmt::Display for PersonaError {
                 if *replayed { "a replayed" } else { "an" }
             ),
             Self::InvalidOperationKey => formatter.write_str("the operation key is not valid"),
+            Self::EmptyLine => formatter.write_str("the line has no words"),
             Self::InvalidModel { cause } => write!(formatter, "{cause}"),
             Self::NotFillable { field } => write!(
                 formatter,
@@ -842,6 +896,19 @@ impl fmt::Display for PersonaError {
                 } else {
                     "keeps the backfill (it could not be put back)"
                 }
+            ),
+            Self::GuidanceUnreadable { id, cause } => write!(
+                formatter,
+                "the story guidance {id:?} was given could not be read: {cause}"
+            ),
+            Self::GuidanceInvalid { id, cause } => write!(
+                formatter,
+                "the story guidance {id:?} was given is not valid: {}",
+                cause.detail
+            ),
+            Self::GuidanceUnwritable { id, cause } => write!(
+                formatter,
+                "the story guidance {id:?} was given could not be kept or forgotten: {cause}"
             ),
             Self::Stopped => formatter.write_str("the persona task stopped without an answer"),
         }
@@ -896,6 +963,7 @@ impl RouteError for PersonaError {
             | Self::InvalidModel { .. }
             | Self::NotFillable { .. }
             | Self::NoGaps
+            | Self::EmptyLine
             | Self::IdMismatch { .. } => StatusCode::BAD_REQUEST,
             Self::PrivateDetailInPublicField | Self::InvalidEdit { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY
@@ -913,6 +981,9 @@ impl RouteError for PersonaError {
             | Self::BackfillsInvalid { .. }
             | Self::BackfillSequenceExhausted { .. }
             | Self::BackfillsUnwritable { .. }
+            | Self::GuidanceUnreadable { .. }
+            | Self::GuidanceInvalid { .. }
+            | Self::GuidanceUnwritable { .. }
             | Self::InvalidOperationKey
             | Self::Stopped => StatusCode::INTERNAL_SERVER_ERROR,
         }

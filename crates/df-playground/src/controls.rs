@@ -152,6 +152,156 @@ pub struct Controls {
     /// What bounds the camera's zoom.
     #[serde(default)]
     pub zoom_limit: ZoomLimit,
+    /// The frame watch's plate schedule, which only the host sets (no change of the page's names
+    /// it), for the toolbar's plate timer.
+    #[serde(default)]
+    pub plate: PlateTimer,
+}
+
+/// The frame watch's plate schedule as the host last heard it from `persona watch`, for the
+/// toolbar's plate timer: the page shows it and works out no schedule of its own. Instants are on
+/// the playground's clock; `now_ms` is that clock as of the reply (`ControlsReply::at`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlateTimer {
+    /// Whether a watch is running.
+    pub running: bool,
+    /// The schedule's interval; zero when it makes none.
+    pub every_ms: u64,
+    /// When the next scheduled frame is due, while one may start.
+    pub due_at_ms: Option<u64>,
+    /// Whether a frame is being made.
+    pub making: bool,
+    /// The last frame's newest moment.
+    pub last: Option<PlateFrame>,
+    /// How many slots of the schedule came while no frame could start.
+    #[serde(default)]
+    pub missed: u32,
+    /// When the last plate of the room went up, for the gap to the next.
+    #[serde(default)]
+    pub room_shown_ms: Option<u64>,
+    #[serde(default)]
+    pub now_ms: u64,
+}
+
+impl PlateTimer {
+    /// The timer as a reader should see it `now_ms` after the host started: only a running watch
+    /// carries the clock, as only a move in the scene says how long ago it began, so a reply with
+    /// nothing running reads the same whenever it is asked.
+    pub fn at(&self, now_ms: u64) -> Self {
+        Self {
+            now_ms: if self.running { now_ms } else { 0 },
+            ..self.clone()
+        }
+    }
+
+    /// The toolbar's words for the timer `elapsed_ms` after the reply it came in: how long until
+    /// the next scheduled frame (whole seconds, counted down), or that one is being made, or that
+    /// no watch runs; then the last frame's kind, moment and age.
+    pub fn shown_text(&self, elapsed_ms: u64) -> String {
+        if !self.running {
+            return "Plate: off".to_owned();
+        }
+        let now_ms = self.now_ms.saturating_add(elapsed_ms);
+        let mut text = if self.every_ms == 0 {
+            "Plate: no schedule".to_owned()
+        } else {
+            match self.due_at_ms {
+                Some(due) if due >= now_ms => {
+                    format!("Plate in {}", minutes((due - now_ms).div_ceil(1_000)))
+                }
+                Some(due) => format!("Plate due {} ago", minutes((now_ms - due) / 1_000)),
+                None => "Plate: waiting".to_owned(),
+            }
+        };
+        if self.making {
+            text.push_str(" \u{b7} generating\u{2026}");
+        }
+        if self.missed > 0 {
+            text.push_str(&format!(" \u{b7} {} missed", self.missed));
+        }
+        let Some(last) = &self.last else {
+            return text;
+        };
+        let kind = match last.reason {
+            FrameReason::Line => "triggered",
+            FrameReason::Schedule => "scheduled",
+            FrameReason::Inspection => "inspection insert",
+            FrameReason::Focus => "focus insert",
+        };
+        format!(
+            "{text} \u{b7} last {kind} {} {} ago",
+            last.moment.key(),
+            minutes(now_ms.saturating_sub(last.at_ms) / 1_000)
+        )
+    }
+}
+
+/// `seconds` as `m:ss`.
+fn minutes(seconds: u64) -> String {
+    format!("{}:{:02}", seconds / 60, seconds % 60)
+}
+
+/// A frame of the watch at one of its moments: its name, why it was made and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlateFrame {
+    pub frame: String,
+    pub reason: FrameReason,
+    pub moment: FrameMoment,
+    pub at_ms: u64,
+}
+
+/// Why a frame was made: a line's change past the gate, the schedule, a close look the judge saw
+/// begin, or a clue's focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameReason {
+    Line,
+    Schedule,
+    Inspection,
+    Focus,
+}
+
+impl FrameReason {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Line => "line",
+            Self::Schedule => "schedule",
+            Self::Inspection => "inspection",
+            Self::Focus => "focus",
+        }
+    }
+
+    /// Whether the frame is an insert (a cut to one thing) rather than a frame of the room.
+    pub fn is_insert(self) -> bool {
+        matches!(self, Self::Inspection | Self::Focus)
+    }
+}
+
+/// A moment of a frame the watch makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameMoment {
+    /// It began to be made.
+    Started,
+    /// It went on screen.
+    Shown,
+    /// Making it failed.
+    Failed,
+    /// An insert gave the screen back to the room.
+    Ended,
+}
+
+impl FrameMoment {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Shown => "shown",
+            Self::Failed => "failed",
+            Self::Ended => "ended",
+        }
+    }
 }
 
 impl Default for Controls {
@@ -168,6 +318,7 @@ impl Default for Controls {
             stt_on: false,
             transition: Transition::default(),
             zoom_limit: ZoomLimit::default(),
+            plate: PlateTimer::default(),
         }
     }
 }
@@ -194,6 +345,10 @@ impl ControlsReply {
     pub fn at(&self, now_ms: u64) -> Self {
         Self {
             scene: self.scene.at(now_ms),
+            controls: Controls {
+                plate: self.controls.plate.at(now_ms),
+                ..self.controls.clone()
+            },
             ..self.clone()
         }
     }

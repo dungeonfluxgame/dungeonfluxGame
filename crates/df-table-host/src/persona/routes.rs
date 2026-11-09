@@ -11,6 +11,7 @@
 //! for or stop `ask` between its line and its backfill (`blocking::run_owned`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Bytes;
@@ -20,11 +21,14 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use df_content::persona::{Persona, PersonaEdit, PersonaId, check_emotion_ids};
 use df_playground::lobby::change::ScreenEdit;
+use df_playground::overlay::Edit;
 use df_playground::scene::SceneChange;
 use df_scene_layout::{CharacterCue, CueKind};
 use df_table::ports::Clock;
 
-use super::backfill::{BackfillJob, backfill_persona, check_gaps, consider, coverage_of};
+use super::backfill::{
+    BackfillJob, backfill_persona, check_gaps, consider, coverage_of, give_guidance,
+};
 use super::emotion_routes;
 use super::emotions::load_emotions;
 use super::generate::{
@@ -34,12 +38,12 @@ use super::line::{Occasion, say_line};
 use super::request::{
     Answered, AskRequest, Audience, BackfillRecord, BackfillRequest, Backfilled, BackfillsQuery,
     CastRow, CoverageRequest, Covered, EditRequest, Edited, GenerateCastRequest, GenerateRequest,
-    Generation, PersonaError, PersonaRemoved, PersonaStored, RemoveRequest, SaidLine, SayRequest,
-    ShowQuery, Spoken, VoiceRequest, summary_of,
+    Generation, GuideRequest, Guided, PersonaError, PersonaRemoved, PersonaStored, RemoveRequest,
+    SaidLine, SayRequest, ShowQuery, Spoken, VoiceRequest, summary_of,
 };
 use super::storage::{
-    PERSONA_WRITES, check_reserved, list_personas, persona_directory, persona_id, read_backfills,
-    read_persona, remove_persona, write_persona,
+    PERSONA_WRITES, check_reserved, forget_given_guidance, list_personas, persona_directory,
+    persona_id, read_backfills, read_persona, remove_persona, write_persona,
 };
 use crate::blocking::{run_blocking, run_owned};
 use crate::dev_http::{parse_body, reply};
@@ -77,6 +81,43 @@ pub mod path {
     pub const PERSONA_BACKFILL: &str = "/dev/persona/backfill";
     /// The backfills committed to a persona (GET with `?id=`).
     pub const PERSONA_BACKFILLS: &str = "/dev/persona/backfills";
+    /// Gives a persona its story guidance once: judged, backfilled and kept as given (POST a
+    /// `GuideRequest`).
+    pub const PERSONA_GUIDE: &str = "/dev/persona/guide";
+    /// Voices and shows a line of the dungeon master, the narrator (POST a `NarrateLine`).
+    pub const PERSONA_NARRATE: &str = "/dev/persona/narrate";
+}
+
+/// The voice the dungeon master speaks in (`speech voice narrator <voice>`).
+pub(super) const NARRATOR: &str = "narrator";
+/// How long the dungeon master's box stays after its line is cued: long enough to read across a
+/// room and hear out (a base and a time per character, as a spoken line's rest).
+const NARRATION_REST_MS: u64 = 12_000;
+
+/// How long the dungeon master's box stays up for `text` once it is cued. A voiced line's clip
+/// length is not known to the host (a played clip answers its bytes and synthesis time only), so
+/// the rest is the line's reading time.
+pub(super) fn rest_of_narration(text: &str) -> Duration {
+    Duration::from_millis(crate::cast::routes::line_rest_ms(
+        NARRATION_REST_MS,
+        text.chars().count(),
+    ))
+}
+
+/// The body of `POST /dev/persona/narrate`: the dungeon master's line, and whether it is voiced.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NarrateLine {
+    pub text: String,
+    #[serde(default)]
+    pub speak: bool,
+}
+
+/// What `persona narrate` did: the scene's revision and the voice, when one was asked for.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Narrated {
+    pub revision: u64,
+    pub voice: Option<Voiced>,
 }
 
 /// What every persona route works with: the host, the text surface the questions go to, and the
@@ -163,6 +204,7 @@ async fn write(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Respon
             move || {
                 let _writing = PERSONA_WRITES.lock();
                 let replaced = write_persona(&directory, &persona)?;
+                forget_given_guidance(&directory, persona.id())?;
                 Ok(PersonaStored {
                     persona: summary_of(&persona),
                     replaced,
@@ -274,6 +316,7 @@ async fn remove(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Respo
             move || {
                 let _writing = PERSONA_WRITES.lock();
                 if remove_persona(&directory, &id)? {
+                    forget_given_guidance(&directory, &id)?;
                     Ok(PersonaRemoved { id: id.to_string() })
                 } else {
                     Err(PersonaError::UnknownPersona { id: id.to_string() })
@@ -394,7 +437,8 @@ async fn clear_thinking(app: &AppState, character: &str) {
 /// Applies `said` as the speaking cue of `character` through the one scene path `scene cue` takes,
 /// which records its own refusals. When `speak` is asked the line is voiced first and its sound
 /// is cued in the same scene change, so the bubble and the voice start together; a voice that
-/// fails is reported and the bubble is cued without it.
+/// fails is reported and the bubble is cued without it. The camera's gentle push-in on the
+/// speaker (or its pull back to the wide plate) is part of the same change.
 async fn cue_line(
     routes: &PersonaRoutes,
     character: String,
@@ -407,7 +451,9 @@ async fn cue_line(
     } else {
         None
     };
+    let shot = crate::cast::routes::speaker_shot(&routes.app, &character, &said.line).await;
     let mut changes = quiet_changes(others);
+    changes.extend(shot.change());
     changes.push(cue_change(
         &character,
         CueKind::Speaking {
@@ -418,12 +464,81 @@ async fn cue_line(
         changes.push(sound_change(clip));
     }
     let applied = crate::playground::apply_scene_changes(&routes.app, changes).await?;
+    shot.applied(&routes.app, applied.revision);
     Ok(Spoken {
         character,
         said,
         revision: applied.revision,
         voice,
     })
+}
+
+/// Shows `line` in the dungeon master's box, voiced first when asked so the box and the voice
+/// start together, and takes the box away once it has been up long enough to read and hear out
+/// (a later line keeps it up).
+async fn narrate_line(
+    routes: &PersonaRoutes,
+    line: &NarrateLine,
+) -> Result<Narrated, PersonaError> {
+    let text = line.text.trim().to_owned();
+    if text.is_empty() {
+        return Err(PersonaError::EmptyLine);
+    }
+    let voice = if line.speak && routes.speech.is_on(SpeechFeature::Tts) {
+        Some(routes.speech.voice_line(NARRATOR, &text).await)
+    } else {
+        None
+    };
+    routes.app.narration_rest().cancel();
+    let mut changes = vec![SceneChange::Narration {
+        text: Some(text.clone()),
+        speaker: Edit::Keep,
+        badge: Edit::Keep,
+        continue_label: Edit::Keep,
+        voice: None,
+        placement: None,
+        progress: Edit::Keep,
+    }];
+    if let Some(Voiced::Played { clip, .. }) = &voice {
+        changes.push(sound_change(clip));
+    }
+    let applied = crate::playground::apply_scene_changes(&routes.app, changes).await?;
+    let rest = rest_of_narration(&text);
+    let app = Arc::downgrade(&routes.app);
+    routes.app.narration_rest().keep(tokio::spawn(async move {
+        tokio::time::sleep(rest).await;
+        if let Some(app) = app.upgrade() {
+            // A refusal is recorded by the scene path.
+            let _ =
+                crate::playground::apply_scene_changes(&app, vec![SceneChange::ClearNarration {}])
+                    .await;
+        }
+    }));
+    routes.app.record_line(format!(
+        "PERSONA narrated chars={} voiced={} rest_ms={} revision={}",
+        text.chars().count(),
+        matches!(voice, Some(Voiced::Played { .. })),
+        rest.as_millis(),
+        applied.revision
+    ));
+    Ok(Narrated {
+        revision: applied.revision,
+        voice,
+    })
+}
+
+async fn narrate(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response {
+    let request: NarrateLine = match parse_body(&bytes) {
+        Ok(request) => request,
+        Err(error) => return answer::<Narrated>(&routes.app, "narrate", None, Err(error.into())),
+    };
+    let owned = Arc::clone(&routes);
+    let result = run_owned(
+        async move { narrate_line(&owned, &request).await },
+        PersonaError::Stopped,
+    )
+    .await;
+    answer(&routes.app, "narrate", None, result)
 }
 
 /// The checked scene, route and stored persona a question about `character` is asked of.
@@ -460,6 +575,7 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
                 recent: &request.recent,
                 asked_by: request.asked_by.as_deref(),
                 intent: request.intent.as_deref(),
+                strike: request.strike,
             };
             let said = match say_line(&owned.app, &route, &scene, &own, occasion).await {
                 Ok(said) => said,
@@ -602,6 +718,26 @@ async fn backfill(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Res
     }
 }
 
+async fn guide(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response {
+    let request: GuideRequest = match parse_body(&bytes) {
+        Ok(request) => request,
+        Err(error) => return answer::<Guided>(&routes.app, "guide", None, Err(error.into())),
+    };
+    let known = known_id(&request.character).map(str::to_owned);
+    let owned = Arc::clone(&routes);
+    let result = run_owned(
+        async move {
+            let (scene, route, own) =
+                asked_of(&owned, &request.character, request.model.as_deref()).await?;
+            let at_ms = WallClock.now_ms();
+            give_guidance(&owned.app, &route, &scene, &own, &request, at_ms).await
+        },
+        PersonaError::Stopped,
+    )
+    .await;
+    answer(&routes.app, "guide", known.as_deref(), result)
+}
+
 async fn backfills(
     State(routes): State<Arc<PersonaRoutes>>,
     query: Result<Query<BackfillsQuery>, QueryRejection>,
@@ -640,10 +776,12 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -
         .route(path::PERSONA_GENERATE, post(generate))
         .route(path::PERSONA_GENERATE_CAST, post(generate_scene_cast))
         .route(path::PERSONA_SAY, post(say))
+        .route(path::PERSONA_NARRATE, post(narrate))
         .route(path::PERSONA_ASK, post(ask))
         .route(path::PERSONA_COVERAGE, post(coverage))
         .route(path::PERSONA_BACKFILL, post(backfill))
         .route(path::PERSONA_BACKFILLS, get(backfills))
+        .route(path::PERSONA_GUIDE, post(guide))
         .with_state(Arc::new(PersonaRoutes {
             app: Arc::clone(&app),
             text: Arc::clone(&text),

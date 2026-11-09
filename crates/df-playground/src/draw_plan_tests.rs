@@ -6,7 +6,7 @@ use std::rc::Rc;
 use crate::controls::{Controls, Device};
 use crate::copy::ReadingPace;
 use crate::draw_plan::{DrawPlan, Part, Snapshot, frame_action, wants_live};
-use crate::fixture::{Fixture, FixtureTitle};
+use crate::fixture::{Fixture, FixtureTitle, PlateKind};
 use crate::scene::{ImageSlot, SceneChange, SceneOverlay, Target};
 
 const SCENE: &str = r##"{
@@ -147,6 +147,7 @@ fn a_party_change_a_picture_and_a_choice_each_redraw_their_own_piece() {
             rotation_degrees: 0,
             slide: None,
             layout: None,
+            plate: PlateKind::Room,
         },
         0,
     );
@@ -191,6 +192,7 @@ fn a_slide_that_is_only_further_along_is_not_a_new_picture() {
                     rotation_degrees: 0,
                     slide: Some(slide),
                     layout: None,
+                    plate: PlateKind::Room,
                 },
                 &fixture(),
                 at_ms,
@@ -223,6 +225,7 @@ fn a_new_slide_is_a_new_picture() {
                         caption: None,
                         rotation_degrees: 0,
                         layout: None,
+                        plate: PlateKind::Room,
                         slide: Some(crate::fixture::Slide {
                             from_percent: 0,
                             to_percent: 100,

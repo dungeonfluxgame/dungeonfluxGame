@@ -71,7 +71,7 @@ fn an_anchored_bubble_sits_over_the_head_with_its_tip_just_above_it() {
         Some(&scene()),
     )
     .unwrap();
-    assert_eq!((place.width_permille, place.left_permille), (80, 805));
+    assert_eq!((place.width_permille, place.left_permille), (310, 690));
     // The tip stops HEAD_GAP above the head at 420: 1000 - 405.
     assert_eq!(place.bottom_permille, 595);
     assert_eq!((place.tip_x_permille, place.tip_y_permille), (845, 405));
@@ -85,8 +85,8 @@ fn a_shift_moves_the_box_and_the_trail_leans_back_to_the_point() {
         Some(&scene()),
     )
     .unwrap();
-    assert_eq!(place.left_permille, 775);
-    assert_eq!((place.root_percent, place.tip_percent), (87, 87));
+    assert_eq!(place.left_permille, 660);
+    assert_eq!((place.root_percent, place.tip_percent), (59, 59));
 }
 
 #[test]
@@ -97,7 +97,7 @@ fn the_box_stays_on_screen_and_another_point_is_touched_without_a_gap() {
         Some(&edge),
     )
     .unwrap();
-    assert_eq!(place.left_permille, 920);
+    assert_eq!(place.left_permille, 690);
     assert_eq!(place.root_percent, 100 - TAIL_INSET_PERCENT);
     assert_eq!(place.tip_percent, 100);
     let at_face = anchored_place(
@@ -146,7 +146,9 @@ fn a_marker_sits_at_its_point_moved_by_its_offset() {
 #[test]
 fn camera_targets_become_stage_positions_for_named_characters_only() {
     let elements = region_target_elements(&scene());
-    assert_eq!(elements.len(), 8);
+    // Two named characters, each with a target for every shot (the speaker push-in among them)
+    // and one for the figure.
+    assert_eq!(elements.len(), 10);
     let hero = elements
         .iter()
         .find(|element| element.id == "region:hero:face")

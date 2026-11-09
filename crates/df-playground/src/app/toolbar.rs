@@ -5,14 +5,19 @@
 //! Controls come in groups that never break inside, and three kinds look different: a choice of
 //! one (a segment of options), an on/off switch, and a one-shot action.
 
+use std::cell::Cell;
+
+use gloo_timers::future::TimeoutFuture;
 use wasm_bindgen::JsValue;
+use wasm_bindgen_futures::spawn_local;
 use web_sys::{Document, Element};
 
-use super::state::App;
+use super::sound::{MUSIC_ACTION, SOUND_ACTION, VOLUME_ACTION};
+use super::state::{App, with_app};
 use crate::audio;
 use crate::controls::{Device, FIXTURE_STATUS_KEY};
 use crate::copy::{ReadingPace, STATUS_KEYS};
-use crate::dom::{append, button, element, option, select, text_element};
+use crate::dom::{append, button, element, now_ms, option, select, text_element};
 use crate::media::AudioState;
 
 /// A labelled control inside a group: the small label, then the control.
@@ -205,7 +210,8 @@ fn overlay_switches(document: &Document, app: &App) -> Result<Element, JsValue> 
     )
 }
 
-/// The sound: a button that lets the browser play sound, and once it has, a plain "Sound on".
+/// The sound: a button that lets the browser play sound, and once it has, a plain "Sound on";
+/// then this viewer's own switches (all sound, the music) and master volume.
 fn sound_control(document: &Document) -> Result<Element, JsValue> {
     let control = if audio::state() == AudioState::Unlocked {
         let state = text_element(document, "span", "studio-state", "Sound on")?;
@@ -214,7 +220,88 @@ fn sound_control(document: &Document) -> Result<Element, JsValue> {
     } else {
         action_button(document, "audio:unlock", "Enable sound")?
     };
-    group(document, "Sound", &[control])
+    let prefs = audio::prefs();
+    let volume = element(document, "input", "studio-volume")?;
+    for (name, value) in [
+        ("type", "range"),
+        ("min", "0"),
+        ("max", "100"),
+        ("step", "1"),
+        ("aria-label", "Volume"),
+        ("data-action", VOLUME_ACTION),
+    ] {
+        volume.set_attribute(name, value)?;
+    }
+    volume.set_attribute("value", &prefs.volume_percent.to_string())?;
+    group(
+        document,
+        "Sound",
+        &[
+            control,
+            switch(document, SOUND_ACTION, "Sound", prefs.sound_on)?,
+            switch(document, MUSIC_ACTION, "Music", prefs.music_on)?,
+            field(document, "Volume", &volume)?,
+        ],
+    )
+}
+
+/// How often the plate timer's words are read again: once a second, so it never changes faster.
+const PLATE_TICK_MS: u32 = 1_000;
+
+thread_local! {
+    /// The host clock of the plate timer last read and the page's clock when it was first seen,
+    /// so the countdown runs on between the host's replies; and whether the tick runs.
+    static PLATE_SEEN: Cell<Option<(u64, f64)>> = const { Cell::new(None) };
+    static PLATE_TICKING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The plate timer's words now: the host's timer, as many milliseconds on as the page has run
+/// since it first saw that reply.
+fn plate_words(app: &App) -> String {
+    let plate = &app.controls.plate;
+    let page_ms = now_ms().unwrap_or_default();
+    let seen = PLATE_SEEN.with(|seen| match seen.get() {
+        Some((host_ms, page_seen)) if host_ms == plate.now_ms => page_seen,
+        _ => {
+            seen.set(Some((plate.now_ms, page_ms)));
+            page_ms
+        }
+    });
+    // A float of whole milliseconds since a moment before it, never negative.
+    let elapsed_ms = (page_ms - seen).max(0.0) as u64;
+    plate.shown_text(elapsed_ms)
+}
+
+/// The plate timer: the frame watch's schedule as the host says it (the page works out none), a
+/// countdown to the next scheduled frame and the last frame's kind and age. A tick, started once,
+/// rewrites its words once a second, only when they changed.
+fn plate_timer(document: &Document, app: &App) -> Result<Element, JsValue> {
+    let timer = text_element(
+        document,
+        "span",
+        "studio-state studio-plate",
+        &plate_words(app),
+    )?;
+    // A timer is not read out on every change.
+    timer.set_attribute("role", "timer")?;
+    if !PLATE_TICKING.with(|ticking| ticking.replace(true)) {
+        spawn_local(async {
+            loop {
+                TimeoutFuture::new(PLATE_TICK_MS).await;
+                let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+                    continue;
+                };
+                let Ok(Some(timer)) = document.query_selector(".studio-plate") else {
+                    continue;
+                };
+                let words = with_app(plate_words);
+                if timer.text_content().as_deref() != Some(words.as_str()) {
+                    timer.set_text_content(Some(&words));
+                }
+            }
+        });
+    }
+    group(document, "Plate", &[timer])
 }
 
 pub fn toolbar(document: &Document, app: &App) -> Result<Element, JsValue> {
@@ -229,5 +316,6 @@ pub fn toolbar(document: &Document, app: &App) -> Result<Element, JsValue> {
     append(&bar, &overlay_switches(document, app)?)?;
     append(&bar, &sound_control(document)?)?;
     append(&bar, &speech_switches(document, app)?)?;
+    append(&bar, &plate_timer(document, app)?)?;
     Ok(bar)
 }

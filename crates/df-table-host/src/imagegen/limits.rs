@@ -19,6 +19,16 @@ pub const REQUESTED_LONG_SIDE_PX: u32 = 1672;
 /// purpose's direction together. An outside contract: `df_imagery::oneshot` refuses longer text.
 pub const MAXIMUM_SENT_TEXT_CHARS: usize = df_imagery::oneshot::MAXIMUM_PROMPT_CHARS;
 
+/// Most pictures one request attaches: the picture to edit and the references together. An
+/// outside contract: `df_imagery::oneshot` refuses more (Forge takes up to 10).
+pub const MAXIMUM_PICTURES: usize = df_imagery::oneshot::MAXIMUM_PICTURES;
+
+/// Most pictures one Codex request attaches, the picture to edit and the references together. An
+/// outside contract: the Codex image tool takes five, and given six it used five and the job ended
+/// `InputMismatch` (dungeon run 18: every room plate of the vault, where six people are, was
+/// refused).
+pub const CODEX_MAXIMUM_PICTURES: usize = 5;
+
 /// What the provenance sidecar adds to a picture name.
 pub const PROVENANCE_SUFFIX: &str = ".provenance.json";
 

@@ -1,10 +1,34 @@
 //! The text `media generate` prints: a numbered line with the facts under it for a job, one line
 //! per job for the status, the end of a job that has no picture, and the refusal line.
 
-use super::request::{GenerateError, JobState, JobView, Sidecar};
+use super::request::{BackendView, GenerateError, JobState, JobView, Sidecar};
 
 fn seconds(milliseconds: u64) -> String {
     format!("{:.1} s", milliseconds as f64 / 1000.0)
+}
+
+/// The backend new jobs start on and what it takes.
+pub(super) fn format_backend(view: &BackendView) -> String {
+    let limit = |maximum: Option<usize>, none: &str| {
+        maximum.map_or_else(|| none.to_owned(), |maximum| format!("at most {maximum}"))
+    };
+    format!(
+        concat!(
+            "image backend: {} (text {} characters, negative prompt {}, {} pictures); ",
+            "{} running on the backend each started on"
+        ),
+        view.backend,
+        limit(
+            view.limits.maximum_text_characters,
+            "the request's bound of"
+        ),
+        limit(
+            view.limits.maximum_negative_characters,
+            "none: bans go in the text,"
+        ),
+        view.limits.maximum_pictures,
+        view.running
+    )
 }
 
 /// The answer to a generation: the job that runs on, or the picture it stored.

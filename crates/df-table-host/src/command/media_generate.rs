@@ -5,11 +5,15 @@
 //! Transitional: once `command.rs`, `command/playground.rs` and `command/usage.rs` name
 //! `crate::imagegen::cli` directly, this module goes.
 
-pub(super) use crate::imagegen::cli::MEDIA_GENERATE_USAGE;
 pub use crate::imagegen::cli::MediaGenerate;
+pub(super) use crate::imagegen::cli::{MEDIA_BACKEND_USAGE, MEDIA_GENERATE_USAGE};
 
 use super::{Command, CommandError};
 
 pub(super) fn parse(words: &[String]) -> Result<Command, CommandError> {
     crate::imagegen::cli::parse(words).map(Command::MediaGenerate)
+}
+
+pub(super) fn parse_backend(words: &[String]) -> Result<Command, CommandError> {
+    crate::imagegen::cli::parse_backend(words).map(Command::MediaGenerate)
 }

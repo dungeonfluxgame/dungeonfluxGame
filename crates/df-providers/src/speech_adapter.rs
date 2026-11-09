@@ -1,10 +1,11 @@
-//! Bounded native ElevenLabs Scribe v2 and Flash v2.5 profiles.
+//! Bounded native ElevenLabs Scribe v2 and Flash v2.5 profiles, and the account's voice list.
 //! Wire sources observed 2026-10-11:
 //! <https://elevenlabs.io/docs/api-reference/speech-to-text/convert>
 //! <https://elevenlabs.io/docs/api-reference/text-to-speech/stream>
+//! <https://elevenlabs.io/docs/api-reference/voices/search> (`GET /v1/voices`, observed 2026-11-08)
 //! Encoded audio and transcripts remain candidates; neither settles supplier spend.
 
-use std::{fmt, future::Future, io::Write, net::SocketAddr, time::Duration};
+use std::{collections::BTreeMap, fmt, future::Future, io::Write, net::SocketAddr, time::Duration};
 
 use df_model::checkpoint::ExecutionMode;
 use df_provider_api::{
@@ -58,6 +59,15 @@ const JSON_LIMITS: TextSchemaLimits = TextSchemaLimits {
     maximum_depth: 16,
     maximum_nodes: 65_536,
 };
+/// Bounds of a voice list answer, which carries each voice's settings, samples and sharing record.
+/// They only protect against mistakes; the transport's response limit bounds the bytes first.
+const VOICE_LIST_JSON_LIMITS: TextSchemaLimits = TextSchemaLimits {
+    maximum_schema_bytes: 256 * 1024 * 1024,
+    maximum_depth: 64,
+    maximum_nodes: 50_000_000,
+};
+/// The longest voice name, label or description kept, in bytes (a guard against mistakes).
+const MAXIMUM_VOICE_TEXT_BYTES: usize = 65_536;
 
 /// Only raw signed little-endian 16-bit mono PCM at 16 kHz is admitted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +118,8 @@ pub enum SpeechAdapterCause {
     Json,
     Transcript,
     EmptyAudio,
+    /// The voice list answer is not a list of voices.
+    VoiceList,
     Owner(RequestError),
     Transport(NativeHttpCause),
     Supplier(ProviderFailureClass),
@@ -125,6 +137,7 @@ impl fmt::Display for SpeechAdapterCause {
             Self::Json => formatter.write_str("the speech answer is not valid JSON"),
             Self::Transcript => formatter.write_str("the transcript is unusable"),
             Self::EmptyAudio => formatter.write_str("the speech answer carried no audio"),
+            Self::VoiceList => formatter.write_str("the voice list is not a list of voices"),
             Self::Owner(cause) => write!(formatter, "the request owner refused it ({cause:?})"),
             Self::Transport(cause) => write!(formatter, "the speech call failed: {cause}"),
             Self::Supplier(class) => write!(formatter, "the speech supplier failed ({class:?})"),
@@ -194,7 +207,8 @@ impl SpeechAdapterError {
             SpeechAdapterCause::Owner(_)
             | SpeechAdapterCause::Json
             | SpeechAdapterCause::Transcript
-            | SpeechAdapterCause::EmptyAudio => ProviderFailureClass::Contract,
+            | SpeechAdapterCause::EmptyAudio
+            | SpeechAdapterCause::VoiceList => ProviderFailureClass::Contract,
             SpeechAdapterCause::Transport(cause) => cause.failure_class(),
             SpeechAdapterCause::Supplier(class) => class,
             _ => ProviderFailureClass::InvalidRequest,
@@ -227,6 +241,67 @@ fn error(cause: SpeechAdapterCause) -> SpeechAdapterError {
         transcription_id: None,
         audio_duration_secs: None,
         error_request_id: None,
+    }
+}
+
+/// One voice of the account's library as `GET /v1/voices` lists it: the id a speech request
+/// names, the voice's name, the supplier's descriptive labels (such as `gender`, `age`, `accent`,
+/// `descriptive` and `use_case`, each when the supplier gives it) and its description.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SupplierVoice {
+    voice_id: String,
+    name: String,
+    labels: BTreeMap<String, String>,
+    description: Option<String>,
+}
+
+impl SupplierVoice {
+    /// The voice, when `voice_id` can be sent as a voice, the name is not blank and every text is
+    /// plain: no control characters and at most [`MAXIMUM_VOICE_TEXT_BYTES`]. Refused as
+    /// `VoiceList` otherwise.
+    pub fn new(
+        voice_id: &str,
+        name: &str,
+        labels: BTreeMap<String, String>,
+        description: Option<&str>,
+    ) -> Result<Self, SpeechAdapterError> {
+        let plain = |text: &str| {
+            text.len() <= MAXIMUM_VOICE_TEXT_BYTES && !text.chars().any(char::is_control)
+        };
+        let id_ok = !voice_id.is_empty()
+            && voice_id.len() <= MAXIMUM_VOICE_ID_BYTES
+            && !voice_id
+                .chars()
+                .any(|character| character.is_whitespace() || character.is_control());
+        let texts_ok = !name.trim().is_empty()
+            && plain(name)
+            && labels.iter().all(|(key, value)| plain(key) && plain(value))
+            && description.is_none_or(plain);
+        if !(id_ok && texts_ok) {
+            return Err(error(SpeechAdapterCause::VoiceList));
+        }
+        Ok(Self {
+            voice_id: voice_id.to_owned(),
+            name: name.to_owned(),
+            labels,
+            description: description.map(str::to_owned),
+        })
+    }
+
+    pub fn voice_id(&self) -> &str {
+        &self.voice_id
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn labels(&self) -> &BTreeMap<String, String> {
+        &self.labels
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
     }
 }
 
@@ -625,13 +700,14 @@ impl NativeSpeechProvider {
                 error_request_id: None,
             })?;
         let metadata = SpeechResponseMetadata(response.metadata);
-        let json = decode_json(&response.body).map_err(|cause| SpeechAdapterError {
-            cause,
-            metadata: Box::new(metadata.clone()),
-            transcription_id: None,
-            audio_duration_secs: None,
-            error_request_id: None,
-        })?;
+        let json =
+            decode_json(&response.body, JSON_LIMITS).map_err(|cause| SpeechAdapterError {
+                cause,
+                metadata: Box::new(metadata.clone()),
+                transcription_id: None,
+                audio_duration_secs: None,
+                error_request_id: None,
+            })?;
         let mut observation = NativeSpeechObservation {
             identity: binding.identity,
             route: self.route,
@@ -768,7 +844,8 @@ impl NativeSpeechProvider {
             request_limits: checked.limits(),
         };
         if response.status != 200 {
-            let json = decode_json(&response.body).map_err(|cause| observation.refused(cause))?;
+            let json = decode_json(&response.body, JSON_LIMITS)
+                .map_err(|cause| observation.refused(cause))?;
             return Err(supplier_error(response.status, &json, &observation));
         }
         if response.body.is_empty() {
@@ -785,6 +862,56 @@ impl NativeSpeechProvider {
             audio,
             observation,
         })
+    }
+
+    /// The voices of the account's library (`GET /v1/voices`), for choosing a character's voice.
+    /// Only the text-to-speech route lists voices. One call within `deadline`, never retried; the
+    /// list spends no characters.
+    pub async fn voices(
+        &self,
+        deadline: Duration,
+        cancellation: impl Future<Output = ()>,
+    ) -> Result<Vec<SupplierVoice>, SpeechAdapterError> {
+        if self.route != CandidateRouteId::ElevenFlashV25Tts {
+            return Err(error(SpeechAdapterCause::UnregisteredRoute));
+        }
+        let request = HttpRequest::elevenlabs_native_get(
+            &format!("{}/v1/voices", self.base),
+            &self.credential,
+        )
+        .with_operation("voices");
+        let response = self
+            .http
+            .execute_profile(
+                request,
+                deadline,
+                cancellation,
+                NativeResponseProfile::ElevenJson,
+            )
+            .await
+            .map_err(|failure| SpeechAdapterError {
+                cause: SpeechAdapterCause::Transport(failure.cause),
+                metadata: Box::new(SpeechResponseMetadata(*failure.metadata)),
+                transcription_id: None,
+                audio_duration_secs: None,
+                error_request_id: None,
+            })?;
+        let metadata = SpeechResponseMetadata(response.metadata);
+        let refused = |cause| SpeechAdapterError {
+            cause,
+            metadata: Box::new(metadata.clone()),
+            transcription_id: None,
+            audio_duration_secs: None,
+            error_request_id: None,
+        };
+        let json = decode_json(&response.body, VOICE_LIST_JSON_LIMITS).map_err(refused)?;
+        if response.status != 200 {
+            return Err(refused(SpeechAdapterCause::Supplier(failure_class(
+                response.status,
+                &json,
+            ))));
+        }
+        parse_voice_list(&json).map_err(refused)
     }
 }
 
@@ -884,11 +1011,52 @@ fn validate_keyterms(keyterms: &[String]) -> Result<(), SpeechAdapterError> {
     Ok(())
 }
 
-fn decode_json(bytes: &[u8]) -> Result<Value, SpeechAdapterCause> {
-    if bytes.len() > JSON_LIMITS.maximum_schema_bytes {
+fn decode_json(bytes: &[u8], limits: TextSchemaLimits) -> Result<Value, SpeechAdapterCause> {
+    if bytes.len() > limits.maximum_schema_bytes {
         return Err(SpeechAdapterCause::Json);
     }
-    parse_unique_json(bytes, JSON_LIMITS).map_err(|_| SpeechAdapterCause::Json)
+    parse_unique_json(bytes, limits).map_err(|_| SpeechAdapterCause::Json)
+}
+
+/// The voices of a `GET /v1/voices` answer, in the supplier's order. A voice that cannot be used
+/// (no id, an id that cannot be sent, no name, a text with control characters) is left out; an
+/// answer without a `voices` list is refused. Labels that are not text are left out.
+fn parse_voice_list(json: &Value) -> Result<Vec<SupplierVoice>, SpeechAdapterCause> {
+    let listed = json
+        .get("voices")
+        .and_then(Value::as_array)
+        .ok_or(SpeechAdapterCause::VoiceList)?;
+    Ok(listed
+        .iter()
+        .filter_map(|voice| {
+            let labels = voice
+                .get("labels")
+                .and_then(Value::as_object)
+                .map(|labels| {
+                    labels
+                        .iter()
+                        .filter_map(|(key, value)| {
+                            value
+                                .as_str()
+                                .filter(|value| !value.trim().is_empty())
+                                .map(|value| (key.clone(), value.to_owned()))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let description = voice
+                .get("description")
+                .and_then(Value::as_str)
+                .filter(|text| !text.trim().is_empty());
+            SupplierVoice::new(
+                voice.get("voice_id")?.as_str()?,
+                voice.get("name")?.as_str()?,
+                labels,
+                description,
+            )
+            .ok()
+        })
+        .collect())
 }
 
 fn optional_id(value: Option<&Value>) -> Result<Option<ProviderRequestId>, SpeechAdapterCause> {
@@ -1054,15 +1222,13 @@ fn parse_transcript(
     })
 }
 
-fn supplier_error(
-    status: u16,
-    json: &Value,
-    observation: &NativeSpeechObservation,
-) -> SpeechAdapterError {
+/// The failure class of a supplier's non-200 answer, from its status and its `detail` type and
+/// code.
+fn failure_class(status: u16, json: &Value) -> ProviderFailureClass {
     let detail = json.get("detail").and_then(Value::as_object);
     let kind = detail.and_then(|d| d.get("type")).and_then(Value::as_str);
     let code = detail.and_then(|d| d.get("code")).and_then(Value::as_str);
-    let class = match (status, kind, code) {
+    match (status, kind, code) {
         (400 | 422, Some("validation_error" | "invalid_request"), Some(_)) => {
             ProviderFailureClass::InvalidRequest
         }
@@ -1078,7 +1244,16 @@ fn supplier_error(
             ProviderFailureClass::Unavailable
         }
         _ => ProviderFailureClass::Unknown,
-    };
+    }
+}
+
+fn supplier_error(
+    status: u16,
+    json: &Value,
+    observation: &NativeSpeechObservation,
+) -> SpeechAdapterError {
+    let detail = json.get("detail").and_then(Value::as_object);
+    let class = failure_class(status, json);
     let mut refused = observation.refused(SpeechAdapterCause::Supplier(class));
     // The error's request id is a diagnostic extra: a malformed one is dropped, the failure stands.
     refused.error_request_id = optional_id(detail.and_then(|d| d.get("request_id")))

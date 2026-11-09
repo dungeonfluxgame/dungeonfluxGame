@@ -20,8 +20,8 @@ use serde::Serialize;
 use super::clips::{clear_clips, clips};
 use super::limits::MAXIMUM_ADMITTED_AUDIO_BYTES;
 use super::request::{
-    ClipPlayed, ClipRow, ClipsCleared, QueryCause, SpeakRequest, SpeechError, SpeechStatus,
-    Transcript, VoiceChanged, VoiceRequest,
+    CastRequest, ClipPlayed, ClipRow, ClipsCleared, QueryCause, SpeakRequest, SpeechError,
+    SpeechStatus, Transcript, VoiceCastError, VoiceChanged, VoiceRequest,
 };
 use super::service::Speech;
 use super::voices::{change_voice, voices_path};
@@ -36,6 +36,8 @@ pub mod path {
     pub const SPEECH_SPEAK: &str = "/dev/speech/speak";
     /// Gives a character a voice or takes it away (POST a `VoiceRequest`).
     pub const SPEECH_VOICE: &str = "/dev/speech/voice";
+    /// Casts a character's voice from their persona (POST a `CastRequest`).
+    pub const SPEECH_CAST: &str = "/dev/speech/cast";
     /// The voice clips the host keeps (GET).
     pub const SPEECH_CLIPS: &str = "/dev/speech/clips";
     /// Deletes every voice clip the host made (POST, no body).
@@ -161,6 +163,26 @@ async fn voice(State(speech): State<Speech>, bytes: Bytes) -> Response {
     answer::<VoiceChanged>(&speech, "voice", result)
 }
 
+async fn cast(State(speech): State<Speech>, bytes: Bytes) -> Response {
+    let result = match parse_body::<CastRequest>(&bytes) {
+        Ok(request) => {
+            let owned = speech.clone();
+            run_owned(
+                async move { owned.cast(request).await },
+                VoiceCastError::Stopped,
+            )
+            .await
+        }
+        Err(error) => Err(error.into()),
+    };
+    if let Err(error) = &result {
+        speech
+            .app()
+            .record_line(format!("SPEECH refused verb=cast error={}", error.key()));
+    }
+    reply(result)
+}
+
 async fn list_clips(State(speech): State<Speech>) -> Response {
     let result = clips(speech.app()).await;
     answer::<Vec<ClipRow>>(&speech, "clips", result)
@@ -188,6 +210,7 @@ pub fn router_with(speech: Speech) -> Router {
         )
         .route(path::SPEECH_SPEAK, post(speak))
         .route(path::SPEECH_VOICE, post(voice))
+        .route(path::SPEECH_CAST, post(cast))
         .route(path::SPEECH_CLIPS, get(list_clips))
         .route(path::SPEECH_CLEAR, post(clear))
         .with_state(speech)

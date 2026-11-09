@@ -223,6 +223,36 @@ pub struct ImageRef {
     /// its regions. A different picture drops it.
     #[serde(default)]
     pub layout: Option<crate::image_layout::ImageLayout>,
+    /// What a backdrop picture is, as the host that put it up says; only the backdrop's is read.
+    /// Defaults to a room plate.
+    #[serde(default)]
+    pub plate: PlateKind,
+}
+
+/// What a backdrop picture is, as the host that put it up knows it: the page reads this and never
+/// guesses it from the picture's name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlateKind {
+    /// A picture of the room with its own scan, or with none: the cast stand where its layout says.
+    #[default]
+    Room,
+    /// A room picture shown with the cast of the room before it, as its own scan missed someone:
+    /// the cast may speak, but nobody stands where that layout says.
+    RoomKeptCast,
+    /// An insert: a cut to an item filling the screen, shown with the cast of the room it cuts
+    /// away from, so the cast may speak while nobody is in the picture.
+    CloseUp,
+}
+
+impl PlateKind {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Room => "room",
+            Self::RoomKeptCast => "room_kept_cast",
+            Self::CloseUp => "close_up",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -266,15 +296,39 @@ pub struct TvScene {
     /// (see `home::model`).
     #[serde(default)]
     pub home: Option<crate::home::model::HomeScene>,
+    /// The clue board: every clue found so far (see `clues`).
+    #[serde(default)]
+    pub clues: Option<crate::clues::ClueBoard>,
     pub elements: ElementSource,
 }
 
 impl TvScene {
-    /// The scanned layout of the backdrop picture, when it carries one.
+    /// The scanned layout of the backdrop picture, when the host says it is that very picture's
+    /// (a room plate, `PlateKind::Room`): a close-up or a room shown with the room's cast before
+    /// it has nobody in it where that layout's figures stood, so nothing is drawn round them, no
+    /// bubble is pinned to them and the camera frames none of them (owner, 2026-11-08: an outline
+    /// only round a character who is visible).
     pub fn backdrop_layout(&self) -> Option<&crate::image_layout::ImageLayout> {
         self.backdrop
             .as_ref()
+            .filter(|backdrop| backdrop.plate == PlateKind::Room)
             .and_then(|backdrop| backdrop.layout.as_ref())
+    }
+
+    /// The layout the backdrop carries, whatever kind of plate it is: the cast's names and the
+    /// room picture their faces are cut from. A close-up keeps it so the cast may speak, but
+    /// nothing is drawn on the close-up from it (`backdrop_layout` is that rule).
+    pub fn cast_layout(&self) -> Option<&crate::image_layout::ImageLayout> {
+        self.backdrop
+            .as_ref()
+            .and_then(|backdrop| backdrop.layout.as_ref())
+    }
+
+    /// Whether the host put the backdrop up as a close-up (`PlateKind::CloseUp`).
+    pub fn is_close_up(&self) -> bool {
+        self.backdrop
+            .as_ref()
+            .is_some_and(|backdrop| backdrop.plate == PlateKind::CloseUp)
     }
 }
 

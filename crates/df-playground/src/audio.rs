@@ -8,6 +8,10 @@
 //! says which cues are new and what a change of music means, and `scene` has already checked the
 //! volumes. Each sound and song started is a timeline record (`page_log`) that ends when it plays
 //! out, is stopped or replaced, or is refused.
+//!
+//! This viewer's own preferences (`AudioPrefs`: sound muted or not, the music on or off, a master
+//! volume over each sound's own) scale and mute what the page plays, never what the scene asks
+//! for. They are kept in browser storage, and a storage the browser blocks leaves the defaults.
 
 use std::cell::RefCell;
 
@@ -22,14 +26,19 @@ use crate::media::AudioState;
 use crate::page_log::{self, now_ms, with_log};
 use crate::path::media_file;
 use crate::scene::{Cue, Track};
-use crate::sound_plan::{MusicChange, fresh_cues, music_change, volume_of};
+use crate::sound_plan::{AUDIO_PREFS_KEY, AudioPrefs, MusicChange, fresh_cues, music_change};
 use crate::timeline::{EndReason, ErrorSource, TimelineKind};
 
 /// The attribute of an audio element that holds the sequence number of its timeline record.
 const TIMELINE_SEQ_ATTRIBUTE: &str = "data-timeline-seq";
+/// The attribute of an audio element that holds its own volume, in percent, for the master volume
+/// to scale again.
+const VOLUME_ATTRIBUTE: &str = "data-volume-percent";
 
 #[derive(Default)]
 struct Engine {
+    /// This viewer's preferences, read from browser storage when the page starts.
+    prefs: AudioPrefs,
     /// Whether the person has clicked or pressed a key on the page.
     gesture_seen: bool,
     /// Whether the browser has let a sound start. It does so without a click in some settings (a
@@ -49,7 +58,10 @@ struct Engine {
 }
 
 thread_local! {
-    static ENGINE: RefCell<Engine> = RefCell::new(Engine::default());
+    static ENGINE: RefCell<Engine> = RefCell::new(Engine {
+        prefs: stored_prefs(),
+        ..Engine::default()
+    });
     /// The one handler every effect's `error` event calls.
     static EFFECT_FAILED: Closure<dyn FnMut(Event)> =
         Closure::<dyn FnMut(Event)>::new(|event: Event| on_effect_error(&event));
@@ -60,6 +72,78 @@ thread_local! {
 
 fn with_engine<R>(change: impl FnOnce(&mut Engine) -> R) -> R {
     ENGINE.with(|engine| change(&mut engine.borrow_mut()))
+}
+
+/// The browser storage of this page, when the browser allows one.
+fn storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+}
+
+/// The preferences kept in browser storage; the defaults when there are none or it is blocked.
+fn stored_prefs() -> AudioPrefs {
+    let text = storage().and_then(|storage| storage.get_item(AUDIO_PREFS_KEY).ok().flatten());
+    AudioPrefs::from_stored(text.as_deref())
+}
+
+/// This viewer's sound preferences now.
+pub fn prefs() -> AudioPrefs {
+    with_engine(|engine| engine.prefs)
+}
+
+/// Takes `prefs` as this viewer's: every sound and the song playing take the master volume and
+/// the mute at once, the music stops or plays on where it was, and they are kept for the next
+/// load (a blocked storage keeps them for this page only, and says so once).
+pub fn set_prefs(prefs: AudioPrefs) {
+    let (before, music, effects) = with_engine(|engine| {
+        let before = std::mem::replace(&mut engine.prefs, prefs);
+        (
+            before,
+            engine
+                .music
+                .as_ref()
+                .map(|(track, audio)| (track.clone(), audio.clone())),
+            engine.effects.clone(),
+        )
+    });
+    for audio in effects.iter().chain(music.as_ref().map(|(_, audio)| audio)) {
+        apply_prefs(audio, &prefs);
+    }
+    if let Some((track, audio)) = music
+        && before.music_on != prefs.music_on
+    {
+        if prefs.music_on {
+            start(&audio, track.media, Kind::Music);
+        } else {
+            end_record(&audio, EndReason::Removed);
+            if let Err(error) = audio.pause() {
+                note_error(format!("could not pause the music: {}", js_message(&error)));
+            }
+        }
+    }
+    match storage() {
+        Some(storage) => {
+            if let Err(error) = storage.set_item(AUDIO_PREFS_KEY, &prefs.stored()) {
+                note_error(format!(
+                    "the sound settings are not kept for the next load: {}",
+                    js_message(&error)
+                ));
+            }
+        }
+        None => note_error(
+            "the sound settings are not kept for the next load: the browser blocks storage"
+                .to_owned(),
+        ),
+    }
+}
+
+/// Gives `audio` the volume and the mute of `prefs`, over its own volume.
+fn apply_prefs(audio: &HtmlAudioElement, prefs: &AudioPrefs) {
+    let own = audio
+        .get_attribute(VOLUME_ATTRIBUTE)
+        .and_then(|percent| percent.parse::<u8>().ok())
+        .unwrap_or(100);
+    audio.set_volume(prefs.volume_for(own));
+    audio.set_muted(!prefs.sound_on);
 }
 
 /// What the page can say about its sound.
@@ -119,7 +203,8 @@ pub fn forget_cues() {
 
 fn new_audio(media: &str, volume_percent: u8, looping: bool) -> Result<HtmlAudioElement, JsValue> {
     let audio = HtmlAudioElement::new_with_src(&media_file(media))?;
-    audio.set_volume(volume_of(volume_percent));
+    audio.set_attribute(VOLUME_ATTRIBUTE, &volume_percent.to_string())?;
+    apply_prefs(&audio, &prefs());
     audio.set_loop(looping);
     MEDIA_ENDED.with(|handler| {
         audio.add_event_listener_with_callback("ended", handler.as_ref().unchecked_ref())
@@ -224,7 +309,7 @@ pub fn unlock() -> bool {
             None
         }
     });
-    if let Some((media, audio)) = retry {
+    if let Some((media, audio)) = retry.filter(|_| prefs().music_on) {
         start(&audio, media, Kind::Music);
     }
     first
@@ -267,7 +352,12 @@ pub fn sync_music(desired: Option<&Track>, device: Device) {
             looping,
         } => with_engine(|engine| {
             if let Some((track, audio)) = &mut engine.music {
-                audio.set_volume(volume_of(volume_percent));
+                if let Err(error) =
+                    audio.set_attribute(VOLUME_ATTRIBUTE, &volume_percent.to_string())
+                {
+                    note_error(format!("could not mark the music: {}", js_message(&error)));
+                }
+                audio.set_volume(engine.prefs.volume_for(volume_percent));
                 audio.set_loop(looping);
                 track.volume_percent = volume_percent;
                 track.looping = looping;
@@ -287,7 +377,10 @@ fn start_music(track: &Track) {
     match new_audio(&track.media, track.volume_percent, track.looping) {
         Ok(audio) => {
             with_engine(|engine| engine.music = Some((track.clone(), audio.clone())));
-            start(&audio, track.media.clone(), Kind::Music);
+            // With the music off the song is kept, not played, so turning it on plays it.
+            if prefs().music_on {
+                start(&audio, track.media.clone(), Kind::Music);
+            }
         }
         Err(error) => note_error(format!(
             "could not play '{}': {}",

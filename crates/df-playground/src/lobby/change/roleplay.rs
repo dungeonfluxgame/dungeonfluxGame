@@ -38,6 +38,9 @@ pub struct RoleplayEdit {
     pub tail_x_percent: Option<u8>,
     pub tail_y_percent: Option<u8>,
     pub caption: Option<String>,
+    /// The item's name that titles the caption on a close-up. It goes with the `caption` it is sent
+    /// with: a caption set without one has no title, and a caption taken away takes its title.
+    pub caption_title: Option<String>,
     /// Anchors the bubble to the region of this label in the backdrop's layout; an empty label
     /// takes the anchor away.
     pub anchor: Option<String>,
@@ -253,6 +256,7 @@ pub(super) fn roleplay_pairs(edit: &RoleplayEdit) -> Vec<(&'static str, String)>
     present(&mut pairs, "line", edit.line.as_ref());
     present(&mut pairs, "emphasis", edit.emphasis.as_ref());
     present(&mut pairs, "caption", edit.caption.as_ref());
+    present(&mut pairs, "caption_title", edit.caption_title.as_ref());
     if let Some(media) = &edit.portrait {
         pairs.push(("portrait", plain(media)));
     }

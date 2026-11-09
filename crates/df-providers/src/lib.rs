@@ -42,8 +42,8 @@ pub use speech_adapter::{
     ElevenSpeechBasis, ElevenSpeechRequest, ElevenSttBasis, ElevenSttRequest, EncodedSpeechAudio,
     NativeSpeechObservation, NativeSpeechProvider, PreparedSpeechResponse, PreparedSttResponse,
     SpeechAdapterCause, SpeechAdapterError, SpeechInputFormat, SpeechOutputFormat,
-    SpeechResponseMetadata, SpeechTranscriptProfile, TranscriptWord, TranscriptWordKind,
-    ValidatedTranscript,
+    SpeechResponseMetadata, SpeechTranscriptProfile, SupplierVoice, TranscriptWord,
+    TranscriptWordKind, ValidatedTranscript,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -160,11 +160,12 @@ pub use worldlabs::{
 mod forge;
 #[cfg(not(target_arch = "wasm32"))]
 pub use forge::{
-    FORGE_DEFAULT_ORIGIN, FORGE_IMAGE_MAXIMUM_SIDE_PX, FORGE_IMAGE_SIDE_STEP_PX,
-    FORGE_SEGMENTATION_MAXIMUM_INSTANCES, FORGE_STT_MODEL, FORGE_TTS_MAXIMUM_CHARACTERS,
-    FORGE_TTS_MODEL, FORGE_TTS_SAMPLE_RATE_HZ, FORGE_TTS_SPEAKERS, ForgeCause, ForgeClient,
-    ForgeConfig, ForgeEngine, ForgeError, ForgeJobKind, ForgeMatches, ForgeMedia, ForgeReference,
-    ForgeRender, forge_speaker,
+    FORGE_DEFAULT_ORIGIN, FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS,
+    FORGE_IMAGE_MAXIMUM_NEGATIVE_CHARACTERS, FORGE_IMAGE_MAXIMUM_SIDE_PX,
+    FORGE_IMAGE_NEGATIVE_GUIDANCE, FORGE_IMAGE_SIDE_STEP_PX, FORGE_SEGMENTATION_MAXIMUM_INSTANCES,
+    FORGE_STT_MODEL, FORGE_TTS_MAXIMUM_CHARACTERS, FORGE_TTS_MODEL, FORGE_TTS_SAMPLE_RATE_HZ,
+    FORGE_TTS_SPEAKERS, ForgeCause, ForgeClient, ForgeConfig, ForgeEngine, ForgeError,
+    ForgeJobKind, ForgeMatches, ForgeMedia, ForgeReference, ForgeRender, forge_speaker,
 };
 #[cfg(not(target_arch = "wasm32"))]
 mod plate_judge;

@@ -128,6 +128,8 @@ pub enum Command {
     MediaHead(String),
     /// Make one picture from a prompt through the image service, or list the generations.
     MediaGenerate(MediaGenerate),
+    /// Play a narrative scene's background music, composing it first when the library has none.
+    MusicGenerate(crate::music::MusicRequest),
     /// Scan a picture with SAM through the imagery API, show its layout or name a region.
     MediaLocate(MediaLocate),
     /// The characters of the shown scene: list them, cue one, or frame one.

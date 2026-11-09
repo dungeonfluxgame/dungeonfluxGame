@@ -63,10 +63,24 @@ impl std::error::Error for ForgeSetupError {}
 
 /// The Forge client this process's environment describes.
 pub fn client_from_environment() -> Result<ForgeClient, ForgeSetupError> {
-    let project = environment::text(PROJECT_VARIABLE).ok_or(ForgeSetupError {
-        cause: ForgeSetupCause::ProjectMissing,
-    })?;
-    let origin = environment::text(URL_VARIABLE).unwrap_or_else(|| FORGE_DEFAULT_ORIGIN.to_owned());
+    client_with(None, None)
+}
+
+/// The Forge client of `origin` and `project`, each the environment's when not given.
+pub fn client_with(
+    origin: Option<&str>,
+    project: Option<&str>,
+) -> Result<ForgeClient, ForgeSetupError> {
+    let project = project
+        .map(str::to_owned)
+        .or_else(|| environment::text(PROJECT_VARIABLE))
+        .ok_or(ForgeSetupError {
+            cause: ForgeSetupCause::ProjectMissing,
+        })?;
+    let origin = origin
+        .map(str::to_owned)
+        .or_else(|| environment::text(URL_VARIABLE))
+        .unwrap_or_else(|| FORGE_DEFAULT_ORIGIN.to_owned());
     let invalid = ForgeSetupError {
         cause: ForgeSetupCause::InvalidSetting,
     };

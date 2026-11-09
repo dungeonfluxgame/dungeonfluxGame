@@ -5,7 +5,8 @@
 //!
 //! The request and its outcome are only recorded: no budget, price or count of pictures ever
 //! blocks a request (owner decision: no spend caps). A line holds ids, closed keys, sizes and
-//! milliseconds, and the prompt's length; it never holds the prompt, which is private text.
+//! milliseconds, the prompt's length and the Forge studio's own sentence for a refusal; it never
+//! holds the prompt, which is private text.
 
 use std::time::Duration;
 
@@ -77,6 +78,18 @@ pub enum ImageGenEvent {
     },
     /// The job's scratch folder could not be removed after the attempt; the job's outcome stands.
     CleanupFailed { job: u64, cause: CleanupCause },
+    /// New jobs start on `to` from now; the `running` jobs go on with the backend they started on.
+    Switched {
+        from: &'static str,
+        to: &'static str,
+        running: usize,
+    },
+    /// A switch of the backend was refused and nothing changed: `to` is the backend asked for,
+    /// when the body named one.
+    SwitchRefused {
+        to: Option<&'static str>,
+        error: GenerateError,
+    },
 }
 
 /// A count as a line writes it: the number, or `-` when it is not known.
@@ -105,12 +118,30 @@ fn plain_word(name: &str) -> String {
     }
 }
 
-/// `error=<key>`, then ` cause=<key>` when the error has a typed cause.
+/// `error=<key>`, then ` cause=<key>` when the error has a typed cause, then the Forge studio's
+/// `detail` (its cause's key and its own reason for a refusal) quoted, so the line keeps its shape,
+/// or the length and bound of a text the backend cannot take.
 fn error_fields(error: &GenerateError) -> String {
-    match error.cause_key() {
+    let mut fields = match error.cause_key() {
         Some(cause) => format!("error={} cause={cause}", error.key()),
         None => format!("error={}", error.key()),
+    };
+    match error {
+        GenerateError::Backend {
+            backend: BackendError::ForgeFailed { detail },
+            ..
+        } => fields.push_str(&format!(" detail={detail:?}")),
+        GenerateError::Backend {
+            backend:
+                BackendError::TextTooLong {
+                    characters,
+                    maximum,
+                },
+            ..
+        } => fields.push_str(&format!(" characters={characters} maximum={maximum}")),
+        _ => {}
     }
+    fields
 }
 
 impl ImageGenEvent {
@@ -124,6 +155,8 @@ impl ImageGenEvent {
             Self::Refused { .. } => "refused",
             Self::InvalidSetting { .. } => "setting",
             Self::CleanupFailed { .. } => "cleanup_failed",
+            Self::Switched { .. } => "switched",
+            Self::SwitchRefused { .. } => "refused",
         }
     }
 
@@ -224,6 +257,14 @@ impl ImageGenEvent {
             Self::CleanupFailed { job, cause } => {
                 format!("IMAGEGEN {verb} job={job} kind={}", cause.key())
             }
+            Self::Switched { from, to, running } => {
+                format!("IMAGEGEN {verb} from={from} to={to} running={running}")
+            }
+            Self::SwitchRefused { to, error } => format!(
+                "IMAGEGEN {verb} verb=backend to={} {}",
+                to.unwrap_or("_"),
+                error_fields(error)
+            ),
         }
     }
 }

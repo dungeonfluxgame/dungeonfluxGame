@@ -172,6 +172,43 @@ async fn say_takes_recent_and_asked_by_too() {
 }
 
 #[tokio::test]
+async fn the_strike_reaches_the_line_and_its_instruction_lifts_concealment() {
+    let PersonaCommand::Say { strike, .. } =
+        command("persona say mara strike=true intent=Seize_it A rival waits")
+    else {
+        panic!("not a say");
+    };
+    assert!(
+        strike,
+        "the runner's strike=true is the request's typed strike"
+    );
+    let PersonaCommand::Say { strike, .. } = command("persona say mara A buyer waits") else {
+        panic!("not a say");
+    };
+    assert!(!strike);
+    let host = scripted_host(vec![line_answer("Stand back.")]).await;
+    write_persona(&host.directory(), &innkeeper()).unwrap();
+    let body = json!({
+        "character": CHARACTER, "situation": "The vault.", "intent": "Seize it now.",
+        "strike": true
+    });
+    let spoken: PersonaReply<Spoken> = post_json(host.port, path::PERSONA_SAY, &body)
+        .await
+        .unwrap();
+    done(spoken);
+    assert_eq!(host.facts_of(0)["now"]["strike"], true);
+    let instructions = host.instructions_of(0);
+    for needed in [
+        "When now.strike is true",
+        "what keeps them concealed is lifted",
+        "a must_avoid that hides who they are or what they came for",
+        "no name they do not know, no secret but their own",
+    ] {
+        assert!(instructions.contains(needed), "{needed}");
+    }
+}
+
+#[tokio::test]
 async fn coverage_sees_the_expertise_and_the_world_facts() {
     let host = scripted_host(vec![coverage_answer(&[]), line_answer("Aye.")]).await;
     write_persona(&host.directory(), &voiced_innkeeper()).unwrap();
@@ -223,28 +260,24 @@ async fn a_refused_backfill_is_asked_once_more_with_the_reason_and_can_then_succ
 }
 
 #[tokio::test]
-async fn a_backfill_refused_twice_is_reported_and_the_line_is_still_said() {
+async fn a_backfill_refused_twice_is_asked_again_and_the_line_is_said() {
     let host = scripted_host(vec![
         coverage_answer(&[("backstory", "childhood")]),
         json!({"edits": "not a list"}),
         json!({"edits": "still not a list"}),
+        json!({"edits": []}),
         line_answer("Above the inn, love."),
     ])
     .await;
     write_persona(&host.directory(), &innkeeper()).unwrap();
     let answered = done(ask(&host, json!({})).await);
     assert!(
-        matches!(
-            answered.backfill,
-            BackfillOutcome::BackfillFailed {
-                error: PersonaError::AnswerRefused { .. }
-            }
-        ),
+        matches!(answered.backfill, BackfillOutcome::Backfilled { .. }),
         "{:?}",
         answered.backfill
     );
     assert_eq!(answered.spoken.said.line, "Above the inn, love.");
-    assert_eq!(host.calls(), 4, "one retry and no more");
+    assert_eq!(host.calls(), 5, "asked again until an answer read");
 }
 
 #[test]

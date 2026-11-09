@@ -384,6 +384,9 @@ pub struct RoleplayScene {
     pub title: Option<SceneTitle>,
     pub bubbles: Vec<Bubble>,
     pub caption: Option<String>,
+    /// The name of the item a close-up shows, which titles the caption when the picture on screen
+    /// is a close-up (`closeup::scene_closeup`); a caption on any other picture ignores it.
+    pub caption_title: Option<String>,
     /// Small items tied to characters of the backdrop's layout (name tags, status marks), placed
     /// by the character anchor API.
     pub markers: Vec<crate::image_layout::CharacterMarker>,

@@ -29,12 +29,12 @@ use crate::dev_http::DevReply;
 use crate::imagegen::MAXIMUM_NAME_CHARS;
 use crate::imagegen::model::plain_name;
 use crate::locate::request::CharacterRequest;
-use crate::persona::deliver_plate;
 use crate::persona::options::take_options;
 use crate::persona::request::{
     GenerateRequest, Generation, PersonaReply, PersonaSummary, SayRequest, Spoken,
 };
 use crate::persona::routes::path as persona_path;
+use crate::persona::{Painting, deliver_plate};
 
 /// Every `move` stage verb, for the unknown-verb refusal and the help.
 pub const MOVEMENT_USAGE: &str = concat!(
@@ -217,6 +217,7 @@ async fn speak(port: u16, character: &str, situation: String) -> Result<String, 
         recent: Vec::new(),
         asked_by: None,
         intent: None,
+        strike: false,
     };
     let reply: PersonaReply<Spoken> = post_json(port, persona_path::PERSONA_SAY, &request).await?;
     let spoken = dev_client::reply_value(reply)?;
@@ -418,7 +419,12 @@ async fn walk(
             }
         })
         .collect();
-    match deliver_plate(port, name, &brief.prompt, placed, None).await {
+    let painting = Painting {
+        prompt: &brief.prompt,
+        avoid: &brief.avoid,
+        sheets: &[],
+    };
+    match deliver_plate(port, name, &painting, placed, None).await {
         Ok(summary) => walk.report.push(summary),
         Err((step, error)) => return Err(walk.failed(step.key(), &error.to_string())),
     }

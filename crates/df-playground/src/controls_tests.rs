@@ -1,6 +1,6 @@
 use crate::controls::{
     Controls, ControlsChange, ControlsChangeReply, ControlsError, ControlsReply, Device,
-    FIXTURE_STATUS_KEY, Transition, TransitionStyle, ZoomLimit,
+    FIXTURE_STATUS_KEY, PlateTimer, Transition, TransitionStyle, ZoomLimit,
 };
 use crate::copy::ReadingPace;
 use crate::fixture::Status;
@@ -101,6 +101,7 @@ fn each_change_sets_its_own_control() {
             stt_on: false,
             transition: Transition::default(),
             zoom_limit: ZoomLimit::default(),
+            plate: PlateTimer::default(),
         }
     );
 }
@@ -306,4 +307,73 @@ fn a_bare_controls_reply_is_not_a_change_reply() {
     })
     .expect("writes");
     assert!(serde_json::from_str::<ControlsChangeReply>(&bare).is_err());
+}
+
+#[test]
+fn the_plate_timer_counts_down_to_the_next_scheduled_frame_and_says_the_last() {
+    use crate::controls::{FrameMoment, FrameReason, PlateFrame};
+    assert_eq!(PlateTimer::default().shown_text(0), "Plate: off");
+    let mut plate = PlateTimer {
+        running: true,
+        every_ms: 60_000,
+        due_at_ms: Some(102_000),
+        making: false,
+        last: None,
+        missed: 0,
+        room_shown_ms: None,
+        now_ms: 60_000,
+    };
+    assert_eq!(plate.shown_text(0), "Plate in 0:42");
+    assert_eq!(plate.shown_text(41_500), "Plate in 0:01");
+    assert_eq!(plate.shown_text(42_000), "Plate in 0:00");
+    assert_eq!(plate.shown_text(47_000), "Plate due 0:05 ago");
+    plate.last = Some(PlateFrame {
+        frame: "archive-2".to_owned(),
+        reason: FrameReason::Schedule,
+        moment: FrameMoment::Shown,
+        at_ms: 25_000,
+    });
+    assert_eq!(
+        plate.shown_text(0),
+        "Plate in 0:42 \u{b7} last scheduled shown 0:35 ago"
+    );
+    plate.making = true;
+    plate.missed = 2;
+    assert_eq!(
+        plate.shown_text(0),
+        concat!(
+            "Plate in 0:42 \u{b7} generating\u{2026} \u{b7} 2 missed \u{b7} ",
+            "last scheduled shown 0:35 ago"
+        )
+    );
+    plate.due_at_ms = None;
+    assert!(plate.shown_text(0).starts_with("Plate: waiting"));
+    plate.every_ms = 0;
+    assert!(plate.shown_text(0).starts_with("Plate: no schedule"));
+    let reply = ControlsReply {
+        revision: 1,
+        boot_id: String::new(),
+        controls: Controls {
+            plate: plate.clone(),
+            ..Controls::default()
+        },
+        scene: crate::scene::SceneOverlay::default(),
+    };
+    assert_eq!(reply.at(90_000).controls.plate.now_ms, 90_000);
+    for reason in [
+        FrameReason::Line,
+        FrameReason::Schedule,
+        FrameReason::Inspection,
+        FrameReason::Focus,
+    ] {
+        assert_eq!(serde_json::json!(reason), serde_json::json!(reason.key()));
+    }
+    for moment in [
+        FrameMoment::Started,
+        FrameMoment::Shown,
+        FrameMoment::Failed,
+        FrameMoment::Ended,
+    ] {
+        assert_eq!(serde_json::json!(moment), serde_json::json!(moment.key()));
+    }
 }

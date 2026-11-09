@@ -70,12 +70,17 @@ fn points_shots_and_targets_come_from_the_region() {
     assert_eq!(shot_focus(&standing, Shot::Face), (500, 320));
     assert_eq!(shot_zoom_percent(&standing, Shot::Face), 375);
     assert_eq!(shot_zoom_percent(&standing, Shot::Full), 107);
+    assert_eq!(shot_zoom_percent(&standing, Shot::Speaker), 112);
+    assert_eq!(
+        shot_focus(&standing, Shot::Speaker),
+        shot_focus(&standing, Shot::Upper)
+    );
     let targets: Vec<_> = region_targets(&layout())
         .into_iter()
         .map(|(id, _)| id)
         .collect();
     assert_eq!(targets[0], "region:elf");
-    assert_eq!(targets.len(), 8);
+    assert_eq!(targets.len(), 10);
     for point in CharacterPoint::ALL {
         assert_eq!(CharacterPoint::from_key(point.key()), Some(point));
     }

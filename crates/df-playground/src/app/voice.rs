@@ -92,7 +92,7 @@ pub fn composer_inputs(app: &App) -> (ComposerView, String) {
             status_blocks_input(&app.controls.status_for(&fixture.phone.status)),
             fixture
                 .tv
-                .backdrop_layout()
+                .cast_layout()
                 .map(|layout| cast(layout).into_iter().map(|member| member.name).collect())
                 .unwrap_or_default(),
         ),

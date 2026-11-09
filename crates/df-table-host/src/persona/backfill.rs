@@ -10,8 +10,9 @@
 //! persona is changed by applying its edits to the persona as it is when they are committed, with
 //! a record of what was invented (`<id>.backfills.json`). The audit lines are
 //! `PERSONA covered id=.. enough=.. gaps=..`, `PERSONA backfilled id=.. gaps=.. edits=..
-//! duration_ms=..`, `PERSONA backfill_retried id=..` and `PERSONA backfill_failed id=..
-//! error=<key>`; they never hold persona, question, guidance or edit text.
+//! duration_ms=..`, `PERSONA backfill_retried id=..`, `PERSONA backfill_failed id=..
+//! error=<key>` and `PERSONA guided id=.. status=<already_given|held|backfilled>`; they never hold
+//! persona, question, guidance or edit text.
 //!
 //! A backfill answer the reader refuses is asked once more with the refusal's reason in the facts
 //! as `previous_refusal`; a second refusal is the backfill's failure, reported, and the line is
@@ -30,7 +31,7 @@ use df_content::persona::privacy::{
     PRIVACY_INSTRUCTION, PRIVACY_OUTPUT_NAME, parse_privacy, privacy_facts, privacy_schema,
     private_side, public_additions,
 };
-use df_content::persona::{Persona, PersonaEdit};
+use df_content::persona::{Persona, PersonaEdit, PersonaField};
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
@@ -40,11 +41,14 @@ use super::generate::{
 use super::handles::Handles;
 use super::line::{Occasion, say_line};
 use super::request::{
-    Answered, AskRequest, BackfillOutcome, BackfillRecord, Backfilled, PersonaError, SaidLine,
-    Spoken,
+    Answered, AskRequest, BackfillOutcome, BackfillRecord, Backfilled, GivenGuidance, GuideRequest,
+    Guided, PersonaError, SaidLine, Spoken,
 };
 use super::state::load_state;
-use super::storage::{commit_backfill, persona_directory, persona_id, read_backfills};
+use super::storage::{
+    commit_backfill, keep_given_guidance, persona_directory, persona_id, read_backfills,
+    read_given_guidance,
+};
 use crate::blocking::run_blocking;
 use crate::state::AppState;
 use crate::text::TextRoute;
@@ -235,17 +239,21 @@ async fn backfill(
         // No fixture words, which may name people (see `line`): the world facts say where they
         // are, with every keeper shown as the character knows them.
         let mut facts = backfill_facts(own, &others, &asked, job.guidance);
-        facts["world"] = handles.world_facts(
-            crate::world::context_for_viewer(app, own.voice_packs(), character).facts,
-        );
+        facts["world"] = handles
+            .world_facts(crate::world::context_for_viewer(app, own.voice_packs(), character).facts);
         facts["public_note"] = json!(PUBLIC_NOTE);
-        edits.extend(match ask_backfill(route, own, latitude, facts.clone()).await {
-            Err(PersonaError::AnswerRefused { cause, .. }) => {
-                app.record_line(format!("PERSONA backfill_retried id={character}"));
-                facts["previous_refusal"] = json!(cause.to_string());
-                ask_backfill(route, own, latitude, facts).await?
+        // A refused answer is asked again with every reason so far until one reads, as the
+        // storyteller's judges are (2026-11-08: one story apply stopped on a second refusal).
+        let mut refusals: Vec<String> = Vec::new();
+        edits.extend(loop {
+            match ask_backfill(route, own, latitude, facts.clone()).await {
+                Err(PersonaError::AnswerRefused { cause, .. }) => {
+                    app.record_line(format!("PERSONA backfill_retried id={character}"));
+                    refusals.push(cause.to_string());
+                    facts["previous_refusal"] = json!(refusals.join("; "));
+                }
+                answered => break answered?,
             }
-            answered => answered?,
         });
     }
     refuse_private_detail(app, route, own, &edits).await?;
@@ -280,6 +288,77 @@ async fn backfill(
             profile,
         },
     })
+}
+
+/// Gives `own`, a checked character of `scene`, the story guidance of `request` once: the coverage
+/// judge weighs it, every gap it names is filled (the topic's when it names none) and the guidance
+/// is kept as given, at `at_ms`. The same guidance again is not judged again: the judge is not
+/// stable (dungeon run 25: one unchanged persona judged covered, then six gaps, then three) and
+/// each gap it found added to the backstory. Guidance that changed (a new plot) is judged anew.
+pub(super) async fn give_guidance(
+    app: &AppState,
+    route: &TextRoute,
+    scene: &ShownScene,
+    own: &Persona,
+    request: &GuideRequest,
+    at_ms: u64,
+) -> Result<Guided, PersonaError> {
+    let (directory, id) = (persona_directory(app), own.id().clone());
+    let given = run_blocking(
+        move || read_given_guidance(&directory, &id),
+        PersonaError::Stopped,
+    )
+    .await?;
+    if given.is_some_and(|given| given.guidance == request.guidance) {
+        app.record_line(format!(
+            "PERSONA guided id={} status=already_given",
+            own.id()
+        ));
+        return Ok(Guided::AlreadyGiven);
+    }
+    let question = format!("Tell me {}.", request.topic);
+    let coverage = coverage_of(app, route, own, &question, Some(&request.guidance)).await?;
+    let guided = if coverage.enough {
+        Guided::Held
+    } else {
+        let mut gaps = coverage.gaps;
+        if gaps.is_empty() {
+            gaps.push(Gap {
+                field: PersonaField::PrivateBackstory,
+                topic: request.topic.clone(),
+                filled: None,
+            });
+        }
+        check_gaps(&gaps)?;
+        let job = BackfillJob {
+            question: None,
+            gaps: &gaps,
+            guidance: Some(&request.guidance),
+            at_ms,
+        };
+        let done = backfill_persona(app, route, scene, own, job).await?.done;
+        Guided::Backfilled {
+            edits: done.edits.len(),
+            sequence: done.sequence,
+        }
+    };
+    let (directory, id) = (persona_directory(app), own.id().clone());
+    let given = GivenGuidance {
+        guidance: request.guidance.clone(),
+        at_ms,
+    };
+    run_blocking(
+        move || keep_given_guidance(&directory, &id, &given),
+        PersonaError::Stopped,
+    )
+    .await?;
+    let status = match guided {
+        Guided::AlreadyGiven => "already_given",
+        Guided::Held => "held",
+        Guided::Backfilled { .. } => "backfilled",
+    };
+    app.record_line(format!("PERSONA guided id={} status={status}", own.id()));
+    Ok(guided)
 }
 
 /// What answering a question came to, before the line is cued.
@@ -525,6 +604,7 @@ pub(super) async fn consider(
         recent: &request.recent,
         asked_by: request.asked_by.as_deref(),
         intent: None,
+        strike: false,
     };
     if request.coverage {
         let filled = fill_gaps(app, route, scene, persona, request, at_ms).await;

@@ -132,3 +132,43 @@ fn a_text_carrying_a_storyteller_handle_is_seen() {
     assert!(handles.carried_by("Ask person-2 where he was."));
     assert!(!handles.carried_by("Ask the merchant where he was."));
 }
+
+#[test]
+fn handles_in_a_text_are_put_as_their_people_look() {
+    let ids: Vec<String> = (1..=11).map(|n| format!("c{n}")).collect();
+    let handles = Handles::author(ids.iter().map(String::as_str));
+    let ten = handles.shown("c10");
+    let one = handles.shown("c1");
+    let text = format!("Ask {one} and {ten}.");
+    let said = handles.with_looks(&text, |id| match id {
+        "c1" => Some("the tall guard".to_owned()),
+        "c10" => Some("the old woman".to_owned()),
+        _ => None,
+    });
+    assert_eq!(said, "Ask the tall guard and the old woman.");
+    assert!(!handles.carried_by(&said));
+}
+
+#[test]
+fn a_handle_is_put_as_a_look_only_as_a_whole_token() {
+    let ids: Vec<String> = (1..=12).map(|n| format!("c{n}")).collect();
+    let handles = Handles::author(ids.iter().map(String::as_str));
+    let one = handles.shown("c1");
+    let twelve = handles.shown("c12");
+    let text = format!("Ask {one}, not {twelve} or x{one} or {one}_b.");
+    let said = handles.with_looks(&text, |id| (id == "c1").then(|| "<look>".to_owned()));
+    assert_eq!(
+        said,
+        format!("Ask <look>, not {twelve} or x{one} or {one}_b.")
+    );
+}
+
+#[test]
+fn a_handle_is_carried_only_as_a_whole_token() {
+    let handles = Handles::author(["warrior", "harbour_merchant"]);
+    assert!(
+        !handles.carried_by("Ask person-12 and xperson-1 and person-1_b."),
+        "person-1 is no part of person-12, xperson-1 or person-1_b"
+    );
+    assert!(handles.carried_by("Ask person-1."));
+}

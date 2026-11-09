@@ -8,7 +8,7 @@
 use std::fmt;
 
 use axum::http::StatusCode;
-use df_playground::fixture::Fixture;
+use df_playground::fixture::{Fixture, PlateKind};
 use df_scene_layout::{SceneLayout, SceneRegion};
 use serde::{Deserialize, Serialize};
 
@@ -109,11 +109,13 @@ impl RouteError for ShownSceneError {
     }
 }
 
-/// What the page shows, read once: the fixture, its backdrop picture and that picture's layout.
+/// What the page shows, read once: the fixture, its backdrop picture, the layout it is shown with
+/// and what kind of plate it is.
 pub(crate) struct ShownCast {
     pub(crate) fixture: Fixture,
     pub(crate) picture: String,
     pub(crate) layout: SceneLayout,
+    pub(crate) plate: PlateKind,
 }
 
 /// The fixture the page shows, its backdrop picture and the picture's layout
@@ -129,6 +131,7 @@ pub(crate) async fn shown_cast(app: &AppState) -> Result<ShownCast, ShownSceneEr
             fixture,
             picture,
             layout,
+            plate: backdrop.plate,
         }),
         None => Err(ShownSceneError::NoLayout { picture }),
     }

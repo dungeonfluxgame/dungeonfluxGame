@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
 use axum::http::StatusCode;
-use df_playground::controls::{Controls, ControlsChange, ControlsError, ControlsReply};
+use df_playground::controls::{Controls, ControlsChange, ControlsError, ControlsReply, PlateTimer};
 use df_playground::fixture::{Camera, Fixture, ImageRef};
 use df_playground::limits::MINIMUM_ZOOM_PERCENT;
 use df_playground::media::ClientReport;
@@ -412,6 +412,22 @@ impl PlaygroundState {
         shown.reply.revision += 1;
         on_applied(&shown.reply, &target);
         Some(shown.reply.at(now))
+    }
+
+    /// Changes the plate timer the toolbar shows (the frame watch's schedule) by `edit`, with
+    /// `now_ms` on the playground's clock; a change that alters it counts as a numbered change.
+    /// Whether it altered it.
+    pub fn change_plate(&self, edit: impl FnOnce(&mut PlateTimer, u64)) -> bool {
+        let now_ms = self.now_ms();
+        let mut shown = self.lock();
+        let mut next = shown.reply.controls.plate.clone();
+        edit(&mut next, now_ms);
+        if next == shown.reply.controls.plate {
+            return false;
+        }
+        shown.reply.controls.plate = next;
+        shown.reply.revision += 1;
+        true
     }
 
     /// The name of the element the camera looks at, if it looks at one. A cheap look, so a

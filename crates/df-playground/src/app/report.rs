@@ -84,6 +84,7 @@ fn build_report() -> Option<ClientReport> {
         pace: app.controls.pace,
         page_clock_ms: 0,
         timeline: Vec::new(),
+        audio_prefs: audio::prefs(),
     })
 }
 

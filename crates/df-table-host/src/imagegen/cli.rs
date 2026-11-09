@@ -2,19 +2,27 @@
 //! request, read the typed answer, print it). It never prints and never starts a server.
 //!
 //! `media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H]
-//! [wait=true] [base=<picture>] [look=house|none]`. Any word that is not one of the keys is
+//! [wait=true] [base=<picture>] [refs=<picture>,<picture>...] [look=house|none]`. `refs=` names
+//! pictures of the media library (character reference sheets) the new picture follows for the
+//! people's looks. Any word that is not one of the keys is
 //! part of the prompt, in order, so a prompt with commas and colons needs no quoting (a prompt
 //! with `as=` or `wait=` inside it does). `look=house` (the default) sends the prompt inside the
-//! house look the scene frames use (`BriefStyle`), so a plate made by hand matches them;
-//! `look=none` sends it as written.
+//! house look the scene frames use (`BriefStyle`), with what it must not show, so a plate made by
+//! hand matches them; `look=none` sends it as written.
 //! `media generate status` lists the generations so far.
+//!
+//! `media backend` shows the image backend new jobs start on and what it takes; `media backend
+//! codex-cli` and `media backend forge [url=<origin>] [project=<id>]` switch it while the host
+//! runs (jobs already running finish on the backend they started on).
 
 use std::collections::BTreeSet;
 
-use super::format::{format_job, format_jobs};
+use super::format::{format_backend, format_job, format_jobs};
 use super::limits::{MAXIMUM_ASPECT_PART, MAXIMUM_ASPECT_RATIO, MAXIMUM_NAME_CHARS};
-use super::model::{Aspect, GenerateRequestError, ImageRequest, Purpose};
-use super::request::{GenerateError, GenerateReply, GenerateRequest, JobState, JobView};
+use super::model::{Aspect, GenerateRequestError, Purpose};
+use super::request::{
+    BackendSwitch, BackendView, GenerateError, GenerateReply, GenerateRequest, JobState, JobView,
+};
 use super::routes::path;
 use crate::command::{CommandError, bad_choice};
 use crate::dev::DevError;
@@ -24,23 +32,29 @@ use crate::movement::brief::BriefStyle;
 
 pub const MEDIA_GENERATE_USAGE: &str = concat!(
     "media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H] ",
-    "[wait=true] [base=<picture to edit, such as bar.png>] [look=house|none] | ",
+    "[wait=true] [base=<picture to edit, such as bar.png>] ",
+    "[refs=<reference pictures, such as ref-warrior.png,ref-mara_adventurer.png>] ",
+    "[look=house|none] | ",
     "media generate status"
 );
 
-const KEYS: [&str; 6] = ["as", "purpose", "aspect", "wait", "base", "look"];
+pub const MEDIA_BACKEND_USAGE: &str =
+    "media backend [codex-cli | forge [url=<loopback origin>] [project=<forge project id>]]";
 
-/// `prompt` as `look` asks: inside the house look (the default), or as written.
-fn with_look(prompt: String, look: Option<&str>) -> Result<String, CommandError> {
+const KEYS: [&str; 7] = ["as", "purpose", "aspect", "wait", "base", "refs", "look"];
+
+/// `prompt` as `look` asks, and what the picture must not show: inside the house look (the
+/// default), or as written with nothing to avoid.
+fn with_look(prompt: String, look: Option<&str>) -> Result<(String, Vec<String>), CommandError> {
     match look {
         None | Some("house") => {
             let style = BriefStyle::default();
-            Ok(format!(
-                "{} this scene: {prompt} {}",
-                style.direction, style.writing_ban
+            Ok((
+                format!("{} this scene: {prompt} {}", style.direction, style.writing),
+                style.avoid,
             ))
         }
-        Some("none") => Ok(prompt),
+        Some("none") => Ok((prompt, Vec::new())),
         Some(other) => Err(bad_choice("look", other, "house or none".to_owned())),
     }
 }
@@ -52,6 +66,10 @@ pub enum MediaGenerate {
     Generate(GenerateRequest),
     /// List the generations so far.
     Status,
+    /// Show the backend new jobs start on.
+    Backend,
+    /// Switch the backend new jobs start on.
+    SwitchBackend(BackendSwitch),
 }
 
 fn option_key(word: &str) -> Option<(&str, &str)> {
@@ -107,6 +125,54 @@ fn request_error(error: GenerateRequestError) -> CommandError {
             &base,
             "a picture file of the media library, such as bar.png".to_owned(),
         ),
+        GenerateRequestError::InvalidReference { reference } => bad_choice(
+            "refs",
+            &reference,
+            "picture files of the media library joined by ',', such as ref-warrior.png".to_owned(),
+        ),
+        GenerateRequestError::TooManyPictures { count, maximum } => bad_choice(
+            "refs",
+            &format!("{count} pictures with the base"),
+            format!("at most {maximum} pictures, the base included"),
+        ),
+    }
+}
+
+/// Reads the words after `media backend`.
+pub fn parse_backend(words: &[String]) -> Result<MediaGenerate, CommandError> {
+    let Some((backend, options)) = words.split_first() else {
+        return Ok(MediaGenerate::Backend);
+    };
+    match backend.as_str() {
+        "codex-cli" if options.is_empty() => {
+            Ok(MediaGenerate::SwitchBackend(BackendSwitch::CodexCli {}))
+        }
+        "forge" => {
+            let (mut url, mut project) = (None, None);
+            for word in options {
+                let (key, value) = word
+                    .split_once('=')
+                    .ok_or(CommandError::Usage(MEDIA_BACKEND_USAGE))?;
+                let slot = match key {
+                    "url" => &mut url,
+                    "project" => &mut project,
+                    _ => return Err(CommandError::Usage(MEDIA_BACKEND_USAGE)),
+                };
+                if slot.replace(value.to_owned()).is_some() {
+                    return Err(CommandError::DuplicateKey(key.to_owned()));
+                }
+            }
+            Ok(MediaGenerate::SwitchBackend(BackendSwitch::Forge {
+                url,
+                project,
+            }))
+        }
+        "codex-cli" => Err(CommandError::Usage(MEDIA_BACKEND_USAGE)),
+        other => Err(bad_choice(
+            "backend",
+            other,
+            "codex-cli or forge".to_owned(),
+        )),
     }
 }
 
@@ -118,7 +184,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
     let mut prompt_words = Vec::new();
     let mut seen = BTreeSet::new();
     let (mut name, mut purpose_key, mut aspect_text, mut wait_text) = (None, None, None, None);
-    let (mut base, mut look) = (None, None);
+    let (mut base, mut refs, mut look) = (None, None, None);
     for word in words {
         let Some((key, value)) = option_key(word) else {
             prompt_words.push(word.as_str());
@@ -132,6 +198,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
             "purpose" => &mut purpose_key,
             "aspect" => &mut aspect_text,
             "base" => &mut base,
+            "refs" => &mut refs,
             "look" => &mut look,
             _ => &mut wait_text,
         };
@@ -140,8 +207,9 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
     if prompt_words.is_empty() {
         return Err(CommandError::Usage(MEDIA_GENERATE_USAGE));
     }
+    let (prompt, avoid) = with_look(prompt_words.join(" "), look)?;
     let request = GenerateRequest {
-        prompt: with_look(prompt_words.join(" "), look)?,
+        prompt,
         name: name
             .ok_or(CommandError::Usage(MEDIA_GENERATE_USAGE))?
             .to_owned(),
@@ -149,17 +217,13 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
         aspect: aspect_text.map(aspect).transpose()?,
         wait: wait_text.map(wait).transpose()?.unwrap_or(false),
         base: base.map(str::to_owned),
+        references: refs
+            .map(|refs| refs.split(',').map(str::to_owned).collect())
+            .unwrap_or_default(),
+        things: Vec::new(),
+        avoid,
     };
-    let checked = ImageRequest::new(
-        &request.prompt,
-        &request.name,
-        request.purpose,
-        request.aspect,
-    )
-    .map_err(request_error)?;
-    if let Some(base) = &request.base {
-        checked.editing(base).map_err(request_error)?;
-    }
+    request.checked().map_err(request_error)?;
     Ok(MediaGenerate::Generate(request))
 }
 
@@ -170,6 +234,16 @@ pub async fn run(port: u16, command: MediaGenerate) -> Result<String, DevError> 
             let jobs: GenerateReply<Vec<JobView>> =
                 dev_client::get_json(port, path::GENERATE).await?;
             Ok(format_jobs(&dev_client::reply_value(jobs)?))
+        }
+        MediaGenerate::Backend => {
+            let shown: GenerateReply<BackendView> =
+                dev_client::get_json(port, path::BACKEND).await?;
+            Ok(format_backend(&dev_client::reply_value(shown)?))
+        }
+        MediaGenerate::SwitchBackend(switch) => {
+            let switched: GenerateReply<BackendView> =
+                dev_client::post_json(port, path::BACKEND, &switch).await?;
+            Ok(format_backend(&dev_client::reply_value(switched)?))
         }
         MediaGenerate::Generate(request) => {
             let job: GenerateReply<JobView> =

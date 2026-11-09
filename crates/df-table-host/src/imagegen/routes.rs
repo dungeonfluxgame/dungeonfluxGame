@@ -17,9 +17,9 @@ use axum::extract::State;
 use axum::response::Response;
 use axum::routing::post;
 
+use super::backend::backend_of;
 use super::events::ImageGenEvent;
-use super::model::ImageRequest;
-use super::request::{GenerateError, GenerateRequest, JobView};
+use super::request::{BackendSwitch, BackendView, GenerateError, GenerateRequest, JobView};
 use super::service::ImageGenerator;
 use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
@@ -27,6 +27,8 @@ use crate::state::AppState;
 /// The address of the picture generator's dev API.
 pub mod path {
     pub const GENERATE: &str = "/dev/media/generate";
+    /// The backend new jobs start on: a GET shows it, a POST of a `BackendSwitch` switches it.
+    pub const BACKEND: &str = "/dev/media/backend";
 }
 
 struct GenerateRoutes {
@@ -37,11 +39,7 @@ struct GenerateRoutes {
 impl GenerateRoutes {
     /// Starts the job `body` asks for and, when it asks to wait, waits for the job to end.
     async fn generate(&self, body: GenerateRequest) -> Result<JobView, GenerateError> {
-        let request = ImageRequest::new(&body.prompt, &body.name, body.purpose, body.aspect)?;
-        let request = match &body.base {
-            Some(base) => request.editing(base)?,
-            None => request,
-        };
+        let request = body.checked()?;
         let started = self.generator.start(&self.app, request).await?;
         if !body.wait {
             return Ok(started.view);
@@ -84,10 +82,41 @@ async fn status(State(routes): State<Arc<GenerateRoutes>>) -> Response {
     reply::<_, GenerateError>(Ok(routes.generator.views()))
 }
 
+async fn backend(State(routes): State<Arc<GenerateRoutes>>) -> Response {
+    reply::<_, GenerateError>(Ok(routes.generator.backend_view()))
+}
+
+/// Switches the backend new jobs start on; a refusal (a body that names no backend the host has,
+/// or one whose preconditions do not hold) changes nothing and is recorded.
+async fn switch_backend(State(routes): State<Arc<GenerateRoutes>>, bytes: Bytes) -> Response {
+    let body = parse_body::<BackendSwitch>(&bytes);
+    let to = body.as_ref().ok().map(BackendSwitch::key);
+    let result: Result<BackendView, GenerateError> = match body {
+        Ok(body) => {
+            routes
+                .generator
+                .switch_backend(&routes.app, backend_of(&body))
+                .await
+        }
+        Err(error) => Err(GenerateError::from(error)),
+    };
+    if let Err(error) = &result {
+        routes.app.record_line(
+            ImageGenEvent::SwitchRefused {
+                to,
+                error: error.clone(),
+            }
+            .line(),
+        );
+    }
+    reply(result)
+}
+
 /// The picture generator's routes over `generator`.
 pub fn router_with(app: Arc<AppState>, generator: Arc<ImageGenerator>) -> Router {
     Router::new()
         .route(path::GENERATE, post(generate).get(status))
+        .route(path::BACKEND, post(switch_backend).get(backend))
         .with_state(Arc::new(GenerateRoutes { app, generator }))
 }
 

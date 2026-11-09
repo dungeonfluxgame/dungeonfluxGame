@@ -1,12 +1,24 @@
 //! The preconditions of the Codex backend: each one fails with its own typed error and says what
-//! the owner must do. Nothing here starts Codex or opens a login file.
+//! the owner must do. Nothing here starts Codex or opens a login file. Each backend's limits; the
+//! Forge backend's bound on its text refuses a longer one before anything is sent, and its job
+//! carries what a picture must not show as a negative prompt.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use axum::http::StatusCode;
+use df_providers::{
+    FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS, FORGE_IMAGE_NEGATIVE_GUIDANCE, ForgeClient,
+    ForgeConfig,
+};
 use tempfile::TempDir;
 
-use super::backend::{BackendError, CodexBackend, CodexSettings, ImageBackend, backend_for};
+use super::backend::{
+    BackendError, BackendLimits, CodexBackend, CodexSettings, ForgeImageBackend, ImageBackend,
+    SwitchedOff, backend_for, forge_image_job,
+};
+use super::limits::{CODEX_MAXIMUM_PICTURES, MAXIMUM_PICTURES};
+use super::model::BackendRequest;
 use crate::io_cause::IoCause;
 
 /// A signed-in-looking home: the login file is only looked for, so its content is irrelevant.
@@ -222,6 +234,13 @@ fn each_backend_error_answers_the_status_of_its_kind_of_failure() {
         ),
         (BackendError::ExecutableNotOnPath, unavailable),
         (BackendError::UsageLimited, unavailable),
+        (
+            BackendError::TextTooLong {
+                characters: 4001,
+                maximum: 4000,
+            },
+            StatusCode::BAD_REQUEST,
+        ),
         (BackendError::Timeout, StatusCode::GATEWAY_TIMEOUT),
         (BackendError::Interrupted, StatusCode::BAD_GATEWAY),
         (
@@ -274,6 +293,13 @@ fn a_backend_error_key_is_its_serde_name_and_it_reads_back() {
         BackendError::Refused {
             detail: "policy".to_owned(),
         },
+        BackendError::TextTooLong {
+            characters: 4001,
+            maximum: 4000,
+        },
+        BackendError::ForgeFailed {
+            detail: "rejected: Image description must contain 1–4000 characters.".to_owned(),
+        },
         BackendError::Unreadable {
             kind: "not found".to_owned(),
         },
@@ -285,4 +311,87 @@ fn a_backend_error_key_is_its_serde_name_and_it_reads_back() {
         let read: BackendError = serde_json::from_value(json).expect("reads back");
         assert_eq!(read, error);
     }
+}
+
+/// A Forge backend whose studio is never reached: nothing listens on port 9.
+fn unreachable_forge() -> ForgeImageBackend {
+    let config = ForgeConfig::new("http://127.0.0.1:9", "41fbb3c9-ac91-4897-b890-7a056b4ae371")
+        .expect("a loopback origin and a project id");
+    ForgeImageBackend::new(Ok(ForgeClient::new(config).expect("builds")))
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_text_longer_than_forge_takes_is_refused_by_its_length_and_never_sent() {
+    let forge = unreachable_forge();
+    let limits = forge.limits();
+    let fits = "x".repeat(FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS);
+    assert_eq!(limits.check_text(&fits), Ok(()));
+    // Forge counts UTF-16 code units: a character outside the basic plane is two.
+    let over = format!(
+        "{}\u{1F56F}",
+        "x".repeat(FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS - 1)
+    );
+    let too_long = BackendError::TextTooLong {
+        characters: FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS + 1,
+        maximum: FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS,
+    };
+    assert_eq!(limits.check_text(&over), Err(too_long.clone()));
+    let request = BackendRequest {
+        text: over,
+        negative: None,
+        width_px: 1664,
+        height_px: 928,
+        base: None,
+        references: Vec::new(),
+    };
+    // Nothing listens, so a request that was sent would end as a transport failure, not this.
+    let refused = forge
+        .generate(&request, Duration::from_secs(5))
+        .await
+        .expect_err("refused before sending");
+    assert_eq!(refused, too_long);
+    assert!(refused.to_string().contains("4001"), "{refused}");
+}
+
+#[test]
+fn each_backend_takes_its_own_number_of_pictures_and_only_forge_a_negative_prompt() {
+    let root = TempDir::new().expect("a temporary folder");
+    let codex = CodexBackend::new(settings(root.path())).limits();
+    assert_eq!(codex.maximum_pictures, CODEX_MAXIMUM_PICTURES);
+    assert_eq!(codex.maximum_text_characters, None);
+    assert_eq!(codex.maximum_negative_characters, None);
+    let forge = unreachable_forge().limits();
+    assert_eq!(forge.maximum_pictures, MAXIMUM_PICTURES);
+    assert_eq!(
+        forge.maximum_text_characters,
+        Some(FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS)
+    );
+    assert!(forge.maximum_negative_characters.is_some());
+    assert_eq!(SwitchedOff.limits(), BackendLimits::REQUEST);
+}
+
+#[test]
+fn a_forge_job_carries_its_negative_prompt_with_the_guidance_that_applies_it() {
+    let mut request = BackendRequest {
+        text: "a scriptorium".to_owned(),
+        negative: Some("painting, readable text".to_owned()),
+        width_px: 1672,
+        height_px: 941,
+        base: None,
+        references: Vec::new(),
+    };
+    let staged = ["0f8e2a8e-7c1d-4b55-9d0e-2a3b4c5d6e7f.png".to_owned()];
+    let job = forge_image_job(&request, &staged);
+    assert_eq!(job["prompt"], "a scriptorium");
+    assert_eq!(job["negative_prompt"], "painting, readable text");
+    assert_eq!(job["true_cfg_scale"], FORGE_IMAGE_NEGATIVE_GUIDANCE);
+    assert_eq!(job["references"][0], staged[0]);
+    assert_eq!(
+        (job["width"].as_u64(), job["height"].as_u64()),
+        (Some(1664), Some(928))
+    );
+    // Forge refuses guidance without a negative prompt, so neither goes alone.
+    request.negative = None;
+    let plain = forge_image_job(&request, &[]);
+    assert!(plain.get("negative_prompt").is_none() && plain.get("true_cfg_scale").is_none());
 }

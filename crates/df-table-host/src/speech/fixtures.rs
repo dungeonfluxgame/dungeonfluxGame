@@ -1,11 +1,12 @@
 //! Test helpers: a fake speech port that never touches the network, and the speech service over
 //! it.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::provider::{
     ClipFormat, PortFuture, PortStatus, STT_MODEL, SpeechPort, Synthesis, SynthesisCall, TTS_MODEL,
-    Transcription, TranscriptionCall,
+    Transcription, TranscriptionCall, VoiceListing,
 };
 use super::request::{MissingSetting, SpeechError, SpeechProviderCause};
 use super::service::Speech;
@@ -23,10 +24,13 @@ pub(crate) struct HeardCall {
     pub(crate) key_terms: Vec<String>,
 }
 
-/// A fake port: configured or not, failing or answering, remembering what it was asked.
+/// A fake port: configured or not, failing or answering, remembering what it was asked. Its voice
+/// list is its own: unlisted unless a test gives one (`listing`), and failing on its own cause.
 pub(crate) struct FakePort {
     pub(crate) configured: bool,
     pub(crate) failure: Option<SpeechProviderCause>,
+    listing: Result<VoiceListing, SpeechProviderCause>,
+    listings: AtomicUsize,
     voices: Mutex<Vec<String>>,
     spoken_characters: Mutex<Vec<usize>>,
     heard: Mutex<Vec<HeardCall>>,
@@ -41,6 +45,8 @@ impl FakePort {
         Self {
             configured: true,
             failure: None,
+            listing: Ok(VoiceListing::Unlisted),
+            listings: AtomicUsize::new(0),
             voices: Mutex::new(Vec::new()),
             spoken_characters: Mutex::new(Vec::new()),
             heard: Mutex::new(Vec::new()),
@@ -59,6 +65,16 @@ impl FakePort {
             failure: Some(cause),
             ..Self::answering()
         }
+    }
+
+    /// The fake answering `listing` when asked for its voices.
+    pub(crate) fn listing(self, listing: Result<VoiceListing, SpeechProviderCause>) -> Self {
+        Self { listing, ..self }
+    }
+
+    /// How many times the fake was asked for its voices.
+    pub(crate) fn listings(&self) -> usize {
+        self.listings.load(Ordering::SeqCst)
     }
 
     /// The voices the fake was asked to speak in, in order.
@@ -116,6 +132,15 @@ impl SpeechPort for FakePort {
             language: "eng".to_owned(),
             words: FAKE_HEARD.split_whitespace().count(),
         });
+        Box::pin(async move { answer })
+    }
+
+    fn voices(&self) -> PortFuture<'_, Result<VoiceListing, SpeechError>> {
+        self.listings.fetch_add(1, Ordering::SeqCst);
+        let answer = self
+            .listing
+            .clone()
+            .map_err(|cause| SpeechError::Provider { cause });
         Box::pin(async move { answer })
     }
 }

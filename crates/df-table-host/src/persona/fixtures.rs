@@ -22,7 +22,7 @@ pub(super) const CHARACTER: &str = "innkeeper";
 /// backend that answers with a script.
 pub(super) struct ScriptedHost {
     pub(super) running: Running,
-    /// The port of the persona router.
+    /// The port of the persona routes (with the story, cast and locate routes).
     pub(super) port: u16,
     /// How many questions the text backend was asked.
     pub(super) calls: Arc<AtomicUsize>,
@@ -134,11 +134,20 @@ pub(super) async fn scripted_host_cast(
         BackendChoice::Scripted(Arc::new(script), None),
         Arc::new(move |line| recorder.record_line(line)),
     );
+    let text = Arc::new(text);
+    // The story, cast and locate routes as well: `persona story apply` reads the plot and the
+    // shown cast, and names the picture's regions, on the port it changes personas on.
     let app = router_with(
         Arc::clone(&running.state),
-        Arc::new(text),
+        Arc::clone(&text),
         speech_over(&running.state, &speech),
-    );
+    )
+    .merge(super::story::router_with(
+        Arc::clone(&running.state),
+        Arc::clone(&text),
+    ))
+    .merge(crate::cast::routes::router(Arc::clone(&running.state)))
+    .merge(crate::locate::router_with(Arc::clone(&running.state), text));
     let listener = crate::server::bind(0).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {

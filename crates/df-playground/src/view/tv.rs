@@ -17,7 +17,6 @@ use web_sys::{Document, Element, HtmlElement, HtmlImageElement};
 use crate::camera::{Framing, clamped_zoom, zoom_ceiling_under};
 use crate::continuity::CameraPlan;
 use crate::controls::{Controls, ZoomLimit};
-use crate::copy::{status_blocks_input, status_copy};
 use crate::dom::{
     append, element, js_message, now_ms, picture, set_style, text_element, with_continuity,
 };
@@ -25,15 +24,19 @@ use crate::draw_plan::Part;
 use crate::figure::{FigureLook, figure_style, first_turn, label_style, next_turn};
 use crate::fixture::{Camera, ElementShape, StageElement, Status, TvScene};
 use crate::image_layout::{ImageLayout, region_target_elements};
+use crate::kit::KitPanels;
+use crate::kit::narration::Narration;
+use crate::kit::status::StatusChip;
 use crate::limits::MAXIMUM_ZOOM_PERCENT;
 use crate::media::{MediaKind, media_kind};
 use crate::motion_style::{CameraAction, CameraDrawn, camera_action, camera_style};
+use crate::overlay::NarrationBox;
 use crate::path::media_file;
 use crate::view::bubble_layout::BubbleLayout;
 use crate::view::kit::dwell_note;
 
 /// The parts of the shared screen, in the order they are drawn.
-pub const PARTS: [Part; 11] = [
+pub const PARTS: [Part; 12] = [
     Part::TvBackdrop,
     Part::TvGrid,
     Part::TvSam,
@@ -45,6 +48,7 @@ pub const PARTS: [Part; 11] = [
     Part::TvPills,
     Part::TvCaption,
     Part::TvParty,
+    Part::TvClues,
 ];
 
 fn figure_class(shape: ElementShape) -> &'static str {
@@ -274,20 +278,31 @@ impl TvHandles {
             }
             None => elements,
         };
+        // The faces of the plate's cast, whoever is speaking, for the bubbles and the clue board.
+        self.top.set_attribute(
+            "data-faces",
+            &layout
+                .map(crate::view::roleplay::named_faces)
+                .unwrap_or_default(),
+        )?;
         let now = now_ms()?;
         let plan =
             with_continuity(|continuity| continuity.camera_plan(now, camera, followed, ceiling));
         self.frame_camera(&plan)
     }
 
-    /// The pixel width of the backdrop's picture, once it has loaded.
+    /// The pixel width of the backdrop's picture, once it has loaded. During a crossfade the slot
+    /// holds several pictures: the newest one that has loaded counts, so the camera keeps its
+    /// ceiling while the new plate loads.
     fn plate_width_px(&self) -> Option<u32> {
-        self.backdrop
-            .first_element_child()
-            .and_then(|frame| frame.first_element_child())
-            .and_then(|image| image.dyn_into::<HtmlImageElement>().ok())
+        let layers = self.backdrop.children();
+        (0..layers.length())
+            .rev()
+            .filter_map(|index| layers.item(index))
+            .filter_map(|frame| frame.first_element_child())
+            .filter_map(|image| image.dyn_into::<HtmlImageElement>().ok())
             .map(|image| image.natural_width())
-            .filter(|width| *width > 0)
+            .find(|width| *width > 0)
     }
 
     /// The zoom the picture can bear for this move. A request over it is drawn at the ceiling and
@@ -344,6 +359,18 @@ impl TvHandles {
                 }
             }
             CameraAction::Restyle => {
+                // A new move written over a move's finished animation of the same name does not
+                // restart it: the picture would cut to the new end. Taking the animation off and
+                // reading the layout makes the browser start the new one from its first frame.
+                if self.camera_drawn.as_ref().is_some_and(|drawn| drawn.moving) {
+                    for layer in [&self.world, &self.top] {
+                        let html = layer.dyn_ref::<HtmlElement>().ok_or_else(|| {
+                            JsValue::from_str("a world layer is not an html element")
+                        })?;
+                        html.style().set_property("animation", "none")?;
+                        let _ = html.offset_width();
+                    }
+                }
                 let style = camera_style(plan);
                 set_style(&self.world, &style)?;
                 set_style(&self.top, &style)?;
@@ -394,6 +421,9 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
     let world = element(document, "div", "tv-world")?;
     // The same camera, lying over the caption and the rest of the screen, for the bubbles.
     let top = element(document, "div", "tv-world-top")?;
+    // The top left of the screen is one column, so the place, the scene's title and the clue board
+    // lie under one another instead of over each other.
+    let heading = element(document, "div", "tv-heading")?;
     let layer = element(document, "div", "tv-figures")?;
     let mut slots = Vec::new();
     let mut backdrop = None;
@@ -405,12 +435,14 @@ pub fn shell(document: &Document) -> Result<TvShell, JsValue> {
         let parent = match part {
             Part::TvBackdrop | Part::TvGrid | Part::TvSam => &world,
             Part::TvAnchors => &top,
+            Part::TvPlace | Part::TvClues => &heading,
             _ => &stage,
         };
         // The figures come after the backdrop and the grid, and before everything on the screen.
         if part == Part::TvPlace {
             append(&world, &layer)?;
             append(&stage, &world)?;
+            append(&stage, &heading)?;
         }
         append(parent, &holder)?;
         slots.push((part, holder));
@@ -440,16 +472,20 @@ fn grid(document: &Document) -> Result<Element, JsValue> {
     element(document, "div", "stage-grid")
 }
 
-fn status_banner(document: &Document, status: &Status) -> Result<Option<Element>, JsValue> {
-    let Some(copy) = status_copy(status) else {
+fn status_banner(document: &Document, status: Status) -> Result<Option<Element>, JsValue> {
+    let chip = StatusChip { status };
+    if chip.text().is_none() {
         return Ok(None);
-    };
-    let class = if status_blocks_input(status) {
-        "tv-status tv-status-blocking"
-    } else {
-        "tv-status"
-    };
-    text_element(document, "div", class, &copy).map(Some)
+    }
+    crate::kit::draw::panels(
+        document,
+        &KitPanels {
+            status: Some(chip),
+            ..KitPanels::default()
+        },
+        None,
+    )
+    .map(Some)
 }
 
 fn caption(
@@ -458,7 +494,7 @@ fn caption(
     controls: &Controls,
 ) -> Result<Option<Element>, JsValue> {
     if let Some(narration) = &scene.narration {
-        return crate::view::narration::narration(document, narration, controls).map(Some);
+        return narration_box(document, narration).map(Some);
     }
     let Some(caption) = &scene.caption else {
         return Ok(None);
@@ -476,6 +512,32 @@ fn caption(
     )?;
     append(&node, &dwell_note(document, &caption.text, controls.pace)?)?;
     Ok(Some(node))
+}
+
+/// The narrator's box: the kit's (`kit::narration`) in the caption layer, so it keeps the caption's
+/// place in the lower third and lies over the outline layer, the camera never moving it. The kit
+/// has no dwell note, so there is none.
+fn narration_box(document: &Document, narration: &NarrationBox) -> Result<Element, JsValue> {
+    let layer = element(
+        document,
+        "div",
+        &format!(
+            "tv-caption tv-narration tv-narration-{}",
+            narration.placement.key()
+        ),
+    )?;
+    append(
+        &layer,
+        &crate::kit::draw::panels(
+            document,
+            &KitPanels {
+                narration: Some(Narration::from(narration)),
+                ..KitPanels::default()
+            },
+            None,
+        )?,
+    )?;
+    Ok(layer)
 }
 
 fn party(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
@@ -511,10 +573,11 @@ pub fn build_part(
             .map(|image| picture(document, "tv-card", image))
             .transpose(),
         Part::TvPanels => crate::view::overlays::panels(document, scene),
-        Part::TvStatus => status_banner(document, &controls.status_for(&scene.status)),
+        Part::TvStatus => status_banner(document, controls.status_for(&scene.status)),
         Part::TvPills => crate::view::pills::build(document, scene),
         Part::TvCaption => caption(document, scene, controls),
         Part::TvParty => party(document, scene),
+        Part::TvClues => crate::view::clues::board(document, scene),
         other => Err(JsValue::from_str(&format!(
             "{} is not a piece of the shared screen",
             other.dom_marker()

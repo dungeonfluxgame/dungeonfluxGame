@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::backend::BackendLimits;
 use super::limits::{
-    MAXIMUM_ASPECT_PART, MAXIMUM_ASPECT_RATIO, MAXIMUM_NAME_CHARS, MAXIMUM_SENT_TEXT_CHARS,
-    REQUESTED_LONG_SIDE_PX,
+    MAXIMUM_ASPECT_PART, MAXIMUM_ASPECT_RATIO, MAXIMUM_NAME_CHARS, MAXIMUM_PICTURES,
+    MAXIMUM_SENT_TEXT_CHARS, REQUESTED_LONG_SIDE_PX,
 };
 
 /// What the picture is for. It sets the default shape and adds one line of direction to the
@@ -203,6 +204,16 @@ pub enum GenerateRequestError {
     InvalidBase {
         base: String,
     },
+    /// A reference is not a plain picture file name of the media library.
+    InvalidReference {
+        reference: String,
+    },
+    /// The picture to edit and the references are more pictures than the request or the backend
+    /// takes.
+    TooManyPictures {
+        count: usize,
+        maximum: usize,
+    },
 }
 
 impl GenerateRequestError {
@@ -213,6 +224,8 @@ impl GenerateRequestError {
             Self::PromptTooLong { .. } => "prompt_too_long",
             Self::InvalidName { .. } => "invalid_name",
             Self::InvalidBase { .. } => "invalid_base",
+            Self::InvalidReference { .. } => "invalid_reference",
+            Self::TooManyPictures { .. } => "too_many_pictures",
         }
     }
 }
@@ -240,6 +253,15 @@ impl fmt::Display for GenerateRequestError {
                 formatter,
                 "'{base}' is not a picture file of the media library, such as bar.png"
             ),
+            Self::InvalidReference { reference } => write!(
+                formatter,
+                "the reference '{reference}' is not a picture file of the media library, such as \
+                 ref-warrior.png"
+            ),
+            Self::TooManyPictures { count, maximum } => write!(
+                formatter,
+                "the request attaches {count} pictures (base and references); at most {maximum} fit"
+            ),
         }
     }
 }
@@ -257,8 +279,29 @@ pub(crate) fn plain_name(name: &str) -> bool {
 /// What sits between the prompt and the purpose's direction in the text the backend reads.
 const DIRECTION_SEPARATOR: &str = "\n\n";
 
+/// The line the sent text gains when references of people are attached, before the purpose's
+/// direction.
+const REFERENCES_DIRECTION: &str = concat!(
+    "The reference pictures of people set only how they look: keep each person in one exactly ",
+    "as shown (face, hair, build, age, costume), never its place, framing or light."
+);
+
+/// What comes before what a picture must not show, when the backend reads it in the text.
+const AVOID_LEAD: &str = "Never show: ";
+
+/// A picture of the media library that shows how one thing in the new picture looks (an item's
+/// close-up), and what it shows, in a few words (`the brass cipher wheel`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThingReference {
+    pub picture: String,
+    pub shows: String,
+}
+
 /// One checked request: a prompt, the name the picture is stored under (without its extension),
-/// what it is for, its shape, and the picture of the media library it edits, when it is an edit.
+/// what it is for, its shape, the picture of the media library it edits, when it is an edit, the
+/// pictures of the media library it follows for the people's looks and for the looks of things in
+/// it, and what it must not show.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageRequest {
     prompt: String,
@@ -266,6 +309,9 @@ pub struct ImageRequest {
     purpose: Purpose,
     aspect: Aspect,
     base: Option<String>,
+    references: Vec<String>,
+    things: Vec<ThingReference>,
+    avoid: Vec<String>,
 }
 
 impl ImageRequest {
@@ -301,6 +347,9 @@ impl ImageRequest {
             purpose,
             aspect: aspect.unwrap_or_else(|| purpose.default_aspect()),
             base: None,
+            references: Vec::new(),
+            things: Vec::new(),
+            avoid: Vec::new(),
         })
     }
 
@@ -313,7 +362,70 @@ impl ImageRequest {
             });
         }
         self.base = Some(base.to_owned());
+        self.check_picture_count()?;
         Ok(self)
+    }
+
+    /// This request following `references`, pictures of the media library (`ref-warrior.png`)
+    /// that show how the people look, attached in order after the picture to edit.
+    pub fn following(mut self, references: &[String]) -> Result<Self, GenerateRequestError> {
+        if let Some(reference) = references
+            .iter()
+            .find(|reference| crate::locate::check_picture_name(reference).is_err())
+        {
+            return Err(GenerateRequestError::InvalidReference {
+                reference: reference.clone(),
+            });
+        }
+        self.references = references.to_vec();
+        self.check_picture_count()?;
+        Ok(self)
+    }
+
+    /// This request following `things`, pictures of the media library that show how things in it
+    /// look, attached in order after the people's references; the text names each by its number.
+    pub fn showing(mut self, things: &[ThingReference]) -> Result<Self, GenerateRequestError> {
+        if let Some(thing) = things
+            .iter()
+            .find(|thing| crate::locate::check_picture_name(&thing.picture).is_err())
+        {
+            return Err(GenerateRequestError::InvalidReference {
+                reference: thing.picture.clone(),
+            });
+        }
+        self.things = things.to_vec();
+        self.check_picture_count()?;
+        Ok(self)
+    }
+
+    /// This request with what the picture must not show, a few plain words each (`painting`): the
+    /// backend's negative prompt when it takes one, otherwise a line of the text.
+    pub fn avoiding(mut self, avoid: &[String]) -> Self {
+        self.avoid = avoid.to_vec();
+        self
+    }
+
+    fn check_picture_count(&self) -> Result<(), GenerateRequestError> {
+        self.check_pictures(MAXIMUM_PICTURES)
+    }
+
+    /// Whether the picture to edit and the references are at most `maximum` pictures.
+    pub fn check_pictures(&self, maximum: usize) -> Result<(), GenerateRequestError> {
+        let count = usize::from(self.base.is_some()) + self.references.len() + self.things.len();
+        if count > maximum {
+            return Err(GenerateRequestError::TooManyPictures { count, maximum });
+        }
+        Ok(())
+    }
+
+    /// The pictures of the media library this request follows for the people's looks, in order.
+    pub fn references(&self) -> &[String] {
+        &self.references
+    }
+
+    /// The pictures of the media library this request follows for the looks of things, in order.
+    pub fn things(&self) -> &[ThingReference] {
+        &self.things
     }
 
     /// The picture of the media library this request edits, when it is an edit.
@@ -337,20 +449,58 @@ impl ImageRequest {
         self.aspect
     }
 
-    /// The text the backend is given: the prompt, then the purpose's direction.
-    pub fn sent_text(&self) -> String {
-        format!(
-            "{}{DIRECTION_SEPARATOR}{}",
-            self.prompt,
-            self.purpose.direction()
-        )
+    /// The text a backend with `limits` is given: the prompt, the people's references' line when
+    /// there are any, one line per thing's reference naming its number among the pictures
+    /// attached (the picture to edit first), what the picture must not show when the backend
+    /// takes no negative prompt, then the purpose's direction.
+    pub fn sent_text(&self, limits: &BackendLimits) -> String {
+        let mut text = self.prompt.clone();
+        if !self.references.is_empty() {
+            text.push_str(DIRECTION_SEPARATOR);
+            text.push_str(REFERENCES_DIRECTION);
+        }
+        if !self.things.is_empty() {
+            let before = usize::from(self.base.is_some()) + self.references.len();
+            let lines: Vec<String> = self
+                .things
+                .iter()
+                .enumerate()
+                .map(|(index, thing)| {
+                    format!(
+                        "Reference {}: {} as it looks.",
+                        before + index + 1,
+                        thing.shows
+                    )
+                })
+                .collect();
+            text.push_str(DIRECTION_SEPARATOR);
+            text.push_str(&lines.join(" "));
+        }
+        if limits.maximum_negative_characters.is_none() && !self.avoid.is_empty() {
+            text.push_str(DIRECTION_SEPARATOR);
+            text.push_str(AVOID_LEAD);
+            text.push_str(&self.avoid.join(", "));
+            text.push('.');
+        }
+        text.push_str(DIRECTION_SEPARATOR);
+        text.push_str(self.purpose.direction());
+        text
+    }
+
+    /// The negative prompt a backend with `limits` is given: what the picture must not show, as
+    /// plain terms, when the backend takes a negative prompt and there is something to avoid.
+    pub fn negative_text(&self, limits: &BackendLimits) -> Option<String> {
+        (limits.maximum_negative_characters.is_some() && !self.avoid.is_empty())
+            .then(|| self.avoid.join(", "))
     }
 }
 
-/// The longest prompt of `purpose` whose sent text the backend still takes.
+/// The longest prompt of `purpose` whose sent text the backend still takes, with references
+/// attached (their line is always counted, so a prompt that fits fits either way).
 pub fn maximum_prompt_chars(purpose: Purpose) -> usize {
     MAXIMUM_SENT_TEXT_CHARS
-        .saturating_sub(DIRECTION_SEPARATOR.chars().count())
+        .saturating_sub(DIRECTION_SEPARATOR.chars().count() * 2)
+        .saturating_sub(REFERENCES_DIRECTION.chars().count())
         .saturating_sub(purpose.direction().chars().count())
 }
 
@@ -358,10 +508,15 @@ pub fn maximum_prompt_chars(purpose: Purpose) -> usize {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendRequest {
     pub text: String,
+    /// What the picture must not show, for a backend that takes a negative prompt.
+    pub negative: Option<String>,
     pub width_px: u32,
     pub height_px: u32,
     /// The bytes of the picture to edit, when it is an edit.
     pub base: Option<Vec<u8>>,
+    /// The bytes of the pictures to follow for the looks of the people, then of the things, in
+    /// order.
+    pub references: Vec<Vec<u8>>,
 }
 
 /// A picture a backend delivered, with what it can say about how it was made.

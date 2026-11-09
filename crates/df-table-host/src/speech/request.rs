@@ -22,6 +22,8 @@ use super::limits::{
 };
 use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::io_cause::IoCause;
+use crate::persona::PersonaError;
+use crate::persona::story::JudgeRouteError;
 use crate::playground::PlaygroundChangeError;
 
 /// The answer of a speech route: its value, or why it was refused.
@@ -110,6 +112,180 @@ pub struct VoiceChanged {
     pub has_voice: bool,
     /// Whether the voices file changed.
     pub changed: bool,
+}
+
+/// The body of `POST /dev/speech/cast`: (re)casts one character's voice from their persona.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CastRequest {
+    pub character: String,
+    /// The model to judge with instead of the persona model.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// The voice a cast gave a character.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceCast {
+    pub character: String,
+    /// The supplier's voice id.
+    pub voice: String,
+    /// The voice's name in the supplier's list.
+    pub voice_name: String,
+    /// Whether another character, or the default, already spoke in the voice.
+    pub reused: bool,
+    /// The judge's reason, in a sentence.
+    pub why: String,
+    /// Whether the voices file changed.
+    pub changed: bool,
+}
+
+/// The answer of `POST /dev/speech/cast`: the cast, or why there is none.
+pub type CastReply = DevReply<VoiceCast, VoiceCastError>;
+
+/// Why the casting judge's answer was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CastAnswerCause {
+    /// The answer has no voice id or no reason.
+    Malformed,
+    /// The voice id is not one of the listed voices.
+    UnknownVoice,
+}
+
+impl CastAnswerCause {
+    pub const ALL: [Self; 2] = [Self::Malformed, Self::UnknownVoice];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Malformed => "malformed",
+            Self::UnknownVoice => "unknown_voice",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|cause| cause.key() == key)
+    }
+}
+
+impl fmt::Display for CastAnswerCause {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Malformed => "the answer must name a voice id and say why",
+            Self::UnknownVoice => "the voice id is not one of the listed voices",
+        })
+    }
+}
+
+/// Why a character's voice was not cast. A failed cast on a character's first line is logged and
+/// the line is spoken in the default voice.
+///
+/// `key()` is the serde tag, except for `Speech` and `Judge`, whose key is their cause's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "error", rename_all = "snake_case")]
+pub enum VoiceCastError {
+    InvalidBody(BodyError),
+    /// The speech side refused: the character id, the voices file or the supplier's list.
+    Speech {
+        cause: SpeechError,
+    },
+    /// The character has no persona to cast a voice from.
+    NoPersona {
+        character: String,
+    },
+    /// The character's persona could not be read.
+    PersonaUnreadable {
+        cause: PersonaError,
+    },
+    /// The speech supplier keeps no list of voices to choose from (Forge).
+    Unlisted,
+    /// The supplier's list has no voice.
+    NoVoices,
+    /// The speech service was built without the text surface the judge is asked through.
+    NoJudge,
+    /// The casting judge refused: the text service, the model, or its answer (refused after it
+    /// was asked again with why).
+    Judge {
+        cause: JudgeRouteError<CastAnswerCause>,
+    },
+    /// The task stopped without an answer.
+    Stopped,
+}
+
+impl VoiceCastError {
+    /// The error's key for the audit line.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::InvalidBody(_) => "invalid_body",
+            Self::Speech { cause } => cause.key(),
+            Self::NoPersona { .. } => "no_persona",
+            Self::PersonaUnreadable { .. } => "persona_unreadable",
+            Self::Unlisted => "unlisted",
+            Self::NoVoices => "no_voices",
+            Self::NoJudge => "no_judge",
+            Self::Judge { cause } => cause.key(),
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+impl fmt::Display for VoiceCastError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidBody(error) => write!(formatter, "{error}"),
+            Self::Speech { cause } => write!(formatter, "{cause}"),
+            Self::NoPersona { character } => write!(
+                formatter,
+                "{character:?} has no persona to cast a voice from (persona generate)"
+            ),
+            Self::PersonaUnreadable { cause } => {
+                write!(formatter, "the persona could not be read: {cause}")
+            }
+            Self::Unlisted => formatter.write_str(
+                "the speech supplier keeps no list of voices to cast from (speech voice sets one)",
+            ),
+            Self::NoVoices => formatter.write_str("the speech supplier lists no voice"),
+            Self::NoJudge => {
+                formatter.write_str("the speech service has no text service to judge with")
+            }
+            Self::Judge { cause } => write!(formatter, "the casting judge refused: {cause}"),
+            Self::Stopped => formatter.write_str("the cast stopped without an answer"),
+        }
+    }
+}
+
+impl std::error::Error for VoiceCastError {}
+
+impl From<BodyError> for VoiceCastError {
+    fn from(error: BodyError) -> Self {
+        Self::InvalidBody(error)
+    }
+}
+
+impl From<JudgeRouteError<CastAnswerCause>> for VoiceCastError {
+    fn from(cause: JudgeRouteError<CastAnswerCause>) -> Self {
+        Self::Judge { cause }
+    }
+}
+
+impl From<SpeechError> for VoiceCastError {
+    fn from(cause: SpeechError) -> Self {
+        Self::Speech { cause }
+    }
+}
+
+impl RouteError for VoiceCastError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::InvalidBody(_) => StatusCode::BAD_REQUEST,
+            Self::Speech { cause } => cause.status(),
+            Self::Judge { cause } => cause.status(),
+            Self::NoPersona { .. } => StatusCode::NOT_FOUND,
+            Self::Unlisted | Self::NoVoices => StatusCode::CONFLICT,
+            Self::NoJudge => StatusCode::SERVICE_UNAVAILABLE,
+            Self::PersonaUnreadable { .. } | Self::Stopped => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
 }
 
 /// A voice clip of the host in the media library.

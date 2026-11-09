@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use super::address::{AddressError, address_schema, parse_address};
+use super::address::{AddressError, Addressed, address_schema, parse_address};
 use super::cli::{PersonaCommand, parse};
 use super::converse::{
     ConverseError, ConverseRequest, DEFAULT_TURNS, Happening, MAXIMUM_TURNS, SceneEvent, Speaker,
@@ -293,7 +293,7 @@ fn frame_options_are_read_with_frames_and_refused_without_it() {
         "frames=x edit_from=middle",
         "frames=bad.name",
         "frames=x parallel=0",
-        "frames=x parallel=5",
+        "frames=x parallel=13",
     ] {
         assert!(
             parse(&words(&format!("converse {bad}"))).is_err(),
@@ -323,23 +323,74 @@ fn listed() -> Vec<Speaker> {
 #[test]
 fn an_answer_naming_a_listed_other_speaker_is_read() {
     assert_eq!(
-        parse_address(&json!({"addressed": "wizard"}), "elf", &listed()),
-        Ok(Some("wizard".to_owned()))
+        parse_address(
+            &json!({"addressed": "wizard", "answer_owed": true}),
+            "elf",
+            &listed()
+        ),
+        Ok(Addressed {
+            addressed: Some("wizard".to_owned()),
+            answer_owed: true
+        })
     );
 }
 
 #[test]
 fn a_null_answer_is_a_line_to_the_room() {
     assert_eq!(
-        parse_address(&json!({"addressed": null}), "elf", &listed()),
-        Ok(None)
+        parse_address(
+            &json!({"addressed": null, "answer_owed": true}),
+            "elf",
+            &listed()
+        ),
+        Ok(Addressed {
+            addressed: None,
+            answer_owed: true
+        })
     );
+}
+
+#[test]
+fn a_line_put_to_someone_that_an_echo_would_answer_owes_no_answer() {
+    assert_eq!(
+        parse_address(
+            &json!({"addressed": "wizard", "answer_owed": false}),
+            "elf",
+            &listed()
+        ),
+        Ok(Addressed {
+            addressed: Some("wizard".to_owned()),
+            answer_owed: false
+        })
+    );
+}
+
+#[test]
+fn an_answer_without_a_yes_or_no_for_an_owed_answer_is_refused() {
+    for answer in [
+        json!({"addressed": "wizard"}),
+        json!({"addressed": null, "answer_owed": null}),
+        json!({"addressed": "wizard", "answer_owed": "yes"}),
+        json!({"addressed": "wizard", "answer_owed": 1}),
+    ] {
+        assert!(
+            matches!(
+                parse_address(&answer, "elf", &listed()),
+                Err(AddressError::MalformedAnswer { .. })
+            ),
+            "{answer}"
+        );
+    }
 }
 
 #[test]
 fn an_answer_naming_the_speaker_is_refused() {
     assert_eq!(
-        parse_address(&json!({"addressed": "elf"}), "elf", &listed()),
+        parse_address(
+            &json!({"addressed": "elf", "answer_owed": true}),
+            "elf",
+            &listed()
+        ),
         Err(AddressError::AddressedSelf {
             id: "elf".to_owned()
         })
@@ -349,7 +400,11 @@ fn an_answer_naming_the_speaker_is_refused() {
 #[test]
 fn an_answer_naming_nobody_listed_is_refused() {
     assert_eq!(
-        parse_address(&json!({"addressed": "dragon"}), "elf", &listed()),
+        parse_address(
+            &json!({"addressed": "dragon", "answer_owed": true}),
+            "elf",
+            &listed()
+        ),
         Err(AddressError::UnknownAddressed {
             id: "dragon".to_owned()
         })
@@ -361,8 +416,8 @@ fn a_malformed_answer_is_refused() {
     for answer in [
         json!("wizard"),
         json!({}),
-        json!({"addressed": 3}),
-        json!({"addressed": ["wizard"]}),
+        json!({"addressed": 3, "answer_owed": true}),
+        json!({"addressed": ["wizard"], "answer_owed": true}),
     ] {
         assert!(
             matches!(
@@ -381,6 +436,15 @@ fn the_schema_allows_the_listed_ids_and_null() {
     assert_eq!(
         allowed,
         &json!(["elf", "innkeeper", "braided_woman", "wizard", null])
+    );
+    assert_eq!(
+        schema["required"],
+        json!(["addressed", "answer_owed"]),
+        "every answer says whether an answer is owed"
+    );
+    assert_eq!(
+        schema["properties"]["answer_owed"],
+        json!({"type": "boolean"})
     );
 }
 

@@ -20,7 +20,7 @@ use df_providers::{
     CandidateRouteId, ElevenSpeechBasis, ElevenSpeechRequest, ElevenSttBasis, ElevenSttRequest,
     NativeHttpCause, NativeHttpLimits, NativeSpeechProvider, ProviderAttemptIdentity,
     ProviderRequestId, SpeechAdapterCause, SpeechInputFormat, SpeechOutputFormat,
-    SpeechTranscriptProfile, TranscriptWordKind, candidate_for, candidate_routes,
+    SpeechTranscriptProfile, SupplierVoice, TranscriptWordKind, candidate_for, candidate_routes,
     reconcile_speech_attempt, reconcile_stt_attempt, registered_speech_provider,
 };
 use df_types::{
@@ -201,7 +201,8 @@ fn read_request(socket: &mut TcpStream) -> Seen {
                 .filter(|(n, _)| n.eq_ignore_ascii_case("content-length"))
                 .map(|(_, v)| v.trim().parse().unwrap())
         })
-        .unwrap();
+        // A GET (the voice list) sends no body and may send no length.
+        .unwrap_or(0);
     assert!(length <= 2_100_000);
     let mut body = vec![0; length];
     socket.read_exact(&mut body).unwrap();
@@ -1383,4 +1384,108 @@ async fn factory_diagnostics_and_historical_candidates_keep_scope_and_privacy() 
         assert!(!after.contains(raw));
     }
     assert!(!joined(task).await.extra_connection);
+}
+
+/// A `GET /v1/voices` answer as ElevenLabs shapes it: each voice with its settings, samples and
+/// labels; one voice without an id and one whose id has a space, which are left out.
+fn voice_list() -> Value {
+    json!({"voices": [
+        {"voice_id": "pFZP5JQG7iQjIQuC4Bku", "name": "Lily", "category": "premade",
+         "labels": {"accent": "british", "descriptive": "velvety", "age": "middle_aged",
+                    "gender": "female", "use_case": "narrative_story"},
+         "description": "Velvety British female voice.", "samples": null,
+         "settings": {"stability": 0.5, "similarity_boost": 0.75},
+         "sharing": null, "high_quality_base_model_ids": ["eleven_flash_v2_5"],
+         "preview_url": "https://example.invalid/lily.mp3"},
+        {"voice_id": "onwK4e9ZLuTAKqWW03F9", "name": "Daniel", "category": "premade",
+         "labels": {"accent": "british", "age": "middle_aged", "gender": "male",
+                    "use_case": "informative_educational", "rank": 3},
+         "description": null},
+        {"name": "No id", "labels": {"gender": "male"}},
+        {"voice_id": "has space", "name": "Spaced", "labels": {}}
+    ], "has_more": false})
+}
+
+#[tokio::test]
+async fn the_voice_list_is_one_get_with_the_key_and_keeps_each_usable_voice_and_its_labels() {
+    let (address, task) = fixture(|_| {
+        wire(
+            200,
+            "application/json",
+            HEADERS,
+            &serde_json::to_vec(&voice_list()).unwrap(),
+        )
+    });
+    let voices = provider(CandidateRouteId::ElevenFlashV25Tts, address, limits())
+        .voices(Duration::from_secs(2), future::pending())
+        .await
+        .unwrap();
+    let seen = joined(task).await;
+    assert!(seen.headers.starts_with("GET /v1/voices HTTP/1.1"));
+    assert!(
+        seen.headers
+            .to_ascii_lowercase()
+            .contains("xi-api-key: credential-private-sentinel")
+    );
+    assert!(seen.body.is_empty());
+    assert!(!seen.extra_connection);
+    let names: Vec<&str> = voices.iter().map(SupplierVoice::name).collect();
+    assert_eq!(names, ["Lily", "Daniel"]);
+    assert_eq!(voices[0].voice_id(), "pFZP5JQG7iQjIQuC4Bku");
+    assert_eq!(voices[0].labels()["gender"], "female");
+    assert_eq!(voices[0].labels()["age"], "middle_aged");
+    assert_eq!(
+        voices[0].description(),
+        Some("Velvety British female voice.")
+    );
+    assert_eq!(voices[1].labels()["gender"], "male");
+    // A label that is not text is left out; a null description is none.
+    assert!(!voices[1].labels().contains_key("rank"));
+    assert_eq!(voices[1].description(), None);
+}
+
+#[tokio::test]
+async fn a_voice_list_refusal_is_typed_and_only_the_speech_route_lists_voices() {
+    let (address, task) = fixture(|_| {
+        wire(
+            401,
+            "application/json",
+            HEADERS,
+            &serde_json::to_vec(&json!({"detail": {"type": "authentication_error",
+                "code": "invalid_api_key", "message": SENTINEL}}))
+            .unwrap(),
+        )
+    });
+    let error = provider(CandidateRouteId::ElevenFlashV25Tts, address, limits())
+        .voices(Duration::from_secs(2), future::pending())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.cause(),
+        SpeechAdapterCause::Supplier(ProviderFailureClass::Denied)
+    );
+    assert!(!format!("{error:?} {error}").contains(SENTINEL));
+    assert!(!joined(task).await.extra_connection);
+
+    let (address, task) = fixture(|_| {
+        wire(
+            200,
+            "application/json",
+            HEADERS,
+            &serde_json::to_vec(&json!({"items": []})).unwrap(),
+        )
+    });
+    let error = provider(CandidateRouteId::ElevenFlashV25Tts, address, limits())
+        .voices(Duration::from_secs(2), future::pending())
+        .await
+        .unwrap_err();
+    assert_eq!(error.cause(), SpeechAdapterCause::VoiceList);
+    joined(task).await;
+
+    let unused = SocketAddr::from(([127, 0, 0, 1], 9));
+    let error = provider(CandidateRouteId::ElevenScribeV2Stt, unused, limits())
+        .voices(Duration::from_secs(2), future::pending())
+        .await
+        .unwrap_err();
+    assert_eq!(error.cause(), SpeechAdapterCause::UnregisteredRoute);
 }

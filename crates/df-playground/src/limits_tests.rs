@@ -2,7 +2,7 @@
 //! person could plausibly use is accepted, and the rules of the domain are kept.
 
 use crate::controls::{Controls, ControlsChange};
-use crate::fixture::{Choice, Fixture, PartyMember};
+use crate::fixture::{Choice, Fixture, PartyMember, PlateKind};
 use crate::limits;
 use crate::media::is_plain_file_name;
 use crate::scene::{ImageSlot, SceneChange, SceneError, SceneOverlay, Target};
@@ -83,6 +83,7 @@ fn values_the_old_caps_refused_are_accepted() {
                 caption: None,
                 rotation_degrees: 0,
                 layout: None,
+                plate: PlateKind::Room,
                 slide: Some(crate::fixture::Slide {
                     from_percent: 0,
                     to_percent: 100,
@@ -136,6 +137,7 @@ fn the_rotation_range_takes_zero_and_359_and_refuses_360() {
         rotation_degrees: degrees,
         slide: None,
         layout: None,
+        plate: PlateKind::Room,
     };
     let mut overlay = SceneOverlay::default();
     assert!(overlay.apply(turn(0), &base()).is_ok());

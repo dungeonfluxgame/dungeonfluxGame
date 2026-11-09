@@ -14,6 +14,31 @@ const HANDLE_PREFIX: &str = "person-";
 /// What the character calls someone it was not told of in this prompt.
 const UNKNOWN: &str = "someone";
 
+/// Whether `character` may be part of a handle or an id (`person-12`, `harbour_merchant`): a
+/// handle in a text is a whole run of these.
+fn is_handle_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '-' || character == '_'
+}
+
+/// `text` as runs of other text, each followed by a whole token of handle characters (empty at
+/// the end), so a handle is matched only whole: `person-1` is never part of `person-12`.
+fn handle_tokens(text: &str) -> impl Iterator<Item = (&str, &str)> {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let gap = rest.find(is_handle_character).unwrap_or(rest.len());
+        let (between, from_token) = rest.split_at(gap);
+        let token_end = from_token
+            .find(|character| !is_handle_character(character))
+            .unwrap_or(from_token.len());
+        let (token, after) = from_token.split_at(token_end);
+        rest = after;
+        Some((between, token))
+    })
+}
+
 /// The ids a character may meet in one prompt and what it calls each.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Handles {
@@ -79,12 +104,39 @@ impl Handles {
         }
     }
 
-    /// Whether `text` carries one of these handles: written for one prompt's numbering, a
-    /// handle points at someone else in another's (a goal handed on to a speaker).
+    /// Whether `text` carries one of these handles as a whole token: written for one prompt's
+    /// numbering, a handle points at someone else in another's (a goal handed on to a speaker).
     pub(super) fn carried_by(&self, text: &str) -> bool {
-        self.shown
+        handle_tokens(text).any(|(_, token)| {
+            self.shown
+                .iter()
+                .any(|(_, called)| called.starts_with(HANDLE_PREFIX) && called == token)
+        })
+    }
+
+    /// `text` with each of these handles put as `look_of` describes its id (a person said by
+    /// their look). Only a whole handle token is put, one with no handle character either side,
+    /// so `person-1` never eats into `person-12`; a handle whose id has no look is left as it is.
+    pub(super) fn with_looks(
+        &self,
+        text: &str,
+        look_of: impl Fn(&str) -> Option<String>,
+    ) -> String {
+        let looks: Vec<(&str, String)> = self
+            .shown
             .iter()
-            .any(|(_, called)| called.starts_with(HANDLE_PREFIX) && text.contains(called.as_str()))
+            .filter(|(_, called)| called.starts_with(HANDLE_PREFIX))
+            .filter_map(|(id, called)| look_of(id).map(|look| (called.as_str(), look)))
+            .collect();
+        let mut said = String::with_capacity(text.len());
+        for (between, token) in handle_tokens(text) {
+            said.push_str(between);
+            match looks.iter().find(|(called, _)| *called == token) {
+                Some((_, look)) => said.push_str(look),
+                None => said.push_str(token),
+            }
+        }
+        said
     }
 
     /// What the character calls `id`: itself and anyone whose name it knows by their id, a

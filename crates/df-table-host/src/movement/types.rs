@@ -137,10 +137,12 @@ pub struct ReferenceCard {
     pub portrait: Option<String>,
 }
 
-/// What the image service is asked to paint: the prompt, and the cards of the characters in it.
+/// What the image service is asked to paint: the prompt, what the picture must not show, and the
+/// cards of the characters in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlateBrief {
     pub prompt: String,
+    pub avoid: Vec<String>,
     pub references: Vec<ReferenceCard>,
 }
 

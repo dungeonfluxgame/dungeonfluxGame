@@ -206,6 +206,7 @@ fn the_verb_prints_one_line_of_keys_per_service() {
         },
         imagegen: ImagegenReport {
             backend: "codex-cli".to_owned(),
+            limits: codex_generator().backend_limits(),
             mode: ImageMode::Live,
             deadline_ms: 900_000,
             provenance_dir_set: true,

@@ -8,7 +8,7 @@
 use crate::fixture::TvScene;
 use crate::home::model::HomeScene;
 use crate::image_layout::ImageLayout;
-use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
+use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, SceneTitle, TopBar};
 
 /// What the panels read: the lobby, the loading screen, the roleplay card (whose anchored bubbles
 /// it leaves to the world layer, decided by the backdrop's layout) and the landing page, which
@@ -20,6 +20,7 @@ type PanelInputs<'a> = (
     &'a Option<HomeScene>,
     Option<&'a Option<TopBar>>,
     Option<&'a ImageLayout>,
+    Option<&'a ImageLayout>,
 );
 
 fn panel_inputs(scene: &TvScene) -> PanelInputs<'_> {
@@ -30,6 +31,7 @@ fn panel_inputs(scene: &TvScene) -> PanelInputs<'_> {
         &scene.home,
         scene.home.as_ref().map(|_| &scene.pills),
         scene.backdrop_layout(),
+        scene.cast_layout(),
     )
 }
 
@@ -47,6 +49,21 @@ fn anchor_inputs(scene: &TvScene) -> (Option<&RoleplayScene>, Option<&ImageLayou
     (scene.roleplay.as_ref(), scene.backdrop_layout())
 }
 
+/// What the place column reads: the place's name, whether the logo is drawn and the roleplay
+/// card's title banner.
+fn place_inputs(scene: &TvScene) -> (&str, bool, Option<&SceneTitle>) {
+    (
+        &scene.place,
+        scene.brand,
+        scene.roleplay.as_ref().and_then(|card| card.title.as_ref()),
+    )
+}
+
+/// Whether the place column differs.
+pub fn place_differ(before: &TvScene, after: &TvScene) -> bool {
+    place_inputs(before) != place_inputs(after)
+}
+
 /// Whether the panels (lobby, loading, roleplay, landing page) differ.
 pub fn panels_differ(before: &TvScene, after: &TvScene) -> bool {
     panel_inputs(before) != panel_inputs(after)
@@ -60,4 +77,9 @@ pub fn pills_differ(before: &TvScene, after: &TvScene) -> bool {
 /// Whether the items tied to characters (anchored bubbles, markers) differ.
 pub fn anchors_differ(before: &TvScene, after: &TvScene) -> bool {
     anchor_inputs(before) != anchor_inputs(after)
+}
+
+/// Whether the clue board differs; the board reads nothing but itself.
+pub fn clues_differ(before: &TvScene, after: &TvScene) -> bool {
+    before.clues != after.clues
 }

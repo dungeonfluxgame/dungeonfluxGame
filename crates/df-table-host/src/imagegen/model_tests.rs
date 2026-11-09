@@ -1,8 +1,10 @@
 //! The purpose, the shape and the checks of a request.
 
+use super::backend::BackendLimits;
 use super::limits::{MAXIMUM_NAME_CHARS, MAXIMUM_SENT_TEXT_CHARS};
 use super::model::{
-    Aspect, AspectError, GenerateRequestError, ImageRequest, Purpose, maximum_prompt_chars,
+    Aspect, AspectError, GenerateRequestError, ImageRequest, Purpose, ThingReference,
+    maximum_prompt_chars,
 };
 
 fn shape(text: &str) -> Aspect {
@@ -114,10 +116,11 @@ fn a_prompt_too_long_for_the_backend_with_its_direction_is_refused_before_any_jo
     );
     for purpose in Purpose::ALL {
         let longest = "x".repeat(maximum_prompt_chars(purpose));
-        let request =
-            ImageRequest::new(&longest, "a", Some(purpose), None).expect("the longest prompt");
+        let request = ImageRequest::new(&longest, "a", Some(purpose), None)
+            .and_then(|request| request.following(&["ref-a.png".to_owned()]))
+            .expect("the longest prompt, with references");
         assert_eq!(
-            request.sent_text().chars().count(),
+            request.sent_text(&BackendLimits::REQUEST).chars().count(),
             MAXIMUM_SENT_TEXT_CHARS,
             "{purpose:?}"
         );
@@ -130,10 +133,106 @@ fn a_prompt_too_long_for_the_backend_with_its_direction_is_refused_before_any_jo
 }
 
 #[test]
+fn references_are_library_pictures_and_add_their_line_before_the_purpose() {
+    let plain = ImageRequest::new("the door", "door", Some(Purpose::Plate), None).expect("ok");
+    let references = ["ref-warrior.png".to_owned(), "ref-sella.png".to_owned()];
+    let following = plain.clone().following(&references).expect("follows");
+    assert_eq!(following.references(), references);
+    let text = following.sent_text(&BackendLimits::REQUEST);
+    assert!(text.starts_with("the door\n\nThe reference pictures of people"));
+    assert!(text.ends_with(Purpose::Plate.direction()));
+    assert!(
+        !plain
+            .sent_text(&BackendLimits::REQUEST)
+            .contains("reference")
+    );
+    assert_eq!(
+        plain.clone().following(&["ref-warrior".to_owned()]),
+        Err(GenerateRequestError::InvalidReference {
+            reference: "ref-warrior".to_owned()
+        })
+    );
+    let eight: Vec<String> = (1..=8).map(|index| format!("ref-{index}.png")).collect();
+    assert!(plain.clone().following(&eight).is_ok());
+    assert_eq!(
+        plain
+            .editing("door.png")
+            .and_then(|request| request.following(&eight)),
+        Err(GenerateRequestError::TooManyPictures {
+            count: 9,
+            maximum: 8
+        })
+    );
+}
+
+#[test]
 fn the_backend_reads_the_prompt_first_then_the_purpose() {
     let request =
         ImageRequest::new("a candlelit hall", "hall", Some(Purpose::Plate), None).expect("ok");
-    let text = request.sent_text();
+    let text = request.sent_text(&BackendLimits::REQUEST);
     assert!(text.starts_with("a candlelit hall"));
     assert!(text.ends_with(Purpose::Plate.direction()));
+}
+
+#[test]
+fn a_thing_s_picture_is_named_by_its_number_among_the_pictures_attached() {
+    let wheel = ThingReference {
+        picture: "wheel-close.png".to_owned(),
+        shows: "Brass cipher wheel".to_owned(),
+    };
+    let request = ImageRequest::new("the scriptorium", "room", Some(Purpose::Plate), None)
+        .and_then(|request| request.editing("room-1.png"))
+        .and_then(|request| request.following(&["ref-jory.png".to_owned()]))
+        .and_then(|request| request.showing(std::slice::from_ref(&wheel)))
+        .expect("a valid request");
+    assert_eq!(request.things(), [wheel]);
+    let text = request.sent_text(&BackendLimits::REQUEST);
+    // The picture to edit is the first attached and the person's sheet the second.
+    assert!(
+        text.contains("\n\nReference 3: Brass cipher wheel as it looks.\n\n"),
+        "{text}"
+    );
+    assert_eq!(
+        request.check_pictures(2),
+        Err(GenerateRequestError::TooManyPictures {
+            count: 3,
+            maximum: 2
+        })
+    );
+    let unnamed = ThingReference {
+        picture: "wheel".to_owned(),
+        shows: "a wheel".to_owned(),
+    };
+    assert!(matches!(
+        request.showing(&[unnamed]),
+        Err(GenerateRequestError::InvalidReference { .. })
+    ));
+}
+
+#[test]
+fn what_a_picture_must_not_show_is_text_or_a_negative_prompt_as_the_backend_takes_it() {
+    let avoid = ["painting".to_owned(), "readable text".to_owned()];
+    let request = ImageRequest::new("a candlelit hall", "hall", Some(Purpose::Plate), None)
+        .expect("ok")
+        .avoiding(&avoid);
+    // A backend with no negative prompt (Codex) reads them in the text.
+    let in_text = request.sent_text(&BackendLimits::REQUEST);
+    assert!(
+        in_text.contains("\n\nNever show: painting, readable text.\n\n"),
+        "{in_text}"
+    );
+    assert_eq!(request.negative_text(&BackendLimits::REQUEST), None);
+    // A backend with one (Forge) takes them there, and the text leaves them out.
+    let negative = BackendLimits {
+        maximum_text_characters: Some(4000),
+        maximum_negative_characters: Some(4000),
+        maximum_pictures: 8,
+    };
+    assert!(!request.sent_text(&negative).contains("painting"));
+    assert_eq!(
+        request.negative_text(&negative).as_deref(),
+        Some("painting, readable text")
+    );
+    let nothing = ImageRequest::new("a hall", "hall", None, None).expect("ok");
+    assert_eq!(nothing.negative_text(&negative), None);
 }

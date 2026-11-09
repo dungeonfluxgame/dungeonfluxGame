@@ -1,9 +1,24 @@
 //! The storyteller's plot: an answer is kept only when every id, part and scene checks out.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
+use df_ai::text::TextOutcome;
+use df_ai::text_fixture::ScriptedBackend;
+
+use super::fixtures::{ScriptedHost, coverage_answer, scripted_host_cast};
 use super::handles::Handles;
-use super::story::{StoryError, parse_moves, parse_story, read_names, with_ids, with_scene_moves};
+use super::request::{GivenGuidance, PersonaReply, PersonaStored};
+use super::routes::path;
+use super::storage::{guidance_file_name, persona_id, read_backfills, read_persona, write_persona};
+use super::story::{
+    Story, StoryError, StoryRoutes, apply_story, parse_moves, parse_story, read_names,
+    stored_story, story_path, with_ids, with_scene_moves, write_story,
+};
+use crate::dev_client::{post_json, reply_value};
+use crate::speech::fixtures::FakePort;
+use crate::text::{BackendChoice, TextRuntime};
 
 fn guidance(establish: &str) -> Value {
     json!({
@@ -27,7 +42,8 @@ fn scenes() -> Vec<String> {
 
 fn place(id: &str) -> Value {
     json!({"id": id, "place": "The market square.", "dressing": ["a counting-house sign"],
-           "danger": "The watch is quick to the cudgel."})
+           "danger": "The watch is quick to the cudgel.",
+           "music": "A slow lute over a market's murmur."})
 }
 
 fn answer() -> Value {
@@ -54,7 +70,7 @@ fn answer() -> Value {
             {"id": "seal_in_pack", "what": "The seal found in Kael's pack.",
              "planted_by": "harbour_merchant",
              "flaw": "The pack was in the inn's stable all night.",
-             "up_close": "The seal's wax is unbroken."}
+             "up_close": "The seal's wax is unbroken.", "needs": []}
         ],
         "beats": [
             {"id": "charge", "scene": "arrest", "happens": "The guards read the charge.",
@@ -64,6 +80,20 @@ fn answer() -> Value {
             {"id": "trial", "scene": "judgement", "happens": "The mayor hears the case.",
              "turns_on": "The stable boy's word.",
              "exhibits": ["seal_in_pack"]}
+        ],
+        "ways": [
+            {"from": "march", "to": "judgement", "stages": [
+                {"id": "hall_steps", "sight": "Worn steps up to the hall.", "worth_a_look": null,
+                 "touches": []},
+                {"id": "hall_doors", "sight": "Iron-bound doors.",
+                 "worth_a_look": "A notice nailed to the door.", "touches": []}
+            ]},
+            {"from": "arrest", "to": "march", "stages": [
+                {"id": "stall_lane", "sight": "A lane between the stalls.",
+                 "worth_a_look": null, "touches": []},
+                {"id": "crowd_gathers", "sight": "A crowd gathers at the corner.",
+                 "worth_a_look": null, "touches": []}
+            ]}
         ]
     })
 }
@@ -86,6 +116,16 @@ fn a_plot_is_read_with_each_character_given_guided_guidance_under_the_title() {
         ids,
         ["arrest", "march", "judgement"],
         "scenes in the order asked for"
+    );
+    let ways: Vec<(&str, &str)> = story
+        .ways
+        .iter()
+        .map(|way| (way.from.as_str(), way.to.as_str()))
+        .collect();
+    assert_eq!(
+        ways,
+        [("arrest", "march"), ("march", "judgement")],
+        "a way from each place to the next, in the scenes' order"
     );
     assert_eq!(
         framer.secrets[0].reveal_conditions,
@@ -158,6 +198,54 @@ fn an_answer_that_leaves_out_the_cast_or_names_no_character_is_refused() {
     let mut bad_part = answer();
     bad_part["characters"][1]["part"] = json!("villain");
     assert!(refused(&bad_part, &["warrior"]));
+}
+
+/// The answer with a second piece of evidence, `ledger`, and the needs of both.
+fn with_needs(seal_needs: Value, ledger_needs: Value) -> Value {
+    let mut story = answer();
+    story["evidence"][0]["needs"] = seal_needs;
+    story["evidence"].as_array_mut().unwrap().push(json!({
+        "id": "ledger", "what": "The stable's ledger.", "planted_by": "harbour_merchant",
+        "flaw": "The pack is entered for the whole night.", "up_close": "A ruled page of names.",
+        "needs": ledger_needs
+    }));
+    story
+}
+
+#[test]
+fn clues_may_build_on_each_other_but_never_on_nothing_or_in_a_circle() {
+    let read = |answer: &Value| parse_story(answer, (&["warrior".to_owned()], &[]), &scenes());
+    let chain = read(&with_needs(json!(["ledger"]), json!([]))).unwrap();
+    assert_eq!(
+        chain.evidence[0].needs,
+        ["ledger"],
+        "the seal is read with the ledger"
+    );
+    for (seal, ledger, why) in [
+        (
+            json!(["ghost"]),
+            json!([]),
+            "a need names a piece of evidence",
+        ),
+        (
+            json!(["seal_in_pack"]),
+            json!([]),
+            "a piece never needs itself",
+        ),
+        (
+            json!(["ledger"]),
+            json!(["seal_in_pack"]),
+            "needs never go round",
+        ),
+    ] {
+        assert!(
+            matches!(
+                read(&with_needs(seal, ledger)),
+                Err(StoryError::MalformedAnswer { .. })
+            ),
+            "{why}"
+        );
+    }
 }
 
 #[test]
@@ -305,4 +393,237 @@ fn a_scenes_moves_change_only_that_scene_in_the_stored_story() {
         other.evidence[0].up_close, stored.evidence[0].up_close,
         "a scene that does not show a piece leaves its look as it was"
     );
+}
+
+/// The plot's framer, `new` in the plot, with its guidance and one secret.
+fn framer_plot() -> Story {
+    serde_json::from_value(json!({
+        "title": "The Vault", "hook": "h", "truth": "t", "culprit": "rival_scholar", "motive": "m",
+        "scenes": [], "evidence": [], "beats": [],
+        "characters": [{
+            "id": "rival_scholar", "name": "Oren Vask", "new": true, "part": "framer",
+            "role": "a rival scholar who plants the forged seal",
+            "guidance": guidance("They planted the forged seal in the archive."),
+            "secrets": [{"id": "forged_seal", "text": "They forged the seal.",
+                         "reveal_conditions": ["shown the forger's mould"]}]
+        }]
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_plain_persona_kept_for_a_plot_character_gets_its_part_once() {
+    // Apply one: the coverage judge finds the part missing, the backfill adds it. Apply two: the
+    // same guidance was given, so nothing is asked.
+    let backfill = json!({"edits": [{
+        "op": "append_text", "field": "private_backstory",
+        "text": "He planted the forged seal in the archive.", "id": null, "sensitivity": null,
+        "reveal_conditions": null, "known_by": null, "speech_style": null, "condition": null,
+        "event": null, "behavior": null
+    }]});
+    let answers = vec![
+        coverage_answer(&[("private_backstory", "the forged seal")]),
+        backfill,
+    ];
+    let host = scripted_host_cast(
+        &["rival_scholar"],
+        answers,
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    host.running.write_asset("persona/story.json", "{}");
+    write_story(&story_path(&host.running.state), &framer_plot()).unwrap();
+    // The persona kept from before the plot gave it a part: a job and a look, nothing else.
+    let plain = serde_json::from_value(json!({
+        "schema": 1, "id": "rival_scholar", "display_name": "Oren Vask",
+        "job": "Scholar: a lean grey-bearded man in an ink-stained robe"
+    }))
+    .unwrap();
+    write_persona(&host.directory(), &plain).unwrap();
+    let id = persona_id("rival_scholar").unwrap();
+
+    let first = apply_story(host.port, None).await.unwrap();
+    assert!(
+        first.contains("a persona was already kept; 1 edit(s) from its guidance"),
+        "{first}"
+    );
+    assert!(first.contains("1 secret(s) kept"), "{first}");
+    let guided = read_persona(&host.directory(), &id).unwrap().unwrap();
+    assert_eq!(guided.job(), plain.job(), "the plates know it by its job");
+    assert_eq!(guided.display_name(), "Oren Vask");
+    assert!(guided.private_backstory().contains("forged seal"));
+    assert_eq!(guided.private_secrets()[0].id, "forged_seal");
+    assert!(
+        host.facts_of(0)
+            .to_string()
+            .contains("planted the forged seal"),
+        "the coverage judge weighs the persona against its guidance"
+    );
+    let kept = host.file("rival_scholar.persona.json").unwrap();
+
+    let second = apply_story(host.port, None).await.unwrap();
+    assert!(
+        second.contains("a persona was already kept; its guidance was given before"),
+        "{second}"
+    );
+    assert_eq!(host.file("rival_scholar.persona.json").unwrap(), kept);
+    assert_eq!(
+        host.calls(),
+        2,
+        "neither the judge nor a backfill is asked again"
+    );
+}
+
+/// The framer's persona as it was before the plot gave it a part: a job and a look, nothing else.
+fn plain_framer() -> df_content::persona::Persona {
+    serde_json::from_value(json!({
+        "schema": 1, "id": "rival_scholar", "display_name": "Oren Vask",
+        "job": "Scholar: a lean grey-bearded man in an ink-stained robe"
+    }))
+    .unwrap()
+}
+
+/// A host whose scene shows the framer, with the plot stored and the plain framer kept, whose
+/// text backend answers with `answers`.
+async fn framer_host(answers: Vec<Value>) -> ScriptedHost {
+    let host = scripted_host_cast(
+        &["rival_scholar"],
+        answers,
+        Arc::new(FakePort::unconfigured()),
+    )
+    .await;
+    host.running.write_asset("persona/story.json", "{}");
+    write_story(&story_path(&host.running.state), &framer_plot()).unwrap();
+    write_persona(&host.directory(), &plain_framer()).unwrap();
+    host
+}
+
+#[tokio::test]
+async fn three_applies_add_edits_only_on_the_first_though_the_judge_finds_gaps_each_time() {
+    // A judge that names gaps whenever it is asked (dungeon run 25 judged one unchanged persona
+    // covered, then six gaps, then three): every named gap is filled on the first apply, and the
+    // next two ask nothing, so the backstory stops growing.
+    let backfill = json!({"edits": [{
+        "op": "append_text", "field": "private_backstory",
+        "text": "He planted the forged seal in the archive.", "id": null, "sensitivity": null,
+        "reveal_conditions": null, "known_by": null, "speech_style": null, "condition": null,
+        "event": null, "behavior": null
+    }]});
+    let short = coverage_answer(&[("private_backstory", "the seal"), ("fears", "being caught")]);
+    let answers = vec![
+        short.clone(),
+        backfill.clone(),
+        short.clone(),
+        backfill.clone(),
+        short,
+        backfill,
+    ];
+    let host = framer_host(answers).await;
+
+    let first = apply_story(host.port, None).await.unwrap();
+    assert!(first.contains("1 edit(s) from its guidance"), "{first}");
+    let gaps = host.facts_of(1).to_string();
+    assert!(
+        gaps.contains("being caught"),
+        "every named gap is filled: {gaps}"
+    );
+    let kept = host.file("rival_scholar.persona.json").unwrap();
+    for _ in 0..2 {
+        let again = apply_story(host.port, None).await.unwrap();
+        assert!(
+            again.contains("its guidance was given before; nothing added"),
+            "{again}"
+        );
+        assert_eq!(host.file("rival_scholar.persona.json").unwrap(), kept);
+    }
+    assert_eq!(
+        host.calls(),
+        2,
+        "one judgement and one backfill, both on the first apply"
+    );
+    let id = persona_id("rival_scholar").unwrap();
+    assert_eq!(read_backfills(&host.directory(), &id).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn given_guidance_is_judged_anew_once_the_persona_is_written_whole_or_the_plot_changes() {
+    let host = framer_host(vec![
+        coverage_answer(&[]),
+        coverage_answer(&[]),
+        coverage_answer(&[]),
+    ])
+    .await;
+    let id = persona_id("rival_scholar").unwrap();
+
+    let first = apply_story(host.port, None).await.unwrap();
+    assert!(
+        first.contains("already holds its guidance; nothing added"),
+        "{first}"
+    );
+    let given: GivenGuidance =
+        serde_json::from_str(&host.file(&guidance_file_name(&id)).unwrap()).unwrap();
+    assert_eq!(
+        given.guidance.must_establish,
+        [
+            "Their name is Oren Vask.",
+            "They planted the forged seal in the archive."
+        ]
+    );
+    apply_story(host.port, None).await.unwrap();
+    assert_eq!(host.calls(), 1, "the same guidance is not judged again");
+
+    // The clean persona put back whole (`persona write`, as a replay's restore does) holds none of
+    // the guidance, so it is judged again.
+    let written: PersonaReply<PersonaStored> = post_json(host.port, path::PERSONA, &plain_framer())
+        .await
+        .unwrap();
+    reply_value(written).unwrap();
+    assert!(host.file(&guidance_file_name(&id)).is_none());
+    apply_story(host.port, None).await.unwrap();
+    assert_eq!(host.calls(), 2, "a persona written whole is judged again");
+
+    // A new plot gives the character other guidance.
+    let mut replotted = framer_plot();
+    replotted.characters[0].guidance.must_establish = vec!["They burned the ledger.".to_owned()];
+    write_story(&story_path(&host.running.state), &replotted).unwrap();
+    apply_story(host.port, None).await.unwrap();
+    assert_eq!(host.calls(), 3, "changed guidance is judged anew");
+}
+
+#[tokio::test]
+async fn reading_the_story_waits_for_a_held_story_lock_rather_than_failing() {
+    let host = framer_host(Vec::new()).await;
+    let text = TextRuntime::new(
+        BackendChoice::Scripted(
+            Arc::new(ScriptedBackend::new(
+                Vec::<TextOutcome>::new(),
+                Arc::default(),
+            )),
+            None,
+        ),
+        Arc::new(|_| {}),
+    );
+    let routes = Arc::new(StoryRoutes {
+        app: Arc::clone(&host.running.state),
+        text: Arc::new(text),
+        story_write: tokio::sync::Mutex::new(()),
+        stretch: std::sync::Mutex::default(),
+    });
+    let path = story_path(&routes.app);
+    // A writer holds the lock with the story half written, as a clue or a sheet being kept does.
+    let writing = routes.story_write.lock().await;
+    std::fs::write(&path, r#"{"title": "The Va"#).unwrap();
+    let reader = tokio::spawn({
+        let routes = Arc::clone(&routes);
+        async move { stored_story(&routes).await }
+    });
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!reader.is_finished(), "the reader waits for the writer");
+    write_story(&path, &framer_plot()).unwrap();
+    drop(writing);
+
+    let read = reader.await.unwrap().unwrap();
+    assert_eq!(read.title, "The Vault");
 }

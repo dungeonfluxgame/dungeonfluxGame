@@ -29,6 +29,7 @@ pub enum Part {
     TvPills,
     TvCaption,
     TvParty,
+    TvClues,
     PhoneHead,
     PhoneStatus,
     PhoneImage,
@@ -54,6 +55,7 @@ impl Part {
             Self::TvPills => "tv-pills",
             Self::TvCaption => "tv-caption",
             Self::TvParty => "tv-party",
+            Self::TvClues => "tv-clues",
             Self::PhoneHead => "phone-head",
             Self::PhoneStatus => "phone-status",
             Self::PhoneImage => "phone-image",
@@ -184,7 +186,7 @@ impl DrawPlan {
         );
         self.mark(
             Part::TvPlace,
-            before.tv.place != after.tv.place || before.tv.brand != after.tv.brand,
+            crate::overlay::changes::place_differ(&before.tv, &after.tv),
         );
         self.mark(
             Part::TvCard,
@@ -212,6 +214,10 @@ impl DrawPlan {
         self.mark(
             Part::TvParty,
             before.tv.party != after.tv.party || before.tv.seats != after.tv.seats,
+        );
+        self.mark(
+            Part::TvClues,
+            crate::overlay::changes::clues_differ(&before.tv, &after.tv),
         );
     }
 

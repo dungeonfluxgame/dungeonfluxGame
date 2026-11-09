@@ -8,6 +8,7 @@ use web_sys::{Element, Event, HtmlImageElement, HtmlSelectElement};
 use super::frames::send_change;
 use super::page::{on_animation_end, place_bubbles, render};
 use super::report::schedule_report;
+use super::sound;
 use super::state::with_app;
 use super::voice;
 use crate::audio;
@@ -38,8 +39,11 @@ pub fn on_key(event: &Event) {
     voice::on_enter(event);
 }
 
-/// Someone typed in the composer's box.
+/// Someone typed in the composer's box, or moved the volume slider.
 pub fn on_input(event: &Event) {
+    if sound::on_input(event) {
+        return;
+    }
     voice::on_input(event);
 }
 
@@ -58,6 +62,9 @@ pub fn on_media_event(event: &Event, failed: bool) {
     let Some(name) = image.get_attribute("data-media") else {
         return;
     };
+    if let Err(error) = crate::view::plate_fade::on_image(&image, failed) {
+        page_log::note_error(ErrorSource::Draw, &crate::dom::js_message(&error));
+    }
     if failed {
         page_log::note_error(
             ErrorSource::Asset,
@@ -76,7 +83,7 @@ pub fn on_click(event: &Event) {
     let Some((_, action)) = action else {
         return;
     };
-    if voice::on_action(&action) {
+    if voice::on_action(&action) || sound::on_action(&action) {
         return;
     }
     let change = with_app(|app| match action.split_once(':') {
@@ -124,5 +131,21 @@ pub fn on_animation_ended(event: &Event) {
         .and_then(|target| target.dyn_into::<Element>().ok())
     {
         on_animation_end(&target);
+    }
+}
+
+/// The clue board's fold has settled at its new width: the bubbles are placed for that size.
+pub fn on_transition_ended(event: &Event) {
+    let on_board = event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+        .is_some_and(|target| {
+            target
+                .class_name()
+                .split_whitespace()
+                .any(|name| name == "kit-clues")
+        });
+    if on_board {
+        place_bubbles();
     }
 }

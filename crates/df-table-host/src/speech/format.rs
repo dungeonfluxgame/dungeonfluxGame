@@ -2,8 +2,8 @@
 //! verb's job is to show it; nothing else here carries what was said.
 
 use super::request::{
-    ClipPlayed, ClipRow, ClipsCleared, MissingSetting, SpeechStatus, Transcript, VoiceChanged,
-    Voiced,
+    ClipPlayed, ClipRow, ClipsCleared, MissingSetting, SpeechStatus, Transcript, VoiceCast,
+    VoiceChanged, Voiced,
 };
 
 pub(super) fn format_status(status: &SpeechStatus) -> String {
@@ -64,6 +64,22 @@ pub(super) fn format_voice(changed: &VoiceChanged) -> String {
             (false, true) => "has no voice of their own now",
             (false, false) => "had no voice of their own",
         }
+    )
+}
+
+pub(super) fn format_cast(cast: &VoiceCast) -> String {
+    format!(
+        "ok {} speaks as {} ({}{}{}): {}",
+        cast.character,
+        cast.voice_name,
+        cast.voice,
+        if cast.reused {
+            ", also someone else's"
+        } else {
+            ""
+        },
+        if cast.changed { "" } else { ", unchanged" },
+        cast.why
     )
 }
 

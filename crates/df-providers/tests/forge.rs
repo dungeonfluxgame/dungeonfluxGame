@@ -309,7 +309,10 @@ async fn a_segmentation_answers_its_matches_and_a_staged_picture_its_id() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_failed_render_and_a_refused_request_keep_their_causes() {
     let studio = Studio::start(|seen, count| match (seen.method.as_str(), count) {
-        ("POST", 1) => json_answer(400, json!({"error": "Voice text must contain 1–1000"})),
+        ("POST", 1) => json_answer(
+            400,
+            json!({"error": "Voice text must contain 1–1000 characters.", "supervisor": {}}),
+        ),
         ("POST", _) => job("queued", None, Value::Null),
         _ => job("failed", None, Value::Null),
     });
@@ -319,6 +322,14 @@ async fn a_failed_render_and_a_refused_request_keep_their_causes() {
         .await
         .unwrap_err();
     assert_eq!(refused.cause, ForgeCause::Rejected);
+    assert_eq!(
+        refused.reason.as_deref(),
+        Some("Voice text must contain 1–1000 characters.")
+    );
+    assert_eq!(
+        refused.to_string(),
+        "forge refused the request: Voice text must contain 1–1000 characters."
+    );
     let failed = client
         .render(ForgeJobKind::Voices, json!({"text": "x"}), soon(10))
         .await

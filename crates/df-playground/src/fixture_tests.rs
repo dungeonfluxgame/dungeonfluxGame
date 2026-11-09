@@ -1,8 +1,8 @@
 mod shipped;
 
 use crate::fixture::{
-    ElementShape, ElementSource, Fixture, FixtureTitle, LiveMarker, StageElement, StagePivot,
-    Status,
+    ElementShape, ElementSource, Fixture, FixtureTitle, LiveMarker, PlateKind, StageElement,
+    StagePivot, Status,
 };
 use crate::fixtures::assert_keys_are_serde_names;
 
@@ -165,4 +165,52 @@ fn the_keys_of_an_element_shape_and_the_live_marker_are_their_serde_names() {
         ElementShape::from_key,
     );
     assert_keys_are_serde_names(&LiveMarker::ALL, LiveMarker::key, LiveMarker::from_key);
+}
+
+#[test]
+fn a_backdrop_layout_counts_only_on_a_room_plate_the_host_put_up_with_its_own_scan() {
+    let mut scene = Fixture::parse(include_str!(
+        "../../../assets/playground/fixtures/ui_roleplay_thought.json"
+    ))
+    .expect("the roleplay fixture reads");
+    let backdrop = scene.tv.backdrop.as_mut().expect("a backdrop");
+    let picture = df_scene_layout::PictureBinding {
+        name: backdrop.media.clone(),
+        sha256: "ab".repeat(32),
+        width_px: 1672,
+        height_px: 941,
+    };
+    backdrop.layout = Some(df_scene_layout::SceneLayout::new(
+        picture,
+        "sam-3.1",
+        "person",
+        Vec::new(),
+    ));
+    assert!(scene.tv.backdrop_layout().is_some(), "the room's own scan");
+    // A close-up, or a room shown with the cast before it, has nobody where that layout's figures
+    // stood; the host says which it is, and the picture's name is not read.
+    for plate in [PlateKind::CloseUp, PlateKind::RoomKeptCast] {
+        scene.tv.backdrop.as_mut().expect("a backdrop").plate = plate;
+        assert!(scene.tv.backdrop_layout().is_none(), "{plate:?}");
+        assert!(
+            scene.tv.cast_layout().is_some(),
+            "the cast keeps its names and faces"
+        );
+    }
+}
+
+#[test]
+fn a_plate_kinds_key_is_its_serde_name_and_a_backdrop_is_a_room_plate_unless_told() {
+    for plate in [PlateKind::Room, PlateKind::RoomKeptCast, PlateKind::CloseUp] {
+        let serde_name = serde_json::to_string(&plate).expect("a plate kind writes");
+        assert_eq!(serde_name, format!("\"{}\"", plate.key()));
+    }
+    let scene = Fixture::parse(include_str!(
+        "../../../assets/playground/fixtures/ui_roleplay_thought.json"
+    ))
+    .expect("the roleplay fixture reads");
+    assert_eq!(
+        scene.tv.backdrop.expect("a backdrop").plate,
+        PlateKind::Room
+    );
 }

@@ -271,6 +271,10 @@ body {
   background: var(--ui-ready);
   box-shadow: none;
 }
+/* The master volume: a slider as tall as the switches beside it. */
+.studio-volume { width: 110px; height: var(--studio-control-h); accent-color: var(--brass); }
+/* The plate timer: its digits keep their width, so the countdown never jitters. */
+.studio-plate { font-variant-numeric: tabular-nums; min-width: 22ch; }
 /* A one-shot action, and the plain state that replaces it once done. */
 .studio-action {
   padding: 0 var(--studio-space-3);
@@ -475,7 +479,7 @@ body {
 .sam-tag.sam-labelled { font-size: .95cqw; }
 .sam-head { position: absolute; width: .7cqw; height: .7cqw; margin: -.35cqw 0 0 -.35cqw; border-radius: 50%; background: #ff4f7b; border: .1cqw solid #fff; box-shadow: 0 0 .4cqw #000a; }
 .sam-legend { position: absolute; right: .8cqw; bottom: .6cqw; padding: .2cqw .6cqw; font: 500 .8cqw/1.3 var(--ui-font); color: #cfeee6; background: #000a; border-radius: .3cqw; }
-.tv-place { position: absolute; left: 2.4cqw; top: 2cqw; font: italic var(--ui-t-lead)/1.2 var(--ui-font); color: var(--ui-brass-hi); letter-spacing: .02em; text-shadow: 0 1px 4px #000, 0 0 10px #000a; }
+.tv-place { margin-top: .6cqw; font: italic var(--ui-t-lead)/1.2 var(--ui-font); color: var(--ui-brass-hi); letter-spacing: .02em; text-shadow: 0 1px 4px #000, 0 0 10px #000a; }
 .tv-figures { position: absolute; inset: 0; z-index: 0; }
 /* A figure keeps its element while it moves, so a change of place glides: about as long as the
    host's tick, so steady travel looks continuous and a single move eases in. */
@@ -493,21 +497,21 @@ body {
   /* The page turns the label back by the figure's turn, so the text stays upright as it glides. */
   transition: transform 90ms linear;
 }
-.tv-status {
-  position: absolute; right: 2.4cqw; top: 1.6cqw; padding: .5cqw 1.4cqw;
-  border: 1px solid var(--line); border-radius: 99px; background: #0b1820cc;
-  font: 1.6cqw/1.3 system-ui, sans-serif; color: var(--ivory);
-}
-.tv-status-blocking { border-color: var(--ember); color: var(--ember); }
+/* The top left of the shared screen is one column (`view::tv::shell`): the place name or brand mark, the scene's title banner
+   (`view::brand`), then the clue board (`view::clues`), each under the one before, so none lies over another. The kit's layers
+   and their top bar take their place in the column instead of the screen. */
+.tv-heading { position: absolute; left: 2.4cqw; top: 1.4cqw; z-index: 2; display: flex; flex-direction: column; align-items: flex-start; gap: 1.1cqw; max-width: 40cqw; pointer-events: none; }
+.tv-heading .kit { position: relative; inset: auto; overflow: visible; }
+.tv-heading .kit-top { position: static; }
 .tv-caption {
   position: absolute; left: 50%; bottom: 20%; transform: translateX(-50%);
   width: min(84%, 78cqw); padding: var(--ui-space-3) var(--ui-space-5) var(--ui-space-3); text-align: center;
   background: radial-gradient(ellipse at 50% 100%, #080d14ee, #080d1400 74%);
 }
 .tv-stage:not(:has(.tv-party)) .tv-caption { bottom: 5%; }
-/* A roleplay card's own caption bar holds the bottom of the screen: a spoken caption sits above it,
-   not on top of it. The bar starts where `.rp-caption` does and is about 9.5cqw tall at most. */
-.tv-stage:has(.rp-caption) .tv-caption:not(.tv-narration) {
+/* A roleplay card's own caption bar (`kit::caption_bar`) holds the bottom of the screen: a spoken caption sits above it,
+   not on top of it. The bar starts where the kit's bottom stack does (`.tv-panels .kit-bottom`) and is about 9.5cqw tall at most. */
+.tv-stage:has(.kit-caption) .tv-caption:not(.tv-narration) {
   bottom: calc(max(4%, calc(var(--ui-reserved-bottom) - 6%)) + 10.5cqw);
 }
 /* A speaker between rules and an italic line, as in render 14. */
@@ -695,6 +699,12 @@ body {
 /* Pictures */
 .tv-backdrop { position: absolute; inset: 0; }
 .tv-backdrop-image { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A new backdrop plate fades in over the old one (`view::plate_fade`): the layer is invisible until its image has loaded, then
+   fades for the transition's length (--fade-ms, the controls' transition); the layers under it go when the fade ends. */
+.tv-backdrop-incoming { opacity: 0; }
+.tv-backdrop-incoming.tv-backdrop-fading { animation: backdrop-fade-in var(--fade-ms, 700ms) ease-in-out forwards; }
+@keyframes backdrop-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .tv-backdrop-incoming.tv-backdrop-fading { animation: none; opacity: 1; } }
 .tv-backdrop-caption { position: absolute; left: 2.4cqw; top: 5.2cqw; font: italic var(--ui-t-small)/1.2 var(--ui-font); color: var(--ui-muted-warm); text-shadow: 0 1px 4px #000; }
 .tv-card {
   position: absolute; left: 50%; top: 33%; transform: translate(-50%, -50%);
@@ -732,6 +742,8 @@ body {
 /* The bubbles' own world: the same camera, the last layer of the stage, so a bubble is over the caption
    and every other overlay (`.tv-world` is one stacking context, and the overlays come after it). */
 .tv-world-top { position: absolute; inset: 0; transform-origin: 0 0; pointer-events: none; }
+/* The lower-third boxes (narration, caption bar, speaker card, close-up title card) lie over the outlines and bubbles layer. */
+.tv-caption, .kit-bottom, .kit-tc { z-index: 2; }
 /* The camera's zoom as a number, animated with its transform, so items tied to a character in the
    world layer can stay one size on the screen while the world grows (`.tv-anchors`). */
 @property --cam-scale { syntax: "<number>"; inherits: true; initial-value: 1; }
@@ -791,7 +803,7 @@ body {
   --ui-lobby-inner: polygon(calc(var(--ui-cut) - var(--ui-edge) * .4) 0, calc(100% - var(--ui-cut) + var(--ui-edge) * .4) 0, 100% calc(var(--ui-cut) - var(--ui-edge) * .4), 100% calc(100% - var(--ui-cut) + var(--ui-edge) * .4), calc(100% - var(--ui-cut) + var(--ui-edge) * .4) 100%, calc(var(--ui-cut) - var(--ui-edge) * .4) 100%, 0 calc(100% - var(--ui-cut) + var(--ui-edge) * .4), 0 calc(var(--ui-cut) - var(--ui-edge) * .4));
 }
 .lb h2, .lb h3, .lb p, .lb ol { margin: 0; padding: 0; }
-.lb-photo, .rp-face { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 0; }
+.lb-photo { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 0; }
 
 /* Title block: a line over the title with a diamond at each end, the title, its words, a rule */
 .lb-head { position: absolute; left: 0; right: 0; top: 5.6%; text-align: center; }
@@ -848,14 +860,6 @@ body {
 .lb-chip-ready-word { display: flex; align-items: center; gap: .4cqw; font: 600 1cqw/1.2 var(--ui-lobby-text); letter-spacing: .06em; text-transform: uppercase; color: #86f8d3; }
 
 /* Top bar: wordmark and pills */
-.tb-logo { position: absolute; display: flex; }
-.tb-logo-stacked { left: 1.7%; top: 2.1%; width: 14.6cqw; flex-direction: column; align-items: center; gap: .15cqw; }
-.tb-compass { width: 3cqw; height: 3cqw; color: #e8b866; filter: drop-shadow(0 0 .5cqw #e8b86688); }
-.tb-compass-under { transform: scaleY(-1); }
-.tb-wordmark { font: 600 2.45cqw/1 var(--ui-lobby-display); font-variant-caps: small-caps; letter-spacing: .025em; background: var(--ui-lobby-gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 .1cqw .3cqw #000c); white-space: nowrap; }
-.tb-logo-inline { left: 2.4%; top: 2.4%; align-items: center; gap: .8cqw; }
-.tb-logo-inline .tb-compass { width: 3.5cqw; height: 3.5cqw; }
-.tb-logo-inline .tb-wordmark { font: 500 2.45cqw/1 var(--ui-lobby-text); font-variant-caps: normal; letter-spacing: .005em; background: none; color: #f6e8c4; -webkit-text-fill-color: #f6e8c4; text-shadow: 0 .1cqw .5cqw #000c; }
 .tb-pills { position: absolute; right: 1.3%; top: 2.9%; display: flex; align-items: center; gap: .9cqw; }
 .tb-pill { display: flex; align-items: center; gap: .8cqw; height: 2.5cqw; padding: 0 1.4cqw; border: .1cqw solid #d8cfe059; border-radius: 99px; background: linear-gradient(180deg, #3a3641a6, #17151de6); box-shadow: 0 .2cqw .8cqw #0008; font: 500 1.1cqw/1 var(--ui-lobby-text); color: #f8f1e4; white-space: nowrap; }
 .tb-pill-icon { flex: 0 0 auto; width: 1.5cqw; height: 1.5cqw; color: #a9cbf2; }
@@ -868,76 +872,92 @@ body {
 .tb-profile-icon { width: 1.5cqw; height: 1.5cqw; color: #8ec6f5; }
 
 /* Roleplay: title bar, speech bubbles with a tail at the speaker, a caption */
-.rp-title-wrap { position: absolute; left: 2.4cqw; top: 9.6%; --ui-glow: #0000; }
-.rp-title { --ui-cut: .8cqw; --ui-edge: .12cqw; --ui-rim: linear-gradient(90deg, #ffffff44, #ffffff14 60%, #ffffff08); --ui-fill: linear-gradient(90deg, #0c0a10ee, #0c0a10a8); display: flex; align-items: center; gap: 1cqw; padding: .7cqw 2.2cqw .7cqw 1.2cqw; }
-.rp-title-glyph { flex: 0 0 auto; width: 2.4cqw; height: 2.4cqw; color: #f1c96a; stroke-width: 1.5; }
-.rp-title-spin { animation: pl-spin 1.2s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .rp-title-spin { animation: none; } }
-.rp-title-text { font: 500 2.1cqw/1.1 var(--ui-lobby-display); color: #f6efe0; white-space: nowrap; }
-.rp-bubble {
-  --tail-h: 1.7cqw; --tail-w: 1.1cqw; --cut: 1.1cqw; --rim: #f6b14e; --glow: #ff9a2a88; --icon: #f1c96a;
-  --fill: linear-gradient(180deg, #1f1814f5, #0e0b09f7);
-  position: absolute; filter: drop-shadow(0 0 .7cqw var(--glow));
+/* A speech bubble is the kit's (`kit::speech`) in an anchored frame: the frame is the box the page places (`view::bubble_layout`),
+   the kit bubble hugs its words inside it (the page cuts the frame to the bubble's measured width), and the tail's tip lies on the head point, `--tail-tip` along the box (`--tail-tip-y` for a tail on a side
+   edge), the base's middle a lean's width away. The kit supplies the glass, tone, glow, tail and padding. */
+.rp-bubble { position: absolute; }
+.rp-bubble:not(.rp-tone-thought) > .kit { position: relative; inset: auto; overflow: visible; }
+.rp-bubble:not(.rp-tone-thought) .kit-bubble {
+  position: relative; width: fit-content; max-width: 100%; transform: none;
+  --kit-tail-x: clamp(2.2cqw, calc(var(--tail-tip) - var(--kit-lean)), calc(100% - 2.2cqw));
+  --kit-tail-y: clamp(2.2cqw, calc(var(--tail-tip-y) - var(--kit-lean)), calc(100% - 2.2cqw));
 }
-.rp-bubble::before, .rp-bubble::after { content: ""; position: absolute; clip-path: var(--shape); }
-.rp-bubble::before { inset: 0; background: var(--rim); }
-.rp-bubble::after { inset: .15cqw; background: var(--fill); }
-.rp-below { --shape: polygon(var(--cut) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% calc(100% - var(--tail-h) - var(--cut)), calc(100% - var(--cut)) calc(100% - var(--tail-h)), calc(var(--tail-root) + var(--tail-w)) calc(100% - var(--tail-h)), var(--tail-tip) 100%, calc(var(--tail-root) - var(--tail-w)) calc(100% - var(--tail-h)), var(--cut) calc(100% - var(--tail-h)), 0 calc(100% - var(--tail-h) - var(--cut)), 0 var(--cut)); }
-.rp-above { --shape: polygon(var(--cut) var(--tail-h), calc(var(--tail-root) - var(--tail-w)) var(--tail-h), var(--tail-tip) 0, calc(var(--tail-root) + var(--tail-w)) var(--tail-h), calc(100% - var(--cut)) var(--tail-h), 100% calc(var(--tail-h) + var(--cut)), 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 calc(var(--tail-h) + var(--cut))); }
-.rp-body { position: relative; z-index: 1; }
-/* A tail on a side edge, for a bubble beside the speaker's face (the page picks it so a bubble never
-   covers a face): the tip is `--tail-tip-y` down the box, the root `--tail-root-y`. */
-.rp-tail-left { --shape: polygon(calc(var(--tail-h) + var(--cut)) 0, calc(100% - var(--cut)) 0, 100% var(--cut), 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, calc(var(--tail-h) + var(--cut)) 100%, var(--tail-h) calc(100% - var(--cut)), var(--tail-h) calc(var(--tail-root-y) + var(--tail-w)), 0 var(--tail-tip-y), var(--tail-h) calc(var(--tail-root-y) - var(--tail-w)), var(--tail-h) var(--cut)); }
-.rp-tail-right { --shape: polygon(var(--cut) 0, calc(100% - var(--tail-h) - var(--cut)) 0, calc(100% - var(--tail-h)) var(--cut), calc(100% - var(--tail-h)) calc(var(--tail-root-y) - var(--tail-w)), 100% var(--tail-tip-y), calc(100% - var(--tail-h)) calc(var(--tail-root-y) + var(--tail-w)), calc(100% - var(--tail-h)) calc(100% - var(--cut)), calc(100% - var(--tail-h) - var(--cut)) 100%, var(--cut) 100%, 0 calc(100% - var(--cut)), 0 var(--cut)); }
-.rp-tail-left .rp-body { padding: 1.1cqw 1.6cqw 1.1cqw calc(1.6cqw + var(--tail-h)); }
-.rp-tail-right .rp-body { padding: 1.1cqw calc(1.6cqw + var(--tail-h)) 1.1cqw 1.6cqw; }
-.rp-below .rp-body { padding: 1.1cqw 1.6cqw calc(1.1cqw + var(--tail-h)); }
-.rp-above .rp-body { padding: calc(1.1cqw + var(--tail-h)) 1.6cqw 1.1cqw; }
-.rp-tone-ally { --rim: #cfe2ff; --glow: #6aa3ff88; }
-.rp-tone-mystic { --rim: #d6a8ff; --glow: #b36bff99; }
-.rp-tone-npc { --rim: #e8a8b8; --glow: #e36a8a77; }
-.rp-tone-narrator { --rim: #f2c27a; --glow: #f0a43a99; --fill: linear-gradient(180deg, #2b1a16f5, #140c0af7); }
-.rp-tone-danger { --rim: #ff6a5a; --glow: #ff3b2fbb; --icon: #ffb4a8; --fill: linear-gradient(180deg, #2f1115f5, #170709f7); }
-/* A thought: a rounded box, and two shrinking dots from the tail's root toward the thinker in place of a pointed tail. */
-.rp-tone-thought {
-  --rim: #e4dcf5; --glow: #c4b2ff70; --icon: #d8ccf6; --dot: #1b1724; --tail-h: 2.6cqw;
-  --fill: linear-gradient(180deg, #1e1a27f2, #0e0c14f4);
-  --dot-a: calc(var(--tail-root) + (var(--tail-tip) - var(--tail-root)) * .35);
-  --dot-b: calc(var(--tail-root) + (var(--tail-tip) - var(--tail-root)) * .8);
-}
-.rp-tone-thought::before, .rp-tone-thought::after { clip-path: none; border-radius: 999px; }
-.rp-tone-thought.rp-below::before { inset: 0 0 var(--tail-h) 0; }
-.rp-tone-thought.rp-below::after { inset: .15cqw .15cqw calc(var(--tail-h) + .15cqw) .15cqw; }
-.rp-tone-thought.rp-above::before { inset: var(--tail-h) 0 0 0; }
-.rp-tone-thought.rp-above::after { inset: calc(var(--tail-h) + .15cqw) .15cqw .15cqw .15cqw; }
-.rp-tone-thought.rp-below {
-  background:
-    radial-gradient(circle at var(--dot-a) calc(100% - var(--tail-h) * .6), var(--dot) 0 .32cqw, var(--rim) .34cqw .5cqw, #0000 .53cqw),
-    radial-gradient(circle at var(--dot-b) calc(100% - var(--tail-h) * .14), var(--dot) 0 .1cqw, var(--rim) .12cqw .28cqw, #0000 .31cqw);
-}
-.rp-tone-thought.rp-above {
-  background:
-    radial-gradient(circle at var(--dot-a) calc(var(--tail-h) * .6), var(--dot) 0 .32cqw, var(--rim) .34cqw .5cqw, #0000 .53cqw),
-    radial-gradient(circle at var(--dot-b) calc(var(--tail-h) * .14), var(--dot) 0 .1cqw, var(--rim) .12cqw .28cqw, #0000 .31cqw);
-}
-.rp-tone-thought.rp-below .rp-body { padding: 1cqw 1.2cqw calc(1cqw + var(--tail-h)); }
-.rp-tone-thought.rp-above .rp-body { padding: calc(1cqw + var(--tail-h)) 1.2cqw 1cqw; }
-.rp-think { display: flex; justify-content: center; align-items: center; gap: .7cqw; height: 1.6cqw; }
-.rp-think-dot { width: .9cqw; height: .9cqw; border-radius: 50%; background: var(--rim); animation: rp-think 1.4s ease-in-out infinite; }
-.rp-think-dot:nth-child(2) { animation-delay: .2s; }
-.rp-think-dot:nth-child(3) { animation-delay: .4s; }
-@keyframes rp-think { 0%, 70%, 100% { opacity: .35; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-.35cqw); } }
-@media (prefers-reduced-motion: reduce) { .rp-think-dot { animation: none; opacity: .8; } }
-.rp-head { display: flex; align-items: center; gap: .8cqw; margin-bottom: .45cqw; }
-.rp-speaker-glyph { flex: 0 0 auto; width: 1.9cqw; height: 1.9cqw; color: var(--icon); stroke-width: 1.6; }
-.rp-face { flex: 0 0 auto; width: 2.4cqw; height: 2.4cqw; border-radius: 50%; border: .12cqw solid var(--rim); }
-.rp-speaker { font: 500 1.45cqw/1.1 var(--ui-lobby-text); color: #f4ead4; }
-.rp-line { font: 400 1.4cqw/1.32 var(--ui-lobby-text); color: #fbf7ee; text-wrap: pretty; text-shadow: 0 .05cqw .2cqw #000a; }
-.rp-emphasis { margin-top: .3cqw; font-style: italic; color: #f6d398; }
-.rp-caption { position: absolute; left: 50%; bottom: max(4%, calc(var(--ui-reserved-bottom) - 6%)); transform: translateX(-50%); width: min(64%, 60cqw); margin: 0; padding: 1.1cqw 2cqw; text-align: center; font: italic 400 1.8cqw/1.35 var(--ui-lobby-text); color: #f6efe0; background: linear-gradient(180deg, #0c0a10b0, #0c0a10e6); border-top: .1cqw solid #f1d9a066; text-shadow: 0 .1cqw .5cqw #000; text-wrap: balance; }
+/* A thought is the kit's thinking cue (`kit::speech`) in the bubble's anchored frame: the frame is as wide as the cue (the page
+   measures it, `view::bubble_layout`) and keeps the two trailing dots' room (2.2cqw) on the side of the head, so the trail's tip
+   lies on the head point (`--tail-tip`). The frame draws nothing of its own. */
+.rp-tone-thought { width: fit-content; }
+.rp-tone-thought.rp-below { padding-bottom: 2.2cqw; }
+.rp-tone-thought.rp-above { padding-top: 2.2cqw; }
+.rp-tone-thought > .kit { position: relative; inset: auto; overflow: visible; }
+.rp-tone-thought .kit-thought { position: relative; width: fit-content; transform: none; }
+.rp-tone-thought .kit-thought::before { left: clamp(1cqw, calc(var(--tail-root) - .5cqw), calc(100% - 2cqw)); }
+.rp-tone-thought .kit-thought::after { left: clamp(1cqw, calc(var(--tail-tip) - .3cqw), calc(100% - 2cqw)); }
+.rp-tone-thought.rp-above .kit-thought::before { top: -1.3cqw; bottom: auto; }
+.rp-tone-thought.rp-above .kit-thought::after { top: -2.2cqw; bottom: auto; }
+.rp-bubble.rp-settled :is(.kit-pane, .kit-bubble-tab, .kit-halo, .kit-bloom, .kit-thought::before, .kit-thought::after) { animation: none; }
+@media (prefers-reduced-motion: reduce) { .rp-bubble.rp-settled :is(.kit-pane, .kit-bubble-tab, .kit-halo, .kit-bloom, .kit-thought::before, .kit-thought::after) { animation: none; } }
 .rp-marker { position: absolute; transform: translate(-50%, -50%); display: flex; align-items: center; gap: .4cqw; padding: .25cqw .8cqw; font: 600 1.05cqw/1.2 var(--ui-lobby-text); color: #f6efe0; background: linear-gradient(180deg, #1c1824ee, #0e0c14f2); border: .1cqw solid #e4dcf5aa; border-radius: 999px; box-shadow: 0 0 .6cqw #000a; white-space: nowrap; }
 .rp-marker-glyph { width: 1.2cqw; height: 1.2cqw; color: #f1c96a; }
 @media (prefers-reduced-motion: reduce) { .lb-loadbar-fill, .lb-wave { animation: none; } }
+/* The card of a speaker who is not in the picture (`kit::speaker`, drawn by the kit) is a compact lower-third strip of face,
+   name and line at the right of the kit's bottom stack, just above the caption bar, so on a close-up all the words stay in
+   the lower third and the thing looked at stays clear above them. The stack starts where the party strip ends. It fades in
+   when drawn and, as a copy kept by the page (`view::overlays`), out when the line ends or the next speaker's card takes
+   over; the copy leaves the stack's flow, so the new card keeps its place. Knob: --kit-out-ms. */
+.tv-panels .kit-bottom { bottom: max(4%, calc(var(--ui-reserved-bottom) - 6%)); }
+.kit-speaker-settled .kit-pane, .kit-speaker-settled .kit-halo, .kit-speaker-settled .kit-bloom { animation: none; }
+.kit-speaker-settled .kit-pane::before { display: none; }
+.kit-speaker-out { position: absolute; pointer-events: none; }
+.kit-speaker-out .kit-pane, .kit-speaker-out .kit-halo, .kit-speaker-out .kit-bloom { animation: rp-card-out var(--kit-out-ms) ease-in forwards; }
+.kit-speaker-out .kit-pane::before { display: none; }
+@keyframes rp-card-out { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .kit-speaker-out, .kit-tc-out { display: none; }
+  .kit-speaker-settled .kit-pane, .kit-speaker-settled .kit-halo, .kit-speaker-settled .kit-bloom, .kit-tc-settled *, .kit-tc-out * { animation: none; }
+  .kit-tc-out .kit-tc-ground, .kit-tc-out .kit-tc-body { animation: none; }
+}
+/* While a plate change is under way the stage is `tv-fading` (`view::plate_fade`): the bubbles over the figures give way to the
+   hidden twin of the speaker's line, the same band, so the plates stay clean; the bubbles come back when the fade ends. */
+.tv-anchors { transition: opacity 300ms ease-in-out; }
+.tv-stage.tv-fading .tv-anchors, .tv-anchors[data-stale] { opacity: 0; }
+.kit-speaker-twin { visibility: hidden; transition: visibility 0s linear 300ms; }
+.tv-stage.tv-fading .kit-speaker-twin { visibility: visible; transition: none; }
+.kit-speaker-twin .kit-pane, .kit-speaker-twin .kit-halo, .kit-speaker-twin .kit-bloom { opacity: 0; transition: opacity 300ms ease-in-out; }
+.tv-stage.tv-fading .kit-speaker-twin .kit-pane { opacity: 1; }
+.tv-stage.tv-fading .kit-speaker-twin .kit-halo { opacity: var(--kit-halo-a); }
+.tv-stage.tv-fading .kit-speaker-twin .kit-bloom { opacity: var(--kit-bloom-a); }
+@media (prefers-reduced-motion: reduce) { .tv-anchors, .tv-stage.tv-fading .kit-speaker-twin, .kit-speaker-twin, .kit-speaker-twin .kit-pane, .kit-speaker-twin .kit-halo, .kit-speaker-twin .kit-bloom { transition: none; } }
+/* === component: close-up title card === */
+/* A clue close-up (`closeup`, `kit::title_card`) after the concept art (01-fullscreen-sword-inspection): the item fills the
+   screen, and the lower third carries the kit's title card: a compass-rose ornament, the item's name in gold and its words
+   in italics, on a vignette from the bottom, with no box. Nothing else crosses the item but the logo, so while the card is
+   up the stage (`:has`) folds the clue board to its strip, steps the party strip aside, and puts the off-screen speaker's
+   card beside the title in the lower third (the title moves to the left); a spoken or narrated caption takes the slot just
+   above the card instead, and the speaker's card gives way to it. Everything stays below 66% of the screen's height. It fades in when drawn and,
+   as a copy kept by the page (`view::overlays`), out when it goes: its blurred ground and its body fade, never the card's
+   root. Knob: --kit-out-ms. */
+.kit-tc-settled * { animation: none; }
+.kit-tc-out * { animation: none; }
+.kit-tc-out { pointer-events: none; }
+.kit-tc-out .kit-tc-ground, .kit-tc-out .kit-tc-body { animation: rp-closeup-out var(--kit-out-ms) ease-in forwards; }
+@keyframes rp-closeup-out { from { opacity: 1; } to { opacity: 0; } }
+.tv-stage:has(.kit-tc) .tv-party { opacity: 0; visibility: hidden; }
+/* With a speaker off the picture, the title and the speaker's card share the lower third side by side, the title at the left
+   and the card at the right, so nothing lies over the thing looked at (owner, 2026-11-09: the card sat over the ledger's
+   binding fold, the clue on show). */
+.tv-stage:has(.kit-tc) .tv-panels .kit-bottom { bottom: 3cqw; }
+.tv-stage:has(.kit-tc) .kit-speaker { align-self: flex-end; width: 40cqw; }
+.tv-stage:has(.kit-tc):has(.kit-speaker) .kit-tc-center { justify-content: flex-start; padding-left: 4cqw; }
+.tv-stage:has(.kit-tc):has(.kit-speaker) .kit-tc-body { max-width: 50cqw; align-items: flex-start; text-align: left; }
+/* An item's name as its sheet keeps it may start in lower case ("brass cipher wheel"); as a title it starts with a capital. */
+.kit-tc-title::first-letter { text-transform: uppercase; }
+.tv-stage:has(.kit-tc) .kit-face { width: 4.4cqw; height: 4.4cqw; }
+.tv-stage:has(.kit-tc) .kit-speaker-name { font-size: 1.4cqw; }
+.tv-stage:has(.kit-tc) .kit-speaker-line { font-size: 1.55cqw; }
+.tv-stage:has(.kit-tc) .tv-caption:not(.tv-narration) { bottom: 13.4cqw; }
+.tv-stage:has(.kit-tc) .tv-caption.tv-narration { bottom: 13.4cqw; }
+.tv-stage:has(.kit-tc):has(.tv-caption) .kit-speaker { display: none; }
+/* === end component: close-up title card === */
 /* === end component: lobby === */
 /* === component: player-lobby === */
 /* The player lobby (renders 11, 24 and 37) drawn for a television read from the sofa, in the material of
@@ -1379,50 +1399,16 @@ body {
 @media (prefers-reduced-motion: reduce) { .tv-stage:has(.pl) .tv-world::after, .pl::before, .pl::after, .pl-seat:nth-child(odd) .pl-card::before, .pl-seat:nth-child(even) .pl-card::before, .pl-join::before, .pl-party::before, .pl-begin::before { display: none; animation: none; } }
 /* === end component: player-lobby-flare === */
 /* === component: narration === */
-/* The narrator's box (renders 13 and 02): chamfered glass with a vertical gradient, a soft inner
-   highlight on the top edge, a warm gold-to-violet rim and glow, the speaker between a waveform and a
-   diamond rule, the line, and a big ring to continue. It takes the caption's place. */
+/* The narrator's box is the kit's (`kit::narration`, renders 02 and 13) in the caption layer: it takes the caption's place in the
+   lower third, over the outlines and bubbles (`.tv-caption` is z-index 2), and is as wide as the kit makes it. The kit's layer
+   joins the box's flow and its stack and vignette stay out of it. */
 .tv-caption.tv-narration {
-  bottom: 16.1cqw; width: 74cqw; max-width: 96%; padding: 0; border: 0; background: none; text-align: left;
+  bottom: 16.1cqw; width: fit-content; padding: 0; border: 0; background: none; text-align: left;
 }
-.tv-caption.tv-narration-right { left: 27.2cqw; transform: none; width: 70.9cqw; }
-.nar-wrap { --ui-glow: #ff9e4a66; filter: drop-shadow(0 0 1.1cqw #ff9e4a55) drop-shadow(0 0 2.4cqw #8f6ae055); }
-.nar {
-  --ui-cut: 1.5cqw; --ui-edge: .2cqw;
-  --ui-rim: linear-gradient(105deg, #ffd9a0, #ff9e4a 18%, #b88cf0 52%, #ff9e4a 86%, #ffd9a0);
-  --ui-fill: linear-gradient(180deg, #ffffff1a 0, #ffffff00 9%), linear-gradient(180deg, #34262ec4, #1a1218dc);
-  display: flex; align-items: center; gap: var(--ui-space-4);
-  padding: var(--ui-space-3) var(--ui-space-4) var(--ui-space-3) var(--ui-space-5);
-}
-.nar::before { backdrop-filter: blur(.6cqw) saturate(1.2); }
-.nar-badge {
-  flex: 0 0 auto; display: grid; place-items: center; width: 5.6cqw; height: 5.6cqw;
-  border: var(--ui-rim-w-lg) solid var(--ui-brass); border-radius: 50%; color: var(--ui-brass-hi);
-  background: radial-gradient(circle, #3b2c1c, #1a130e); box-shadow: 0 0 1cqw #e8b86655;
-}
-.nar-badge-glyph { width: 3cqw; height: 3cqw; }
-.nar-main { flex: 1 1 auto; min-width: 0; }
-.nar-head { display: flex; align-items: center; gap: var(--ui-space-2); font: 600 var(--ui-t-lead)/1.2 var(--ui-font); color: var(--ui-text-strong); }
-.nar-voice { flex: 0 0 auto; width: 2.6cqw; height: 1.7cqw; color: var(--ui-brass-hi); }
-.nar-speaker { flex: 0 0 auto; }
-.nar-rule { position: relative; flex: 1 1 auto; height: 1px; background: linear-gradient(90deg, #ffd9a0, #ffd9a022); }
-.nar-rule::after {
-  content: ""; position: absolute; left: 50%; top: 50%; width: .8cqw; height: .8cqw;
-  transform: translate(-50%, -50%) rotate(45deg); border: 1px solid #ffd9a0; background: #26191c;
-}
-.nar-progress { flex: 0 0 auto; font: var(--ui-t-small)/1.2 var(--ui-font); font-weight: 400; color: var(--ui-muted-warm); }
-.nar-text { margin-top: var(--ui-space-2); font: 1.78cqw/1.36 var(--ui-font); letter-spacing: -.005em; color: var(--ui-text-strong); text-wrap: pretty; text-shadow: 0 1px 2px #0008; }
-.nar .tv-dwell { margin-top: var(--ui-space-1); text-align: left; color: var(--ui-muted-warm); }
-.nar-continue { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: var(--ui-space-1); font: var(--ui-t-small)/1.2 var(--ui-font); color: var(--ui-brass-hi); }
-.nar-continue-ring {
-  position: relative; width: 4.4cqw; height: 4.4cqw; border: .2cqw solid #ffb866; border-radius: 50%;
-  box-shadow: 0 0 1cqw #ff9e4a66, inset 0 0 .8cqw #ff9e4a33;
-}
-.nar-continue-ring::after {
-  content: ""; position: absolute; left: 50%; top: 50%; width: 1.1cqw; height: 1.1cqw;
-  border-top: .22cqw solid #ffe2b0; border-right: .22cqw solid #ffe2b0;
-  transform: translate(-70%, -50%) rotate(45deg);
-}
+.tv-caption.tv-narration-right { left: 27.2cqw; transform: none; }
+.tv-narration > .kit { position: relative; inset: auto; overflow: visible; }
+.tv-narration .kit-vignette { display: none; }
+.tv-narration .kit-bottom { position: static; }
 
 /* === component: seats === */
 /* The party strip as the concept's seat cards (renders 02, 03 and 13): a glass bar holding one card per
@@ -1473,15 +1459,6 @@ body {
 .party-open-ring { display: grid; place-items: center; width: 3.8cqw; height: 3.8cqw; border: .2cqw solid #dbe8f7; border-radius: 50%; box-shadow: 0 0 .9cqw #7fa6d899, inset 0 0 .6cqw #7fa6d866; }
 .party-open-plus { width: 2cqw; height: 2cqw; color: #f2f7fd; }
 .party-open-word { font: var(--ui-t-lead)/1.2 var(--ui-font); color: var(--ui-text-strong); }
-
-/* === component: brand === */
-/* The DungeonFlux logo at the top left (renders 02 and 13) and the place name moved under it. */
-.tv-brandplate { display: contents; }
-.tv-logo { position: absolute; left: 2.4cqw; top: 1.1cqw; display: flex; align-items: center; gap: var(--ui-space-2); color: var(--ui-brass-hi); filter: drop-shadow(0 1px 4px #000c); }
-.tv-logo-mark { width: 3.8cqw; height: 3.8cqw; fill: #e8c47a; stroke: #fff3c9; stroke-width: 1; }
-.tv-logo-word { padding-bottom: .15cqw; border-bottom: 1px solid #c6a36b99; font: 600 2.35cqw/1.1 var(--ui-font); color: #f6e7c4; letter-spacing: .01em; }
-.tv-stage:has(.tv-logo) .tv-place { top: 6cqw; font-size: var(--ui-t-body); }
-.tv-stage:has(.tv-logo) .tv-backdrop-caption { top: 8.8cqw; }
 
 /* === component: home === */
 /* The landing page (render 19) drawn for a television read from the sofa (10-foot UI): brand mark,
@@ -2214,3 +2191,51 @@ body {
 .cfg-choice-tile { height: 2.2cqw; padding: 0; border: 0; background: transparent; box-shadow: none; }
 .cfg-tile .cfg-slider { height: 2.2cqw; }
 /* === end component: home-configure === */
+/* === component: clue-board === */
+/* The clue board (`view::clues`) is the kit's board (`kit::clue_board`) on the left of the shared screen, under the logo, the place
+   name and the scene's title (the right is the off-screen speaker's card). When the board changes it is OPEN: the kit's glass pane, the
+   newest note on top and large with its whole detail and a gold rim that flares for about two seconds, the older ones under
+   it with picture and name. After --clue-hold it eases (--clue-ease, 700 ms) down to a :is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) strip: small pictures with a
+   "Clues N" label, so the plate stays clean. The hold is the CSS animation `clue-hold` on the layer; its end (`animationend`)
+   is what shuts it, so nothing else keeps a timer. A worked-out clue has a verdigris edge on its picture in the strip.
+   Knob: --clue-ease. */
+.tv-clues { --clue-ease: 700ms; }
+/* The board lies in the heading column (`.tv-heading`, over the bubbles' and outlines' layer `.tv-world-top`) under the place and
+   the scene's title: a speaker's rim never crosses it, and the bubbles keep clear of it (`view::bubble_layout`). It opens at its full width at once, so the bubbles are placed clear of the open
+   board, and only the fold eases (owner, 2026-11-09: a bubble and an outline covered the open board's newest clue). */
+.tv-clues .kit-clues { transition: width var(--clue-ease) ease; }
+.tv-clues.clue-open .kit-clues { transition: none; }
+/* Open, the board shows the newest three notes (the count in its head says how many there are), so it covers little of the
+   people at the left of the plate for its few seconds; the folded strip shows them all. */
+.tv-clues.clue-open .kit-note:nth-child(n + 4) { display: none; }
+.tv-clues.clue-open { animation: clue-hold var(--clue-hold) linear both; }
+.tv-stage:has(.kit-caption) .tv-clues .kit-notes { max-height: 15cqw; overflow: hidden; }
+.tv-clues.clue-redrawn .kit-pane, .tv-clues.clue-redrawn .kit-halo, .tv-clues.clue-redrawn .kit-bloom { animation: none; }
+.tv-clues.clue-redrawn .kit-pane::before { display: none; }
+.tv-clues .kit-note.clue-settled, .tv-clues .kit-note.clue-settled::after { animation: none; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-clues { width: 10cqw; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-clues-icon { display: none; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-clues-title { font-size: var(--kit-t-floor); }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-clues-head { margin-bottom: .6cqw; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-notes { flex-direction: row; flex-wrap: wrap; gap: .5cqw; max-height: 18cqw; overflow: hidden; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note { padding: 0; background: none; box-shadow: none; clip-path: none; animation: none; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note::after { display: none; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note-text { display: none; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note:not(:has(.kit-note-picture)) { display: none; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note-picture { width: 3.1cqw; height: 3.1cqw; border-radius: .5cqw; box-shadow: 0 .15cqw .5cqw #000a; }
+:is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note-solved .kit-note-picture { outline: .15cqw solid var(--kit-verdigris); }
+/* The board and its folded strip stay under the logo. When they would cover a person, the narration or the caption bar
+   (`view::bubble_layout`), the board or strip fades out (clue-hidden) until it is clear. */
+.tv-clues { transition: opacity 400ms ease; }
+.tv-clues.clue-hidden { opacity: 0; }
+@keyframes clue-hold { from { outline-color: transparent; } to { outline-color: transparent; } }
+/* Reduced motion: the board cuts between open and shut. The hold is not motion (it changes nothing on screen), so it still
+   runs and still shuts the board. */
+@media (prefers-reduced-motion: reduce) {
+  .tv-clues .kit-clues { transition: none; }
+  .tv-clues.clue-open { animation: clue-hold var(--clue-hold) linear both; }
+  .tv-clues.clue-redrawn .kit-pane, .tv-clues.clue-redrawn .kit-halo, .tv-clues.clue-redrawn .kit-bloom { animation: none; }
+  .tv-clues .kit-note.clue-settled, .tv-clues .kit-note.clue-settled::after { animation: none; }
+  :is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note { animation: none; }
+}
+/* === end component: clue-board === */

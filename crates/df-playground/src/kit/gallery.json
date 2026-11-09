@@ -1,0 +1,1268 @@
+{
+  "boards": [
+    {
+      "name": "Narrator opening",
+      "after": "render 02",
+      "plate": "innkeeper-table-plate-clean.webp",
+      "panels": {
+        "brand": {
+          "style": "stacked"
+        },
+        "chips": [
+          {
+            "title": "The Ashen Road",
+            "subtitle": "Episode 1 — A Fragile Alliance"
+          }
+        ],
+        "narration": {
+          "badge": "dice",
+          "text": "The road to Keldmere winds through mist and pine, the air thick with the scent of rain. For three days you've traveled together, strangers no longer, bound now by a contract, a shared purpose... and perhaps, something more.",
+          "continue_label": "Continue",
+          "continue_style": "chevron"
+        },
+        "progress": {
+          "progress": {
+            "index": 1,
+            "total": 5,
+            "title": "Introduction"
+          },
+          "show_play": true,
+          "continue_label": "Continue"
+        },
+        "party": {
+          "layout": "compact",
+          "party": [
+            {
+              "name": "Rylan",
+              "hit_points": 31,
+              "maximum_hit_points": 31,
+              "color": "#e5483f"
+            },
+            {
+              "name": "Lyra",
+              "hit_points": 24,
+              "maximum_hit_points": 27,
+              "color": "#3fcf6a"
+            },
+            {
+              "name": "Caelia",
+              "hit_points": 22,
+              "maximum_hit_points": 26,
+              "color": "#f2b632"
+            },
+            {
+              "name": "Thorne",
+              "hit_points": 9,
+              "maximum_hit_points": 20,
+              "color": "#3d7cf0"
+            },
+            {
+              "name": "Vexa",
+              "hit_points": 4,
+              "maximum_hit_points": 25,
+              "color": "#4fd07a"
+            },
+            {
+              "name": "Darin",
+              "hit_points": 35,
+              "maximum_hit_points": 35,
+              "color": "#9b5cf0"
+            }
+          ],
+          "seats": {
+            "looks": [
+              {
+                "name": "Rylan",
+                "class": "Fighter",
+                "level": 3,
+                "portrait": "lobby-cam.webp",
+                "glyph": "sword"
+              },
+              {
+                "name": "Lyra",
+                "class": "Rogue",
+                "level": 3,
+                "portrait": "chip-nyx.webp",
+                "glyph": "mask"
+              },
+              {
+                "name": "Caelia",
+                "class": "Cleric",
+                "level": 3,
+                "portrait": "lobby-nyx.webp",
+                "glyph": "sun"
+              },
+              {
+                "name": "Thorne",
+                "class": "Wizard",
+                "level": 3,
+                "portrait": "lobby-mage.webp",
+                "glyph": "book"
+              },
+              {
+                "name": "Vexa",
+                "class": "Ranger",
+                "level": 3,
+                "portrait": "chip-vyx.webp",
+                "glyph": "bow"
+              },
+              {
+                "name": "Darin",
+                "class": "Barbarian",
+                "level": 3,
+                "portrait": "chip-cam.webp",
+                "glyph": "hammer"
+              }
+            ],
+            "open": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "Arrival at the port",
+      "after": "render 13",
+      "plate": "quay-in-the-rain.webp",
+      "panels": {
+        "brand": {},
+        "chips": [
+          {
+            "icon": "book",
+            "title": "Session: The Ember Roads"
+          },
+          {
+            "icon": "players",
+            "title": "Party: 4 / 6"
+          }
+        ],
+        "narration": {
+          "speaker": "The Dungeon Master",
+          "text": "Beneath a crimson sky, the port city of Valemere stirs to life. Caravans from distant lands crowd the docks, rumors travel faster than the ships, and somewhere in the chaos, an opportunity — or a danger — awaits your party.",
+          "segments": [
+            {
+              "text": "Beneath a crimson sky, the port city of "
+            },
+            {
+              "text": "Valemere",
+              "highlight": true
+            },
+            {
+              "text": " stirs to life. Caravans from distant lands crowd the docks, rumors travel faster than the ships, and somewhere in the chaos, an opportunity — or a danger — awaits your party."
+            }
+          ],
+          "continue_label": "Continue",
+          "continue_style": "ring",
+          "placement": "right"
+        },
+        "party": {
+          "layout": "tall",
+          "party": [
+            {
+              "name": "Kael",
+              "hit_points": 42,
+              "maximum_hit_points": 42,
+              "color": "#e8b866"
+            },
+            {
+              "name": "Lyra",
+              "hit_points": 38,
+              "maximum_hit_points": 38,
+              "color": "#6cdb88"
+            },
+            {
+              "name": "Seris",
+              "hit_points": 36,
+              "maximum_hit_points": 36,
+              "color": "#f8d74c"
+            },
+            {
+              "name": "Thoren",
+              "hit_points": 44,
+              "maximum_hit_points": 44,
+              "color": "#4faef7"
+            }
+          ],
+          "seats": {
+            "looks": [
+              {
+                "name": "Kael",
+                "class": "Fighter",
+                "portrait": "lobby-cam.webp",
+                "glyph": "shield"
+              },
+              {
+                "name": "Lyra",
+                "class": "Ranger",
+                "portrait": "chip-nyx.webp",
+                "glyph": "bow"
+              },
+              {
+                "name": "Seris",
+                "class": "Cleric",
+                "portrait": "lobby-mage.webp",
+                "glyph": "sun"
+              },
+              {
+                "name": "Thoren",
+                "class": "Wizard",
+                "portrait": "vaelin-narrator.webp",
+                "glyph": "book"
+              }
+            ],
+            "open": 2
+          }
+        }
+      }
+    },
+    {
+      "name": "Roleplay at the table",
+      "after": "renders 04, 12 and 26 to 31; the eye icon waits on F5",
+      "plate": "market-two.png",
+      "panels": {
+        "brand": {},
+        "chips": [
+          {
+            "icon": "book",
+            "title": "The Ember Roads",
+            "parts": [
+              "Scene 3 of 10"
+            ],
+            "track": {
+              "index": 3,
+              "total": 10
+            }
+          }
+        ],
+        "banners": [
+          {
+            "icon": "scales",
+            "number": 3,
+            "title": "Negotiate"
+          }
+        ],
+        "bubbles": [
+          {
+            "speaker": "Kael",
+            "glyph": "shield",
+            "tone": "hero",
+            "line": "This price is a robbery. We're not greenhorns.",
+            "place": {
+              "left_percent": 2,
+              "tail_y_percent": 50,
+              "width_percent": 22,
+              "tail_percent": 40
+            }
+          },
+          {
+            "speaker": "Lyra",
+            "glyph": "bow",
+            "tone": "ally",
+            "line": "Wait — let him talk. There's more to this than a simple sale.",
+            "place": {
+              "left_percent": 25,
+              "tail_y_percent": 42,
+              "width_percent": 23,
+              "tail_percent": 60
+            }
+          },
+          {
+            "speaker": "Seris",
+            "glyph": "sun",
+            "tone": "mystic",
+            "line": "I sense he's hiding something. Let me read him.",
+            "accent": "#7ff0dc",
+            "place": {
+              "left_percent": 49,
+              "tail_y_percent": 48,
+              "width_percent": 22,
+              "tail_percent": 55
+            }
+          },
+          {
+            "speaker": "Dockmaster",
+            "glyph": "scales",
+            "tone": "npc",
+            "name_style": "tab",
+            "line": "Robbery? Please. You want passage to Valemere before the next full moon?",
+            "emphasis": "I'm offering you a favor.",
+            "place": {
+              "left_percent": 73,
+              "tail_y_percent": 50,
+              "width_percent": 25,
+              "tail_percent": 45
+            }
+          },
+          {
+            "speaker": "Thoren",
+            "tone": "thought",
+            "place": {
+              "left_percent": 64,
+              "tail_y_percent": 62,
+              "width_percent": 8
+            }
+          }
+        ],
+        "narration": {
+          "speaker": "The Dungeon Master",
+          "text": "The dockmaster studies your faces, weighing ambition against coin. The map before you could get you to Valemere... or into deep trouble.",
+          "placement": "left"
+        },
+        "choices": {
+          "layout": "cards",
+          "choices": [
+            {
+              "id": "negotiate",
+              "label": "Negotiate",
+              "description": "Haggle for a better price.",
+              "icon": "masks",
+              "look": "lit",
+              "votes": 2
+            },
+            {
+              "id": "investigate",
+              "label": "Investigate",
+              "description": "Probe for what he's hiding.",
+              "votes": 1
+            },
+            {
+              "id": "consider",
+              "label": "Consider",
+              "description": "Ask about other routes or options.",
+              "icon": "mountain"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "A choice and a fight",
+      "after": "renders 32, 03 and 07; the branch and waves icons wait on F5",
+      "plate": "adventure-citadel-waterfall.webp",
+      "panels": {
+        "brand": {},
+        "status": {
+          "status": {
+            "kind": "telling"
+          }
+        },
+        "banners": [
+          {
+            "number": 7,
+            "title": "Make a Choice"
+          },
+          {
+            "icon": "swords",
+            "title": "Combat Encounter",
+            "tone": "danger"
+          }
+        ],
+        "choices": {
+          "prompt": "Which path do you take?",
+          "layout": "rows",
+          "choices": [
+            {
+              "id": "pass",
+              "label": "Take the mountain pass",
+              "icon": "mountain",
+              "look": "lit",
+              "votes": 3
+            },
+            {
+              "id": "river",
+              "label": "Follow the river road",
+              "votes": 1
+            },
+            {
+              "id": "wait",
+              "label": "Wait for nightfall",
+              "icon": "hourglass",
+              "look": "unavailable"
+            }
+          ]
+        },
+        "caption": {
+          "text": "The party weighs the risks and chooses their next move."
+        }
+      }
+    },
+    {
+      "name": "The twist",
+      "after": "renders 35 and 18; the spiral icon waits on F5",
+      "plate": "balcony-real.png",
+      "panels": {
+        "brand": {},
+        "banners": [
+          {
+            "number": 10,
+            "title": "Trigger a Twist"
+          }
+        ],
+        "narration": {
+          "speaker": "The Narrator",
+          "text": "As the sun dips below the ridge, a crimson light erupts from the citadel...",
+          "emphasis": "The real threat has awakened.",
+          "tone": "danger"
+        },
+        "speaker": {
+          "name": "Mysterious Stranger",
+          "line": "You're getting close... closer than is safe. Turn back while you still can.",
+          "portrait": "lobby-mage.webp"
+        },
+        "bubbles": [
+          {
+            "speaker": "Seris",
+            "tone": "thought",
+            "place": {
+              "left_percent": 8,
+              "tail_y_percent": 50,
+              "width_percent": 8
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Chapter card and nameplate",
+      "after": "renders 14, 17 and 38",
+      "plate": "home-hall-generated.png",
+      "panels": {
+        "title_cards": [
+          {
+            "kicker": "Entering",
+            "title": "The Ashen Citadel",
+            "text": "The gates have not opened in three hundred years.",
+            "scale": "chapter"
+          }
+        ],
+        "nameplate": {
+          "speaker": "Garrick the Trader",
+          "text": "Ah, back again? New supplies, a sturdier blade, or perhaps something a little more... unique?"
+        }
+      }
+    },
+    {
+      "name": "Quest journal",
+      "after": "render 36",
+      "plate": "garrick-shop-plate.webp",
+      "panels": {
+        "journal": {
+          "entries": [
+            {
+              "id": "caravan",
+              "title": "The Missing Caravan",
+              "state": "current"
+            },
+            {
+              "id": "ruins",
+              "title": "Ruins of the First Sun"
+            },
+            {
+              "id": "guild",
+              "title": "A Favor for the Guild"
+            },
+            {
+              "id": "rats",
+              "title": "Rats in the Cellar",
+              "state": "done"
+            }
+          ],
+          "more": "+2 more",
+          "detail": {
+            "title": "The Missing Caravan",
+            "body": "The Greyhaven caravan vanished near the Ashen Wilds. Find what happened and report back to Garrick.",
+            "sketch": "campaign-ashen-citadel.webp"
+          }
+        },
+        "section": {
+          "title": "Journal / Quests",
+          "subtitle": "Track objectives, lore, and important details."
+        }
+      }
+    },
+    {
+      "name": "Loot, goods, map and clues",
+      "after": "renders 07, 17 and 20; the potion, chest and key icons wait on F5",
+      "plate": "innkeeper-table-plate-clean.webp",
+      "panels": {
+        "places": [
+          {
+            "text": "Greyhaven",
+            "glyph": "home",
+            "x_permille": 300,
+            "y_permille": 640
+          },
+          {
+            "text": "Ashen Ruins",
+            "glyph": "mountain",
+            "look": "current",
+            "x_permille": 720,
+            "y_permille": 600
+          },
+          {
+            "text": "Ravenford",
+            "look": "chip",
+            "x_permille": 470,
+            "y_permille": 820
+          }
+        ],
+        "bubbles": [
+          {
+            "speaker": "Garrick",
+            "tone": "thought",
+            "place": {
+              "left_percent": 36,
+              "tail_y_percent": 62,
+              "width_percent": 8
+            }
+          }
+        ],
+        "clues": {
+          "board": {
+            "notes": [
+              {
+                "id": "seal",
+                "name": "Broken wax seal",
+                "detail": "House Valemont's crest, cracked in half.",
+                "worked_out": true,
+                "picture": "letter.png"
+              },
+              {
+                "id": "map",
+                "name": "Torn map corner",
+                "detail": "A route drawn in red ink, ending at the old ruins. Someone planned this.",
+                "picture": "map.png"
+              }
+            ]
+          }
+        },
+        "ledgers": [
+          {
+            "title": "Chest Contents",
+            "kind": "loot",
+            "items": [
+              {
+                "id": "gold",
+                "name": "127 Gold Pieces",
+                "icon": "coins"
+              },
+              {
+                "id": "letter",
+                "name": "Sealed Letter",
+                "picture": "letter.png",
+                "icon": "book"
+              },
+              {
+                "id": "map",
+                "name": "Map of the Ashen Wilds",
+                "picture": "map.png",
+                "icon": "mountain"
+              },
+              {
+                "id": "potion",
+                "name": "Potion of Healing",
+                "quantity": "×2",
+                "rarity": "common"
+              },
+              {
+                "id": "cloak",
+                "name": "Traveler's Cloak",
+                "rarity": "uncommon"
+              },
+              {
+                "id": "key",
+                "name": "Ancient Key",
+                "rarity": "rare",
+                "taken": true
+              }
+            ]
+          },
+          {
+            "title": "Garrick's Goods",
+            "icon": "scales",
+            "kind": "shop",
+            "items": [
+              {
+                "id": "longsword",
+                "name": "Longsword",
+                "price": "15 gp"
+              },
+              {
+                "id": "chain",
+                "name": "Chain Shirt",
+                "price": "50 gp",
+                "highlight": true
+              },
+              {
+                "id": "healing",
+                "name": "Healing Potion",
+                "price": "50 gp"
+              },
+              {
+                "id": "lantern",
+                "name": "Lantern",
+                "price": "5 gp"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "Item inspection",
+      "after": "renders 01 and 17",
+      "plate": "home-hall-generated.png",
+      "panels": {
+        "title_cards": [
+          {
+            "title": "Sunfall Longsword",
+            "rarity": "legendary",
+            "text": "A finely crafted longsword of exceptional balance. The hilt bears the crest of a fallen sun, a symbol of a once-noble order."
+          }
+        ]
+      }
+    },
+    {
+      "name": "Stress: long words and a full table",
+      "after": "no render; robustness",
+      "plate": "innkeeper-table-plate-clean.webp",
+      "panels": {
+        "brand": {},
+        "status": {
+          "status": {
+            "kind": "waiting_for",
+            "who": "Bartholomew Thistlewood-Ravenscar",
+            "what": "to choose a spell from the very long list"
+          }
+        },
+        "chips": [
+          {
+            "icon": "book",
+            "title": "The Very Long and Winding Road Beyond the Ashen Mountains of Eternal Dusk",
+            "subtitle": "Episode 12 — An Alliance Forged in Fire, Broken by Ice, Remade in Blood"
+          }
+        ],
+        "narration": {
+          "speaker": "Grand Archivist Melisandre of the Drowned Library",
+          "badge": "dice",
+          "text": "The Very Long and Winding Road Beyond the Ashen Mountains of Eternal Dusk. The Very Long and Winding Road Beyond the Ashen Mountains of Eternal Dusk."
+        },
+        "party": {
+          "layout": "compact",
+          "downed": [
+            2
+          ],
+          "party": [
+            {
+              "name": "Bartholomew Thistlewood-Ravenscar",
+              "hit_points": 88,
+              "maximum_hit_points": 120,
+              "color": "#e5483f",
+              "conditions": [
+                "Poisoned",
+                "Frightened"
+              ]
+            },
+            {
+              "name": "Lyra",
+              "hit_points": 24,
+              "maximum_hit_points": 27,
+              "color": "#3fcf6a"
+            },
+            {
+              "name": "Caelia",
+              "hit_points": 0,
+              "maximum_hit_points": 26,
+              "color": "#f2b632",
+              "conditions": [
+                "Unconscious"
+              ]
+            },
+            {
+              "name": "Thorne",
+              "hit_points": 9,
+              "maximum_hit_points": 20,
+              "color": "#3d7cf0"
+            },
+            {
+              "name": "Vexa",
+              "hit_points": 4,
+              "maximum_hit_points": 25,
+              "color": "#4fd07a"
+            },
+            {
+              "name": "Darin",
+              "hit_points": 35,
+              "maximum_hit_points": 35,
+              "color": "#9b5cf0"
+            },
+            {
+              "name": "Seris",
+              "hit_points": 30,
+              "maximum_hit_points": 30,
+              "color": "#f8d74c"
+            },
+            {
+              "name": "Kael",
+              "hit_points": 42,
+              "maximum_hit_points": 42,
+              "color": "#e8b866"
+            }
+          ],
+          "seats": {
+            "looks": [
+              {
+                "name": "Bartholomew Thistlewood-Ravenscar",
+                "class": "Barbarian / Fighter",
+                "level": 12,
+                "portrait": "chip-cam.webp",
+                "glyph": "hammer"
+              },
+              {
+                "name": "Lyra",
+                "class": "Rogue",
+                "level": 3,
+                "portrait": "chip-nyx.webp",
+                "glyph": "mask"
+              },
+              {
+                "name": "Caelia",
+                "class": "Cleric",
+                "level": 3,
+                "portrait": "lobby-nyx.webp",
+                "glyph": "sun"
+              },
+              {
+                "name": "Thorne",
+                "class": "Wizard",
+                "level": 3,
+                "portrait": "vaelin-narrator.webp",
+                "glyph": "book"
+              },
+              {
+                "name": "Vexa",
+                "class": "Ranger",
+                "level": 3,
+                "portrait": "chip-vyx.webp",
+                "glyph": "bow"
+              },
+              {
+                "name": "Darin",
+                "class": "Barbarian",
+                "level": 3,
+                "portrait": "lobby-cam.webp",
+                "glyph": "hammer"
+              },
+              {
+                "name": "Seris",
+                "class": "Cleric",
+                "level": 5,
+                "portrait": "lobby-mage.webp",
+                "glyph": "sun"
+              },
+              {
+                "name": "Kael",
+                "class": "Fighter",
+                "level": 5,
+                "portrait": "lobby-cam.webp",
+                "glyph": "shield"
+              }
+            ],
+            "open": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "Stress: long lists, empty lists and long labels",
+      "after": "no render; robustness",
+      "plate": "market-two.png",
+      "panels": {
+        "banners": [
+          {
+            "number": 12,
+            "title": "The Very Long and Winding Road Beyond the Ashen Mountains of Eternal Dusk"
+          },
+          {
+            "icon": "swords",
+            "title": "Ambush at the Crossing of the Seven Burning Bridges",
+            "tone": "danger"
+          }
+        ],
+        "places": [
+          {
+            "text": "The Drowned Library of the Ninth Spire",
+            "glyph": "home",
+            "x_permille": 150,
+            "y_permille": 300
+          },
+          {
+            "text": "Ravenford-upon-the-Mire",
+            "look": "parchment",
+            "x_permille": 150,
+            "y_permille": 400
+          }
+        ],
+        "journal": {
+          "entries": []
+        },
+        "choices": {
+          "prompt": "What does the party do while the bridges burn behind them?",
+          "layout": "rows",
+          "choices": [
+            {
+              "id": "a",
+              "label": "The Very Long and Winding Road Beyond the Ashen Mountains of Eternal Dusk",
+              "icon": "mountain",
+              "look": "lit",
+              "votes": 4
+            },
+            {
+              "id": "b",
+              "label": "Hold the line at the last bridge and wait for the storm",
+              "votes": 2
+            },
+            {
+              "id": "c",
+              "label": "Wait",
+              "icon": "hourglass"
+            }
+          ]
+        },
+        "ledgers": [
+          {
+            "title": "Garrick Thistlewood's Exceptional Emporium of Goods",
+            "icon": "scales",
+            "kind": "shop",
+            "items": [
+              {
+                "id": "i0",
+                "name": "Greatsword of the Fallen Sun Emperor (+3, attuned)",
+                "price": "12,500 gp"
+              },
+              {
+                "id": "i1",
+                "name": "Longsword",
+                "price": "15 gp"
+              },
+              {
+                "id": "i2",
+                "name": "Chain Shirt",
+                "price": "50 gp"
+              },
+              {
+                "id": "i3",
+                "name": "Healing Potion",
+                "price": "50 gp"
+              },
+              {
+                "id": "i4",
+                "name": "Lantern",
+                "price": "5 gp"
+              },
+              {
+                "id": "i5",
+                "name": "Rope, hempen (50 feet)",
+                "price": "1 gp"
+              },
+              {
+                "id": "i6",
+                "name": "Thieves' Tools",
+                "price": "25 gp"
+              },
+              {
+                "id": "i7",
+                "name": "Bag of Holding",
+                "price": "4,000 gp"
+              }
+            ]
+          },
+          {
+            "title": "Chest Contents",
+            "kind": "loot",
+            "items": []
+          }
+        ]
+      }
+    },
+    {
+      "name": "Stress: long names and lines",
+      "after": "no render; robustness",
+      "plate": "quay-in-the-rain.webp",
+      "panels": {
+        "bubbles": [
+          {
+            "speaker": "Archmagister Eleanora of the Ninth Spire",
+            "tone": "thought",
+            "place": {
+              "left_percent": 6,
+              "tail_y_percent": 48,
+              "width_percent": 8
+            }
+          }
+        ],
+        "speaker": {
+          "name": "Archmagister Eleanora of the Ninth Spire, Keeper of the Drowned Library",
+          "line": "Every bridge burns for a reason, and every reason burns for a bridge. Turn back before the last one falls into the river.",
+          "portrait": "lobby-mage.webp"
+        },
+        "caption": {
+          "text": "The Very Long and Winding Road Beyond the Ashen Mountains of Eternal Dusk, and the party walks it."
+        },
+        "nameplate": {
+          "speaker": "Archmagister Eleanora of the Ninth Spire the Undying",
+          "text": "You have walked the long road beyond the Ashen Mountains; now walk it back, slowly, and count every bridge you burned."
+        }
+      }
+    },
+    {
+      "name": "An item on the counter",
+      "after": "render 07",
+      "plate": "garrick-shop-plate.webp",
+      "panels": {
+        "title_cards": [
+          {
+            "title": "Ruby Signet Ring",
+            "rarity": "uncommon",
+            "text": "A noble ring bearing the crest of House Valemont. The ruby still holds a faint, warm glow.",
+            "align": "right"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Stress: long bubble lines and names",
+      "after": "render 04; robustness",
+      "plate": "market-two.png",
+      "panels": {
+        "brand": {},
+        "chips": [
+          {
+            "icon": "book",
+            "title": "The Ember Roads",
+            "parts": [
+              "Scene 3 of 10"
+            ],
+            "track": {
+              "index": 3,
+              "total": 10
+            }
+          }
+        ],
+        "banners": [
+          {
+            "icon": "scales",
+            "number": 3,
+            "title": "Negotiate"
+          }
+        ],
+        "bubbles": [
+          {
+            "speaker": "Kael Ironbrand, Sworn Shield of the Ember Roads",
+            "glyph": "shield",
+            "tone": "hero",
+            "line": "This price is a robbery and you know it. We have crossed the Ashen Wilds twice this season, buried three friends on the way, and we are not greenhorns to be fleeced at the first dock we find.",
+            "place": {
+              "left_percent": 2,
+              "tail_y_percent": 72,
+              "width_percent": 24,
+              "tail_percent": 40
+            }
+          },
+          {
+            "speaker": "Lyra",
+            "glyph": "bow",
+            "tone": "ally",
+            "line": "Wait. Let him talk.",
+            "place": {
+              "left_percent": 28,
+              "tail_y_percent": 40,
+              "width_percent": 20,
+              "tail_percent": 60
+            }
+          },
+          {
+            "speaker": "Dockmaster Aldous Brineweather of the Lower Quay",
+            "glyph": "scales",
+            "tone": "npc",
+            "name_style": "tab",
+            "line": "Robbery? Please. You want passage to Valemere before the next full moon, with the river guilds at war and the toll bridges burning one after another all the way down the coast?",
+            "emphasis": "Then I am offering you a favour, and favours are never cheap.",
+            "place": {
+              "left_percent": 70,
+              "tail_y_percent": 72,
+              "width_percent": 28,
+              "tail_percent": 45
+            }
+          },
+          {
+            "speaker": "Thoren",
+            "tone": "thought",
+            "place": {
+              "left_percent": 52,
+              "tail_y_percent": 30,
+              "width_percent": 8
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Stress: a compact party of long names",
+      "after": "render 02; robustness",
+      "plate": "balcony-real.png",
+      "panels": {
+        "brand": {
+          "style": "stacked"
+        },
+        "narration": {
+          "badge": "dice",
+          "text": "The bells of the citadel ring out across the valley, and every one of you knows what the seventh bell means.",
+          "continue_label": "Continue",
+          "continue_style": "chevron"
+        },
+        "party": {
+          "layout": "compact",
+          "downed": [
+            2
+          ],
+          "party": [
+            {
+              "name": "Bartholomew Thistlewood-Ravenscar",
+              "hit_points": 61,
+              "maximum_hit_points": 72,
+              "color": "#e5483f",
+              "conditions": [
+                "Poisoned",
+                "Frightened",
+                "Restrained"
+              ]
+            },
+            {
+              "name": "Lyra",
+              "hit_points": 24,
+              "maximum_hit_points": 27,
+              "color": "#3fcf6a"
+            },
+            {
+              "name": "Caelia of the Seven Bells",
+              "hit_points": 0,
+              "maximum_hit_points": 26,
+              "color": "#f2b632",
+              "conditions": [
+                "Unconscious"
+              ]
+            },
+            {
+              "name": "Thorne",
+              "hit_points": 9,
+              "maximum_hit_points": 44,
+              "color": "#3d7cf0"
+            },
+            {
+              "name": "Vexa",
+              "hit_points": 4,
+              "maximum_hit_points": 25,
+              "color": "#4fd07a",
+              "conditions": [
+                "Poisoned"
+              ]
+            },
+            {
+              "name": "Darin",
+              "hit_points": 35,
+              "maximum_hit_points": 35,
+              "color": "#9b5cf0"
+            }
+          ],
+          "seats": {
+            "looks": [
+              {
+                "name": "Bartholomew Thistlewood-Ravenscar",
+                "class": "Arcane Trickster Rogue",
+                "level": 11,
+                "portrait": "lobby-cam.webp",
+                "glyph": "mask"
+              },
+              {
+                "name": "Lyra",
+                "class": "Rogue",
+                "level": 3,
+                "portrait": "chip-nyx.webp",
+                "glyph": "bow"
+              },
+              {
+                "name": "Caelia of the Seven Bells",
+                "class": "Cleric",
+                "level": 3,
+                "portrait": "lobby-nyx.webp",
+                "glyph": "sun"
+              },
+              {
+                "name": "Thorne",
+                "class": "Circle of the Moon Druid",
+                "level": 7,
+                "portrait": "lobby-mage.webp",
+                "glyph": "book"
+              },
+              {
+                "name": "Vexa",
+                "class": "Ranger",
+                "level": 3,
+                "portrait": "chip-vyx.webp",
+                "glyph": "bow"
+              },
+              {
+                "name": "Darin",
+                "class": "Barbarian",
+                "level": 3,
+                "portrait": "chip-cam.webp",
+                "glyph": "hammer"
+              }
+            ],
+            "open": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "Stress: a long journal",
+      "after": "render 36; robustness",
+      "plate": "garrick-shop-plate.webp",
+      "panels": {
+        "journal": {
+          "entries": [
+            {
+              "id": "caravan",
+              "title": "The Missing Caravan of the Greyhaven Merchants' Guild and Its Lost Cargo",
+              "state": "current"
+            },
+            {
+              "id": "ruins",
+              "title": "Ruins of the First Sun"
+            },
+            {
+              "id": "guild",
+              "title": "A Favor for the Guild"
+            },
+            {
+              "id": "bells",
+              "title": "The Seventh Bell"
+            },
+            {
+              "id": "letter",
+              "title": "A Letter Never Sent",
+              "state": "failed"
+            },
+            {
+              "id": "rats",
+              "title": "Rats in the Cellar",
+              "state": "done"
+            }
+          ],
+          "more": "+6 more",
+          "detail": {
+            "title": "The Missing Caravan of the Greyhaven Merchants' Guild",
+            "body": "The Greyhaven caravan vanished near the Ashen Wilds three nights ago, with eleven wagons, forty souls and a strongbox sealed by the guild itself. Garrick swears the drivers knew the road blind; the last waystation saw them pass at dusk, lanterns lit, singing. Since then nothing: no wreck, no tracks off the road, no ransom note. The guild offers two hundred gold for news and five hundred for the strongbox, unopened. Find what happened, recover what can be recovered and report back to Garrick before the guild sends its own people, who are less patient and far less kind.",
+            "sketch": "campaign-ashen-citadel.webp"
+          }
+        },
+        "section": {
+          "title": "Journal / Quests",
+          "subtitle": "Track objectives, lore, and important details."
+        }
+      }
+    },
+    {
+      "name": "Stress: a tall list beside narration and choice cards",
+      "after": "renders 04 and 20; robustness",
+      "plate": "garrick-shop-plate.webp",
+      "panels": {
+        "ledgers": [
+          {
+            "title": "Garrick's Goods",
+            "icon": "scales",
+            "kind": "shop",
+            "items": [
+              {
+                "id": "i0",
+                "name": "Greatsword of the Fallen Sun",
+                "price": "1,250 gp"
+              },
+              {
+                "id": "i1",
+                "name": "Longsword",
+                "price": "15 gp"
+              },
+              {
+                "id": "i2",
+                "name": "Chain Shirt",
+                "price": "50 gp",
+                "highlight": true
+              },
+              {
+                "id": "i3",
+                "name": "Healing Potion",
+                "price": "50 gp"
+              },
+              {
+                "id": "i4",
+                "name": "Lantern",
+                "price": "5 gp"
+              },
+              {
+                "id": "i5",
+                "name": "Rope, hempen (50 feet)",
+                "price": "1 gp"
+              },
+              {
+                "id": "i6",
+                "name": "Thieves' Tools",
+                "price": "25 gp"
+              },
+              {
+                "id": "i7",
+                "name": "Bag of Holding",
+                "price": "4,000 gp"
+              },
+              {
+                "id": "i8",
+                "name": "Spyglass",
+                "price": "1,000 gp"
+              }
+            ]
+          }
+        ],
+        "narration": {
+          "speaker": "The Dungeon Master",
+          "text": "Garrick spreads his wares across the counter, but his eyes keep drifting to the door, as if he expects someone else to walk through it before you decide.",
+          "placement": "left"
+        },
+        "choices": {
+          "layout": "cards",
+          "choices": [
+            {
+              "id": "buy",
+              "label": "Buy the chain shirt",
+              "description": "Fifty gold, and Garrick throws in a lantern.",
+              "icon": "coins",
+              "look": "lit",
+              "votes": 2
+            },
+            {
+              "id": "ask",
+              "label": "Ask who he expects",
+              "description": "Probe for what he's hiding."
+            },
+            {
+              "id": "wait",
+              "label": "Wait",
+              "description": "Let the silence work on him.",
+              "icon": "hourglass",
+              "votes": 1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

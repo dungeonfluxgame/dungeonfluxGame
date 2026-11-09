@@ -100,13 +100,18 @@ pub struct AnchoredPlace {
     pub tip_percent: u8,
 }
 
+/// The widest an anchored bubble is first drawn, in percent of the screen: wide enough that a long
+/// line wraps to four or five lines. The page then measures the bubble and keeps only its own width
+/// (`view::bubble_layout`), so a short line hugs its words.
+const ANCHORED_WIDTH_PERCENT: u16 = 31;
+
 /// Where `bubble` goes when it is anchored to a character of `layout`; `None` when it has no
 /// anchor, there is no layout, or the layout has no character of that name (the bubble keeps its
 /// own place).
 pub fn anchored_place(bubble: &Bubble, layout: Option<&ImageLayout>) -> Option<AnchoredPlace> {
     let anchor = bubble.anchor.as_ref()?;
     let region = layout?.region(&anchor.region)?;
-    let width = u16::from(bubble.width_percent).clamp(1, 100) * 10;
+    let width = u16::from(bubble.width_percent).clamp(ANCHORED_WIDTH_PERCENT, 100) * 10;
     let (point_x, point_y) = point_of(region, anchor.point);
     let head_x = point_x.min(FULL_PERMILLE);
     // Over the head the tip stops short of the hair; at any other point it touches it.

@@ -1,4 +1,7 @@
-use super::{FORGE_TTS_SPEAKERS, ForgeCause, ForgeConfig, forge_speaker, picture_type};
+use super::{
+    FORGE_TTS_SPEAKERS, ForgeCause, ForgeConfig, MAXIMUM_REASON_CHARACTERS, forge_speaker,
+    picture_type, refusal_reason,
+};
 
 const PROJECT: &str = "41fbb3c9-ac91-4897-b890-7a056b4ae371";
 
@@ -56,4 +59,34 @@ fn a_staged_picture_is_typed_by_its_signature() {
     assert_eq!(picture_type(b"RIFF\0\0\0\0WEBPVP8 "), Some("image/webp"));
     assert_eq!(picture_type(b"GIF89a"), None);
     assert_eq!(picture_type(b""), None);
+}
+
+#[test]
+fn a_refusal_keeps_forge_s_sentence_bounded_and_on_one_line() {
+    let refusal =
+        r#"{"error": "Image description must contain 1–4000 characters.", "supervisor": {}}"#;
+    assert_eq!(
+        refusal_reason(refusal.as_bytes()).as_deref(),
+        Some("Image description must contain 1–4000 characters.")
+    );
+    assert_eq!(
+        refusal_reason(br#"{"error": "first\nsecond"}"#).as_deref(),
+        Some("first second")
+    );
+    let long = format!(
+        r#"{{"error": "{}"}}"#,
+        "x".repeat(MAXIMUM_REASON_CHARACTERS + 1)
+    );
+    assert_eq!(
+        refusal_reason(long.as_bytes()).map(|reason| reason.chars().count()),
+        Some(MAXIMUM_REASON_CHARACTERS)
+    );
+    for body in [
+        &b"not json"[..],
+        br#"{"error": ""}"#,
+        br#"{"error": 3}"#,
+        b"{}",
+    ] {
+        assert_eq!(refusal_reason(body), None);
+    }
 }

@@ -4,7 +4,7 @@
 use crate::camera::Framing;
 use crate::continuity::{Admit, CameraClock, Continuity, ReplyGate, SlideClock, canvas_accepts};
 use crate::controls::{Controls, ControlsReply};
-use crate::fixture::{Camera, ElementShape, StageElement, StagePivot};
+use crate::fixture::{Camera, ElementShape, PlateKind, StageElement, StagePivot};
 use crate::limits::{MAXIMUM_REMEMBERED_SLIDES, MAXIMUM_ZOOM_PERCENT};
 use crate::overlay::Edit;
 use crate::scene::{ImageSlot, SceneChange, SceneOverlay};
@@ -186,6 +186,7 @@ fn a_reply_says_how_long_ago_each_move_began_by_the_hosts_clock() {
                 rotation_degrees: 0,
                 slide: Some(slide(0, 5_000, 0)),
                 layout: None,
+                plate: PlateKind::Room,
             },
             &base,
             10_500,

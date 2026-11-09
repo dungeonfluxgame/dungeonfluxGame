@@ -4,15 +4,16 @@
 
 pub mod brand;
 pub mod bubble_layout;
+pub mod clues;
 pub mod composer;
 pub mod home;
 pub mod icons;
 pub mod kit;
 pub mod lobby;
-pub mod narration;
 pub mod overlays;
 pub mod phone;
 pub mod pills;
+pub mod plate_fade;
 pub mod roleplay;
 pub mod sam;
 pub mod seats;

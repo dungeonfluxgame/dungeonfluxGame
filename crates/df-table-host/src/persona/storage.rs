@@ -1,11 +1,12 @@
 //! Persona storage: the persona files in the playground's `personas` folder, read and written one
-//! persona per file, whole or not at all, and the record of the backfills of each persona.
+//! persona per file, whole or not at all, the record of the backfills of each persona, and the
+//! story guidance each was given.
 
 use std::path::{Path, PathBuf};
 
 use df_content::persona::{Persona, PersonaId};
 
-use super::request::{BackfillRecord, PersonaError, PersonaSummary, summary_of};
+use super::request::{BackfillRecord, GivenGuidance, PersonaError, PersonaSummary, summary_of};
 use crate::blocking::{WriteLock, run_blocking};
 use crate::dev_http::BodyError;
 use crate::io_cause::IoCause;
@@ -22,10 +23,12 @@ pub const PERSONA_DIRECTORY: &str = "personas";
 pub const PERSONA_SUFFIX: &str = ".persona.json";
 /// What a backfill record file's name adds to its persona's id.
 pub const BACKFILLS_SUFFIX: &str = ".backfills.json";
+/// What the name of the file of the story guidance a persona was given adds to its id.
+pub const GUIDANCE_SUFFIX: &str = ".guidance.json";
 
 /// The words no persona can be called: the last segments of the dev API's paths and the words of
 /// the persona command line, which would be read as a verb or as a route instead of an id.
-pub const RESERVED_IDS: [&str; 14] = [
+pub const RESERVED_IDS: [&str; 15] = [
     "remove",
     "edit",
     "voice",
@@ -38,6 +41,7 @@ pub const RESERVED_IDS: [&str; 14] = [
     "coverage",
     "backfill",
     "backfills",
+    "guide",
     "list",
     "all",
 ];
@@ -72,6 +76,11 @@ pub fn persona_file_name(id: &PersonaId) -> String {
 /// The backfill record file of `id`.
 pub fn backfills_file_name(id: &PersonaId) -> String {
     format!("{id}{BACKFILLS_SUFFIX}")
+}
+
+/// The file of the story guidance `id` was given.
+pub(super) fn guidance_file_name(id: &PersonaId) -> String {
+    format!("{id}{GUIDANCE_SUFFIX}")
 }
 
 /// The `personas` folder of the host's playground.
@@ -159,7 +168,62 @@ pub(super) fn store_generated(
         return Ok(Some(existing));
     }
     write_persona(directory, persona)?;
+    forget_given_guidance(directory, persona.id())?;
     Ok(None)
+}
+
+/// The story guidance `id` was given, or none: never given, or written whole or removed since.
+pub(super) fn read_given_guidance(
+    directory: &Path,
+    id: &PersonaId,
+) -> Result<Option<GivenGuidance>, PersonaError> {
+    let text = match std::fs::read_to_string(directory.join(guidance_file_name(id))) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(PersonaError::GuidanceUnreadable {
+                id: id.to_string(),
+                cause: IoCause::from_kind(error.kind()),
+            });
+        }
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| PersonaError::GuidanceInvalid {
+            id: id.to_string(),
+            cause: BodyError::from_json(&error),
+        })
+}
+
+/// Keeps `given` as the story guidance `id` holds, whole or not at all.
+pub(super) fn keep_given_guidance(
+    directory: &Path,
+    id: &PersonaId,
+    given: &GivenGuidance,
+) -> Result<(), PersonaError> {
+    let unwritable = |cause| PersonaError::GuidanceUnwritable {
+        id: id.to_string(),
+        cause,
+    };
+    let text = serde_json::to_string_pretty(given)
+        .map(|json| ascii_only(&json))
+        .map_err(|_| unwritable(IoCause::InvalidData))?;
+    let _writing = PERSONA_WRITES.lock();
+    crate::atomic_file::write_atomically(directory, &guidance_file_name(id), text.as_bytes())
+        .map_err(|error| unwritable(IoCause::from_kind(error.kind())))
+}
+
+/// Forgets the story guidance `id` was given: a persona written whole (a clean one put back, or
+/// one generated again) or removed holds none of it. The caller holds [`PERSONA_WRITES`].
+pub(super) fn forget_given_guidance(directory: &Path, id: &PersonaId) -> Result<(), PersonaError> {
+    match std::fs::remove_file(directory.join(guidance_file_name(id))) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(PersonaError::GuidanceUnwritable {
+            id: id.to_string(),
+            cause: IoCause::from_kind(error.kind()),
+        }),
+    }
 }
 
 /// Removes the file of `id`; `false` when it had none. The persona's `<id>.backfills.json` stays:

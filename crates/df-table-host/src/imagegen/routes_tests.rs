@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use super::backend::BackendError;
 use super::fixtures::{FakeBackend, Script, picture, png_bytes};
 use super::model::GenerateRequestError;
-use super::request::{GenerateError, GenerateReply, JobState, JobView};
+use super::request::{BackendView, GenerateError, GenerateReply, JobState, JobView};
 use super::routes::{path, router_with};
 use super::service::ImageGenerator;
 use crate::client::{get, post_json};
@@ -477,4 +477,54 @@ async fn a_waited_generation_without_a_picture_prints_its_name_and_how_long_it_r
         "{text}"
     );
     assert!(text.contains("\n  "), "{text}");
+}
+
+#[tokio::test]
+async fn the_backend_route_shows_the_backend_and_refuses_one_it_cannot_switch_to() {
+    let running = start(&[]).await;
+    let port = serve_route(
+        &running,
+        generator(FakeBackend::new(Script::Picture(picture()))),
+    )
+    .await;
+    let shown: BackendView = done(&get(port, path::BACKEND).await.expect("answers").body);
+    assert_eq!((shown.backend.as_str(), shown.running), ("fake", 0));
+    let unknown = post_json(port, path::BACKEND, r#"{"backend":"dall-e"}"#)
+        .await
+        .expect("answers");
+    assert_eq!(unknown.status, StatusCode::BAD_REQUEST);
+    assert!(matches!(
+        rejected(&unknown.body),
+        GenerateError::InvalidBody(_)
+    ));
+    // Forge with a project that is not a project id is refused by its setup, never a fallback.
+    let unset = post_json(
+        port,
+        path::BACKEND,
+        r#"{"backend":"forge","project":"not a project"}"#,
+    )
+    .await
+    .expect("answers");
+    assert_eq!(unset.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(matches!(
+        rejected(&unset.body),
+        GenerateError::Backend {
+            job: None,
+            backend: BackendError::Unaccepted { .. }
+        }
+    ));
+    let after: BackendView = done(&get(port, path::BACKEND).await.expect("answers").body);
+    assert_eq!(after.backend, "fake", "nothing changed");
+    let lines = imagegen_lines(&running);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("IMAGEGEN refused verb=backend to=_ error=invalid_body")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line
+            .starts_with("IMAGEGEN refused verb=backend to=forge error=backend cause=unaccepted")),
+        "{lines:?}"
+    );
 }

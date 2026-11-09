@@ -185,6 +185,7 @@ pub(super) fn media(words: &[String]) -> Result<Command, CommandError> {
             })
         }
         [verb, rest @ ..] if verb == "generate" => super::media_generate::parse(rest),
+        [verb, rest @ ..] if verb == "backend" => super::media_generate::parse_backend(rest),
         [verb, rest @ ..] if verb == "locate" => crate::locate::cli::parse(rest),
         _ => Err(CommandError::Usage(MEDIA_USAGE)),
     }

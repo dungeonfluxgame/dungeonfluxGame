@@ -523,6 +523,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         // picture generator.
         .merge(crate::services::routes::router(state.clone()))
         .merge(crate::cast::routes::router(state.clone()))
+        .merge(crate::music::routes::router(state.clone()))
         // A route layer sees the matched route, and the answers of the body and query readers.
         .route_layer(middleware::from_fn_with_state(state.clone(), record_served))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))

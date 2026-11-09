@@ -107,10 +107,11 @@ fn portrait_passes_through_to_the_reference_card() {
 #[test]
 fn prompt_forbids_writing_in_the_picture() {
     let brief = build_brief(&balcony(), &cast(), &looks()).expect("builds");
+    assert!(brief.avoid.iter().any(|term| term == "readable text"));
+    assert!(brief.avoid.iter().any(|term| term == "speech bubbles"));
     assert!(
-        brief
-            .prompt
-            .contains("No text, letters, captions, speech bubbles, logos or interface")
+        brief.prompt.contains("faded, smudged ink"),
+        "writing a thing carries is shown unreadable, never left out"
     );
 }
 
@@ -173,9 +174,11 @@ fn empty_look_sheets_describe_everyone_by_job() {
 fn custom_style_replaces_the_direction_and_ban() {
     let style = BriefStyle {
         direction: "A pencil sketch of".to_owned(),
-        writing_ban: "No lettering at all.".to_owned(),
+        writing: "Lettering is a blur.".to_owned(),
+        avoid: vec!["ink".to_owned()],
     };
     let brief = build_brief_with(&style, &balcony(), &cast(), &looks()).expect("builds");
     assert!(brief.prompt.starts_with("A pencil sketch of a stone balcony"));
-    assert!(brief.prompt.ends_with("No lettering at all."));
+    assert!(brief.prompt.ends_with("Lettering is a blur."));
+    assert_eq!(brief.avoid, ["ink"]);
 }

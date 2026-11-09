@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-use super::backend::BackendError;
-use super::model::{Aspect, GenerateRequestError, Purpose};
+use super::backend::{BackendError, BackendLimits};
+use super::model::{Aspect, GenerateRequestError, ImageRequest, Purpose, ThingReference};
 use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::io_cause::IoCause;
 
@@ -37,6 +37,72 @@ pub struct GenerateRequest {
     /// A picture of the media library to edit instead of making a new one (`bar.png`).
     #[serde(default)]
     pub base: Option<String>,
+    /// Pictures of the media library the new picture follows for the people's looks, in order
+    /// (character reference sheets such as `ref-warrior.png`). Every backend of the host attaches
+    /// them; a host without this field refuses a body that has it, so none is dropped silently.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<String>,
+    /// Pictures of the media library that show how things in the new picture look (an item's
+    /// close-up), each with what it shows, attached after `references`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub things: Vec<ThingReference>,
+    /// What the picture must not show, a few plain words each: the backend's negative prompt when
+    /// it takes one, otherwise a line of the text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub avoid: Vec<String>,
+}
+
+/// The body of `POST /dev/media/backend`: the image backend new jobs start on. Codex runs with the
+/// settings the host was started with; Forge with the studio's address and project the host was
+/// started with (`DF_FORGE_URL`, `DF_FORGE_PROJECT`), or `url` and `project` when given. Every
+/// variant is a struct, so a field another backend takes is refused, not ignored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "backend", deny_unknown_fields)]
+pub enum BackendSwitch {
+    #[serde(rename = "codex-cli")]
+    CodexCli {},
+    #[serde(rename = "forge")]
+    Forge {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        project: Option<String>,
+    },
+}
+
+impl BackendSwitch {
+    /// The serde name of the backend asked for.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::CodexCli {} => "codex-cli",
+            Self::Forge { .. } => "forge",
+        }
+    }
+}
+
+/// What `/dev/media/backend` answers: the backend new jobs start on, what it takes, and how many
+/// jobs are running (each on the backend it started on).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackendView {
+    pub backend: String,
+    pub limits: BackendLimits,
+    pub running: u64,
+}
+
+impl GenerateRequest {
+    /// The checked request this body asks for: its prompt, name, purpose and shape, the picture it
+    /// edits, the pictures it follows and what it must not show.
+    pub fn checked(&self) -> Result<ImageRequest, GenerateRequestError> {
+        let request = ImageRequest::new(&self.prompt, &self.name, self.purpose, self.aspect)?;
+        let request = match &self.base {
+            Some(base) => request.editing(base)?,
+            None => request,
+        };
+        Ok(request
+            .following(&self.references)?
+            .showing(&self.things)?
+            .avoiding(&self.avoid))
+    }
 }
 
 /// One job as the routes show it.
@@ -88,6 +154,9 @@ pub struct Provenance {
     pub requested_height_px: u32,
     pub prompt: String,
     pub sent_text: String,
+    /// The negative prompt sent beside the text, when the backend takes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub negative: Option<String>,
     pub duration_ms: u64,
     pub deadline_ms: u64,
     pub width_px: u32,
@@ -172,6 +241,12 @@ pub enum GenerateError {
         base: String,
         cause: IoCause,
     },
+    /// A reference could not be read from the media library.
+    ReferenceUnreadable {
+        job: u64,
+        reference: String,
+        cause: IoCause,
+    },
     /// A blocking task of the job stopped without an answer (it panicked or the runtime is
     /// stopping).
     Stopped { job: Option<u64> },
@@ -188,6 +263,7 @@ impl GenerateError {
             Self::InvalidPicture { .. } => "invalid_picture",
             Self::StoreFailed { .. } => "store_failed",
             Self::BaseUnreadable { .. } => "base_unreadable",
+            Self::ReferenceUnreadable { .. } => "reference_unreadable",
             Self::Stopped { .. } => "stopped",
         }
     }
@@ -199,7 +275,9 @@ impl GenerateError {
             Self::InvalidRequest(error) => Some(error.key()),
             Self::Backend { backend, .. } => Some(backend.key()),
             Self::InvalidPicture { cause, .. } => Some(cause.key()),
-            Self::BaseUnreadable { cause, .. } => Some(cause.key()),
+            Self::BaseUnreadable { cause, .. } | Self::ReferenceUnreadable { cause, .. } => {
+                Some(cause.key())
+            }
             Self::NameBusy { .. } | Self::StoreFailed { .. } | Self::Stopped { .. } => None,
         }
     }
@@ -210,7 +288,8 @@ impl GenerateError {
             Self::Backend { job, .. } | Self::Stopped { job } => *job,
             Self::InvalidPicture { job, .. }
             | Self::StoreFailed { job, .. }
-            | Self::BaseUnreadable { job, .. } => Some(*job),
+            | Self::BaseUnreadable { job, .. }
+            | Self::ReferenceUnreadable { job, .. } => Some(*job),
             Self::InvalidBody(_) | Self::InvalidRequest(_) | Self::NameBusy { .. } => None,
         }
     }
@@ -243,6 +322,12 @@ impl fmt::Display for GenerateError {
                 formatter,
                 "the picture to edit, {base}, could not be read from the media library: {cause}"
             ),
+            Self::ReferenceUnreadable {
+                reference, cause, ..
+            } => write!(
+                formatter,
+                "the reference {reference} could not be read from the media library: {cause}"
+            ),
             Self::Stopped { .. } => {
                 formatter.write_str("a task of the generation stopped without an answer")
             }
@@ -259,7 +344,9 @@ impl RouteError for GenerateError {
             Self::NameBusy { .. } => StatusCode::CONFLICT,
             Self::Backend { backend, .. } => backend.status(),
             Self::InvalidPicture { .. } => StatusCode::BAD_GATEWAY,
-            Self::BaseUnreadable { .. } => StatusCode::BAD_REQUEST,
+            Self::BaseUnreadable { .. } | Self::ReferenceUnreadable { .. } => {
+                StatusCode::BAD_REQUEST
+            }
             Self::StoreFailed { .. } | Self::Stopped { .. } => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

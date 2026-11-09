@@ -54,6 +54,16 @@ pub const FORGE_TTS_SPEAKERS: [&str; 9] = [
 ];
 /// Most characters of one voice job (Forge's request contract).
 pub const FORGE_TTS_MAXIMUM_CHARACTERS: usize = 1000;
+/// Most characters of one image job's description (Forge's request contract). Forge counts them
+/// as JavaScript does, in UTF-16 code units (`runtime/jobs.js`).
+pub const FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS: usize = 4000;
+/// Most characters of one image job's negative prompt, what the picture must not show, counted as
+/// the description is (Forge's request contract, `runtime/jobs.js`).
+pub const FORGE_IMAGE_MAXIMUM_NEGATIVE_CHARACTERS: usize = 4000;
+/// The `true_cfg_scale` an image job with a negative prompt is sent. Forge applies a negative
+/// prompt only above 1 and takes up to 10; 4 is Qwen-Image's published default (the studio's form
+/// leaves 2 when blank). It roughly doubles the render time (owner, 2026-11-09).
+pub const FORGE_IMAGE_NEGATIVE_GUIDANCE: f64 = 4.0;
 /// The sample rate of Forge's voice output (Qwen3-TTS writes 24 kHz mono WAV).
 pub const FORGE_TTS_SAMPLE_RATE_HZ: u32 = 24_000;
 /// Most matches one segmentation keeps with `select: top` (Forge's request contract).
@@ -78,6 +88,9 @@ const MAXIMUM_RESPONSE_BYTES: usize = 256 * 1024 * 1024;
 const PROJECT_ID_BYTES: usize = 36;
 /// The engine-start answers Forge gives when the engine cannot start (`service-preparation.js`).
 const START_FAILURES: [&str; 4] = ["missing", "failed", "port_in_use", "recovery_unresolved"];
+/// Most characters of Forge's own reason for a refusal that are kept: its messages are one short
+/// sentence, so this only guards against an answer that is not one.
+const MAXIMUM_REASON_CHARACTERS: usize = 500;
 
 /// Why Forge gave no answer. It never carries text, audio, a picture, a path or a Forge id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -132,19 +145,28 @@ impl ForgeCause {
 }
 
 /// Why a Forge call gave no answer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ForgeError {
     pub cause: ForgeCause,
+    /// Forge's own sentence for a refusal (`{"error": ...}` of a 4xx answer), when it gave one:
+    /// at most `MAXIMUM_REASON_CHARACTERS`, with control characters as spaces.
+    pub reason: Option<String>,
 }
 
 impl ForgeError {
     const fn new(cause: ForgeCause) -> Self {
-        Self { cause }
+        Self {
+            cause,
+            reason: None,
+        }
     }
 }
 
 impl fmt::Display for ForgeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let (ForgeCause::Rejected, Some(reason)) = (self.cause, &self.reason) {
+            return write!(formatter, "forge refused the request: {reason}");
+        }
         match self.cause {
             ForgeCause::InvalidConfiguration => {
                 formatter.write_str("the forge origin or project is not usable")
@@ -395,20 +417,20 @@ struct JobRecord {
 
 impl JobRecord {
     fn read(reply: &Value) -> Result<Self, ForgeError> {
-        let malformed = ForgeError::new(ForgeCause::Malformed);
+        let malformed = || ForgeError::new(ForgeCause::Malformed);
         let job = &reply["job"];
         let status = job["status"]
             .as_str()
             .and_then(JobStatus::from_key)
-            .ok_or(malformed)?;
+            .ok_or_else(malformed)?;
         let result = &job["details"]["result"];
         let matches = if result.is_object() {
-            Some(read_matches(result).ok_or(malformed)?)
+            Some(read_matches(result).ok_or_else(malformed)?)
         } else {
             None
         };
         Ok(Self {
-            id: job["id"].as_str().ok_or(malformed)?.to_owned(),
+            id: job["id"].as_str().ok_or_else(malformed)?.to_owned(),
             status,
             output: job["output"].as_str().map(str::to_owned),
             matches,
@@ -886,13 +908,36 @@ fn record_engine(engine: ForgeEngine, action: &str, elapsed: Duration) {
     );
 }
 
-/// A 2xx answer, or why not.
+/// A 2xx answer, or why not: a refusal keeps the reason Forge gave.
 fn status_ok(response: &NativeHttpResponse) -> Result<(), ForgeError> {
     match response.status {
         200..=299 => Ok(()),
-        400..=499 => Err(ForgeError::new(ForgeCause::Rejected)),
+        400..=499 => Err(ForgeError {
+            cause: ForgeCause::Rejected,
+            reason: refusal_reason(&response.body),
+        }),
         _ => Err(ForgeError::new(ForgeCause::Failed)),
     }
+}
+
+/// The `error` sentence of a Forge refusal (`{"error": "..."}`, its `supervisor.js` answer), kept
+/// to `MAXIMUM_REASON_CHARACTERS` with control characters as spaces; `None` for any other body.
+fn refusal_reason(body: &[u8]) -> Option<String> {
+    let answer: Value = serde_json::from_slice(body).ok()?;
+    let reason: String = answer["error"]
+        .as_str()?
+        .trim()
+        .chars()
+        .take(MAXIMUM_REASON_CHARACTERS)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    (!reason.is_empty()).then_some(reason)
 }
 
 fn json_answer(response: &NativeHttpResponse) -> Result<Value, ForgeError> {

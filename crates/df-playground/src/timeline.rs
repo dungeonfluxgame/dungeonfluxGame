@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::bubble_place::BubbleSide;
+use crate::clues::ClueBoard;
 use crate::controls::TransitionStyle;
 use crate::copy::{ReadingPace, caption_dwell_ms, result_card_dwell_ms, word_count};
 use crate::fixture::{Fixture, StageElement};
@@ -55,13 +56,26 @@ pub enum TimelineKind {
     /// A speaking character's outline in the picture, from the moment their line starts to the
     /// moment it ends. Its id is the character's.
     Outline,
+    /// The card of a speaker who is not in the picture, from the moment their line starts to the
+    /// moment it ends. Its id is `card-<character>-<line>`.
+    Card,
+    /// A backdrop crossfade: the wait for the new plate's image (`fade-load-<media>`) and its fade
+    /// (`fade-<media>`).
+    Fade,
+    /// A visible speaker's bubble given way to the lower third during a plate change
+    /// (`third-<character>`).
+    Third,
+    /// The clue board on the shared screen, from the draw that put it up (or changed it) to the
+    /// draw that changed or took it away. Its id is `clues-<notes>-<hash>`
+    /// (`ClueBoard::board_identity`).
+    Clues,
     /// An error the page met. The page never sends this kind as a record; the host makes one from
     /// each error a report carries, so a timeline read shows errors in their place.
     Error,
 }
 
 impl TimelineKind {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 18] = [
         Self::Line,
         Self::Plate,
         Self::Figure,
@@ -75,6 +89,10 @@ impl TimelineKind {
         Self::Transcribe,
         Self::Ask,
         Self::Outline,
+        Self::Card,
+        Self::Fade,
+        Self::Third,
+        Self::Clues,
         Self::Error,
     ];
 
@@ -94,6 +112,10 @@ impl TimelineKind {
             Self::Transcribe => "transcribe",
             Self::Ask => "ask",
             Self::Outline => "outline",
+            Self::Card => "card",
+            Self::Fade => "fade",
+            Self::Third => "third",
+            Self::Clues => "clues",
             Self::Error => "error",
         }
     }
@@ -343,6 +365,10 @@ pub struct Showing {
     pub figures: Vec<String>,
     /// The characters outlined as speaking, by name.
     pub outlines: Vec<String>,
+    /// The off-screen speaker's card, by its key.
+    pub cards: Vec<String>,
+    /// The clue board, by its key.
+    pub clues: Vec<String>,
     pub camera: Option<ShownCamera>,
 }
 
@@ -401,6 +427,11 @@ impl Showing {
                 .map(|(character, _)| character.to_owned())
                 .collect();
         }
+        showing.cards = crate::speaker_card::scene_card(tv)
+            .map(|card| card.card_identity())
+            .into_iter()
+            .collect();
+        showing.clues = tv.clues.iter().map(ClueBoard::board_identity).collect();
         showing.camera = tv.camera.as_ref().map(|camera| ShownCamera {
             serial: camera.serial,
             zoom_percent: camera.zoom_percent,
@@ -698,7 +729,7 @@ impl PageLog {
 }
 
 /// Each kind of thing followed by id, with what was shown of it: its id and its dwell.
-type ShownItems = [(TimelineKind, Vec<(String, Option<u64>)>); 5];
+type ShownItems = [(TimelineKind, Vec<(String, Option<u64>)>); 7];
 
 fn shown_items(showing: &Showing) -> ShownItems {
     let with_dwell = |items: &BTreeMap<String, Option<u64>>| {
@@ -732,6 +763,22 @@ fn shown_items(showing: &Showing) -> ShownItems {
                 .outlines
                 .iter()
                 .map(|character| (character.clone(), None))
+                .collect(),
+        ),
+        (
+            TimelineKind::Card,
+            showing
+                .cards
+                .iter()
+                .map(|key| (key.clone(), None))
+                .collect(),
+        ),
+        (
+            TimelineKind::Clues,
+            showing
+                .clues
+                .iter()
+                .map(|key| (key.clone(), None))
                 .collect(),
         ),
     ]

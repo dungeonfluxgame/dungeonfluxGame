@@ -26,7 +26,8 @@ use web_sys::Event;
 use crate::dom::{append, document, element};
 use crate::timeline::ErrorSource;
 use events::{
-    on_animation_ended, on_change, on_click, on_input, on_key, on_media_event, on_visibility_change,
+    on_animation_ended, on_change, on_click, on_input, on_key, on_media_event, on_transition_ended,
+    on_visibility_change,
 };
 use page::place_bubbles;
 use state::{ROOT_ID, THEME_ID, log_error, with_app_mut};
@@ -82,6 +83,10 @@ pub fn start() -> Result<(), JsValue> {
     let finished = Closure::<dyn FnMut(Event)>::new(|event: Event| on_animation_ended(&event));
     root.add_event_listener_with_callback("animationend", finished.as_ref().unchecked_ref())?;
     finished.forget();
+    // The fold eases the board's width: once it has settled, the bubbles are placed for its size.
+    let settled = Closure::<dyn FnMut(Event)>::new(|event: Event| on_transition_ended(&event));
+    root.add_event_listener_with_callback("transitionend", settled.as_ref().unchecked_ref())?;
+    settled.forget();
     let loaded = Closure::<dyn FnMut(Event)>::new(|event: Event| on_media_event(&event, false));
     root.add_event_listener_with_callback_and_bool("load", loaded.as_ref().unchecked_ref(), true)?;
     loaded.forget();

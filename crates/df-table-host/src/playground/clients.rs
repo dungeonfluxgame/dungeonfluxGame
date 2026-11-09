@@ -4,10 +4,10 @@
 //! comes back, and when its files change. The table remembers the newest report of each page by
 //! the page's own name, and a bounded timeline of what the page showed and played, put on the
 //! playground's clock with the page's own clock reading (`page_clock_ms`). It writes an audit line
-//! only for a change: a page seen, gone or evicted, its link, revision, fixture or sound lock
-//! changed, an error it met, a draw that rebuilt pieces, and each line, plate, figure, clip,
-//! scene, sound, song and camera framing as it ends (`TIMING ..`). A heartbeat that says nothing
-//! new writes nothing, and a report wakes no page.
+//! only for a change: a page seen, gone or evicted, its link, revision, fixture, sound lock or
+//! sound preferences changed, an error it met, a draw that rebuilt pieces, and each line, plate,
+//! figure, clip, scene, sound, song and camera framing as it ends (`TIMING ..`). A heartbeat that
+//! says nothing new writes nothing, and a report wakes no page.
 
 mod request;
 mod routes;
@@ -274,7 +274,11 @@ fn ending_line(client: &str, entry: &TimelineEntry) -> Option<String> {
             | TimelineKind::Capture
             | TimelineKind::Transcribe
             | TimelineKind::Ask
-            | TimelineKind::Outline,
+            | TimelineKind::Outline
+            | TimelineKind::Card
+            | TimelineKind::Fade
+            | TimelineKind::Third
+            | TimelineKind::Clues,
             _,
         ) => Some(format!(
             "TIMING {} client={client} id={id} start_ms={} end_ms={end_ms} shown_ms={} \
@@ -359,6 +363,16 @@ fn change_lines(
         lines.push(format!(
             "CLIENT audio client={client} state={} at_ms={now_ms}",
             after.audio.key()
+        ));
+    }
+    if before.audio_prefs != after.audio_prefs {
+        let prefs = &after.audio_prefs;
+        let on = |on: bool| if on { "on" } else { "off" };
+        lines.push(format!(
+            "CLIENT audio_prefs client={client} sound={} music={} volume={} at_ms={now_ms}",
+            on(prefs.sound_on),
+            on(prefs.music_on),
+            prefs.volume_percent
         ));
     }
     lines

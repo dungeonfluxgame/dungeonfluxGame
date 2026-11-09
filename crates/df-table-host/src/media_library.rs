@@ -132,6 +132,10 @@ pub fn media_problem(change: &SceneChange, entries: &[MediaEntry]) -> Option<Str
         SceneChange::Music { media, .. } | SceneChange::Sound { media, .. } => {
             check_media(media, MediaKind::Audio, entries)
         }
+        SceneChange::Clues { notes } => notes
+            .iter()
+            .filter_map(|note| note.picture.as_deref())
+            .find_map(|media| check_media(media, MediaKind::Image, entries)),
         SceneChange::SeatSet { portrait, .. } => portrait
             .set_value()
             .and_then(|media| check_media(media, MediaKind::Image, entries)),

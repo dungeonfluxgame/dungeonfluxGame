@@ -7,6 +7,9 @@
 //! still does (`line.rs`), so a secret comes out only when its conditions hold, as
 //! `planning/interaction-engine.md` asks (trust alone never authorises a reveal; an approved
 //! reveal is committed before its text is released). The judge's reasons stay with the judge.
+//! Once a story's danger has struck, the secrets its play has made revealable (`story_next`, the
+//! same verdicts on what the party found) are let out without asking again (run 25: the culprit,
+//! his proof found, was only ever blocked and the truth never came out).
 //!
 //! Audit line: `PERSONA reveal_judged id=.. secrets=.. early=.. duration_ms=..` (ids and counts,
 //! never secret text).
@@ -18,6 +21,7 @@ use serde_json::{Value, json};
 
 use super::generate::{operation_key, text_request};
 use super::request::{LineError, PersonaError};
+use super::story::{StoryError, read_story, story_path};
 use crate::state::AppState;
 use crate::text::TextRoute;
 
@@ -62,26 +66,7 @@ pub(super) async fn early_reveals(
         .iter()
         .map(|secret| secret.id.as_str())
         .collect();
-    let schema = json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["verdicts"],
-        "properties": {
-            "verdicts": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["id", "holds", "reason"],
-                    "properties": {
-                        "id": {"type": "string", "enum": ids},
-                        "holds": {"type": "boolean"},
-                        "reason": {"type": "string"}
-                    }
-                }
-            }
-        }
-    });
+    let schema = verdicts_schema(&ids);
     let secrets: Vec<Value> = question
         .secrets
         .iter()
@@ -105,6 +90,54 @@ pub(super) async fn early_reveals(
         started.elapsed().as_millis()
     ));
     Ok(early)
+}
+
+/// The closed schema of a reveal verdict list: for each secret of `ids`, whether its conditions
+/// hold, and why.
+pub(super) fn verdicts_schema(ids: &[&str]) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["verdicts"],
+        "properties": {
+            "verdicts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["id", "holds", "reason"],
+                    "properties": {
+                        "id": {"type": "string", "enum": ids},
+                        "holds": {"type": "boolean"},
+                        "reason": {"type": "string"}
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// The ids of `character`'s secrets the story's play has made revealable since its danger struck
+/// (`Story::revealable`, kept by `story_next`): the line lets them out without asking the judge
+/// again. None when no story is plotted; a story that does not read is recorded and gives none.
+pub(super) fn revealable_of(app: &AppState, character: &str) -> Vec<String> {
+    let story = match read_story(&story_path(app)) {
+        Ok(story) => story,
+        Err(StoryError::NoStory) => return Vec::new(),
+        Err(_) => {
+            app.record_line(format!(
+                "PERSONA state_unavailable id={character} error=story_unreadable"
+            ));
+            return Vec::new();
+        }
+    };
+    story
+        .revealable
+        .into_iter()
+        .flat_map(|kept| kept.secrets)
+        .filter(|held| held.holder == character)
+        .map(|held| held.secret)
+        .collect()
 }
 
 /// The judge's answer: one verdict for each of `ids`, and the secrets whose conditions do not

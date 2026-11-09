@@ -658,11 +658,15 @@ pub enum Shot {
     Upper,
     /// The whole figure.
     Full,
+    /// A gentle push-in on whoever is speaking: the upper body at a small fixed zoom, so the set
+    /// dressing stays readable round them.
+    Speaker,
 }
 
 impl Shot {
-    /// Every shot, closest first.
-    pub const ALL: [Self; 3] = [Self::Face, Self::Upper, Self::Full];
+    /// Every shot: the three that fill the screen with the figure, closest first, then the gentle
+    /// speaker push-in.
+    pub const ALL: [Self; 4] = [Self::Face, Self::Upper, Self::Full, Self::Speaker];
 
     /// The shot's wire and command name, the same as its serde name.
     pub fn key(self) -> &'static str {
@@ -670,6 +674,7 @@ impl Shot {
             Self::Face => "face",
             Self::Upper => "upper",
             Self::Full => "full",
+            Self::Speaker => "speaker",
         }
     }
 
@@ -682,7 +687,7 @@ impl Shot {
     fn span_permille(self) -> u16 {
         match self {
             Self::Face => 300,
-            Self::Upper => 550,
+            Self::Upper | Self::Speaker => 550,
             Self::Full => 1050,
         }
     }
@@ -690,6 +695,8 @@ impl Shot {
 
 /// The share of the screen's height a shot fills, in thousandths.
 const SHOT_FILL_PERMILLE: u16 = 900;
+/// The zoom of the speaker shot, in percent: a small push-in, whatever the figure's size.
+const SPEAKER_ZOOM_PERCENT: u16 = 112;
 /// Where the face is below the top of the head, in thousandths of the character's height.
 const FACE_DROP_PERMILLE: u16 = 110;
 /// Where the chest is below the top of the head, in thousandths of the character's height.
@@ -809,8 +816,12 @@ pub fn shot_focus(region: &SceneRegion, shot: Shot) -> (u16, u16) {
 }
 
 /// The zoom, in percent, at which `shot` of the character in `region` fills most of the screen's
-/// height, within the camera's range. The page still holds it to what the picture's pixels bear.
+/// height, within the camera's range (the speaker shot is a fixed small push-in). The page still
+/// holds it to what the picture's pixels bear.
 pub fn shot_zoom_percent(region: &SceneRegion, shot: Shot) -> u16 {
+    if shot == Shot::Speaker {
+        return SPEAKER_ZOOM_PERCENT;
+    }
     let span_permille =
         (u32::from(figure_height_permille(region)) * u32::from(shot.span_permille()) / 1000).max(1);
     u16::try_from(100 * u32::from(SHOT_FILL_PERMILLE) / span_permille)

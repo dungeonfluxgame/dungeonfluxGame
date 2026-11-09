@@ -12,9 +12,11 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::clues::{ClueBoard, ClueNote};
 use crate::controls::Device;
 use crate::fixture::{
-    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, Slide, UnavailableChoice,
+    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, PlateKind, Slide,
+    UnavailableChoice,
 };
 use crate::limits::{
     MAXIMUM_CAMERA_MS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_PIVOT_PERCENT, MAXIMUM_ROTATION_DEGREES,
@@ -161,6 +163,9 @@ pub struct SceneOverlay {
     pub phone_image: Edit<ImageRef>,
     #[serde(skip_serializing_if = "Edit::is_keep")]
     pub music: Edit<Track>,
+    /// The clue board on the shared screen: set whole, or cleared.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub clues: Edit<ClueBoard>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
     pub cue_count: u64,
@@ -225,6 +230,10 @@ pub enum SceneChange {
         /// change of backdrop keeps its characters (anchors, the SAM layer, camera targets).
         #[serde(default)]
         layout: Option<crate::image_layout::ImageLayout>,
+        /// What a backdrop picture is: the host says a room plate, a room shown with the cast
+        /// before it, or a close-up. Defaults to a room plate; only the backdrop's is read.
+        #[serde(default)]
+        plate: PlateKind,
     },
     ClearImage {
         slot: ImageSlot,
@@ -237,6 +246,13 @@ pub enum SceneChange {
         looping: bool,
     },
     StopMusic {},
+    /// Sets the clue board on the shared screen, replacing the one shown: every clue found so far,
+    /// oldest first, the newest last.
+    Clues {
+        notes: Vec<ClueNote>,
+    },
+    /// Takes the clue board away.
+    ClearClues {},
     /// Plays a sound once.
     Sound {
         media: String,
@@ -319,6 +335,7 @@ pub enum SceneError {
         limit: usize,
     },
     DuplicateMember(String),
+    DuplicateClue(String),
     UnknownMember(String),
     TooManyMembers,
     TooManyChoices {
@@ -367,6 +384,7 @@ impl fmt::Display for SceneError {
                 write!(formatter, "{what} is longer than {limit} characters")
             }
             Self::DuplicateMember(name) => write!(formatter, "'{name}' is already in the party"),
+            Self::DuplicateClue(id) => write!(formatter, "the clue board has '{id}' twice"),
             Self::UnknownMember(name) => write!(formatter, "'{name}' is not in the party"),
             Self::TooManyMembers => write!(
                 formatter,
@@ -478,6 +496,7 @@ impl SceneOverlay {
             unavailable,
             phone_image,
             music,
+            clues,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -502,6 +521,7 @@ impl SceneOverlay {
             ("unavailable", unavailable.is_keep()),
             ("phone_image", phone_image.is_keep()),
             ("music", music.is_keep()),
+            ("clues", clues.is_keep()),
         ]
         .into_iter()
         .filter_map(|(name, kept)| (!kept).then_some(name))
@@ -556,6 +576,7 @@ impl SceneOverlay {
             unavailable,
             phone_image,
             music,
+            clues,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -581,5 +602,6 @@ impl SceneOverlay {
         unavailable.apply_to_value(&mut phone.unavailable);
         phone_image.apply_to(&mut phone.image);
         music.apply_to(&mut fixture.music);
+        clues.apply_to(&mut fixture.tv.clues);
     }
 }

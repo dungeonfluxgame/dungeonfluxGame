@@ -428,7 +428,7 @@ fn the_help_text_starts_an_entry_with_every_top_level_verb() {
 }
 
 /// Every sub-verb `scene` accepts.
-const SCENE_SUB_VERBS: [&str; 30] = [
+const SCENE_SUB_VERBS: [&str; 31] = [
     "caption",
     "caption-clear",
     "party",
@@ -449,6 +449,7 @@ const SCENE_SUB_VERBS: [&str; 30] = [
     "seat",
     "seats",
     "logo",
+    "clues",
     "lobby",
     "loading",
     "roleplay",

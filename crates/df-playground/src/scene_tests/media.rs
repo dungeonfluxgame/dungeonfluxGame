@@ -1,7 +1,7 @@
 //! Pictures, music and sound cues in the scene overlay.
 
 use crate::controls::Device;
-use crate::fixture::{Fixture, ImageRef};
+use crate::fixture::{Fixture, ImageRef, PlateKind};
 use crate::fixtures::assert_keys_are_serde_names;
 use crate::limits::{MAXIMUM_CUES_KEPT, MAXIMUM_NAME_CHARACTERS};
 use crate::overlay::Edit;
@@ -33,6 +33,7 @@ fn image(media: &str) -> ImageRef {
         rotation_degrees: 0,
         slide: None,
         layout: None,
+        plate: PlateKind::Room,
     }
 }
 
@@ -55,6 +56,7 @@ fn a_fixture_may_carry_pictures_and_refuses_unknown_picture_keys() {
             rotation_degrees: 0,
             slide: None,
             layout: None,
+            plate: PlateKind::Room,
         })
     );
     assert_eq!((fixture.tv.card, fixture.phone.image), (None, None));
@@ -79,6 +81,7 @@ fn a_picture_is_set_in_its_slot_and_replaces_what_the_fixture_has() {
                     rotation_degrees: 0,
                     slide: None,
                     layout: None,
+                    plate: PlateKind::Room,
                 },
                 &base(),
             )
@@ -116,6 +119,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
         rotation_degrees: 0,
         slide: None,
         layout: None,
+        plate: PlateKind::Room,
     };
     assert_eq!(
         overlay.apply(empty, &base()),
@@ -128,6 +132,7 @@ fn a_picture_needs_a_name_and_a_caption_within_the_limit() {
         rotation_degrees: 0,
         slide: None,
         layout: None,
+        plate: PlateKind::Room,
     };
     assert!(matches!(
         overlay.apply(long, &base()),
@@ -270,6 +275,7 @@ fn a_reset_drops_the_changes_and_the_old_cues_but_the_count_keeps_rising() {
                 rotation_degrees: 0,
                 slide: None,
                 layout: None,
+                plate: PlateKind::Room,
             },
             &base(),
         )
@@ -355,6 +361,7 @@ fn a_picture_can_be_turned_and_a_turn_over_359_degrees_is_refused() {
                 rotation_degrees: 180,
                 slide: None,
                 layout: None,
+                plate: PlateKind::Room,
             },
             &base(),
         )
@@ -372,6 +379,7 @@ fn a_picture_can_be_turned_and_a_turn_over_359_degrees_is_refused() {
                 rotation_degrees: 360,
                 slide: None,
                 layout: None,
+                plate: PlateKind::Room,
             },
             &base(),
         )

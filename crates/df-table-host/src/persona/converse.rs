@@ -24,7 +24,7 @@ use df_playground::copy::{ReadingPace, caption_dwell_ms, word_count};
 use serde::{Deserialize, Serialize};
 
 use super::address::{AddressReply, AddressRequest, PERSONA_ADDRESSED};
-use super::frame_watch::{FrameOptions, FrameWatch};
+use super::frame_watch::{FrameOptions, FrameWatch, ask_judge};
 use super::plate::make_plate;
 use super::request::{PersonaSummary, SayRequest, Spoken};
 use super::routes::path;
@@ -353,8 +353,9 @@ async fn addressed_once(
 
 /// `persona addressed`: whom `line`, said by `speaker` in the shown scene after `recent`, is
 /// directed at, as the addressee judge reads it (a model call against the closed list of the
-/// scene's speakers): their id, or `nobody`. The market runner uses it so the one a line is put
-/// to answers it.
+/// scene's speakers): their id, or `nobody`, then an `answer_owed=<true|false>` line saying
+/// whether an answer would add anything. The market runner uses it so the one a line is put to
+/// answers it, and nobody answers with an echo.
 pub(super) async fn who_is_addressed(
     port: u16,
     mut request: AddressRequest,
@@ -362,9 +363,12 @@ pub(super) async fn who_is_addressed(
     let cast: CastList = super::cli::reply_value(get_json(port, cast_path::CAST).await?)?;
     request.speakers = speakers_of(cast);
     let reply: AddressReply = post_json(port, PERSONA_ADDRESSED, &request).await?;
-    Ok(crate::dev_client::reply_value(reply)?
-        .addressed
-        .unwrap_or_else(|| "nobody".to_owned()))
+    let judged = crate::dev_client::reply_value(reply)?;
+    Ok(format!(
+        "{}\nanswer_owed={}",
+        judged.addressed.as_deref().unwrap_or("nobody"),
+        judged.answer_owed
+    ))
 }
 
 /// Runs the conversation against the host on `port` and gives the transcript. A turn that fails
@@ -441,6 +445,7 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             recent: table.recent_lines(&history),
             asked_by: None,
             intent: None,
+            strike: false,
         };
         let spoken = match say_once(port, &say).await {
             Ok(spoken) => spoken,
@@ -491,9 +496,13 @@ pub async fn converse(port: u16, request: ConverseRequest) -> Result<String, Dev
             async {
                 match frames.as_mut() {
                     Some(watch) => {
-                        watch
-                            .after_line(port, &speaker, &line, &mut transcript)
+                        match watch
+                            .line_request(port, &speaker, &line, &mut transcript)
                             .await
+                        {
+                            Some(request) => Some(ask_judge(port, &request).await),
+                            None => None,
+                        }
                     }
                     None => None,
                 }

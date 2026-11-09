@@ -205,7 +205,7 @@ fn paths(prefix: &str, value: &Value, found: &mut BTreeSet<String>) {
 
 /// What the playground can draw that the projection does not fill yet, and who builds it. A field
 /// leaves this list when the projection (or, for the host's own moves, the host) fills it.
-const NOT_PROJECTED_YET: [(&str, &str); 20] = [
+const NOT_PROJECTED_YET: [(&str, &str); 21] = [
     // The art and camera of a scene come from the scene builder and the Director (O.14, SB, G1).
     ("tv.backdrop", "scene builder (SB): the plate"),
     ("tv.card", "Director (G1): handouts and portraits"),
@@ -224,6 +224,10 @@ const NOT_PROJECTED_YET: [(&str, &str); 20] = [
     // The landing, lobby, loading, narration and roleplay presentation of the TV belongs to the
     // playground's UI track; the table's projection does not carry it.
     ("tv.brand", "playground UI track: landing brand"),
+    (
+        "tv.clues",
+        "persona story: the clue board, pushed as a scene change",
+    ),
     ("tv.home", "playground UI track: landing page"),
     ("tv.loading", "playground UI track: loading screen"),
     ("tv.lobby", "playground UI track: lobby"),

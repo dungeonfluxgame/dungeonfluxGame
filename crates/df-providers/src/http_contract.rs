@@ -188,6 +188,18 @@ impl HttpRequest {
         )
     }
 
+    /// A native ElevenLabs `GET` (the voice list): the credential header and no body.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn elevenlabs_native_get(endpoint: &str, credential: &str) -> Self {
+        Self::new(
+            ProviderName::ElevenLabs,
+            HttpMethod::Get,
+            endpoint.to_owned(),
+            vec![("xi-api-key", credential.to_owned())],
+            Vec::new(),
+        )
+    }
+
     /// A Forge studio request: Forge refuses a write without its same-origin `Origin` and the
     /// `X-Forge-Request` kind (`project` or `runtime`), and takes no credential.
     #[cfg(not(target_arch = "wasm32"))]

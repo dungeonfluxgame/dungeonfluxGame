@@ -3,10 +3,11 @@ use df_scene_layout::{CharacterCue, CueKind};
 use super::CastCommand;
 use super::request::{CameraMoved, CameraRequest, CastError, CastList, CastReply, Cued};
 use super::routes::path;
+use super::routes::{SpeakerMove, speaker_move};
 use crate::command::{Command, parse};
 use crate::dev_http::{DevReply, RouteError};
 use crate::shown_scene::ShownSceneError;
-use crate::test_support::layout_of;
+use crate::test_support::{layout_of, layout_of_cast};
 
 fn words(text: &str) -> Vec<String> {
     text.split_whitespace().map(str::to_owned).collect()
@@ -101,7 +102,10 @@ async fn the_cast_and_the_camera_follow_the_backdrop_the_scene_shows() {
     let run = |line: &'static str| async move { crate::dev::run_dev(port, &words(line)).await };
     let first = run("scene cast").await.unwrap();
     assert!(first.contains("elf") && !first.contains("dwarf"), "{first}");
-    assert!(first.contains("elf Sylwen (Scout of the pass) ["), "{first}");
+    assert!(
+        first.contains("elf Sylwen (Scout of the pass) ["),
+        "{first}"
+    );
     let listed: CastReply<CastList> = crate::dev_client::get_json(port, path::CAST).await.unwrap();
     let DevReply::Done { value } = listed else {
         panic!("the cast is listed");
@@ -285,4 +289,222 @@ fn every_cast_error_key_is_its_serde_tag_or_its_causes() {
         assert_eq!(written["cause"]["error"], error.key(), "{written}");
         assert_eq!(serde_json::from_value::<CastError>(written).unwrap(), error);
     }
+}
+
+fn push(character: &str) -> SpeakerMove {
+    SpeakerMove::Push {
+        target: format!("region:{character}:speaker"),
+        zoom_percent: 112,
+    }
+}
+
+#[test]
+fn a_speaker_with_a_region_gets_the_gentle_push_in_and_the_next_speaker_takes_it() {
+    let layout = layout_of_cast("plate.png", &["elf", "dwarf"]);
+    assert_eq!(speaker_move(Some(&layout), "elf", None), push("elf"));
+    assert_eq!(
+        speaker_move(Some(&layout), "dwarf", Some("region:elf:speaker")),
+        push("dwarf")
+    );
+    assert_eq!(
+        speaker_move(Some(&layout), "elf", Some("region:dwarf")),
+        push("elf")
+    );
+}
+
+#[test]
+fn the_same_speaker_again_holds_still() {
+    let layout = layout_of_cast("plate.png", &["elf", "dwarf"]);
+    for held in ["region:elf:speaker", "region:elf", "region:elf:face"] {
+        assert_eq!(
+            speaker_move(Some(&layout), "elf", Some(held)),
+            SpeakerMove::Hold,
+            "{held}"
+        );
+    }
+}
+
+#[test]
+fn a_speaker_without_a_region_leaves_the_camera_wide() {
+    let layout = layout_of_cast("plate.png", &["elf"]);
+    assert_eq!(
+        speaker_move(Some(&layout), "bard", Some("region:elf:speaker")),
+        SpeakerMove::Wide
+    );
+    assert_eq!(
+        speaker_move(None, "elf", Some("region:elf:speaker")),
+        SpeakerMove::Wide
+    );
+    assert_eq!(speaker_move(None, "elf", None), SpeakerMove::Hold);
+    assert_eq!(speaker_move(Some(&layout), "bard", None), SpeakerMove::Hold);
+}
+
+#[test]
+fn a_camera_held_on_something_else_is_left_alone() {
+    let layout = layout_of_cast("plate.png", &["elf"]);
+    assert_eq!(
+        speaker_move(Some(&layout), "elf", Some("finn")),
+        SpeakerMove::Hold
+    );
+    assert_eq!(speaker_move(None, "elf", Some("finn")), SpeakerMove::Hold);
+}
+
+#[tokio::test]
+async fn a_spoken_cue_moves_the_camera_and_a_thinking_cue_does_not() {
+    use crate::test_support::{STARTER_FILES, start};
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("media/plate.png", "plate.png");
+    crate::locate::write_layout(
+        &running.playground_path("assets/layouts"),
+        "plate.png",
+        &layout_of_cast("plate.png", &["elf", "dwarf"]),
+    )
+    .unwrap();
+    running.write_asset(
+        "fixtures/one.json",
+        concat!(
+            r#"{"name": "One", "tv": {"place": "Here", "status": {"kind": "ok"}, "elements": [], "#,
+            r#""backdrop": {"media": "plate.png", "caption": null}}, "#,
+            r#""phone": {"hero": "Pip", "status": {"kind": "ok"}}}"#
+        ),
+    );
+    let port = running.port;
+    let run = |line: &'static str| async move { crate::dev::run_dev(port, &words(line)).await };
+    let serial = || {
+        running
+            .state
+            .playground()
+            .snapshot()
+            .scene
+            .camera
+            .set_value()
+            .map(|camera| camera.serial)
+    };
+    run("scene cast").await.unwrap();
+
+    run("scene cue elf think").await.unwrap();
+    assert_eq!(running.state.playground().camera_target(), None);
+
+    run("scene cue elf speak Well met.").await.unwrap();
+    assert_eq!(
+        running.state.playground().camera_target().as_deref(),
+        Some("region:elf:speaker")
+    );
+    let pushed = serial();
+
+    run("scene cue elf speak Again.").await.unwrap();
+    assert_eq!(serial(), pushed, "the same speaker holds still");
+
+    run("scene cue dwarf think").await.unwrap();
+    assert_eq!(serial(), pushed, "a thinking cue leaves the camera");
+
+    run("scene cue dwarf speak Aye.").await.unwrap();
+    assert_eq!(
+        running.state.playground().camera_target().as_deref(),
+        Some("region:dwarf:speaker")
+    );
+    let log: Vec<String> = running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("CAMERA speaker"))
+        .collect();
+    assert_eq!(log.len(), 3, "{log:?}");
+    assert!(
+        log[0].contains("character=elf move=push target=region:elf:speaker zoom=112 over=2000")
+    );
+    assert!(log[1].contains("character=elf move=hold"));
+    assert!(log[2].contains("character=dwarf move=push"));
+}
+
+/// A host showing a plate with `elf` and `dwarf` on the clock `start_paused` stops.
+async fn paused_host() -> crate::test_support::Running {
+    use crate::test_support::{STARTER_FILES, start};
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("media/plate.png", "plate.png");
+    crate::locate::write_layout(
+        &running.playground_path("assets/layouts"),
+        "plate.png",
+        &layout_of_cast("plate.png", &["elf", "dwarf"]),
+    )
+    .unwrap();
+    running.write_asset(
+        "fixtures/one.json",
+        concat!(
+            r#"{"name": "One", "tv": {"place": "Here", "status": {"kind": "ok"}, "elements": [], "#,
+            r#""backdrop": {"media": "plate.png", "caption": null}}, "#,
+            r#""phone": {"hero": "Pip", "status": {"kind": "ok"}}}"#
+        ),
+    );
+    crate::dev::run_dev(running.port, &words("scene cast"))
+        .await
+        .unwrap();
+    running
+}
+
+/// Moves the paused clock on by `ms` and lets the pull-back task, and the blocking reads it waits
+/// for, finish.
+async fn pass(ms: u64) {
+    tokio::time::advance(std::time::Duration::from_millis(ms)).await;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+        std::thread::yield_now();
+    }
+}
+
+fn rests(running: &crate::test_support::Running) -> usize {
+    running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .filter(|line| line.text.starts_with("CAMERA speaker") && line.text.contains("move=rest"))
+        .count()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_line_cancels_the_pending_pull_back() {
+    use super::routes::SPEAKER_REST_MS;
+    let running = paused_host().await;
+    let port = running.port;
+    let run = |line: &'static str| async move { crate::dev::run_dev(port, &words(line)).await };
+    run("scene cue elf speak Well.").await.unwrap();
+    pass(SPEAKER_REST_MS - 2_000).await;
+    run("scene cue elf speak Again.").await.unwrap();
+    // Past the first line's deadline, before the second's.
+    pass(SPEAKER_REST_MS - 2_000).await;
+    assert_eq!(rests(&running), 0);
+    assert_eq!(
+        running.state.playground().camera_target().as_deref(),
+        Some("region:elf:speaker")
+    );
+    pass(3_000).await;
+    assert_eq!(rests(&running), 1, "only the second line's timer ran");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_pull_back_quiets_the_last_speaker_and_sends_the_camera_wide() {
+    use super::routes::SPEAKER_REST_MS;
+    let running = paused_host().await;
+    let port = running.port;
+    crate::dev::run_dev(port, &words("scene cue elf speak Well."))
+        .await
+        .unwrap();
+    let bubbles = || {
+        running
+            .state
+            .playground()
+            .snapshot()
+            .scene
+            .roleplay
+            .set_value()
+            .map(|card| card.bubbles.len())
+    };
+    assert_eq!(bubbles(), Some(1));
+    pass(SPEAKER_REST_MS + 1_000).await;
+    assert_eq!(rests(&running), 1);
+    assert_eq!(running.state.playground().camera_target(), None);
+    assert_eq!(bubbles().unwrap_or(0), 0, "the line left with the camera");
 }

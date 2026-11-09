@@ -15,19 +15,24 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
 use df_imagery::oneshot::{self, OneShotConfig, OneShotError, OneShotRequest};
 use df_providers::{
-    FORGE_IMAGE_MAXIMUM_SIDE_PX, FORGE_IMAGE_SIDE_STEP_PX, ForgeCause, ForgeClient, ForgeEngine,
-    ForgeError, ForgeJobKind, ForgeMedia, NativeHttpCause,
+    FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS, FORGE_IMAGE_MAXIMUM_NEGATIVE_CHARACTERS,
+    FORGE_IMAGE_MAXIMUM_SIDE_PX, FORGE_IMAGE_NEGATIVE_GUIDANCE, FORGE_IMAGE_SIDE_STEP_PX,
+    ForgeCause, ForgeClient, ForgeEngine, ForgeError, ForgeJobKind, ForgeMedia, NativeHttpCause,
 };
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use super::limits::{CODEX_MAXIMUM_PICTURES, MAXIMUM_PICTURES};
 use super::model::{BackendRequest, GeneratedImage};
-use crate::forge::{FORGE_BACKEND, ForgeSetupError, client_from_environment};
+use super::request::BackendSwitch;
+use crate::forge::{FORGE_BACKEND, ForgeSetupError, client_from_environment, client_with};
 use crate::io_cause::IoCause;
 
 /// The login file a signed-in Codex home holds. Its presence is checked; it is never read.
@@ -89,7 +94,11 @@ pub enum BackendError {
     UsageLimited,
     /// The service refused or failed the request.
     Refused { detail: String },
-    /// The Forge studio gave no picture; `detail` is the closed key of its cause.
+    /// The text sent, or the negative prompt beside it, is longer than the backend takes:
+    /// `characters` counted as the backend counts them. Nothing was sent.
+    TextTooLong { characters: usize, maximum: usize },
+    /// The Forge studio gave no picture; `detail` is the closed key of its cause, then Forge's own
+    /// reason after a colon when it refused the request with one.
     ForgeFailed { detail: String },
     /// The delivered picture could not be read back.
     Unreadable { kind: String },
@@ -116,6 +125,7 @@ impl BackendError {
             Self::Interrupted => "interrupted",
             Self::UsageLimited => "usage_limited",
             Self::Refused { .. } => "refused",
+            Self::TextTooLong { .. } => "text_too_long",
             Self::ForgeFailed { .. } => "forge_failed",
             Self::Unreadable { .. } => "unreadable",
             Self::Internal => "internal",
@@ -123,7 +133,8 @@ impl BackendError {
     }
 
     /// The status a refusal for this reason is answered with: a backend that is not set up is a
-    /// 503, a deadline a 504, a failure of the service a 502 and a failure inside the host a 500.
+    /// 503, a text the backend cannot take a 400, a deadline a 504, a failure of the service a 502
+    /// and a failure inside the host a 500.
     pub fn status(&self) -> StatusCode {
         match self {
             Self::NotSwitchedOn
@@ -138,6 +149,7 @@ impl BackendError {
             | Self::WorkRootUnfit { .. }
             | Self::Unaccepted { .. }
             | Self::UsageLimited => StatusCode::SERVICE_UNAVAILABLE,
+            Self::TextTooLong { .. } => StatusCode::BAD_REQUEST,
             Self::Timeout => StatusCode::GATEWAY_TIMEOUT,
             Self::Interrupted | Self::Refused { .. } | Self::ForgeFailed { .. } => {
                 StatusCode::BAD_GATEWAY
@@ -256,6 +268,17 @@ impl fmt::Display for BackendError {
                 ),
                 detail, CODEX_HOME_VARIABLE
             ),
+            Self::TextTooLong {
+                characters,
+                maximum,
+            } => write!(
+                formatter,
+                concat!(
+                    "the picture's text is {} characters and the image backend takes at most {}; ",
+                    "nothing was sent"
+                ),
+                characters, maximum
+            ),
             Self::ForgeFailed { detail } => write!(
                 formatter,
                 "the forge studio gave no picture ({detail}); its queue and engine say why"
@@ -273,6 +296,55 @@ impl fmt::Display for BackendError {
 
 impl std::error::Error for BackendError {}
 
+/// What one backend takes, so a request is fitted to it before it is sent: callers read it (the
+/// services report carries it) to size what they ask for, and the service checks every request
+/// against it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackendLimits {
+    /// Most characters of the text sent (`ImageRequest::sent_text`), counted in UTF-16 code units;
+    /// none when the backend's bound is the request's own (`MAXIMUM_SENT_TEXT_CHARS`).
+    pub maximum_text_characters: Option<usize>,
+    /// Most characters of a negative prompt, when the backend takes what a picture must not show
+    /// apart from its text; none when those words go into the text.
+    pub maximum_negative_characters: Option<usize>,
+    /// Most pictures one request attaches: the picture to edit and the references together.
+    pub maximum_pictures: usize,
+}
+
+impl BackendLimits {
+    /// The request's own bounds, for a backend that has none narrower.
+    pub const REQUEST: Self = Self {
+        maximum_text_characters: None,
+        maximum_negative_characters: None,
+        maximum_pictures: MAXIMUM_PICTURES,
+    };
+
+    /// Whether the backend takes `text`, the whole text a request sends.
+    pub fn check_text(&self, text: &str) -> Result<(), BackendError> {
+        within(text, self.maximum_text_characters)
+    }
+
+    /// Whether the backend takes `negative` as its negative prompt.
+    pub fn check_negative(&self, negative: &str) -> Result<(), BackendError> {
+        within(negative, self.maximum_negative_characters)
+    }
+}
+
+/// `text` against `maximum`, counted in UTF-16 code units as the Forge studio counts them.
+fn within(text: &str, maximum: Option<usize>) -> Result<(), BackendError> {
+    let Some(maximum) = maximum else {
+        return Ok(());
+    };
+    let characters = text.encode_utf16().count();
+    if characters > maximum {
+        return Err(BackendError::TextTooLong {
+            characters,
+            maximum,
+        });
+    }
+    Ok(())
+}
+
 /// Something that turns a request into a picture.
 pub trait ImageBackend: Send + Sync {
     /// The name recorded in provenance and audit lines.
@@ -280,6 +352,11 @@ pub trait ImageBackend: Send + Sync {
 
     /// Looks at every precondition without starting any work.
     fn check(&self) -> Result<(), BackendError>;
+
+    /// What the backend takes.
+    fn limits(&self) -> BackendLimits {
+        BackendLimits::REQUEST
+    }
 
     /// Whether the backend was given a Codex home. Only a Codex backend has one.
     fn codex_home_set(&self) -> bool {
@@ -463,6 +540,14 @@ impl ImageBackend for CodexBackend {
         self.settings.codex_home.is_some()
     }
 
+    /// Codex has no negative prompt, so what a picture must not show goes into its text.
+    fn limits(&self) -> BackendLimits {
+        BackendLimits {
+            maximum_pictures: CODEX_MAXIMUM_PICTURES,
+            ..BackendLimits::REQUEST
+        }
+    }
+
     fn generate<'a>(
         &'a self,
         request: &'a BackendRequest,
@@ -478,6 +563,7 @@ impl ImageBackend for CodexBackend {
                 width_px: request.width_px,
                 height_px: request.height_px,
                 base: request.base.clone(),
+                references: request.references.clone(),
             };
             let image = oneshot::generate(&config, &one_shot)
                 .await
@@ -530,8 +616,25 @@ pub fn backend_from_environment() -> Box<dyn ImageBackend> {
     )
 }
 
+/// The backend `switch` asks for, built from what the host was started with (and, for Forge, the
+/// switch's own address and project when given). It is not checked here: the generator checks it
+/// before it switches.
+pub fn backend_of(switch: &BackendSwitch) -> Arc<dyn ImageBackend> {
+    match switch {
+        BackendSwitch::CodexCli {} => {
+            Arc::new(CodexBackend::new(CodexSettings::from_process_environment()))
+        }
+        BackendSwitch::Forge { url, project } => Arc::new(ForgeImageBackend::new(client_with(
+            url.as_deref(),
+            project.as_deref(),
+        ))),
+    }
+}
+
 /// The Forge backend: Qwen Image 2.1 in the owner's local studio, one queued render per picture.
-/// A base picture to edit is staged as the render's one reference. Forge takes sides in steps of
+/// A base picture to edit is staged as the render's first reference and the references after it,
+/// in order (Forge takes up to 10; the host attaches up to `MAXIMUM_PICTURES`). What the picture
+/// must not show is the render's negative prompt. Forge takes sides in steps of
 /// 32 pixels, so the requested size is rounded to the nearest it takes; the picture's own size is
 /// what is reported. It never retries: a render Forge reports interrupted stays for Forge's
 /// Recovery panel.
@@ -562,6 +665,16 @@ impl ImageBackend for ForgeImageBackend {
         self.client().map(|_| ())
     }
 
+    /// Forge's bounds on an image job's description and negative prompt, and the pictures the host
+    /// attaches.
+    fn limits(&self) -> BackendLimits {
+        BackendLimits {
+            maximum_text_characters: Some(FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS),
+            maximum_negative_characters: Some(FORGE_IMAGE_MAXIMUM_NEGATIVE_CHARACTERS),
+            maximum_pictures: MAXIMUM_PICTURES,
+        }
+    }
+
     fn generate<'a>(
         &'a self,
         request: &'a BackendRequest,
@@ -569,26 +682,26 @@ impl ImageBackend for ForgeImageBackend {
     ) -> BoxFuture<'a, Result<GeneratedImage, BackendError>> {
         Box::pin(async move {
             let client = self.client()?;
+            let limits = self.limits();
+            limits.check_text(&request.text)?;
+            if let Some(negative) = &request.negative {
+                limits.check_negative(negative)?;
+            }
             let started = tokio::time::Instant::now();
             let until = started + deadline;
             client
                 .prepare(ForgeEngine::Images, until)
                 .await
                 .map_err(forge_error)?;
-            let mut references = Vec::new();
-            if let Some(base) = &request.base {
+            let mut references = Vec::with_capacity(request.references.len() + 1);
+            for picture in request.base.iter().chain(&request.references) {
                 let staged = client
-                    .stage_reference(base, until)
+                    .stage_reference(picture, until)
                     .await
                     .map_err(forge_error)?;
                 references.push(staged.as_str().to_owned());
             }
-            let body = serde_json::json!({
-                "prompt": request.text,
-                "width": forge_side(request.width_px),
-                "height": forge_side(request.height_px),
-                "references": references,
-            });
+            let body = forge_image_job(request, &references);
             let render = client
                 .render(ForgeJobKind::Images, body, until)
                 .await
@@ -613,6 +726,23 @@ impl ImageBackend for ForgeImageBackend {
             })
         })
     }
+}
+
+/// The body of Forge's image job for `request` with its staged `references`. A negative prompt
+/// goes with the guidance that makes Forge apply it (`FORGE_IMAGE_NEGATIVE_GUIDANCE`); Forge
+/// refuses either without the other.
+pub(super) fn forge_image_job(request: &BackendRequest, references: &[String]) -> Value {
+    let mut body = serde_json::json!({
+        "prompt": request.text,
+        "width": forge_side(request.width_px),
+        "height": forge_side(request.height_px),
+        "references": references,
+    });
+    if let Some(negative) = &request.negative {
+        body["negative_prompt"] = Value::from(negative.as_str());
+        body["true_cfg_scale"] = Value::from(FORGE_IMAGE_NEGATIVE_GUIDANCE);
+    }
+    body
 }
 
 /// `side` rounded to the nearest side Forge takes.
@@ -645,7 +775,10 @@ fn forge_error(error: ForgeError) -> BackendError {
             kind: error.cause.key().to_owned(),
         },
         cause => BackendError::ForgeFailed {
-            detail: cause.key().to_owned(),
+            detail: match error.reason {
+                Some(reason) => format!("{}: {reason}", cause.key()),
+                None => cause.key().to_owned(),
+            },
         },
     }
 }

@@ -11,6 +11,12 @@
 //!   that did not give an answer
 //! - `SPEECH refused verb=<verb> error=<key>` for every refused request (routes)
 //! - `SPEECH key_terms_unavailable error=<key>` when the shown scene could not give names
+//! - `SPEECH voice_cast character=<id> voice_name=<"name"> reused=<bool> changed=<bool>
+//!   duration_ms=<n>` when a character's voice was cast (by `speech cast`, or before the first
+//!   line of a character with a persona and no voice of their own)
+//! - `SPEECH voice_cast_retried character=<id> error=<cause>` when the judge is asked again
+//! - `SPEECH voice_cast_failed character=<id> error=<key> duration_ms=<n>` when a first line's
+//!   cast failed and the line is spoken in the default voice
 //!
 //! Only text the host itself produced or the operator typed is voiced; a transcript is a draft
 //! for the player to edit and is never an action.
@@ -18,34 +24,58 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use df_content::persona::{BriefScope, PublicPersona};
 use df_playground::scene::{SceneChange, Target};
 use df_types::saturating_millis;
 
+use super::cast::{ask_cast, cast_facts};
 use super::clips::{Clip, clips, store_clip};
 use super::limits::{
     MAXIMUM_AUDIO_MS, MAXIMUM_KEY_TERM_CHARACTERS, MAXIMUM_KEY_TERM_WORDS, MAXIMUM_KEY_TERMS,
     MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
 };
 use super::provider::{
-    PortStatus, SpeechPort, SynthesisCall, TranscriptionCall, port_from_environment,
+    PortStatus, SpeechPort, SynthesisCall, TranscriptionCall, VoiceListing, port_from_environment,
 };
 use super::request::{
-    ClipPlayed, MissingSetting, QueryCause, SpeakRequest, SpeechError, SpeechFeature, SpeechStatus,
-    Transcript, Voiced, current_limits,
+    CastAnswerCause, CastRequest, ClipPlayed, MissingSetting, QueryCause, SpeakRequest,
+    SpeechError, SpeechFeature, SpeechStatus, Transcript, VoiceCast, VoiceCastError, Voiced,
+    current_limits,
 };
-use super::voices::{ResolvedVoice, VoiceBook, check_character, voices_path};
+use super::voices::{
+    ResolvedVoice, VoiceBook, VoiceSource, change_voice, check_character, claim_voice, voices_path,
+};
 use crate::blocking::run_blocking;
 use crate::command::DEFAULT_VOLUME;
-use crate::persona::summaries_of;
+use crate::persona::generate::load_persona;
+use crate::persona::story::judge_route;
+use crate::persona::{PersonaError, summaries_of};
 use crate::playground::apply_scene_changes;
 use crate::shown_scene::shown_cast;
 use crate::state::AppState;
+use crate::text::TextRuntime;
 
-/// The host, and the supplier its speech is asked of.
+/// The host, the supplier its speech is asked of, and the text surface a character's voice is
+/// cast through.
 #[derive(Clone)]
 pub struct Speech {
     app: Arc<AppState>,
     port: Arc<dyn SpeechPort>,
+    /// The text surface the casting judge is asked through; without it nothing is cast and a
+    /// character without a voice speaks in the default.
+    text: Option<Arc<TextRuntime>>,
+    /// Held around each cast, so a character is never cast twice (two first lines at once) and
+    /// each cast sees the voices the casts before it gave.
+    casting: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// Whether a cast may replace the voice a character has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Replace {
+    /// `speech cast`: the character's voice is the judge's choice, whatever it was.
+    Yes,
+    /// A first line's cast: a voice the character was given meanwhile is kept.
+    No,
 }
 
 /// A line that was voiced and kept as a clip.
@@ -73,7 +103,19 @@ impl SpeechVerb {
 
 impl Speech {
     pub fn new(app: Arc<AppState>, port: Arc<dyn SpeechPort>) -> Self {
-        Self { app, port }
+        Self {
+            app,
+            port,
+            text: None,
+            casting: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    /// This service casting characters' voices through `text` (the host's one text surface).
+    #[must_use]
+    pub fn with_text(mut self, text: Arc<TextRuntime>) -> Self {
+        self.text = Some(text);
+        self
     }
 
     /// Whether the playground has `feature` turned on (`playground set tts=..` or `stt=..`).
@@ -254,7 +296,19 @@ impl Speech {
             check_character(character)?;
         }
         self.check_configured()?;
-        let resolved: ResolvedVoice = self.voice_book().await?.resolve(character, voice)?;
+        let book = self.voice_book().await?;
+        let resolved = match (character, voice) {
+            (Some(character), None) if book.voice_of(character).is_none() => {
+                match self.cast_first_voice(character).await {
+                    Some(id) => ResolvedVoice {
+                        id,
+                        source: VoiceSource::Character,
+                    },
+                    None => book.resolve(Some(character), None)?,
+                }
+            }
+            _ => book.resolve(character, voice)?,
+        };
         let profile = resolved.profile(self.port.status().tts_model);
         let started = Instant::now();
         let made = self
@@ -276,6 +330,137 @@ impl Speech {
             clip,
             voice_profile: profile,
             synthesis_ms,
+        })
+    }
+
+    /// The voice cast for `character` before their first line, when they have a persona and the
+    /// service a text surface: `None` speaks the line in the default voice. A failed cast is
+    /// logged (`SPEECH voice_cast_failed`) and never stops the line; it is tried again on the
+    /// character's next line.
+    async fn cast_first_voice(&self, character: &str) -> Option<String> {
+        let text = self.text.as_ref()?;
+        let _casting = self.casting.lock().await;
+        let started = Instant::now();
+        let failed = |error: VoiceCastError| {
+            self.app.record_line(format!(
+                "SPEECH voice_cast_failed character={character} error={} duration_ms={}",
+                error.key(),
+                saturating_millis(started.elapsed())
+            ));
+            None
+        };
+        let book = match self.voice_book().await {
+            Ok(book) => book,
+            Err(error) => return failed(error.into()),
+        };
+        // Another line of the character cast their voice while this one waited.
+        if let Some(own) = book.voice_of(character) {
+            return Some(own.to_owned());
+        }
+        let persona = match load_persona(&self.app, character).await {
+            Ok(persona) => persona,
+            Err(PersonaError::UnknownPersona { .. }) => return None,
+            Err(cause) => return failed(VoiceCastError::PersonaUnreadable { cause }),
+        };
+        let public = persona.brief(BriefScope::Listener).public;
+        match self
+            .cast_locked(text, character, &public, &book, None, Replace::No)
+            .await
+        {
+            Ok(cast) => Some(cast.voice),
+            Err(error) => failed(error),
+        }
+    }
+
+    /// Casts the voice of the character `request` names from their persona, replacing the voice
+    /// they have (`speech cast`).
+    pub(super) async fn cast(&self, request: CastRequest) -> Result<VoiceCast, VoiceCastError> {
+        check_character(&request.character)?;
+        let text = self.text.as_ref().ok_or(VoiceCastError::NoJudge)?;
+        let _casting = self.casting.lock().await;
+        let persona =
+            load_persona(&self.app, &request.character)
+                .await
+                .map_err(|error| match error {
+                    PersonaError::UnknownPersona { .. } => VoiceCastError::NoPersona {
+                        character: request.character.clone(),
+                    },
+                    cause => VoiceCastError::PersonaUnreadable { cause },
+                })?;
+        let book = self.voice_book().await?;
+        let public = persona.brief(BriefScope::Listener).public;
+        self.cast_locked(
+            text,
+            &request.character,
+            &public,
+            &book,
+            request.model.as_deref(),
+            Replace::Yes,
+        )
+        .await
+    }
+
+    /// Lists the supplier's voices, asks the judge which fits `public` (preferring one nobody in
+    /// `book` speaks in) and writes it as `character`'s voice. The caller holds `casting`.
+    async fn cast_locked(
+        &self,
+        text: &TextRuntime,
+        character: &str,
+        public: &PublicPersona,
+        book: &VoiceBook,
+        model: Option<&str>,
+        replace: Replace,
+    ) -> Result<VoiceCast, VoiceCastError> {
+        let started = Instant::now();
+        let route = judge_route::<CastAnswerCause>(text, model)?;
+        let voices = match self.port.voices().await? {
+            VoiceListing::Listed(voices) => voices,
+            VoiceListing::Unlisted => return Err(VoiceCastError::Unlisted),
+        };
+        if voices.is_empty() {
+            return Err(VoiceCastError::NoVoices);
+        }
+        let in_use = book.voices_in_use(character);
+        let facts = cast_facts(public, &voices, &in_use);
+        let choice = ask_cast(&self.app, character, &route, facts, &voices).await?;
+        let path = voices_path(&self.app);
+        let (owned_character, chosen) = (character.to_owned(), choice.voice.clone());
+        let (voice, changed) = match replace {
+            Replace::Yes => {
+                let changed = run_blocking(
+                    move || change_voice(&path, &owned_character, Some(&chosen)),
+                    SpeechError::Stopped,
+                )
+                .await?
+                .changed;
+                (choice.voice, changed)
+            }
+            Replace::No => {
+                let claimed = run_blocking(
+                    move || claim_voice(&path, &owned_character, &chosen),
+                    SpeechError::Stopped,
+                )
+                .await?;
+                (claimed.voice, claimed.given)
+            }
+        };
+        let voice_name = voices
+            .iter()
+            .find(|listed| listed.voice_id() == voice)
+            .map_or_else(|| "-".to_owned(), |listed| listed.name().to_owned());
+        let reused = in_use.contains(&voice.as_str());
+        self.app.record_line(format!(
+            "SPEECH voice_cast character={character} voice_name={voice_name:?} reused={reused} \
+             changed={changed} duration_ms={}",
+            saturating_millis(started.elapsed())
+        ));
+        Ok(VoiceCast {
+            character: character.to_owned(),
+            voice,
+            voice_name,
+            reused,
+            why: choice.why,
+            changed,
         })
     }
 

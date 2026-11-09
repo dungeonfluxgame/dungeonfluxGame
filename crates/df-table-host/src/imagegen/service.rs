@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use df_table::ports::Clock;
@@ -25,11 +25,13 @@ use df_types::saturating_millis;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use super::backend::{BackendError, ImageBackend, backend_from_environment};
+use super::backend::{BackendError, BackendLimits, ImageBackend, backend_from_environment};
 use super::events::ImageGenEvent;
 use super::limits::{DEFAULT_DEADLINE, DEFAULT_GRACE, MAXIMUM_REMEMBERED_JOBS, PROVENANCE_SUFFIX};
 use super::model::{BackendRequest, GeneratedImage, ImageRequest};
-use super::request::{GenerateError, JobState, JobView, PictureCause, Provenance, Sidecar};
+use super::request::{
+    BackendView, GenerateError, JobState, JobView, PictureCause, Provenance, Sidecar,
+};
 use crate::io_cause::IoCause;
 use crate::media_library::{media_directory, store_bytes};
 use crate::state::AppState;
@@ -155,9 +157,11 @@ pub(super) fn forget_oldest_finished<T>(
     }
 }
 
-/// The generator: one backend, the deadline each job gets and the jobs so far.
+/// The generator: its backend, the deadline each job gets and the jobs so far. The backend can be
+/// switched while the host runs (`switch_backend`): a job keeps the backend it started on, and the
+/// lock is held only to read or replace it, never across an await.
 pub struct ImageGenerator {
-    backend: Arc<dyn ImageBackend>,
+    backend: RwLock<Arc<dyn ImageBackend>>,
     deadline: Duration,
     grace: Duration,
     provenance_directory: Option<PathBuf>,
@@ -169,7 +173,7 @@ pub struct ImageGenerator {
 impl ImageGenerator {
     pub fn new(backend: Arc<dyn ImageBackend>) -> Self {
         Self {
-            backend,
+            backend: RwLock::new(backend),
             deadline: DEFAULT_DEADLINE,
             grace: DEFAULT_GRACE,
             provenance_directory: None,
@@ -219,9 +223,59 @@ impl ImageGenerator {
         self.deadline
     }
 
+    /// The backend new jobs start on.
+    fn backend(&self) -> Arc<dyn ImageBackend> {
+        Arc::clone(&self.backend.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
     /// The backend's name, as provenance and audit lines show it.
     pub fn backend_name(&self) -> &'static str {
-        self.backend.name()
+        self.backend().name()
+    }
+
+    /// What the backend takes.
+    pub fn backend_limits(&self) -> BackendLimits {
+        self.backend().limits()
+    }
+
+    /// The backend new jobs start on, what it takes and how many jobs are running.
+    pub fn backend_view(&self) -> BackendView {
+        let backend = self.backend();
+        BackendView {
+            backend: backend.name().to_owned(),
+            limits: backend.limits(),
+            running: u64::try_from(self.running()).unwrap_or(u64::MAX),
+        }
+    }
+
+    /// Makes `backend` the one new jobs start on, once its preconditions hold (looked at on the
+    /// blocking pool); one that does not hold is refused with its reason and nothing changes. The
+    /// jobs running go on with the backend they started on. Records one `IMAGEGEN switched` line.
+    pub async fn switch_backend(
+        &self,
+        app: &AppState,
+        backend: Arc<dyn ImageBackend>,
+    ) -> Result<BackendView, GenerateError> {
+        let candidate = Arc::clone(&backend);
+        tokio::task::spawn_blocking(move || candidate.check())
+            .await
+            .map_err(|_| GenerateError::Stopped { job: None })?
+            .map_err(|backend| GenerateError::Backend { job: None, backend })?;
+        let to = backend.name();
+        let from = {
+            let mut slot = self.backend.write().unwrap_or_else(PoisonError::into_inner);
+            std::mem::replace(&mut *slot, backend).name()
+        };
+        let view = self.backend_view();
+        app.record_line_and_echo(
+            ImageGenEvent::Switched {
+                from,
+                to,
+                running: self.running(),
+            }
+            .line(),
+        );
+        Ok(view)
     }
 
     fn jobs(&self) -> MutexGuard<'_, Vec<JobRecord>> {
@@ -235,7 +289,7 @@ impl ImageGenerator {
 
     /// Whether the backend runs with a Codex home (its path is never shown).
     pub fn codex_home_set(&self) -> bool {
-        self.backend.codex_home_set()
+        self.backend().codex_home_set()
     }
 
     /// How many jobs are running now.
@@ -284,7 +338,20 @@ impl ImageGenerator {
         request: ImageRequest,
     ) -> Result<Started, GenerateError> {
         let asked_ms = self.clock.now_ms();
-        self.check(app, asked_ms).await?;
+        // The job keeps this backend to its end, whatever it is switched to meanwhile.
+        let backend = self.backend();
+        self.check(app, &backend, asked_ms).await?;
+        // The pictures and the text are held to the bounds of the backend that sends them, not
+        // only to the request's own, so a request the backend cannot take opens no job.
+        let limits = backend.limits();
+        request.check_pictures(limits.maximum_pictures)?;
+        limits
+            .check_text(&request.sent_text(&limits))
+            .and_then(|()| match request.negative_text(&limits) {
+                Some(negative) => limits.check_negative(&negative),
+                None => Ok(()),
+            })
+            .map_err(|backend| GenerateError::Backend { job: None, backend })?;
         let (view, running) = self.open_job(request.name())?;
         app.record_line(
             ImageGenEvent::Requested {
@@ -294,7 +361,7 @@ impl ImageGenerator {
                 aspect: request.aspect(),
                 prompt_chars: request.prompt().chars().count(),
                 deadline: self.deadline,
-                backend: self.backend.name(),
+                backend: backend.name(),
                 running,
             }
             .line(),
@@ -312,7 +379,7 @@ impl ImageGenerator {
                 }
                 .line(),
             );
-            let outcome = generator.run(&app, job, request).await;
+            let outcome = generator.run(&app, job, request, backend.as_ref()).await;
             // A waiter that went away stopped only waiting; the record holds the job's end.
             let _ = end.send(outcome);
         });
@@ -322,15 +389,20 @@ impl ImageGenerator {
 
     /// Looks at the backend's preconditions on the blocking pool and records how long that took
     /// and what it found. A check task that stopped without an answer found nothing to record.
-    async fn check(&self, app: &AppState, asked_ms: u64) -> Result<(), GenerateError> {
-        let backend = Arc::clone(&self.backend);
-        let checked = tokio::task::spawn_blocking(move || backend.check())
+    async fn check(
+        &self,
+        app: &AppState,
+        backend: &Arc<dyn ImageBackend>,
+        asked_ms: u64,
+    ) -> Result<(), GenerateError> {
+        let checking = Arc::clone(backend);
+        let checked = tokio::task::spawn_blocking(move || checking.check())
             .await
             .map_err(|_| GenerateError::Stopped { job: None })?;
         let checked_ms = self.clock.now_ms().saturating_sub(asked_ms);
         app.record_line(
             ImageGenEvent::Check {
-                backend: self.backend.name(),
+                backend: backend.name(),
                 duration: Duration::from_millis(checked_ms),
                 failed: checked.as_ref().err().cloned(),
             }
@@ -381,8 +453,9 @@ impl ImageGenerator {
         app: &AppState,
         job: u64,
         request: ImageRequest,
+        backend: &dyn ImageBackend,
     ) -> Result<JobView, GenerateError> {
-        let outcome = self.make_and_store(app, job, &request).await;
+        let outcome = self.make_and_store(app, job, &request, backend).await;
         let state = match &outcome {
             Ok((provenance, sidecar)) => JobState::Stored {
                 provenance: Box::new(provenance.clone()),
@@ -401,7 +474,7 @@ impl ImageGenerator {
                     name: request.name().to_owned(),
                     error: error.clone(),
                     duration: Duration::from_millis(view.elapsed_ms),
-                    backend: self.backend.name(),
+                    backend: backend.name(),
                 }
                 .line(),
             );
@@ -436,19 +509,44 @@ impl ImageGenerator {
         app: &AppState,
         job: u64,
         request: &ImageRequest,
+        backend: &dyn ImageBackend,
     ) -> Result<(Provenance, Option<Sidecar>), GenerateError> {
         let (width_px, height_px) = request.aspect().requested_size();
         let base = match request.base() {
-            Some(base) => Some(read_base(app, job, base).await?),
+            Some(base) => Some(read_picture(app, job, base).await?.map_err(|cause| {
+                GenerateError::BaseUnreadable {
+                    job,
+                    base: base.to_owned(),
+                    cause,
+                }
+            })?),
             None => None,
         };
+        let attached = request
+            .references()
+            .iter()
+            .chain(request.things().iter().map(|thing| &thing.picture));
+        let mut references =
+            Vec::with_capacity(request.references().len() + request.things().len());
+        for reference in attached {
+            references.push(read_picture(app, job, reference).await?.map_err(|cause| {
+                GenerateError::ReferenceUnreadable {
+                    job,
+                    reference: reference.clone(),
+                    cause,
+                }
+            })?);
+        }
+        let limits = backend.limits();
         let backend_request = BackendRequest {
-            text: request.sent_text(),
+            text: request.sent_text(&limits),
+            negative: request.negative_text(&limits),
             width_px,
             height_px,
             base,
+            references,
         };
-        let image = self.generate(job, backend_request).await?;
+        let image = self.generate(job, &backend_request, backend).await?;
         if let Some(cause) = image.cleanup {
             app.record_line_and_echo(ImageGenEvent::CleanupFailed { job, cause }.line());
         }
@@ -462,13 +560,14 @@ impl ImageGenerator {
                 detail: failure.to_string(),
             })?;
         let provenance = Provenance {
-            backend: self.backend.name().to_owned(),
+            backend: backend.name().to_owned(),
             purpose: request.purpose(),
             aspect: request.aspect(),
             requested_width_px: width_px,
             requested_height_px: height_px,
             prompt: request.prompt().to_owned(),
-            sent_text: request.sent_text(),
+            sent_text: backend_request.text,
+            negative: backend_request.negative,
             duration_ms: saturating_millis(image.duration),
             deadline_ms: saturating_millis(self.deadline),
             width_px: image.width_px,
@@ -490,7 +589,7 @@ impl ImageGenerator {
                 width_px: image.width_px,
                 height_px: image.height_px,
                 duration: image.duration,
-                backend: self.backend.name(),
+                backend: backend.name(),
                 sha256_prefix: image.sha256_hex.chars().take(16).collect(),
                 tokens_in: image.input_tokens,
                 tokens_out: image.output_tokens,
@@ -507,10 +606,11 @@ impl ImageGenerator {
     async fn generate(
         &self,
         job: u64,
-        backend_request: BackendRequest,
+        backend_request: &BackendRequest,
+        backend: &dyn ImageBackend,
     ) -> Result<GeneratedImage, GenerateError> {
         let limit = self.deadline.saturating_add(self.grace);
-        let attempt = self.backend.generate(&backend_request, self.deadline);
+        let attempt = backend.generate(backend_request, self.deadline);
         match tokio::time::timeout(limit, attempt).await {
             Ok(generated) => generated.map_err(|backend| GenerateError::Backend {
                 job: Some(job),
@@ -551,18 +651,18 @@ fn extension_of(mime: &str) -> &'static str {
     }
 }
 
-/// The bytes of `base`, a picture of the host's media library, read on the blocking pool.
-async fn read_base(app: &AppState, job: u64, base: &str) -> Result<Vec<u8>, GenerateError> {
-    let path = media_directory(app.playground().files()).join(base);
-    let name = base.to_owned();
+/// The bytes of `picture`, a picture of the host's media library, read on the blocking pool, or
+/// why it could not be read. The outer error is a reading task that stopped.
+async fn read_picture(
+    app: &AppState,
+    job: u64,
+    picture: &str,
+) -> Result<Result<Vec<u8>, IoCause>, GenerateError> {
+    let path = media_directory(app.playground().files()).join(picture);
     tokio::task::spawn_blocking(move || std::fs::read(path))
         .await
-        .map_err(|_| GenerateError::Stopped { job: Some(job) })?
-        .map_err(|error| GenerateError::BaseUnreadable {
-            job,
-            base: name,
-            cause: IoCause::from_kind(error.kind()),
-        })
+        .map_err(|_| GenerateError::Stopped { job: Some(job) })
+        .map(|read| read.map_err(|error| IoCause::from_kind(error.kind())))
 }
 
 fn stored_as_delivered_note(mime: &str) -> String {

@@ -7,8 +7,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use df_ai::text::TextRequest;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use super::generate::operation_key;
 use crate::dev_http::{BodyError, RouteError};
 use crate::text::{
     ModelCause, ServiceReason, TextAskError, TextRoute, TextRuntime, TextServiceCause,
@@ -106,7 +109,7 @@ impl<C> From<TextAskError<C>> for JudgeRouteError<C> {
 }
 
 /// The route a judgement is asked of: the default persona model, or the one the request names.
-pub(super) fn judge_route<C>(
+pub(crate) fn judge_route<C>(
     text: &TextRuntime,
     model: Option<&str>,
 ) -> Result<Arc<TextRoute>, JudgeRouteError<C>> {
@@ -117,4 +120,21 @@ pub(super) fn judge_route<C>(
     }
     text.persona_route(model)
         .map_err(|cause| JudgeRouteError::InvalidModel { cause })
+}
+
+/// Asks `request` once under `operation` and reads the answer with `read`. An answer the reader
+/// refuses is [`JudgeRouteError::AnswerRefused`], saying whether it was a replay, so the caller
+/// can ask once more with why.
+pub(crate) async fn ask_request<T, C: fmt::Display>(
+    route: &TextRoute,
+    operation: &str,
+    request: &TextRequest,
+    read: impl Fn(&Value) -> Result<T, C>,
+) -> Result<T, JudgeRouteError<C>> {
+    let key = operation_key(operation).map_err(|_| JudgeRouteError::InvalidOperationKey)?;
+    route
+        .ask(&key, request, read)
+        .await
+        .map(|asked| asked.value)
+        .map_err(JudgeRouteError::from)
 }

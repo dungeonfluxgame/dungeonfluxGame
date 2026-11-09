@@ -733,6 +733,7 @@ async fn with_backdrop_layout(state: &AppState, change: SceneChange) -> SceneCha
         rotation_degrees,
         slide,
         layout: None,
+        plate,
     } = change
     else {
         return change;
@@ -759,5 +760,6 @@ async fn with_backdrop_layout(state: &AppState, change: SceneChange) -> SceneCha
         rotation_degrees,
         slide,
         layout,
+        plate,
     }
 }

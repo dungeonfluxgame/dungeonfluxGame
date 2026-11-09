@@ -40,6 +40,9 @@ pub const BACKEND_NAME: &str = "codex-cli";
 /// Longest request text this entry point accepts, in characters.
 pub const MAXIMUM_PROMPT_CHARS: usize = 16_000;
 
+/// The most pictures one request attaches: the base, when there is one, and the references.
+pub const MAXIMUM_PICTURES: usize = crate::request::DEFAULT_MAX_REFERENCES;
+
 /// The largest single protocol line, in bytes. A finished picture arrives as one base64 line, so
 /// the backend's own small default (1 MiB) loses every real picture as lost output; the durable
 /// service allows 24 MiB, and the owner wants large limits.
@@ -78,6 +81,9 @@ pub struct OneShotRequest {
     /// A picture to edit instead of making a new one: the result keeps it and changes what the
     /// prompt says. PNG, JPEG or WebP bytes.
     pub base: Option<Vec<u8>>,
+    /// Pictures the result follows (a person's look, say), attached in order after the base.
+    /// PNG, JPEG or WebP bytes; with the base, at most `MAXIMUM_PICTURES`.
+    pub references: Vec<Vec<u8>>,
 }
 
 /// A verified picture and what is known about how it was made.
@@ -386,16 +392,18 @@ pub async fn generate(
     let prompt = TextPrompt::new(&request.prompt, 1)
         .map_err(|_| OneShotError::InvalidRequest("the prompt is empty"))?;
     let dimensions = dimensions(request)?;
+    if usize::from(request.base.is_some()) + request.references.len() > MAXIMUM_PICTURES {
+        return Err(OneShotError::InvalidRequest(
+            "the request attaches more pictures than the backend takes",
+        ));
+    }
     let (folder, attempt) = AttemptFolder::create(&config.work_root).await?;
-    let (kind, references) = match &request.base {
-        None => (ImageKind::Generate, Vec::new()),
-        Some(base) => match stage_base(attempt.inputs(), base).await {
-            Ok(staged) => (ImageKind::Edit, vec![staged]),
-            Err(error) => {
-                record_unreturned_cleanup(folder.remove().await, &error);
-                return Err(error);
-            }
-        },
+    let (kind, references) = match stage_pictures(attempt.inputs(), request).await {
+        Ok(staged) => staged,
+        Err(error) => {
+            record_unreturned_cleanup(folder.remove().await, &error);
+            return Err(error);
+        }
     };
     let backend_request = CodexImageRequest::new(
         prompt,
@@ -450,20 +458,55 @@ pub async fn generate(
     })
 }
 
-/// Stages `base` in the attempt's inputs as the picture to edit, under a name with its own type's
-/// extension and with its digest, so the backend's preflight checks it like any staged reference.
-async fn stage_base(inputs: &Path, base: &[u8]) -> Result<StagedReference, OneShotError> {
-    let (mime, _, _) = describe(base).ok_or(OneShotError::InvalidRequest(
-        "the base is not a readable picture",
-    ))?;
+/// Stages the request's pictures in the attempt's inputs, the base first: an edit when there is a
+/// base, otherwise a generation that follows the references.
+async fn stage_pictures(
+    inputs: &Path,
+    request: &OneShotRequest,
+) -> Result<(ImageKind, Vec<StagedReference>), OneShotError> {
+    let mut staged = Vec::with_capacity(request.references.len() + 1);
+    if let Some(base) = &request.base {
+        staged
+            .push(stage_picture(inputs, "base", base, "the base is not a readable picture").await?);
+    }
+    for (index, reference) in request.references.iter().enumerate() {
+        let stem = format!("reference-{}", index + 1);
+        staged.push(
+            stage_picture(
+                inputs,
+                &stem,
+                reference,
+                "a reference is not a readable picture",
+            )
+            .await?,
+        );
+    }
+    let kind = if request.base.is_some() {
+        ImageKind::Edit
+    } else {
+        ImageKind::Generate
+    };
+    Ok((kind, staged))
+}
+
+/// Stages `picture` in the attempt's inputs as `<stem>.<its own type's extension>` with its digest,
+/// so the backend's preflight checks it like any staged reference. A picture that does not read is
+/// refused with `unreadable`.
+async fn stage_picture(
+    inputs: &Path,
+    stem: &str,
+    picture: &[u8],
+    unreadable: &'static str,
+) -> Result<StagedReference, OneShotError> {
+    let (mime, _, _) = describe(picture).ok_or(OneShotError::InvalidRequest(unreadable))?;
     let extension = match mime {
         "image/jpeg" => "jpg",
         "image/webp" => "webp",
         _ => "png",
     };
-    let path = inputs.join(format!("base.{extension}"));
-    let digest = crate::lower_hex(&Sha256::digest(base));
-    let (target, bytes) = (path.clone(), base.to_vec());
+    let path = inputs.join(format!("{stem}.{extension}"));
+    let digest = crate::lower_hex(&Sha256::digest(picture));
+    let (target, bytes) = (path.clone(), picture.to_vec());
     tokio::task::spawn_blocking(move || std::fs::write(target, bytes))
         .await
         .map_err(|_| OneShotError::Internal)?
@@ -525,6 +568,7 @@ mod tests {
             width_px: 16,
             height_px: 9,
             base: None,
+            references: Vec::new(),
         };
         assert_send(&generate(&config, &request));
     }
@@ -537,6 +581,108 @@ mod tests {
         bytes.extend_from_slice(&1672_u32.to_be_bytes());
         bytes.extend_from_slice(&941_u32.to_be_bytes());
         assert_eq!(describe(&bytes), Some(("image/png", 1672, 941)));
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::RgbImage::new(2, 2)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    #[tokio::test]
+    async fn references_are_staged_in_order_after_the_base() {
+        let work_root = attempt_work_root("references");
+        let (folder, attempt) = AttemptFolder::create(&work_root).await.unwrap();
+        let picture = tiny_png();
+        let request = OneShotRequest {
+            prompt: "the two of them".to_owned(),
+            width_px: 16,
+            height_px: 9,
+            base: Some(picture.clone()),
+            references: vec![picture.clone(), picture],
+        };
+        let (kind, staged) = stage_pictures(attempt.inputs(), &request).await.unwrap();
+        let names: Vec<_> = staged
+            .iter()
+            .map(|reference| reference.path().file_name().unwrap().to_owned())
+            .collect();
+        folder.remove().await.unwrap();
+        let _ = std::fs::remove_dir_all(&work_root);
+        assert_eq!(kind, ImageKind::Edit);
+        assert_eq!(names, ["base.png", "reference-1.png", "reference-2.png"]);
+    }
+
+    #[tokio::test]
+    async fn references_without_a_base_make_a_generation_that_follows_them() {
+        let work_root = attempt_work_root("references-only");
+        let (folder, attempt) = AttemptFolder::create(&work_root).await.unwrap();
+        let request = OneShotRequest {
+            prompt: "him again".to_owned(),
+            width_px: 16,
+            height_px: 9,
+            base: None,
+            references: vec![tiny_png()],
+        };
+        let (kind, staged) = stage_pictures(attempt.inputs(), &request).await.unwrap();
+        folder.remove().await.unwrap();
+        let _ = std::fs::remove_dir_all(&work_root);
+        assert_eq!(kind, ImageKind::Generate);
+        assert_eq!(staged.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_reference_that_is_not_a_picture_is_refused_by_name() {
+        let work_root = attempt_work_root("reference-unreadable");
+        let (folder, attempt) = AttemptFolder::create(&work_root).await.unwrap();
+        let request = OneShotRequest {
+            prompt: "him again".to_owned(),
+            width_px: 16,
+            height_px: 9,
+            base: None,
+            references: vec![b"not a picture".to_vec()],
+        };
+        let error = stage_pictures(attempt.inputs(), &request)
+            .await
+            .expect_err("text is no reference");
+        folder.remove().await.unwrap();
+        let _ = std::fs::remove_dir_all(&work_root);
+        assert_eq!(
+            error,
+            OneShotError::InvalidRequest("a reference is not a readable picture")
+        );
+    }
+
+    #[tokio::test]
+    async fn more_pictures_than_the_backend_takes_are_refused_before_any_work() {
+        let work = std::env::temp_dir();
+        let config = OneShotConfig {
+            executable: work.join("no-such-codex-executable.exe"),
+            work_root: work,
+            agent_model: None,
+            codex_home: None,
+            deadline: Duration::from_secs(5),
+        };
+        let request = OneShotRequest {
+            prompt: "a crowd".to_owned(),
+            width_px: 16,
+            height_px: 9,
+            base: Some(tiny_png()),
+            references: vec![tiny_png(); MAXIMUM_PICTURES],
+        };
+        let error = generate(&config, &request)
+            .await
+            .expect_err("one picture too many");
+        assert_eq!(
+            error,
+            OneShotError::InvalidRequest(
+                "the request attaches more pictures than the backend takes"
+            )
+        );
     }
 
     #[test]
@@ -558,6 +704,7 @@ mod tests {
             width_px: 16,
             height_px: 9,
             base: None,
+            references: Vec::new(),
         };
         let error = generate(&config, &request)
             .await
@@ -580,6 +727,7 @@ mod tests {
             width_px: 16,
             height_px: 9,
             base: None,
+            references: Vec::new(),
         };
         let error = generate(&config, &request)
             .await
@@ -607,6 +755,7 @@ mod tests {
             width_px: 16,
             height_px: 9,
             base: None,
+            references: Vec::new(),
         };
         let error = generate(&config, &request)
             .await

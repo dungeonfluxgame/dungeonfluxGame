@@ -2,7 +2,8 @@
 //! owner's local Forge studio (`DF_SPEECH_BACKEND=forge`).
 //!
 //! [`SpeechPort`] is the whole surface the host asks of a supplier: whether it is set up and with
-//! which models, text to one buffered clip (MP3 or WAV), and 16 kHz mono PCM to a transcript. The
+//! which models, text to one buffered clip (MP3 or WAV), 16 kHz mono PCM to a transcript, and the
+//! voices it can speak in (for casting a character's voice; a supplier may keep no list). The
 //! host's routes and the persona routes know only the port, so the planned `AudioService`
 //! (`df-media`) can replace either adapter without touching them. [`port_from_environment`]
 //! picks one. The ElevenLabs adapter builds each request the way the
@@ -30,7 +31,7 @@ use df_providers::{
     CandidateRouteId, ELEVEN_STT_LANGUAGE, ELEVEN_STT_MODEL, ELEVEN_TTS_LANGUAGE, ELEVEN_TTS_MODEL,
     ElevenSpeechRequest, ElevenSttRequest, NativeHttpCause, NativeSpeechProvider, ProviderLimits,
     SpeechAdapterCause, SpeechAdapterError, SpeechInputFormat, SpeechOutputFormat,
-    SpeechTranscriptProfile, TranscriptWordKind, registered_speech_provider,
+    SpeechTranscriptProfile, SupplierVoice, TranscriptWordKind, registered_speech_provider,
 };
 use df_types::{
     LocaleTag, OperationId, RecoveryEpoch, RevisionLabel, RunId, SessionId, SessionRevision, Usage,
@@ -40,7 +41,7 @@ use df_types::{
 use super::limits::{
     KEY_VARIABLES, MAXIMUM_ADMITTED_AUDIO_BYTES, MAXIMUM_ADMITTED_TEXT_BYTES, MAXIMUM_AUDIO_MS,
     MAXIMUM_PROVIDER_REQUEST_BYTES, MAXIMUM_PROVIDER_RESPONSE_BYTES, MAXIMUM_TEXT_CHARACTERS,
-    SPEECH_DEADLINE,
+    SPEECH_DEADLINE, VOICE_LIST_DEADLINE,
 };
 use super::request::{MissingSetting, SpeechError, SpeechProviderCause};
 use crate::environment;
@@ -112,6 +113,15 @@ pub struct PortStatus {
     pub stt_model: &'static str,
 }
 
+/// The voices a supplier can speak in, or that it keeps no list a voice can be chosen from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoiceListing {
+    /// The supplier's voices, in its order.
+    Listed(Vec<SupplierVoice>),
+    /// The supplier keeps no list (Forge maps any voice id to a preset speaker).
+    Unlisted,
+}
+
 /// The surface the host asks of a speech supplier.
 pub trait SpeechPort: Send + Sync {
     fn status(&self) -> PortStatus;
@@ -120,6 +130,8 @@ pub trait SpeechPort: Send + Sync {
         &self,
         call: TranscriptionCall,
     ) -> PortFuture<'_, Result<Transcription, SpeechError>>;
+    /// The voices a character's voice can be cast from.
+    fn voices(&self) -> PortFuture<'_, Result<VoiceListing, SpeechError>>;
 }
 
 /// The variable that picks the speech supplier: `elevenlabs` (unset) or `forge`.
@@ -237,6 +249,18 @@ impl SpeechPort for ElevenLabsPort {
         call: TranscriptionCall,
     ) -> PortFuture<'_, Result<Transcription, SpeechError>> {
         Box::pin(async move { listen(&self.ready()?.stt, call).await })
+    }
+
+    fn voices(&self) -> PortFuture<'_, Result<VoiceListing, SpeechError>> {
+        Box::pin(async move {
+            let listed = self
+                .ready()?
+                .tts
+                .voices(VOICE_LIST_DEADLINE, pending())
+                .await
+                .map_err(adapter_error)?;
+            Ok(VoiceListing::Listed(listed))
+        })
     }
 }
 
@@ -436,7 +460,8 @@ fn adapter_error(error: SpeechAdapterError) -> SpeechError {
         SpeechAdapterCause::InvalidCredential => SpeechProviderCause::Credential,
         SpeechAdapterCause::Json
         | SpeechAdapterCause::Transcript
-        | SpeechAdapterCause::EmptyAudio => SpeechProviderCause::Unusable,
+        | SpeechAdapterCause::EmptyAudio
+        | SpeechAdapterCause::VoiceList => SpeechProviderCause::Unusable,
         SpeechAdapterCause::Transport(NativeHttpCause::Deadline) => SpeechProviderCause::Deadline,
         SpeechAdapterCause::Transport(NativeHttpCause::Cancelled) => SpeechProviderCause::Cancelled,
         SpeechAdapterCause::Transport(_) => SpeechProviderCause::Transport,

@@ -2,7 +2,7 @@
 
 use crate::controls::Device;
 use crate::scene::{Cue, Target, Track};
-use crate::sound_plan::{FreshCues, MusicChange, fresh_cues, music_change, volume_of};
+use crate::sound_plan::{AudioPrefs, FreshCues, MusicChange, fresh_cues, music_change, volume_of};
 
 fn cue(id: u64, target: Target) -> Cue {
     Cue {
@@ -130,4 +130,69 @@ fn a_volume_is_a_share_of_full_and_is_held_at_full() {
     assert_eq!(volume_of(50), 0.5);
     assert_eq!(volume_of(100), 1.0);
     assert_eq!(volume_of(255), 1.0);
+}
+
+#[test]
+fn the_master_volume_scales_each_sound_s_own_and_the_toggles_mute_without_losing_it() {
+    let prefs = AudioPrefs::default();
+    assert_eq!(
+        prefs,
+        AudioPrefs {
+            sound_on: true,
+            music_on: true,
+            volume_percent: 80
+        }
+    );
+    assert!((prefs.volume_for(50) - 0.4).abs() < 1e-9);
+    assert!((prefs.volume_for(100) - 0.8).abs() < 1e-9);
+    let silent = AudioPrefs {
+        volume_percent: 0,
+        ..prefs
+    };
+    assert_eq!(silent.volume_for(100), 0.0);
+    let full = AudioPrefs {
+        volume_percent: 100,
+        ..prefs
+    };
+    assert!((full.volume_for(30) - 0.3).abs() < 1e-9);
+    assert!(prefs.music_plays());
+    assert!(
+        !AudioPrefs {
+            music_on: false,
+            ..prefs
+        }
+        .music_plays()
+    );
+    let muted = AudioPrefs {
+        sound_on: false,
+        ..prefs
+    };
+    assert!(!muted.music_plays(), "muted, the music is off too");
+    assert!(muted.music_on, "and comes back with the sound");
+    assert!(
+        (muted.volume_for(50) - 0.4).abs() < 1e-9,
+        "the volume is kept"
+    );
+}
+
+#[test]
+fn stored_prefs_read_back_and_anything_else_is_the_defaults() {
+    let prefs = AudioPrefs {
+        sound_on: false,
+        music_on: true,
+        volume_percent: 35,
+    };
+    assert_eq!(AudioPrefs::from_stored(Some(&prefs.stored())), prefs);
+    assert_eq!(AudioPrefs::from_stored(None), AudioPrefs::default());
+    assert_eq!(
+        AudioPrefs::from_stored(Some("not json")),
+        AudioPrefs::default()
+    );
+    assert_eq!(
+        AudioPrefs::from_stored(Some(
+            r#"{"sound_on":true,"music_on":true,"volume_percent":250}"#
+        ))
+        .volume_percent,
+        100
+    );
 }

@@ -3,9 +3,10 @@
 //! the fixture has them. The destructures below have no `..`, so a new field of `SceneOverlay`,
 //! `TvScene`, `PhoneScene` or `Fixture` stops this file compiling until it is classified here.
 
+use crate::clues::{ClueBoard, ClueNote};
 use crate::fixture::{
-    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, PhoneScene, TvScene,
-    UnavailableChoice,
+    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, PhoneScene, PlateKind,
+    TvScene, UnavailableChoice,
 };
 use crate::home::model::HomeScene;
 use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
@@ -19,6 +20,7 @@ fn image(media: &str) -> ImageRef {
         rotation_degrees: 0,
         slide: None,
         layout: None,
+        plate: PlateKind::Room,
     }
 }
 
@@ -143,6 +145,18 @@ fn home(focus: &str) -> HomeScene {
     }
 }
 
+fn clue_board(id: &str) -> ClueBoard {
+    ClueBoard {
+        notes: vec![ClueNote {
+            id: id.to_owned(),
+            name: "A clue".to_owned(),
+            detail: "What it shows.".to_owned(),
+            worked_out: false,
+            picture: None,
+        }],
+    }
+}
+
 fn track(media: &str) -> Track {
     Track {
         media: media.to_owned(),
@@ -204,6 +218,7 @@ fn all_set() -> SceneOverlay {
         unavailable: Edit::Set(vec![unavailable("Fly")]),
         phone_image: Edit::Set(image("live-phone.webp")),
         music: Edit::Set(track("live.ogg")),
+        clues: Edit::Set(clue_board("live-clue")),
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
@@ -232,6 +247,7 @@ fn all_clear() -> SceneOverlay {
         unavailable: Edit::Clear,
         phone_image: Edit::Clear,
         music: Edit::Clear,
+        clues: Edit::Clear,
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
@@ -288,6 +304,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
         roleplay,
         pills,
         home,
+        clues,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -314,6 +331,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
     assert_eq!(roleplay.as_ref(), overlay.roleplay.set_value());
     assert_eq!(pills.as_ref(), overlay.pills.set_value());
     assert_eq!(home.as_ref(), overlay.home.set_value());
+    assert_eq!(clues.as_ref(), overlay.clues.set_value());
     assert_eq!(Some(&suggested), overlay.suggested.set_value());
     assert_eq!(Some(&groups), overlay.groups.set_value());
     assert_eq!(Some(&unavailable), overlay.unavailable.set_value());
@@ -348,6 +366,7 @@ fn every_slot_clears() {
         roleplay,
         pills,
         home,
+        clues,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -374,6 +393,7 @@ fn every_slot_clears() {
     assert_eq!(roleplay, None);
     assert_eq!(pills, None);
     assert_eq!(home, None);
+    assert_eq!(clues, None);
     assert!(suggested.is_empty());
     assert!(groups.is_empty());
     assert!(unavailable.is_empty());
@@ -393,11 +413,11 @@ fn changed_slots_match_wire_names() {
         .filter(|key| !matches!(*key, "cue_count" | "slide_count" | "camera_count" | "cues"))
         .collect();
     let mut slots = overlay.changed_slots();
-    assert_eq!(slots.len(), 18, "{slots:?}");
+    assert_eq!(slots.len(), 19, "{slots:?}");
     slots.sort_unstable();
     keys.sort_unstable();
     assert_eq!(slots, keys);
-    assert_eq!(all_clear().changed_slots().len(), 18);
+    assert_eq!(all_clear().changed_slots().len(), 19);
     assert!(!overlay.is_empty() && !all_clear().is_empty());
 }
 

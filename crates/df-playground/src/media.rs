@@ -14,6 +14,7 @@ use crate::limits::{
     MAXIMUM_MEDIA_NAME_BYTES, MAXIMUM_REPORT_BYTES, MAXIMUM_REPORTED_ERROR_CHARACTERS,
     MAXIMUM_REPORTED_ERRORS, MAXIMUM_REPORTED_IMAGES, MAXIMUM_TIMELINE_RECORDS,
 };
+use crate::sound_plan::AudioPrefs;
 use crate::timeline::{ClientError, FixtureLoadCause, LinkState, TimelineRecord, ViewportPx, cut};
 
 /// Image file types a page can show. SVG is left out on purpose: opened on its own it can run
@@ -168,6 +169,9 @@ pub struct ClientReport {
     pub page_clock_ms: u64,
     /// What the page started or ended showing and playing since the last report it delivered.
     pub timeline: Vec<TimelineRecord>,
+    /// This viewer's sound preferences (sound, music, master volume).
+    #[serde(default)]
+    pub audio_prefs: AudioPrefs,
 }
 
 impl Default for ClientReport {
@@ -190,6 +194,7 @@ impl Default for ClientReport {
             pace: ReadingPace::Normal,
             page_clock_ms: 0,
             timeline: Vec::new(),
+            audio_prefs: AudioPrefs::default(),
         }
     }
 }

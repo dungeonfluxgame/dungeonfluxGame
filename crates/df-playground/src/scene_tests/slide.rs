@@ -1,6 +1,6 @@
 //! A card that slides across the shared screen.
 
-use crate::fixture::{Fixture, ImageRef, Slide};
+use crate::fixture::{Fixture, ImageRef, PlateKind, Slide};
 use crate::limits::MAXIMUM_SLIDE_MS;
 use crate::scene::{ImageSlot, SceneChange, SceneError, SceneOverlay};
 
@@ -37,6 +37,7 @@ fn show_card(
             caption: None,
             rotation_degrees: 180,
             layout: None,
+            plate: PlateKind::Room,
             slide: moving,
         },
         &base(),

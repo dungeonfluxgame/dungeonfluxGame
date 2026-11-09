@@ -1,0 +1,23 @@
+{
+  "name": "UI: kit gallery",
+  "description": "A quiet stage for the in-game TV UI kit (crates/df-playground/src/kit), for development only. A development build of the page opened with ?kit=N draws gallery board N as the whole stage: every kit component in the premium glass look, each board after a concept render or a stress case. The boards are the kit's own sample data (src/kit/gallery.json), compiled into development builds only; no speech line is part of this scene.",
+  "tv": {
+    "place": "",
+    "status": { "kind": "ok" },
+    "caption": null,
+    "backdrop": { "media": "lobby-hall-plate.webp", "caption": null },
+    "card": null,
+    "elements": []
+  },
+  "phone": {
+    "hero": "Kael",
+    "goal": null,
+    "status": { "kind": "ok" },
+    "narration": [],
+    "suggested": [],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

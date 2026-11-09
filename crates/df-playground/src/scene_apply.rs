@@ -6,6 +6,7 @@
 //! own small method here.
 
 use crate::checks;
+use crate::clues::{ClueBoard, ClueNote};
 use crate::fixture::{Camera, UnavailableChoice};
 use crate::fixture::{Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember};
 use crate::limits::{MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CUES_KEPT, MAXIMUM_PARTY_MEMBERS};
@@ -83,6 +84,7 @@ impl SceneOverlay {
                 rotation_degrees,
                 slide,
                 layout,
+                plate,
             } => self.set_image(
                 slot,
                 ImageRef {
@@ -91,6 +93,7 @@ impl SceneOverlay {
                     rotation_degrees,
                     slide,
                     layout,
+                    plate,
                 },
                 now_ms,
             ),
@@ -106,6 +109,11 @@ impl SceneOverlay {
             } => self.start_music(media, target, volume_percent, looping),
             SceneChange::StopMusic {} => {
                 self.music = Edit::Clear;
+                Ok(())
+            }
+            SceneChange::Clues { notes } => self.set_clues(notes),
+            SceneChange::ClearClues {} => {
+                self.clues = Edit::Clear;
                 Ok(())
             }
             SceneChange::Sound {
@@ -276,6 +284,13 @@ impl SceneOverlay {
             volume_percent,
             looping,
         });
+        Ok(())
+    }
+
+    fn set_clues(&mut self, notes: Vec<ClueNote>) -> Result<(), SceneError> {
+        let board = ClueBoard { notes };
+        board.check()?;
+        self.clues = Edit::Set(board);
         Ok(())
     }
 

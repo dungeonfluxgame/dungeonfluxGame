@@ -1,0 +1,60 @@
+# The Charter Beneath the Hill (story plotted by `persona story plot`, scenes scriptorium,
+# reliquary, vault): play starts part way through the quest, two levels down in the flooded archive
+# beneath a ruined monastery, where four adventurers and their torchbearer seek the founding charter
+# a dying abbot sent them for. It turns on inspection and research: each place has evidence on show
+# (the plot's exhibits), some of it read only with what was found before (its needs), and a rival
+# waits in the dark of the vault. Nothing is scripted: each move comes from the storyteller at the
+# table (`persona story next`), from what has been said and found.
+# Needs `archive-scriptorium-2.png`, `archive-reliquary.png` and `archive-vault.png` (scanned and
+# named) and `persona story apply` run on each, so every character has a persona and its secrets.
+@flow scriptorium
+@frames frames=archive
+# Each plate is painted anew in the house look from the scene and everyone's looks: edits of edits
+# drifted from photographic into illustration (run 2).
+@frames edit=false
+@frames hold=30
+# Owner: a new display plate every 30 seconds, whatever is said.
+@frames every=60
+@place scriptorium archive-scriptorium-2.png
+@place_keeper scriptorium village_torchbearer
+@place_keeper_situation scriptorium Holding the torch high for the four adventurers who hired you, two levels down in the flooded scriptorium beneath the ruined monastery, after the forced gate and the climb past the collapsed stair, knee-deep in cold black water.
+@place_situation scriptorium Two levels down in the flooded scriptorium beneath the ruined monastery, part way through the search for the founding charter, after forcing the rusted gate and climbing past the collapsed stair; knee-deep black water between the writing desks, one torch for light.
+@place_scene scriptorium A flooded monastery scriptorium deep underground lit by one torch, knee-deep black water between wooden writing desks, a fallen shelf of swollen ledgers in the aisle, an open ledger of pages written in faded brown ink, with cut parchment edges, a brass cipher wheel and a smeared catalogue leaf under a candle stub on a desk: at the left the tall blond bearded man of about thirty-five with shoulder-length wavy hair, in a shaggy grey-brown fur mantle over a worn wool tunic and mail, a sword at his hip, the dark-haired woman of about forty with a long face and black hair under a dark green wool hood and cloak, a leather belt and satchel and the broad red-bearded man of about thirty with curly red hair, in a heavy brown wool travelling cloak over a leather jerkin wade in; in the middle the thin village youth of about sixteen with short tousled light-brown hair and a narrow freckled face, in a patched brown wool tunic with a rope belt holds up the torch; at the right the young woman of about twenty with a single long brown braid and freckles, in a scuffed brown leather jerkin over a cream linen shirt leans over the open ledger.
+@place reliquary archive-reliquary.png
+@place_keeper reliquary village_torchbearer
+@place_keeper_situation reliquary Holding the torch for the four adventurers in the narrow reliquary corridor below the scriptorium, carved inscriptions on the walls and a floor of cracked tiles ahead.
+@place_situation reliquary In the narrow reliquary corridor below the flooded scriptorium, carved inscriptions in an old script along the walls above empty niches, a floor of tiles running on into the dark, one torch for light.
+@place_scene reliquary A narrow stone reliquary corridor deep underground lit by one torch, carved inscriptions in an old script above empty niches, a floor of square tiles with one narrow bordered run of intact tiles, muddy boot scuffs, shallow water at the edges, darkness beyond: at the left the tall blond bearded man of about thirty-five with shoulder-length wavy hair, in a shaggy grey-brown fur mantle over a worn wool tunic and mail, a sword at his hip and the young woman of about twenty with a single long brown braid and freckles, in a scuffed brown leather jerkin over a cream linen shirt; the broad red-bearded man of about thirty with curly red hair, in a heavy brown wool travelling cloak over a leather jerkin crouches over the tiles; behind him the thin village youth holds up the torch; at the right the dark-haired woman of about forty with a long face and black hair under a dark green wool hood and cloak, a leather belt and satchel studies the inscriptions on the wall.
+@place vault archive-vault.png
+@place_keeper vault village_torchbearer
+@place_keeper_situation vault Holding the torch for the four adventurers as they step through the half-open stone door into the sealed vault at the end of the corridor, deep shadows all round.
+@place_situation vault In the sealed vault at the end of the reliquary corridor, the heavy stone door pushed half open, a stone pedestal in the middle with two folded charters on it, deep shadows in the corners, one torch for light.
+@place_scene vault A sealed stone vault lit by one torch, a heavy half-open stone door with a scratched iron latch, a stone pedestal holding two folded parchment charters, each with a faded blue wax seal, dust on the floor, deep shadows at the back: at the left the tall blond bearded man of about thirty-five with shoulder-length wavy hair, in a shaggy grey-brown fur mantle over a worn wool tunic and mail, a sword at his hip with his hand on his sword, the dark-haired woman of about forty with a long face and black hair under a dark green wool hood and cloak, a leather belt and satchel and the red-bearded man; in the middle the young woman of about twenty with a single long brown braid and freckles, in a scuffed brown leather jerkin over a cream linen shirt leans over the charters; at the right the thin village youth holds up the torch; deep in the shadows at the back right a lean grey-bearded man of about sixty with a hooked nose, in a dark grey hooded scholar's robe crouches, barely seen.
+# Everyone starts clean, and knows the names they would: the four travel together and hired the
+# torchbearer in the village; the one waiting in the vault knows nobody's.
+! persona state warrior reset
+! persona state mara_adventurer reset
+! persona state jory_adventurer reset
+! persona state sella_adventurer reset
+! persona state village_torchbearer reset
+! persona state rival_scholar reset
+! persona state warrior knows mara_adventurer
+! persona state warrior knows jory_adventurer
+! persona state warrior knows sella_adventurer
+! persona state warrior knows village_torchbearer
+! persona state mara_adventurer knows warrior
+! persona state mara_adventurer knows jory_adventurer
+! persona state mara_adventurer knows sella_adventurer
+! persona state mara_adventurer knows village_torchbearer
+! persona state jory_adventurer knows warrior
+! persona state jory_adventurer knows mara_adventurer
+! persona state jory_adventurer knows sella_adventurer
+! persona state jory_adventurer knows village_torchbearer
+! persona state sella_adventurer knows warrior
+! persona state sella_adventurer knows mara_adventurer
+! persona state sella_adventurer knows jory_adventurer
+! persona state sella_adventurer knows village_torchbearer
+! persona state village_torchbearer knows warrior
+! persona state village_torchbearer knows mara_adventurer
+! persona state village_torchbearer knows jory_adventurer
+! persona state village_torchbearer knows sella_adventurer

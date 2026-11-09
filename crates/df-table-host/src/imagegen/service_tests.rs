@@ -8,7 +8,9 @@ use std::time::Duration;
 use df_table::testkit::ManualClock;
 use tempfile::TempDir;
 
-use super::backend::BackendError;
+use df_providers::{FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS, ForgeClient, ForgeConfig};
+
+use super::backend::{BackendError, ForgeImageBackend};
 use super::fixtures::{FakeBackend, Script, picture, png_bytes};
 use super::limits::DEFAULT_DEADLINE;
 use super::model::{GeneratedImage, ImageRequest, Purpose};
@@ -279,6 +281,63 @@ async fn a_refusal_by_the_service_ends_the_job_with_its_typed_error() {
     );
     assert!(rig.stored_files().is_empty());
     assert_eq!(generator.views().len(), 1);
+}
+
+#[tokio::test]
+async fn references_reach_the_backend_in_order_after_the_base() {
+    let rig = Rig::new().await;
+    std::fs::create_dir_all(rig.media()).expect("makes the library");
+    for (name, bytes) in [
+        ("door.png", b"base".as_slice()),
+        ("ref-a.png", b"first"),
+        ("ref-b.png", b"second"),
+    ] {
+        std::fs::write(rig.media().join(name), bytes).expect("writes");
+    }
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    let request = request("hall")
+        .editing("door.png")
+        .and_then(|request| request.following(&["ref-a.png".to_owned(), "ref-b.png".to_owned()]))
+        .expect("a request");
+    let view = rig.run_to_end(&generator, request).await.expect("stored");
+    let asked = backend.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].0.base.as_deref(), Some(b"base".as_slice()));
+    assert_eq!(
+        asked[0].0.references,
+        [b"first".to_vec(), b"second".to_vec()]
+    );
+    let (provenance, _) = stored(&view);
+    assert!(
+        provenance
+            .sent_text
+            .contains("The reference pictures of people")
+    );
+}
+
+#[tokio::test]
+async fn a_missing_reference_ends_the_job_with_its_name_and_asks_no_backend() {
+    let rig = Rig::new().await;
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    let request = request("hall")
+        .following(&["ref-gone.png".to_owned()])
+        .expect("a request");
+    let error = rig
+        .run_to_end(&generator, request)
+        .await
+        .expect_err("no reference");
+    assert_eq!(
+        error,
+        GenerateError::ReferenceUnreadable {
+            job: 1,
+            reference: "ref-gone.png".to_owned(),
+            cause: crate::io_cause::IoCause::from_kind(std::io::ErrorKind::NotFound),
+        }
+    );
+    assert!(backend.asked().is_empty());
+    assert!(rig.stored_files().is_empty());
 }
 
 #[tokio::test]
@@ -570,5 +629,67 @@ async fn a_scratch_folder_left_behind_is_recorded_and_the_picture_still_stored()
     assert!(
         lines.contains(&"IMAGEGEN cleanup_failed job=1 kind=resource_busy".to_owned()),
         "{lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_switched_backend_takes_new_jobs_while_a_running_one_ends_on_its_own() {
+    let rig = Rig::new().await;
+    let first = FakeBackend::slow(Script::Picture(picture()), Duration::from_millis(300));
+    let generator = rig.generator(Arc::clone(&first));
+    let started = generator
+        .start(&rig.running.state, request("hall"))
+        .await
+        .expect("starts");
+    let second = FakeBackend::new(Script::Picture(picture()));
+    let view = generator
+        .switch_backend(&rig.running.state, Arc::clone(&second) as _)
+        .await
+        .expect("switches");
+    assert_eq!(view.running, 1);
+    started
+        .finished
+        .await
+        .expect("the job finishes")
+        .expect("stored");
+    rig.run_to_end(&generator, request("yard"))
+        .await
+        .expect("stored");
+    assert_eq!((first.asked().len(), second.asked().len()), (1, 1));
+    assert!(
+        rig.lines()
+            .iter()
+            .any(|line| line == "IMAGEGEN switched from=fake to=fake running=1"),
+        "{:?}",
+        rig.lines()
+    );
+    // A backend whose preconditions do not hold is refused, and new jobs stay where they were.
+    let unset = FakeBackend::failing_check(BackendError::NoCodexHome);
+    assert_eq!(
+        generator
+            .switch_backend(&rig.running.state, unset as _)
+            .await
+            .map(|_| ()),
+        Err(GenerateError::Backend {
+            job: None,
+            backend: BackendError::NoCodexHome
+        })
+    );
+    rig.run_to_end(&generator, request("gate"))
+        .await
+        .expect("stored");
+    assert_eq!(second.asked().len(), 2);
+    // The limits are the backend's new jobs start on.
+    let config = ForgeConfig::new("http://127.0.0.1:9", "41fbb3c9-ac91-4897-b890-7a056b4ae371")
+        .expect("a loopback origin and a project id");
+    let forge = ForgeImageBackend::new(Ok(ForgeClient::new(config).expect("builds")));
+    let view = generator
+        .switch_backend(&rig.running.state, Arc::new(forge))
+        .await
+        .expect("switches");
+    assert_eq!(view.backend, "forge");
+    assert_eq!(
+        generator.backend_limits().maximum_text_characters,
+        Some(FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS)
     );
 }

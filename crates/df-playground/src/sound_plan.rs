@@ -1,11 +1,72 @@
-//! What the page should do about sound, decided from numbers and data alone: which cues are new
-//! and what a change of music means.
+//! What the page should do about sound, decided from numbers and data alone: which cues are new,
+//! what a change of music means, and how loud this viewer's own preferences make each sound.
 //!
 //! The audio module starts and stops the browser's elements; this module only says which ones. It
 //! reads no clock and touches no element, so native tests cover it.
 
+use serde::{Deserialize, Serialize};
+
 use crate::controls::Device;
 use crate::scene::{Cue, Track};
+
+/// The browser storage key of this viewer's sound preferences.
+pub const AUDIO_PREFS_KEY: &str = "df-playground-audio-prefs";
+
+/// This viewer's playback preferences: sound on or muted, the background music on or off, and a
+/// master volume over each sound's own. They are the page's, not the game's: the host still says
+/// what plays, and the page only scales or mutes its own output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioPrefs {
+    pub sound_on: bool,
+    pub music_on: bool,
+    /// The master volume, 0 to 100.
+    pub volume_percent: u8,
+}
+
+impl Default for AudioPrefs {
+    fn default() -> Self {
+        Self {
+            sound_on: true,
+            music_on: true,
+            volume_percent: 80,
+        }
+    }
+}
+
+impl AudioPrefs {
+    /// The preferences kept in browser storage as `text`; the defaults when there are none or
+    /// they do not read (a volume over 100 is held at 100).
+    pub fn from_stored(text: Option<&str>) -> Self {
+        text.and_then(|text| serde_json::from_str::<Self>(text).ok())
+            .map(|prefs| Self {
+                volume_percent: prefs.volume_percent.min(100),
+                ..prefs
+            })
+            .unwrap_or_default()
+    }
+
+    /// The text kept in browser storage.
+    pub fn stored(&self) -> String {
+        serde_json::json!({
+            "sound_on": self.sound_on,
+            "music_on": self.music_on,
+            "volume_percent": self.volume_percent,
+        })
+        .to_string()
+    }
+
+    /// The browser's volume, from 0 to 1, of a sound whose own volume is `percent`: its own
+    /// scaled by the master volume. Muting is the element's own switch, so the volume stays.
+    pub fn volume_for(&self, percent: u8) -> f64 {
+        volume_of(percent) * volume_of(self.volume_percent.min(100))
+    }
+
+    /// Whether the background music plays: sound on and music on.
+    pub fn music_plays(&self) -> bool {
+        self.sound_on && self.music_on
+    }
+}
 
 /// The cues a page should play now, and what to remember afterwards.
 #[derive(Debug, PartialEq, Eq)]

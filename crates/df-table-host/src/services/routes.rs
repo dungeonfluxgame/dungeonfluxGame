@@ -128,6 +128,7 @@ impl ServicesRoutes {
             },
             imagegen: ImagegenReport {
                 backend: backend.to_owned(),
+                limits: generator.backend_limits(),
                 mode: if backend == SwitchedOff.name() {
                     ImageMode::Off
                 } else {
@@ -209,6 +210,6 @@ pub fn router_with(
 pub fn router(app: Arc<AppState>) -> Router {
     let text = crate::locate::text_runtime(&app);
     let generator = Arc::new(ImageGenerator::from_environment(&app));
-    let speech = Speech::from_environment(Arc::clone(&app));
+    let speech = Speech::from_environment(Arc::clone(&app)).with_text(Arc::clone(&text));
     router_with(app, text, generator, speech)
 }

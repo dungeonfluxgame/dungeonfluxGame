@@ -556,6 +556,14 @@ impl SceneOverlay {
             card.title = Some(title);
         }
         put(&mut card.caption, edit.caption.clone(), "a scene's caption")?;
+        if edit.caption.is_some() {
+            card.caption_title = None;
+            put(
+                &mut card.caption_title,
+                edit.caption_title.clone(),
+                "a caption's title",
+            )?;
+        }
         if let Some(number) = edit.bubble_remove {
             if !(1..=card.bubbles.len()).contains(&number) {
                 return Err(ScreenError::InvalidBubbleNumber { number }.into());

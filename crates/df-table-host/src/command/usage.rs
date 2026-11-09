@@ -7,7 +7,7 @@ use df_playground::limits::{
     MAXIMUM_CAMERA_MS, MAXIMUM_TRANSITION_MS, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
 };
 
-use super::media_generate::MEDIA_GENERATE_USAGE;
+use super::media_generate::{MEDIA_BACKEND_USAGE, MEDIA_GENERATE_USAGE};
 use crate::cast::cli::{CAMERA_ON_USAGE, CAST_USAGE, CUE_USAGE};
 use crate::locate::cli::MEDIA_LOCATE_USAGE;
 use crate::movement::cli::MOVEMENT_USAGE;
@@ -21,7 +21,9 @@ use crate::persona::cli::{
 };
 use crate::services::SERVICES_USAGE;
 use crate::speech::SPEECH_USAGE;
-use crate::speech::cli::{SPEECH_SPEAK_USAGE, SPEECH_TRANSCRIBE_USAGE, SPEECH_VOICE_USAGE};
+use crate::speech::cli::{
+    SPEECH_CAST_USAGE, SPEECH_SPEAK_USAGE, SPEECH_TRANSCRIBE_USAGE, SPEECH_VOICE_USAGE,
+};
 use crate::world::cli::{WORLD_PLACE_USAGE, WORLD_QUOTE_USAGE, WORLD_USAGE};
 
 pub(super) const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
@@ -46,7 +48,8 @@ pub(super) const SCENE_USAGE: &str = concat!(
     "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | image ... | ",
     "image-clear <slot> | slide ... | camera ... | camera-reset ... | camera-on ... | cast | ",
     "cue ... | music ... | music-stop | sound ... | reset | narration ... | seat ... | seats ... ",
-    "| logo ... | lobby ... | loading ... | roleplay ... | pill ... | home ... | start ... | ",
+    "| logo ... | clues ... | lobby ... | loading ... | roleplay ... | pill ... | home ... | ",
+    "start ... | ",
     "build ... | show | lookahead ... | timing ..."
 );
 pub(super) const CAPTION_USAGE: &str = "scene caption <text> [speaker=NAME]";
@@ -62,8 +65,11 @@ pub(super) const SLIDE_USAGE: &str =
     "scene slide tv-card <name> [from=15] [to=85] [over=5000] [caption=TEXT] [rotate=0-359]";
 pub(super) const SCENE_CAMERA_USAGE: &str =
     "scene camera <element> [zoom=200] [over=1200] | scene camera-reset [over=1200]";
-pub(super) const MUSIC_USAGE: &str =
-    "scene music <name> [on=both|tv|phone] [volume=0-100] [loop=true|false] | scene music-stop";
+pub(super) const MUSIC_USAGE: &str = concat!(
+    "scene music <name> [on=both|tv|phone] [volume=0-100] [loop=true|false] | scene music ",
+    "generate as=NAME [seconds=3-600] [on=both|tv|phone] [volume=0-100] <prompt...> | ",
+    "scene music-stop"
+);
 pub(super) const SOUND_USAGE: &str = "scene sound <name> [on=both|tv|phone] [volume=0-100]";
 pub(super) const NARRATION_USAGE: &str = concat!(
     "scene narration set <text> [speaker=NAME|none] [badge=GLYPH|none] [continue=TEXT|none] ",
@@ -75,6 +81,10 @@ pub(super) const SEAT_USAGE: &str = concat!(
     "[glyph=NAME|none] [accent=#rrggbb|none] [hp=N] [max=N] [conditions=a,b] | remove <name>",
 );
 pub(super) const SEATS_USAGE: &str = "scene seats open <N> | clear";
+pub(super) const CLUES_USAGE: &str = concat!(
+    "scene clues set \"id|name|detail|seen\" \"id|name|detail|worked|picture.png\" ... (oldest ",
+    "first, the newest last) | scene clues clear",
+);
 pub(super) const LOGO_USAGE: &str = "scene logo on|off";
 pub(super) const MEDIA_USAGE: &str =
     "media | media head <name> | media add <file> [as=NAME] | media remove <name>";
@@ -88,7 +98,7 @@ pub(super) const REPL_USAGE: &str = "repl";
 pub(super) const CLIENTS_USAGE: &str = concat!(
     "clients [<client>] | clients timeline <client> ",
     "[kind=line|plate|figure|clip|scene|sound|music|draw|camera|capture|transcribe|ask|outline|",
-    "error] ",
+    "card|fade|third|clues|error] ",
     "[after=SEQ]",
 );
 pub(super) const FIXTURES_USAGE: &str = "fixtures";
@@ -192,7 +202,10 @@ pub fn usage_text() -> String {
          spoken line, or nothing; each character has one bubble of its own, anchored to \
          its mask (an engine\n      \
          posts the same JSON to /dev/scene/cue)\n\
-         \n  {MUSIC_USAGE}\n      play music until it is stopped or replaced\n\
+         \n  {MUSIC_USAGE}\n      play music until it is stopped or replaced; generate plays \
+         the library's sound NAME\n      looping, or first composes it from the prompt \
+         (instrumental, 120 seconds unless told)\n      and stores it as NAME.mp3, so one \
+         track is made per narrative scene\n\
          \n  {SOUND_USAGE}\n      play a sound once\n\
          \n  {NARRATION_USAGE}\n      the narrator's box in the caption's place: set it from its \
          text, change any of its\n      fields (speaker, badge, continue label, voice mark, \
@@ -202,6 +215,9 @@ pub fn usage_text() -> String {
          \n  {SEATS_USAGE}\n      open seats after the heroes, or take every look and open seat \
          away\n\
          \n  {LOGO_USAGE}\n      the DungeonFlux logo at the top left of the shared screen\n\
+         \n  {CLUES_USAGE}\n      the clue board down the left of the shared screen: every clue \
+         found so far, one quoted word each: id, name, detail, seen or worked (resolved)\n      \
+         and an optional picture from the library; or take it away\n\
          \n  {MEDIA_USAGE}\n      list, add (a local file, copied into the library) or remove \
          pictures, sounds and videos;\n      {video_limits}; a video's size is in the listing; \
          videos are not placed on a screen yet;\n      the listing ends with the library's \
@@ -212,6 +228,10 @@ pub fn usage_text() -> String {
          needs DF_IMAGERY_MODE=live, DF_IMAGERY_BACKEND=codex-cli \
          and\n      CODEX_HOME=<signed-in folder> in its environment; a picture takes minutes, so \
          without wait=true\n      it runs on and `media generate status` shows it\n\
+         \n  {MEDIA_BACKEND_USAGE}\n      show the image backend new pictures are made with, \
+         or switch it while the host runs\n      (Forge takes the url and project the host was \
+         started with unless given); jobs already\n      running finish on the backend they \
+         started on\n\
          \n  {MEDIA_LOCATE_USAGE}\n      \
          find the people (or heads) in a library picture with a SAM 3.1 segmentation through the \
          imagery\n      \
@@ -310,7 +330,10 @@ pub fn usage_text() -> String {
          default voice), keeps it as a voice-<n>.mp3 clip in the media library and plays it \
          as a scene sound; {SPEECH_TRANSCRIBE_USAGE} prints what a 16 kHz mono 16-bit PCM or \
          WAV recording says; {SPEECH_VOICE_USAGE} sets or clears a character's voice in \
-         voices.json; clips lists the clips the host made and clear deletes them. persona \
+         voices.json; {SPEECH_CAST_USAGE} has a judge choose the character's voice from the \
+         supplier's list by their persona (a character with a persona and no voice is cast so \
+         before their first line); clips lists the clips the host made and clear deletes them. \
+         persona \
          ask and say take speak=true to voice the line and start it with its bubble, and \
          ask takes coverage=false to skip the coverage question.\n\
          \n  {WAIT_USAGE}\n      pause here; stage scenes over time in a script or a session\n\

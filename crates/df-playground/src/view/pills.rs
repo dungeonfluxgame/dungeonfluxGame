@@ -1,4 +1,5 @@
-//! The top bar of the shared screen: the wordmark at the left and the pills at the right.
+//! The top bar of the shared screen: the pills at the right. The logo is the brand mark's
+//! (`view::brand`).
 //!
 //! The session's name, the party's count, the balance and the rate are drawn only when the scene
 //! carries them, and as the words the server gave: the public pricing shows what tables pay, so
@@ -9,13 +10,10 @@ use web_sys::{Document, Element};
 
 use crate::dom::{append, element, text_element};
 use crate::fixture::TvScene;
-use crate::lobby::model::{LogoStyle, TopBar, party_text, session_text};
+use crate::lobby::model::{TopBar, party_text, session_text};
 use crate::overlay::Glyph;
 use crate::view::icons::{Icon, icon};
 use crate::view::kit::glyph;
-
-/// The wordmark's name.
-const WORDMARK: &str = crate::home::chrome::DEFAULT_WORDMARK;
 
 /// The top bar of `scene`, or `None` when it has none.
 pub fn build(document: &Document, scene: &TvScene) -> Result<Option<Element>, JsValue> {
@@ -27,34 +25,8 @@ pub fn build(document: &Document, scene: &TvScene) -> Result<Option<Element>, Js
         return Ok(None);
     }
     let root = element(document, "div", "tb")?;
-    // The scene's own `brand` logo (`view::brand`) and this one are the same mark: draw one.
-    if let Some(style) = bar.logo.filter(|_| !scene.brand) {
-        append(&root, &logo(document, style)?)?;
-    }
     append(&root, &pills(document, bar, None)?)?;
     Ok(Some(root))
-}
-
-fn logo(document: &Document, style: LogoStyle) -> Result<Element, JsValue> {
-    let class = match style {
-        LogoStyle::Stacked => "tb-logo tb-logo-stacked",
-        LogoStyle::Inline => "tb-logo tb-logo-inline",
-    };
-    let mark = element(document, "div", class)?;
-    mark.set_attribute("role", "img")?;
-    mark.set_attribute("aria-label", WORDMARK)?;
-    append(&mark, &icon(document, Icon::Compass, "tb-compass")?)?;
-    append(
-        &mark,
-        &text_element(document, "span", "tb-wordmark", WORDMARK)?,
-    )?;
-    if style == LogoStyle::Stacked {
-        append(
-            &mark,
-            &icon(document, Icon::Compass, "tb-compass tb-compass-under")?,
-        )?;
-    }
-    Ok(mark)
 }
 
 /// A plain pill: a picture and a line.

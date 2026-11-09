@@ -14,6 +14,8 @@ pub mod bubble_place;
 pub mod camera;
 pub mod checks;
 pub mod choices;
+pub mod closeup;
+pub mod clues;
 pub mod composer;
 pub mod continuity;
 pub mod contrast;
@@ -28,6 +30,7 @@ pub mod fixture_checks;
 pub mod frame;
 pub mod home;
 pub mod image_layout;
+pub mod kit;
 pub mod layout;
 pub mod limits;
 pub mod lobby;
@@ -35,9 +38,11 @@ pub mod media;
 pub mod motion_style;
 pub mod overlay;
 pub mod path;
+pub mod plate_fade;
 pub mod scene;
 mod scene_apply;
 pub mod sound_plan;
+pub mod speaker_card;
 pub mod style;
 pub mod timeline;
 pub mod voice_capture;
@@ -68,6 +73,10 @@ mod bubble_place_tests;
 mod camera_tests;
 #[cfg(test)]
 mod choices_tests;
+#[cfg(test)]
+mod closeup_tests;
+#[cfg(test)]
+mod clues_tests;
 #[cfg(test)]
 mod composer_tests;
 #[cfg(test)]
@@ -107,9 +116,13 @@ mod motion_style_tests;
 #[cfg(test)]
 mod overlay_tests;
 #[cfg(test)]
+mod plate_fade_tests;
+#[cfg(test)]
 mod scene_tests;
 #[cfg(test)]
 mod sound_plan_tests;
+#[cfg(test)]
+mod speaker_card_tests;
 #[cfg(test)]
 mod style_tests;
 #[cfg(test)]

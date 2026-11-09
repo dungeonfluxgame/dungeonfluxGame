@@ -516,3 +516,59 @@ fn a_page_ages_and_is_forgotten_on_the_playground_clock() {
         "a page silent that long is forgotten"
     );
 }
+
+#[tokio::test]
+async fn the_clue_board_is_set_through_the_scene_path_replaced_refused_and_cleared() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("fixtures/stage.json", STAGE);
+    with_media(&running);
+    run(
+        &running,
+        "scene clues set \"ring|Gold ring|It bears a crest.|seen|portrait.png\" \
+         \"note|Torn note|Half a date.|worked\"",
+    )
+    .await
+    .expect("sets");
+    let board = shown(&running).await.scene.clues;
+    let df_playground::overlay::Edit::Set(board) = board else {
+        panic!("the board was not set: {board:?}");
+    };
+    assert_eq!(board.notes.len(), 2);
+    assert_eq!(board.notes[0].picture.as_deref(), Some("portrait.png"));
+    assert!(!board.notes[0].worked_out && board.notes[1].worked_out);
+    let refused = run(
+        &running,
+        "scene clues set \"ring|Ring|Gold.|seen|missing.png\"",
+    )
+    .await
+    .expect_err("a picture the library lacks is refused");
+    assert!(format!("{refused}").contains("missing.png"), "{refused}");
+    run(
+        &running,
+        "scene clues set \"ring|Gold ring|Cleaned.|worked\"",
+    )
+    .await
+    .expect("replaces");
+    run(&running, "scene clues clear").await.expect("clears");
+    let lines = log_lines(&running).await;
+    let scene = scene_lines(&lines);
+    assert!(
+        scene[0].starts_with("PLAYGROUND clues notes=2 worked_out=1 revision="),
+        "{}",
+        scene[0]
+    );
+    assert!(
+        scene[scene.len() - 1].starts_with("PLAYGROUND clues_clear revision="),
+        "{scene:?}"
+    );
+    assert_eq!(
+        shown(&running).await.scene.clues,
+        df_playground::overlay::Edit::Clear
+    );
+    assert!(
+        run(&running, "scene clues set \"ring|Ring|Gold.|maybe\"")
+            .await
+            .is_err()
+    );
+    assert!(run(&running, "scene clues set").await.is_err());
+}

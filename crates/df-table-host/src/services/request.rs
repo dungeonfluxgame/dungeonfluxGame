@@ -9,6 +9,7 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::dev_http::{DevReply, RouteError};
+use crate::imagegen::BackendLimits;
 use crate::text::BackendKind;
 
 /// The answer of the services route: its report, or why it was refused.
@@ -70,10 +71,13 @@ impl ImageMode {
     }
 }
 
-/// The picture generator: its backend, its deadline, where provenance goes and its jobs.
+/// The picture generator: its backend and what it takes, its deadline, where provenance goes and
+/// its jobs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImagegenReport {
     pub backend: String,
+    /// What the backend takes, so a caller fits its pictures and text to it before it asks.
+    pub limits: BackendLimits,
     pub mode: ImageMode,
     pub deadline_ms: u64,
     pub provenance_dir_set: bool,

@@ -21,11 +21,15 @@
 //! - `POST /dev/speech/voice`, `GET /dev/speech/clips`, `POST /dev/speech/clear`: a character's
 //!   voice in `voices.json`, the host's `voice-<n>.mp3` clips in the media library, and their
 //!   removal.
+//! - `POST /dev/speech/cast`: `{character, model}` casts the character's voice from their persona
+//!   (`cast`): a judge picks one of the supplier's listed voices. A character with a persona and
+//!   no voice is cast the same way before their first line (a failed cast speaks in the default).
 //!
 //! The dev CLI's `speech` verbs are these routes. Reading order: `request` (bodies, replies and
 //! `SpeechError`), `provider` (the port), `service` (the work and its audit lines), `routes`,
 //! `voices` and `clips` (the two stores), `cli` and `format`.
 
+mod cast;
 pub mod cli;
 mod clips;
 mod format;
@@ -44,6 +48,8 @@ pub use self::routes::router_with;
 pub use self::service::Speech;
 pub(crate) use self::service::sound_change;
 
+#[cfg(test)]
+mod cast_tests;
 #[cfg(test)]
 pub(crate) mod fixtures;
 #[cfg(test)]

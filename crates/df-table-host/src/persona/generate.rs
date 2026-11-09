@@ -111,7 +111,7 @@ impl ShownScene {
 }
 
 /// The stored persona of `character`, or `UnknownPersona`.
-pub(super) async fn load_persona(app: &AppState, character: &str) -> Result<Persona, PersonaError> {
+pub(crate) async fn load_persona(app: &AppState, character: &str) -> Result<Persona, PersonaError> {
     let id = persona_id(character)?;
     let directory = persona_directory(app);
     run_blocking(

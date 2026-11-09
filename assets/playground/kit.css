@@ -1,0 +1,3889 @@
+/* The in-game TV UI kit (crates/df-playground/src/kit): premium glass over the photographic
+   plate, drawn from the concept boards in assets/concept-art (inventory: artifacts/tmp/kit/).
+
+   Glass recipe (inventory F2): a panel root holds three siblings. The halo is a wide ring of the
+   panel's outline grown outward, blurred into a neon bloom outside the rim. The bloom is a narrow
+   copy of the rim, softly blurred, under the pane. The pane blurs the plate with its own
+   backdrop-filter, is shaped by a mask on itself (a mask cuts the pane's blurred backdrop too,
+   where a clip-path leaves square "ears" past a chamfer in Edge), and carries the crisp hairline
+   rim, cut to a ring of its shape (evenodd polygon). No filter, clip-path, mask or opacity is ever
+   put on a root or any ancestor of a blurring pane, or the blur samples nothing (F1); fades
+   animate the pane, the halo and the bloom themselves (F3). Shape points are declared on the
+   element that uses them (F2, probe 5).
+
+   Every panel is glass over the plate. The large panels blur with a wide radius, at most
+   `kit::BLURRED_PANES_AT_MOST` on a screen; the small still panes (bubbles, choices, loose party
+   cards) are fine glass (`.kit-fine`) with a small radius, at most `kit::FINE_PANES_AT_MOST`.
+   Only a parchment, a floating list and the chapter vignette are solid (`.kit-solid`). Without
+   backdrop-filter every pane keeps its solid fill (the `@supports` rule below switches the
+   blurring panes to their translucent one).
+
+   Sizes are cqw of the stage (.tv-stage is the container): 1cqw is 16 px of a 1600 px stage.
+   No text is under 1.5cqw except the dev-only gallery tag. */
+
+:root {
+  --kit-gold-hi: #fff3cf;
+  --kit-gold: var(--ui-brass-hi, #f1d9a0);
+  --kit-gold-mid: var(--ui-brass, #c6a36b);
+  --kit-gold-deep: var(--ui-brass-deep, #8a5f2a);
+  --kit-gold-title: #f1c96a;
+  --kit-gold-text: linear-gradient(180deg, #fff6d6, #f8dc96 40%, #dba653 75%, #f3d089);
+  --kit-text-strong: var(--ui-text-strong, #fdfbf8);
+  --kit-text: #f6efe0;
+  --kit-text-muted: var(--ui-muted-warm, #dcd4cb);
+  --kit-text-shadow: 0 .1cqw .4cqw #000c;
+
+  --kit-display: "Sitka Display", "Sitka Heading", Constantia, "Palatino Linotype", Georgia, serif;
+  --kit-body: var(--ui-font, "Palatino Linotype", "Book Antiqua", Palatino, Georgia, serif);
+  --kit-t-floor: 1.5cqw;
+  --kit-t-small: 1.6cqw;
+  --kit-t-body: 1.65cqw;
+  --kit-t-lead: 1.75cqw;
+  --kit-t-name: 1.9cqw;
+  --kit-t-title: 2.6cqw;
+  --kit-t-hero: 3cqw;
+  --kit-t-display: 4.9cqw;
+
+  --kit-fill-warm: #241a1ea8;
+  --kit-fill-warm-solid: #241a1ef0;
+  --kit-fill-deep: #120c12c4;
+  --kit-fill-deep-solid: #120c12f4;
+  --kit-fill-night: #141c34a8;
+  --kit-fill-night-solid: #141c34ec;
+  --kit-fill-wine: #1c070ab8;
+  --kit-fill-wine-solid: #1c070af2;
+  --kit-fill-ink: #0c0a109c;
+  --kit-fill-ink-solid: #0c0a10ee;
+  --kit-fill-tile: #14161cd8;
+
+  --kit-rim-gold: linear-gradient(105deg, #fff3cf, #f1d9a0 18%, #8a5f2a 50%, #c6a36b 82%, #fff3cf);
+  --kit-rim-ice: linear-gradient(105deg, #f4f8ff, #bcd3f2 30%, #7fa6d8 55%, #cfe0f7 80%, #f4f8ff);
+  --kit-rim-danger: linear-gradient(105deg, #ffb4a8, #ff3b2f 28%, #8c1414 58%, #ff6a5a 86%, #ffb4a8);
+  --kit-hairline: linear-gradient(90deg, #f1d9a000, #f1d9a0cc 50%, #f1d9a000);
+
+  --kit-ember: #ff9e4a;
+  --kit-amethyst: #b88cf0;
+  --kit-ice: #7fa6d8;
+  --kit-crimson: #ff3b2f;
+  --kit-verdigris: #4fd1b8;
+  --kit-rarity-very-rare: #ff9fd2;
+
+  --kit-ease: cubic-bezier(.2, .7, .2, 1);
+  --kit-in-ms: var(--tune-kit-in, 420ms);
+  --kit-out-ms: var(--tune-kit-out, 300ms);
+  --kit-sweep-ms: var(--tune-kit-sweep, 1600ms);
+  --kit-pulse-ms: var(--tune-kit-pulse, 1800ms);
+  --kit-rise: .6cqw;
+}
+
+/* === the layer and its two stacks === */
+.kit {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--kit-text);
+  font-family: var(--kit-body);
+  text-shadow: var(--kit-text-shadow);
+}
+.kit p,
+.kit h2,
+.kit h3,
+.kit ul {
+  margin: 0;
+  padding: 0;
+}
+.kit-plate {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.kit-vignette {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 38%;
+  background: radial-gradient(ellipse 90% 100% at 50% 100%, #080d14ee, #080d1499 45%, #080d1400 78%);
+}
+/* A gallery board is the whole stage: the stage fills the window, so a screenshot of a 1600x900 or
+   1280x720 window is the TV at that size (development builds only, `kit::gallery`). */
+.tv-stage:has(.kit-gallery) {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  margin: 0;
+  aspect-ratio: auto;
+}
+.kit-gallery-tag {
+  position: absolute;
+  left: .8cqw;
+  bottom: .1cqw;
+  font: italic 1cqw/1.2 var(--kit-body);
+  color: #dcd4cb99;
+}
+/* The top bar: brand, headers and clues at the left, the encounter banner in the centre, the chips
+   at the right; the twist card in its own row under it. A title wraps in its slot; it never runs
+   into a neighbour. */
+.kit-top {
+  position: absolute;
+  left: 2.4cqw;
+  right: 2cqw;
+  top: 1.4cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2cqw;
+}
+.kit-top-row {
+  align-self: stretch;
+  display: flex;
+  align-items: flex-start;
+  gap: 1.6cqw;
+}
+.kit-top-left {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.1cqw;
+  max-width: 40cqw;
+  min-width: 0;
+}
+.kit-top-centre {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 1.2cqw;
+}
+/* Beside an encounter banner in the centre, the headers keep at least 30cqw, so a long title
+   stays a short block; the centre banner gives way first and wraps (`.kit-banner-top_center`). */
+.kit-top-row:has(> .kit-top-centre > *) > .kit-top-left {
+  flex-shrink: 0;
+  max-width: 34cqw;
+}
+/* The band's feathered right end shortens with it, and the words stay clear of it. */
+.kit-top-row:has(> .kit-top-centre > *) .kit-banner-header .kit-pane {
+  --kit-feather: 4cqw;
+  padding-right: 4.5cqw;
+}
+.kit-top-row:has(> .kit-top-left > *) .kit-banner-top_center .kit-pane {
+  padding-inline: 2.2cqw;
+}
+.kit-top-right {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1.6cqw;
+  max-width: 68cqw;
+  min-width: 0;
+}
+.kit-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: .8cqw;
+  min-width: 0;
+}
+/* The bottom stack, top to bottom: speaker card, narration, choices, caption, nameplate, section
+   label, party, progress line. Each panel sits above the next, so a longer line pushes the panels
+   above it up instead of covering the one below. */
+.kit-bottom {
+  position: absolute;
+  left: 1.5cqw;
+  right: 1.2cqw;
+  bottom: 1.6cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1cqw;
+}
+.kit-bottom > * {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.kit-bottom > .kit-party {
+  margin-top: .9cqw;
+}
+/* A nameplate's line stays clear of the screen's overscan: its foot at most 92% down (render 14). */
+.kit-bottom > .kit-nameplate:last-child {
+  margin-bottom: 3.4cqw;
+}
+/* With lists in the right column the bottom stack keeps out of the column's lane (a list is
+   27cqw wide, `.kit-ledger`), so a tall list never runs under the narration or the choices. */
+.kit:has(.kit-column > *) > .kit-bottom {
+  right: calc(27cqw + 2cqw + 1.6cqw);
+}
+/* The right column of lists, under the chips: past the stage's height it wraps into a second
+   column to the left rather than run off the bottom; beside a bottom stack it keeps one column. */
+.kit-column {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: wrap-reverse;
+  align-content: flex-start;
+  align-items: flex-end;
+  gap: 1.8cqw;
+  max-height: 50cqw;
+  margin-top: 1.4cqw;
+}
+.kit:has(.kit-bottom > *) .kit-column {
+  flex-wrap: nowrap;
+}
+
+/* === glass === */
+.kit-glass {
+  position: relative;
+  box-sizing: border-box;
+  --kit-cut: 1.2cqw;
+  --kit-rim-w: .12cqw;
+  --kit-halo-w: .8cqw;
+  --kit-halo-blur: .8cqw;
+  --kit-halo-a: .8;
+  --kit-bloom-blur: .25cqw;
+  --kit-bloom-a: .9;
+  --kit-blur: .9cqw;
+  --kit-sat: 1.4;
+  --kit-fill: var(--kit-fill-warm);
+  --kit-fill-solid: var(--kit-fill-warm-solid);
+  --kit-tint: #ff9e4a26;
+  --kit-rim: var(--kit-rim-gold);
+  --kit-halo: linear-gradient(90deg, var(--kit-ember), var(--kit-amethyst) 55%, var(--kit-ember));
+  --kit-flare: 0;
+  --kit-delay: 0ms;
+}
+/* Fine glass: a small still pane blurs the plate with a small radius. */
+.kit-glass.kit-fine {
+  --kit-blur: .6cqw;
+  --kit-sat: 1.3;
+}
+/* The neon bloom outside the rim: a ring from the outline grown by --kit-halo-w to just under
+   the pane's edge, blurred. */
+.kit-halo {
+  position: absolute;
+  inset: calc(var(--kit-halo-w) * -1);
+  pointer-events: none;
+  filter: blur(var(--kit-halo-blur));
+  opacity: var(--kit-halo-a);
+  animation: kit-halo-in var(--kit-in-ms) var(--kit-ease) var(--kit-delay) both;
+}
+.kit-halo-ring {
+  position: absolute;
+  inset: 0;
+  --kit-e: var(--kit-halo-w);
+  --kit-under: .3cqw;
+  background: var(--kit-halo);
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+/* The rim bloom: the rim drawn wider and softly blurred under the pane, so the rim glows on both
+   sides; a flare hotspot burns on the bottom rim of a featured panel. */
+.kit-bloom {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  filter: blur(var(--kit-bloom-blur));
+  opacity: var(--kit-bloom-a);
+  animation: kit-halo-in var(--kit-in-ms) var(--kit-ease) var(--kit-delay) both;
+}
+.kit-bloom-ring {
+  position: absolute;
+  inset: 0;
+  --kit-bw: calc(var(--kit-rim-w) * 3);
+  background: var(--kit-rim);
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+.kit-bloom::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 14cqw;
+  max-width: 60%;
+  height: 1cqw;
+  transform: translate(-50%, 50%);
+  background: radial-gradient(closest-side, #fff4d8, #ffc27a99 40%, #ff9e4a00);
+  opacity: var(--kit-flare);
+}
+.kit-pane {
+  position: relative;
+  box-sizing: border-box;
+  height: 100%;
+  background:
+    linear-gradient(180deg, #ffffff22 0, #fff0 16%),
+    linear-gradient(115deg, #ffffff12 0 14%, #fff0 26%),
+    radial-gradient(90% 70% at 50% 118%, var(--kit-tint), #0000 70%),
+    var(--kit-fill-solid);
+  box-shadow: inset 0 1px 0 #ffffff30, inset 0 0 1.6cqw #00000040;
+  animation: kit-in var(--kit-in-ms) var(--kit-ease) var(--kit-delay) both;
+}
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .kit-glass:not(.kit-solid) > .kit-pane {
+    background:
+      linear-gradient(180deg, #ffffff22 0, #fff0 16%),
+      linear-gradient(115deg, #ffffff12 0 14%, #fff0 26%),
+      radial-gradient(90% 70% at 50% 118%, var(--kit-tint), #0000 70%),
+      var(--kit-fill);
+    -webkit-backdrop-filter: blur(var(--kit-blur)) saturate(var(--kit-sat));
+    backdrop-filter: blur(var(--kit-blur)) saturate(var(--kit-sat));
+  }
+}
+.kit-pane > * {
+  position: relative;
+  z-index: 1;
+}
+/* The light sweep: a soft band that crosses the pane once, above the glass, below the words. */
+.kit-pane::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, #fff0 38%, #fff3cf26 47%, #ffffff40 50%, #fff3cf26 53%, #fff0 62%);
+  transform: translateX(-130%);
+  animation: kit-sweep var(--kit-sweep-ms) ease-in-out calc(var(--kit-delay) + var(--kit-in-ms) + 250ms) 1 both;
+}
+/* The crisp hairline rim, cut to a ring of the pane's own shape so it stays thin on the diagonals. */
+.kit-pane::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: var(--kit-rim);
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+
+/* Shapes. --kit-o is an outline at inset --op-p with corners --op-k in from the box's corners,
+   --kit-i the same at --ip-p and --ip-k; each element sets the four for its own ring. */
+.kit-pane {
+  --op-p: 0px;
+  --op-k: var(--kit-cut);
+  --op-x: 0px;
+  --ip-p: var(--kit-rim-w);
+  --ip-k: calc(var(--kit-cut) + var(--kit-rim-w) * .414);
+  --ip-x: calc(var(--kit-rim-w) * 1.6);
+}
+.kit-bloom-ring {
+  --op-p: 0px;
+  --op-k: var(--kit-cut);
+  --op-x: 0px;
+  --ip-p: var(--kit-bw);
+  --ip-k: calc(var(--kit-cut) + var(--kit-bw) * .414);
+  --ip-x: calc(var(--kit-bw) * 1.6);
+}
+.kit-halo-ring {
+  --op-p: 0px;
+  --op-k: calc(var(--kit-cut) + var(--kit-e) * .586);
+  --op-x: 0px;
+  --ip-p: calc(var(--kit-e) + var(--kit-under));
+  --ip-k: calc(var(--kit-cut) + var(--kit-e) + var(--kit-under) * .414);
+  --ip-x: calc(var(--kit-e) + var(--kit-under) * 1.6);
+}
+.kit-shape-oct :is(.kit-pane, .kit-halo-ring, .kit-bloom-ring),
+.kit-card,
+.kit-note,
+.kit-row-lit,
+.kit-bubble-tab {
+  --kit-o: var(--op-k) var(--op-p), calc(100% - var(--op-k)) var(--op-p), calc(100% - var(--op-p)) var(--op-k), calc(100% - var(--op-p)) calc(100% - var(--op-k)), calc(100% - var(--op-k)) calc(100% - var(--op-p)), var(--op-k) calc(100% - var(--op-p)), var(--op-p) calc(100% - var(--op-k)), var(--op-p) var(--op-k);
+  --kit-i: var(--ip-k) var(--ip-p), calc(100% - var(--ip-k)) var(--ip-p), calc(100% - var(--ip-p)) var(--ip-k), calc(100% - var(--ip-p)) calc(100% - var(--ip-k)), calc(100% - var(--ip-k)) calc(100% - var(--ip-p)), var(--ip-k) calc(100% - var(--ip-p)), var(--ip-p) calc(100% - var(--ip-k)), var(--ip-p) var(--ip-k);
+}
+.kit-shape-hex :is(.kit-pane, .kit-halo-ring, .kit-bloom-ring),
+.kit-inlay {
+  --kit-o: var(--op-k) var(--op-p), calc(100% - var(--op-k)) var(--op-p), calc(100% - var(--op-x)) 50%, calc(100% - var(--op-k)) calc(100% - var(--op-p)), var(--op-k) calc(100% - var(--op-p)), var(--op-x) 50%;
+  --kit-i: var(--ip-k) var(--ip-p), calc(100% - var(--ip-k)) var(--ip-p), calc(100% - var(--ip-x)) 50%, calc(100% - var(--ip-k)) calc(100% - var(--ip-p)), var(--ip-k) calc(100% - var(--ip-p)), var(--ip-x) 50%;
+}
+.kit-shape-hex .kit-pane {
+  --ip-k: calc(var(--kit-cut) + var(--kit-rim-w) * .5);
+}
+/* The halo of a hexagon reaches out further at the points, so the glow follows them. */
+.kit-shape-hex > .kit-halo {
+  inset: calc(var(--kit-halo-w) * -1) calc(var(--kit-halo-w) * -1.8);
+}
+.kit-shape-hex .kit-halo-ring {
+  --kit-ex: calc(var(--kit-e) * 1.8);
+  --op-k: calc(var(--kit-cut) * 1.45);
+  --ip-p: calc(var(--kit-e) + var(--kit-under));
+  --ip-k: calc(var(--kit-cut) + var(--kit-ex) + var(--kit-under) * .5);
+  --ip-x: calc(var(--kit-ex) + var(--kit-under) * 1.6);
+}
+/* The masks that shape the panes, the blurred backdrop with them. A chamfer is four corner
+   gradients, each a quadrant of the pane, transparent up to the cut's diagonal. */
+.kit-shape-oct > .kit-pane {
+  --kit-m: calc(var(--kit-cut) * .7071);
+  mask:
+    linear-gradient(135deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) top left / 51% 51% no-repeat,
+    linear-gradient(225deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) top right / 51% 51% no-repeat,
+    linear-gradient(45deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) bottom left / 51% 51% no-repeat,
+    linear-gradient(315deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) bottom right / 51% 51% no-repeat;
+}
+/* A pointed end is two corner boxes as wide as the cut and half the height, cut on their
+   diagonals, beside the full-height middle. */
+.kit-shape-hex > .kit-pane {
+  mask:
+    linear-gradient(#000 0 0) center / calc(100% - 2 * var(--kit-cut) + 2px) 100% no-repeat,
+    linear-gradient(to bottom right, #0000 calc(50% - .6px), #000 calc(50% + .6px)) left top / var(--kit-cut) 50.5% no-repeat,
+    linear-gradient(to top right, #0000 calc(50% - .6px), #000 calc(50% + .6px)) left bottom / var(--kit-cut) 50.5% no-repeat,
+    linear-gradient(to bottom left, #0000 calc(50% - .6px), #000 calc(50% + .6px)) right top / var(--kit-cut) 50.5% no-repeat,
+    linear-gradient(to top left, #0000 calc(50% - .6px), #000 calc(50% + .6px)) right bottom / var(--kit-cut) 50.5% no-repeat;
+}
+/* A tab: chamfered at the left, its right end feathered across its last 11cqw only, where the
+   padding is, so a word never fades. */
+.kit-shape-tab > .kit-pane {
+  mask:
+    linear-gradient(90deg, #000 calc(100% - var(--kit-feather, 11cqw)), #0000) right / calc(100% - var(--kit-cut) + 1px) 100% no-repeat,
+    linear-gradient(#000 0 0) left center / var(--kit-cut) calc(100% - 2 * var(--kit-cut) + 2px) no-repeat,
+    linear-gradient(to bottom right, #0000 calc(50% - .6px), #000 calc(50% + .6px)) left top / var(--kit-cut) var(--kit-cut) no-repeat,
+    linear-gradient(to top right, #0000 calc(50% - .6px), #000 calc(50% + .6px)) left bottom / var(--kit-cut) var(--kit-cut) no-repeat;
+}
+.kit-shape-tab > .kit-pane::after {
+  clip-path: none;
+  background:
+    linear-gradient(90deg, #fff3cfaa, #f1d9a066 40%, #fff0 85%) top / 100% 1px no-repeat,
+    linear-gradient(90deg, #f1d9a0ee, #f1c96a99 45%, #f1d9a000 90%) bottom / 100% .14cqw no-repeat,
+    linear-gradient(180deg, #f1d9a0cc, #f1d9a066) left / .12cqw 100% no-repeat;
+}
+/* A band: a plain bar feathered at both sides, with hairline rules top and bottom. */
+.kit-shape-band > .kit-pane {
+  mask: linear-gradient(90deg, #0000, #000 9%, #000 91%, #0000);
+  box-shadow: inset 0 1px .4cqw -.2cqw #f1d9a066, inset 0 0 1.6cqw #00000040;
+}
+/* The band's rules: the top a bright hairline peaking at the centre with a short glint, the
+   bottom at half its strength (renders 32, 35). */
+.kit-shape-band > .kit-pane::after {
+  clip-path: none;
+  background:
+    radial-gradient(closest-side, #fff3cf, #fff3cf00) top center / 6cqw 3px no-repeat,
+    linear-gradient(90deg, #f1d9a000, #f1d9a0cc 50%, #f1d9a000) top / 100% 1px no-repeat,
+    linear-gradient(90deg, #f1d9a000, #f1d9a066 50%, #f1d9a000) bottom / 100% 1px no-repeat;
+}
+.kit-shape-tab > .kit-halo,
+.kit-shape-band > .kit-halo,
+.kit-shape-tab > .kit-bloom,
+.kit-shape-band > .kit-bloom {
+  display: none;
+}
+/* Round ends: the pane, the rim, the bloom and the halo are rings cut by a mask. A radius of
+   2.4cqw is a full capsule at one line and a rounded box when the words wrap. */
+.kit-shape-capsule {
+  --kit-radius: 2.4cqw;
+}
+.kit-shape-capsule > .kit-pane,
+.kit-shape-capsule > .kit-pane::before,
+.kit-shape-capsule .kit-bloom-ring {
+  border-radius: var(--kit-radius);
+}
+/* A capsule's pane has no mask, so it clips its own light sweep (overflow is no backdrop root). */
+.kit-shape-capsule > .kit-pane {
+  overflow: hidden;
+}
+.kit-shape-capsule > .kit-pane::after,
+.kit-shape-capsule .kit-bloom-ring,
+.kit-shape-capsule .kit-halo-ring {
+  clip-path: none;
+  border-radius: var(--kit-radius);
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+.kit-shape-capsule .kit-halo-ring {
+  border-radius: calc(var(--kit-radius) + var(--kit-e));
+  padding: calc(var(--kit-e) + var(--kit-under));
+}
+.kit-shape-capsule > .kit-pane::after {
+  padding: var(--kit-rim-w);
+}
+.kit-shape-capsule .kit-bloom-ring {
+  padding: var(--kit-bw);
+}
+/* A tail. A mask shapes the pane, which cuts its blurred backdrop with it (a clip-path leaves the
+   backdrop blurred across the whole box in Edge): the body is the four chamfer quadrants above
+   (or below) the tail's strip, and the tail is a conic wedge from its tip to the two corners of
+   its base, the wedge's angles worked out from the tail's sizes (tail 2.6cqw long, base 1.6cqw,
+   tip .7cqw off its centre toward the speaker, the long slanted pointer of renders 03, 04 and 12).
+   A tail on the left or right edge is the same turned a quarter, for a bubble beside the face
+   (`view::bubble_layout` swaps the shape with the side). The halo and the bloom are rings of the
+   same outline the size of the pane; the halo's own drop-shadow carries the neon outward, so no
+   filter sits on the bubble, which would stop the pane's blur. */
+.kit-shape-tail-below,
+.kit-shape-tail-above,
+.kit-shape-tail-left,
+.kit-shape-tail-right {
+  --kit-tw: .8cqw;
+}
+.kit-shape-tail-below > :is(.kit-halo, .kit-bloom),
+.kit-shape-tail-above > :is(.kit-halo, .kit-bloom),
+.kit-shape-tail-left > :is(.kit-halo, .kit-bloom),
+.kit-shape-tail-right > :is(.kit-halo, .kit-bloom) {
+  inset: 0;
+}
+.kit-shape-tail-below > .kit-halo,
+.kit-shape-tail-above > .kit-halo,
+.kit-shape-tail-left > .kit-halo,
+.kit-shape-tail-right > .kit-halo {
+  filter: blur(.25cqw) drop-shadow(0 0 .25cqw var(--kit-halo)) drop-shadow(0 0 .8cqw var(--kit-halo));
+}
+.kit-shape-tail-below > .kit-pane,
+.kit-shape-tail-above > .kit-pane,
+.kit-shape-tail-left > .kit-pane,
+.kit-shape-tail-right > .kit-pane {
+  --kit-q: calc((100% - var(--kit-tail-h)) * .51);
+  --kit-m: calc(var(--kit-cut) * .7071);
+  --kit-wedge: #0000 0, #000 .25deg 31.95deg, #0000 32.2deg;
+}
+/* The wedge's first angle: the base's corner nearest the way the tip leans. On a side tail a lean
+   to the left leans up and one to the right leans down. */
+.kit-shape-tail-below.kit-lean-right > .kit-pane {
+  --kit-from: -30deg;
+}
+.kit-shape-tail-below.kit-lean-left > .kit-pane {
+  --kit-from: -2.2deg;
+}
+.kit-shape-tail-above.kit-lean-right > .kit-pane {
+  --kit-from: 177.8deg;
+}
+.kit-shape-tail-above.kit-lean-left > .kit-pane {
+  --kit-from: 150deg;
+}
+.kit-shape-tail-left.kit-lean-right > .kit-pane {
+  --kit-from: 60deg;
+}
+.kit-shape-tail-left.kit-lean-left > .kit-pane {
+  --kit-from: 87.8deg;
+}
+.kit-shape-tail-right.kit-lean-right > .kit-pane {
+  --kit-from: 267.8deg;
+}
+.kit-shape-tail-right.kit-lean-left > .kit-pane {
+  --kit-from: 240deg;
+}
+.kit-shape-tail-below > .kit-pane {
+  mask:
+    linear-gradient(135deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left top / 51% var(--kit-q) no-repeat,
+    linear-gradient(225deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right top / 51% var(--kit-q) no-repeat,
+    linear-gradient(45deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left 0 bottom var(--kit-tail-h) / 51% var(--kit-q) no-repeat,
+    linear-gradient(315deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right 0 bottom var(--kit-tail-h) / 51% var(--kit-q) no-repeat,
+    conic-gradient(from var(--kit-from) at calc(var(--kit-tail-x) + var(--kit-lean)) 100%, var(--kit-wedge)) left bottom / 100% calc(var(--kit-tail-h) + 1px) no-repeat;
+}
+.kit-shape-tail-above > .kit-pane {
+  mask:
+    linear-gradient(135deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left 0 top var(--kit-tail-h) / 51% var(--kit-q) no-repeat,
+    linear-gradient(225deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right 0 top var(--kit-tail-h) / 51% var(--kit-q) no-repeat,
+    linear-gradient(45deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left bottom / 51% var(--kit-q) no-repeat,
+    linear-gradient(315deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right bottom / 51% var(--kit-q) no-repeat,
+    conic-gradient(from var(--kit-from) at calc(var(--kit-tail-x) + var(--kit-lean)) 0, var(--kit-wedge)) left top / 100% calc(var(--kit-tail-h) + 1px) no-repeat;
+}
+.kit-shape-tail-left > .kit-pane {
+  mask:
+    linear-gradient(135deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left var(--kit-tail-h) top 0 / var(--kit-q) 51% no-repeat,
+    linear-gradient(225deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right 0 top 0 / var(--kit-q) 51% no-repeat,
+    linear-gradient(45deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left var(--kit-tail-h) bottom 0 / var(--kit-q) 51% no-repeat,
+    linear-gradient(315deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right 0 bottom 0 / var(--kit-q) 51% no-repeat,
+    conic-gradient(from var(--kit-from) at 0 calc(var(--kit-tail-y) + var(--kit-lean)), var(--kit-wedge)) left top / calc(var(--kit-tail-h) + 1px) 100% no-repeat;
+}
+.kit-shape-tail-right > .kit-pane {
+  mask:
+    linear-gradient(135deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left 0 top 0 / var(--kit-q) 51% no-repeat,
+    linear-gradient(225deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right var(--kit-tail-h) top 0 / var(--kit-q) 51% no-repeat,
+    linear-gradient(45deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) left 0 bottom 0 / var(--kit-q) 51% no-repeat,
+    linear-gradient(315deg, #0000 calc(var(--kit-m) - .5px), #000 calc(var(--kit-m) + .5px)) right var(--kit-tail-h) bottom 0 / var(--kit-q) 51% no-repeat,
+    conic-gradient(from var(--kit-from) at 100% calc(var(--kit-tail-y) + var(--kit-lean)), var(--kit-wedge)) right top / calc(var(--kit-tail-h) + 1px) 100% no-repeat;
+}
+.kit-shape-tail-below .kit-halo-ring,
+.kit-shape-tail-above .kit-halo-ring,
+.kit-shape-tail-left .kit-halo-ring,
+.kit-shape-tail-right .kit-halo-ring {
+  --kit-ring: .3cqw;
+}
+.kit-shape-tail-below .kit-bloom-ring,
+.kit-shape-tail-above .kit-bloom-ring,
+.kit-shape-tail-left .kit-bloom-ring,
+.kit-shape-tail-right .kit-bloom-ring {
+  --kit-ring: calc(var(--kit-rim-w) * 3);
+}
+.kit-lean-left {
+  --kit-lean: -.7cqw;
+}
+.kit-lean-right {
+  --kit-lean: .7cqw;
+}
+.kit-shape-tail-below > .kit-pane,
+.kit-shape-tail-below .kit-halo-ring,
+.kit-shape-tail-below .kit-bloom-ring {
+  --kit-b: calc(100% - var(--kit-tail-h));
+  --kit-o: var(--kit-cut) 0, calc(100% - var(--kit-cut)) 0, 100% var(--kit-cut), 100% calc(var(--kit-b) - var(--kit-cut)), calc(100% - var(--kit-cut)) var(--kit-b), calc(var(--kit-tail-x) + var(--kit-tw)) var(--kit-b), calc(var(--kit-tail-x) + var(--kit-lean)) 100%, calc(var(--kit-tail-x) - var(--kit-tw)) var(--kit-b), var(--kit-cut) var(--kit-b), 0 calc(var(--kit-b) - var(--kit-cut)), 0 var(--kit-cut), var(--kit-cut) 0;
+  --kit-i: calc(var(--kit-cut) + var(--kit-ring) * .41) var(--kit-ring), calc(100% - var(--kit-cut) - var(--kit-ring) * .41) var(--kit-ring), calc(100% - var(--kit-ring)) calc(var(--kit-cut) + var(--kit-ring) * .41), calc(100% - var(--kit-ring)) calc(var(--kit-b) - var(--kit-cut) - var(--kit-ring) * .41), calc(100% - var(--kit-cut) - var(--kit-ring) * .41) calc(var(--kit-b) - var(--kit-ring)), calc(var(--kit-tail-x) + var(--kit-tw) - var(--kit-ring) * .8) calc(var(--kit-b) - var(--kit-ring)), calc(var(--kit-tail-x) + var(--kit-lean) * .93) calc(100% - var(--kit-ring) * 3.2), calc(var(--kit-tail-x) - var(--kit-tw) + var(--kit-ring) * .8) calc(var(--kit-b) - var(--kit-ring)), calc(var(--kit-cut) + var(--kit-ring) * .41) calc(var(--kit-b) - var(--kit-ring)), var(--kit-ring) calc(var(--kit-b) - var(--kit-cut) - var(--kit-ring) * .41), var(--kit-ring) calc(var(--kit-cut) + var(--kit-ring) * .41), calc(var(--kit-cut) + var(--kit-ring) * .41) var(--kit-ring);
+}
+.kit-shape-tail-above > .kit-pane,
+.kit-shape-tail-above .kit-halo-ring,
+.kit-shape-tail-above .kit-bloom-ring {
+  --kit-t: var(--kit-tail-h);
+  --kit-o: var(--kit-cut) var(--kit-t), calc(var(--kit-tail-x) - var(--kit-tw)) var(--kit-t), calc(var(--kit-tail-x) + var(--kit-lean)) 0, calc(var(--kit-tail-x) + var(--kit-tw)) var(--kit-t), calc(100% - var(--kit-cut)) var(--kit-t), 100% calc(var(--kit-t) + var(--kit-cut)), 100% calc(100% - var(--kit-cut)), calc(100% - var(--kit-cut)) 100%, var(--kit-cut) 100%, 0 calc(100% - var(--kit-cut)), 0 calc(var(--kit-t) + var(--kit-cut)), var(--kit-cut) var(--kit-t);
+  --kit-i: calc(var(--kit-cut) + var(--kit-ring) * .41) calc(var(--kit-t) + var(--kit-ring)), calc(var(--kit-tail-x) - var(--kit-tw) + var(--kit-ring) * .8) calc(var(--kit-t) + var(--kit-ring)), calc(var(--kit-tail-x) + var(--kit-lean) * .93) calc(var(--kit-ring) * 3.2), calc(var(--kit-tail-x) + var(--kit-tw) - var(--kit-ring) * .8) calc(var(--kit-t) + var(--kit-ring)), calc(100% - var(--kit-cut) - var(--kit-ring) * .41) calc(var(--kit-t) + var(--kit-ring)), calc(100% - var(--kit-ring)) calc(var(--kit-t) + var(--kit-cut) + var(--kit-ring) * .41), calc(100% - var(--kit-ring)) calc(100% - var(--kit-cut) - var(--kit-ring) * .41), calc(100% - var(--kit-cut) - var(--kit-ring) * .41) calc(100% - var(--kit-ring)), calc(var(--kit-cut) + var(--kit-ring) * .41) calc(100% - var(--kit-ring)), var(--kit-ring) calc(100% - var(--kit-cut) - var(--kit-ring) * .41), var(--kit-ring) calc(var(--kit-t) + var(--kit-cut) + var(--kit-ring) * .41), calc(var(--kit-cut) + var(--kit-ring) * .41) calc(var(--kit-t) + var(--kit-ring));
+}
+.kit-shape-tail-left > .kit-pane,
+.kit-shape-tail-left .kit-halo-ring,
+.kit-shape-tail-left .kit-bloom-ring {
+  --kit-h: var(--kit-tail-h);
+  --kit-o: calc(var(--kit-h) + var(--kit-cut)) 0, calc(100% - var(--kit-cut)) 0, 100% var(--kit-cut), 100% calc(100% - var(--kit-cut)), calc(100% - var(--kit-cut)) 100%, calc(var(--kit-h) + var(--kit-cut)) 100%, var(--kit-h) calc(100% - var(--kit-cut)), var(--kit-h) calc(var(--kit-tail-y) + var(--kit-tw)), 0 calc(var(--kit-tail-y) + var(--kit-lean)), var(--kit-h) calc(var(--kit-tail-y) - var(--kit-tw)), var(--kit-h) var(--kit-cut);
+  --kit-i: calc(var(--kit-h) + var(--kit-cut) + var(--kit-ring) * .41) var(--kit-ring), calc(100% - var(--kit-cut) - var(--kit-ring) * .41) var(--kit-ring), calc(100% - var(--kit-ring)) calc(var(--kit-cut) + var(--kit-ring) * .41), calc(100% - var(--kit-ring)) calc(100% - var(--kit-cut) - var(--kit-ring) * .41), calc(100% - var(--kit-cut) - var(--kit-ring) * .41) calc(100% - var(--kit-ring)), calc(var(--kit-h) + var(--kit-cut) + var(--kit-ring) * .41) calc(100% - var(--kit-ring)), calc(var(--kit-h) + var(--kit-ring)) calc(100% - var(--kit-cut) - var(--kit-ring) * .41), calc(var(--kit-h) + var(--kit-ring)) calc(var(--kit-tail-y) + var(--kit-tw) - var(--kit-ring) * .8), calc(var(--kit-ring) * 3.2) calc(var(--kit-tail-y) + var(--kit-lean) * .93), calc(var(--kit-h) + var(--kit-ring)) calc(var(--kit-tail-y) - var(--kit-tw) + var(--kit-ring) * .8), calc(var(--kit-h) + var(--kit-ring)) calc(var(--kit-cut) + var(--kit-ring) * .41);
+}
+.kit-shape-tail-right > .kit-pane,
+.kit-shape-tail-right .kit-halo-ring,
+.kit-shape-tail-right .kit-bloom-ring {
+  --kit-h: var(--kit-tail-h);
+  --kit-o: var(--kit-cut) 0, calc(100% - var(--kit-h) - var(--kit-cut)) 0, calc(100% - var(--kit-h)) var(--kit-cut), calc(100% - var(--kit-h)) calc(var(--kit-tail-y) - var(--kit-tw)), 100% calc(var(--kit-tail-y) + var(--kit-lean)), calc(100% - var(--kit-h)) calc(var(--kit-tail-y) + var(--kit-tw)), calc(100% - var(--kit-h)) calc(100% - var(--kit-cut)), calc(100% - var(--kit-h) - var(--kit-cut)) 100%, var(--kit-cut) 100%, 0 calc(100% - var(--kit-cut)), 0 var(--kit-cut);
+  --kit-i: calc(var(--kit-cut) + var(--kit-ring) * .41) var(--kit-ring), calc(100% - var(--kit-h) - var(--kit-cut) - var(--kit-ring) * .41) var(--kit-ring), calc(100% - var(--kit-h) - var(--kit-ring)) calc(var(--kit-cut) + var(--kit-ring) * .41), calc(100% - var(--kit-h) - var(--kit-ring)) calc(var(--kit-tail-y) - var(--kit-tw) + var(--kit-ring) * .8), calc(100% - var(--kit-ring) * 3.2) calc(var(--kit-tail-y) + var(--kit-lean) * .93), calc(100% - var(--kit-h) - var(--kit-ring)) calc(var(--kit-tail-y) + var(--kit-tw) - var(--kit-ring) * .8), calc(100% - var(--kit-h) - var(--kit-ring)) calc(100% - var(--kit-cut) - var(--kit-ring) * .41), calc(100% - var(--kit-h) - var(--kit-cut) - var(--kit-ring) * .41) calc(100% - var(--kit-ring)), calc(var(--kit-cut) + var(--kit-ring) * .41) calc(100% - var(--kit-ring)), var(--kit-ring) calc(100% - var(--kit-cut) - var(--kit-ring) * .41), var(--kit-ring) calc(var(--kit-cut) + var(--kit-ring) * .41);
+}
+.kit-pane {
+  --kit-ring: var(--kit-rim-w);
+}
+
+/* Tones: a rim colour and a halo colour each, read by the bubbles, the speaker card and the chips. */
+.kit-tone-hero {
+  --kit-tone-rim: #f6b14e;
+  --kit-tone-halo: #ff9a2a;
+}
+.kit-tone-ally {
+  --kit-tone-rim: #9cc8ff;
+  --kit-tone-halo: #4f9bff;
+}
+.kit-tone-mystic {
+  --kit-tone-rim: #d6a8ff;
+  --kit-tone-halo: #b36bff;
+}
+.kit-tone-npc {
+  --kit-tone-rim: #f0b0c0;
+  --kit-tone-halo: #ff6a92;
+}
+.kit-tone-narrator,
+.kit-tone-gold,
+.kit-tone-thought {
+  --kit-tone-rim: #f2c27a;
+  --kit-tone-halo: #f0a43a;
+}
+.kit-tone-danger {
+  --kit-tone-rim: #ff6a5a;
+  --kit-tone-halo: #ff3b2f;
+}
+.kit-tone-night {
+  --kit-fill: var(--kit-fill-night);
+  --kit-fill-solid: var(--kit-fill-night-solid);
+  --kit-tint: #7fa6d822;
+  --kit-rim: linear-gradient(90deg, #e8dff2cc, #b9c6e055 50%, #f1d9a0bb);
+  --kit-halo: linear-gradient(90deg, #7fa6d8, #b88cf0);
+  --kit-halo-a: .5;
+  --kit-halo-w: .55cqw;
+  --kit-halo-blur: .55cqw;
+  --kit-bloom-a: .55;
+  --kit-blur: .7cqw;
+  --kit-sat: 1.45;
+}
+.kit-tone-ember {
+  --kit-fill: var(--kit-fill-night);
+  --kit-fill-solid: var(--kit-fill-night-solid);
+  --kit-rim: linear-gradient(90deg, #ffd9a0, #ff9e4a 50%, #ffd9a0);
+  --kit-halo: var(--kit-ember);
+  --kit-halo-a: .85;
+  --kit-halo-w: .6cqw;
+  --kit-blur: .7cqw;
+}
+.kit-tone-ink {
+  --kit-fill: var(--kit-fill-ink);
+  --kit-fill-solid: var(--kit-fill-ink-solid);
+  --kit-tint: #0000;
+  --kit-blur: .8cqw;
+  --kit-sat: 1.3;
+}
+
+/* === shared marks === */
+.kit-sep {
+  color: var(--kit-gold-mid);
+  margin: 0 .2cqw;
+}
+.kit-rule {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 4cqw;
+}
+.kit-rule .hm-rule {
+  flex: 1 1 0;
+  height: 1px;
+  background: linear-gradient(90deg, #f1d9a000, #f1d9a0cc);
+}
+.kit-rule .hm-rule:last-child {
+  background: linear-gradient(270deg, #f1d9a000, #f1d9a0cc);
+}
+/* The rule's diamond is the same gold jewel on every panel. */
+.kit-rule .hm-diamond {
+  width: .7cqw;
+  height: .7cqw;
+  margin: 0 .8cqw;
+  border: .12cqw solid var(--kit-gold-hi);
+  background: linear-gradient(135deg, #fff3cf, #f1c96a 55%, #c6a36b);
+  box-shadow: 0 0 .6cqw #f1c96aaa;
+}
+.kit-rose {
+  position: relative;
+  display: inline-grid;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 .5cqw #f1c96a88);
+}
+.kit-rose > svg {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+}
+.kit-rose-back {
+  color: #b8893f;
+  transform: rotate(45deg) scale(.74);
+}
+/* The inline rose is a crisp star: a tight glow, and the back star outlined darker so its four
+   points read apart from the front star's (renders 03, 13). */
+.kit-brand-inline .kit-rose {
+  filter: drop-shadow(0 0 .25cqw #f1c96a66);
+}
+.kit-brand-inline .kit-rose-back {
+  stroke: #5a3a14;
+  stroke-width: .9px;
+  paint-order: stroke;
+}
+.kit-rose-front {
+  color: #f1c96a;
+}
+/* The drawing's inner diamond is filled dark for the overlay's small mark; the kit's rose is a
+   solid star with a light gold core (renders 01, 02, 13, 38). */
+.kit-rose > svg path[fill] {
+  fill: var(--kit-gold-hi);
+}
+/* The voice wave, half again the name's height in bright gold (renders 02, 13, 35), the bars on a
+   thin centred baseline. */
+.kit-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: .14cqw;
+  width: 4cqw;
+  height: 2.2cqw;
+  flex: 0 0 auto;
+  background: linear-gradient(90deg, #f1c96a00, #f1c96aaa 1cqw, #f1c96aaa calc(100% - 1cqw), #f1c96a00) center / 100% 1px no-repeat;
+}
+.kit-wave-bar {
+  width: .2cqw;
+  border-radius: .1cqw;
+  background: linear-gradient(180deg, #fffbea, #f8dc96 45%, #f1c96a);
+  box-shadow: 0 0 .45cqw #f1c96a, 0 0 1cqw #f1c96a88;
+  transform-origin: 50% 50%;
+}
+.kit-wave-on .kit-wave-bar {
+  animation: kit-wave 900ms ease-in-out calc(var(--kit-in-ms) + 100ms) infinite alternate;
+}
+.kit-wave-on .kit-wave-bar:nth-child(even) {
+  animation-delay: calc(var(--kit-in-ms) + 340ms);
+}
+.kit-wave-on .kit-wave-bar:nth-child(3n) {
+  animation-delay: calc(var(--kit-in-ms) + 520ms);
+}
+.kit-dots {
+  display: inline-flex;
+  gap: .55cqw;
+  align-items: center;
+  padding: .2cqw 0;
+}
+.kit-dot {
+  width: .8cqw;
+  height: .8cqw;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff3cf, #f1c96a 60%, #c6a36b);
+  box-shadow: 0 0 .6cqw #f1c96aaa;
+  animation: kit-think 1.4s ease-in-out infinite;
+}
+.kit-dot:nth-child(2) {
+  animation-delay: .2s;
+}
+.kit-dot:nth-child(3) {
+  animation-delay: .4s;
+}
+.kit-step-diamond {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: .9cqw;
+  height: .9cqw;
+  background: #fff3cf;
+  box-shadow: 0 0 .8cqw #ffb866, 0 0 1.6cqw #ffb86688;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.kit-turning {
+  animation: kit-turn 1.2s linear infinite;
+}
+/* Gold text: a gradient clipped to the letters. A text-shadow would paint over the gradient, so
+   the shadow is a drop-shadow on the text's own element. */
+.kit-brand-word,
+.kit-np-name,
+.kit-tc-title,
+.kit-ledger-title,
+.kit-nar-emphasis,
+.kit-section-title {
+  text-shadow: none;
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 .1cqw .4cqw #000c);
+}
+.kit-rarity-common {
+  color: var(--ui-rarity-common, #d7cfc3);
+}
+.kit-rarity-uncommon {
+  color: var(--ui-rarity-uncommon, #7fd99a);
+}
+.kit-rarity-rare {
+  color: var(--ui-rarity-rare, #c78bfa);
+}
+.kit-rarity-very_rare {
+  color: var(--kit-rarity-very-rare);
+}
+.kit-rarity-legendary {
+  color: var(--ui-rarity-legendary, #f8d74c);
+}
+
+/* === 1. brand mark === */
+.kit-brand {
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) both;
+}
+.kit-brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: .9cqw;
+}
+.kit-brand-rose {
+  width: 3.6cqw;
+  height: 3.6cqw;
+}
+.kit-brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: .25cqw;
+}
+.kit-brand-word {
+  font: 600 2.5cqw/1.05 var(--kit-display);
+  letter-spacing: .02em;
+  background-image: linear-gradient(100deg, #fff0 42%, #fffbea 50%, #fff0 58%), var(--kit-gold-text);
+  background-size: 260% 100%, 100% 100%;
+  background-repeat: no-repeat;
+  background-position: 160% 0, 0 0;
+  filter: drop-shadow(0 0 .6cqw #000) drop-shadow(0 .1cqw .4cqw #000c) drop-shadow(0 0 .6cqw #f1c96a66);
+  animation: kit-letter-sweep var(--kit-sweep-ms) ease-in-out 600ms 1 both;
+}
+/* The inline wordmark is a regular-weight cream-white over its fine gold underline (render 13). */
+.kit-brand-inline .kit-brand-word {
+  font-weight: 400;
+  background-image: linear-gradient(100deg, #fff0 42%, #fffbea 50%, #fff0 58%), linear-gradient(180deg, #fff6e0, #f6e2b4 55%, #e8c47a);
+}
+.kit-brand-rule {
+  height: 1px;
+  width: 100%;
+  background: linear-gradient(90deg, #f1c96acc, #c6a36b00);
+  box-shadow: 0 0 .4cqw #f1c96a66;
+}
+/* The crest (render 02), about 6cqw tall: a gold ring centred behind the wordmark, the rose's
+   long top and bottom points piercing it, hairlines running out from the ring above and below the
+   word, and the wordmark in heavy bevelled metal small capitals, on a soft dark ground of its own
+   so the gold reads on a bright plate. The ring and the rose are cut away across the word's line,
+   so no gold lies behind a letter. */
+.kit-brand-stacked .kit-brand-lockup {
+  display: grid;
+  place-items: center;
+  padding: 0 1.4cqw;
+  background: radial-gradient(closest-side, #000a, #0000 70%);
+}
+.kit-brand-stacked .kit-brand-lockup > * {
+  grid-area: 1 / 1;
+}
+.kit-brand-ring {
+  position: relative;
+  width: 3.8cqw;
+  height: 3.8cqw;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: .12cqw solid #e8c47a;
+  box-shadow: 0 0 .6cqw #f1c96a77, inset 0 0 .5cqw #f1c96a44;
+  -webkit-mask-image: linear-gradient(180deg, #000 20%, #0000 24% 76%, #000 80%);
+  mask-image: linear-gradient(180deg, #000 20%, #0000 24% 76%, #000 80%);
+}
+/* The hairlines run 5cqw out from the ring over the word's cap line and under its foot, fading
+   away from the ring; the lockup draws them, so the ring's cut leaves them whole. */
+.kit-brand-stacked .kit-brand-lockup::before,
+.kit-brand-stacked .kit-brand-lockup::after {
+  content: "";
+  grid-area: 1 / 1;
+  align-self: center;
+  width: 14cqw;
+  height: .09cqw;
+  background:
+    linear-gradient(90deg, #f1d9a000, #f1d9a0) left / 5cqw 100% no-repeat,
+    linear-gradient(270deg, #f1d9a000, #f1d9a0) right / 5cqw 100% no-repeat;
+}
+.kit-brand-stacked .kit-brand-lockup::before {
+  transform: translateY(-1.2cqw);
+}
+.kit-brand-stacked .kit-brand-lockup::after {
+  transform: translateY(1.2cqw);
+}
+/* The rose drawn 6.4cqw tall and narrowed, its top and bottom points reaching past the ring,
+   its middle cut away behind the word. */
+.kit-brand-stacked .kit-brand-rose {
+  width: 6.4cqw;
+  height: 6.4cqw;
+  transform: scaleX(.52);
+  -webkit-mask-image: linear-gradient(180deg, #000 32%, #0000 35% 65%, #000 68%);
+  mask-image: linear-gradient(180deg, #000 32%, #0000 35% 65%, #000 68%);
+}
+.kit-brand-stacked .kit-brand-text {
+  position: relative;
+}
+.kit-brand-stacked .kit-brand-word {
+  font-size: 1.86cqw;
+  font-weight: 700;
+  font-variant: small-caps;
+  letter-spacing: .04em;
+  background-image: linear-gradient(100deg, #fff0 42%, #fffbea 50%, #fff0 58%), linear-gradient(180deg, #fffaf0 0 38%, #f6dc9c 55%, #b8803c 82%, #f3d089);
+  -webkit-text-stroke: .04cqw #5a3a14;
+  filter: drop-shadow(0 .08cqw 0 #3a2410) drop-shadow(0 0 .8cqw #f1c96a55) drop-shadow(0 0 .5cqw #000c);
+}
+.kit-brand-stacked .kit-brand-rule {
+  display: none;
+}
+.kit-brand-place {
+  margin-top: .5cqw;
+  font: italic var(--kit-t-small)/1.2 var(--kit-body);
+  color: var(--kit-gold);
+}
+
+/* === 2. title chip and 22. status === */
+.kit-chip,
+.kit-status {
+  min-width: 0;
+}
+/* The chip is near-black navy glass (renders 02, 13), dark enough over a bright sky. */
+.kit-chip {
+  max-width: 40cqw;
+  --kit-fill: #0e1426cc;
+  --kit-fill-solid: #0e1426f2;
+  --kit-sat: 1.2;
+}
+.kit-status {
+  max-width: 26cqw;
+  --kit-radius: 1.5cqw;
+}
+/* The words keep clear of the round ends: the inline padding is at least the radius on a side
+   without the icon, so a wrapped line never crowds the rim. */
+.kit-chip .kit-pane,
+.kit-status .kit-pane {
+  display: flex;
+  align-items: center;
+  gap: .8cqw;
+  min-height: 3cqw;
+  padding: .45cqw var(--kit-radius) .45cqw 1.1cqw;
+}
+/* The status is one line of words in a capsule exactly as tall as its minimum height (its radius
+   is set with its width above); a wrapped status is a rounded box with its words clear of the
+   corners. */
+.kit-status .kit-pane {
+  padding-left: var(--kit-radius);
+}
+.kit-chip-icon {
+  width: 2.2cqw;
+  height: 2.2cqw;
+  color: var(--kit-gold);
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 .4cqw #f1c96a77);
+}
+/* The default mark: the compass drawn in outline only, in a fine ring. */
+.kit-chip-compass > svg,
+.kit-chip-compass > svg path[fill] {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+.kit-chip-compass > .kit-rose-back {
+  stroke-width: 2.2;
+}
+.kit-chip-compass::before {
+  content: "";
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  border: .1cqw solid currentColor;
+}
+.kit-chip-body {
+  display: flex;
+  flex-direction: column;
+  gap: .15cqw;
+  min-width: 0;
+}
+.kit-chip-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: .6cqw;
+}
+/* The title leads; the sub-line is at most four fifths of it in size and quieter (render 02). */
+.kit-chip-title {
+  font: 400 var(--kit-t-name)/1.15 var(--kit-display);
+  color: #f6efe0;
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+.kit-chip-part,
+.kit-chip-sub {
+  font: var(--kit-t-floor)/1.25 var(--kit-body);
+  color: var(--kit-text-muted);
+  text-wrap: balance;
+}
+.kit-chip-sub {
+  color: color-mix(in srgb, var(--kit-text-muted) 85%, #0000);
+  letter-spacing: .01em;
+}
+.kit-chip-part {
+  color: var(--kit-text);
+}
+.kit-chip-track {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: .7cqw;
+  margin-top: .3cqw;
+}
+.kit-track-dot {
+  width: .55cqw;
+  height: .55cqw;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.kit-track-dot.kit-step-past {
+  background: color-mix(in srgb, var(--kit-gold-title) 70%, #0000);
+}
+.kit-track-dot.kit-step-current {
+  width: .8cqw;
+  height: .8cqw;
+  background: #fff3cf;
+  box-shadow: 0 0 .6cqw #f1c96a, 0 0 1.2cqw #f1c96a99;
+  animation: kit-dot-glow var(--kit-pulse-ms) ease-in-out var(--kit-in-ms) 2;
+}
+.kit-track-dot.kit-step-future {
+  border: 1px solid #f1d9a066;
+}
+.kit-status-text {
+  font: var(--kit-t-small)/1.25 var(--kit-body);
+  color: var(--kit-text-strong);
+  text-wrap: balance;
+}
+.kit-status.kit-tone-ember .kit-status-text {
+  color: #ffd9a0;
+}
+
+/* === 3. progress line === */
+.kit-progress {
+  position: relative;
+  align-self: stretch;
+  height: 3cqw;
+  padding: 0 .9cqw;
+  display: flex;
+  align-items: center;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) both;
+}
+.kit-progress-label {
+  display: flex;
+  align-items: center;
+  gap: .8cqw;
+  font: var(--kit-t-small)/1.2 var(--kit-body);
+  color: var(--kit-text);
+}
+.kit-play {
+  display: inline-grid;
+  place-items: center;
+  width: 2.6cqw;
+  height: 2.6cqw;
+  border-radius: 50%;
+  border: 1px solid #f1d9a0aa;
+  background: #0c0a1066;
+  box-shadow: 0 0 .8cqw #f1c96a44;
+}
+.kit-play-icon {
+  width: 1.2cqw;
+  height: 1.2cqw;
+  color: var(--kit-text-strong);
+  fill: currentColor;
+}
+.kit-progress-track {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 38cqw;
+  transform: translate(-50%, -50%);
+  display: flex;
+  gap: .6cqw;
+}
+.kit-segment {
+  position: relative;
+  flex: 1 1 0;
+  height: .16cqw;
+  border-radius: .1cqw;
+}
+.kit-segment.kit-step-past {
+  background: var(--kit-gold);
+}
+.kit-segment.kit-step-current {
+  background: linear-gradient(90deg, #fff3cf, #ffb866);
+  box-shadow: 0 0 1cqw #ffb866cc, 0 0 .3cqw #fff3cf;
+  transform-origin: 0 50%;
+  animation: kit-grow 600ms var(--kit-ease) var(--kit-in-ms) both;
+}
+.kit-segment.kit-step-future {
+  background: #ffffff2e;
+}
+/* The continue capsule: a pointed gold rim round a dark inside, drawn as two stacked shapes. */
+.kit-progress-continue {
+  position: relative;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: .7cqw;
+  padding: .7cqw 2.6cqw;
+  font: 500 var(--kit-t-lead)/1.2 var(--kit-display);
+  color: var(--kit-gold-hi);
+  filter: drop-shadow(0 0 .5cqw #f1c96a88);
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 400ms both;
+}
+.kit-progress-continue::before,
+.kit-progress-continue::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  clip-path: polygon(1.4cqw 0, calc(100% - 1.4cqw) 0, 100% 50%, calc(100% - 1.4cqw) 100%, 1.4cqw 100%, 0 50%);
+}
+.kit-progress-continue::before {
+  background: var(--kit-rim-gold);
+}
+.kit-progress-continue::after {
+  inset: .14cqw;
+  background: linear-gradient(180deg, #2a2018f2, #120c10f2);
+}
+/* The inner hairline of the double rim, a ring .3cqw inside the outer one. */
+.kit-continue-inlay {
+  position: absolute;
+  inset: .3cqw;
+  pointer-events: none;
+  background: linear-gradient(90deg, #f1d9a0aa, #fff3cfdd 50%, #f1d9a0aa);
+  clip-path: polygon(evenodd, 1.15cqw 0, calc(100% - 1.15cqw) 0, 100% 50%, calc(100% - 1.15cqw) 100%, 1.15cqw 100%, 0 50%, 1.15cqw 0, calc(1.15cqw + .5px) 1px, calc(100% - 1.15cqw - .5px) 1px, calc(100% - 1.4px) 50%, calc(100% - 1.15cqw - .5px) calc(100% - 1px), calc(1.15cqw + .5px) calc(100% - 1px), 1.4px 50%, calc(1.15cqw + .5px) 1px);
+}
+.kit-progress-continue .kit-play-icon {
+  width: 1.4cqw;
+  height: 1.4cqw;
+  color: var(--kit-text-strong);
+  filter: drop-shadow(0 0 .3cqw #fff3cf99);
+}
+
+/* === 4 and 5. narration box and twist === */
+.kit-narration {
+  width: 68cqw;
+  --kit-cut: 1.5cqw;
+  --kit-rim-w: .16cqw;
+  --kit-halo-w: .95cqw;
+  --kit-halo-blur: .9cqw;
+  --kit-halo-a: .9;
+  --kit-blur: 1cqw;
+  --kit-flare: .9;
+  --kit-fill: #120e16a8;
+  --kit-fill-solid: #120e16f0;
+  --kit-tint: #ff9e4a14;
+  --kit-rim: linear-gradient(105deg, #ffe2b0, #ff9e4a 18%, #c08cff 52%, #ff9e4a 86%, #ffe2b0);
+  --kit-halo: linear-gradient(90deg, #ff8a3a, #b17bff 50%, #ff8a3a);
+}
+.kit-narration-right {
+  align-self: flex-end;
+  width: 70.6cqw;
+}
+.kit-narration-left {
+  align-self: flex-start;
+  width: 52cqw;
+  --kit-cut: 1.2cqw;
+}
+.kit-narration .kit-pane {
+  display: flex;
+  align-items: center;
+  gap: 1.5cqw;
+  padding: 1cqw 2.2cqw 1.15cqw 2cqw;
+}
+/* The rim spark (render 02): a white four-point star burning on the rim's centre with an ember
+   streak running along the rim, drawn above the pane (a sibling of it, never an ancestor). The
+   encounter banner wears the same spark at the top and bottom of its rim (render 03). It fades
+   in, flares once and settles; only its opacity moves. */
+.kit-narration::after,
+.kit-banner-top_center.kit-tone-danger::before,
+.kit-banner-top_center.kit-tone-danger::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  z-index: 3;
+  width: 22cqw;
+  max-width: 80%;
+  height: 1.6cqw;
+  transform: translate(-50%, 50%);
+  pointer-events: none;
+  --kit-spark-hot: #ffd9a0;
+  --kit-spark-glow: #ff9e4a;
+  background:
+    radial-gradient(closest-side, #fff, #fff 30%, var(--kit-spark-hot) 55%, #ff9e4a00) center / .9cqw .9cqw no-repeat,
+    linear-gradient(90deg, #fff0, #fff 50%, #fff0) center / 2.6cqw .12cqw no-repeat,
+    linear-gradient(180deg, #fff0, #fff 50%, #fff0) center / .12cqw 1.6cqw no-repeat,
+    linear-gradient(90deg, #ff9e4a00, color-mix(in srgb, var(--kit-spark-glow) 80%, #0000) 22%, #fff6e4 50%, color-mix(in srgb, var(--kit-spark-glow) 80%, #0000) 78%, #ff9e4a00) center / 100% 3px no-repeat,
+    radial-gradient(closest-side, color-mix(in srgb, var(--kit-spark-glow) 45%, #0000), #0000) center / 100% .9cqw no-repeat,
+    radial-gradient(closest-side, color-mix(in srgb, var(--kit-spark-glow) 60%, #0000), #0000) center / 7cqw 1.4cqw no-repeat;
+  animation: kit-spark 1400ms var(--kit-ease) calc(var(--kit-delay) + var(--kit-in-ms)) 1 both;
+}
+/* The tab header (render 02): the name and the wave after it in a hairline frame with a chamfer at
+   its top left; the frame's foot is the header's rule, which runs on from it. */
+.kit-nar-head.kit-nar-head-tab {
+  align-items: flex-end;
+  gap: 0;
+}
+.kit-nar-tab {
+  --tab-cut: .6cqw;
+  --tab-ring: .12cqw;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: .6cqw;
+  padding: .3cqw .6cqw .35cqw 1.2cqw;
+  --kit-o: var(--tab-cut) 0, 100% 0, 100% 100%, 0 100%, 0 var(--tab-cut);
+  --kit-i: calc(var(--tab-cut) + var(--tab-ring) * .414) var(--tab-ring), calc(100% - var(--tab-ring)) var(--tab-ring), calc(100% - var(--tab-ring)) calc(100% - var(--tab-ring)), var(--tab-ring) calc(100% - var(--tab-ring)), var(--tab-ring) calc(var(--tab-cut) + var(--tab-ring) * .414);
+}
+.kit-nar-tab::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: #f1d9a0cc;
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+.kit-nar-tab .kit-wave {
+  box-sizing: content-box;
+  padding: 0 1cqw;
+}
+.kit-nar-head.kit-nar-head-tab > .kit-nar-rule {
+  margin-bottom: 0;
+}
+.kit-nar-head-tab > .kit-nar-rule .hm-rule:first-child {
+  background: #f1d9a0cc;
+}
+/* The header rule has no jewel (render 02); the right-hand box keeps an outline diamond (13). */
+.kit-narration:not(.kit-narration-right) .kit-nar-rule .hm-diamond {
+  display: none;
+}
+.kit-narration-right .kit-nar-rule .hm-diamond {
+  background: none;
+  border-color: var(--kit-gold-title);
+}
+.kit-narration.kit-tone-danger::after {
+  --kit-spark-hot: #ffc4b8;
+  --kit-spark-glow: #ff3b2f;
+}
+.kit-narration-left .kit-pane {
+  padding: .8cqw 2cqw .95cqw 1.7cqw;
+}
+.kit-narration-left .kit-nar-head {
+  margin-bottom: .25cqw;
+}
+.kit-narration-left .kit-nar-line {
+  font-size: 1.55cqw;
+  line-height: 1.36;
+}
+.kit-narration .kit-pane:has(> .kit-continue-chevron) {
+  padding-right: 3.4cqw;
+}
+/* The medallion (render 02): a dark glass disc in a thin translucent ring with a highlight arc,
+   and the die drawn in fine pale white-gold lines glowing warm, its outline about two thirds of
+   the medal across. */
+.kit-medal {
+  flex: 0 0 auto;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 5.2cqw;
+  height: 5.2cqw;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: .1cqw solid #f1d9a040;
+  background: radial-gradient(circle at 50% 40%, #2a2030cc, #0e0a12ee);
+  box-shadow: inset 0 0 1cqw #ffb05a33, 0 0 0 .05cqw #fff3cf22;
+}
+.kit-medal::before {
+  content: "";
+  position: absolute;
+  inset: -.1cqw;
+  border-radius: 50%;
+  background: conic-gradient(from 200deg, #fff3cf00, #fff3cfcc 70deg, #fff3cf00 110deg, #0000 200deg, #ffb86666 250deg, #0000 300deg);
+  mask: radial-gradient(closest-side, #0000 calc(100% - .16cqw), #000 calc(100% - .1cqw));
+}
+/* The die's outline spans 18 of the drawing's 24 units, so a 4.5cqw drawing draws it 3.4cqw
+   across. */
+.kit-medal-icon {
+  width: 4.5cqw;
+  height: 4.5cqw;
+  color: #ffc46a;
+  fill: none;
+  stroke-width: 1;
+  filter: drop-shadow(0 0 .3cqw #ffb35a) drop-shadow(0 0 .6cqw #ff9e4a99);
+}
+.kit-nar-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kit-nar-head {
+  display: flex;
+  align-items: center;
+  gap: 1cqw;
+  margin-bottom: 0;
+}
+.kit-nar-speaker {
+  font: 500 var(--kit-t-name)/1.2 var(--kit-display);
+  color: var(--kit-text-strong);
+  text-shadow: 0 0 .8cqw #f1c96a33, var(--kit-text-shadow);
+  text-wrap: balance;
+}
+/* The compact box names the speaker in gold italic of a regular weight (render 04). */
+.kit-narration-left .kit-nar-speaker {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--kit-gold);
+}
+.kit-nar-progress {
+  margin-left: auto;
+  font: var(--kit-t-floor)/1.2 var(--kit-body);
+  color: var(--kit-text-muted);
+  text-align: right;
+}
+/* The rule runs on from the speaker's name to the box's right side (render 13), on the name's
+   foot, so the header and the rule share one line. */
+.kit-nar-head > .kit-nar-rule {
+  align-self: flex-end;
+  margin-bottom: .45cqw;
+}
+.kit-nar-head > .kit-nar-rule .hm-rule:last-child {
+  flex-grow: 1.4;
+}
+.kit-nar-line {
+  font: var(--kit-t-body)/1.38 var(--kit-body);
+  color: var(--kit-text-strong);
+  text-wrap: pretty;
+}
+.kit-hl {
+  color: var(--kit-gold-title);
+  font-weight: 600;
+  text-shadow: 0 0 .8cqw #f1c96a66, var(--kit-text-shadow);
+}
+.kit-nar-emphasis {
+  margin-top: .4cqw;
+  font: italic 600 1.85cqw/1.3 var(--kit-body);
+  background-image: linear-gradient(180deg, #ffe2b0, #ffb866);
+}
+/* The chevron stands clear of the chamfered corner and its rim. */
+.kit-pane > .kit-continue-chevron {
+  position: absolute;
+  right: 1.1cqw;
+  bottom: calc(var(--kit-cut) * .7);
+}
+.kit-continue-icon {
+  width: 1.4cqw;
+  height: 1.4cqw;
+  color: var(--kit-gold);
+  filter: drop-shadow(0 0 .4cqw #f1c96a);
+}
+.kit-continue-chevron .kit-continue-icon {
+  animation: kit-nudge 1.6s ease-in-out calc(var(--kit-in-ms) + 600ms) 3;
+}
+.kit-continue-ring {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .4cqw;
+  flex: 0 0 auto;
+}
+.kit-ring-mark {
+  display: grid;
+  place-items: center;
+  width: 4.2cqw;
+  height: 4.2cqw;
+  border-radius: 50%;
+  border: .16cqw solid var(--kit-gold-title);
+  background: radial-gradient(circle, #f1c96a26, #0000 70%);
+  box-shadow: 0 0 1cqw #f1c96a88, inset 0 0 .8cqw #f1c96a44;
+  animation: kit-ring-pulse var(--kit-pulse-ms) ease-in-out calc(var(--kit-in-ms) + 300ms) 2;
+}
+/* The chevron of the ring points on, to the right. */
+.kit-continue-ring .kit-continue-icon {
+  width: 2.2cqw;
+  height: 2.2cqw;
+  color: var(--kit-gold-hi);
+  transform: rotate(-90deg);
+}
+.kit-continue-label {
+  font: var(--kit-t-floor)/1.1 var(--kit-body);
+  color: var(--kit-gold-title);
+}
+/* The twist: a crimson neon frame on a cool wine glass, under the top bar (render 35). */
+.kit-narration.kit-tone-danger {
+  width: fit-content;
+  max-width: 46cqw;
+  --kit-rim-w: .22cqw;
+  --kit-fill: var(--kit-fill-wine);
+  --kit-fill-solid: var(--kit-fill-wine-solid);
+  --kit-tint: #ff3b2f40;
+  --kit-rim: var(--kit-rim-danger);
+  --kit-halo: var(--kit-crimson);
+  --kit-halo-a: 1;
+  --kit-halo-w: 1.15cqw;
+  --kit-halo-blur: 1cqw;
+  --kit-bloom-blur: .35cqw;
+  --kit-blur: .9cqw;
+  --kit-flare: 1;
+}
+.kit-narration.kit-tone-danger .kit-bloom::after {
+  background: radial-gradient(closest-side, #ffe6e0, #ff6a5aaa 40%, #ff3b2f00);
+}
+.kit-narration.kit-tone-danger .kit-nar-speaker {
+  font-size: 2cqw;
+  color: var(--kit-gold-title);
+  text-shadow: 0 0 .8cqw #f1c96a44, var(--kit-text-shadow);
+}
+/* The card fits its words; the italic warning alone is balanced so no line of it holds one word. */
+.kit-narration.kit-tone-danger :is(.kit-nar-line, .kit-nar-emphasis) {
+  max-width: 40cqw;
+}
+.kit-narration.kit-tone-danger .kit-nar-emphasis {
+  text-wrap: balance;
+}
+.kit-narration.kit-tone-danger .kit-nar-line {
+  color: var(--kit-text);
+}
+/* The twist has no rule under its header (render 35). */
+.kit-narration.kit-tone-danger .kit-nar-rule {
+  display: none;
+}
+.kit-narration.kit-tone-danger .kit-halo {
+  animation: kit-halo-in 600ms var(--kit-ease) both, kit-pulse var(--kit-pulse-ms) ease-in-out 600ms 3;
+}
+.kit-narration.kit-tone-danger .kit-pane {
+  animation-duration: 600ms;
+}
+.kit-narration.kit-tone-danger .kit-pane::after,
+.kit-banner.kit-tone-danger .kit-pane::after {
+  animation: kit-flare 300ms ease-out 300ms 1 both;
+}
+.kit-narration .kit-halo {
+  animation: kit-halo-in var(--kit-in-ms) var(--kit-ease) both, kit-pulse var(--kit-pulse-ms) ease-in-out var(--kit-in-ms) 2;
+}
+
+/* === 6. party strip === */
+.kit-party {
+  align-self: stretch;
+}
+.kit-party.kit-glass {
+  --kit-cut: 1.2cqw;
+  --kit-halo-a: .5;
+  --kit-halo-blur: .8cqw;
+  --kit-fill: var(--kit-fill-deep);
+  --kit-fill-solid: var(--kit-fill-deep-solid);
+  --kit-tint: #b88cf022;
+  /* Violet and ice along the sides with an ember centre (render 13). */
+  --kit-rim: linear-gradient(90deg, #b88cf0, #7fa6d8 30%, #ffb866 50%, #7fa6d8 70%, #b88cf0);
+  --kit-halo: linear-gradient(90deg, #b88cf0, #7fa6d8 50%, #b88cf0);
+}
+.kit-party.kit-glass .kit-pane {
+  padding: .9cqw 1.1cqw;
+}
+.kit-party-row {
+  display: flex;
+  gap: 1cqw;
+}
+/* Loose cards stand in one row, 15cqw each (render 02), every card as tall as the tallest, so the
+   row is even and each portrait and health bar keeps to the card's foot. A card with a long word
+   in its name is as wide as that word and its neighbours give way, so no word breaks. A dense
+   strip shares the row by content. The row leaves room above for the condition tags on the
+   cards' top rims. */
+.kit-party-loose .kit-party-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(min-content, 15.2cqw);
+  justify-content: center;
+  align-items: stretch;
+  column-gap: 1cqw;
+}
+.kit-party-loose:has(.kit-card-conditions) .kit-party-row {
+  padding-top: 1.1cqw;
+}
+/* A tile inside the bar. */
+.kit-card {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 9cqw;
+  overflow: hidden;
+  --kit-cut: .8cqw;
+  --kit-ring: .12cqw;
+  --op-p: 0px;
+  --op-k: var(--kit-cut);
+  --ip-p: var(--kit-ring);
+  --ip-k: calc(var(--kit-cut) + var(--kit-ring) * .414);
+  background: var(--kit-fill-tile);
+  clip-path: polygon(var(--kit-o));
+  animation: kit-in var(--kit-in-ms) var(--kit-ease) both;
+}
+/* A tile's rim is neutral gold glass; the hero's accent only tints its foot (render 13). */
+.kit-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(180deg, #f1d9a0cc, #c6a36b88 45%, color-mix(in srgb, var(--kit-accent, #c6a36b) 55%, #c6a36b));
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+/* A loose card: fine glass of its own with a subtle neutral rim and a faint gold glow (render
+   02); the hero's accent shows in the bar, the glyphs and a faint tint along the foot only. */
+.kit-card-glass {
+  flex: 0 1 15cqw;
+  min-width: 9cqw;
+  --kit-cut: .9cqw;
+  --kit-rim-w: .12cqw;
+  --kit-halo-w: .5cqw;
+  --kit-halo-blur: .55cqw;
+  --kit-halo-a: .2;
+  --kit-bloom-a: .45;
+  --kit-fill: #12101aa6;
+  --kit-fill-solid: #12101af0;
+  --kit-tint: color-mix(in srgb, var(--kit-accent, #c6a36b) 14%, #0000);
+  --kit-rim: linear-gradient(180deg, #f6e6c2cc, #a89a8a77 45%, color-mix(in srgb, var(--kit-accent, #c6a36b) 60%, #c6a36b));
+  --kit-halo: #c6a36b;
+  --kit-delay: 80ms;
+}
+.kit-card-portrait {
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 35%, #3a3040, #14161c);
+}
+/* The theme's party portraits zoom in on the face (`.portrait-image`); the kit frames its own
+   with the object position alone: head and shoulders in view. */
+.kit-card-portrait .portrait-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 18%;
+  transform: none;
+}
+.kit-card-portrait .portrait-initial {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font: 600 2.6cqw/1 var(--kit-display);
+  color: var(--kit-gold);
+}
+.kit-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: .15cqw;
+  min-width: 0;
+}
+/* The glyph stands beside the name, which wraps in its own column (render 02). */
+.kit-card-name {
+  display: flex;
+  align-items: baseline;
+  gap: .4cqw;
+  font: 600 1.75cqw/1.1 var(--kit-display);
+  color: var(--kit-text-strong);
+}
+.kit-card-name-text {
+  min-width: 0;
+  overflow-wrap: break-word;
+  text-wrap: balance;
+}
+/* The glyph stands on the name's first line, however many lines the name wraps to. */
+.kit-card-glyph {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: .07cqw;
+  width: 1.8cqw;
+  height: 1.8cqw;
+  color: var(--kit-accent, var(--kit-gold));
+  filter: drop-shadow(0 0 .3cqw color-mix(in srgb, var(--kit-accent, #f1c96a) 70%, #0000));
+}
+/* The class and the level are one run of words ("Fighter Lv. 3", render 02), lighter than the
+   name: the class in muted warm white and "Lv." in a tint of the hero's accent; only the glyph
+   before the name carries the full accent. A long class wraps as a phrase, and the level stays
+   whole after its last word. */
+.kit-card-class {
+  font: 400 var(--kit-t-floor)/1.22 var(--kit-body);
+  color: var(--kit-text-muted);
+  overflow-wrap: break-word;
+  text-wrap: pretty;
+}
+.kit-card-class-name {
+  color: var(--kit-text-muted);
+}
+.kit-card-level {
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--kit-accent, #f1c96a) 70%, #f4ece0);
+}
+.kit-card-hp {
+  font: var(--kit-t-floor)/1.2 var(--kit-body);
+  color: var(--kit-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.kit-bar {
+  height: .4cqw;
+  border-radius: 99px;
+  background: #ffffff26;
+}
+.kit-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  --kit-bar: var(--kit-accent, #6cdb88);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--kit-bar) 65%, #000), var(--kit-bar) 80%, color-mix(in srgb, var(--kit-bar) 50%, #fff));
+  box-shadow: 0 0 .6cqw var(--kit-bar), 0 0 .2cqw color-mix(in srgb, var(--kit-bar) 60%, #fff);
+  transition: width 600ms var(--kit-ease);
+}
+.kit-bar-amber .kit-bar-fill {
+  --kit-bar: var(--ui-warn, #f8d74c);
+}
+.kit-bar-red .kit-bar-fill {
+  --kit-bar: var(--ui-danger, #f05a5c);
+}
+/* Condition chips stand inside the card's top-right corner, clear of its chamfer, and wrap
+   leftward; they never cross the rim. */
+.kit-card-conditions {
+  position: absolute;
+  z-index: 4;
+  top: .45cqw;
+  right: .8cqw;
+  left: .8cqw;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-content: flex-start;
+  gap: .3cqw;
+  pointer-events: none;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 300ms both;
+}
+.kit-condition {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  overflow-wrap: break-word;
+  padding: .05cqw .45cqw;
+  border-radius: .3cqw;
+  font: var(--kit-t-floor)/1.25 var(--kit-body);
+  color: #f5c8c1;
+  background: linear-gradient(180deg, #6a3434f4, #51292af4);
+  border: 1px solid #f05a5c99;
+  box-shadow: 0 0 .6cqw #f05a5c66, inset 0 1px 0 #ffffff22;
+}
+.kit-card-downed .portrait-image {
+  filter: grayscale(1) brightness(.6);
+}
+.kit-card-open {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .6cqw;
+  background: #101626b8;
+}
+.kit-card-open::after {
+  background: linear-gradient(105deg, #7fa6d866, #7fa6d822 50%, #7fa6d855);
+}
+.kit-open-ring {
+  display: grid;
+  place-items: center;
+  width: 3.8cqw;
+  height: 3.8cqw;
+  border-radius: 50%;
+  border: .14cqw solid #c8d9ed;
+  box-shadow: 0 0 1cqw #7fa6d899, inset 0 0 .6cqw #7fa6d855;
+}
+.kit-open-icon {
+  width: 2cqw;
+  height: 2cqw;
+  color: #e8eef6;
+}
+.kit-open-word {
+  font: var(--kit-t-body)/1.2 var(--kit-display);
+  color: var(--kit-text);
+}
+/* Tall: a full-bleed portrait under a foot gradient, head and shoulders in view (render 13). */
+.kit-party-tall .kit-card {
+  aspect-ratio: 1.56 / 1;
+  max-width: 17cqw;
+}
+.kit-party-tall .kit-party-row {
+  justify-content: center;
+}
+.kit-party-tall .kit-card-portrait {
+  position: absolute;
+  inset: 0;
+}
+/* A wide card shows a band from near the top of the picture, where the library's portraits hold
+   the head, so the face and shoulders stand above the foot gradient and the name. */
+.kit-party-tall .kit-card-portrait .portrait-image {
+  object-position: 50% 6%;
+}
+.kit-party-tall .kit-card-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 3cqw .9cqw 1.3cqw;
+  align-items: center;
+  text-align: center;
+  background: linear-gradient(180deg, #0000, #0a0b10c8 45%, #0a0b10ee);
+}
+.kit-party-tall .kit-card-name {
+  justify-content: center;
+}
+.kit-party-tall .kit-bar {
+  position: absolute;
+  z-index: 2;
+  left: .9cqw;
+  right: .9cqw;
+  bottom: .6cqw;
+  height: .5cqw;
+}
+/* Compact: a grid of the portrait column beside the name and the class line, the health bar
+   across the card's whole foot (render 02). A card is at least 6.4cqw tall and grows with a name
+   or class that wraps; its words sit in the middle of the card, never clipped. */
+.kit-party-compact .kit-card-face {
+  display: grid;
+  grid-template-columns: 4.6cqw minmax(min-content, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  column-gap: .4cqw;
+  min-height: 6.4cqw;
+  height: 100%;
+  padding: 0;
+}
+/* The portrait is a fixed head-and-shoulders crop at the column's top, whatever the row's height,
+   so a neighbour's long name never re-crops a face; below it the column is glass, into which the
+   picture's foot and right edge feather. */
+.kit-party-compact .kit-card-portrait {
+  grid-area: 1 / 1 / 2 / 2;
+  align-self: start;
+  aspect-ratio: 4.6 / 6.4;
+  -webkit-mask-image: linear-gradient(90deg, #000 88%, #0000), linear-gradient(180deg, #000 80%, #0000);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(90deg, #000 88%, #0000), linear-gradient(180deg, #000 80%, #0000);
+  mask-composite: intersect;
+}
+.kit-party-compact .kit-card-portrait .portrait-image {
+  object-fit: cover;
+  object-position: 50% 12%;
+}
+/* A loose card's portrait stands on the card, outside the clipped pane: 40% of the card wide, its
+   head rising to 1cqw over the top rim, the picture feathered at its top over the rim, at its
+   right into the words and at its foot into the glass (render 02). The face column beneath it is
+   an empty spacer: the picture is opaque to 62% of its width and gone at 82% (4.9cqw), where the
+   words start, glyph first, so the picture never lies over them. The cards stand .6cqw apart and
+   the words keep .4cqw from the right rim, so "Barbarian Lv. 3" stays one line. */
+.kit-party-compact.kit-party-loose:not(.kit-party-dense) .kit-party-row {
+  grid-auto-columns: minmax(min-content, 15.6cqw);
+  column-gap: .6cqw;
+}
+.kit-party-compact.kit-party-loose:not(.kit-party-dense) .kit-card-face {
+  grid-template-columns: 4.6cqw minmax(min-content, 1fr);
+  column-gap: .3cqw;
+}
+.kit-party-compact.kit-party-loose:not(.kit-party-dense) .kit-card-body {
+  padding-right: .4cqw;
+}
+.kit-party-compact.kit-party-loose:not(.kit-party-dense) .kit-card-glass > .kit-card-portrait .portrait-image {
+  object-position: 42% 6%;
+}
+.kit-party-compact.kit-party-loose:not(.kit-party-dense) .kit-card-glass > .kit-card-portrait {
+  position: absolute;
+  z-index: 3;
+  top: -1cqw;
+  left: 0;
+  width: 6cqw;
+  height: 7.6cqw;
+  aspect-ratio: auto;
+  pointer-events: none;
+  background: none;
+  -webkit-mask-image: linear-gradient(90deg, #0000, #000 .4cqw 62%, #0000 82%), linear-gradient(180deg, #0000, #000 1.3cqw 70%, #0000);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(90deg, #0000, #000 .4cqw 62%, #0000 82%), linear-gradient(180deg, #0000, #000 1.3cqw 70%, #0000);
+  mask-composite: intersect;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) var(--kit-delay) both;
+}
+/* Each loose compact card glows faintly with its hero's accent from its lower left (render 02). */
+.kit-party-compact.kit-party-loose .kit-card-glass {
+  --kit-tint: color-mix(in srgb, var(--kit-accent, #c6a36b) 24%, #0000);
+}
+.kit-party-compact.kit-party-loose .kit-card-glass > .kit-pane {
+  box-shadow: inset 0 1px 0 #ffffff30, inset 0 0 1.4cqw color-mix(in srgb, var(--kit-accent, #c6a36b) 22%, #0000);
+}
+.kit-party-compact.kit-party-loose .kit-card-glass > .kit-pane::before {
+  background:
+    radial-gradient(ellipse at 30% 100%, color-mix(in srgb, var(--kit-accent, #c6a36b) 22%, #0000), #0000 70%),
+    linear-gradient(105deg, #fff0 38%, #fff3cf26 47%, #ffffff40 50%, #fff3cf26 53%, #fff0 62%);
+}
+/* The words keep clear of the right rim and sit in the middle of the card when a neighbour makes
+   the row taller; the hero's one glyph stands inline before the name (render 13). */
+.kit-party-compact .kit-card-body {
+  grid-area: 1 / 2;
+  align-self: center;
+  justify-content: center;
+  min-height: 0;
+  padding: .5cqw .9cqw .3cqw 0;
+}
+.kit-party-compact .kit-card-name {
+  line-height: 1.08;
+}
+/* A compact card's chips are a tag on its top rim at the right, out of the card's flow, so a
+   chip never moves its own card's name; when any card of the strip has one, every card's words
+   start a little lower, the same for all, so no tag covers a name. */
+.kit-party-compact .kit-card-conditions {
+  top: 0;
+  left: auto;
+  right: 1.1cqw;
+  flex-wrap: nowrap;
+  transform: translateY(-60%);
+}
+.kit-party-compact:has(.kit-card-conditions) .kit-card-body {
+  padding-top: 1cqw;
+}
+/* A framed tile clips to its shape, so its tag stays just inside the top rim. */
+.kit-party-compact.kit-glass .kit-card-conditions {
+  top: .35cqw;
+  transform: none;
+}
+.kit-party-compact .kit-bar {
+  grid-area: 2 / 1 / 3 / -1;
+  height: .45cqw;
+  margin: .3cqw .4cqw .4cqw;
+}
+.kit-party-compact .kit-bar-fill {
+  box-shadow: 0 0 .8cqw var(--kit-bar), 0 0 .25cqw color-mix(in srgb, var(--kit-bar) 60%, #fff);
+}
+.kit-party-compact .kit-card-open {
+  display: flex;
+}
+/* Dense, past six cards: the cards share the row in equal tracks, none narrower than 9cqw, and
+   a long name wraps within its card; the class line and the hit-point words give way. */
+.kit-party-dense .kit-card-glass,
+.kit-party-dense .kit-card {
+  flex: 1 1 0;
+  min-width: 9cqw;
+}
+.kit-party-dense .kit-party-row {
+  gap: .8cqw;
+}
+.kit-party-dense.kit-party-loose .kit-party-row {
+  grid-auto-columns: minmax(9cqw, 1fr);
+  justify-content: stretch;
+  row-gap: 0;
+}
+/* A dense card is a small tile: a round 3.6cqw face (render 03), crisp in a gold ring, over the
+   name, which has the card's whole width to wrap in, centred in the room above the health bar. */
+.kit-party-compact.kit-party-dense .kit-card-face {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  row-gap: .3cqw;
+}
+.kit-party-compact.kit-party-dense .kit-card-body {
+  grid-area: 2 / 1;
+  align-items: center;
+  padding: 0 .6cqw;
+  text-align: center;
+}
+.kit-party-compact.kit-party-dense .kit-card-name {
+  justify-content: center;
+}
+.kit-party-compact.kit-party-dense .kit-bar {
+  grid-area: 3 / 1;
+}
+.kit-party-compact.kit-party-dense .kit-card-portrait {
+  grid-area: 1 / 1;
+  justify-self: center;
+  align-self: start;
+  aspect-ratio: 1;
+  width: 3.6cqw;
+  height: 3.6cqw;
+  margin-top: .7cqw;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: .1cqw solid #f1d9a0aa;
+  box-shadow: 0 0 .5cqw #f1c96a55;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.kit-party-compact.kit-party-dense .kit-card-portrait .portrait-image {
+  object-position: 50% 12%;
+}
+.kit-party-dense .kit-card-class,
+.kit-party-dense .kit-card-hp {
+  display: none;
+}
+.kit-party-dense .kit-card-name {
+  gap: .3cqw;
+  font-size: var(--kit-t-floor);
+  line-height: 1.08;
+}
+.kit-party-dense .kit-card-glyph {
+  width: 1.3cqw;
+  height: 1.3cqw;
+}
+
+/* === 7. speech bubble and the thinking cue === */
+/* A bubble hugs its words: it is as wide as its longest line, at most its place's width (24cqw
+   when it has no place). It is a grid of one cell, so the name tab's width counts toward it. */
+.kit-bubble {
+  position: absolute;
+  display: grid;
+  width: fit-content;
+  max-width: 24cqw;
+  --kit-cut: 1cqw;
+  --kit-rim-w: .16cqw;
+  --kit-halo-w: .7cqw;
+  --kit-halo-blur: .6cqw;
+  --kit-halo-a: 1;
+  --kit-bloom-a: 1;
+  --kit-bloom-blur: .2cqw;
+  --kit-tail-h: 2.6cqw;
+  --kit-tail-x: 30%;
+  --kit-tail-y: 30%;
+  /* Near-black glass (renders 03, 04): the tone is only in the rim and the halo. */
+  --kit-fill: #0d0b0cd0;
+  --kit-fill-solid: #0d0b0cf4;
+  --kit-tint: #0000;
+  --kit-tone-ink: var(--kit-accent, var(--kit-tone-rim));
+  --kit-rim: linear-gradient(105deg, #ffffff, color-mix(in srgb, var(--kit-tone-ink) 70%, #fff) 14%, var(--kit-tone-ink) 30%, var(--kit-tone-ink) 70%, color-mix(in srgb, var(--kit-tone-ink) 70%, #fff) 86%, #ffffff);
+  --kit-halo: var(--kit-accent, var(--kit-tone-halo));
+}
+/* The hero's and the narrator's halo is a crisp hairline with a soft glow, not a band. */
+.kit-bubble:is(.kit-tone-hero, .kit-tone-narrator) {
+  --kit-halo-w: .45cqw;
+  --kit-halo-a: .55;
+}
+/* A bubble hangs from its tail's tip: a tail below holds the bottom edge at the place's height,
+   so a longer line grows the box upward, away from the speaker. */
+.kit-shape-tail-below.kit-bubble {
+  transform: translateY(-100%);
+}
+.kit-bubble > .kit-pane {
+  grid-area: 1 / 1;
+}
+.kit-bubble .kit-pane {
+  padding: .8cqw 1.3cqw calc(.95cqw + var(--kit-tail-h));
+  animation-name: kit-pop;
+  animation-duration: 380ms;
+}
+.kit-bubble .kit-halo {
+  animation-name: kit-halo-in;
+  animation-duration: 380ms;
+}
+.kit-shape-tail-above.kit-bubble .kit-pane {
+  padding: calc(.8cqw + var(--kit-tail-h)) 1.3cqw .95cqw;
+}
+.kit-shape-tail-left.kit-bubble .kit-pane {
+  padding: .8cqw 1.3cqw .95cqw calc(1.3cqw + var(--kit-tail-h));
+}
+.kit-shape-tail-right.kit-bubble .kit-pane {
+  padding: .8cqw calc(1.3cqw + var(--kit-tail-h)) .95cqw 1.3cqw;
+}
+.kit-bubble-head {
+  display: flex;
+  align-items: flex-start;
+  gap: .6cqw;
+  margin-bottom: .3cqw;
+}
+/* The head glyph is gold and part filled (renders 03, 04); a speaker's own accent tints it. The
+   name is white and heavier. */
+.kit-bubble-icon {
+  width: 1.8cqw;
+  height: 1.8cqw;
+  margin-top: .05cqw;
+  flex: 0 0 auto;
+  color: var(--kit-accent, var(--kit-gold));
+  fill: color-mix(in srgb, currentColor 35%, #0000);
+  filter: drop-shadow(0 0 .4cqw color-mix(in srgb, var(--kit-accent, #f1c96a) 70%, #0000));
+}
+.kit-bubble-face {
+  width: 2.4cqw;
+  height: 2.4cqw;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  border: .12cqw solid var(--kit-tone-ink);
+}
+.kit-bubble-name {
+  min-width: 0;
+  font: 600 1.85cqw/1.15 var(--kit-display);
+  color: var(--kit-text-strong);
+  overflow-wrap: anywhere;
+  text-wrap: balance;
+}
+/* A bubble's lines fill its width and no last line holds one word, however many lines it has
+   (render 04): pretty wrapping, where balance would leave the box wider than its lines. */
+.kit-bubble-line {
+  font: 1.65cqw/1.34 var(--kit-body);
+  color: var(--kit-text);
+  text-wrap: pretty;
+}
+.kit-bubble-em {
+  margin-top: .2cqw;
+  font: italic 1.55cqw/1.34 var(--kit-body);
+  color: #ffc78a;
+  text-wrap: pretty;
+}
+/* The name tab: a chamfered tab with the speaker's glyph, rimmed in the tone, on the top edge. It
+   shares the bubble's one grid cell with the pane, so the bubble is at least as wide as the tab;
+   its foot stays 1.05cqw into the pane and a name that wraps grows the tab upward. */
+.kit-name-tab .kit-pane {
+  padding-top: 1.7cqw;
+}
+.kit-bubble-tab {
+  position: relative;
+  z-index: 3;
+  grid-area: 1 / 1;
+  justify-self: start;
+  align-self: start;
+  margin: 0 1.2cqw;
+  transform: translateY(calc(-100% + 1.05cqw));
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  gap: .45cqw;
+  min-width: 0;
+  max-width: calc(100% - 2.4cqw);
+  padding: .25cqw 1cqw .3cqw .8cqw;
+  --kit-cut: .5cqw;
+  --kit-ring: .12cqw;
+  --op-p: 0px;
+  --op-k: var(--kit-cut);
+  --ip-p: var(--kit-ring);
+  --ip-k: calc(var(--kit-cut) + var(--kit-ring) * .414);
+  background: linear-gradient(180deg, #33261ef8, #17110ef8);
+  clip-path: polygon(var(--kit-o));
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 120ms both;
+}
+.kit-bubble-tab::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, #fff3cf, var(--kit-tone-ink) 40%, var(--kit-tone-ink));
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+.kit-bubble-tab .kit-bubble-icon {
+  width: 1.5cqw;
+  height: 1.5cqw;
+  margin: 0;
+}
+/* The tab is a small label (renders 17, 20): its name at the type floor, wrapping pretty, not
+   balanced, so its lines fill the tab, the tab's right edge stays by its longest line and a long
+   name takes as few lines as it can. */
+.kit-bubble-tab .kit-bubble-name {
+  font-size: var(--kit-t-floor);
+  text-wrap: pretty;
+}
+.kit-thought {
+  width: auto;
+  transform: translateY(calc(-100% - 2.2cqw));
+  --kit-halo-a: .6;
+}
+.kit-thought .kit-pane {
+  padding: .75cqw 1.3cqw;
+}
+.kit-thought::before,
+.kit-thought::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  background: #0d0b0ce0;
+  border: .12cqw solid var(--kit-tone-ink);
+  box-shadow: 0 0 .6cqw var(--kit-halo);
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 200ms both;
+}
+.kit-thought::before {
+  width: 1cqw;
+  height: 1cqw;
+  left: 1.6cqw;
+  bottom: -1.3cqw;
+}
+.kit-thought::after {
+  width: .6cqw;
+  height: .6cqw;
+  left: 1cqw;
+  bottom: -2.2cqw;
+}
+
+/* === 8. speaker nameplate === */
+.kit-nameplate {
+  width: 70cqw;
+  text-align: center;
+}
+.kit-np-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1cqw;
+  margin-bottom: .5cqw;
+  animation: kit-fade 600ms var(--kit-ease) both;
+}
+/* A rule tapers to a fine point at its outer end and runs straight into a gold diamond, its inner
+   end, 1cqw from the name (render 14). */
+.kit-np-rule {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 7.5cqw;
+  height: .6cqw;
+  transform-origin: 100% 50%;
+  animation: kit-grow 600ms var(--kit-ease) both;
+}
+.kit-np-rule::before {
+  content: "";
+  flex: 1 1 auto;
+  height: .16cqw;
+  margin-right: -.2cqw;
+  background: linear-gradient(90deg, #f1d9a000, #f1d9a0ee);
+  clip-path: polygon(0 50%, 100% 0, 100% 100%);
+}
+.kit-np-rule::after {
+  content: "";
+  flex: 0 0 auto;
+  width: .42cqw;
+  height: .42cqw;
+  background: #fff3cf;
+  box-shadow: 0 0 .5cqw #f1c96a;
+  transform: rotate(45deg);
+}
+.kit-np-rule-after {
+  flex-direction: row-reverse;
+  transform-origin: 0 50%;
+}
+.kit-np-rule-after::before {
+  margin: 0 0 0 -.2cqw;
+  background: linear-gradient(270deg, #f1d9a000, #f1d9a0ee);
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+.kit-np-name {
+  font: 500 var(--kit-t-name)/1.2 var(--kit-display);
+  background-image: linear-gradient(180deg, #fff3cf, #f1c96a);
+  filter: drop-shadow(0 .1cqw .4cqw #000c) drop-shadow(0 0 .7cqw #f1c96a55);
+}
+.kit-np-line {
+  font: italic var(--kit-t-lead)/1.38 var(--kit-body);
+  color: var(--kit-text);
+  text-wrap: balance;
+  text-shadow: 0 .1cqw .5cqw #000, 0 0 1.2cqw #000c;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 120ms both;
+}
+
+/* === 9. caption bar === */
+.kit-caption {
+  width: 66cqw;
+}
+.kit-caption .kit-pane {
+  padding: 1cqw 6cqw;
+}
+.kit-caption-line {
+  font: italic var(--kit-t-lead)/1.35 var(--kit-body);
+  color: var(--kit-text);
+  text-align: center;
+  text-wrap: balance;
+}
+
+/* === 10 and 16. header and encounter banners === */
+.kit-banner .kit-pane {
+  display: flex;
+  align-items: center;
+  gap: .9cqw;
+}
+.kit-banner-words {
+  display: block;
+  min-width: 0;
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+/* A wide dark band behind the scene's title (renders 26 to 35), feathering out to the right. */
+.kit-banner-header {
+  min-width: min(30cqw, 100%);
+  max-width: 46cqw;
+  --kit-cut: .8cqw;
+  --kit-blur: .6cqw;
+  --kit-tint: #0000;
+  --kit-fill: linear-gradient(90deg, #0c0a10c0, #0c0a1070);
+  --kit-fill-solid: linear-gradient(90deg, #0c0a10f0, #0c0a10b0);
+}
+.kit-banner-header .kit-pane {
+  min-height: 3.8cqw;
+  padding: .55cqw 12cqw .55cqw 1.3cqw;
+  animation-name: kit-slide;
+}
+.kit-banner-icon {
+  width: 2.4cqw;
+  height: 2.4cqw;
+  flex: 0 0 auto;
+  color: var(--kit-gold-title);
+  filter: drop-shadow(0 0 .4cqw #f1c96a77);
+  animation: kit-icon-glow 1.2s ease-in-out calc(var(--kit-in-ms) + 100ms) 1;
+}
+.kit-banner-number {
+  margin-right: .5cqw;
+  font: 500 var(--kit-t-name)/1.2 var(--kit-display);
+  color: var(--kit-text);
+}
+.kit-banner-title {
+  font: 500 var(--kit-t-name)/1.2 var(--kit-display);
+  color: var(--kit-text);
+}
+.kit-banner-top_center {
+  max-width: 36cqw;
+  min-width: min(24cqw, 100%);
+  --kit-cut: 1.8cqw;
+  --kit-rim-w: .18cqw;
+  --kit-blur: .7cqw;
+  --kit-flare: 1;
+}
+.kit-banner-top_center .kit-pane {
+  justify-content: center;
+  min-height: 4.6cqw;
+  padding: .6cqw 3.4cqw;
+  text-align: center;
+  animation-name: kit-settle;
+  animation-duration: 450ms;
+}
+/* The fine gold inlay just inside the encounter banner's rim. */
+.kit-pane > .kit-inlay {
+  position: absolute;
+  inset: .4cqw .58cqw;
+  z-index: 2;
+  pointer-events: none;
+  --op-p: 0px;
+  --op-k: calc(var(--kit-cut) * .8);
+  --op-x: 0px;
+  --ip-p: .07cqw;
+  --ip-k: calc(var(--kit-cut) * .8 + .035cqw);
+  --ip-x: .11cqw;
+  background: linear-gradient(90deg, #f1d9a077, #fff3cfaa 50%, #f1d9a077);
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+.kit-banner-top_center .kit-banner-icon {
+  color: var(--kit-text-strong);
+  fill: none;
+  stroke-width: 2.3;
+  width: 2.8cqw;
+  height: 2.8cqw;
+  filter: drop-shadow(0 0 .2cqw #fff) drop-shadow(0 0 .6cqw #ff6a5a);
+}
+.kit-banner-top_center .kit-banner-title {
+  font-size: 2.3cqw;
+  color: var(--kit-text-strong);
+  letter-spacing: .02em;
+}
+.kit-banner.kit-tone-danger {
+  --kit-fill: #5c0c12b8;
+  --kit-fill-solid: #5c0c12f2;
+  --kit-tint: #ff3b2f40;
+  --kit-rim: var(--kit-rim-danger);
+  --kit-halo: var(--kit-crimson);
+  --kit-halo-a: 1;
+  --kit-halo-w: 1cqw;
+  --kit-halo-blur: .9cqw;
+}
+.kit-banner.kit-tone-danger .kit-bloom::after {
+  background: radial-gradient(closest-side, #ffe6e0, #ff6a5aaa 40%, #ff3b2f00);
+}
+/* The encounter is deep saturated crimson glass with its words in warm cream-gold of a regular
+   weight and a gold glyph (render 03); a spark burns on the top and the bottom of its rim. */
+.kit-banner.kit-tone-danger .kit-banner-title {
+  font-weight: 400;
+  text-shadow: none;
+  color: transparent;
+  background: linear-gradient(180deg, #fff3dc, #f1c98a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 .1cqw .4cqw #000c);
+}
+.kit-banner.kit-tone-danger .kit-banner-icon {
+  color: #f1d9a0;
+  filter: drop-shadow(0 0 .2cqw #fff3cf) drop-shadow(0 0 .6cqw #ff6a5a);
+}
+.kit-banner-top_center.kit-tone-danger::before,
+.kit-banner-top_center.kit-tone-danger::after {
+  --kit-spark-hot: #ffd6c4;
+  --kit-spark-glow: #ff5a3a;
+  width: 16cqw;
+}
+.kit-banner-top_center.kit-tone-danger::before {
+  top: 0;
+  bottom: auto;
+  transform: translate(-50%, -50%);
+}
+/* The encounter's crimson glow keeps close to its rim (render 03). */
+.kit-banner-top_center.kit-tone-danger {
+  --kit-halo-w: .8cqw;
+  --kit-halo-a: .75;
+}
+.kit-banner.kit-tone-danger .kit-halo {
+  animation: kit-halo-in 450ms var(--kit-ease) both, kit-pulse var(--kit-pulse-ms) ease-in-out 450ms 3;
+}
+
+/* === 11. story choices === */
+.kit-choices {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2cqw;
+}
+/* The prompt stands on its own dark vignette, so it reads over a bright plate (render 32). The
+   vignette is the prompt's own blurred pseudo-element; no pane is inside the prompt. */
+.kit-choices-prompt {
+  position: relative;
+  isolation: isolate;
+  max-width: 42cqw;
+  font: 400 2.2cqw/1.2 var(--kit-display);
+  color: var(--kit-gold-hi);
+  text-align: center;
+  text-wrap: balance;
+  text-shadow: 0 0 1cqw #000, 0 0 1.4cqw #f1c96a44, var(--kit-text-shadow);
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) both;
+}
+.kit-choices-prompt::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1.8cqw -6cqw;
+  pointer-events: none;
+  background: radial-gradient(closest-side, #080d14eb, #080d14c0 50%, #080d1400);
+  filter: blur(.6cqw);
+}
+.kit-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1cqw;
+}
+.kit-choice {
+  width: 36cqw;
+  --kit-cut: .9cqw;
+  --kit-rim-w: .13cqw;
+  --kit-halo-w: .55cqw;
+  --kit-halo-a: .55;
+  --kit-halo-blur: .55cqw;
+  --kit-bloom-a: .9;
+  --kit-fill: #121a30b0;
+  --kit-fill-solid: #121a30e8;
+  --kit-tint: #7fa6d822;
+  --kit-rim: var(--kit-rim-ice);
+  --kit-halo: var(--kit-ice);
+  --kit-delay: calc(var(--kit-order, 0) * 80ms + 120ms);
+}
+.kit-choice .kit-pane {
+  display: flex;
+  align-items: center;
+  gap: 1.2cqw;
+  min-height: 4.6cqw;
+  height: auto;
+  padding: .7cqw 2cqw;
+}
+.kit-choice-icon {
+  width: 2.5cqw;
+  height: 2.5cqw;
+  flex: 0 0 auto;
+  color: #e8eef6;
+  filter: drop-shadow(0 0 .4cqw #7fa6d888);
+}
+/* The slot of a choice without an icon holds the kit's one neutral mark, a small gold diamond,
+   so the labels of one list line up and no icon column stands empty. */
+.kit-choice-icon-slot {
+  display: grid;
+  place-items: center;
+  filter: none;
+}
+.kit-choice-icon-slot::before {
+  content: "";
+  width: .8cqw;
+  height: .8cqw;
+  transform: rotate(45deg);
+  border: .12cqw solid #dfe8f4;
+  background: #7fa6d844;
+  box-shadow: 0 0 .5cqw #7fa6d899;
+}
+.kit-look-lit .kit-choice-icon-slot::before,
+.kit-look-chosen .kit-choice-icon-slot::before {
+  border-color: #fff3cf;
+  background: #f1c96a;
+  box-shadow: 0 0 .6cqw #f1c96a;
+}
+.kit-look-unavailable .kit-choice-icon-slot::before {
+  border-color: #9aa3b0;
+  background: none;
+  box-shadow: none;
+}
+.kit-choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: .15cqw;
+  min-width: 0;
+}
+.kit-choice-label {
+  font: 400 1.85cqw/1.18 var(--kit-display);
+  color: var(--kit-text);
+  text-wrap: pretty;
+  overflow-wrap: break-word;
+}
+.kit-choice-desc {
+  font: var(--kit-t-floor)/1.25 var(--kit-body);
+  color: var(--kit-text-muted);
+  text-wrap: balance;
+}
+.kit-votes {
+  display: flex;
+  align-items: center;
+  gap: .5cqw;
+  min-height: .9cqw;
+  margin-top: .3cqw;
+}
+/* A row's pips stand at its right inset, out of the label's flow (render 32). */
+.kit-choices-rows .kit-choice .kit-pane > .kit-votes {
+  position: absolute;
+  right: 2.4cqw;
+  top: 50%;
+  margin: 0;
+  transform: translateY(-50%);
+}
+.kit-vote {
+  width: .7cqw;
+  height: .7cqw;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #fff3cf, #f1c96a 60%, #c6a36b);
+  box-shadow: 0 0 .5cqw #f1c96a;
+}
+.kit-look-lit,
+.kit-look-chosen {
+  --kit-rim: var(--kit-rim-gold);
+  --kit-halo: linear-gradient(90deg, #ff9e4a, #ffd27a 50%, #ff9e4a);
+  --kit-halo-a: 1;
+  --kit-halo-w: .75cqw;
+  --kit-halo-blur: .7cqw;
+  --kit-bloom-a: 1;
+  --kit-flare: .9;
+  --kit-fill: #2a1d1ab4;
+  --kit-fill-solid: #2a1d1aee;
+  --kit-tint: #ffb84a33;
+}
+.kit-look-lit .kit-pane,
+.kit-look-chosen .kit-pane {
+  box-shadow: inset 0 1px 0 #ffffff30, inset 0 0 1cqw #ffcf6a55;
+}
+.kit-look-lit .kit-halo {
+  animation: kit-halo-in var(--kit-in-ms) var(--kit-ease) var(--kit-delay) both, kit-pulse var(--kit-pulse-ms) ease-in-out calc(var(--kit-delay) + var(--kit-in-ms)) 2;
+}
+/* A lit icon is a filled gold drawing (renders 04, 32), its lines dark brown over the fill so a
+   stroke-drawn icon keeps its features. Each part darkens what it lies on, so a later part's gold
+   never paints over an earlier part's line (the rims between stacked coins). */
+.kit-look-lit .kit-choice-icon,
+.kit-look-chosen .kit-choice-icon {
+  isolation: isolate;
+  color: #5a3a12;
+  fill: #f1c96a;
+  filter: drop-shadow(0 0 .5cqw #f1c96a);
+}
+.kit-look-lit .kit-choice-icon *,
+.kit-look-chosen .kit-choice-icon * {
+  mix-blend-mode: darken;
+}
+/* Rows are elongated octagons: a short chamfer, a flat end about half the row's height and
+   another chamfer (renders 22, 32). */
+.kit-choices-rows .kit-choice {
+  --kit-cut: 1.1cqw;
+}
+/* A row's icon stands at the left inset and its pips at the right, both out of the flow. In a list
+   with icons every label starts at one x, 1.6cqw after the icon column (render 32); a list with
+   no icon centres its labels between equal 6cqw sides (render 07). */
+.kit-choices-rows .kit-choice .kit-pane {
+  padding: .7cqw 6cqw;
+}
+.kit-choices-rows .kit-choice .kit-pane > .kit-choice-icon {
+  position: absolute;
+  left: 2.4cqw;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.kit-choices-rows .kit-choice-text {
+  flex: 1 1 auto;
+  text-align: center;
+}
+.kit-choices-rows.kit-choices-iconed .kit-choice .kit-pane {
+  padding-left: 6.5cqw;
+}
+.kit-choices-rows.kit-choices-iconed .kit-choice-text {
+  text-align: left;
+}
+.kit-look-lit .kit-choice-label,
+.kit-look-chosen .kit-choice-label {
+  color: var(--kit-gold-hi);
+}
+/* An unavailable choice keeps its words legible and struck through; only its glass, rim and
+   glow are dimmed. */
+.kit-look-unavailable {
+  --kit-fill: #10131c8c;
+  --kit-fill-solid: #10131ce0;
+  --kit-tint: #0000;
+  --kit-rim: linear-gradient(105deg, #9aa3b088, #6f7784 50%, #9aa3b088);
+}
+.kit-look-unavailable .kit-halo,
+.kit-look-unavailable .kit-bloom {
+  display: none;
+}
+.kit-look-unavailable .kit-choice-icon {
+  color: #b9b2a8;
+  filter: none;
+}
+.kit-look-unavailable .kit-choice-label {
+  color: #b9b2a8;
+  text-decoration: line-through .1cqw #b9b2a8;
+}
+.kit-dimmed .kit-pane,
+.kit-dimmed .kit-halo,
+.kit-dimmed .kit-bloom {
+  opacity: .45;
+  transition: opacity var(--kit-out-ms) ease-in;
+}
+.kit-choices-cards .kit-choice-list {
+  flex-direction: row;
+  justify-content: center;
+  align-items: stretch;
+  gap: 2cqw;
+  width: 100%;
+}
+/* The cards are a centred group, 23cqw each and growing to 30cqw where the row has room, so a
+   description holds one line (render 04); beside the list column they narrow and it wraps. */
+.kit-choices-cards .kit-choice {
+  flex: 1 1 23cqw;
+  width: auto;
+  min-width: 0;
+  max-width: 30cqw;
+  --kit-cut: 1cqw;
+}
+.kit-choices-cards {
+  align-self: stretch;
+}
+/* A card is three columns: the icon, or the empty slot of one, the title over its description,
+   and the pips at the foot of the last, so every card's words start on one line and a card is the
+   title and one description line tall, about 6.6cqw (render 04). */
+.kit-choices-cards .kit-choice .kit-pane {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0;
+  min-height: 6.2cqw;
+  height: 100%;
+  padding: .9cqw 1.4cqw .9cqw 1.6cqw;
+}
+.kit-choices-cards .kit-choice-icon {
+  grid-column: 1;
+  width: 2.6cqw;
+  height: 2.6cqw;
+  margin: 0 .7cqw 0 0;
+}
+.kit-choices-cards .kit-choice-text {
+  grid-column: 2;
+}
+/* A card's pips stand in its bottom-right corner, on the description's line, never a row of
+   their own and never over a word. */
+.kit-choices-cards .kit-votes {
+  grid-column: 3;
+  grid-row: 1;
+  align-self: end;
+  margin: 0 0 .45cqw .8cqw;
+  min-height: 0;
+}
+/* Beside the list column the cards narrow to about 21cqw, so a short title keeps to one line: the
+   sides and the icon column narrow, the title is a little smaller, and the words run on over the
+   pips' column, the last line of words stopping short of the pips. */
+.kit:has(.kit-column > *) > .kit-bottom .kit-choices-cards .kit-choice .kit-pane {
+  padding-right: 1.4cqw;
+  padding-left: 1.4cqw;
+}
+.kit:has(.kit-column > *) > .kit-bottom .kit-choices-cards .kit-choice-icon {
+  width: 2.1cqw;
+  height: 2.1cqw;
+  margin-right: .5cqw;
+}
+.kit:has(.kit-column > *) > .kit-bottom .kit-choices-cards .kit-choice-text {
+  grid-column: 2 / 4;
+  grid-row: 1;
+}
+.kit:has(.kit-column > *) > .kit-bottom .kit-choices-cards .kit-choice-label {
+  font-size: 1.7cqw;
+}
+.kit:has(.kit-column > *) > .kit-bottom .kit-choices-cards .kit-choice-text > :last-child {
+  padding-right: calc(var(--kit-votes, 0) * 1.2cqw);
+}
+
+/* === 12. quest journal (parchment, not glass) === */
+/* The book and the section label share one column as tall as the stage's safe area: the book is
+   as tall as its pages' words, at least 28cqw and at most what the label leaves, and stands
+   centred in the room above the label (render 36). The list shows whole rows only and the host
+   pages the rest; the right page's body is never clipped, and the sketch under it gives way to it. */
+.kit-journal-column {
+  position: absolute;
+  left: 1.5cqw;
+  right: 1.2cqw;
+  top: 3.4cqw;
+  bottom: 1.1cqw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2cqw;
+}
+.kit-journal {
+  flex: 0 1 auto;
+  min-height: min(28cqw, 100%);
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  width: 74cqw;
+  max-width: 100%;
+}
+/* A long right page grows the book down to the label, which then stands over the book's foot, as
+   in render 36. The label stands on a dark band of its own from the screen's left and bottom
+   edges, fading upward and toward the gutter: over the book it reads as the book's lower edge in
+   shadow, never a stain on bare parchment; under a short book it is a vignette on the plate. */
+.kit-journal-column > .kit-section {
+  flex: 0 0 auto;
+  margin-top: auto;
+  position: relative;
+  isolation: isolate;
+}
+.kit-journal-column > .kit-section::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: -2.4cqw;
+  top: -2.6cqw;
+  bottom: -2.1cqw;
+  width: 52cqw;
+  pointer-events: none;
+  background: linear-gradient(180deg, #0a080600, #0a0806c8 42%, #0a0806ee);
+  -webkit-mask-image: linear-gradient(90deg, #000 62%, #0000);
+  mask-image: linear-gradient(90deg, #000 62%, #0000);
+}
+/* The open book (render 36): one spread of two pages meeting at the spine, on a dark leather
+   cover standing .8cqw beyond the pages, with a fine tooled gold line round the cover's edge. */
+.kit-book {
+  position: relative;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  padding: .8cqw .8cqw 1cqw;
+  box-sizing: border-box;
+  border-radius: .7cqw;
+  background:
+    radial-gradient(ellipse at 50% 0%, #4a2e1a66, #0000 60%),
+    linear-gradient(180deg, #34200f, #2a1a10 40%, #1e120a);
+  box-shadow: 0 2cqw 4cqw #000a, 0 0 2cqw #ffb84a22, inset 0 0 0 .14cqw #1a0e06, inset 0 0 0 .24cqw #c9a04a44, inset 0 .2cqw .6cqw #ffffff14;
+  animation: kit-rise 500ms var(--kit-ease) both;
+}
+/* An aged page: foxing, a fibre grain, a darker uneven burn at its edges and the curve of the
+   page shading into the gutter. */
+.kit-page {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 2.2cqw 3cqw 2cqw;
+  color: #2a1f14;
+  text-shadow: none;
+  --kit-paper:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .29 0 0 0 0 .2 0 0 0 0 .1 0 0 0 .2 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E"),
+    radial-gradient(ellipse 72% 68% at 50% 48%, #0000 58%, #6b4a2444 80%, #4a2c1499 100%),
+    radial-gradient(ellipse 18% 12% at 30% 64%, #7a552a26, #7a552a00),
+    radial-gradient(circle at 18% 82%, #8a5f2a2e, #8a5f2a00 22%),
+    radial-gradient(circle at 82% 14%, #8a5f2a24, #8a5f2a00 18%),
+    radial-gradient(ellipse at 60% 55%, #6b4a2414, #6b4a2400 40%),
+    radial-gradient(ellipse 34% 22% at 4% 6%, #5a3a1a66, #5a3a1a00),
+    radial-gradient(ellipse 30% 26% at 96% 92%, #5a3a1a5c, #5a3a1a00),
+    radial-gradient(ellipse 22% 30% at 3% 70%, #4a2e1444, #4a2e1400),
+    radial-gradient(ellipse 26% 18% at 70% 99%, #4a2e1450, #4a2e1400),
+    repeating-radial-gradient(circle at 37% 41%, #5a43280c 0 1px, #0000 1px 3px),
+    radial-gradient(ellipse at 50% 40%, #f1e6cc, #dcc79f 70%, #b89a68);
+  /* The stacked edges of the leaves under the page, three 1px lines at its foot. */
+  box-shadow: inset 0 0 3cqw #6b4a2499, inset 0 0 1cqw #4a2c14aa, inset 0 0 .3cqw #2a1a0ecc, 0 1px 0 #d9c49a, 0 2px 0 #8a6a40, 0 3px 0 #cdb68a, 0 4px 0 #7a5a34, 0 5px 0 #bfa67a;
+}
+/* Each page curves down into the gutter, shaded over the 4cqw at its inner edge, and darkens a
+   little at its outer edge. */
+.kit-page-left {
+  border-radius: .4cqw 0 0 .4cqw;
+  background:
+    linear-gradient(270deg, #2a1a0e66, #3b2a1a55 .5cqw, #0000 4cqw),
+    linear-gradient(90deg, #2a1a0e40, #0000 2cqw),
+    var(--kit-paper);
+}
+/* The right page never clips: its body is always shown whole. */
+.kit-page-right {
+  overflow: visible;
+  border-radius: 0 .4cqw .4cqw 0;
+  background:
+    linear-gradient(90deg, #2a1a0e66, #3b2a1a55 .5cqw, #0000 4cqw),
+    linear-gradient(270deg, #2a1a0e40, #0000 2cqw),
+    var(--kit-paper);
+}
+/* The spine's crease where the two pages meet. */
+.kit-book::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: .8cqw;
+  bottom: 1cqw;
+  left: calc(50% - .5cqw);
+  width: 1cqw;
+  pointer-events: none;
+  background: linear-gradient(90deg, #0000, #2a1a0e66 50%, #0000);
+}
+/* Ink corner ornaments: an angle of two fine rules with a dot. */
+.kit-j-corner {
+  position: absolute;
+  width: 2.2cqw;
+  height: 2.2cqw;
+  border: 0 solid #5a4328aa;
+}
+.kit-j-corner::after {
+  content: "";
+  position: absolute;
+  width: .4cqw;
+  height: .4cqw;
+  background: #5a4328;
+  transform: rotate(45deg);
+}
+.kit-j-corner-tl {
+  left: .8cqw;
+  top: .8cqw;
+  border-width: 1px 0 0 1px;
+}
+.kit-j-corner-tr {
+  right: .8cqw;
+  top: .8cqw;
+  border-width: 1px 1px 0 0;
+}
+.kit-j-corner-bl {
+  left: .8cqw;
+  bottom: .8cqw;
+  border-width: 0 0 1px 1px;
+}
+.kit-j-corner-br {
+  right: .8cqw;
+  bottom: .8cqw;
+  border-width: 0 1px 1px 0;
+}
+.kit-j-corner-tl::after,
+.kit-j-corner-bl::after {
+  left: .35cqw;
+}
+.kit-j-corner-tr::after,
+.kit-j-corner-br::after {
+  right: .35cqw;
+}
+.kit-j-corner-tl::after,
+.kit-j-corner-tr::after {
+  top: .35cqw;
+}
+.kit-j-corner-bl::after,
+.kit-j-corner-br::after {
+  bottom: .35cqw;
+}
+/* A satin ribbon lying on the right page beside the spine, out of the pages' flow so the spread
+   stays whole: a soft sheen across its width, its fall shaded down its length, hanging past the
+   cover's foot with a notched tail and a soft shadow beside it (a drop-shadow, so the tail casts
+   it). */
+.kit-ribbon {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: -1.8cqw;
+  left: calc(50% + 1.2cqw);
+  width: .9cqw;
+  background:
+    linear-gradient(180deg, #ffffff14, #fff0 12%, #0000 70%, #00000040),
+    linear-gradient(90deg, #7a1018, #c23440 45%, #8e1820);
+  filter: saturate(.85) drop-shadow(.2cqw .15cqw .3cqw #000a);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 96%, 0 100%);
+}
+.kit-j-heading {
+  display: flex;
+  align-items: center;
+  gap: 1.4cqw;
+}
+.kit-j-title {
+  font: 600 2.4cqw/1.1 var(--kit-display);
+  color: #2a1f14;
+}
+.kit-j-star {
+  width: 1.4cqw;
+  height: 1.4cqw;
+  color: #8a5f2a;
+}
+.kit-j-rule {
+  margin: .9cqw 0 1.2cqw;
+}
+.kit-j-rule .hm-rule {
+  background: linear-gradient(90deg, #5a432800, #5a4328aa);
+}
+.kit-j-rule .hm-rule:last-child {
+  background: linear-gradient(270deg, #5a432800, #5a4328aa);
+}
+.kit-j-rule .hm-diamond {
+  background: #e8c47a;
+  border-color: #8a5f2a;
+  box-shadow: none;
+}
+/* The list shows whole rows only: a row that does not fit the page's height wraps into a second
+   column past the page's edge, which the list clips, so no row is ever cut mid-height. The
+   padding is the current rim's room to glow. */
+.kit-quests {
+  list-style: none;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: .5cqw 6cqw;
+  margin: -1cqw -2.4cqw 0;
+  padding: 1cqw 2.4cqw 1cqw;
+}
+.kit-quests > .kit-quest {
+  width: 100%;
+  box-sizing: border-box;
+}
+.kit-quest {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 1.2cqw;
+  padding: .5cqw 1.2cqw;
+  border-radius: .6cqw;
+  border: .16cqw solid #0000;
+  border-bottom-color: #5a432833;
+  font: 2cqw/1.2 var(--kit-display);
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 200ms both;
+}
+.kit-quest-mark {
+  display: grid;
+  place-items: center;
+  width: 1.7cqw;
+  height: 1.7cqw;
+  flex: 0 0 auto;
+  transform: rotate(45deg);
+  background: linear-gradient(135deg, #fff3cf, #f1d9a0 50%, #c9a04a);
+  border: .12cqw solid #8a5f2a;
+  box-shadow: 0 0 .5cqw #c9a04aaa;
+}
+.kit-quest-icon {
+  width: 1.2cqw;
+  height: 1.2cqw;
+  color: #4a3414;
+  transform: rotate(-45deg);
+}
+.kit-quest-star {
+  color: #7a4a14;
+}
+/* The current quest is the page's focal point (render 36): a saturated orange-gold neon outline
+   with chamfered corners round the bare page, a pale gold inner bloom and a strong orange outer
+   bloom on a layer of its own under it, which settles back to that strength, never lower, after
+   its pulses; and two sparkles burning on its bottom and right rims. The outline is
+   a ring of the entry's octagon (the evenodd recipe of the glass rim); the bloom is the layer's
+   shadow, so the entry itself stays unfilled. */
+.kit-quest-current {
+  position: relative;
+  isolation: isolate;
+  border-color: #0000;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 200ms both;
+}
+.kit-quest-current::before,
+.kit-quest-current::after {
+  content: "";
+  position: absolute;
+  inset: -.16cqw;
+  z-index: -1;
+  pointer-events: none;
+}
+.kit-quest-current::before {
+  border-radius: .6cqw;
+  box-shadow: 0 0 .4cqw .1cqw #ffe7a8, 0 0 1.6cqw .35cqw #ff9a1acc, inset 0 0 1cqw #ffcf6a55;
+  animation: kit-entry-glow var(--kit-pulse-ms) ease-in-out 800ms 2;
+}
+.kit-quest-current::after {
+  --op-p: 0px;
+  --op-k: .6cqw;
+  --ip-p: .2cqw;
+  --ip-k: calc(.6cqw + .2cqw * .414);
+  --kit-o: var(--op-k) var(--op-p), calc(100% - var(--op-k)) var(--op-p), calc(100% - var(--op-p)) var(--op-k), calc(100% - var(--op-p)) calc(100% - var(--op-k)), calc(100% - var(--op-k)) calc(100% - var(--op-p)), var(--op-k) calc(100% - var(--op-p)), var(--op-p) calc(100% - var(--op-k)), var(--op-p) var(--op-k);
+  --kit-i: var(--ip-k) var(--ip-p), calc(100% - var(--ip-k)) var(--ip-p), calc(100% - var(--ip-p)) var(--ip-k), calc(100% - var(--ip-p)) calc(100% - var(--ip-k)), calc(100% - var(--ip-k)) calc(100% - var(--ip-p)), var(--ip-k) calc(100% - var(--ip-p)), var(--ip-p) calc(100% - var(--ip-k)), var(--ip-p) var(--ip-k);
+  background: linear-gradient(90deg, #ffb02e, #ffd77a 50%, #ffb02e);
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+/* Two four-point sparkles centred on the rim, at the bottom's middle and the right side's middle;
+   only their opacity pulses, twice, with the bloom. */
+.kit-quest-sparks {
+  position: absolute;
+  inset: -.16cqw;
+  pointer-events: none;
+}
+.kit-quest-sparks::before,
+.kit-quest-sparks::after {
+  content: "";
+  position: absolute;
+  width: 1.4cqw;
+  height: 1.4cqw;
+  background:
+    radial-gradient(closest-side, #fff, #fff 35%, #ffcf6a00) center / .5cqw .5cqw no-repeat,
+    linear-gradient(90deg, #fff0, #fff 50%, #fff0) center / 100% .1cqw no-repeat,
+    linear-gradient(180deg, #fff0, #fff 50%, #fff0) center / .1cqw 100% no-repeat,
+    radial-gradient(closest-side, #ffcf6a99, #ffcf6a00);
+  animation: kit-spark 1400ms var(--kit-ease) 800ms 1 both;
+}
+.kit-quest-sparks::before {
+  left: 50%;
+  bottom: 0;
+  transform: translate(-50%, 50%);
+}
+.kit-quest-sparks::after {
+  right: 0;
+  top: 50%;
+  transform: translate(50%, -50%);
+}
+.kit-quest-current .kit-quest-mark {
+  box-shadow: 0 0 .8cqw #ffcf6a;
+}
+.kit-quest-done .kit-quest-title,
+.kit-quest-failed .kit-quest-title {
+  opacity: .55;
+  text-decoration: line-through 1px #2a1f14;
+}
+.kit-quest-failed .kit-quest-mark {
+  filter: grayscale(1);
+}
+.kit-j-more {
+  flex: 0 0 auto;
+  margin-top: -.8cqw;
+  font: italic var(--kit-t-small)/1.2 var(--kit-body);
+  color: #5a4328;
+}
+.kit-j-detail-title {
+  font: 600 2.4cqw/1.15 var(--kit-display);
+  color: #2a1f14;
+}
+/* The body is never shrunk or clipped: the sketch under it gives way first. */
+.kit-j-body {
+  flex: 0 0 auto;
+  font: var(--kit-t-body)/1.4 var(--kit-body);
+  color: #2a1f14;
+  text-wrap: pretty;
+}
+.kit-j-heading,
+.kit-j-rule,
+.kit-j-detail-title {
+  flex: 0 0 auto;
+}
+/* The sketch takes what the body leaves, at most 15cqw, and is the only part of the page that
+   gives way, down to nothing under a long body: it has no size of its own (size containment), so
+   it never makes the book taller, and grows into the room left. It is a soft sepia print of the
+   picture multiplied into the page, its edges, dark areas too, fading into the paper on one oval
+   feather (render 36). A photo filter cannot draw engraved lines; a line-art picture from the host
+   would. */
+.kit-j-sketch {
+  display: block;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 15cqw;
+  width: 100%;
+  contain: size;
+  margin-top: 1cqw;
+  object-fit: cover;
+  mix-blend-mode: multiply;
+  opacity: .8;
+  filter: grayscale(1) contrast(1.2) brightness(1.2) sepia(.35);
+  -webkit-mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 55%, #0000 100%);
+  mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 55%, #0000 100%);
+}
+
+/* === 13 and 19. title cards === */
+.kit-tc {
+  position: absolute;
+  display: flex;
+  justify-content: center;
+  text-align: center;
+}
+.kit-tc-ground {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse 80% 100% at 50% 100%, #080d14e8, #080d1480 50%, #080d1400 80%);
+  mask: linear-gradient(0deg, #000 45%, #0000), linear-gradient(90deg, #0000, #000 18%, #000 82%, #0000);
+  mask-composite: intersect;
+  animation: kit-fade 600ms var(--kit-ease) both;
+}
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .kit-tc-ground {
+    -webkit-backdrop-filter: blur(.9cqw) saturate(1.25);
+    backdrop-filter: blur(.9cqw) saturate(1.25);
+  }
+}
+.kit-tc-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .35cqw;
+  max-width: 66cqw;
+}
+.kit-tc-center {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 46%;
+  align-items: flex-end;
+  padding-bottom: 3cqw;
+}
+.kit-tc-right {
+  top: 4cqw;
+  right: 2.4cqw;
+  width: 32cqw;
+  padding: 2cqw 1cqw;
+}
+/* A side card's ground is a soft right-side vignette (render 07): it darkens and blurs toward the
+   screen's right edge and feathers away to nothing at its left and its top and bottom, so no edge
+   of it shows over the scene. */
+.kit-tc-right .kit-tc-ground {
+  inset: -4cqw -2.4cqw -4cqw -6cqw;
+  background: linear-gradient(90deg, #080d1400, #080d14a8 40%, #080d14d0);
+  -webkit-mask-image: linear-gradient(90deg, #0000, #000 30%), linear-gradient(#0000, #000 22% 78%, #0000);
+  -webkit-mask-composite: source-in;
+  mask: linear-gradient(90deg, #0000, #000 30%), linear-gradient(#0000, #000 22% 78%, #0000);
+  mask-composite: intersect;
+}
+.kit-tc-right .kit-tc-body {
+  max-width: 30cqw;
+}
+/* The ornament row: the compass rose between two long hairline rules fading outward, on a row
+   of its own (renders 01 and 07); a side card repeats it under its words. */
+.kit-tc-ornament {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  gap: 1cqw;
+  max-width: 100%;
+  margin-bottom: .2cqw;
+}
+.kit-tc-ornament > .kit-rose,
+.kit-tc-ornament > .kit-tc-orn-icon {
+  animation: kit-bloom 800ms var(--kit-ease) both;
+}
+.kit-tc-ornament-foot {
+  margin: 1cqw 0 0;
+}
+.kit-tc-orn-rose,
+.kit-tc-orn-icon {
+  width: 3.4cqw;
+  height: 3.4cqw;
+  color: var(--kit-gold-title);
+  filter: drop-shadow(0 0 .9cqw #f1c96aaa);
+}
+/* The star's rules are short (about 9cqw a side, render 01). */
+.kit-tc-orn-rule {
+  flex: 0 1 9cqw;
+  min-width: 3cqw;
+  height: 1px;
+  background: linear-gradient(90deg, #f1d9a000, #f1d9a0ee);
+  box-shadow: 0 0 .5cqw #f1c96a88;
+  transform-origin: 100% 50%;
+  animation: kit-grow 800ms var(--kit-ease) 200ms both;
+}
+.kit-tc-orn-rule-after {
+  background: linear-gradient(270deg, #f1d9a000, #f1d9a0ee);
+  transform-origin: 0 50%;
+}
+.kit-tc-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.4cqw;
+  max-width: 100%;
+}
+/* A title flank (render 01): an 8cqw tapering rule, thickest at the title, ending at its outer
+   end in a small gold diamond, the rule's jewel. */
+.kit-tc-flank {
+  position: relative;
+  flex: 0 0 auto;
+  width: 8cqw;
+  height: .14cqw;
+  transform-origin: 100% 50%;
+  animation: kit-grow 800ms var(--kit-ease) 250ms both;
+}
+.kit-tc-flank::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 .5cqw;
+  background: linear-gradient(90deg, #f1d9a033, #f1d9a0ee);
+  clip-path: polygon(0 50%, 100% 0, 100% 100%);
+}
+.kit-tc-flank::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: .4cqw;
+  height: .4cqw;
+  box-sizing: border-box;
+  border: .08cqw solid var(--kit-gold-hi);
+  background: linear-gradient(135deg, #fff3cf, #f1c96a 55%, #c6a36b);
+  box-shadow: 0 0 .4cqw #f1c96aaa;
+  transform: translate(0, -50%) rotate(45deg);
+}
+.kit-tc-flank-after {
+  transform-origin: 0 50%;
+}
+.kit-tc-flank-after::after {
+  inset: 0 .5cqw 0 0;
+  background: linear-gradient(270deg, #f1d9a033, #f1d9a0ee);
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+.kit-tc-flank-after::before {
+  left: auto;
+  right: 0;
+}
+.kit-tc-title {
+  min-width: 0;
+  font: 500 var(--kit-t-hero)/1.12 var(--kit-display);
+  background-image: var(--kit-gold-text);
+  text-wrap: balance;
+  filter: drop-shadow(0 .1cqw .5cqw #000) drop-shadow(0 0 1.2cqw #f1c96a55);
+  animation: kit-in 700ms var(--kit-ease) 250ms both;
+}
+.kit-tc-rarity {
+  font: var(--kit-t-floor)/1.2 var(--kit-body);
+  font-variant: small-caps;
+  letter-spacing: .14em;
+  text-transform: lowercase;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 450ms both;
+}
+.kit-tc-rule {
+  width: 16cqw;
+  flex: 0 0 auto;
+  margin-top: .3cqw;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 450ms both;
+}
+.kit-tc-text {
+  margin-top: .5cqw;
+  font: italic var(--kit-t-lead)/1.4 var(--kit-body);
+  color: var(--kit-text);
+  text-wrap: balance;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) 600ms both;
+}
+.kit-tc-chapter {
+  left: 0;
+  right: 0;
+  top: 7cqw;
+  height: 30cqw;
+  align-items: center;
+}
+/* A chapter card's ground is a vignette only: a blur this large would cost a full-screen repaint. */
+.kit-tc-chapter .kit-tc-ground {
+  inset: -7cqw 0 -14cqw;
+  background: radial-gradient(ellipse 60% 55% at 50% 50%, #080d14c8, #080d1460 55%, #080d1400 80%);
+  mask: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.kit-tc-chapter .kit-tc-body {
+  gap: .7cqw;
+}
+.kit-tc-kicker {
+  display: flex;
+  align-items: center;
+  gap: 1.2cqw;
+  font: var(--kit-t-small)/1.2 var(--kit-body);
+  font-variant: small-caps;
+  text-transform: lowercase;
+  letter-spacing: .5em;
+  color: #ece8f7;
+  animation: kit-fade 600ms var(--kit-ease) both;
+}
+.kit-tc-kicker-rule {
+  position: relative;
+  width: 7cqw;
+  height: 1px;
+  background: linear-gradient(90deg, #f1d9a000, #f1d9a0cc);
+}
+.kit-tc-kicker-rule-after {
+  background: linear-gradient(270deg, #f1d9a000, #f1d9a0cc);
+}
+.kit-tc-kicker-rule::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: .5cqw;
+  height: .5cqw;
+  background: var(--kit-gold);
+  transform: translate(50%, -50%) rotate(45deg);
+}
+.kit-tc-kicker-rule-after::after {
+  right: auto;
+  left: 0;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.kit-tc-chapter .kit-tc-title {
+  font: italic 500 var(--kit-t-display)/1.1 var(--kit-display);
+  background-image: linear-gradient(100deg, #fff0 42%, #fffbea 50%, #fff0 58%), linear-gradient(180deg, #fff6d6, #f8dc96 40%, #dba653 75%, #f3d089);
+  background-size: 260% 100%, 100% 100%;
+  background-repeat: no-repeat;
+  background-position: 160% 0, 0 0;
+  filter: drop-shadow(0 .1cqw .5cqw #000) drop-shadow(0 0 1.6cqw #f1c96a66);
+  animation: kit-track-in 900ms var(--kit-ease) 200ms both, kit-letter-sweep var(--kit-sweep-ms) ease-in-out 1200ms 1 both;
+}
+.kit-tc-chapter .kit-tc-rule {
+  width: 26cqw;
+}
+/* The rule's centre is a glowing jewel. */
+.kit-tc-chapter .kit-tc-rule .hm-diamond {
+  width: 1cqw;
+  height: 1cqw;
+  border: 0;
+  background: radial-gradient(circle at 35% 35%, #fffbea, #f1c96a 45%, #a8742a);
+  box-shadow: 0 0 1cqw #f1c96a, 0 0 2.2cqw #f1c96a99;
+}
+
+/* === 14. off-picture speaker card === */
+.kit-speaker {
+  align-self: flex-end;
+  width: 44cqw;
+  --kit-cut: 1.2cqw;
+  --kit-rim-w: .14cqw;
+  --kit-blur: .8cqw;
+  --kit-halo-a: .85;
+  --kit-halo-w: .7cqw;
+  --kit-fill: #1f1814b8;
+  --kit-fill-solid: #1f1814f2;
+  --kit-tint: color-mix(in srgb, var(--kit-tone-halo) 22%, #0000);
+  --kit-rim: linear-gradient(105deg, #fff3cf, var(--kit-tone-rim) 25%, var(--kit-tone-rim) 75%, #fff3cf);
+  --kit-halo: var(--kit-tone-halo);
+}
+.kit-speaker .kit-pane {
+  display: flex;
+  align-items: center;
+  gap: 1.4cqw;
+  padding: 1.2cqw 2cqw 1.2cqw 1.4cqw;
+  animation-duration: 400ms;
+}
+.kit-face {
+  position: relative;
+  flex: 0 0 auto;
+  width: 6cqw;
+  height: 6cqw;
+  overflow: hidden;
+  border-radius: 50%;
+  border: .16cqw solid var(--kit-gold-title);
+  box-shadow: inset 0 0 .8cqw #000a, 0 0 1cqw var(--kit-tone-halo);
+  background: radial-gradient(circle at 50% 35%, #3a3040, #14161c);
+}
+.kit-face .portrait-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 15%;
+  transform: none;
+}
+.kit-face-cut-image {
+  position: absolute;
+  max-width: none;
+}
+.kit-face .portrait-initial {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  font: 600 2.6cqw/1 var(--kit-display);
+  color: var(--kit-gold);
+}
+.kit-speaker-body {
+  min-width: 0;
+}
+.kit-speaker-name {
+  font: 600 var(--kit-t-name)/1.2 var(--kit-display);
+  color: var(--kit-text-strong);
+  margin-bottom: .3cqw;
+}
+.kit-speaker-line {
+  font: var(--kit-t-body)/1.34 var(--kit-body);
+  color: var(--kit-text);
+  text-wrap: pretty;
+}
+.kit-speaker-twin {
+  --kit-halo-a: .4;
+}
+
+/* === 15. section label === */
+.kit-section {
+  align-self: flex-start;
+  display: flex;
+  align-items: stretch;
+  gap: 1.4cqw;
+  margin: 0 0 1cqw .9cqw;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) both;
+}
+.kit-section-bar {
+  flex: 0 0 .22cqw;
+  border-radius: .1cqw;
+  background: linear-gradient(180deg, #fffbea, #f1c96a 50%, #c6a36b);
+  box-shadow: 0 0 .5cqw #f1c96a, 0 0 1.2cqw #f1c96a88;
+}
+.kit-section-icon {
+  align-self: center;
+  width: 2.8cqw;
+  height: 2.8cqw;
+  color: var(--kit-gold-title);
+}
+.kit-section-title {
+  font: 500 var(--kit-t-title)/1.15 var(--kit-display);
+  background-image: var(--kit-gold-text);
+  filter: drop-shadow(0 .1cqw .4cqw #000c) drop-shadow(0 0 .8cqw #f1c96a44);
+}
+.kit-section-sub {
+  font: var(--kit-t-small)/1.3 var(--kit-body);
+  color: var(--kit-text-muted);
+}
+
+/* === 17 and 18. loot and shop lists === */
+.kit-ledger {
+  width: 27cqw;
+  --kit-cut: 1cqw;
+  --kit-halo-a: .55;
+  --kit-halo-w: .55cqw;
+  --kit-blur: .9cqw;
+}
+.kit-ledger-shop {
+  --kit-fill: #241a1eb8;
+}
+.kit-ledger-loot {
+  --kit-fill: var(--kit-fill-night);
+  --kit-fill-solid: var(--kit-fill-night-solid);
+  --kit-tint: #7fa6d822;
+  --kit-halo: linear-gradient(90deg, #f1c96a, #7fa6d8 50%, #f1c96a);
+}
+.kit-ledger .kit-pane,
+.kit-ledger-body {
+  padding: 1.4cqw 1.8cqw 1.2cqw;
+}
+/* A floating list has no glass: its words carry a heavier shadow on the plate (render 20). */
+.kit-ledger-floating {
+  text-shadow: 0 .1cqw .5cqw #000, 0 0 1.2cqw #000c;
+}
+/* The title stands centred over its rule (render 20). */
+.kit-ledger-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .8cqw;
+}
+.kit-ledger-icon {
+  width: 2.2cqw;
+  height: 2.2cqw;
+  flex: 0 0 auto;
+  color: var(--kit-gold-title);
+  filter: drop-shadow(0 0 .4cqw #f1c96a77);
+}
+.kit-ledger-title {
+  min-width: 0;
+  font: 500 2.3cqw/1.15 var(--kit-display);
+  text-align: center;
+  text-wrap: balance;
+  background-image: var(--kit-gold-text);
+}
+.kit-ledger-rule {
+  margin: .5cqw 0 .6cqw;
+}
+.kit-rows {
+  list-style: none;
+}
+.kit-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: .9cqw;
+  min-height: 3.4cqw;
+  padding: .3cqw 0;
+  box-sizing: border-box;
+  border-bottom: 1px solid #f1d9a022;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) calc(var(--kit-order, 0) * 90ms + 200ms) both;
+}
+.kit-row:last-child {
+  border-bottom: 0;
+}
+.kit-row-mark {
+  display: grid;
+  place-items: center;
+  width: 2.4cqw;
+  height: 2.4cqw;
+  flex: 0 0 auto;
+}
+/* A row with neither picture nor icon shows the kit's one neutral mark, a small gold diamond,
+   so the column never stands empty. */
+.kit-row-mark:empty::before {
+  content: "";
+  width: .8cqw;
+  height: .8cqw;
+  transform: rotate(45deg);
+  border: .12cqw solid var(--kit-gold-hi);
+  background: linear-gradient(135deg, #fff3cf, #f1c96a 55%, #c6a36b);
+  box-shadow: 0 0 .5cqw #f1c96aaa;
+}
+.kit-row-icon {
+  width: 2.2cqw;
+  height: 2.2cqw;
+  flex: 0 0 auto;
+  color: var(--kit-gold-title);
+  animation: kit-icon-glow 1.2s ease-in-out calc(var(--kit-order, 0) * 90ms + 500ms) 1;
+}
+.kit-row-picture {
+  width: 2.4cqw;
+  height: 2.4cqw;
+  object-fit: cover;
+  border-radius: .3cqw;
+}
+.kit-row-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font: var(--kit-t-body)/1.22 var(--kit-body);
+  color: var(--kit-text);
+  overflow-wrap: break-word;
+}
+.kit-row-figure {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font: var(--kit-t-body)/1.2 var(--kit-body);
+  color: var(--kit-text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.kit-ledger-shop .kit-row-figure {
+  margin-left: 0;
+  color: var(--kit-gold);
+}
+.kit-ledger-shop .kit-row {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-columns: minmax(0, max-content) minmax(2cqw, 1fr);
+  grid-auto-columns: auto;
+  align-items: last baseline;
+  column-gap: .6cqw;
+}
+.kit-row-leader {
+  min-width: 2cqw;
+  height: .25cqw;
+  align-self: end;
+  margin-bottom: .95cqw;
+  background: radial-gradient(circle, #f1d9a077 45%, #0000 50%) 0 50% / .5cqw .25cqw repeat-x;
+}
+.kit-ledger-shop .kit-row-check {
+  align-self: center;
+}
+.kit-row-taken > :not(.kit-row-check) {
+  opacity: .4;
+}
+.kit-row-check {
+  width: 1.6cqw;
+  height: 1.6cqw;
+  flex: 0 0 auto;
+  margin-left: .4cqw;
+  color: var(--kit-verdigris);
+}
+/* The highlighted row in a chamfered gold ring of its own, the kit's octagon (as a clue note). */
+.kit-row-lit {
+  margin: .2cqw -.8cqw;
+  padding: .3cqw .8cqw;
+  --kit-cut: .6cqw;
+  --kit-ring: .13cqw;
+  --op-p: 0px;
+  --op-k: var(--kit-cut);
+  --ip-p: var(--kit-ring);
+  --ip-k: calc(var(--kit-cut) + var(--kit-ring) * .414);
+  background: linear-gradient(90deg, #f1c96a33, #f1c96a12), radial-gradient(80% 120% at 50% 100%, #ffb84a2a, #0000);
+  clip-path: polygon(var(--kit-o));
+  box-shadow: inset 0 0 1cqw #f1c96a44;
+}
+.kit-row-lit::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: var(--kit-rim-gold);
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+
+/* === 20. map place labels === */
+.kit-place {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: .5cqw;
+  max-width: 22cqw;
+  padding: .35cqw 1.2cqw .4cqw;
+  border-radius: 1.4cqw;
+  transform: translate(-50%, -50%);
+  font: 500 var(--kit-t-body)/1.2 var(--kit-display);
+  text-align: center;
+  text-wrap: balance;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) both;
+}
+.kit-place-icon {
+  width: 1.7cqw;
+  height: 1.7cqw;
+  flex: 0 0 auto;
+}
+.kit-place-parchment,
+.kit-place-current {
+  color: #2a1f14;
+  text-shadow: none;
+  background: linear-gradient(180deg, #f6ecd6, #e4d2ab);
+  border: 1px solid #5a4328aa;
+  box-shadow: 0 .3cqw .8cqw #0009, inset 0 0 .4cqw #8a5f2a55;
+}
+.kit-place-current {
+  border-color: #c9a04a;
+  box-shadow: 0 0 1cqw #ffcf6a, 0 0 2cqw #ffb84a88, inset 0 0 .4cqw #8a5f2a55;
+  animation: kit-fade var(--kit-in-ms) var(--kit-ease) both, kit-place-glow var(--kit-pulse-ms) ease-in-out var(--kit-in-ms) 2;
+}
+.kit-place-chip {
+  color: var(--kit-text-strong);
+  background: var(--kit-fill-night-solid);
+  border: .12cqw solid #f1d9a0aa;
+  box-shadow: 0 0 .8cqw #f1c96a55;
+}
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .kit-place-chip {
+    background: var(--kit-fill-night);
+    -webkit-backdrop-filter: blur(.6cqw) saturate(1.4);
+    backdrop-filter: blur(.6cqw) saturate(1.4);
+  }
+}
+
+/* === 21. clue board === */
+.kit-clues {
+  width: 30cqw;
+  --kit-cut: 1.1cqw;
+  --kit-halo-a: .6;
+  --kit-fill: var(--kit-fill-night);
+  --kit-fill-solid: var(--kit-fill-night-solid);
+  --kit-tint: #b88cf01a;
+  --kit-halo: linear-gradient(90deg, #f1c96a, #b88cf0 50%, #f1c96a);
+}
+.kit-clues .kit-pane {
+  padding: 1.2cqw 1.4cqw 1.4cqw;
+}
+.kit-clues-head {
+  display: flex;
+  align-items: center;
+  gap: .7cqw;
+  margin-bottom: 1cqw;
+}
+.kit-clues-icon {
+  width: 2cqw;
+  height: 2cqw;
+  color: var(--kit-gold-title);
+}
+.kit-clues-title {
+  font: 500 2cqw/1.1 var(--kit-display);
+  color: var(--kit-gold-hi);
+}
+.kit-clues-count {
+  margin-left: auto;
+  min-width: 2.2cqw;
+  padding: .05cqw .5cqw;
+  border-radius: 99px;
+  text-align: center;
+  font: var(--kit-t-floor)/1.3 var(--kit-body);
+  color: var(--kit-text-strong);
+  border: 1px solid #f1d9a088;
+}
+.kit-notes {
+  display: flex;
+  flex-direction: column;
+  gap: .8cqw;
+}
+.kit-note {
+  position: relative;
+  display: flex;
+  gap: 1cqw;
+  padding: .8cqw;
+  --kit-cut: .6cqw;
+  --kit-ring: .12cqw;
+  --op-p: 0px;
+  --op-k: var(--kit-cut);
+  --ip-p: var(--kit-ring);
+  --ip-k: calc(var(--kit-cut) + var(--kit-ring) * .414);
+  background: var(--kit-fill-tile);
+  clip-path: polygon(var(--kit-o));
+  animation: kit-in var(--kit-in-ms) var(--kit-ease) both;
+}
+.kit-note::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, #c6a36b88, #c6a36b33 50%, #c6a36b77);
+  clip-path: polygon(evenodd, var(--kit-o), var(--kit-i));
+}
+.kit-note-newest {
+  --kit-ring: .16cqw;
+  background: linear-gradient(180deg, #2a2216e0, #14161cd8);
+  box-shadow: inset 0 0 .8cqw #f1c96a88, inset 0 0 2cqw #f1c96a33;
+}
+.kit-note-newest::after {
+  background: var(--kit-rim-gold);
+  animation: kit-flare 1.2s ease-in-out 500ms 2;
+}
+.kit-note-solved::after {
+  background: linear-gradient(105deg, #bff7ea, var(--kit-verdigris) 40%, #1f8a78 70%, #bff7ea);
+}
+.kit-note-picture {
+  flex: 0 0 auto;
+  width: 5cqw;
+  height: 5cqw;
+  object-fit: cover;
+  border-radius: .3cqw;
+}
+.kit-note-compact .kit-note-picture,
+.kit-note-regular .kit-note-picture {
+  width: 3.4cqw;
+  height: 3.4cqw;
+}
+.kit-note-name {
+  display: flex;
+  align-items: center;
+  gap: .5cqw;
+  font: 600 var(--kit-t-body)/1.2 var(--kit-display);
+  color: var(--kit-text-strong);
+}
+.kit-note-newest .kit-note-name {
+  color: var(--kit-gold-hi);
+}
+.kit-note-check {
+  width: 1.6cqw;
+  height: 1.6cqw;
+  flex: 0 0 auto;
+  color: var(--kit-verdigris);
+}
+.kit-note-detail {
+  margin-top: .3cqw;
+  font: var(--kit-t-floor)/1.3 var(--kit-body);
+  color: var(--kit-text-muted);
+}
+
+/* === motion === */
+@keyframes kit-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--kit-rise));
+  }
+}
+@keyframes kit-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes kit-pop {
+  from {
+    opacity: 0;
+    transform: scale(.92);
+  }
+}
+@keyframes kit-slide {
+  from {
+    opacity: 0;
+    transform: translateX(-.8cqw);
+  }
+}
+@keyframes kit-settle {
+  from {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+}
+@keyframes kit-rise {
+  from {
+    opacity: 0;
+    transform: translateY(1cqw);
+  }
+}
+@keyframes kit-halo-in {
+  from {
+    opacity: 0;
+  }
+  45% {
+    opacity: 1;
+  }
+}
+/* A pulse swells the bloom once and lets it settle back. */
+@keyframes kit-pulse {
+  50% {
+    opacity: 1;
+    filter: blur(calc(var(--kit-halo-blur) * 1.35));
+  }
+}
+@keyframes kit-sweep {
+  from {
+    transform: translateX(-130%);
+  }
+  85% {
+    opacity: 1;
+  }
+  to {
+    transform: translateX(130%);
+    opacity: 0;
+  }
+}
+@keyframes kit-letter-sweep {
+  from {
+    background-position: 160% 0, 0 0;
+  }
+  to {
+    background-position: -60% 0, 0 0;
+  }
+}
+@keyframes kit-spark {
+  from {
+    opacity: 0;
+  }
+  35% {
+    opacity: 1;
+  }
+  65% {
+    opacity: .7;
+  }
+  to {
+    opacity: .92;
+  }
+}
+@keyframes kit-flare {
+  40% {
+    filter: brightness(1.6);
+  }
+}
+@keyframes kit-grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+@keyframes kit-bloom {
+  from {
+    opacity: 0;
+    transform: scale(.6);
+  }
+}
+@keyframes kit-track-in {
+  from {
+    opacity: 0;
+    letter-spacing: .06em;
+  }
+}
+@keyframes kit-wave {
+  to {
+    transform: scaleY(.45);
+  }
+}
+@keyframes kit-think {
+  0%,
+  100% {
+    opacity: .35;
+    transform: scale(.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes kit-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes kit-dot-glow {
+  50% {
+    box-shadow: 0 0 1cqw #f1c96a, 0 0 2cqw #f1c96aaa;
+  }
+}
+@keyframes kit-ring-pulse {
+  50% {
+    box-shadow: 0 0 1.8cqw #f1c96aaa, inset 0 0 1cqw #f1c96a66;
+  }
+}
+@keyframes kit-icon-glow {
+  50% {
+    filter: drop-shadow(0 0 .9cqw #f1c96a);
+  }
+}
+@keyframes kit-entry-glow {
+  50% {
+    box-shadow: 0 0 .6cqw .16cqw #ffe7a8, 0 0 2.3cqw .5cqw #ff9a1a, inset 0 0 1.2cqw #ffcf6a77;
+  }
+}
+@keyframes kit-place-glow {
+  50% {
+    box-shadow: 0 0 1.8cqw #ffcf6a, 0 0 3cqw #ffb84aaa, inset 0 0 .4cqw #8a5f2a55;
+  }
+}
+@keyframes kit-nudge {
+  50% {
+    transform: translateY(.25cqw);
+  }
+}
+
+/* Reduced motion: every kit motion becomes one short fade, with no sweep, pulse, travel or
+   loop. `!important` is needed because this one rule must win over every component's own
+   animation shorthand, whatever its specificity. */
+@media (prefers-reduced-motion: reduce) {
+  .kit :not(:has(.kit-pane)),
+  .kit *::before,
+  .kit *::after {
+    animation-name: kit-fade !important;
+    animation-duration: 150ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition: none !important;
+  }
+  /* An ancestor of a blurring pane never fades: its opacity would stop the pane's blur (F1). */
+  .kit :has(.kit-pane) {
+    animation: none !important;
+    transition: none !important;
+  }
+  .kit-pane::before {
+    display: none;
+  }
+}

@@ -60,6 +60,7 @@ pub enum ReplyError {
     SceneBuilder(SceneBuilderError),
     Locate(LocateError),
     Generate(GenerateError),
+    Music(crate::music::MusicError),
     Cast(CastError),
     Persona(PersonaError),
     Emotion(EmotionError),
@@ -77,6 +78,8 @@ pub enum ReplyError {
     Frame(crate::persona::frame::FrameRouteError),
     /// The storyteller's plot (`/dev/persona/story`).
     Story(crate::persona::story::StoryRouteError),
+    /// A character's voice cast (`POST /dev/speech/cast`).
+    VoiceCast(crate::speech::request::VoiceCastError),
 }
 
 impl fmt::Display for ReplyError {
@@ -94,6 +97,7 @@ impl fmt::Display for ReplyError {
             Self::SceneBuilder(error) => write!(formatter, "{error}"),
             Self::Locate(error) => write!(formatter, "{error}"),
             Self::Generate(error) => write!(formatter, "{error}"),
+            Self::Music(error) => write!(formatter, "{error}"),
             Self::Cast(error) => write!(formatter, "{error}"),
             Self::Persona(error) => write!(formatter, "{error}"),
             Self::Emotion(error) => write!(formatter, "{error}"),
@@ -106,6 +110,7 @@ impl fmt::Display for ReplyError {
             Self::Address(error) => write!(formatter, "{error}"),
             Self::Frame(error) => write!(formatter, "{error}"),
             Self::Story(error) => write!(formatter, "{error}"),
+            Self::VoiceCast(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -113,6 +118,12 @@ impl fmt::Display for ReplyError {
 impl From<crate::persona::story::StoryRouteError> for ReplyError {
     fn from(error: crate::persona::story::StoryRouteError) -> Self {
         Self::Story(error)
+    }
+}
+
+impl From<crate::speech::request::VoiceCastError> for ReplyError {
+    fn from(error: crate::speech::request::VoiceCastError) -> Self {
+        Self::VoiceCast(error)
     }
 }
 
@@ -184,6 +195,12 @@ impl From<GenerateError> for ReplyError {
     }
 }
 
+impl From<crate::music::MusicError> for ReplyError {
+    fn from(error: crate::music::MusicError) -> Self {
+        Self::Music(error)
+    }
+}
+
 impl From<CastError> for ReplyError {
     fn from(error: CastError) -> Self {
         Self::Cast(error)
@@ -244,6 +261,7 @@ fn write_refusal(
         ReplyError::Director(error) => error.key(),
         ReplyError::SceneBuilder(error) => error.key(),
         ReplyError::Locate(error) => error.key(),
+        ReplyError::Music(error) => error.key(),
         ReplyError::Cast(error) => error.key(),
         ReplyError::Persona(error) => error.key(),
         ReplyError::Emotion(error) => error.key(),
@@ -255,6 +273,7 @@ fn write_refusal(
         ReplyError::Address(error) => error.key(),
         ReplyError::Frame(error) => error.key(),
         ReplyError::Story(error) => error.key(),
+        ReplyError::VoiceCast(error) => error.key(),
     };
     write!(formatter, "refused ({key}): {message}")
 }
@@ -314,7 +333,8 @@ pub enum DevError {
         error: Box<DevError>,
     },
     /// `persona converse plate=NAME` talked to the end and then failed to make the plate at
-    /// `step`; the lines said are all in `done`.
+    /// `step`, or `persona story way-plates` failed to make a stage's plate there; what was done
+    /// before it (the lines said, the plates made) is all in `done`.
     PlateStopped {
         done: Vec<String>,
         step: PlateStep,
@@ -839,6 +859,7 @@ async fn execute(port: u16, command: Command) -> Result<String, DevError> {
             send_requests(port, route::DEV_MEDIA_REMOVE, "media", &request, read_reply).await
         }
         Command::MediaGenerate(command) => crate::imagegen::run(port, command).await,
+        Command::MusicGenerate(request) => crate::music::cli::run(port, request).await,
         Command::MediaLocate(command) => crate::locate::cli::run(port, command).await,
         Command::Cast(command) => crate::cast::cli::run(port, command).await,
         Command::Persona(command) => crate::persona::cli::run(port, command).await,

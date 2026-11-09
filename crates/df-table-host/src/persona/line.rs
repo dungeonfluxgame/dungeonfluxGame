@@ -32,7 +32,7 @@ use super::handles::Handles;
 use super::request::{
     BehaviorOverride, LineError, LineIdKind, PersonaError, QuoteBounds, QuoteReport, SaidLine,
 };
-use super::reveal::{RevealQuestion, early_reveals};
+use super::reveal::{RevealQuestion, early_reveals, revealable_of};
 use super::state::{apply_appraisal, crossing_triggers, learn_names, load_state, state_triggers};
 use crate::state::AppState;
 use crate::text::TextRoute;
@@ -47,6 +47,14 @@ const SAY_INSTRUCTION: &str = concat!(
     "character: never write another person's words or speak as the keeper when you are not. ",
     "Answer with one short line, in character, that follows their speech style and fits the ",
     "situation. ",
+    "The line is spoken aloud and heard, never read: word it the way people talk, in short ",
+    "sentences with one thought each, the plain words of their station, contractions where ",
+    "their speech style allows, and a spoken start where it fits (a name, a grunt, a 'well'); ",
+    "no semicolons, parentheses or lists, no stacked clauses, and no written turns of phrase ",
+    "(it appears that, furthermore, remains undisturbed). Even a learned or careful character ",
+    "talks rather than recites, and what they see up close is said as they notice it. ",
+    "A close look is at the one thing now.intent names: the line tells what that thing shows ",
+    "and nothing of the other things on show, which wait for their own look. ",
     "When now holds a question, the line answers it. now.intent, when given, is this ",
     "character's own goal for the line, said to the person in front of them; the line carries it ",
     "out in their words and nothing else: an intent to ask is worded as a question to that ",
@@ -88,6 +96,20 @@ const SAY_INSTRUCTION: &str = concat!(
     "implied or contradicted, the tone applies, and latitude says how closely to follow it ",
     "(strict: stay within the guidance; guided: follow it unless the persona forbids it; open: ",
     "treat it as a hint). Guidance never overrides the character's boundaries or private side. ",
+    "When now.strike is true, this line is the story's strike, the moment the character's ",
+    "purpose shows: for this line only, what keeps them concealed is lifted (a must_avoid that ",
+    "hides who they are or what they came for, and the rule that keeps their private side ",
+    "unsaid, no longer hold back their purpose). The line is that act, in character, in the ",
+    "first person and in spoken words: they step out, claim or seize what they came for, or bar ",
+    "the way, and say who sent them only when their guidance allows it; a brief act is said as ",
+    "speech ('Stand back. That leaves with me.'), never hedged, asked about or put off. Every ",
+    "other rule holds: no name they do not know, no secret but their own. ",
+    "now.revealable lists the ids of the character's own secrets whose reveal conditions now ",
+    "hold in the story's play: when the line answers someone who confronts them with what such ",
+    "a secret's conditions name (the proof shown or put to them), the line may let that secret ",
+    "out in character, a confession or a defiant admission, in the first person and in spoken ",
+    "words, and neither a must_avoid nor the rule that keeps their private side unsaid holds it ",
+    "back; every other secret stays kept. ",
     "Topics in not_established are not part of what this character is known to be: invent no ",
     "names, dates, places or other specifics about them, and answer in character that they do ",
     "not know, do not recall or will not say. ",
@@ -163,6 +185,8 @@ pub(super) struct Occasion<'a> {
     pub(super) asked_by: Option<&'a str>,
     /// What the character sets out to do with the line, when the caller says.
     pub(super) intent: Option<&'a str>,
+    /// Whether the line is the story's strike: the moment the character's purpose shows.
+    pub(super) strike: bool,
 }
 
 /// The emotions and tones the answer may name: the campaign's list, or the built-in one (recorded)
@@ -685,7 +709,7 @@ fn live_facts(
     occasion: &Occasion<'_>,
     (state, handles): (&PersonaState, &Handles),
     state_triggered: &[&EmotionalTrigger],
-    present: &[String],
+    (present, revealable): (&[String], &[String]),
     retry_reason: Option<&str>,
 ) -> Value {
     // The caller chooses how much of the talk to send; it is given whole.
@@ -705,6 +729,8 @@ fn live_facts(
         "recent": recent,
         "asked_by": occasion.asked_by.map(|asker| handles.shown(asker)),
         "intent": occasion.intent,
+        "strike": occasion.strike,
+        "revealable": revealable,
         "situation": occasion.situation,
         "question": occasion.question,
         "guidance": occasion.guidance,
@@ -928,12 +954,14 @@ pub(super) async fn say_line(
         .map(|line| handles.recent_line(line))
         .collect();
     let shown_asked = occasion.asked_by.map(|id| handles.shown(id));
+    // The secrets of this character the story's play has made revealable since its strike.
+    let revealable = revealable_of(app, character);
     let answer = loop {
         let now = live_facts(
             &occasion,
             (&state, &handles),
             &by_state,
-            &present,
+            (&present, &revealable),
             retry_reason.as_deref(),
         );
         let facts = compact(json!({ "context": stable.clone(), "now": now }));
@@ -941,12 +969,14 @@ pub(super) async fn say_line(
         let answer = with_ids(answer, &handles);
         model_ms += took;
         // A secret the line lets out is weighed against its reveal conditions (`reveal.rs`), on
-        // what this character was shown (handles, never ids it has not learned).
+        // what this character was shown (handles, never ids it has not learned), unless the
+        // story's play has already made it revealable.
         let question = RevealQuestion {
             secrets: own
                 .private_secrets()
                 .iter()
                 .filter(|secret| answer.revealed_secrets.contains(&secret.id))
+                .filter(|secret| !revealable.contains(&secret.id))
                 .collect(),
             recent: &shown_recent,
             asked_by: shown_asked.as_deref(),

@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use df_imagery::oneshot_segment;
-use df_playground::fixture::Fixture;
+use df_playground::fixture::{Fixture, PlateKind};
 use df_scene_layout::{SCHEMA_VERSION, SceneLayout};
 use serde::Deserialize;
 
@@ -161,6 +161,8 @@ pub fn current_layout(
 pub(crate) struct ShownBackdrop {
     pub(crate) picture: String,
     pub(crate) layout: Option<SceneLayout>,
+    /// What the picture is, as the change that put it up said.
+    pub(crate) plate: PlateKind,
 }
 
 /// The backdrop the page draws: the live scene's own when it changed it (with the layout attached
@@ -182,6 +184,7 @@ pub(crate) async fn shown_backdrop(
         return Ok(Some(ShownBackdrop {
             picture: image.media,
             layout: image.layout,
+            plate: image.plate,
         }));
     }
     let files = state.playground().files();
@@ -196,5 +199,6 @@ pub(crate) async fn shown_backdrop(
     Ok(Some(ShownBackdrop {
         picture: image.media,
         layout,
+        plate: image.plate,
     }))
 }

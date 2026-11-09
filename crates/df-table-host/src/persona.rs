@@ -63,13 +63,17 @@ mod state;
 mod state_view;
 mod storage;
 pub(crate) mod story;
+mod story_clues;
+mod story_items;
+mod story_narrate;
 mod story_next;
+mod story_way;
 
 pub use self::cli::{PersonaCommand, parse};
 pub use self::converse::ConverseError;
 pub use self::emotions::EmotionError;
-pub(crate) use self::plate::deliver_plate;
 pub use self::plate::PlateStep;
+pub(crate) use self::plate::{Painting, deliver_plate};
 pub use self::request::{PersonaError, PersonaSummary};
 pub use self::routes::router_with;
 pub(crate) use self::storage::summaries_of;
@@ -101,8 +105,16 @@ mod persona_tests;
 #[cfg(test)]
 mod reveal_tests;
 #[cfg(test)]
+mod story_clues_tests;
+#[cfg(test)]
+mod story_items_tests;
+#[cfg(test)]
+mod story_narrate_tests;
+#[cfg(test)]
 mod story_next_tests;
 #[cfg(test)]
 mod story_tests;
+#[cfg(test)]
+mod story_way_tests;
 #[cfg(test)]
 mod voice_tests;

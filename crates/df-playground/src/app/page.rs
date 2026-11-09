@@ -318,6 +318,24 @@ fn leaving_copy(old: &Element, transition: Transition) -> Result<Element, JsValu
 
 /// Takes the leaving copy away when its animation has ended.
 pub fn on_animation_end(target: &Element) {
+    match view::clues::on_animation_end(target) {
+        Ok(true) => {
+            // The board folded: the bubbles are placed again, now clear of the strip.
+            place_bubbles();
+            return;
+        }
+        Ok(false) => {}
+        Err(error) => {
+            log_error(ErrorSource::Draw, &js_message(&error));
+        }
+    }
+    match view::plate_fade::on_animation_end(target) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            log_error(ErrorSource::Draw, &js_message(&error));
+        }
+    }
     if target
         .get_attribute("class")
         .is_some_and(|class| is_leaving(&class))
@@ -363,6 +381,7 @@ fn rebuild_devices(
     app: &App,
     leaving: Option<Transition>,
 ) -> Result<Option<Transition>, JsValue> {
+    view::plate_fade::reset();
     let leaving = if reduced_motion()? { None } else { leaving };
     let copy = leaving
         .map(|transition| leaving_copy(&page.devices, transition))
@@ -389,7 +408,21 @@ fn redraw_parts(
     };
     for part in parts {
         if let Some(slot) = page.slots.get(&part) {
-            fill(slot, build_part(document, part, fixture, app)?)?;
+            let built = build_part(document, part, fixture, app)?;
+            match part {
+                // A new plate fades in over the old one (`view::plate_fade`).
+                Part::TvBackdrop => {
+                    view::plate_fade::swap(slot, built, app.controls.transition, reduced_motion()?)?
+                }
+                // A speaker's card or a close-up's title card that goes or is replaced fades out
+                // (`view::overlays`).
+                Part::TvPanels => fill(slot, view::overlays::carry_over(document, slot, built)?)?,
+                // A note already on screen does not fade in again (`view::clues`).
+                Part::TvClues => fill(slot, view::clues::carry_over(slot, built)?)?,
+                // Bubbles that would vanish in a plate change fade out with the stage instead.
+                Part::TvAnchors if view::plate_fade::hold_anchors(slot, &built)? => {}
+                _ => fill(slot, built)?,
+            }
         }
     }
     Ok(())

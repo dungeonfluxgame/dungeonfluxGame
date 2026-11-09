@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 use df_content::persona::MAXIMUM_ID_CHARS;
 
 use super::format::{
-    format_cleared, format_clips, format_played, format_status, format_transcript, format_voice,
+    format_cast, format_cleared, format_clips, format_played, format_status, format_transcript,
+    format_voice,
 };
 use super::limits::AUDIO_CONTENT_TYPE;
 use super::request::{
-    ClipPlayed, ClipRow, ClipsCleared, SpeakRequest, SpeechError, SpeechReply, SpeechStatus,
-    Transcript, VoiceChanged, VoiceRequest,
+    CastReply, CastRequest, ClipPlayed, ClipRow, ClipsCleared, SpeakRequest, SpeechError,
+    SpeechReply, SpeechStatus, Transcript, VoiceCast, VoiceChanged, VoiceRequest,
 };
 use super::routes::path;
 use super::voices::check_character;
@@ -26,7 +27,7 @@ use crate::dev_client::{self, get_json, post_json};
 pub const SPEECH_USAGE: &str = concat!(
     "speech [status] | speech speak <character|-> <text...> | ",
     "speech transcribe <file.wav|file.pcm> | speech voice <character> <voice-id|clear> | ",
-    "speech clips | speech clear",
+    "speech cast <character> [model=<name>] | speech clips | speech clear",
 );
 /// `speech speak`: voice operator text and play it.
 pub const SPEECH_SPEAK_USAGE: &str = "speech speak <character|-> <text...>";
@@ -34,6 +35,8 @@ pub const SPEECH_SPEAK_USAGE: &str = "speech speak <character|-> <text...>";
 pub const SPEECH_TRANSCRIBE_USAGE: &str = "speech transcribe <file.wav|file.pcm>";
 /// `speech voice`: a character's voice.
 pub const SPEECH_VOICE_USAGE: &str = "speech voice <character> <voice-id|clear>";
+/// `speech cast`: a character's voice chosen from their persona by the casting judge.
+pub const SPEECH_CAST_USAGE: &str = "speech cast <character> [model=<name>]";
 
 /// A speech command of the dev CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +54,12 @@ pub enum SpeechCommand {
     Voice {
         character: String,
         voice: Option<String>,
+    },
+    /// Cast `character`'s voice from their persona, replacing the one they have; `model` judges
+    /// instead of the persona model.
+    Cast {
+        character: String,
+        model: Option<String>,
     },
     /// List the voice clips the host keeps.
     Clips,
@@ -94,6 +103,18 @@ pub fn parse(words: &[String]) -> Result<SpeechCommand, CommandError> {
             voice: (voice != "clear").then(|| voice.clone()),
         }),
         [verb, ..] if verb == "voice" => Err(CommandError::Usage(SPEECH_VOICE_USAGE)),
+        [verb, character] if verb == "cast" => Ok(SpeechCommand::Cast {
+            character: character_word(character)?,
+            model: None,
+        }),
+        [verb, character, option] if verb == "cast" => match option.split_once('=') {
+            Some(("model", model)) if !model.is_empty() => Ok(SpeechCommand::Cast {
+                character: character_word(character)?,
+                model: Some(model.to_owned()),
+            }),
+            _ => Err(CommandError::Usage(SPEECH_CAST_USAGE)),
+        },
+        [verb, ..] if verb == "cast" => Err(CommandError::Usage(SPEECH_CAST_USAGE)),
         [verb] if verb == "clips" => Ok(SpeechCommand::Clips),
         [verb] if verb == "clear" => Ok(SpeechCommand::Clear),
         _ => Err(CommandError::Usage(SPEECH_USAGE)),
@@ -213,6 +234,12 @@ pub async fn run(port: u16, command: SpeechCommand) -> Result<String, DevError> 
             let changed: VoiceChanged =
                 reply_value(post_json(port, path::SPEECH_VOICE, &request).await?)?;
             Ok(format_voice(&changed))
+        }
+        SpeechCommand::Cast { character, model } => {
+            let request = CastRequest { character, model };
+            let reply: CastReply = post_json(port, path::SPEECH_CAST, &request).await?;
+            let cast: VoiceCast = dev_client::reply_value(reply)?;
+            Ok(format_cast(&cast))
         }
         SpeechCommand::Clips => {
             let clips: Vec<ClipRow> = reply_value(get_json(port, path::SPEECH_CLIPS).await?)?;

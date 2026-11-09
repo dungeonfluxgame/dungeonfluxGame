@@ -16,7 +16,7 @@ use tokio::time::Instant;
 
 use super::{
     ClipFormat, PortFuture, PortStatus, SpeechPort, Synthesis, SynthesisCall, Transcription,
-    TranscriptionCall,
+    TranscriptionCall, VoiceListing,
 };
 use crate::forge::{ForgeSetupCause, ForgeSetupError, client_from_environment};
 use crate::speech::limits::SPEECH_DEADLINE;
@@ -78,6 +78,11 @@ impl SpeechPort for ForgeSpeechPort {
         call: TranscriptionCall,
     ) -> PortFuture<'_, Result<Transcription, SpeechError>> {
         Box::pin(async move { listen(self.ready()?, call).await })
+    }
+
+    /// Forge keeps no list a voice is chosen from: any voice id maps to a preset speaker.
+    fn voices(&self) -> PortFuture<'_, Result<VoiceListing, SpeechError>> {
+        Box::pin(std::future::ready(Ok(VoiceListing::Unlisted)))
     }
 }
 
@@ -187,6 +192,10 @@ impl SpeechPort for UnknownBackendPort {
         &self,
         _call: TranscriptionCall,
     ) -> PortFuture<'_, Result<Transcription, SpeechError>> {
+        Box::pin(std::future::ready(Err(Self::refusal())))
+    }
+
+    fn voices(&self) -> PortFuture<'_, Result<VoiceListing, SpeechError>> {
         Box::pin(std::future::ready(Err(Self::refusal())))
     }
 }

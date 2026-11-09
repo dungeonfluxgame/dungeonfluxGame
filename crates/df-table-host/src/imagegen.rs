@@ -28,19 +28,19 @@ pub mod routes;
 pub mod service;
 
 pub use self::backend::{
-    BackendError, CodexBackend, CodexSettings, ImageBackend, SwitchedOff, backend_for,
-    backend_from_environment,
+    BackendError, BackendLimits, CodexBackend, CodexSettings, ImageBackend, SwitchedOff,
+    backend_for, backend_from_environment, backend_of,
 };
 pub use self::cli::{MediaGenerate, run};
 pub use self::events::ImageGenEvent;
 pub use self::limits::{DEFAULT_DEADLINE, MAXIMUM_NAME_CHARS};
 pub use self::model::{
     Aspect, AspectError, BackendRequest, GenerateRequestError, GeneratedImage, ImageRequest,
-    Purpose,
+    Purpose, ThingReference,
 };
 pub use self::request::{
-    GenerateError, GenerateReply, GenerateRequest, JobState, JobView, PictureCause, Provenance,
-    Sidecar,
+    BackendSwitch, BackendView, GenerateError, GenerateReply, GenerateRequest, JobState, JobView,
+    PictureCause, Provenance, Sidecar,
 };
 pub use self::routes::{router, router_with};
 pub use self::service::{ImageGenerator, Started};
