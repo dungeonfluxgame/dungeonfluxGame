@@ -899,6 +899,11 @@ pub(super) async fn say_line(
         .iter()
         .map(|persona| handles.listener_brief(persona.brief(BriefScope::Listener)))
         .collect();
+    // Who asks, as this character sees them, for the reveal judge.
+    let asker: Option<PersonaBrief> = occasion
+        .asked_by
+        .and_then(|asker| others.iter().find(|persona| persona.id().as_str() == asker))
+        .map(|persona| handles.listener_brief(persona.brief(BriefScope::Listener)));
     let config = emotion_config(app);
     let by_state = state_triggers(own, &state);
     let present: Vec<String> = present_ids.iter().map(|id| handles.shown(id)).collect();
@@ -945,6 +950,7 @@ pub(super) async fn say_line(
                 .collect(),
             recent: &shown_recent,
             asked_by: shown_asked.as_deref(),
+            asker: asker.as_ref(),
             situation: occasion.situation,
         };
         let early = early_reveals(app, route, character, &question).await?;

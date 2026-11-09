@@ -16,7 +16,7 @@ pub use df_scene_layout::{
     shot_focus, shot_zoom_percent,
 };
 
-use crate::lobby::model::{Bubble, TAIL_INSET_PERCENT};
+use crate::lobby::model::{Bubble, BubbleTone, TAIL_INSET_PERCENT};
 
 /// A bubble's anchor: the name of a character in the backdrop's layout and the point of that
 /// character its tail points at.
@@ -129,4 +129,33 @@ pub fn anchored_place(bubble: &Bubble, layout: Option<&ImageLayout>) -> Option<A
         root_percent: u8::try_from(along.clamp(inset, 100 - inset)).unwrap_or(TAIL_INSET_PERCENT),
         tip_percent: u8::try_from(along.clamp(0, 100)).unwrap_or(TAIL_INSET_PERCENT),
     })
+}
+
+/// The characters whose figures are outlined while they speak, each with the mask the outline is
+/// traced from: the characters of `bubbles` that show words (a thinking indicator does not name a
+/// speaker), once each in the order they speak. A character without a mask, or whose name is not
+/// in the layout, has no outline.
+pub fn speaker_masks<'a>(
+    bubbles: &'a [Bubble],
+    layout: Option<&'a ImageLayout>,
+) -> Vec<(&'a str, &'a str)> {
+    let mut found: Vec<(&str, &str)> = Vec::new();
+    for bubble in bubbles
+        .iter()
+        .filter(|bubble| bubble.tone != BubbleTone::Thought)
+    {
+        let Some(anchor) = &bubble.anchor else {
+            continue;
+        };
+        let Some(mask) = layout
+            .and_then(|layout| layout.region(&anchor.region))
+            .and_then(LayoutRegion::mask)
+        else {
+            continue;
+        };
+        if !found.iter().any(|(region, _)| *region == anchor.region) {
+            found.push((anchor.region.as_str(), mask));
+        }
+    }
+    found
 }

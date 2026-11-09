@@ -11,7 +11,7 @@ use web_sys::{Document, Element};
 
 use crate::dom::{append, element, set_style, text_element};
 use crate::fixture::TvScene;
-use crate::image_layout::{ImageLayout, anchored_place, marker_place, percent_text};
+use crate::image_layout::{ImageLayout, anchored_place, marker_place, percent_text, speaker_masks};
 use crate::lobby::model::{Bubble, BubbleTone, RoleplayScene, tail_of};
 use crate::overlay::Glyph;
 use crate::view::kit::photo;
@@ -76,6 +76,11 @@ pub fn anchored(document: &Document, scene: &TvScene) -> Result<Option<Element>,
         .collect();
     root.set_attribute("data-faces", &faces.join(";"))?;
     let mut any = false;
+    // The speakers' outlines come first, so every bubble is over them.
+    for (character, mask) in speaker_masks(&card.bubbles, Some(layout)) {
+        append(&root, &outline_element(document, character, mask)?)?;
+        any = true;
+    }
     for bubble in &card.bubbles {
         if anchored_place(bubble, Some(layout)).is_some() {
             append(&root, &bubble_element(document, bubble, Some(layout))?)?;
@@ -103,6 +108,29 @@ pub fn anchored(document: &Document, scene: &TvScene) -> Result<Option<Element>,
         any = true;
     }
     Ok(any.then_some(root))
+}
+
+/// The outline of the speaking character `character`, traced from its `mask`: a rim and a glow
+/// around the silhouette, outside it, so the figure itself is never covered. The silhouette is
+/// cut out of the glow in the theme (`.rp-outline`).
+fn outline_element(document: &Document, character: &str, mask: &str) -> Result<Element, JsValue> {
+    let outline = element(document, "div", "rp-outline")?;
+    outline.set_attribute("data-character", character)?;
+    outline.set_attribute("aria-hidden", "true")?;
+    let silhouette = element(document, "div", "rp-outline-shape")?;
+    set_style(
+        &silhouette,
+        &format!("-webkit-mask-image:url(\"{mask}\");mask-image:url(\"{mask}\");"),
+    )?;
+    append(&outline, &silhouette)?;
+    set_style(
+        &outline,
+        &format!(
+            "-webkit-mask-image:url(\"{mask}\"),linear-gradient(#000,#000);\
+             mask-image:url(\"{mask}\"),linear-gradient(#000,#000);"
+        ),
+    )?;
+    Ok(outline)
 }
 
 fn bubble_element(
@@ -182,12 +210,7 @@ fn bubble_element(
         return Ok(wrapper);
     }
     let head = element(document, "div", "rp-head")?;
-    match photo(
-        document,
-        "rp-face",
-        bubble.portrait.as_deref(),
-        speaker,
-    )? {
+    match photo(document, "rp-face", bubble.portrait.as_deref(), speaker)? {
         Some(face) => append(&head, &face)?,
         None => {
             if let Some(mark) = bubble.glyph {

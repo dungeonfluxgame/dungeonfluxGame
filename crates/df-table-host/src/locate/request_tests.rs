@@ -4,6 +4,7 @@ use super::request::{
     IdentityOutcome, LocateError, QuestionCause, ScanCause, ScanPrompt, ScanSendState,
 };
 use crate::dev_http::{BodyCause, BodyError, RouteError};
+use crate::forge::ForgeSetupCause;
 use crate::io_cause::IoCause;
 use crate::text::TextServiceCause;
 
@@ -56,6 +57,10 @@ fn every_error() -> Vec<LocateError> {
         LocateError::StaleLayout { picture: picture() },
         LocateError::LayoutChanged { picture: picture() },
         LocateError::FalKeyMissing,
+        LocateError::ForgeNotConfigured {
+            cause: ForgeSetupCause::ProjectMissing,
+        },
+        LocateError::UnknownScanBackend,
         LocateError::ScanFailed {
             cause: ScanCause::Expired,
             send_state: ScanSendState::PossiblySent,

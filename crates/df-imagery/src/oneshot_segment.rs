@@ -15,6 +15,13 @@
 //!
 //! `segment` is `Send`, so a host awaits it on its own task; hashing, decoding and preparing the
 //! picture run on a blocking thread.
+//!
+//! `segment_with_forge` (`forge`) is the same door through the owner's local Forge studio: the
+//! same request, mask set, phases and typed error, from Forge's SAM 3.1 engine.
+
+mod forge;
+
+pub use self::forge::segment_with_forge;
 
 use std::time::{Duration, Instant};
 

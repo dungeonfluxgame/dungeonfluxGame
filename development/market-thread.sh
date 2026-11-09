@@ -9,20 +9,21 @@
 # who answers and where with `@keeper <id>`, `@keeper_situation <text>` and `@speaker_situation
 # <text>` lines, and may set where the keeper's feelings and standing start with `@state <emotion>
 # <level>` and `@rapport <toward> <-100..100>` lines; a `! <dev command>` line runs a dev command
-# (a stance or a rule given to a persona for the scene). `@frames <option>` lines (one `persona watch` option each: `frames=<name>`,
+# (a stance or a rule given to a persona for the scene). `@frames <option>` lines (one
+# `persona watch` option each: `frames=<name>`,
 # `scene=<what the picture shows>`, `hold=30`, ...) let the picture follow the thread: every line
 # said is handed to `persona watch`, whose transcript is printed at the end and kept in
 # $FRAMES_LOG. `@backfill sync` has the keeper's missing details (how a blade looks up close)
 # backfilled before the answer, so the answer can say them (`persona ask backfill=sync`).
 #
 # Flowing play (`@flow <first place>`): no beats are scripted. Each turn asks the storyteller for
-# the next move from everything said so far (`persona story next`), plays it and lets whoever it
-# was put to answer, until the story's end is reached (or `@flow_moves <n>`, default 80, as a
-# guard). Each place of the story has `@place <id> <plate>`, `@place_keeper <id> <keeper id>`,
-# `@place_keeper_situation <id> <text>`, `@place_situation <id> <text>` and `@place_scene <id>
-# <what the plate shows>` lines; on a move that sets off for a place, its plate is shown, its
-# situations and keeper are taken, and the frame watch starts again there (`<frames>-<place>`),
-# its scene joined by the plot's set dressing for that place (`persona story beats <place>`).
+# the next move from everything said so far (`persona story next`), plays it and lets whoever it was
+# put to answer, until the story's end is reached. Each place of the story has `@place <id>
+# <plate>`, `@place_keeper <id> <keeper id>`, `@place_keeper_situation <id> <text>`,
+# `@place_situation <id> <text>` and `@place_scene <id> <what the plate shows>` lines; on a move
+# that sets off for a place, its plate is shown, its situations and keeper are taken, and the frame
+# watch starts again there (`<frames>-<place>`), its scene joined by the plot's set dressing for
+# that place (`persona story beats <place>`).
 cd "$(dirname "$0")/.."
 D=${DF_TABLE_EXE:-./artifacts/build/bubbles/debug/df-table.exe}
 P=${DF_TABLE_PORT:-7879}
@@ -41,7 +42,6 @@ KEEPER_BACKFILL=true
 EXHIBITS=()
 DRESSING=()
 FLOW=""
-FLOW_MOVES=80
 declare -A PLACE_PLATE PLACE_KEEPER PLACE_KEEPER_SITUATION PLACE_SITUATION PLACE_SCENE
 while IFS= read -r setting; do
   value=${setting#* }
@@ -56,7 +56,6 @@ while IFS= read -r setting; do
     '@exhibit '*) EXHIBITS+=("$value") ;;
     '@dressing '*) DRESSING+=("$value") ;;
     '@flow '*) FLOW=$value ;;
-    '@flow_moves '*) FLOW_MOVES=$value ;;
     '@place '*) PLACE_PLATE[${value%% *}]=${value#* } ;;
     '@place_keeper '*) PLACE_KEEPER[${value%% *}]=${value#* } ;;
     '@place_keeper_situation '*) PLACE_KEEPER_SITUATION[${value%% *}]=${value#* } ;;
@@ -120,9 +119,10 @@ if [ -z "$FLOW" ] && { [ -z "$KEEPER" ] || [ -z "$KEEPER_SITUATION" ] ||
 fi
 
 # The last twenty lines of the thread, as repeated `recent=` options (a short window let lines
-# repeat what was said a few exchanges back).
-recent_args() {
+# repeat what was said a few exchanges back), none before line $1 when it is given.
+recent_args() { # [first line]
   local start=$(( ${#HISTORY[@]} > 20 ? ${#HISTORY[@]} - 20 : 0 )) i
+  [ "$start" -lt "${1:-0}" ] && start=$1
   RECENT=()
   for ((i = start; i < ${#HISTORY[@]}; i++)); do RECENT+=("recent=${HISTORY[$i]}"); done
 }
@@ -130,8 +130,9 @@ recent_args() {
 say_as() { # speaker, instruction
   local who="$1" instruction="$2" out line
   recent_args
-  out=$(timeout 200 $D dev --port $P persona say "$who" "${RECENT[@]}" "intent=$instruction" \
-    "$SPEAKER_SITUATION" 2>&1)
+  # Every line is voiced when the playground's TTS is on (run 97: no line was ever voiced).
+  out=$(timeout 200 $D dev --port $P persona say "$who" speak=true "${RECENT[@]}" \
+    "intent=$instruction" "$SPEAKER_SITUATION" 2>&1)
   line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
   N=$((N + 1))
   printf '[%02d] %s: %s\n' "$N" "$who" "${line:-<no line: $out>}"
@@ -150,11 +151,15 @@ say_as() { # speaker, instruction
 # against the scene's speakers) reads whom it is directed at; nobody, the speaker themself or no
 # answer leaves it to the keeper. When the next beat is theirs, that beat is their answer, so they
 # do not answer twice (run 69: a question to someone, then their own examination). An answer that
-# itself puts a question to someone gets one reply from them (`keeper follow`; run 71: a keeper's
-# question went unanswered as the next beat moved on), and only when the judge names someone.
+# itself puts a question to someone gets a reply from them (run 71: a keeper's question went
+# unanswered as the next beat moved on), and that reply, when it asks again, an answer (runs 89
+# and 90: an unanswered follow-up was asked again by the next player); a reply comes only when
+# the judge names someone. `follow` is how many replies are left, set on the replies only.
 keeper() { # [follow]
   local follow=$1 out line answerer situation
-  recent_args
+  # Whoever answers hears only what was said where they are (runs 94 and 96: people at the inn
+  # spoke of what was said at the market); the one who makes a move remembers it all.
+  recent_args "${ARRIVED:-0}"
   # The judge is told what the speaker set out to do (the beat's goal, where they are): whom
   # they meant the line for counts as much as its words. A reply (`reply=true`) is put to someone
   # only when it leaves them a question or a demand to answer (run 73: an order was restated after
@@ -179,8 +184,8 @@ keeper() { # [follow]
   [ "$answerer" = "$NEXT_SPEAKER" ] && return
   situation=$SPEAKER_SITUATION
   [ "$answerer" = "$KEEPER" ] && situation=$KEEPER_SITUATION
-  out=$(timeout 280 $D dev --port $P persona ask "$answerer" "from=$LAST_SPEAKER" "${RECENT[@]}" \
-    "backfill=$KEEPER_BACKFILL" "situation=$situation" "$LAST" 2>&1)
+  out=$(timeout 280 $D dev --port $P persona ask "$answerer" speak=true "from=$LAST_SPEAKER" \
+    "${RECENT[@]}" "backfill=$KEEPER_BACKFILL" "situation=$situation" "$LAST" 2>&1)
   line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
   N=$((N + 1))
   printf '[%02d] %s: %s\n' "$N" "$answerer" "${line:-<no line: $out>}"
@@ -188,11 +193,12 @@ keeper() { # [follow]
   HISTORY+=("$answerer: $line")
   watch_line "$answerer" "$line"
   sleep 3
-  [ -n "$follow" ] || [ -z "$line" ] && return
+  [ -z "$line" ] && return
+  [ -n "$follow" ] && [ "$follow" -le 1 ] && return
   LAST="$line"
   LAST_SPEAKER="$answerer"
   LAST_INTENT=""
-  keeper follow
+  keeper $((${follow:-3} - 1))
 }
 
 # Each line of the beats file is `speaker | goal`; `#` lines are comments, `@` lines settings, and
@@ -248,10 +254,20 @@ place_frames() { # place
 # Play moves to a place: its plate, keeper and situations, and a frame watch of its own.
 enter_place() { # place
   PLACE=$1
+  # The lines said before play came here: a place is left only once every player has spoken there.
+  ARRIVED=${#HISTORY[@]}
   $D dev --port $P scene image tv-backdrop "${PLACE_PLATE[$1]}" > /dev/null
   KEEPER=${PLACE_KEEPER[$1]:-$KEEPER}
   KEEPER_SITUATION=${PLACE_KEEPER_SITUATION[$1]:-$KEEPER_SITUATION}
   SPEAKER_SITUATION=${PLACE_SITUATION[$1]:-$SPEAKER_SITUATION}
+  # What is on show there (the plot's exhibits for the place), as anyone sees it up close.
+  local shown
+  shown=$($D dev --port $P persona story beats "$1" 2>/dev/null | sed -n 's/^@exhibit //p' |
+    paste -sd ' ' -)
+  if [ -n "$shown" ]; then
+    KEEPER_SITUATION="$KEEPER_SITUATION On show before everyone: $shown"
+    SPEAKER_SITUATION="$SPEAKER_SITUATION On show before everyone: $shown"
+  fi
   printf '\n=== %s (%s)\n' "$1" "${PLACE_PLATE[$1]}"
   if [ ${#FRAMES[@]} -gt 0 ]; then
     place_frames "$1"
@@ -261,27 +277,28 @@ enter_place() { # place
 
 # Flowing play: the storyteller's next move each turn, from everything said so far.
 play_flow() {
-  local out speaker to goal move_to end moves=0 line all opening=true after=""
+  local out speaker to goal move_to served end line all opening=true after=""
   enter_place "$FLOW"
-  while [ "$moves" -lt "$FLOW_MOVES" ]; do
-    moves=$((moves + 1))
+  while true; do
     all=()
     for line in "${HISTORY[@]}"; do all+=("recent=$line"); done
     # Someone already there opens a place; after anyone who is not a player, a player moves
     # (the route checks it).
-    out=$(timeout 300 $D dev --port $P persona story next "opening=$opening" \
-      ${after:+"after=$after"} "${all[@]}" "$PLACE" 2>&1)
+    out=$($D dev --port $P persona story next "opening=$opening" \
+      ${after:+"after=$after"} "arrived=$ARRIVED" "${all[@]}" "$PLACE" 2>&1)
     speaker=$(printf '%s\n' "$out" | sed -n 's/^speaker=//p')
     to=$(printf '%s\n' "$out" | sed -n 's/^to=//p')
     goal=$(printf '%s\n' "$out" | sed -n 's/^goal=//p')
     move_to=$(printf '%s\n' "$out" | sed -n 's/^move_to=//p')
+    served=$(printf '%s\n' "$out" | sed -n 's/^served=//p')
     end=$(printf '%s\n' "$out" | sed -n 's/^end=//p')
     if [ -z "$speaker" ]; then
       printf '       <no move: %s>\n' "$out"
       return
     fi
     # The move as the storyteller set it, so a line can be checked against what it was asked.
-    printf '       > %s to %s: %s\n' "$speaker" "$to" "$goal"
+    printf '       > %s to %s: %s%s\n' "$speaker" "$to" "$goal" \
+      "$([ "$served" = true ] && printf ' (place served)')"
     opening=false
     after=$speaker
     say_as "$speaker" "$goal"
@@ -300,7 +317,6 @@ play_flow() {
       after=""
     fi
   done
-  printf '\n=== stopped after %s moves (@flow_moves)\n' "$FLOW_MOVES"
 }
 [ -n "$FLOW" ] && play_flow
 

@@ -79,7 +79,7 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona story show | ",
     "persona story apply [model=<name>] | persona story moves [model=<name>] <scene> | ",
     "persona story beats <scene> | ",
-    "persona story next [opening=true] [after=<id>] [recent=<line>]... ",
+    "persona story next [opening=true] [after=<id>] [arrived=<n>] [recent=<line>]... ",
     "[model=<name>] <place> | ",
     "persona addressed <speaker> [recent=<text>]... [intent=<text>] [reply=true|false] ",
     "[model=<name>] <line...> | ",
@@ -196,7 +196,7 @@ pub const PERSONA_STORY_USAGE: &str = concat!(
     "persona story show | ",
     "persona story apply [model=<name>] | persona story moves [model=<name>] <scene> | ",
     "persona story beats <scene> | ",
-    "persona story next [opening=true] [after=<id>] [recent=<line>]... ",
+    "persona story next [opening=true] [after=<id>] [arrived=<n>] [recent=<line>]... ",
     "[model=<name>] <place>",
 );
 /// `persona ask`: coverage, backfill of gaps, then the line.
@@ -353,6 +353,8 @@ pub enum PersonaCommand {
         opening: bool,
         /// Who made the last move.
         after: Option<String>,
+        /// How many of `recent` were said before play came to this place.
+        arrived: usize,
         model: Option<String>,
     },
     /// Have the storyteller plot the moves of one scene of the stored story.
@@ -770,7 +772,9 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
     };
     let (given, rest) = take_options(
         rest,
-        &["cast", "scenes", "recent", "after", "opening", "model"],
+        &[
+            "cast", "scenes", "recent", "after", "arrived", "opening", "model",
+        ],
     );
     // A verb takes only its own options: one it does not take is refused, never ignored.
     let only = |allowed: &[&str]| given.iter().all(|(key, _)| allowed.contains(key));
@@ -810,7 +814,9 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
             scene: plain(&rest[0])?,
             model: value("model"),
         }),
-        ("next", false) if rest.len() == 1 && only(&["recent", "after", "opening", "model"]) => {
+        ("next", false)
+            if rest.len() == 1 && only(&["recent", "after", "arrived", "opening", "model"]) =>
+        {
             Ok(PersonaCommand::StoryNext {
                 place: plain(&rest[0])?,
                 recent: given
@@ -823,6 +829,13 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
                     .transpose()?
                     .unwrap_or(false),
                 after: value("after").map(|id| plain(&id)).transpose()?,
+                arrived: value("arrived")
+                    .map(|text| {
+                        text.parse::<usize>()
+                            .map_err(|_| bad_choice("arrived", &text, "a whole number"))
+                    })
+                    .transpose()?
+                    .unwrap_or(0),
                 model: value("model"),
             })
         }
@@ -1456,12 +1469,14 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             recent,
             opening,
             after,
+            arrived,
             model,
         } => {
             let request = super::story_next::NextRequest {
                 place,
                 present: Vec::new(),
                 recent,
+                arrived,
                 opening,
                 after,
                 model,

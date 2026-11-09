@@ -388,6 +388,8 @@ pub(crate) enum NativeResponseProfile {
     Json,
     ElevenJson,
     AudioMpeg,
+    /// A success answer of exactly this media type (a Forge asset); any other answer is JSON.
+    Media(&'static str),
 }
 
 impl NativeHttp {
@@ -633,6 +635,7 @@ impl NativeHttp {
             .ok_or(NativeHttpCause::ContentType)?;
         let expected_type = match (profile, status) {
             (NativeResponseProfile::AudioMpeg, 200) => "audio/mpeg",
+            (NativeResponseProfile::Media(media), 200) => media,
             _ => "application/json",
         };
         if content_types.next().is_some()

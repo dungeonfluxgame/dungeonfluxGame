@@ -457,7 +457,8 @@ fn eviction_removes_the_oldest_voice_clips_and_nothing_else() {
         "voice-2.mp3",
         "voice-10.mp3",
         "voice-x.mp3",
-        "voice-3.wav",
+        "voice-4.wav",
+        "voice-3.ogg",
         "voice-.mp3",
         "my-voice-4.mp3",
         "narration.mp3",
@@ -466,6 +467,7 @@ fn eviction_removes_the_oldest_voice_clips_and_nothing_else() {
         std::fs::write(directory.path().join(name), b"x").unwrap();
     }
     assert_eq!(clip_number("voice-10.mp3"), Some(10));
+    assert_eq!(clip_number("voice-4.wav"), Some(4));
     assert_eq!(clip_number("voice-x.mp3"), None);
     let names = |directory: &std::path::Path| -> Vec<String> {
         list_clips(directory)
@@ -476,13 +478,13 @@ fn eviction_removes_the_oldest_voice_clips_and_nothing_else() {
     };
     assert_eq!(
         names(directory.path()),
-        ["voice-1.mp3", "voice-2.mp3", "voice-10.mp3"]
+        ["voice-1.mp3", "voice-2.mp3", "voice-4.wav", "voice-10.mp3"]
     );
-    assert_eq!(evict_clips(directory.path(), 1).unwrap(), 2);
+    assert_eq!(evict_clips(directory.path(), 1).unwrap(), 3);
     assert_eq!(names(directory.path()), ["voice-10.mp3"]);
     for kept in [
         "voice-x.mp3",
-        "voice-3.wav",
+        "voice-3.ogg",
         "voice-.mp3",
         "my-voice-4.mp3",
         "narration.mp3",

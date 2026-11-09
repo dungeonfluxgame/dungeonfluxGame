@@ -4,7 +4,8 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::provider::{
-    PortFuture, PortStatus, SpeechPort, Synthesis, SynthesisCall, Transcription, TranscriptionCall,
+    ClipFormat, PortFuture, PortStatus, STT_MODEL, SpeechPort, Synthesis, SynthesisCall, TTS_MODEL,
+    Transcription, TranscriptionCall,
 };
 use super::request::{MissingSetting, SpeechError, SpeechProviderCause};
 use super::service::Speech;
@@ -87,6 +88,8 @@ impl SpeechPort for FakePort {
         PortStatus {
             configured: self.configured,
             missing: (!self.configured).then_some(MissingSetting::SpeechKey),
+            tts_model: TTS_MODEL,
+            stt_model: STT_MODEL,
         }
     }
 
@@ -94,7 +97,8 @@ impl SpeechPort for FakePort {
         locked(&self.voices).push(call.voice);
         locked(&self.spoken_characters).push(call.text.chars().count());
         let answer = self.outcome(Synthesis {
-            mp3: FAKE_MP3.to_vec(),
+            audio: FAKE_MP3.to_vec(),
+            format: ClipFormat::Mp3,
         });
         Box::pin(async move { answer })
     }

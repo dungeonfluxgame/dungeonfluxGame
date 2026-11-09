@@ -1,7 +1,8 @@
 //! `media locate`: the layout of a library picture from a SAM segmentation through the imagery API.
 //!
-//! The host asks `df_imagery::oneshot_segment` (the fal SAM backend, SAM 3.1 by default) for the
-//! instances of one noun prompt in a picture of the media library, reduces each instance to a box,
+//! The host asks `df_imagery::oneshot_segment` (the fal SAM backend, SAM 3.1 by default, or SAM 3.1
+//! in the owner's local Forge studio with `DF_SCAN_BACKEND=forge`) for the instances of one noun
+//! prompt in a picture of the media library, reduces each instance to a box,
 //! a head point and its mask (a transparent PNG) with the imagery API's own helpers, and stores the
 //! result in the playground's `layouts` folder as `<picture>.layout.json` (a
 //! `df_scene_layout::SceneLayout`, bound to the picture by its digest). When the page reads a
@@ -38,8 +39,8 @@ pub use self::request::{
 };
 pub use self::routes::{router, router_with, text_runtime};
 pub use self::scan::{
-    FAL_KEY_VARIABLES, KEEP_LABEL_OVERLAP_PERMILLE, Scanned, keep_labels, layout_from, relabel,
-    scan_picture,
+    FAL_KEY_VARIABLES, KEEP_LABEL_OVERLAP_PERMILLE, SCAN_BACKEND_VARIABLE, Scanned, keep_labels,
+    layout_from, relabel, scan_picture,
 };
 pub use self::storage::{
     LAYOUT_DIRECTORY, LAYOUT_SUFFIX, attach_layout, current_layout, layout_file_name, read_layout,

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::limits::MAXIMUM_PICTURE_NAME_BYTES;
 use crate::dev_http::{BodyError, DevReply, RouteError};
+use crate::forge::{ForgeSetupCause, ForgeSetupError};
 use crate::io_cause::IoCause;
 use crate::text::TextServiceCause;
 
@@ -457,6 +458,12 @@ pub enum LocateError {
     },
     /// No fal key is in the host's environment.
     FalKeyMissing,
+    /// The scan's supplier is Forge (`DF_SCAN_BACKEND=forge`) and the host has no client for it.
+    ForgeNotConfigured {
+        cause: ForgeSetupCause,
+    },
+    /// `DF_SCAN_BACKEND` names a supplier the host does not know.
+    UnknownScanBackend,
     ScanFailed {
         cause: ScanCause,
         send_state: ScanSendState,
@@ -500,6 +507,8 @@ impl LocateError {
             Self::StaleLayout { .. } => "stale_layout",
             Self::LayoutChanged { .. } => "layout_changed",
             Self::FalKeyMissing => "fal_key_missing",
+            Self::ForgeNotConfigured { .. } => "forge_not_configured",
+            Self::UnknownScanBackend => "unknown_scan_backend",
             Self::ScanFailed { .. } => "scan_failed",
             Self::QuestionInvalid { .. } => "question_invalid",
             Self::TextServiceMissing { .. } => "text_service_missing",
@@ -617,6 +626,14 @@ impl fmt::Display for LocateError {
                 "no fal key in the host's environment: ",
                 "set DF_FAL_KEY (or FAL_KEY) before `df-table serve`"
             )),
+            Self::ForgeNotConfigured { cause } => {
+                write!(formatter, "{}", ForgeSetupError { cause: *cause })
+            }
+            Self::UnknownScanBackend => write!(
+                formatter,
+                "{} names no scan supplier: set it to fal or forge, or unset it",
+                super::scan::SCAN_BACKEND_VARIABLE
+            ),
             Self::ScanFailed { cause, send_state } => write!(
                 formatter,
                 "the imagery API's segmentation did not give masks ({}; the request was {})",
@@ -665,9 +682,10 @@ impl RouteError for LocateError {
             | Self::QuestionInvalid { .. } => StatusCode::BAD_REQUEST,
             Self::PictureMissing { .. } | Self::NoLayout { .. } => StatusCode::NOT_FOUND,
             Self::StaleLayout { .. } | Self::LayoutChanged { .. } => StatusCode::CONFLICT,
-            Self::FalKeyMissing | Self::TextServiceMissing { .. } => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            Self::FalKeyMissing
+            | Self::ForgeNotConfigured { .. }
+            | Self::UnknownScanBackend
+            | Self::TextServiceMissing { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::ScanFailed { .. } | Self::TextService { .. } => StatusCode::BAD_GATEWAY,
             Self::PictureUnreadable { .. }
             | Self::LayoutUnreadable { .. }

@@ -14,10 +14,10 @@ use crate::movement::cli::MOVEMENT_USAGE;
 use crate::persona::cli::{
     GUIDANCE_OPTIONS, PERSONA_ADD_USAGE, PERSONA_ASK_USAGE, PERSONA_BACKFILL_USAGE,
     PERSONA_BACKFILLS_USAGE, PERSONA_BEHAVIOR_USAGE, PERSONA_CONVERSE_USAGE,
-    PERSONA_COVERAGE_USAGE, PERSONA_DROP_USAGE, PERSONA_EDIT_USAGE, PERSONA_GENERATE_USAGE,
-    PERSONA_REMOVE_USAGE, PERSONA_SAY_USAGE, PERSONA_SECRET_USAGE, PERSONA_SET_USAGE,
-    PERSONA_EMOTION_USAGE, PERSONA_EXPERTISE_USAGE, PERSONA_STATE_USAGE,
-    PERSONA_TEMPERAMENT_USAGE, PERSONA_TRIGGER_USAGE, PERSONA_USAGE, PERSONA_VOICE_USAGE,
+    PERSONA_COVERAGE_USAGE, PERSONA_DROP_USAGE, PERSONA_EDIT_USAGE, PERSONA_EMOTION_USAGE,
+    PERSONA_EXPERTISE_USAGE, PERSONA_GENERATE_USAGE, PERSONA_REMOVE_USAGE, PERSONA_SAY_USAGE,
+    PERSONA_SECRET_USAGE, PERSONA_SET_USAGE, PERSONA_STATE_USAGE, PERSONA_TEMPERAMENT_USAGE,
+    PERSONA_TRIGGER_USAGE, PERSONA_USAGE, PERSONA_VOICE_USAGE,
 };
 use crate::services::SERVICES_USAGE;
 use crate::speech::SPEECH_USAGE;
@@ -87,7 +87,8 @@ pub(super) const FIXTURE_USAGE: &str =
 pub(super) const REPL_USAGE: &str = "repl";
 pub(super) const CLIENTS_USAGE: &str = concat!(
     "clients [<client>] | clients timeline <client> ",
-    "[kind=line|plate|figure|clip|scene|sound|music|draw|camera|capture|transcribe|ask|error] ",
+    "[kind=line|plate|figure|clip|scene|sound|music|draw|camera|capture|transcribe|ask|outline|",
+    "error] ",
     "[after=SEQ]",
 );
 pub(super) const FIXTURES_USAGE: &str = "fixtures";

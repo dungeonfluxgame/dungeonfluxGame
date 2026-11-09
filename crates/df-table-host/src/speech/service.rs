@@ -4,6 +4,7 @@
 //! Audit lines (`SPEECH ...`) hold counts, names of clips, closed keys and times only, never a
 //! recording, a transcript, the text of a line, a voice id or a key:
 //!
+//! - `SPEECH port backend=<elevenlabs|forge|unknown> configured=<bool>` when the service is built
 //! - `SPEECH synthesized clip=<name> bytes=<n> duration_ms=<n> profile=<label>`
 //! - `SPEECH transcribed audio_ms=<n> duration_ms=<n> words=<n> terms=<n>`
 //! - `SPEECH failed verb=<speak|transcribe> error=<key> duration_ms=<n>` for a supplier call
@@ -26,7 +27,7 @@ use super::limits::{
     MAXIMUM_TEXT_CHARACTERS, MINIMUM_AUDIO_MS,
 };
 use super::provider::{
-    ElevenLabsPort, PortStatus, STT_MODEL, SpeechPort, SynthesisCall, TTS_MODEL, TranscriptionCall,
+    PortStatus, SpeechPort, SynthesisCall, TranscriptionCall, port_from_environment,
 };
 use super::request::{
     ClipPlayed, MissingSetting, QueryCause, SpeakRequest, SpeechError, SpeechFeature, SpeechStatus,
@@ -93,9 +94,15 @@ impl Speech {
         }
     }
 
-    /// The speech service over the supplier this process's environment asks for.
+    /// The speech service over the supplier this process's environment asks for
+    /// (`DF_SPEECH_BACKEND`).
     pub fn from_environment(app: Arc<AppState>) -> Self {
-        Self::new(app, Arc::new(ElevenLabsPort::from_environment()))
+        let (port, backend) = port_from_environment();
+        app.record_line(format!(
+            "SPEECH port backend={backend} configured={}",
+            port.status().configured
+        ));
+        Self::new(app, port)
     }
 
     pub(crate) fn app(&self) -> &AppState {
@@ -131,8 +138,8 @@ impl Speech {
         Ok(SpeechStatus {
             configured: port.configured,
             missing: port.missing,
-            tts_model: TTS_MODEL.to_owned(),
-            stt_model: STT_MODEL.to_owned(),
+            tts_model: port.tts_model.to_owned(),
+            stt_model: port.stt_model.to_owned(),
             default_voice: book.default_voice().map(str::to_owned),
             voices: book.rows(),
             clips_kept: u64::try_from(kept.len()).unwrap_or(u64::MAX),
@@ -248,7 +255,7 @@ impl Speech {
         }
         self.check_configured()?;
         let resolved: ResolvedVoice = self.voice_book().await?.resolve(character, voice)?;
-        let profile = resolved.profile();
+        let profile = resolved.profile(self.port.status().tts_model);
         let started = Instant::now();
         let made = self
             .port
@@ -260,7 +267,7 @@ impl Speech {
         let synthesis_ms = saturating_millis(started.elapsed());
         let made =
             made.inspect_err(|error| self.record_failure(SpeechVerb::Speak, error, synthesis_ms))?;
-        let clip = store_clip(&self.app, &made.mp3).await?;
+        let clip = store_clip(&self.app, &made.audio, made.format).await?;
         self.app.record_line(format!(
             "SPEECH synthesized clip={} bytes={} duration_ms={synthesis_ms} profile={profile}",
             clip.name, clip.bytes

@@ -20,7 +20,9 @@ use super::request::{
 };
 use crate::dev_http::reply;
 use crate::imagegen::{ImageBackend, ImageGenerator, SwitchedOff};
-use crate::locate::{DEFAULT_MIN_CONFIDENCE_PERMILLE, FAL_KEY_VARIABLES, SCAN_TIMEOUT};
+use crate::locate::{
+    DEFAULT_MIN_CONFIDENCE_PERMILLE, FAL_KEY_VARIABLES, SCAN_BACKEND_VARIABLE, SCAN_TIMEOUT,
+};
 use crate::speech::Speech;
 use crate::state::AppState;
 use crate::text::TextRuntime;
@@ -35,6 +37,35 @@ struct ServicesRoutes {
     text: Arc<TextRuntime>,
     generator: Arc<ImageGenerator>,
     speech: Speech,
+}
+
+/// The scan's supplier as a scan would read it now: fal, or Forge for `DF_SCAN_BACKEND=forge`
+/// (its key is then whether the host has a Forge client).
+fn locate_report() -> LocateReport {
+    let (model, endpoint, key_present) =
+        match crate::environment::text(SCAN_BACKEND_VARIABLE).as_deref() {
+            Some(crate::forge::FORGE_BACKEND) => {
+                let client = crate::forge::client_from_environment();
+                let endpoint = client.as_ref().map_or_else(
+                    |_| df_providers::FORGE_DEFAULT_ORIGIN.to_owned(),
+                    |client| client.config().origin().to_owned(),
+                );
+                ("forge/sam-3.1".to_owned(), endpoint, client.is_ok())
+            }
+            // Read when asked, as a scan reads it when it starts; only its presence is shown.
+            _ => (
+                oneshot_segment::DEFAULT_MODEL.to_owned(),
+                oneshot_segment::DEFAULT_ENDPOINT.to_owned(),
+                crate::environment::first_text(&FAL_KEY_VARIABLES).is_some(),
+            ),
+        };
+    LocateReport {
+        model,
+        endpoint_host: endpoint_host(&endpoint).to_owned(),
+        timeout_ms: saturating_millis(SCAN_TIMEOUT),
+        key_present,
+        min_confidence_permille: DEFAULT_MIN_CONFIDENCE_PERMILLE,
+    }
 }
 
 /// A count as a report carries it.
@@ -70,8 +101,8 @@ impl ServicesRoutes {
                 SpeechReport {
                     configured: port.configured,
                     missing: port.missing.map(|setting| setting.variable().to_owned()),
-                    tts_model: crate::speech::provider::TTS_MODEL.to_owned(),
-                    stt_model: crate::speech::provider::STT_MODEL.to_owned(),
+                    tts_model: port.tts_model.to_owned(),
+                    stt_model: port.stt_model.to_owned(),
                     voices: None,
                     clips_kept: None,
                 }
@@ -108,14 +139,7 @@ impl ServicesRoutes {
                 running: count(generator.running()),
                 last_outcome: generator.last_outcome().map(str::to_owned),
             },
-            locate: LocateReport {
-                model: oneshot_segment::DEFAULT_MODEL.to_owned(),
-                endpoint_host: endpoint_host(oneshot_segment::DEFAULT_ENDPOINT).to_owned(),
-                timeout_ms: saturating_millis(SCAN_TIMEOUT),
-                // Read when asked, as a scan reads it when it starts; only its presence is shown.
-                key_present: crate::environment::first_text(&FAL_KEY_VARIABLES).is_some(),
-                min_confidence_permille: DEFAULT_MIN_CONFIDENCE_PERMILLE,
-            },
+            locate: locate_report(),
             speech,
         }
     }

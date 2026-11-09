@@ -427,7 +427,7 @@ async fn a_fixture_scan_the_supplier_rate_limits_is_one_failed_line_at_scan_with
     )
     .unwrap();
     let (endpoint, server) = rate_limiting_supplier();
-    let supplier = super::scan::ScanSupplier {
+    let supplier = super::scan::ScanSupplier::Fal {
         endpoint,
         credential: Some("fixture-key".to_owned()),
     };

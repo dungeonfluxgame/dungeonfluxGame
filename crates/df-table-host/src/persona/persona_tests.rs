@@ -1117,6 +1117,21 @@ fn the_story_and_addressee_verbs_read_their_scene_and_reply() {
         "the moves of a scene take no cast"
     );
     assert_eq!(
+        command("persona story next after=warrior arrived=4 bar"),
+        PersonaCommand::StoryNext {
+            place: "bar".to_owned(),
+            recent: Vec::new(),
+            opening: false,
+            after: Some("warrior".to_owned()),
+            arrived: 4,
+            model: None,
+        }
+    );
+    assert!(
+        parse(&words("persona story next arrived=some bar")).is_err(),
+        "arrived is a count of lines"
+    );
+    assert_eq!(
         command(
             "persona addressed town_mayor recent=warrior:_I_did_not intent=judge reply=true Speak."
         ),

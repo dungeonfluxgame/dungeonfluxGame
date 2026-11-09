@@ -854,6 +854,96 @@ Run 76 (`run76-judgement.md`, stopped at line 44):
   44 lines.
 - A goal's speaker is always "you", never their own look.
 
+## Refinement 27 and runs 95 to 111 (the quest played to its end)
+
+Run 111 played the whole quest on clean personas with every line voiced:
+- **market:** a traveller earned the fruit seller's sighting and the guard's report;
+- **inn:** the stranger made his offer to the room, the players questioned him and read the clay
+  and the black wax;
+- **graveyard:** the players read each staged sign truly, then the trap sprang and the story
+  ended.
+
+What it took:
+- **Replays on clean personas.** Each run saved its backfills, and `story apply` left the earlier
+  arrest story in the cast: in backstories, goals, triggers, voice samples and a public look ("who
+  carries the warrant"). The fruit seller kept telling of Kael's arrest. The cast was cleaned,
+  snapshotted, and is restored before every run.
+- **`story moves` saved the view it asked with.** That blanked every name in the stored plot, so
+  the names judge had nothing to check, and blanked every other scene's exhibits. It now merges
+  only its scene's beats and exhibits into the stored story.
+- **Judges.**
+  - A malformed judge answer is asked again, never the end of play.
+  - The knowledge judge refuses repeats, goals that send a speaker to themself or tell what only
+    their listener saw, and a set-off that is early or for the wrong place.
+  - The reveal judge is told who asks.
+  - Guidance names nothing a character has met.
+- **Pace.**
+  - The judge waited on choices only the next place settles. A middle place is now left once
+    every player has spoken about three lines there.
+  - At the last place the danger strikes first: someone who is no player acts. Only after that is
+    the end judged (run 110 ended with the trap never sprung).
+  - A close look says what is seen.
+- **Open:**
+  - The flirting at the inn never came: the plot's inn beat has no room for it.
+  - A speaker now and then plays the other's part.
+  - The innkeeper once invented a sighting.
+
+## Refinement 26 and runs 87 to 94 (the quest moves through its places)
+
+The owner: "just have the players MOVE to the next location", "dont set limtis", and keep the
+code neutral and flexible for any story.
+
+- **Runs 87 to 92 stayed at the market.** The game master was told to send the players on once
+  a place had given its clue, then to say so itself (`served`). It never did, not even after
+  every clue was out (run 89: `served=false` on every move). In run 92, told to choose the next
+  place itself, it refused hundreds of times.
+  - Now the pace judge decides before each move whether the place is done.
+  - Code then takes the players to the story's next place, and the game master writes the move
+    with which they set off.
+- **Run 93 went market, inn, graveyard, end**, the first run through every place. But the inn
+  was over in four lines and the graveyard ended before the trap was found.
+  - Now a place waits until every player has spoken there (`arrived=`, lines since play came).
+  - The knowledge judge refuses a set-off goal that keeps the players where they are.
+- **Run 94, the whole quest in order:**
+  - **Market:** the fruit seller held her sighting back from the guard and the sergeant, who are
+    not travellers.
+  - **Inn:** the fiddler told of the bell once the warrior asked what he had heard, his
+    condition. The stranger, questioned by each player in their own way, kept his part: "I can
+    account for no certainty".
+  - **Graveyard:** four players in turn followed the same wheel ruts while the groundsman
+    warned them off the marker; the story ended on talk going round, before the trap came out.
+  - Now the knowledge judge refuses a repeated move.
+  - At the last place, "done" means the truth behind the hook is out.
+- **Leaks found in run 94:** the plot's player guidance gave away the trap and the reward (as
+  "does not know who set the trap"), so Sella asked about a reward nobody had offered. The plot
+  is now told to give a guidance only what its character has already met. That is not yet
+  enough: a re-plot still put "who set the trap" in a player's must_avoid. It also brought back
+  the arrest story (Kael accused, a cloak scrap), because `story apply` appends each story to
+  the personas' private backstories and the next plot reads them. The re-plot was set aside and
+  its persona edits undone.
+- **Run 96:**
+  - The quest ran market, inn, graveyard: the fiddler drew out the stranger's reward in the open
+    room, the players questioned him, and he stayed evasive.
+  - At the graveyard the story did not end on talk going round (the last-place rule held). But
+    the clues could not be found: no place had its evidence on show.
+  - Now the plot plans each place's exhibits, and the runner shows them to everyone there.
+  - The inn people quoted market talk: an answerer now hears only the lines said at their place.
+  - The set-off move went to the guard: a served place is now left on a player's move.
+  - Run 95 stopped at its first move on a judge's malformed answer: a judge's answer is now asked
+    again until it reads.
+- **Fixed on the way:**
+  - an asker's follow-up went unanswered and the next player asked it again (now answered);
+  - a goal sent a speaker to question themself (refused);
+  - the camera made no new shot in fifteen lines of talk (the quest's gate is now 20);
+  - the try and move caps are gone.
+- **Open:**
+  - **Stale bubble:** a line from the last place stays up over the new place's plate until
+    someone speaks.
+  - **Slow shots:** a shot can take two minutes to come.
+  - **Continuity slip:** the tavern server once spoke as if she had been at the market.
+  - **Odd steering:** the culprit pointed the players at his own clues.
+  - **Not yet seen in play:** the flirting at the inn.
+
 ## Refinement 25 and runs 77 to 86 (the quest "The Lantern Bait": a story that flows)
 
 Goal (owner, 2026-11-08): four broke players ride into town, look round the market, go to the

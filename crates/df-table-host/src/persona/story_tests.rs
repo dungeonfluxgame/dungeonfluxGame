@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 use super::handles::Handles;
-use super::story::{StoryError, parse_moves, parse_story, read_names, with_ids};
+use super::story::{StoryError, parse_moves, parse_story, read_names, with_ids, with_scene_moves};
 
 fn guidance(establish: &str) -> Value {
     json!({
@@ -58,11 +58,12 @@ fn answer() -> Value {
         ],
         "beats": [
             {"id": "charge", "scene": "arrest", "happens": "The guards read the charge.",
-             "turns_on": "Kael keeps his temper."},
+             "turns_on": "Kael keeps his temper.", "exhibits": []},
             {"id": "street", "scene": "march", "happens": "The town watches.",
-             "turns_on": "A witness looks away."},
+             "turns_on": "A witness looks away.", "exhibits": []},
             {"id": "trial", "scene": "judgement", "happens": "The mayor hears the case.",
-             "turns_on": "The stable boy's word."}
+             "turns_on": "The stable boy's word.",
+             "exhibits": ["seal_in_pack"]}
         ]
     })
 }
@@ -269,4 +270,39 @@ fn the_names_judge_answer_lists_texts_by_index_and_refuses_one_that_is_no_text()
         read_names(&json!({"naming": [{"index": 2, "name": "Haldor"}]}), 2),
         Err(StoryError::MalformedAnswer { .. })
     ));
+}
+
+#[test]
+fn a_scenes_moves_change_only_that_scene_in_the_stored_story() {
+    let stored = parse_story(&answer(), (&["warrior".to_owned()], &[]), &scenes()).unwrap();
+    // The view a moves question is asked with: names blank, every exhibit's look cleared.
+    let mut asked = stored.clone();
+    for character in &mut asked.characters {
+        character.name.clear();
+    }
+    for piece in &mut asked.evidence {
+        piece.up_close.clear();
+    }
+    let mut played = asked.clone();
+    let trial = played
+        .beats
+        .iter_mut()
+        .find(|beat| beat.id == "trial")
+        .unwrap();
+    trial.leads = "warrior".to_owned();
+    trial.exhibits = vec!["seal_in_pack".to_owned()];
+    played.evidence[0].up_close = "A fresh look at the seal.".to_owned();
+    let kept = with_scene_moves(stored.clone(), &played, "judgement");
+    assert_eq!(
+        kept.characters[0].name, stored.characters[0].name,
+        "names are kept"
+    );
+    let beat = kept.beats.iter().find(|beat| beat.id == "trial").unwrap();
+    assert_eq!(beat.leads, "warrior");
+    assert_eq!(kept.evidence[0].up_close, "A fresh look at the seal.");
+    let other = with_scene_moves(stored.clone(), &played, "arrest");
+    assert_eq!(
+        other.evidence[0].up_close, stored.evidence[0].up_close,
+        "a scene that does not show a piece leaves its look as it was"
+    );
 }

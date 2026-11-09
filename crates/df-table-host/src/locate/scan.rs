@@ -1,5 +1,9 @@
 //! The SAM scan: a library picture's instances through the imagery API, reduced to a layout whose
 //! regions keep the names of the regions they overlap in the layout they replace.
+//!
+//! `DF_SCAN_BACKEND` picks the supplier: `fal` (unset; fal's SAM 3.1 with `DF_FAL_KEY`) or
+//! `forge` (SAM 3.1 in the owner's local Forge studio, `crate::forge`). Both give the same mask
+//! set; a value the host does not know refuses the scan before anything is sent.
 
 use std::path::Path;
 
@@ -15,9 +19,14 @@ use super::limits::SCAN_TIMEOUT;
 use super::request::{LocateError, LocateRequest, LocateStage, LocateStageError, ScanPrompt};
 use super::storage::{LAYOUT_WRITES, read_layout, read_picture, write_layout};
 use super::validate::{check_label, check_masks, check_picture_name};
+use crate::forge::{FORGE_BACKEND, ForgeSetupError, client_from_environment};
 
 /// The environment variables the supplier key is read from, in order.
 pub const FAL_KEY_VARIABLES: [&str; 2] = ["DF_FAL_KEY", "FAL_KEY"];
+/// The variable that picks the scan's supplier: `fal` (unset) or `forge`.
+pub const SCAN_BACKEND_VARIABLE: &str = "DF_SCAN_BACKEND";
+/// The value of `SCAN_BACKEND_VARIABLE` that picks fal, as unset does.
+pub const FAL_BACKEND: &str = "fal";
 /// How much a new region must overlap an old one (intersection over union, in thousandths) to
 /// keep its name.
 pub const KEEP_LABEL_OVERLAP_PERMILLE: u16 = 500;
@@ -180,19 +189,30 @@ pub struct Scanned {
     pub phases: SegmentPhases,
 }
 
-/// Where a scan sends: the imagery API's endpoint, and the supplier key as the host's environment
-/// held it when the scan started (`None`: no key). It has no `Debug`, so the key is never printed.
-pub(super) struct ScanSupplier {
-    pub(super) endpoint: String,
-    pub(super) credential: Option<String>,
+/// Where a scan sends, as the host's environment said when the scan started. It has no `Debug`,
+/// so the key is never printed.
+pub(super) enum ScanSupplier {
+    /// fal at the imagery API's endpoint, with the supplier key (`None`: no key).
+    Fal {
+        endpoint: String,
+        credential: Option<String>,
+    },
+    /// The owner's Forge studio, or why the host has no client for it.
+    Forge(Result<df_providers::ForgeClient, ForgeSetupError>),
+    /// A `DF_SCAN_BACKEND` value the host does not know.
+    Unknown,
 }
 
 impl ScanSupplier {
-    /// The fal endpoint, with the key the host's environment holds now.
+    /// The supplier `DF_SCAN_BACKEND` names, with what the host's environment holds now.
     pub(super) fn from_environment() -> Self {
-        Self {
-            endpoint: oneshot_segment::DEFAULT_ENDPOINT.to_owned(),
-            credential: crate::environment::first_text(&FAL_KEY_VARIABLES),
+        match crate::environment::text(SCAN_BACKEND_VARIABLE).as_deref() {
+            None | Some(FAL_BACKEND) => Self::Fal {
+                endpoint: oneshot_segment::DEFAULT_ENDPOINT.to_owned(),
+                credential: crate::environment::first_text(&FAL_KEY_VARIABLES),
+            },
+            Some(FORGE_BACKEND) => Self::Forge(client_from_environment()),
+            Some(_) => Self::Unknown,
         }
     }
 }
@@ -258,23 +278,32 @@ async fn scan_masks(
         width_px: 0,
         height_px: 0,
     };
-    let credential = supplier.credential.ok_or(LocateError::FalKeyMissing)?;
-    let config = SegmentConfig {
-        endpoint: supplier.endpoint,
-        model: oneshot_segment::DEFAULT_MODEL.to_owned(),
-        credential,
-        timeout: SCAN_TIMEOUT,
+    let segment_request = SegmentRequest {
+        source,
+        prompt: prompt.segmentation(),
+        maximum_masks: masks,
     };
     let started = tokio::time::Instant::now();
-    let segmented = oneshot_segment::segment(
-        &config,
-        SegmentRequest {
-            source,
-            prompt: prompt.segmentation(),
-            maximum_masks: masks,
-        },
-    )
-    .await
+    let segmented = match supplier {
+        ScanSupplier::Fal {
+            endpoint,
+            credential,
+        } => {
+            let config = SegmentConfig {
+                endpoint,
+                model: oneshot_segment::DEFAULT_MODEL.to_owned(),
+                credential: credential.ok_or(LocateError::FalKeyMissing)?,
+                timeout: SCAN_TIMEOUT,
+            };
+            oneshot_segment::segment(&config, segment_request).await
+        }
+        ScanSupplier::Forge(client) => {
+            let client =
+                client.map_err(|error| LocateError::ForgeNotConfigured { cause: error.cause })?;
+            oneshot_segment::segment_with_forge(&client, segment_request, SCAN_TIMEOUT).await
+        }
+        ScanSupplier::Unknown => return Err(LocateError::UnknownScanBackend),
+    }
     .map_err(|error: SegmentError| LocateError::ScanFailed {
         cause: error.cause.into(),
         send_state: error.send_state.into(),

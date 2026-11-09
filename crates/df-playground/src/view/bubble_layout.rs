@@ -13,7 +13,7 @@
 //! bubbles, the layout of the stage or the camera's framing changed, never every frame; a bubble
 //! that fits where it is stays, and a placement that did not change writes nothing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Element, HtmlElement};
@@ -30,6 +30,9 @@ use crate::timeline::ErrorSource;
 
 /// The bubbles of the world layer that are anchored to a character.
 const BUBBLES: &str = ".tv-anchors .rp-bubble[data-character]";
+
+/// The outlines of the speaking characters.
+const OUTLINES: &str = ".tv-anchors .rp-outline[data-character]";
 
 /// The chrome that stays clear of the bubbles: the logo, the place name, the roleplay title bar,
 /// the top bar's pills, the status chip, the caption bars, the party strip and the markers.
@@ -57,6 +60,9 @@ pub struct BubbleLayout {
     /// What each character's bubble showed when last placed: its kind and its words. A bubble the
     /// page draws again with the same content is not new, so it does not pop in a second time.
     shown: HashMap<String, (bool, String)>,
+    /// The characters whose outline was drawn when last placed, so an outline drawn again for the
+    /// same speaker does not fade in a second time.
+    outlined: HashSet<String>,
     /// The framing the bubbles were last placed for.
     framing: Option<Framing>,
 }
@@ -106,6 +112,7 @@ impl BubbleLayout {
         };
         let bubbles = self.measure_bubbles(stage, framing, (width, height))?;
         self.settle_repeats(&bubbles);
+        self.settle_outlines(stage)?;
         if bubbles.is_empty() {
             self.chosen.clear();
             return Ok(());
@@ -177,6 +184,31 @@ impl BubbleLayout {
             shown.insert(bubble.character.clone(), content);
         }
         self.shown = shown;
+    }
+
+    /// Marks the outlines of the characters that were already outlined as settled, then
+    /// remembers who is outlined now.
+    fn settle_outlines(&mut self, stage: &Element) -> Result<(), JsValue> {
+        let found = stage.query_selector_all(OUTLINES)?;
+        let mut outlined = HashSet::new();
+        for index in 0..found.length() {
+            let Some(element) = found
+                .item(index)
+                .and_then(|node| node.dyn_into::<Element>().ok())
+            else {
+                continue;
+            };
+            let Some(character) = element.get_attribute("data-character") else {
+                continue;
+            };
+            if self.outlined.contains(&character) {
+                let classes = element.class_name();
+                element.set_class_name(&format!("{classes} rp-settled"));
+            }
+            outlined.insert(character);
+        }
+        self.outlined = outlined;
+        Ok(())
     }
 
     /// Reads every anchored bubble of `stage`: where its head is on the stage for `framing`, how

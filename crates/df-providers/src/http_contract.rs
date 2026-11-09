@@ -61,16 +61,19 @@ pub enum ProviderName {
     WorldLabs,
     /// The choice service behind `SystemOneChoiceProvider`.
     SystemOne,
+    /// The owner's local Forge studio behind `ForgeClient`.
+    Forge,
 }
 
 impl ProviderName {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::OpenAi,
         Self::Fal,
         Self::Bfl,
         Self::ElevenLabs,
         Self::WorldLabs,
         Self::SystemOne,
+        Self::Forge,
     ];
 
     /// The supplier's published spelling, as audit lines carry it.
@@ -82,6 +85,7 @@ impl ProviderName {
             Self::ElevenLabs => "elevenlabs",
             Self::WorldLabs => "worldlabs",
             Self::SystemOne => "systemone",
+            Self::Forge => "forge",
         }
     }
 
@@ -182,6 +186,27 @@ impl HttpRequest {
             ],
             body,
         )
+    }
+
+    /// A Forge studio request: Forge refuses a write without its same-origin `Origin` and the
+    /// `X-Forge-Request` kind (`project` or `runtime`), and takes no credential.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn forge_native(
+        method: HttpMethod,
+        url: String,
+        origin: &str,
+        kind: &'static str,
+        content_type: Option<&'static str>,
+        body: Vec<u8>,
+    ) -> Self {
+        let mut headers = vec![
+            ("Origin", origin.to_owned()),
+            ("X-Forge-Request", kind.to_owned()),
+        ];
+        if let Some(content_type) = content_type {
+            headers.push(("Content-Type", content_type.to_owned()));
+        }
+        Self::new(ProviderName::Forge, method, url, headers, body)
     }
 
     /// A bearer-authenticated `POST` with a caller-built body, such as a multipart image edit.

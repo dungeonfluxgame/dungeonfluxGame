@@ -166,3 +166,38 @@ fn the_page_and_the_layout_crate_agree_on_the_zoom_range() {
         crate::limits::MAXIMUM_ZOOM_PERCENT
     );
 }
+
+fn masked(label: &str, head_x: u16) -> LayoutRegion {
+    region(Some(label), head_x, 300).with_mask(Some(format!("data:image/png;base64,{label}")))
+}
+
+fn speaking(region: &str, tone: BubbleTone) -> Bubble {
+    Bubble {
+        tone,
+        line: "Hold.".to_owned(),
+        ..bubble(anchor(region, 0, CharacterPoint::Head))
+    }
+}
+
+#[test]
+fn the_speaker_with_a_mask_is_outlined_once_and_a_thinker_is_not() {
+    let layout = layout(vec![
+        masked("innkeeper", 300),
+        masked("hero", 600),
+        region(Some("guard"), 800, 300),
+    ]);
+    let bubbles = vec![
+        speaking("innkeeper", BubbleTone::Npc),
+        speaking("hero", BubbleTone::Thought),
+        speaking("innkeeper", BubbleTone::Npc),
+        speaking("guard", BubbleTone::Npc),
+        speaking("nobody", BubbleTone::Npc),
+        bubble(None),
+    ];
+    assert_eq!(
+        speaker_masks(&bubbles, Some(&layout)),
+        vec![("innkeeper", "data:image/png;base64,innkeeper")]
+    );
+    assert!(speaker_masks(&bubbles, None).is_empty());
+    assert!(speaker_masks(&[], Some(&layout)).is_empty());
+}

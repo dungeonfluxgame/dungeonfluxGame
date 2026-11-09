@@ -39,6 +39,7 @@ pub mod director;
 pub mod engine;
 pub mod environment;
 pub mod event_log;
+pub mod forge;
 pub mod guard;
 pub mod imagegen;
 pub mod io_cause;

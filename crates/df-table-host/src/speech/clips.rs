@@ -1,15 +1,17 @@
-//! The voice clips the host makes: MP3 files named `voice-<n>.mp3` in the media library, so the
-//! page's existing sound path plays them.
+//! The voice clips the host makes: files named `voice-<n>.mp3` (ElevenLabs) or `voice-<n>.wav`
+//! (Forge) in the media library, so the page's existing sound path plays them.
 //!
 //! A clip is stored through the library's one staged add (`media_library::store_bytes`). The host
 //! keeps at most `kept_clips()` and evicts the lowest-numbered first; only files named
-//! `voice-<digits>.mp3` are ever listed, counted or removed here, so no other media is touched.
+//! `voice-<digits>` with a clip suffix are ever listed, counted or removed here, so no other media
+//! is touched. Both formats share one numbering.
 //! A clip is deliberately uncached by text: the same line voiced twice is two clips.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::limits::kept_clips;
+use super::provider::ClipFormat;
 use super::request::{ClipCause, ClipRow, SpeechError};
 use crate::blocking::{WriteLock, run_blocking};
 use crate::io_cause::IoCause;
@@ -19,7 +21,8 @@ use crate::media_store::AddError;
 use crate::state::AppState;
 
 const CLIP_PREFIX: &str = "voice-";
-const CLIP_SUFFIX: &str = ".mp3";
+/// Every format a clip may be in.
+const CLIP_FORMATS: [ClipFormat; 2] = [ClipFormat::Mp3, ClipFormat::Wav];
 
 /// Held while a clip's number is chosen and while clips are evicted or cleared.
 static CLIP_WRITES: WriteLock = WriteLock::new();
@@ -35,7 +38,10 @@ pub(super) struct Clip {
 
 /// The number in a clip's name, or `None` when the name is not one the host made.
 pub(super) fn clip_number(name: &str) -> Option<u64> {
-    let digits = name.strip_prefix(CLIP_PREFIX)?.strip_suffix(CLIP_SUFFIX)?;
+    let stem = name.strip_prefix(CLIP_PREFIX)?;
+    let digits = CLIP_FORMATS
+        .iter()
+        .find_map(|format| stem.strip_suffix(format.suffix()))?;
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
@@ -84,8 +90,9 @@ fn library(app: &AppState) -> PathBuf {
     media_directory(app.playground().files())
 }
 
-/// The name of the next clip: above every clip on disk and every number handed out this run.
-fn next_name(directory: &Path) -> Result<String, SpeechError> {
+/// The name of the next clip in `format`: above every clip on disk and every number handed out
+/// this run.
+fn next_name(directory: &Path, format: ClipFormat) -> Result<String, SpeechError> {
     let _choosing = CLIP_WRITES.lock();
     let on_disk = list_clips(directory)?
         .last()
@@ -94,7 +101,7 @@ fn next_name(directory: &Path) -> Result<String, SpeechError> {
         .load(Ordering::Relaxed)
         .max(on_disk.saturating_add(1));
     NEXT_CLIP.store(number.saturating_add(1), Ordering::Relaxed);
-    Ok(format!("{CLIP_PREFIX}{number}{CLIP_SUFFIX}"))
+    Ok(format!("{CLIP_PREFIX}{number}{}", format.suffix()))
 }
 
 /// Removes the oldest clips of `directory` until `keep` are left; returns how many went.
@@ -114,13 +121,17 @@ pub(super) fn evict_clips(directory: &Path, keep: usize) -> Result<u64, SpeechEr
     Ok(removed)
 }
 
-/// Keeps `mp3` in the media library as a new clip, then trims the oldest clips past the bound.
-/// A trim that fails is recorded and never fails the clip that was made.
-pub(super) async fn store_clip(app: &AppState, mp3: &[u8]) -> Result<Clip, SpeechError> {
+/// Keeps `audio` (a clip in `format`) in the media library as a new clip, then trims the oldest
+/// clips past the bound. A trim that fails is recorded and never fails the clip that was made.
+pub(super) async fn store_clip(
+    app: &AppState,
+    audio: &[u8],
+    format: ClipFormat,
+) -> Result<Clip, SpeechError> {
     let directory = library(app);
     let named = directory.clone();
-    let name = run_blocking(move || next_name(&named), SpeechError::Stopped).await?;
-    let added = store_bytes(directory.clone(), &name, mp3)
+    let name = run_blocking(move || next_name(&named, format), SpeechError::Stopped).await?;
+    let added = store_bytes(directory.clone(), &name, audio)
         .await
         .map_err(|error| SpeechError::ClipUnstored {
             cause: match error {

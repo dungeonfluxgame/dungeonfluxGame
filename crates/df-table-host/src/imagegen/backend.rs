@@ -1,6 +1,7 @@
 //! The backends of the picture generator: the trait the service calls, the real Codex CLI backend
-//! (through the image service's one-shot door in `df-imagery`) and the backend that says it is not
-//! switched on, with the typed reasons a backend gives no picture.
+//! (through the image service's one-shot door in `df-imagery`), the owner's local Forge studio
+//! (Qwen Image 2.1, `DF_IMAGERY_BACKEND=forge`) and the backend that says it is not switched on,
+//! with the typed reasons a backend gives no picture.
 //!
 //! A backend is async: the service awaits it on the job's task, under the deadline and a grace
 //! period, and the Codex backend looks at its files on the blocking pool. Every precondition is
@@ -18,10 +19,15 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use df_imagery::oneshot::{self, OneShotConfig, OneShotError, OneShotRequest};
+use df_providers::{
+    FORGE_IMAGE_MAXIMUM_SIDE_PX, FORGE_IMAGE_SIDE_STEP_PX, ForgeCause, ForgeClient, ForgeEngine,
+    ForgeError, ForgeJobKind, ForgeMedia, NativeHttpCause,
+};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 
 use super::model::{BackendRequest, GeneratedImage};
+use crate::forge::{FORGE_BACKEND, ForgeSetupError, client_from_environment};
 use crate::io_cause::IoCause;
 
 /// The login file a signed-in Codex home holds. Its presence is checked; it is never read.
@@ -31,7 +37,7 @@ const CONFIG_FILE: &str = "config.toml";
 
 // The environment variables the real backend reads. They match the runbook's names.
 
-/// `live` with `BACKEND_VARIABLE` set to `codex-cli` switches generation on.
+/// `live` with `BACKEND_VARIABLE` set to `codex-cli` or `forge` switches generation on.
 pub const MODE_VARIABLE: &str = "DF_IMAGERY_MODE";
 pub const BACKEND_VARIABLE: &str = "DF_IMAGERY_BACKEND";
 /// An absolute path of the Codex executable; unset looks for it on `PATH`.
@@ -83,6 +89,8 @@ pub enum BackendError {
     UsageLimited,
     /// The service refused or failed the request.
     Refused { detail: String },
+    /// The Forge studio gave no picture; `detail` is the closed key of its cause.
+    ForgeFailed { detail: String },
     /// The delivered picture could not be read back.
     Unreadable { kind: String },
     /// The image backend failed inside the host.
@@ -108,6 +116,7 @@ impl BackendError {
             Self::Interrupted => "interrupted",
             Self::UsageLimited => "usage_limited",
             Self::Refused { .. } => "refused",
+            Self::ForgeFailed { .. } => "forge_failed",
             Self::Unreadable { .. } => "unreadable",
             Self::Internal => "internal",
         }
@@ -130,7 +139,9 @@ impl BackendError {
             | Self::Unaccepted { .. }
             | Self::UsageLimited => StatusCode::SERVICE_UNAVAILABLE,
             Self::Timeout => StatusCode::GATEWAY_TIMEOUT,
-            Self::Interrupted | Self::Refused { .. } => StatusCode::BAD_GATEWAY,
+            Self::Interrupted | Self::Refused { .. } | Self::ForgeFailed { .. } => {
+                StatusCode::BAD_GATEWAY
+            }
             Self::Unreadable { .. } | Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -143,7 +154,7 @@ impl fmt::Display for BackendError {
                 formatter,
                 concat!(
                     "picture generation is not switched on: start `df-table serve` with {}={} ",
-                    "and {}=codex-cli (and {}=<signed-in home>)"
+                    "and {}=codex-cli (and {}=<signed-in home>) or forge"
                 ),
                 MODE_VARIABLE, LIVE_MODE, BACKEND_VARIABLE, CODEX_HOME_VARIABLE
             ),
@@ -244,6 +255,10 @@ impl fmt::Display for BackendError {
                     "sign in again with `{}=<home> codex login`"
                 ),
                 detail, CODEX_HOME_VARIABLE
+            ),
+            Self::ForgeFailed { detail } => write!(
+                formatter,
+                "the forge studio gave no picture ({detail}); its queue and engine say why"
             ),
             Self::Unreadable { kind } => {
                 write!(
@@ -499,14 +514,140 @@ fn backend_error(error: OneShotError) -> BackendError {
     }
 }
 
-/// The backend this process's environment asks for: the Codex backend when the host was started
-/// with `DF_IMAGERY_MODE=live` and `DF_IMAGERY_BACKEND=codex-cli`, otherwise one that says so.
+/// The backend this process's environment asks for: with `DF_IMAGERY_MODE=live`, the Codex
+/// backend for `DF_IMAGERY_BACKEND=codex-cli` and the Forge backend for `forge`; otherwise one
+/// that says it is not switched on.
 pub fn backend_from_environment() -> Box<dyn ImageBackend> {
+    let mode = crate::environment::text(MODE_VARIABLE);
+    let backend = crate::environment::text(BACKEND_VARIABLE);
+    if mode.as_deref() == Some(LIVE_MODE) && backend.as_deref() == Some(FORGE_BACKEND) {
+        return Box::new(ForgeImageBackend::new(client_from_environment()));
+    }
     backend_for(
-        crate::environment::text(MODE_VARIABLE).as_deref(),
-        crate::environment::text(BACKEND_VARIABLE).as_deref(),
+        mode.as_deref(),
+        backend.as_deref(),
         CodexSettings::from_process_environment(),
     )
+}
+
+/// The Forge backend: Qwen Image 2.1 in the owner's local studio, one queued render per picture.
+/// A base picture to edit is staged as the render's one reference. Forge takes sides in steps of
+/// 32 pixels, so the requested size is rounded to the nearest it takes; the picture's own size is
+/// what is reported. It never retries: a render Forge reports interrupted stays for Forge's
+/// Recovery panel.
+pub struct ForgeImageBackend {
+    client: Result<ForgeClient, ForgeSetupError>,
+}
+
+impl ForgeImageBackend {
+    pub fn new(client: Result<ForgeClient, ForgeSetupError>) -> Self {
+        Self { client }
+    }
+
+    fn client(&self) -> Result<&ForgeClient, BackendError> {
+        self.client
+            .as_ref()
+            .map_err(|error| BackendError::Unaccepted {
+                detail: error.to_string(),
+            })
+    }
+}
+
+impl ImageBackend for ForgeImageBackend {
+    fn name(&self) -> &'static str {
+        FORGE_BACKEND
+    }
+
+    fn check(&self) -> Result<(), BackendError> {
+        self.client().map(|_| ())
+    }
+
+    fn generate<'a>(
+        &'a self,
+        request: &'a BackendRequest,
+        deadline: Duration,
+    ) -> BoxFuture<'a, Result<GeneratedImage, BackendError>> {
+        Box::pin(async move {
+            let client = self.client()?;
+            let started = tokio::time::Instant::now();
+            let until = started + deadline;
+            client
+                .prepare(ForgeEngine::Images, until)
+                .await
+                .map_err(forge_error)?;
+            let mut references = Vec::new();
+            if let Some(base) = &request.base {
+                let staged = client
+                    .stage_reference(base, until)
+                    .await
+                    .map_err(forge_error)?;
+                references.push(staged.as_str().to_owned());
+            }
+            let body = serde_json::json!({
+                "prompt": request.text,
+                "width": forge_side(request.width_px),
+                "height": forge_side(request.height_px),
+                "references": references,
+            });
+            let render = client
+                .render(ForgeJobKind::Images, body, until)
+                .await
+                .map_err(forge_error)?;
+            let bytes = client
+                .asset(&render.output, ForgeMedia::Png, until)
+                .await
+                .map_err(forge_error)?;
+            let (width_px, height_px) = png_size(&bytes).ok_or(BackendError::Unreadable {
+                kind: "png_header".to_owned(),
+            })?;
+            Ok(GeneratedImage {
+                sha256_hex: df_imagery::oneshot_segment::picture_sha256(&bytes),
+                bytes,
+                mime: "image/png".to_owned(),
+                width_px,
+                height_px,
+                duration: started.elapsed(),
+                input_tokens: None,
+                output_tokens: None,
+                cleanup: None,
+            })
+        })
+    }
+}
+
+/// `side` rounded to the nearest side Forge takes.
+fn forge_side(side: u32) -> u32 {
+    let step = FORGE_IMAGE_SIDE_STEP_PX;
+    (side.saturating_add(step / 2) / step * step).clamp(step, FORGE_IMAGE_MAXIMUM_SIDE_PX)
+}
+
+/// The width and height a PNG's header gives, or `None` for bytes that are not a PNG.
+fn png_size(png: &[u8]) -> Option<(u32, u32)> {
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") || png.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes(png.get(16..20)?.try_into().ok()?);
+    let height = u32::from_be_bytes(png.get(20..24)?.try_into().ok()?);
+    Some((width, height))
+}
+
+/// The backend error of a Forge failure.
+fn forge_error(error: ForgeError) -> BackendError {
+    match error.cause {
+        ForgeCause::Deadline | ForgeCause::Transport(NativeHttpCause::Deadline) => {
+            BackendError::Timeout
+        }
+        ForgeCause::JobInterrupted => BackendError::Interrupted,
+        ForgeCause::InvalidConfiguration | ForgeCause::InvalidRequest => BackendError::Unaccepted {
+            detail: error.to_string(),
+        },
+        ForgeCause::Malformed => BackendError::Unreadable {
+            kind: error.cause.key().to_owned(),
+        },
+        cause => BackendError::ForgeFailed {
+            detail: cause.key().to_owned(),
+        },
+    }
 }
 
 /// The backend for the two switches' values and the Codex settings.

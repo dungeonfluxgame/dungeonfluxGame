@@ -13,7 +13,6 @@ use df_content::persona::PersonaId;
 use serde::{Deserialize, Serialize};
 
 use super::limits::{MAXIMUM_VOICE_ID_BYTES, MAXIMUM_VOICES, MAXIMUM_VOICES_FILE_BYTES};
-use super::provider::TTS_MODEL;
 use super::request::{SpeechError, VoiceCause, VoiceChanged, VoiceRow, VoicesCause};
 use crate::atomic_file::write_atomically;
 use crate::blocking::WriteLock;
@@ -57,8 +56,8 @@ pub(super) struct ResolvedVoice {
 impl ResolvedVoice {
     /// The label of the profile that spoke: the model and where the voice came from, never the
     /// voice id.
-    pub(super) fn profile(&self) -> String {
-        format!("{TTS_MODEL}/{}", self.source.key())
+    pub(super) fn profile(&self, model: &str) -> String {
+        format!("{model}/{}", self.source.key())
     }
 }
 

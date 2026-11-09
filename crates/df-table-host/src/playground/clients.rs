@@ -273,7 +273,8 @@ fn ending_line(client: &str, entry: &TimelineEntry) -> Option<String> {
             | TimelineKind::Clip
             | TimelineKind::Capture
             | TimelineKind::Transcribe
-            | TimelineKind::Ask,
+            | TimelineKind::Ask
+            | TimelineKind::Outline,
             _,
         ) => Some(format!(
             "TIMING {} client={client} id={id} start_ms={} end_ms={end_ms} shown_ms={} \

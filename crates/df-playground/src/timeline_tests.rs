@@ -346,3 +346,34 @@ fn the_keys_of_the_timeline_enums_are_their_serde_names() {
         FixtureLoadCause::from_key,
     );
 }
+
+fn outlined(characters: &[&str]) -> Showing {
+    Showing {
+        scene: Some("tavern.json".to_owned()),
+        outlines: characters.iter().map(|name| (*name).to_owned()).collect(),
+        ..Showing::default()
+    }
+}
+
+#[test]
+fn an_outline_lasts_as_long_as_the_speaker_and_the_next_speaker_replaces_it() {
+    let mut log = PageLog::default();
+    log.observe(outlined(&["innkeeper"]), 1_000);
+    log.observe(outlined(&["innkeeper"]), 2_000);
+    log.observe(outlined(&["hero"]), 4_000);
+    log.observe(outlined(&[]), 6_000);
+    let outlines = of_kind(&log, TimelineKind::Outline);
+    assert_eq!(outlines.len(), 2);
+    assert_eq!(outlines[0].id, "innkeeper");
+    assert_eq!(
+        (outlines[0].start_page_ms, outlines[0].end_page_ms),
+        (1_000, Some(4_000))
+    );
+    assert_eq!(outlines[0].end_reason, Some(EndReason::Replaced));
+    assert_eq!(outlines[1].id, "hero");
+    assert_eq!(
+        (outlines[1].start_page_ms, outlines[1].end_page_ms),
+        (4_000, Some(6_000))
+    );
+    assert_eq!(outlines[1].end_reason, Some(EndReason::Removed));
+}

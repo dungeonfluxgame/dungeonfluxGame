@@ -749,6 +749,18 @@ body {
 .tv-anchors .rp-bubble.rp-tail-left { transform-origin: 0 var(--tail-tip-y); }
 .tv-anchors .rp-bubble.rp-tail-right { transform-origin: 100% var(--tail-tip-y); }
 .tv-anchors .rp-marker { transform: translate(-50%, -50%) scale(calc(1 / var(--cam-scale, 1))); }
+/* The speaking character's outline, traced from their SAM mask (`view::roleplay::outline_element`): a thin warm rim and
+   a soft glow in the filter, with the silhouette itself cut out of the wrapper (mask exclude), so the figure is never
+   covered and only the edge shows. The rim keeps its width on the screen while the camera zooms. It fades in once when
+   a speaker starts, and is marked settled when the same speaker's outline is drawn again. */
+.tv-anchors .rp-outline { position: absolute; inset: 0; pointer-events: none;
+  filter: drop-shadow(0 0 calc(.12cqw / var(--cam-scale, 1)) hsl(44 100% 88%)) drop-shadow(0 0 calc(.12cqw / var(--cam-scale, 1)) hsl(44 100% 88%)) drop-shadow(0 0 calc(.9cqw / var(--cam-scale, 1)) hsl(40 100% 62% / .9));
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-composite: xor; mask-composite: exclude; }
+.tv-anchors .rp-outline-shape { position: absolute; inset: 0; background: #fff; -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+@keyframes rp-outline-in { from { opacity: 0; } to { opacity: 1; } }
+.tv-anchors .rp-outline:not(.rp-settled) { animation: rp-outline-in 220ms ease-out both; }
+@media (prefers-reduced-motion: reduce) { .tv-anchors .rp-outline:not(.rp-settled) { animation: none; } }
 /* SAM tags and head dots are labels on the picture: they keep their size while the camera zooms. */
 .sam-tag, .sam-head { scale: calc(1 / var(--cam-scale, 1)); }
 @media (prefers-reduced-motion: reduce) { .tv-world { animation: none !important; transition: none !important; } }

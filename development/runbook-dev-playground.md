@@ -24,7 +24,9 @@ shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md)
    `CODEX_HOME=<repo>/artifacts/codex-image-home codex login` (a browser opens; sign in
    yourself). Never copy `auth.json`. `artifacts/` is gitignored.
 2. **fal key** for the character scan: `DF_FAL_KEY` in `.env` (the host does not read `.env`;
-   export it into the host's environment, never print it).
+   export it into the host's environment, never print it). The same goes for the voices:
+   `DF_ELEVENLABS_API_KEY`. Without it, `speech status` reads `configured=false` and no line is
+   voiced, even with TTS on in the playground (run 97).
 3. **Find the current Codex executable.** The desktop app moves it when it updates, and the
    text service then reads as unconfigured (`missing=DF_TEXT_CODEX_EXECUTABLE`):
    `ls -d "$LOCALAPPDATA/OpenAI/Codex/bin/"*/codex.exe`.
@@ -51,6 +53,8 @@ Use a scratch copy of the playground so persona and library writes do not touch 
 mkdir -p artifacts/tmp/persona-live && cp -r assets/playground artifacts/tmp/persona-live/playground
 X='C:\Users\<you>\AppData\Local\OpenAI\Codex\bin\<hash>\codex.exe'
 export DF_FAL_KEY=$(grep -E '^DF_FAL_KEY=' .env | cut -d= -f1 --complement | tr -d '"\r')
+export DF_ELEVENLABS_API_KEY=$(grep -E '^DF_ELEVENLABS_API_KEY=' .env | cut -d= -f1 --complement |
+  tr -d '"\r')
 export DF_TEXT_BACKEND=codex DF_TEXT_CODEX_EXECUTABLE="$X"
 export DF_IMAGERY_MODE=live DF_IMAGERY_BACKEND=codex-cli DF_IMAGERY_CODEX_EXECUTABLE="$X" \
   CODEX_HOME="$PWD/artifacts/codex-image-home"
@@ -372,21 +376,66 @@ engine should just flow and not predetermine scenes"; quest "The Lantern Bait", 
   `harbour_framer`; an id is shown to whoever learns that name). `persona story apply`, with each
   place's plate shown in turn, writes the new personas and puts each character's secrets into
   their persona.
-- **Played live, by `persona story next [opening=true] [after=<id>] [recent=<line>]...
-  <place>`:** the storyteller as game master gives one move at a time from what has been said:
-  who acts, whom it is put to, a goal, whether the players now set off for another place, and
-  whether the end is reached. Code decides who may move (`turn_speakers`):
+- **Played live, by `persona story next [opening=true] [after=<id>] [arrived=<n>]
+  [recent=<line>]... <place>`:** the storyteller as game master gives one move at a time from
+  what has been said: who acts, whom it is put to, a goal, and whether the end is reached.
+  Code decides who may move (`turn_speakers`):
   - someone already there opens a place;
   - after someone who is no player, a player moves;
   - nobody moves twice running;
   - play goes in rounds, the players who have spoken least first.
 
-  Three judges, each a model call against a closed schema, refuse a goal; it is asked again with
-  every reason, three tries in all:
+  Judges, each a model call against a closed schema, refuse a goal; it is asked again with
+  every reason, until a move stands:
   - the names judge, for a goal that names someone;
   - a goal carrying a storyteller handle (`person-N`) is refused too;
   - the knowledge judge, for a goal that holds what its speaker could not know from their
-    guidance, their secrets, what was said, what is in sight and who is there.
+    guidance, their secrets, what was said, what is in sight and who is there; that sends the
+    speaker to question themself; that repeats what was already asked or done; or that keeps
+    the players at a place it has said they leave.
+- **Moving on (runs 87 to 94):** left to choose, the game master never sent the players on,
+  even long after a place's clue was out. Now:
+  - before each move the pace judge says whether the place has given what it offers, from its
+    beat, its danger, what its people keep and the lines said there (`arrived=` tells where
+    those begin);
+  - code first waits until every player there has spoken at the place;
+  - once the pace judge says yes, the move is the set-off, and code takes the players to the
+    story's next place in its order;
+  - at the last place that is the story's end, which comes only once the truth behind the hook
+    is out (talk going round never ends it).
+- **Guidance holds only what a character already knows:** run 94's players were told they
+  "do not know who set the trap", and so knew of a trap and asked after a reward before anyone
+  offered it. The plot is told that a guidance never mentions a person, offer, place, plan or
+  danger its character has not met yet, not even to deny it; check each player's must_avoid
+  after plotting, as a plot can still break it. Before re-plotting with personas that played an
+  earlier story, check their private backstories: `story apply` appends each story to them, and
+  the next plot builds on what it finds there.
+- **Replay from clean personas (run 101):** every run saves what it learned into the personas:
+  each backfill appends to a backstory (recorded in `<id>.backfills.json`), and `story apply`
+  leaves the earlier story in place. A test replay of the same story then inherits the last run,
+  half-told secrets included, and a cast reused from an earlier story carries it (Nessa kept
+  telling of Kael's arrest). Before testing, take the earlier story and the backfills out,
+  check the cast, save the clean personas, and restore them with `persona write <id> <file>`
+  before every run. In real play the saving is right: the world remembers.
+- **Pace (runs 108 to 111):** a middle place is left once every player has spoken about three
+  lines there, or sooner when the pace judge reads it as done. At the last place, once every
+  player has had those turns, the next move is the danger striking (someone who is no player
+  acts, `strike_now`). Only after that is the end judged, so a story never ends before its trap
+  springs.
+- **A close look is said aloud (run 101):** the game master tells a player who looks closely to
+  say what they see. A line that only says "I'll check" finds nothing, and the last place never
+  ends.
+- **Answers to follow-ups:** after a move's answer, its speaker may follow up once, and that
+  follow-up is answered too, so the next player never asks it again.
+- **Clues are planned by the plot (run 96):** each beat names its exhibits, the evidence on show
+  at its place, with what a close look shows. The runner adds them to everyone's situation there,
+  and the game master steers players toward them with hints. Without them a close look found
+  nothing. A plot made before this rule gets its exhibits from `persona story moves <scene>`,
+  with the place's plate shown.
+- **Who hears what:** whoever answers hears only the lines said at their place. Whoever makes a
+  move remembers all of them (runs 94 and 96: people at the inn spoke of market talk).
+- **The camera in talk:** faces change more than bodies in conversation, so a talk-heavy quest
+  lowers its frame gate (`@frames gate=20`): a few changed faces cut to a new shot.
 - **Secrets:** every line that lets a secret out is weighed by the reveal judge against that
   secret's conditions, on what the speaker was shown. Out too early, the line is worded again;
   a second early wording is refused. Run 77's opening lines let out two secrets unasked; since
@@ -555,6 +604,54 @@ locate label`) and fit each persona's look to it (`persona set <id> job <look>`)
 set in `ui_roleplay_thought.json`: `roleplay.title: null`, `roleplay.caption: null`,
 `pills: { "logo": "inline" }`. After `scene reset`, re-apply a backdrop with
 `scene image tv-backdrop <name>.png`.
+
+## The speaker's outline
+
+While a character's line is up, the page traces a thin warm rim and glow round their figure from
+their SAM mask (`.rp-outline`, drawn with the anchored bubbles; the SAM layer stays off). It has no
+message of its own: it follows the anchored bubble that shows words (a thinking indicator, a
+character without a mask or a bubble without an anchor draws none). A scene with masks needs no
+model: `playground go ui_roleplay_thought`, then
+`scene roleplay set bubble=1 speaker=Sylvi tone=ally anchor=elf line="..."`. Timing: `clients
+timeline <client> kind=outline` (`TIMING outline` in the host log) gives `start_ms`/`end_ms` per
+character; the start equals the bubble's `CLIENT bubble` draw and the end is the next speaker's
+start (`reason=replaced`) or the line leaving (`removed`). Use `--package DIR` and your own
+`wasm-bindgen` output when you must not overwrite `artifacts/playground/pkg`.
+
+## Forge as the model provider (optional, no spend)
+
+The owner's local Forge studio (`Game Development Studio`, `http://127.0.0.1:5173`) can stand in
+for the paid suppliers, each concern on its own switch. Unset keeps the paid default.
+
+| Concern | Switch | Forge model | Paid default |
+| --- | --- | --- | --- |
+| voices and speech recognition | `DF_SPEECH_BACKEND=forge` | Qwen3-TTS 1.7B CustomVoice, Nemotron ASR | `elevenlabs` |
+| SAM scan (`media locate`) | `DF_SCAN_BACKEND=forge` | SAM 3.1 | `fal` |
+| picture generation | `DF_IMAGERY_MODE=live DF_IMAGERY_BACKEND=forge` | Qwen Image 2.1 | `codex-cli` |
+
+All three also need `DF_FORGE_PROJECT=<forge project id>` (the renders land in that project;
+`GET http://127.0.0.1:5173/api/projects` lists them; "DungeonFlux dev" is
+`41fbb3c9-ac91-4897-b890-7a056b4ae371`). `DF_FORGE_URL` overrides the origin (loopback
+`http://` only). An unknown switch value refuses (`missing=DF_SPEECH_BACKEND`,
+`unknown_scan_backend`), never falls back to a paid supplier. `services` and `speech status`
+show the models. The host starts only the one engine a call needs (never start-all) and never
+offloads: check `GET /api/runtime/services` and offload by hand
+(`POST /api/runtime/models/<id>/offload`) when you are done. A job Forge marks `interrupted`
+is never resubmitted; resolve it in Forge's Recovery panel.
+
+How each maps: a voice id that is a Forge speaker (`Ryan`, `Aiden`, `Vivian`, `Serena`,
+`Uncle_Fu`, `Dylan`, `Eric`, `Ono_Anna`, `Sohee`) is used as is (`speech voice elf Aiden`);
+an ElevenLabs id maps to one speaker by a stable hash. Clips are `voice-<n>.wav`. Nemotron is
+English only and has no key-term boosting. The scan runs one Forge job per instance (Forge
+saves only the top-k matches as one mask). `FORGE` lines in the host log give queue and render
+times (`FORGE job kind=voices outcome=completed queued_ms= render_ms=`).
+
+Measured through the host on 2026-11-08 (RTX Spark, `FORGE` and `SPEECH` lines): TTS cold
+57.6 s for a 6.5 s line (engine start 2.8 s, model load 32.5 s, render 22.3 s), warm 8.5 s for
+a 2 s line, so Qwen3-TTS renders about four times slower than the speech lasts and a voiced line
+arrives seconds after its text; Nemotron cold 4.4 s (load 4 s), warm 0.3 s for 6.5 s of audio;
+SAM cold 21.5 s for two people, warm about 2.4 s per instance (16 people in 40 s); Qwen Image
+cold 227 s for a 1664x928 plate (about 95 s of it the model load).
 
 ## Troubleshooting
 

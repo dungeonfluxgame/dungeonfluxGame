@@ -17,6 +17,9 @@ reqwest = { version = "=0.13.5", default-features = false, features = ["rustls"]
 serde = "=1.0.229"
 serde_json = "=1.0.151"
 tokio = { workspace = true, features = ["macros", "rt", "time", "net"] }
+# Forge's realtime speech route is a WebSocket (`forge::realtime`).
+tokio-tungstenite = { version = "=0.29.0", default-features = false, features = ["connect", "handshake"] }
+futures-util = { version = "=0.3.34", default-features = false, features = ["std", "sink"] }
 
 [dev-dependencies]
 df-model = { path = "../df-model" }

@@ -8,6 +8,9 @@
 @flow arrival
 @frames frames=quest-a
 @frames hold=30
+# Talk moves faces more than bodies: the default gate (above 25, "a few faces changed") made no
+# new shot in fifteen lines of run 91, so a few changed faces cut to a new one.
+@frames gate=20
 @frames max_frames=8
 @frames parallel=2
 @place arrival quest-market.png

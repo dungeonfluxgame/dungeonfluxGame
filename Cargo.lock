@@ -889,11 +889,13 @@ dependencies = [
  "df-observe",
  "df-provider-api",
  "df-types",
+ "futures-util",
  "httpdate",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

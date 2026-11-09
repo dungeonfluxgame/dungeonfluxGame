@@ -1,9 +1,11 @@
-//! The one port to the speech supplier, and its ElevenLabs adapter.
+//! The one port to the speech supplier, and its adapters: ElevenLabs (the default) and the
+//! owner's local Forge studio (`DF_SPEECH_BACKEND=forge`).
 //!
-//! [`SpeechPort`] is the whole surface the host asks of a supplier: whether it is set up, text to
-//! one buffered MP3, and 16 kHz mono PCM to a transcript. The host's routes and the persona
-//! routes know only the port, so the planned `AudioService` (`df-media`) can replace
-//! [`ElevenLabsPort`] without touching them. The adapter builds each request the way the
+//! [`SpeechPort`] is the whole surface the host asks of a supplier: whether it is set up and with
+//! which models, text to one buffered clip (MP3 or WAV), and 16 kHz mono PCM to a transcript. The
+//! host's routes and the persona routes know only the port, so the planned `AudioService`
+//! (`df-media`) can replace either adapter without touching them. [`port_from_environment`]
+//! picks one. The ElevenLabs adapter builds each request the way the
 //! `df-providers` speech contract wants it and calls `NativeSpeechProvider`; it never calls the
 //! supplier by hand. A dev host has no session, run or revision to bind a request to, so each
 //! call gets a fixed dev basis and a job that counts up; the zero content digest says the request
@@ -14,6 +16,7 @@
 
 use std::future::{Future, pending};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -41,6 +44,12 @@ use super::limits::{
 };
 use super::request::{MissingSetting, SpeechError, SpeechProviderCause};
 use crate::environment;
+use crate::forge::FORGE_BACKEND;
+
+mod forge;
+
+pub use self::forge::ForgeSpeechPort;
+use self::forge::UnknownBackendPort;
 
 /// A future the port returns, so the port is usable as a trait object.
 pub type PortFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -53,9 +62,27 @@ pub struct SynthesisCall {
     pub voice: String,
 }
 
-/// One buffered MP3.
+/// The container of a voiced clip, which names its file in the media library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipFormat {
+    Mp3,
+    Wav,
+}
+
+impl ClipFormat {
+    /// The file suffix of a clip in this format.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Mp3 => ".mp3",
+            Self::Wav => ".wav",
+        }
+    }
+}
+
+/// One buffered clip.
 pub struct Synthesis {
-    pub mp3: Vec<u8>,
+    pub audio: Vec<u8>,
+    pub format: ClipFormat,
 }
 
 /// A recording and the names that bias recognition. The recording is request-lived memory.
@@ -73,12 +100,16 @@ pub struct Transcription {
     pub words: usize,
 }
 
-/// Whether the supplier is set up.
+/// Whether the supplier is set up, and the models it speaks and listens with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortStatus {
     pub configured: bool,
     /// The variable to set when it is not.
     pub missing: Option<MissingSetting>,
+    /// The text-to-speech model, for status and clip profiles.
+    pub tts_model: &'static str,
+    /// The speech-to-text model.
+    pub stt_model: &'static str,
 }
 
 /// The surface the host asks of a speech supplier.
@@ -91,10 +122,28 @@ pub trait SpeechPort: Send + Sync {
     ) -> PortFuture<'_, Result<Transcription, SpeechError>>;
 }
 
-/// The name of the text-to-speech model, for status and clip profiles.
+/// The variable that picks the speech supplier: `elevenlabs` (unset) or `forge`.
+pub const BACKEND_VARIABLE: &str = MissingSetting::SpeechBackend.variable();
+/// The value of `BACKEND_VARIABLE` that picks ElevenLabs, as unset does.
+pub const ELEVENLABS_BACKEND: &str = "elevenlabs";
+/// The name of ElevenLabs' text-to-speech model, for status and clip profiles.
 pub const TTS_MODEL: &str = ELEVEN_TTS_MODEL;
-/// The name of the speech-to-text model.
+/// The name of ElevenLabs' speech-to-text model.
 pub const STT_MODEL: &str = ELEVEN_STT_MODEL;
+
+/// The supplier `DF_SPEECH_BACKEND` names, and the key its audit line carries. A value the host
+/// does not know is a port that refuses every call and names the variable: it never falls back to
+/// a supplier that costs money.
+pub fn port_from_environment() -> (Arc<dyn SpeechPort>, &'static str) {
+    match crate::environment::text(BACKEND_VARIABLE).as_deref() {
+        None | Some(ELEVENLABS_BACKEND) => (
+            Arc::new(ElevenLabsPort::from_environment()),
+            ELEVENLABS_BACKEND,
+        ),
+        Some(FORGE_BACKEND) => (Arc::new(ForgeSpeechPort::from_environment()), FORGE_BACKEND),
+        Some(_) => (Arc::new(UnknownBackendPort), "unknown"),
+    }
+}
 
 /// Nanoseconds of audio in one 16 kHz sample (the input contract).
 const NANOSECONDS_PER_SAMPLE: u64 = 62_500;
@@ -174,6 +223,8 @@ impl SpeechPort for ElevenLabsPort {
                 PortState::Ready(_) => None,
                 PortState::Missing | PortState::Refused => Some(MissingSetting::SpeechKey),
             },
+            tts_model: TTS_MODEL,
+            stt_model: STT_MODEL,
         }
     }
 
@@ -313,7 +364,8 @@ async fn speak(
     let [first, _completed] = prepared.complete(owner(&binding)).map_err(adapter_error)?;
     match first.kind {
         TtsEventKind::Chunk { chunk, .. } => Ok(Synthesis {
-            mp3: chunk.into_bytes(),
+            audio: chunk.into_bytes(),
+            format: ClipFormat::Mp3,
         }),
         _ => Err(SpeechError::Provider {
             cause: SpeechProviderCause::Unusable,

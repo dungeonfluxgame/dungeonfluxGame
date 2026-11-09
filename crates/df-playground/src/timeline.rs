@@ -15,6 +15,7 @@ use crate::bubble_place::BubbleSide;
 use crate::controls::TransitionStyle;
 use crate::copy::{ReadingPace, caption_dwell_ms, result_card_dwell_ms, word_count};
 use crate::fixture::{Fixture, StageElement};
+use crate::image_layout::speaker_masks;
 use crate::limits::{
     MAXIMUM_REPORTED_ERROR_CHARACTERS, MAXIMUM_REPORTED_ERRORS, MAXIMUM_TIMELINE_ID_CHARACTERS,
     MAXIMUM_TIMELINE_PARTS, MAXIMUM_TIMELINE_RECORDS,
@@ -51,13 +52,16 @@ pub enum TimelineKind {
     Transcribe,
     /// A question put to a character, from the request to the answer. Its id is the character's.
     Ask,
+    /// A speaking character's outline in the picture, from the moment their line starts to the
+    /// moment it ends. Its id is the character's.
+    Outline,
     /// An error the page met. The page never sends this kind as a record; the host makes one from
     /// each error a report carries, so a timeline read shows errors in their place.
     Error,
 }
 
 impl TimelineKind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Line,
         Self::Plate,
         Self::Figure,
@@ -70,6 +74,7 @@ impl TimelineKind {
         Self::Capture,
         Self::Transcribe,
         Self::Ask,
+        Self::Outline,
         Self::Error,
     ];
 
@@ -88,6 +93,7 @@ impl TimelineKind {
             Self::Capture => "capture",
             Self::Transcribe => "transcribe",
             Self::Ask => "ask",
+            Self::Outline => "outline",
             Self::Error => "error",
         }
     }
@@ -335,6 +341,8 @@ pub struct Showing {
     pub plates: BTreeMap<String, Option<u64>>,
     pub clips: BTreeMap<String, Option<u64>>,
     pub figures: Vec<String>,
+    /// The characters outlined as speaking, by name.
+    pub outlines: Vec<String>,
     pub camera: Option<ShownCamera>,
 }
 
@@ -387,6 +395,12 @@ impl Showing {
             .iter()
             .map(|element| element.id.clone())
             .collect();
+        if let Some(roleplay) = &tv.roleplay {
+            showing.outlines = speaker_masks(&roleplay.bubbles, tv.backdrop_layout())
+                .into_iter()
+                .map(|(character, _)| character.to_owned())
+                .collect();
+        }
         showing.camera = tv.camera.as_ref().map(|camera| ShownCamera {
             serial: camera.serial,
             zoom_percent: camera.zoom_percent,
@@ -684,7 +698,7 @@ impl PageLog {
 }
 
 /// Each kind of thing followed by id, with what was shown of it: its id and its dwell.
-type ShownItems = [(TimelineKind, Vec<(String, Option<u64>)>); 4];
+type ShownItems = [(TimelineKind, Vec<(String, Option<u64>)>); 5];
 
 fn shown_items(showing: &Showing) -> ShownItems {
     let with_dwell = |items: &BTreeMap<String, Option<u64>>| {
@@ -710,6 +724,14 @@ fn shown_items(showing: &Showing) -> ShownItems {
                 .figures
                 .iter()
                 .map(|id| (id.clone(), None))
+                .collect(),
+        ),
+        (
+            TimelineKind::Outline,
+            showing
+                .outlines
+                .iter()
+                .map(|character| (character.clone(), None))
                 .collect(),
         ),
     ]

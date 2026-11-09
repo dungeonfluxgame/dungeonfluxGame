@@ -32,14 +32,20 @@ pub struct SpeechLimits {
 pub enum MissingSetting {
     /// The speech supplier's key.
     SpeechKey,
+    /// The Forge project the voices go to, when Forge is the speech supplier.
+    ForgeProject,
+    /// A speech supplier the host knows: the variable names none.
+    SpeechBackend,
 }
 
 impl MissingSetting {
-    pub const ALL: [Self; 1] = [Self::SpeechKey];
+    pub const ALL: [Self; 3] = [Self::SpeechKey, Self::ForgeProject, Self::SpeechBackend];
 
     pub fn key(self) -> &'static str {
         match self {
             Self::SpeechKey => "speech_key",
+            Self::ForgeProject => "forge_project",
+            Self::SpeechBackend => "speech_backend",
         }
     }
 
@@ -51,6 +57,8 @@ impl MissingSetting {
     pub const fn variable(self) -> &'static str {
         match self {
             Self::SpeechKey => "DF_ELEVENLABS_API_KEY",
+            Self::ForgeProject => "DF_FORGE_PROJECT",
+            Self::SpeechBackend => "DF_SPEECH_BACKEND",
         }
     }
 }
