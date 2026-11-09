@@ -14,6 +14,99 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-09T09:41:14-05:00 to 2026-11-09T15:41:14-05:00
+
+Range: f0bd97dac7277dd28133be0cef9f1367276330e7..39299fd91194000d8d465df72821b68fad999607
+
+- 39299fd9 - puzzles that play fair: server-held clues, judged pace, a strike and an end game; the way between places; owned frame judges; runtime image-vendor swap; neutral engine prompts
+
+## 2026-11-08T14:24:05-05:00 to 2026-11-08T20:24:05-05:00
+
+Range: a8b0ad0c32ab37d7a77fc7e9a88936d95886d59e..f0bd97dac7277dd28133be0cef9f1367276330e7
+
+- f0bd97da - the quest plays to its end: clean replays, judged pace, a trap that springs; Forge as an optional provider; the speaker's outline
+
+## 2026-11-08T07:42:50-05:00 to 2026-11-08T11:43:24-05:00
+
+Range: 0e9839577d595239b7d954ab9ffe6e92ab115488..a8b0ad0c32ab37d7a77fc7e9a88936d95886d59e
+
+- 63062f61 - the whole arrest story played from the plot; no names or hidden parts reach a scene
+- daddeb33 - frames keep a bound, kneeling prisoner; titles stay with their owner; a goal's speaker is you
+- a8b0ad0c - stories that flow: the storyteller prepares, a live game master steers, secrets wait for their conditions
+
+## 2026-11-08T02:07:33-05:00 to 2026-11-08T07:42:50-05:00
+
+Range: 618ca2fa44162aada2acd2e40117e390dcb6f7f6..0e9839577d595239b7d954ab9ffe6e92ab115488
+
+- 0e983957 - the storyteller plots each scene's moves; exhibits on show; a photographic look
+
+## 2026-11-08T00:35:14-05:00 to 2026-11-08T02:07:33-05:00
+
+Range: 8a4fb3f01408c18fec710370802bd8f1b80b6ad3..618ca2fa44162aada2acd2e40117e390dcb6f7f6
+
+- 618ca2fa - the storyteller plots the story; the arrest of Kael in three scenes
+
+## 2026-11-07T19:34:53-05:00 to 2026-11-08T00:35:14-05:00
+
+Range: 364517ca7f43242308072061c2ec8887cadb821a..8a4fb3f01408c18fec710370802bd8f1b80b6ad3
+
+- f8f1da82 - events files run dev commands; the whiplash scene with live frames
+- ad77f9e4 - persona refinement 18: varied openings, period voice, shock and public shame; converse survives a refused addressee
+- 8418dab5 - names are learned, never given; a rules pass over the session's code
+- a7feba5a - move design: people the context places at the destination become residents
+- 1387fb64 - blade gauntlet: coins and price slots, persona watch frames, Codex prompt over stdin
+- be0b0aa2 - camera on items: inserts that fill the screen, details from the backfill engine
+- 8a4fb3f0 - names never leak into prompts; inserts never lost; the judge decides new looks
+
+## 2026-11-07T13:45:02-05:00 to 2026-11-07T19:34:53-05:00
+
+Range: b6ce8b7ccd08e2ad26f6c8a1c11382641d55c55e..364517ca7f43242308072061c2ec8887cadb821a
+
+- 2a624d02 - persona refinement 12: grief before courtesy, news limits promises, a number for how much, stronger loss and flirt bands
+- b460d671 - persona refinement 13: the bar at night; names on SAM tags and bubbles; state triggers fire once
+- e339b174 - persona refinement 14: romance edge cases; affection and jealousy; event triggers fire once
+- 8698762e - persona refinements 15-16: standings set by hand; headroom above 50; parting and jealousy bands
+- 716de661 - frames that follow the talk: a judge gates edits of the plate; camera shots; the soap-opera medieval look
+- 364517ca - scripted events, overlapping frames, betrayal bands; runner switches stances mid-scene
+
+## 2026-11-07T09:11:03-05:00 to 2026-11-07T13:45:02-05:00
+
+Range: 2f86d35e011562bde17300b18a7c0d24e2e2e0ab..b6ce8b7ccd08e2ad26f6c8a1c11382641d55c55e
+
+- 19dfd7b4 - art style: one BriefStyle for every plate (realistic live-action TV look); converse plate= reuses it
+- f2a0160f - runbook: the dev playground, personas, move transitions and plates
+- 2a513a18 - movement: the scene design is a model call that can invent residents; market walk-through in the runbook
+- 3c56a3ef - plate swap drops bubbles of characters not in the new picture; market thread script and runbook
+- 4c473616 - no string matching for gameplay decisions: Jev judges privacy, who a line addresses, and the engine's reading
+- 566fe75a - keep generated plates: market and balcony assets, fixture, Mara's persona; a stored plate is reused, not rendered again
+- e5b33237 - persona voice, expertise and packs; world bible with price quotes; recent lines and public prices in every line
+- 55d3aa2d - persona engine: emotions, mood, attention, attitude and emotional triggers; one call per line; leaner Codex calls; viewer-scoped world and quotes on totals
+- 72c10dcc - persona refinement 1: appraisal guide as data, precise repeat rule, deltas in the state log; market thread reads beat files
+- 876acdcb - persona refinement 2: conduct as data, intent on say, spoken gap fills, three more emotions, experiment log
+- e886683d - persona refinement 3: provoked emotions do not fade, advice amounts allowed, stated prices must be quoted, no-filler conduct
+- cc1d88d2 - persona refinement 4: sharper appraisal guide (data), guide default generated from the shipped file; Mara answers only what was said
+- a0905fdf - persona refinement 5: appraisal guide covers every emotion; each emotion fades at its own rate scaled by temperament
+- fe7bc282 - persona refinement 6: a wrong stated total is worded again at the stall's price; intent is the speaker's own goal
+- 63ebcfe3 - persona refinement 7: the reply says why a line was worded again; run 10 verified correct totals and asking customers
+- 141c782a - persona refinement 8: quotes as a list, unknown behavior/trigger ids dropped not fatal, asking intent explicit, no stage directions; rage verified; refined personas saved
+- 46d548c9 - persona refinement 9: intent self-check in the line call; a missed intent gets the one retry
+- 66f48d45 - persona refinement 10: sharper intent self-check, de-duplicated price retry reason, ask beats name the person and the question
+- c85e2666 - persona refinement log: final verification run
+- 3021ff71 - persona refinement 11: keeper sees a price table and a price rule; an order total is one entry per lot
+- 8891435b - persona refinement log: runs 16-17 and the timeline; mid-sentence ask beats reworded
+- b6ce8b7c - persona refinement log: runs 18-19 on the final build; pear beat verified, heart weak spots noted
+
+## 2026-11-07T03:18:21-05:00 to 2026-11-07T09:11:03-05:00
+
+Range: 750afe95a49cea93ee3dfb3a92f4cdeb2a88a109..2f86d35e011562bde17300b18a7c0d24e2e2e0ab
+
+- 0559133e - CHANGELOG: record the Responses out-of-credit commit
+- 9f40719e - persona converse plate=NAME: a plate from the talk, with a spinner chip; clean scene fixture; scene-transitions plan
+- b72998ed - movement: the frozen contract of a scene transition (types, stage stubs)
+- 0b6d4bcf - movement: stages, move verbs and the elf-triggered scene transition
+- ad9fe1b9 - movement: honest transition trace, title_remove edit, naming beats we, wider verb table
+- 2f86d35e - movement: Jev is a model call (POST /dev/move/interpret) with speaker and context; word tables removed
+
 ## 2026-11-06T23:47:06-05:00 to 2026-11-07T03:18:21-05:00
 
 Range: a1ca615d4ad76631dd3b38dfcdbcb609fdad06a8..750afe95a49cea93ee3dfb3a92f4cdeb2a88a109
