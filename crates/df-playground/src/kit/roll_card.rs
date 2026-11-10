@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::fixture::{DieRole, NaturalMark, RollDie, RollKind, RollMode, RollOutcome, RollView};
-use crate::kit::roll_tray::TrayLayout;
+use crate::kit::roll_tray::{MOST_DICE_DRAWN, TrayLayout};
 use crate::limits::{ROLL_BREAKDOWN_MS, ROLL_EXIT_MS, ROLL_FACES_MS};
 use crate::roll::{DieTumble, RollSchedule};
 
@@ -234,8 +234,8 @@ const LEAST_FIT_PERCENT: u32 = 60;
 /// The width the card's content has, between its padding.
 const CARD_CONTENT_WIDTH_TENTHS: u32 = 286;
 /// The pane's padding above and below, and the room the foot keeps for the stamp.
-const CARD_PADDING_TENTHS: u32 = 13 + 14 + 27;
-const SECTION_GAP_TENTHS: u32 = 7;
+const CARD_PADDING_TENTHS: u32 = 13 + 14 + 25;
+const SECTION_GAP_TENTHS: u32 = 6;
 const MARKS_ROW_TENTHS: u32 = 24;
 const MARKS_ROW_GAP_TENTHS: u32 = 3;
 /// The gap between a kicker and its chips, and the widths of their characters: a kicker's
@@ -269,12 +269,12 @@ const PILL_CHARACTER_TENTHS: u32 = 13;
 const PILL_SPACE_TENTHS: u32 = 6;
 const PILL_LINE_TENTHS: u32 = 33;
 const PILL_FIXED_TENTHS: u32 = 38;
-const SUM_FONT_TENTHS: u32 = 30;
-const SUM_FONT_LONG_TENTHS: u32 = 23;
+const SUM_FONT_TENTHS: u32 = 36;
+const SUM_FONT_LONG_TENTHS: u32 = 35;
 const TERM_LABEL_FONT_TENTHS: u32 = 20;
 /// The gap between the parts of a term, and between one term and the next.
 const SUM_PART_GAP_TENTHS: u32 = 6;
-const SUM_TERM_GAP_TENTHS: u32 = 8;
+const SUM_TERM_GAP_TENTHS: u32 = 6;
 /// How far the verdict's seal hangs below the card.
 const STAMP_HANG_TENTHS: u32 = 40;
 
@@ -375,6 +375,27 @@ impl RollCard {
             .map(|reroll| format!("Heroic Inspiration, was {}", reroll.was))
     }
 
+    /// What was rolled when the dice are too many to draw one by one and show only as a pile and
+    /// a tally: how many dice of each kind, in the order they first appear ("8d6", or "5d6 + 3d8").
+    pub fn dice_word(&self) -> Option<String> {
+        let slots = self.slots();
+        if slots.len() <= MOST_DICE_DRAWN {
+            return None;
+        }
+        let mut kinds: Vec<(DieArt, usize)> = Vec::new();
+        for slot in &slots {
+            match kinds.iter_mut().find(|(art, _)| *art == slot.art) {
+                Some((_, count)) => *count += 1,
+                None => kinds.push((slot.art, 1)),
+            }
+        }
+        let words: Vec<String> = kinds
+            .iter()
+            .map(|(art, count)| format!("{count}{}", art.key()))
+            .collect();
+        Some(words.join(" + "))
+    }
+
     /// The dice on the tray, left to right: each die of the roll in the server's order, a
     /// percentile die as its tens and ones, and the die a Heroic Inspiration reroll replaced
     /// standing before the die that took its place.
@@ -458,7 +479,7 @@ impl RollCard {
                     0
                 };
                 let label = term.label.as_deref().map_or(0, |label| {
-                    SUM_PART_GAP_TENTHS + character_count(label) * label_font * 70 / 100
+                    SUM_PART_GAP_TENTHS + character_count(label) * label_font * 68 / 100
                 });
                 sign + character_count(&term.number) * font * 55 / 100 + label
             })
@@ -484,6 +505,7 @@ impl RollCard {
             self.mode_word().map(str::to_owned),
             self.inspiration_word(),
             self.natural_word().map(str::to_owned),
+            self.dice_word(),
         ];
         let marks = self
             .kicker()
@@ -589,7 +611,7 @@ impl RollCard {
                 SUM_FONT_TENTHS
             };
             let lines = self.sum_lines();
-            lines * font * 12 / 10 + (lines - 1) * 2
+            lines * font * 11 / 10
         } else {
             0
         };

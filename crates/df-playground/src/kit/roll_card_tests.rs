@@ -311,6 +311,37 @@ fn a_chip_too_long_for_a_row_is_two_lines_tall_in_the_height_of_the_card() {
 }
 
 #[test]
+fn a_crowd_of_dice_says_how_many_of_which_kind_and_a_few_dice_say_nothing() {
+    let crowd = many_dice(8);
+    assert_eq!(crowd.dice_word().as_deref(), Some("8d10"));
+    let few = many_dice(i32::try_from(MOST_DICE_DRAWN).expect("small"));
+    assert_eq!(few.dice_word(), None);
+}
+
+#[test]
+fn the_written_sum_is_set_large_enough_for_its_digits_to_stand_over_the_floor() {
+    // A digit's ink is about 0.64 of its font, and the floor for ink is 3.9 percent of the
+    // screen's 56.25cqw height.
+    let css = roll_css();
+    for rule in [".kit-roll-sum {", ".kit-roll-sum-long {"] {
+        let rule = &css[css.find(rule).expect("the sum's rule")..];
+        let rule = &rule[..rule.find('}').expect("ends")];
+        let font: f64 = rule
+            .lines()
+            .find_map(|line| {
+                let line = line.trim();
+                line.strip_prefix("font-size: ")
+                    .or_else(|| line.strip_prefix("font: 700 "))
+            })
+            .and_then(|size| size.split("cqw").next())
+            .expect("a size in cqw")
+            .parse()
+            .expect("a number");
+        assert!(font * 0.64 / 56.25 >= 0.039, "{font}cqw is too small");
+    }
+}
+
+#[test]
 fn a_pair_is_set_apart_by_a_gap_that_fits_the_tray_and_other_rows_have_none() {
     let pair = TrayGrid::of(2);
     assert!(
@@ -801,6 +832,9 @@ fn while_the_card_is_up_the_narration_is_a_low_strip_on_the_foot_left_of_the_car
 
 /// The height of the card's pane as the browser laid it out in the playground's stylesheet (the
 /// pane's `offsetHeight`, in tenths of a cqw), for the cards below, in a 1280 px wide page.
+// TODO(DEV-12): the three heights are the earlier browser measurements carried over by the
+// stylesheet's changes since (sum font and line, section gap, foot padding and the larger chips),
+// worked out by hand and not measured again; measure them in a browser.
 #[test]
 fn the_estimated_height_of_a_card_is_never_under_what_the_browser_measured_and_not_far_over() {
     let mut contested = roll(
@@ -826,12 +860,12 @@ fn the_estimated_height_of_a_card_is_never_under_what_the_browser_measured_and_n
     percentile.target = None;
     percentile.outcome = None;
     for (name, card, measured) in [
-        ("a lone d20", athletics(), 477),
-        ("a percentile roll", RollCard::from(&percentile), 436),
+        ("a lone d20", athletics(), 478),
+        ("a percentile roll", RollCard::from(&percentile), 430),
         (
             "a contested roll with a long target",
             RollCard::from(&contested),
-            534,
+            571,
         ),
     ] {
         let estimate = card.height_tenths();

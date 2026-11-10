@@ -94,6 +94,8 @@ fn head(document: &Document, card: &RollCard) -> Result<Element, JsValue> {
                 word.to_owned(),
             )
         }),
+        card.dice_word()
+            .map(|word| ("kit-roll-mode kit-roll-mode-dice".to_owned(), word)),
     ];
     for (class, word) in chips.into_iter().flatten() {
         append(&marks, &text_element(document, "span", &class, &word)?)?;

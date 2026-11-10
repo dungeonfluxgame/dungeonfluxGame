@@ -3888,7 +3888,7 @@
    small cluster of dice that tumble beside a tally of the faces. A die is thrown across the tray
    (`roll-toss` moves it across and turns it, `roll-hop` bounces it) and lands on the page's own
    random spot. Sizes: the total is the hero at 10cqw of font (its numerals are over 6 percent of the screen's
-   height, which is 56.25cqw), the sum and the target 3cqw and over (over 3.5 percent), a lone die's
+   height, which is 56.25cqw), the sum 3.5cqw and over (its digits' ink over 3.9 percent), the target 3cqw, a lone die's
    numeral over 6 percent. The verdict is a seal that overlaps the panel's foot; a card taller than the
    screen is drawn smaller (--roll-fit, worked out in `kit::roll_card`). Only transforms and opacity
    move, and no moving element carries a filter, a blend or a mask that must be redrawn each frame. Numerals use
@@ -3915,7 +3915,7 @@
 .kit-roll .kit-pane {
   display: flex;
   flex-direction: column;
-  gap: .7cqw;
+  gap: .6cqw;
   padding: 1.3cqw 2.2cqw 1.4cqw;
   text-shadow: none;
 }
@@ -3974,7 +3974,8 @@
 .kit-roll-mode-disadvantage {
   color: #ff9674;
 }
-.kit-roll-mode-inspiration {
+.kit-roll-mode-inspiration,
+.kit-roll-mode-dice {
   color: var(--kit-gold);
 }
 .kit-roll-natural-high {
@@ -4247,7 +4248,7 @@
   align-self: center;
 }
 .kit-roll-chip-count {
-  font: 700 1.7cqw/1 var(--kit-body);
+  font: 700 2.7cqw/1 var(--kit-body);
   color: var(--kit-gold);
 }
 .kit-roll-chip-unused {
@@ -4298,7 +4299,7 @@
   padding: .7cqw 1.5cqw .8cqw;
   border-radius: 1.2cqw;
   border: .16cqw solid #c6a36b99;
-  background: #f1d9a014;
+  background: #0b0a12cc;
   text-align: center;
   text-wrap: balance;
   overflow-wrap: break-word;
@@ -4309,7 +4310,7 @@
   font: 700 1.7cqw/1 var(--kit-body);
   letter-spacing: .18em;
   text-transform: uppercase;
-  color: var(--kit-gold);
+  color: var(--kit-gold-hi);
 }
 .kit-roll-total-number,
 .kit-roll-against {
@@ -4369,23 +4370,23 @@
   flex-direction: column;
   align-items: stretch;
   gap: .9cqw;
-  padding-bottom: 2.7cqw;
+  padding-bottom: 2.4cqw;
 }
 .kit-roll-sum {
   min-width: 0;
   text-wrap: balance;
-  font: 700 3cqw/1.2 var(--kit-body);
+  font: 700 3.6cqw/1.1 var(--kit-body);
   color: var(--roll-numeral);
   animation: roll-fade var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
 }
 .kit-roll-sum-long {
-  font-size: 2.3cqw;
+  font-size: 3.5cqw;
 }
 .kit-roll-term {
   display: inline-flex;
   align-items: baseline;
   gap: .6cqw;
-  margin-right: .8cqw;
+  margin-right: .6cqw;
   white-space: nowrap;
 }
 .kit-roll-number,
@@ -4398,7 +4399,7 @@
 }
 .kit-roll-term-label {
   font: 700 2cqw/1.2 var(--kit-body);
-  letter-spacing: .06em;
+  letter-spacing: .03em;
   text-transform: uppercase;
   color: var(--kit-gold);
 }
@@ -4449,7 +4450,7 @@
   color: var(--roll-positive);
 }
 .kit-roll-verdict-negative {
-  color: var(--roll-negative);
+  color: #ff9e82;
 }
 .kit-roll-verdict-neutral {
   color: var(--roll-neutral);
