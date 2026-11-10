@@ -293,6 +293,23 @@ fn the_dice_are_laid_in_rows_that_fit_the_tray_and_fewer_dice_are_bigger() {
     assert_eq!((TrayGrid::of(2).columns, TrayGrid::of(2).rows), (2, 1));
 }
 
+#[test]
+fn a_pair_is_set_apart_by_a_gap_that_fits_the_tray_and_other_rows_have_none() {
+    let pair = TrayGrid::of(2);
+    assert!(
+        pair.cell_gap_tenths() >= 20,
+        "a left-out die has room beside the kept one"
+    );
+    assert!(
+        pair.columns * pair.cell_tenths + (pair.columns - 1) * pair.cell_gap_tenths() <= 264,
+        "the pair and its gap fit the tray"
+    );
+    assert!(pair.vars().contains("--cell-gap:3cqw;"));
+    for count in [1, 3, MOST_DICE_DRAWN] {
+        assert_eq!(TrayGrid::of(count).cell_gap_tenths(), 0, "{count}");
+    }
+}
+
 fn many_dice(count: i32) -> RollCard {
     RollCard::from(&roll(
         RollKind::Damage,
@@ -744,7 +761,7 @@ fn while_the_card_is_up_the_narration_is_a_low_strip_on_the_foot_left_of_the_car
         .expect("the roll card section");
     let section = &THEME[start..];
     let strip = &section[section
-        .find(":has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration {")
+        .find(":has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration {")
         .expect("the strip's rule")..];
     let strip = &strip[..strip.find('}').expect("ends")];
     assert!(strip.contains("bottom: 0;") && strip.contains("left: 0;"));

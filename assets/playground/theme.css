@@ -2295,8 +2295,9 @@ body {
    dimmed a quarter behind it, and it lies over the bubbles and outlines (z-index 3). While it is up the clue board, the story's
    mark and the party strip fade out, the narration box becomes a low strip on the very foot of the screen, left of the card and
    dressed as the card is (dark glass, gold rim), so it hides the least of the plates (their figures stand to the foot), and the
-   inventory panel fades out (`inventory::is_covered`); they come back as the card begins to leave (`roll-left`). The animations
-   always run. */
+   inventory panel fades out (`inventory::is_covered`); they come back as the card begins to leave (`roll-left`), except the
+   narration strip, which holds its place until the card has finished leaving (`roll-gone`) and only then returns, so it never
+   slides over the fading card. The animations always run. */
 .tv-roll {
   z-index: 3;
   --kit-rise: 0px;
@@ -2328,12 +2329,12 @@ body {
 .tv-caption.tv-narration {
   transition: bottom 400ms ease, left 400ms ease, transform 400ms ease;
 }
-.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration {
+.tv-stage:has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration {
   bottom: 0;
   left: 0;
   transform: none;
 }
-.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-narration {
+.tv-stage:has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration .kit-narration {
   width: 61cqw;
   --kit-cut: 1.4cqw;
   --kit-rim-w: .12cqw;
@@ -2343,23 +2344,23 @@ body {
   --kit-rim: var(--kit-rim-gold);
   --kit-halo: linear-gradient(90deg, var(--kit-ember), var(--kit-amethyst) 55%, var(--kit-ember));
 }
-.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-pane {
+.tv-stage:has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration .kit-pane {
   padding: .7cqw 2cqw .8cqw 1.8cqw;
   gap: 1.2cqw;
 }
-.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration :is(.kit-medal, .kit-nar-rule, .kit-nar-emphasis) {
+.tv-stage:has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration :is(.kit-medal, .kit-nar-rule, .kit-nar-emphasis) {
   display: none;
 }
-.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-nar-main {
+.tv-stage:has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration .kit-nar-main {
   display: flex;
   align-items: baseline;
   gap: 1.2cqw;
 }
-.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-nar-head {
+.tv-stage:has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration .kit-nar-head {
   flex: none;
   margin: 0;
 }
-.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-nar-line {
+.tv-stage:has(.tv-roll:not(.roll-gone)) .tv-caption.tv-narration .kit-nar-line {
   font-size: 1.6cqw;
   line-height: 1.32;
 }

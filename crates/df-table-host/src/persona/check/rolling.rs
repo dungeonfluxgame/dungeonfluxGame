@@ -226,7 +226,7 @@ pub(super) fn roll_request(
             Ok(dice(
                 DieRole::Healing,
                 healing.dice,
-                ModifierLabel::Flat,
+                healing.bonus_label,
                 inspiration,
             ))
         }

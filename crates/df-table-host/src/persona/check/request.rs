@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use df_playground::fixture::RollView;
-use df_rules::roll::{Ability, AttackKind, DiceExpression, RollError, RollMode, Skill};
+use df_rules::roll::{
+    Ability, AttackKind, DiceExpression, ModifierLabel, RollError, RollMode, Skill,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::RulesCheckError;
@@ -455,6 +457,8 @@ pub struct SheetAttack {
 pub struct SheetHealing {
     pub id: String,
     pub dice: DiceExpression,
+    /// What the flat bonus of `dice` comes from, so the roll names it (`Flat` names nothing).
+    pub bonus_label: ModifierLabel,
 }
 
 /// A feature of the sheet, in the sheet's words, that the judge reads for what it grants.

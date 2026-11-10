@@ -160,6 +160,7 @@ pub(super) fn modifier_word(label: ModifierLabel) -> &'static str {
         ModifierLabel::Expertise => "Expertise",
         ModifierLabel::Advantage => "Advantage",
         ModifierLabel::Disadvantage => "Disadvantage",
+        ModifierLabel::ClassLevel => "Class level",
         ModifierLabel::Flat => "Modifier",
     }
 }
@@ -179,7 +180,8 @@ fn spoken_source(label: ModifierLabel) -> Option<String> {
         ModifierLabel::Proficiency
         | ModifierLabel::Expertise
         | ModifierLabel::Advantage
-        | ModifierLabel::Disadvantage => Some(modifier_word(label).to_lowercase()),
+        | ModifierLabel::Disadvantage
+        | ModifierLabel::ClassLevel => Some(modifier_word(label).to_lowercase()),
     }
 }
 

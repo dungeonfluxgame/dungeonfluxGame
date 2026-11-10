@@ -30,6 +30,8 @@ listed_enum! {
         Advantage,
         /// The -5 of a passive score with Disadvantage (page 186).
         Disadvantage,
+        /// The class level a feature adds, such as the Fighter level of Second Wind.
+        ClassLevel,
         /// A flat number the request carries, such as a damage modifier.
         Flat,
     }
@@ -49,6 +51,7 @@ impl ModifierLabel {
             Self::Expertise => "expertise",
             Self::Advantage => "advantage",
             Self::Disadvantage => "disadvantage",
+            Self::ClassLevel => "class_level",
             Self::Flat => "flat",
         }
     }

@@ -4024,6 +4024,7 @@
   display: grid;
   grid-template-columns: repeat(var(--cols, 1), var(--cell, 9cqw));
   grid-auto-rows: var(--cell, 9cqw);
+  column-gap: var(--cell-gap, 0cqw);
   justify-content: center;
   align-content: center;
 }
@@ -4122,17 +4123,20 @@
 .kit-roll-face-wide {
   --face-fit: var(--wide-fit, .85);
 }
-/* A die left out is dimmed, smaller and struck with a short line under its numeral. */
+/* A die left out is dimmed, smaller and struck through its numeral corner to corner: a bold line
+   that keeps the numeral's upright and runs up to the right whatever way the die lies. */
 .kit-roll-strike {
   position: absolute;
+  z-index: 2;
   left: var(--face-x);
-  top: calc(var(--face-y) + var(--numeral) * .36);
-  width: calc(var(--numeral) * 1.4);
-  height: .3cqw;
-  translate: -50% 0;
+  top: var(--face-y);
+  width: calc(var(--numeral) * 1.7);
+  height: .4cqw;
+  translate: -50% -50%;
+  rotate: calc(var(--r3, 0deg) * -1 - 36deg);
   border-radius: 1cqw;
   background: var(--roll-negative);
-  box-shadow: 0 0 .4cqw #000c;
+  box-shadow: 0 0 .5cqw #000d;
   opacity: 0;
 }
 .kit-roll-die-unused .kit-roll-strike,

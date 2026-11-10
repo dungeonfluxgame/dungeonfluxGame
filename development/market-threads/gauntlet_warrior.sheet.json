@@ -133,8 +133,8 @@
     }
   ],
   "healing": [
-    { "id": "second_wind", "dice": "1d10+3" },
-    { "id": "short_rest_hit_die", "dice": "1d10+2" }
+    { "id": "second_wind", "dice": "1d10+3", "bonus_label": "class_level" },
+    { "id": "short_rest_hit_die", "dice": "1d10+2", "bonus_label": "constitution" }
   ],
   "equipment": ["chain mail", "shield", "longsword", "greataxe", "dagger", "longbow with 20 arrows", "traveller's pack"],
   "critical_range": [19, 20]

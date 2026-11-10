@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use df_rules::roll::{Ability, AttackKind, DiceExpression, Skill};
+use df_rules::roll::{Ability, AttackKind, DiceExpression, ModifierLabel, Skill};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -39,6 +39,8 @@ struct AttackFile {
 struct HealingFile {
     id: String,
     dice: String,
+    #[serde(default)]
+    bonus_label: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +118,15 @@ fn dice_of(text: &str) -> Result<DiceExpression, String> {
     DiceExpression::from_str(text).map_err(|error| format!("'{text}': {error}"))
 }
 
+/// The source a healing's flat bonus is named by; no label is a flat number.
+fn bonus_label_of(key: Option<&str>) -> Result<ModifierLabel, String> {
+    match key {
+        None => Ok(ModifierLabel::Flat),
+        Some(key) => ModifierLabel::from_key(key)
+            .ok_or_else(|| format!("'{key}' is not a modifier label for a healing bonus")),
+    }
+}
+
 /// The features of the sheet that are written as a sentence, in the sheet's words.
 fn features_of(groups: [&BTreeMap<String, Value>; 2]) -> impl Iterator<Item = SheetFeature> + '_ {
     groups.into_iter().flat_map(|group| {
@@ -163,6 +174,7 @@ pub(super) fn read_sheet(text: &str) -> Result<CheckSheet, String> {
             Ok(SheetHealing {
                 id: healing.id.clone(),
                 dice: dice_of(&healing.dice)?,
+                bonus_label: bonus_label_of(healing.bonus_label.as_deref())?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;

@@ -20,6 +20,10 @@ const TRAY_INNER_HEIGHT_TWO_TENTHS: u32 = 115;
 const TRAY_INNER_HEIGHT_MANY_TENTHS: u32 = 95;
 /// What the tray is taller than the dice's inner height: the rim and its padding, in tenths.
 const TRAY_RIM_TENTHS: u32 = 20;
+/// The most the cells of a row are set apart, in tenths of a cqw: the slack of a pair is shared
+/// out as a gap, so a die that is left out and drawn smaller does not lie under the one that
+/// counts, and the pair still sits inside the tray's rim.
+const CELL_GAP_MOST_TENTHS: u32 = 30;
 /// The room under the dice for a caption ("tens", "ones"), in tenths of a cqw.
 const CAPTION_ROOM_TENTHS: u32 = 22;
 /// How much wider a die's picture is drawn than the cell it stands in, in percent: the art leaves
@@ -128,6 +132,16 @@ impl TrayGrid {
         }
     }
 
+    /// The gap between the cells of a row, in tenths of a cqw: what the row leaves of the tray's
+    /// width, up to `CELL_GAP_MOST_TENTHS`. Three dice or more fill the row and have none.
+    pub fn cell_gap_tenths(self) -> u32 {
+        if self.columns < 2 {
+            return 0;
+        }
+        let slack = TRAY_INNER_WIDTH_TENTHS.saturating_sub(self.columns * self.cell_tenths);
+        (slack / (self.columns - 1)).min(CELL_GAP_MOST_TENTHS)
+    }
+
     /// The side of a die's picture, in tenths of a cqw.
     pub fn picture_tenths(self) -> u32 {
         self.cell_tenths * self.picture_percent / 100
@@ -155,11 +169,13 @@ impl TrayGrid {
     pub fn vars(self) -> String {
         format!(
             concat!(
-                "--cols:{};--cell:{}cqw;--roll-die:{}cqw;--numeral:{}cqw;--wide-fit:{};",
+                "--cols:{};--cell:{}cqw;--cell-gap:{}cqw;--roll-die:{}cqw;--numeral:{}cqw;",
+                "--wide-fit:{};",
                 "--scatter:{};--caption-room:{}cqw;",
             ),
             self.columns,
             f64::from(self.cell_tenths) / 10.0,
+            f64::from(self.cell_gap_tenths()) / 10.0,
             f64::from(self.picture_tenths()) / 10.0,
             f64::from(self.numeral_tenths()) / 10.0,
             f64::from(self.wide_fit_percent) / 100.0,

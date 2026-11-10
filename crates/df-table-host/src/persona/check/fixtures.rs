@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use df_ai::text::{TextOutcome, TextRequest};
 use df_ai::text_fixture::ScriptedBackend;
 use df_content::persona::Persona;
-use df_rules::roll::{Ability, AttackKind, DiceExpression, DieSize, Skill};
+use df_rules::roll::{Ability, AttackKind, DiceExpression, DieSize, ModifierLabel, Skill};
 use serde_json::{Value, json};
 
 use super::flow::Pacer;
@@ -87,6 +87,7 @@ pub(super) fn sheet() -> CheckSheet {
                 die: DieSize::D10,
                 modifier: 3,
             },
+            bonus_label: ModifierLabel::ClassLevel,
         }],
         equipment: vec!["chain mail".to_owned(), "shield".to_owned()],
         features: vec![SheetFeature {
