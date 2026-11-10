@@ -50,6 +50,7 @@ pub fn on_input(event: &Event) {
 /// The page was hidden or shown.
 pub fn on_visibility_change() {
     voice::on_visibility_change();
+    super::toolbar::refresh_plate();
 }
 
 pub fn on_media_event(event: &Event, failed: bool) {

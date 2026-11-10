@@ -44,7 +44,7 @@ pub struct ControlsUpdate {
 /// of the host or a newer revision of this one. An older answer, such as a slow one that was
 /// overtaken, changes nothing.
 pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
-    with_app_mut(|app| {
+    let update = with_app_mut(|app| {
         let first = !app.gate.is_started();
         let new_run = match app.gate.admit(&reply.boot_id, reply.revision) {
             Admit::Refuse { older_run } => {
@@ -71,6 +71,7 @@ pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
             first,
             boot_changed,
         );
+        super::toolbar::note_plate_reply(reply.controls.plate.now_ms);
         app.controls = reply.controls;
         app.scene = reply.scene;
         app.reshow();
@@ -80,7 +81,11 @@ pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
             boot_changed,
             stale_run: false,
         }
-    })
+    });
+    if update.changed {
+        super::toolbar::refresh_plate();
+    }
+    update
 }
 
 /// Takes a canvas as the page's own when it is newer than the one it has, from the run of the

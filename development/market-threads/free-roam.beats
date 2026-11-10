@@ -22,6 +22,11 @@
 # nothing to paint on for is not made and the log says why), and he moves on. Without supplies
 # the situation lets him declare what he can do with what he holds, or that he goes to buy: the
 # facts decide.
+# Pacing: a new plate is left up for `@roam_dwell` seconds while he takes it in; each finished
+# painting is shown full frame with its title for the first `@roam_reveal` number of seconds, then
+# the view it was painted from for the second; the show waits `@roam_show_dwell` seconds on the
+# square, then steps through the last `@roam_show_each <N> <seconds>` paintings and ends on the
+# show plate. `@refs max=3` caps the pictures a plate follows (a study follows its plate alone).
 @roam danny
 @inventory development/market-threads/danny.inventory.json
 @roam_goal You are a travelling painter wandering the countryside with no fixed plan, looking for places and things worth painting before the season turns. Say in your own words, in one line to yourself, where you are going next and why.
@@ -30,20 +35,49 @@
 @roam_declare You have just studied that thing and set up to paint it here. Declare aloud, in one line, the one physical action you are doing right now as you do it: in the first person and the present tense, what your hands are doing and with which of your things (the one board on the easel, the brush, the pigment). Setting a thing up, steadying it, holding it or laying it out does not use it up, so do not say you use up, spend or finish anything yet; the work is finished later, and that is when supplies are used. Work on the one board only. If a supply you need is low or gone, declare what you can do with what you hold (sketch it with charcoal on a page) or that you set off to buy more.
 @roam_declare_hold 20
 @roam_perceive on
+@refs max=3
+@roam_dwell 6
+@roam_show_dwell 12
+@roam_reveal 10 6
+@roam_view_caption The view
+@roam_show_each 20 5
 @roam_scene_kind scene
 @roam_art_kind artwork
 @roam_art_item painting
 @roam_art_board boards
 @roam_art_title Painting of {thing}
-@roam_painted You have just finished the study of this place on the board. Say in one line, aloud, that it is finished, and which of your things were used up in making it: the primed board you painted on, the pigments you mixed, the oil, the rags. Your brushes and easel are not used up. Name only what you really had; if you had nothing to paint on or with, say so instead. Do not list the finished painting itself as something you gained.
+@roam_painted You have just finished the study of this place on the board. Say in one line, aloud, that it is finished, and what was used up in making it: the one primed board you painted on, the one or two pigments you actually mixed for this scene, chosen by the colours of this place (never a little of each pigment you own), a little oil and one rag. Your brushes and easel are not used up. Name only what you really had; if you had nothing to paint on or with, say so instead. Do not list the finished painting itself as something you gained.
 @roam_art_retry The painted scene must cover the board from edge to edge inside a narrow pale margin: a clearly visible painted view with sky, ground and buildings in strong tones; the board must not be left blank, flat or empty.
 @roam_art_look A small finished oil-on-board study of the place seen in the reference picture, painted as a landscape painter paints the view in front of him: the place itself, its buildings, ground, light and sky, with no figures in the foreground and nobody painted into the scene, or at most a few tiny indistinct figures far away. Seen flat and square-on and filling the whole frame, the primed board's pale unpainted margin showing at its edge. Oil paint in loose, visible brushstrokes, a limited earth palette, a little thickly built in the lights, simplified shapes, nothing photographic.
 @roam_show_look A wide, unretouched photograph of the centre of a medieval town in daylight, by its fountain. Every painting on the reference sheet is set out in the open, each shown as it is on the sheet: laid in rows on trestle tables and leaned along the stone edge of the fountain, small painted boards a hand span wide. The man from the reference sheet stands beside them with his easel, looking over his work.
 @roam_show_say The day is over and all your paintings are laid out around you. Say in a line or two, aloud, what you made of the day, speaking of the work before you.
 @way road You have seen what you came to see in this town. Leave it by the road and set off for the next town along it, one you have not been to yet.
 @way town You are not done with this town yet. Go to another spot within it that you have not seen.
-@way_arrival market You have arrived at the stalls of a market or trading stop and have just looked one over. Now you trade. Say in one line, aloud, what you do: you sell one of your finished paintings to a stallholder for silver pennies, saying which painting and how many pennies you are paid, and you buy or trade for the supplies you are out of or low on (boards, pigments, oil, charcoal, whatever you lack), saying what you get and how many. Only buy what the pennies you have after the sale will pay for; the painting leaves you and the pennies and supplies come to you.
+@way_arrival market You have arrived at the stalls of a market or trading stop and have just looked one over. Now you trade, only with someone or something you can see on this plate. Speak only as yourself, in the first person, about what you offer and what you ask for, in one line, aloud; never speak for the other person or give their answer, their price or their reply (say "I'll sell you this study of the wall for five silver pennies; for those I'll take five bundles of charcoal", not "it's yours for five pennies"). What you do: you sell one of your finished paintings to a stallholder who would plausibly want it, pricing it fairly and saying which painting and how many silver pennies you are paid (several pennies, not one), then you spend those pennies on what that stall plausibly sells, several units if the pennies allow, saying what you get and how many. If nothing you can see sells the supplies you are out of (boards, pigments, oil), say that you must look for a seller of them elsewhere, and spend the pennies on a lesser thing this stall does sell (charcoal, a rag, a page) instead. The painting leaves you and the pennies and goods come to you.
 @way market Take stock of what you carry. Make for this town's market or a trading stop and get more of what is low or gone: sell a small painting of yours for pennies if you are short of money, then buy or trade for the supplies you need (pigments, boards, charcoal, oil), saying what you get and how many.
+# Walking about town: a move shows the sights it passes on the way (`@walk <way> <sights>
+# [town=<seeds|within|leaves>]`, each sight up `@walk_hold` seconds with a fade) before its place, so
+# he goes through the town instead of being put in it. A town or market move gives the look of the
+# town (`town=seeds`, kept until he leaves) that its places and sights are all painted after; the
+# road ends it (`town=leaves`). Each sight posts the `walk` impulse as it goes up.
+@walk road 1 town=leaves
+@walk town 2 town=seeds
+@walk market 2 town=seeds
+@walk_hold 6
+# The score follows the journey's tempo (the host's tempo engine and music director, the table in
+# free-roam.music.json). Each line maps an event the runner already has to an impulse kind and its
+# strength in permille (`@tempo <event> <kind> <strength>`); an arrival is tried as
+# `arrival_<way>` first. Which cue plays for the resulting tempo is the table's, not the runner's.
+@tempo_table development/market-threads/free-roam.music.json
+@tempo arrival_road arrive_road 1000
+@tempo arrival_town arrive_town 1000
+@tempo arrival_market arrive_market 1000
+@tempo look look 1000
+@tempo walk walk 300
+@tempo declare declare 1000
+@tempo painted painted 1000
+@tempo trade trade 1000
+@tempo show show 1000
 @frames gate=100
 @frames every=0
 @frames insert_hold=20

@@ -84,6 +84,11 @@ pub fn story_differ(before: &TvScene, after: &TvScene) -> bool {
     before.story != after.story
 }
 
+/// Whether the inventory panel differs; the panel reads nothing but itself.
+pub fn inventory_differ(before: &TvScene, after: &TvScene) -> bool {
+    before.inventory != after.inventory
+}
+
 /// Whether the clue board differs; the board reads nothing but itself.
 pub fn clues_differ(before: &TvScene, after: &TvScene) -> bool {
     before.clues != after.clues

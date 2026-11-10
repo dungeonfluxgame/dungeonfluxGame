@@ -155,6 +155,20 @@ async fn add_new_things(
     }
     let why_not = added.as_ref().err().map(ToString::to_string);
     let added = added.is_ok();
+    // When nothing else is attended to, the thing just added that draws them most is.
+    if added && *attention == Attended::None {
+        let strongest = proposed
+            .iter()
+            .fold(None, |best: Option<&Proposed>, one| match best {
+                Some(best) if sees[best.see].salience >= sees[one.see].salience => Some(best),
+                _ => Some(one),
+            });
+        if let Some(one) = strongest {
+            *attention = Attended::Item {
+                id: one.thing.id.clone(),
+            };
+        }
+    }
     reported.extend(proposed.into_iter().map(|one| {
         if added {
             sees[one.see].item = Some(one.thing.id.clone());
@@ -247,6 +261,9 @@ async fn look(
                 ..Appraisal::default()
             },
         );
+    }
+    if let Some(why) = checked.attention_cleared {
+        app.record_line(format!("PERSONA attention_cleared who={} why={why}", id));
     }
     let mut sees = checked.sees;
     let mut attention = checked.attention;

@@ -321,6 +321,14 @@ fn scene_fields(
             )],
         ),
         SceneChange::ClearStory {} => ("story_clear", Vec::new()),
+        SceneChange::Inventory { panel } => (
+            "inventory",
+            vec![
+                ("rows", panel.rows.len().to_string()),
+                ("moves", panel.moves.len().to_string()),
+            ],
+        ),
+        SceneChange::ClearInventory {} => ("inventory_clear", Vec::new()),
         SceneChange::Sound {
             media,
             target,

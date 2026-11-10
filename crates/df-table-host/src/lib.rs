@@ -71,6 +71,7 @@ pub mod shown_scene;
 pub mod sink;
 pub mod speech;
 pub mod state;
+pub mod tempo;
 pub mod text;
 mod video_container;
 pub mod view;

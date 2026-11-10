@@ -5,9 +5,11 @@
 //! second_reading=<bool> duration_ms=..` line. `POST /dev/move/design`
 //! designs the scene a move arrives in, residents included, and answers a `DevReply` of a
 //! `SceneDesign` or a [`DesignRouteError`], with `MOVE designed ..` and `MOVE refused verb=design`
-//! lines. A refused answer to the design call is asked for once more, with the rule it broke as
-//! `refused_before` and one `MOVE retry verb=design reason=<key> detail=<rule>` line; a refusal
-//! that stands names its typed cause on its `MOVE refused` line. A line never reaches an audit
+//! lines. A refused answer to the design call is asked for again, with every rule broken so far as
+//! `refused_before` and one `MOVE retry verb=design attempt=<n> reason=<key> detail=<rule>` line
+//! each time, until an answer stands or the design stage's deadline
+//! ([`Deadlines::designing_ms`]) has passed; the refusal that ends it names its typed cause on its
+//! `MOVE refused` line. A line never reaches an audit
 //! line: it is data for the model.
 //!
 //! The question runs under the persona text scope and the default persona model, as the persona
@@ -15,7 +17,7 @@
 //! for, so a client that leaves cannot lose an answer already paid for.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -24,16 +26,20 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::post;
 use df_ai::text_attempts::OperationKey;
+use df_content::world_bible::is_valid_id;
 use serde::{Deserialize, Serialize};
 
 use super::design::{
-    DESIGN_INSTRUCTION, DesignError, MoverInventories, check_move, check_shown_items, design_facts,
-    design_schema, parse_design,
+    DESIGN_INSTRUCTION, DesignError, MoverInventories, WalkNeeds, check_feature, check_move,
+    check_shown_items, check_walk, design_facts, design_schema, parse_design,
 };
 use super::interpret::{
     InterpretError, JEV_INSTRUCTION, jev_facts, jev_schema, parse_reading, require_text,
 };
-use super::types::{Clarification, Declared, Interpreted, MoveIntent, PartyMember, SceneDesign};
+use super::transition::Deadlines;
+use super::types::{
+    Clarification, Declared, Interpreted, MoveIntent, PartyMember, SceneDesign, TownRole, WalkAsk,
+};
 use crate::blocking::run_owned;
 use crate::dev_http::{BodyError, DevReply, RouteError, parse_body, reply};
 use crate::persona::generate::{operation_key, text_request};
@@ -41,6 +47,7 @@ use crate::state::AppState;
 use crate::text::{
     ModelCause, ServiceReason, TextAskError, TextRoute, TextRuntime, TextServiceCause,
 };
+use crate::world::{Town, Visited, end_town, seed_town};
 
 /// The addresses of the movement dev API.
 pub mod path {
@@ -190,6 +197,8 @@ impl From<TextAskError<InterpretError>> for InterpretRouteError {
 struct MoveRoutes {
     app: Arc<AppState>,
     text: Arc<TextRuntime>,
+    /// How long the design call keeps asking again after refused answers.
+    design_deadline: Duration,
 }
 
 /// Answers `result`, recording a refusal first as `MOVE refused verb=<verb> error=<key>`, with
@@ -347,6 +356,9 @@ pub struct DesignRequest {
     pub context: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// The sights wanted on the way and the move's role in its town, for a move that walks.
+    #[serde(default)]
+    pub walk: Option<WalkAsk>,
 }
 
 /// The answer of the design route: the scene design, or why it was refused.
@@ -456,13 +468,26 @@ impl From<TextAskError<DesignError>> for DesignRouteError {
     }
 }
 
-/// Asks the model to design the scene `request.intent` arrives in and checks its answer.
+/// Asks the model to design the scene `request.intent` arrives in and checks its answer. A move
+/// that walks is also asked for the sights on the way, and the town it is in is kept or ended as
+/// its role says.
 async fn design_scene(
     routes: &MoveRoutes,
     request: &DesignRequest,
 ) -> Result<SceneDesign, DesignRouteError> {
     check_move(&request.intent, &request.party)
         .map_err(|cause| DesignRouteError::BadMove { cause })?;
+    if request
+        .walk
+        .as_ref()
+        .is_some_and(|ask| !is_valid_id(&ask.move_id))
+    {
+        return Err(DesignRouteError::BadMove {
+            cause: DesignError::Malformed {
+                reason: "the walk's move id is not a plain id".to_owned(),
+            },
+        });
+    }
     let route = route_for(&routes.text, request.model.as_deref())?;
     let key = operation_key("design").map_err(|_| DesignRouteError::InvalidOperationKey)?;
     let inventories: MoverInventories = request
@@ -472,63 +497,146 @@ async fn design_scene(
         .map(|who| (who.clone(), crate::world::inventory_of(&routes.app, who)))
         .filter(|(_, items)| !items.is_empty())
         .collect();
+    let town = crate::world::town_of(&routes.app);
+    let visited = crate::world::visited_of(&routes.app);
+    let needs = request
+        .walk
+        .as_ref()
+        .map(|ask| WalkNeeds::of(ask, town.as_ref()));
     let started = Instant::now();
-    // One more asking, never a loop: a refused answer is shown to the model as the rule it broke
-    // and asked for again, so one invalid answer does not lose the move.
-    let (design, retried) = match ask_design(&route, &key, request, &inventories, None).await {
-        Err(TextAskError::AnswerRefused(cause)) => {
-            routes.app.record_line(format!(
-                "MOVE retry verb=design reason={} detail={cause}",
-                cause.key()
-            ));
-            let key = operation_key("design").map_err(|_| DesignRouteError::InvalidOperationKey)?;
-            let second = ask_design(&route, &key, request, &inventories, Some(&cause)).await;
-            (second?, true)
-        }
-        first => (first?, false),
+    let deadline = routes.design_deadline;
+    let asked = Asked {
+        request,
+        inventories: &inventories,
+        needs: needs.as_ref(),
+        visited: &visited,
     };
+    // No count of askings is capped: a refused answer is shown to the model as every rule broken
+    // so far and asked for again, so invalid answers do not lose the move, until the stage's
+    // deadline has passed (a service failure ends it at once).
+    let mut refused: Vec<DesignError> = Vec::new();
+    let mut first_key = Some(key);
+    let design = loop {
+        let key = match first_key.take() {
+            Some(key) => key,
+            None => operation_key("design").map_err(|_| DesignRouteError::InvalidOperationKey)?,
+        };
+        match ask_design(&route, &key, &asked, &refused).await {
+            Ok(design) => break design,
+            Err(TextAskError::AnswerRefused(cause)) if started.elapsed() < deadline => {
+                routes.app.record_line(format!(
+                    "MOVE retry verb=design attempt={} reason={} detail={cause}",
+                    refused.len() + 2,
+                    cause.key()
+                ));
+                refused.push(cause);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let retried = !refused.is_empty();
+    let kept = keep_town(routes, request.walk.as_ref(), town, &design).await;
     routes.app.record_line(format!(
-        "MOVE designed placements={} residents={} retried={retried} duration_ms={}",
+        "MOVE designed placements={} residents={} stages={} town={kept} feature={} \
+         retried={retried} duration_ms={}",
         design.placements.len(),
         design.residents.len(),
+        design.stages.len(),
+        design.feature,
         started.elapsed().as_millis()
     ));
     Ok(design)
 }
 
-/// One asking of the design call: the move, what the movers hold and, on a second asking, what was
-/// refused of the first answer; the answer is checked against the move, the party and the
-/// movers' inventories.
+/// What the town of `ask`'s role came to once the design is accepted, as the `MOVE designed`
+/// line says it: `seeded` (kept from the design's look), `reused`, `left` (ended), or `none`. A
+/// town that cannot be kept or ended is `unwritten`, and the move goes on.
+async fn keep_town(
+    routes: &MoveRoutes,
+    ask: Option<&WalkAsk>,
+    town: Option<Town>,
+    design: &SceneDesign,
+) -> &'static str {
+    let Some(ask) = ask else {
+        return "none";
+    };
+    let (kept, written) = match (ask.town, town, &design.town_look) {
+        (TownRole::Leaves, Some(_), _) => ("left", end_town(&routes.app).await.map(|_| ())),
+        (TownRole::Seeds, None, Some(look)) => {
+            let seeded = Town {
+                id: format!("town-{}", ask.move_id),
+                look: look.clone(),
+                created_at: ask.move_id.clone(),
+            };
+            ("seeded", seed_town(&routes.app, seeded).await)
+        }
+        (_, Some(_), _) => ("reused", Ok(())),
+        _ => ("none", Ok(())),
+    };
+    match written {
+        Ok(()) => kept,
+        Err(error) => {
+            routes
+                .app
+                .record_line(format!("WORLD refused verb=town error={}", error.key()));
+            "unwritten"
+        }
+    }
+}
+
+/// What one asking of the design call is about: the move, what the movers hold and what the move
+/// asks of the walk.
+struct Asked<'a> {
+    request: &'a DesignRequest,
+    inventories: &'a MoverInventories,
+    needs: Option<&'a WalkNeeds>,
+    visited: &'a [Visited],
+}
+
+/// One asking of the design call: the move, what the movers hold and, on a later asking, every
+/// refusal of the earlier answers; the answer is checked against the move, the party, the movers'
+/// inventories and the walk the move asked for.
 async fn ask_design(
     route: &TextRoute,
     key: &OperationKey,
-    request: &DesignRequest,
-    inventories: &MoverInventories,
-    refused_before: Option<&DesignError>,
+    asked: &Asked<'_>,
+    refused_before: &[DesignError],
 ) -> Result<SceneDesign, TextAskError<DesignError>> {
+    let Asked {
+        request,
+        inventories,
+        needs,
+        visited,
+    } = asked;
     let facts = design_facts(
         &request.intent,
         &request.party,
         request.context.as_deref(),
         inventories,
         refused_before,
+        *needs,
+        visited,
     );
     let question = text_request(
         route.profile(),
         DESIGN_INSTRUCTION,
         facts,
         DESIGN_OUTPUT_NAME,
-        design_schema(),
+        design_schema(*needs),
     );
-    let asked = route
+    let answered = route
         .ask(key, &question, |answer| {
-            parse_design(answer, &request.intent, &request.party).and_then(|design| {
-                check_shown_items(&design, inventories)?;
-                Ok(design)
-            })
+            let mut design = parse_design(answer, &request.intent, &request.party)?;
+            check_shown_items(&design, inventories)?;
+            check_feature(&design, visited)?;
+            check_walk(&design, *needs)?;
+            if let Some(needs) = needs {
+                needs.settle(&mut design);
+            }
+            Ok(design)
         })
         .await?;
-    Ok(asked.value)
+    Ok(answered.value)
 }
 
 async fn design(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Response {
@@ -563,8 +671,22 @@ async fn design(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Response
 // TODO(DEV-12): route tests on a fake text service: a reading, a design with a resident, a refused
 // answer, an empty line, a bad move, a missing text service and the audit lines.
 pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>) -> Router {
+    let designing = Deadlines::default().designing_ms;
+    router_with_design_deadline(app, text, Duration::from_millis(designing))
+}
+
+/// [`router_with`] where the design call asks again after refused answers for `design_deadline`.
+pub(crate) fn router_with_design_deadline(
+    app: Arc<AppState>,
+    text: Arc<TextRuntime>,
+    design_deadline: Duration,
+) -> Router {
     Router::new()
         .route(path::MOVE_INTERPRET, post(interpret))
         .route(path::MOVE_DESIGN, post(design))
-        .with_state(Arc::new(MoveRoutes { app, text }))
+        .with_state(Arc::new(MoveRoutes {
+            app,
+            text,
+            design_deadline,
+        }))
 }

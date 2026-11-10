@@ -2,7 +2,7 @@
 //! refusal is a typed [`WorldError`] and one `WORLD refused verb=.. error=<key>` audit line, and a
 //! change of the active place is `WORLD place place=<id|none>`, or `WORLD arrived place=<id>
 //! things=<n>` for a place designed in play. A thing's kept close-up is `WORLD thing_picture
-//! place=.. item=..`. The inventory routes are `inventory::routes`.
+//! place=.. item=..`. The town is `town`; the inventory routes are `inventory::routes`.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -21,9 +21,11 @@ use super::request::{
     WorldError, WorldView,
 };
 use super::store::{
-    keep_thing_picture, read_active_place, read_bible, read_place, world_directory, write_designed,
-    write_place,
+    keep_thing_picture, read_active_place, read_bible, read_place, read_town, world_directory,
+    write_designed, write_place,
 };
+use super::town::TownView;
+use super::walk_note::{WalkNoted, WalkStageNote};
 use crate::blocking::run_blocking;
 use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
@@ -42,6 +44,10 @@ pub mod path {
     pub const WORLD_QUOTE: &str = "/dev/world/quote";
     /// Reads the bible now and counts what it holds (GET).
     pub const WORLD_VALIDATE: &str = "/dev/world/validate";
+    /// The town the party is in, if any (GET).
+    pub const WORLD_TOWN: &str = "/dev/world/town";
+    /// Notes a stage of a move's walk in the audit log (POST a `WalkStageNote`).
+    pub const WORLD_WALK: &str = "/dev/world/walk";
 }
 
 /// Answers `result`, recording a refusal first as `WORLD refused verb=.. error=<key>`.
@@ -98,12 +104,16 @@ pub(super) fn set_place(directory: &Path, place: Option<String>) -> Result<Place
 }
 
 /// Makes `place`, designed in play, the active one after checking it as the bible's places are.
-pub(super) fn arrive_at(directory: &Path, place: Place) -> Result<PlaceSet, WorldError> {
+pub(super) fn arrive_at(
+    directory: &Path,
+    place: Place,
+    feature: Option<String>,
+) -> Result<PlaceSet, WorldError> {
     read_bible(directory)?
         .check_place(&place)
         .map_err(|cause| WorldError::PlaceInvalid { cause })?;
     let id = place.id.clone();
-    write_designed(directory, place)?;
+    write_designed(directory, place, feature)?;
     Ok(PlaceSet { place: Some(id) })
 }
 
@@ -162,7 +172,7 @@ async fn arrive(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
         things = request.place.things.len();
         let directory = world_directory(&app);
         run_blocking(
-            move || arrive_at(&directory, request.place),
+            move || arrive_at(&directory, request.place, request.feature),
             WorldError::Stopped,
         )
         .await
@@ -223,6 +233,46 @@ async fn validate(State(app): State<Arc<AppState>>) -> Response {
     answer(&app, "validate", result)
 }
 
+async fn town(State(app): State<Arc<AppState>>) -> Response {
+    let directory = world_directory(&app);
+    let result = run_blocking(
+        move || read_town(&directory).map(|town| TownView { town }),
+        WorldError::Stopped,
+    )
+    .await;
+    answer(&app, "town", result)
+}
+
+async fn walk(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
+    let result = parse_body::<WalkStageNote>(&bytes)
+        .map_err(WorldError::from)
+        .and_then(|note| {
+            let invalid = [&note.place, &note.stage]
+                .into_iter()
+                .find(|id| !is_valid_id(id));
+            match invalid {
+                Some(id) => Err(WorldError::InvalidWalkStage { id: id.clone() }),
+                None => Ok(note),
+            }
+        })
+        .map(|note| {
+            let at_ms = app.playground().clock_ms();
+            app.record_line(format!(
+                "WORLD walk_stage place={} stage={} number={} of={} outcome={} at_ms={at_ms} \
+                 up_ms={}",
+                note.place,
+                note.stage,
+                note.number,
+                note.of,
+                note.outcome.key(),
+                note.up_ms
+                    .map_or_else(|| "-".to_owned(), |up_ms| up_ms.to_string())
+            ));
+            WalkNoted { at_ms }
+        });
+    answer(&app, "walk", result)
+}
+
 /// The world routes.
 pub fn router_with(app: Arc<AppState>) -> Router {
     Router::new()
@@ -232,6 +282,8 @@ pub fn router_with(app: Arc<AppState>) -> Router {
         .route(path::WORLD_PICTURE, post(picture))
         .route(path::WORLD_QUOTE, get(quote))
         .route(path::WORLD_VALIDATE, get(validate))
+        .route(path::WORLD_TOWN, get(town))
+        .route(path::WORLD_WALK, post(walk))
         .with_state(Arc::clone(&app))
         .merge(super::memory::routes::router_with(Arc::clone(&app)))
         .merge(super::inventory::routes::router_with(app))

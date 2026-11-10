@@ -372,6 +372,8 @@ async fn a_focus_is_an_insert_of_its_look_and_each_frame_moment_is_one_line() {
         reason: FrameReason::Focus,
         took_ms: 20_400,
         declared: None,
+        revealed: None,
+        dropped: None,
     };
     let timed: FrameTimingReply = post_json(port, PERSONA_FRAME_TIMING, &timing)
         .await
@@ -455,6 +457,8 @@ async fn the_watch_s_schedule_and_moments_become_the_toolbar_s_plate_timer_and_t
         reason: FrameReason::Schedule,
         took_ms: 0,
         declared: None,
+        revealed: None,
+        dropped: None,
     };
     for request in [
         moment("plates-1", FrameMoment::Started),
@@ -889,6 +893,151 @@ async fn a_picture_over_its_target_is_asked_again_with_why_and_never_cut() {
                 == "PERSONA frame_retried reason=picture_over_target characters=120 target=100"
         });
     assert!(retried);
+}
+
+/// Serves the frame route over a scripted model that gives `answers` in turn: the host, its port,
+/// how many times the model was asked and the facts of each asking.
+async fn frame_route_scripted(
+    answers: Vec<serde_json::Value>,
+) -> (
+    crate::test_support::Running,
+    u16,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    std::sync::Arc<std::sync::Mutex<Vec<df_ai::text::TextRequest>>>,
+) {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    use df_ai::text::TextOutcome;
+    use df_ai::text_fixture::ScriptedBackend;
+
+    use crate::test_support::{STARTER_FILES, start};
+    use crate::text::{BackendChoice, TextRuntime};
+
+    let running = start(&STARTER_FILES).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let script = ScriptedBackend::new(
+        answers.into_iter().map(TextOutcome::Answered),
+        Arc::clone(&calls),
+    )
+    .recording(Arc::clone(&asked));
+    let recorder = Arc::clone(&running.state);
+    let text = TextRuntime::new(
+        BackendChoice::Scripted(Arc::new(script), None),
+        Arc::new(move |line| recorder.record_line(line)),
+    );
+    let app = super::frame::router_with(Arc::clone(&running.state), Arc::new(text));
+    let listener = crate::server::bind(0).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        // The server runs until the test's runtime stops; its end is the test's end.
+        let _ = axum::serve(listener, app).await;
+    });
+    (running, port, calls, asked)
+}
+
+fn lamp_request() -> FrameRequest {
+    FrameRequest {
+        picture: "A flooded scriptorium.".to_owned(),
+        lines: vec!["Lena: Look at this.".to_owned()],
+        speakers: speakers(),
+        gate_percent: None,
+        model: None,
+        last_shot: None,
+        peak_percent: 0,
+        last_inspected: None,
+        ask: FrameAsk::Line {},
+        picture_target_characters: None,
+    }
+}
+
+fn smelly_answer(kind: &str) -> serde_json::Value {
+    json!({
+        "changed_percent": 40,
+        "changes": [{"character": null, "kind": kind, "now": "a damp smell"}],
+        "next_picture": "The woman in grey lifts the lamp.", "shot": "wide",
+        "inspected_item": null, "new_look": false, "items_in_view": []
+    })
+}
+
+fn logged(running: &crate::test_support::Running, text: &str) -> bool {
+    running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .any(|line| line.text == text)
+}
+
+#[tokio::test]
+async fn a_refused_answer_is_logged_with_its_reason_and_asked_again_once_with_why() {
+    use std::sync::atomic::Ordering;
+
+    use crate::dev_client::post_json;
+    use crate::dev_http::DevReply;
+
+    let (running, port, calls, asked) =
+        frame_route_scripted(vec![smelly_answer("smell"), smelly_answer("light")]).await;
+    let judged: FrameReply = post_json(port, PERSONA_FRAME, &lamp_request())
+        .await
+        .unwrap();
+    let DevReply::Done { value } = judged else {
+        panic!("judged: {judged:?}");
+    };
+    assert_eq!(value.next_picture, "The woman in grey lifts the lamp.");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let asked = asked.lock().unwrap();
+    assert!(asked[0].facts["previous_refusal"].is_null());
+    assert_eq!(
+        asked[1].facts["previous_refusal"],
+        "'smell' is not a change kind"
+    );
+    assert!(logged(
+        &running,
+        "PERSONA frame_retried reason=unknown_kind detail='smell' is not a change kind"
+    ));
+}
+
+#[tokio::test]
+async fn an_answer_refused_twice_is_logged_and_refused_as_typed() {
+    use std::sync::atomic::Ordering;
+
+    use crate::dev_client::post_json;
+    use crate::dev_http::DevReply;
+
+    let (running, port, calls, _asked) = frame_route_scripted(vec![
+        smelly_answer("smell"),
+        smelly_answer("taste"),
+        smelly_answer("light"),
+    ])
+    .await;
+    let judged: FrameReply = post_json(port, PERSONA_FRAME, &lamp_request())
+        .await
+        .unwrap();
+    assert!(matches!(judged, DevReply::Rejected { .. }), "{judged:?}");
+    assert_eq!(calls.load(Ordering::SeqCst), 2, "asked again once, no more");
+    assert!(logged(
+        &running,
+        "PERSONA frame_refused reason=unknown_kind detail='taste' is not a change kind"
+    ));
+}
+
+#[test]
+fn the_items_a_picture_shows_are_closed_to_what_the_speakers_hold() {
+    let config = FrameConfig::default();
+    let entry = |schema: &serde_json::Value, field: &str| {
+        schema["properties"]["items_in_view"]["items"]["properties"][field].clone()
+    };
+    let nothing = super::frame::frame_schema(&speakers(), &[], &Vec::new(), &config);
+    assert!(entry(&nothing, "item").get("enum").is_none());
+    let inventories = vec![(
+        "tavern_server".to_owned(),
+        vec![held("tray", "pewter tray"), held("lute", "lute")],
+    )];
+    let holding = super::frame::frame_schema(&speakers(), &[], &inventories, &config);
+    assert_eq!(entry(&holding, "owner")["enum"], json!(["tavern_server"]));
+    assert_eq!(entry(&holding, "item")["enum"], json!(["tray", "lute"]));
 }
 
 #[test]

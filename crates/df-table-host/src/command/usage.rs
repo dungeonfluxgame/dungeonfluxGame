@@ -24,6 +24,7 @@ use crate::speech::SPEECH_USAGE;
 use crate::speech::cli::{
     SPEECH_CAST_USAGE, SPEECH_SPEAK_USAGE, SPEECH_TRANSCRIBE_USAGE, SPEECH_VOICE_USAGE,
 };
+use crate::tempo::cli::TEMPO_USAGE;
 use crate::world::cli::{WORLD_PLACE_USAGE, WORLD_QUOTE_USAGE, WORLD_USAGE};
 
 pub(super) const SPAWN_USAGE: &str = "spawn <kind> <id> [x=N] [y=N] [field=value ...]";
@@ -58,8 +59,8 @@ pub(super) const PARTY_USAGE: &str = concat!(
     "[max=N] [conditions=a,b] | remove <name> | clear",
 );
 pub(super) const IMAGE_USAGE: &str = concat!(
-    "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] [rotate=0-359] | scene ",
-    "image-clear <slot>",
+    "scene image <tv-backdrop|tv-card|phone> <name> [caption=TEXT] [rotate=0-359] ",
+    "[plate=show] | scene image-clear <slot>",
 );
 pub(super) const SLIDE_USAGE: &str =
     "scene slide tv-card <name> [from=15] [to=85] [over=5000] [caption=TEXT] [rotate=0-359]";
@@ -176,7 +177,8 @@ pub fn usage_text() -> String {
          reset or another fixture goes back to the file\n\
          \n  {IMAGE_USAGE}\n      put a picture from the media library on the shared screen \
          (tv-backdrop behind the\n      figures, tv-card in the middle) or at the top of a \
-         phone's story\n\
+         phone's story; plate=show marks the backdrop as the day's show plate, which the page \
+         shows without the inventory panel\n\
          \n  {SLIDE_USAGE}\n      slide the card across the shared screen (defaults: from 15 to \
          85 percent of its width, over\n      5 seconds); a redraw part-way carries on from where \
          it was\n\
@@ -324,6 +326,12 @@ pub fn usage_text() -> String {
          invents one. {WORLD_PLACE_USAGE} sets the active place (- clears it); \
          {WORLD_QUOTE_USAGE} prices a lot at the active place (list, bulk, lowest the keeper \
          takes); validate reads the bible now and reports what is wrong with it.\n\
+         \n  {TEMPO_USAGE}\
+         \n      the tempo engine (df-tempo) and the music director: tempo load reads a music \
+         table (the policy, the impulse kinds and the profiles, all data), tempo prepare finds \
+         or composes every profile's track once, tempo impulse posts an event of the journey, \
+         and the director plays the profile the tempo calls for, with a minimum dwell and a dip \
+         fade between tracks; tempo reset starts the journey again on the base profile.\n\
          \n  {SPEECH_USAGE}\
          \n      voice chat through the speech service (see services): the status and the \
          voices; {SPEECH_SPEAK_USAGE} voices operator text in a character's voice (- for the \

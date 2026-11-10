@@ -31,6 +31,7 @@ use super::model::{
 };
 use super::request::{
     BackendSwitch, BackendView, GenerateError, GenerateReply, GenerateRequest, JobState, JobView,
+    ReferenceCap,
 };
 use super::routes::path;
 use crate::command::{CommandError, bad_choice};
@@ -49,7 +50,7 @@ pub const MEDIA_GENERATE_USAGE: &str = concat!(
 
 pub const MEDIA_BACKEND_USAGE: &str = concat!(
     "media backend [codex-cli | forge [url=<loopback origin>] [project=<forge project id>] ",
-    "[size=<W>x<H>] [steps=<N>]]"
+    "[size=<W>x<H>] [steps=<N>] | refs=<N>]"
 );
 
 const KEYS: [&str; 8] = [
@@ -86,6 +87,8 @@ pub enum MediaGenerate {
     Backend,
     /// Switch the backend new jobs start on.
     SwitchBackend(BackendSwitch),
+    /// Set the soft cap on the pictures a plate request the host builds itself carries.
+    ReferenceCap(ReferenceCap),
 }
 
 fn option_key(word: &str) -> Option<(&str, &str)> {
@@ -179,6 +182,14 @@ pub fn parse_backend(words: &[String]) -> Result<MediaGenerate, CommandError> {
     let Some((backend, options)) = words.split_first() else {
         return Ok(MediaGenerate::Backend);
     };
+    if let Some(maximum) = backend.strip_prefix("refs=") {
+        let maximum = maximum
+            .parse()
+            .ok()
+            .filter(|_| options.is_empty())
+            .ok_or_else(|| bad_choice("refs", maximum, "a whole number from 1".to_owned()))?;
+        return Ok(MediaGenerate::ReferenceCap(ReferenceCap { maximum }));
+    }
     match backend.as_str() {
         "codex-cli" if options.is_empty() => {
             Ok(MediaGenerate::SwitchBackend(BackendSwitch::CodexCli {}))
@@ -266,6 +277,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
         avoid,
         left_out: Vec::new(),
         priority: urgency.map(priority).transpose()?.unwrap_or_default(),
+        sheet: None,
     };
     request.checked().map_err(request_error)?;
     Ok(MediaGenerate::Generate(request))
@@ -283,6 +295,11 @@ pub async fn run(port: u16, command: MediaGenerate) -> Result<String, DevError> 
             let shown: GenerateReply<BackendView> =
                 dev_client::get_json(port, path::BACKEND).await?;
             Ok(format_backend(&dev_client::reply_value(shown)?))
+        }
+        MediaGenerate::ReferenceCap(cap) => {
+            let set: GenerateReply<BackendView> =
+                dev_client::post_json(port, path::REFERENCES, &cap).await?;
+            Ok(format_backend(&dev_client::reply_value(set)?))
         }
         MediaGenerate::SwitchBackend(switch) => {
             let switched: GenerateReply<BackendView> =

@@ -4,14 +4,20 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use df_ai::text::{TextOutcome, TextRequest};
 use df_ai::text_fixture::ScriptedBackend;
 use serde_json::{Value, json};
 
-use super::cli::{Said, walk};
-use super::routes::{DesignReply, DesignRequest, InterpretRequest, path, router_with};
-use super::types::{MoveIntent, MoveKind, PartyMember, TransitionStage};
+use super::cli::{MoveCommand, MoveOptions, Said, parse, walk};
+use super::routes::{
+    DesignReply, DesignRequest, InterpretRequest, path, router_with_design_deadline,
+};
+use super::types::{
+    MoveIntent, MoveKind, PartyMember, SceneDesign, TownRole, TransitionStage, WalkAsk,
+};
+use super::walk::Impulse;
 use crate::dev_client::post_json;
 use crate::dev_http::DevReply;
 use crate::persona::PersonaSummary;
@@ -40,6 +46,10 @@ impl Scripted {
         self.asked.lock().unwrap()[call].facts.clone()
     }
 
+    fn schema_of(&self, call: usize) -> Value {
+        self.asked.lock().unwrap()[call].output_schema.clone()
+    }
+
     fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
@@ -58,6 +68,11 @@ impl Scripted {
 
 /// A host with the movement routes over a text backend that answers with `answers`, in order.
 async fn scripted(answers: Vec<Value>) -> Scripted {
+    scripted_asking_for(answers, Duration::from_secs(60)).await
+}
+
+/// [`scripted`] where the design call asks again after refused answers for `design_deadline`.
+async fn scripted_asking_for(answers: Vec<Value>, design_deadline: Duration) -> Scripted {
     let running = start(&STARTER_FILES).await;
     let calls = Arc::new(AtomicUsize::new(0));
     let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -71,7 +86,7 @@ async fn scripted(answers: Vec<Value>) -> Scripted {
         BackendChoice::Scripted(Arc::new(script), None),
         Arc::new(move |line| recorder.record_line(line)),
     ));
-    let app = router_with(Arc::clone(&running.state), text);
+    let app = router_with_design_deadline(Arc::clone(&running.state), text, design_deadline);
     let listener = crate::server::bind(0).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -119,7 +134,7 @@ async fn danny_says(host: &Scripted, line: &str) -> String {
         Some(TransitionStage::Interpreting),
         &danny(),
         Some(said),
-        None,
+        &MoveOptions::default(),
     )
     .await
     .expect("the reading is carried through")
@@ -133,7 +148,7 @@ async fn free_line(host: &Scripted, line: &str) -> String {
         Some(TransitionStage::Interpreting),
         &danny(),
         None,
-        None,
+        &MoveOptions::default(),
     )
     .await
     .expect("the reading is carried through")
@@ -324,13 +339,15 @@ fn design_request() -> DesignRequest {
         }],
         context: Some(SITUATION.to_owned()),
         model: None,
+        walk: None,
     }
 }
 
 /// A design of the market that the checks accept.
 fn market_design() -> Value {
     json!({
-        "place": "a market square", "mood": "busy", "elements": ["awnings"],
+        "place": "a market square", "mood": "busy", "feature": "fountain_square",
+        "elements": ["awnings"],
         "things": [{"id": "fountain", "name": "the fountain", "look": "worn grey stone"}],
         "shown_items": [], "residents": [],
         "placements": [{"character": "danny", "depth": "foreground", "side": "left",
@@ -372,13 +389,13 @@ async fn a_refused_design_is_asked_for_once_more_with_the_rule_it_broke() {
 
     assert_eq!(value.place, "a market square");
     assert_eq!(host.calls(), 2);
-    assert_eq!(host.facts_of(0)["refused_before"], Value::Null);
-    let refused = &host.facts_of(1)["refused_before"];
+    assert_eq!(host.facts_of(0)["refused_before"], json!([]));
+    let refused = &host.facts_of(1)["refused_before"][0];
     assert_eq!(refused["error"], "bad_thing");
     assert!(refused["detail"].as_str().unwrap().contains("a thing id"));
     let retry = lines_starting_with(&host, "MOVE retry");
     assert_eq!(retry.len(), 1, "{retry:?}");
-    assert!(retry[0].starts_with("MOVE retry verb=design reason=bad_thing detail="));
+    assert!(retry[0].starts_with("MOVE retry verb=design attempt=2 reason=bad_thing detail="));
     let designed = lines_starting_with(&host, "MOVE designed");
     assert!(designed[0].contains("retried=true"), "{designed:?}");
     assert!(lines_starting_with(&host, "MOVE refused").is_empty());
@@ -390,16 +407,15 @@ async fn a_refused_design_is_asked_for_once_more_with_the_rule_it_broke() {
 }
 
 #[tokio::test]
-async fn a_design_refused_twice_is_refused_with_its_typed_cause_after_two_askings_only() {
-    let host = scripted(vec![
-        design_with_bad_thing_id(),
-        design_with_bad_thing_id(),
-        market_design(),
-    ])
+async fn a_design_still_refused_when_the_deadline_has_passed_is_refused_with_its_typed_cause() {
+    let host = scripted_asking_for(
+        vec![design_with_bad_thing_id(), market_design()],
+        Duration::ZERO,
+    )
     .await;
 
     let DevReply::Rejected { error, message } = design(&host).await else {
-        panic!("two refused answers lose the move");
+        panic!("a refused answer past the deadline loses the move");
     };
 
     assert_eq!(error.key(), "answer_refused");
@@ -407,7 +423,7 @@ async fn a_design_refused_twice_is_refused_with_its_typed_cause_after_two_asking
         message.contains("a thing id is not a place id"),
         "{message}"
     );
-    assert_eq!(host.calls(), 2, "one second asking and no more");
+    assert_eq!(host.calls(), 1, "no asking after the deadline");
     let refused = lines_starting_with(&host, "MOVE refused");
     assert_eq!(refused.len(), 1, "{refused:?}");
     assert!(
@@ -417,16 +433,15 @@ async fn a_design_refused_twice_is_refused_with_its_typed_cause_after_two_asking
         refused[0]
     );
     assert!(!refused[0].contains("Market Cross"), "{}", refused[0]);
-    assert_eq!(lines_starting_with(&host, "MOVE retry").len(), 1);
+    assert!(lines_starting_with(&host, "MOVE retry").is_empty());
 }
 
 #[tokio::test]
 async fn a_walk_whose_design_stays_refused_names_the_cause_in_its_trace_and_failure() {
-    let host = scripted(vec![
-        walks_to("the market"),
-        design_with_bad_thing_id(),
-        design_with_bad_thing_id(),
-    ])
+    let host = scripted_asking_for(
+        vec![walks_to("the market"), design_with_bad_thing_id()],
+        Duration::ZERO,
+    )
     .await;
     let said = Said {
         speaker: "danny",
@@ -439,10 +454,10 @@ async fn a_walk_whose_design_stays_refused_names_the_cause_in_its_trace_and_fail
         Some(TransitionStage::Designing),
         &danny(),
         Some(said),
-        None,
+        &MoveOptions::default(),
     )
     .await
-    .expect_err("the design is refused twice");
+    .expect_err("the design is refused past the deadline");
 
     let shown = error.to_string();
     assert!(
@@ -457,4 +472,421 @@ async fn a_walk_whose_design_stays_refused_names_the_cause_in_its_trace_and_fail
         "{shown}"
     );
     assert!(!shown.contains("Market Cross"), "{shown}");
+}
+
+const TOWN_LOOK: &str = "half-timbered houses with steep red tile roofs, narrow cobbled lanes, \
+                         low evening light";
+
+fn two_sights() -> Value {
+    json!([
+        {"id": "fountain_square", "sight": "a stone fountain in a small square", "pose": "walking"},
+        {"id": "shopfronts", "sight": "a row of timber shopfronts", "pose": "pausing"}
+    ])
+}
+
+/// A design of the market on foot: the sights on the way and, when it is given, the town's look.
+fn walking_design(stages: Value, town_look: Option<&str>) -> Value {
+    let mut design = market_design();
+    design["stages"] = stages;
+    if let Some(look) = town_look {
+        design["town_look"] = json!(look);
+    }
+    design
+}
+
+/// The design of a move painted as `move_id` that asks for `stages` sights and plays `town`.
+async fn designed_walk(
+    host: &Scripted,
+    move_id: &str,
+    stages: usize,
+    town: TownRole,
+) -> DesignReply {
+    let request = DesignRequest {
+        walk: Some(WalkAsk {
+            stages,
+            town,
+            move_id: move_id.to_owned(),
+        }),
+        ..design_request()
+    };
+    post_json(host.port, path::MOVE_DESIGN, &request)
+        .await
+        .expect("the design route answers")
+}
+
+fn designed(reply: DesignReply) -> SceneDesign {
+    match reply {
+        DevReply::Done { value } => value,
+        DevReply::Rejected { error, message } => panic!("refused: {} {message}", error.key()),
+    }
+}
+
+#[tokio::test]
+async fn a_move_that_seeds_a_town_keeps_its_look_and_later_moves_in_it_reuse_it() {
+    let host = scripted(vec![
+        walking_design(two_sights(), Some(TOWN_LOOK)),
+        walking_design(two_sights(), None),
+        walking_design(json!([]), None),
+        walking_design(json!([]), Some("grey stone houses under slate roofs")),
+    ])
+    .await;
+    let state = Arc::clone(&host.running.state);
+
+    // The first place of a town move seeds the town from the design's look.
+    let first = designed(designed_walk(&host, "roam-01", 2, TownRole::Seeds).await);
+    assert_eq!(first.stages.len(), 2);
+    assert_eq!(first.stages[0].id, "fountain_square");
+    assert_eq!(first.town_look.as_deref(), Some(TOWN_LOOK));
+    let town = crate::world::town_of(&state).expect("the town is kept");
+    assert_eq!(town.id, "town-roam-01");
+    assert_eq!(town.created_at, "roam-01");
+    assert_eq!(town.look, TOWN_LOOK);
+    assert_eq!(
+        host.facts_of(0)["route"],
+        json!({"stages_wanted": 2, "town": null})
+    );
+    let schema = host.schema_of(0);
+    assert_eq!(schema["properties"]["stages"]["maxItems"], json!(2));
+    assert!(
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("town_look"))
+    );
+
+    // The next move in the town is told its look, asks for none, and answers with it.
+    let second = designed(designed_walk(&host, "roam-02", 2, TownRole::Seeds).await);
+    assert_eq!(second.town_look.as_deref(), Some(TOWN_LOOK));
+    assert_eq!(host.facts_of(1)["route"]["town"], json!(TOWN_LOOK));
+    let schema = host.schema_of(1);
+    assert!(
+        !schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("town_look"))
+    );
+    assert_eq!(crate::world::town_of(&state).unwrap().id, "town-roam-01");
+
+    // A move with no sights is still in the town.
+    let third = designed(designed_walk(&host, "roam-03", 0, TownRole::Within).await);
+    assert!(third.stages.is_empty());
+    assert_eq!(third.town_look.as_deref(), Some(TOWN_LOOK));
+    let schema = host.schema_of(2);
+    assert!(schema["properties"].get("stages").is_none());
+
+    // Leaving by the road ends the town, and the next town move seeds a new one.
+    let left = designed(designed_walk(&host, "roam-04", 1, TownRole::Leaves).await);
+    assert_eq!(left.town_look, None);
+    assert_eq!(crate::world::town_of(&state), None);
+    assert_eq!(host.facts_of(3)["route"]["town"], Value::Null);
+
+    let designs = lines_starting_with(&host, "MOVE designed");
+    let towns: Vec<&str> = designs
+        .iter()
+        .map(|line| {
+            line.split("town=")
+                .nth(1)
+                .unwrap()
+                .split(' ')
+                .next()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(towns, ["seeded", "reused", "reused", "left"]);
+    assert_eq!(
+        lines_starting_with(&host, "WORLD town_"),
+        [
+            "WORLD town_seeded id=town-roam-01 created_at=roam-01",
+            "WORLD town_left id=town-roam-01"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn more_sights_than_the_move_asked_for_are_refused_and_asked_again_until_they_fit() {
+    let three = json!([
+        {"id": "one", "sight": "a well", "pose": "walking"},
+        {"id": "two", "sight": "an arch", "pose": "walking"},
+        {"id": "three", "sight": "a bridge", "pose": "pausing"}
+    ]);
+    let host = scripted(vec![
+        walking_design(three.clone(), Some(TOWN_LOOK)),
+        walking_design(three, Some(TOWN_LOOK)),
+        walking_design(two_sights(), Some(TOWN_LOOK)),
+    ])
+    .await;
+
+    let DevReply::Done { value } = designed_walk(&host, "roam-01", 2, TownRole::Seeds).await else {
+        panic!("the third answer fits");
+    };
+
+    assert_eq!(value.stages.len(), 2);
+    assert_eq!(host.calls(), 3);
+    let refused = host.facts_of(2)["refused_before"].clone();
+    assert_eq!(refused.as_array().map(Vec::len), Some(2));
+    assert_eq!(refused[1]["error"], "too_many_stages");
+    assert!(refused[1]["detail"].as_str().unwrap().contains("at most 2"));
+}
+
+#[tokio::test]
+async fn more_sights_than_the_move_asked_for_past_the_deadline_lose_the_move() {
+    let three = json!([
+        {"id": "one", "sight": "a well", "pose": "walking"},
+        {"id": "two", "sight": "an arch", "pose": "walking"},
+        {"id": "three", "sight": "a bridge", "pose": "pausing"}
+    ]);
+    let host =
+        scripted_asking_for(vec![walking_design(three, Some(TOWN_LOOK))], Duration::ZERO).await;
+
+    let DevReply::Rejected { error, message } =
+        designed_walk(&host, "roam-01", 2, TownRole::Seeds).await
+    else {
+        panic!("a refused answer past the deadline loses the move");
+    };
+
+    assert_eq!(error.key(), "answer_refused");
+    assert!(message.contains("at most 2"), "{message}");
+    assert_eq!(host.calls(), 1);
+    assert_eq!(crate::world::town_of(&host.running.state), None);
+    assert!(lines_starting_with(&host, "WORLD town_").is_empty());
+}
+
+#[tokio::test]
+async fn a_move_that_seeds_a_town_without_its_look_is_refused() {
+    let host = scripted_asking_for(vec![walking_design(two_sights(), None)], Duration::ZERO).await;
+
+    let DevReply::Rejected { message, .. } =
+        designed_walk(&host, "roam-01", 2, TownRole::Seeds).await
+    else {
+        panic!("a town needs its look");
+    };
+
+    assert!(message.contains("town_look is missing"), "{message}");
+    assert_eq!(crate::world::town_of(&host.running.state), None);
+}
+
+#[tokio::test]
+async fn a_move_that_asked_for_no_walk_takes_no_sights() {
+    let host = scripted(vec![
+        walking_design(two_sights(), None),
+        walking_design(json!([]), None),
+    ])
+    .await;
+
+    let plain = designed(design(&host).await);
+
+    assert!(plain.stages.is_empty(), "the second answer stands");
+    assert_eq!(host.calls(), 2);
+    assert_eq!(host.facts_of(0).get("route"), None);
+    assert_eq!(
+        host.facts_of(1)["refused_before"][0]["error"],
+        "too_many_stages"
+    );
+}
+
+fn words(line: &str) -> Vec<String> {
+    line.split_whitespace().map(str::to_owned).collect()
+}
+
+fn act_options(options: &str) -> Result<MoveOptions, crate::command::CommandError> {
+    match parse(&words(&format!(
+        "act danny {options} we go to the next place"
+    )))? {
+        MoveCommand::Act {
+            options, situation, ..
+        } => {
+            assert_eq!(situation, "we go to the next place");
+            Ok(options)
+        }
+        other => panic!("not an act: {other:?}"),
+    }
+}
+
+#[test]
+fn the_walk_options_come_before_the_text_of_a_move() {
+    let options = act_options("plate=roam-01 walk=2 town=seeds hold=6.5 impulse=walk:300").unwrap();
+
+    assert_eq!(options.plate.as_deref(), Some("roam-01"));
+    assert_eq!(options.walk.stages, 2);
+    assert_eq!(options.walk.town, Some(TownRole::Seeds));
+    assert_eq!(options.walk.hold, Some(Duration::from_millis(6_500)));
+    assert_eq!(
+        options.walk.impulse,
+        Some(Impulse {
+            kind: "walk".to_owned(),
+            permille: 300
+        })
+    );
+    assert_eq!(act_options("").unwrap(), MoveOptions::default());
+}
+
+#[test]
+fn a_walk_option_outside_its_words_is_refused() {
+    for refused in [
+        "walk=many",
+        "walk=-1",
+        "town=village",
+        "hold=4.9",
+        "hold=soon",
+        "hold=NaN",
+        "impulse=walk",
+        "impulse=:300",
+        "impulse=walk:1001",
+        "plate=roam.01.png",
+    ] {
+        assert!(act_options(refused).is_err(), "{refused} is refused");
+    }
+}
+
+/// Makes the party have been to a place with `feature`, through the world's arrive route.
+async fn been_to(host: &Scripted, id: &str, feature: &str) {
+    let request = crate::world::request::ArriveRequest {
+        place: df_content::world_bible::Place {
+            id: id.to_owned(),
+            name: format!("the place {id}"),
+            description: "Mood: quiet.".to_owned(),
+            stalls: Vec::new(),
+            things: Vec::new(),
+        },
+        feature: Some(feature.to_owned()),
+    };
+    let reply: crate::world::request::WorldReply<crate::world::request::PlaceSet> =
+        post_json(host.running.port, "/dev/world/arrive", &request)
+            .await
+            .expect("the world answers");
+    assert!(matches!(reply, DevReply::Done { .. }), "arrived");
+}
+
+#[tokio::test]
+async fn a_design_that_repeats_a_places_feature_is_refused_and_asked_again() {
+    let mut repeats = market_design();
+    repeats["feature"] = json!("open_road");
+    let mut distinct = market_design();
+    distinct["feature"] = json!("ford");
+    let host = scripted(vec![repeats, distinct]).await;
+    been_to(&host, "roam-01", "open_road").await;
+
+    let DevReply::Done { value } = design(&host).await else {
+        panic!("the distinct second answer stands");
+    };
+
+    assert_eq!(value.feature, "ford");
+    assert_eq!(host.calls(), 2);
+    assert_eq!(
+        host.facts_of(0)["previously_designed"],
+        json!([{"name": "the place roam-01", "feature": "open_road"}])
+    );
+    assert_eq!(
+        host.facts_of(1)["previously_designed"],
+        host.facts_of(0)["previously_designed"]
+    );
+    assert_eq!(
+        host.facts_of(1)["refused_before"][0]["error"],
+        "repeated_feature"
+    );
+    let retry = lines_starting_with(&host, "MOVE retry");
+    assert!(
+        retry[0].starts_with("MOVE retry verb=design attempt=2 reason=repeated_feature detail="),
+        "{retry:?}"
+    );
+    let designed = lines_starting_with(&host, "MOVE designed");
+    assert!(
+        designed[0].contains("feature=ford retried=true"),
+        "{designed:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_distinct_feature_passes_at_the_first_asking_and_a_design_is_not_kept_until_arrival() {
+    let mut distinct = market_design();
+    distinct["feature"] = json!("ford");
+    let host = scripted(vec![distinct.clone(), distinct]).await;
+    been_to(&host, "roam-01", "open_road").await;
+
+    let DevReply::Done { value } = design(&host).await else {
+        panic!("a distinct feature stands");
+    };
+    assert_eq!(value.feature, "ford");
+    assert_eq!(host.calls(), 1);
+
+    // Designing alone keeps nothing: the same move designed again may use the same feature.
+    let DevReply::Done { value } = design(&host).await else {
+        panic!("a design not yet arrived at repeats nothing");
+    };
+    assert_eq!(value.feature, "ford");
+    assert_eq!(host.calls(), 2);
+    assert_eq!(crate::world::visited_of(&host.running.state).len(), 1);
+}
+
+/// A design that breaks the rule `breaker` changes.
+fn design_breaking(breaker: impl Fn(&mut Value)) -> Value {
+    let mut design = market_design();
+    breaker(&mut design);
+    design
+}
+
+#[tokio::test]
+async fn refusals_keep_coming_back_with_all_of_them_until_an_answer_stands() {
+    let bad_resident = design_breaking(|design| {
+        design["residents"] = json!([{
+            "id": "fruit-vendor", "display_name": "Mara", "job": "vendor", "look": "stout",
+            "depth": "middle", "side": "right", "doing": "arranges pears"
+        }]);
+    });
+    let resident_owner = design_breaking(|design| {
+        design["shown_items"] = json!([{"owner": "fruit_vendor", "item": "easel"}]);
+    });
+    let host = scripted(vec![
+        bad_resident.clone(),
+        resident_owner,
+        bad_resident,
+        market_design(),
+    ])
+    .await;
+
+    let DevReply::Done { value } = design(&host).await else {
+        panic!("the fourth answer stands");
+    };
+
+    assert_eq!(value.place, "a market square");
+    assert_eq!(host.calls(), 4, "no count caps the askings");
+    let errors = |call: usize| -> Vec<String> {
+        host.facts_of(call)["refused_before"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|refused| refused["error"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    assert!(errors(0).is_empty());
+    assert_eq!(errors(1), ["bad_resident"]);
+    assert_eq!(errors(2), ["bad_resident", "invalid_shown_item"]);
+    assert_eq!(
+        errors(3),
+        ["bad_resident", "invalid_shown_item", "bad_resident"]
+    );
+    let retry = lines_starting_with(&host, "MOVE retry");
+    assert_eq!(retry.len(), 3, "{retry:?}");
+    for (index, line) in retry.iter().enumerate() {
+        assert!(
+            line.starts_with(&format!("MOVE retry verb=design attempt={} ", index + 2)),
+            "{line}"
+        );
+    }
+    assert!(lines_starting_with(&host, "MOVE refused").is_empty());
+    let designed = lines_starting_with(&host, "MOVE designed");
+    assert!(designed[0].contains("retried=true"), "{designed:?}");
+}
+
+#[tokio::test]
+async fn a_service_that_gives_no_answer_ends_the_askings_with_its_own_error() {
+    let host = scripted(vec![design_with_bad_thing_id(), design_with_bad_thing_id()]).await;
+
+    let DevReply::Rejected { error, .. } = design(&host).await else {
+        panic!("a script that runs out ends the askings");
+    };
+
+    assert_eq!(error.key(), "text_service");
+    assert_eq!(lines_starting_with(&host, "MOVE retry").len(), 2);
+    assert!(host.calls() >= 3, "{}", host.calls());
 }

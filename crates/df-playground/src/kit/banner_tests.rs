@@ -55,5 +55,40 @@ fn rings_drawn_at_different_times_stay_at_the_angle_the_page_clock_gives() {
 fn the_turn_time_is_the_one_in_the_style_sheet() {
     assert_eq!(TURN_MS, 1_200);
     let css = include_str!("../../../../assets/playground/kit.css");
-    assert!(css.contains("animation: kit-turn 1.2s linear infinite;"));
+    assert!(css.contains("kit-turn 1.2s linear var(--kit-turn-delay, 0ms) infinite"));
+}
+
+/// The classes in a selector: what its specificity counts, as no banner selector has an id.
+fn class_count(selector: &str) -> usize {
+    selector.matches('.').count()
+}
+
+#[test]
+fn no_rule_for_the_banner_icon_can_drop_the_working_rings_turn() {
+    let css = include_str!("../../../../assets/playground/kit.css");
+    let mut turning = None;
+    let mut others = Vec::new();
+    for block in css.split('}') {
+        let Some((selector, body)) = block.split_once('{') else {
+            continue;
+        };
+        let selector = selector.rsplit("*/").next().unwrap_or(selector).trim();
+        if !selector.contains("kit-banner-icon") || !body.contains("animation") {
+            continue;
+        }
+        if selector.contains("kit-turning") {
+            turning = Some((selector.to_owned(), body.to_owned()));
+        } else {
+            others.push(selector.to_owned());
+        }
+    }
+    let (selector, body) = turning.expect("a rule turns the working ring over the banner icon");
+    assert!(body.contains("kit-turn 1.2s linear var(--kit-turn-delay, 0ms) infinite"));
+    assert!(!others.is_empty());
+    for other in others {
+        assert!(
+            class_count(&selector) > class_count(&other),
+            "{other} ties or beats the working ring's rule {selector}"
+        );
+    }
 }

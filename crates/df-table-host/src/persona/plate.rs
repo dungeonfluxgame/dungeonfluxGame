@@ -21,12 +21,14 @@ use df_playground::scene::{ImageSlot, SceneChange};
 use df_scene_layout::SceneLayout;
 
 use super::converse::{Table, Turn};
+use super::frame::DroppedWhy;
+use super::people_check::{Verified, verified};
 use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json, reply_value};
 use crate::imagegen::model::PictureSize;
 use crate::imagegen::request::{BackendView, GenerateReply, GenerateRequest, JobState};
 use crate::imagegen::{
-    Aspect, BackendLimits, Priority, Purpose, ThingReference, routes::path as image_path,
+    Aspect, BackendLimits, Priority, Purpose, SheetPick, ThingReference, routes::path as image_path,
 };
 use crate::locate::cli::show as show_layout;
 use crate::locate::request::{
@@ -204,6 +206,7 @@ pub(super) fn plate_request(
         avoid: painting.avoid.to_vec(),
         left_out: fitted.dropped,
         priority: Priority::Normal,
+        sheet: None,
     }
 }
 
@@ -411,6 +414,12 @@ impl RoomTurn {
             Priority::Normal
         }
     }
+
+    /// The view of the people's sheets its picture is shown: a declared action painted anew shows
+    /// its person whole and small, so the full-length view; any other leaves it to the request.
+    fn sheet(&self, base: Option<&str>) -> Option<SheetPick> {
+        (self.emergency.is_some() && base.is_none()).then_some(SheetPick::FullLength)
+    }
 }
 
 /// A frame put on screen: what was done, whether it shows with its own scan (every character
@@ -423,6 +432,8 @@ pub(super) struct Shown {
     pub captioned: Option<Captioned>,
     /// Whether it went up: a room frame a newer one overtook is made and never shown.
     pub on_screen: bool,
+    /// Why a frame that was made did not go up, when it is made and neither up nor failed.
+    pub dropped: Option<DroppedWhy>,
     /// How long a room frame painted now took to make (generated, scanned and named), before it
     /// waited for its slot; none for an insert or a kept plate.
     pub making: Option<Duration>,
@@ -451,7 +462,7 @@ pub(super) async fn make_frame(
         .iter()
         .map(|character| character.name.clone())
         .collect();
-    let shown = build(port, name, painting, characters, base, turn).await?;
+    let shown = build(port, name, painting, characters, base, &turn).await?;
     drop_stale_bubbles(port, &present)
         .await
         .map_err(at(PlateStep::Backdrop))?;
@@ -558,6 +569,71 @@ pub(super) async fn make_insert(
     ))
 }
 
+/// Cuts to `picture`, a picture the library already holds (a finished painting), as it is: nothing
+/// is made and no model is asked. It is shown full frame with the layout of `room`, the picture it
+/// cuts away from, so the scene keeps its cast, and the scene's caption bar shows `caption` (the
+/// caption it replaced is answered, to be put back with the room). It is shown at once
+/// (`claim_reveal`) and holds the screen for `hold`.
+pub(super) async fn make_reveal(
+    port: u16,
+    screen: &SharedScreen,
+    reveal: Reveal<'_>,
+    mut ticket: RevealTicket,
+) -> Result<(String, Option<Captioned>), PlateFailure> {
+    let Reveal {
+        name,
+        picture,
+        room,
+        caption,
+        hold,
+    } = reveal;
+    let layout = layout_of(port, room).await?;
+    claim_reveal(screen, &mut ticket, hold).await;
+    let before = match caption {
+        Some(_) => Some(
+            current_caption(port)
+                .await
+                .map_err(at(PlateStep::Caption))?,
+        ),
+        None => None,
+    };
+    put_backdrop(port, picture, Some(layout), PlateKind::CloseUp).await?;
+    let captioned = match (caption, before) {
+        (Some(text), Some(before)) => {
+            change(port, &caption_change(text, None))
+                .await
+                .map_err(at(PlateStep::Caption))?;
+            Some(Captioned { before })
+        }
+        _ => None,
+    };
+    Ok((
+        format!(
+            "reveal {name}: {picture} is behind the scene, with the cast of {room}{}",
+            if captioned.is_some() {
+                ", captioned"
+            } else {
+                ""
+            }
+        ),
+        captioned,
+    ))
+}
+
+/// What a revealed picture is shown with (see [`make_reveal`]).
+pub(super) struct Reveal<'a> {
+    /// The reveal's name, for the transcript.
+    pub name: &'a str,
+    /// The picture of the media library to show.
+    pub picture: &'a str,
+    /// The picture it cuts away from, whose cast the scene keeps.
+    pub room: &'a str,
+    /// The words for the caption bar.
+    pub caption: Option<&'a str>,
+    /// How long it holds the screen.
+    pub hold: Duration,
+}
+
 /// The screen, as the frames of one conversation share it: when the last picture went up, until
 /// when an insert holds it, and the least time a picture stays up before another replaces it
 /// (one that flashed by would be a flicker nobody at the table could follow; `frames.json`
@@ -581,6 +657,39 @@ pub(super) struct Screen {
     /// plate started before it, still waiting or being made, is superseded: the talk it shows is
     /// older than the action declared.
     declared: Option<(u32, String)>,
+    /// The revealed pictures (`@show`) form a sequence: the next ticket to give, the one served
+    /// next, the tickets given up without being served, when the picture up now (a reveal) has
+    /// held its whole requested time, and when the last reveal went up.
+    reveal_next: u64,
+    reveal_serving: u64,
+    reveal_abandoned: Vec<u64>,
+    reveal_until: Option<Instant>,
+    reveal_shown: Option<Instant>,
+}
+
+impl Screen {
+    /// When the picture up last has been up long enough for another to replace it: the screen's
+    /// least time for a generated picture, and for a revealed one the time it was asked to hold
+    /// (an explicit short hold is the caller's own request and is not stretched).
+    fn shown_by(&self) -> Option<Instant> {
+        self.last_shown.map(|shown| {
+            if self.reveal_shown == Some(shown) {
+                shown
+            } else {
+                shown + self.minimum_shown
+            }
+        })
+    }
+
+    /// Whether a revealed picture is queued and not yet up: pictures that are not reveals wait
+    /// for it, so a sequence of reveals is never broken into.
+    fn reveals_pending(&mut self) -> bool {
+        // Tickets given up without being served are skipped.
+        while self.reveal_abandoned.contains(&self.reveal_serving) {
+            self.reveal_serving += 1;
+        }
+        self.reveal_serving < self.reveal_next
+    }
 }
 
 pub(super) type SharedScreen = Arc<Mutex<Screen>>;
@@ -618,7 +727,10 @@ pub(super) async fn claim_screen(
     hold: Option<Duration>,
 ) {
     wait_on_screen(screen, |state, now| {
-        let shown_by = state.last_shown.map(|shown| shown + state.minimum_shown);
+        if state.reveals_pending() {
+            return ControlFlow::Continue(ROOM_QUEUE_LOOK);
+        }
+        let shown_by = state.shown_by();
         let free_at = if respect_hold {
             shown_by.max(state.held_until)
         } else {
@@ -643,7 +755,7 @@ pub(super) async fn claim_after_insert(screen: &SharedScreen, insert_shown: Inst
         if state.last_shown.is_some_and(|shown| shown > insert_shown) {
             return ControlFlow::Break(false);
         }
-        let shown_by = state.last_shown.map(|shown| shown + state.minimum_shown);
+        let shown_by = state.shown_by();
         if let Some(wait) = wait_until(shown_by, now) {
             return ControlFlow::Continue(wait);
         }
@@ -707,8 +819,11 @@ pub(super) async fn claim_room(screen: &SharedScreen, number: u32, cued: bool) -
             state.room_ready.retain(|ready| *ready != number);
             return ControlFlow::Break(false);
         }
+        if state.reveals_pending() {
+            return ControlFlow::Continue(ROOM_QUEUE_LOOK);
+        }
         let free_at = [
-            state.last_shown.map(|shown| shown + state.minimum_shown),
+            state.shown_by(),
             state.held_until,
             state.last_room.map(|(_, up)| up + state.room_every),
         ]
@@ -767,13 +882,108 @@ pub(super) async fn claim_declared(screen: &SharedScreen, number: u32, hold: Dur
         if state.declared.as_ref().is_some_and(|(at, _)| *at > number) {
             return ControlFlow::Break(false);
         }
-        let shown_by = state.last_shown.map(|shown| shown + state.minimum_shown);
+        // A revealed picture, and the ones queued behind it, are shown their whole requested time
+        // first: the emergency plate takes its turn after them.
+        if state.reveals_pending() {
+            return ControlFlow::Continue(ROOM_QUEUE_LOOK);
+        }
+        let shown_by = state.shown_by().max(state.reveal_until);
         if let Some(wait) = wait_until(shown_by, now) {
             return ControlFlow::Continue(wait);
         }
         state.last_shown = Some(now);
         state.held_until = Some(now + hold);
         state.last_room = Some((number, now));
+        ControlFlow::Break(true)
+    })
+    .await
+}
+
+/// A place in the sequence of revealed pictures. A ticket given up without being served (its
+/// frame aborted) is skipped, so it never holds back the ones behind it.
+pub(super) struct RevealTicket {
+    screen: SharedScreen,
+    number: u64,
+    served: bool,
+    /// How many revealed pictures were up or queued ahead of this one when it was given.
+    pub behind: usize,
+}
+
+impl Drop for RevealTicket {
+    fn drop(&mut self) {
+        if !self.served {
+            let mut state = self.screen.lock().unwrap_or_else(PoisonError::into_inner);
+            state.reveal_abandoned.push(self.number);
+        }
+    }
+}
+
+/// Takes the next place in the sequence of revealed pictures. Every one asked for is taken, however
+/// many are up or queued already: a place is a number and one waiting task, and the sequence shows
+/// each in order for its whole hold, so the queue is bounded by what the runner sends.
+pub(super) fn queue_reveal(screen: &SharedScreen) -> RevealTicket {
+    let mut state = screen.lock().unwrap_or_else(PoisonError::into_inner);
+    state.reveals_pending();
+    let queued = usize::try_from(state.reveal_next - state.reveal_serving).unwrap_or(usize::MAX);
+    let up = usize::from(
+        state
+            .reveal_until
+            .is_some_and(|until| until > Instant::now()),
+    );
+    let behind = queued + up;
+    let number = state.reveal_next;
+    state.reveal_next += 1;
+    RevealTicket {
+        screen: Arc::clone(screen),
+        number,
+        served: false,
+        behind,
+    }
+}
+
+/// Claims the screen for a revealed picture in its turn, then shows it at once: it waits for the
+/// revealed pictures before it to hold their whole requested time (a sequence, never one
+/// displacing another), for no slot, no insert's hold and no plate ahead of it, and, when the
+/// picture before it is a generated one, for the least time that stays up (nothing changes faster
+/// than a person can follow); a revealed picture's own hold is its requested time, however short.
+/// It holds the screen for `hold`. It is no new picture of the talk, so it touches neither the
+/// room plates' slots nor the plates waiting: they wait out the sequence and are shown after it.
+pub(super) async fn claim_reveal(screen: &SharedScreen, ticket: &mut RevealTicket, hold: Duration) {
+    let number = ticket.number;
+    wait_on_screen(screen, |state, now| {
+        state.reveals_pending();
+        if state.reveal_serving != number {
+            return ControlFlow::Continue(ROOM_QUEUE_LOOK);
+        }
+        let free_at = state.shown_by().max(state.reveal_until);
+        if let Some(wait) = wait_until(free_at, now) {
+            return ControlFlow::Continue(wait);
+        }
+        state.last_shown = Some(now);
+        state.reveal_shown = Some(now);
+        state.reveal_until = Some(now + hold);
+        state.held_until = Some(now + hold);
+        state.reveal_serving += 1;
+        ControlFlow::Break(())
+    })
+    .await;
+    ticket.served = true;
+}
+
+/// Claims the screen for the room coming back after the revealed picture that went up at
+/// `reveal_shown`, as `claim_after_insert` does, but without the least time a generated picture
+/// stays up: the picture was up its whole requested hold, which is what was asked. A newer picture
+/// that went up meanwhile (the next of the sequence) keeps the screen, and `false` is answered.
+pub(super) async fn claim_after_reveal(screen: &SharedScreen, reveal_shown: Instant) -> bool {
+    wait_on_screen(screen, |state, now| {
+        if state.last_shown.is_some_and(|shown| shown > reveal_shown) || state.reveals_pending() {
+            return ControlFlow::Break(false);
+        }
+        if let Some(wait) = wait_until(state.reveal_until, now) {
+            return ControlFlow::Continue(wait);
+        }
+        state.last_shown = Some(now);
+        state.held_until = None;
         ControlFlow::Break(true)
     })
     .await
@@ -802,6 +1012,7 @@ pub(super) fn not_shown(
             own_cast,
             captioned: None,
             on_screen: false,
+            dropped: Some(DroppedWhy::Superseded),
             making,
         },
         None => overtaken(name, own_cast, making),
@@ -815,13 +1026,14 @@ fn overtaken(name: &str, own_cast: bool, making: Option<Duration>) -> Shown {
         own_cast,
         captioned: None,
         on_screen: false,
+        dropped: Some(DroppedWhy::Overtaken),
         making,
     }
 }
 
 /// Takes away the bubbles anchored to a character who is not in the new picture: their region is
 /// gone from the layout, so they would fall back to a fixed spot over someone else.
-async fn drop_stale_bubbles(port: u16, present: &[String]) -> Result<(), DevError> {
+pub(super) async fn drop_stale_bubbles(port: u16, present: &[String]) -> Result<(), DevError> {
     let controls: ControlsReply = get_json(port, route::PLAYGROUND_CONTROLS).await?;
     let Some(card) = controls.scene.roleplay.set_value() else {
         return Ok(());
@@ -940,17 +1152,18 @@ pub(super) async fn scan_plate(
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
 ) -> Result<ScannedPlate, PlateFailure> {
-    scan_plate_with(port, name, painting, characters, base, Priority::Normal).await
+    scan_plate_with(port, name, painting, characters, base, (Priority::Normal, None)).await
 }
 
-/// [`scan_plate`] with the picture's urgency for the image backend.
-async fn scan_plate_with(
+/// [`scan_plate`] with the picture's urgency for the image backend and the view of the people's
+/// reference sheets it is shown (none: the request's own, see `SheetPick`).
+pub(super) async fn scan_plate_with(
     port: u16,
     name: &str,
     painting: &Painting<'_>,
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
-    priority: Priority,
+    (priority, sheet): (Priority, Option<SheetPick>),
 ) -> Result<ScannedPlate, PlateFailure> {
     let kept = format!("{name}.png");
     if show_layout(port, &kept).await.is_ok() {
@@ -986,6 +1199,7 @@ async fn scan_plate_with(
     }
     let mut request = plate_request(name, painting, base, fitted);
     request.priority = priority;
+    request.sheet = sheet;
     let picture = generate(port, request).await?;
     let located: LocateReply<LocatedLayout> = post_json(
         port,
@@ -1034,13 +1248,31 @@ async fn build(
     painting: &Painting<'_>,
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
-    turn: RoomTurn,
+    turn: &RoomTurn,
 ) -> Result<Shown, PlateFailure> {
-    let ScannedPlate { picture, made } =
-        scan_plate_with(port, name, painting, characters, base, turn.priority()).await?;
+    let scanned = scan_plate_with(
+        port,
+        name,
+        painting,
+        characters,
+        base,
+        (turn.priority(), turn.sheet(base)),
+    )
+    .await?;
+    show_scanned(port, name, scanned, turn).await
+}
+
+/// Puts the scanned plate `name` behind the scene at its `turn`, or says it was not shown.
+pub(super) async fn show_scanned(
+    port: u16,
+    name: &str,
+    scanned: ScannedPlate,
+    turn: &RoomTurn,
+) -> Result<Shown, PlateFailure> {
+    let ScannedPlate { picture, made } = scanned;
     let Some(made) = made else {
-        if !claim(&turn).await {
-            return Ok(not_shown(&turn, name, true, None));
+        if !claim(turn).await {
+            return Ok(not_shown(turn, name, true, None));
         }
         put_backdrop(port, &picture, None, PlateKind::Room).await?;
         return Ok(Shown {
@@ -1054,6 +1286,7 @@ async fn build(
             own_cast: true,
             captioned: None,
             on_screen: true,
+            dropped: None,
             making: None,
         });
     };
@@ -1066,8 +1299,8 @@ async fn build(
         _ => None,
     };
     let making = Some(made.since.elapsed());
-    if !claim(&turn).await {
-        return Ok(not_shown(&turn, name, own_cast, making));
+    if !claim(turn).await {
+        return Ok(not_shown(turn, name, own_cast, making));
     }
     let cast_note = kept_cast.as_ref().map_or_else(String::new, |(room, _)| {
         format!(", with the cast of {room}")
@@ -1087,8 +1320,107 @@ async fn build(
         own_cast,
         captioned: None,
         on_screen: true,
+        dropped: None,
         making,
     })
+}
+
+/// One way of painting a declared plate: its name in the library, what it is painted from and the
+/// picture it edits, when it edits one.
+pub(super) struct Attempt<'a> {
+    pub name: String,
+    pub painting: Painting<'a>,
+    pub base: Option<&'a str>,
+}
+
+/// What making a declared plate came to.
+pub(super) struct DeclaredMade {
+    /// What was done: shown, superseded, or refused for showing more people than the cast.
+    pub shown: Shown,
+    /// The accepted attempt's picture in the library, which keeps its own scan as its layout.
+    pub picture: Option<String>,
+    /// Which attempt (from 1) is the picture, or the last one made when it was refused.
+    pub attempt: u8,
+    /// How long each attempt made took.
+    pub makings: Vec<Duration>,
+    /// How many people the last attempt showed, when every attempt showed more than the cast.
+    pub rejected: Option<usize>,
+}
+
+/// Makes a declared plate by `attempts` (the first as the caller chose, the second a fresh paint),
+/// checking each against the cast (`people_check`): the first that shows no more people than the
+/// `characters` is shown at its `turn`; when every attempt shows more, nothing is shown and the
+/// scene stays as it is. Every attempt is made first in the backend's own line.
+pub(super) async fn make_declared(
+    port: u16,
+    attempts: [Attempt<'_>; 2],
+    characters: Vec<CharacterRequest>,
+    turn: RoomTurn,
+) -> Result<DeclaredMade, PlateFailure> {
+    let present: Vec<String> = characters
+        .iter()
+        .map(|character| character.name.clone())
+        .collect();
+    let made = verified(characters.len(), |attempt| {
+        let way = &attempts[usize::from(attempt) - 1];
+        let characters = characters.clone();
+        let urgency = (turn.priority(), turn.sheet(way.base));
+        async move {
+            let scanned = scan_plate_with(
+                port,
+                &way.name,
+                &way.painting,
+                characters,
+                way.base,
+                urgency,
+            )
+            .await?;
+            let (people, making) = scanned
+                .made
+                .as_ref()
+                .map_or((None, Duration::ZERO), |made| {
+                    (Some(made.regions), made.since.elapsed())
+                });
+            Ok((scanned, people, making))
+        }
+    })
+    .await?;
+    let makings = made.makings;
+    match made.verdict {
+        Verified::Accepted { plate, attempt } => {
+            let name = &attempts[usize::from(attempt) - 1].name;
+            let picture = plate.picture.clone();
+            let shown = show_scanned(port, name, plate, &turn).await?;
+            drop_stale_bubbles(port, &present)
+                .await
+                .map_err(at(PlateStep::Backdrop))?;
+            Ok(DeclaredMade {
+                shown,
+                picture: Some(picture),
+                attempt,
+                makings,
+                rejected: None,
+            })
+        }
+        Verified::Rejected { found } => Ok(DeclaredMade {
+            shown: Shown {
+                summary: format!(
+                    "plate {}: made twice with {found} people for a cast of {}, not shown",
+                    attempts[0].name,
+                    present.len()
+                ),
+                own_cast: false,
+                captioned: None,
+                on_screen: false,
+                dropped: None,
+                making: None,
+            },
+            picture: None,
+            attempt: super::people_check::ATTEMPTS,
+            makings,
+            rejected: Some(found),
+        }),
+    }
 }
 
 /// The reference sheets (`ref-<persona id>.png`) the media library holds for `characters`, in
@@ -1113,7 +1445,7 @@ pub(super) async fn reference_sheets(
 
 /// Whether the media library holds the picture `name` (it answers 404 when not); any other answer
 /// is an error.
-async fn library_holds(port: u16, name: &str) -> Result<bool, DevError> {
+pub(super) async fn library_holds(port: u16, name: &str) -> Result<bool, DevError> {
     let answer = crate::client::head(port, &df_playground::path::media_file(name))
         .await
         .map_err(DevError::Client)?;
@@ -1270,6 +1602,7 @@ async fn request_sheet(
         avoid,
         left_out: Vec::new(),
         priority: Priority::Normal,
+        sheet: None,
     };
     let reply: GenerateReply<crate::imagegen::request::JobView> =
         post_json(port, image_path::GENERATE, &request).await?;

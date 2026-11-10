@@ -201,7 +201,12 @@ fn a_backdrop_layout_counts_only_on_a_room_plate_the_host_put_up_with_its_own_sc
 
 #[test]
 fn a_plate_kinds_key_is_its_serde_name_and_a_backdrop_is_a_room_plate_unless_told() {
-    for plate in [PlateKind::Room, PlateKind::RoomKeptCast, PlateKind::CloseUp] {
+    for plate in [
+        PlateKind::Room,
+        PlateKind::RoomKeptCast,
+        PlateKind::CloseUp,
+        PlateKind::Show,
+    ] {
         let serde_name = serde_json::to_string(&plate).expect("a plate kind writes");
         assert_eq!(serde_name, format!("\"{}\"", plate.key()));
     }
@@ -213,4 +218,34 @@ fn a_plate_kinds_key_is_its_serde_name_and_a_backdrop_is_a_room_plate_unless_tol
         scene.tv.backdrop.expect("a backdrop").plate,
         PlateKind::Room
     );
+}
+
+#[test]
+fn the_show_plate_keeps_its_own_scan_like_a_room_plate_and_reads_back_from_json() {
+    let mut scene = Fixture::parse(include_str!(
+        "../../../assets/playground/fixtures/ui_roleplay_thought.json"
+    ))
+    .expect("the roleplay fixture reads");
+    let backdrop = scene.tv.backdrop.as_mut().expect("a backdrop");
+    backdrop.layout = Some(df_scene_layout::SceneLayout::new(
+        df_scene_layout::PictureBinding {
+            name: backdrop.media.clone(),
+            sha256: "ab".repeat(32),
+            width_px: 1672,
+            height_px: 941,
+        },
+        "sam-3.1",
+        "person",
+        Vec::new(),
+    ));
+    backdrop.plate = PlateKind::Show;
+    assert!(
+        scene.tv.backdrop_layout().is_some(),
+        "the show is a scanned room"
+    );
+    assert!(!scene.tv.is_close_up());
+    let text = serde_json::to_string(&scene.tv).expect("the scene writes");
+    assert!(text.contains("\"plate\":\"show\""), "{text}");
+    let back: crate::fixture::TvScene = serde_json::from_str(&text).expect("the scene reads back");
+    assert_eq!(back.backdrop.expect("a backdrop").plate, PlateKind::Show);
 }

@@ -29,6 +29,13 @@ pub const MAXIMUM_PICTURES: usize = df_imagery::oneshot::MAXIMUM_PICTURES;
 /// refused).
 pub const CODEX_MAXIMUM_PICTURES: usize = 5;
 
+/// The most pictures a plate request the host builds itself carries unless the owner sets another
+/// (`media backend refs=<N>`, `persona watch refs_max=<N>`): below what a backend takes, because
+/// more references dilute the picture and slow it. The people's sheets come first, then the things
+/// in use, then what is only seen; the picture to edit counts as one. Never above the backend's
+/// own maximum.
+pub const DEFAULT_REFERENCE_CAP: usize = 3;
+
 /// What the provenance sidecar adds to a picture name.
 pub const PROVENANCE_SUFFIX: &str = ".provenance.json";
 

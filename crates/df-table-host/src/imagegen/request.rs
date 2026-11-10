@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use super::backend::{BackendError, BackendLimits};
 use super::model::{
     Aspect, GenerateRequestError, ImageRequest, InferenceSteps, PictureSize, Priority, Purpose,
-    ThingReference,
+    SheetPick, ThingReference,
 };
 use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::io_cause::IoCause;
@@ -61,6 +61,10 @@ pub struct GenerateRequest {
     /// right now) is put first by a backend that has a queue of its own, as Forge does.
     #[serde(default, skip_serializing_if = "Priority::is_normal")]
     pub priority: Priority,
+    /// Which view of the people's reference sheets the picture is shown; none: the front view for
+    /// an edit, the whole sheet for a picture painted anew.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheet: Option<SheetPick>,
 }
 
 /// The body of `POST /dev/media/backend`: the image backend new jobs start on. Codex runs with the
@@ -110,6 +114,22 @@ pub struct BackendView {
     /// The steps every picture is made with, when a switch set them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<InferenceSteps>,
+    /// The soft cap on the pictures a plate request the host builds itself carries (the limits
+    /// above already show the lower of it and the backend's maximum).
+    #[serde(default = "default_reference_cap")]
+    pub reference_cap: usize,
+}
+
+fn default_reference_cap() -> usize {
+    super::limits::DEFAULT_REFERENCE_CAP
+}
+
+/// The body of `POST /dev/media/references`: the soft cap on the pictures a plate request the host
+/// builds itself carries, from one. It never lifts a request above the backend's own maximum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceCap {
+    pub maximum: std::num::NonZeroUsize,
 }
 
 impl GenerateRequest {
@@ -126,7 +146,8 @@ impl GenerateRequest {
             .showing(&self.things)?
             .avoiding(&self.avoid)
             .leaving_out(&self.left_out)
-            .prioritised(self.priority))
+            .prioritised(self.priority)
+            .showing_sheets(self.sheet))
     }
 }
 

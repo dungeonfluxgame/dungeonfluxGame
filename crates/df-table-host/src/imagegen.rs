@@ -36,7 +36,7 @@ pub use self::events::ImageGenEvent;
 pub use self::limits::{DEFAULT_DEADLINE, MAXIMUM_NAME_CHARS};
 pub use self::model::{
     Aspect, AspectError, BackendRequest, GenerateRequestError, GeneratedImage, ImageRequest,
-    Priority, Purpose, ThingReference,
+    Priority, Purpose, SheetPick, ThingReference,
 };
 pub use self::request::{
     BackendSwitch, BackendView, GenerateError, GenerateReply, GenerateRequest, JobState, JobView,

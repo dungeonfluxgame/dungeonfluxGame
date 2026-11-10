@@ -170,8 +170,13 @@ pub struct PlateTimer {
     pub every_ms: u64,
     /// When the next scheduled frame is due, while one may start.
     pub due_at_ms: Option<u64>,
-    /// Whether a frame is being made.
+    /// Whether a frame is being made: true while `in_flight` is not empty.
     pub making: bool,
+    /// The frames being made, by name, in the order they started: each started frame is here until
+    /// its one closing moment (`shown`, `failed` or `dropped`), so two made at once count two and
+    /// one frame's end never clears another's. An older host sends none; `making` then says it.
+    #[serde(default)]
+    pub in_flight: Vec<String>,
     /// The last frame's newest moment.
     pub last: Option<PlateFrame>,
     /// How many slots of the schedule came while no frame could start.
@@ -196,8 +201,10 @@ impl PlateTimer {
     }
 
     /// The toolbar's words for the timer `elapsed_ms` after the reply it came in: how long until
-    /// the next scheduled frame (whole seconds, counted down), or that one is being made, or that
-    /// no watch runs; then the last frame's kind, moment and age.
+    /// the next scheduled frame (whole seconds, counted down) or that none is scheduled, or that
+    /// no watch runs; how long the frame being made has been going, and its kind; how long the
+    /// room's plate has been up; then the last frame's kind, moment and age (left out while that
+    /// last moment is the start of the frame being made, which has just been said).
     pub fn shown_text(&self, elapsed_ms: u64) -> String {
         if !self.running {
             return "Plate: off".to_owned();
@@ -214,27 +221,43 @@ impl PlateTimer {
                 None => "Plate: waiting".to_owned(),
             }
         };
-        if self.making {
+        let age = |at_ms: u64| minutes(now_ms.saturating_sub(at_ms) / 1_000);
+        let making_now = self
+            .last
+            .as_ref()
+            .filter(|last| self.making && last.moment == FrameMoment::Started);
+        if let Some(last) = making_now {
+            text.push_str(&format!(
+                " \u{b7} generating ({}) {}",
+                last.reason.words(),
+                age(last.at_ms)
+            ));
+        } else if self.making {
             text.push_str(" \u{b7} generating\u{2026}");
+        }
+        if self.in_flight.len() > 1 {
+            text.push_str(&format!(" \u{b7} {} in flight", self.in_flight.len()));
         }
         if self.missed > 0 {
             text.push_str(&format!(" \u{b7} {} missed", self.missed));
         }
-        let Some(last) = &self.last else {
-            return text;
-        };
-        let kind = match last.reason {
-            FrameReason::Line => "triggered",
-            FrameReason::Schedule => "scheduled",
-            FrameReason::Inspection => "inspection insert",
-            FrameReason::Focus => "focus insert",
-            FrameReason::Declared => "declared",
-        };
-        format!(
-            "{text} \u{b7} last {kind} {} {} ago",
-            last.moment.key(),
-            minutes(now_ms.saturating_sub(last.at_ms) / 1_000)
-        )
+        let room_plate_is_last = self.last.as_ref().is_some_and(|last| {
+            last.moment == FrameMoment::Shown
+                && !last.reason.is_insert()
+                && Some(last.at_ms) == self.room_shown_ms
+        });
+        if let Some(shown) = self.room_shown_ms.filter(|_| !room_plate_is_last) {
+            text.push_str(&format!(" \u{b7} room plate up {}", age(shown)));
+        }
+        match &self.last {
+            Some(last) if making_now.is_none() => format!(
+                "{text} \u{b7} last {} {} {} ago",
+                last.reason.words(),
+                last.moment.key(),
+                age(last.at_ms)
+            ),
+            _ => text,
+        }
     }
 }
 
@@ -263,6 +286,10 @@ pub enum FrameReason {
     Inspection,
     Focus,
     Declared,
+    /// A picture already in the library cut to as it is, with a caption (`@show`).
+    Reveal,
+    /// A sight on the way to a place, or the place itself, shown in the walk of a move.
+    Walk,
 }
 
 impl FrameReason {
@@ -273,12 +300,30 @@ impl FrameReason {
             Self::Inspection => "inspection",
             Self::Focus => "focus",
             Self::Declared => "declared",
+            Self::Reveal => "reveal",
+            Self::Walk => "walk",
+        }
+    }
+
+    /// The toolbar's words for the frame's kind.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Line => "triggered",
+            Self::Schedule => "scheduled",
+            Self::Inspection => "inspection insert",
+            Self::Focus => "focus insert",
+            Self::Declared => "declared",
+            Self::Reveal => "revealed picture",
+            Self::Walk => "walk",
         }
     }
 
     /// Whether the frame is an insert (a cut to one thing) rather than a frame of the room.
     pub fn is_insert(self) -> bool {
-        matches!(self, Self::Inspection | Self::Focus)
+        matches!(
+            self,
+            Self::Inspection | Self::Focus | Self::Reveal | Self::Walk
+        )
     }
 }
 
@@ -292,6 +337,9 @@ pub enum FrameMoment {
     Shown,
     /// Making it failed.
     Failed,
+    /// It finished without going up and without failing: another picture took its place
+    /// (superseded, overtaken), it was replaced by a newer one, or the talk moved on.
+    Dropped,
     /// An insert gave the screen back to the room.
     Ended,
 }
@@ -302,6 +350,7 @@ impl FrameMoment {
             Self::Started => "started",
             Self::Shown => "shown",
             Self::Failed => "failed",
+            Self::Dropped => "dropped",
             Self::Ended => "ended",
         }
     }

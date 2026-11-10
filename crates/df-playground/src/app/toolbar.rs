@@ -13,7 +13,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{Document, Element};
 
 use super::sound::{MUSIC_ACTION, SOUND_ACTION, VOLUME_ACTION};
-use super::state::{App, with_app};
+use super::state::{App, try_with_app};
 use crate::audio;
 use crate::controls::{Device, FIXTURE_STATUS_KEY};
 use crate::copy::{ReadingPace, STATUS_KEYS};
@@ -255,8 +255,33 @@ thread_local! {
     static PLATE_TICKING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Notes that the page took a reply of the host whose plate timer carries `host_ms`, so the timer
+/// counts on from the moment the reply came, not from the next tick.
+pub fn note_plate_reply(host_ms: u64) {
+    let page_ms = now_ms().unwrap_or_default();
+    PLATE_SEEN.with(|seen| seen.set(Some((host_ms, page_ms))));
+}
+
+/// Writes the plate timer's words into the toolbar now, when they changed. The tick, a reply of the
+/// host and a page shown again all call it, so the words are never older than the last of them.
+/// The state being in use is skipped, not waited for: a panic here would end the tick for good.
+pub fn refresh_plate() {
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    let Ok(Some(timer)) = document.query_selector(".studio-plate") else {
+        return;
+    };
+    let Some(words) = try_with_app(plate_words) else {
+        return;
+    };
+    if timer.text_content().as_deref() != Some(words.as_str()) {
+        timer.set_text_content(Some(&words));
+    }
+}
+
 /// The plate timer's words now: the host's timer, as many milliseconds on as the page has run
-/// since it first saw that reply.
+/// since it took that reply.
 fn plate_words(app: &App) -> String {
     let plate = &app.controls.plate;
     let page_ms = now_ms().unwrap_or_default();
@@ -273,8 +298,9 @@ fn plate_words(app: &App) -> String {
 }
 
 /// The plate timer: the frame watch's schedule as the host says it (the page works out none), a
-/// countdown to the next scheduled frame and the last frame's kind and age. A tick, started once,
-/// rewrites its words once a second, only when they changed.
+/// countdown to the next scheduled frame, the frame being made and the last frame's kind and age.
+/// A tick, started once, rewrites its words once a second, only when they changed.
+/// A page that was hidden is caught up when it is shown (`events::on_visibility_change`).
 fn plate_timer(document: &Document, app: &App) -> Result<Element, JsValue> {
     let timer = text_element(
         document,
@@ -288,16 +314,7 @@ fn plate_timer(document: &Document, app: &App) -> Result<Element, JsValue> {
         spawn_local(async {
             loop {
                 TimeoutFuture::new(PLATE_TICK_MS).await;
-                let Some(document) = web_sys::window().and_then(|window| window.document()) else {
-                    continue;
-                };
-                let Ok(Some(timer)) = document.query_selector(".studio-plate") else {
-                    continue;
-                };
-                let words = with_app(plate_words);
-                if timer.text_content().as_deref() != Some(words.as_str()) {
-                    timer.set_text_content(Some(&words));
-                }
+                refresh_plate();
             }
         });
     }

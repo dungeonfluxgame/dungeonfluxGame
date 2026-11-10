@@ -9,6 +9,7 @@ use crate::fixture::{
     TvScene, UnavailableChoice,
 };
 use crate::home::model::HomeScene;
+use crate::inventory::{InventoryPanel, InventoryRow, RowUse};
 use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
 use crate::overlay::{
     Edit, NarrationBox, NarrationPlacement, PartyLook, Progress, SeatStrip, StoryMark,
@@ -147,6 +148,21 @@ fn home(focus: &str) -> HomeScene {
     }
 }
 
+fn inventory_panel(owner: &str) -> InventoryPanel {
+    InventoryPanel {
+        owner: owner.to_owned(),
+        title: "Satchel".to_owned(),
+        rows: vec![InventoryRow {
+            id: "ochre".to_owned(),
+            name: "yellow ochre".to_owned(),
+            count: 3,
+            usage: RowUse::Consumed,
+        }],
+        serial: 1,
+        moves: Vec::new(),
+    }
+}
+
 fn story_mark(title: &str) -> StoryMark {
     StoryMark {
         title: title.to_owned(),
@@ -233,6 +249,7 @@ fn all_set() -> SceneOverlay {
         music: Edit::Set(track("live.ogg")),
         clues: Edit::Set(clue_board("live-clue")),
         story: Edit::Set(story_mark("Live story")),
+        inventory: Edit::Set(inventory_panel("live-owner")),
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
@@ -263,6 +280,7 @@ fn all_clear() -> SceneOverlay {
         music: Edit::Clear,
         clues: Edit::Clear,
         story: Edit::Clear,
+        inventory: Edit::Clear,
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
@@ -321,6 +339,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
         home,
         clues,
         story,
+        inventory,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -349,6 +368,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
     assert_eq!(home.as_ref(), overlay.home.set_value());
     assert_eq!(clues.as_ref(), overlay.clues.set_value());
     assert_eq!(story.as_ref(), overlay.story.set_value());
+    assert_eq!(inventory.as_ref(), overlay.inventory.set_value());
     assert_eq!(Some(&suggested), overlay.suggested.set_value());
     assert_eq!(Some(&groups), overlay.groups.set_value());
     assert_eq!(Some(&unavailable), overlay.unavailable.set_value());
@@ -385,6 +405,7 @@ fn every_slot_clears() {
         home,
         clues,
         story,
+        inventory,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -413,6 +434,7 @@ fn every_slot_clears() {
     assert_eq!(home, None);
     assert_eq!(clues, None);
     assert_eq!(story, None);
+    assert_eq!(inventory, None);
     assert!(suggested.is_empty());
     assert!(groups.is_empty());
     assert!(unavailable.is_empty());
@@ -432,11 +454,11 @@ fn changed_slots_match_wire_names() {
         .filter(|key| !matches!(*key, "cue_count" | "slide_count" | "camera_count" | "cues"))
         .collect();
     let mut slots = overlay.changed_slots();
-    assert_eq!(slots.len(), 20, "{slots:?}");
+    assert_eq!(slots.len(), 21, "{slots:?}");
     slots.sort_unstable();
     keys.sort_unstable();
     assert_eq!(slots, keys);
-    assert_eq!(all_clear().changed_slots().len(), 20);
+    assert_eq!(all_clear().changed_slots().len(), 21);
     assert!(!overlay.is_empty() && !all_clear().is_empty());
 }
 

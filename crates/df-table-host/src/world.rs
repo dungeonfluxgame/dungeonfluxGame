@@ -23,6 +23,8 @@
 //! - `GET /dev/world/validate`: reads the bible now and counts what it holds.
 //! - `POST /dev/world/picture`: `{"item", "picture"}` keeps a close-up as the reference sheet of a
 //!   thing at a place designed in play.
+//! - `GET /dev/world/town`: the town the party is in, if any (see `town`).
+//! - `POST /dev/world/walk`: notes one stage of a move's walk in the audit log (see `walk_note`).
 //! - `/dev/world/inventory/..`: the standard inventory of any number of owners (see `inventory`).
 //! - `/dev/world/memory/..`: the standard memory of any number of owners (see `memory`).
 //!
@@ -35,14 +37,21 @@ pub mod memory;
 pub mod request;
 pub mod routes;
 mod store;
+mod town;
+mod visited;
+mod walk_note;
 
 pub use self::cli::{WorldCommand, parse};
 pub use self::inventory::{
-    Inventory, InventoryApplied, InventoryDelta, InventoryItem, InventoryReason, ItemUse,
-    inventory_of, sheet_name, take_judged_changes,
+    GainSource, Inventory, InventoryApplied, InventoryDelta, InventoryItem, InventoryMiss,
+    InventoryReason, ItemCount, ItemUse, follow_judged, inventory_of, judged_miss, sheet_name,
+    take_judged_changes,
 };
 pub use self::request::WorldError;
 pub use self::routes::router_with;
+pub use self::town::{Town, TownView, end_town, seed_town, town_of};
+pub use self::visited::{Visited, visited_of};
+pub use self::walk_note::{WalkNoted, WalkOutcome, WalkStageNote};
 
 use df_content::world_bible::clamp_quote;
 
@@ -52,6 +61,8 @@ use crate::state::AppState;
 mod inventory_tests;
 #[cfg(test)]
 mod memory_tests;
+#[cfg(test)]
+mod town_tests;
 #[cfg(test)]
 mod world_tests;
 

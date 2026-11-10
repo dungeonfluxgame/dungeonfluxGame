@@ -820,7 +820,7 @@
   transform: translate(-50%, -50%) rotate(45deg);
 }
 .kit-turning {
-  animation: kit-turn 1.2s linear infinite;
+  animation: kit-turn 1.2s linear var(--kit-turn-delay, 0ms) infinite;
 }
 /* Gold text: a gradient clipped to the letters. A text-shadow would paint over the gradient, so
    the shadow is a drop-shadow on the text's own element. */
@@ -2247,6 +2247,16 @@
   color: var(--kit-gold-title);
   filter: drop-shadow(0 0 .4cqw #f1c96a77);
   animation: kit-icon-glow 1.2s ease-in-out calc(var(--kit-in-ms) + 100ms) 1;
+}
+/* The working ring turns for as long as it is drawn, and glows once as it arrives. It names the
+   banner so that no placement or tone rule for the icon above it in specificity can drop the turn
+   (a rule with only `.kit-banner-icon` ties `.kit-turning` and, coming later, used to win). The
+   page sets --kit-turn-delay so a ring drawn again carries on from the angle of the one it
+   replaces. */
+.kit-banner .kit-banner-icon.kit-turning {
+  animation:
+    kit-turn 1.2s linear var(--kit-turn-delay, 0ms) infinite,
+    kit-icon-glow 1.2s ease-in-out calc(var(--kit-in-ms) + 100ms) 1;
 }
 .kit-banner-number {
   margin-right: .5cqw;

@@ -218,12 +218,16 @@ fn image(words: &[String]) -> Result<Command, CommandError> {
         return Err(CommandError::Usage(IMAGE_USAGE));
     };
     let slot = picture_slot(slot, PICTURE_SLOTS)?;
-    let (mut caption, mut rotation_degrees) = (None, 0_u16);
-    for (key, value) in keyed(rest, "caption=TEXT, rotate=0-359", &["caption", "rotate"])? {
-        if key == "rotate" {
-            rotation_degrees = rotation(key, value, " (180 is upside down)")?;
-        } else {
-            caption = Some(value.to_owned());
+    let (mut caption, mut rotation_degrees, mut plate) = (None, 0_u16, PlateKind::Room);
+    for (key, value) in keyed(
+        rest,
+        "caption=TEXT, rotate=0-359, plate=show",
+        &["caption", "rotate", "plate"],
+    )? {
+        match key {
+            "rotate" => rotation_degrees = rotation(key, value, " (180 is upside down)")?,
+            "plate" => plate = show_plate(slot, value)?,
+            _ => caption = Some(value.to_owned()),
         }
     }
     Ok(Command::Scene(SceneChange::Image {
@@ -233,8 +237,22 @@ fn image(words: &[String]) -> Result<Command, CommandError> {
         rotation_degrees,
         slide: None,
         layout: None,
-        plate: PlateKind::Room,
+        plate,
     }))
+}
+
+/// `plate=show` of `scene image tv-backdrop`: the picture is the day's show plate. Only a backdrop
+/// has a plate kind, and the show is the only kind a command names (the host sets the others).
+fn show_plate(slot: ImageSlot, value: &str) -> Result<PlateKind, CommandError> {
+    match (slot, value) {
+        (ImageSlot::TvBackdrop, "show") => Ok(PlateKind::Show),
+        (ImageSlot::TvBackdrop, _) => Err(bad_choice("plate", value, "show")),
+        _ => Err(bad_choice(
+            "plate",
+            value,
+            "nothing: only tv-backdrop has a plate kind",
+        )),
+    }
 }
 
 fn percent(key: &str, value: &str) -> Result<u8, CommandError> {

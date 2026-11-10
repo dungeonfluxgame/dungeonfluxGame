@@ -32,6 +32,14 @@
 //! insert hold; the caption that was there is put back with the room. The watch records when
 //! each frame starts and is shown and when an insert ends (`PERSONA frame_timing`, see `frame`).
 //!
+//! A watch input `@show <picture> | <caption> | <seconds>` cuts to a picture the library already
+//! holds (a finished painting) as it is: no picture is made and no model is asked. It is an insert
+//! with that picture and the room's layout (the cast and the bubbles stay), the caption on the
+//! scene's caption bar, held for the seconds (10 by default), then the room returns. It is shown
+//! at once like an emergency plate, but it is no new picture of the talk, so the plates waiting
+//! for their slots are not dropped; an unknown picture is refused with a typed reason and logged
+//! (`PERSONA frame_timing .. reason=reveal`, `PERSONA revealed`, `PERSONA refused verb=reveal`).
+//!
 //! A watch input `@declare <speaker id> | <json>` (printed by `persona declare`) is a character
 //! declaring the physical action they are doing right now: it makes an emergency plate of it, a
 //! picture of the scene showing the action in progress. No judge decides whether to cut, and no
@@ -72,15 +80,17 @@ use super::declare::{
     DECLARE_PREFIX, NO_DUPLICATES, WatchDeclared, declared_scene, held_by, plan_base,
 };
 use super::frame::{
-    DeclaredTiming, FrameAsk, FrameConfig, FrameJudgement, FrameMoment, FrameReason, FrameReply,
-    FrameRequest, FrameScheduleRequest, FrameTimingReply, FrameTimingRequest, PERSONA_FRAME,
-    PERSONA_FRAME_SCHEDULE, PERSONA_FRAME_TIMING, ShowSettings,
+    DeclaredRejected, DeclaredTiming, DroppedWhy, FrameAsk, FrameConfig, FrameJudgement,
+    FrameMoment, FrameReason, FrameReply, FrameRequest, FrameScheduleRequest, FrameTimingReply,
+    FrameTimingRequest, PERSONA_FRAME, PERSONA_FRAME_SCHEDULE, PERSONA_FRAME_TIMING, RevealRefusal,
+    RevealedTiming, ShowSettings,
 };
 use super::plate::{
-    Captioned, InsertRequest, Painting, PlateFailure, RoomTurn, SharedScreen, Shown,
-    begin_declaration, claim_after_insert, figures_in, fit_pictures, image_limits,
-    inventory_sheets, items_that_fit, make_frame, make_insert, plate_request, put_caption_back,
-    put_title_back, reference_sheet_name, show_with_cast, start_spinner,
+    Attempt, Captioned, InsertRequest, Painting, PlateFailure, Reveal, RoomTurn, SharedScreen,
+    Shown, begin_declaration, claim_after_insert, claim_after_reveal, figures_in, fit_pictures,
+    image_limits, inventory_sheets, items_that_fit, library_holds, make_declared, make_frame,
+    make_insert, make_reveal, plate_request, put_caption_back, put_title_back, queue_reveal,
+    reference_sheet_name, show_with_cast, start_spinner,
 };
 use super::request::{BackfillRequest, Backfilled, CoverageRequest, Covered, PersonaReply};
 use super::routes::path as persona_path;
@@ -88,6 +98,7 @@ use super::story::{PERSONA_STORY, StoryReply};
 use super::story_items::{ItemPicture, PERSONA_STORY_ITEM_PICTURE, PictureReply, thing_of};
 use crate::cast::request::CastList;
 use crate::cast::routes::path as cast_path;
+use crate::command::bad_choice;
 use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json, reply_value};
 use crate::imagegen::{BackendLimits, GenerateRequestError};
@@ -115,7 +126,7 @@ pub(super) const MAXIMUM_PARALLEL_FRAMES: usize = 12;
 const MAXIMUM_SCHEDULE_JUDGES: usize = 2;
 /// How often `persona watch` looks, between lines, for frames that finished, an insert whose hold
 /// is over and a scheduled frame that is due: well inside what a person notices.
-const WATCH_TICK: Duration = Duration::from_secs(1);
+const WATCH_TICK: Duration = Duration::from_millis(250);
 /// How a close-up is framed: the item alone, over the whole picture. Never a plain strip left for
 /// the words shown over it: the painter draws that strip as a flat band across the picture file
 /// (roam run 2: a beige band over the bottom quarter of every insert).
@@ -176,6 +187,9 @@ pub struct FrameOptions {
     /// How long an emergency plate (a declared action) stays up before the room's plates go on,
     /// instead of the settings' `show.declare_hold_seconds`.
     pub declare_hold: Option<Duration>,
+    /// The soft cap on the pictures a plate request the host builds itself carries, set on the
+    /// host when the watch starts (`refs_max=`, as `media backend refs=` does).
+    pub refs_max: Option<usize>,
     /// The story's place the talk is at, so every room frame draws the things in sight there as
     /// their reference sheets have them (`persona story item`), the same in every picture.
     pub place: Option<String>,
@@ -185,6 +199,13 @@ impl FrameOptions {
     pub(super) fn with_every(self, every: Duration) -> Self {
         Self {
             every: Some(every),
+            ..self
+        }
+    }
+
+    pub(super) fn with_refs_max(self, maximum: usize) -> Self {
+        Self {
+            refs_max: Some(maximum),
             ..self
         }
     }
@@ -211,12 +232,47 @@ pub(super) enum WatchInput<'a> {
     /// `@declare <speaker id> | <json>`: a character declaring what they are doing right now (the
     /// JSON is a [`WatchDeclared`]).
     Declare { speaker: &'a str, body: &'a str },
+    /// `@show <picture> | <caption> | <seconds>`: a picture the library already holds, shown as it
+    /// is for `hold` seconds (none given: `DEFAULT_REVEAL_HOLD_SECONDS`).
+    Show {
+        picture: &'a str,
+        caption: &'a str,
+        hold: Option<u64>,
+    },
     /// None of these, or a focus with no text.
     Unreadable,
 }
 
+/// How long a revealed picture is held when `@show` gives no seconds.
+pub(super) const DEFAULT_REVEAL_HOLD_SECONDS: u64 = 10;
+
+/// The watch input that shows a picture the library already holds.
+const SHOW_PREFIX: &str = "@show ";
+
 impl<'a> WatchInput<'a> {
     pub(super) fn parse(entry: &'a str) -> Self {
+        if let Some(shown) = entry.strip_prefix(SHOW_PREFIX) {
+            // `<picture> | <caption> | <seconds>`: the seconds are the last field when it is a
+            // whole number, and a caption may hold ` | ` itself.
+            let Some((picture, rest)) = shown.split_once(" | ") else {
+                return Self::Unreadable;
+            };
+            let (caption, hold) = match rest.rsplit_once(" | ") {
+                Some((caption, seconds)) => match seconds.trim().parse() {
+                    Ok(seconds) => (caption, Some(seconds)),
+                    Err(_) => (rest, None),
+                },
+                None => (rest, None),
+            };
+            return match picture.trim() {
+                "" => Self::Unreadable,
+                picture => Self::Show {
+                    picture,
+                    caption: caption.trim(),
+                    hold,
+                },
+            };
+        }
         if let Some(declared) = entry.strip_prefix(DECLARE_PREFIX) {
             return match declared.split_once(" | ") {
                 Some((speaker, body)) if !speaker.trim().is_empty() && !body.trim().is_empty() => {
@@ -289,8 +345,15 @@ pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<Stri
     let cast = reply_value(listed)?;
     let picture = cast.picture.clone();
     let speakers = speakers_of(cast);
+    let refs_max = options.refs_max;
     let mut watch = FrameWatch::new(options, &speakers, &picture);
     let mut transcript = Vec::new();
+    if let Some(maximum) = refs_max {
+        match set_reference_cap(port, maximum).await {
+            Ok(()) => transcript.push(format!("  at most {maximum} pictures to a plate request")),
+            Err(error) => transcript.push(format!("  reference cap not set: {error}")),
+        }
+    }
     let mut input = BufReader::new(tokio::io::stdin()).lines();
     let mut tick = tokio::time::interval(WATCH_TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -312,9 +375,20 @@ pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<Stri
         };
         match WatchInput::parse(&entry) {
             WatchInput::Unreadable => transcript.push(format!(
-                "  not '<speaker id> | <line>', '@focus <text>' or \
-                 '@declare <speaker id> | <json>', skipped: {entry}"
+                "  not '<speaker id> | <line>', '@focus <text>', '@show <picture> | <caption> | \
+                 <seconds>' or '@declare <speaker id> | <json>', skipped: {entry}"
             )),
+            WatchInput::Show {
+                picture,
+                caption,
+                hold,
+            } => {
+                let hold = Duration::from_secs(hold.unwrap_or(DEFAULT_REVEAL_HOLD_SECONDS));
+                transcript.push(format!("  show: {picture}"));
+                watch
+                    .reveal(port, turn, (picture, caption, hold), &mut transcript)
+                    .await;
+            }
             WatchInput::Declare { speaker: id, body } => {
                 let declared = serde_json::from_str::<WatchDeclared>(body);
                 let Some(speaker) = speakers.iter().find(|speaker| speaker.id == id) else {
@@ -376,9 +450,79 @@ async fn mark(
         reason,
         took_ms: saturating_millis(took),
         declared,
+        revealed: None,
+        dropped: None,
     };
     let reply: FrameTimingReply = post_json(port, PERSONA_FRAME_TIMING, &request).await?;
     reply_value(reply).map(|_| ())
+}
+
+/// Records a moment of a revealed picture `frame` (see [`mark`]), with the picture and its hold.
+async fn mark_revealed(
+    port: u16,
+    frame: &str,
+    (moment, took): (FrameMoment, Duration),
+    revealed: RevealedTiming,
+) -> Result<(), DevError> {
+    let request = FrameTimingRequest {
+        frame: frame.to_owned(),
+        moment,
+        reason: FrameReason::Reveal,
+        took_ms: saturating_millis(took),
+        declared: None,
+        revealed: Some(revealed),
+        dropped: None,
+    };
+    let reply: FrameTimingReply = post_json(port, PERSONA_FRAME_TIMING, &request).await?;
+    reply_value(reply).map(|_| ())
+}
+
+/// Records that the frame `frame`, started, finished without going up and without failing (the
+/// `dropped` moment): every frame that starts ends with exactly one of `shown`, `failed` and
+/// `dropped`, so the page's timer never counts a frame that is over.
+async fn mark_dropped(
+    port: u16,
+    frame: &str,
+    reason: FrameReason,
+    took: Duration,
+    why: DroppedWhy,
+) -> Result<(), DevError> {
+    let request = FrameTimingRequest {
+        frame: frame.to_owned(),
+        moment: FrameMoment::Dropped,
+        reason,
+        took_ms: saturating_millis(took),
+        declared: None,
+        revealed: None,
+        dropped: Some(why),
+    };
+    let reply: FrameTimingReply = post_json(port, PERSONA_FRAME_TIMING, &request).await?;
+    reply_value(reply).map(|_| ())
+}
+
+/// Sets the soft cap on the pictures a plate request the host builds itself carries.
+async fn set_reference_cap(port: u16, maximum: usize) -> Result<(), DevError> {
+    use crate::imagegen::request::{GenerateReply, ReferenceCap};
+    let Some(maximum) = std::num::NonZeroUsize::new(maximum) else {
+        return Ok(());
+    };
+    let reply: GenerateReply<crate::imagegen::request::BackendView> = post_json(
+        port,
+        crate::imagegen::routes::path::REFERENCES,
+        &ReferenceCap { maximum },
+    )
+    .await?;
+    reply_value(reply).map(|_| ())
+}
+
+/// Why `picture` cannot be shown as it is: it is no picture file name, or the media library holds
+/// none of that name. `None`: it can be shown.
+async fn reveal_refusal(port: u16, picture: &str) -> Result<Option<RevealRefusal>, DevError> {
+    if crate::locate::check_picture_name(picture).is_err() {
+        return Ok(Some(RevealRefusal::InvalidName));
+    }
+    let held = library_holds(port, picture).await?;
+    Ok((!held).then_some(RevealRefusal::UnknownPicture))
 }
 
 /// What the keeper of an item's stall knows of how it looks up close, before an insert of it.
@@ -439,6 +583,96 @@ async fn keeper_details(
                 _ => None,
             })
             .collect(),
+    ))
+}
+
+/// `persona show-picture`: shows `picture`, one the library already holds, for `hold` as `@show`
+/// does in a watch (an insert with `room`'s layout, `caption` on the caption bar, nothing made),
+/// then puts `room` and the caption that was there back. For a call without a watch: it waits out
+/// the hold. An unknown picture is refused and logged.
+pub(super) async fn show_picture(
+    port: u16,
+    picture: &str,
+    room: &str,
+    caption: Option<&str>,
+    hold: Duration,
+) -> Result<String, DevError> {
+    // The frame's name is a plain file name whatever the picture's is.
+    let stem: String = picture
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = format!("show-{stem}");
+    let revealed = |refused| RevealedTiming {
+        picture: picture.to_owned(),
+        hold_ms: saturating_millis(hold),
+        refused,
+        behind: 0,
+    };
+    if let Some(refusal) = reveal_refusal(port, picture).await? {
+        mark_revealed(
+            port,
+            &name,
+            (FrameMoment::Failed, Duration::ZERO),
+            revealed(Some(refusal)),
+        )
+        .await?;
+        return Err(DevError::Command(bad_choice(
+            "picture",
+            picture,
+            format!("a picture of the media library ({})", refusal.key()),
+        )));
+    }
+    mark_revealed(
+        port,
+        &name,
+        (FrameMoment::Started, Duration::ZERO),
+        revealed(None),
+    )
+    .await?;
+    let started = Instant::now();
+    let reveal = Reveal {
+        name: &name,
+        picture,
+        room,
+        caption,
+        hold,
+    };
+    let screen = SharedScreen::default();
+    let ticket = queue_reveal(&screen);
+    let (summary, captioned) = make_reveal(port, &screen, reveal, ticket)
+        .await
+        .map_err(|(_, error)| *error)?;
+    mark_revealed(
+        port,
+        &name,
+        (FrameMoment::Shown, started.elapsed()),
+        revealed(None),
+    )
+    .await?;
+    tokio::time::sleep(hold).await;
+    if let Some(captioned) = captioned {
+        put_caption_back(port, captioned.before).await?;
+    }
+    show_with_cast(port, room, room)
+        .await
+        .map_err(|(_, error)| *error)?;
+    mark_revealed(
+        port,
+        &name,
+        (FrameMoment::Ended, started.elapsed()),
+        revealed(None),
+    )
+    .await?;
+    Ok(format!(
+        "{summary}; the room is back after {} s",
+        hold.as_secs()
     ))
 }
 
@@ -508,6 +742,8 @@ struct InFlight {
     reason: FrameReason,
     started: Instant,
     after_turn: u32,
+    /// How long it holds the screen when that is not the insert hold (a revealed picture).
+    hold: Option<Duration>,
     task: JoinHandle<Made>,
 }
 
@@ -517,6 +753,8 @@ struct Made {
     made: Result<Shown, PlateFailure>,
     finished: Instant,
     timing: Result<(), DevError>,
+    /// The picture that went up, when it is not the frame's own name (a declared plate made again).
+    picture: Option<String>,
 }
 
 /// A frame judge asked and not answered yet (on the schedule, after a line, or for a focus), owned
@@ -543,6 +781,8 @@ struct InsertUp {
     name: String,
     reason: FrameReason,
     shown: Instant,
+    /// How long it holds the screen when that is not the insert hold (a revealed picture).
+    hold: Option<Duration>,
 }
 
 /// The state of the frames of one conversation.
@@ -583,6 +823,8 @@ pub(super) struct FrameWatch {
     insert_up: Option<InsertUp>,
     /// The emergency plate on screen, until its hold is over.
     declared_up: Option<InsertUp>,
+    /// How many pictures the library already held have been shown (`reveal`), for their names.
+    reveals: u32,
     /// The caption an insert's clue replaced on the caption bar, while the clue is up.
     captioned: Option<Captioned>,
     /// When the watch began, and when it last asked for a frame on the schedule.
@@ -803,6 +1045,7 @@ impl FrameWatch {
             last_inspected: None,
             insert_up: None,
             declared_up: None,
+            reveals: 0,
             captioned: None,
             began: Instant::now(),
             next_slot: 0,
@@ -995,6 +1238,18 @@ impl FrameWatch {
                 "  declared plate {} replaced by a newer declaration",
                 older.name
             ));
+            let why = DroppedWhy::Replaced;
+            if let Err(error) = mark_dropped(
+                port,
+                &older.name,
+                older.reason,
+                older.started.elapsed(),
+                why,
+            )
+            .await
+            {
+                transcript.push(format!("  end of {} not recorded: {error}", older.name));
+            }
         }
         self.in_flight
             .retain(|frame| frame.reason != FrameReason::Declared);
@@ -1013,11 +1268,14 @@ impl FrameWatch {
         };
         let plan = plan_base(on_screen.is_some(), figures, self.characters.len());
         let base = on_screen.filter(|_| plan.edit);
+        let fresh_words = {
+            let place = self.options.scene.as_deref().unwrap_or(&self.picture);
+            format!("{place} {}", judgement.next_picture)
+        };
         let scene_words = if plan.edit {
             judgement.next_picture.clone()
         } else {
-            let place = self.options.scene.as_deref().unwrap_or(&self.picture);
-            format!("{place} {}", judgement.next_picture)
+            fresh_words.clone()
         };
         let style = BriefStyle::default();
         let prompt = room_prompt(
@@ -1026,6 +1284,8 @@ impl FrameWatch {
             &judgement.shot_look,
             &scene_words,
         );
+        // A picture that shows more people than the cast is made once more, painted anew.
+        let fresh_prompt = room_prompt(&style, None, &judgement.shot_look, &fresh_words);
         // The speaker's sheet comes first, so the backend's room for pictures never loses it.
         let mut characters = self.characters.clone();
         if let Some(at) = characters
@@ -1096,18 +1356,32 @@ impl FrameWatch {
         let reason = FrameReason::Declared;
         let superseded_count = u32::try_from(superseded).unwrap_or(u32::MAX);
         let started = Instant::now();
+        let cast = u32::try_from(characters.len()).unwrap_or(u32::MAX);
         let task = tokio::spawn(async move {
-            let painting = Painting {
-                prompt: &prompt,
-                avoid: &avoid,
-                sheets: &sheets,
-            };
-            let made = make_frame(
+            let attempts = [
+                Attempt {
+                    name: task_name.clone(),
+                    painting: Painting {
+                        prompt: &prompt,
+                        avoid: &avoid,
+                        sheets: &sheets,
+                    },
+                    base: base.as_deref(),
+                },
+                Attempt {
+                    name: format!("{task_name}-redo"),
+                    painting: Painting {
+                        prompt: &fresh_prompt,
+                        avoid: &avoid,
+                        sheets: &sheets,
+                    },
+                    base: None,
+                },
+            ];
+            let made = make_declared(
                 port,
-                &task_name,
-                &painting,
+                attempts,
                 characters,
-                base.as_deref(),
                 RoomTurn {
                     number,
                     screen,
@@ -1118,33 +1392,54 @@ impl FrameWatch {
             )
             .await;
             let finished = Instant::now();
-            let timing = match &made {
-                Ok(shown) if shown.on_screen => {
+            let (made, picture, timing) = match made {
+                Ok(done) => {
                     let took = finished - started;
-                    let made_for = shown.making.unwrap_or(took);
+                    let total: Duration = done.makings.iter().sum();
                     let note = DeclaredTiming {
                         who,
                         superseded: superseded_count,
-                        queue_wait_ms: saturating_millis(took.saturating_sub(made_for)),
-                        made_ms: saturating_millis(made_for),
+                        queue_wait_ms: saturating_millis(took.saturating_sub(total)),
+                        made_ms: saturating_millis(done.makings.last().copied().unwrap_or(took)),
                         base: plan.way().to_owned(),
                         reason: plan.reason.to_owned(),
+                        attempt: done.attempt,
+                        first_made_ms: done
+                            .makings
+                            .first()
+                            .filter(|_| done.makings.len() > 1)
+                            .map(|first| saturating_millis(*first)),
+                        rejected: done.rejected.map(|people| DeclaredRejected {
+                            people: u32::try_from(people).unwrap_or(u32::MAX),
+                            cast,
+                        }),
                     };
-                    mark(
-                        port,
-                        &task_name,
-                        (FrameMoment::Shown, reason),
-                        took,
-                        Some(note),
-                    )
-                    .await
+                    // A refused plate is a failed one: the room stays as it is.
+                    let moment = if done.shown.on_screen {
+                        Some(FrameMoment::Shown)
+                    } else if done.rejected.is_some() {
+                        Some(FrameMoment::Failed)
+                    } else {
+                        None
+                    };
+                    let timing = match moment {
+                        Some(moment) => {
+                            mark(port, &task_name, (moment, reason), took, Some(note)).await
+                        }
+                        None => match done.shown.dropped {
+                            Some(why) => mark_dropped(port, &task_name, reason, took, why).await,
+                            None => Ok(()),
+                        },
+                    };
+                    (Ok(done.shown), done.picture, timing)
                 }
-                Ok(_) | Err(_) => Ok(()),
+                Err(failure) => (Err(failure), None, Ok(())),
             };
             Made {
                 made,
                 finished,
                 timing,
+                picture,
             }
         });
         // The newest picture shows the declared action; the talk before it is behind it.
@@ -1162,6 +1457,134 @@ impl FrameWatch {
             reason,
             started,
             after_turn: turn,
+            hold: None,
+            task,
+        });
+    }
+
+    /// Shows a picture the library already holds, as it is (`@show <picture> | <caption> |
+    /// <seconds>`, after line `turn`): an insert of it with the room's layout, its caption on the
+    /// caption bar, held for `hold`, then the room returns. Nothing is made and no model is asked.
+    /// It is shown at once (`claim_reveal`), and is no new picture of the talk: the plates waiting
+    /// for their slots are not dropped, and the picture the next edit starts from does not
+    /// change. A picture the library does not hold is refused, logged with its reason, and
+    /// nothing changes on screen.
+    pub(super) async fn reveal(
+        &mut self,
+        port: u16,
+        turn: u32,
+        (picture, caption, hold): (&str, &str, Duration),
+        transcript: &mut Vec<String>,
+    ) {
+        self.collect(port, false, transcript).await;
+        self.end_insert(port, false, transcript).await;
+        self.end_declared(port, false, transcript).await;
+        let revealed = |refused, behind| RevealedTiming {
+            picture: picture.to_owned(),
+            hold_ms: saturating_millis(hold),
+            refused,
+            behind,
+        };
+        let name = format!("{}-show-{}", self.options.name, self.reveals + 1);
+        match reveal_refusal(port, picture).await {
+            Ok(None) => {}
+            Ok(Some(refusal)) => {
+                transcript.push(format!("  {picture} is not shown: {}", refusal.key()));
+                let failed = (FrameMoment::Failed, Duration::ZERO);
+                if let Err(error) =
+                    mark_revealed(port, &name, failed, revealed(Some(refusal), 0)).await
+                {
+                    transcript.push(format!("  refusal not recorded: {error}"));
+                }
+                return;
+            }
+            Err(error) => {
+                transcript.push(format!(
+                    "  {picture} is not shown, the library is not read: {error}"
+                ));
+                return;
+            }
+        }
+        // A revealed picture waits for the ones before it to hold their whole time: a sequence.
+        let ticket = queue_reveal(&self.screen);
+        let behind = u32::try_from(ticket.behind).unwrap_or(u32::MAX);
+        self.reveals += 1;
+        let since_start = self.last_start.unwrap_or(self.began).elapsed();
+        if let Err(error) = mark_revealed(
+            port,
+            &name,
+            (FrameMoment::Started, since_start),
+            revealed(None, behind),
+        )
+        .await
+        {
+            transcript.push(format!("  start of {name} not recorded: {error}"));
+        }
+        transcript.push(format!(
+            "  {name} started: {picture} for {:.1} s, no picture made, {behind} ahead of it",
+            hold.as_secs_f32()
+        ));
+        let screen = self.screen.clone();
+        let room = self.cast_picture.clone();
+        let task_name = name.clone();
+        let picture = picture.to_owned();
+        let caption = (!caption.is_empty()).then(|| caption.to_owned());
+        let started = Instant::now();
+        let task = tokio::spawn(async move {
+            let made = make_reveal(
+                port,
+                &screen,
+                Reveal {
+                    name: &task_name,
+                    picture: &picture,
+                    room: &room,
+                    caption: caption.as_deref(),
+                    hold,
+                },
+                ticket,
+            )
+            .await
+            .map(|(summary, captioned)| Shown {
+                own_cast: false,
+                on_screen: true,
+                dropped: None,
+                making: None,
+                summary,
+                captioned,
+            });
+            let finished = Instant::now();
+            let timing = match &made {
+                Ok(_) => {
+                    let shown = (FrameMoment::Shown, finished - started);
+                    mark_revealed(
+                        port,
+                        &task_name,
+                        shown,
+                        RevealedTiming {
+                            picture,
+                            hold_ms: saturating_millis(hold),
+                            refused: None,
+                            behind,
+                        },
+                    )
+                    .await
+                }
+                Err(_) => Ok(()),
+            };
+            Made {
+                made,
+                finished,
+                timing,
+                picture: None,
+            }
+        });
+        self.in_flight.push_back(InFlight {
+            number: 0,
+            name,
+            reason: FrameReason::Reveal,
+            started,
+            after_turn: turn,
+            hold: Some(hold),
             task,
         });
     }
@@ -1429,6 +1852,8 @@ impl FrameWatch {
             FrameReason::Focus => format!("for a focus, after line {turn}"),
             FrameReason::Line | FrameReason::Inspection => format!("after line {turn}"),
             FrameReason::Declared => format!("for a declaration, after line {turn}"),
+            FrameReason::Reveal => format!("for a revealed picture, after line {turn}"),
+            FrameReason::Walk => format!("for a walk, after line {turn}"),
         };
         let changes: Vec<String> = judgement
             .changes
@@ -1470,7 +1895,10 @@ impl FrameWatch {
             .is_some_and(|started| started.elapsed() < self.options.hold);
         let room_full = self.rooms_in_flight() >= self.options.parallel;
         let can_start = match reason {
-            FrameReason::Focus | FrameReason::Declared => true,
+            FrameReason::Focus
+            | FrameReason::Declared
+            | FrameReason::Reveal
+            | FrameReason::Walk => true,
             FrameReason::Inspection => self.inserts_in_flight() < self.options.parallel,
             FrameReason::Line => !held && !room_full,
             // A slot of the schedule keeps the cadence: the hold never puts it off.
@@ -1669,6 +2097,7 @@ impl FrameWatch {
                     inserted.map(|(summary, _, captioned)| Shown {
                         own_cast: false,
                         on_screen: true,
+                        dropped: None,
                         making: None,
                         summary: match kept {
                             None => insert_summary(summary, offered.as_ref(), details),
@@ -1709,12 +2138,16 @@ impl FrameWatch {
                     let took = finished - started;
                     mark(port, &task_name, (FrameMoment::Shown, reason), took, None).await
                 }
+                Ok(Shown {
+                    dropped: Some(why), ..
+                }) => mark_dropped(port, &task_name, reason, finished - started, *why).await,
                 Ok(_) | Err(_) => Ok(()),
             };
             Made {
                 made,
                 finished,
                 timing,
+                picture: None,
             }
         });
         // An insert is a cut to the item: the next frame starts again from the room as it was. A
@@ -1742,6 +2175,7 @@ impl FrameWatch {
             reason,
             started,
             after_turn: turn,
+            hold: None,
             task,
         });
     }
@@ -1760,6 +2194,18 @@ impl FrameWatch {
                 "  frame {} ({}) dropped: the talk moved on before it was made",
                 frame.number, frame.name
             ));
+            let why = DroppedWhy::Abandoned;
+            if let Err(error) = mark_dropped(
+                port,
+                &frame.name,
+                frame.reason,
+                frame.started.elapsed(),
+                why,
+            )
+            .await
+            {
+                transcript.push(format!("  end of {} not recorded: {error}", frame.name));
+            }
         }
         if let Some(before) = self.title_before.take()
             && let Err(error) = put_title_back(port, before).await
@@ -1830,7 +2276,19 @@ impl FrameWatch {
             return;
         };
         let shown = up.shown;
-        let left = self.insert_hold().saturating_sub(shown.elapsed());
+        let revealed = up.reason == FrameReason::Reveal;
+        // A revealed picture with another behind it is replaced by that one at the end of its hold,
+        // not by the room: the next one's report ends it.
+        if revealed
+            && self
+                .in_flight
+                .iter()
+                .any(|frame| frame.reason == FrameReason::Reveal)
+        {
+            return;
+        }
+        let hold = up.hold.unwrap_or_else(|| self.insert_hold());
+        let left = hold.saturating_sub(shown.elapsed());
         if !left.is_zero() {
             if !finishing {
                 return;
@@ -1839,7 +2297,11 @@ impl FrameWatch {
         }
         // A room frame that waited out the hold went up first: it ends the insert when it is
         // reported, and the clue's words leave with the insert at once.
-        let room_back = claim_after_insert(&self.screen, shown).await;
+        let room_back = if revealed {
+            claim_after_reveal(&self.screen, shown).await
+        } else {
+            claim_after_insert(&self.screen, shown).await
+        };
         self.restore_caption(port, transcript).await;
         if !room_back {
             return;
@@ -1992,6 +2454,7 @@ impl FrameWatch {
                 made: Ok(shown),
                 finished,
                 timing,
+                picture,
             }) => {
                 if let Err(error) = timing {
                     transcript.push(format!(
@@ -2016,6 +2479,7 @@ impl FrameWatch {
                         name: frame.name.clone(),
                         reason: frame.reason,
                         shown: finished,
+                        hold: frame.hold,
                     });
                 } else if !shown.on_screen {
                     // An emergency plate jumped the queue: its making time says nothing of a
@@ -2032,6 +2496,7 @@ impl FrameWatch {
                             name: frame.name.clone(),
                             reason: frame.reason,
                             shown: finished,
+                            hold: None,
                         });
                     } else {
                         self.made_room(shown.making);
@@ -2040,7 +2505,8 @@ impl FrameWatch {
                     // base of an edit, the room an insert goes back to) only moves forward.
                     if frame.number > self.newest_number {
                         self.newest_number = frame.number;
-                        self.newest_picture = format!("{}.png", frame.name);
+                        self.newest_picture =
+                            picture.unwrap_or_else(|| format!("{}.png", frame.name));
                     }
                     if shown.own_cast && frame.number >= self.newest_number {
                         self.cast_picture = self.newest_picture.clone();
@@ -2082,10 +2548,24 @@ impl FrameWatch {
                     ));
                 }
             }
-            Err(_) => transcript.push(format!(
-                "  frame {} ({}) stopped without an answer",
-                frame.number, frame.name
-            )),
+            Err(_) => {
+                transcript.push(format!(
+                    "  frame {} ({}) stopped without an answer",
+                    frame.number, frame.name
+                ));
+                let why = DroppedWhy::Abandoned;
+                if let Err(error) = mark_dropped(
+                    port,
+                    &frame.name,
+                    frame.reason,
+                    frame.started.elapsed(),
+                    why,
+                )
+                .await
+                {
+                    transcript.push(format!("  end of {} not recorded: {error}", frame.name));
+                }
+            }
         }
     }
 }

@@ -28,7 +28,7 @@ use crate::observe::{
 use crate::options::ServeOptions;
 use crate::playground::PlaygroundFiles;
 use crate::server;
-use crate::sink::LineEcho;
+use crate::sink::{LineEcho, TERMINAL_FALLBACK_FILE, TerminalWriter};
 use crate::state::AppState;
 
 /// Stops a background task when serving ends by any route, including an early return.
@@ -68,6 +68,7 @@ impl fmt::Display for ServeError {
 impl std::error::Error for ServeError {}
 
 /// Writes one line to the terminal. A closed terminal drops the line: it must not stop the table.
+/// The echo of audit lines does not use this: its `TerminalWriter` records a failed write.
 pub fn write_terminal_line(line: &str) {
     let _ = writeln!(std::io::stdout().lock(), "{line}");
 }
@@ -118,9 +119,13 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
         }
     };
     let kinds = registry.len();
-    let echo = options
-        .echoes_lines
-        .then(|| LineEcho::starting_after(&log, write_terminal_line));
+    let echo = options.echoes_lines.then(|| {
+        let mut terminal = TerminalWriter::new(
+            Arc::clone(&log),
+            options.playground_directory.join(TERMINAL_FALLBACK_FILE),
+        );
+        LineEcho::starting_after(&log, move |line| terminal.write_line(line))
+    });
     let state = Arc::new(AppState::new(
         Canvas::new(registry),
         sink,

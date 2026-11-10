@@ -179,6 +179,9 @@ pub struct Resident {
 pub struct SceneDesign {
     pub place: String,
     pub mood: String,
+    /// The one feature that sets the place apart from the places already designed, as a short
+    /// lowercase id; kept with the place once the party is there.
+    pub feature: String,
     pub elements: Vec<String>,
     pub things: Vec<Thing>,
     /// What the movers hold that the picture shows on or beside them, most noticeable first: the
@@ -187,6 +190,85 @@ pub struct SceneDesign {
     pub residents: Vec<Resident>,
     pub placements: Vec<Placement>,
     pub left_behind: Vec<String>,
+    /// The sights passed on the way to the place, in order, when the move asked for a walk.
+    #[serde(default)]
+    pub stages: Vec<RouteSight>,
+    /// The look of the town the place is in, shared by the place and every sight on the way to it.
+    #[serde(default)]
+    pub town_look: Option<String>,
+}
+
+/// How a mover goes through a sight on the way: on the move, or stopped to take it in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pose {
+    Walking,
+    Pausing,
+}
+
+impl Pose {
+    pub const ALL: [Self; 2] = [Self::Walking, Self::Pausing];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Walking => "walking",
+            Self::Pausing => "pausing",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|pose| pose.key() == key)
+    }
+}
+
+/// One sight the party passes on the way to the place a move arrives at: an id no other sight of
+/// the move has, what a camera would see of it, and how the movers go through it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteSight {
+    pub id: String,
+    pub sight: String,
+    pub pose: Pose,
+}
+
+/// What a move is asked to do with the town it is in. The role of a kind of move is data of the
+/// caller (`@walk` lines of a beats file).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TownRole {
+    /// The move's place belongs to the town in force; when there is none, the design gives the
+    /// town's look and it is kept.
+    Seeds,
+    /// The move's place belongs to the town in force, if there is one.
+    Within,
+    /// The move leaves the town in force, which ends.
+    Leaves,
+}
+
+impl TownRole {
+    pub const ALL: [Self; 3] = [Self::Seeds, Self::Within, Self::Leaves];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Seeds => "seeds",
+            Self::Within => "within",
+            Self::Leaves => "leaves",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|role| role.key() == key)
+    }
+}
+
+/// What a move asks of its design beyond the place: up to `stages` sights on the way, the move's
+/// role in the town, and the move's own id (the plate's name), which a town it seeds is stamped
+/// with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WalkAsk {
+    pub stages: usize,
+    pub town: TownRole,
+    pub move_id: String,
 }
 
 /// An item the picture shows: whose it is and its id among what they hold.

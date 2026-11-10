@@ -1042,6 +1042,7 @@ dependencies = [
  "df-scene-layout",
  "df-table",
  "df-telemetry",
+ "df-tempo",
  "df-types",
  "futures-util",
  "prost",

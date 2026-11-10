@@ -21,7 +21,10 @@ pub mod limits;
 pub mod request;
 pub mod routes;
 
+#[cfg(test)]
+pub(crate) use self::backend::{ComposeFuture, Composer};
 pub use self::request::{MusicError, MusicPlayed, MusicProviderCause, MusicRequest, MusicSource};
+pub use self::routes::MusicService;
 
 #[cfg(test)]
 mod music_tests;

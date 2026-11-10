@@ -711,6 +711,34 @@ fn an_image_can_be_turned_with_rotate_and_a_bad_turn_is_refused() {
 }
 
 #[test]
+fn the_backdrop_can_be_marked_as_the_show_plate_and_nothing_else_names_a_plate_kind() {
+    assert_eq!(
+        scene("scene image tv-backdrop gallery-show.png plate=show"),
+        Ok(SceneChange::Image {
+            slot: ImageSlot::TvBackdrop,
+            media: "gallery-show.png".into(),
+            caption: None,
+            rotation_degrees: 0,
+            slide: None,
+            layout: None,
+            plate: PlateKind::Show,
+        })
+    );
+    for bad in [
+        "scene image tv-backdrop a.png plate=close_up",
+        "scene image tv-backdrop a.png plate=room",
+        "scene image tv-card a.png plate=show",
+        "scene image phone a.png plate=show",
+    ] {
+        assert!(
+            matches!(scene(bad), Err(CommandError::BadChoice { .. })),
+            "{bad}"
+        );
+    }
+    assert!(usage_text().contains("plate=show"));
+}
+
+#[test]
 fn slide_sends_the_card_across_the_screen_with_defaults_from_left_to_right_over_five_seconds() {
     use crate::command::DEFAULT_SLIDE;
     assert_eq!(DEFAULT_SLIDE.from_percent, 15);

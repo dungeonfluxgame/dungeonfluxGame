@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::facts::Offered;
-use super::request::{Attended, Feeling, PerceiveCause, Seen};
+use super::request::{Attended, Feeling, PerceiveCause, Seen, Subject};
 
 /// The name of the answer object.
 pub(super) const OUTPUT_NAME: &str = "perception";
@@ -38,8 +38,19 @@ pub(super) const INSTRUCTION: &str = concat!(
     "character cannot place. ",
     "Where now.viewpoint is viewer the character is not in the picture but watching it, as an ",
     "audience would: they see what it shows and nothing that is not shown. ",
+    "Where now.viewpoint is in_picture the character is in the picture, and now.you gives the ",
+    "region of the scan that is them: the figure there, with its dress, build and whatever it ",
+    "holds, is the character's own body, which they know from the inside and recognise as ",
+    "themselves at once, as in a mirror. It is never another person. Whatever you say of that ",
+    "figure you say as the character, in the first person (I, my), never as a stranger would, ",
+    "and its sees entry has that region's id and subject self. ",
     "sees lists what the character picks out, in their own terms (a painter sees colour, light ",
-    "and shape; a thief sees locks and purses): what is plain words saying what they see, region ",
+    "and shape; a thief sees locks and purses). The character does not list themselves, what ",
+    "they wear or what they carry as sights, since they know those from their own facts: the ",
+    "sights are the place and the others in it. subject says what each entry is: place (the ",
+    "place or a thing in it), person (another person), self (themselves, their body or their ",
+    "clothes) or carried (something they hold); self and carried entries never become what they ",
+    "attend to, and are best left out. For each: what is plain words saying what they see, region ",
     "is the id from the scan when it is one of those people and otherwise null, item is the id ",
     "from items_here or carrying when it is one of those things and otherwise null, and salience ",
     "from 0 to 100 is how strongly it draws them. now.mode glance lists the one to four things ",
@@ -50,6 +61,9 @@ pub(super) const INSTRUCTION: &str = concat!(
     "cart. Each is one of your sees entries that has no region (see is its place in sees, from ",
     "0); never a person, and never something items_here or carrying already holds. That sees ",
     "entry's item is null, or the new id itself (it is the same thing), and never another item. ",
+    "Propose only objects a camera could be brought up close to (a wall, a door, a trough, a ",
+    "gate, a stall), never a vista (a distant town, open fields, the sky, a road, a horizon, ",
+    "a crowd); kind says which, object or vista, and a vista is left out. ",
     "Propose the ones that strike the character, as many or as few as they do. id is a new id ",
     "of lowercase letters, digits, - or _; name is a short noun phrase; look is what a camera ",
     "brought up close would show of it (material, colour, wear, markings) in plain neutral ",
@@ -61,8 +75,10 @@ pub(super) const INSTRUCTION: &str = concat!(
     "know and where they are. earlier_thoughts are what they thought before: say what is NEW in ",
     "this picture compared with them; never reuse their wording, their opening words or their ",
     "sentence shape, and begin differently each time. attention is what they now attend to: a ",
-    "region from the scan or an item from the lists, never both, or both null when nothing in ",
-    "particular. feeling is the one emotion from the list the sight stirs and its change from ",
+    "region from the scan or an item from the lists, never both, never themselves or what they ",
+    "carry. When items_here lists things of the place, choose the one that draws them most: ",
+    "attention is both null only when the place offers nothing that draws them. feeling is the ",
+    "one emotion from the list the sight stirs and its change from ",
     "-100 to 100, judged by meaning, or null when nothing moves them; it leaves out what their ",
     "state already holds. wants lists, as short phrases, what they now want to do about what ",
     "they see; empty when nothing. recent ",
@@ -95,7 +111,7 @@ pub(super) fn schema(offered: &Offered, config: &EmotionConfig) -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["what", "region", "item", "salience"],
+                    "required": ["what", "region", "item", "salience", "subject"],
                     "properties": {
                         "what": { "type": "string" },
                         "region": nullable_ids(
@@ -106,6 +122,13 @@ pub(super) fn schema(offered: &Offered, config: &EmotionConfig) -> Value {
                         "salience": {
                             "type": "integer",
                             "description": "How strongly it draws them, 0 to 100."
+                        },
+                        "subject": {
+                            "type": "string",
+                            "enum": ["place", "person", "self", "carried"],
+                            "description": "place: the place or a thing in it; person: another \
+                                            person; self: the character, their body or clothes; \
+                                            carried: something they hold."
                         },
                     },
                 },
@@ -135,13 +158,18 @@ pub(super) fn schema(offered: &Offered, config: &EmotionConfig) -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["see", "id", "name", "look", "attended"],
+                    "required": ["see", "id", "name", "look", "attended", "kind"],
                     "properties": {
                         "see": { "type": "integer", "description": "Index of its sees entry." },
                         "id": { "type": "string" },
                         "name": { "type": "string" },
                         "look": { "type": "string" },
                         "attended": { "type": "boolean" },
+                        "kind": {
+                            "type": ["string", "null"],
+                            "enum": ["object", "vista", null],
+                            "description": "object: a camera can go close to it; vista: it cannot."
+                        },
                     },
                 },
             },
@@ -156,6 +184,8 @@ struct SeenRecord {
     region: Option<String>,
     item: Option<String>,
     salience: i64,
+    #[serde(default)]
+    subject: Subject,
 }
 
 #[derive(Deserialize)]
@@ -180,6 +210,9 @@ struct NewThingRecord {
     name: String,
     look: String,
     attended: bool,
+    /// `object` (the default when it is left out or null) or `vista`.
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -221,6 +254,8 @@ pub(super) struct Checked {
     pub(super) new_things: Vec<Proposed>,
     /// The proposals that were not usable. They never cost the rest of the answer.
     pub(super) dropped: Vec<Dropped>,
+    /// Why the attention the model gave was cleared (`self` or `carried`), when it was.
+    pub(super) attention_cleared: Option<&'static str>,
     pub(super) leak_suspect: bool,
 }
 
@@ -264,6 +299,15 @@ fn check_proposal(
     offered: &Offered,
     earlier: &[Proposed],
 ) -> Result<Option<Proposed>, PerceiveCause> {
+    match record.kind.as_deref() {
+        None | Some("object") => {}
+        Some("vista") => return Err(PerceiveCause::Vista),
+        Some(other) => {
+            return Err(bad_thing(format!(
+                "kind {other:?} is neither object nor vista; use one of those, or null"
+            )));
+        }
+    }
     let see = usize::try_from(record.see)
         .ok()
         .filter(|see| *see < sees.len())
@@ -275,8 +319,14 @@ fn check_proposal(
                 sees.len()
             ))
         })?;
-    if sees[see].region.is_some() {
+    if sees[see].region.is_some() || sees[see].subject == Subject::Person {
         return Err(PerceiveCause::NewThingForPerson { see });
+    }
+    if sees[see].subject.is_own() {
+        return Err(bad_thing(format!(
+            "sees entry {see} is the character themselves or what they carry, so it is no thing \
+             of the place; remove its new_things entry"
+        )));
     }
     match sees[see].item.as_deref() {
         Some(item) if item == record.id => {
@@ -392,6 +442,60 @@ fn proposed_things(
     (proposed, dropped)
 }
 
+/// Clears `attention` when it names the character themselves (their own region, or a sight the
+/// model marked `self`) or something they carry (a carried item, or a sight marked `carried`):
+/// those are known from their own facts and are no sights. Answers why it was cleared.
+fn clear_own_attention(
+    attention: &mut Attended,
+    sees: &[Seen],
+    offered: &Offered,
+) -> Option<&'static str> {
+    let current = attention.clone();
+    let marked = |subject: Subject| {
+        sees.iter()
+            .filter(|seen| seen.subject == subject)
+            .any(|seen| match &current {
+                Attended::Region { id } => seen.region.as_deref() == Some(id),
+                Attended::Item { id } => seen.item.as_deref() == Some(id),
+                Attended::None => false,
+            })
+    };
+    let why = match &current {
+        Attended::None => None,
+        Attended::Region { id } if offered.own_region.as_deref() == Some(id) => Some("self"),
+        Attended::Item { id } if offered.carried.contains(id) => Some("carried"),
+        _ if marked(Subject::Own) => Some("self"),
+        _ if marked(Subject::Carried) => Some("carried"),
+        _ => None,
+    };
+    if why.is_some() {
+        *attention = Attended::None;
+    }
+    why
+}
+
+/// The thing of the place the model saw that draws the character most (the first of equals): a
+/// sight of the place that names an item that is not carried.
+fn most_salient_thing(sees: &[Seen], offered: &Offered) -> Option<Attended> {
+    sees.iter()
+        .filter(|seen| seen.subject == Subject::Place)
+        .filter_map(|seen| Some((seen.salience, seen.item.as_deref()?)))
+        .filter(|(_, item)| {
+            offered
+                .items
+                .iter()
+                .any(|offered_item| offered_item == item)
+                && !offered.carried.iter().any(|carried| carried == item)
+        })
+        .fold(None, |best: Option<(u8, &str)>, one| match best {
+            Some(best) if best.0 >= one.0 => Some(best),
+            _ => Some(one),
+        })
+        .map(|(_, item)| Attended::Item {
+            id: item.to_owned(),
+        })
+}
+
 /// The answer `answer` gives, checked against what `offered` lists and the emotion list `config`.
 pub(super) fn read_answer(
     answer: &Value,
@@ -439,11 +543,18 @@ pub(super) fn read_answer(
         if what.is_empty() {
             return Err(malformed("a sees entry says nothing"));
         }
+        // A sight at the character's own region is them, whatever subject the model gave it.
+        let subject = if seen.region.is_some() && seen.region == offered.own_region {
+            Subject::Own
+        } else {
+            seen.subject
+        };
         sees.push(Seen {
             what,
             region: seen.region,
             item: seen.item,
             salience,
+            subject,
         });
     }
     let mut attention = match (record.attention.region, record.attention.item) {
@@ -488,6 +599,8 @@ pub(super) fn read_answer(
             wants.push(want);
         }
     }
+    // What the character attends to is never themselves or what they hold.
+    let attention_cleared = clear_own_attention(&mut attention, &sees, offered);
     let (new_things, dropped) = proposed_things(record.new_things, &sees, &attention, offered);
     // What the answer named of a proposal that was left out is no item of the place.
     for left_out in &dropped {
@@ -507,6 +620,10 @@ pub(super) fn read_answer(
             attention = Attended::None;
         }
     }
+    // When nothing is attended to, the place's most striking thing is: attention is rarely empty.
+    if attention == Attended::None {
+        attention = most_salient_thing(&sees, offered).unwrap_or(Attended::None);
+    }
     Ok(Checked {
         sees,
         thinking_about,
@@ -515,6 +632,7 @@ pub(super) fn read_answer(
         wants,
         new_things,
         dropped,
+        attention_cleared,
         leak_suspect: report.leaks,
     })
 }

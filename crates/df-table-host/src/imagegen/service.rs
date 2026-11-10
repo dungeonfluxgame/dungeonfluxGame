@@ -16,7 +16,7 @@
 //! media type), and the provenance says so.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
@@ -27,8 +27,11 @@ use tokio::task::JoinHandle;
 
 use super::backend::{BackendError, BackendLimits, ImageBackend, backend_from_environment};
 use super::events::ImageGenEvent;
-use super::limits::{DEFAULT_DEADLINE, DEFAULT_GRACE, MAXIMUM_REMEMBERED_JOBS, PROVENANCE_SUFFIX};
-use super::model::{BackendRequest, GeneratedImage, ImageRequest, Priority};
+use super::limits::{
+    DEFAULT_DEADLINE, DEFAULT_GRACE, DEFAULT_REFERENCE_CAP, MAXIMUM_REMEMBERED_JOBS,
+    PROVENANCE_SUFFIX,
+};
+use super::model::{BackendRequest, GeneratedImage, ImageRequest, Priority, SheetPick};
 use super::request::{
     BackendView, GenerateError, JobState, JobView, PictureCause, Provenance, Sidecar,
 };
@@ -191,6 +194,8 @@ pub struct ImageGenerator {
     clock: Arc<dyn Clock>,
     jobs: Mutex<Vec<JobRecord>>,
     next_job: AtomicU64,
+    /// The soft cap on the pictures a plate request the host builds itself carries.
+    reference_cap: AtomicUsize,
 }
 
 impl ImageGenerator {
@@ -205,6 +210,7 @@ impl ImageGenerator {
             }),
             jobs: Mutex::new(Vec::new()),
             next_job: AtomicU64::new(1),
+            reference_cap: AtomicUsize::new(DEFAULT_REFERENCE_CAP),
         }
     }
 
@@ -256,9 +262,36 @@ impl ImageGenerator {
         self.backend().name()
     }
 
-    /// What the backend takes.
+    /// What the backend takes, with the pictures held to the soft cap (`reference_cap`): the
+    /// callers that build a plate request fit its pictures to this, so a request carries few
+    /// references even where the backend takes more. A request handed to the service is checked
+    /// against the backend's own maximum, not the cap.
     pub fn backend_limits(&self) -> BackendLimits {
-        self.backend().limits()
+        self.capped(self.backend().limits())
+    }
+
+    /// The soft cap on the pictures of a plate request the host builds itself.
+    pub fn reference_cap(&self) -> usize {
+        self.reference_cap.load(Ordering::Relaxed)
+    }
+
+    /// Sets the soft cap, and records it with the backend's own maximum beside it.
+    pub fn set_reference_cap(&self, app: &AppState, maximum: usize) -> BackendView {
+        self.reference_cap.store(maximum, Ordering::Relaxed);
+        app.record_line(
+            ImageGenEvent::ReferenceCap {
+                maximum: maximum.min(self.backend().limits().maximum_pictures),
+                backend_maximum: self.backend().limits().maximum_pictures,
+            }
+            .line(),
+        );
+        self.backend_view()
+    }
+
+    /// `limits` with the pictures held to the soft cap, never above the backend's own maximum.
+    fn capped(&self, mut limits: BackendLimits) -> BackendLimits {
+        limits.maximum_pictures = limits.maximum_pictures.min(self.reference_cap());
+        limits
     }
 
     /// The backend new jobs start on, what it takes and how many jobs are running.
@@ -267,10 +300,11 @@ impl ImageGenerator {
         let tuning = backend.tuning();
         BackendView {
             backend: backend.name().to_owned(),
-            limits: backend.limits(),
+            limits: self.capped(backend.limits()),
             running: u64::try_from(self.running()).unwrap_or(u64::MAX),
             size: tuning.size,
             steps: tuning.steps,
+            reference_cap: self.reference_cap(),
         }
     }
 
@@ -419,7 +453,8 @@ impl ImageGenerator {
                     name: request.name().to_owned(),
                     base: request.base().map(str::to_owned),
                     attached,
-                    maximum: limits.maximum_pictures,
+                    maximum: self.capped(limits).maximum_pictures,
+                    backend_maximum: limits.maximum_pictures,
                     left_out: request.left_out().to_vec(),
                 }
                 .line(),
@@ -774,14 +809,14 @@ fn extension_of(mime: &str) -> &'static str {
     }
 }
 
-/// The view of a person's multi-view sheet `request` is shown, when it is shown one: an edit the
-/// front view, an emergency picture painted anew (a declared action with no base to edit) the
-/// full-length one; any other picture the whole sheet.
+/// The view of a person's multi-view sheet `request` is shown, when it is shown one: the view the
+/// caller asked for (`sheet`: a walking figure in a wide view wants the full-length one), else, by
+/// the kind of request, an edit the front view and a picture painted anew the whole sheet.
 fn person_view(request: &ImageRequest) -> Option<SheetView> {
-    match (request.base(), request.priority()) {
-        (Some(_), _) => Some(SheetView::Front),
-        (None, Priority::Emergency) => Some(SheetView::FullLength),
-        (None, Priority::Normal) => None,
+    match (request.sheet(), request.base()) {
+        (Some(SheetPick::Front), _) | (None, Some(_)) => Some(SheetView::Front),
+        (Some(SheetPick::FullLength), _) => Some(SheetView::FullLength),
+        (Some(SheetPick::Whole), _) | (None, None) => None,
     }
 }
 

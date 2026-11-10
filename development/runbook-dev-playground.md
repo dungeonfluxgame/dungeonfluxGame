@@ -2,9 +2,17 @@
 
 Verified live on 2026-11-07 against commit `f2a0160f` plus the market and residents work (Windows ARM64, Git Bash). Every
 recipe below was run end to end. The flowing quest ("Play the quest end to end") was verified on
-2026-11-08 at `f0bd97da` (run 111: market, inn, graveyard, the trap sprung, the end). This is
+2026-11-08 at `f0bd97da` (run 111: market, inn, graveyard, the trap sprung, the end). The free
+roam ("Free roam: the current run procedure") was run five times on 2026-11-09 (stamps 11091737,
+11091838, 11092018, 11092200 and 11092245) on the Forge image backend at 512x512 and 20 steps;
+what those runs found and what is still open are in "Known gaps". This is
 a development runbook for the dev host, not the
 shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md).
+
+Where to start: the roam is the current work, so read "Free roam: the current run procedure",
+"Standing rules" and "Systems and where they live" first. The older recipes (the tavern, the
+market, the quest) still work and are kept below; a section's date says when it was last
+confirmed.
 
 ## What works
 
@@ -18,6 +26,323 @@ shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md)
 | Image prompt and character cards from the design | `move brief` | pure code |
 | New plate generated, characters found, backdrop swapped, spinner shown | `move act <who> plate=NAME ...` | Codex images + fal SAM scan + Codex text |
 | One art style for every plate | `BriefStyle` in `movement/brief.rs` | none |
+
+## Free roam: the current run procedure (verified 2026-11-09)
+
+One roam is Danny, a lone painter, walking 20 moves (`market-threads/free-roam.beats`) and then
+showing his paintings. "Free roam" says what each part does; this section is how to run it. The
+steps are the ones that worked for runs 3 to 5 on 2026-11-09. Pictures come from the Forge studio
+(Qwen Image at 512x512, 20 steps, no spend), text from Codex, the character scan from fal and
+voices from ElevenLabs (both spend). Run everything from the repository root in Git Bash, on the
+one dev host, port 7879 (see "Standing rules"). Each block assumes the shell of the one before.
+
+Before step 1 these must hold:
+
+- `.env` has `DF_FAL_KEY` and `DF_ELEVENLABS_API_KEY` (never print them), and the Codex image home
+  exists (see "One-time setup").
+- The scratch playground `artifacts/tmp/persona-live/playground` (a copy of `assets/playground`)
+  holds `roam-00.png` with its scan and `danny` named in it, `ref-danny.png` and the
+  `item-danny-*.png` sheets. They are gitignored. If the scratch is rebuilt, make them again with
+  "Making the starting pictures" under "Free roam".
+
+**1. Look at the Forge studio.** Its queue is one line: a head job that waits for memory, was
+interrupted or needs a person holds every render behind it. List the open jobs:
+
+```bash
+curl -s http://127.0.0.1:5173/api/runtime/jobs | head -c 800
+```
+
+If a job at the head reads `waiting_memory`, `interrupted` or `needs_attention`, read "Forge studio
+operations" before going on. If nothing answers, start the studio:
+
+```bash
+powershell -NoProfile -File "C:\Users\mreca\Desktop\Game Development Studio\start-server.ps1"
+```
+
+**2. Stop the host you own, and only that one.** Find its process by the command line, never by
+name: other agents run hosts of their own.
+
+```bash
+P=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object {
+  \$_.CommandLine -like '*serve --port 7879*' -and \$_.Name -like 'df-table*' }).ProcessId")
+[ -n "$P" ] && powershell -NoProfile -Command "Stop-Process -Id $P -Force"
+```
+
+**3. Build the host** in the warm roam lane. The exe cannot be rebuilt while the host runs from
+it, so step 2 comes first. A build that prints nothing may have failed: look for `Finished`.
+
+```bash
+CARGO_TARGET_DIR=$PWD/artifacts/build/roam RUST_MIN_STACK=67108864 cargo --offline build -p df-table-host --bin df-table --locked
+```
+
+**4. Build and deploy the page** (only when `df-playground` or the page's CSS changed). The page's
+wasm is built in the bubbles lane:
+
+```bash
+CARGO_TARGET_DIR=$PWD/artifacts/build/bubbles cargo --offline build -p df-playground --lib --target wasm32-unknown-unknown --locked
+```
+
+Then wasm-bindgen writes the package the host serves (`artifacts/playground/pkg`, the host's
+`--package` default). The generator must be the Cargo.lock version, 0.2.129; this is what
+`development/playground.sh build` runs:
+
+```bash
+wasm-bindgen --target web --no-typescript --out-dir artifacts/playground/pkg artifacts/build/bubbles/wasm32-unknown-unknown/debug/df_playground.wasm
+```
+
+The page's HTML and CSS are served from the scratch playground, not from `assets/`, so copy the
+styles after a change (the scratch `kit.css` was found stale against `assets/` on 2026-11-09):
+
+```bash
+cp assets/playground/theme.css assets/playground/kit.css artifacts/tmp/persona-live/playground/
+```
+
+**5. Archive the last run's files** out of the scratch playground. The memory folder and the
+numbered paintings and galleries are named by owner, not by run, so a new run would collide with
+them. Use the last run's number for `RUN`. A glob with no match prints an error; ignore it:
+
+```bash
+RUN=5; S=artifacts/tmp/persona-live/playground; A=artifacts/tmp/roam-live/run$RUN-archive
+mkdir -p $A/media && mv $S/world/memory $A/world-memory
+mv $S/media/item-danny-painting_* $S/media/gallery-danny-* $S/media/*-show* $A/media/
+```
+
+**6. Start the host** with the scratch playground, the Forge image backend and Codex text. The
+host does not read `.env`: export the keys into its environment. Leave out `--quiet`: the audit
+lines are how a run is read.
+
+```bash
+CODEX=$(ls -d "$LOCALAPPDATA"/OpenAI/Codex/bin/*/codex.exe | tail -1)
+export DF_TEXT_BACKEND=codex DF_TEXT_CODEX_EXECUTABLE="$CODEX" DF_IMAGERY_CODEX_EXECUTABLE="$CODEX"
+export DF_IMAGERY_MODE=live DF_IMAGERY_BACKEND=forge CODEX_HOME=$PWD/artifacts/codex-image-home
+export DF_FORGE_PROJECT=41fbb3c9-ac91-4897-b890-7a056b4ae371
+export DF_FAL_KEY=$(grep '^DF_FAL_KEY=' .env | cut -d= -f2-)
+export DF_ELEVENLABS_API_KEY=$(grep '^DF_ELEVENLABS_API_KEY=' .env | cut -d= -f2-)
+export RUST_MIN_STACK=67108864
+D=$PWD/artifacts/build/roam/debug/df-table.exe
+nohup "$D" serve --port 7879 --playground artifacts/tmp/persona-live/playground \
+  > artifacts/tmp/roam-live/host.log 2>&1 < /dev/null & disown
+```
+
+The Forge project id is "DungeonFlux dev" (`GET http://127.0.0.1:5173/api/projects` lists them).
+Check the services after a few seconds (text `configured=true`, imagegen live on `forge`):
+
+```bash
+sleep 6; $D dev --port 7879 services
+```
+
+**7. Show the starting plate**, Danny alone on a road, located and named `danny`:
+
+```bash
+$D dev --port 7879 scene image tv-backdrop roam-00.png
+```
+
+```bash
+$D dev --port 7879 scene cast
+```
+
+`scene cast` must list `danny`. If it does not, the scan or the name is missing: see "Making the
+starting pictures".
+
+**8. No market items at the start:**
+
+```bash
+$D dev --port 7879 world place -
+```
+
+**9. Seed what he carries.** The runner seeds the same file again from its `@inventory` line;
+doing it here shows what he holds before the run:
+
+```bash
+$D dev --port 7879 world inventory set danny character development/market-threads/danny.inventory.json
+```
+
+**10. Set the backend size and steps.** A `media backend` call clears what it does not repeat,
+so say all of them. The studio's own default is 40 steps; 20 at 512x512 is what the timings below
+were measured with:
+
+```bash
+$D dev --port 7879 media backend forge project=41fbb3c9-ac91-4897-b890-7a056b4ae371 size=512x512 steps=20
+```
+
+**11. Reset Danny** (his state, not his persona file; `persona write danny
+development/market-threads/danny.persona.json` first when that file changed):
+
+```bash
+$D dev --port 7879 persona state danny reset
+```
+
+**12. Page settings:** the TV layout, a 1.5 s fade between plates, and voices on.
+
+```bash
+$D dev --port 7879 playground set device=tv transition=fade ms=1500
+```
+
+```bash
+$D dev --port 7879 playground set tts=true
+```
+
+**13. Clear the clue board and the narration box** of the last run:
+
+```bash
+$D dev --port 7879 scene clues clear
+```
+
+```bash
+$D dev --port 7879 scene narration clear
+```
+
+**14. Copy the runner**, never run the script itself (bash reads a script as it goes, so an edit
+mid-run garbles it), and point its `cd` at the checkout:
+
+```bash
+mkdir -p artifacts/tmp/roam-live && cp development/market-thread.sh artifacts/tmp/roam-live/runner.sh
+```
+
+```bash
+sed -i 's#^cd .*#cd /c/Users/mreca/Desktop/dungeonfluxGame#' artifacts/tmp/roam-live/runner.sh
+```
+
+**15. Run it** in the background, with the next free run number for `N`. `FRAMES_LOG` names the
+frame transcripts (`frames<N>-<plate>.log` beside it):
+
+```bash
+N=6; DF_TABLE_EXE=$D DF_TABLE_PORT=7879 FRAMES_LOG=artifacts/tmp/roam-live/frames$N.log bash artifacts/tmp/roam-live/runner.sh development/market-threads/free-roam.beats > artifacts/tmp/roam-live/play$N.log 2>&1 &
+```
+
+**16. Follow it** with a monitor. `grep --line-buffered` keeps the pipe flowing but `cut` buffers
+its own output, so `stdbuf -oL` goes in front of it:
+
+```bash
+tail -n +1 -f artifacts/tmp/roam-live/play$N.log | grep --line-buffered -E '^\[(move|refs|memory|see|thought|look|insert|declare|painted|trade|inventory|show)' | stdbuf -oL cut -c1-260
+```
+
+**17. Reload the page and click Enable sound.** Open `http://localhost:7879/playground/`, reload
+it so it runs the package built in step 4, and click Enable sound in the toolbar: the click is
+what unlocks the page's audio. `$D dev --port 7879 playground` shows `tts: true` and `audio
+unlocked` when it took. A host restart turns TTS off again (step 12). Do this in the first
+minute: the first move takes about 65 s before its plate is up. Do not reload the page again
+mid-run.
+
+The run ends with the `[show]` lines. Leave the host up while the inspector reads the run (see
+"Standing rules"); stop it with step 2 when done. Stop the runner and the monitor only if you
+started them.
+
+### What each log line means
+
+One roam writes these lines to `play<N>.log`; indented `~` lines are the runner echoing host
+replies. A move that did not go live says why and he tries the next one from where he is.
+
+| Line | Meaning |
+| --- | --- |
+| `[move NN] <way> \| said \| read \| place \| plate \| jev_ms design_ms plate_ms live_at_ms` | The move's trace (the host's `TRANSITION` records). `said` is his line, `read` Jev's reading of it (`kind`, `who`, `to`), `place` the designed place, `plate` the picture's name `roam-<MMDDHHMM>-NN`. `jev_ms` covers both readings when Jev read it twice, `design_ms` the design call, `plate_ms` the picture made (studio job plus scan), `live_at_ms` when the plate was behind the scene, from the move's start. |
+| `[refs NN] shown base attached count maximum left_out` | What the picture was given: the design's items in sight, its base, the sheets attached (`ref-danny.png`, `item-danny-*.png`), the backend's budget (Forge 8) and what did not fit and was told in words. |
+| `place <plate>: the active place, N thing(s) worth a close look` | The designed place became the world's active place with N things the camera can show. |
+| `[memory NN] captured scene ..` | The plate was kept as a memory of kind `scene` (standard memory API). A last `[memory] ..` line names the owners and what they keep. |
+| `[see NN] vision=true <what he sees> \| attending: <thing>` | Perception: what the model saw in the picture on screen, and what he attends to. |
+| `[thought NN] <text>` | His thought about it (kept as a memory of kind `thought`). A new thing he noticed that the camera can go to is added to the place (`WORLD thing_added .. via=perceive` in the host log). |
+| `[look NN] <line>` | He steps up to a thing and says what he sees of it up close. |
+| `[insert NN] item=<id> (<name>) frame shown_at_ms made_ms ended_at_ms up_ms` | The close-up insert: the frame judge named the item, the insert was painted from its look and shown (`shown_at_ms`), how long it took (`made_ms`) and how long it stayed (`up_ms`). `none: the judge saw no new close look` when it named none. From the host's `PERSONA frame_judged` and `frame_timing` lines (`events area=PERSONA`). |
+| `[declare NN] <words>` then `[declare NN] plate shown_at_ms made_ms queue_wait_ms superseded ended_at_ms up_ms` | He declares what his hands are doing and the emergency plate of it: made, shown at once (`queue_wait_ms` is the wait for the screen after it was made), and its hold. |
+| `[painted NN] <line>` then `[inventory] <item> a -> b (<why>)` | The finishing line, judged against what he really holds: the board and pigments are used up, brushes and easel are kept. |
+| `[memory NN] painted <id> seq picture after plate` or `not painted: ..` or `study blank, not stored` | The study painting was kept as a memory of kind `artwork` and as a kept item, or why it was not made (no board used up) or removed (near blank). |
+| `[trade NN] <line>` then `[trade NN] changes: ..; gained: ..` | A market stop (`@way_arrival market`): the sale of a painting and the purchases, applied to what he holds (`gained: no gain recorded` when nothing stood). |
+| `[inventory] refused (move NN): <error>` | The host refused a change (`insufficient`, `kept_item`, `unsourced_gain`, ..). |
+| `[inventory NN] a->b, ...` | What he held before and after the move, whatever its lines said. |
+| `[paint NN] <line>` | His line toward `@roam_paint`; only in a beats file that has no `@roam_declare`. |
+| `[show] composed gallery of N pieces -> gallery-danny-1.png`, `[show] plate .. after ..`, `[show] <line>` | The day's end: the paintings composed into one sheet, the show plate edited after it and his character sheet, and what he says. |
+
+### Measured timings (runs 4 and 5, 2026-11-09)
+
+Forge at 512x512, 20 steps, an idle studio queue; from the `[move]`, `[insert]` and `[declare]`
+lines and the host's `PERSONA frame_timing` and `PERSONA declared` lines.
+
+| Stage | Measured |
+| --- | --- |
+| Jev reads the line (`jev_ms`) | about 4 to 6 s |
+| Design call (`design_ms`) | about 6 to 8 s |
+| Move plate (`plate_ms`) | about 46 to 65 s; live 58 to 70 s after the move began |
+| Insert made (`made_ms`) | about 19 to 27 s; up 20.4 to 20.8 s |
+| Declared plate made (`made_ms`) | about 55 to 80 s (127 s once, run 5 move 2; cause not found) |
+| Declared plate queue wait (`queue_wait_ms`) | under 50 ms (15 to 35 ms); shown at once |
+| Declared plate hold (`up_ms`) | about 20 s (20.0 to 21.0 s) |
+| A whole move (plate, look, insert, declaration, painting) | about 4 minutes; 20 moves take about 75 to 85 minutes before the show |
+
+These are observed ranges, not limits: read the real values from the run's own log. Before the
+512x512 setting a 1664x928 plate at 40 steps took 103 to 226 s (see "Image vendor limits").
+
+## Standing rules
+
+These hold for every run and every change to the dev host. Most are owner decisions; the date is
+the decision's.
+
+- **No string matching for gameplay decisions** (owner, 2026-11-07). What a character meant, who a
+  line addresses, which action or branch applies, whether text reveals a secret: Jev's to judge (a
+  model call against a closed schema, its answer checked in code against ids and enums). String
+  matching stays for protocol, ids, file formats and command-line grammar. No word lists, no
+  whole-word guards. See `AGENTS.md`.
+- **Names never reach image prompts.** A character is painted from their look, and the display name
+  and the id stay out of the picture prompt, the design call's facts and the design's texts (the
+  image model paints any word it is given: a signboard read `Danny traveling`). See "Free roam",
+  "Reference sheets".
+- **No caps on dev model answers.** No length, count or `maxItems` limit on what a dev tool's
+  model answers; only correctness checks (ids plain and unique, closed enums, references that
+  exist). Frame prompts are the one place a length is a backend's own limit (Forge 4000 characters),
+  and a too-long answer is asked again, never cut.
+- **No reduced-motion handling in the page** (owner, 2026-11-09). No style sheet of the page names
+  `prefers-reduced-motion`; animations always run. A test fails if one does
+  (`crates/df-playground/src/motion_style_tests/theme.rs`). Do not add one to the page; the
+  account app's reduced-motion rule is a different surface.
+- **One dev host.** Only the host on port 7879 runs. You stop only the host you started, found by
+  its command line (`*serve --port 7879*`), never by name. **Subagents start no servers**: they
+  build and run unit checks, and the coordinator checks live.
+- **The coordinator runs the live checks, and watches the screen.** While a run plays, the
+  coordinator looks at the TV (plates, transitions, positions, occlusions, clues), hands every fix
+  to an implementing subagent with a precise brief, and does not reload the page mid-scene.
+- **An inspector agent looks at every picture and event of every run.** A long-lived inspector
+  reads the run's log and opens every plate, insert, declared plate and painting. It writes to
+  `artifacts/tmp/inspector/` (gitignored, so copy anything durable into this runbook): one
+  `run-roam<N>-report.md` per run (metrics, findings numbered `R<run>-<n>` and graded S1 to S3, a
+  per-picture verdict table), `run<N>-notes.md` while the run plays, `state.json` (runs seen, open
+  findings, the checks for the next run) and `sheet.sh`, which makes a contact sheet of media
+  pictures. What it checks each run: every move live, Jev and design refusals, the stage times,
+  inserts against moves, declared plates for a second or third Danny (a duplicate is S1),
+  perception lines and refusals, thoughts for repetition, inventory against what his finishing line
+  said, market trades, paintings real and not blank, the gallery and the show plate, a page
+  screenshot (whole picture visible, the thinking cue, readable bubbles).
+- **Fixes go to implementing agents.** The inspector and the coordinator report; one subagent owns
+  each fix and its files (`AGENTS.md`: no worktrees, one shared checkout, exact edits, never
+  reset or rewrite another's files). An independent evaluator approves; the inspector does not.
+- **Hints never solve** (owner, 2026-11-09). The Dungeon Master may recall the scene or point at
+  one unexamined thing in sight; it never names which found pieces belong together or suggests
+  comparing them. See "The dungeon master (narrator)".
+- **Speed over test depth in gameplay refinement.** Small direct edits, one warm build, one browser
+  check; mark each test still owed `TODO(DEV-12): <test>`.
+- **Every interactive character has a persona and shows its name** (the display name on the SAM tag
+  and the bubble, never an id); no speech bubbles are added to fixtures (the thinking cue is the
+  indicator).
+- **A quest shows a new plate every 60 s** (owner, 2026-11-09, relaxed from 30 s because Codex hit
+  its image limit): its beats carry `@frames every=60` and the frame watch stays on. The
+  `frames.json` default is still 30 s. The roam makes no scheduled plates (`every=0`): its move
+  plates, inserts and declared plates are the pictures.
+
+## Systems and where they live
+
+All of these are standard and story-neutral: the roam's beats file is data, and none of the code
+knows a painter. Code paths are under `crates/`; the sections named are the details.
+
+| System | Route and verb | Code | Details |
+| --- | --- | --- | --- |
+| Inventory API | `/dev/world/inventory`, `.../owner`, `.../set`, `.../add`, `.../remove`, `.../consume`, `.../batch`, `.../transfer`, `.../history`; `world inventory ..` (also `sheets`); judged lines answer `inventory_changes`, a gain needs a `source` | `df-table-host/src/world/inventory*` (`inventory.rs`, `inventory/{cli,operations,request,routes,store}.rs`) | "Free roam", "What he holds" |
+| Memory API and gallery composite | `/dev/world/memory`, `.../list`, `.../get`, `.../put`, `.../capture`, `.../delete`, `.../references`, `.../compose`, `.../inspect`, `.../history`; `world memory ..` | `df-table-host/src/world/memory*` (`memory/{cli,host,limits,operations,request,routes,store}.rs`); the sheet is `df_imagery::gallery` (`df-imagery/src/gallery.rs`) | "Memories" |
+| Perception API | `POST /dev/persona/perceive`, `.../perceive/scene`, `GET /dev/persona/thoughts`; `persona perceive`, `persona thoughts` | `df-table-host/src/persona/perceive*` (`perceive/{answer,attending,cli,facts,request,routes,screen,thoughts}.rs`) | "Perception" |
+| Declare action and emergency plates | `POST /dev/persona/declare`; `persona declare`; the frame watch's `@declare` input line; `media generate .. priority=emergency` | `persona/declare.rs`; `persona/plate.rs` (`make_declared`); `persona/frame_watch.rs` (`FrameWatch::declare`) | "Declared actions and emergency plates" |
+| People check on a made plate | none (inside a declared plate: one count check, a second attempt, then a refusal) | `persona/people_check.rs` | "Declared actions and emergency plates", "Verified after it is made" |
+| Jev: interpret, design and retry | `POST /dev/move/interpret`, `.../design`; `move interpret\|design\|brief\|act`; the second reading and the design retry carry `refused_before` | `df-table-host/src/movement/{interpret,design,routes,transition,brief}.rs` | "Free roam" (How Jev reads a roam line), Troubleshooting |
+| Insert pictures | the frame route `POST /dev/persona/frame` names `inspected_item`; `persona watch .. insert_hold=` | `persona/frame.rs` (the judge), `persona/plate.rs` (`insert_request`, the item alone, painted anew), the playground's `persona/frames.json` (`insert` shot) | "Frames that follow the talk" |
+| Reference sheets | character `ref-<id>.png`, item `item-<owner>-<item>.png`; `world inventory sheets <owner>`; an edit is given the single front view | `world/inventory*` (the missing-sheet ask); `df_imagery::sheet_view` (`df-imagery/src/sheet_view.rs`), applied in `df-table-host/src/imagegen/service.rs` | "Reference sheets", "Character reference sheets", "One person, once" |
+| Page aspect-ratio mapping | none (the page decides, not a control): a plate within 5 % of 16:9 fills the frame (cover), any other lies whole over a blurred copy of itself (contain); every point tied to the picture takes its screen place from the same fit | `df-playground/src/plate_fit.rs` (`PlateFit`, `data-fit` read by `theme.css`), `image_layout.rs`; tests `plate_fit_tests.rs` | this table |
+| Forge backend runtime settings | `media backend [codex-cli \| forge [url=] [project=] [size=WxH] [steps=N]]`; size and steps apply to every Forge picture until the next `media backend` call | `imagegen/{cli,backend,limits}.rs`; the studio client `df-providers/src/forge.rs` | "Forge as the model provider", "Image vendor limits" |
 
 ## One-time setup
 
@@ -35,7 +360,9 @@ shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md)
 
 ## Build (warm lane)
 
-Use one shared target directory, never `--target-dir` per attempt. Stop the host first: it
+This is the general recipe, in the bubbles lane; the roam builds in the `roam` lane (see "Free
+roam: the current run procedure"). Use one shared target directory, never `--target-dir` per
+attempt. Stop the host first: it
 locks `df-table.exe`. Stop only your own host, by the port it serves. Other agents run hosts of
 their own on other ports and lanes, and a kill by name stops theirs too.
 
@@ -655,6 +982,9 @@ code changed, start the host, and restore the plot and the cast before the next 
 
 ## Free roam
 
+How to run it is "Free roam: the current run procedure", near the top; this section is what the
+parts do.
+
 One lone traveller, Danny, a painter (`market-threads/danny.persona.json`), wanders through 20
 places (`market-threads/free-roam.beats`): towns reached by the road and spots within each town.
 Nobody answers him. Each move is his own line toward a loose goal, read by Jev as a move
@@ -738,7 +1068,8 @@ it is the host's standard for any number of owners (`crates/df-table-host/src/wo
   `invalid_query`, `invalid_owner`, `invalid_item`, `invalid_schema`, `unknown_owner`,
   `unknown_item`, `duplicate_item` (an item twice in a list or a batch), `missing_words` (a new
   item needs a name and a look), `empty_batch`, `zero_count`, `insufficient` (the count would go
-  below zero), `kept_item` (a kept item cannot be used up), `invalid_reason`
+  below zero), `kept_item` (a kept item cannot be used up on the explicit route), `invalid_reason`,
+  `unsourced_gain`, `unreasoned_loss`
   (judged lines only, below), `overflow`, `same_owner` (a transfer to the owner it is from), `store_unreadable`,
   `store_invalid`, `store_unwritable`, `stopped`. Each refusal is one `WORLD refused
   verb=inventory_<verb> error=<key>` line.
@@ -768,31 +1099,114 @@ it is the host's standard for any number of owners (`crates/df-table-host/src/wo
   call of any character (`persona say` and `persona ask`) is told what that character alone holds
   (`now.inventory`, each item with its count and its `use`, so it knows what is running low and
   which things are used up by use) and answers `inventory_changes`. Each entry is `{item, change,
-  reason, why, name, look, use}`: `change` is below zero for what leaves and above for what is
-  gained, and `reason` is one of a closed list:
+  reason, why, name, look, use, source, paid_with, where, from, made_from, what_happened, to}`:
+  `change` is below zero for what leaves and above for what is gained, and `reason` is one of a
+  closed list (null for a loss is a loss with no reason):
 
   | `reason` | Direction | What the host does |
   | --- | --- | --- |
   | `gained` | gain | an `add` (bought, found, given, received) |
-  | `used_up` | loss | a `consume`: refused for a kept item |
-  | `worn_out`, `broken`, `lost`, `given_away` | loss | a `remove`: allowed for a kept item |
+  | `used_up` | loss | a `consume`: refused for a kept item (`unreasoned_loss`) |
+  | `sold` | loss | a `remove`, only with its payment: a gain by `exchange` in the same line names the item in `paid_with`, of at least that count |
+  | `given_away` | loss | a `remove`, only with `to`: an id of a character present, not the owner |
+  | `lost`, `broken`, `worn_out` | loss | a `remove`, only with a `what_happened` that is not blank (null when the line does not show it) |
 
-  A reason that does not fit the direction is refused (`invalid_reason`). The instruction says in
-  neutral words that using a kept item (a tool, a possession) does not lower its count, so a kept
-  item drops only for `worn_out`, `broken`, `lost` or `given_away`, and only when the line shows it.
+  A reason that does not fit the direction is refused (`invalid_reason`). **A loss needs a reason
+  that stands, as a gain needs a source.** Nothing leaves an inventory by itself: a loss with no
+  reason, a kept item `used_up`, a sale with no payment in the line, a `lost`, `broken` or
+  `worn_out` with nothing said of what happened, or a `given_away` to nobody present, is refused as
+  `unreasoned_loss` and logged. The instruction says in neutral words that using a kept item (a
+  tool, a possession) does not lower its count, so a kept item drops only for `sold`,
+  `given_away`, `lost`, `broken` or `worn_out`, and only when the line shows it. A sale and its
+  payment depend on each other: a sale whose payment is refused is refused, and so is the payment
+  that leaned on it, so both apply or neither. Code checks that `what_happened` is not blank; it
+  does not read it (no word matching), so the instruction asks for null when the line shows nothing.
   A gain of something the character does not hold yet proposes it: a new id (the id grammar), a
   `name`, a `look` and a `use` (`name`, `look` and `use` are null for an item already held); a new
   item with no name or look is refused (`missing_words`) and an id that is not an id
-  `invalid_item`; no count of it is too large (only zero and overflow are refused). A new item the line brought in has its
-  reference sheet asked for at once, by the same missing-sheet path pictures use (`persona say` and
+  `invalid_item`; no count of it is too large (only zero and overflow are refused). A new item the
+  line brought in has its reference sheet asked for at once, by the same missing-sheet path pictures use (`persona say` and
   `persona ask` print `sheet item-<owner>-<item>.png: none yet, asked for`).
 
+  **A gain needs a source.** Goods do not appear from nowhere. A gain says where it came from in
+  a closed `source`, with the field that source needs, and code checks it:
+
+  | `source` | Field | Code accepts it when |
+  | --- | --- | --- |
+  | `exchange` | `paid_with: [{item, count}]` | the same line has a loss entry for each item, of at least that much, applied in the same batch (selling a thing is that thing going down: list it) |
+  | `found` | `where: <thing id>` | the id is a thing offered at the active place (`world/state.json` things, or a stall item) |
+  | `given` | `from: <owner id>` | the giver is a character present in the scene and is not the owner |
+  | `made` | `made_from: [{item, count}]` | the same line uses each input up (`used_up`), of at least that much |
+
+  A gain with no source, or whose field does not hold up (an empty list, a count of zero, a payment
+  not in the line, one coin claimed by two gains, a thing not offered, a giver not present), is
+  refused as `unsourced_gain`, and so are the loss entries named by its `paid_with` or `made_from`:
+  an exchange applies both sides or neither (a coin that was to pay for a refused gain does not go
+  down). A loss entry that no gain names stands on its own. Operators using the explicit routes
+  (`add`, `batch`) are not asked for a source. A `from` the character was shown as a handle is read
+  back to its id in code, one that is not a person shown to them reads as none. The refusal is one
+  `WORLD refused verb=inventory_judged error=unsourced_gain` line, which the roam runner already
+  prints as `[inventory] refused`.
+
+  **One line, one change per item.** The entries of one item in a line are netted into one signed
+  change before the counts are checked: a coin that rises by a sale and falls by a purchase is the
+  difference (equal amounts cancel and the coin is not changed), entries of one item in the same
+  direction merge, and an item that is sold and listed in `paid_with` is one decrease. Each entry
+  keeps its own reason, source and `paid_with` for the checks (a decrease paying for a gain counts
+  gross, not net). The net must be possible: a coin that would end below zero is refused as
+  `insufficient`, and so is everything that leaned on it (the purchase it paid for is
+  `unsourced_gain`, the sale that its proceeds fed is `unreasoned_loss`), so a sale and a purchase
+  apply together or not at all. Only the judged path nets: the explicit `batch` route is operator
+  input and still refuses an item twice (`duplicate_item`).
+
+  **Deals.** The judge instruction gives, in generic words, the two common shapes. A sale plus a
+  purchase in one line is four entries: the sold item down (`sold`, `to` the buyer's id when
+  named), the coins up (`gained`, `source: exchange`, `paid_with` the sold item and its count), the
+  same coins down (`used_up`), and the goods up (`gained`, `source: exchange`, `paid_with` the
+  coins and their count). A barter has no coins: the sold item down, and the goods up with
+  `paid_with` the sold item. Every entry of a deal names the others, and `item` is always an id
+  from `now.inventory`, matched to what the line says by meaning, never made up (except for a new
+  item gained). When the model leaves the proceeds without their payment (run 7: `unsourced_gain`
+  and `unreasoned_loss`, so only the purchase applied), code repairs it before refusing: a `sold`
+  item that no gain by exchange names is paired with the one gain by exchange whose item pays for
+  another gain by exchange of the same line (the coins that buy the goods), and the pairing is
+  validated like any other. Two such gains, or none, repair nothing and the sale is refused as it
+  stands. A `paid_with` that names a sold item with a larger count than the line sells of it (run 8:
+  the price, 5, where the one painting's count, 1, belongs) is set to what the line sells, since the
+  sale's own entry is what the counts are checked on; the item is listed as repaired. **A line is
+  atomic.** When any entry of a judged line is refused, for any reason, none of its changes apply:
+  a sale and its purchase never apply by halves (run 8 applied the purchase and kept the painting),
+  nor do uses (run 9 move 16 spent the ochre and lamp black of a painting whose board, oil and rags
+  were short). The refusals that caused it are the `WORLD refused` lines.
+
+  **A refused answer is asked again.** The line call judges the answer's `inventory_changes`
+  before it settles the line (`world::judged_miss`, the same judging as the application, changing
+  nothing). When any entry is refused, the call asks the judge again with `now.retry_reason`
+  holding every refusal so far as typed ids and counts only (`unsourced_gain boards`,
+  `insufficient coins (holds 2, asked 3)`, and for each item the gains name as paid, the count
+  they name together against the count that goes down in the line), until the entries stand or
+  the text deadline (`TEXT_DEADLINE`) since the line began has passed, with no count of askings
+  capped, as the design call's. Each asking is one `WORLD retry verb=inventory_judged
+  attempt=<n> reason=<keys>` line, and the refused answer one `WORLD judged_entries` line. If the
+  deadline passes first, the last answer is judged as always: the deal is refused whole and
+  nothing of it applies. The other reasons to word a line again (secret, intent, repeat, price)
+  still ask once. The instruction states that what is paid in a deal is conserved: the counts
+  named for one item across the gains add up to no more than what goes down of it, so one payment
+  that buys several goods is split between their gains (or each gain names its own payment). Code
+  does not accept the same payment named in full by two gains: it cannot tell one payment buying
+  both from the same coin claimed twice, so the asking again settles it. Whenever a judged line has a refused entry, or a repair, the host logs the model's
+  structured answer: `WORLD judged_entries owner=<id> entries=<item:change:reason:source[:pay=..]
+  [:make=..][:to=..][:from=..][:where=..]; ...> refused=<keys|-> repaired=<items|->`. Ids and
+  numbers only (a word that is not an id is `?`, no reason or other free text), at most the first
+  forty entries.
+
   Each entry is judged on its own, in order, against the character's list as it stands. One code
-  refuses (an item the character does not hold, one named twice, a kept item used up, a reason that
-  does not fit, a count below zero) is one `WORLD refused verb=inventory_judged error=<key>` line and
-  changes nothing, and does not hold back the others of the line; the ones that stand are taken as
-  one atomic batch. `move act` prints each change under the line (`inventory: <item> <before> ->
-  <after> (<why>)`). A character with no inventory has nothing to change.
+  refuses (an item the character does not hold, a kept item used up, a reason that does not fit, a
+  net below zero) is one `WORLD refused verb=inventory_judged error=<key>` line and refuses the
+  whole line, which is asked again (below); a line with no refused entry is taken as one atomic
+  batch.
+  `move act` prints each change under the line (`inventory: <item> <before> -> <after> (<why>)`). A
+  character with no inventory has nothing to change.
 - **The judge's facts stay bounded as owners grow.** A speaker's line sees only its own list. The
   frame judge sees only the people in the picture: for each, the items it holds at least one of, as
   `id`, `name` and `count` (no look). The design call sees only the movers' lists. No call is given
@@ -841,73 +1255,58 @@ A picture that shows an item without one goes ahead, told in words, and asks the
 for the sheet in the background (`sheet item-danny-easel.png: none yet, asked for` in the move's
 report). An insert of a thing in sight is drawn from its kept close-up once it has one.
 
-Run it (the coordinator's host on 7879, built from this checkout's lane):
+### Making the starting pictures
+
+Only when the scratch playground lacks `roam-00.png`, `ref-danny.png` or the `item-danny-*.png`
+sheets (they are gitignored). The run itself is "Free roam: the current run procedure", near the
+top. With the host up and the Forge backend set (steps 6 and 10 there), Danny's persona, when its
+file changed:
 
 ```bash
-D=./artifacts/build/roam/debug/df-table.exe
-# Danny, clean, and what he carries at the start
 $D dev --port 7879 persona write danny development/market-threads/danny.persona.json
-$D dev --port 7879 persona state danny reset
-$D dev --port 7879 world inventory set danny character development/market-threads/danny.inventory.json
-$D dev --port 7879 world inventory get danny                 # what he holds now
+```
 
-# Sheets ahead of play (each an image job; the run does not wait for them)
+His reference sheet (front close-up, three-quarter and full-length views side by side) and the
+sheets of what he carries (each an image job; the run does not wait for them):
+
+```bash
 $D dev --port 7879 media generate "A lean man of about thirty with a short sandy-brown beard \
 and a sun-browned, freckled face, in a wide-brimmed straw hat, a paint-flecked oatmeal linen \
 smock over brown wool trousers and scuffed knee boots, a worn leather satchel at his hip and a \
 folding wooden easel strapped across his back. The same man as a front close-up, a three-quarter \
 view and a full-length view side by side on a plain mid-grey ground." \
   as=ref-danny purpose=portrait aspect=16:9 wait=true
-$D dev --port 7879 world inventory sheets danny              # asks for every missing item sheet
-$D dev --port 7879 media generate status                     # until the item-danny-* jobs are stored
-
-# The starting place: Danny alone on a road outside a town, located and named
-$D dev --port 7879 media generate "A lean painter in a straw hat with a folding easel on his \
-back walks alone along a dirt road between fields toward a small town, morning." \
-  as=roam-start purpose=plate refs=ref-danny.png wait=true
-$D dev --port 7879 media locate roam-start.png masks=1
-$D dev --port 7879 media locate show roam-start.png          # his region number, usually 1
-$D dev --port 7879 media locate label roam-start.png 1 danny Danny
-$D dev --port 7879 world place -                             # no market items at the start
-$D dev --port 7879 scene image tv-backdrop roam-start.png
-$D dev --port 7879 scene cast                                # lists danny
-
-# The roam: a copy of the runner, 20 moves
-mkdir -p artifacts/tmp/roam-live
-cp development/market-thread.sh artifacts/tmp/roam-live/runner.sh
-sed -i 's#^cd .*#cd /c/Users/<you>/Desktop/dungeonfluxGame#' artifacts/tmp/roam-live/runner.sh
-DF_TABLE_EXE=$D DF_TABLE_PORT=7879 FRAMES_LOG=artifacts/tmp/roam-live/frames.log \
-  bash artifacts/tmp/roam-live/runner.sh development/market-threads/free-roam.beats \
-  > artifacts/tmp/roam-live/play.log 2>&1
-grep -E '^\[(move|look|insert|paint|refs|inventory)' artifacts/tmp/roam-live/play.log
 ```
 
-The log has one line per step:
+```bash
+$D dev --port 7879 world inventory sheets danny
+```
 
-- `[move NN] <way> | said: <his line> | read: kind=.. who=danny to=.. | place: <designed place> |
-  plate: roam-<stamp>-NN | jev_ms=.. design_ms=.. plate_ms=.. live_at_ms=..`, from the move's
-  `TRANSITION` trace. A move that did not go live says why, and he tries the next one from where
-  he is.
-- `[look NN] <his line>`: the close look.
-- `[paint NN] <his line>`: the line toward `@roam_paint`.
-- `[refs NN] shown=<design's items in sight> base=.. attached=<names> count=.. maximum=..
-  left_out=..`, from the host's `IMAGEGEN references` line for the move's plate (`attached=none`
-  when it followed nothing).
-- `[insert NN] item=<id> (<name>) frame=<name> shown_at_ms=.. made_ms=.. ended_at_ms=.. up_ms=..`,
-  from the host's `PERSONA frame_judged` and `frame_timing` lines (`events area=PERSONA`).
-  `none: the judge saw no new close look` when the judge named none.
-- `[memory NN] captured scene <id> seq=.. place=<plate> picture=<plate>.png (<place name>)` for each
-  plate that went live, `[memory NN] painted <id> seq=.. picture=item-danny-painting_NN.png
-  after=<board sheet|-> plate=.. (<title>)` for each painting kept (`not painted: ..` when the study
-  was not made), and `[memory] ..` at the end (the owners and what they keep); at the end of the day
-  `[show] composed gallery of N pieces -> gallery-danny-1.png`, `[show] plate <name> after <sheet>,
-  ref-danny.png` and `[show] <his line>`.
-- `[inventory] <item> <before> -> <after> (<why>) | <the line>`, one per change;
-  `[inventory] refused (move NN): <error>` for a change the host refused;
-  `[inventory NN] <item> <before>-><after>, ...` (or `unchanged`): what he held before and after
-  the move, whatever its lines said.
+`media generate status` shows the `item-danny-*` jobs until they are stored. The starting plate,
+Danny alone on a road outside a town, located and named:
 
-Each place's frame watch transcript is kept in `artifacts/tmp/roam-live/frames-<plate>.log`.
+```bash
+$D dev --port 7879 media generate "A lean painter in a straw hat with a folding easel on his \
+back walks alone along a dirt road between fields toward a small town, morning." \
+  as=roam-00 purpose=plate refs=ref-danny.png wait=true
+```
+
+```bash
+$D dev --port 7879 media locate roam-00.png masks=1
+```
+
+```bash
+$D dev --port 7879 media locate show roam-00.png
+```
+
+`show` prints his region number (usually 1); name it:
+
+```bash
+$D dev --port 7879 media locate label roam-00.png 1 danny Danny
+```
+
+Each place's frame watch transcript is kept in `artifacts/tmp/roam-live/frames<N>-<plate>.log`. The
+log lines of a run are explained under "What each log line means" in the run procedure.
 
 ## Memories
 
@@ -1031,6 +1430,22 @@ says one line toward the situation (`[trade NN] <line>`), the per-line judge app
 painting (`given_away`, pennies up) and the purchases to what he really holds, and the log adds
 `[trade NN] changes: ..; gained: ..` or `gained: no gain recorded`. The declaration's situation says
 that setting a thing up does not use it up, so only the finishing line uses the board.
+Pacing is data too (`@roam_dwell`, `@roam_reveal`, `@roam_show_dwell`, `@roam_show_each`, `@refs max=3`): a
+new plate stays up for the dwell while he perceives it (`[dwell NN]`), each painting made is shown full
+frame with its title and then the view it was painted from (`[reveal NN]`, `@show <picture> | <caption>
+| <seconds>` to the frame watch, `[pace NN] painting <picture> up 8024 of 10000 ms, view <picture> up 7988 of 6000 ms`: the picture
+from the host's `PERSONA revealed picture=..` line, the time up from the `took_ms` of the
+`frame_timing moment=ended .. reason=reveal` line (matched by order in the move), and the hold asked
+for, so a short or stretched hold shows), and the show steps through the last paintings after the show plate and ends
+on it (`[show] piece ..`, `[pace show] ..`). A study follows its plate alone and the show plate its
+base, the gallery sheet and his sheet: no more than `@refs max=`.
+The study is made in the background once the finishing line has shown a board used up, while the
+declared plate is on screen; its lines (`[painted NN]`, `[memory NN] ..`) are held in files and printed
+in the usual order when the declared plate has ended, and the memory, the item and the reveal follow
+(the `~ item` line now comes before `[reveal NN]`). A study that does not end within three hung-bounds
+is stopped, its file removed and `[memory NN] study abandoned after N s` printed. The runner polls the
+host's events once a second. `[time NN] move took <s> s (plate .., look .., declare .., study ..,
+reveal ..)` closes each move: `study` is only what remained to wait for after the declaration.
 The page does not show the memories yet: `list` answers the rows of the kit's
 list panel (`ledger`, a row per memory with its title and primary picture), the same shape as the
 inventory's.
@@ -1084,7 +1499,10 @@ and an owner's call on cost.)
   scene call (4 when it does not say).
 - **The answer, checked.** `Perceived`: `who`, `mode`, `picture`, `vision`, `viewpoint`
   (`{from: pictured, region}` or `{from: viewer}` for a character who is not in the picture and sees
-  what the screen shows a viewer), `regions` (how many the model was told of), `sees` (`what` in
+  what the screen shows a viewer; a character in the picture is told in the facts, as `now.you`,
+  which region is them, and the instruction says the figure there is their own body, told in the
+  first person; a sight at that region is `self` whatever subject the model gave),
+  `regions` (how many the model was told of), `sees` (`what` in
   the character's terms, `region` a scan id, `item` an offered item or carried one, `salience` 0
   to 100), `thinking_about` (first person, their own voice, as long as it needs), `attention`
   (`{on: region, id}`, `{on: item, id}` or `{on: none}`), `feeling` (an emotion of
@@ -1117,7 +1535,11 @@ and an owner's call on cost.)
   thing it proposes, and so may `attention`), with an `id` (the id grammar, not one the place or
   what they carry already has, nor another proposal's), a `name`, a `look` (what a camera brought
   up close would show, in neutral words) and `attended` (at most one, and only when `attention`
-  names nothing else or that thing). The model decides what strikes the character; there is no
+  names nothing else or that thing) and `kind` (`object`, the default, or `vista`). A camera can
+  go up close to an object (a wall, a door, a trough, a gate, a stall) and not to a vista (a
+  distant town, open fields, the sky, a road, a crowd): a vista is left out as `PERSONA
+  thing_unadded error=vista`, with the rest of the answer kept. The model decides what strikes
+  the character; there is no
   salience threshold or count in code. Proposals are an extra of the answer and never cost the
   sight and thought: each is checked on its own, and a bad one is left out while the rest is kept,
   with no retry. It is left out when its `sees` entry has a region (a person of the scan, never a
@@ -1143,9 +1565,13 @@ and an owner's call on cost.)
   `persona thoughts danny` and `world memory list danny kind=thought` read them back.
 - **The words the runner reads** from `persona perceive`: a header line (`danny perceives
   (mode=.. vision=.. picture=.. regions=.. viewpoint=.. attention=.. duration_ms=..)`), then one
-  `see: <what> | region=<id|-> item=<id|-> salience=NN` line for each thing seen, `thought: <text>`,
-  `attention: region:<id>|item:<id>|none`, and `feeling:`, `wants:`, `leak_suspect:` and `kept:`
-  when there are any. Line breaks inside a thought are folded to spaces.
+  `see: <what> | region=<id|-> item=<id|-> salience=NN` line for each thing seen, one `thing <id>
+  (<name>): <look>` line (the shape of the move's design lines) for each new thing that is now a
+  thing of the place, `thought: <text>`, `attention: region:<id>|item:<id>|none`, and `feeling:`,
+  `wants:`, `leak_suspect:` and `kept:` when there are any. Line breaks inside a thought are folded
+  to spaces. The runner adds the `thing` lines to the move's own, so a close look at a thing the
+  character noticed has its name and look (run 9 printed `item=wooden_door (?)`: the lines were
+  not in the output, and the runner looked the name up among the design's things only).
 
 ```bash
 $D dev --port 7879 persona perceive danny recent="danny: The road bends here."   # the screen now
@@ -1155,9 +1581,37 @@ $D dev --port 7879 persona perceive scene who=danny,wren recent="wren: Morning."
 $D dev --port 7879 persona thoughts danny limit=5
 ```
 
+**Sights are the place and the others, never the character or what they carry.** Runs 6 and 7 had
+Danny list his own dark coat, and a painting in his hand, as sights, so attention went to himself.
+The instruction now says the character does not list themselves, what they wear or what they carry
+(known from their own facts). Each `sees` entry has a closed `subject` (`place`, `person`, `self`,
+`carried`; `Seen.subject`, default `place`), chosen by the model. Code, with no word matching:
+attention on the character's own region, on a carried item or on an entry marked `self`/`carried`
+is cleared to nothing (`PERSONA attention_cleared who=.. why=self|carried`); such entries are not
+kept as what was seen in the thought, never become new things (dropped as `bad_new_thing`), and an
+entry marked `person` is never a thing either (`new_thing_for_person`). When the attention is then
+nothing, the instruction asks the character to choose what in the place draws them most, and code
+backs it up: the `place` sight that names an offered, not-carried item with the highest salience (the
+first of equals), else the strongest thing just added, becomes the attention, so it is rarely empty.
+The runner's `[see NN]` line leaves out `self` and `carried` entries (the `see:` lines end with
+`subject=..`).
+
+**What a speaker attends to reaches the frame judge.** The frame judge used to guess from the
+look line alone, and in run 5 an offered wall ("I'll step up to that wall") was not cut to
+(`offered=3 inspected=-`). Now `judge` adds `attending: [{speaker, item}]` to its facts
+(`perceive::attending`): for each speaker of the call, the item their newest kept thought
+attended to, only when that thought was had at the place that is active now and the item is still
+one the judge is offered. It expires when the place changes, and a newer perception that attended
+to nothing (or to a person) ends it. `FRAME_INSTRUCTION` tells the judge that a line of that
+speaker that steps up to, goes closer to or describes the attended thing is a close look at it
+(`inspected_item`); the judge still decides, and its id is still checked against the items. A
+thought's `world memory` record links the attended item, and `GET /dev/persona/thoughts` returns
+it as `attended`.
+
 **In the roam.** With `@roam_perceive on` (data in `free-roam.beats`) the runner calls `persona
-perceive danny` once a move's plate is live and its frame watch has started, before the look line,
-and prints `[see NN] vision=true <what he sees>; <..> | attending: <the thing he attends to>` and
+perceive danny` the moment a move's plate is live (in the background, before the move's own
+bookkeeping: the scene memory, the tempo impulse, the frame watch start), waits out `@roam_dwell`
+counted from then and the perception, and speaks the look line after it. It prints `[see NN] vision=true <what he sees>; <..> | attending: <the thing he attends to>` and
 `[thought NN] <what he is thinking about>`. His thought and what he attends to are added to the
 situation of the look and paint lines (` What is on your mind: .. You have your eye on: ..`), so
 what he says is about what is really on screen. Off, the roam is as before.
@@ -1367,6 +1821,34 @@ Occlusion rules (owner, 2026-11-09):
 - The close-up title capitalizes its first letter (`.kit-tc-title::first-letter`): a sheet may
   keep an item name in lower case.
 
+The inventory panel (`view/inventory.rs`, scene slot `inventory`, hidden by default) is the
+kit's loot list at the lower right above the caption bar, anchored to the stage, not the picture.
+`world inventory show <owner>` shows that owner's inventory under their display name (`Satchel`
+when they have no persona); `world inventory hide` takes it away. While it is shown, every
+application of changes to that owner (the judged line, `world inventory add|remove|consume|batch|
+transfer|set`, a trade, a painting added) rebuilds it from the stored inventory (host:
+`world/inventory/screen.rs`; log lines `WORLD inventory_shown|inventory_followed|
+inventory_hidden`, and the scene line `inventory rows=.. moves=..`). Rows run supplies first, then
+kept things; a numbered family (ids ending `_<number>`, such as the finished paintings) of two or
+more collapses into one plural row with the total (`Paintings x2`), listed first; past 16 rows the
+lowest counts fold into `Other items` (a family or a row at zero never folds). The viewer sees USED
+UP happen: a count that fell flashes the row red-amber with a `-N` tag, one that rose flashes green
+with `+N`, each for 4 s from when the page first showed it (`inventory::FLASH_MS`, `FlashClock`,
+`inv-flash-*` in `theme.css`). The host carries every move of the last 4 s, merged by row, so two
+pushes close together (a finishing line's batch, then the painting added a moment later) both
+flash; a redraw carries each flash on from where it was (`--inv-age`) and never restarts it. While
+a full-frame picture is up (a reveal, an inspection or focus insert, a close-up backdrop, or the
+day's show plate, which the runner puts up with `scene image tv-backdrop <name> plate=show`
+(`PlateKind::Show`, otherwise a room plate with its own scan); not a walk, declared or room plate)
+the panel fades out (`inventory-covered`, `picture_is_up`), moves
+that arrive meanwhile start their flash when the panel fades back in (`inv-return`); a supply at 1 has an amber tint; a row at 0 stays listed, struck and dimmed, for as
+long as the panel is shown (an item never held there is not listed). Like the story mark it fades
+out (class `inventory-hidden`, 400 ms) while it would cover a face, a bubble, the narration or
+caption bar, the clue board or the story chip, and never moves. The roam runner shows it at the
+start (`play_roam`). Check it live: `dev --port 7879 world inventory show danny`, then
+`world inventory consume danny boards 1` and watch the TV; `scene` lines and the page's timeline
+(`clients timeline <client>`) show the redraw of the `tv-inventory` part.
+
 ## Clue board
 
 The shared screen can show every clue found so far as a slim column of cards down the left (under
@@ -1502,6 +1984,124 @@ a way may carry no clue. Audit lines: `PERSONA story_ways`, `PERSONA story_ways_
 `PERSONA story_way_plate stage=.. plate=..`, `PERSONA story_phase at=.. place=.. to=.. stage=..
 moves=..`, `PERSONA story_stage_judged stage=.. served=..` and `PERSONA story_next .. stage=..`.
 
+## Walking about town
+
+Owner, 2026-11-10: "the character needs to walk about town"; players move gradually between places,
+they do not teleport. A move used to be a jump cut: he says where he goes and the plate swaps to the
+new place. Now a move can show the sights he passes on the way first, then the place. It reuses the
+idea of "The way between places" (stages with a sight and a plate) for a move of free roam, and is
+story-neutral: the sights, the town and the pace are data.
+
+**The contract.**
+
+- **The design call returns `stages`.** `POST /dev/move/design` takes `walk: {stages, town,
+  move_id}` (`move act ... walk=N town=ROLE`); with it the closed schema adds `stages`, 0 to N
+  sights `{id, sight, pose}`: `id` a place id no other sight of the move has, `sight` what a camera
+  sees of it (a fountain, a row of shopfronts, an archway), `pose` `walking` or `pausing`. Code
+  refuses an id that is not a place id or repeats (`invalid_stage`), a blank text, a pose outside the
+  two words, and more sights than the move asked for (`too_many_stages`, with the count); a refused
+  answer is asked again with every refusal so far, as for every design (see "Troubleshooting"). A move that asked for no walk takes no
+  sights. Nothing in the design names anyone or lettering (the instruction says so, as for the rest).
+- **`@walk <way> <sights> [town=<seeds|within|leaves>]` lines** in the beats say how many sights a
+  kind of move asks for at most and its role in the town (`free-roam.beats`: town moves 2 sights,
+  road moves 1, market moves 2). `@walk_hold <seconds>` is how long each sight is up (default 6, never
+  under 5: `move act` refuses `hold=` under 5 s). The runner passes them to `move act` as `walk=`,
+  `town=`, `hold=` and, from `@tempo walk <kind> <strength>`, `impulse=<kind>:<strength>`.
+- **One town record.** `GET /dev/world/town` (`world town`) answers the town the party is in:
+  `{id: "town-<move id>", look, created_at: <move id>}`, kept in `world/state.json` beside the active
+  place. The design of a `seeds` move gives `town_look` (materials, roofs, doors, street layout,
+  light; no names) when there is no town, and it is kept (`WORLD town_seeded id=.. created_at=..`);
+  a `seeds` or `within` move after it is told the look (`route.town` in the facts), asks for none and
+  carries it; a `leaves` move ends it (`WORLD town_left id=..`) and the next `seeds` move gives a new
+  one. A designed place (`arrive`) keeps the town; setting the place to nowhere or to a bible place
+  ends it. The `MOVE designed` line says `stages=N town=seeded|reused|left|none`. A move with no
+  plate is only looked at and changes no town.
+- **Places do not repeat (the design's `feature`).** Every design answers `feature`: a short
+  lowercase id (letters, digits, `_`, `-`) for the one thing that sets the place apart (a ford, a
+  mill, a crossroads shrine: the instruction states the principle, never a list). `world/state.json`
+  keeps `visited`, oldest first, `{name, feature}` of each place the party arrived at (`POST
+  /dev/world/arrive` takes the design's `feature`, which `move act ... plate=NAME` sends once the
+  plate is up; a text-only `move design` or `move brief` keeps nothing). The design call's facts
+  carry them all as `previously_designed`, and the instruction asks for a place distinct from every
+  one while it still fits the destination words and the town (`route.town`). An answer whose
+  `feature` equals a kept one (exact id comparison, no words matched) is refused as
+  `repeated_feature` and asked again with that rule among the `refused_before` list (`MOVE retry
+  verb=design attempt=2 reason=repeated_feature ..`); the `MOVE designed` line names `feature=<id>`. The list
+  ends when a bible place is made active (`world place <id>` or `world place -`); to start a run
+  fresh without that, delete the `visited` key of `state.json` (it is read again on every call).
+  Known limit: going back to a place already designed is not a move this supports yet, since a
+  design always has to be a new feature.
+- **The town's look is in every picture of it**: the place's prompt (and the `picture:` words the
+  frame judge reads) say "The town, the same in every picture of it: <look>", and so does each
+  sight's.
+
+**How the show runs.** `move act ... plate=NAME walk=N` makes the sights and the place at the same
+time, not one after the other: each sight is its own plate (`NAME-walk1`, `NAME-walk2`) painted
+anew from a compact prompt (the town's look, the sight, the movers by look as small figures walking
+or pausing; no things, no items, no residents) after the movers' reference sheets alone, all at normal priority (a sight never
+starves the place) and shown the full-length view of the sheet (`sheet: full_length`: one person, once);
+the place is made as always (sheets of what he carries, residents) and is not made later for the
+sights. Each plate is scanned and named like an arrival plate. The sequencer (`movement::walk`,
+pure, tested on a controlled clock) then shows them:
+
+- a sight goes up as soon as it is ready and the one before it has been up its hold, through the
+  existing swap (backdrop with the page's fade, the bubbles of anyone not in it taken away, the
+  scene's cast and layout of that plate), in order;
+- while the place is not made, the sights are spread over the wait it is expected to take instead
+  of going up back to back: the place is expected `PLACE_TO_SIGHT` (2) times as long as the sights
+  took to land (live run 9, moves 5 to 7: 2.2, 2.9, 1.7 times), and each sight is up its share of the
+  time left to then, never under its hold. A place that comes in sooner ends the spreading: the
+  sight up only finishes its plain hold. Run 9 move 6 (sights landed at 72 s, place at 207 s) left
+  its last sight up 129 s; more sights share the same wait, so a bigger `@walk` count shortens each
+  one (a walk of 4 sights gives about 18 s each from 72 s);
+- a sight not ready when its turn comes and the place is ready is passed over
+  (`skipped reason=late`), so a slow sight never keeps the place from arriving; a sight whose
+  making or swap failed is passed over (`reason=failed`); the move never fails for a sight;
+  plates that come in together are all taken in before any is passed over, a sight made before an
+  earlier one waits its turn, and a stream that closes with every plate in only waits out the hold;
+  a sight that never came is passed over (`no plate came for it`);
+- the place never goes up before a sight that is ready, and goes up once the last sight shown has
+  been up its hold; with no sight ready, it goes up as soon as it is made, as before; the place made is never dropped
+  and the walk always ends on it. Only the place failing ends the walk in failure, and that failure
+  says each plate's state (`plates_stopped: .. stage 1 passed, stage 2 pending, place pending`);
+- the spinner title is put back when the first picture of the walk goes up.
+
+So a sight is up 5 s at the least (6 s by default) and the viewer never sees a change faster than
+that. The sights are made while the old place is still up; they add no time to the move unless
+the image backend is one queue (Forge: each sight is one more render ahead of the place; on Codex
+they run side by side). The walk cannot overlap the previous move's reveal and dwell: the runner starts a move only
+after the last one ended (its frame watch is stopped), so the walk starts at the design.
+
+**Logs.** `move act` prints, and the runner turns into `[walk NN]`:
+
+| Line | Meaning |
+| --- | --- |
+| `[town NN] <look>` | The look of the town the place was designed in. |
+| `[walk NN] stage k/N <sight> prompt: ..` | The compact prompt of each sight. |
+| `[walk NN] <frame> made in <ms> ms: <regions found, characters named>` | A plate made and scanned (the sights and the place). |
+| `[walk NN] stage k/N <sight> shown_at_ms=.. up_ms=..` | A sight was shown (playground clock) and how long it was up. |
+| `[walk NN] stage k/N <sight> skipped reason=late\|failed` | A sight passed over. |
+| `[walk NN] memory <id> kind=walk seq=.. place=.. picture=..` | The sight kept as a memory of the traveller, linked to the place (`links` has the place). |
+| `[walk NN] arrived stages=S/N walk_ms=..` | The end: sights shown of those asked, and the time from the first sight up to the place up. |
+| `[time NN] move took .. (plate P, of which walk W, ..)` | The plate's time includes the walk. |
+
+The host logs `PERSONA frame_timing moment=started|shown|ended|dropped frame=<NAME>-walkK
+reason=walk ..` for each plate of the walk (the place is `frame=<NAME>`), `WORLD walk_stage
+place=.. stage=.. number=k of=N outcome=shown|late|failed at_ms=.. up_ms=..` for each sight, and
+`WORLD town_seeded` / `WORLD town_left`. The transition's `TRANSITION` records are written as the
+walk happened: `locating` at the place made, `live` at the place up (the runner's `plate_ms` is
+the place's making; `live_at_ms` includes the walk).
+
+**Tempo.** Each sight posts the impulse of `@tempo walk <kind> <strength>` (`walk` in
+`free-roam.beats`, `{"kind": "walk"}` in the music table) when it goes up; a table without the kind
+only prints `walk impulse .. not posted`.
+
+**Check it without spend** (text only, the host up): `$D dev --port 7879 move act danny walk=2
+town=seeds "<situation>"` with no `plate=` runs Jev and the design and prints the `stage k/N ..`
+lines and the `town:` line, and changes no town. The live check is a roam run (see "Free roam: the
+current run procedure"): watch the `[walk NN]` lines, the TV (each sight up 6 s with a fade, then
+the place) and `$D dev --port 7879 world town`.
+
 ## The strike at the last place
 
 At the story's last place, once every player has had their turns, the danger strikes: the next
@@ -1623,9 +2223,11 @@ service never gives an EDIT (a request with a base) a person's whole multi-view 
 picture at least 3:2 wide is cut to its left third, the front view (`df_imagery::sheet_view`, pure
 pixels, unit-tested), in memory for that job, and `IMAGEGEN sheet_view job=.. name=.. picture=..
 view=front` says so; a picture that is not that wide is a single view and goes as it is, and a
-picture painted anew (no base) is given the whole sheet, except an emergency one (a declared plate
-painted anew), which gets the full-length third (`view=full_length`). The front crop holds for every
-edit, not only declared plates.
+picture painted anew (no base) is given the whole sheet unless the request says otherwise: the
+request carries `sheet: whole|front|full_length` (`SheetPick`), and the view follows it, not the
+priority. A declared plate painted anew and every sight of a walk (a small figure in a wide view) ask
+for `full_length` (the full-length third, `view=full_length`); an edit that says nothing gets the
+front crop, for every edit, not only declared plates.
 
 **Extra figures in the base (roam run 4: a market stall).** Even with the cast count and the front
 view, an edit of a base that already holds other people carried one more likeness into the action
@@ -1636,8 +2238,71 @@ picture's words) joined to the declared scene, with the cast count statement, th
 (full-length third) and the items in use. A base holding only the cast is edited, as before; one
 with no scan is edited (nothing says otherwise). The transcript says `declared plate base=edit|fresh
 reason=cast_only|extra_figures|layout_unread|no_base (N figure(s) .., M in the cast)` and the
-`PERSONA declared ..` line ends `.. made_ms=.. base=edit|fresh reason=.. shown_at_ms=..`. Not done:
-item sheets, which also show two views side by side.
+`PERSONA declared ..` line ends `.. made_ms=.. first_made_ms=<ms|-> attempt=1|2 base=edit|fresh
+reason=.. shown_at_ms=..`.
+
+**Verified after it is made (roam run 5: two identical men at a street well, `base=edit
+reason=cast_only`).** No prompt prevents a duplicate every time, so a declared plate is checked
+(`persona/people_check.rs`, one count check `more_than_cast` and the two attempts `verified`; only
+declared plates use it now, any frame whose cast is known could): the person scan every plate
+already gets in `scan_plate` (the located regions, the same pass as `media locate`, no second call)
+is counted against the cast. More people than the cast and the plate is made once more as a fresh
+paint (`<frame>-redo`: the place's words, the cast count statement, the full-length sheet view,
+the negative prompt, still first in the backend's line). The attempt within the cast is the plate,
+and its own scan stays as its layout (the first attempt's picture and layout stay in the library
+unused). If the redo still shows more, nothing is shown and the room stays as it is: `PERSONA
+declared .. attempt=2 .. rejected=extra_figures people=N cast=M failed_at_ms=..` and `frame_timing
+moment=failed reason=declared`; the declaration's words were still said. `made_ms` is the shown
+(or last) attempt's making time, `first_made_ms` the first's when there was a second, and
+`queue_wait_ms` the rest of the plate's time. A redo is a second image job, so a plate that is
+refused takes about two plates' time before the failure. Not done: item sheets, which also show
+two views side by side.
+
+**A soft cap on the pictures of a plate (smart references, not many).** More reference pictures
+dilute a plate and slow it, and Codex takes 5 at most. The host holds the pictures of a plate
+request it builds itself (move plates, declared plates, inserts, shows) to a soft cap, 3 by
+default, never above the backend's own maximum: `media backend refs=<N>` sets it on the running
+host (`POST /dev/media/references`, one `IMAGEGEN reference_cap maximum=.. backend_maximum=..`
+line), `persona watch refs_max=<N>` sets it when the watch starts, and the runner's `@refs max=<N>`
+does both. It works through the limits every caller already fits its pictures to
+(`services` / `media backend` show the capped `pictures`, and `soft cap N`), so no caller changed.
+The picture to edit counts as one. Relevance order: the people's sheets first (the speaker first
+in a declared plate), then the items in use or in hand in the order given (a declared plate's
+`items_in_use`; a move plate's most visible first), then what is only seen; an insert is given
+none. What does not fit is left out and told in words where it has a look. Every job's
+`IMAGEGEN references .. count=<n> maximum=<soft> backend_maximum=<n> left_out=..` line says the
+cap and what a caller left out (a declared plate's items left out are in the watch's transcript).
+
+**Showing a picture that already exists (`@show`, `persona show-picture`).** A finished painting
+is cut to as it is: no picture is made and no model is asked. In a watch, `@show <picture> |
+<caption> | <seconds>` (seconds optional, 10 by default; the last field is the seconds only when it
+is a whole number, so a caption may hold ` | `): an insert of that picture, full frame, with the
+room's layout so the cast and the bubbles stay valid, the caption on the scene's caption bar, held
+for the seconds, then the room and the caption that was there return. It is shown at once like an
+emergency plate (when a generated picture is up, only its least time, 8 s, is waited for) but is no
+new picture of the talk: plates waiting for their slots are not dropped, they wait out the hold
+and go up after it, and the newest picture (the next edit's base) does not change.
+**Reveals are a sequence (run 6: `@show` twice, 10 s then 6 s, were both shown 8 s).** Each is
+shown its FULL requested time: one asked for while another is up or queued waits for the earlier
+one's whole hold, in order, then is shown at once and replaces it directly (the room does not
+flash back between them); the 8 s least time is for a generated picture displaced by something
+else, never for a reveal's own hold, so a hold under 8 s is honoured and the room is back at the
+hold's end (the watch ticks every 250 ms, so a hold ends within that). The queue has no count cap
+(the end-of-day show sends 20 in a row; run 9's cap of 4 refused the last two of six with
+`queue_full`): a place is a number and one waiting task, nothing else is held, so each is taken and
+shown in order for its whole hold. A room plate, an insert or a declared
+plate arriving meanwhile waits for the whole sequence and goes up after it. Log:
+`PERSONA frame_timing moment=started|shown|ended frame=<frames>-show-N reason=reveal ..` (`started`
+is when it was asked for; for N queued behind others the first reads `PERSONA reveal_queued
+picture=<name> behind=<n>`; `ended` of one is the `shown` of the next, `took_ms` its hold, a few
+ms over) and, at
+`shown`, `PERSONA revealed picture=<name> hold_ms=<ms>`. A picture that is no picture file name
+(`invalid_name`) or that the library does not hold (`unknown_picture`) is refused, nothing changes
+on screen, and the log has `PERSONA refused verb=reveal picture=<name|-> error=<key>` and a
+`frame_timing moment=failed reason=reveal` line. Without a watch:
+`persona show-picture <picture> room=<the picture the room goes back to> [caption=<text>]
+[hold=<seconds>]` does the same on its own and waits out the hold (it refuses an unknown picture
+with an error).
 
 **Priority and reordering (`plate.rs`).**
 - A declaration starts at once whatever is being made: it takes a slot even when `parallel` and
@@ -1665,6 +2330,16 @@ item sheets, which also show two views side by side.
   made> made_ms=<generated, scanned, named> shown_at_ms=..`. The watch transcript has the
   `[NN] Name (declaring): ..` line and `frame N (name) started for a declaration .. superseding n
   room plate(s) (m waiting)`.
+- **Every started frame closes once (the owner's "the timer is broken").** A frame that starts ends
+  with exactly one of `moment=shown` (then `ended` for an insert), `moment=failed` and
+  `moment=dropped ... why=superseded|overtaken|replaced|abandoned`: a room plate a newer one took
+  the slot of (`overtaken`), one a declaration made after it started (`superseded`), a declared
+  plate a newer declaration replaced while it was made (`replaced`), and a frame the talk left, or
+  whose task stopped, before it was made (`abandoned`). A declared plate made again (the redo) is
+  one frame: it started once and closes once, with the second attempt (`attempt=2`). The host
+  keeps `plate.in_flight`, the names of the frames started and not yet closed, so frames made
+  together count together (`controls.plate.in_flight`; `making` is `in_flight` not empty), and a
+  stopped watch clears it. The toolbar adds `· N in flight` from two.
 
 **Priority in the Forge studio (`ForgeClient::render_with`).** The studio's queue takes the job
 `POST /api/runtime/jobs/<id>/move` with `{"to": "top"}` (`runtime/queue-order.js`; the same
@@ -1692,7 +2367,8 @@ for the plate to be shown and to end its hold. `[declare NN] <words>`, then
 up_ms=..`. The engine knows nothing of painters: the situation is data.
 
 **Check it live** (the coordinator's host on 7879, rebuilt from this checkout's lane; Forge started
-and `media backend forge size=512x512 steps=20` or the Codex backend):
+and `media backend forge size=512x512 steps=20` or the Codex backend; the full steps are in "Free
+roam: the current run procedure"):
 1. Danny and his inventory as in "Free roam", then the roam itself with `@roam_declare` set
    (`bash development/market-thread.sh development/market-threads/free-roam.beats`, the
    `@roam_declare` and `@roam_declare_hold` lines are in the file). By hand: a plate with Danny in it
@@ -1704,10 +2380,11 @@ and `media backend forge size=512x512 steps=20` or the Codex backend):
    then `moment=ended` about `declare_hold` s later. A room plate started before it that finished
    later logs `made, not shown, superseded by`.
 3. Screen: Danny at his easel with the board on it and a brush in hand, the place behind him, the
-   speech bubble with his words; no other plate replaces it for the hold. At 512x512, 20 steps, with the Forge queue idle
-   the plate takes the studio's job record time for one image plus the scan (the studio's own
-   `queued_ms`, `render_ms` on `FORGE job kind=images` and the scan job lines); measure it from
-   `made_ms` of the `PERSONA declared` line.
+   speech bubble with his words; no other plate replaces it for the hold. At 512x512, 20 steps, with
+   the Forge queue idle the plate takes the studio's job time for one image plus the scan (the
+   studio's own `queued_ms`, `render_ms` on `FORGE job kind=images` and the scan job lines); measure
+   it from `made_ms` of the `PERSONA declared` line. Measured in roam runs 4 and 5 (2026-11-09):
+   `made_ms` 55 to 80 s (once 127 s), `queue_wait_ms` under 50 ms, about 20 s on screen.
 
 ## The speaker's outline
 
@@ -1745,6 +2422,80 @@ the `speaker` shot of that character (112 %, `region:<name>:speaker`), the same 
 holds, a character with no region on the plate sends it wide, and a thinking cue never moves it.
 Only the speaker keeps a bubble and outline; 15 s plus 70 ms per character after the last line the
 line leaves and the camera eases back out. `clients timeline <client> kind=camera` gives each move.
+
+## Forge studio operations
+
+The Forge studio is a separate application, not part of this repository: `C:\Users\mreca\Desktop\Game
+Development Studio`, at `http://127.0.0.1:5173`. It has its own `AGENTS.md` (read it, and
+`docs/STUDIO_GUIDE.md`, before changing anything there). This repository only talks to its HTTP
+API (`crates/df-providers/src/forge.rs`). "Forge as the model provider" below says which concerns
+Forge can serve; this section is how to keep it running.
+
+**Start and stop** it with its own scripts, which track the process by PID and refuse to touch
+anything that is not a verified studio (`-Port` for another port). Do not kill node by name.
+
+```bash
+powershell -NoProfile -File "C:\Users\mreca\Desktop\Game Development Studio\start-server.ps1"
+```
+
+```bash
+powershell -NoProfile -File "C:\Users\mreca\Desktop\Game Development Studio\stop-server.ps1"
+```
+
+Start needs `node_modules` and `dist\index.html` (run `npm install` and `npm run build` in the
+studio folder first). Stop asks for an orderly stop (it closes SQLite and checkpoints the queue)
+and terminates the process only if it is still up after 8 s.
+
+**One render at a time.** The studio's queue is durable and runs one render from its head (the
+image engine holds a lock). Everything else waits behind it, the scan (SAM) jobs and the sheets
+included, so a blocked head holds back every plate. List what is open:
+
+```bash
+curl -s http://127.0.0.1:5173/api/runtime/jobs
+```
+
+**What the host does when the queue is blocked** (`df-providers/src/forge.rs`; unit-tested in
+`crates/df-providers/tests/forge.rs`):
+
+- It reads the queue before it submits and again about 1 s later, then every 5 s while its job
+  waits. A head that waits for memory (`waiting_memory`), was interrupted (`interrupted`) or needs a
+  person (`needs_attention`) ends the render at once with a typed cause, `queue_waiting_memory`,
+  `queue_interrupted` or `queue_needs_attention` (`FORGE job .. outcome=queue_*`; Forge's reasons
+  show as `detail=` on the `IMAGEGEN` failed lines), instead of waiting out the 15-minute deadline.
+  The read is advisory: a failed read never fails a render.
+- It withdraws what it stopped waiting for: on any error while its job was last seen waiting (a
+  passed deadline, a blocked queue, a failed poll) it cancels the job and reads it back to confirm.
+  One line: `FORGE withdrawn outcome=cancelled|taken|refused|unreachable`. A job that started
+  meanwhile finishes on its own and the line says so (`taken`).
+- It never resubmits a job: one whose outcome is unknown (`interrupted`) is an error the caller
+  sees.
+- An emergency picture (a declared plate) is moved to the top of the studio's line right after
+  the submit, once, when the job is still waiting: `FORGE prioritised .. outcome=moved|refused|
+  unavailable`, by `POST /api/runtime/jobs/<id>/move` with `{"to": "top"}`. Seen working live
+  (nine `moved` lines on 2026-11-09). See "Declared actions and emergency plates".
+
+**Stalls seen on 2026-11-09, and what cured them**
+
+| What was seen | Cause | Cure |
+| --- | --- | --- |
+| No plate comes; the head job of the list is `waiting_memory` | The studio's memory check: the render does not fit in the GPU memory that is free (a model another job loaded still sits there) | Free the memory: offload the idle engine (`POST /api/runtime/models/<id>/offload`, see the headers below) or from the studio's Models page. The studio's own automatic release (it stops one idle, studio-owned engine) is one of the fixes loaded only after a rebuild and restart (below) |
+| The head job is `interrupted` and nothing behind it moves | The job's outcome is unknown (the studio or the engine stopped while it ran). The studio never retries it and the host never resubmits it | In the studio's queue page use "Mark cancelled after checking" once you have checked that the engine is no longer running that render. The deployed page asks with a native `confirm()`, which embedded browsers (an editor's or an agent's browser pane) suppress, so the click does nothing there: use an ordinary browser at `http://127.0.0.1:5173`. The same action is `POST /api/runtime/jobs/<id>/resolve` with `{"confirmed": true}` (read in `runtime/jobs.js`, not run) |
+| A render that is running cannot be cancelled | The studio cancels only a job no engine has taken (`Only queued jobs can be cancelled here`) | Only the engine's Force stop (studio page) ends a running render. Check the job list afterwards |
+| A cancel or a move by hand answers 403 `Local studio requests only.` | Every runtime write must come from the studio's own origin | Send `Origin: http://127.0.0.1:5173` (the same as the Host) and `X-Forge-Request: runtime` with it |
+
+A by-hand cancel of a waiting job, as the host does it:
+
+```bash
+curl -s -X POST http://127.0.0.1:5173/api/runtime/jobs/<job id>/cancel -H "Origin: http://127.0.0.1:5173" -H "X-Forge-Request: runtime"
+```
+
+**The studio's own fixes are not in the running studio until it is rebuilt and restarted.** The
+studio folder's working copy (2026-11-09, uncommitted there) has an automatic memory release that
+may also stop the idle resident model of the render's own engine when it alone holds the memory
+and the studio restarts it by itself, a memory wait that gives up after 30 minutes
+(`memoryWaitLimitMs`), and a rewritten queue page (`src/RuntimeQueue.jsx`) without the native
+`confirm()`. They load only after `npm run build` in the studio folder and a restart of the
+studio with the two scripts above. Built, not verified live: no stall has been cured by them yet.
 
 ## Forge as the model provider (optional, no spend)
 
@@ -1838,8 +2589,11 @@ provenance's `requested_*` is the set size. A smaller plate lowers the playgroun
 which is figured from the plate's real width. Observed in the studio's job records (o, 41
 completed image jobs to 2026-11-09 21:46): 1664x928 at 40 steps took 103–226 s (mean 135 s) with no
 pictures in, 160–259 s with 5 references, and 338–562 s with the negative prompt (guidance 4) and
-5 references; 1024x1024 at 20 steps took 57–187 s (mean 88 s, ten jobs). No 512x512 job has run,
-so its time is an estimate from pixels and steps, not a measurement.
+5 references; 1024x1024 at 20 steps took 57–187 s (mean 88 s, ten jobs). 512x512 at 20 steps has
+run since (roam runs 3 to 5, 2026-11-09): the studio's `render_ms` on the host's `FORGE job
+kind=images` lines was 12–63 s (mean 36 s, 39 jobs of one host log, plates and 1:1 inserts
+together), and a move's plate took 46–65 s all told with its scan (see "Free roam: the current run
+procedure").
 
 What plates must respect:
 
@@ -1866,9 +2620,13 @@ What plates must respect:
 | a resident has no persona after the plate | the scan did not name their region | `scene cast` to see who was found; rerun, or `persona generate <id>` after a region is named |
 | a character's head is cut off at the top of the picture | the image model's framing; the prompt does not control it | rerun the plate; a framing line in `BriefStyle` is the planned fix |
 | whole party moves on "we" | Jev had no context | `move act` passes the situation as context; real play passes recent lines |
-| `the transition failed: answer_refused: the model's design was refused: <rule>` (HTTP 502, host `MOVE refused verb=design error=answer_refused cause=<key> detail=<rule>`) | the design call's answer broke a check; the host already asked once more (`MOVE retry verb=design reason=<key> detail=<rule>`, the rule sent back as `refused_before`) and the second answer broke one too. The `cause` key says which: `bad_thing` (a thing id with capitals or spaces, or repeated), `invalid_shown_item` (an item the mover does not hold, named by its name or the owner by display name, or twice), `bad_resident` (an id that is not a persona id, or a party member's or repeated), `malformed_design` (a missing or blank field, a mover not placed once, or someone who does not move listed in `placements`). Only ids, types and references are checked: no length or count is refused | read the rule in `detail` (never the model's text); if the same key repeats, the instruction or the facts leave the model no way to meet it; add the case to `design_tests.rs` |
+| `the transition failed: answer_refused: the model's design was refused: <rule>` (HTTP 502, host `MOVE refused verb=design error=answer_refused cause=<key> detail=<rule>`) | the design call's answer broke a check; the host asks again after every refusal (`MOVE retry verb=design attempt=<n> reason=<key> detail=<rule>`), sending back all the rules broken so far as the `refused_before` list, with no count of askings capped, and stops only when an answer stands or the design stage's deadline (`Deadlines::designing_ms`, 60 s) has passed; this refusal is the last one then, or the text service itself failed (`text_service`). The `cause` key says which: `bad_thing` (a thing id with capitals or spaces, or repeated), `invalid_shown_item` (the detail says which: an owner who holds nothing in `inventory`, such as a resident invented in the same answer; an item its owner does not hold, named by its name instead of its id; or the same item twice; the facts' `shown_item_choices` lists the pairs that are allowed), `bad_resident` (the detail says: not a persona id, such as a hyphen, space or capital; or already taken by a party member or another resident), `malformed_design` (a missing or blank field, a mover not placed once, or someone who does not move listed in `placements`). Only ids, types and references are checked: no length or count is refused | read the rule in `detail` (never the model's text); if the same key repeats, the instruction or the facts leave the model no way to meet it; add the case to `design_tests.rs` |
 | `not moved: the movement names no destination: <reason>` on a line that does name one (a roam run, 2026-11-09) | Jev's first reading refused a bare place phrase or a thing in sight, and the line was not declared a move | `move act` declares its line a move and reads it a second time with the reason (see "Free roam"); `move say`/`move interpret` lines are undeclared and read once |
 | OpenAI Responses `credit_balance_exhausted` | key has no credit | add credit or use `DF_TEXT_BACKEND=codex` |
+| no plate comes in a roam, or a plate fails `queue_waiting_memory`, `queue_interrupted` or `queue_needs_attention` | the Forge studio's queue head is blocked | "Forge studio operations" |
+| the page looks old after a rebuild, or a style change does not show | the page's package is `artifacts/playground/pkg` but its CSS and HTML are served from the scratch playground | rebuild and run wasm-bindgen, copy `theme.css` and `kit.css` into the scratch playground, reload ("Free roam: the current run procedure", step 4) |
+| `cargo build` of the host says the exe is in use during a roam | the host is running from the roam lane's `df-table.exe` | stop your host by its command line (step 2), then build |
+| `scene cast` does not list `danny` after showing `roam-00.png` | the plate's scan or his name is missing (a scratch rebuilt without the layout) | "Making the starting pictures" under "Free roam" |
 | an `emotions.json` or persona edit has no effect | the host reads its scratch copy (`artifacts/tmp/persona-live/playground`), not `assets/` | edit both, or copy the file into the scratch copy; no restart needed |
 | no line is voiced | the host was started without `DF_ELEVENLABS_API_KEY`, TTS is off, or the page's audio is locked | export the key and restart; click TTS in the toolbar (it also unlocks audio); `playground` shows `tts:` and `audio` |
 | a place goes round and round, nobody leaves | the pace judge keeps reading it as not served | a middle place is left once every player has said about three lines there; read `PERSONA story_next served=` in the host log |
@@ -1879,17 +2637,107 @@ What plates must respect:
 ## Coordinator practice during play
 
 Owner, 2026-11-09: while a quest plays, the coordinator watches the TV, hands every fix to a
-subagent rather than making it, and asks before reloading the page mid-scene.
+subagent rather than making it, and asks before reloading the page mid-scene. The other standing
+rules, and the inspector who reads every run, are under "Standing rules" near the top.
 
 ## Known gaps
 
-Reference portraits for character consistency are not built (cards carry job lines only).
-The design step is a model call (`POST /dev/move/design`) that may invent residents; their
-ids are not checked against the persona routes' reserved words (`list`, `all`, ...). Picture
-framing is not controlled (a face can be cut off by the frame). Owed tests are marked
-`TODO(DEV-12)`. The transition's Generating, Locating and Placing timings are written after
-the plate call returns. `persona converse` has no topic shifts. Each plate run spends an
+Reference sheets (`ref-<id>.png`) are made by hand for the characters that need them (the quest
+cast, Danny); no code was found that makes one for a resident the design invents, who is painted
+from the look alone. The design step is a model call (`POST /dev/move/design`) that may invent
+residents; their ids are not checked against the persona routes' reserved words (`list`, `all`,
+...). Picture framing is not controlled (a face can be cut off by the frame). Owed tests are
+marked `TODO(DEV-12)`. The transition's Generating, Locating and Placing timings are written
+after the plate call returns. `persona converse` has no topic shifts. Each plate run spends an
 image generation and a fal scan.
+
+**H-1, "the host stops logging" (2026-11-10): not a host defect.** On the live host the log was
+checked read-only after run 9: `latest` did not move for a `GET` and a `world inventory get`
+because a successful read writes no line by design (`server::logs_served`: only a `/dev/` change or a
+refusal is an `HTTP served` line). A request the host does log moved it at once (`GET
+/dev/host/status` with `Host: probe.invalid` -> 403, `latest` 9081 -> 9083, two lines, and the
+same two lines appeared in `host.log` in that request). Nothing was stuck: `EventLog` takes its lock
+with `unwrap_or_else(PoisonError::into_inner)` and `push` has no gate, channel or cap that drops a
+line; the echo had `echo_pending=0`, `echo_dropped=0`, `echo_writer_gone=false`. The page was
+alive (visible, 78 animation frames a second) and had nothing new to report, and run 9's runner had
+finished (its `play9.log` ends on the final show and the memory summary). So a log that "stopped"
+means the driver stopped, not the log. To tell quiet from stuck, probe with a request the host
+always logs: `curl -H 'Host: probe.invalid' localhost:<port>/dev/host/status` (answers 403, adds
+`CANVAS reject cause=forbidden_request` and `HTTP refused ...`) and compare `log.latest` in
+`/dev/host/status` before and after. A probe that does not move it would be a real H-1; none has
+been seen. Runs 6 and 7: only `run6-host.log` survives (it ends on page `CLIENT gone` lines at
+00:48); the runners' last lines (`play6.log` 00:43, `play7.log` 02:34) precede the host logs' last
+lines by about 4 and 2 minutes, so those runs stalled or were stopped on the runner side; why is
+not recorded.
+
+Free roam (2026-11-09, five runs; stamps 11091737, 11091838, 11092018, 11092200 and 11092245).
+The numbers are the inspector's (`artifacts/tmp/inspector/`) and the runner's logs. The checkout
+was `ce4b6c83` plus the uncommitted work of the day, so a later commit may already have changed
+what is listed as built.
+
+Fixed, and seen working in a live run:
+- **Close-ups.** Inserts on 0 of 19 live moves in run 1, 16 of 19 in run 2 (the judge's rule for
+  a close look, `@roam_look` saying he steps up to the thing); 8 of 9 in run 4. Beige band and
+  reframes gone once an insert was painted anew from the item's look (run 4).
+- **Names in pictures.** The `Danny traveling` signboard of run 1 did not come back (run 2 on).
+- **Tools used up.** Easel and brushes stay (`use: kept`, run 3).
+- **Reference budget.** Over-listed packed items gone: 3 references a move and plates of 46 to
+  64 s (run 3); in run 2 the plates with 4 to 8 references took 73 to 118 s.
+- **Jev.** A declared move reads a bare place phrase, with a second reading: no Jev refusal in
+  runs 3 and 4 (run 2 had one, run 1 one).
+- **Design refusals.** Three in run 3, none in run 4 (the typed retry).
+- **Blank studies.** Six of 17 paintings of run 3 were blank boards; the two paintings of run 4
+  the inspector opened were real oil studies (the blank check and the second try).
+- **Declared plate timing.** Shown at once, queue wait under 50 ms, a hold of 20 s, in every run
+  from 3; `FORGE prioritised outcome=moved` seen 9 times in the host log.
+- **Declared duplicates.** Nine of 17 declared plates in run 3 had two or three Dannys; one of 9
+  in run 4, after the cast count, the negative prompt and the single front view.
+- **The declaration no longer uses the board up** (run 5): the finishing line does.
+- **Perception.** Answers with a bad proposal for a new thing were refused whole in run 4 (4 of 9);
+  from run 5 the bad proposal is dropped (`PERSONA thing_unadded`) and the sight and thought stay.
+- **The page.** A 512x512 plate lies whole over a blurred copy of itself (contain), letterboxed,
+  with the thinking cue and bubbles on it (run 4 screenshot).
+
+Built, not yet verified live (unit tests and the code only; check each in the next full run):
+- **The people check** on declared plates (`persona/people_check.rs`): run 5 still had three
+  duplicates in eight declared plates (moves 5, 9 and 10), and the check came after it.
+- **A gain needs a source** (`exchange`, `found`, `given`, `made`; `unsourced_gain`), the
+  reworded `@roam_painted` and `@way_arrival market` texts, and the larger starting counts in
+  `danny.inventory.json` (boards 6, pigments 5 to 6, oil and rags 8, coins 20).
+- **What a speaker attends to reaches the frame judge** (`perceive::attending`), and the object
+  or vista `kind` of a new thing: in progress when this was written.
+- **The host's early refusal and withdrawal** when the studio's queue is blocked (the `queue_*`
+  causes, `FORGE withdrawn`): no such line is in today's host log.
+- **The studio's own fixes** (auto memory release, the queue page): see "Forge studio operations".
+- **The end of the day.** Run 4 stopped after move 9 and run 5 after move 12, so the square
+  gallery tiles, the show plate's naming and the `[show]` line were not seen after run 3, where
+  his line was empty and the plate was unlabelled (`unknown_region`).
+
+Open:
+- **Thoughts repeat a template.** The `[thought]` lines of run 5 open "Hm." or speak of a warm
+  edge of light on cool stone; his looks open "I'll step up to ..." and "late light" came in
+  about 15 of 20 moves of run 2.
+- **Market trade is not real.** Run 4's two market stops traded nothing; in run 5 move 3 the
+  trade worked (a painting for a board, verdigris and two pennies) and move 7 sold a painting "for
+  0 cp" to nobody and took four goods "for 0 cp". A market place can come without a stall for what
+  he is out of.
+- **Supplies run out too soon.** The finishing line used a board and up to seven colours for each
+  painting, so by move 3 he had nothing to paint on and later moves read `not painted: no boards
+  was used up (had 0, have 0)`; the finishing line also claimed things he no longer had (nine
+  refused `insufficient` entries a time).
+- **Duplicate figures in declared plates** (above), 1 of 9 in run 4 and 3 of 8 in run 5.
+- **Missed close-ups.** Run 5 move 8 offered three things and the judge named none for "I'll step
+  up to that wall" (`inspected=-`); run 3 had inserts on 8 of its 18 live moves.
+- **Repeated places.** The same milestone, handcart, market and blue-door lane come back, and "the
+  next town" never reads as a new town.
+- **Self-recognition.** In run 4 move 9 and run 5 move 8 the `[see]` line calls him a bearded man
+  in the third person.
+- **The title chip is stale** (it read "Market: the enchanted-steel stall" through the roam), and
+  stone inserts show a faint knitted texture.
+- **One declared plate took 127 s** (run 5 move 2) against 55 to 80 s; the cause was not found.
+- **A narrator-box timing test is flaky** (the coordinator's report; its name and cause are not
+  recorded here).
+- **The studio's queue page** with the fix for an `interrupted` job is not deployed.
 
 Flowing play (2026-11-08):
 - **Flirting:** the flirting at the inn never comes, because the plot's inn beat has no room for
@@ -1902,3 +2750,134 @@ Flowing play (2026-11-08):
   anyway.
 - **Forge voices** trail their line by several seconds (about 8 s for a 2-second line warm, about
   58 s cold), too slow for live play.
+
+## Tempo and the music director
+
+The tempo engine (`crates/df-tempo`, `presentation::advance_presentation`) keeps one journey's
+intensity with its inertia, fatigue and phase (calm, build, anticipation, peak, release). The
+host (`crates/df-table-host/src/tempo`) holds one such run, moves it at the host's clock when an
+event is posted, and a music director plays the profile of a music table that the tempo calls for.
+The engine has one intensity channel, not separate tension, energy and triumph channels (the plan's
+channel list is not what `df-tempo` carries today), so the audit lines and views report
+`intensity`, `inertia`, `momentum`, `target`, `fatigue` and the phase. Everything about style is
+data: `development/market-threads/free-roam.music.json`. Nothing in the host names a story or a
+sound. The runner posts the events it already has; it decides nothing.
+
+**Routes and verbs** (each answers the shared dev envelope with a typed `TempoError`):
+
+| Verb | Route | Does |
+| --- | --- | --- |
+| `tempo load <table.json>` | `POST /dev/tempo/table` (the file is the body) | checks and installs the table, starts a run at rest; what plays stays |
+| `tempo prepare` | `POST /dev/tempo/prepare` | finds or composes every profile's track, one after another; the only place a track is made |
+| `tempo reset` | `POST /dev/tempo/reset` | starts the journey again; the director plays the base profile |
+| `tempo impulse <kind> [0-1000] [note=<text>]` | `POST /dev/tempo/impulse` `{kind, intensity?, note?}` | one event of the journey, at a strength in permille (1000 when left out) |
+| `tempo tick` | `POST /dev/tempo/tick` | advances to now and lets the director decide |
+| `tempo [state]` | `GET /dev/tempo` | where the tempo stands now (read only), the recent impulses, what plays |
+
+Errors, with stable keys: `invalid_body`, `no_table` (load first), `unknown_impulse {kind}`,
+`invalid_intensity`, `invalid_note`, `invalid_table {cause}` (`no_profiles`, `no_impulses`,
+`too_many`, `invalid_policy`, `invalid_director`, `invalid_id`, `duplicate_profile`,
+`duplicate_impulse`, `unknown_base`, `invalid_impulse`, `invalid_prompt`, `invalid_length`,
+`invalid_volume`, `invalid_crossfade`, `invalid_condition` with `empty_phases`,
+`invalid_intensity_range`, `invalid_recent` or `unknown_impulse_kind`), `engine {cause}` and
+`stopped`. An unknown field or phase in the table file is `invalid_body` (cause `data`). The CLI
+prints two lines for every verb that moves the run:
+
+```
+tempo phase=build intensity=300 inertia=261 momentum=rising target=100 fatigue=200 at_ms=63000 policy=tempo/1
+music cue=journey track=tempo-journey-1a2b3c4d reused volume=22 | decision=hold reason=dwell wanted=road until_ms=151000
+```
+
+**The table file.** One JSON object, every field checked when it is loaded:
+
+- `version`: the policy version the views report.
+- `policy`: the numbers `df-tempo` runs on: `inertia_half_life_ms`, `decay_half_life_ms`,
+  `fatigue_half_life_ms`, `fatigue_charge_permille`, `fatigue_attenuation_permille`, `thresholds`
+  (where calm gives way to build, build to anticipation, anticipation to peak), `hysteresis_permille`,
+  plus `rest_permille` (where the journey starts and rests) and `momentum_deadband_permille`.
+- `director`: `min_dwell_ms` (how long a cue plays before another replaces it), `tick_ms` (how often
+  the director decides when no impulse comes), `hold_margin_permille`, `track_prefix` and `target`
+  (`tv`, `phone` or `both`).
+- `impulses`: the kinds the journey posts, each `{kind, impulse_permille, target_permille,
+  release}`: the push on the intensity at full strength (negative lowers it), the level the tempo
+  settles toward after it, and whether it is a release.
+- `base` and `profiles`, in priority order. A profile is `{id, when, prompt, length_seconds,
+  volume_percent, loop, crossfade_ms}`. `when` is closed and every field in it must hold: `phases`
+  (a list of phases), `intensity_min`, `intensity_max`, `momentum` (`rising`, `falling`, `stable`),
+  `recent {kinds, within_ms}` (an impulse of one of the kinds that long ago or less). The tempo
+  wants the first profile whose `when` holds, else the base; `{}` always holds.
+
+**How a track change happens.** At each boundary (an impulse, `tempo tick`, `tempo reset`, the
+director's own tick every `tick_ms`, or the end of a held dwell) the engine is advanced to the host
+clock and the director decides. The playing cue changes only when its profile no longer applies
+(its intensity bounds widened by `hold_margin_permille`, unless a profile before it in the table
+now applies), it has played `min_dwell_ms`, and the wanted profile's track is in the library. A
+change that has to wait for the dwell is `hold`, and the director wakes itself at the end of the
+dwell; a track not in the library is `skip` (`TEMPO cue_skipped`), never awaited and never composed
+during play. The page plays one music track at a time and has no crossfade, so the change is a dip
+fade of scene changes: the old track in 3 volume steps down, the new track from a quarter of its
+volume in 4 steps up, `crossfade_ms` of the profile in all (a profile with 0 changes in one step).
+Each step is a `PLAYGROUND` line. A reset or a new table makes pending changes stale and they are
+dropped (`TEMPO cue_dropped reason=stale`).
+
+**Tracks.** A profile's library file is `<track_prefix>-<id>-<hash>.mp3`, the hash of its prompt and
+length: the same prompt and length is found again (the music engine's reuse), a changed prompt or
+length is a new track and a new composition. Volume and crossfade are not part of the name.
+
+**The free-roam score** (`free-roam.music.json`): chill, inspiring instrumentals with no vocals,
+G major, 84 to 92 BPM, fingerpicked acoustic guitar, soft felt piano and light strings, every
+prompt saying it is one score (same key, same instruments, same tempo family) with no hard ending.
+The roam's `@tempo` lines map events to kinds (arrival by `road`, `town` or `market`, `look`,
+`declare`, `painted`, `trade`, `show`). In table order: `show` (a show within 15 min, a build or
+higher phase; 75 s, volume 26), `market` (a trade or a market arrival within 150 s, intensity 150 or
+more; 75 s, 25), `study` (a look, declaration or finished painting within 150 s, intensity at most
+450; sparse piano, 60 s, 18), `road` (a road arrival within 150 s in build or anticipation; open and
+rising, 90 s, 24), `town` (a town arrival, same; a little more motion, 75 s, 24) and the base
+`journey` (calm or released, easy walking, 90 s, 22). A day: journey, then road or town on
+arriving, study for the close look and the painting, back to journey once they have settled,
+market on a trade, show last. On the scripted day of `tempo::cue_tests` (10 moves of 7 minutes)
+there are 28 changes in 71 minutes, none closer than the dwell of 75 s.
+
+**Costs.** `tempo prepare` on the shipped table composes 6 tracks, 465 s of music in all (75 + 75
++ 60 + 90 + 75 + 90), through the music engine's one ElevenLabs composer
+(`DF_ELEVENLABS_API_KEY`, never printed): 6 `/v1/music` calls, composed one after another, each
+stored in the media library as `tempo-<id>-<hash>.mp3`. A second `tempo prepare` composes
+nothing (`6 reused`). The runner runs it at its start, so a roam that finds the tracks pays nothing.
+Run it by hand first to see the timings: `$D dev --port 7879 tempo load
+development/market-threads/free-roam.music.json`, then `$D dev --port 7879 tempo prepare`. It prints
+a summary and one line per profile (`reused`, or `composed (.. bytes, took .. ms)`, or `failed
+(<error key>)`); a failed profile is skipped during play and a second `tempo prepare` composes only it.
+
+**Volume against the voice.** A spoken line plays as a scene sound at `DEFAULT_VOLUME` 80, music
+at the profile's volume (18 to 26, about 30% of the voice), and both are scaled by the same master
+volume of the viewer. The page has no ducking under speech (`crates/df-playground/src/audio.rs`
+plays music and sounds as independent elements), so the music stays at about a third of the voice
+instead: a gap to close if lines are lost under the strings.
+
+**Danny's voice.** `voices.json` holds `"danny": "bIHbv24MWmeRgasZH58o"` in the scratch playground
+(`artifacts/tmp/persona-live/playground/voices.json`) and now in `assets/playground/voices.json`
+(an opaque ElevenLabs voice id, the same one the scratch file gives the village torchbearer).
+`speech cast danny` would choose another from the supplier's list by his persona. A line is voiced
+when the runner asks with `speak=true`, the playground's `tts` switch is on (`playground set
+tts=true`, step 12 of the run procedure; a host restart turns it off) and the page's audio is
+unlocked by a click.
+
+**Running it.** Rebuild the host in the roam lane (step 3 of the run procedure; the page is
+unchanged). Then, with the host up and the keys exported as in step 6:
+
+```bash
+$D dev --port 7879 tempo load development/market-threads/free-roam.music.json
+$D dev --port 7879 tempo prepare        # 6 compositions, 465 s of music, the first time only
+$D dev --port 7879 tempo reset          # the journey starts: music cue=journey ...
+```
+
+The roam (step 15) does the same at its start. Its log shows `[music] prepared: 6 profiles: 6
+reused, 0 composed ..`, `[tempo 00]` and `[music 00] cue=journey ..`, then per move `[tempo NN]
+phase=.. intensity=..` and `[music NN] cue=<profile> track=<name> reused | decision=..` after the
+arrival, the close look, the declaration, a finished painting, a trade and the show. The host log
+has `TEMPO table`, `TEMPO impulse kind=.. strength=.. phase=.. intensity=.. inertia=.. momentum=..
+target=.. fatigue=.. at_ms=..`, `TEMPO decision action=.. reason=.. wanted=.. playing=..`,
+`TEMPO cue profile=.. track=.. volume=.. crossfade_ms=.. steps=.. from=..` and `TEMPO prepared
+...`. The state is in the host's memory: a host restart needs `tempo load` again (the runner does
+it). Owed: a listening check of the cues and their changes by ear, and the page-side crossfade and
+ducking noted above.

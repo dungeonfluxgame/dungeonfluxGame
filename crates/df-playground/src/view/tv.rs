@@ -37,7 +37,7 @@ use crate::view::bubble_layout::BubbleLayout;
 use crate::view::kit::dwell_note;
 
 /// The parts of the shared screen, in the order they are drawn.
-pub const PARTS: [Part; 13] = [
+pub const PARTS: [Part; 14] = [
     Part::TvBackdrop,
     Part::TvGrid,
     Part::TvSam,
@@ -51,6 +51,7 @@ pub const PARTS: [Part; 13] = [
     Part::TvParty,
     Part::TvClues,
     Part::TvStory,
+    Part::TvInventory,
 ];
 
 fn figure_class(shape: ElementShape) -> &'static str {
@@ -598,6 +599,7 @@ pub fn build_part(
         Part::TvParty => party(document, scene),
         Part::TvClues => crate::view::clues::board(document, scene),
         Part::TvStory => crate::view::story::mark(document, scene),
+        Part::TvInventory => crate::view::inventory::panel(document, scene, controls),
         other => Err(JsValue::from_str(&format!(
             "{} is not a piece of the shared screen",
             other.dom_marker()

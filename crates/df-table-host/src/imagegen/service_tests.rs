@@ -876,8 +876,8 @@ async fn an_edit_is_shown_the_front_view_of_a_multi_view_sheet_and_a_fresh_pictu
 }
 
 #[tokio::test]
-async fn an_emergency_picture_painted_anew_is_shown_the_full_length_view_of_a_sheet() {
-    use super::model::Priority;
+async fn a_picture_that_asks_for_the_full_length_view_is_shown_it_whatever_its_priority() {
+    use super::model::SheetPick;
     let rig = Rig::new().await;
     std::fs::create_dir_all(rig.media()).expect("makes the library");
     std::fs::write(
@@ -891,7 +891,7 @@ async fn an_emergency_picture_painted_anew_is_shown_the_full_length_view_of_a_sh
     let request = request("door")
         .following(&people)
         .expect("a request")
-        .prioritised(Priority::Emergency);
+        .showing_sheets(Some(SheetPick::FullLength));
     rig.run_to_end(&generator, request).await.expect("stored");
     assert_eq!(size_of_png(&backend.asked()[0].0.references[0]), (3, 3));
     let views: Vec<String> = rig
@@ -902,5 +902,140 @@ async fn an_emergency_picture_painted_anew_is_shown_the_full_length_view_of_a_sh
     assert_eq!(
         views,
         ["IMAGEGEN sheet_view job=1 name=door picture=ref-wide.png view=full_length"]
+    );
+}
+
+/// The pictures the fake backend was shown and the `sheet_view` lines, for a request on a 9 by 3
+/// sheet (three 3 by 3 views).
+async fn views_of(
+    make: impl FnOnce(super::model::ImageRequest) -> super::model::ImageRequest,
+) -> (Vec<(u32, u32)>, Vec<String>) {
+    let rig = Rig::new().await;
+    std::fs::create_dir_all(rig.media()).expect("makes the library");
+    std::fs::write(
+        rig.media().join("ref-wide.png"),
+        flat_png(9, 3, [200, 10, 10]),
+    )
+    .expect("writes");
+    std::fs::write(rig.media().join("base.png"), flat_png(4, 4, [1, 2, 3])).expect("writes");
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    let people = ["ref-wide.png".to_owned()];
+    let request = make(request("door").following(&people).expect("a request"));
+    rig.run_to_end(&generator, request).await.expect("stored");
+    let shown = backend.asked()[0]
+        .0
+        .references
+        .iter()
+        .map(|bytes| size_of_png(bytes))
+        .collect();
+    let lines = rig
+        .lines()
+        .into_iter()
+        .filter(|line| line.starts_with("IMAGEGEN sheet_view "))
+        .collect();
+    (shown, lines)
+}
+
+#[tokio::test]
+async fn the_view_of_a_sheet_follows_the_kind_of_request_not_its_priority() {
+    use super::model::{Priority, SheetPick};
+    // Painted anew and saying nothing: the whole sheet, emergency or not.
+    for priority in [Priority::Normal, Priority::Emergency] {
+        let (shown, lines) = views_of(|request| request.prioritised(priority)).await;
+        assert_eq!(shown, [(9, 3)], "{priority:?}");
+        assert!(lines.is_empty(), "{lines:?}");
+    }
+    // An edit saying nothing: the front view.
+    let (shown, lines) = views_of(|request| request.editing("base.png").expect("an edit")).await;
+    assert_eq!(shown, [(3, 3)]);
+    assert_eq!(
+        lines,
+        ["IMAGEGEN sheet_view job=1 name=door picture=ref-wide.png view=front"]
+    );
+    // What the caller asks for wins over the kind: the full-length view of a picture painted anew
+    // (a walking figure), the whole sheet of an edit, the front view of a picture painted anew.
+    let (shown, lines) =
+        views_of(|request| request.showing_sheets(Some(SheetPick::FullLength))).await;
+    assert_eq!(shown, [(3, 3)]);
+    assert_eq!(
+        lines,
+        ["IMAGEGEN sheet_view job=1 name=door picture=ref-wide.png view=full_length"]
+    );
+    let (shown, _) = views_of(|request| {
+        request
+            .editing("base.png")
+            .expect("an edit")
+            .showing_sheets(Some(SheetPick::Whole))
+    })
+    .await;
+    assert_eq!(shown, [(9, 3)]);
+    let (shown, lines) = views_of(|request| request.showing_sheets(Some(SheetPick::Front))).await;
+    assert_eq!(shown, [(3, 3)]);
+    assert!(lines[0].ends_with("view=front"), "{lines:?}");
+}
+
+#[tokio::test]
+async fn the_soft_cap_holds_the_pictures_a_plate_carries_below_the_backend_and_never_above_it() {
+    let rig = Rig::new().await;
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    let limits = |generator: &ImageGenerator| generator.backend_limits().maximum_pictures;
+    let backend_maximum = super::backend::ImageBackend::limits(backend.as_ref()).maximum_pictures;
+    assert!(backend_maximum > 3);
+    assert_eq!(
+        limits(&generator),
+        3,
+        "three pictures unless the owner sets another"
+    );
+    generator.set_reference_cap(&rig.running.state, 2);
+    assert_eq!(limits(&generator), 2);
+    assert_eq!(generator.backend_view().reference_cap, 2);
+    generator.set_reference_cap(&rig.running.state, 50);
+    assert_eq!(
+        limits(&generator),
+        backend_maximum,
+        "never above what the backend takes"
+    );
+    assert_eq!(generator.backend_view().reference_cap, 50);
+    let lines = rig.lines();
+    assert!(
+        lines.contains(&format!(
+            "IMAGEGEN reference_cap maximum=2 backend_maximum={backend_maximum}"
+        )),
+        "{lines:?}"
+    );
+    assert!(
+        lines.contains(&format!(
+            "IMAGEGEN reference_cap maximum={backend_maximum} backend_maximum={backend_maximum}"
+        )),
+        "{lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_references_line_says_the_soft_cap_and_the_backend_maximum() {
+    let rig = Rig::new().await;
+    std::fs::create_dir_all(rig.media()).expect("makes the library");
+    std::fs::write(rig.media().join("ref-a.png"), flat_png(2, 2, [1, 1, 1])).expect("writes");
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    generator.set_reference_cap(&rig.running.state, 2);
+    let edit = request("hall")
+        .following(&["ref-a.png".to_owned()])
+        .expect("a request")
+        .leaving_out(&["item-danny-brushes.png".to_owned()]);
+    rig.run_to_end(&generator, edit).await.expect("stored");
+    let backend_maximum = super::backend::ImageBackend::limits(backend.as_ref()).maximum_pictures;
+    let lines = rig.lines();
+    let references = lines
+        .iter()
+        .find(|line| line.starts_with("IMAGEGEN references "))
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(
+        references.contains(&format!(
+            " count=1 maximum=2 backend_maximum={backend_maximum} left_out=item-danny-brushes.png"
+        )),
+        "{references}"
     );
 }

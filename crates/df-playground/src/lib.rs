@@ -30,6 +30,7 @@ pub mod fixture_checks;
 pub mod frame;
 pub mod home;
 pub mod image_layout;
+pub mod inventory;
 pub mod kit;
 pub mod layout;
 pub mod limits;
@@ -106,6 +107,8 @@ mod frame_tests;
 mod home_tests;
 #[cfg(test)]
 mod image_layout_tests;
+#[cfg(test)]
+mod inventory_tests;
 #[cfg(test)]
 mod layout_tests;
 #[cfg(test)]

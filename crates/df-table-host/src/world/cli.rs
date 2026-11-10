@@ -9,13 +9,14 @@ use super::inventory::cli::{self as inventory_cli, InventoryCommand};
 use super::memory::cli::{self as memory_cli, MemoryCommand};
 use super::request::{PlaceRequest, PlaceSet, Quoted, Validated, WorldReply, WorldView};
 use super::routes::path;
+use super::town::TownView;
 use crate::command::{CommandError, bad_choice};
 use crate::dev::DevError;
 use crate::dev_client::{self, get_json, post_json};
 
 /// Every `world` verb, for the unknown-verb refusal and the help.
 pub const WORLD_USAGE: &str = concat!(
-    "world [show] | world place <id|-> | world quote <item> <qty> | world validate | ",
+    "world [show] | world place <id|-> | world quote <item> <qty> | world validate | world town | ",
     "world inventory ... (world inventory help) | world memory ... (world memory help)"
 );
 /// `world place`: the active place (`-` for none).
@@ -34,6 +35,8 @@ pub enum WorldCommand {
     Quote { item: String, qty: u32 },
     /// Read the bible now and count what it holds.
     Validate,
+    /// The town the party is in, if any.
+    Town,
     /// An inventory operation.
     Inventory(InventoryCommand),
     /// A memory operation.
@@ -72,6 +75,7 @@ pub fn parse(words: &[String]) -> Result<WorldCommand, CommandError> {
         }),
         ("quote", _) => Err(CommandError::Usage(WORLD_QUOTE_USAGE)),
         ("validate", []) => Ok(WorldCommand::Validate),
+        ("town", []) => Ok(WorldCommand::Town),
         ("inventory", words) => inventory_cli::parse(words).map(WorldCommand::Inventory),
         ("memory", words) => memory_cli::parse(words).map(WorldCommand::Memory),
         _ => Err(CommandError::Usage(WORLD_USAGE)),
@@ -103,6 +107,16 @@ fn format_view(view: &WorldView) -> String {
         ));
     }
     lines.join("\n")
+}
+
+fn format_town(view: &TownView) -> String {
+    match &view.town {
+        Some(town) => format!(
+            "town id={} created_at={}\nlook: {}",
+            town.id, town.created_at, town.look
+        ),
+        None => "town none".to_owned(),
+    }
 }
 
 fn format_quote(quoted: &Quoted) -> String {
@@ -146,6 +160,10 @@ pub async fn run(port: u16, command: WorldCommand) -> Result<String, DevError> {
         }
         WorldCommand::Inventory(command) => inventory_cli::run(port, command).await,
         WorldCommand::Memory(command) => memory_cli::run(port, command).await,
+        WorldCommand::Town => {
+            let view: TownView = reply_value(get_json(port, path::WORLD_TOWN).await?)?;
+            Ok(format_town(&view))
+        }
         WorldCommand::Validate => {
             let counts: Validated = reply_value(get_json(port, path::WORLD_VALIDATE).await?)?;
             Ok(format!(

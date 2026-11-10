@@ -60,6 +60,7 @@ mod handles;
 mod line;
 pub(crate) mod options;
 pub(crate) mod perceive;
+mod people_check;
 mod plate;
 mod reveal;
 pub mod request;
@@ -74,6 +75,7 @@ mod story_mark;
 mod story_narrate;
 mod story_next;
 mod story_way;
+mod walk_plates;
 
 pub use self::cli::{PersonaCommand, parse};
 pub use self::converse::ConverseError;
@@ -85,6 +87,10 @@ pub(crate) use self::plate::{
 pub use self::request::{PersonaError, PersonaSummary};
 pub use self::routes::router_with;
 pub(crate) use self::storage::summaries_of;
+pub(crate) use self::walk_plates::{
+    MadePlate, Spinner, WalkMoment, make_walk_plate, mark_walk, show_walk_plate, spinner_off,
+    spinner_on,
+};
 #[cfg(test)]
 pub(crate) use self::storage::write_persona;
 
@@ -96,6 +102,10 @@ mod backfill_tests;
 mod converse_tests;
 #[cfg(test)]
 mod declare_tests;
+#[cfg(test)]
+mod frame_closing_tests;
+#[cfg(test)]
+mod people_check_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
@@ -114,6 +124,8 @@ mod line_tests;
 mod perceive_tests;
 #[cfg(test)]
 mod persona_tests;
+#[cfg(test)]
+mod reveal_picture_tests;
 #[cfg(test)]
 mod reveal_tests;
 #[cfg(test)]

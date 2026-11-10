@@ -21,6 +21,7 @@ CONFLICT = re.compile(r"^(<<<<<<< |>>>>>>> |=======$)")
 DEBUG_OUTPUT = re.compile(r"\b(dbg!|todo!|unimplemented!)\(")
 PRINT_OUTPUT = re.compile(r"\b(println!|eprintln!|print!|eprint!)\(")
 BARE_ALLOW = re.compile(r"#\[allow\((?![^)]*reason\s*=)")
+SCRATCH_NAME = re.compile(r"^(scratch|tmp|temp)(?![a-z])")
 BARE_TODO = re.compile(r"\b(TODO|FIXME|XXX)\b(?!\([A-Z]+-\d+\))")
 MAXIMUM_COLUMNS = 100
 
@@ -71,7 +72,7 @@ def main():
     tracked, untracked = changed_paths(args.base)
     for path in untracked:
         suffix = Path(path).suffix.lower()
-        if suffix in STRAY_SUFFIXES or Path(path).name.lower().startswith(("scratch", "tmp", "temp")):
+        if suffix in STRAY_SUFFIXES or SCRATCH_NAME.match(Path(path).name.lower()):
             problems.append(f"stray file (belongs in artifacts/tmp/<task>/ or nowhere): {path}")
     for path in tracked + untracked:
         if path == "development/hygiene-check.py":

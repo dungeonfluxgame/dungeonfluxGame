@@ -18,6 +18,7 @@ use crate::fixture::{
     Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, PlateKind, Slide,
     UnavailableChoice,
 };
+use crate::inventory::InventoryPanel;
 use crate::limits::{
     MAXIMUM_CAMERA_MS, MAXIMUM_PARTY_MEMBERS, MAXIMUM_PIVOT_PERCENT, MAXIMUM_ROTATION_DEGREES,
     MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME_PERCENT, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
@@ -172,6 +173,9 @@ pub struct SceneOverlay {
     /// or cleared.
     #[serde(skip_serializing_if = "Edit::is_keep")]
     pub story: Edit<StoryMark>,
+    /// The inventory panel on the shared screen: set whole by the host, or cleared.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub inventory: Edit<InventoryPanel>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
     pub cue_count: u64,
@@ -237,7 +241,8 @@ pub enum SceneChange {
         #[serde(default)]
         layout: Option<crate::image_layout::ImageLayout>,
         /// What a backdrop picture is: the host says a room plate, a room shown with the cast
-        /// before it, or a close-up. Defaults to a room plate; only the backdrop's is read.
+        /// before it, a close-up, or the day's show. Defaults to a room plate; only the backdrop's
+        /// is read.
         #[serde(default)]
         plate: PlateKind,
     },
@@ -266,6 +271,13 @@ pub enum SceneChange {
     },
     /// Takes the story's mark away.
     ClearStory {},
+    /// Sets the inventory panel on the shared screen (one owner's rows and the newest change),
+    /// replacing the one shown.
+    Inventory {
+        panel: InventoryPanel,
+    },
+    /// Takes the inventory panel away.
+    ClearInventory {},
     /// Plays a sound once.
     Sound {
         media: String,
@@ -372,6 +384,10 @@ pub enum SceneError {
         what: &'static str,
         limit: usize,
     },
+    /// The inventory panel has a row twice.
+    DuplicateRow(String),
+    /// The inventory panel moved a row it does not have.
+    UnknownRow(String),
     /// A scene's number is 0 or past its total.
     InvalidProgress {
         index: u16,
@@ -398,6 +414,13 @@ impl fmt::Display for SceneError {
             }
             Self::DuplicateMember(name) => write!(formatter, "'{name}' is already in the party"),
             Self::DuplicateClue(id) => write!(formatter, "the clue board has '{id}' twice"),
+            Self::DuplicateRow(id) => write!(formatter, "the inventory has '{id}' twice"),
+            Self::UnknownRow(id) => {
+                write!(
+                    formatter,
+                    "the inventory moved '{id}', which is not a row of it"
+                )
+            }
             Self::UnknownMember(name) => write!(formatter, "'{name}' is not in the party"),
             Self::TooManyMembers => write!(
                 formatter,
@@ -511,6 +534,7 @@ impl SceneOverlay {
             music,
             clues,
             story,
+            inventory,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -537,6 +561,7 @@ impl SceneOverlay {
             ("music", music.is_keep()),
             ("clues", clues.is_keep()),
             ("story", story.is_keep()),
+            ("inventory", inventory.is_keep()),
         ]
         .into_iter()
         .filter_map(|(name, kept)| (!kept).then_some(name))
@@ -593,6 +618,7 @@ impl SceneOverlay {
             music,
             clues,
             story,
+            inventory,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -620,5 +646,6 @@ impl SceneOverlay {
         music.apply_to(&mut fixture.music);
         clues.apply_to(&mut fixture.tv.clues);
         story.apply_to(&mut fixture.tv.story);
+        inventory.apply_to(&mut fixture.tv.inventory);
     }
 }

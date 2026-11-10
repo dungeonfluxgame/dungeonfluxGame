@@ -9,6 +9,7 @@ use super::request::{
     SetRequest, TakeRequest, TransferRequest,
 };
 use super::routes::path;
+use super::screen::{Screen, ShowRequest};
 use super::{Inventory, InventoryChange, InventoryItem, ItemUse, OwnerKind};
 use crate::command::{CommandError, bad_choice};
 use crate::dev::DevError;
@@ -24,7 +25,8 @@ pub const INVENTORY_USAGE: &str = concat!(
     "world inventory consume <owner> <item> <count> [why=<text>] | ",
     "world inventory batch <owner> <changes.json> | ",
     "world inventory transfer <from> <to> <item> <count> [why=<text>] | ",
-    "world inventory history [<owner>] [limit=<n>] | world inventory sheets <owner>"
+    "world inventory history [<owner>] [limit=<n>] | world inventory sheets <owner> | ",
+    "world inventory show <owner> | world inventory hide"
 );
 
 /// A `world inventory` command of the dev CLI.
@@ -60,6 +62,12 @@ pub enum InventoryCommand {
     Sheets {
         owner: String,
     },
+    /// Show one owner's inventory on the shared screen from now on.
+    Show {
+        owner: String,
+    },
+    /// Take the inventory off the shared screen.
+    Hide,
 }
 
 fn count_word(text: &str) -> Result<u64, CommandError> {
@@ -174,6 +182,10 @@ pub fn parse(words: &[String]) -> Result<InventoryCommand, CommandError> {
         ("sheets", [owner]) => Ok(InventoryCommand::Sheets {
             owner: owner.clone(),
         }),
+        ("show", [owner]) => Ok(InventoryCommand::Show {
+            owner: owner.clone(),
+        }),
+        ("hide", []) => Ok(InventoryCommand::Hide),
         _ => Err(usage()),
     }
 }
@@ -232,6 +244,16 @@ fn format_owners(list: &OwnerList) -> String {
         )
     }));
     lines.join("\n")
+}
+
+fn format_screen(screen: &Screen) -> String {
+    match &screen.owner {
+        Some(owner) => format!(
+            "ok the screen shows {owner}'s inventory ({} rows)",
+            screen.rows
+        ),
+        None => "ok the screen shows no inventory".to_owned(),
+    }
 }
 
 fn format_history(history: &History) -> String {
@@ -299,6 +321,16 @@ pub async fn run(port: u16, command: InventoryCommand) -> Result<String, DevErro
             Ok(format_history(&history))
         }
         InventoryCommand::Sheets { owner } => sheets(port, &owner).await,
+        InventoryCommand::Show { owner } => {
+            let request = ShowRequest { owner };
+            let screen: Screen = value(post_json(port, path::INVENTORY_SHOW, &request).await?)?;
+            Ok(format_screen(&screen))
+        }
+        InventoryCommand::Hide => {
+            let screen: Screen =
+                value(post_json(port, path::INVENTORY_HIDE, &serde_json::json!({})).await?)?;
+            Ok(format_screen(&screen))
+        }
     }
 }
 

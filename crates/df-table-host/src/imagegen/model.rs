@@ -48,6 +48,35 @@ impl Priority {
     }
 }
 
+/// How much of a person's reference sheet a picture is shown. A sheet holds several views side by
+/// side (a front close-up, a three-quarter view, a full-length view); a picture shown the whole
+/// sheet can paint each view as another person. The caller says which view its picture needs: a
+/// small walking figure in a wide view wants the full-length one. A request that says nothing is an
+/// edit shown the front view, or a picture painted anew shown the whole sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SheetPick {
+    Whole,
+    Front,
+    FullLength,
+}
+
+impl SheetPick {
+    pub const ALL: [Self; 3] = [Self::Whole, Self::Front, Self::FullLength];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Whole => "whole",
+            Self::Front => "front",
+            Self::FullLength => "full_length",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|pick| pick.key() == key)
+    }
+}
+
 /// What the picture is for. It sets the default shape and adds one line of direction to the
 /// prompt, so the owner's words stay the first thing the backend reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -535,6 +564,7 @@ pub struct ImageRequest {
     avoid: Vec<String>,
     left_out: Vec<String>,
     priority: Priority,
+    sheet: Option<SheetPick>,
 }
 
 impl ImageRequest {
@@ -575,6 +605,7 @@ impl ImageRequest {
             avoid: Vec::new(),
             left_out: Vec::new(),
             priority: Priority::Normal,
+            sheet: None,
         })
     }
 
@@ -644,6 +675,13 @@ impl ImageRequest {
         self
     }
 
+    /// This request showing the people's reference sheets as `sheet` says; none leaves it to the
+    /// request: the front view for an edit, the whole sheet for a picture painted anew.
+    pub fn showing_sheets(mut self, sheet: Option<SheetPick>) -> Self {
+        self.sheet = sheet;
+        self
+    }
+
     fn check_picture_count(&self) -> Result<(), GenerateRequestError> {
         self.check_pictures(MAXIMUM_PICTURES)
     }
@@ -679,6 +717,10 @@ impl ImageRequest {
 
     pub fn priority(&self) -> Priority {
         self.priority
+    }
+
+    pub fn sheet(&self) -> Option<SheetPick> {
+        self.sheet
     }
 
     pub fn prompt(&self) -> &str {

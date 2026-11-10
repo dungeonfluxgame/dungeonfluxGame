@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "policy": {
+    "inertia_half_life_ms": 20000,
+    "decay_half_life_ms": 60000,
+    "fatigue_half_life_ms": 120000,
+    "fatigue_charge_permille": 200,
+    "fatigue_attenuation_permille": 500,
+    "thresholds": [150, 380, 650],
+    "hysteresis_permille": 40,
+    "rest_permille": 80,
+    "momentum_deadband_permille": 40
+  },
+  "director": {
+    "min_dwell_ms": 75000,
+    "tick_ms": 30000,
+    "hold_margin_permille": 80,
+    "track_prefix": "tempo",
+    "target": "tv"
+  },
+  "impulses": [
+    { "kind": "arrive_road", "impulse_permille": 220, "target_permille": 100 },
+    { "kind": "arrive_town", "impulse_permille": 200, "target_permille": 100 },
+    { "kind": "arrive_market", "impulse_permille": 240, "target_permille": 120 },
+    { "kind": "look", "impulse_permille": 100, "target_permille": 100 },
+    { "kind": "walk", "impulse_permille": 60, "target_permille": 100 },
+    { "kind": "declare", "impulse_permille": 90, "target_permille": 100 },
+    { "kind": "painted", "impulse_permille": 300, "target_permille": 100 },
+    { "kind": "trade", "impulse_permille": 260, "target_permille": 120 },
+    { "kind": "show", "impulse_permille": 700, "target_permille": 450 },
+    { "kind": "rest", "impulse_permille": -300, "target_permille": 80, "release": true }
+  ],
+  "base": "journey",
+  "profiles": [
+    {
+      "id": "show",
+      "when": {
+        "phases": ["build", "anticipation", "peak", "release"],
+        "recent": { "kinds": ["show"], "within_ms": 900000 }
+      },
+      "prompt": "Instrumental only, no vocals. One score of a single chill, inspiring soundtrack, in G major at about 90 BPM, built from fingerpicked acoustic guitar, soft felt piano and light strings, so it crossfades musically with the other cues of the same score (same key, same instruments, same tempo family of 80 to 95 BPM). This is the uplifting cue: triumphant but soft, strings opening up in a warm rising theme, guitar and piano carrying the melody, a gentle swell and one soft low drum pulse, hopeful and proud, never loud, never dramatic. Warm, spacious and unhurried. A seamless loop with no hard ending: it begins and ends on the tonic, no fade-out and no final chord.",
+      "length_seconds": 75,
+      "volume_percent": 26,
+      "loop": true,
+      "crossfade_ms": 6000
+    },
+    {
+      "id": "market",
+      "when": {
+        "intensity_min": 150,
+        "recent": { "kinds": ["trade", "arrive_market"], "within_ms": 150000 }
+      },
+      "prompt": "Instrumental only, no vocals. One score of a single chill, inspiring soundtrack, in G major at about 92 BPM, built from fingerpicked acoustic guitar, soft felt piano and light strings, so it crossfades musically with the other cues of the same score (same key, same instruments, same tempo family of 80 to 95 BPM). This is the market cue: lively but gentle, a light plucked rhythm guitar, a playful soft piano figure, pizzicato strings and a very soft brushed snare and shaker, friendly and bustling yet still relaxed. Warm, spacious and hopeful. A seamless loop with no hard ending: it begins and ends on the tonic, no fade-out and no final chord.",
+      "length_seconds": 75,
+      "volume_percent": 25,
+      "loop": true,
+      "crossfade_ms": 4000
+    },
+    {
+      "id": "study",
+      "when": {
+        "intensity_max": 450,
+        "recent": { "kinds": ["look", "declare", "painted"], "within_ms": 150000 }
+      },
+      "prompt": "Instrumental only, no vocals. One score of a single chill, inspiring soundtrack, in G major at about 84 BPM, built from fingerpicked acoustic guitar, soft felt piano and light strings, so it crossfades musically with the other cues of the same score (same key, same instruments, same tempo family of 80 to 95 BPM). This is the study cue, for a close look and for painting: focused and quiet, a few sparse soft piano notes with plenty of space, one warm sustained string pad, the guitar almost silent, intimate and contemplative, no percussion at all. Warm and hopeful. A seamless loop with no hard ending: it begins and ends on the tonic, no fade-out and no final chord.",
+      "length_seconds": 60,
+      "volume_percent": 18,
+      "loop": true,
+      "crossfade_ms": 5000
+    },
+    {
+      "id": "road",
+      "when": {
+        "phases": ["build", "anticipation"],
+        "recent": { "kinds": ["arrive_road"], "within_ms": 150000 }
+      },
+      "prompt": "Instrumental only, no vocals. One score of a single chill, inspiring soundtrack, in G major at about 88 BPM, built from fingerpicked acoustic guitar, soft felt piano and light strings, so it crossfades musically with the other cues of the same score (same key, same instruments, same tempo family of 80 to 95 BPM). This is the road cue: open and wide, spacious guitar with long sustained strings, a gently rising melodic line over a soft piano pulse, light brushes, a sense of horizon and distance. Warm, hopeful and unhurried. A seamless loop with no hard ending: it begins and ends on the tonic, no fade-out and no final chord.",
+      "length_seconds": 90,
+      "volume_percent": 24,
+      "loop": true,
+      "crossfade_ms": 5000
+    },
+    {
+      "id": "town",
+      "when": {
+        "phases": ["build", "anticipation"],
+        "recent": { "kinds": ["arrive_town"], "within_ms": 150000 }
+      },
+      "prompt": "Instrumental only, no vocals. One score of a single chill, inspiring soundtrack, in G major at about 88 BPM, built from fingerpicked acoustic guitar, soft felt piano and light strings, so it crossfades musically with the other cues of the same score (same key, same instruments, same tempo family of 80 to 95 BPM). This is the town cue: a little more motion than easy walking, brighter guitar arpeggios, a soft piano answering the melody, light strings swelling gently and a very soft brushed shaker. Warm, spacious and hopeful. A seamless loop with no hard ending: it begins and ends on the tonic, no fade-out and no final chord.",
+      "length_seconds": 75,
+      "volume_percent": 24,
+      "loop": true,
+      "crossfade_ms": 4000
+    },
+    {
+      "id": "journey",
+      "when": {},
+      "prompt": "Instrumental only, no vocals. One score of a single chill, inspiring soundtrack, in G major at about 86 BPM, built from fingerpicked acoustic guitar, soft felt piano and light strings, so it crossfades musically with the other cues of the same score (same key, same instruments, same tempo family of 80 to 95 BPM). This is the base cue, easy walking: gentle fingerpicked acoustic guitar carrying a simple warm melody, soft piano chords underneath, a very light string pad, no percussion. Warm, spacious, hopeful and unhurried. A seamless loop with no hard ending: it begins and ends on the tonic, no fade-out and no final chord.",
+      "length_seconds": 90,
+      "volume_percent": 22,
+      "loop": true,
+      "crossfade_ms": 5000
+    }
+  ]
+}

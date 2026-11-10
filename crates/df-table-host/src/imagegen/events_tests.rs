@@ -47,7 +47,8 @@ fn the_pictures_a_job_follows_are_one_line_of_names() {
             "ref-danny.png".to_owned(),
             "item-danny-easel.png".to_owned(),
         ],
-        maximum: 8,
+        maximum: 3,
+        backend_maximum: 8,
         left_out: Vec::new(),
     }
     .line();
@@ -55,7 +56,8 @@ fn the_pictures_a_job_follows_are_one_line_of_names() {
         line,
         concat!(
             "IMAGEGEN references job=3 name=roam-01 base=- ",
-            "attached=ref-danny.png,item-danny-easel.png count=2 maximum=8 left_out=-"
+            "attached=ref-danny.png,item-danny-easel.png count=2 maximum=3 backend_maximum=8 ",
+            "left_out=-"
         )
     );
 }

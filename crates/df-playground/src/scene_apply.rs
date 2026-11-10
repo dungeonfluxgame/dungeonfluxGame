@@ -125,6 +125,15 @@ impl SceneOverlay {
                 self.story = Edit::Clear;
                 Ok(())
             }
+            SceneChange::Inventory { panel } => {
+                panel.check()?;
+                self.inventory = Edit::Set(panel);
+                Ok(())
+            }
+            SceneChange::ClearInventory {} => {
+                self.inventory = Edit::Clear;
+                Ok(())
+            }
             SceneChange::Sound {
                 media,
                 target,

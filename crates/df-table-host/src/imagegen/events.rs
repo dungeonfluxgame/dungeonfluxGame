@@ -41,6 +41,12 @@ pub enum ImageGenEvent {
         backend: &'static str,
         running: usize,
     },
+    /// The soft cap on the pictures a plate request the host builds itself carries was set; the
+    /// backend's own maximum is above it or equal.
+    ReferenceCap {
+        maximum: usize,
+        backend_maximum: usize,
+    },
     /// A job that is not of normal urgency, the line after its request: an emergency picture is
     /// put first by a backend that has a queue of its own.
     Prioritised {
@@ -65,7 +71,9 @@ pub enum ImageGenEvent {
         name: String,
         base: Option<String>,
         attached: Vec<String>,
+        /// The soft cap in force (never above the backend's), and the backend's own maximum.
         maximum: usize,
+        backend_maximum: usize,
         left_out: Vec<String>,
     },
     /// The job's own task began its work, `wait` after the request arrived (the check included).
@@ -204,6 +212,7 @@ impl ImageGenEvent {
             Self::Check { .. } => "check",
             Self::Requested { .. } => "requested",
             Self::Prioritised { .. } => "priority",
+            Self::ReferenceCap { .. } => "reference_cap",
             Self::SheetView { .. } => "sheet_view",
             Self::References { .. } => "references",
             Self::Started { .. } => "started",
@@ -258,6 +267,10 @@ impl ImageGenEvent {
                 backend,
                 running
             ),
+            Self::ReferenceCap {
+                maximum,
+                backend_maximum,
+            } => format!("IMAGEGEN {verb} maximum={maximum} backend_maximum={backend_maximum}"),
             Self::SheetView {
                 job,
                 name,
@@ -284,11 +297,12 @@ impl ImageGenEvent {
                 base,
                 attached,
                 maximum,
+                backend_maximum,
                 left_out,
             } => format!(
                 concat!(
                     "IMAGEGEN {} job={} name={} base={} attached={} count={} maximum={} ",
-                    "left_out={}"
+                    "backend_maximum={} left_out={}"
                 ),
                 verb,
                 job,
@@ -297,6 +311,7 @@ impl ImageGenEvent {
                 names_or_dash(attached),
                 attached.len(),
                 maximum,
+                backend_maximum,
                 names_or_dash(left_out)
             ),
             Self::Started { job, wait } => {

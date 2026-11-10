@@ -2231,3 +2231,54 @@ body {
 }
 .tv-story .kit-progress-label { flex-wrap: wrap; justify-content: flex-end; column-gap: .6cqw; text-align: right; text-wrap: balance; }
 .tv-story .kit-progress-track { position: static; transform: none; width: 18cqw; }
+
+/* === component: inventory panel === */
+/* What the roam character holds (`view::inventory`): the kit's loot list, small, at the lower right above the caption bar and
+   anchored to the stage, not to the picture. A row is a supply or a tool with its count; the rows run down and then across in
+   columns of eight. A count that fell flashes red-amber with a "-N" tag, one that rose flashes green with "+N" (the tag has its
+   own room at the row's right, so nothing shifts), both for 4 s from when the page first showed the move (`inv-flash-*`,
+   `inv-tag`; keep in step with `inventory::FLASH_MS`; `--inv-age` carries a redrawn row on from where its flash was). A row at zero stays listed, struck and dimmed; one of a supply left has an amber tint. When the panel
+   would cover a person, a bubble, the narration, the caption bar, the clue board or the story's chip (`view::bubble_layout`) it
+   fades out (inventory-hidden) until it is clear; it never moves. It also fades out (inventory-covered, set in place by
+   `view::inventory::settle_cover`) while a full-frame picture is up (a reveal or an item's close-up insert,
+   `inventory::picture_is_up`) and returns with the room, walk or arrival plate. */
+.tv-inventory { z-index: 2; --kit-rise: 0px; transition: opacity 400ms ease; }
+.tv-inventory:is(.inventory-hidden, .inventory-covered) { opacity: 0; }
+.tv-inventory .kit-ledger { position: absolute; right: 2cqw; bottom: 12cqw; width: max-content; max-width: 34cqw; --kit-halo-a: .4; }
+.tv-inventory .kit-ledger .kit-pane { padding: .8cqw 1.2cqw .7cqw; }
+.tv-inventory .kit-ledger-title { font-size: 1.5cqw; }
+.tv-inventory .kit-ledger-rule { margin: .3cqw 0 .4cqw; }
+.tv-inventory .kit-rows { display: grid; grid-auto-flow: column; grid-template-rows: repeat(8, auto); grid-auto-columns: 12.5cqw; column-gap: 1.4cqw; }
+.tv-inventory .kit-row { min-height: 2cqw; gap: .5cqw; padding: .1cqw 3.2cqw .1cqw 0; animation: none; }
+.tv-inventory .kit-row:last-child { border-bottom: 1px solid #f1d9a022; }
+.tv-inventory .kit-row-mark { width: 1cqw; height: 1cqw; }
+.tv-inventory .kit-row-name { font-size: 1.05cqw; line-height: 1.1; }
+.tv-inventory .kit-row-figure { font-size: 1.05cqw; }
+.tv-inventory.inv-redrawn .kit-pane, .tv-inventory.inv-redrawn .kit-halo, .tv-inventory.inv-redrawn .kit-bloom { animation: none; }
+.tv-inventory.inv-redrawn .kit-pane::before { display: none; }
+.tv-inventory .kit-row.inv-out .kit-row-name { text-decoration: line-through; }
+.tv-inventory .kit-row.inv-out > :not(.inv-tag) { opacity: .42; }
+.tv-inventory .kit-row.inv-last { background: linear-gradient(90deg, #ffb84a38, #ffb84a0c); }
+.tv-inventory .kit-row.inv-last .kit-row-figure { color: var(--kit-ember); }
+.tv-inventory .kit-row.inv-spent { animation: inv-flash-spent 4s ease-out 1 backwards; animation-delay: calc(var(--inv-age, 0ms) * -1); }
+.tv-inventory .kit-row.inv-gained { animation: inv-flash-gained 4s ease-out 1 backwards; animation-delay: calc(var(--inv-age, 0ms) * -1); }
+.tv-inventory.inv-return { animation: inv-return 400ms ease 1 backwards; }
+.inv-tag { position: absolute; right: 0; top: 50%; transform: translateY(-50%); font: 700 1.2cqw/1 var(--kit-body); font-variant-numeric: tabular-nums; animation: inv-tag 4s linear 1 both; animation-delay: calc(var(--inv-age, 0ms) * -1); }
+.inv-spent .inv-tag { color: #ff9a5c; }
+.inv-gained .inv-tag { color: #7fe3a0; }
+@keyframes inv-flash-spent {
+  0%, 30% { background-color: #ff4a2ac0; box-shadow: inset 0 0 1cqw #ff7a3acc; }
+  100% { background-color: #ff4a2a00; box-shadow: inset 0 0 0 #ff7a3a00; }
+}
+@keyframes inv-flash-gained {
+  0%, 30% { background-color: #3ccf7ab0; box-shadow: inset 0 0 1cqw #7fe3a0cc; }
+  100% { background-color: #3ccf7a00; box-shadow: inset 0 0 0 #7fe3a000; }
+}
+@keyframes inv-return {
+  from { opacity: 0; }
+}
+@keyframes inv-tag {
+  0%, 75% { opacity: 1; }
+  100% { opacity: 0; }
+}
+/* === end component: inventory panel === */

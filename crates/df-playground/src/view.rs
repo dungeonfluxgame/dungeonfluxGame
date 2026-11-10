@@ -8,6 +8,7 @@ pub mod clues;
 pub mod composer;
 pub mod home;
 pub mod icons;
+pub mod inventory;
 pub mod kit;
 pub mod lobby;
 pub mod overlays;

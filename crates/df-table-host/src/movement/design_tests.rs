@@ -1,12 +1,14 @@
 //! Tests of `design`.
 
 use crate::movement::design::{
-    DesignError, check_shown_items, design_facts, design_schema, parse_design,
+    DesignError, ShownItemCause, WalkNeeds, check_feature, check_shown_items, check_walk,
+    design_facts, design_schema, parse_design,
 };
 use crate::movement::types::{
-    Depth, MoveIntent, MoveKind, PartyMember, Placement, Resident, SceneDesign, ShownItem, Side,
+    Depth, MoveIntent, MoveKind, PartyMember, Placement, Pose, Resident, RouteSight, SceneDesign,
+    ShownItem, Side, TownRole, WalkAsk,
 };
-use crate::world::InventoryItem;
+use crate::world::{InventoryItem, Town, Visited};
 use df_content::world_bible::Thing;
 use serde_json::{Value, json};
 
@@ -54,6 +56,7 @@ fn answer(placements: Vec<Value>, residents: Vec<Value>) -> Value {
     json!({
         "place": "a busy market street",
         "mood": "bright and noisy",
+        "feature": "fruit_stalls",
         "elements": ["striped awnings", "crates of fruit"],
         "things": [],
         "shown_items": [],
@@ -79,6 +82,7 @@ fn a_valid_design_with_a_resident_places_everyone_and_computes_left_behind() {
         SceneDesign {
             place: "a busy market street".to_owned(),
             mood: "bright and noisy".to_owned(),
+            feature: "fruit_stalls".to_owned(),
             elements: vec!["striped awnings".to_owned(), "crates of fruit".to_owned()],
             things: vec![],
             shown_items: vec![],
@@ -109,6 +113,8 @@ fn a_valid_design_with_a_resident_places_everyone_and_computes_left_behind() {
                 },
             ],
             left_behind: vec!["rogue".to_owned()],
+            stages: vec![],
+            town_look: None,
         }
     );
 }
@@ -351,13 +357,14 @@ fn a_move_with_no_movers_or_no_destination_is_refused_before_the_answer_is_read(
 
 #[test]
 fn the_schema_is_closed_and_the_facts_carry_the_move_and_the_party() {
-    let schema = design_schema();
+    let schema = design_schema(None);
     assert_eq!(schema["additionalProperties"], json!(false));
     assert_eq!(
         schema["required"],
         json!([
             "place",
             "mood",
+            "feature",
             "elements",
             "things",
             "shown_items",
@@ -376,7 +383,14 @@ fn the_schema_is_closed_and_the_facts_carry_the_move_and_the_party() {
         &party(),
         Some("on the balcony"),
         &inventories,
+        &[],
         None,
+        &[],
+    );
+    assert_eq!(facts["previously_designed"], json!([]));
+    assert_eq!(
+        facts["shown_item_choices"],
+        json!([{"owner": "elf", "item": "easel"}])
     );
     assert_eq!(facts["inventory"][0]["items"][0]["id"], json!("easel"));
     assert_eq!(facts["move"]["to"], json!("the market"));
@@ -386,7 +400,7 @@ fn the_schema_is_closed_and_the_facts_carry_the_move_and_the_party() {
         "a name is not told to the design call"
     );
     assert_eq!(facts["context"], json!("on the balcony"));
-    assert_eq!(facts["refused_before"], Value::Null);
+    assert_eq!(facts["refused_before"], json!([]));
 
     let refused = DesignError::BadThing {
         id: "Well".to_owned(),
@@ -396,11 +410,13 @@ fn the_schema_is_closed_and_the_facts_carry_the_move_and_the_party() {
         &party(),
         None,
         &inventories,
-        Some(&refused),
+        std::slice::from_ref(&refused),
+        None,
+        &[],
     );
     assert_eq!(
         second["refused_before"],
-        json!({"error": "bad_thing", "detail": refused.to_string()})
+        json!([{"error": "bad_thing", "detail": refused.to_string()}])
     );
     assert!(
         !second.to_string().contains("Well"),
@@ -508,13 +524,13 @@ fn each_likely_cause_of_a_refusal_has_its_own_key_and_a_message_without_the_mode
                 arrival["shown_items"] = json!([{"owner": "Danny", "item": "easel"}]);
             }),
             "invalid_shown_item",
-            "names an item its owner does not hold",
+            "names an owner who holds nothing in inventory",
         ),
         // A resident whose id is a party member's.
         (
             refused(&|arrival| arrival["residents"][0]["id"] = json!("painter")),
             "bad_resident",
-            "a resident id is not a persona id",
+            "a resident id is already taken",
         ),
         // A resident also listed among the placements, which hold only the movers.
         (
@@ -556,5 +572,434 @@ fn each_likely_cause_of_a_refusal_has_its_own_key_and_a_message_without_the_mode
                 "{model_text} in {error}"
             );
         }
+    }
+}
+
+fn sight(id: &str, text: &str, pose: &str) -> Value {
+    json!({"id": id, "sight": text, "pose": pose})
+}
+
+fn walking_answer(stages: Value, town_look: Option<&str>) -> Value {
+    let mut arrival = answer(vec![mover("painter", "centre")], vec![]);
+    arrival["stages"] = stages;
+    if let Some(look) = town_look {
+        arrival["town_look"] = json!(look);
+    }
+    arrival
+}
+
+fn lone_painter() -> Vec<PartyMember> {
+    vec![member("painter", "Danny")]
+}
+
+fn ask(stages: usize, town: TownRole) -> WalkAsk {
+    WalkAsk {
+        stages,
+        town,
+        move_id: "roam-01".to_owned(),
+    }
+}
+
+fn town(look: &str) -> Town {
+    Town {
+        id: "town-roam-00".to_owned(),
+        look: look.to_owned(),
+        created_at: "roam-00".to_owned(),
+    }
+}
+
+fn parsed_stages(stages: Value) -> Result<SceneDesign, DesignError> {
+    parse_design(
+        &walking_answer(stages, None),
+        &intent(&["painter"], "the market"),
+        &lone_painter(),
+    )
+}
+
+#[test]
+fn the_sights_on_the_way_are_read_in_order_with_their_poses() {
+    let design = parsed_stages(json!([
+        sight("fountain_square", " a stone fountain ", "walking"),
+        sight("shop-row", "a row of shopfronts", "pausing")
+    ]))
+    .unwrap();
+
+    assert_eq!(
+        design.stages,
+        vec![
+            RouteSight {
+                id: "fountain_square".to_owned(),
+                sight: "a stone fountain".to_owned(),
+                pose: Pose::Walking
+            },
+            RouteSight {
+                id: "shop-row".to_owned(),
+                sight: "a row of shopfronts".to_owned(),
+                pose: Pose::Pausing
+            }
+        ]
+    );
+}
+
+#[test]
+fn an_answer_without_stages_has_none() {
+    let plain = answer(vec![mover("painter", "centre")], vec![]);
+
+    let design =
+        parse_design(&plain, &intent(&["painter"], "the market"), &lone_painter()).unwrap();
+
+    assert!(design.stages.is_empty());
+    assert_eq!(design.town_look, None);
+}
+
+#[test]
+fn a_stage_id_that_repeats_or_is_no_id_is_refused() {
+    let repeated = parsed_stages(json!([
+        sight("arch", "an archway", "walking"),
+        sight("arch", "a bridge", "walking")
+    ]))
+    .unwrap_err();
+    let no_id = parsed_stages(json!([sight("Old Arch!", "an archway", "walking")])).unwrap_err();
+    let blank_id = parsed_stages(json!([sight("  ", "an archway", "walking")])).unwrap_err();
+
+    assert_eq!(repeated.key(), "invalid_stage");
+    assert_eq!(no_id.key(), "invalid_stage");
+    assert_eq!(blank_id.key(), "malformed_design");
+    assert!(
+        !no_id.to_string().contains("Old Arch"),
+        "the model's id is not in the words: {no_id}"
+    );
+}
+
+#[test]
+fn a_blank_sight_or_a_pose_outside_the_closed_words_is_refused() {
+    let blank = parsed_stages(json!([sight("arch", "   ", "walking")])).unwrap_err();
+    let run = parsed_stages(json!([sight("arch", "an archway", "running")])).unwrap_err();
+    let not_a_list = parsed_stages(json!("an archway")).unwrap_err();
+    let not_an_object = parsed_stages(json!(["an archway"])).unwrap_err();
+
+    assert!(blank.to_string().contains("'sight' is blank"), "{blank}");
+    assert!(
+        run.to_string()
+            .contains("'pose' is not one of the allowed words"),
+        "{run}"
+    );
+    assert!(
+        not_a_list.to_string().contains("'stages' is not a list"),
+        "{not_a_list}"
+    );
+    assert!(
+        not_an_object
+            .to_string()
+            .contains("a stage is not an object"),
+        "{not_an_object}"
+    );
+}
+
+#[test]
+fn a_blank_town_look_is_refused() {
+    let blank = parse_design(
+        &walking_answer(json!([]), Some("  ")),
+        &intent(&["painter"], "the market"),
+        &lone_painter(),
+    )
+    .unwrap_err();
+
+    assert!(
+        blank.to_string().contains("'town_look' is blank"),
+        "{blank}"
+    );
+}
+
+#[test]
+fn the_move_bounds_the_stages_by_what_it_asked_for() {
+    let two = parsed_stages(json!([
+        sight("one", "a well", "walking"),
+        sight("two", "an arch", "walking")
+    ]))
+    .unwrap();
+    let within = WalkNeeds::of(&ask(2, TownRole::Within), None);
+    let fewer = WalkNeeds::of(&ask(3, TownRole::Within), None);
+    let one = WalkNeeds::of(&ask(1, TownRole::Within), None);
+
+    assert_eq!(check_walk(&two, Some(&within)), Ok(()));
+    assert_eq!(check_walk(&two, Some(&fewer)), Ok(()));
+    assert_eq!(
+        check_walk(&two, Some(&one)),
+        Err(DesignError::TooManyStages {
+            given: 2,
+            allowed: 1
+        })
+    );
+    assert_eq!(
+        check_walk(&two, None),
+        Err(DesignError::TooManyStages {
+            given: 2,
+            allowed: 0
+        }),
+        "a move that asked for no walk takes no sights"
+    );
+    assert_eq!(check_walk(&parsed_stages(json!([])).unwrap(), None), Ok(()));
+}
+
+#[test]
+fn a_move_that_seeds_a_town_needs_its_look_and_one_that_has_a_town_does_not() {
+    let bare = parsed_stages(json!([])).unwrap();
+    let seeding = WalkNeeds::of(&ask(2, TownRole::Seeds), None);
+    let kept = town("red roofs");
+    let within_town = WalkNeeds::of(&ask(2, TownRole::Seeds), Some(&kept));
+
+    assert!(seeding.asks_town_look);
+    assert_eq!(
+        check_walk(&bare, Some(&seeding)),
+        Err(DesignError::MissingTownLook)
+    );
+    assert!(!within_town.asks_town_look);
+    assert_eq!(check_walk(&bare, Some(&within_town)), Ok(()));
+}
+
+#[test]
+fn the_town_look_in_force_is_what_a_design_carries_unless_the_move_seeds_one() {
+    let kept = town("red roofs");
+    let mut given = parse_design(
+        &walking_answer(json!([]), Some("grey roofs")),
+        &intent(&["painter"], "the market"),
+        &lone_painter(),
+    )
+    .unwrap();
+
+    WalkNeeds::of(&ask(0, TownRole::Seeds), None).settle(&mut given);
+    assert_eq!(given.town_look.as_deref(), Some("grey roofs"));
+
+    WalkNeeds::of(&ask(0, TownRole::Within), Some(&kept)).settle(&mut given);
+    assert_eq!(given.town_look.as_deref(), Some("red roofs"));
+
+    WalkNeeds::of(&ask(0, TownRole::Seeds), Some(&kept)).settle(&mut given);
+    assert_eq!(given.town_look.as_deref(), Some("red roofs"));
+
+    WalkNeeds::of(&ask(0, TownRole::Leaves), Some(&kept)).settle(&mut given);
+    assert_eq!(
+        given.town_look, None,
+        "leaving the town takes its look away"
+    );
+
+    WalkNeeds::of(&ask(0, TownRole::Within), None).settle(&mut given);
+    assert_eq!(given.town_look, None);
+}
+
+#[test]
+fn the_schema_asks_for_stages_and_a_town_look_only_when_the_move_does() {
+    let plain = design_schema(None);
+    let walking = design_schema(Some(&WalkNeeds::of(&ask(2, TownRole::Seeds), None)));
+    let kept = town("x");
+    let in_town = design_schema(Some(&WalkNeeds::of(&ask(2, TownRole::Within), Some(&kept))));
+    let no_sights = design_schema(Some(&WalkNeeds::of(&ask(0, TownRole::Seeds), None)));
+
+    assert!(plain["properties"].get("stages").is_none());
+    assert!(plain["properties"].get("town_look").is_none());
+    assert_eq!(walking["properties"]["stages"]["maxItems"], json!(2));
+    assert_eq!(
+        walking["properties"]["stages"]["items"]["required"],
+        json!(["id", "sight", "pose"])
+    );
+    assert_eq!(
+        walking["properties"]["stages"]["items"]["properties"]["pose"]["enum"],
+        json!(["walking", "pausing"])
+    );
+    let required = walking["required"].as_array().unwrap();
+    assert!(required.contains(&json!("stages")) && required.contains(&json!("town_look")));
+    assert!(in_town["properties"].get("town_look").is_none());
+    assert!(in_town["properties"].get("stages").is_some());
+    assert!(no_sights["properties"].get("stages").is_none());
+    assert!(no_sights["properties"].get("town_look").is_some());
+}
+
+#[test]
+fn the_facts_tell_a_walking_move_how_many_sights_and_the_look_of_its_town() {
+    let kept = town("red roofs");
+    let needs = WalkNeeds::of(&ask(2, TownRole::Within), Some(&kept));
+
+    let facts = design_facts(
+        &intent(&["painter"], "the market"),
+        &lone_painter(),
+        None,
+        &vec![],
+        &[],
+        Some(&needs),
+        &[],
+    );
+
+    assert_eq!(
+        facts["route"],
+        json!({"stages_wanted": 2, "town": "red roofs"})
+    );
+    let plain = design_facts(
+        &intent(&["painter"], "the market"),
+        &lone_painter(),
+        None,
+        &vec![],
+        &[],
+        None,
+        &[],
+    );
+    assert!(plain.get("route").is_none());
+}
+
+fn visited(name: &str, feature: &str) -> Visited {
+    Visited {
+        name: name.to_owned(),
+        feature: feature.to_owned(),
+    }
+}
+
+#[test]
+fn a_design_names_the_one_feature_that_sets_the_place_apart_as_a_plain_id() {
+    let designed = |feature: Value| {
+        let mut arrival = answer(vec![mover("elf", "left")], vec![]);
+        arrival["feature"] = feature;
+        parse_design(&arrival, &intent(&["elf"], "the road"), &party())
+    };
+    assert_eq!(designed(json!(" ford ")).unwrap().feature, "ford");
+    for bad in [
+        json!("A Ford"),
+        json!("the ford"),
+        json!(""),
+        json!("  "),
+        json!(3),
+    ] {
+        let error = designed(bad).unwrap_err();
+        assert_eq!(error.key(), "malformed_design", "{error}");
+    }
+    let mut missing = answer(vec![mover("elf", "left")], vec![]);
+    missing.as_object_mut().unwrap().remove("feature");
+    let error = parse_design(&missing, &intent(&["elf"], "the road"), &party()).unwrap_err();
+    assert!(
+        error.to_string().contains("'feature' is missing"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_feature_a_place_already_has_is_refused_and_a_distinct_one_passes() {
+    let kept = vec![
+        visited("a bare country road", "open_road"),
+        visited("a mill", "mill"),
+    ];
+    let design_with = |feature: &str| {
+        let mut arrival = answer(vec![mover("elf", "left")], vec![]);
+        arrival["feature"] = json!(feature);
+        parse_design(&arrival, &intent(&["elf"], "the road"), &party()).unwrap()
+    };
+    for repeated in ["open_road", "mill"] {
+        let error = check_feature(&design_with(repeated), &kept).unwrap_err();
+        assert_eq!(error, DesignError::RepeatedFeature);
+        assert_eq!(error.key(), "repeated_feature");
+        assert!(
+            !error.to_string().contains(repeated),
+            "no model text in {error}"
+        );
+    }
+    // An exact comparison of ids: a different id is a different feature.
+    for distinct in ["ford", "open_road_2", "mill_race"] {
+        let design = design_with(distinct);
+        assert_eq!(check_feature(&design, &kept), Ok(()), "{distinct}");
+    }
+    assert_eq!(check_feature(&design_with("open_road"), &[]), Ok(()));
+}
+
+#[test]
+fn the_facts_carry_the_places_already_designed_oldest_first() {
+    let kept = vec![
+        visited("a bare country road", "open_road"),
+        visited("a mill", "mill"),
+    ];
+    let facts = design_facts(
+        &intent(&["elf"], "the road"),
+        &party(),
+        None,
+        &vec![],
+        &[],
+        None,
+        &kept,
+    );
+    assert_eq!(
+        facts["previously_designed"],
+        json!([
+            {"name": "a bare country road", "feature": "open_road"},
+            {"name": "a mill", "feature": "mill"}
+        ])
+    );
+}
+
+#[test]
+fn a_refused_shown_item_and_a_refused_resident_id_each_say_which_rule_they_broke() {
+    let lone = vec![member("painter", "Danny")];
+    let inventories = vec![("painter".to_owned(), vec![easel()])];
+    let shown = |entries: Value| {
+        let mut arrival = answer(vec![mover("painter", "left")], vec![vendor("fruit_vendor")]);
+        arrival["shown_items"] = entries;
+        let design = parse_design(&arrival, &intent(&["painter"], "the market"), &lone).unwrap();
+        check_shown_items(&design, &inventories).unwrap_err()
+    };
+    // A resident invented in the same answer is no owner of anything.
+    let resident_owner = shown(json!([{"owner": "fruit_vendor", "item": "easel"}]));
+    assert!(matches!(
+        resident_owner,
+        DesignError::InvalidShownItem {
+            cause: ShownItemCause::NoSuchOwner,
+            ..
+        }
+    ));
+    assert!(
+        resident_owner
+            .to_string()
+            .contains("a resident invented in this answer holds none")
+    );
+    let not_held = shown(json!([{"owner": "painter", "item": "lute"}]));
+    assert!(matches!(
+        not_held,
+        DesignError::InvalidShownItem {
+            cause: ShownItemCause::NotHeld,
+            ..
+        }
+    ));
+    let twice = shown(json!([
+        {"owner": "painter", "item": "easel"},
+        {"owner": "painter", "item": "easel"}
+    ]));
+    assert!(matches!(
+        twice,
+        DesignError::InvalidShownItem {
+            cause: ShownItemCause::Twice,
+            ..
+        }
+    ));
+    assert!(twice.to_string().contains("the same item twice"));
+
+    let grammar = DesignError::BadResident {
+        id: "fruit-vendor".to_owned(),
+    };
+    assert!(
+        grammar
+            .to_string()
+            .contains("only lowercase letters, digits and underscores")
+    );
+    let taken = DesignError::BadResident {
+        id: "painter".to_owned(),
+    };
+    assert!(taken.to_string().contains("already taken"));
+}
+
+#[test]
+fn the_instruction_tells_the_rules_the_refusals_come_from() {
+    use crate::movement::design::DESIGN_INSTRUCTION;
+    for rule in [
+        "copied exactly from shown_item_choices",
+        "a resident you invent in this answer owns none",
+        "only lowercase letters, digits and underscores (no hyphens, spaces or capitals)",
+        "give no two residents one id",
+        "holds every refusal of your earlier answers",
+    ] {
+        assert!(DESIGN_INSTRUCTION.contains(rule), "{rule}");
     }
 }

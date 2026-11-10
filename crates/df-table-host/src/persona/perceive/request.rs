@@ -127,6 +127,39 @@ pub enum Viewpoint {
     Viewer,
 }
 
+/// What a sight is of. Only the place and the others in it are sights; the character's own body and
+/// clothes and what they carry are known from their own facts, so they never draw attention.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Subject {
+    /// The place or a thing in it.
+    #[default]
+    Place,
+    /// Another person.
+    Person,
+    /// The character themselves: their body, their clothes.
+    #[serde(rename = "self")]
+    Own,
+    /// Something the character holds.
+    Carried,
+}
+
+impl Subject {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Place => "place",
+            Self::Person => "person",
+            Self::Own => "self",
+            Self::Carried => "carried",
+        }
+    }
+
+    /// Whether the sight is the character's own and so can never be what they attend to.
+    pub fn is_own(self) -> bool {
+        matches!(self, Self::Own | Self::Carried)
+    }
+}
+
 /// One thing the character picks out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seen {
@@ -138,6 +171,9 @@ pub struct Seen {
     pub item: Option<String>,
     /// How much it draws them, 0 to 100.
     pub salience: u8,
+    /// What it is of: the place, another person, themselves or something they carry.
+    #[serde(default)]
+    pub subject: Subject,
 }
 
 /// A thing the character noticed that the place did not offer, proposed as a thing of the place.
@@ -248,6 +284,8 @@ pub struct Thought {
     pub place: Option<String>,
     /// The picture they looked at, when it was a library picture.
     pub picture: Option<String>,
+    /// The item or thing they attended to, when they attended to one.
+    pub attended: Option<String>,
     /// The thought, then what they saw and wanted, as words.
     pub text: String,
 }
@@ -300,6 +338,9 @@ pub enum PerceiveCause {
     /// another new thing, an id that is not in the id grammar or is already a thing or an item,
     /// words that say nothing, or it is attended to while the attention names something else.
     BadNewThing { detail: String },
+    /// A proposed new thing is a vista (a distant town, open fields, the sky, a road), not an
+    /// object a camera can be brought up close to, so it is not a thing of the place.
+    Vista,
     /// A proposed new thing comes from a `sees` entry that has a region: the regions of the scan
     /// are people, and people are never things of the place.
     NewThingForPerson { see: usize },
@@ -329,6 +370,7 @@ impl PerceiveCause {
             Self::BadAttention { .. } => "bad_attention",
             Self::BadSalience { .. } => "bad_salience",
             Self::BadNewThing { .. } => "bad_new_thing",
+            Self::Vista => "vista",
             Self::NewThingForPerson { .. } => "new_thing_for_person",
             Self::HandleInText => "handle_in_text",
         }
@@ -386,6 +428,10 @@ impl fmt::Display for PerceiveCause {
             Self::BadNewThing { detail } => {
                 write!(formatter, "a new thing is not usable: {detail}")
             }
+            Self::Vista => formatter.write_str(
+                "a vista is no thing of the place: a camera cannot go up close to it; remove its \
+                 new_things entry",
+            ),
             Self::NewThingForPerson { see } => write!(
                 formatter,
                 "sees entry {see} has a region, so it is a person, and a person is never a thing; \

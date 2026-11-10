@@ -38,8 +38,8 @@ use super::request::{
 use super::reveal::{RevealQuestion, early_reveals, revealable_of};
 use super::state::{apply_appraisal, crossing_triggers, learn_names, load_state, state_triggers};
 use crate::state::AppState;
-use crate::text::TextRoute;
-use crate::world::{InventoryDelta, InventoryItem, InventoryReason, ItemUse};
+use crate::text::{TEXT_DEADLINE, TextRoute};
+use crate::world::{GainSource, InventoryDelta, InventoryItem, InventoryReason, ItemUse};
 
 /// The name of the answer object of a line.
 const LINE_OUTPUT_NAME: &str = "persona_line";
@@ -98,15 +98,50 @@ const SAY_INSTRUCTION: &str = concat!(
     "now.inventory is what the character holds, each item with its count and its use: the line ",
     "knows what it has left and what is running low. An item whose use is consumed is used up ",
     "by using it; an item whose use is kept (a tool, a possession) is not used up by using it, ",
-    "so using it never lowers its count. inventory_changes lists each item the line shows ",
+    "so using it never lowers its count. A loss never exceeds the count now.inventory holds of ",
+    "that item, and the changes of a line stand together or not at all: when the occasion asks ",
+    "the line to use, finish or spend something that needs an item the character holds none of ",
+    "(or too few), the line says plainly that they are out of it, never claims the work done ",
+    "with it, and lists no loss of it. inventory_changes lists each item the line shows ",
     "moving right now: item is its id; change is below zero for what leaves and above zero for ",
-    "what is gained; reason is gained (bought, found, given or received), used_up (a consumed ",
-    "item spent or applied), worn_out (an item that wears out after long use is now worn out), ",
-    "broken, lost or given_away; why is a few words. Never give used_up for a kept item. A ",
+    "what is gained; reason is gained (bought, found, given or received) for a gain, and for a ",
+    "loss one of: used_up (a consumed item spent or applied; never a kept item), sold (the item ",
+    "is sold: the gain by exchange that pays for it is in this same line and names it in ",
+    "paid_with), given_away (to is the id in others of the person it is given to), or lost, ",
+    "broken or worn_out (what_happened says in a few words what happened, taken from what the ",
+    "line shows, and is null when the line does not show it). Nothing leaves an inventory by ",
+    "itself: when no reason fits, list no loss. why is a few words. A ",
     "gain of something the character does not hold yet gives it a new id (lowercase letters, ",
     "digits, '_' or '-'), a name, a look (its plain visible detail up close) and its use; for ",
-    "an item already held name, look and use are null. A plan, a wish or something only talked ",
-    "about changes nothing, and inventory_changes is empty when nothing moves. ",
+    "an item already held name, look and use are null. A gain needs a source, never goods from ",
+    "nowhere: source is exchange when something the character holds goes down for it in this ",
+    "same line (paid_with lists each item and count that goes down, a thing sold or a coin paid ",
+    "among them, each also given its own loss entry in inventory_changes: selling a thing means ",
+    "that thing, and its value in whatever is paid, go down on one side and the goods go up on ",
+    "the other; a paid_with count is how many of that item go down, the same as the count of its ",
+    "own loss entry, never the price or the count of what is gained); found when it is picked ",
+    "up at a thing offered here (where is that thing's id); ",
+    "given when someone present gives it (from is that person's id in others); made when it is ",
+    "crafted from inputs used up in this same line (made_from lists each item and count, each ",
+    "also lost as used_up). A loss, or a gain whose source is missing, is null for source and ",
+    "empty or null for paid_with, where, from and made_from. Every entry of a deal names the ",
+    "others it belongs to, and item is always an id from now.inventory, matched to what the ",
+    "line says by meaning (a thing the line calls 'my old map' is the id whose name is 'Old ",
+    "map'), never an id made up, except for a new item gained. A sale plus a purchase in one ",
+    "line (selling A for coins and buying goods with them) is four entries: A goes down, ",
+    "reason sold, to the buyer's id when the buyer is named; the coins go up, reason gained, ",
+    "source exchange, paid_with A and its count; the same coins go down, reason used_up, as ",
+    "they are paid; and the goods go up, reason gained, source exchange, paid_with the coins ",
+    "and their count. A barter has no coins: A goes down, reason sold, and the goods go up, ",
+    "reason gained, source exchange, paid_with A and its count. What is paid in a deal is ",
+    "conserved: each item and count in a paid_with comes out of what goes down in this line, ",
+    "and across all the gains of the line the counts named for one item add up to no more than ",
+    "what goes down of it. When one payment buys several things, split it between their gains ",
+    "so that the counts sum to what goes down (three coins for two goods: 2 and 1, or any ",
+    "split that adds to 3), or give each gain its own different payment; never name the same ",
+    "coins in full for each. When retry_reason lists refused inventory_changes, answer them ",
+    "again so that no refusal stands. A plan, a wish or something only ",
+    "talked about changes nothing, and inventory_changes is empty when nothing moves. ",
     "When now holds narrative guidance, the line serves it: every fact in must_establish is ",
     "true of the character and the line never contradicts one, nothing in must_avoid is stated, ",
     "implied or contradicted, the tone applies, and latitude says how closely to follow it ",
@@ -292,15 +327,33 @@ fn appraisal_schema(config: &EmotionConfig) -> Value {
 fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
     let mut behavior_ids: Vec<Value> = behaviors.into_iter().map(Value::from).collect();
     behavior_ids.push(Value::Null);
-    let reasons: Vec<&str> = InventoryReason::ALL
+    let mut reasons: Vec<Value> = InventoryReason::ALL
         .into_iter()
-        .map(InventoryReason::key)
+        .map(|reason| Value::from(reason.key()))
         .collect();
+    reasons.push(Value::Null);
     let mut uses: Vec<Value> = ItemUse::ALL
         .into_iter()
         .map(|usage| Value::from(usage.key()))
         .collect();
     uses.push(Value::Null);
+    let mut sources: Vec<Value> = GainSource::ALL
+        .into_iter()
+        .map(|source| Value::from(source.key()))
+        .collect();
+    sources.push(Value::Null);
+    let counted = |description: &str| {
+        json!({
+            "type": "array",
+            "description": description,
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["item", "count"],
+                "properties": { "item": { "type": "string" }, "count": { "type": "integer" } },
+            },
+        })
+    };
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -346,11 +399,16 @@ fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["item", "change", "reason", "why", "name", "look", "use"],
+                    "required": [
+                        "item", "change", "reason", "why", "name", "look", "use", "source",
+                        "paid_with", "where", "from", "made_from", "what_happened", "to"
+                    ],
                     "properties": {
                         "item": { "type": "string" },
                         "change": { "type": "integer" },
-                        "reason": { "type": "string", "enum": reasons },
+                        "reason": { "type": ["string", "null"], "enum": reasons },
+                        "what_happened": nullable("string", "What happened to a lost item."),
+                        "to": nullable("string", "Who a given away item goes to, else null."),
                         "why": { "type": "string" },
                         "name": nullable("string", "A new item's name, else null."),
                         "look": nullable("string", "A new item's visible look, else null."),
@@ -359,6 +417,15 @@ fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
                             "enum": uses,
                             "description": "A new item's use, else null.",
                         },
+                        "source": {
+                            "type": ["string", "null"],
+                            "enum": sources,
+                            "description": "Where a gain came from, else null.",
+                        },
+                        "paid_with": counted("What goes down for an exchange, else empty."),
+                        "where": nullable("string", "The offered thing a found gain is at."),
+                        "from": nullable("string", "Who present gives a given gain."),
+                        "made_from": counted("The inputs a made gain uses up, else empty."),
                     },
                 },
             },
@@ -688,6 +755,10 @@ fn with_ids(mut answer: Answer, handles: &Handles) -> Answer {
         .iter()
         .filter_map(|called| handles.id_of(called))
         .collect();
+    for delta in &mut answer.inventory_changes {
+        delta.giver = delta.giver.take().and_then(|called| handles.id_of(&called));
+        delta.to = delta.to.take().and_then(|called| handles.id_of(&called));
+    }
     answer
 }
 
@@ -1023,6 +1094,10 @@ pub(super) async fn say_line(
     };
     let mut model_ms = 0;
     let mut retry_reason = None;
+    // Whether the line was worded again for a reason of its own (a secret, its intent, a repeat, a
+    // price), which is done once. Refused inventory changes are asked again without a count.
+    let mut line_retried = false;
+    let mut inventory_refusals: Vec<String> = Vec::new();
     let shown_recent: Vec<String> = occasion
         .recent
         .iter()
@@ -1065,7 +1140,7 @@ pub(super) async fn say_line(
         };
         let early = early_reveals(app, route, character, &question).await?;
         // A second wording that still lets a secret out early is refused, never released.
-        if !early.is_empty() && retry_reason.is_some() {
+        if !early.is_empty() && line_retried {
             return Err(PersonaError::AnswerRefused {
                 replayed: false,
                 cause: LineError::Malformed {
@@ -1093,8 +1168,27 @@ pub(super) async fn say_line(
             .or_else(|| answer.repeat.clone())
             .or_else(|| answer.slot_miss.clone())
             .or_else(|| quote_retry_reason(app, own.id().as_str(), &answer.quotes));
-        match (reason, retry_reason.is_some()) {
-            (Some(reason), false) => retry_reason = Some(reason),
+        // Inventory changes the judge gave that code refuses are asked again, with every refusal
+        // so far as typed ids and counts, until they stand or the text deadline since the line
+        // began has passed (no count of askings is capped, as the design call's).
+        if started.elapsed() < TEXT_DEADLINE
+            && let Some(miss) =
+                crate::world::judged_miss(app, character, &answer.inventory_changes, &present_ids)
+        {
+            inventory_refusals.push(miss.note);
+            app.record_line(format!(
+                "WORLD retry verb=inventory_judged attempt={} reason={}",
+                inventory_refusals.len() + 1,
+                miss.keys
+            ));
+            retry_reason = Some(inventory_refusals.join(" | "));
+            continue;
+        }
+        match (reason, line_retried) {
+            (Some(reason), false) => {
+                line_retried = true;
+                retry_reason = Some(reason);
+            }
             _ => break answer,
         }
     };
@@ -1102,12 +1196,19 @@ pub(super) async fn say_line(
     if let Some(detail) = declared_miss(occasion.declare, answer.declared.as_ref(), &inventory) {
         return Err(super::declare::refused(detail));
     }
-    let said = settle(app, own, &config, &by_state, answer, retry_reason);
+    let said = settle(
+        app,
+        own,
+        (&config, &by_state, &present_ids),
+        answer,
+        retry_reason,
+    );
     let said = SaidLine {
         model_ms,
         total_ms: millis(started),
         ..said
     };
+    crate::world::follow_judged(app, character, &said.inventory).await;
     app.record_line(format!(
         "PERSONA said id={character} model_ms={} total_ms={} leak_suspect={} retried={} gaps={} \
          fired={} dropped={}",
@@ -1128,8 +1229,7 @@ pub(super) async fn say_line(
 fn settle(
     app: &AppState,
     own: &Persona,
-    config: &EmotionConfig,
-    by_state: &[&EmotionalTrigger],
+    (config, by_state, present): (&EmotionConfig, &[&EmotionalTrigger], &[String]),
     answer: Answer,
     retried_for: Option<String>,
 ) -> SaidLine {
@@ -1173,8 +1273,12 @@ fn settle(
     let line = fill_price_slots(app, &answer.line, &held_cp);
     let quotes: Vec<QuoteReport> = lots.into_iter().flatten().collect();
     learn_names(app, own, &answer.names_learned);
-    let inventory =
-        crate::world::take_judged_changes(app, own.id().as_str(), &answer.inventory_changes);
+    let inventory = crate::world::take_judged_changes(
+        app,
+        own.id().as_str(),
+        &answer.inventory_changes,
+        present,
+    );
     let state = apply_appraisal(app, own, &appraisal);
     let tone = appraisal
         .tone

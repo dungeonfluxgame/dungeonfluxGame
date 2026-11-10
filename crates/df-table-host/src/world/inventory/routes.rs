@@ -3,7 +3,9 @@
 //! verb=inventory_<verb> error=<key>` audit line. A change is one `WORLD inventory_changed
 //! owner=.. item=.. kind=.. before=.. after=..` line for each item that moved, and a set one
 //! `WORLD inventory_set owner=.. kind=.. items=..` line: ids and counts only, never a reason, which
-//! is the model's or the caller's words. The history route reads those lines back.
+//! is the model's or the caller's words. The history route reads those lines back. The show and
+//! hide routes put one owner's inventory on the shared screen and take it away (`screen`), and
+//! every route that changes an owner's inventory brings that panel up to date.
 
 use std::sync::Arc;
 
@@ -21,6 +23,7 @@ use super::request::{
     AddRequest, BatchRequest, Changed, HistoryQuery, InventoryError, OwnerQuery, SetRequest,
     TakeRequest, TransferRequest,
 };
+use super::screen::{self, ShowRequest, follow};
 use super::store::inventory_directory;
 use crate::blocking::run_blocking;
 use crate::dev_http::{parse_body, reply};
@@ -46,6 +49,10 @@ pub mod path {
     pub const INVENTORY_TRANSFER: &str = "/dev/world/inventory/transfer";
     /// The change lines of the host's log (GET with `?owner=&limit=`).
     pub const INVENTORY_HISTORY: &str = "/dev/world/inventory/history";
+    /// Shows one owner's inventory on the shared screen (POST a `ShowRequest`).
+    pub const INVENTORY_SHOW: &str = "/dev/world/inventory/show";
+    /// Takes the inventory off the shared screen (POST, no body).
+    pub const INVENTORY_HIDE: &str = "/dev/world/inventory/hide";
 }
 
 /// Records a refusal of `verb` as `WORLD refused verb=inventory_<verb> error=<key>`.
@@ -67,6 +74,19 @@ pub(super) fn record_changed(app: &AppState, changed: &Changed) {
             taken.before,
             taken.after
         ));
+    }
+}
+
+/// Brings the shared screen's inventory panel up to date for each owner `changed` left.
+async fn follow_changed(app: &AppState, changed: &Changed) {
+    for view in &changed.owners {
+        follow(
+            app,
+            &view.inventory.owner,
+            &view.inventory.items,
+            &changed.applied,
+        )
+        .await;
     }
 }
 
@@ -118,6 +138,7 @@ async fn seed(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
                 view.inventory.items.len()
             ));
         }
+        follow_changed(&app, changed).await;
     }
     answer(&app, "set", result)
 }
@@ -137,6 +158,7 @@ async fn changing(
     .await;
     if let Ok(changed) = &result {
         record_changed(app, changed);
+        follow_changed(app, changed).await;
     }
     answer(app, verb, result)
 }
@@ -206,8 +228,23 @@ async fn transfer(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
     .await;
     if let Ok(changed) = &result {
         record_changed(&app, changed);
+        follow_changed(&app, changed).await;
     }
     answer(&app, "transfer", result)
+}
+
+async fn show(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
+    let result = async {
+        let request: ShowRequest = parse_body(&bytes)?;
+        screen::show(&app, &request.owner).await
+    }
+    .await;
+    answer(&app, "show", result)
+}
+
+async fn hide(State(app): State<Arc<AppState>>) -> Response {
+    let result = screen::hide(&app).await;
+    answer(&app, "hide", result)
 }
 
 async fn changes(
@@ -235,5 +272,7 @@ pub fn router_with(app: Arc<AppState>) -> Router {
         .route(path::INVENTORY_BATCH, post(batch))
         .route(path::INVENTORY_TRANSFER, post(transfer))
         .route(path::INVENTORY_HISTORY, get(changes))
+        .route(path::INVENTORY_SHOW, post(show))
+        .route(path::INVENTORY_HIDE, post(hide))
         .with_state(app)
 }

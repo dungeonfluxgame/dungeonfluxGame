@@ -502,6 +502,19 @@ fn draw(document: &Document, root: &Element, app: &mut App) -> Result<(), JsValu
     if change.devices || !change.parts.is_empty() {
         place_bubbles_of(app);
     }
+    // A full-frame picture (a reveal, a close-up insert) fades the inventory panel out in place.
+    let covered = shown_fixture(app).is_some_and(|fixture| {
+        crate::inventory::picture_is_up(
+            &app.controls.plate,
+            fixture.tv.backdrop.as_ref().map(|image| image.plate),
+        )
+    });
+    if view::inventory::settle_cover(document, covered)?
+        && let Some(page) = &app.page
+    {
+        // The room is back: the panel is drawn again, so the moves that came meanwhile flash now.
+        redraw_parts(document, page, app, std::iter::once(Part::TvInventory))?;
+    }
     note_draw(app, &change);
     observe_shown(app, change.transition);
     Ok(())

@@ -188,6 +188,17 @@ pub enum InventoryError {
     InvalidReason {
         item: String,
     },
+    /// A loss has no reason that stands: none given, a kept item used up, a sale with no payment in
+    /// the line, a loss that is lost, broken or worn out with nothing said of what happened, or an
+    /// item given to nobody present.
+    UnreasonedLoss {
+        item: String,
+    },
+    /// A gain has no valid source: none named, or its payment is not in the same line, its thing is
+    /// not offered here, or its giver is not present.
+    UnsourcedGain {
+        item: String,
+    },
     /// An item whose use is kept cannot be used up (`consume`); it leaves only by a `remove`.
     KeptItem {
         owner: String,
@@ -208,6 +219,10 @@ pub enum InventoryError {
     /// A transfer to the owner it is from.
     SameOwner {
         owner: String,
+    },
+    /// The shared screen refused the inventory panel (no scene is shown, or it could not be read).
+    ScreenRefused {
+        detail: String,
     },
     /// An inventory file could not be read.
     StoreUnreadable {
@@ -239,10 +254,13 @@ impl InventoryError {
             Self::EmptyBatch => "empty_batch",
             Self::ZeroCount { .. } => "zero_count",
             Self::InvalidReason { .. } => "invalid_reason",
+            Self::UnsourcedGain { .. } => "unsourced_gain",
+            Self::UnreasonedLoss { .. } => "unreasoned_loss",
             Self::KeptItem { .. } => "kept_item",
             Self::Insufficient { .. } => "insufficient",
             Self::Overflow { .. } => "overflow",
             Self::SameOwner { .. } => "same_owner",
+            Self::ScreenRefused { .. } => "screen_refused",
             Self::StoreUnreadable { .. } => "store_unreadable",
             Self::StoreInvalid { .. } => "store_invalid",
             Self::StoreUnwritable { .. } => "store_unwritable",
@@ -298,6 +316,17 @@ impl fmt::Display for InventoryError {
                     "the reason for the change of {item} does not fit its direction"
                 )
             }
+            Self::UnreasonedLoss { item } => write!(
+                formatter,
+                "the loss of {item} has no reason that stands: it is used up (never a kept item), \
+                 sold with its payment in the same line, given to someone present, or lost, \
+                 broken or worn out with what happened said"
+            ),
+            Self::UnsourcedGain { item } => write!(
+                formatter,
+                "the gain of {item} has no source that stands: something of theirs must go down \
+                 for it, or it is found at a thing here, or given by someone present, or made"
+            ),
             Self::KeptItem { owner, item } => {
                 write!(
                     formatter,
@@ -317,6 +346,12 @@ impl fmt::Display for InventoryError {
                 )
             }
             Self::SameOwner { owner } => write!(formatter, "{owner} cannot give to themself"),
+            Self::ScreenRefused { detail } => {
+                write!(
+                    formatter,
+                    "the shared screen refused the inventory: {detail}"
+                )
+            }
             Self::StoreUnreadable { cause } => {
                 write!(formatter, "an inventory file could not be read: {cause}")
             }
@@ -344,7 +379,10 @@ impl RouteError for InventoryError {
             | Self::EmptyBatch
             | Self::ZeroCount { .. }
             | Self::InvalidReason { .. }
+            | Self::UnsourcedGain { .. }
+            | Self::UnreasonedLoss { .. }
             | Self::SameOwner { .. } => StatusCode::BAD_REQUEST,
+            Self::ScreenRefused { .. } => StatusCode::CONFLICT,
             Self::UnknownOwner { .. } | Self::UnknownItem { .. } => StatusCode::NOT_FOUND,
             Self::KeptItem { .. } | Self::Insufficient { .. } | Self::Overflow { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY

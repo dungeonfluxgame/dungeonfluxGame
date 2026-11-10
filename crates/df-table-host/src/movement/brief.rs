@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::types::{Depth, Placement, PlateBrief, ReferenceCard, SceneDesign, Side};
+use super::types::{
+    Depth, Placement, PlateBrief, Pose, ReferenceCard, RouteSight, SceneDesign, Side,
+};
 use crate::imagegen::limits::MAXIMUM_SENT_TEXT_CHARS;
 
 /// A character who may be placed in the picture: the persona id, the display name (for the
@@ -125,6 +127,20 @@ pub fn build_brief_with(
         scene_text(design, &placed),
         style.writing
     );
+    check_length(&prompt)?;
+    let references = placed
+        .iter()
+        .map(|entry| reference_card(entry.character, entry.look))
+        .collect();
+    Ok(PlateBrief {
+        prompt,
+        avoid: style.avoid.clone(),
+        references,
+    })
+}
+
+/// Refuses a prompt longer than the image service accepts.
+fn check_length(prompt: &str) -> Result<(), BriefError> {
     let length = prompt.chars().count();
     if length > MAXIMUM_SENT_TEXT_CHARS {
         return Err(BriefError::PromptTooLong {
@@ -132,19 +148,76 @@ pub fn build_brief_with(
             maximum: MAXIMUM_SENT_TEXT_CHARS,
         });
     }
-    let references = placed
+    Ok(())
+}
+
+/// The brief of one sight on the way to the place `design` describes: a wide view of the sight
+/// with the movers going through it, painted in the town's look and after the movers' sheets
+/// alone (no things, no items, no residents), so it is cheap to make and the same town stands in
+/// every sight and in the place.
+pub fn build_stage_brief(
+    design: &SceneDesign,
+    stage: &RouteSight,
+    movers: &[BriefCharacter],
+    looks: &LookSheets,
+) -> Result<PlateBrief, BriefError> {
+    let style = BriefStyle::default();
+    let people: Vec<(&BriefCharacter, &str)> = movers
         .iter()
-        .map(|entry| ReferenceCard {
-            character: entry.character.id.clone(),
-            look: entry.look.to_owned(),
-            portrait: entry.character.portrait.clone(),
-        })
+        .map(|character| (character, look_or_job(looks, character)))
         .collect();
+    let mut prompt = format!("{} ", style.direction);
+    if let Some(look) = &design.town_look {
+        prompt.push_str(&format!(
+            "The town, the same in every picture of it: {look}. "
+        ));
+    }
+    prompt.push_str(&format!(
+        "On the way through the town, a wide view of {}. ",
+        stage.sight.trim().trim_end_matches('.')
+    ));
+    for (_, look) in &people {
+        prompt.push_str(&format!("A person ({look}) {}. ", pose_words(stage.pose)));
+    }
+    prompt.push_str(&cast_words(people.len()));
+    prompt.push_str(&style.writing);
+    check_length(&prompt)?;
     Ok(PlateBrief {
         prompt,
-        avoid: style.avoid.clone(),
-        references,
+        avoid: style.avoid,
+        references: people
+            .iter()
+            .map(|(character, look)| reference_card(character, look))
+            .collect(),
     })
+}
+
+fn reference_card(character: &BriefCharacter, look: &str) -> ReferenceCard {
+    ReferenceCard {
+        character: character.id.clone(),
+        look: look.to_owned(),
+        portrait: character.portrait.clone(),
+    }
+}
+
+/// Who is in a view on the way: only the movers described, each once.
+fn cast_words(count: usize) -> String {
+    match count {
+        1 => "The cast in view is one person, the one described, who appears once and only once; \
+              nobody else is in the picture. "
+            .to_owned(),
+        _ => format!(
+            "The cast in view is {count} people, the ones described, each once; nobody else is \
+             in the picture. "
+        ),
+    }
+}
+
+fn pose_words(pose: Pose) -> &'static str {
+    match pose {
+        Pose::Walking => "is walking on through it, mid-stride, small in the wide view",
+        Pose::Pausing => "has stopped there to take it in, small in the wide view",
+    }
 }
 
 /// What the picture of `design` shows, in the words of its prompt without the style around them:
@@ -265,6 +338,11 @@ impl Default for BriefStyle {
 
 fn scene_text(design: &SceneDesign, placed: &[PlacedCharacter<'_>]) -> String {
     let mut text = format!("{}. Mood: {}. ", design.place, design.mood);
+    if let Some(look) = &design.town_look {
+        text.push_str(&format!(
+            "The town, the same in every picture of it: {look}. "
+        ));
+    }
     if !design.elements.is_empty() {
         text.push_str(&format!(
             "Elements in the scene: {}. ",

@@ -19,7 +19,9 @@ use axum::routing::post;
 
 use super::backend::backend_of;
 use super::events::ImageGenEvent;
-use super::request::{BackendSwitch, BackendView, GenerateError, GenerateRequest, JobView};
+use super::request::{
+    BackendSwitch, BackendView, GenerateError, GenerateRequest, JobView, ReferenceCap,
+};
 use super::service::ImageGenerator;
 use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
@@ -29,6 +31,9 @@ pub mod path {
     pub const GENERATE: &str = "/dev/media/generate";
     /// The backend new jobs start on: a GET shows it, a POST of a `BackendSwitch` switches it.
     pub const BACKEND: &str = "/dev/media/backend";
+    /// The soft cap on the pictures a plate request the host builds itself carries (POST a
+    /// `ReferenceCap`).
+    pub const REFERENCES: &str = "/dev/media/references";
 }
 
 struct GenerateRoutes {
@@ -86,6 +91,18 @@ async fn backend(State(routes): State<Arc<GenerateRoutes>>) -> Response {
     reply::<_, GenerateError>(Ok(routes.generator.backend_view()))
 }
 
+/// Sets the soft cap on the pictures a plate request the host builds itself carries, and answers
+/// the backend as it shows now.
+async fn set_reference_cap(State(routes): State<Arc<GenerateRoutes>>, bytes: Bytes) -> Response {
+    let result: Result<BackendView, GenerateError> = match parse_body::<ReferenceCap>(&bytes) {
+        Ok(cap) => Ok(routes
+            .generator
+            .set_reference_cap(&routes.app, cap.maximum.get())),
+        Err(error) => Err(GenerateError::from(error)),
+    };
+    reply(result)
+}
+
 /// Switches the backend new jobs start on; a refusal (a body that names no backend the host has,
 /// or one whose preconditions do not hold) changes nothing and is recorded.
 async fn switch_backend(State(routes): State<Arc<GenerateRoutes>>, bytes: Bytes) -> Response {
@@ -117,6 +134,7 @@ pub fn router_with(app: Arc<AppState>, generator: Arc<ImageGenerator>) -> Router
     Router::new()
         .route(path::GENERATE, post(generate).get(status))
         .route(path::BACKEND, post(switch_backend).get(backend))
+        .route(path::REFERENCES, post(set_reference_cap))
         .with_state(Arc::new(GenerateRoutes { app, generator }))
 }
 

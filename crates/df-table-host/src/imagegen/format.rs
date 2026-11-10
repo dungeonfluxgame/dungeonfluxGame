@@ -22,8 +22,8 @@ pub(super) fn format_backend(view: &BackendView) -> String {
     .collect::<String>();
     format!(
         concat!(
-            "image backend: {} (text {} characters, negative prompt {}, {} pictures{}); ",
-            "{} running on the backend each started on"
+            "image backend: {} (text {} characters, negative prompt {}, {} pictures{}, soft ",
+            "cap {}); {} running on the backend each started on"
         ),
         view.backend,
         limit(
@@ -36,6 +36,7 @@ pub(super) fn format_backend(view: &BackendView) -> String {
         ),
         view.limits.maximum_pictures,
         tuned,
+        view.reference_cap,
         view.running
     )
 }

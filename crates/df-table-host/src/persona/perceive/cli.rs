@@ -2,9 +2,10 @@
 //! request each sends, and the text of each answer.
 //!
 //! The text of an answer is the contract the market runner reads (`development/market-thread.sh`):
-//! a header line, then one `see:` line for each thing seen, and the `thought:`, `attention:`,
-//! `feeling:`, `wants:` and `kept:` lines the answer has, each on one line (a thought's own line
-//! breaks are folded to spaces).
+//! a header line, then one `see:` line for each thing seen, one `thing <id> (<name>): <look>` line
+//! (the shape of the move's design lines) for each new thing now a thing of the place, and the
+//! `thought:`, `attention:`, `feeling:`, `wants:` and `kept:` lines the answer has, each on one
+//! line (a thought's own line breaks are folded to spaces).
 
 use df_content::persona::PersonaId;
 
@@ -175,11 +176,20 @@ pub(in crate::persona) fn format_perceived(perceived: &Perceived) -> String {
     )];
     for seen in &perceived.sees {
         lines.push(format!(
-            "see: {} | region={} item={} salience={}",
+            "see: {} | region={} item={} salience={} subject={}",
             one_line(&seen.what),
             seen.region.as_deref().unwrap_or("-"),
             seen.item.as_deref().unwrap_or("-"),
-            seen.salience
+            seen.salience,
+            seen.subject.key()
+        ));
+    }
+    for thing in perceived.new_things.iter().filter(|thing| thing.added) {
+        lines.push(format!(
+            "thing {} ({}): {}",
+            thing.id,
+            one_line(&thing.name),
+            one_line(&thing.look)
         ));
     }
     lines.push(format!("thought: {}", one_line(&perceived.thinking_about)));

@@ -11,7 +11,15 @@
 //! `finish` waits, for a bounded time, for the writer to print what is queued, so the last lines
 //! before a shutdown reach the terminal. Neither fails the table: an event that is not recorded is
 //! dropped, and a closed terminal drops the echo.
+//!
+//! The terminal itself is `TerminalWriter`. A terminal that fails a write (a redirected log whose
+//! file was closed or filled) is never silent: the first failure is recorded as
+//! `HOST log_sink_failed kind=<io error kind>`, and from then on every line is also appended to a
+//! file the host opens itself, so the lines are kept where the terminal no longer takes them.
 
+use std::fs::{File, OpenOptions};
+use std::io::{ErrorKind, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
@@ -24,6 +32,78 @@ use crate::limits::{
 /// What a queued line counts for against the bound: its text and what holding it costs.
 fn cost(text: &str) -> usize {
     text.len().saturating_add(ECHO_LINE_OVERHEAD_BYTES)
+}
+
+/// The file, in the playground directory the host keeps its data in, that takes every terminal line
+/// once the terminal has failed a write.
+pub const TERMINAL_FALLBACK_FILE: &str = "host-terminal.log";
+
+/// What becomes of the terminal lines after the terminal first failed a write.
+enum Fallback {
+    /// The terminal has not failed.
+    Unused,
+    Appending(File),
+    /// The file could not be opened or written; that was recorded once.
+    Lost,
+}
+
+/// Writes lines to the terminal and, once the terminal has failed a write, to a file as well.
+pub struct TerminalWriter {
+    log: Arc<EventLog>,
+    fallback_path: PathBuf,
+    fallback: Fallback,
+}
+
+impl TerminalWriter {
+    /// A writer whose fallback file is `fallback_path`; its records go to `log`.
+    pub fn new(log: Arc<EventLog>, fallback_path: PathBuf) -> Self {
+        Self {
+            log,
+            fallback_path,
+            fallback: Fallback::Unused,
+        }
+    }
+
+    /// Writes `line` to the standard output.
+    pub fn write_line(&mut self, line: &str) {
+        self.write_line_to(&mut std::io::stdout().lock(), line);
+    }
+
+    /// Writes `line` to `terminal`. A failed write is recorded the first time, and the line and
+    /// every later one are appended to the fallback file. The terminal is still tried each time, in
+    /// case it recovers.
+    pub(crate) fn write_line_to(&mut self, terminal: &mut impl Write, line: &str) {
+        if let Err(error) = writeln!(terminal, "{line}") {
+            self.begin_fallback(error.kind());
+        }
+        if let Fallback::Appending(file) = &mut self.fallback
+            && let Err(error) = writeln!(file, "{line}")
+        {
+            self.lose_fallback(error.kind());
+        }
+    }
+
+    fn begin_fallback(&mut self, terminal_failure: ErrorKind) {
+        if !matches!(self.fallback, Fallback::Unused) {
+            return;
+        }
+        self.log
+            .push(format!("HOST log_sink_failed kind={terminal_failure:?}"));
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.fallback_path)
+        {
+            Ok(file) => self.fallback = Fallback::Appending(file),
+            Err(error) => self.lose_fallback(error.kind()),
+        }
+    }
+
+    fn lose_fallback(&mut self, failure: ErrorKind) {
+        self.fallback = Fallback::Lost;
+        self.log
+            .push(format!("HOST log_fallback_failed kind={failure:?}"));
+    }
 }
 
 /// Queues each logged line once, in order, for a writer thread that prints it with the writer the

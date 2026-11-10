@@ -36,6 +36,7 @@ fn media_generate_parses_a_prompt_with_options() {
             avoid: Vec::new(),
             left_out: Vec::new(),
             priority: Priority::Normal,
+            sheet: None,
         }))
     );
     let quoted = parsed("media generate \"one word=prompt\" as=x look=none").expect("parses");
@@ -53,6 +54,7 @@ fn media_generate_parses_a_prompt_with_options() {
             avoid: Vec::new(),
             left_out: Vec::new(),
             priority: Priority::Normal,
+            sheet: None,
         }))
     );
     let urgent =
@@ -261,5 +263,24 @@ fn media_backend_shows_or_switches_the_image_backend() {
             serde_json::to_value(&switch).expect("writes")["backend"],
             switch.key()
         );
+    }
+}
+
+#[test]
+fn media_backend_refs_sets_the_soft_cap_on_the_pictures_of_a_plate_request() {
+    use super::request::ReferenceCap;
+    let command = parsed("media backend refs=3").expect("parses");
+    assert_eq!(
+        command,
+        Command::MediaGenerate(MediaGenerate::ReferenceCap(ReferenceCap {
+            maximum: 3.try_into().unwrap()
+        }))
+    );
+    for odd in [
+        "media backend refs=0",
+        "media backend refs=many",
+        "media backend refs=3 forge",
+    ] {
+        assert!(parsed(odd).is_err(), "{odd}");
     }
 }

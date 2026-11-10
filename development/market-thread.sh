@@ -78,6 +78,36 @@
 # `frame_timing` and `PERSONA declared` lines. The study painting of `@roam_art_*` is still made after
 # it, as after a paint line. The situation says what to do without supplies; the facts decide.
 #
+# Time in free roam: the study painting is made in the background from the moment the finishing line
+# has been said while the declared plate is on screen (`roam_study_start`), its lines and result wait
+# in files and are printed, in their usual order, when the declared plate has ended
+# (`roam_study_finish`); `[time NN] move took <s> s (plate .., look .., declare .., study .., reveal ..)`
+# says where the seconds went (`study` is what was still to wait for after the declaration).
+#
+# Walking about town (`@walk <way> <sights> [town=<seeds|within|leaves>]`, `@walk_hold <seconds>`):
+# a move of a kind with a `@walk` line is asked for up to that many sights on the way to its place
+# (`move act ... walk=N town=ROLE hold=S`); each is made together with the place, shown in order
+# for at least the hold with a fade, and the place follows the last of them. `[walk NN] stage k/N
+# <sight> shown_at_ms=.. up_ms=..` says when each went up and for how long, `[walk NN] stage k/N ..
+# skipped reason=late|failed` a sight passed over, `[walk NN] arrived stages=S/N walk_ms=..` the
+# end, `[walk NN] memory ..` each sight kept as a memory of kind `walk` linked to the place, and
+# `[town NN]` the look of the town that every sight and place of it is painted after (the first
+# place of a `town=seeds` move gives it, `town=leaves` ends it). `@tempo walk <kind> <strength>`
+# makes each sight post that impulse as it goes up. `[time NN]` says how much of the plate's time
+# was the walk.
+#
+# Pacing in free roam (data in the beats): a plate that goes live is left on screen for `@roam_dwell
+# <seconds>` while the perception of it runs in parallel (`[dwell NN]`); each painting made is shown
+# full frame with its title and then the view it was painted from (`@roam_reveal <painting seconds>
+# <view seconds>`, `@roam_view_caption`; `@show <picture> | <caption> | <seconds>` to the frame watch,
+# `[reveal NN]`, and `[pace NN] painting <picture> up <ms> of <held ms>, view <picture> up <ms> of <held ms>`
+# from the host's `PERSONA revealed` and `frame_timing moment=ended .. reason=reveal` lines, by order); the show waits `@roam_show_dwell` seconds on the town square, then shows the
+# last `@roam_show_each <N> <seconds>` paintings with their titles after the show plate and ends on
+# it (`[show] piece ..`, `[pace show] ..`). `@refs max=<n>` is the soft cap on the pictures a plate
+# follows: the runner asks for no more (a study follows its plate alone; the show plate its base, the
+# gallery sheet and the traveller's sheet) and passes `refs_max=<n>` to the frame watch when the host
+# takes it.
+#
 # Free roam keeps memories (the host's standard memory API, `world memory ...`): with
 # `@roam_scene_kind <kind>` every plate that goes live is captured as a memory of that kind (the
 # place, the plate), `[memory NN] captured ..`; with `@roam_art_kind <kind>` the line toward
@@ -96,6 +126,11 @@
 # sheet (`[show] composed gallery of N pieces -> <name>`), the show plate edited from the move's
 # plate after that sheet and the traveller's sheet (`@roam_show_look` is its look statement), and
 # one line toward `@roam_show_say`.
+# Free roam score (`@tempo_table <music table>`, `@tempo <event> <kind> <strength>`): the host's tempo
+# engine and music director play the table's tracks as the journey's tempo moves. The runner loads
+# the table, runs `tempo prepare` (`[music] prepared: ..`) and starts the base track, then posts the
+# events it already has (`arrival`, `look`, `declare`, `painted`, `trade`, `show`; an arrival is tried
+# as `arrival_<way>` first) as the kinds the `@tempo` lines name, and prints `[tempo NN]` and `[music NN]`.
 cd "$(dirname "$0")/.."
 D=${DF_TABLE_EXE:-./artifacts/build/bubbles/debug/df-table.exe}
 P=${DF_TABLE_PORT:-7879}
@@ -140,9 +175,23 @@ ROAM_SHOW=""
 ROAM_SHOW_LOOK=""
 ROAM_SHOW_SAY=""
 ROAM_PERCEIVE=""
+ROAM_DWELL=6
+ROAM_SHOW_DWELL=12
+SHOW_EACH_N=6
+SHOW_EACH_SECONDS=5
+REVEAL_PAINTING_SECONDS=10
+REVEAL_VIEW_SECONDS=6
+VIEW_CAPTION="The view"
+REFS_MAX=""
+WATCH_REFS=""
 MIND=""
+PERCEIVED_THINGS=""
 MOVES=()
+TEMPO_TABLE=""
 declare -A PLACE_PLATE PLACE_KEEPER PLACE_KEEPER_SITUATION PLACE_SITUATION PLACE_SCENE WAY ARRIVAL
+declare -A TEMPO_EVENT WALK_STAGES WALK_TOWN
+WALK_HOLD=
+WALK_SECONDS=0
 while IFS= read -r setting; do
   value=${setting#* }
   case "$setting" in
@@ -171,6 +220,12 @@ while IFS= read -r setting; do
     '@roam_declare '*) ROAM_DECLARE=$value ;;
     '@roam_declare_hold '*) ROAM_DECLARE_HOLD=$value ;;
     '@roam_perceive '*) ROAM_PERCEIVE=$value ;;
+    '@roam_dwell '*) ROAM_DWELL=$value ;;
+    '@roam_show_dwell '*) ROAM_SHOW_DWELL=$value ;;
+    '@roam_show_each '*) SHOW_EACH_N=${value%% *}; SHOW_EACH_SECONDS=${value#* } ;;
+    '@roam_reveal '*) REVEAL_PAINTING_SECONDS=${value%% *}; REVEAL_VIEW_SECONDS=${value#* } ;;
+    '@roam_view_caption '*) VIEW_CAPTION=$value ;;
+    '@refs '*) REFS_MAX=${value#max=} ;;
     '@roam_scene_kind '*) SCENE_KIND=$value ;;
     '@roam_art_kind '*) ART_KIND=$value ;;
     '@roam_art_item '*) ART_ITEM=$value ;;
@@ -180,8 +235,13 @@ while IFS= read -r setting; do
     '@roam_show '*) ROAM_SHOW=$value ;;
     '@roam_show_look '*) ROAM_SHOW_LOOK=$value ;;
     '@roam_show_say '*) ROAM_SHOW_SAY=$value ;;
+    '@tempo_table '*) TEMPO_TABLE=$value ;;
+    '@tempo '*) TEMPO_EVENT[${value%% *}]=${value#* } ;;
     '@way '*) WAY[${value%% *}]=${value#* } ;;
     '@way_arrival '*) ARRIVAL[${value%% *}]=${value#* } ;;
+    '@walk_hold '*) WALK_HOLD=$value ;;
+    '@walk '*) read -r walk_way walk_n walk_town <<< "$value"
+      WALK_STAGES[$walk_way]=$walk_n; WALK_TOWN[$walk_way]=$walk_town ;;
     '@move '*) MOVES+=("$value") ;;
   esac
 done < <(grep '^@' "$BEATS")
@@ -749,7 +809,7 @@ roam_insert() { # after-sequence, frames name, move number, the design's thing l
   local after=$1 frames=$2 number=$3 things=$4 item="" name="" frame="" shown="" made=""
   local deadline=$((SECONDS + HUNG)) sequence text
   while [ "$SECONDS" -lt "$deadline" ]; do
-    sleep 5
+    sleep 1
     while read -r sequence _ text; do
       after=$sequence
       case "$text" in
@@ -815,39 +875,42 @@ item_count() {
   count=$(held_counts | sed -n "s/^$1=//p" | head -1)
   printf '%s\n' "${count:-0}"
 }
-# Free roam: the painting made of what they studied. The line toward `@roam_painted` is said first and
-# judged like any line (the board painted on, the pigments, the oil and the rags are used up, as the
-# per-line judge reads it against what they really hold). The study is made only when that used up
-# the item of `@roam_art_board` (its count is below $6, what they held before the paint lines), so
-# the board becomes the painting; otherwise the log says why. The move's plate is then edited into
-# the study (that plate is its only reference), stored as
-# `item-<owner>-<item>.png`, kept as a memory of kind `@roam_art_kind` linked to its item and place,
-# and added to what they hold as a kept item.
-# Arguments: move number, plate, place id, thing name, thing look, the board count before, place name,
-# the line said before.
-roam_paint_study() {
-  [ -z "$ART_KIND" ] && return
-  local number=$1 id file prompt title request try seen made stored kept done_line done_out now
+# Free roam: the painting made of what they studied, in two parts so that it can be made while the
+# declared plate is on screen. `roam_study_start` runs `roam_study_job` in the background; its output
+# and result wait in files until `roam_study_finish` prints them, so every line comes in the order it
+# always did. The job: the line toward `@roam_painted` is said first and judged like any line (the board
+# painted on, the pigments, the oil and the rags are used up, as the per-line judge reads it against
+# what they really hold). The study is made only when that used up the item of `@roam_art_board` (its
+# count is below the count before the paint lines), so the board becomes the painting; otherwise the
+# log says why. The move's plate is then edited into the study (that plate is its only reference),
+# stored as `item-<owner>-<item>.png`; a study the host finds near blank is made once more with
+# `@roam_art_retry` added, and removed if still blank. The finish, once the job is done, keeps the
+# study as a memory of kind `@roam_art_kind` linked to its item and place, adds it to what they hold
+# as a kept item and shows it (`roam_reveal`). A job that does not end within three hung-bounds is
+# stopped, its file removed and the log says so.
+# Arguments: move number, plate, thing name, thing look, the board count before, place name, the line
+# said before, the files' common name.
+roam_study_job() {
+  local number=$1 id file prompt title request try seen made stored done_line done_out now
   if [ -n "$ROAM_PAINTED" ]; then
     done_out=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true \
-      "recent=$ROAM: $8" "intent=$ROAM_PAINTED" "You are at $7.$MIND" 2>&1)
+      "recent=$ROAM: $7" "intent=$ROAM_PAINTED" "You are at $6.$MIND" 2>&1)
     done_line=$(printf '%s\n' "$done_out" | sed -n '1s/.*says: //p')
     printf '[painted %02d] %s\n' "$number" "${done_line:-<no line: $done_out>}"
     roam_inventory "$done_line" "$done_out"
   fi
   now=$(item_count "$ART_BOARD")
-  if [ -n "$ART_BOARD" ] && [ "${now:-0}" -ge "${6:-0}" ]; then
+  if [ -n "$ART_BOARD" ] && [ "${now:-0}" -ge "${5:-0}" ]; then
     printf '[memory %02d] not painted: no %s was used up (had %s, have %s)\n' "$number" \
-      "$ART_BOARD" "${6:-0}" "$now"
+      "$ART_BOARD" "${5:-0}" "$now"
     return
   fi
   id=$(printf '%s_%02d' "${ART_ITEM:-artwork}" "$number")
   file="item-$ROAM-$id"
-  title=${ART_TITLE//\{thing\}/$4}
-  prompt="$ART_LOOK The subject of the study: $5"
+  title=${ART_TITLE//\{thing\}/$3}
+  prompt="$ART_LOOK The subject of the study: $4"
   # The plate is the reference for the place; the board is only described in words (a board's sheet
-  # as a reference made the model paint just the board). A study the host finds near blank is made
-  # once more with `@roam_art_retry` added to the request, and kept out of the memories if still blank.
+  # as a reference made the model paint just the board).
   request=$prompt
   try=1
   while :; do
@@ -873,23 +936,79 @@ roam_paint_study() {
     request="$prompt $ART_RETRY"
     try=2
   done
+  printf 'stored=%q id=%q title=%q prompt=%q\n' "$stored" "$id" "$title" "$prompt" > "$8.state"
+}
+# Starts the study of move $1 in the background (see roam_study_job).
+roam_study_start() { # move number, plate, thing name, thing look, board count before, place name, line
+  [ -z "$ART_KIND" ] && return
+  local folder
+  folder=$(dirname "$FRAMES_LOG")
+  mkdir -p "$folder"
+  STUDY_BASE="$folder/study-$2"
+  rm -f "$STUDY_BASE.out" "$STUDY_BASE.state" "$STUDY_BASE.done"
+  STUDY_STARTED=$SECONDS
+  # The job does not hold the frame watch's input open.
+  ( exec 4>&-
+    roam_study_job "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$STUDY_BASE"
+    : > "$STUDY_BASE.done" ) > "$STUDY_BASE.out" 2>&1 &
+  STUDY_PID=$!
+}
+# Waits for the study started for move $1 (for three hung-bounds at most), prints what the job
+# printed, keeps the study as a memory and an item and shows it. Sets TIME_STUDY (seconds from here
+# to the study kept, so what the overlap saved shows) and TIME_REVEAL (the reveal).
+roam_study_finish() { # move number, plate, place id
+  TIME_STUDY=0
+  TIME_REVEAL=0
+  [ -n "${STUDY_PID:-}" ] || return
+  local number=$1 began=$SECONDS deadline=$((SECONDS + 3 * HUNG)) stored="" id="" title="" prompt=""
+  local kept
+  while [ ! -e "$STUDY_BASE.done" ] && [ "$SECONDS" -lt "$deadline" ]; do
+    sleep 1
+  done
+  if [ ! -e "$STUDY_BASE.done" ]; then
+    kill "$STUDY_PID" 2>/dev/null
+    cat "$STUDY_BASE.out" 2>/dev/null
+    printf '[memory %02d] study abandoned after %s s\n' "$number" "$((SECONDS - STUDY_STARTED))"
+    $D dev --port $P media remove "item-$ROAM-${ART_ITEM:-artwork}_$(printf '%02d' "$number").png" \
+      >/dev/null 2>&1
+    rm -f "$STUDY_BASE.out" "$STUDY_BASE.state" "$STUDY_BASE.done"
+    STUDY_PID=""
+    return
+  fi
+  cat "$STUDY_BASE.out"
+  # shellcheck disable=SC1090
+  [ -e "$STUDY_BASE.state" ] && . "$STUDY_BASE.state"
+  rm -f "$STUDY_BASE.out" "$STUDY_BASE.state" "$STUDY_BASE.done"
+  STUDY_PID=""
+  if [ -z "$stored" ]; then
+    TIME_STUDY=$((SECONDS - began))
+    return
+  fi
   kept=$($D dev --port $P world memory capture "$ROAM" "$ART_KIND" "$stored" "$title" "id=$id" \
     "place=$3" "description=$prompt" "link=item:$id" "link=place:$3" by=runner 2>&1 | head -1)
   case "$kept" in
     'ok memory='*)
       printf '[memory %02d] painted %s seq=%s picture=%s after=%s plate=%s (%s)\n' "$number" \
-        "$(field_of "$kept" memory)" "$(field_of "$kept" seq)" "$stored" "-" "$2.png" "$title" ;;
-    *) printf '[memory %02d] painted %s but not kept as a memory: %s\n' "$number" "$stored" "$kept" ;;
+        "$(field_of "$kept" memory)" "$(field_of "$kept" seq)" "$stored" "-" "$2.png" "$title"
+      roam_tempo "$number" painted ;;
+    *) printf '[memory %02d] painted %s but not kept as a memory: %s\n' "$number" "$stored" "$kept"
+      kept="" ;;
   esac
   $D dev --port $P world inventory add "$ROAM" "$id" 1 "name=$title" "look=$prompt" use=kept \
     why=made 2>&1 | head -1 | sed "s/^/       ~ item $id: /"
+  TIME_STUDY=$((SECONDS - began))
+  if [ -n "$kept" ]; then
+    began=$SECONDS
+    roam_reveal "$number" "$stored" "$title" "$2"
+    TIME_REVEAL=$((SECONDS - began))
+  fi
 }
 # Free roam: the day's work shown. Every memory of kind `@roam_art_kind` is composed into one gallery
 # sheet; the show plate is the move's plate edited after that sheet and the traveller's own sheet,
 # put behind the scene with the traveller located in it, and the traveller says a line.
 roam_show() { # move number, plate, place name, line said when moving
   [ -z "$ART_KIND" ] && return
-  local composed gallery count refs shown line made scan region
+  local composed gallery count refs shown line made scan region began=$SECONDS held
   composed=$($D dev --port $P world memory compose "$ROAM" "kind=$ART_KIND" 2>&1 | head -1)
   gallery=$(field_of "$composed" picture)
   if [ -z "$gallery" ]; then
@@ -898,8 +1017,11 @@ roam_show() { # move number, plate, place name, line said when moving
   fi
   count=$(field_of "$composed" members)
   printf '[show] composed gallery of %s pieces -> %s\n' "$count" "$gallery"
+  # The gallery sheet and the traveller's single sheet, and the base: no more than `@refs max=`.
   refs=$gallery
-  library_holds "ref-$ROAM.png" && refs="$refs,ref-$ROAM.png"
+  if library_holds "ref-$ROAM.png" && [ "${REFS_MAX:-8}" -ge 3 ]; then
+    refs="$refs,ref-$ROAM.png"
+  fi
   made=$(timeout $HUNG $D dev --port $P media generate "$ROAM_SHOW_LOOK" "as=$2-show" \
     purpose=plate "base=$2.png" "refs=$refs" wait=true look=none 2>&1)
   shown=$(stored_file "$made")
@@ -918,11 +1040,112 @@ roam_show() { # move number, plate, place name, line said when moving
   else
     printf '[show] no person found in %s to name\n' "$shown"
   fi
-  $D dev --port $P scene image tv-backdrop "$shown" 2>&1 | head -1 | sed 's/^/       ~ /'
+  # The square has been on screen all this while; it stays up at least for the show's dwell.
+  held=$((SECONDS - began))
+  [ "$held" -lt "$ROAM_SHOW_DWELL" ] && sleep $((ROAM_SHOW_DWELL - held))
+  printf '[dwell %02d] the town square was up %s s before the show plate (dwell %s s)\n' "$1" \
+    "$((SECONDS - began))" "$ROAM_SHOW_DWELL"
+  $D dev --port $P scene image tv-backdrop "$shown" plate=show 2>&1 | head -1 | sed 's/^/       ~ /'
+  start_watch "${FRAMES_LOG%.log}-$2-show.log" "frames=$2-show" "scene=$ROAM_SHOW_LOOK" \
+    ${WATCH_REFS:+"$WATCH_REFS"} "${FRAMES[@]}"
+  sleep "$ROAM_DWELL"
+  roam_show_pieces
+  stop_watch quiet
   line=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true "recent=$ROAM: $4" \
     "intent=$ROAM_SHOW_SAY" "You are at $3." 2>&1)
   printf '[show] %s\n' "$(printf '%s\n' "$line" | sed -n '1s/.*says: //p')"
   roam_inventory "$(printf '%s\n' "$line" | sed -n '1s/.*says: //p')" "$line"
+}
+
+# Free roam: the new plate is left on screen for `@roam_dwell` seconds so it can be taken in, and the
+# perception of it runs in parallel, so the dwell costs no time when the perception takes longer.
+# `roam_view_start` is called the moment the plate is live (the perception goes on in the background
+# while the move's bookkeeping runs); `roam_view_finish` waits out the dwell, counted from then, and
+# the perception, prints what `roam_perceive` printed and sets MIND and PERCEIVED_THINGS as it did.
+roam_view_start() { # move number, line said when moving, what the plate shows
+  local folder
+  folder=$(dirname "$FRAMES_LOG")
+  mkdir -p "$folder"
+  VIEW_BEGAN=$SECONDS
+  VIEW_STEM="$folder/view-$plate"
+  ( roam_perceive "$1" "$2" "$3"
+    printf '%s' "$MIND" > "$VIEW_STEM.mind"
+    printf '%s' "$PERCEIVED_THINGS" > "$VIEW_STEM.things"
+  ) > "$VIEW_STEM.see" 2>&1 &
+  VIEW_PID=$!
+}
+roam_view_finish() { # move number
+  local held=$((SECONDS - VIEW_BEGAN))
+  [ "$held" -lt "$ROAM_DWELL" ] && sleep $((ROAM_DWELL - held))
+  wait "$VIEW_PID"
+  cat "$VIEW_STEM.see"
+  MIND=$(cat "$VIEW_STEM.mind" 2>/dev/null)
+  PERCEIVED_THINGS=$(cat "$VIEW_STEM.things" 2>/dev/null)
+  rm -f "$VIEW_STEM.mind" "$VIEW_STEM.things" "$VIEW_STEM.see"
+  printf '[dwell %02d] the view was up %s s before he spoke of it (dwell %s s)\n' "$1" \
+    "$((SECONDS - VIEW_BEGAN))" "$ROAM_DWELL"
+}
+# What the host says of the `@show` pictures shown after event $1, in order: REVEAL_PICTURES (the
+# picture of each `PERSONA revealed picture=.. hold_ms=..` line) and REVEAL_UPS (the `took_ms` of each
+# `PERSONA frame_timing moment=ended .. reason=reveal` line, the time that picture was up). Waits for
+# $2 pictures to have ended, at most $3 seconds of showing and 30 more, or until the watch has ended
+# (the events it left are read first); they are matched by order.
+roam_reveal_wait() { # after-sequence, how many, seconds of showing
+  local after=$1 want=$2 deadline=$((SECONDS + $3 + 30)) sequence text
+  REVEAL_PICTURES=()
+  REVEAL_UPS=()
+  while [ "$SECONDS" -lt "$deadline" ] && [ "${#REVEAL_UPS[@]}" -lt "$want" ]; do
+    sleep 1
+    while read -r sequence _ text; do
+      after=$sequence
+      case "$text" in
+        'PERSONA revealed '*) REVEAL_PICTURES+=("$(field_of "$text" picture)") ;;
+        'PERSONA frame_timing '*)
+          if [ "$(field_of "$text" reason)" = reveal ] && [ "$(field_of "$text" moment)" = ended ]; then
+            REVEAL_UPS+=("$(field_of "$text" took_ms)")
+          fi ;;
+      esac
+    done < <($D dev --port $P events "$after" area=PERSONA 2>/dev/null | grep -E '^ *[0-9]+ ')
+    kill -0 "$WATCH_PID" 2>/dev/null || break
+  done
+}
+# Free roam: the finished painting is shown full frame with its title, then the view it was painted
+# from (`@show <picture> | <caption> | <seconds>` to the frame watch), and the time each was up is
+# printed as `[pace NN]`.
+roam_reveal() { # move number, the painting's picture, its title, the move's plate
+  [ -n "$WATCH_PID" ] || return
+  local after caption=${3//|/-}
+  after=$(latest_event)
+  printf '@show %s | %s | %s\n' "$2" "$caption" "$REVEAL_PAINTING_SECONDS" >&4
+  printf '[reveal %02d] painting %s | %s | %s s\n' "$1" "$2" "$caption" "$REVEAL_PAINTING_SECONDS"
+  printf '@show %s.png | %s | %s\n' "$4" "$VIEW_CAPTION" "$REVEAL_VIEW_SECONDS" >&4
+  printf '[reveal %02d] view %s.png | %s | %s s\n' "$1" "$4" "$VIEW_CAPTION" "$REVEAL_VIEW_SECONDS"
+  roam_reveal_wait "$after" 2 $((REVEAL_PAINTING_SECONDS + REVEAL_VIEW_SECONDS))
+  printf '[pace %02d] painting %s up %s of %s ms, view %s up %s of %s ms\n' "$1" \
+    "${REVEAL_PICTURES[0]:-$2}" "${REVEAL_UPS[0]:--}" "$((REVEAL_PAINTING_SECONDS * 1000))" \
+    "${REVEAL_PICTURES[1]:-$4.png}" "${REVEAL_UPS[1]:--}" "$((REVEAL_VIEW_SECONDS * 1000))"
+}
+# Free roam: the last `@roam_show_each` paintings, one after the other with their titles, for
+# `@roam_show_each` seconds each; the watch goes back to the show plate after the last.
+roam_show_pieces() {
+  [ "${SHOW_EACH_N:-0}" -gt 0 ] && [ -n "$WATCH_PID" ] || return
+  local rows id title picture after number count=0
+  rows=$($D dev --port $P world memory list "$ROAM" "kind=$ART_KIND" limit=1000 2>/dev/null |
+    sed -n 's/^ *[0-9][0-9]*  \([^ ]*\)  ([^)]*)  \(.*\)  place=[^ ]*  pictures=\([^ ,]*\).*$/\1|\2|\3/p' |
+    tail -n "$SHOW_EACH_N")
+  after=$(latest_event)
+  while IFS='|' read -r id title picture; do
+    [ -z "$id" ] && continue
+    printf '@show %s | %s | %s\n' "$picture" "${title//|/-}" "$SHOW_EACH_SECONDS" >&4
+    printf '[show] piece %s %s | %s | %s s\n' "$id" "$picture" "$title" "$SHOW_EACH_SECONDS"
+    count=$((count + 1))
+  done <<< "$rows"
+  [ "$count" -gt 0 ] || return
+  roam_reveal_wait "$after" "$count" $((count * SHOW_EACH_SECONDS))
+  for number in $(seq 0 $((count - 1))); do
+    printf '[pace show] piece %s up %s of %s ms\n' "${REVEAL_PICTURES[$number]:--}" \
+      "${REVEAL_UPS[$number]:--}" "$((SHOW_EACH_SECONDS * 1000))"
+  done
 }
 
 # The thing a `persona perceive` answer says is attended to: the words of the first `see:` line
@@ -940,11 +1163,14 @@ roam_attended() { # attention (region:<id>, item:<id> or none), output of person
   done < <(printf '%s\n' "$2" | grep '^see: ')
 }
 # Free roam: what the character sees of the plate that went live and thinks of it (`persona
-# perceive`: the picture on screen). Prints the `[see NN]` and `[thought NN]` lines and sets MIND to
-# what the look and paint lines carry in their situation: what is on their mind and what they have
-# their eye on.
+# perceive`: the picture on screen). Prints the `[see NN]` and `[thought NN]` lines and one `[thing
+# NN] <id> (<name>): <look>` for each thing they noticed and added to the place, sets PERCEIVED_THINGS
+# to those as `thing <id> (<name>): <look>` lines (the shape of the design's, so a close look at one
+# has its name), and sets MIND to what the look and paint lines carry in their situation: what is on
+# their mind and what they have their eye on.
 roam_perceive() { # move number, line said when moving, what the plate shows
   MIND=""
+  PERCEIVED_THINGS=""
   [ "$ROAM_PERCEIVE" = on ] || return
   local out thought attention what sees header
   out=$(timeout $HUNG $D dev --port $P persona perceive "$ROAM" "recent=$ROAM: $2" "scene=$3" 2>&1)
@@ -953,14 +1179,16 @@ roam_perceive() { # move number, line said when moving, what the plate shows
     printf '[see %02d] <no sight: %s>\n' "$1" "$(printf '%s\n' "$out" | head -1)"
     return
   fi
+  PERCEIVED_THINGS=$(printf '%s\n' "$out" | grep '^thing ')
   header=$(printf '%s\n' "$out" | head -1)
   attention=$(printf '%s\n' "$out" | sed -n 's/^attention: //p' | head -1)
   what=$(roam_attended "$attention" "$out")
-  sees=$(printf '%s\n' "$out" | sed -n 's/^see: \(.*\) | region=.*$/\1/p' | paste -sd ';' - |
-    sed 's/;/; /g')
+  sees=$(printf '%s\n' "$out" | grep -v ' subject=\(self\|carried\)$' |
+    sed -n 's/^see: \(.*\) | region=.*$/\1/p' | paste -sd ';' - | sed 's/;/; /g')
   printf '[see %02d] vision=%s %s | attending: %s\n' "$1" "$(field_of "$header" vision)" \
     "${sees:--}" "${what:-nothing in particular}"
   printf '[thought %02d] %s\n' "$1" "$thought"
+  printf '%s\n' "$PERCEIVED_THINGS" | sed -n "s/^thing /[thing $(printf '%02d' "$1")] /p"
   MIND=" What is on your mind: $thought${what:+ You have your eye on: $what.}"
 }
 
@@ -985,6 +1213,8 @@ roam_declare() { # move number, the line before it, the place
     return
   fi
   printf '%s\n' "$relay" >&4
+  # The study is made while the declared plate is on screen.
+  roam_study_start "$1" "$plate" "$STUDY_THING_NAME" "$STUDY_THING_LOOK" "$STUDY_BOARD_AT" "$3" "$line"
   roam_declared_plate "$after" "$plate-look" "$1"
 }
 # Waits for the emergency plate of the declaration made after event $1 in the watch of frames $2:
@@ -995,7 +1225,7 @@ roam_declared_plate() { # after-sequence, frames name, move number
   local after=$1 frames=$2 number=$3 frame="" shown="" made="-" waited="-" superseded="-"
   local deadline=$((SECONDS + HUNG)) sequence text
   while [ "$SECONDS" -lt "$deadline" ]; do
-    sleep 5
+    sleep 1
     while read -r sequence _ text; do
       after=$sequence
       case "$text" in
@@ -1040,6 +1270,7 @@ held_gains() { # before, after
 roam_trade() { # move number, the line before it, the place, the situation
   local before after out line gained
   before=$(held_counts)
+  roam_tempo "$1" trade
   out=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true "recent=$ROAM: $2" \
     "intent=$4" "You are at $3.$MIND" 2>&1)
   line=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
@@ -1051,6 +1282,66 @@ roam_trade() { # move number, the line before it, the place, the situation
     "${gained:-no gain recorded}"
 }
 
+# Free roam tempo and music (`@tempo_table <music table>`, `@tempo <event> <kind> <strength>`): the
+# host's tempo engine and music director do the work; the runner only posts events. The event is
+# posted as the kind and strength its `@tempo` line names (`<event>_<way>` is tried before
+# `<event>`, so an arrival can differ by the kind of move) and the answer is printed as
+# `[tempo NN] phase=.. intensity=..` and `[music NN] cue=<profile> track=<name> reused|composed |
+# decision=..`. Nothing waits on it and a failure is only printed.
+roam_tempo() { # move number, event, [way]
+  [ -n "$TEMPO_TABLE" ] || return 0
+  local mapped=${TEMPO_EVENT[${2}_${3:-}]:-${TEMPO_EVENT[$2]:-}} out
+  [ -n "$mapped" ] || return 0
+  # shellcheck disable=SC2086
+  out=$(timeout 60 $D dev --port $P tempo impulse $mapped 2>&1)
+  case "$out" in
+    'tempo phase='*) printf '%s\n' "$out" |
+      sed -n "s/^tempo /[tempo $1] /p; s/^music /[music $1] /p" ;;
+    *) printf '[tempo %s] not posted (%s): %s\n' "$1" "$2" "$(printf '%s\n' "$out" | head -1)" ;;
+  esac
+}
+# Free roam, before the first move: load the music table, find or compose every profile's track
+# (`tempo prepare` is the only place a track is made, the run plays only those it finds) and start
+# the journey on the base track. Without a table, or if it does not load, the roam is silent.
+roam_tempo_start() {
+  [ -n "$TEMPO_TABLE" ] || return 0
+  local out
+  if ! out=$($D dev --port $P tempo load "$TEMPO_TABLE" 2>&1); then
+    printf '[music] table not loaded: %s\n' "$(printf '%s\n' "$out" | head -1)"
+    TEMPO_TABLE=""
+    return 0
+  fi
+  out=$(timeout $HUNG $D dev --port $P tempo prepare 2>&1)
+  printf '[music] prepared: %s\n' "$(printf '%s\n' "$out" | head -1 | sed 's/^prepared //')"
+  printf '%s\n' "$out" | sed -n '2,$p' | sed 's/^/       ~ /'
+  out=$($D dev --port $P tempo reset 2>&1)
+  printf '%s\n' "$out" | sed -n 's/^tempo /[tempo 00] /p; s/^music /[music 00] /p'
+}
+
+# Free roam walk (`@walk <way> <sights> [town=<seeds|within|leaves>]`, `@walk_hold <seconds>`): the
+# options `move act` takes for a kind of move that walks: `walk=<sights>`, its `town=` role,
+# `hold=` and, when the tempo table is loaded and has an `@tempo walk <kind> <strength>` line, the
+# `impulse=<kind>:<strength>` each sight posts as it goes up. Prints nothing for a kind of move
+# with no `@walk` line.
+roam_walk_options() { # way
+  [ -n "${WALK_STAGES[$1]:-}" ] || return 0
+  local options="walk=${WALK_STAGES[$1]}" mapped=${TEMPO_EVENT[walk]:-}
+  [ -n "${WALK_TOWN[$1]:-}" ] && options="$options ${WALK_TOWN[$1]}"
+  [ -n "$WALK_HOLD" ] && options="$options hold=$WALK_HOLD"
+  [ -n "$TEMPO_TABLE" ] && [ -n "$mapped" ] && options="$options impulse=${mapped% *}:${mapped#* }"
+  printf '%s' "$options"
+}
+# Prints the `walk ..` lines of a move's output as `[walk NN] ..` and the look of its town as
+# `[town NN] ..`, and sets WALK_SECONDS to the seconds from the first sight going up to the place
+# going up (0 without a walk).
+roam_walk_lines() { # move number, output of move act
+  local ms number
+  number=$(printf '%02d' "$1")
+  printf '%s\n' "$2" | sed -n "s/^walk /[walk $number] /p; s/^town: /[town $number] /p"
+  ms=$(printf '%s\n' "$2" | sed -n 's/^walk arrived .*walk_ms=\([0-9]*\).*/\1/p' | head -1)
+  WALK_SECONDS=$(( ${ms:-0} / 1000 ))
+}
+
 # Free roam: the `@move` lines in order. Each move is said by the roaming character toward the goal
 # and the way's situation (where they are, where they have been and what they hold now), run as a
 # move with a plate of its own, and the close look at the new place waited out before the next.
@@ -1058,11 +1349,23 @@ play_roam() {
   local stamp number=0 way out said reading place picture plate things trace look line seq
   local here="" visited="" holding situation interpreted designed briefed painted live
   local events_at held_before held_after paint paint_line insert_line inspected thing_name thing_look
-  local board_at
+  local board_at t_move t_plate t_look_from t_declare_from t_look t_declare
   stamp=$(date +%m%d%H%M)
+  # The soft cap on the pictures a frame follows goes to the watch only when this host takes it.
+  if [ -n "$REFS_MAX" ] &&
+    timeout 30 $D dev --port $P persona watch </dev/null 2>&1 | grep -q 'refs_max'; then
+    WATCH_REFS="refs_max=$REFS_MAX"
+  fi
   if [ -n "$INVENTORY" ]; then
     $D dev --port $P world inventory set "$ROAM" character "$INVENTORY" | head -1 | sed 's/^/       ~ /'
   fi
+  # The TV shows what the traveller holds, supplies going down as they are used up.
+  $D dev --port $P world inventory show "$ROAM" | head -1 | sed 's/^/       ~ /'
+  # The soft cap holds for every plate the host builds, the move plates before the first watch too.
+  if [ -n "$REFS_MAX" ] && [ -n "$WATCH_REFS" ]; then
+    $D dev --port $P media backend "refs=$REFS_MAX" | head -1 | sed 's/^/       ~ /'
+  fi
+  roam_tempo_start
   for way in "${MOVES[@]}"; do
     number=$((number + 1))
     plate=$(printf 'roam-%s-%02d' "$stamp" "$number")
@@ -1074,19 +1377,27 @@ play_roam() {
     stop_watch quiet
     events_at=$(latest_event)
     held_before=$(held_counts)
-    out=$(timeout $HUNG $D dev --port $P move act "$ROAM" "plate=$plate" "$situation" 2>&1)
+    t_move=$SECONDS
+    out=$(timeout $HUNG $D dev --port $P move act "$ROAM" "plate=$plate" $(roam_walk_options "$way") \
+      "$situation" 2>&1)
+    t_plate=$((SECONDS - t_move))
+    # The plate is on screen, so the perception of it starts at once; the move's bookkeeping below
+    # runs while the model looks (the bookkeeping is a score of short commands that took seconds).
     said=$(printf '%s\n' "$out" | sed -n "s/^$ROAM says: //p" | head -1)
+    picture=$(printf '%s\n' "$out" | sed -n 's/^picture: //p' | head -1)
+    trace=$(printf '%s\n' "$out" | grep '^TRANSITION ')
+    live=$(stage_at "$trace" live)
+    if [ -n "$live" ] && [ "$way" != _show_ ]; then
+      roam_view_start "$number" "$said" "$picture"
+    fi
     reading=$(printf '%s\n' "$out" | sed -n 's/^reading: move //p; s/^\(not moved: .*\)/\1/p' |
       head -1)
     place=$(printf '%s\n' "$out" | sed -n 's/^design: place=\(.*\) mood=.*/\1/p' | head -1)
-    picture=$(printf '%s\n' "$out" | sed -n 's/^picture: //p' | head -1)
     things=$(printf '%s\n' "$out" | grep '^thing ')
-    trace=$(printf '%s\n' "$out" | grep '^TRANSITION ')
     interpreted=$(stage_at "$trace" designing)
     designed=$(stage_at "$trace" briefing)
     briefed=$(stage_at "$trace" generating)
     painted=$(stage_at "$trace" locating)
-    live=$(stage_at "$trace" live)
     printf '[move %02d] %s | said: %s | read: %s | place: %s | plate: %s | jev_ms=%s design_ms=%s plate_ms=%s live_at_ms=%s\n' \
       "$number" "$way" "${said:-<none>}" "${reading:-<none>}" "${place:-<none>}" "$plate" \
       "${interpreted:--}" "$(span "$interpreted" "$designed")" "$(span "$briefed" "$painted")" \
@@ -1094,6 +1405,7 @@ play_roam() {
     roam_inventory "$said" "$out"
     roam_refs "${events_at:-0}" "$plate" "$number" "$out"
     printf '%s\n' "$out" | grep -E '^(sheet |place )' | sed 's/^/       /'
+    roam_walk_lines "$number" "$out"
     if [ -z "$live" ]; then
       printf '       <move %02d did not go live: %s>\n' "$number" "$(printf '%s\n' "$out" | tail -1)"
       continue
@@ -1101,13 +1413,19 @@ play_roam() {
     here=$place
     visited="${visited:+$visited; }$place"
     roam_remember_scene "$number" "$plate" "$place" "$picture"
+    roam_tempo "$number" arrival "$way"
     if [ "$way" = _show_ ]; then
+      roam_tempo "$number" show
       roam_show "$number" "$plate" "$place" "$said"
       continue
     fi
+    t_look_from=$SECONDS
     start_watch "${FRAMES_LOG%.log}-$plate.log" "frames=$plate-look" "scene=$picture" \
-      ${ROAM_DECLARE_HOLD:+"declare_hold=$ROAM_DECLARE_HOLD"} "${FRAMES[@]}"
-    roam_perceive "$number" "$said" "$picture"
+      ${ROAM_DECLARE_HOLD:+"declare_hold=$ROAM_DECLARE_HOLD"} ${WATCH_REFS:+"$WATCH_REFS"} \
+      "${FRAMES[@]}"
+    roam_view_finish "$number"
+    # What he noticed and added to the place is a thing to look at closely like the designed ones.
+    things="$things${PERCEIVED_THINGS:+${things:+$'\n'}$PERCEIVED_THINGS}"
     seq=$(latest_event)
     look=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true "recent=$ROAM: $said" \
       "intent=$ROAM_LOOK" "You are at $place.$MIND" 2>&1)
@@ -1120,6 +1438,7 @@ play_roam() {
       insert_line=$(roam_insert "${seq:-0}" "$plate-look" "$number" "$things")
       printf '%s\n' "$insert_line"
       inspected=$(field_of "$insert_line" item)
+      [ -n "$inspected" ] && roam_tempo "$number" look
     fi
     # What the study is of: the thing looked at closely, else the place as the design describes it.
     thing_name=$(printf '%s\n' "$things" | sed -n "s/^thing $inspected (\([^)]*\)).*/\1/p" | head -1)
@@ -1129,27 +1448,50 @@ play_roam() {
       thing_look=$(printf '%s\n' "$out" | sed -n 's/^elements: //p' | head -1)
     fi
     board_at=$(item_count "$ART_BOARD")
+    t_declare_from=$SECONDS
+    t_look=$((t_declare_from - t_look_from))
+    TIME_STUDY=0
+    TIME_REVEAL=0
+    STUDY_PID=""
+    t_declare=""
+    STUDY_THING_NAME=$thing_name
+    STUDY_THING_LOOK=$thing_look
+    STUDY_BOARD_AT=$board_at
     if [ -n "${ARRIVAL[$way]:-}" ]; then
       # This kind of move has its own arrival step (a trade at a market), not the declaration.
       roam_trade "$number" "${line:-$said}" "$place" "${ARRIVAL[$way]}"
     elif [ -n "$ROAM_DECLARE" ]; then
       # The declaration is the painting line: spoken, judged for the supplies it uses and drawn.
+      roam_tempo "$number" declare
       roam_declare "$number" "${line:-$said}" "$place"
       paint_line=$DECLARED_LINE
-      [ -n "$paint_line" ] && roam_paint_study "$number" "$plate" "$plate" "$thing_name" \
-        "$thing_look" "$board_at" "$place" "$paint_line"
+      t_declare=$((SECONDS - t_declare_from))
+      if [ -n "$paint_line" ]; then
+        [ -n "${STUDY_PID:-}" ] ||
+          roam_study_start "$number" "$plate" "$thing_name" "$thing_look" "$board_at" "$place" \
+            "$paint_line"
+        roam_study_finish "$number" "$plate" "$plate"
+      fi
     elif [ -n "$ROAM_PAINT" ]; then
       paint=$(timeout $HUNG $D dev --port $P persona say "$ROAM" speak=true \
         "recent=$ROAM: ${line:-$said}" "intent=$ROAM_PAINT" "You are at $place.$MIND" 2>&1)
       paint_line=$(printf '%s\n' "$paint" | sed -n '1s/.*says: //p')
       printf '[paint %02d] %s\n' "$number" "${paint_line:-<no line: $paint>}"
       roam_inventory "$paint_line" "$paint"
-      [ -n "$paint_line" ] && roam_paint_study "$number" "$plate" "$plate" "$thing_name" \
-        "$thing_look" "$board_at" "$place" "$paint_line"
+      t_declare=$((SECONDS - t_declare_from))
+      if [ -n "$paint_line" ]; then
+        roam_study_start "$number" "$plate" "$thing_name" "$thing_look" "$board_at" "$place" \
+          "$paint_line"
+        roam_study_finish "$number" "$plate" "$plate"
+      fi
     fi
+    t_declare=${t_declare:-$((SECONDS - t_declare_from))}
     roam_refused "${events_at:-0}" "$number"
     held_after=$(held_counts)
     printf '[inventory %02d] %s\n' "$number" "$(held_diff "$held_before" "$held_after")"
+    printf '[time %02d] move took %s s (plate %s, of which walk %s, look %s, declare %s, study %s, reveal %s)\n' \
+      "$number" "$((SECONDS - t_move))" "$t_plate" "$WALK_SECONDS" "$t_look" "$t_declare" \
+      "$TIME_STUDY" "$TIME_REVEAL"
   done
   stop_watch quiet
   if [ -n "$SCENE_KIND$ART_KIND" ]; then

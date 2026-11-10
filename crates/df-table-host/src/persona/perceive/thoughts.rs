@@ -50,6 +50,7 @@ fn thought_text(perceived: &Perceived) -> String {
     let saw: Vec<&str> = perceived
         .sees
         .iter()
+        .filter(|seen| !seen.subject.is_own())
         .map(|seen| seen.what.trim())
         .filter(|what| !what.is_empty())
         .collect();
@@ -128,6 +129,11 @@ pub(super) fn thought_of(memory: Memory) -> Thought {
         seq: memory.seq,
         place: memory.place,
         picture: memory.pictures.first().cloned(),
+        attended: memory
+            .links
+            .iter()
+            .find(|link| link.what == LinkKind::Item)
+            .map(|link| link.id.clone()),
         text: memory.description,
     }
 }

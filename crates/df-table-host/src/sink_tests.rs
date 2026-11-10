@@ -1,3 +1,4 @@
+use std::io::{ErrorKind, Write};
 use std::sync::{Arc, Mutex};
 
 use df_table::element::ElementId;
@@ -6,7 +7,7 @@ use df_table::ports::EventSink;
 
 use crate::event_log::EventLog;
 use crate::observe::{EventLevel, HostEventSink, WallClock};
-use crate::sink::LineEcho;
+use crate::sink::{LineEcho, TerminalWriter};
 
 fn moved() -> TableEvent {
     TableEvent::ElementMoved {
@@ -104,4 +105,78 @@ fn the_echo_skips_lines_logged_before_it_was_made() {
     echo.echo_new(&log);
     std::thread::sleep(std::time::Duration::from_millis(100));
     assert!(printed.lock().expect("not poisoned").is_empty());
+}
+
+/// A terminal that refuses every write, like a redirected log whose file was closed.
+struct ClosedTerminal;
+
+impl Write for ClosedTerminal {
+    fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+        Err(ErrorKind::BrokenPipe.into())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(ErrorKind::BrokenPipe.into())
+    }
+}
+
+fn lines_starting(log: &EventLog, prefix: &str) -> Vec<String> {
+    texts(log)
+        .into_iter()
+        .filter(|text| text.starts_with(prefix))
+        .collect()
+}
+
+#[test]
+fn a_failed_terminal_write_is_recorded_once_and_every_line_is_kept_in_the_fallback_file() {
+    let directory = tempfile::TempDir::new().expect("a scratch directory");
+    let fallback = directory.path().join("terminal.log");
+    let log = Arc::new(EventLog::default());
+    let mut writer = TerminalWriter::new(Arc::clone(&log), fallback.clone());
+    writer.write_line_to(&mut ClosedTerminal, "CANVAS first");
+    writer.write_line_to(&mut ClosedTerminal, "CANVAS second");
+    assert_eq!(
+        lines_starting(&log, "HOST"),
+        ["HOST log_sink_failed kind=BrokenPipe"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(fallback).expect("the fallback file"),
+        "CANVAS first
+CANVAS second
+"
+    );
+}
+
+#[test]
+fn a_terminal_that_takes_its_lines_records_nothing_and_opens_no_file() {
+    let directory = tempfile::TempDir::new().expect("a scratch directory");
+    let fallback = directory.path().join("terminal.log");
+    let log = Arc::new(EventLog::default());
+    let mut writer = TerminalWriter::new(Arc::clone(&log), fallback.clone());
+    let mut terminal = Vec::new();
+    writer.write_line_to(&mut terminal, "CANVAS first");
+    assert_eq!(
+        terminal,
+        b"CANVAS first
+"
+    );
+    assert!(texts(&log).is_empty());
+    assert!(!fallback.exists());
+}
+
+#[test]
+fn a_fallback_file_that_cannot_be_opened_is_recorded_once_too() {
+    let directory = tempfile::TempDir::new().expect("a scratch directory");
+    let fallback = directory.path().join("missing").join("terminal.log");
+    let log = Arc::new(EventLog::default());
+    let mut writer = TerminalWriter::new(Arc::clone(&log), fallback);
+    writer.write_line_to(&mut ClosedTerminal, "CANVAS first");
+    writer.write_line_to(&mut ClosedTerminal, "CANVAS second");
+    assert_eq!(
+        lines_starting(&log, "HOST"),
+        [
+            "HOST log_sink_failed kind=BrokenPipe",
+            "HOST log_fallback_failed kind=NotFound"
+        ]
+    );
 }

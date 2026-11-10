@@ -12,7 +12,6 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::response::Response;
 use axum::routing::{get, post};
-use df_playground::fixture::PlateKind;
 use df_playground::lobby::change::ScreenEdit;
 use df_playground::scene::SceneChange;
 use df_scene_layout::{
@@ -251,7 +250,7 @@ pub(crate) async fn speaker_shot(app: &AppState, speaker: &str, line: &str) -> S
     let layout = shown_cast(app)
         .await
         .ok()
-        .filter(|shown| shown.plate == PlateKind::Room)
+        .filter(|shown| shown.plate.has_own_layout())
         .map(|shown| shown.layout);
     let current = app.playground().camera_target();
     SpeakerShot {

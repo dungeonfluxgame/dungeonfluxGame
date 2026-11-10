@@ -1,10 +1,11 @@
 //! Tests of `brief`.
 
 use super::brief::{
-    BriefCharacter, BriefError, BriefStyle, LookSheets, build_brief, build_brief_with, scene_words,
+    BriefCharacter, BriefError, BriefStyle, LookSheets, build_brief, build_brief_with,
+    build_stage_brief, scene_words,
 };
 use crate::imagegen::limits::MAXIMUM_SENT_TEXT_CHARS;
-use crate::movement::types::{Depth, Placement, SceneDesign, Side};
+use crate::movement::types::{Depth, Placement, Pose, RouteSight, SceneDesign, Side};
 
 fn character(id: &str, display_name: &str, job: &str, portrait: Option<&str>) -> BriefCharacter {
     BriefCharacter {
@@ -27,6 +28,7 @@ fn placement(character: &str, depth: Depth, side: Side, doing: &str) -> Placemen
 
 fn balcony() -> SceneDesign {
     SceneDesign {
+        feature: "tavern_balcony".to_owned(),
         place: "a stone balcony above a harbour".to_owned(),
         mood: "windy dusk".to_owned(),
         elements: vec!["lanterns".to_owned(), "a rope rail".to_owned()],
@@ -38,6 +40,8 @@ fn balcony() -> SceneDesign {
             placement("bran", Depth::Background, Side::Right, "watches the boats"),
         ],
         left_behind: vec!["cora".to_owned(), "dev".to_owned()],
+        stages: vec![],
+        town_look: None,
     }
 }
 
@@ -236,4 +240,119 @@ fn what_a_character_carries_in_view_is_said_in_their_sentence() {
         ),
         "{words}"
     );
+}
+
+const TOWN: &str = "half-timbered houses with steep red tile roofs and narrow cobbled lanes";
+
+fn fountain() -> RouteSight {
+    RouteSight {
+        id: "fountain_square".to_owned(),
+        sight: "a stone fountain in a small square.".to_owned(),
+        pose: Pose::Walking,
+    }
+}
+
+#[test]
+fn the_town_look_is_in_the_place_prompt_only_when_the_design_has_one() {
+    let (mut design, cast) = roamer();
+    let without = build_brief(&design, &cast, &LookSheets::empty()).expect("builds");
+    assert!(!without.prompt.contains("The town"), "{}", without.prompt);
+
+    design.town_look = Some(TOWN.to_owned());
+    let with = build_brief(&design, &cast, &LookSheets::empty()).expect("builds");
+    assert!(
+        with.prompt.contains(&format!(
+            "The town, the same in every picture of it: {TOWN}."
+        )),
+        "{}",
+        with.prompt
+    );
+    let words = scene_words(&design, &cast, &LookSheets::empty()).expect("words");
+    assert!(
+        words.contains(TOWN),
+        "a frame judge reads the town too: {words}"
+    );
+}
+
+#[test]
+fn a_sight_on_the_way_is_a_wide_view_of_the_mover_in_the_towns_look() {
+    let (mut design, cast) = roamer();
+    design.town_look = Some(TOWN.to_owned());
+
+    let brief =
+        build_stage_brief(&design, &fountain(), &cast, &LookSheets::empty()).expect("builds");
+
+    for part in [
+        TOWN,
+        "a wide view of a stone fountain in a small square.",
+        "A person (a lean painter with a sandy beard) is walking on through it",
+        "The cast in view is one person",
+    ] {
+        assert!(brief.prompt.contains(part), "{part} in: {}", brief.prompt);
+    }
+    for word in ["Danny", "danny", "folding easel", "satchel"] {
+        assert!(!brief.prompt.contains(word), "{word} in: {}", brief.prompt);
+    }
+    let ids: Vec<&str> = brief
+        .references
+        .iter()
+        .map(|card| card.character.as_str())
+        .collect();
+    assert_eq!(ids, ["danny"], "the mover's sheet is the one reference");
+    assert_eq!(brief.avoid, BriefStyle::default().avoid);
+}
+
+#[test]
+fn a_pausing_mover_has_stopped_to_take_the_sight_in() {
+    let (design, cast) = roamer();
+    let sight = RouteSight {
+        pose: Pose::Pausing,
+        ..fountain()
+    };
+
+    let brief = build_stage_brief(&design, &sight, &cast, &LookSheets::empty()).expect("builds");
+
+    assert!(
+        brief.prompt.contains("has stopped there to take it in"),
+        "{}",
+        brief.prompt
+    );
+    assert!(
+        !brief.prompt.contains("The town"),
+        "no town, no town sentence"
+    );
+}
+
+#[test]
+fn a_sight_with_two_movers_says_both_are_in_view_once() {
+    let (design, mut cast) = roamer();
+    cast.push(character(
+        "mara",
+        "Mara",
+        "a tall woman in a green hood",
+        None,
+    ));
+
+    let brief =
+        build_stage_brief(&design, &fountain(), &cast, &LookSheets::empty()).expect("builds");
+
+    assert!(
+        brief.prompt.contains("The cast in view is 2 people"),
+        "{}",
+        brief.prompt
+    );
+    assert_eq!(brief.references.len(), 2);
+}
+
+#[test]
+fn a_sight_over_the_image_service_s_limit_is_refused() {
+    let (design, cast) = roamer();
+    let sight = RouteSight {
+        sight: "a cobbled lane ".repeat(MAXIMUM_SENT_TEXT_CHARS / 10),
+        ..fountain()
+    };
+
+    let error = build_stage_brief(&design, &sight, &cast, &LookSheets::empty()).unwrap_err();
+
+    assert_eq!(error.key(), "prompt_too_long");
 }

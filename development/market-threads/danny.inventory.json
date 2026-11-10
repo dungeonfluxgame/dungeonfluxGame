@@ -18,7 +18,7 @@
     "name": "primed wooden boards",
     "look": "Small flat panels of planed limewood, a hand span wide, primed with chalky white gesso on one side, bare wood on the back.",
     "use": "consumed",
-    "count": 4
+    "count": 12
   },
   {
     "id": "sketchbook_pages",
@@ -46,62 +46,62 @@
     "name": "yellow ochre cakes",
     "look": "Small dry cakes of earthy yellow-brown pigment in a twist of paper.",
     "use": "consumed",
-    "count": 3
+    "count": 6
   },
   {
     "id": "umber",
     "name": "raw umber cakes",
     "look": "Small dry cakes of dull brown earth pigment in a twist of paper.",
     "use": "consumed",
-    "count": 3
+    "count": 6
   },
   {
     "id": "verdigris",
     "name": "verdigris",
     "look": "A pinch of blue-green copper pigment in a stoppered clay pot.",
     "use": "consumed",
-    "count": 2
+    "count": 5
   },
   {
     "id": "madder",
     "name": "madder red",
     "look": "Deep rose-red lake pigment in a stoppered clay pot.",
     "use": "consumed",
-    "count": 1
+    "count": 5
   },
   {
     "id": "lead_white",
     "name": "lead white",
     "look": "Heavy chalky white pigment in a stoppered clay pot.",
     "use": "consumed",
-    "count": 3
+    "count": 6
   },
   {
     "id": "lamp_black",
     "name": "lamp black",
     "look": "Fine soft black soot pigment in a small tin.",
     "use": "consumed",
-    "count": 2
+    "count": 5
   },
   {
     "id": "linseed_oil",
     "name": "linseed oil",
     "look": "A small stoppered flask of golden linseed oil, its glass smeared with fingerprints; each count is one day's mixing.",
     "use": "consumed",
-    "count": 4
+    "count": 12
   },
   {
     "id": "rags",
     "name": "rags",
     "look": "Torn strips of old linen, stiff with dried paint in every colour.",
     "use": "consumed",
-    "count": 5
+    "count": 12
   },
   {
     "id": "coins",
     "name": "silver pennies",
     "look": "Worn silver pennies in a small drawstring purse.",
     "use": "consumed",
-    "count": 14
+    "count": 20
   }
 ]

@@ -33,7 +33,8 @@ impl BannerPlace {
 /// How long the working ring takes to turn once, in milliseconds: `kit-turning` in `kit.css`.
 pub const TURN_MS: u64 = 1200;
 
-/// How far into its turn a working ring drawn at `now_ms` starts, as a negative animation delay.
+/// How far into its turn a working ring drawn at `now_ms` starts, as a negative animation delay
+/// (the style sheet's `--kit-turn-delay`).
 /// The page draws the whole panels layer again whenever any of it changes, so a new ring would
 /// start at the top each time and look stuck if draws come faster than a turn; every ring is
 /// instead held to the page clock, so the new one carries on from where the old one was.

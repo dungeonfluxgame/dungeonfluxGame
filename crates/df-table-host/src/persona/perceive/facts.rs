@@ -53,6 +53,10 @@ pub(super) struct Sight<'a> {
 pub(super) struct Offered {
     pub(super) regions: Vec<String>,
     pub(super) items: Vec<String>,
+    /// The ids of what the character carries: never a sight, so never what they attend to.
+    pub(super) carried: Vec<String>,
+    /// The character's own region in the scan, when they are in the picture.
+    pub(super) own_region: Option<String>,
     /// Every id of the place's items and things and of what the character carries, listed or not:
     /// a new thing takes none of them.
     pub(super) taken: Vec<String>,
@@ -195,6 +199,16 @@ pub(super) async fn briefing(
             region: region.id().as_str().to_owned(),
         });
 
+    // The region of the picture that is the character themselves, named once more on its own so the
+    // model cannot take the figure there for someone else.
+    let you = match &viewpoint {
+        Viewpoint::Pictured { region } => listed
+            .iter()
+            .find(|(_, listed_region)| listed_region.id().as_str() == region)
+            .map(|(number, _)| json!({"region": region, "number": number})),
+        Viewpoint::Viewer => None,
+    };
+
     let items_here: Vec<Value> = place_items
         .iter()
         .take(MAXIMUM_PLACE_ITEMS)
@@ -271,6 +285,7 @@ pub(super) async fn briefing(
                 Viewpoint::Pictured { .. } => "in_picture",
                 Viewpoint::Viewer => "viewer",
             },
+            "you": you,
             "place": place,
             "picture": {
                 "name": screen.picture,
@@ -298,6 +313,11 @@ pub(super) async fn briefing(
         offered: Offered {
             regions: region_ids,
             items: item_ids,
+            carried: held.iter().map(|item| item.id.clone()).collect(),
+            own_region: match &viewpoint {
+                Viewpoint::Pictured { region } => Some(region.clone()),
+                Viewpoint::Viewer => None,
+            },
             taken,
             handles,
             looks,

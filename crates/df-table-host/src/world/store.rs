@@ -13,6 +13,8 @@ use df_content::world_bible::{Place, Thing, WorldBible, is_valid_id};
 use serde::{Deserialize, Serialize};
 
 use super::request::WorldError;
+use super::town::Town;
+use super::visited::Visited;
 use crate::blocking::WriteLock;
 use crate::dev_http::BodyError;
 use crate::io_cause::IoCause;
@@ -35,6 +37,13 @@ struct WorldState {
     /// The active place when it was designed in play rather than written in the bible.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     designed: Option<Place>,
+    /// The town the party is in, kept while places designed in play follow one another in it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    town: Option<Town>,
+    /// The places designed in play that the party has been to, oldest first, until a place of the
+    /// bible is made the active one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    visited: Vec<Visited>,
 }
 
 /// The `world` folder of the host's playground.
@@ -106,19 +115,57 @@ pub(super) fn write_place(directory: &Path, place: Option<&str>) -> Result<(), W
         &WorldState {
             place: place.map(str::to_owned),
             designed: None,
+            town: None,
+            visited: Vec::new(),
         },
     )
 }
 
-/// Makes `designed`, a place designed in play, the active one, whole or not at all.
-pub(super) fn write_designed(directory: &Path, designed: Place) -> Result<(), WorldError> {
-    write_state(
+/// Makes `designed`, a place designed in play, the active one, whole or not at all. The town the
+/// party is in stays, and `feature` (when the design gave one) is kept with the place.
+pub(super) fn write_designed(
+    directory: &Path,
+    designed: Place,
+    feature: Option<String>,
+) -> Result<(), WorldError> {
+    let _writing = WORLD_WRITES.lock();
+    let before = read_state(directory)?;
+    let mut visited = before.visited;
+    if let Some(feature) = feature {
+        visited.push(Visited {
+            name: designed.name.clone(),
+            feature,
+        });
+    }
+    write_state_locked(
         directory,
         &WorldState {
             place: Some(designed.id.clone()),
             designed: Some(designed),
+            town: before.town,
+            visited,
         },
     )
+}
+
+/// The places designed in play that the party has been to, oldest first.
+pub(super) fn read_visited(directory: &Path) -> Result<Vec<Visited>, WorldError> {
+    Ok(read_state(directory)?.visited)
+}
+
+/// The town the party is in, if there is one.
+pub(super) fn read_town(directory: &Path) -> Result<Option<Town>, WorldError> {
+    Ok(read_state(directory)?.town)
+}
+
+/// Keeps `town` as the one the party is in (none: the party is in no town), whole or not at all,
+/// and answers the town it replaced.
+pub(super) fn write_town(directory: &Path, town: Option<Town>) -> Result<Option<Town>, WorldError> {
+    let _writing = WORLD_WRITES.lock();
+    let mut state = read_state(directory)?;
+    let before = std::mem::replace(&mut state.town, town);
+    write_state_locked(directory, &state)?;
+    Ok(before)
 }
 
 /// Keeps `picture` as the close-up of the thing `item` at the active place, which must be a place

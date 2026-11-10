@@ -29,6 +29,10 @@ pub struct PlaceRequest {
 #[serde(deny_unknown_fields)]
 pub struct ArriveRequest {
     pub place: Place,
+    /// The one feature that sets the place apart from the others designed (the design's
+    /// `feature`): kept with the places the party has been to, so the next design is told it.
+    #[serde(default)]
+    pub feature: Option<String>,
 }
 
 /// `POST /dev/world/picture`: keeps `picture` as the close-up of the thing `item` at the active
@@ -131,6 +135,10 @@ pub enum WorldError {
     UnknownThing {
         id: String,
     },
+    /// A walk's stage note names a place or a stage that is not an id.
+    InvalidWalkStage {
+        id: String,
+    },
     /// A quote needs a place and none is active (`world place <id>`).
     NoActivePlace,
     /// The quote cannot be made.
@@ -154,6 +162,7 @@ impl WorldError {
             Self::PlaceInvalid { .. } => "place_invalid",
             Self::NotDesigned => "not_designed",
             Self::UnknownThing { .. } => "unknown_thing",
+            Self::InvalidWalkStage { .. } => "invalid_walk_stage",
             Self::NoActivePlace => "no_active_place",
             Self::Quote { cause } => cause.key(),
             Self::Stopped => "stopped",
@@ -190,6 +199,12 @@ impl fmt::Display for WorldError {
             Self::NotDesigned => formatter
                 .write_str("the active place was not designed in play, so it keeps no picture"),
             Self::UnknownThing { id } => write!(formatter, "the active place has no thing {id:?}"),
+            Self::InvalidWalkStage { id } => {
+                write!(
+                    formatter,
+                    "{id:?} is not an id (lowercase letters, digits, '_' or '-')"
+                )
+            }
             Self::NoActivePlace => {
                 formatter.write_str("no place is active (set one with: world place <id>)")
             }
@@ -204,9 +219,10 @@ impl std::error::Error for WorldError {}
 impl RouteError for WorldError {
     fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidBody(_) | Self::InvalidQuery { .. } | Self::PlaceInvalid { .. } => {
-                StatusCode::BAD_REQUEST
-            }
+            Self::InvalidBody(_)
+            | Self::InvalidQuery { .. }
+            | Self::InvalidWalkStage { .. }
+            | Self::PlaceInvalid { .. } => StatusCode::BAD_REQUEST,
             Self::UnknownPlace { .. } | Self::UnknownThing { .. } => StatusCode::NOT_FOUND,
             Self::NoActivePlace | Self::NotDesigned | Self::Quote { .. } => {
                 StatusCode::UNPROCESSABLE_ENTITY

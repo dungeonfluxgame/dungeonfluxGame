@@ -18,11 +18,11 @@ use crate::speech::limits::KEY_VARIABLES;
 pub(super) const ELEVENLABS: &str = "elevenlabs";
 
 /// The answer of one composition: MP3 bytes, or why there are none.
-pub(super) type ComposeFuture<'a> =
+pub(crate) type ComposeFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<u8>, MusicError>> + Send + 'a>>;
 
 /// Makes one instrumental of `length_ms` from `prompt` within `deadline`; never retried.
-pub(super) trait Composer: Send + Sync {
+pub(crate) trait Composer: Send + Sync {
     /// The supplier, as audit lines name it.
     fn provider(&self) -> &'static str;
     /// The supplier's model, as audit lines name it.

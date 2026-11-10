@@ -122,13 +122,15 @@ impl BubbleLayout {
         let faces = all_faces(stage, framing, (width, height));
         settle_clue_board(stage, &to_stage, &faces)?;
         settle_story_mark(stage, &to_stage, &faces)?;
+        settle_inventory(stage, &to_stage, &faces)?;
         let bubbles = self.measure_bubbles(stage, framing, (width, height))?;
         self.settle_repeats(&bubbles);
         self.settle_outlines(stage)?;
         if bubbles.is_empty() {
             self.chosen.clear();
             settle_clue_board(stage, &to_stage, &faces)?;
-            return settle_story_mark(stage, &to_stage, &faces);
+            settle_story_mark(stage, &to_stage, &faces)?;
+            return settle_inventory(stage, &to_stage, &faces);
         }
         let mut keep_out = Vec::new();
         let chrome = stage.query_selector_all(KEEP_OUT)?;
@@ -172,7 +174,8 @@ impl BubbleLayout {
         }
         self.chosen = present;
         settle_clue_board(stage, &to_stage, &faces)?;
-        settle_story_mark(stage, &to_stage, &faces)
+        settle_story_mark(stage, &to_stage, &faces)?;
+        settle_inventory(stage, &to_stage, &faces)
     }
 
     /// Marks the bubbles that show what their character's bubble already showed as settled, so
@@ -423,6 +426,32 @@ fn settle_story_mark(
         .iter()
         .any(|mark| board_covers(mark, faces, &boxes));
     set_class(&layer, "story-hidden", covers)
+}
+
+/// Keeps the inventory panel off the people and the other panels. The panel fades out
+/// (`inventory-hidden`) while it covers a face, a bubble, the narration, the caption bar, the clue
+/// board or the story's chip and line, and back in once clear. The panel never moves, and the
+/// bubbles do not move for it: it gives way.
+fn settle_inventory(
+    stage: &Element,
+    to_stage: &dyn Fn(&web_sys::DomRect) -> Rect,
+    faces: &[Rect],
+) -> Result<(), JsValue> {
+    let Some(layer) = stage.query_selector(".tv-inventory")? else {
+        return Ok(());
+    };
+    let mut boxes = rects_of(stage, LOWER_THIRD, to_stage)?;
+    boxes.extend(rects_of(stage, BUBBLES, to_stage)?);
+    boxes.extend(rects_of(stage, ".tv-clues .kit-clues", to_stage)?);
+    boxes.extend(rects_of(
+        stage,
+        ".tv-story .kit-chip, .tv-story .kit-progress",
+        to_stage,
+    )?);
+    let covers = rects_of(&layer, ".kit-ledger", to_stage)?
+        .iter()
+        .any(|panel| board_covers(panel, faces, &boxes));
+    set_class(&layer, "inventory-hidden", covers)
 }
 
 /// The boxes of the elements of `stage` that match `selector`, on the stage.

@@ -318,6 +318,7 @@ fn the_plate_timer_counts_down_to_the_next_scheduled_frame_and_says_the_last() {
         every_ms: 60_000,
         due_at_ms: Some(102_000),
         making: false,
+        in_flight: Vec::new(),
         last: None,
         missed: 0,
         room_shown_ms: None,
@@ -366,6 +367,8 @@ fn the_plate_timer_counts_down_to_the_next_scheduled_frame_and_says_the_last() {
         FrameReason::Inspection,
         FrameReason::Focus,
         FrameReason::Declared,
+        FrameReason::Reveal,
+        FrameReason::Walk,
     ] {
         assert_eq!(serde_json::json!(reason), serde_json::json!(reason.key()));
     }
@@ -373,8 +376,91 @@ fn the_plate_timer_counts_down_to_the_next_scheduled_frame_and_says_the_last() {
         FrameMoment::Started,
         FrameMoment::Shown,
         FrameMoment::Failed,
+        FrameMoment::Dropped,
         FrameMoment::Ended,
     ] {
         assert_eq!(serde_json::json!(moment), serde_json::json!(moment.key()));
+    }
+}
+
+mod plate_words {
+    use crate::controls::{FrameMoment, FrameReason, PlateFrame, PlateTimer};
+    fn running_plate(last: Option<(FrameReason, FrameMoment, u64)>) -> PlateTimer {
+        PlateTimer {
+            running: true,
+            every_ms: 0,
+            due_at_ms: None,
+            making: false,
+            in_flight: Vec::new(),
+            last: last.map(|(reason, moment, at_ms)| PlateFrame {
+                frame: "plates-1".to_owned(),
+                reason,
+                moment,
+                at_ms,
+            }),
+            missed: 0,
+            room_shown_ms: None,
+            now_ms: 100_000,
+        }
+    }
+
+    #[test]
+    fn a_frame_being_made_counts_up_from_its_start_and_is_not_said_twice() {
+        let mut plate = running_plate(Some((FrameReason::Declared, FrameMoment::Started, 62_000)));
+        plate.making = true;
+        assert_eq!(
+            plate.shown_text(0),
+            "Plate: no schedule \u{b7} generating (declared) 0:38"
+        );
+        assert_eq!(
+            plate.shown_text(3_000),
+            "Plate: no schedule \u{b7} generating (declared) 0:41"
+        );
+    }
+
+    #[test]
+    fn a_shown_or_failed_frame_ends_generating_and_resets_the_age_to_that_moment() {
+        let mut plate = running_plate(Some((FrameReason::Declared, FrameMoment::Shown, 97_000)));
+        plate.room_shown_ms = Some(97_000);
+        assert_eq!(
+            plate.shown_text(0),
+            "Plate: no schedule \u{b7} last declared shown 0:03 ago"
+        );
+        plate.last = Some(PlateFrame {
+            frame: "plates-2".to_owned(),
+            reason: FrameReason::Declared,
+            moment: FrameMoment::Failed,
+            at_ms: 99_000,
+        });
+        assert_eq!(
+            plate.shown_text(0),
+            "Plate: no schedule \u{b7} room plate up 0:03 \u{b7} last declared failed 0:01 ago"
+        );
+    }
+
+    #[test]
+    fn an_insert_over_a_room_in_the_making_still_says_generating_and_the_insert() {
+        let mut plate = running_plate(Some((FrameReason::Inspection, FrameMoment::Ended, 90_000)));
+        plate.making = true;
+        assert_eq!(
+            plate.shown_text(0),
+            concat!(
+                "Plate: no schedule \u{b7} generating\u{2026} \u{b7} ",
+                "last inspection insert ended 0:10 ago"
+            )
+        );
+    }
+
+    #[test]
+    fn the_age_follows_the_pages_clock_between_replies() {
+        let plate = running_plate(Some((FrameReason::Reveal, FrameMoment::Shown, 100_000)));
+        assert_eq!(
+            plate.shown_text(0),
+            "Plate: no schedule \u{b7} last revealed picture shown 0:00 ago"
+        );
+        assert_eq!(
+            plate.shown_text(72_000),
+            "Plate: no schedule \u{b7} last revealed picture shown 1:12 ago"
+        );
     }
 }

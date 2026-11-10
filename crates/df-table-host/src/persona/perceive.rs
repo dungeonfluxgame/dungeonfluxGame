@@ -30,6 +30,7 @@
 //! back in an answer is put as how the person looks, or the answer is refused (`facts`).
 
 mod answer;
+mod attending;
 pub(super) mod cli;
 mod facts;
 pub mod request;
@@ -37,4 +38,5 @@ pub mod routes;
 mod screen;
 mod thoughts;
 
+pub(crate) use self::attending::attending;
 pub(crate) use self::routes::router_with;

@@ -25,6 +25,7 @@ df-ai = { path = "../df-ai" }
 df-providers = { path = "../df-providers" }
 df-provider-api = { path = "../df-provider-api" }
 df-model = { path = "../df-model" }
+df-tempo = { path = "../df-tempo" }
 df-content = { path = "../df-content" }
 df-scene-layout = { path = "../df-scene-layout" }
 df-telemetry = { path = "../df-telemetry" }

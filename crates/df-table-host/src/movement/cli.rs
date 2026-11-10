@@ -6,14 +6,17 @@
 //! a frame judge can name one of them for a close look. `move act` has a character say a line
 //! through `persona say` and runs that line as a move: Jev is told the line was said toward going
 //! somewhere (`declared: move`), and a first answer that finds no destination in it is read once
-//! more with its own reason, as a `retry` record in the trace.
+//! more with its own reason, as a `retry` record in the trace. `walk=N` asks the design for up to N
+//! sights on the way, which are made with the place and shown before it (`walk`), `town=` is the
+//! move's role in its town, `hold=` how long each sight is up and `impulse=` the tempo impulse
+//! each posts.
 //!
 //! The party is the shown scene's characters that have a stored persona, read from the host's cast
 //! route exactly as `persona converse` reads them. Each stage either advances the transition with a
 //! record or fails it with its typed key, and the old scene stays up.
 
 use std::fmt;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::brief::{BriefCharacter, LookSheets, build_brief, scene_words};
 use super::interpret::retry_after;
@@ -23,8 +26,9 @@ use super::routes::{
 use super::transition::{Deadlines, Transition, format_trace};
 use super::types::{
     Clarification, Declared, Depth, Interpreted, MoveIntent, PartyMember, PlateBrief, Resident,
-    SceneDesign, Side, TransitionStage, Unclear,
+    SceneDesign, Side, TownRole, TransitionStage, Unclear,
 };
+use super::walk::{Impulse, MINIMUM_HOLD, Through, WalkOptions, walk_through};
 use crate::cast::request::{CastList, CastReply};
 use crate::cast::routes::path as cast_path;
 use crate::command::{CommandError, bad_choice};
@@ -51,21 +55,22 @@ use df_content::world_bible::Place;
 
 /// Every `move` stage verb, for the unknown-verb refusal and the help.
 pub const MOVEMENT_USAGE: &str = concat!(
-    "move say [plate=NAME] <line...> | move act <character> [plate=NAME] <situation...> | ",
-    "move interpret <line...> | move design <line...> | move brief <line...>",
+    "move say [options] <line...> | move act <character> [options] <situation...> | ",
+    "move interpret <line...> | move design <line...> | move brief <line...>; options: ",
+    "plate=NAME walk=<sights> town=<seeds|within|leaves> hold=<seconds> impulse=<kind>:<strength>",
 );
 
 /// A `move` command of the dev CLI: the line, and the last stage to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MoveCommand {
     /// Run every stage, make the plate when one is named, and print each record.
-    Say { line: String, plate: Option<String> },
+    Say { line: String, options: MoveOptions },
     /// Have `character` say a line about `situation` through `persona say`, then run that line as
     /// a move with them as the speaker; the plate is made when one is named.
     Act {
         character: String,
         situation: String,
-        plate: Option<String>,
+        options: MoveOptions,
     },
     /// Read the line, then stop.
     Interpret(String),
@@ -73,6 +78,14 @@ pub enum MoveCommand {
     Design(String),
     /// Read the line, design the scene and make the brief, then stop.
     Brief(String),
+}
+
+/// The options before a move's text: the plate to make (`plate=NAME`) and what the move asks of
+/// its walk (`walk=`, `town=`, `hold=`, `impulse=`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MoveOptions {
+    pub plate: Option<String>,
+    pub walk: WalkOptions,
 }
 
 /// Why a movement could not be carried through. `report` is everything printed before the failure
@@ -121,18 +134,18 @@ pub fn parse(words: &[String]) -> Result<MoveCommand, CommandError> {
     let line = rest.join(" ");
     match verb.as_str() {
         "say" => {
-            let (plate, line) = plate_and_text(rest)?;
-            Ok(MoveCommand::Say { line, plate })
+            let (options, line) = options_and_text(rest)?;
+            Ok(MoveCommand::Say { line, options })
         }
         "act" => {
             let [character, rest @ ..] = rest else {
                 return Err(CommandError::Usage(MOVEMENT_USAGE));
             };
-            let (plate, situation) = plate_and_text(rest)?;
+            let (options, situation) = options_and_text(rest)?;
             Ok(MoveCommand::Act {
                 character: character.clone(),
                 situation,
-                plate,
+                options,
             })
         }
         "interpret" => Ok(MoveCommand::Interpret(line)),
@@ -142,17 +155,21 @@ pub fn parse(words: &[String]) -> Result<MoveCommand, CommandError> {
     }
 }
 
-/// The `plate=NAME` option before a move's text, and the text. The name is checked as
-/// `persona converse plate=` checks it.
-fn plate_and_text(words: &[String]) -> Result<(Option<String>, String), CommandError> {
-    let (given, text) = take_options(words, &["plate"]);
+/// The options before a move's text, and the text. The `plate=NAME` is checked as `persona
+/// converse plate=` checks it. `walk=<N>` asks for at most N sights on the way, `town=<seeds|
+/// within|leaves>` is the move's role in its town, `hold=<seconds>` (at least [`MINIMUM_HOLD`])
+/// how long each sight stays up, and `impulse=<kind>:<permille>` the tempo impulse each posts; the
+/// last of a key given twice counts.
+fn options_and_text(words: &[String]) -> Result<(MoveOptions, String), CommandError> {
+    let (given, text) = take_options(words, &["plate", "walk", "town", "hold", "impulse"]);
     if text.is_empty() {
         return Err(CommandError::Usage(MOVEMENT_USAGE));
     }
-    let plate = match given.last() {
-        None => None,
-        Some(&(key, value)) => {
-            if !plain_name(value) {
+    let mut options = MoveOptions::default();
+    for &(key, value) in &given {
+        match key {
+            "plate" if plain_name(value) => options.plate = Some(value.to_owned()),
+            "plate" => {
                 return Err(bad_choice(
                     key,
                     value,
@@ -161,10 +178,52 @@ fn plate_and_text(words: &[String]) -> Result<(Option<String>, String), CommandE
                     ),
                 ));
             }
-            Some(value.to_owned())
+            "walk" => {
+                options.walk.stages = value
+                    .parse()
+                    .map_err(|_| bad_choice(key, value, "a whole number of sights".to_owned()))?;
+            }
+            "town" => {
+                options.walk.town =
+                    Some(TownRole::from_key(value).ok_or_else(|| {
+                        bad_choice(key, value, "seeds, within or leaves".to_owned())
+                    })?);
+            }
+            "hold" => options.walk.hold = Some(hold_of(key, value)?),
+            _ => options.walk.impulse = Some(impulse_of(key, value)?),
         }
-    };
-    Ok((plate, text.join(" ")))
+    }
+    Ok((options, text.join(" ")))
+}
+
+/// `hold=`: a number of seconds, at least the least a sight stays up.
+fn hold_of(key: &str, value: &str) -> Result<Duration, CommandError> {
+    let seconds: f64 = value
+        .parse()
+        .map_err(|_| bad_choice(key, value, "a number of seconds".to_owned()))?;
+    let minimum = MINIMUM_HOLD.as_secs_f64();
+    if !seconds.is_finite() || seconds < minimum {
+        return Err(bad_choice(
+            key,
+            value,
+            format!("at least {minimum} seconds, so a sight can be taken in"),
+        ));
+    }
+    Ok(Duration::from_secs_f64(seconds))
+}
+
+/// `impulse=<kind>:<permille>`: a tempo kind and a strength from 0 to 1000.
+fn impulse_of(key: &str, value: &str) -> Result<Impulse, CommandError> {
+    let expected = || bad_choice(key, value, "<kind>:<strength 0 to 1000>".to_owned());
+    let (kind, permille) = value.split_once(':').ok_or_else(expected)?;
+    let permille: u16 = permille.parse().map_err(|_| expected())?;
+    if kind.is_empty() || permille > 1000 {
+        return Err(expected());
+    }
+    Ok(Impulse {
+        kind: kind.to_owned(),
+        permille,
+    })
 }
 
 /// Runs one `move` command against the host on `port` and gives its report.
@@ -173,13 +232,13 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
     let cast: CastList = dev_client::reply_value(cast_reply)?;
     let present = present_personas(&cast);
     let outcome = match command {
-        MoveCommand::Say { line, plate } => {
-            walk(port, &line, None, &present, None, plate.as_deref()).await
+        MoveCommand::Say { line, options } => {
+            walk(port, &line, None, &present, None, &options).await
         }
         MoveCommand::Act {
             character,
             situation,
-            plate,
+            options,
         } => {
             let said = speak(port, &character, situation.clone()).await?;
             // What the line used up or gained of what the speaker holds, as the host took it.
@@ -198,22 +257,15 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
                 speaker: &character,
                 situation: &situation,
             };
-            walk(
-                port,
-                &said.line,
-                None,
-                &present,
-                Some(spoken),
-                plate.as_deref(),
-            )
-            .await
-            .map(|report| {
-                [report]
-                    .into_iter()
-                    .chain(inventory)
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
+            walk(port, &said.line, None, &present, Some(spoken), &options)
+                .await
+                .map(|report| {
+                    [report]
+                        .into_iter()
+                        .chain(inventory)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
         }
         MoveCommand::Interpret(line) => {
             walk(
@@ -222,7 +274,7 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
                 Some(TransitionStage::Interpreting),
                 &present,
                 None,
-                None,
+                &MoveOptions::default(),
             )
             .await
         }
@@ -233,7 +285,7 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
                 Some(TransitionStage::Designing),
                 &present,
                 None,
-                None,
+                &MoveOptions::default(),
             )
             .await
         }
@@ -244,7 +296,7 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
                 Some(TransitionStage::Briefing),
                 &present,
                 None,
-                None,
+                &MoveOptions::default(),
             )
             .await
         }
@@ -320,6 +372,15 @@ impl Walk {
             .map_err(|error| self.failed(error.key(), &error.to_string()))
     }
 
+    /// Moves to the next stage with a record of `detail`, as of `at_ms` on the walk's clock (a
+    /// stage that was passed while others were shown).
+    fn advance_at(&mut self, at_ms: u64, detail: &str) -> Result<(), MoveError> {
+        self.transition
+            .advance(at_ms, detail)
+            .map(|_| ())
+            .map_err(|error| self.failed(error.key(), &error.to_string()))
+    }
+
     /// Fails the transition and returns the report that ends in its failed record.
     fn failed(&mut self, key: &str, message: &str) -> MoveError {
         let now = self.now_ms();
@@ -389,15 +450,15 @@ fn clarification_text(clarification: &Clarification) -> String {
 
 /// The stages in order, stopping after `stop`; `None` runs the whole path (`move say`, `move act`).
 /// `said` is the character who said `line` toward going somewhere in `move act`: the line is
-/// printed first, and Jev is told who said it and that it was meant as a move. `plate` makes the
-/// plate and puts it on the scene.
+/// printed first, and Jev is told who said it and that it was meant as a move. `options.plate`
+/// makes the plate and puts it on the scene, after the sights on the way when the design has any.
 pub(super) async fn walk(
     port: u16,
     line: &str,
     stop: Option<TransitionStage>,
     present: &[PersonaSummary],
     said: Option<Said<'_>>,
-    plate: Option<&str>,
+    options: &MoveOptions,
 ) -> Result<String, MoveError> {
     let party: Vec<PartyMember> = present
         .iter()
@@ -459,6 +520,7 @@ pub(super) async fn walk(
         party: party.clone(),
         context: context.map(str::to_owned),
         model: None,
+        walk: options.walk.ask(options.plate.as_deref()),
     };
     let design =
         match post_json::<_, DesignReply>(port, move_path::MOVE_DESIGN, &design_request).await {
@@ -470,12 +532,13 @@ pub(super) async fn walk(
         };
     walk.report.push(design_text(&design));
     walk.advance(&format!(
-        "place={} things={} placements={} residents={} left_behind={}",
+        "place={} things={} placements={} residents={} left_behind={} stages={}",
         design.place,
         design.things.len(),
         design.placements.len(),
         design.residents.len(),
-        design.left_behind.len()
+        design.left_behind.len(),
+        design.stages.len()
     ))?;
     if stop == Some(TransitionStage::Designing) {
         return Ok(walk.finished());
@@ -509,7 +572,7 @@ pub(super) async fn walk(
     if stop == Some(TransitionStage::Briefing) {
         return Ok(walk.finished());
     }
-    let Some(name) = plate else {
+    let Some(name) = options.plate.as_deref() else {
         walk.report
             .push("Generating, locating and placing were not run: give plate=NAME.".to_owned());
         return Ok(walk.finished());
@@ -565,14 +628,54 @@ pub(super) async fn walk(
         avoid: &brief.avoid,
         sheets: &sheets,
     };
-    match deliver_plate(port, name, &painting, placed, None).await {
-        Ok(summary) => walk.report.push(summary),
-        Err((step, error)) => return Err(walk.failed(step.key(), &error.to_string())),
+    if design.stages.is_empty() {
+        match deliver_plate(port, name, &painting, placed, None).await {
+            Ok(summary) => walk.report.push(summary),
+            Err((step, error)) => return Err(walk.failed(step.key(), &error.to_string())),
+        }
+        // deliver_plate runs the three stages in one call, so their records are written after it.
+        walk.advance(&format!("plate={name} generated and stored"))?;
+        walk.advance("characters located and named in the picture")?;
+        walk.advance("backdrop swapped behind the scene")?;
+    } else {
+        let movers: Vec<BriefCharacter> = characters
+            .iter()
+            .filter(|character| {
+                design
+                    .placements
+                    .iter()
+                    .any(|placement| placement.character == character.id)
+                    && !design
+                        .residents
+                        .iter()
+                        .any(|resident| resident.id == character.id)
+            })
+            .cloned()
+            .collect();
+        let began_ms = walk.now_ms();
+        let through = Through {
+            port,
+            plate: name,
+            design: &design,
+            movers: &movers,
+            placed: &placed,
+            arrival: painting,
+            owner: said.as_ref().map(|said| said.speaker),
+            options: &options.walk,
+        };
+        let walked = match walk_through(through).await {
+            Ok(walked) => walked,
+            Err(failure) => return Err(walk.failed(&failure.key, &failure.message)),
+        };
+        walk.report.extend(walked.lines);
+        // The place was made, scanned and named while the sights were shown; it went up after the
+        // last of them.
+        let made_ms = began_ms + walked.made_ms.unwrap_or_default();
+        let arrived_ms = began_ms + walked.arrived_ms.unwrap_or_default();
+        walk.advance_at(made_ms, &format!("plate={name} generated and stored"))?;
+        walk.advance_at(made_ms, "characters located and named in the picture")?;
+        walk.advance_at(arrived_ms, "backdrop swapped behind the scene")?;
     }
-    // deliver_plate runs the three stages in one call, so their records are written after it.
-    walk.advance(&format!("plate={name} generated and stored"))?;
-    walk.advance("characters located and named in the picture")?;
-    walk.advance("backdrop swapped behind the scene")?;
     walk.report.push(arrive(port, name, &design).await);
     // A resident has a persona only once the plate has named them in the scene.
     for resident in &design.residents {
@@ -628,6 +731,7 @@ async fn arrive(port: u16, plate: &str, design: &SceneDesign) -> String {
             stalls: Vec::new(),
             things: design.things.clone(),
         },
+        feature: Some(design.feature.clone()),
     };
     let set: Result<PlaceSet, DevError> = match post_json::<_, WorldReply<PlaceSet>>(
         port,
@@ -742,6 +846,19 @@ fn design_text(design: &SceneDesign) -> String {
         format!("design: place={} mood={}", design.place, design.mood),
         format!("elements: {}", design.elements.join(", ")),
     ];
+    if let Some(look) = &design.town_look {
+        lines.push(format!("town: {look}"));
+    }
+    for (index, stage) in design.stages.iter().enumerate() {
+        lines.push(format!(
+            "stage {}/{} {} ({}): {}",
+            index + 1,
+            design.stages.len(),
+            stage.id,
+            stage.pose.key(),
+            stage.sight
+        ));
+    }
     for thing in &design.things {
         lines.push(format!(
             "thing {} ({}): {}",

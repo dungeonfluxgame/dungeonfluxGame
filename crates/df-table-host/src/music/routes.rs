@@ -213,6 +213,61 @@ pub(super) async fn play(
     played
 }
 
+/// A track the library holds under a request's name: found there or just made.
+pub(crate) struct Ensured {
+    pub(crate) file: String,
+    pub(crate) source: MusicSource,
+    pub(crate) bytes: u64,
+    pub(crate) length_ms: Option<u64>,
+    pub(crate) compose_ms: Option<u64>,
+}
+
+/// The library's sounds, for choosing a track.
+async fn library_entries(app: &AppState) -> Result<Vec<MediaEntry>, MusicError> {
+    let directory = media_directory(app.playground().files());
+    run_blocking(move || media_entries(&directory), FileError::Stopped)
+        .await
+        .map_err(|error| MusicError::LibraryUnreadable {
+            cause: file_cause(error),
+        })
+}
+
+/// The track of `request`'s name, reused from the library or composed and stored, once the
+/// request's turn for its name has come. The scene is not touched.
+async fn ensure_in_turn(
+    app: &AppState,
+    composer: &dyn Composer,
+    request: &MusicRequest,
+    deadline: Duration,
+) -> Result<Ensured, MusicError> {
+    let entries = library_entries(app).await?;
+    match choose_track(&request.name, &entries) {
+        Track::Library { file, bytes } => {
+            app.record_line(format!(
+                "MUSIC reused name={} file={file} bytes={bytes}",
+                request.name
+            ));
+            Ok(Ensured {
+                file,
+                source: MusicSource::Library,
+                bytes,
+                length_ms: None,
+                compose_ms: None,
+            })
+        }
+        Track::Compose { file } => {
+            let composed = compose_and_store(app, composer, request, &file, deadline).await?;
+            Ok(Ensured {
+                file,
+                source: MusicSource::Composed,
+                bytes: composed.bytes,
+                length_ms: Some(composed.length_ms),
+                compose_ms: Some(composed.compose_ms),
+            })
+        }
+    }
+}
+
 /// [`play`] once the request's turn for its name has come.
 async fn play_in_turn(
     app: &AppState,
@@ -220,31 +275,13 @@ async fn play_in_turn(
     request: MusicRequest,
     deadline: Duration,
 ) -> Result<MusicPlayed, MusicError> {
-    let directory = media_directory(app.playground().files());
-    let entries = run_blocking(move || media_entries(&directory), FileError::Stopped)
-        .await
-        .map_err(|error| MusicError::LibraryUnreadable {
-            cause: file_cause(error),
-        })?;
-    let (file, source, bytes, length_ms, compose_ms) = match choose_track(&request.name, &entries) {
-        Track::Library { file, bytes } => {
-            app.record_line(format!(
-                "MUSIC reused name={} file={file} bytes={bytes}",
-                request.name
-            ));
-            (file, MusicSource::Library, bytes, None, None)
-        }
-        Track::Compose { file } => {
-            let composed = compose_and_store(app, composer, &request, &file, deadline).await?;
-            (
-                file,
-                MusicSource::Composed,
-                composed.bytes,
-                Some(composed.length_ms),
-                Some(composed.compose_ms),
-            )
-        }
-    };
+    let Ensured {
+        file,
+        source,
+        bytes,
+        length_ms,
+        compose_ms,
+    } = ensure_in_turn(app, composer, &request, deadline).await?;
     let change = SceneChange::Music {
         media: file.clone(),
         target: request.target,
@@ -266,20 +303,80 @@ async fn play_in_turn(
     })
 }
 
-struct MusicRoutes {
-    app: Arc<AppState>,
+/// The music engine's one composer and its turns for track names, shared by every route and flow
+/// that finds, makes or plays a track (the tempo director's `prepare` uses the same one).
+#[derive(Clone)]
+pub struct MusicService {
     composer: Arc<dyn Composer>,
     tracks: Arc<TrackLocks>,
+}
+
+impl MusicService {
+    /// The service over ElevenLabs, with the speech key from the environment.
+    pub fn from_environment() -> Self {
+        Self::with_composer(Arc::new(ElevenLabsComposer::from_environment()))
+    }
+
+    pub(crate) fn with_composer(composer: Arc<dyn Composer>) -> Self {
+        Self {
+            composer,
+            tracks: Arc::new(TrackLocks::default()),
+        }
+    }
+
+    /// The track of `request`'s name: the library's when it holds one, else composed and stored.
+    /// Requests for one name take turns, so a track is paid for once. The scene is not touched.
+    pub(crate) async fn ensure(
+        &self,
+        app: &AppState,
+        request: &MusicRequest,
+    ) -> Result<Ensured, MusicError> {
+        request.check()?;
+        let lock = self.tracks.of(&request.name).await;
+        let ensured = {
+            let _turn = lock.lock().await;
+            ensure_in_turn(app, self.composer.as_ref(), request, COMPOSE_DEADLINE).await
+        };
+        self.tracks.release(&request.name, lock).await;
+        ensured
+    }
+}
+
+/// The library file of each of `names` (a sound of that name), or none, in order. Nothing is
+/// composed: this is how a flow learns which tracks it may play without waiting.
+pub(crate) async fn held_files(
+    app: &AppState,
+    names: &[String],
+) -> Result<Vec<Option<String>>, MusicError> {
+    let entries = library_entries(app).await?;
+    Ok(names
+        .iter()
+        .map(|name| match choose_track(name, &entries) {
+            Track::Library { file, .. } => Some(file),
+            Track::Compose { .. } => None,
+        })
+        .collect())
+}
+
+struct MusicRoutes {
+    app: Arc<AppState>,
+    service: MusicService,
 }
 
 async fn scene_music(State(routes): State<Arc<MusicRoutes>>, bytes: Bytes) -> Response {
     let result = match parse_body::<MusicRequest>(&bytes) {
         Ok(request) => {
-            let (app, composer) = (Arc::clone(&routes.app), Arc::clone(&routes.composer));
-            let tracks = Arc::clone(&routes.tracks);
+            let (app, service) = (Arc::clone(&routes.app), routes.service.clone());
             run_owned(
                 async move {
-                    play(&app, composer.as_ref(), &tracks, request, COMPOSE_DEADLINE).await
+                    play(
+                        &app,
+                        service.composer.as_ref(),
+                        &service.tracks,
+                        request,
+                        COMPOSE_DEADLINE,
+                    )
+                    .await
                 },
                 MusicError::Stopped,
             )
@@ -295,18 +392,9 @@ async fn scene_music(State(routes): State<Arc<MusicRoutes>>, bytes: Bytes) -> Re
     reply(result)
 }
 
-/// The music route over `composer`.
-pub(super) fn router_with(app: Arc<AppState>, composer: Arc<dyn Composer>) -> Router {
+/// The music route over `service`.
+pub fn router_over(app: Arc<AppState>, service: MusicService) -> Router {
     Router::new()
         .route(path::SCENE_MUSIC, post(scene_music))
-        .with_state(Arc::new(MusicRoutes {
-            app,
-            composer,
-            tracks: Arc::new(TrackLocks::default()),
-        }))
-}
-
-/// The music route over ElevenLabs, with the speech key from the environment.
-pub fn router(app: Arc<AppState>) -> Router {
-    router_with(app, Arc::new(ElevenLabsComposer::from_environment()))
+        .with_state(Arc::new(MusicRoutes { app, service }))
 }

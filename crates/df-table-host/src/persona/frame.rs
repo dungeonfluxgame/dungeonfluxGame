@@ -31,10 +31,18 @@
 //! each its owner and its id, checked in code against what the owner holds),
 //! most noticeable first, so a room frame attaches those items' reference sheets in that order.
 //!
+//! A refused answer is asked again once with the refusal in the facts (`previous_refusal`), after
+//! one `PERSONA frame_retried reason=<key> detail=<refusal>` line (a picture over its target is
+//! asked again until one fits, `reason=picture_over_target characters=.. target=..`); a second
+//! refusal is one `PERSONA frame_refused reason=<key> detail=<refusal>` line, then the typed error.
+//!
 //! The watch reports when each frame it makes starts and is shown, and when an insert ends, to
-//! `POST /dev/persona/frame/timing`: one `PERSONA frame_timing moment=started|shown|failed|ended
-//! frame=<name> reason=line|schedule|inspection|focus|declared at_ms=<playground clock>
-//! took_ms=..` line,
+//! `POST /dev/persona/frame/timing`: one `PERSONA frame_timing moment=started|shown|failed|dropped|
+//! ended frame=<name> reason=line|schedule|inspection|focus|declared|reveal
+//! at_ms=<playground clock>
+//! took_ms=..` line. Every frame that starts ends with exactly one of `shown`, `failed` and
+//! `dropped` (finished without going up: `why=superseded|overtaken|replaced|abandoned`), and the
+//! plate timer the page reads lists the frames in flight (`PlateTimer::in_flight`),
 //! on the clock the pages' `TIMING` lines use. `took_ms` is the time since the frame before
 //! started (or the watch began) for `started`, the making time for `shown`, and the time the
 //! insert was up for `ended`; a scheduled frame's `started` line also says when it was due
@@ -124,7 +132,10 @@ pub(super) const FRAME_INSTRUCTION: &str = concat!(
     "its material, colour and wear aloud), or null when nobody is. A thing in sight (an item ",
     "with a look and no keeper) is looked at closely by whoever studies it up close and says ",
     "what they see of it, even alone with nobody to show it to; it is not when it is only ",
-    "passed, named or mentioned. When it is given, ",
+    "passed, named or mentioned. attending lists, for a speaker, the item they have just turned ",
+    "their attention to after looking at the picture: a line of that speaker that steps up to ",
+    "it, goes closer to it or describes it up close is a close look at it, so give it as ",
+    "inspected_item. When it is given, ",
     "next_picture is that item alone as a camera close in on it would show it, filling the ",
     "frame: each of its parts, its marks and its finish, every detail ",
     "the lines, its tags or look and its keeper's account in keepers give, with hands or what it ",
@@ -528,11 +539,89 @@ pub struct DeclaredTiming {
     pub superseded: u32,
     /// From the plate being made to its going up: the wait for the screen.
     pub queue_wait_ms: u64,
-    /// How long making it took (generated, scanned and named).
+    /// How long making the attempt that was shown took (generated, scanned and named); for a plate
+    /// that was refused, the last attempt.
     pub made_ms: u64,
     /// `edit` of the picture on screen, or `fresh` (painted anew), and why (`BasePlan`).
     pub base: String,
     pub reason: String,
+    /// Which attempt (1 or 2) is the plate shown, or the last made when it was refused: a plate
+    /// that showed more people than the cast is made once more, painted anew.
+    pub attempt: u8,
+    /// How long the first attempt took, when a second was made.
+    #[serde(default)]
+    pub first_made_ms: Option<u64>,
+    /// Set when every attempt showed more people than the cast and nothing was shown
+    /// (`extra_figures`): how many the last showed, and how many the cast has.
+    #[serde(default)]
+    pub rejected: Option<DeclaredRejected>,
+}
+
+/// Why a declared plate was not shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeclaredRejected {
+    pub people: u32,
+    pub cast: u32,
+}
+
+/// Why a picture could not be shown as it is (`@show`, `persona show-picture`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RevealRefusal {
+    /// The name is not a picture file name.
+    InvalidName,
+    /// The media library holds no picture of that name.
+    UnknownPicture,
+}
+
+impl RevealRefusal {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::InvalidName => "invalid_name",
+            Self::UnknownPicture => "unknown_picture",
+        }
+    }
+}
+
+/// What a revealed picture adds to its timing: which picture, how long it is held, and why it was
+/// refused when it was (the `failed` moment).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RevealedTiming {
+    pub picture: String,
+    pub hold_ms: u64,
+    #[serde(default)]
+    pub refused: Option<RevealRefusal>,
+    /// How many revealed pictures were up or queued ahead of it when it was asked for: it waits
+    /// for each to hold its whole time first.
+    #[serde(default)]
+    pub behind: u32,
+}
+
+/// Why a frame that was started finished without going up (the `dropped` moment).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DroppedWhy {
+    /// A declaration made after it started took its place: the talk it shows is older.
+    Superseded,
+    /// A newer plate took its slot.
+    Overtaken,
+    /// A newer declaration replaced it while it was being made.
+    Replaced,
+    /// The talk moved on, or its task stopped, before it was made.
+    Abandoned,
+}
+
+impl DroppedWhy {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Superseded => "superseded",
+            Self::Overtaken => "overtaken",
+            Self::Replaced => "replaced",
+            Self::Abandoned => "abandoned",
+        }
+    }
 }
 
 /// The body of `POST /dev/persona/frame/timing`: a moment of the frame `frame` (its media name
@@ -547,6 +636,12 @@ pub struct FrameTimingRequest {
     /// For the `shown` moment of a declared plate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared: Option<DeclaredTiming>,
+    /// For the moments of a revealed picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revealed: Option<RevealedTiming>,
+    /// For the `dropped` moment: why the frame finished without going up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dropped: Option<DroppedWhy>,
 }
 
 /// The body of `POST /dev/persona/frame/schedule`: whether the watch runs, its schedule's
@@ -678,6 +773,30 @@ pub enum FrameError {
     },
 }
 
+impl FrameError {
+    /// The error's key for the audit line: its serde tag.
+    fn key(&self) -> &'static str {
+        match self {
+            Self::EmptyPicture => "empty_picture",
+            Self::NoLines => "no_lines",
+            Self::InvalidGate { .. } => "invalid_gate",
+            Self::SettingsUnreadable { .. } => "settings_unreadable",
+            Self::InvalidSettings { .. } => "invalid_settings",
+            Self::UnknownCharacter { .. } => "unknown_character",
+            Self::UnknownKind { .. } => "unknown_kind",
+            Self::UnknownShot { .. } => "unknown_shot",
+            Self::UnknownItem { .. } => "unknown_item",
+            Self::ItemNotHeld { .. } => "item_not_held",
+            Self::MalformedAnswer { .. } => "malformed_answer",
+            Self::PictureOverTarget { .. } => "picture_over_target",
+            Self::EmptyFocus => "empty_focus",
+            Self::NoInspectShot => "no_inspect_shot",
+            Self::EmptyDeclare => "empty_declare",
+            Self::InvalidFrameName { .. } => "invalid_frame_name",
+        }
+    }
+}
+
 impl std::fmt::Display for FrameError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -738,6 +857,7 @@ fn malformed(reason: impl Into<String>) -> FrameError {
 pub(super) fn frame_schema(
     speakers: &[Speaker],
     items: &[PlaceItem],
+    inventories: &SpeakerInventories,
     config: &FrameConfig,
 ) -> Value {
     let mut ids: Vec<Value> = speakers
@@ -751,6 +871,27 @@ pub(super) fn frame_schema(
         .collect();
     item_ids.push(Value::Null);
     let shot_ids: Vec<&str> = config.judged_shots().map(|shot| shot.id.as_str()).collect();
+    // What is shown on or beside an owner is what the speakers hold: with something held, the ids
+    // are closed to it (a thing in sight is inspected, never shown as held); with nothing held
+    // there is no id to close them to, and code refuses any entry (`items_in_view`).
+    let mut held_owner = json!({"type": "string"});
+    let mut held_item = json!({"type": "string"});
+    if !inventories.is_empty() {
+        let owners: Vec<&str> = inventories
+            .iter()
+            .map(|(owner, _)| owner.as_str())
+            .collect();
+        let mut held_ids: Vec<&str> = Vec::new();
+        for (_, held) in inventories {
+            for item in held {
+                if !held_ids.contains(&item.id.as_str()) {
+                    held_ids.push(item.id.as_str());
+                }
+            }
+        }
+        held_owner["enum"] = json!(owners);
+        held_item["enum"] = json!(held_ids);
+    }
     json!({
         "type": "object",
         "additionalProperties": false,
@@ -784,8 +925,8 @@ pub(super) fn frame_schema(
                     "additionalProperties": false,
                     "required": ["owner", "item"],
                     "properties": {
-                        "owner": {"type": "string"},
-                        "item": {"type": "string"}
+                        "owner": held_owner,
+                        "item": held_item
                     }
                 }
             }
@@ -1169,11 +1310,14 @@ async fn judge(
     let inventories = speaker_inventories(&routes.app, &request.speakers);
     let mut facts = frame_facts(request, &items, &keepers, &config);
     facts["inventory"] = inventory_facts(&inventories);
-    let schema = frame_schema(&request.speakers, &items, &config);
+    facts["attending"] = super::perceive::attending(&routes.app, &request.speakers, &items).await;
+    let schema = frame_schema(&request.speakers, &items, &inventories, &config);
     let started = Instant::now();
     // A picture over its target is asked again with every reason so far until one fits, never cut
     // short: a longer one is refused by the image backend (Forge takes 4000 characters in all).
+    // Any other refused answer is asked again once with its reason, as the other judges do.
     let mut refusals: Vec<String> = Vec::new();
+    let mut asked_again = false;
     let parsed = loop {
         let question = text_request(
             route.profile(),
@@ -1203,7 +1347,24 @@ async fn judge(
                 refusals.push(cause.to_string());
                 facts["previous_refusal"] = json!(refusals.join("; "));
             }
-            asked => break asked?,
+            Err(FrameRouteError::AnswerRefused { cause, .. }) if !asked_again => {
+                routes.app.record_line(format!(
+                    "PERSONA frame_retried reason={} detail={cause}",
+                    cause.key()
+                ));
+                asked_again = true;
+                refusals.push(cause.to_string());
+                facts["previous_refusal"] = json!(refusals.join("; "));
+            }
+            asked => {
+                if let Err(FrameRouteError::AnswerRefused { cause, .. }) = &asked {
+                    routes.app.record_line(format!(
+                        "PERSONA frame_refused reason={} detail={cause}",
+                        cause.key()
+                    ));
+                }
+                break asked?;
+            }
         }
     };
     let (parsed, items_in_view) = parsed;
@@ -1274,10 +1435,22 @@ async fn timing(State(routes): State<Arc<FrameRoutes>>, bytes: Bytes) -> Respons
                             .map_or_else(|| "-".to_owned(), |due| due.to_string())
                     );
                 }
+                // Every frame that starts is in flight until its one closing moment, so frames made
+                // together count together and one's end never clears another's.
                 match request.moment {
-                    FrameMoment::Started => plate.making = true,
-                    FrameMoment::Shown | FrameMoment::Failed => plate.making = false,
+                    FrameMoment::Started => {
+                        if !plate.in_flight.contains(&request.frame) {
+                            plate.in_flight.push(request.frame.clone());
+                        }
+                    }
+                    FrameMoment::Shown | FrameMoment::Failed | FrameMoment::Dropped => {
+                        plate.in_flight.retain(|frame| *frame != request.frame);
+                    }
                     FrameMoment::Ended => {}
+                }
+                plate.making = !plate.in_flight.is_empty();
+                if let (FrameMoment::Dropped, Some(why)) = (request.moment, request.dropped) {
+                    due.push_str(&format!(" why={}", why.key()));
                 }
                 // How long the room plate before this one was up, against the schedule's interval.
                 if request.moment == FrameMoment::Shown && !request.reason.is_insert() {
@@ -1305,17 +1478,56 @@ async fn timing(State(routes): State<Arc<FrameRoutes>>, bytes: Bytes) -> Respons
                 request.took_ms
             ));
             if let Some(declared) = &request.declared {
+                // A refused plate says how many people it showed against the cast, and that it was
+                // never shown; a shown one when it went up.
+                let outcome = match &declared.rejected {
+                    Some(rejected) => format!(
+                        "rejected=extra_figures people={} cast={} failed_at_ms={at_ms}",
+                        rejected.people, rejected.cast
+                    ),
+                    None => format!("shown_at_ms={at_ms}"),
+                };
                 routes.app.record_line(format!(
                     "PERSONA declared who={} plate={} superseded={} queue_wait_ms={} \
-                     made_ms={} base={} reason={} shown_at_ms={at_ms}",
+                     made_ms={} first_made_ms={} attempt={} base={} reason={} {outcome}",
                     declared.who,
                     request.frame,
                     declared.superseded,
                     declared.queue_wait_ms,
                     declared.made_ms,
+                    declared
+                        .first_made_ms
+                        .map_or_else(|| "-".to_owned(), |ms| ms.to_string()),
+                    declared.attempt,
                     declared.base,
                     declared.reason
                 ));
+            }
+            if let Some(revealed) = &request.revealed {
+                let picture = if is_plain_file_name(&revealed.picture) {
+                    revealed.picture.as_str()
+                } else {
+                    "-"
+                };
+                if request.moment == FrameMoment::Started && revealed.behind > 0 {
+                    routes.app.record_line(format!(
+                        "PERSONA reveal_queued picture={picture} behind={}",
+                        revealed.behind
+                    ));
+                }
+                match revealed.refused {
+                    Some(refusal) => routes.app.record_line(format!(
+                        "PERSONA refused verb=reveal picture={picture} error={}",
+                        refusal.key()
+                    )),
+                    None if request.moment == FrameMoment::Shown => {
+                        routes.app.record_line(format!(
+                            "PERSONA revealed picture={picture} hold_ms={}",
+                            revealed.hold_ms
+                        ));
+                    }
+                    None => {}
+                }
             }
             routes.app.announce_change();
             Ok(FrameTimed { at_ms })
@@ -1350,6 +1562,7 @@ async fn schedule(State(routes): State<Arc<FrameRoutes>>, bytes: Bytes) -> Respo
                 plate.missed = request.missed;
                 if !request.running {
                     plate.making = false;
+                    plate.in_flight.clear();
                 }
             });
             if changed {

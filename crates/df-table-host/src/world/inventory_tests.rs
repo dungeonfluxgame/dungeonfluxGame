@@ -11,9 +11,9 @@ use super::inventory::request::{
 };
 use super::inventory::routes::path;
 use super::inventory::{
-    ChangeKind, Inventory, InventoryChange, InventoryDelta, InventoryItem, InventoryReason,
-    ItemUse, OwnerKind, SCHEMA, apply_changes, change_of, inventory_of, sheet_name,
-    take_judged_changes, transfer,
+    ChangeKind, GainContext, GainSource, Inventory, InventoryChange, InventoryDelta, InventoryItem,
+    InventoryReason, ItemCount, ItemUse, Judged, OwnerKind, SCHEMA, apply_changes, change_of,
+    entries_token, inventory_of, judge_deltas, sheet_name, take_judged_changes, transfer,
 };
 use crate::command::{CommandError, split_words};
 use crate::dev_client::{get_json, post_json};
@@ -291,17 +291,24 @@ fn delta(item: &str, change: i64, reason: InventoryReason) -> InventoryDelta {
     InventoryDelta {
         item: item.to_owned(),
         change,
-        reason,
+        reason: Some(reason),
         why: "the line shows it".to_owned(),
         name: None,
         look: None,
         usage: None,
+        source: None,
+        paid_with: Vec::new(),
+        made_from: Vec::new(),
+        place_thing: None,
+        giver: None,
+        what_happened: Some("it happened in the line".to_owned()),
+        to: None,
     }
 }
 
 #[test]
 fn a_judged_delta_is_a_gain_a_loss_a_removal_or_nothing_by_its_reason() {
-    use InventoryReason::{Broken, Gained, GivenAway, Lost, UsedUp, WornOut};
+    use InventoryReason::{Broken, Gained, GivenAway, Lost, Sold, UsedUp, WornOut};
     let change = |delta: &InventoryDelta| change_of(delta).unwrap().unwrap();
     assert!(matches!(
         change(&delta("rags", 3, Gained)),
@@ -311,7 +318,7 @@ fn a_judged_delta_is_a_gain_a_loss_a_removal_or_nothing_by_its_reason() {
         change(&delta("ochre", -2, UsedUp)),
         InventoryChange::Consume { count: 2, .. }
     ));
-    for reason in [WornOut, Broken, Lost, GivenAway] {
+    for reason in [Sold, WornOut, Broken, Lost, GivenAway] {
         assert!(
             matches!(
                 change(&delta("brush", -1, reason)),
@@ -931,7 +938,7 @@ async fn any_speaking_character_has_its_own_judged_inventory() {
     let host = host().await;
     seed(&host, "danny", "character", &[("ochre", 3)]).await;
     seed(&host, "baker", "shop", &[("loaf", 4)]).await;
-    let taken = take_judged_changes(&host.state, "baker", &[delta("loaf", -1, UsedUp)]);
+    let taken = take_judged_changes(&host.state, "baker", &[delta("loaf", -1, UsedUp)], &[]);
     assert_eq!(
         (taken[0].owner.as_str(), taken[0].before, taken[0].after),
         ("baker", 4, 3)
@@ -941,14 +948,14 @@ async fn any_speaking_character_has_its_own_judged_inventory() {
         3,
         "another owner's list is not touched"
     );
-    // Each delta is judged on its own: a refused one is one line and changes nothing, and does not
-    // hold back the others of the line.
+    // Each delta is judged on its own: a refused one is one line, and a line with a refused entry
+    // changes nothing at all.
     for refused in [
         delta("ochre", -4, UsedUp),
         delta("loaf", 1, Gained),
         delta("ochre", -1, Gained),
     ] {
-        assert!(take_judged_changes(&host.state, "danny", &[refused]).is_empty());
+        assert!(take_judged_changes(&host.state, "danny", &[refused], &[]).is_empty());
     }
     assert_eq!(inventory_of(&host.state, "danny")[0].count, 3);
     let both = take_judged_changes(
@@ -959,9 +966,18 @@ async fn any_speaking_character_has_its_own_judged_inventory() {
             delta("ochre", -1, UsedUp),
             delta("ochre", -1, UsedUp),
         ],
+        &[],
     );
-    assert_eq!(both.len(), 1, "the one that stands is taken");
-    assert_eq!(inventory_of(&host.state, "danny")[0].count, 2);
+    assert!(both.is_empty(), "the unknown item refuses the whole line");
+    assert_eq!(inventory_of(&host.state, "danny")[0].count, 3);
+    let twice = take_judged_changes(
+        &host.state,
+        "danny",
+        &[delta("ochre", -1, UsedUp), delta("ochre", -1, UsedUp)],
+        &[],
+    );
+    assert_eq!(twice.len(), 1, "the two entries of one item are one change");
+    assert_eq!(inventory_of(&host.state, "danny")[0].count, 1);
     let refused = lines(&host)
         .into_iter()
         .filter(|line| line.starts_with("WORLD refused verb=inventory_judged"))
@@ -973,12 +989,13 @@ async fn any_speaking_character_has_its_own_judged_inventory() {
             "WORLD refused verb=inventory_judged error=missing_words",
             "WORLD refused verb=inventory_judged error=invalid_reason",
             "WORLD refused verb=inventory_judged error=unknown_item",
-            "WORLD refused verb=inventory_judged error=duplicate_item",
         ]
     );
     // A character with no inventory, or an empty judgement, is nothing to do.
-    assert!(take_judged_changes(&host.state, "nobody", &[delta("ochre", -1, UsedUp)]).is_empty());
-    assert!(take_judged_changes(&host.state, "danny", &[]).is_empty());
+    assert!(
+        take_judged_changes(&host.state, "nobody", &[delta("ochre", -1, UsedUp)], &[]).is_empty()
+    );
+    assert!(take_judged_changes(&host.state, "danny", &[], &[]).is_empty());
     assert!(inventory_of(&host.state, "nobody").is_empty());
 }
 
@@ -1009,18 +1026,24 @@ async fn a_judged_line_cannot_use_up_a_kept_item_but_may_wear_it_out_and_bring_i
             delta("brushes", -1, UsedUp),
             delta("ochre", -1, UsedUp),
         ],
+        &[],
     );
-    assert_eq!(taken.len(), 1);
+    assert!(
+        taken.is_empty(),
+        "a kept item used up refuses the whole line"
+    );
     assert_eq!(
         held(&host, "danny").await,
         [
             ("easel".to_owned(), 1),
             ("brushes".to_owned(), 5),
-            ("ochre".to_owned(), 2)
+            ("ochre".to_owned(), 3)
         ]
     );
+    let ochre_only = take_judged_changes(&host.state, "danny", &[delta("ochre", -1, UsedUp)], &[]);
+    assert_eq!(ochre_only.len(), 1);
     // A brush that wears out, judged so, drops by one.
-    let worn = take_judged_changes(&host.state, "danny", &[delta("brushes", -1, WornOut)]);
+    let worn = take_judged_changes(&host.state, "danny", &[delta("brushes", -1, WornOut)], &[]);
     assert_eq!((worn[0].before, worn[0].after), (5, 4));
 
     // Buying something new: the judge gives it an id, a name, a look and its use.
@@ -1028,9 +1051,12 @@ async fn a_judged_line_cannot_use_up_a_kept_item_but_may_wear_it_out_and_bring_i
         name: Some("Blue lapis".to_owned()),
         look: Some("deep blue stone, ground fine".to_owned()),
         usage: Some(ItemUse::Consumed),
+        source: Some(GainSource::Given),
+        giver: Some("baker".to_owned()),
         ..delta(id, count, Gained)
     };
-    let bought = take_judged_changes(&host.state, "danny", &[new("lapis", 2)]);
+    let baker = ["baker".to_owned()];
+    let bought = take_judged_changes(&host.state, "danny", &[new("lapis", 2)], &baker);
     assert_eq!(
         (bought[0].kind, bought[0].before, bought[0].after),
         (ChangeKind::Add, 0, 2)
@@ -1043,7 +1069,7 @@ async fn a_judged_line_cannot_use_up_a_kept_item_but_may_wear_it_out_and_bring_i
     );
     // Without its words, or with an id that is not one, it is refused.
     for refused in [delta("saffron", 1, Gained), new("Saffron Gold", 1)] {
-        assert!(take_judged_changes(&host.state, "danny", &[refused]).is_empty());
+        assert!(take_judged_changes(&host.state, "danny", &[refused], &baker).is_empty());
     }
     assert!(stored.item("saffron").is_none());
     let errors: Vec<_> = lines(&host)
@@ -1053,14 +1079,14 @@ async fn a_judged_line_cannot_use_up_a_kept_item_but_may_wear_it_out_and_bring_i
     assert_eq!(
         errors,
         [
-            "WORLD refused verb=inventory_judged error=kept_item",
-            "WORLD refused verb=inventory_judged error=kept_item",
+            "WORLD refused verb=inventory_judged error=unreasoned_loss",
+            "WORLD refused verb=inventory_judged error=unreasoned_loss",
             "WORLD refused verb=inventory_judged error=missing_words",
             "WORLD refused verb=inventory_judged error=invalid_item",
         ]
     );
     // No count of a new item is too large: only zero and overflow are refused.
-    let sack = take_judged_changes(&host.state, "danny", &[new("pigment_sack", 50_000)]);
+    let sack = take_judged_changes(&host.state, "danny", &[new("pigment_sack", 50_000)], &baker);
     assert_eq!(sack[0].after, 50_000);
     // The same refusal on the explicit route, and a kept item added by the route keeps its use.
     assert_eq!(
@@ -1259,7 +1285,7 @@ async fn many_owners_behave_as_one_does() {
             let state = std::sync::Arc::clone(&host.state);
             let spend = spend.clone();
             std::thread::spawn(move || {
-                take_judged_changes(&state, &format!("npc-{number:02}"), &[spend]).len()
+                take_judged_changes(&state, &format!("npc-{number:02}"), &[spend], &[]).len()
             })
         })
         .collect();
@@ -1395,6 +1421,12 @@ fn every_error_has_its_own_key_a_sentence_and_a_status() {
         InventoryError::InvalidReason {
             item: "y".to_owned(),
         },
+        InventoryError::UnsourcedGain {
+            item: "y".to_owned(),
+        },
+        InventoryError::UnreasonedLoss {
+            item: "y".to_owned(),
+        },
         InventoryError::KeptItem {
             owner: "x".to_owned(),
             item: "y".to_owned(),
@@ -1437,4 +1469,1101 @@ fn every_error_has_its_own_key_a_sentence_and_a_status() {
         );
         let _ = error.status();
     }
+}
+
+fn gain(item: &str, count: i64, source: Option<GainSource>) -> InventoryDelta {
+    InventoryDelta {
+        name: Some(item.to_owned()),
+        look: Some(format!("{item} up close")),
+        usage: Some(ItemUse::Consumed),
+        source,
+        ..delta(item, count, InventoryReason::Gained)
+    }
+}
+
+fn counted(items: &[(&str, u64)]) -> Vec<ItemCount> {
+    items
+        .iter()
+        .map(|(item, count)| ItemCount {
+            item: (*item).to_owned(),
+            count: *count,
+        })
+        .collect()
+}
+
+/// A gain by exchange, paying with `paid`.
+fn bought(item: &str, count: i64, paid: &[(&str, u64)]) -> InventoryDelta {
+    InventoryDelta {
+        paid_with: counted(paid),
+        ..gain(item, count, Some(GainSource::Exchange))
+    }
+}
+
+fn spent(item: &str, count: i64) -> InventoryDelta {
+    delta(item, -count, InventoryReason::UsedUp)
+}
+
+fn purse() -> Inventory {
+    inventory(
+        "danny",
+        OwnerKind::Character,
+        &[
+            ("coins", 14),
+            ("ochre", 3),
+            ("boards", 4),
+            ("painting", 1),
+            ("charcoal", 6),
+        ],
+    )
+    .with_kept("painting")
+}
+
+fn judged(deltas: &[InventoryDelta], things: &[&str], present: &[&str]) -> Judged {
+    let things: Vec<String> = things.iter().map(|thing| (*thing).to_owned()).collect();
+    let present: Vec<String> = present.iter().map(|who| (*who).to_owned()).collect();
+    judge_deltas(
+        &purse(),
+        deltas,
+        &GainContext {
+            things: &things,
+            present: &present,
+        },
+    )
+}
+
+fn unsourced(item: &str) -> InventoryError {
+    InventoryError::UnsourcedGain {
+        item: item.to_owned(),
+    }
+}
+
+#[test]
+fn a_gain_with_no_source_is_refused_goods_do_not_appear_from_nowhere() {
+    // Held or new, with words or without, a gain that names no source is refused.
+    let out = judged(&[gain("ochre", 2, None), gain("boards", 1, None)], &[], &[]);
+    assert!(out.changes.is_empty());
+    assert_eq!(out.refused, [unsourced("ochre"), unsourced("boards")]);
+    // The live case: goods taken at a road, one coin down, nothing offered gone.
+    let road = judged(
+        &[
+            spent("coins", 1),
+            bought("boards", 1, &[("painting", 1)]),
+            bought("ochre", 1, &[("painting", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(
+        road.changes
+            .iter()
+            .all(|change| matches!(change, InventoryChange::Consume { .. })),
+        "no gain stands without the painting going down: {:?}",
+        road.changes
+    );
+    assert_eq!(road.refused, [unsourced("boards"), unsourced("ochre")]);
+}
+
+#[test]
+fn an_exchange_with_the_payment_in_the_same_batch_applies_both_sides() {
+    let out = judged(
+        &[spent("coins", 2), bought("ochre", 2, &[("coins", 2)])],
+        &[],
+        &[],
+    );
+    assert!(out.refused.is_empty());
+    assert_eq!(out.changes.len(), 2);
+    let (after, applied) = apply_changes(&purse(), &out.changes).unwrap();
+    assert_eq!(counts(&after)[..2], [("coins", 12), ("ochre", 5)]);
+    assert_eq!(applied.len(), 2);
+    // Selling a thing is that thing going down for the coin.
+    let sold = judged(
+        &[
+            delta("painting", -1, InventoryReason::Sold),
+            bought("coins", 3, &[("painting", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(sold.refused.is_empty());
+    assert_eq!(sold.changes.len(), 2);
+    let (after, _) = apply_changes(&purse(), &sold.changes).unwrap();
+    assert_eq!(
+        after.item("painting").map(|painting| painting.count),
+        Some(0)
+    );
+    assert_eq!(after.item("coins").map(|coins| coins.count), Some(17));
+}
+
+#[test]
+fn an_exchange_whose_payment_is_missing_or_short_is_refused_with_its_payment() {
+    // No payment in the batch at all.
+    let none = judged(&[bought("ochre", 2, &[("coins", 2)])], &[], &[]);
+    assert!(none.changes.is_empty());
+    assert_eq!(none.refused, [unsourced("ochre")]);
+    // A payment short of what the gain names: the gain is refused, and the coin that was to pay for
+    // it does not go down either, so neither side applies.
+    let short = judged(
+        &[spent("coins", 1), bought("ochre", 2, &[("coins", 2)])],
+        &[],
+        &[],
+    );
+    assert!(short.changes.is_empty(), "{:?}", short.changes);
+    assert_eq!(short.refused, [unsourced("ochre")]);
+    // A payment that cannot be made (more coins than held) refuses the payment and the gain.
+    let broke = judged(
+        &[spent("coins", 99), bought("ochre", 2, &[("coins", 99)])],
+        &[],
+        &[],
+    );
+    assert!(broke.changes.is_empty());
+    assert_eq!(
+        broke
+            .refused
+            .iter()
+            .map(InventoryError::key)
+            .collect::<Vec<_>>(),
+        ["insufficient", "unsourced_gain"]
+    );
+    // An exchange that names nothing paid, or a count of zero, has no source.
+    let nothing = judged(&[bought("ochre", 1, &[])], &[], &[]);
+    let zero = judged(
+        &[spent("coins", 1), bought("ochre", 1, &[("coins", 0)])],
+        &[],
+        &[],
+    );
+    assert_eq!(nothing.refused, [unsourced("ochre")]);
+    assert_eq!(zero.refused, [unsourced("ochre")]);
+    // A coin pays for one gain only: the second claim on the same coin is refused.
+    let twice = judged(
+        &[
+            spent("coins", 1),
+            bought("ochre", 1, &[("coins", 1)]),
+            bought("boards", 1, &[("coins", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(
+        twice.changes.is_empty(),
+        "a deal applies whole or not at all"
+    );
+    assert_eq!(twice.refused, [unsourced("boards")]);
+}
+
+#[test]
+fn a_found_gain_needs_a_thing_offered_here() {
+    let found = |thing: Option<&str>| InventoryDelta {
+        place_thing: thing.map(str::to_owned),
+        ..gain("pebble", 1, Some(GainSource::Found))
+    };
+    let standing = judged(&[found(Some("well"))], &["well", "gate"], &[]);
+    assert!(standing.refused.is_empty());
+    for (thing, offered) in [
+        (Some("cart"), vec!["well"]),
+        (Some("well"), vec![]),
+        (None, vec!["well"]),
+    ] {
+        let out = judged(&[found(thing)], &offered, &[]);
+        assert!(out.changes.is_empty());
+        assert_eq!(out.refused, [unsourced("pebble")]);
+    }
+}
+
+#[test]
+fn a_given_gain_needs_another_character_present() {
+    let given = |from: Option<&str>| InventoryDelta {
+        giver: from.map(str::to_owned),
+        ..gain("loaf", 1, Some(GainSource::Given))
+    };
+    let standing = judged(&[given(Some("baker"))], &[], &["baker", "danny"]);
+    assert!(standing.refused.is_empty());
+    for from in [Some("nobody"), Some("danny"), None] {
+        let out = judged(&[given(from)], &[], &["baker", "danny"]);
+        assert!(out.changes.is_empty());
+        assert_eq!(out.refused, [unsourced("loaf")]);
+    }
+}
+
+#[test]
+fn a_made_gain_needs_its_inputs_used_up_in_the_same_batch() {
+    let made = |inputs: &[(&str, u64)]| InventoryDelta {
+        made_from: counted(inputs),
+        ..gain("study", 1, Some(GainSource::Made))
+    };
+    let ok = judged(
+        &[
+            spent("boards", 1),
+            spent("ochre", 1),
+            made(&[("boards", 1), ("ochre", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(ok.refused.is_empty());
+    let (after, _) = apply_changes(&purse(), &ok.changes).unwrap();
+    assert_eq!(after.item("study").map(|study| study.count), Some(1));
+    assert_eq!(after.item("boards").map(|boards| boards.count), Some(3));
+    // An input that is not used up refuses the gain and the input that was.
+    let missing = judged(
+        &[spent("boards", 1), made(&[("boards", 1), ("ochre", 1)])],
+        &[],
+        &[],
+    );
+    assert!(missing.changes.is_empty());
+    assert_eq!(missing.refused, [unsourced("study")]);
+}
+
+#[tokio::test]
+async fn a_judged_exchange_is_both_sides_or_neither_through_the_host() {
+    use crate::world::request::{PlaceSet, WorldReply};
+    use crate::world::routes::path as world_path;
+    let host = host().await;
+    seed(&host, "danny", "character", &[("coins", 14), ("ochre", 3)]).await;
+    // Both sides.
+    let paid = take_judged_changes(
+        &host.state,
+        "danny",
+        &[spent("coins", 2), bought("ochre", 2, &[("coins", 2)])],
+        &[],
+    );
+    assert_eq!(paid.len(), 2);
+    assert_eq!(
+        held(&host, "danny").await,
+        [("coins".to_owned(), 12), ("ochre".to_owned(), 5)]
+    );
+    // Neither: the gain has no payment and the coin line is tied to it.
+    let none = take_judged_changes(
+        &host.state,
+        "danny",
+        &[spent("coins", 1), bought("ochre", 2, &[("coins", 2)])],
+        &[],
+    );
+    assert!(none.is_empty());
+    assert_eq!(
+        held(&host, "danny").await,
+        [("coins".to_owned(), 12), ("ochre".to_owned(), 5)]
+    );
+    // A found gain is checked against the things of the active place.
+    let find = |thing: &str| InventoryDelta {
+        place_thing: Some(thing.to_owned()),
+        ..gain("pebble", 1, Some(GainSource::Found))
+    };
+    assert!(take_judged_changes(&host.state, "danny", &[find("well")], &[]).is_empty());
+    let _: WorldReply<PlaceSet> = post_json(
+        host.port,
+        world_path::WORLD_ARRIVE,
+        &json!({"place": {"id": "roam-01", "name": "a lane",
+            "things": [{"id": "well", "name": "the old well", "look": "mossy stones"}]}}),
+    )
+    .await
+    .unwrap();
+    assert!(take_judged_changes(&host.state, "danny", &[find("cart")], &[]).is_empty());
+    assert_eq!(
+        take_judged_changes(&host.state, "danny", &[find("well")], &[]).len(),
+        1
+    );
+    let refused: Vec<_> = lines(&host)
+        .into_iter()
+        .filter(|line| line.starts_with("WORLD refused verb=inventory_judged"))
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            "WORLD refused verb=inventory_judged error=unsourced_gain",
+            "WORLD refused verb=inventory_judged error=unsourced_gain",
+            "WORLD refused verb=inventory_judged error=unsourced_gain",
+        ]
+    );
+}
+
+/// A trait for the tests' one-line way to say an item of an inventory is kept.
+trait WithKept {
+    fn with_kept(self, item: &str) -> Self;
+}
+
+impl WithKept for Inventory {
+    fn with_kept(mut self, item: &str) -> Self {
+        if let Some(held) = self.items.iter_mut().find(|held| held.id == item) {
+            held.usage = ItemUse::Kept;
+        }
+        self
+    }
+}
+
+fn losing(item: &str, reason: Option<InventoryReason>) -> InventoryDelta {
+    InventoryDelta {
+        reason,
+        what_happened: None,
+        ..delta(item, -1, InventoryReason::Lost)
+    }
+}
+
+fn unreasoned(item: &str) -> InventoryError {
+    InventoryError::UnreasonedLoss {
+        item: item.to_owned(),
+    }
+}
+
+#[test]
+fn a_kept_item_that_vanishes_with_no_reason_is_refused() {
+    use InventoryReason::{Broken, GivenAway, Lost, Sold, UsedUp, WornOut};
+    // No reason, a reason that does not fit a kept item, or a reason without what it needs.
+    for vanishing in [
+        losing("painting", None),
+        losing("painting", Some(UsedUp)),
+        losing("painting", Some(Lost)),
+        InventoryDelta {
+            what_happened: Some("   ".to_owned()),
+            ..losing("painting", Some(Broken))
+        },
+        losing("painting", Some(WornOut)),
+        losing("painting", Some(GivenAway)),
+        InventoryDelta {
+            to: Some("stranger".to_owned()),
+            ..losing("painting", Some(GivenAway))
+        },
+        InventoryDelta {
+            to: Some("danny".to_owned()),
+            ..losing("painting", Some(GivenAway))
+        },
+        losing("painting", Some(Sold)),
+    ] {
+        let out = judged(std::slice::from_ref(&vanishing), &[], &["baker", "danny"]);
+        assert!(out.changes.is_empty(), "{vanishing:?}");
+        assert_eq!(out.refused, [unreasoned("painting")], "{vanishing:?}");
+    }
+    // A consumed item still needs a reason: used up, or sold with its payment.
+    let out = judged(&[losing("ochre", None)], &[], &[]);
+    assert_eq!(out.refused, [unreasoned("ochre")]);
+}
+
+#[test]
+fn a_loss_with_a_reason_that_fits_applies() {
+    use InventoryReason::{Broken, GivenAway, Lost, UsedUp, WornOut};
+    let said = |what: &str| Some(what.to_owned());
+    for (loss, item) in [
+        (
+            InventoryDelta {
+                what_happened: said("it fell in the river"),
+                ..losing("painting", Some(Lost))
+            },
+            "painting",
+        ),
+        (
+            InventoryDelta {
+                what_happened: said("the board cracked in the cold"),
+                ..losing("boards", Some(Broken))
+            },
+            "boards",
+        ),
+        (
+            InventoryDelta {
+                what_happened: said("worn bald with use"),
+                ..losing("painting", Some(WornOut))
+            },
+            "painting",
+        ),
+        (
+            InventoryDelta {
+                to: said("baker"),
+                ..losing("painting", Some(GivenAway))
+            },
+            "painting",
+        ),
+        (losing("ochre", Some(UsedUp)), "ochre"),
+    ] {
+        let out = judged(std::slice::from_ref(&loss), &[], &["baker", "danny"]);
+        assert!(out.refused.is_empty(), "{loss:?} {:?}", out.refused);
+        assert_eq!(out.changes.len(), 1);
+        let (after, applied) = apply_changes(&purse(), &out.changes).unwrap();
+        assert_eq!(applied[0].before - applied[0].after, 1);
+        assert_eq!(
+            after.item(item).map(|held| held.count),
+            purse().item(item).map(|held| held.count - 1)
+        );
+    }
+}
+
+#[test]
+fn a_sale_goes_down_only_with_its_payment_in_the_same_batch() {
+    use InventoryReason::Sold;
+    // The sale and its payment apply together.
+    let both = judged(
+        &[
+            losing("painting", Some(Sold)),
+            bought("coins", 3, &[("painting", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(both.refused.is_empty());
+    assert_eq!(both.changes.len(), 2);
+    let (after, _) = apply_changes(&purse(), &both.changes).unwrap();
+    assert_eq!(after.item("painting").map(|held| held.count), Some(0));
+    assert_eq!(after.item("coins").map(|held| held.count), Some(17));
+    // A payment that names another item, or fewer than are sold, does not pay for the sale, and the
+    // gain that leaned on the sale goes with it: neither side applies.
+    for payment in [
+        bought("coins", 3, &[("ochre", 1)]),
+        bought("coins", 3, &[("painting", 0)]),
+    ] {
+        let out = judged(&[losing("painting", Some(Sold)), payment], &[], &[]);
+        assert!(out.changes.is_empty(), "{:?}", out.changes);
+        assert_eq!(out.refused.len(), 2);
+    }
+    let two = InventoryDelta {
+        change: -2,
+        ..losing("boards", Some(Sold))
+    };
+    let short = judged(&[two, bought("coins", 3, &[("boards", 1)])], &[], &[]);
+    assert!(short.changes.is_empty());
+    // A sale whose payment is refused leaves the item where it was.
+    let unpaid = judged(
+        &[
+            losing("painting", Some(Sold)),
+            InventoryDelta {
+                source: None,
+                ..bought("coins", 3, &[("painting", 1)])
+            },
+        ],
+        &[],
+        &[],
+    );
+    assert!(unpaid.changes.is_empty());
+}
+
+#[tokio::test]
+async fn a_vanishing_painting_changes_nothing_through_the_host_and_is_logged() {
+    use InventoryReason::{Lost, Sold};
+    let host = host().await;
+    let painting = json!({"id": "painting", "name": "painting", "look": "a small study",
+        "use": "kept", "count": 1});
+    let coins = json!({"id": "coins", "name": "coins", "look": "silver", "count": 5});
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "danny", "kind": "character", "items": [painting, coins]}),
+        )
+        .await,
+    );
+    assert!(
+        take_judged_changes(
+            &host.state,
+            "danny",
+            &[losing("painting", None), losing("painting", Some(Lost))],
+            &[],
+        )
+        .is_empty()
+    );
+    assert_eq!(held(&host, "danny").await[0], ("painting".to_owned(), 1));
+    // Sold with its payment: both sides, atomically.
+    let sold = take_judged_changes(
+        &host.state,
+        "danny",
+        &[
+            losing("painting", Some(Sold)),
+            bought("coins", 4, &[("painting", 1)]),
+        ],
+        &[],
+    );
+    assert_eq!(sold.len(), 2);
+    assert_eq!(
+        held(&host, "danny").await,
+        [("painting".to_owned(), 0), ("coins".to_owned(), 9)]
+    );
+    let refused: Vec<_> = lines(&host)
+        .into_iter()
+        .filter(|line| line.starts_with("WORLD refused verb=inventory_judged"))
+        .collect();
+    assert_eq!(
+        refused,
+        [
+            "WORLD refused verb=inventory_judged error=unreasoned_loss",
+            "WORLD refused verb=inventory_judged error=unreasoned_loss",
+        ]
+    );
+}
+
+fn poor_purse() -> Inventory {
+    inventory(
+        "danny",
+        OwnerKind::Character,
+        &[("coins", 2), ("painting", 1), ("charcoal", 6)],
+    )
+    .with_kept("painting")
+}
+
+/// A wall study sold for `sale` coins, and `price` coins paid for five bundles of charcoal, in one
+/// line: the coin appears twice, once up and once down.
+fn sale_and_purchase(sale: i64, price: u64) -> Vec<InventoryDelta> {
+    vec![
+        losing("painting", Some(InventoryReason::Sold)),
+        bought("coins", sale, &[("painting", 1)]),
+        spent("coins", i64::try_from(price).unwrap()),
+        bought("charcoal", 5, &[("coins", price)]),
+    ]
+}
+
+#[test]
+fn a_sale_and_a_purchase_in_one_line_net_the_coin_that_rises_and_falls() {
+    // Five coins up for the sale, eight down for the charcoal: the coin is three down in all.
+    let out = judged(&sale_and_purchase(5, 8), &[], &[]);
+    assert!(out.refused.is_empty(), "{:?}", out.refused);
+    assert_eq!(out.changes.len(), 3, "one change for each item");
+    let (after, applied) = apply_changes(&purse(), &out.changes).unwrap();
+    assert_eq!(after.item("coins").map(|held| held.count), Some(11));
+    assert_eq!(after.item("painting").map(|held| held.count), Some(0));
+    assert_eq!(after.item("charcoal").map(|held| held.count), Some(11));
+    assert_eq!(applied.len(), 3);
+    // The same amount up and down cancels: the coin is not changed at all.
+    let even = judged(&sale_and_purchase(8, 8), &[], &[]);
+    assert!(even.refused.is_empty());
+    assert_eq!(even.changes.len(), 2, "the painting and the charcoal");
+    let (after, _) = apply_changes(&purse(), &even.changes).unwrap();
+    assert_eq!(after.item("coins").map(|held| held.count), Some(14));
+}
+
+#[test]
+fn a_sale_and_a_purchase_whose_net_is_impossible_change_nothing() {
+    let things: [String; 0] = [];
+    let judged_poor = |deltas: &[InventoryDelta]| {
+        judge_deltas(
+            &poor_purse(),
+            deltas,
+            &GainContext {
+                things: &things,
+                present: &[],
+            },
+        )
+    };
+    // The coin held, two, is not enough for a net of three down: the coin is refused, and the
+    // purchase and the sale that leaned on it with it.
+    let out = judged_poor(&sale_and_purchase(5, 8));
+    assert!(out.changes.is_empty(), "{:?}", out.changes);
+    assert_eq!(
+        out.refused,
+        [
+            InventoryError::Insufficient {
+                owner: "danny".to_owned(),
+                item: "coins".to_owned(),
+                have: 2,
+                asked: 3
+            },
+            unsourced("charcoal"),
+            unreasoned("painting"),
+        ]
+    );
+    // Enough proceeds make the same purchase possible from the same purse.
+    let funded = judged_poor(&sale_and_purchase(8, 8));
+    assert!(funded.refused.is_empty(), "{:?}", funded.refused);
+}
+
+#[test]
+fn entries_of_one_item_in_the_same_direction_merge_on_the_judged_path_only() {
+    use InventoryReason::UsedUp;
+    let merged = judged(
+        &[delta("ochre", -1, UsedUp), delta("ochre", -2, UsedUp)],
+        &[],
+        &[],
+    );
+    assert!(merged.refused.is_empty());
+    assert!(matches!(
+        merged.changes[..],
+        [InventoryChange::Consume { count: 3, .. }]
+    ));
+    let gains = judged(
+        &[
+            spent("coins", 2),
+            bought("ochre", 1, &[("coins", 1)]),
+            bought("ochre", 1, &[("coins", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(gains.refused.is_empty(), "{:?}", gains.refused);
+    assert!(
+        gains
+            .changes
+            .iter()
+            .any(|change| matches!(change, InventoryChange::Add { count: 2, .. }))
+    );
+    // The explicit batch is operator input and still refuses an item twice.
+    assert_eq!(
+        apply_changes(&purse(), &[consume("ochre", 1), consume("ochre", 2)]).unwrap_err(),
+        InventoryError::DuplicateItem {
+            item: "ochre".to_owned()
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_sale_and_a_purchase_in_one_line_apply_through_the_host() {
+    let host = host().await;
+    let painting = json!({"id": "painting", "name": "painting", "look": "a small study",
+        "use": "kept", "count": 1});
+    let coins = json!({"id": "coins", "name": "coins", "look": "silver", "count": 14});
+    let charcoal = json!({"id": "charcoal", "name": "charcoal", "look": "sticks", "count": 6});
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "danny", "kind": "character", "items": [painting, coins, charcoal]}),
+        )
+        .await,
+    );
+    let taken = take_judged_changes(&host.state, "danny", &sale_and_purchase(5, 8), &[]);
+    assert_eq!(taken.len(), 3);
+    assert_eq!(
+        held(&host, "danny").await,
+        [
+            ("painting".to_owned(), 0),
+            ("coins".to_owned(), 11),
+            ("charcoal".to_owned(), 11)
+        ]
+    );
+    assert!(
+        lines(&host).contains(
+            &"WORLD inventory_changed owner=danny item=coins kind=consume before=14 after=11"
+                .to_owned()
+        )
+    );
+}
+
+/// The entries of "I'll sell you my study for five coins, and I'll take five apples for them" as a
+/// model may fill them: the sale's coin gain has no payment named, or the wrong one.
+fn sale_and_apples(proceeds_paid_with: &[(&str, u64)]) -> Vec<InventoryDelta> {
+    vec![
+        InventoryDelta {
+            to: Some("baker".to_owned()),
+            ..losing("painting", Some(InventoryReason::Sold))
+        },
+        bought("coins", 5, proceeds_paid_with),
+        spent("coins", 5),
+        bought("apples", 5, &[("coins", 5)]),
+    ]
+}
+
+#[test]
+fn a_sale_whose_proceeds_name_no_payment_is_paired_with_it_and_applies_fully() {
+    // The coin gain names nothing, or names the wrong thing: the sold item is paired with it.
+    for named in [vec![], vec![("ochre", 1)], vec![("coins", 5)]] {
+        let out = judged(&sale_and_apples(&named), &[], &["baker"]);
+        assert!(out.refused.is_empty(), "{named:?} {:?}", out.refused);
+        assert_eq!(out.repaired, ["painting"]);
+        assert_eq!(
+            out.changes.len(),
+            2,
+            "painting down, apples up, coins net zero"
+        );
+        let (after, _) = apply_changes(&purse(), &out.changes).unwrap();
+        assert_eq!(after.item("painting").map(|held| held.count), Some(0));
+        assert_eq!(after.item("coins").map(|held| held.count), Some(14));
+        assert_eq!(after.item("apples").map(|held| held.count), Some(5));
+    }
+    // Already right: nothing to repair.
+    let right = judged(&sale_and_apples(&[("painting", 1)]), &[], &["baker"]);
+    assert!(right.refused.is_empty());
+    assert!(right.repaired.is_empty());
+}
+
+#[test]
+fn a_barter_with_no_coins_applies() {
+    use InventoryReason::Sold;
+    let out = judged(
+        &[
+            losing("painting", Some(Sold)),
+            bought("apples", 5, &[("painting", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(out.refused.is_empty(), "{:?}", out.refused);
+    assert!(out.repaired.is_empty());
+    let (after, _) = apply_changes(&purse(), &out.changes).unwrap();
+    assert_eq!(after.item("painting").map(|held| held.count), Some(0));
+    assert_eq!(after.item("apples").map(|held| held.count), Some(5));
+    assert_eq!(after.item("coins").map(|held| held.count), Some(14));
+}
+
+#[test]
+fn a_sale_with_no_counterpart_in_the_line_is_still_refused() {
+    use InventoryReason::Sold;
+    // Nothing to pair the sold painting with: it is refused, and the purchase of the same deal
+    // does not apply half of the line.
+    let out = judged(
+        &[
+            losing("painting", Some(Sold)),
+            spent("coins", 5),
+            bought("apples", 5, &[("coins", 5)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(out.repaired.is_empty());
+    assert_eq!(out.refused, [unreasoned("painting")]);
+    assert!(out.changes.is_empty(), "{:?}", out.changes);
+    // Two gains that could be the proceeds: code does not guess between them.
+    let two = judged(
+        &[
+            losing("painting", Some(Sold)),
+            bought("coins", 3, &[]),
+            bought("ochre", 1, &[]),
+            spent("boards", 1),
+            bought("apples", 5, &[("coins", 3), ("ochre", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    assert!(two.repaired.is_empty());
+    assert!(two.refused.contains(&unreasoned("painting")));
+}
+
+/// The entries of run 8, a sale for five silver pennies and five sticks of charcoal bought with
+/// them, as the model gave them: the sale's payment names the sold item with the price as its
+/// count.
+fn run_eight_line() -> Vec<InventoryDelta> {
+    vec![
+        InventoryDelta {
+            to: Some("seller".to_owned()),
+            ..losing("painting", Some(InventoryReason::Sold))
+        },
+        bought("coins", 5, &[("painting", 5)]),
+        spent("coins", 5),
+        bought("charcoal", 5, &[("coins", 5)]),
+    ]
+}
+
+#[test]
+fn a_sale_paid_with_the_price_as_its_count_applies_fully() {
+    let out = judged(&run_eight_line(), &[], &["seller"]);
+    assert!(out.refused.is_empty(), "{:?}", out.refused);
+    assert_eq!(out.repaired, ["painting"]);
+    let (after, _) = apply_changes(&purse(), &out.changes).unwrap();
+    assert_eq!(after.item("painting").map(|held| held.count), Some(0));
+    assert_eq!(after.item("coins").map(|held| held.count), Some(14));
+    assert_eq!(after.item("charcoal").map(|held| held.count), Some(11));
+}
+
+#[test]
+fn a_deal_that_cannot_apply_fully_applies_nothing() {
+    // The purchase cannot be paid (this purse holds two coins): the sale and the proceeds do not
+    // apply without it.
+    let things: [String; 0] = [];
+    let poor = judge_deltas(
+        &poor_purse(),
+        &sale_and_purchase(1, 9),
+        &GainContext {
+            things: &things,
+            present: &[],
+        },
+    );
+    assert!(poor.changes.is_empty(), "{:?}", poor.changes);
+    assert!(!poor.refused.is_empty());
+    let broke = judged(&sale_and_purchase(5, 99), &[], &[]);
+    assert!(broke.changes.is_empty(), "{:?}", broke.changes);
+    // An entry of an item that takes no part in the deal is refused with it: the line is whole.
+    let mut line = sale_and_purchase(5, 99);
+    line.push(spent("ochre", 1));
+    let mixed = judged(&line, &[], &[]);
+    assert!(mixed.changes.is_empty(), "{:?}", mixed.changes);
+}
+
+#[test]
+fn the_plain_deals_apply_with_correct_counts_or_refuse_whole() {
+    use InventoryReason::Sold;
+    let applied = |out: &Judged| {
+        assert!(out.refused.is_empty(), "{:?}", out.refused);
+        apply_changes(&purse(), &out.changes).unwrap().0
+    };
+    let count = |after: &Inventory, id: &str| after.item(id).map(|held| held.count);
+    // A pure sale for coins.
+    let sale = judged(
+        &[
+            losing("painting", Some(Sold)),
+            bought("coins", 5, &[("painting", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    let after = applied(&sale);
+    assert_eq!(
+        (count(&after, "painting"), count(&after, "coins")),
+        (Some(0), Some(19))
+    );
+    // A pure purchase with coins.
+    let purchase = judged(
+        &[spent("coins", 4), bought("charcoal", 2, &[("coins", 4)])],
+        &[],
+        &[],
+    );
+    let after = applied(&purchase);
+    assert_eq!(
+        (count(&after, "coins"), count(&after, "charcoal")),
+        (Some(10), Some(8))
+    );
+    // A swap of one item for another.
+    let swap = judged(
+        &[
+            losing("painting", Some(Sold)),
+            bought("boards", 2, &[("painting", 1)]),
+        ],
+        &[],
+        &[],
+    );
+    let after = applied(&swap);
+    assert_eq!(
+        (count(&after, "painting"), count(&after, "boards")),
+        (Some(0), Some(6))
+    );
+    // A sale and a purchase with its proceeds, the sale's payment naming a larger count.
+    let both = judged(&run_eight_line(), &[], &["seller"]);
+    assert_eq!(count(&applied(&both), "charcoal"), Some(11));
+    // The same deals with an item not held, too few of it, or too few coins refuse whole.
+    for line in [
+        vec![
+            delta("sword", -1, Sold),
+            bought("coins", 5, &[("sword", 1)]),
+        ],
+        vec![
+            InventoryDelta {
+                change: -3,
+                ..losing("painting", Some(Sold))
+            },
+            bought("coins", 5, &[("painting", 3)]),
+        ],
+        vec![spent("coins", 40), bought("charcoal", 2, &[("coins", 40)])],
+    ] {
+        let out = judged(&line, &[], &[]);
+        assert!(out.changes.is_empty(), "{line:?} {:?}", out.changes);
+        assert!(!out.refused.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn the_run_eight_line_applies_through_the_host_with_no_half_applied_deal() {
+    let host = host().await;
+    let painting = json!({"id": "painting", "name": "painting", "look": "a small study",
+        "use": "kept", "count": 1});
+    let coins = json!({"id": "coins", "name": "coins", "look": "silver", "count": 20});
+    let charcoal = json!({"id": "charcoal", "name": "charcoal", "look": "sticks", "count": 6});
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "danny", "kind": "character", "items": [painting, coins, charcoal]}),
+        )
+        .await,
+    );
+    let seller = ["seller".to_owned()];
+    let taken = take_judged_changes(&host.state, "danny", &run_eight_line(), &seller);
+    assert_eq!(
+        taken.len(),
+        2,
+        "painting down, charcoal up, coins untouched"
+    );
+    assert_eq!(
+        held(&host, "danny").await,
+        [
+            ("painting".to_owned(), 0),
+            ("coins".to_owned(), 20),
+            ("charcoal".to_owned(), 11)
+        ]
+    );
+    // A deal that cannot apply fully applies nothing and says why.
+    let broke = [spent("coins", 99), bought("charcoal", 5, &[("coins", 99)])];
+    assert!(take_judged_changes(&host.state, "danny", &broke, &[]).is_empty());
+    assert_eq!(held(&host, "danny").await[1], ("coins".to_owned(), 20));
+    assert!(lines(&host).iter().any(|line| {
+        line.starts_with("WORLD judged_entries owner=danny")
+            && line.contains("refused=insufficient")
+    }));
+}
+
+/// The entries of run 9, three coins for the study and a pigment and two boards for them, with
+/// `pigment` and `boards` the payments the two goods name.
+fn run_nine_line(pigment: u64, boards: u64) -> Vec<InventoryDelta> {
+    vec![
+        losing("painting", Some(InventoryReason::Sold)),
+        bought("coins", 3, &[("painting", 1)]),
+        spent("coins", 3),
+        bought("ochre", 1, &[("coins", pigment)]),
+        bought("boards", 2, &[("coins", boards)]),
+    ]
+}
+
+#[test]
+fn one_payment_split_between_two_goods_applies_and_named_in_full_for_each_applies_nothing() {
+    let split = judged(&run_nine_line(2, 1), &[], &[]);
+    assert!(split.refused.is_empty(), "{:?}", split.refused);
+    let (after, _) = apply_changes(&purse(), &split.changes).unwrap();
+    let count = |id: &str| after.item(id).map(|held| held.count);
+    assert_eq!(
+        (
+            count("painting"),
+            count("coins"),
+            count("ochre"),
+            count("boards")
+        ),
+        (Some(0), Some(14), Some(4), Some(6))
+    );
+    // Six coins named for three that go down: the second gain is refused, and the deal with it.
+    let twice = judged(&run_nine_line(3, 3), &[], &[]);
+    assert_eq!(twice.refused, [unsourced("boards")]);
+    assert!(twice.changes.is_empty(), "{:?}", twice.changes);
+}
+
+/// What the painter held in run 9 move 16: ochre and lamp black, and none of the rest.
+fn painters_shelf() -> Inventory {
+    inventory(
+        "danny",
+        OwnerKind::Character,
+        &[
+            ("boards", 0),
+            ("ochre", 1),
+            ("lamp_black", 2),
+            ("linseed_oil", 0),
+            ("rags", 0),
+        ],
+    )
+}
+
+#[test]
+fn a_line_of_uses_with_one_short_item_applies_none_of_them() {
+    let things: [String; 0] = [];
+    let judge = |uses: &[(&str, u64)]| {
+        let deltas: Vec<InventoryDelta> = uses
+            .iter()
+            .map(|(item, count)| spent(item, i64::try_from(*count).unwrap()))
+            .collect();
+        judge_deltas(
+            &painters_shelf(),
+            &deltas,
+            &GainContext {
+                things: &things,
+                present: &[],
+            },
+        )
+    };
+    // The five uses of the line: a board, ochre, lamp black, oil and a rag.
+    let all = judge(&[
+        ("boards", 1),
+        ("ochre", 1),
+        ("lamp_black", 1),
+        ("linseed_oil", 1),
+        ("rags", 1),
+    ]);
+    assert_eq!(all.refused.len(), 3, "{:?}", all.refused);
+    assert!(all.refused.iter().all(|error| matches!(
+        error,
+        InventoryError::Insufficient {
+            have: 0,
+            asked: 1,
+            ..
+        }
+    )));
+    assert!(
+        all.changes.is_empty(),
+        "no pigment is spent: {:?}",
+        all.changes
+    );
+    // What the painter really holds applies, whole.
+    let held = judge(&[("ochre", 1), ("lamp_black", 1)]);
+    assert!(held.refused.is_empty());
+    let (after, _) = apply_changes(&painters_shelf(), &held.changes).unwrap();
+    assert_eq!(after.item("ochre").map(|item| item.count), Some(0));
+    assert_eq!(after.item("lamp_black").map(|item| item.count), Some(1));
+}
+
+#[tokio::test]
+async fn the_painted_line_of_run_nine_changes_nothing_through_the_host() {
+    let host = host().await;
+    let items: Vec<Value> = painters_shelf()
+        .items
+        .iter()
+        .map(|item| {
+            json!({"id": item.id, "name": item.name, "look": item.look, "count": item.count})
+        })
+        .collect();
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "danny", "kind": "character", "items": items}),
+        )
+        .await,
+    );
+    let uses = ["boards", "ochre", "lamp_black", "linseed_oil", "rags"].map(|item| spent(item, 1));
+    assert!(take_judged_changes(&host.state, "danny", &uses, &[]).is_empty());
+    assert_eq!(
+        held(&host, "danny").await,
+        [
+            ("boards".to_owned(), 0),
+            ("ochre".to_owned(), 1),
+            ("lamp_black".to_owned(), 2),
+            ("linseed_oil".to_owned(), 0),
+            ("rags".to_owned(), 0)
+        ]
+    );
+}
+
+#[test]
+fn the_entries_token_is_ids_and_numbers_only_and_bounded() {
+    let mut deal = sale_and_apples(&[]);
+    deal[0].why = "free text with spaces".to_owned();
+    deal[1].item = "Not An Id!".to_owned();
+    let token = entries_token(&deal);
+    assert_eq!(
+        token,
+        "painting:-1:sold:-:to=baker;?:+5:gained:exchange;coins:-5:used_up:-;\
+         apples:+5:gained:exchange:pay=coins*5"
+    );
+    assert!(!token.contains(' '));
+    let many = vec![delta("ochre", -1, InventoryReason::UsedUp); 45];
+    assert!(entries_token(&many).ends_with(";+5"));
+    assert_eq!(entries_token(&[]), "-");
+}
+
+#[tokio::test]
+async fn a_judged_line_that_is_refused_or_repaired_logs_its_entries() {
+    let host = host().await;
+    let painting = json!({"id": "painting", "name": "painting", "look": "a small study",
+        "use": "kept", "count": 1});
+    let coins = json!({"id": "coins", "name": "coins", "look": "silver", "count": 20});
+    let _: Changed = done(
+        post(
+            &host,
+            path::INVENTORY_SET,
+            json!({"owner": "danny", "kind": "character", "items": [painting, coins]}),
+        )
+        .await,
+    );
+    let baker = ["baker".to_owned()];
+    // The run 7 shape applies fully, and says it was paired.
+    let taken = take_judged_changes(&host.state, "danny", &sale_and_apples(&[]), &baker);
+    assert_eq!(taken.len(), 2);
+    assert_eq!(
+        held(&host, "danny").await,
+        [
+            ("painting".to_owned(), 0),
+            ("coins".to_owned(), 20),
+            ("apples".to_owned(), 5)
+        ]
+    );
+    // A refusal logs the entries and the keys.
+    let none = take_judged_changes(
+        &host.state,
+        "danny",
+        &[losing("coins", Some(InventoryReason::Lost))],
+        &baker,
+    );
+    assert!(none.is_empty());
+    let logged: Vec<String> = lines(&host)
+        .into_iter()
+        .filter(|line| line.starts_with("WORLD judged_entries"))
+        .collect();
+    assert_eq!(logged.len(), 2);
+    assert!(logged[0].contains("owner=danny entries=painting:-1:sold:-:to=baker;"));
+    assert!(logged[0].ends_with("refused=- repaired=painting"));
+    assert!(logged[1].ends_with("entries=coins:-1:lost:- refused=unreasoned_loss repaired=-"));
 }

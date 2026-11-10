@@ -32,8 +32,8 @@ use super::format::{
     format_list, format_owner, format_public, format_spoken, format_voice_generated,
 };
 use super::frame_watch::{
-    DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, FrameOptions, MAXIMUM_PARALLEL_FRAMES,
-    judge_frame, watch_lines,
+    DEFAULT_HOLD_SECONDS, DEFAULT_MAXIMUM_FRAMES, DEFAULT_REVEAL_HOLD_SECONDS, FrameOptions,
+    MAXIMUM_PARALLEL_FRAMES, judge_frame, show_picture, watch_lines,
 };
 use super::options::{Asking, GUIDANCE_KEYS, GuidanceArgs, asking_from, take_options};
 use super::request::{
@@ -80,6 +80,7 @@ pub const PERSONA_USAGE: &str = concat!(
     "[model=<name>] [frames=<name> <frame options>] [<topic...>] | ",
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
     "persona watch frames=<name> <frame options> (lines '<speaker id> | <line>' on stdin) | ",
+    "persona show-picture <picture> room=<picture> [caption=<text>] [hold=<seconds>] | ",
     "persona story plot [cast=<id>,<id>...] scenes=<id>,<id>... [model=<name>] <premise...> | ",
     "persona story show | persona story reset | ",
     "persona story apply [model=<name>] | persona story moves [model=<name>] <scene> | ",
@@ -195,14 +196,20 @@ pub const PERSONA_CONVERSE_USAGE: &str = concat!(
 /// `persona frame`: how much the picture would visibly change for these lines.
 pub const PERSONA_FRAME_USAGE: &str =
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...>";
+/// `persona show-picture`: a picture the library already holds, shown as it is for a while.
+pub const PERSONA_SHOW_PICTURE_USAGE: &str = concat!(
+    "persona show-picture <picture> room=<the picture the room goes back to> ",
+    "[caption=<text>] [hold=<seconds> (10 by default)]"
+);
 /// `persona watch`: frames for lines said elsewhere, read from standard input.
 pub const PERSONA_WATCH_USAGE: &str = concat!(
     "persona watch frames=<name> [gate=0-100] [scene=<what the picture shows>] ",
     "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [insert_hold=<seconds>] ",
     "[max_frames=N (none by default)] [parallel=1-8 (8 by default)] [every=<seconds>] ",
-    "[declare_hold=<seconds>] [place=<story place>] [judge_model=<name>], with one ",
-    "'<speaker id> | <line>', '@focus [<item> | ]<text>' or '@declare <speaker id> | <json>' ",
-    "(printed by `persona declare`) per line of standard input",
+    "[declare_hold=<seconds>] [refs_max=<N>] [place=<story place>] [judge_model=<name>], with ",
+    "one '<speaker id> | <line>', '@focus [<item> | ]<text>', '@show <picture> | <caption> | ",
+    "<seconds>' or '@declare <speaker id> | <json>' (printed by `persona declare`) per line of ",
+    "standard input",
 );
 /// `persona addressed`: whom a line is directed at, and whether an answer is owed, by the
 /// addressee judge.
@@ -441,6 +448,13 @@ pub enum PersonaCommand {
     Perceive(super::perceive::cli::PerceiveCommand),
     /// A character declares the action they are doing right now (`declare`).
     Declare(super::declare::DeclareCommand),
+    /// Show a picture the library already holds, without a watch (`show-picture`).
+    ShowPicture {
+        picture: String,
+        room: String,
+        caption: Option<String>,
+        hold: u64,
+    },
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
@@ -798,6 +812,7 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         judge_model: value("judge_model").map(str::to_owned),
         every: None,
         declare_hold: None,
+        refs_max: None,
         place: None,
     }))
 }
@@ -1001,6 +1016,42 @@ fn parse_story(words: &[String]) -> Result<PersonaCommand, CommandError> {
     }
 }
 
+/// `persona show-picture <picture> room=<the picture the room goes back to> [caption=<text>]
+/// [hold=<seconds>]`.
+fn parse_show_picture(words: &[String]) -> Result<PersonaCommand, CommandError> {
+    let usage = || CommandError::Usage(PERSONA_SHOW_PICTURE_USAGE);
+    let [picture, rest @ ..] = words else {
+        return Err(usage());
+    };
+    let (given, left) = take_options(rest, &["room", "caption", "hold"]);
+    let value = |key: &str| {
+        given
+            .iter()
+            .find(|(seen, _)| *seen == key)
+            .map(|(_, value)| (*value).to_owned())
+    };
+    let hold = value("hold")
+        .map(|text| {
+            text.parse::<u64>()
+                .ok()
+                .filter(|seconds| *seconds <= 3_600)
+                .ok_or_else(|| {
+                    bad_choice("hold", &text, "a whole number from 0 to 3600".to_owned())
+                })
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_REVEAL_HOLD_SECONDS);
+    match (value("room"), left.is_empty()) {
+        (Some(room), true) => Ok(PersonaCommand::ShowPicture {
+            picture: picture.clone(),
+            room,
+            caption: value("caption"),
+            hold,
+        }),
+        _ => Err(usage()),
+    }
+}
+
 fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
     let (given, rest) = take_options(
         words,
@@ -1017,6 +1068,7 @@ fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
             "parallel",
             "every",
             "declare_hold",
+            "refs_max",
             "place",
         ],
     );
@@ -1033,6 +1085,16 @@ fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
             .filter(|seconds| *seconds <= 3_600)
             .ok_or_else(|| bad_choice("every", text, "a whole number from 0 to 3600".to_owned()))?;
         options = options.with_every(Duration::from_secs(every));
+    }
+    if let Some((_, text)) = given.iter().find(|(key, _)| *key == "refs_max") {
+        let maximum = text
+            .parse::<usize>()
+            .ok()
+            .filter(|maximum| (1..=64).contains(maximum))
+            .ok_or_else(|| {
+                bad_choice("refs_max", text, "a whole number from 1 to 64".to_owned())
+            })?;
+        options = options.with_refs_max(maximum);
     }
     if let Some((_, text)) = given.iter().find(|(key, _)| *key == "declare_hold") {
         let hold = text
@@ -1241,6 +1303,7 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
             super::perceive::cli::parse_thoughts(words).map(PersonaCommand::Perceive)
         }
         ("declare", words) => super::declare::parse_declare(words).map(PersonaCommand::Declare),
+        ("show-picture", words) => parse_show_picture(words),
         ("remove", [id]) => Ok(PersonaCommand::Remove { id: id_word(id)? }),
         ("remove", _) => Err(CommandError::Usage(PERSONA_REMOVE_USAGE)),
         _ => Err(CommandError::Usage(PERSONA_USAGE)),
@@ -1681,6 +1744,21 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             model,
         } => judge_frame(port, picture, lines, gate_percent, model).await,
         PersonaCommand::Watch(options) => watch_lines(port, options).await,
+        PersonaCommand::ShowPicture {
+            picture,
+            room,
+            caption,
+            hold,
+        } => {
+            show_picture(
+                port,
+                &picture,
+                &room,
+                caption.as_deref(),
+                Duration::from_secs(hold),
+            )
+            .await
+        }
         PersonaCommand::StoryPlot {
             premise,
             cast,

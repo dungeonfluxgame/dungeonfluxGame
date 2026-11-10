@@ -43,7 +43,7 @@ pub fn draw(document: &Document, banner: &Banner) -> Result<Option<Element>, JsV
         if working {
             set_style(
                 &drawing,
-                &format!("animation-delay:{}", turn_delay_ms(now_ms())),
+                &format!("--kit-turn-delay:{}", turn_delay_ms(now_ms())),
             )?;
         }
         append(&pane, &drawing)?;

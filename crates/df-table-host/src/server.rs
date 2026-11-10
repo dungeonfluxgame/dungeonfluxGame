@@ -514,6 +514,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(route::RELOAD, post(reload))
         .route(path::HOST_STATUS, get(host_status))
         .with_state(state.clone());
+    // One music service, so the scene route and the tempo director share a composer and its turns.
+    let music = crate::music::MusicService::from_environment();
     api.merge(playground::router(state.clone()))
         .merge(media_library::router(state.clone()))
         .merge(crate::engine::router(state.clone()))
@@ -523,7 +525,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         // picture generator.
         .merge(crate::services::routes::router(state.clone()))
         .merge(crate::cast::routes::router(state.clone()))
-        .merge(crate::music::routes::router(state.clone()))
+        .merge(crate::music::routes::router_over(
+            state.clone(),
+            music.clone(),
+        ))
+        .merge(crate::tempo::routes::router(state.clone(), music))
         // A route layer sees the matched route, and the answers of the body and query readers.
         .route_layer(middleware::from_fn_with_state(state.clone(), record_served))
         .layer(DefaultBodyLimit::max(MAXIMUM_REQUEST_BYTES))

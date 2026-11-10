@@ -17,8 +17,8 @@ use super::declare::{
 };
 use super::fixtures::{CHARACTER, ScriptedHost, innkeeper, line_answer, scripted_host};
 use super::frame::{
-    DeclaredTiming, FrameAsk, FrameConfig, FrameMoment, FrameReason, FrameTimingRequest,
-    PERSONA_FRAME_TIMING,
+    DeclaredRejected, DeclaredTiming, FrameAsk, FrameConfig, FrameMoment, FrameReason,
+    FrameTimingRequest, PERSONA_FRAME_TIMING,
 };
 use super::frame_watch::{WatchInput, room_prompt};
 use super::plate::{
@@ -682,6 +682,8 @@ async fn a_declared_plate_logs_how_it_was_made_and_why() {
         moment: FrameMoment::Shown,
         reason: FrameReason::Declared,
         took_ms: 66_000,
+        revealed: None,
+        dropped: None,
         declared: Some(DeclaredTiming {
             who: "danny".to_owned(),
             superseded: 0,
@@ -689,6 +691,9 @@ async fn a_declared_plate_logs_how_it_was_made_and_why() {
             made_ms: 65_980,
             base: "fresh".to_owned(),
             reason: "extra_figures".to_owned(),
+            attempt: 2,
+            first_made_ms: Some(61_000),
+            rejected: None,
         }),
     };
     let timed: crate::persona::frame::FrameTimingReply =
@@ -711,8 +716,101 @@ async fn a_declared_plate_logs_how_it_was_made_and_why() {
     assert!(
         declared.starts_with(concat!(
             "PERSONA declared who=danny plate=roam-03-look-2 superseded=0 queue_wait_ms=20 ",
-            "made_ms=65980 base=fresh reason=extra_figures shown_at_ms="
+            "made_ms=65980 first_made_ms=61000 attempt=2 base=fresh reason=extra_figures ",
+            "shown_at_ms="
         )),
         "{declared}"
+    );
+    let refused = FrameTimingRequest {
+        moment: FrameMoment::Failed,
+        declared: Some(DeclaredTiming {
+            attempt: 2,
+            first_made_ms: Some(60_000),
+            rejected: Some(DeclaredRejected { people: 3, cast: 1 }),
+            ..timing.declared.clone().unwrap()
+        }),
+        ..timing
+    };
+    let timed: crate::persona::frame::FrameTimingReply =
+        post_json(running.port, PERSONA_FRAME_TIMING, &refused)
+            .await
+            .unwrap();
+    assert!(matches!(timed, DevReply::Done { .. }));
+    let lines: Vec<String> = running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("PERSONA"))
+        .collect();
+    assert!(
+        lines.iter().any(
+            |line| line.starts_with("PERSONA frame_timing moment=failed ")
+                && line.contains(" frame=roam-03-look-2 reason=declared ")
+        ),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains(concat!(
+            " attempt=2 base=fresh reason=extra_figures rejected=extra_figures people=3 ",
+            "cast=1 failed_at_ms="
+        ))),
+        "{lines:?}"
+    );
+}
+
+// The soft cap on the pictures of a plate request.
+
+#[test]
+fn a_capped_plate_takes_the_speaker_first_then_the_items_in_use_in_their_order() {
+    use super::plate::{fit_pictures, items_that_fit};
+    use crate::imagegen::BackendLimits;
+    use df_content::world_bible::Thing;
+    // The service reports the backend's limits with the pictures held to the cap (3 here).
+    let limits = BackendLimits {
+        maximum_pictures: 3,
+        ..BackendLimits::REQUEST
+    };
+    let in_use = ["easel", "boards", "brushes"];
+    // An edit: the picture to edit is one, the speaker one, so one item of what the hands use.
+    assert_eq!(items_that_fit(&limits, 1, true, in_use.to_vec()), ["easel"]);
+    // Painted anew: the speaker, then the first two items named in use.
+    assert_eq!(
+        items_that_fit(&limits, 1, false, in_use.to_vec()),
+        ["easel", "boards"]
+    );
+    // A cast larger than the cap keeps the speaker (first in the list) and nobody's items.
+    let people: Vec<String> = ["ref-danny.png", "ref-a.png", "ref-b.png", "ref-c.png"]
+        .map(str::to_owned)
+        .to_vec();
+    let sheets: Vec<Thing> = in_use
+        .iter()
+        .map(|id| Thing {
+            id: (*id).to_owned(),
+            name: (*id).to_owned(),
+            look: format!("{id} up close"),
+            picture: Some(format!("item-danny-{id}.png")),
+        })
+        .collect();
+    let fitted = fit_pictures(3, people.clone(), &sheets);
+    assert_eq!(
+        fitted.people,
+        people[..3],
+        "the speaker's sheet first, then the others"
+    );
+    assert!(fitted.things.is_empty(), "no room is left for the items");
+    assert_eq!(fitted.dropped[0], "ref-c.png");
+    // One person and a base: two pictures left for what is only seen, in the order given.
+    let fitted = fit_pictures(2, vec!["ref-danny.png".to_owned()], &sheets);
+    let shown: Vec<&str> = fitted
+        .things
+        .iter()
+        .map(|thing| thing.shows.as_str())
+        .collect();
+    assert_eq!(shown, ["easel"]);
+    assert_eq!(
+        fitted.dropped,
+        ["item-danny-boards.png", "item-danny-brushes.png"]
     );
 }

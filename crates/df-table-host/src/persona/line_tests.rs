@@ -16,9 +16,7 @@ use super::fixtures::{
     CHARACTER, ScriptedHost, append_backstory_answer, innkeeper, line_answer,
     line_answer_with_gaps, privacy_answer, scripted_host, scripted_host_cast, write_market,
 };
-use super::request::{
-    Answered, BackfillOutcome, BackfillRecord, PersonaReply, SaidLine, Spoken,
-};
+use super::request::{Answered, BackfillOutcome, BackfillRecord, PersonaReply, SaidLine, Spoken};
 use super::routes::path;
 use super::storage::write_persona;
 use crate::dev_client::{get_json, post_json};
@@ -360,8 +358,7 @@ async fn a_line_the_model_says_repeats_recent_is_worded_once_more_with_the_reaso
 }
 
 #[tokio::test]
-async fn a_line_still_repeating_after_the_retry_is_kept_reported_and_never_asked_again()
- {
+async fn a_line_still_repeating_after_the_retry_is_kept_reported_and_never_asked_again() {
     let repeating = |line: &str| {
         let mut answer = line_answer(line);
         answer["repeats_recent"] = json!(true);
@@ -379,6 +376,233 @@ async fn a_line_still_repeating_after_the_retry_is_kept_reported_and_never_asked
     assert_eq!(host.calls(), 2, "one retry and no more");
     assert_eq!(said.line, "Two.");
     assert!(said.repeat_retried && said.repeats_recent);
+}
+
+/// What the innkeeper holds in the run 9 line: the study to sell, the coins, the boards she has
+/// and a pigment she has none of yet.
+fn cottage_study_hands(host: &ScriptedHost) {
+    write_persona(&host.directory(), &innkeeper()).unwrap();
+    host.running.write_asset(
+        "world/inventory/innkeeper.json",
+        &json!({"schema": 1, "owner": CHARACTER, "kind": "character", "items": [
+            {"id": "painting_06", "name": "cottage window study", "look": "A shuttered window.",
+             "use": "kept", "count": 1},
+            {"id": "coins", "name": "silver pennies", "look": "Small silver coins.",
+             "use": "consumed", "count": 14},
+            {"id": "boards", "name": "boards", "look": "Fresh pine boards.", "use": "consumed",
+             "count": 1},
+            {"id": "verdigris", "name": "verdigris", "look": "Blue-green pigment.",
+             "use": "consumed", "count": 0}
+        ]})
+        .to_string(),
+    );
+}
+
+/// One entry of `inventory_changes` as the judge fills it.
+fn entry(
+    item: &str,
+    change: i64,
+    reason: &str,
+    source: Option<&str>,
+    paid: &[(&str, u64)],
+) -> Value {
+    json!({
+        "item": item, "change": change, "reason": reason, "why": "the deal",
+        "name": null, "look": null, "use": null, "source": source,
+        "paid_with": paid.iter().map(|(item, count)| json!({"item": item, "count": count}))
+            .collect::<Vec<_>>(),
+        "made_from": [], "where": null, "from": null, "what_happened": null, "to": null
+    })
+}
+
+/// The deal of run 9 with the three coins named in full for each of the two goods.
+fn cottage_study_claimed_twice() -> Value {
+    let mut answer = line_answer("Three pennies for the study; the pigment and two boards.");
+    answer["inventory_changes"] = json!([
+        entry("painting_06", -1, "sold", None, &[]),
+        entry(
+            "coins",
+            3,
+            "gained",
+            Some("exchange"),
+            &[("painting_06", 1)]
+        ),
+        entry("coins", -3, "used_up", None, &[]),
+        entry("verdigris", 1, "gained", Some("exchange"), &[("coins", 3)]),
+        entry("boards", 2, "gained", Some("exchange"), &[("coins", 3)]),
+    ]);
+    answer
+}
+
+/// The same deal with the three coins split between the two goods.
+fn cottage_study_split() -> Value {
+    let mut answer = line_answer("Three pennies for the study; the pigment and two boards.");
+    answer["inventory_changes"] = json!([
+        entry("painting_06", -1, "sold", None, &[]),
+        entry(
+            "coins",
+            3,
+            "gained",
+            Some("exchange"),
+            &[("painting_06", 1)]
+        ),
+        entry("coins", -3, "used_up", None, &[]),
+        entry("verdigris", 1, "gained", Some("exchange"), &[("coins", 2)]),
+        entry("boards", 2, "gained", Some("exchange"), &[("coins", 1)]),
+    ]);
+    answer
+}
+
+#[tokio::test]
+async fn a_refused_deal_is_judged_again_with_the_refusals_and_then_applies_fully() {
+    let host = scripted_host(vec![cottage_study_claimed_twice(), cottage_study_split()]).await;
+    cottage_study_hands(&host);
+    let said = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(host.calls(), 2);
+    assert!(host.facts_of(0)["now"].get("retry_reason").is_none());
+    let reason = host.facts_of(1)["now"]["retry_reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        reason.contains("unsourced_gain boards") && reason.contains("coins named 6, goes down 3"),
+        "{reason}"
+    );
+    let moved: Vec<(&str, u64, u64)> = said
+        .inventory
+        .iter()
+        .map(|applied| (applied.item.as_str(), applied.before, applied.after))
+        .collect();
+    assert_eq!(
+        moved,
+        [("painting_06", 1, 0), ("verdigris", 0, 1), ("boards", 1, 3)],
+        "the coin rose by three and fell by three: not changed"
+    );
+    assert_eq!(
+        host.lines_starting_with("WORLD retry"),
+        ["WORLD retry verb=inventory_judged attempt=2 reason=unsourced_gain"]
+    );
+}
+
+#[tokio::test]
+async fn a_deal_refused_again_is_asked_again_with_every_refusal_so_far() {
+    let host = scripted_host(vec![
+        cottage_study_claimed_twice(),
+        cottage_study_claimed_twice(),
+        cottage_study_split(),
+    ])
+    .await;
+    cottage_study_hands(&host);
+    let said = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(host.calls(), 3, "asked again until it stands");
+    let reason = host.facts_of(2)["now"]["retry_reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        reason.matches("unsourced_gain boards").count(),
+        2,
+        "{reason}"
+    );
+    assert_eq!(said.inventory.len(), 3);
+    assert_eq!(
+        host.lines_starting_with("WORLD retry"),
+        [
+            "WORLD retry verb=inventory_judged attempt=2 reason=unsourced_gain",
+            "WORLD retry verb=inventory_judged attempt=3 reason=unsourced_gain"
+        ]
+    );
+}
+
+/// What the painter held in run 9 move 16: ochre and lamp black, and none of the rest.
+fn painters_shelf(host: &ScriptedHost) {
+    write_persona(&host.directory(), &innkeeper()).unwrap();
+    let item = |id: &str, count: u64| {
+        json!({"id": id, "name": id, "look": format!("{id} up close"), "use": "consumed",
+               "count": count})
+    };
+    host.running.write_asset(
+        "world/inventory/innkeeper.json",
+        &json!({"schema": 1, "owner": CHARACTER, "kind": "character", "items": [
+            item("boards", 0), item("ochre", 1), item("lamp_black", 2),
+            item("linseed_oil", 0), item("rags", 0)
+        ]})
+        .to_string(),
+    );
+}
+
+fn uses(line: &str, items: &[&str]) -> Value {
+    let mut answer = line_answer(line);
+    answer["inventory_changes"] = json!(
+        items
+            .iter()
+            .map(|item| entry(item, -1, "used_up", None, &[]))
+            .collect::<Vec<_>>()
+    );
+    answer
+}
+
+#[tokio::test]
+async fn a_painted_line_using_what_is_not_held_changes_nothing_and_is_judged_again() {
+    let host = scripted_host(vec![
+        uses(
+            "It's finished. I used a board, ochre, lamp black, a little oil, and a rag.",
+            &["boards", "ochre", "lamp_black", "linseed_oil", "rags"],
+        ),
+        uses(
+            "I am out of boards, so there is no study; I only mixed ochre and lamp black.",
+            &["ochre", "lamp_black"],
+        ),
+    ])
+    .await;
+    painters_shelf(&host);
+    let said = done(
+        say(
+            &host,
+            CHARACTER,
+            json!({"intent": "say the study is finished"}),
+        )
+        .await,
+    )
+    .said;
+    assert_eq!(host.calls(), 2);
+    let reason = host.facts_of(1)["now"]["retry_reason"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        reason.contains("insufficient boards (holds 0, asked 1)"),
+        "{reason}"
+    );
+    assert!(reason.contains("insufficient rags") && reason.contains("insufficient linseed_oil"));
+    let facts = host.facts_of(0);
+    let boards = facts["now"]["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == "boards")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        boards["count"], 0,
+        "the facts show the real count: {boards}"
+    );
+    let moved: Vec<(&str, u64, u64)> = said
+        .inventory
+        .iter()
+        .map(|applied| (applied.item.as_str(), applied.before, applied.after))
+        .collect();
+    assert_eq!(moved, [("ochre", 1, 0), ("lamp_black", 2, 1)]);
+}
+
+#[tokio::test]
+async fn a_line_whose_inventory_changes_stand_is_not_asked_again() {
+    let host = scripted_host(vec![cottage_study_split()]).await;
+    cottage_study_hands(&host);
+    let said = done(say(&host, CHARACTER, json!({})).await).said;
+    assert_eq!(host.calls(), 1);
+    assert_eq!(said.inventory.len(), 3);
+    assert!(host.lines_starting_with("WORLD retry").is_empty());
 }
 
 #[tokio::test]
@@ -462,7 +686,9 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
         let quote = said.quotes[0].clone();
         (
             quote.proposed_total_cp,
-            quote.bounds.map(|bounds| u64::from(bounds.clamped_total_cp)),
+            quote
+                .bounds
+                .map(|bounds| u64::from(bounds.clamped_total_cp)),
             quote.bounds.map(|bounds| bounds.floor_total_cp),
         )
     };
@@ -473,7 +699,9 @@ async fn a_quote_is_held_inside_the_stall_and_both_numbers_are_reported() {
         "worded again at the stall's total"
     );
     assert!(
-        host.facts_of(1).to_string().contains("the stall's total for that lot is 43 cp"),
+        host.facts_of(1)
+            .to_string()
+            .contains("the stall's total for that lot is 43 cp"),
         "the retry names the stall's total"
     );
     let high = done(say(&host, "fruit_vendor", json!({})).await).said;

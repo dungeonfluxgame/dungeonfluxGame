@@ -101,7 +101,7 @@ pub(super) async fn read_screen(
                     cause: ShownSceneError::NoBackdrop,
                 })?;
             let close_up = backdrop.plate == PlateKind::CloseUp;
-            let fits = backdrop.plate == PlateKind::Room;
+            let fits = backdrop.plate.has_own_layout();
             (backdrop.picture, backdrop.layout.filter(|_| fits), close_up)
         }
     };

@@ -162,6 +162,21 @@ async fn the_model_is_given_the_picture_and_the_scan_and_the_answer_is_kept_as_a
     let scan = facts["now"]["scan"].as_array().unwrap();
     assert_eq!(scan[0]["who"], json!("you"));
     assert_eq!(scan[0]["id"], json!(region_of(CHARACTER)));
+    // The character's own region is also named once on its own, and the instruction says that the
+    // figure there is them and is told in the first person.
+    assert_eq!(
+        facts["now"]["you"],
+        json!({"region": region_of(CHARACTER), "number": 0})
+    );
+    let instruction = host.instructions_of(0);
+    for part in [
+        "now.you gives the region of the scan that is them",
+        "is the character's own body",
+        "in the first person (I, my), never as a stranger would",
+        "that region's id and subject self",
+    ] {
+        assert!(instruction.contains(part), "{part}");
+    }
     // The thought is a memory of kind thought, owned by the character.
     let kept = crate::world::memory::recent(&host.running.state, CHARACTER, "thought", 10)
         .await
@@ -624,6 +639,12 @@ async fn a_scene_call_over_a_named_list_marks_a_viewer_and_one_refusal_stops_no_
         other => panic!("{other:?}"),
     }
     assert_eq!(host.facts_of(0)["now"]["viewpoint"], json!("viewer"));
+    // A viewer is in no region; a character in the picture is told which region is them.
+    assert!(host.facts_of(0)["now"].get("you").is_none());
+    assert_eq!(
+        host.facts_of(1)["now"]["you"]["region"],
+        json!(region_of("anna"))
+    );
     // Nobody to ask, too many and a bad parallel are refused whole.
     for (body, key) in [
         (json!({"parallel": 0}), "invalid_parallel"),
@@ -813,13 +834,57 @@ fn the_answer_is_written_as_lines_the_runner_reads() {
     assert!(lines[0].starts_with("danny perceives (mode=glance vision=true picture=plate.png"));
     assert_eq!(
         lines[1],
-        "see: a well, mossy | region=- item=well salience=70"
+        "see: a well, mossy | region=- item=well salience=70 subject=place"
     );
     assert_eq!(lines[2], "thought: That well wants painting.");
     assert_eq!(lines[3], "attention: item:well");
     assert_eq!(lines[4], "feeling: joy +12");
     assert_eq!(lines[5], "wants: paint it; rest");
     assert_eq!(lines[6], "kept: thought-1-0");
+}
+
+#[test]
+fn a_thing_added_to_the_place_is_written_with_its_name_for_the_runner_and_one_left_out_is_not() {
+    let perceived: Perceived = serde_json::from_value(json!({
+        "who": "danny", "mode": "glance", "picture": "plate.png", "vision": true,
+        "viewpoint": {"from": "pictured", "region": "r0000000a"}, "regions": 1,
+        "sees": [{"what": "a door", "region": null, "item": "wooden_door", "salience": 70}],
+        "new_things": [
+            {"id": "wooden_door", "name": "weathered wooden door",
+             "look": "Grey\ntimber, black iron latch.", "added": true},
+            {"id": "sky", "name": "sky", "look": "Clouds.", "added": false,
+             "why_not": "a vista"}
+        ],
+        "thinking_about": "That door.", "attention": {"on": "item", "id": "wooden_door"},
+        "feeling": null, "wants": [], "leak_suspect": false, "thought": null, "duration_ms": 5
+    }))
+    .unwrap();
+    let text = format_perceived(&perceived);
+    let things: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("thing "))
+        .collect();
+    assert_eq!(
+        things,
+        ["thing wooden_door (weathered wooden door): Grey timber, black iron latch."]
+    );
+}
+
+#[tokio::test]
+async fn a_sight_at_the_characters_own_region_is_themselves_whatever_subject_the_model_gave() {
+    let mut mirror = plain_answer(
+        vec![{
+            let mut man = sight("a bearded man beside the easel", "person", None, 70);
+            man["region"] = json!(region_of(CHARACTER));
+            man
+        }],
+        json!({"region": null, "item": null}),
+    );
+    mirror["new_things"] = json!([]);
+    let host = host_of(&[CHARACTER], vec![mirror]).await;
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(seen.sees[0].subject.key(), "self");
+    assert!(!format_perceived(&seen).contains("subject=person"));
 }
 
 /// A road designed in play, with one thing in sight: the active place new things are added to.
@@ -1141,7 +1206,7 @@ async fn a_bad_proposal_is_dropped_with_what_to_change_and_the_answer_is_kept() 
         ),
         (
             case(&|said| {
-                said["attention"] = json!({"region": region_of(CHARACTER), "item": null});
+                said["attention"] = json!({"region": null, "item": "milestone"});
             }),
             "bad_new_thing",
             "only one new thing may be attended to",
@@ -1230,4 +1295,416 @@ async fn a_bad_core_still_asks_again_with_the_reason_whatever_the_proposals_hold
         thing_cause_of(empty, &[CHARACTER]).await,
         PerceiveCause::EmptyThought
     );
+}
+
+#[tokio::test]
+async fn a_vista_is_dropped_and_an_object_is_kept() {
+    let mut said = wall_answer("old-wall");
+    said["sees"] = json!([
+        {"what": "a distant town on the hill", "region": null, "item": null, "salience": 60},
+        {"what": "an old pale wall", "region": null, "item": null, "salience": 80},
+        {"what": "a trough", "region": null, "item": null, "salience": 50}
+    ]);
+    said["new_things"] = json!([
+        {"see": 0, "id": "distant-town", "name": "distant town", "look": "Roofs far off.",
+         "attended": false, "kind": "vista"},
+        {"see": 1, "id": "old-wall", "name": "old wall", "look": "Pale stone.",
+         "attended": true, "kind": "object"},
+        {"see": 2, "id": "trough", "name": "trough", "look": "Hollowed oak.",
+         "attended": false, "kind": null}
+    ]);
+    let (host, seen) = perceived_with(&[CHARACTER], said).await;
+    // The sight and thought are kept whole; the vista is no thing; the objects are.
+    assert_eq!(seen.sees.len(), 3);
+    assert_eq!(seen.thinking_about, "That wall wants painting.");
+    let by_id = |id: &str| seen.new_things.iter().find(|thing| thing.id == id).unwrap();
+    assert!(!by_id("distant-town").added);
+    assert!(by_id("old-wall").added && by_id("trough").added);
+    assert!(
+        by_id("distant-town")
+            .why_not
+            .as_deref()
+            .unwrap()
+            .contains("a vista")
+    );
+    assert_eq!(seen.sees[0].item, None);
+    assert_eq!(ids_here(&host), ["milestone", "old-wall", "trough"]);
+    assert_eq!(
+        host.lines_starting_with("PERSONA thing_unadded"),
+        ["PERSONA thing_unadded who=innkeeper error=vista"]
+    );
+    // A kind that is neither is a bad proposal, dropped the same way.
+    let mut odd = wall_answer("old-wall");
+    odd["new_things"][0]["kind"] = json!("scenery");
+    let (_, seen) = perceived_with(&[CHARACTER], odd).await;
+    assert!(!seen.new_things[0].added);
+    assert!(
+        seen.new_things[0]
+            .why_not
+            .as_deref()
+            .unwrap()
+            .contains("neither object nor vista")
+    );
+}
+
+/// A frame judge over the same host and a script of judgements; answers what it was asked.
+async fn frame_judge_over(
+    host: &ScriptedHost,
+    answers: usize,
+) -> (u16, Arc<std::sync::Mutex<Vec<df_ai::text::TextRequest>>>) {
+    use df_ai::text::TextOutcome;
+    use df_ai::text_fixture::ScriptedBackend;
+
+    use crate::text::{BackendChoice, TextRuntime};
+
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let judgement = json!({
+        "changed_percent": 10, "changes": [], "next_picture": "The road, as it was.",
+        "shot": "wide", "inspected_item": null, "new_look": false
+    });
+    let script = ScriptedBackend::new(
+        (0..answers).map(|_| TextOutcome::Answered(judgement.clone())),
+        calls,
+    )
+    .recording(Arc::clone(&asked));
+    let recorder = Arc::clone(&host.running.state);
+    let text = TextRuntime::new(
+        BackendChoice::Scripted(Arc::new(script), None),
+        Arc::new(move |line| recorder.record_line(line)),
+    );
+    let app = super::frame::router_with(Arc::clone(&host.running.state), Arc::new(text));
+    let listener = crate::server::bind(0).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        // The server runs until the test's runtime stops; its end is the test's end.
+        let _ = axum::serve(listener, app).await;
+    });
+    (port, asked)
+}
+
+async fn judged(port: u16) -> Value {
+    let body = json!({
+        "picture": "A road with an old wall.",
+        "lines": [format!("{CHARACTER}: I'll step up to that wall.")],
+        "speakers": [
+            {"id": CHARACTER, "display_name": "Marta", "job": "Role: an innkeeper"},
+            {"id": "wren", "display_name": "Wren", "job": "Role: a passer-by"}
+        ]
+    });
+    post_json(port, "/dev/persona/frame", &body).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_speakers_attention_reaches_the_frame_judge_for_them_only_and_expires_with_the_place() {
+    // The speaker perceives the road and attends to the old wall.
+    let mut said = wall_answer("old-wall");
+    said["sees"][0]["item"] = json!("old-wall");
+    said["attention"] = json!({"region": null, "item": "old-wall"});
+    said["new_things"] = json!([]);
+    let mut nothing = said.clone();
+    nothing["sees"][0]["item"] = json!(null);
+    nothing["attention"] = json!({"region": null, "item": null});
+    let host = host_of(&[CHARACTER, "wren"], vec![said, nothing]).await;
+    host.running.write_asset(
+        "world/state.json",
+        &json!({
+            "place": "road",
+            "designed": {
+                "id": "road", "name": "A road", "description": "A dusty road.", "stalls": [],
+                "things": [
+                    {"id": "milestone", "name": "milestone", "look": "Worn grey stone."},
+                    {"id": "old-wall", "name": "old wall", "look": "Pale stone."}
+                ]
+            }
+        })
+        .to_string(),
+    );
+    done(perceive(&host, json!({"who": CHARACTER})).await);
+    let (port, asked) = frame_judge_over(&host, 4).await;
+    // At the place they perceived: the speaker's attention, and nobody else's.
+    judged(port).await;
+    assert_eq!(
+        asked.lock().unwrap()[0].facts["attending"],
+        json!([{"speaker": CHARACTER, "item": "old-wall"}])
+    );
+    assert!(
+        asked.lock().unwrap()[0]
+            .instructions
+            .contains("attending lists")
+    );
+    // Another place: it expires with the place, though the same thing is there.
+    host.running.write_asset(
+        "world/state.json",
+        &json!({
+            "place": "lane",
+            "designed": {
+                "id": "lane", "name": "A lane", "description": "A lane.", "stalls": [],
+                "things": [{"id": "old-wall", "name": "old wall", "look": "Pale stone."}]
+            }
+        })
+        .to_string(),
+    );
+    judged(port).await;
+    assert_eq!(asked.lock().unwrap()[1].facts["attending"], json!([]));
+    // Back at the road the thought was had at, it holds again.
+    host.running.write_asset(
+        "world/state.json",
+        &json!({
+            "place": "road",
+            "designed": {
+                "id": "road", "name": "A road", "description": "A dusty road.", "stalls": [],
+                "things": [{"id": "old-wall", "name": "old wall", "look": "Pale stone."}]
+            }
+        })
+        .to_string(),
+    );
+    judged(port).await;
+    assert_eq!(
+        asked.lock().unwrap()[2].facts["attending"],
+        json!([{"speaker": CHARACTER, "item": "old-wall"}])
+    );
+    // A newer perception that attends to nothing ends it.
+    done(perceive(&host, json!({"who": CHARACTER})).await);
+    judged(port).await;
+    assert_eq!(asked.lock().unwrap()[3].facts["attending"], json!([]));
+}
+
+/// A road designed in play with two things in sight.
+fn road_of_two(host: &ScriptedHost) {
+    host.running.write_asset(
+        "world/state.json",
+        &json!({
+            "place": "road",
+            "designed": {
+                "id": "road", "name": "A road", "description": "A dusty road.", "stalls": [],
+                "things": [
+                    {"id": "milestone", "name": "milestone", "look": "Worn grey stone."},
+                    {"id": "cottage", "name": "cottage", "look": "Dark timber and thatch."}
+                ]
+            }
+        })
+        .to_string(),
+    );
+}
+
+/// The character carries a brush.
+fn carrying_a_brush(host: &ScriptedHost) {
+    host.running.write_asset(
+        "world/inventory/innkeeper.json",
+        &json!({
+            "schema": 1, "owner": CHARACTER, "kind": "character",
+            "items": [{"id": "brush", "name": "brush", "look": "Splayed bristles.",
+                       "use": "kept", "count": 1}]
+        })
+        .to_string(),
+    );
+}
+
+fn sight(what: &str, subject: &str, item: Option<&str>, salience: u32) -> Value {
+    json!({"what": what, "region": null, "item": item, "salience": salience, "subject": subject})
+}
+
+fn plain_answer(sees: Vec<Value>, attention: Value) -> Value {
+    json!({
+        "sees": sees, "thinking_about": "A thought.", "attention": attention,
+        "feeling": null, "wants": [], "new_things": [],
+        "leaks_private_side": false, "leaked_excerpt": null
+    })
+}
+
+#[tokio::test]
+async fn the_character_themselves_is_never_the_attention_and_the_place_is_chosen_instead() {
+    // Attention on their own region and on a sight marked self: cleared, then the place's most
+    // salient thing is chosen.
+    let mut own = plain_answer(
+        vec![
+            {
+                let mut coat = sight("my dark coat feels heavy", "self", None, 90);
+                coat["region"] = json!(region_of(CHARACTER));
+                coat
+            },
+            sight("a worn milestone", "place", Some("milestone"), 30),
+            sight("a dark cottage", "place", Some("cottage"), 70),
+        ],
+        json!({"region": region_of(CHARACTER), "item": null}),
+    );
+    own["new_things"] = json!([]);
+    let host = host_of(&[CHARACTER], vec![own]).await;
+    road_of_two(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(
+        seen.attention,
+        Attended::Item {
+            id: "cottage".to_owned()
+        }
+    );
+    assert_eq!(
+        host.lines_starting_with("PERSONA attention_cleared"),
+        ["PERSONA attention_cleared who=innkeeper why=self"]
+    );
+    assert_eq!(seen.sees[0].subject.key(), "self");
+    // The thought keeps the sights, not the coat.
+    let kept = crate::world::memory::recent(&host.running.state, CHARACTER, "thought", 1)
+        .await
+        .unwrap();
+    assert!(
+        !kept[0].description.contains("dark coat"),
+        "{}",
+        kept[0].description
+    );
+    assert!(kept[0].description.contains("dark cottage"));
+    // A sight marked self by item, with the attention on that item, is cleared the same way.
+    let by_item = plain_answer(
+        vec![sight("my hat", "self", Some("milestone"), 80)],
+        json!({"region": null, "item": "milestone"}),
+    );
+    let host = host_of(&[CHARACTER], vec![by_item]).await;
+    road_of_two(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(seen.attention, Attended::None);
+    assert!(
+        !host
+            .lines_starting_with("PERSONA attention_cleared who=innkeeper why=self")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn what_the_character_carries_is_no_sight_no_attention_and_no_new_thing() {
+    // Attention on a carried item: cleared; a carried sight is no place thing and is no proposal.
+    let mut held = plain_answer(
+        vec![
+            sight("I hold a brush", "carried", Some("brush"), 95),
+            sight("a worn milestone", "place", Some("milestone"), 20),
+        ],
+        json!({"region": null, "item": "brush"}),
+    );
+    held["new_things"] = json!([
+        {"see": 0, "id": "my-brush", "name": "brush", "look": "Bristles.",
+         "attended": false, "kind": "object"}
+    ]);
+    let host = host_of(&[CHARACTER], vec![held]).await;
+    road_of_two(&host);
+    carrying_a_brush(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(host.calls(), 1);
+    // Never the brush; the milestone is chosen instead.
+    assert_eq!(
+        seen.attention,
+        Attended::Item {
+            id: "milestone".to_owned()
+        }
+    );
+    assert_eq!(
+        host.lines_starting_with("PERSONA attention_cleared"),
+        ["PERSONA attention_cleared who=innkeeper why=carried"]
+    );
+    assert!(!seen.new_things[0].added);
+    assert!(
+        seen.new_things[0]
+            .why_not
+            .as_deref()
+            .unwrap()
+            .contains("what they carry")
+    );
+    assert_eq!(ids_here(&host), ["milestone", "cottage"]);
+    // With only carried sights and self, the attention stays nothing.
+    let only_mine = plain_answer(
+        vec![
+            sight("I hold a brush", "carried", Some("brush"), 95),
+            sight("my coat", "self", None, 90),
+        ],
+        json!({"region": null, "item": null}),
+    );
+    let host = host_of(&[CHARACTER], vec![only_mine]).await;
+    road_of_two(&host);
+    carrying_a_brush(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(seen.attention, Attended::None);
+}
+
+#[tokio::test]
+async fn a_place_thing_is_chosen_when_nothing_else_is_and_a_person_is_no_thing() {
+    // No attention given: the most salient thing of the place is chosen (the first of equals).
+    let said = plain_answer(
+        vec![
+            sight("a worn milestone", "place", Some("milestone"), 40),
+            sight("a dark cottage", "place", Some("cottage"), 75),
+            sight("a stranger", "person", None, 99),
+        ],
+        json!({"region": null, "item": null}),
+    );
+    let host = host_of(&[CHARACTER], vec![said]).await;
+    road_of_two(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(
+        seen.attention,
+        Attended::Item {
+            id: "cottage".to_owned()
+        }
+    );
+    assert!(
+        host.lines_starting_with("PERSONA attention_cleared")
+            .is_empty()
+    );
+    // A proposal for a person (by subject, with no region) is dropped as a person.
+    let mut stranger = plain_answer(
+        vec![sight("a stranger on the road", "person", None, 90)],
+        json!({"region": null, "item": null}),
+    );
+    stranger["new_things"] = json!([
+        {"see": 0, "id": "stranger", "name": "stranger", "look": "A traveller.",
+         "attended": false, "kind": "object"}
+    ]);
+    let host = host_of(&[CHARACTER], vec![stranger]).await;
+    road_of_two(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert!(!seen.new_things[0].added);
+    assert_eq!(
+        host.lines_starting_with("PERSONA thing_unadded"),
+        ["PERSONA thing_unadded who=innkeeper error=new_thing_for_person"]
+    );
+    // A thing just added is attended to when nothing else is, the strongest first.
+    let mut added = plain_answer(
+        vec![
+            sight("a low wall", "place", None, 40),
+            sight("a stout gate", "place", None, 85),
+        ],
+        json!({"region": null, "item": null}),
+    );
+    added["new_things"] = json!([
+        {"see": 0, "id": "low-wall", "name": "low wall", "look": "Stone.",
+         "attended": false, "kind": "object"},
+        {"see": 1, "id": "gate", "name": "gate", "look": "Oak.",
+         "attended": false, "kind": "object"}
+    ]);
+    let host = host_of(&[CHARACTER], vec![added]).await;
+    road_of_two(&host);
+    let seen = done(perceive(&host, json!({"who": CHARACTER})).await);
+    assert_eq!(
+        seen.attention,
+        Attended::Item {
+            id: "gate".to_owned()
+        }
+    );
+}
+
+#[tokio::test]
+async fn the_instruction_keeps_the_character_and_what_they_carry_out_of_the_sights() {
+    let host = host_of(
+        &[CHARACTER],
+        vec![plain_answer(vec![], json!({"region": null, "item": null}))],
+    )
+    .await;
+    done(perceive(&host, json!({"who": CHARACTER})).await);
+    let instruction = host.instructions_of(0);
+    for part in [
+        "does not list themselves, what they wear or what they carry as sights",
+        "the sights are the place and the others in it",
+        "self and carried entries never become what they attend to",
+        "choose the one that draws them most",
+    ] {
+        assert!(instruction.contains(part), "{part}");
+    }
 }
