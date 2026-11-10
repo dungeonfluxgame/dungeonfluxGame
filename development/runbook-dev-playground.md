@@ -3,9 +3,11 @@
 Verified live on 2026-11-07 against commit `f2a0160f` plus the market and residents work (Windows ARM64, Git Bash). Every
 recipe below was run end to end. The flowing quest ("Play the quest end to end") was verified on
 2026-11-08 at `f0bd97da` (run 111: market, inn, graveyard, the trap sprung, the end). The free
-roam ("Free roam: the current run procedure") was run five times on 2026-11-09 (stamps 11091737,
-11091838, 11092018, 11092200 and 11092245) on the Forge image backend at 512x512 and 20 steps;
-what those runs found and what is still open are in "Known gaps". This is
+roam ("Free roam: the current run procedure") was run ten times: runs 1 to 5 on 2026-11-09 on the
+Forge image backend at 512x512 and 20 steps, runs 6 to 10 on 2026-11-10 on the Codex image
+backend; runs 9 and 10 (stamps 11100339 and 11100557) are the ones this procedure was last
+checked against. What those runs found and what is still open are in "Known
+gaps". This is
 a development runbook for the dev host, not the
 shipped launcher. Plan: [scene-transitions.md](../planning/scene-transitions.md).
 
@@ -27,13 +29,16 @@ confirmed.
 | New plate generated, characters found, backdrop swapped, spinner shown | `move act <who> plate=NAME ...` | Codex images + fal SAM scan + Codex text |
 | One art style for every plate | `BriefStyle` in `movement/brief.rs` | none |
 
-## Free roam: the current run procedure (verified 2026-11-09)
+## Free roam: the current run procedure (verified 2026-11-10)
 
 One roam is Danny, a lone painter, walking 20 moves (`market-threads/free-roam.beats`) and then
 showing his paintings. "Free roam" says what each part does; this section is how to run it. The
-steps are the ones that worked for runs 3 to 5 on 2026-11-09. Pictures come from the Forge studio
-(Qwen Image at 512x512, 20 steps, no spend), text from Codex, the character scan from fal and
-voices from ElevenLabs (both spend). Run everything from the repository root in Git Bash, on the
+steps are the ones that worked for runs 3 to 5 on 2026-11-09 (Forge pictures) and runs 6 to 10 on
+2026-11-10 (Codex pictures). Text comes from Codex, the character scan from fal and voices from
+ElevenLabs (both spend). Pictures come from either backend, and the steps say where they differ:
+**Codex** (runs 6 to 10, the current default: a move's plate and walk sights take 1.5 to 3
+minutes) or the **Forge** studio (Qwen Image at 512x512, 20 steps, no spend). The beats file asks
+for at most three reference pictures a plate (`@refs max=3`) on either. Run everything from the repository root in Git Bash, on the
 one dev host, port 7879 (see "Standing rules"). Each block assumes the shell of the one before.
 
 Before step 1 these must hold:
@@ -45,7 +50,8 @@ Before step 1 these must hold:
   `item-danny-*.png` sheets. They are gitignored. If the scratch is rebuilt, make them again with
   "Making the starting pictures" under "Free roam".
 
-**1. Look at the Forge studio.** Its queue is one line: a head job that waits for memory, was
+**1. Look at the Forge studio** (Forge pictures only; with Codex pictures go on to step 2). Its
+queue is one line: a head job that waits for memory, was
 interrupted or needs a person holds every render behind it. List the open jobs:
 
 ```bash
@@ -60,7 +66,9 @@ powershell -NoProfile -File "C:\Users\mreca\Desktop\Game Development Studio\star
 ```
 
 **2. Stop the host you own, and only that one.** Find its process by the command line, never by
-name: other agents run hosts of their own.
+name: other agents run hosts of their own. The filter needs both the command line and the process
+name: the PowerShell that runs the query carries the text `serve --port 7879` in its own command
+line, so a command-line match alone stops your own shell too.
 
 ```bash
 P=$(powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object {
@@ -102,14 +110,23 @@ numbered paintings and galleries are named by owner, not by run, so a new run wo
 them. Use the last run's number for `RUN`. A glob with no match prints an error; ignore it:
 
 ```bash
-RUN=5; S=artifacts/tmp/persona-live/playground; A=artifacts/tmp/roam-live/run$RUN-archive
+RUN=10; S=artifacts/tmp/persona-live/playground; A=artifacts/tmp/roam-live/run$RUN-archive
 mkdir -p $A/media && mv $S/world/memory $A/world-memory
 mv $S/media/item-danny-painting_* $S/media/gallery-danny-* $S/media/*-show* $A/media/
 ```
 
+The `*-show*` glob also takes the show's music (`tempo-show-<hash>.mp3`, the archives of runs 8 and 9
+hold one), so the next run composes it again (the start of a run prints `1 composed (75 s of music
+asked)`). Copy the finished run's `host.log` and `play<N>.log` into the archive too (runs 8 and 9
+did); the next host overwrites its log.
+
 **6. Start the host** with the scratch playground, the Forge image backend and Codex text. The
 host does not read `.env`: export the keys into its environment. Leave out `--quiet`: the audit
-lines are how a run is read.
+lines are how a run is read. For **Codex pictures** (runs 6 to 10) the block is the same with
+`DF_IMAGERY_BACKEND=codex-cli`; the scratch script `artifacts/tmp/danny-sheets/start-host-codex.sh
+roam-00.png` is exactly that (gitignored, so it does not survive a cleanup: rebuild it from this
+block). It sends the host log to `artifacts/tmp/market/host.log`, goes to the `weapons_stall`
+fixture and then shows the plate named in its argument, so step 7 is done by it.
 
 ```bash
 CODEX=$(ls -d "$LOCALAPPDATA"/OpenAI/Codex/bin/*/codex.exe | tail -1)
@@ -151,15 +168,24 @@ $D dev --port 7879 world place -
 ```
 
 **9. Seed what he carries.** The runner seeds the same file again from its `@inventory` line;
-doing it here shows what he holds before the run:
+doing it here shows what he holds before the run. He starts with boards 12, linseed oil 12, rags 12,
+sketchbook pages 18, charcoal 6, ochre, umber and lead white 6 each, verdigris, madder and lamp
+black 5 each, brushes 5, one easel, one satchel and 20 silver pennies (the file's counts; runs 9
+and 10 started so):
 
 ```bash
 $D dev --port 7879 world inventory set danny character development/market-threads/danny.inventory.json
 ```
 
-**10. Set the backend size and steps.** A `media backend` call clears what it does not repeat,
-so say all of them. The studio's own default is 40 steps; 20 at 512x512 is what the timings below
-were measured with:
+**10. Set the image backend.** For Codex pictures:
+
+```bash
+$D dev --port 7879 media backend codex-cli
+```
+
+For Forge pictures set the size and steps. A `media backend` call clears what it does not repeat,
+so say all of them. The studio's own default is 40 steps; 20 at 512x512 is what the Forge timings
+below were measured with:
 
 ```bash
 $D dev --port 7879 media backend forge project=41fbb3c9-ac91-4897-b890-7a056b4ae371 size=512x512 steps=20
@@ -207,22 +233,26 @@ sed -i 's#^cd .*#cd /c/Users/mreca/Desktop/dungeonfluxGame#' artifacts/tmp/roam-
 frame transcripts (`frames<N>-<plate>.log` beside it):
 
 ```bash
-N=6; DF_TABLE_EXE=$D DF_TABLE_PORT=7879 FRAMES_LOG=artifacts/tmp/roam-live/frames$N.log bash artifacts/tmp/roam-live/runner.sh development/market-threads/free-roam.beats > artifacts/tmp/roam-live/play$N.log 2>&1 &
+N=11; DF_TABLE_EXE=$D DF_TABLE_PORT=7879 FRAMES_LOG=artifacts/tmp/roam-live/frames$N.log bash artifacts/tmp/roam-live/runner.sh development/market-threads/free-roam.beats > artifacts/tmp/roam-live/play$N.log 2>&1 &
 ```
 
 **16. Follow it** with a monitor. `grep --line-buffered` keeps the pipe flowing but `cut` buffers
 its own output, so `stdbuf -oL` goes in front of it:
 
 ```bash
-tail -n +1 -f artifacts/tmp/roam-live/play$N.log | grep --line-buffered -E '^\[(move|refs|memory|see|thought|look|insert|declare|painted|trade|inventory|show)' | stdbuf -oL cut -c1-260
+tail -n +1 -f artifacts/tmp/roam-live/play$N.log | grep --line-buffered -E '^\[(move|refs|walk|town|memory|see|thought|thing|dwell|look|insert|declare|painted|trade|inventory|reveal|pace|time|show)' | stdbuf -oL cut -c1-260
 ```
 
 **17. Reload the page and click Enable sound.** Open `http://localhost:7879/playground/`, reload
 it so it runs the package built in step 4, and click Enable sound in the toolbar: the click is
 what unlocks the page's audio. `$D dev --port 7879 playground` shows `tts: true` and `audio
 unlocked` when it took. A host restart turns TTS off again (step 12). Do this in the first
-minute: the first move takes about 65 s before its plate is up. Do not reload the page again
-mid-run.
+minute: the first move's plate is up after about 65 s on Forge and 1.5 to 2.5 minutes on Codex
+(run 10: 145 s). Do not reload the page again mid-run.
+
+A whole run on Codex takes about 6 minutes a move (5 to 6.5 minutes, longest 8.4): run 9 took 1 h
+51 min for its 20 moves and then the show, and run 10's 15 moves took 1 h 28 min. Plan on about 2
+hours for 20 moves plus a few minutes for the show.
 
 The run ends with the `[show]` lines. Leave the host up while the inspector reads the run (see
 "Standing rules"); stop it with step 2 when done. Stop the runner and the monitor only if you
@@ -236,21 +266,29 @@ replies. A move that did not go live says why and he tries the next one from whe
 | Line | Meaning |
 | --- | --- |
 | `[move NN] <way> \| said \| read \| place \| plate \| jev_ms design_ms plate_ms live_at_ms` | The move's trace (the host's `TRANSITION` records). `said` is his line, `read` Jev's reading of it (`kind`, `who`, `to`), `place` the designed place, `plate` the picture's name `roam-<MMDDHHMM>-NN`. `jev_ms` covers both readings when Jev read it twice, `design_ms` the design call, `plate_ms` the picture made (studio job plus scan), `live_at_ms` when the plate was behind the scene, from the move's start. |
-| `[refs NN] shown base attached count maximum left_out` | What the picture was given: the design's items in sight, its base, the sheets attached (`ref-danny.png`, `item-danny-*.png`), the backend's budget (Forge 8) and what did not fit and was told in words. |
+| `[refs NN] shown base attached count maximum left_out` | What the picture was given: the design's items in sight, its base, the sheets attached (`ref-danny.png`, `item-danny-*.png`), the backend's budget (Forge 8; the roam asks for 3, `@refs max=3`) and what did not fit and was told in words. |
+| `[town NN] <look>` | The look of the town that every sight and place of its moves is painted after (a town or market move gives it; the road move out ends it). |
+| `[walk NN] stage k/N <sight> ..`, `[walk NN] <picture> made in .. ms`, `[walk NN] stage k/N .. shown_at_ms up_ms`, `[walk NN] arrived stages=S/N walk_ms` | The sights on the way to a place (`@walk`, "Walking about town"): each is made with the place, shown in order for at least 6 s, and spread over the arrival plate's wait. `stage k/N .. skipped reason=late\|failed` is a sight passed over; `[walk NN] memory ..` keeps each as a memory of kind `walk`. |
 | `place <plate>: the active place, N thing(s) worth a close look` | The designed place became the world's active place with N things the camera can show. |
 | `[memory NN] captured scene ..` | The plate was kept as a memory of kind `scene` (standard memory API). A last `[memory] ..` line names the owners and what they keep. |
 | `[see NN] vision=true <what he sees> \| attending: <thing>` | Perception: what the model saw in the picture on screen, and what he attends to. |
 | `[thought NN] <text>` | His thought about it (kept as a memory of kind `thought`). A new thing he noticed that the camera can go to is added to the place (`WORLD thing_added .. via=perceive` in the host log). |
+| `[thing NN] <id> (<name>): <look>` | A thing the perception found in the plate and added to the place, so the camera can go to it (named; `(?)` is the unnamed form of runs 7 to 9). |
+| `[dwell NN] the view was up <s> s before he spoke of it (dwell <s> s)` | How long the new plate was on screen before his line, against the beats' `@roam_dwell` (target 6 s). The wait is the perception, one Codex call of about 11 to 15 s (`PERSONA perceived .. duration_ms=`), so it is 10 to 14 s on Codex (runs 9 and 10), not the 6 s asked for. The show's `[dwell]` line is the town square's wait for the show plate. |
 | `[look NN] <line>` | He steps up to a thing and says what he sees of it up close. |
 | `[insert NN] item=<id> (<name>) frame shown_at_ms made_ms ended_at_ms up_ms` | The close-up insert: the frame judge named the item, the insert was painted from its look and shown (`shown_at_ms`), how long it took (`made_ms`) and how long it stayed (`up_ms`). `none: the judge saw no new close look` when it named none. From the host's `PERSONA frame_judged` and `frame_timing` lines (`events area=PERSONA`). |
 | `[declare NN] <words>` then `[declare NN] plate shown_at_ms made_ms queue_wait_ms superseded ended_at_ms up_ms` | He declares what his hands are doing and the emergency plate of it: made, shown at once (`queue_wait_ms` is the wait for the screen after it was made), and its hold. |
 | `[painted NN] <line>` then `[inventory] <item> a -> b (<why>)` | The finishing line, judged against what he really holds: the board and pigments are used up, brushes and easel are kept. |
 | `[memory NN] painted <id> seq picture after plate` or `not painted: ..` or `study blank, not stored` | The study painting was kept as a memory of kind `artwork` and as a kept item, or why it was not made (no board used up) or removed (near blank). |
+| `[reveal NN] painting <picture> \| <title> \| 10 s` then `[reveal NN] view <picture> \| The view \| 6 s` | The finished painting is shown full frame with its title, then the view it was painted from (`@roam_reveal 10 6`). |
+| `[pace NN] painting <picture> up <ms> of <held ms>, view <picture> up <ms> of <held ms>` | What the host measured: runs 9 and 10 held 9992 to 10054 ms of 10000 and 6071 to 6277 ms of 6000 (within about 300 ms). |
+| `[time NN] move took <s> s (plate .., of which walk .., look .., declare .., study .., reveal ..)` | Where the move's seconds went. `study` is only the wait left after the declaration (the study is made in the background). |
 | `[trade NN] <line>` then `[trade NN] changes: ..; gained: ..` | A market stop (`@way_arrival market`): the sale of a painting and the purchases, applied to what he holds (`gained: no gain recorded` when nothing stood). |
 | `[inventory] refused (move NN): <error>` | The host refused a change (`insufficient`, `kept_item`, `unsourced_gain`, ..). |
 | `[inventory NN] a->b, ...` | What he held before and after the move, whatever its lines said. |
 | `[paint NN] <line>` | His line toward `@roam_paint`; only in a beats file that has no `@roam_declare`. |
-| `[show] composed gallery of N pieces -> gallery-danny-1.png`, `[show] plate .. after ..`, `[show] <line>` | The day's end: the paintings composed into one sheet, the show plate edited after it and his character sheet, and what he says. |
+| `[show] composed gallery of N pieces -> gallery-danny-1.png`, `[show] plate .. after ..`, `[show] piece <id> <picture> \| <title> \| 5 s`, `[pace show] piece <picture> up <ms> of 5000 ms`, `[show] <line>`, then `[memory] owners: ..` | The day's end: the paintings composed into one sheet, the show plate edited after it and his character sheet, the last 20 paintings (`@roam_show_each 20 5`: count, seconds) shown for 5 s each, then the show plate stays up (run 9, with a count of 6, measured 5005 to 5236 ms; a piece that was not shown reads `piece - up - of 5000 ms`), what he says, and the owners' memory counts. |
+| `[tempo NN] ..`, `[music NN] cue=.. track=.. \| decision=..` | The tempo engine and the music director's cue for the move ("Tempo and the music director"). |
 
 ### Measured timings (runs 4 and 5, 2026-11-09)
 
@@ -270,6 +308,31 @@ lines and the host's `PERSONA frame_timing` and `PERSONA declared` lines.
 
 These are observed ranges, not limits: read the real values from the run's own log. Before the
 512x512 setting a 1664x928 plate at 40 steps took 103 to 226 s (see "Image vendor limits").
+
+**Codex pictures (runs 9 and 10, 2026-11-10)**, from the `[move]`, `[time]`, `[insert]`, `[declare]`,
+`[reveal]`, `[pace]` and `[dwell]` lines; run 9 has 18 timed moves, run 10 has 15.
+
+| Stage | Measured |
+| --- | --- |
+| Jev reads the line (`jev_ms`) | 3.4 to 6.7 s, median 4.2 s |
+| Design call (`design_ms`) | 6.5 to 26 s, median 8.6 s (the long ones asked again) |
+| Move plate with its walk sights (`[time]` plate) | 97 to 173 s (the walk part 5 to 75 s) |
+| Insert made (`made_ms`) | 38 to 56 s; up 20.0 to 20.3 s |
+| Declared plate made (`made_ms`) | 59 to 138 s; shown at once (`queue_wait_ms` 21 to 69 ms); up 20.0 to 20.3 s |
+| Painting reveal, then its view | 10 s and 6 s, measured 9992 to 10054 ms and 6071 to 6277 ms |
+| Walk sight (`up_ms`) | at least 5.99 s (the beats ask for 6 s); the arrival plate follows it |
+| New plate up before he speaks (`[dwell]`) | 10 to 14 s in run 10, 10 to 20 s in run 9 (target 6 s) |
+| A whole move (`[time]`) | run 9: 232 to 503 s, mean 357 s; run 10: 291 to 391 s, mean 349 s |
+
+### Run history
+
+| Run | Pictures | How it went |
+| --- | --- | --- |
+| 1 to 5 (2026-11-09) | Forge | Fixes found one run at a time; run 3 reached the show, runs 4 and 5 were stopped at moves 9 and 12. Details in "Known gaps". |
+| 6, 7 (2026-11-10) | Codex | Run 6 stopped on purpose at move 5; run 7 stopped after move 10 (the runner went quiet; why is not recorded, see H-1). |
+| 8 | Codex | Moves 1 to 8; the boards ran out and it was stopped. |
+| 9 (11100339) | Codex | All 20 moves and the show: 12 paintings, 0 duplicate Dannys in 17 declared plates, the show stepped 4 of its 6 pieces (`queue_full`, since fixed); two market moves lost, no board bought. |
+| 10 (11100557) | Codex | Stopped by the owner at move 15 of 20: 15 moves timed, 0 refusals, the first board restock (move 7: boards 7 to 12). The show was not reached. |
 
 ## Standing rules
 
@@ -2651,7 +2714,7 @@ marked `TODO(DEV-12)`. The transition's Generating, Locating and Placing timings
 after the plate call returns. `persona converse` has no topic shifts. Each plate run spends an
 image generation and a fal scan.
 
-**H-1, "the host stops logging" (2026-11-10): not a host defect.** On the live host the log was
+**H-1, "the host stops logging" (2026-11-10): CLOSED, not a host defect.** On the live host the log was
 checked read-only after run 9: `latest` did not move for a `GET` and a `world inventory get`
 because a successful read writes no line by design (`server::logs_served`: only a `/dev/` change or a
 refusal is an `HTTP served` line). A request the host does log moved it at once (`GET
@@ -2665,15 +2728,20 @@ means the driver stopped, not the log. To tell quiet from stuck, probe with a re
 always logs: `curl -H 'Host: probe.invalid' localhost:<port>/dev/host/status` (answers 403, adds
 `CANVAS reject cause=forbidden_request` and `HTTP refused ...`) and compare `log.latest` in
 `/dev/host/status` before and after. A probe that does not move it would be a real H-1; none has
-been seen. Runs 6 and 7: only `run6-host.log` survives (it ends on page `CLIENT gone` lines at
+been seen: `host.log` grew to the end of runs 8 and 9 and through run 10's 15 moves, and the freeze
+watch was stopped. A terminal that fails a write is also covered now (`sink.rs`): the first failure
+is one `HOST log_sink_failed kind=..` line and every line after it is also appended to
+`host-terminal.log` in the playground directory (unit-tested, never triggered live). Runs 6 and 7:
+only `run6-host.log` survives (it ends on page `CLIENT gone` lines at
 00:48); the runners' last lines (`play6.log` 00:43, `play7.log` 02:34) precede the host logs' last
 lines by about 4 and 2 minutes, so those runs stalled or were stopped on the runner side; why is
 not recorded.
 
-Free roam (2026-11-09, five runs; stamps 11091737, 11091838, 11092018, 11092200 and 11092245).
-The numbers are the inspector's (`artifacts/tmp/inspector/`) and the runner's logs. The checkout
-was `ce4b6c83` plus the uncommitted work of the day, so a later commit may already have changed
-what is listed as built.
+Free roam (2026-11-09 and 2026-11-10, ten runs; the stamps of runs 1 to 5 are 11091737, 11091838,
+11092018, 11092200 and 11092245, of runs 9 and 10 11100339 and 11100557; see "Run history"). The
+numbers are the inspector's (`artifacts/tmp/inspector/`) and the runner's logs. Runs 1 to 5 ran at
+`ce4b6c83` plus the uncommitted work of the day and runs 9 and 10 on later builds of that work
+(the code is at `5bc540b7` now), so a later commit may already have changed what is listed as built.
 
 Fixed, and seen working in a live run:
 - **Close-ups.** Inserts on 0 of 19 live moves in run 1, 16 of 19 in run 2 (the judge's rule for
@@ -2691,50 +2759,76 @@ Fixed, and seen working in a live run:
 - **Declared plate timing.** Shown at once, queue wait under 50 ms, a hold of 20 s, in every run
   from 3; `FORGE prioritised outcome=moved` seen 9 times in the host log.
 - **Declared duplicates.** Nine of 17 declared plates in run 3 had two or three Dannys; one of 9
-  in run 4, after the cast count, the negative prompt and the single front view.
+  in run 4, after the cast count, the negative prompt and the single front view; none of 17 in
+  run 9 (the people check, `reason=cast_only attempt=1` on every one).
 - **The declaration no longer uses the board up** (run 5): the finishing line does.
 - **Perception.** Answers with a bad proposal for a new thing were refused whole in run 4 (4 of 9);
   from run 5 the bad proposal is dropped (`PERSONA thing_unadded`) and the sight and thought stay.
 - **The page.** A 512x512 plate lies whole over a blurred copy of itself (contain), letterboxed,
-  with the thinking cue and bubbles on it (run 4 screenshot).
+  with the thinking cue and bubbles on it (run 4 screenshot). The inventory panel is hidden while a
+  painting is revealed and returns matching the API (run 8 move 1).
+- **Perceived things are named** (run 10: `[thing NN] stone_post (weathered milestone)`; run 9 still
+  had three `(?)` inserts), and the walk, reveal and pace lines read as in the table above.
+- **Trades apply whole.** A sale and its purchase net together and coins do not move on a barter:
+  run 8 move 7, run 10 moves 3, 7 and 13 (painting 1 to 0, goods up; coins unchanged). The first
+  board restock was run 10 move 7 (boards 7 to 12); oil came in on move 13 (2 to 3).
+- **The end of the day** (run 9): the gallery sheet of all 12 paintings (3 by 4, square tiles, none
+  blank), the show plate with the paintings laid out on a fountain and tables, the show's naming
+  (no `unknown_region`) and the closing `[show]` line were all seen; the 5 s piece holds were exact.
+- **Reveals and holds.** Painting 10 s and view 6 s exact in every reveal of runs 7 to 10; walk
+  sights at least 5.99 s; declared plates shown at once and held 20.0 to 20.3 s.
+- **The frame judge** gave no `frame_refused` in run 9 (run 8 move 5 had an `answer_refused` and no
+  insert).
 
-Built, not yet verified live (unit tests and the code only; check each in the next full run):
-- **The people check** on declared plates (`persona/people_check.rs`): run 5 still had three
-  duplicates in eight declared plates (moves 5, 9 and 10), and the check came after it.
-- **A gain needs a source** (`exchange`, `found`, `given`, `made`; `unsourced_gain`), the
-  reworded `@roam_painted` and `@way_arrival market` texts, and the larger starting counts in
-  `danny.inventory.json` (boards 6, pigments 5 to 6, oil and rags 8, coins 20).
+Built, not yet seen live (unit tests and the code only; check each in the next full run):
+- **A judged line applies whole or not at all, and a refused line is asked again** with the typed
+  refusals until it stands or the text deadline passes; a design call is asked again until it
+  stands or the design deadline passes. Run 10 had 0 refusals, so no re-ask ran; run 9 move 3 still
+  lost its design after one retry.
+- **The show steps through every piece**: the reveal queue has no count cap and `@roam_show_each 20
+  5` asks for 20 (run 9's cap of 4 showed 4 of 6, `queue_full`). Run 10 stopped before the show.
+- **The show plate hides the inventory panel** (`PlateKind::Show`; run 9 left it over Danny, R9-7).
+- **The frame judge asked again** once with a typed reason (`PERSONA frame_retried` /
+  `frame_refused`): none occurred in run 9.
+- **`HOST log_sink_failed` and `host-terminal.log`** (see H-1 above).
 - **What a speaker attends to reaches the frame judge** (`perceive::attending`), and the object
   or vista `kind` of a new thing: in progress when this was written.
 - **The host's early refusal and withdrawal** when the studio's queue is blocked (the `queue_*`
   causes, `FORGE withdrawn`): no such line is in today's host log.
 - **The studio's own fixes** (auto memory release, the queue page): see "Forge studio operations".
-- **The end of the day.** Run 4 stopped after move 9 and run 5 after move 12, so the square
-  gallery tiles, the show plate's naming and the `[show]` line were not seen after run 3, where
-  his line was empty and the plate was unlabelled (`unknown_region`).
 
 Open:
 - **Thoughts repeat a template.** The `[thought]` lines of run 5 open "Hm." or speak of a warm
   edge of light on cool stone; his looks open "I'll step up to ..." and "late light" came in
   about 15 of 20 moves of run 2.
-- **Market trade is not real.** Run 4's two market stops traded nothing; in run 5 move 3 the
-  trade worked (a painting for a board, verdigris and two pennies) and move 7 sold a painting "for
-  0 cp" to nobody and took four goods "for 0 cp". A market place can come without a stall for what
-  he is out of.
-- **Supplies run out too soon.** The finishing line used a board and up to seven colours for each
-  painting, so by move 3 he had nothing to paint on and later moves read `not painted: no boards
-  was used up (had 0, have 0)`; the finishing line also claimed things he no longer had (nine
-  refused `insufficient` entries a time).
-- **Duplicate figures in declared plates** (above), 1 of 9 in run 4 and 3 of 8 in run 5.
-- **Missed close-ups.** Run 5 move 8 offered three things and the judge named none for "I'll step
-  up to that wall" (`inspected=-`); run 3 had inserts on 8 of its 18 live moves.
-- **Repeated places.** The same milestone, handcart, market and blue-door lane come back, and "the
-  next town" never reads as a new town.
-- **Self-recognition.** In run 4 move 9 and run 5 move 8 the `[see]` line calls him a bearded man
-  in the third person.
+- **Markets do not reliably offer the supplies he is out of.** Run 9 bought no board all run (move
+  3 lost its design, move 13 refused `unsourced_gain` for a parcel the plate showed, move 19 lost its
+  line, "Where shall I go next?", read `needs_clarification`); run 10 restocked boards only at move 7
+  and oil at move 13, and used up its rags at move 15. A trade restocks only what the judge accepts
+  from what the plate shows.
+- **A finished painting can be sold to restock supplies**, which shrinks the show, and the show
+  gallery and the memory list still count it (run 9: 12 pieces including the sold painting_05, the
+  panel `Paintings x11`; run 10 sold paintings 02, 01 and 05). Owner decision pending: block sales
+  of paintings, or show only what he owns.
+- **Out-of-stock wording is inconsistent in the old build.** Run 9 moves 16, 18 and 20: the
+  finishing line claimed a board and pigments he did not hold (move 16 also spent ochre and lamp
+  black for no painting), while move 17 was honest. The atomic-use and typed re-ask fix is built;
+  its live behaviour is not observed (run 10 was stopped at move 15, before supplies ran out).
+- **The new plate stays up 10 to 14 s before he speaks (dwell)** against the 6 s asked for: the
+  perception call is slower than the dwell (`[dwell]` lines of runs 9 and 10; run 7 9 to 23 s).
+- **The milestone road opens move 1 in six runs** (runs 5 to 10), and the same market, handcart and
+  blue-door lane come back; "the next town" never reads as a new town. The declared set-up shot
+  repeats in composition (inspector R9-6).
+- **Some moves skip a walk sight as `late`** because the arrival plate finishes first (run 9 moves
+  2, 8, 12 and 17; run 10 moves 2 and 6).
+- **Missed close-ups.** Run 9 had inserts on 15 of its 18 live moves, none where no thing was
+  offered; run 5 move 8 offered three things and the judge named none (`inspected=-`).
+- **Self-recognition.** The `[see]` line calls him a bearded man in the third person in run 4 move
+  9, run 5 move 8 and run 9 move 7; the fix is built and run 10 was not checked for it.
 - **The title chip is stale** (it read "Market: the enchanted-steel stall" through the roam), and
   stone inserts show a faint knitted texture.
-- **One declared plate took 127 s** (run 5 move 2) against 55 to 80 s; the cause was not found.
+- **One declared plate took 127 s** on Forge (run 5 move 2) against 55 to 80 s; the cause was not
+  found. On Codex they take 59 to 138 s.
 - **A narrator-box timing test is flaky** (the coordinator's report; its name and cause are not
   recorded here).
 - **The studio's queue page** with the fix for an `interrupted` job is not deployed.
@@ -2750,6 +2844,8 @@ Flowing play (2026-11-08):
   anyway.
 - **Forge voices** trail their line by several seconds (about 8 s for a 2-second line warm, about
   58 s cold), too slow for live play.
+- **Still unverified** (the roam runs do not exercise them): the quest run's ending check (a
+  confession, `end=true`), stage plates, and the arrival plate's re-scan from the earlier quest goal.
 
 ## Tempo and the music director
 
