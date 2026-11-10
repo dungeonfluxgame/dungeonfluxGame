@@ -14,6 +14,20 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-10T12:06:09-05:00 to 2026-11-10T15:52:29-05:00
+
+Range: 4bb3b98cb4a82214caf0184ee1f9dcc35515cef9..6daa741190cb62251fd541a566633536647165ac
+
+- dbf56d44 - dice gauntlet: roll card and dice art, every check kind, a check judge and a vocal DM, a warrior and 45 stations
+- 6daa7411 - dice gauntlet: 48 stations with stakes, fresh flourishes, judge names opponents
+
+## 2026-11-10T06:06:09-05:00 to 2026-11-10T12:06:09-05:00
+
+Range: 5bc540b7dda9730c8c96da1e22b507d33b4bdbb7..4bb3b98c
+
+- 075244e4 - CHANGELOG: record the free roam commits in six-hour blocks
+- 4bb3b98c - runbook: the free-roam run procedure, log lines, Codex timings and open items after runs 8 to 10
+
 ## 2026-11-10T03:41:14-05:00 to 2026-11-10T06:06:09-05:00
 
 Range: 572e2dac220b8064ef4b5e90ec209a155934ff27..5bc540b7dda9730c8c96da1e22b507d33b4bdbb7
