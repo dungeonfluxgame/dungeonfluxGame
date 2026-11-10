@@ -14,6 +14,25 @@ commit into the next block: keep the recorded ending revision as the next
 baseline and capture baseline..HEAD, which includes the bookkeeping commit.
 Do not invent a self-hash or silently discard metadata commits.
 
+## 2026-11-10T03:41:14-05:00 to 2026-11-10T06:06:09-05:00
+
+Range: 572e2dac220b8064ef4b5e90ec209a155934ff27..5bc540b7dda9730c8c96da1e22b507d33b4bdbb7
+
+- 5bc540b7 - free roam: judged lines apply whole, the show steps through every piece, Danny recognises himself
+
+## 2026-11-09T21:41:14-05:00 to 2026-11-10T03:41:14-05:00
+
+Range: ce4b6c83ae335d1660bb30d2591c32720fbc4a4e..572e2dac220b8064ef4b5e90ec209a155934ff27
+
+- 572e2dac - roam fixes from live runs: perceived things, fresh declared plates, market trades, painting studies, no reduced motion
+
+## 2026-11-09T15:41:14-05:00 to 2026-11-09T21:41:14-05:00
+
+Range: 39299fd91194000d8d465df72821b68fad999607..ce4b6c83ae335d1660bb30d2591c32720fbc4a4e
+
+- a8bf04db - CHANGELOG: record the 47 commits since 750afe95 and the fair-puzzles commit in six-hour blocks
+- ce4b6c83 - free roam: a lone painter's day, with the standard inventory, memory, perception and declare APIs
+
 ## 2026-11-09T09:41:14-05:00 to 2026-11-09T15:41:14-05:00
 
 Range: f0bd97dac7277dd28133be0cef9f1367276330e7..39299fd91194000d8d465df72821b68fad999607
