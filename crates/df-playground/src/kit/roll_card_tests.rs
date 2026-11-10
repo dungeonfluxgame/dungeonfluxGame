@@ -323,20 +323,18 @@ fn the_written_sum_is_set_large_enough_for_its_digits_to_stand_over_the_floor() 
     // A digit's ink is about 0.64 of its font, and the floor for ink is 3.9 percent of the
     // screen's 56.25cqw height.
     let css = roll_css();
-    for rule in [".kit-roll-sum {", ".kit-roll-sum-long {"] {
-        let rule = &css[css.find(rule).expect("the sum's rule")..];
-        let rule = &rule[..rule.find('}').expect("ends")];
-        let font: f64 = rule
-            .lines()
-            .find_map(|line| {
-                let line = line.trim();
-                line.strip_prefix("font-size: ")
-                    .or_else(|| line.strip_prefix("font: 700 "))
-            })
-            .and_then(|size| size.split("cqw").next())
-            .expect("a size in cqw")
-            .parse()
-            .expect("a number");
+    let rule = &css[css
+        .find(".kit-roll-sum-long {")
+        .expect("the long sum's rule")..];
+    let rule = &rule[..rule.find('}').expect("ends")];
+    let long: f64 = rule
+        .split("var(--sum-font, ")
+        .nth(1)
+        .and_then(|size| size.split("cqw").next())
+        .expect("a size in cqw")
+        .parse()
+        .expect("a number");
+    for font in [font_size_cqw(".kit-roll-sum"), long] {
         assert!(font * 0.64 / 56.25 >= 0.039, "{font}cqw is too small");
     }
 }
@@ -383,13 +381,16 @@ fn a_crowd_of_dice_is_a_cluster_and_a_tally_of_every_face_with_its_count() {
     let TrayLayout::Tally(tally) = card.layout() else {
         panic!("twenty dice are tallied");
     };
-    assert_eq!(tally.cluster.len(), 3);
+    assert!(
+        tally.cluster.is_empty(),
+        "ten rows of chips take the whole tray"
+    );
     let counted: u32 = tally.chips.iter().map(|chip| chip.count).sum();
     assert_eq!(counted, 20, "every die is in the tally");
     let faces: Vec<&str> = tally.chips.iter().map(|chip| chip.face.as_str()).collect();
     assert_eq!(faces, ["10", "9", "8", "7", "6", "5", "4", "3", "2", "1"]);
     assert!(tally.chips.iter().all(|chip| chip.count == 2));
-    assert_eq!((tally.columns, tally.rows), (4, 3));
+    assert_eq!((tally.columns, tally.rows), (3, 4));
 }
 
 #[test]
@@ -491,7 +492,7 @@ fn font_size_cqw(selector: &str) -> f64 {
             .find_map(|word| {
                 word.split('/')
                     .next()
-                    .and_then(|size| size.strip_suffix("cqw"))
+                    .and_then(|size| size.trim_end_matches(')').strip_suffix("cqw"))
             })
             .unwrap_or_else(|| panic!("{selector} has no size in cqw"));
         return size.parse().expect("a number");
@@ -594,6 +595,7 @@ fn own_properties(text: &str, after: &str) -> std::collections::BTreeSet<String>
         let own = [
             "roll-", "from-", "rest-", "art-", "face-", "cols", "cell", "chip-", "cluster", "rx",
             "ry", "scatter", "r0", "r3", "hop", "throw", "tray-", "numeral", "caption-", "wide-",
+            "sum-",
         ]
         .iter()
         .any(|family| name.starts_with(family));
@@ -612,7 +614,7 @@ fn every_custom_property_the_roll_stylesheet_reads_is_set_by_the_page_or_by_the_
     let set_by_the_sheet = own_properties(&css, "\n  --");
     let plan = TumblePlan::new(5, 1);
     let vars = format!(
-        "{}{}{}{}{}--roll-fit:0.8;",
+        "{}{}{}{}{}--roll-fit:0.8;--sum-font:3.9cqw;",
         crate::kit::roll_card::staging_vars(RollSchedule::new(1_500, 0), 0),
         crate::kit::roll_card::die_vars(DieArt::D20, plan.dice.first()),
         TrayGrid::of(3).vars(),
@@ -774,6 +776,106 @@ fn an_ordinary_card_keeps_its_size_and_a_card_taller_than_the_screen_is_drawn_sm
         athletics().height_tenths() + 40 + 26 <= 562 - 16,
         "a lone d20 with its stamp stays above the foot of the screen"
     );
+}
+
+fn long_saving_throw() -> RollCard {
+    let mut view = roll(
+        RollKind::SavingThrow,
+        vec![
+            die(20, 6, DieRole::Test, false),
+            die(20, 17, DieRole::Test, true),
+        ],
+        vec![
+            modifier("Dexterity", 2),
+            modifier("Proficiency", 3),
+            modifier("Cloak of Protection", 1),
+            modifier("Bless", 2),
+            modifier("Aura", 1),
+        ],
+        26,
+    );
+    view.mode = RollMode::Advantage;
+    view.title = "Dexterity saving throw against the Ancient Red Dragon breath weapon".to_owned();
+    RollCard::from(&view)
+}
+
+#[test]
+fn a_card_drawn_smaller_sets_its_sum_larger_so_the_digits_keep_their_size_on_the_screen() {
+    for card in [long_saving_throw(), worst_case(), athletics()] {
+        let on_screen = card.sum_font_tenths() * card.fit_percent() / 100;
+        assert!(
+            on_screen >= 30,
+            "the sum is {on_screen} tenths on the screen"
+        );
+        let tall = card.fitted_height_tenths() + 40;
+        assert!(
+            26 + tall * card.fit_percent() / 100 <= 562 - 16 + 1 || card.fit_percent() == 60,
+            "the card runs past the foot of the screen"
+        );
+    }
+    assert!(long_saving_throw().fit_percent() < 100);
+    assert_eq!(athletics().sum_font_tenths(), 36);
+}
+
+#[test]
+fn a_short_sum_is_one_line_and_a_long_one_keeps_its_ending_with_its_last_term() {
+    let heal = RollCard::from(&roll(
+        RollKind::Healing,
+        vec![
+            die(8, 6, DieRole::Damage, true),
+            die(8, 3, DieRole::Damage, true),
+        ],
+        vec![modifier("Wisdom", 3)],
+        12,
+    ));
+    assert_eq!(heal.sum_lines(heal.sum_font_tenths()), 1);
+    let long = long_saving_throw();
+    assert!(long.sum_lines(long.sum_font_tenths()) <= 6);
+}
+
+#[test]
+fn every_chip_of_a_tally_has_its_cell_and_a_tray_tall_enough_for_its_rows() {
+    let mixed = RollCard::from(&roll(
+        RollKind::Damage,
+        [
+            (6, 4),
+            (6, 2),
+            (6, 6),
+            (6, 5),
+            (6, 3),
+            (8, 7),
+            (8, 1),
+            (8, 5),
+        ]
+        .into_iter()
+        .map(|(sides, face)| die(sides, face, DieRole::Damage, true))
+        .collect(),
+        Vec::new(),
+        33,
+    ));
+    for card in [mixed, many_dice(20), many_dice(40)] {
+        let TrayLayout::Tally(tally) = card.layout() else {
+            panic!("a crowd is tallied");
+        };
+        assert!(tally.columns * tally.rows >= u32::try_from(tally.chips.len()).expect("small"));
+        let rows = tally.rows * 40 + (tally.rows - 1) * 5;
+        assert!(
+            tally.tray_height_tenths() >= rows + 20,
+            "{} rows",
+            tally.rows
+        );
+        assert!(card.height_tenths() >= tally.tray_height_tenths());
+        let across = if tally.cluster.is_empty() { 258 } else { 172 };
+        assert!(
+            tally.columns * 50 <= across + 5,
+            "{} columns",
+            tally.columns
+        );
+    }
+    let TrayLayout::Tally(few) = many_dice(8).layout() else {
+        panic!("a crowd is tallied");
+    };
+    assert_eq!(few.cluster.len(), 3, "a few chips leave room for the cubes");
 }
 
 #[test]

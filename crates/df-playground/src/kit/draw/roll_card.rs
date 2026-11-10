@@ -38,7 +38,14 @@ pub fn draw(document: &Document, card: &RollCard, plan: &TumblePlan) -> Result<E
     root.set_attribute("data-dice", &slots.len().to_string())?;
     let fit = card.fit_percent();
     if fit < 100 {
-        set_style(&root, &format!("--roll-fit:{};", f64::from(fit) / 100.0))?;
+        set_style(
+            &root,
+            &format!(
+                "--roll-fit:{};--sum-font:{}cqw;",
+                f64::from(fit) / 100.0,
+                f64::from(card.sum_font_tenths()) / 10.0
+            ),
+        )?;
     }
     append(&pane, &element(document, "span", "kit-roll-wash")?)?;
     append(&pane, &head(document, card)?)?;
@@ -129,6 +136,7 @@ fn tray(document: &Document, slots: &[DieSlot], plan: &TumblePlan) -> Result<Ele
         }
         TrayLayout::Tally(tally) => {
             tray.set_attribute("class", "kit-roll-tray kit-roll-tray-tally")?;
+            set_style(&tray, &tally.tray_vars())?;
             let cluster = element(document, "div", "kit-roll-cluster")?;
             set_style(&cluster, &tally.vars())?;
             for (index, art) in tally.cluster.iter().enumerate() {
@@ -140,7 +148,9 @@ fn tray(document: &Document, slots: &[DieSlot], plan: &TumblePlan) -> Result<Ele
                 };
                 append(&cluster, &die(document, &slot, toss(index), false)?)?;
             }
-            append(&tray, &cluster)?;
+            if !tally.cluster.is_empty() {
+                append(&tray, &cluster)?;
+            }
             append(&tray, &chips(document, &tally)?)?;
         }
     }
@@ -286,19 +296,24 @@ fn foot(document: &Document, card: &RollCard) -> Result<Element, JsValue> {
             ""
         };
         let sum = element(document, "p", &format!("kit-roll-sum{long}"))?;
-        for (index, term) in card.terms().iter().enumerate() {
-            append(&sum, &term_element(document, index, term)?)?;
+        let terms = card.terms();
+        for (index, term) in terms.iter().enumerate() {
+            let node = term_element(document, index, term)?;
+            if index + 1 == terms.len() {
+                // The "= total" stays on the last term, so it is never alone on a line.
+                let ending = element(document, "span", "kit-roll-term kit-roll-ending")?;
+                append(
+                    &ending,
+                    &text_element(document, "span", "kit-roll-op kit-roll-equals", "=")?,
+                )?;
+                append(
+                    &ending,
+                    &text_element(document, "span", "kit-roll-sum-total", &card.total_text())?,
+                )?;
+                append(&node, &ending)?;
+            }
+            append(&sum, &node)?;
         }
-        let ending = element(document, "span", "kit-roll-term kit-roll-ending")?;
-        append(
-            &ending,
-            &text_element(document, "span", "kit-roll-op kit-roll-equals", "=")?,
-        )?;
-        append(
-            &ending,
-            &text_element(document, "span", "kit-roll-sum-total", &card.total_text())?,
-        )?;
-        append(&sum, &ending)?;
         append(&foot, &sum)?;
     }
     Ok(foot)

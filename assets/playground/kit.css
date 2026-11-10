@@ -3953,6 +3953,8 @@
   color: var(--kit-gold-hi);
 }
 .kit-roll-title-long {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
   font-size: 2.2cqw;
 }
 /* The chips beside the kicker are as large as the call's other words (2cqw, over 3.5 percent of the
@@ -4375,19 +4377,23 @@
 .kit-roll-sum {
   min-width: 0;
   text-wrap: balance;
-  font: 700 3.6cqw/1.1 var(--kit-body);
+  font: 700 var(--sum-font, 3.6cqw)/1.1 var(--kit-body);
   color: var(--roll-numeral);
   animation: roll-fade var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
 }
 .kit-roll-sum-long {
-  font-size: 3.5cqw;
+  font-size: var(--sum-font, 3.5cqw);
 }
 .kit-roll-term {
   display: inline-flex;
   align-items: baseline;
-  gap: .6cqw;
-  margin-right: .6cqw;
+  gap: .4cqw;
+  margin-right: .4cqw;
+  max-width: 100%;
   white-space: nowrap;
+}
+.kit-roll-term .kit-roll-ending {
+  margin-right: 0;
 }
 .kit-roll-number,
 .kit-roll-sum-total {
@@ -4398,6 +4404,8 @@
   font-weight: 700;
 }
 .kit-roll-term-label {
+  min-width: 0;
+  white-space: normal;
   font: 700 2cqw/1.2 var(--kit-body);
   letter-spacing: .03em;
   text-transform: uppercase;

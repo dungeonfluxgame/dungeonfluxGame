@@ -50,8 +50,26 @@ pub const MOST_DICE_DRAWN: usize = 4;
 const CLUSTER_DICE: usize = 3;
 /// The width of the cluster beside a tally, in tenths of a cqw.
 const CLUSTER_WIDTH_TENTHS: u32 = 78;
-/// The most rows of chips a tally has.
-const TALLY_ROWS: u32 = 3;
+/// The width the chips of a tally have beside the cluster of dice, and across the whole tray when
+/// the cluster is left out, in tenths of a cqw.
+const TALLY_CHIPS_BESIDE_CLUSTER_TENTHS: u32 = 172;
+const TALLY_CHIPS_ACROSS_TENTHS: u32 = 258;
+/// The gap between chips, and the height of a row of them, in tenths of a cqw.
+const CHIP_GAP_TENTHS: u32 = 5;
+const CHIP_ROW_TENTHS: u32 = 40;
+/// How wide a chip is (`.kit-roll-chip`): its border and slack, each character of the face, and,
+/// for a face shown more than once, the gap and the "x" with each digit of the count; in tenths.
+const CHIP_SLACK_TENTHS: u32 = 5;
+const CHIP_FACE_CHARACTER_TENTHS: u32 = 15;
+const CHIP_COUNT_FIXED_TENTHS: u32 = 3;
+const CHIP_COUNT_CHARACTER_TENTHS: u32 = 14;
+/// The most rows of chips a tally has beside the cluster; more and the cluster is left out and the
+/// chips take the whole tray.
+const TALLY_ROWS_BESIDE_CLUSTER: u32 = 3;
+/// The tray of a tally is never shorter than three cubes need, and is as tall as its rows of
+/// chips, with the room the rim and padding take.
+const TALLY_TRAY_LEAST_TENTHS: u32 = 115;
+const TALLY_TRAY_RIM_TENTHS: u32 = 20;
 /// The most chips a tally shows; the rest are counted in one more chip.
 const MOST_TALLY_CHIPS: usize = 17;
 
@@ -203,8 +221,23 @@ pub struct Tally {
     pub chips: Vec<TallyChip>,
     pub columns: u32,
     pub rows: u32,
-    /// The pictures of the dice that tumble beside it.
+    /// The pictures of the dice that tumble beside it; none when the chips need the whole tray.
     pub cluster: Vec<DieArt>,
+}
+
+impl TallyChip {
+    /// How wide the chip is drawn, in tenths of a cqw.
+    fn width_tenths(&self) -> u32 {
+        let face = u32::try_from(self.face.chars().count()).unwrap_or(u32::MAX);
+        let count = if self.count > 1 {
+            // The "x" and the digits of the count.
+            let digits = u32::try_from(self.count.to_string().len()).unwrap_or(u32::MAX);
+            CHIP_COUNT_FIXED_TENTHS + (1 + digits) * CHIP_COUNT_CHARACTER_TENTHS
+        } else {
+            0
+        };
+        CHIP_SLACK_TENTHS + face * CHIP_FACE_CHARACTER_TENTHS + count
+    }
 }
 
 impl Tally {
@@ -252,16 +285,21 @@ impl Tally {
                 state: DieState::Counted,
             });
         }
-        let count = u32::try_from(chips.len()).unwrap_or(u32::MAX);
-        let columns = count.div_ceil(TALLY_ROWS).clamp(3, 6);
-        let rows = count.div_ceil(columns).max(1);
+        let widest = chips.iter().map(TallyChip::width_tenths).max().unwrap_or(0);
+        let (columns, rows) = Self::grid(chips.len(), widest, TALLY_CHIPS_BESIDE_CLUSTER_TENTHS);
+        let (columns, rows, with_cluster) = if rows > TALLY_ROWS_BESIDE_CLUSTER {
+            let (columns, rows) = Self::grid(chips.len(), widest, TALLY_CHIPS_ACROSS_TENTHS);
+            (columns, rows, false)
+        } else {
+            (columns, rows, true)
+        };
         let mut cluster = Vec::new();
-        for slot in slots {
+        for slot in slots.iter().filter(|_| with_cluster) {
             if cluster.len() < CLUSTER_DICE && !cluster.contains(&slot.art) {
                 cluster.push(slot.art);
             }
         }
-        while cluster.len() < CLUSTER_DICE.min(slots.len()) {
+        while with_cluster && cluster.len() < CLUSTER_DICE.min(slots.len()) {
             cluster.push(slots[cluster.len() % slots.len()].art);
         }
         Self {
@@ -270,6 +308,28 @@ impl Tally {
             rows,
             cluster,
         }
+    }
+
+    /// The columns and rows `count` chips of the width `widest` take in `across`: as many columns
+    /// as fit, and the rows they make.
+    fn grid(count: usize, widest: u32, across: u32) -> (u32, u32) {
+        let count = u32::try_from(count).unwrap_or(u32::MAX).max(1);
+        let columns = ((across + CHIP_GAP_TENTHS) / (widest + CHIP_GAP_TENTHS)).clamp(1, count);
+        (columns, count.div_ceil(columns))
+    }
+
+    /// The tray's own height, in tenths of a cqw: tall enough for every row of chips.
+    pub fn tray_height_tenths(&self) -> u32 {
+        let rows = self.rows * CHIP_ROW_TENTHS + (self.rows - 1) * CHIP_GAP_TENTHS;
+        rows.max(TALLY_TRAY_LEAST_TENTHS - TALLY_TRAY_RIM_TENTHS) + TALLY_TRAY_RIM_TENTHS
+    }
+
+    /// The custom property of the tray itself.
+    pub fn tray_vars(&self) -> String {
+        format!(
+            "--tray-h:{}cqw;",
+            f64::from(self.tray_height_tenths()) / 10.0
+        )
     }
 
     /// The custom properties of the chips' container.

@@ -252,8 +252,6 @@ const TITLE_FONT_LONG_TENTHS: u32 = 22;
 /// How many characters of the title fit a line at each size.
 const TITLE_LINE_CHARACTERS: u32 = 22;
 const TITLE_LINE_CHARACTERS_LONG: u32 = 29;
-/// A tally's tray.
-const TALLY_TRAY_TENTHS: u32 = 135;
 const TOTAL_BOX_TENTHS: u32 = 112;
 const TOTAL_FONT_TENTHS: u32 = 100;
 const TOTAL_FONT_SMALL_TENTHS: u32 = 80;
@@ -271,10 +269,14 @@ const PILL_LINE_TENTHS: u32 = 33;
 const PILL_FIXED_TENTHS: u32 = 38;
 const SUM_FONT_TENTHS: u32 = 36;
 const SUM_FONT_LONG_TENTHS: u32 = 35;
+/// The smallest the sum's digits are ever drawn on the screen, in tenths of a cqw: 3.1cqw makes
+/// their ink 3.5 percent of the screen's height, and a card drawn smaller sets the sum larger
+/// in itself so it stays so.
+const SUM_FONT_LEAST_ON_SCREEN_TENTHS: u32 = 31;
 const TERM_LABEL_FONT_TENTHS: u32 = 20;
 /// The gap between the parts of a term, and between one term and the next.
-const SUM_PART_GAP_TENTHS: u32 = 6;
-const SUM_TERM_GAP_TENTHS: u32 = 6;
+const SUM_PART_GAP_TENTHS: u32 = 4;
+const SUM_TERM_GAP_TENTHS: u32 = 4;
 /// How far the verdict's seal hangs below the card.
 const STAMP_HANG_TENTHS: u32 = 40;
 
@@ -457,15 +459,32 @@ impl RollCard {
         terms.len() > TERMS_BEFORE_SMALLER_SUM || characters > SUM_CHARACTERS_BEFORE_SMALLER
     }
 
-    /// How many lines the sum takes in the width of the card: terms wrap only between one term
-    /// and the next, and the "= total" ending stays whole. An estimate from the stylesheet's
-    /// sizes, worked in tenths of a cqw.
-    fn sum_lines(&self) -> u32 {
-        let font = if self.sum_is_long() {
+    /// The sum's size when the card is drawn whole, in tenths of a cqw.
+    fn sum_base_font_tenths(&self) -> u32 {
+        if self.sum_is_long() {
             SUM_FONT_LONG_TENTHS
         } else {
             SUM_FONT_TENTHS
-        };
+        }
+    }
+
+    /// The sum's size in the card, in tenths of a cqw: its own size, or larger when the card is
+    /// drawn smaller, so on the screen it is never under `SUM_FONT_LEAST_ON_SCREEN_TENTHS`.
+    fn sum_font_at(&self, fit_percent: u32) -> u32 {
+        self.sum_base_font_tenths()
+            .max((SUM_FONT_LEAST_ON_SCREEN_TENTHS * 100).div_ceil(fit_percent.max(1)))
+    }
+
+    /// The sum's size in the card as it is drawn (`fit_percent`), in tenths of a cqw.
+    pub fn sum_font_tenths(&self) -> u32 {
+        self.sum_font_at(self.fit_percent())
+    }
+
+    /// How many lines the sum takes in the width of the card at the size `font`: terms wrap only
+    /// between one term and the next, the "= total" ending stays on the last term, and a label
+    /// longer than a line breaks inside its term. An estimate from the stylesheet's sizes, worked
+    /// in tenths of a cqw.
+    pub fn sum_lines(&self, font: u32) -> u32 {
         let label_font = TERM_LABEL_FONT_TENTHS;
         let ending = |chars: u32| font * 7 / 10 + SUM_PART_GAP_TENTHS + chars * font * 55 / 100;
         let mut widths: Vec<u32> = self
@@ -484,7 +503,9 @@ impl RollCard {
                 sign + character_count(&term.number) * font * 55 / 100 + label
             })
             .collect();
-        widths.push(ending(character_count(&self.total_text())));
+        if let Some(last) = widths.last_mut() {
+            *last += SUM_PART_GAP_TENTHS + ending(character_count(&self.total_text()));
+        }
         let mut lines = 1;
         let mut used = 0;
         for width in widths {
@@ -493,6 +514,10 @@ impl RollCard {
                 used = width;
             } else {
                 used += if used > 0 { SUM_TERM_GAP_TENTHS } else { 0 } + width;
+            }
+            if used > CARD_CONTENT_WIDTH_TENTHS {
+                lines += (used - 1) / CARD_CONTENT_WIDTH_TENTHS;
+                used %= CARD_CONTENT_WIDTH_TENTHS;
             }
         }
         lines
@@ -589,6 +614,11 @@ impl RollCard {
     /// out from the stylesheet's sizes, so a card that would run off the screen is known before it
     /// is drawn.
     pub fn height_tenths(&self) -> u32 {
+        self.height_with_sum(self.sum_base_font_tenths())
+    }
+
+    /// The same with the sum set at `sum_font` tenths of a cqw.
+    fn height_with_sum(&self, sum_font: u32) -> u32 {
         let (title_font, line_characters) = if self.title_is_long() {
             (TITLE_FONT_LONG_TENTHS, TITLE_LINE_CHARACTERS_LONG)
         } else {
@@ -596,22 +626,16 @@ impl RollCard {
         };
         let title_lines = character_count(self.title())
             .div_ceil(line_characters)
-            .clamp(1, 2);
+            .clamp(1, if self.title_is_long() { 3 } else { 2 });
         let head = self.marks_height_tenths() + title_lines * title_font * 11 / 10;
         let slots = self.slots();
         let tray = match self.layout() {
             TrayLayout::Dice(grid) => Some(grid.tray_height_tenths()),
-            TrayLayout::Tally(_) => Some(TALLY_TRAY_TENTHS),
+            TrayLayout::Tally(tally) => Some(tally.tray_height_tenths()),
         }
         .filter(|_| !slots.is_empty());
         let sum = if self.writes_a_sum() {
-            let font = if self.sum_is_long() {
-                SUM_FONT_LONG_TENTHS
-            } else {
-                SUM_FONT_TENTHS
-            };
-            let lines = self.sum_lines();
-            lines * font * 11 / 10
+            self.sum_lines(sum_font) * sum_font * 11 / 10
         } else {
             0
         };
@@ -625,15 +649,23 @@ impl RollCard {
     }
 
     /// How much of its size the card keeps, in percent: all of it, unless the card with its
-    /// stamp would run past the foot of the screen, and then it is drawn smaller to fit.
+    /// stamp would run past the foot of the screen, and then it is drawn smaller to fit. The sum is
+    /// set larger in a smaller card (`sum_font_at`), so the fit is the largest at which the card
+    /// with that larger sum still fits.
     pub fn fit_percent(&self) -> u32 {
-        let tall = self.height_tenths() + STAMP_HANG_TENTHS;
         let room = STAGE_HEIGHT_TENTHS - CARD_TOP_TENTHS - SCREEN_FOOT_MARGIN_TENTHS;
-        if tall <= room {
-            100
-        } else {
-            (room * 100 / tall).max(LEAST_FIT_PERCENT)
-        }
+        (LEAST_FIT_PERCENT..=100)
+            .rev()
+            .find(|&percent| {
+                let tall = self.height_with_sum(self.sum_font_at(percent)) + STAMP_HANG_TENTHS;
+                tall * percent / 100 <= room
+            })
+            .unwrap_or(LEAST_FIT_PERCENT)
+    }
+
+    /// How tall the card is as it is drawn, with the sum at its size in a card drawn smaller.
+    pub fn fitted_height_tenths(&self) -> u32 {
+        self.height_with_sum(self.sum_font_tenths())
     }
 
     /// Whether the sum is worth writing: a lone number is the total already.
