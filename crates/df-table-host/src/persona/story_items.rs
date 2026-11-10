@@ -31,6 +31,7 @@ use super::story::{
     names_in, plain_id, read_story, refused, story_path, text_of, write_story,
 };
 use super::story_next::judge;
+use df_content::world_bible::Thing;
 use df_playground::scene::SceneChange;
 
 use crate::blocking::{run_blocking, run_owned};
@@ -38,6 +39,17 @@ use crate::dev::DevError;
 use crate::dev_client::{post_json, reply_value};
 use crate::dev_http::{DevReply, parse_body, reply};
 use crate::text::TextRoute;
+
+/// The story's sheet of a thing as every picture takes a reference sheet: its id, name, look and
+/// close-up.
+pub(super) fn thing_of(item: StoryItem) -> Thing {
+    Thing {
+        id: item.id,
+        name: item.name,
+        look: item.look,
+        picture: item.picture,
+    }
+}
 
 /// The address of the sheet route: POST an [`ItemRequest`].
 pub(super) const PERSONA_STORY_ITEM: &str = "/dev/persona/story/item";

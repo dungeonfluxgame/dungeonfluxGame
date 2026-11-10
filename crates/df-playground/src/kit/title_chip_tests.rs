@@ -4,6 +4,7 @@ use crate::home::glyph::{HomeGlyph, HomeIcon};
 use crate::kit::Step;
 use crate::kit::title_chip::{TitleChip, top_bar_chips};
 use crate::lobby::model::{PartyCount, TopBar};
+use crate::overlay::StoryMark;
 
 #[test]
 fn a_chip_keeps_its_worded_parts_and_drops_blank_ones() {
@@ -51,4 +52,15 @@ fn the_top_bar_pills_become_chips_in_order_with_their_words() {
     );
     assert_eq!(chips[1].icon, Some(HomeIcon::Page(HomeGlyph::Players)));
     assert!(top_bar_chips(&TopBar::default()).is_empty());
+}
+
+#[test]
+fn a_story_mark_becomes_a_chip_of_its_title_alone() {
+    let mark = StoryMark {
+        title: "The Charter Beneath the Hill".to_owned(),
+        progress: None,
+    };
+    let chip = TitleChip::from(&mark);
+    assert_eq!(chip.title(), Some("The Charter Beneath the Hill"));
+    assert!(chip.parts().is_empty() && chip.track().is_empty() && chip.subtitle().is_none());
 }

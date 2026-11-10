@@ -1,7 +1,7 @@
 //! Tests of `brief`.
 
 use super::brief::{
-    BriefCharacter, BriefError, BriefStyle, LookSheets, build_brief, build_brief_with,
+    BriefCharacter, BriefError, BriefStyle, LookSheets, build_brief, build_brief_with, scene_words,
 };
 use crate::imagegen::limits::MAXIMUM_SENT_TEXT_CHARS;
 use crate::movement::types::{Depth, Placement, SceneDesign, Side};
@@ -12,6 +12,7 @@ fn character(id: &str, display_name: &str, job: &str, portrait: Option<&str>) ->
         display_name: display_name.to_owned(),
         job: job.to_owned(),
         portrait: portrait.map(str::to_owned),
+        carrying: Vec::new(),
     }
 }
 
@@ -29,6 +30,8 @@ fn balcony() -> SceneDesign {
         place: "a stone balcony above a harbour".to_owned(),
         mood: "windy dusk".to_owned(),
         elements: vec!["lanterns".to_owned(), "a rope rail".to_owned()],
+        things: vec![],
+        shown_items: vec![],
         residents: vec![],
         placements: vec![
             placement("ana", Depth::Foreground, Side::Left, "leans on the rail"),
@@ -73,12 +76,12 @@ fn prompt_leaves_out_the_characters_who_stayed_behind() {
 fn prompt_names_each_placed_character_with_depth_and_side() {
     let brief = build_brief(&balcony(), &cast(), &looks()).expect("builds");
     assert!(brief.prompt.contains(
-        "Ana (red cloak, grey eyes) stands in the foreground left, leans on the rail."
+        "A person (red cloak, grey eyes) stands in the foreground left, leans on the rail."
     ));
     assert!(
         brief
             .prompt
-            .contains("Bran (sailor) stands in the background right, watches the boats.")
+            .contains("A person (sailor) stands in the background right, watches the boats.")
     );
 }
 
@@ -125,7 +128,9 @@ fn same_design_gives_the_same_brief() {
 #[test]
 fn placement_of_an_unknown_character_is_refused() {
     let mut design = balcony();
-    design.placements.push(placement("zed", Depth::Middle, Side::Centre, "waits"));
+    design
+        .placements
+        .push(placement("zed", Depth::Middle, Side::Centre, "waits"));
     let error = build_brief(&design, &cast(), &looks()).expect_err("refused");
     assert_eq!(
         error,
@@ -178,7 +183,57 @@ fn custom_style_replaces_the_direction_and_ban() {
         avoid: vec!["ink".to_owned()],
     };
     let brief = build_brief_with(&style, &balcony(), &cast(), &looks()).expect("builds");
-    assert!(brief.prompt.starts_with("A pencil sketch of a stone balcony"));
+    assert!(
+        brief
+            .prompt
+            .starts_with("A pencil sketch of a stone balcony")
+    );
     assert!(brief.prompt.ends_with("Lettering is a blur."));
     assert_eq!(brief.avoid, ["ink"]);
+}
+
+/// A mover whose id and display name are the same word, as a roamer's are: the image model paints
+/// any word it is given (a signboard once read "Danny traveling").
+fn roamer() -> (SceneDesign, Vec<BriefCharacter>) {
+    let mut design = balcony();
+    design.placements = vec![placement(
+        "danny",
+        Depth::Middle,
+        Side::Left,
+        "walks the road, traveling light",
+    )];
+    design.left_behind = Vec::new();
+    let mut danny = character("danny", "Danny", "a lean painter with a sandy beard", None);
+    danny.carrying = vec!["folding easel".to_owned(), "leather satchel".to_owned()];
+    (design, vec![danny])
+}
+
+#[test]
+fn the_brief_never_holds_a_placed_character_s_name_or_id() {
+    let (design, cast) = roamer();
+    let brief = build_brief(&design, &cast, &LookSheets::empty()).expect("builds");
+    for word in ["Danny", "danny"] {
+        assert!(!brief.prompt.contains(word), "{word} in: {}", brief.prompt);
+    }
+    // Nor does what a frame judge reads as the picture on screen.
+    let words = scene_words(&design, &cast, &LookSheets::empty()).expect("words");
+    assert!(
+        !words.contains("Danny") && !words.contains("danny"),
+        "{words}"
+    );
+    // The scan that names them in the picture still has the name: only the prompt is nameless.
+    assert_eq!(cast[0].display_name, "Danny");
+}
+
+#[test]
+fn what_a_character_carries_in_view_is_said_in_their_sentence() {
+    let (design, cast) = roamer();
+    let words = scene_words(&design, &cast, &LookSheets::empty()).expect("words");
+    assert!(
+        words.contains(
+            "A person (a lean painter with a sandy beard) stands in the middle left, walks the \
+             road, traveling light, with their folding easel and leather satchel in view."
+        ),
+        "{words}"
+    );
 }

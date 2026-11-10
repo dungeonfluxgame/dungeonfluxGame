@@ -310,6 +310,17 @@ fn scene_fields(
             ],
         ),
         SceneChange::ClearClues {} => ("clues_clear", Vec::new()),
+        SceneChange::Story { mark } => (
+            "story",
+            vec![(
+                "at",
+                mark.progress
+                    .as_ref()
+                    .map_or(0, |progress| progress.index)
+                    .to_string(),
+            )],
+        ),
+        SceneChange::ClearStory {} => ("story_clear", Vec::new()),
         SceneChange::Sound {
             media,
             target,

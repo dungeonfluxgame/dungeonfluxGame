@@ -8,6 +8,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
+use df_providers::FORGE_IMAGE_MAXIMUM_STEPS;
 use serde::{Deserialize, Serialize};
 
 use super::backend::BackendLimits;
@@ -15,6 +16,37 @@ use super::limits::{
     MAXIMUM_ASPECT_PART, MAXIMUM_ASPECT_RATIO, MAXIMUM_NAME_CHARS, MAXIMUM_PICTURES,
     MAXIMUM_SENT_TEXT_CHARS, REQUESTED_LONG_SIDE_PX,
 };
+
+/// How urgent a picture is. An emergency picture (an action a character declares they are doing
+/// right now) goes first wherever the backend has a queue of its own to put it in; every other
+/// picture waits its turn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Priority {
+    #[default]
+    Normal,
+    Emergency,
+}
+
+impl Priority {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Emergency => "emergency",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::Normal, Self::Emergency]
+            .into_iter()
+            .find(|priority| priority.key() == key)
+    }
+
+    /// For `skip_serializing_if`: a normal request does not write its priority.
+    pub fn is_normal(&self) -> bool {
+        *self == Self::Normal
+    }
+}
 
 /// What the picture is for. It sets the default shape and adds one line of direction to the
 /// prompt, so the owner's words stay the first thing the backend reads.
@@ -133,6 +165,25 @@ impl Aspect {
         Ok(Self { width, height })
     }
 
+    /// The shape of a picture of `size`: the sides in lowest terms, scaled down together when a
+    /// part would pass `MAXIMUM_ASPECT_PART`; none when the sides are more elongated than a shape
+    /// may be.
+    pub fn of_size(size: PictureSize) -> Option<Self> {
+        let (width, height) = (size.width_px(), size.height_px());
+        let divisor = gcd(width, height);
+        let (width, height) = (width / divisor, height / divisor);
+        let longest = width.max(height);
+        if longest <= MAXIMUM_ASPECT_PART {
+            return Self::new(width, height).ok();
+        }
+        let scaled = |side: u32| {
+            let part = (u64::from(side) * u64::from(MAXIMUM_ASPECT_PART) + u64::from(longest) / 2)
+                / u64::from(longest);
+            u32::try_from(part).unwrap_or(MAXIMUM_ASPECT_PART).max(1)
+        };
+        Self::new(scaled(width), scaled(height)).ok()
+    }
+
     /// The size asked of the backend: the long side is `REQUESTED_LONG_SIDE_PX`.
     pub fn requested_size(self) -> (u32, u32) {
         let (long, short) = if self.width >= self.height {
@@ -149,6 +200,15 @@ impl Aspect {
         } else {
             (short_px, REQUESTED_LONG_SIDE_PX)
         }
+    }
+}
+
+/// The greatest common divisor of two sides, each at least 1.
+fn gcd(first: u32, second: u32) -> u32 {
+    if second == 0 {
+        first
+    } else {
+        gcd(second, first % second)
     }
 }
 
@@ -183,6 +243,166 @@ impl From<Aspect> for String {
 impl fmt::Display for Aspect {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}:{}", self.width, self.height)
+    }
+}
+
+/// The most either side of a picture size may be, in pixels, against a mistyped size. The Forge
+/// backend rounds and clamps what is given to the sides Forge takes.
+pub const MAXIMUM_SIZE_SIDE_PX: u32 = 16_384;
+
+/// A picture size in pixels that replaces the shape's own size, such as 512x512: each side from 1
+/// to `MAXIMUM_SIZE_SIDE_PX`. On the wire it is the text `WxH`, read through the same check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct PictureSize {
+    width_px: u32,
+    height_px: u32,
+}
+
+/// Why a text is not a picture size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PictureSizeError {
+    /// It is not two whole numbers joined by 'x'.
+    NotWidthByHeight,
+    /// A side is 0 or more than `MAXIMUM_SIZE_SIDE_PX`.
+    SideOutOfRange,
+}
+
+impl fmt::Display for PictureSizeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotWidthByHeight => {
+                formatter.write_str("a size is two whole numbers as WxH, such as 512x512")
+            }
+            Self::SideOutOfRange => write!(
+                formatter,
+                "each side of a size is from 1 to {MAXIMUM_SIZE_SIDE_PX} pixels"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PictureSizeError {}
+
+impl PictureSize {
+    pub fn new(width_px: u32, height_px: u32) -> Result<Self, PictureSizeError> {
+        let in_range = |side: u32| (1..=MAXIMUM_SIZE_SIDE_PX).contains(&side);
+        if !in_range(width_px) || !in_range(height_px) {
+            return Err(PictureSizeError::SideOutOfRange);
+        }
+        Ok(Self {
+            width_px,
+            height_px,
+        })
+    }
+
+    pub fn width_px(self) -> u32 {
+        self.width_px
+    }
+
+    pub fn height_px(self) -> u32 {
+        self.height_px
+    }
+}
+
+impl FromStr for PictureSize {
+    type Err = PictureSizeError;
+
+    /// `WxH` with both whole numbers.
+    fn from_str(text: &str) -> Result<Self, PictureSizeError> {
+        let (width, height) = text
+            .split_once('x')
+            .ok_or(PictureSizeError::NotWidthByHeight)?;
+        let side = |side: &str| {
+            side.parse::<u32>()
+                .map_err(|_| PictureSizeError::NotWidthByHeight)
+        };
+        Self::new(side(width)?, side(height)?)
+    }
+}
+
+impl TryFrom<String> for PictureSize {
+    type Error = PictureSizeError;
+
+    fn try_from(text: String) -> Result<Self, PictureSizeError> {
+        text.parse()
+    }
+}
+
+impl From<PictureSize> for String {
+    fn from(size: PictureSize) -> Self {
+        size.to_string()
+    }
+}
+
+impl fmt::Display for PictureSize {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}x{}", self.width_px, self.height_px)
+    }
+}
+
+/// How many denoising steps a Forge image job takes in place of the studio's own default: a whole
+/// number from 1 to `FORGE_IMAGE_MAXIMUM_STEPS` (Forge's request contract). On the wire it is the
+/// number, read through the same check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u32", into = "u32")]
+pub struct InferenceSteps(u32);
+
+/// Why a number is not a count of inference steps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InferenceStepsError;
+
+impl fmt::Display for InferenceStepsError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "steps are a whole number from 1 to {FORGE_IMAGE_MAXIMUM_STEPS}"
+        )
+    }
+}
+
+impl std::error::Error for InferenceStepsError {}
+
+impl InferenceSteps {
+    pub fn new(steps: u32) -> Result<Self, InferenceStepsError> {
+        if (1..=FORGE_IMAGE_MAXIMUM_STEPS).contains(&steps) {
+            Ok(Self(steps))
+        } else {
+            Err(InferenceStepsError)
+        }
+    }
+
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl FromStr for InferenceSteps {
+    type Err = InferenceStepsError;
+
+    /// A whole number of steps.
+    fn from_str(text: &str) -> Result<Self, InferenceStepsError> {
+        Self::new(text.parse().map_err(|_| InferenceStepsError)?)
+    }
+}
+
+impl TryFrom<u32> for InferenceSteps {
+    type Error = InferenceStepsError;
+
+    fn try_from(steps: u32) -> Result<Self, InferenceStepsError> {
+        Self::new(steps)
+    }
+}
+
+impl From<InferenceSteps> for u32 {
+    fn from(steps: InferenceSteps) -> Self {
+        steps.0
+    }
+}
+
+impl fmt::Display for InferenceSteps {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
     }
 }
 
@@ -301,7 +521,8 @@ pub struct ThingReference {
 /// One checked request: a prompt, the name the picture is stored under (without its extension),
 /// what it is for, its shape, the picture of the media library it edits, when it is an edit, the
 /// pictures of the media library it follows for the people's looks and for the looks of things in
-/// it, and what it must not show.
+/// it, what it must not show, and the pictures its caller left out for want of room (for the audit
+/// line only).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageRequest {
     prompt: String,
@@ -312,6 +533,8 @@ pub struct ImageRequest {
     references: Vec<String>,
     things: Vec<ThingReference>,
     avoid: Vec<String>,
+    left_out: Vec<String>,
+    priority: Priority,
 }
 
 impl ImageRequest {
@@ -350,6 +573,8 @@ impl ImageRequest {
             references: Vec::new(),
             things: Vec::new(),
             avoid: Vec::new(),
+            left_out: Vec::new(),
+            priority: Priority::Normal,
         })
     }
 
@@ -405,6 +630,20 @@ impl ImageRequest {
         self
     }
 
+    /// This request with the pictures its caller left out for want of room: recorded in the audit
+    /// line of the job, never sent.
+    pub fn leaving_out(mut self, left_out: &[String]) -> Self {
+        self.left_out = left_out.to_vec();
+        self
+    }
+
+    /// This request with its urgency: an emergency picture is put first in the line of a backend
+    /// that has one.
+    pub fn prioritised(mut self, priority: Priority) -> Self {
+        self.priority = priority;
+        self
+    }
+
     fn check_picture_count(&self) -> Result<(), GenerateRequestError> {
         self.check_pictures(MAXIMUM_PICTURES)
     }
@@ -431,6 +670,15 @@ impl ImageRequest {
     /// The picture of the media library this request edits, when it is an edit.
     pub fn base(&self) -> Option<&str> {
         self.base.as_deref()
+    }
+
+    /// The pictures its caller left out for want of room.
+    pub fn left_out(&self) -> &[String] {
+        &self.left_out
+    }
+
+    pub fn priority(&self) -> Priority {
+        self.priority
     }
 
     pub fn prompt(&self) -> &str {
@@ -517,6 +765,8 @@ pub struct BackendRequest {
     /// The bytes of the pictures to follow for the looks of the people, then of the things, in
     /// order.
     pub references: Vec<Vec<u8>>,
+    /// How urgent the picture is: a backend with a queue of its own puts an emergency one first.
+    pub priority: Priority,
 }
 
 /// A picture a backend delivered, with what it can say about how it was made.

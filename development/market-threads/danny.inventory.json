@@ -1,0 +1,107 @@
+[
+  {
+    "id": "easel",
+    "name": "folding easel",
+    "look": "A folding field easel of pale ash, three legs bound with brass wing nuts, the wood paint-smeared and rubbed dark where hands hold it, strapped with a cracked leather strap.",
+    "use": "kept",
+    "count": 1
+  },
+  {
+    "id": "satchel",
+    "name": "leather satchel",
+    "look": "A worn brown leather satchel with a buckled flap, scuffed pale at the corners, flecked with dried paint, hanging from a long strap.",
+    "use": "kept",
+    "count": 1
+  },
+  {
+    "id": "boards",
+    "name": "primed wooden boards",
+    "look": "Small flat panels of planed limewood, a hand span wide, primed with chalky white gesso on one side, bare wood on the back.",
+    "use": "consumed",
+    "count": 4
+  },
+  {
+    "id": "sketchbook_pages",
+    "name": "sketchbook pages",
+    "look": "Loose leaves of rough cream paper held in a soft leather cover tied with a cord, edges dog-eared and smudged with charcoal.",
+    "use": "consumed",
+    "count": 18
+  },
+  {
+    "id": "charcoal",
+    "name": "willow charcoal sticks",
+    "look": "Thin black sticks of willow charcoal, snapped to different lengths, wrapped in a scrap of oiled cloth.",
+    "use": "consumed",
+    "count": 6
+  },
+  {
+    "id": "brushes",
+    "name": "brushes",
+    "look": "Hog-bristle and squirrel-hair brushes on stained wooden handles, bound with twine where the ferrules would be, bristles splayed from use.",
+    "use": "kept",
+    "count": 5
+  },
+  {
+    "id": "ochre",
+    "name": "yellow ochre cakes",
+    "look": "Small dry cakes of earthy yellow-brown pigment in a twist of paper.",
+    "use": "consumed",
+    "count": 3
+  },
+  {
+    "id": "umber",
+    "name": "raw umber cakes",
+    "look": "Small dry cakes of dull brown earth pigment in a twist of paper.",
+    "use": "consumed",
+    "count": 3
+  },
+  {
+    "id": "verdigris",
+    "name": "verdigris",
+    "look": "A pinch of blue-green copper pigment in a stoppered clay pot.",
+    "use": "consumed",
+    "count": 2
+  },
+  {
+    "id": "madder",
+    "name": "madder red",
+    "look": "Deep rose-red lake pigment in a stoppered clay pot.",
+    "use": "consumed",
+    "count": 1
+  },
+  {
+    "id": "lead_white",
+    "name": "lead white",
+    "look": "Heavy chalky white pigment in a stoppered clay pot.",
+    "use": "consumed",
+    "count": 3
+  },
+  {
+    "id": "lamp_black",
+    "name": "lamp black",
+    "look": "Fine soft black soot pigment in a small tin.",
+    "use": "consumed",
+    "count": 2
+  },
+  {
+    "id": "linseed_oil",
+    "name": "linseed oil",
+    "look": "A small stoppered flask of golden linseed oil, its glass smeared with fingerprints; each count is one day's mixing.",
+    "use": "consumed",
+    "count": 4
+  },
+  {
+    "id": "rags",
+    "name": "rags",
+    "look": "Torn strips of old linen, stiff with dried paint in every colour.",
+    "use": "consumed",
+    "count": 5
+  },
+  {
+    "id": "coins",
+    "name": "silver pennies",
+    "look": "Worn silver pennies in a small drawstring purse.",
+    "use": "consumed",
+    "count": 14
+  }
+]

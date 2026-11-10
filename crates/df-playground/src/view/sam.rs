@@ -4,8 +4,9 @@
 //! named region in gold), with a tag in the middle of the mask carrying its number, its character's
 //! shown name (the label when it has none) and the model's score, and a dot at its head point
 //! (where an anchored bubble's tail points). A region with no mask falls back to its box outline.
-//! The layer sits in the world layer with the backdrop, so it moves with the camera, and is shown
-//! or hidden by the `show_sam` control
+//! The layer lies over the picture's own box in the frame (`plate_fit`), whatever the picture's
+//! shape, so every percent inside it is a percent of the picture. It sits in the world layer with
+//! the backdrop, so it moves with the camera, and is shown or hidden by the `show_sam` control
 //! (`playground set sam=true|false`). A pure function of the layout; it never changes it.
 
 use wasm_bindgen::JsValue;
@@ -13,6 +14,7 @@ use web_sys::{Document, Element};
 
 use crate::dom::{append, element, set_style, text_element};
 use crate::image_layout::{CharacterPoint, ImageLayout, LayoutRegion, percent_text, point_of};
+use crate::plate_fit::PlateFit;
 
 /// How far apart, in degrees, the colours of neighbouring regions are: a step near the golden
 /// angle, so regions next to each other never share a colour.
@@ -50,6 +52,7 @@ fn box_style(region: &LayoutRegion) -> String {
 pub fn layer(document: &Document, layout: &ImageLayout) -> Result<Element, JsValue> {
     let root = element(document, "div", "sam-layer")?;
     root.set_attribute("aria-hidden", "true")?;
+    set_style(&root, &PlateFit::of_picture(layout.picture()).box_style())?;
     for (number, region) in layout.regions().iter().enumerate() {
         let colour = format!("--sam-hue:{};", hue(number, region));
         let named = if region.label().is_some() {

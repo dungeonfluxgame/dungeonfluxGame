@@ -2,7 +2,7 @@
 
 use crate::kit::Step;
 use crate::kit::progress_line::ProgressLine;
-use crate::overlay::Progress;
+use crate::overlay::{Progress, StoryMark};
 
 fn line(index: u16, total: u16, title: Option<&str>) -> ProgressLine {
     ProgressLine {
@@ -53,4 +53,22 @@ fn a_blank_continue_word_draws_no_capsule() {
     assert_eq!(line.continue_label(), None);
     line.continue_label = Some(" Continue ".to_owned());
     assert_eq!(line.continue_label(), Some("Continue"));
+}
+
+#[test]
+fn a_story_mark_draws_the_line_of_the_place_reached_and_none_before_play() {
+    let mut mark = StoryMark {
+        title: "The Charter".to_owned(),
+        progress: None,
+    };
+    assert_eq!(ProgressLine::of_story(&mark), None);
+    mark.progress = Some(Progress {
+        index: 2,
+        total: 5,
+        title: Some("The Hall".to_owned()),
+    });
+    let line = ProgressLine::of_story(&mark).expect("a place was reached");
+    assert_eq!(line.count_text(), "Scene 2 of 5");
+    assert_eq!(line.title(), Some("The Hall"));
+    assert_eq!(line.continue_label(), None);
 }

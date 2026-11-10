@@ -4,7 +4,7 @@
 //! The bible is data: `<playground>/world/bible.json`, read fresh on every call, so a designer's
 //! edit needs no rebuild. A missing file is an empty bible; one that does not read or is not valid
 //! is a typed [`WorldError`]. The active place is `<playground>/world/state.json`
-//! (`{"place": "<id>"}`).
+//! (`{"place": "<id>"}`, or a place designed in play held whole, see `store`).
 //!
 //! `context_for_viewer` (keeper sees ask, tiers and floor; anyone else only the posted facts) and
 //! `context_for` (keeper level, for tools) are the seams between the persona prompts and the
@@ -17,18 +17,30 @@
 //!
 //! - `GET /dev/world`: a `WorldView` (the bible's ids, the active place and its facts).
 //! - `POST /dev/world/place`: `{"place": "<id>"}` or `{"place": null}` sets or clears the place.
+//! - `POST /dev/world/arrive`: `{"place": {<place>}}` makes a place designed in play (a move's
+//!   destination) the active one.
 //! - `GET /dev/world/quote?item=<id>&qty=<n>`: the price quote at the active place.
 //! - `GET /dev/world/validate`: reads the bible now and counts what it holds.
+//! - `POST /dev/world/picture`: `{"item", "picture"}` keeps a close-up as the reference sheet of a
+//!   thing at a place designed in play.
+//! - `/dev/world/inventory/..`: the standard inventory of any number of owners (see `inventory`).
+//! - `/dev/world/memory/..`: the standard memory of any number of owners (see `memory`).
 //!
 //! The dev CLI's `world` verbs are these routes.
 
 pub mod cli;
 mod facts;
+pub mod inventory;
+pub mod memory;
 pub mod request;
 pub mod routes;
 mod store;
 
 pub use self::cli::{WorldCommand, parse};
+pub use self::inventory::{
+    Inventory, InventoryApplied, InventoryDelta, InventoryItem, InventoryReason, ItemUse,
+    inventory_of, sheet_name, take_judged_changes,
+};
 pub use self::request::WorldError;
 pub use self::routes::router_with;
 
@@ -36,6 +48,10 @@ use df_content::world_bible::clamp_quote;
 
 use crate::state::AppState;
 
+#[cfg(test)]
+mod inventory_tests;
+#[cfg(test)]
+mod memory_tests;
 #[cfg(test)]
 mod world_tests;
 
@@ -71,12 +87,10 @@ fn context(app: &AppState, pack_ids: &[String], viewer: Option<&str>) -> WorldCo
     let directory = store::world_directory(app);
     let context = (|| {
         let bible = store::read_bible(&directory)?;
-        let facts = match store::read_place(&directory)? {
-            Some(id) => bible.place(&id).map_or(serde_json::Value::Null, |place| {
-                facts::place_facts(&bible, place, viewer)
-            }),
-            None => serde_json::Value::Null,
-        };
+        let facts = store::read_active_place(&directory, &bible)?
+            .map_or(serde_json::Value::Null, |place| {
+                facts::place_facts(&bible, &place, viewer)
+            });
         let voice_packs = pack_ids
             .iter()
             .filter_map(|id| bible.voice_pack(id))
@@ -116,37 +130,92 @@ pub fn spoken_amount(app: &AppState, amount_cp: u64) -> String {
         .unwrap_or_else(|| format!("{amount_cp} cp"))
 }
 
-/// An item offered at the active place, and the keeper of the first stall that sells it (who
-/// knows how it looks up close).
+/// A thing at the active place worth a close look: an item a stall sells, with its tags and the
+/// keeper of the first stall that sells it (who knows how it looks up close), or a thing in sight
+/// there, with its look and no keeper.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlaceItem {
-    pub item: df_content::world_bible::Item,
-    pub keeper: String,
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub look: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keeper: Option<String>,
+    /// The close-up kept as its reference sheet, for a thing in sight that has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
-/// The items offered at the active place (every stall, each once, in the bible's order), for a
-/// judge that names one by id; empty with no place, or when the bible cannot be had.
+/// Adds `things`, noticed by `via` (a feature's name), to the active place, which must be a place
+/// designed in play. The place is checked as a designed place is (`arrive`), all of them are added
+/// or none, and each is one `WORLD thing_added place=.. id=.. via=..` line; a refusal is one `WORLD
+/// refused verb=add_things error=<key>` line. Answers the place's id.
+pub async fn add_things(
+    app: &AppState,
+    via: &str,
+    things: Vec<df_content::world_bible::Thing>,
+) -> Result<String, WorldError> {
+    let directory = store::world_directory(app);
+    let ids: Vec<String> = things.iter().map(|thing| thing.id.clone()).collect();
+    let added = crate::blocking::run_blocking(
+        move || {
+            let bible = store::read_bible(&directory)?;
+            store::add_things(&directory, &bible, things)
+        },
+        WorldError::Stopped,
+    )
+    .await;
+    match &added {
+        Ok(place) => {
+            for id in &ids {
+                app.record_line(format!("WORLD thing_added place={place} id={id} via={via}"));
+            }
+        }
+        Err(error) => app.record_line(format!(
+            "WORLD refused verb=add_things error={}",
+            error.key()
+        )),
+    }
+    added
+}
+
+/// The things worth a close look at the active place, for a judge that names one by id: the items
+/// its stalls sell (each once, in the bible's order), then the things in sight there; empty with no
+/// place, or when the bible cannot be had.
 pub fn place_items(app: &AppState) -> Vec<PlaceItem> {
     let directory = store::world_directory(app);
     let items = (|| {
         let bible = store::read_bible(&directory)?;
-        let Some(place) = store::read_place(&directory)?.and_then(|id| bible.place(&id).cloned())
-        else {
+        let Some(place) = store::read_active_place(&directory, &bible)? else {
             return Ok(Vec::new());
         };
         let mut items: Vec<PlaceItem> = Vec::new();
         for stall in &place.stalls {
             for id in &stall.sells {
                 if let Some(item) = bible.item(id)
-                    && !items.iter().any(|seen| seen.item.id == item.id)
+                    && !items.iter().any(|seen| seen.id == item.id)
                 {
                     items.push(PlaceItem {
-                        item: item.clone(),
-                        keeper: stall.keeper.clone(),
+                        id: item.id.clone(),
+                        name: item.name.clone(),
+                        tags: item.tags.clone(),
+                        look: None,
+                        keeper: Some(stall.keeper.clone()),
+                        picture: None,
                     });
                 }
             }
         }
+        items.extend(place.things.iter().map(|thing| PlaceItem {
+            id: thing.id.clone(),
+            name: thing.name.clone(),
+            tags: Vec::new(),
+            look: Some(thing.look.clone()),
+            keeper: None,
+            picture: thing.picture.clone(),
+        }));
         Ok::<_, WorldError>(items)
     })();
     items.unwrap_or_else(|error| {

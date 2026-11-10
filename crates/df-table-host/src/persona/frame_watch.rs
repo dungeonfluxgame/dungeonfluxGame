@@ -16,7 +16,8 @@
 //! Before an insert is made, the coverage judge is asked whether the keeper of the item's stall
 //! already knows how it looks up close; only when not is the backfill engine asked for it. What
 //! it adds stays in the keeper's backstory (which the frame judge reads) and goes into the
-//! insert's picture.
+//! insert's picture. A thing in sight at the place has no keeper to ask: the judge's picture of
+//! it, from its look, is the insert's.
 //!
 //! `persona watch` keeps the picture moving on a schedule too: every `every` (`every=`, else
 //! `frames.json` `show.every_seconds`, 30 s), on slots counted from the watch's start so neither
@@ -30,6 +31,17 @@
 //! readable bar at the foot of the screen, which the page keeps every bubble clear of) for the
 //! insert hold; the caption that was there is put back with the room. The watch records when
 //! each frame starts and is shown and when an insert ends (`PERSONA frame_timing`, see `frame`).
+//!
+//! A watch input `@declare <speaker id> | <json>` (printed by `persona declare`) is a character
+//! declaring the physical action they are doing right now: it makes an emergency plate of it, a
+//! picture of the scene showing the action in progress. No judge decides whether to cut, and no
+//! slot is waited for: the plate is started at once whatever is being made (one emergency plate
+//! at a time; a newer declaration replaces an older one still on its way), asks the image
+//! backend for its own queue's front (`Priority::Emergency`), and goes up the moment it is made,
+//! held for `declare_hold` (`show.declare_hold_seconds`, 20 s) like an insert. Every room plate
+//! started before the declaration that is still waiting or being made is superseded: made, never
+//! shown, since the talk it shows is older than the action declared (`plate::begin_declaration`).
+//! Plates started after it follow the normal rules.
 
 // TODO(DEV-12): tests on a fake host: frames made in parallel are shown in the order they were
 // started (a later one that finishes first waits for the one before it), the spinner shows once
@@ -38,7 +50,10 @@
 // alongside it; an insert cuts in inside the hold, keeps the room's cast, comes back to the
 // newest room after the insert hold (whole, at the end too) and carries the keeper's backfill. A
 // focus's caption goes up with its insert and the one before comes back with the room; a
-// scheduled frame starts on the tick with no line said.
+// scheduled frame starts on the tick with no line said. A declaration through `declare` on a fake
+// host (an image backend that records its request): the request's priority, the speaker's sheet
+// first and then the sheets of what is in use, the prompt without a name, the `PERSONA declared`
+// line and the `ended` moment after the hold (the screen's rules are tested in `declare_tests`).
 
 use std::collections::VecDeque;
 use std::sync::PoisonError;
@@ -53,20 +68,22 @@ use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
 use super::converse::{Speaker, speakers_of};
+use super::declare::{DECLARE_PREFIX, NO_DUPLICATES, WatchDeclared, declared_scene, held_by};
 use super::frame::{
-    FrameAsk, FrameConfig, FrameJudgement, FrameMoment, FrameReason, FrameReply, FrameRequest,
-    FrameScheduleRequest, FrameTimingReply, FrameTimingRequest, PERSONA_FRAME,
+    DeclaredTiming, FrameAsk, FrameConfig, FrameJudgement, FrameMoment, FrameReason, FrameReply,
+    FrameRequest, FrameScheduleRequest, FrameTimingReply, FrameTimingRequest, PERSONA_FRAME,
     PERSONA_FRAME_SCHEDULE, PERSONA_FRAME_TIMING, ShowSettings,
 };
 use super::plate::{
     Captioned, InsertRequest, Painting, PlateFailure, RoomTurn, SharedScreen, Shown,
-    claim_after_insert, fit_pictures, image_limits, make_frame, make_insert, plate_request,
-    put_caption_back, put_title_back, reference_sheet_name, show_with_cast, start_spinner,
+    begin_declaration, claim_after_insert, fit_pictures, image_limits, inventory_sheets,
+    items_that_fit, make_frame, make_insert, plate_request, put_caption_back, put_title_back,
+    reference_sheet_name, show_with_cast, start_spinner,
 };
 use super::request::{BackfillRequest, Backfilled, CoverageRequest, Covered, PersonaReply};
 use super::routes::path as persona_path;
-use super::story::{PERSONA_STORY, StoryItem, StoryReply};
-use super::story_items::{ItemPicture, PERSONA_STORY_ITEM_PICTURE, PictureReply};
+use super::story::{PERSONA_STORY, StoryReply};
+use super::story_items::{ItemPicture, PERSONA_STORY_ITEM_PICTURE, PictureReply, thing_of};
 use crate::cast::request::CastList;
 use crate::cast::routes::path as cast_path;
 use crate::dev::DevError;
@@ -74,7 +91,10 @@ use crate::dev_client::{get_json, post_json, reply_value};
 use crate::imagegen::{BackendLimits, GenerateRequestError};
 use crate::locate::request::CharacterRequest;
 use crate::movement::brief::BriefStyle;
-use crate::world::PlaceItem;
+use crate::world::request::{PlaceSet, ThingPicture, WorldReply};
+use crate::world::routes::path as world_path;
+use crate::world::{InventoryItem, PlaceItem};
+use df_content::world_bible::Thing;
 
 /// How long a frame stays at least before the next one starts, by default.
 pub(super) const DEFAULT_HOLD_SECONDS: u64 = 30;
@@ -94,12 +114,16 @@ const MAXIMUM_SCHEDULE_JUDGES: usize = 2;
 /// How often `persona watch` looks, between lines, for frames that finished, an insert whose hold
 /// is over and a scheduled frame that is due: well inside what a person notices.
 const WATCH_TICK: Duration = Duration::from_secs(1);
-/// How a close-up is framed: the thing in the upper two thirds, the lower third left plain for
-/// the words shown over it.
+/// How a close-up is framed: the item alone, over the whole picture. Never a plain strip left for
+/// the words shown over it: the painter draws that strip as a flat band across the picture file
+/// (roam run 2: a beige band over the bottom quarter of every insert).
 const INSERT_FRAMING: &str = concat!(
-    "Frame the thing in the upper two thirds of the picture, whole and sharp; the lower third ",
-    "is a plain, softly out-of-focus surface with nothing to read in it."
+    "The item alone fills the whole picture edge to edge, sharp from top to bottom, with no ",
+    "person, border, bar or plain empty strip in view."
 );
+/// What an insert must not show beyond the house list: the strip and the people the framing rules
+/// out, so the negative prompt says what the text asks.
+const INSERT_AVOID: [&str; 2] = ["a plain empty band along an edge", "a person's face"];
 
 /// The watch input that shows a found clue up close: `@focus <what the close look shows>`.
 const FOCUS_PREFIX: &str = "@focus ";
@@ -147,6 +171,9 @@ pub struct FrameOptions {
     /// How long after the last frame started `persona watch` starts one on its schedule, instead
     /// of the settings' `show.every_seconds`; zero makes none.
     pub every: Option<Duration>,
+    /// How long an emergency plate (a declared action) stays up before the room's plates go on,
+    /// instead of the settings' `show.declare_hold_seconds`.
+    pub declare_hold: Option<Duration>,
     /// The story's place the talk is at, so every room frame draws the things in sight there as
     /// their reference sheets have them (`persona story item`), the same in every picture.
     pub place: Option<String>,
@@ -156,6 +183,13 @@ impl FrameOptions {
     pub(super) fn with_every(self, every: Duration) -> Self {
         Self {
             every: Some(every),
+            ..self
+        }
+    }
+
+    pub(super) fn with_declare_hold(self, hold: Duration) -> Self {
+        Self {
+            declare_hold: Some(hold),
             ..self
         }
     }
@@ -172,12 +206,26 @@ pub(super) enum WatchInput<'a> {
         item: Option<&'a str>,
         text: &'a str,
     },
-    /// Neither, or a focus with no text.
+    /// `@declare <speaker id> | <json>`: a character declaring what they are doing right now (the
+    /// JSON is a [`WatchDeclared`]).
+    Declare { speaker: &'a str, body: &'a str },
+    /// None of these, or a focus with no text.
     Unreadable,
 }
 
 impl<'a> WatchInput<'a> {
     pub(super) fn parse(entry: &'a str) -> Self {
+        if let Some(declared) = entry.strip_prefix(DECLARE_PREFIX) {
+            return match declared.split_once(" | ") {
+                Some((speaker, body)) if !speaker.trim().is_empty() && !body.trim().is_empty() => {
+                    Self::Declare {
+                        speaker: speaker.trim(),
+                        body: body.trim(),
+                    }
+                }
+                _ => Self::Unreadable,
+            };
+        }
         if let Some(look) = entry.strip_prefix(FOCUS_PREFIX) {
             let (item, text) = match look.split_once(" | ") {
                 Some((item, text)) => (Some(item.trim()), text.trim()),
@@ -262,8 +310,31 @@ pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<Stri
         };
         match WatchInput::parse(&entry) {
             WatchInput::Unreadable => transcript.push(format!(
-                "  not '<speaker id> | <line>' or '@focus <text>', skipped: {entry}"
+                "  not '<speaker id> | <line>', '@focus <text>' or \
+                 '@declare <speaker id> | <json>', skipped: {entry}"
             )),
+            WatchInput::Declare { speaker: id, body } => {
+                let declared = serde_json::from_str::<WatchDeclared>(body);
+                let Some(speaker) = speakers.iter().find(|speaker| speaker.id == id) else {
+                    transcript.push(format!("  {id} is not in the scene, skipped"));
+                    continue;
+                };
+                match declared {
+                    Ok(declared) => {
+                        turn += 1;
+                        transcript.push(format!(
+                            "[{turn:02}] {} (declaring): {}",
+                            speaker.display_name, declared.line
+                        ));
+                        watch
+                            .declare(port, turn, (speaker, declared), &mut transcript)
+                            .await;
+                    }
+                    Err(error) => {
+                        transcript.push(format!("  not a declaration from {id}, skipped: {error}"))
+                    }
+                }
+            }
             WatchInput::Focus { item, text } => {
                 transcript.push(format!("  focus: {text}"));
                 watch.focus(port, turn, (item, text), &mut transcript).await;
@@ -288,19 +359,21 @@ pub(super) async fn watch_lines(port: u16, options: FrameOptions) -> Result<Stri
     Ok(transcript.join("\n"))
 }
 
-/// Records a moment of the frame `frame` on the host (`POST /dev/persona/frame/timing`).
+/// Records a moment of the frame `frame` on the host (`POST /dev/persona/frame/timing`); the
+/// `shown` moment of a declared plate also says who declared and how its time went.
 async fn mark(
     port: u16,
     frame: &str,
-    moment: FrameMoment,
-    reason: FrameReason,
+    (moment, reason): (FrameMoment, FrameReason),
     took: Duration,
+    declared: Option<DeclaredTiming>,
 ) -> Result<(), DevError> {
     let request = FrameTimingRequest {
         frame: frame.to_owned(),
         moment,
         reason,
         took_ms: saturating_millis(took),
+        declared,
     };
     let reply: FrameTimingReply = post_json(port, PERSONA_FRAME_TIMING, &request).await?;
     reply_value(reply).map(|_| ())
@@ -315,20 +388,22 @@ enum KeeperDetails {
     Added(Vec<String>),
 }
 
-/// How the keeper of `offered`'s stall knows it up close: the coverage judge is asked first, and
+/// How `keeper` knows `offered`, an item of their stall, up close: the coverage judge is asked
+/// first, and
 /// only when their persona does not hold it does the backfill engine add it, to their public
 /// backstory, the memory of their own work (expertise stays authored and is never backfilled, as
 /// `planning/persona-voice-and-world-bible.md` has it), so later lines and inserts agree and a
 /// second look at the same item adds nothing.
 async fn keeper_details(
     port: u16,
+    keeper: &str,
     offered: &PlaceItem,
     show: &ShowSettings,
 ) -> Result<KeeperDetails, DevError> {
     // What is asked is data (`frames.json` `show.detail_topic`); the item is named after it.
-    let look = format!("{} The item: {}.", show.detail_topic, offered.item.name);
+    let look = format!("{} The item: {}.", show.detail_topic, offered.name);
     let coverage = CoverageRequest {
-        character: offered.keeper.clone(),
+        character: keeper.to_owned(),
         question: look.clone(),
         guidance: None,
         model: None,
@@ -339,7 +414,7 @@ async fn keeper_details(
         return Ok(KeeperDetails::Known);
     }
     let request = BackfillRequest {
-        character: offered.keeper.clone(),
+        character: keeper.to_owned(),
         gaps: vec![Gap {
             field: PersonaField::Backstory,
             topic: look,
@@ -409,10 +484,7 @@ pub(super) async fn judge_frame(
         ));
     }
     if let Some(offered) = &judged.inspecting {
-        text.push(format!(
-            "  inspecting: {} ({})",
-            offered.item.name, offered.item.id
-        ));
+        text.push(format!("  inspecting: {} ({})", offered.name, offered.id));
     }
     text.push(format!("  shot: {} ({})", judged.shot, judged.shot_look));
     text.push(format!("  next picture: {}", judged.next_picture));
@@ -507,6 +579,8 @@ pub(super) struct FrameWatch {
     last_inspected: Option<String>,
     /// The insert on screen.
     insert_up: Option<InsertUp>,
+    /// The emergency plate on screen, until its hold is over.
+    declared_up: Option<InsertUp>,
     /// The caption an insert's clue replaced on the caption bar, while the clue is up.
     captioned: Option<Captioned>,
     /// When the watch began, and when it last asked for a frame on the schedule.
@@ -564,26 +638,48 @@ pub(super) fn needs_lead(
 #[derive(Debug, Clone)]
 struct FocusOn {
     caption: String,
-    sheet: Option<StoryItem>,
+    sheet: Option<Thing>,
+}
+
+/// Where the reference sheet of a thing shown up close keeps its first close-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SheetHome {
+    /// The stored story (a found clue's thing).
+    Story,
+    /// The active place, designed in play (a thing in sight there).
+    Place,
 }
 
 /// The story's reference sheet `item`, from the stored story; `None` when it keeps none.
-async fn sheet_of(port: u16, item: &str) -> Result<Option<StoryItem>, DevError> {
+async fn sheet_of(port: u16, item: &str) -> Result<Option<Thing>, DevError> {
     let reply: StoryReply = get_json(port, PERSONA_STORY).await?;
     Ok(reply_value(reply)?
         .items
         .into_iter()
-        .find(|sheet| sheet.id == item))
+        .find(|sheet| sheet.id == item)
+        .map(thing_of))
 }
 
 /// The story's reference sheets of the things at `place`.
-async fn sheets_at(port: u16, place: &str) -> Result<Vec<StoryItem>, DevError> {
+async fn sheets_at(port: u16, place: &str) -> Result<Vec<Thing>, DevError> {
     let reply: StoryReply = get_json(port, PERSONA_STORY).await?;
     Ok(reply_value(reply)?
         .items
         .into_iter()
         .filter(|sheet| sheet.place == place)
+        .map(thing_of)
         .collect())
+}
+
+/// The reference sheet of `offered` when it is a thing in sight (it has a look): a thing a stall
+/// sells is drawn from its keeper's account instead.
+fn place_sheet(offered: &PlaceItem) -> Option<Thing> {
+    Some(Thing {
+        id: offered.id.clone(),
+        name: offered.name.clone(),
+        look: offered.look.clone()?,
+        picture: offered.picture.clone(),
+    })
 }
 
 /// The prompt of a room frame painted anew: the house look, the judge's picture of the scene, its
@@ -625,14 +721,32 @@ pub(super) fn picture_target(maximum_characters: usize, fixed_characters: usize)
         .max(PICTURE_TARGET_FLOOR)
 }
 
-/// Keeps `picture`, a close-up just drawn, on the story's reference sheet `item`.
-async fn keep_sheet_picture(port: u16, item: &str, picture: &str) -> Result<(), DevError> {
-    let request = ItemPicture {
-        item: item.to_owned(),
-        picture: picture.to_owned(),
-    };
-    let reply: PictureReply = post_json(port, PERSONA_STORY_ITEM_PICTURE, &request).await?;
-    reply_value(reply).map(|_| ())
+/// Keeps `picture`, a close-up just drawn, on the reference sheet `item` where it is kept.
+async fn keep_sheet_picture(
+    port: u16,
+    home: SheetHome,
+    item: &str,
+    picture: &str,
+) -> Result<(), DevError> {
+    match home {
+        SheetHome::Story => {
+            let request = ItemPicture {
+                item: item.to_owned(),
+                picture: picture.to_owned(),
+            };
+            let reply: PictureReply = post_json(port, PERSONA_STORY_ITEM_PICTURE, &request).await?;
+            reply_value(reply).map(|_| ())
+        }
+        SheetHome::Place => {
+            let request = ThingPicture {
+                item: item.to_owned(),
+                picture: picture.to_owned(),
+            };
+            let reply: WorldReply<PlaceSet> =
+                post_json(port, world_path::WORLD_PICTURE, &request).await?;
+            reply_value(reply).map(|_| ())
+        }
+    }
 }
 
 /// A conversation that ends early (a turn failed) drops its watch: the frames still being made
@@ -653,7 +767,7 @@ impl FrameWatch {
     pub(super) fn new(options: FrameOptions, speakers: &[Speaker], picture: &str) -> Self {
         let people: Vec<String> = speakers
             .iter()
-            .map(|speaker| format!("{} ({})", speaker.display_name, speaker.job))
+            .map(|speaker| format!("a person ({})", speaker.job))
             .collect();
         let described = options.scene.clone().unwrap_or_else(|| {
             format!("The scene as the talk begins, with {}.", people.join("; "))
@@ -686,6 +800,7 @@ impl FrameWatch {
             last_start: None,
             last_inspected: None,
             insert_up: None,
+            declared_up: None,
             captioned: None,
             began: Instant::now(),
             next_slot: 0,
@@ -724,6 +839,7 @@ impl FrameWatch {
             .push(format!("{}: {}", speaker.display_name, line));
         self.collect(port, false, transcript).await;
         self.end_insert(port, false, transcript).await;
+        self.end_declared(port, false, transcript).await;
         if !self.line_judge_wanted() {
             return None;
         }
@@ -756,6 +872,7 @@ impl FrameWatch {
     ) {
         self.collect(port, false, transcript).await;
         self.end_insert(port, false, transcript).await;
+        self.end_declared(port, false, transcript).await;
         let sheet = match item {
             Some(item) => match sheet_of(port, item).await {
                 Ok(Some(sheet)) => Some(sheet),
@@ -783,6 +900,245 @@ impl FrameWatch {
         self.ask_later(port, turn, request, Some(focus));
     }
 
+    /// A character declares the action they are doing right now (`@declare`, after line `turn`):
+    /// an emergency plate of the scene showing it. No judge is asked and no slot is waited for, and
+    /// no cap on the plates being made holds it back (the most frames made still does: that cap is
+    /// the spend). An emergency plate still on its way is replaced by this one, every room plate
+    /// started before it is superseded (`begin_declaration`), and the plate is made after the
+    /// speaker's reference sheet first and the sheets of what their hands use next, within the
+    /// image backend's room for pictures, as an edit of the picture on screen (painted anew when
+    /// there is none). The picture's words are the speaker's look and the action, never a name.
+    pub(super) async fn declare(
+        &mut self,
+        port: u16,
+        turn: u32,
+        (speaker, declared): (&Speaker, WatchDeclared),
+        transcript: &mut Vec<String>,
+    ) {
+        self.collect(port, false, transcript).await;
+        self.end_insert(port, false, transcript).await;
+        self.end_declared(port, false, transcript).await;
+        if self.made >= self.options.maximum_frames {
+            transcript.push(format!(
+                "  declaration after line {turn} not drawn: the most frames ({}) are made",
+                self.made
+            ));
+            return;
+        }
+        let held = match held_by(port, &speaker.id).await {
+            Ok(held) => held,
+            Err(error) => {
+                transcript.push(format!(
+                    "  the inventory of {} is not read, so nothing they hold is drawn: {error}",
+                    speaker.id
+                ));
+                Vec::new()
+            }
+        };
+        let in_use: Vec<(String, InventoryItem)> = declared
+            .action
+            .items_in_use
+            .iter()
+            .filter_map(|wanted| {
+                held.iter()
+                    .find(|item| item.id == *wanted && item.count > 0)
+                    .map(|item| (speaker.id.clone(), item.clone()))
+            })
+            .collect();
+        let names: Vec<String> = in_use.iter().map(|(_, item)| item.name.clone()).collect();
+        let scene = declared_scene(
+            &speaker.job,
+            &declared.action,
+            &names,
+            self.characters.len(),
+        );
+        let request = FrameRequest {
+            picture: self.picture.clone(),
+            lines: Vec::new(),
+            speakers: self.speakers.clone(),
+            gate_percent: self.options.gate_percent,
+            model: None,
+            last_shot: self.last_shot.clone(),
+            peak_percent: 0,
+            last_inspected: None,
+            ask: FrameAsk::Declare {
+                scene: scene.clone(),
+            },
+            picture_target_characters: None,
+        };
+        let judgement = match ask_judge(port, &request).await {
+            Ok(judgement) => judgement,
+            Err(error) => {
+                transcript.push(format!(
+                    "  declaration after line {turn} not drawn, the frame settings are not read: \
+                     {error}"
+                ));
+                return;
+            }
+        };
+        self.show = judgement.show.clone();
+        {
+            let mut screen = self.screen.lock().unwrap_or_else(PoisonError::into_inner);
+            screen.minimum_shown = Duration::from_secs(self.show.minimum_shown_seconds);
+            screen.room_every = self.every();
+        }
+        // One emergency plate at a time: a newer declaration replaces an older one on its way.
+        for older in self
+            .in_flight
+            .iter()
+            .filter(|frame| frame.reason == FrameReason::Declared)
+        {
+            older.task.abort();
+            transcript.push(format!(
+                "  declared plate {} replaced by a newer declaration",
+                older.name
+            ));
+        }
+        self.in_flight
+            .retain(|frame| frame.reason != FrameReason::Declared);
+        self.made += 1;
+        let number = self.made;
+        let name = format!("{}-{number}", self.options.name);
+        let waiting = begin_declaration(&self.screen, number, &name);
+        let superseded = self.rooms_in_flight();
+        let base = (!self.newest_picture.is_empty()).then(|| self.newest_picture.clone());
+        let style = BriefStyle::default();
+        let prompt = room_prompt(
+            &style,
+            base.as_ref().map(|_| judgement.edit_rule.as_str()),
+            &judgement.shot_look,
+            &judgement.next_picture,
+        );
+        // The speaker's sheet comes first, so the backend's room for pictures never loses it.
+        let mut characters = self.characters.clone();
+        if let Some(at) = characters
+            .iter()
+            .position(|character| character.name == speaker.id)
+        {
+            let own = characters.remove(at);
+            characters.insert(0, own);
+        }
+        let shown = match image_limits(port).await {
+            Ok(limits) => items_that_fit(&limits, characters.len(), base.is_some(), in_use),
+            Err(error) => {
+                transcript.push(format!("  picture limits not read: {error}"));
+                in_use
+            }
+        };
+        let mut sheets = Vec::new();
+        match inventory_sheets(port, &shown).await {
+            Ok(made) => {
+                for name in &made.requested {
+                    transcript.push(format!("  sheet {name}: none yet, asked for"));
+                }
+                sheets.extend(made.sheets);
+            }
+            Err((_, error)) => transcript.push(format!("  inventory sheets not read: {error}")),
+        }
+        transcript.push(format!(
+            "  frame {number} ({name}) started for a declaration after line {turn}, declared, \
+             superseding {superseded} room plate(s) ({waiting} waiting), {}",
+            base.as_deref().map_or_else(
+                || "painted anew".to_owned(),
+                |base| format!("editing {base}")
+            )
+        ));
+        if self.in_flight.is_empty() && self.every().is_zero() {
+            match start_spinner(port).await {
+                Ok(before) => self.title_before = Some(before),
+                Err(error) => transcript.push(format!("  spinner not shown: {error}")),
+            }
+        }
+        let since_start = self.last_start.unwrap_or(self.began).elapsed();
+        if let Err(error) = mark(
+            port,
+            &name,
+            (FrameMoment::Started, FrameReason::Declared),
+            since_start,
+            None,
+        )
+        .await
+        {
+            transcript.push(format!("  frame {number} start not recorded: {error}"));
+        }
+        let hold = self.declare_hold();
+        let screen = self.screen.clone();
+        let cast_from = Some(self.cast_picture.clone());
+        let mut avoid = style.avoid;
+        avoid.extend(NO_DUPLICATES.map(str::to_owned));
+        let task_name = name.clone();
+        let who = speaker.id.clone();
+        let reason = FrameReason::Declared;
+        let superseded_count = u32::try_from(superseded).unwrap_or(u32::MAX);
+        let started = Instant::now();
+        let task = tokio::spawn(async move {
+            let painting = Painting {
+                prompt: &prompt,
+                avoid: &avoid,
+                sheets: &sheets,
+            };
+            let made = make_frame(
+                port,
+                &task_name,
+                &painting,
+                characters,
+                base.as_deref(),
+                RoomTurn {
+                    number,
+                    screen,
+                    cast_from,
+                    cued: false,
+                    emergency: Some(hold),
+                },
+            )
+            .await;
+            let finished = Instant::now();
+            let timing = match &made {
+                Ok(shown) if shown.on_screen => {
+                    let took = finished - started;
+                    let made_for = shown.making.unwrap_or(took);
+                    let note = DeclaredTiming {
+                        who,
+                        superseded: superseded_count,
+                        queue_wait_ms: saturating_millis(took.saturating_sub(made_for)),
+                        made_ms: saturating_millis(made_for),
+                    };
+                    mark(
+                        port,
+                        &task_name,
+                        (FrameMoment::Shown, reason),
+                        took,
+                        Some(note),
+                    )
+                    .await
+                }
+                Ok(_) | Err(_) => Ok(()),
+            };
+            Made {
+                made,
+                finished,
+                timing,
+            }
+        });
+        // The newest picture shows the declared action; the talk before it is behind it.
+        self.picture = judgement.next_picture;
+        let cleared = self.since.len();
+        self.since.clear();
+        for judging in &mut self.judging {
+            judging.lines_judged = judging.lines_judged.saturating_sub(cleared);
+        }
+        self.peak_percent = 0;
+        self.last_cued = Some(started);
+        self.in_flight.push_back(InFlight {
+            number,
+            name,
+            reason,
+            started,
+            after_turn: turn,
+            task,
+        });
+    }
+
     /// Asks the frame judge `request` (after line `turn`) as an owned task, considered by the tick
     /// once it answers.
     fn ask_later(&mut self, port: u16, turn: u32, request: FrameRequest, focus: Option<FocusOn>) {
@@ -804,6 +1160,7 @@ impl FrameWatch {
     pub(super) async fn on_tick(&mut self, port: u16, turn: u32, transcript: &mut Vec<String>) {
         self.collect(port, false, transcript).await;
         self.end_insert(port, false, transcript).await;
+        self.end_declared(port, false, transcript).await;
         self.take_judgements(port, turn, transcript).await;
         let every = self.every();
         let due = slots_due(self.began, every, self.next_slot, Instant::now());
@@ -924,8 +1281,8 @@ impl FrameWatch {
         transcript: &mut Vec<String>,
     ) -> FrameRequest {
         let picture_target_characters = match ask {
-            // A focus asks no model: its picture is the clue's words.
-            FrameAsk::Focus { .. } => None,
+            // A focus and a declaration ask no model: their picture is given.
+            FrameAsk::Focus { .. } | FrameAsk::Declare { .. } => None,
             FrameAsk::Line {} | FrameAsk::Schedule {} => {
                 self.picture_target(port, transcript).await
             }
@@ -987,7 +1344,7 @@ impl FrameWatch {
     pub(super) fn fixed_characters(
         &self,
         limits: &BackendLimits,
-        sheets: &[StoryItem],
+        sheets: &[Thing],
     ) -> Result<usize, GenerateRequestError> {
         let style = BriefStyle::default();
         let config = FrameConfig::default();
@@ -1044,6 +1401,7 @@ impl FrameWatch {
             FrameReason::Schedule => format!("on the schedule, after line {turn}"),
             FrameReason::Focus => format!("for a focus, after line {turn}"),
             FrameReason::Line | FrameReason::Inspection => format!("after line {turn}"),
+            FrameReason::Declared => format!("for a declaration, after line {turn}"),
         };
         let changes: Vec<String> = judgement
             .changes
@@ -1072,7 +1430,7 @@ impl FrameWatch {
         // The last item looked at is told to the judge, which says whether a look is new; a line
         // with no close look keeps it (run 59 cut to the Verdant twice).
         if let Some(offered) = &judgement.inspecting {
-            self.last_inspected = Some(offered.item.id.clone());
+            self.last_inspected = Some(offered.id.clone());
         }
         self.show = judgement.show.clone();
         {
@@ -1085,7 +1443,7 @@ impl FrameWatch {
             .is_some_and(|started| started.elapsed() < self.options.hold);
         let room_full = self.rooms_in_flight() >= self.options.parallel;
         let can_start = match reason {
-            FrameReason::Focus => true,
+            FrameReason::Focus | FrameReason::Declared => true,
             FrameReason::Inspection => self.inserts_in_flight() < self.options.parallel,
             FrameReason::Line => !held && !room_full,
             // A slot of the schedule keeps the cadence: the hold never puts it off.
@@ -1098,7 +1456,11 @@ impl FrameWatch {
         let number = self.made;
         let name = format!("{}-{number}", self.options.name);
         let style = BriefStyle::default();
-        let base = self.options.edit.then(|| {
+        // An insert is never an edit of the room: its rule keeps the people's faces as they are,
+        // and an insert shows none (roam run 2: three of six were the wide plate with the person
+        // still standing in it). It is painted anew from the item's look.
+        let insert = reason.is_insert();
+        let base = (self.options.edit && !insert).then(|| {
             if self.options.from_last {
                 self.newest_picture.clone()
             } else {
@@ -1122,17 +1484,25 @@ impl FrameWatch {
                 caption: look.clone(),
                 sheet: None,
             })),
-            FrameAsk::Line {} | FrameAsk::Schedule {} => None,
+            FrameAsk::Line {} | FrameAsk::Schedule {} | FrameAsk::Declare { .. } => None,
         };
         let caption = focus.as_ref().map(|focus| focus.caption.clone());
-        let sheet = focus.and_then(|focus| focus.sheet);
+        // A focus is drawn from the story's sheet of its thing; an inspection of a thing in sight
+        // from the place's, so a second close look shows the same close-up.
+        let sheet = match focus {
+            Some(focus) => focus.sheet.map(|sheet| (sheet, SheetHome::Story)),
+            None => offered
+                .as_ref()
+                .and_then(place_sheet)
+                .map(|sheet| (sheet, SheetHome::Place)),
+        };
         transcript.push(format!(
             "  frame {number} ({name}) started {when}, {}, shot {}{}{}",
             reason.key(),
             judgement.shot,
             offered
                 .as_ref()
-                .map_or_else(String::new, |offered| format!(" on {}", offered.item.name)),
+                .map_or_else(String::new, |offered| format!(" on {}", offered.name)),
             base.as_deref().map_or_else(
                 || ", painted anew".to_owned(),
                 |base| format!(", editing {base}")
@@ -1147,16 +1517,20 @@ impl FrameWatch {
             }
         }
         let since_start = self.last_start.unwrap_or(self.began).elapsed();
-        if let Err(error) = mark(port, &name, FrameMoment::Started, reason, since_start).await {
+        if let Err(error) = mark(
+            port,
+            &name,
+            (FrameMoment::Started, reason),
+            since_start,
+            None,
+        )
+        .await
+        {
             transcript.push(format!("  frame {number} start not recorded: {error}"));
         }
         let characters = self.characters.clone();
         let task_name = name.clone();
-        // An insert takes the cast of the newest room picture, the one it cuts away from, and
-        // waits for no room frame; a room frame waits for its slot (`claim_room`).
-        let insert = reason.is_insert();
-        // A close-up leaves its lower third plain, where the caption and a speaker's words sit,
-        // so no word covers the thing looked at (dungeon run 6: a card hid the latch's scratches).
+        // A close-up is framed as the item alone filling the picture.
         let prompt = if insert {
             format!("{prompt} {INSERT_FRAMING}")
         } else {
@@ -1167,7 +1541,7 @@ impl FrameWatch {
         // to plate; a wheel came back as a different object): a sheet's close-up is attached as
         // a picture when there is room, and a sheet without one is told in words (owner,
         // 2026-11-09).
-        let sheets = match (&self.options.place, insert) {
+        let mut sheets = match (&self.options.place, insert) {
             (Some(place), false) => match sheets_at(port, place).await {
                 Ok(sheets) => sheets,
                 Err(error) => {
@@ -1177,20 +1551,63 @@ impl FrameWatch {
             },
             _ => Vec::new(),
         };
-        let avoid = style.avoid;
+        // Then what the people hold that the judge says the picture shows, in its order; a
+        // missing sheet is told in words and asked for.
+        if !insert && !judgement.items_in_view.is_empty() {
+            let shown: Vec<(String, InventoryItem)> = judgement
+                .items_in_view
+                .iter()
+                .map(|shown| (shown.owner.clone(), shown.item.clone()))
+                .collect();
+            let shown = match image_limits(port).await {
+                Ok(limits) => items_that_fit(
+                    &limits,
+                    self.characters.len() + sheets.len(),
+                    base.is_some(),
+                    shown,
+                ),
+                Err(error) => {
+                    transcript.push(format!("  picture limits not read: {error}"));
+                    shown
+                }
+            };
+            match inventory_sheets(port, &shown).await {
+                Ok(made) => {
+                    for name in &made.requested {
+                        transcript.push(format!("  sheet {name}: none yet, asked for"));
+                    }
+                    sheets.extend(made.sheets);
+                }
+                Err((_, error)) => {
+                    transcript.push(format!("  inventory sheets not read: {error}"));
+                }
+            }
+        }
+        let mut avoid = style.avoid;
+        if insert {
+            avoid.extend(INSERT_AVOID.map(str::to_owned));
+        }
         let screen = self.screen.clone();
         let insert_hold = self.insert_hold();
         let show = self.show.clone();
+        // An insert takes the cast of the newest room picture, the one it cuts away from, and
+        // waits for no room frame; a room frame waits for its slot (`claim_room`).
         let cut = insert.then(|| (self.cast_picture.clone(), offered, caption, sheet));
         let cast_from = Some(self.cast_picture.clone());
         let started = Instant::now();
         let task = tokio::spawn(async move {
             let made = match cut {
                 Some((room, offered, caption, sheet)) => {
-                    // The insert waits for the item's details: a failed backfill still cuts to
-                    // the item, from the judge's picture alone, and says so.
-                    let details = match &offered {
-                        Some(offered) => Some(keeper_details(port, offered, &show).await),
+                    // The insert waits for the details of an item its keeper knows: a failed
+                    // backfill still cuts to the item, from the judge's picture alone, and says
+                    // so. A thing in sight has no keeper; its look is in the judge's picture.
+                    let kept = offered
+                        .as_ref()
+                        .and_then(|offered| Some((offered.keeper.as_deref()?, offered)));
+                    let details = match kept {
+                        Some((keeper, offered)) => {
+                            Some(keeper_details(port, keeper, offered, &show).await)
+                        }
                         None => None,
                     };
                     let prompt = match &details {
@@ -1199,23 +1616,26 @@ impl FrameWatch {
                         }
                         _ => prompt,
                     };
-                    let drawn = sheet.as_ref().and_then(|sheet| sheet.picture.as_deref());
+                    let drawn = sheet
+                        .as_ref()
+                        .and_then(|(sheet, _)| sheet.picture.as_deref());
                     let request = InsertRequest {
                         name: &task_name,
                         prompt: &prompt,
                         avoid: &avoid,
-                        base: base.as_deref(),
                         drawn,
                         room: &room,
                         caption: caption.as_deref(),
-                        caption_title: sheet.as_ref().map(|sheet| sheet.name.as_str()),
+                        caption_title: sheet.as_ref().map(|(sheet, _)| sheet.name.as_str()),
                         hold: insert_hold,
                     };
                     let inserted = make_insert(port, &screen, request).await;
                     // A close-up drawn now is kept on its sheet, so the next one is the same.
                     let kept = match (&inserted, &sheet) {
-                        (Ok((_, picture, _)), Some(sheet)) if sheet.picture.is_none() => {
-                            keep_sheet_picture(port, &sheet.id, picture).await.err()
+                        (Ok((_, picture, _)), Some((sheet, home))) if sheet.picture.is_none() => {
+                            keep_sheet_picture(port, *home, &sheet.id, picture)
+                                .await
+                                .err()
                         }
                         _ => None,
                     };
@@ -1250,6 +1670,7 @@ impl FrameWatch {
                             screen,
                             cast_from,
                             cued: reason == FrameReason::Line,
+                            emergency: None,
                         },
                     )
                     .await
@@ -1259,7 +1680,7 @@ impl FrameWatch {
             let timing = match &made {
                 Ok(shown) if shown.on_screen => {
                     let took = finished - started;
-                    mark(port, &task_name, FrameMoment::Shown, reason, took).await
+                    mark(port, &task_name, (FrameMoment::Shown, reason), took, None).await
                 }
                 Ok(_) | Err(_) => Ok(()),
             };
@@ -1319,6 +1740,7 @@ impl FrameWatch {
             transcript.push(format!("  title not put back: {error}"));
         }
         self.insert_up = None;
+        self.declared_ended(port, Instant::now(), transcript).await;
         self.restore_caption(port, transcript).await;
         self.tell_schedule(port, Schedule::Stopped, transcript)
             .await;
@@ -1330,6 +1752,7 @@ impl FrameWatch {
         self.stop_judging(transcript);
         self.collect(port, true, transcript).await;
         self.end_insert(port, true, transcript).await;
+        self.end_declared(port, true, transcript).await;
         self.tell_schedule(port, Schedule::Stopped, transcript)
             .await;
     }
@@ -1414,8 +1837,41 @@ impl FrameWatch {
             return;
         };
         let took = ended.saturating_duration_since(up.shown);
-        if let Err(error) = mark(port, &up.name, FrameMoment::Ended, up.reason, took).await {
+        if let Err(error) = mark(port, &up.name, (FrameMoment::Ended, up.reason), took, None).await
+        {
             transcript.push(format!("  end of insert {} not recorded: {error}", up.name));
+        }
+    }
+
+    /// Records that the emergency plate on screen has been up for its whole hold (`ended`); when
+    /// `finishing`, waits out what is left of the hold first. The screen is not changed: the room's
+    /// plates go on from here by their own rules.
+    async fn end_declared(&mut self, port: u16, finishing: bool, transcript: &mut Vec<String>) {
+        let Some(up) = &self.declared_up else {
+            return;
+        };
+        let left = self.declare_hold().saturating_sub(up.shown.elapsed());
+        if !left.is_zero() {
+            if !finishing {
+                return;
+            }
+            tokio::time::sleep(left).await;
+        }
+        self.declared_ended(port, Instant::now(), transcript).await;
+    }
+
+    /// Records that the emergency plate on screen gave up the screen's hold at `ended`.
+    async fn declared_ended(&mut self, port: u16, ended: Instant, transcript: &mut Vec<String>) {
+        let Some(up) = self.declared_up.take() else {
+            return;
+        };
+        let took = ended.saturating_duration_since(up.shown);
+        if let Err(error) = mark(port, &up.name, (FrameMoment::Ended, up.reason), took, None).await
+        {
+            transcript.push(format!(
+                "  end of declared plate {} not recorded: {error}",
+                up.name
+            ));
         }
     }
 
@@ -1443,7 +1899,7 @@ impl FrameWatch {
     fn rooms_in_flight(&self) -> usize {
         self.in_flight
             .iter()
-            .filter(|frame| !frame.reason.is_insert())
+            .filter(|frame| !frame.reason.is_insert() && frame.reason != FrameReason::Declared)
             .count()
     }
 
@@ -1454,6 +1910,14 @@ impl FrameWatch {
             .iter()
             .filter(|frame| frame.reason.is_insert())
             .count()
+    }
+
+    /// How long an emergency plate holds the screen: the command's `declare_hold=`, or the
+    /// settings'.
+    fn declare_hold(&self) -> Duration {
+        self.options
+            .declare_hold
+            .unwrap_or(Duration::from_secs(self.show.declare_hold_seconds))
     }
 
     /// How long an insert stays up: the command's `insert_hold=`, or the settings'.
@@ -1527,10 +1991,24 @@ impl FrameWatch {
                         shown: finished,
                     });
                 } else if !shown.on_screen {
-                    self.made_room(shown.making);
+                    // An emergency plate jumped the queue: its making time says nothing of a
+                    // room plate's.
+                    if frame.reason != FrameReason::Declared {
+                        self.made_room(shown.making);
+                    }
                     transcript.push(format!("  {}", shown.summary));
                 } else {
-                    self.made_room(shown.making);
+                    if frame.reason == FrameReason::Declared {
+                        // A declaration that goes up ends the one before it, and holds the screen.
+                        self.declared_ended(port, finished, transcript).await;
+                        self.declared_up = Some(InsertUp {
+                            name: frame.name.clone(),
+                            reason: frame.reason,
+                            shown: finished,
+                        });
+                    } else {
+                        self.made_room(shown.making);
+                    }
                     // A plate older than one already up fills a slot, but the newest picture (the
                     // base of an edit, the room an insert goes back to) only moves forward.
                     if frame.number > self.newest_number {
@@ -1562,8 +2040,14 @@ impl FrameWatch {
                     step.key()
                 ));
                 let took = finished - frame.started;
-                if let Err(error) =
-                    mark(port, &frame.name, FrameMoment::Failed, frame.reason, took).await
+                if let Err(error) = mark(
+                    port,
+                    &frame.name,
+                    (FrameMoment::Failed, frame.reason),
+                    took,
+                    None,
+                )
+                .await
                 {
                     transcript.push(format!(
                         "  frame {} failure not recorded: {error}",
@@ -1579,22 +2063,20 @@ impl FrameWatch {
     }
 }
 
-/// What an insert did: `summary`, and for an item, what its keeper's details came to.
+/// What an insert did: `summary`, and for an item its keeper knows, what their details came to.
 fn insert_summary(
     summary: String,
     offered: Option<&PlaceItem>,
     details: Option<Result<KeeperDetails, DevError>>,
 ) -> String {
-    match (offered, details) {
-        (Some(offered), Some(Ok(KeeperDetails::Known))) => format!(
-            "{summary}; {} already knew the {} up close, nothing backfilled",
-            offered.keeper, offered.item.name
-        ),
-        (Some(offered), Some(Ok(KeeperDetails::Added(details)))) => format!(
-            "{summary}; {} detail(s) of the {} backfilled into {}",
+    let kept = offered.and_then(|offered| Some((offered.keeper.as_deref()?, &offered.name)));
+    match (kept, details) {
+        (Some((keeper, name)), Some(Ok(KeeperDetails::Known))) => {
+            format!("{summary}; {keeper} already knew the {name} up close, nothing backfilled")
+        }
+        (Some((keeper, name)), Some(Ok(KeeperDetails::Added(details)))) => format!(
+            "{summary}; {} detail(s) of the {name} backfilled into {keeper}",
             details.len(),
-            offered.item.name,
-            offered.keeper
         ),
         (_, Some(Err(error))) => format!("{summary}; no details backfilled ({error})"),
         _ => summary,

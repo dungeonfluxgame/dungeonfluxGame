@@ -167,6 +167,15 @@ impl Transition {
         Ok(next)
     }
 
+    /// Records `detail` at the current stage without leaving it (a second attempt at the stage).
+    /// A finished transition takes no note, and a clock earlier than the last record is recorded
+    /// at the last record's time.
+    pub fn note(&mut self, now_ms: u64, detail: &str) {
+        if !self.is_finished() {
+            self.push_record(now_ms.max(self.last_ms), detail.to_owned());
+        }
+    }
+
     /// Fails the current stage, keeping it, and stores the failure. A finished transition keeps
     /// its first outcome, so a late failure is ignored. A clock earlier than the last record is
     /// recorded at the last record's time, so the failure is never lost.
@@ -220,7 +229,7 @@ impl Transition {
 
     /// Rebuilds a transition from its records, to read its stage and trace. Records carry neither
     /// deadlines nor a failure, so the result has the default deadlines and is never failed. A
-    /// failure record repeats its stage, so a trace that ends in one is refused as out of order.
+    /// failure record or a note repeats its stage, so a trace with one is refused as out of order.
     pub fn replay(records: &[TransitionRecord]) -> Result<Self, TransitionError> {
         let first = records.first().ok_or(TransitionError::TraceEmpty)?;
         let last = records.last().ok_or(TransitionError::TraceEmpty)?;

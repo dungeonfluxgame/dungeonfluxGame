@@ -1,7 +1,8 @@
 //! The facts of a place, as the JSON the persona prompts embed.
 //!
-//! Structural only: the stalls and items of the place, and each item's quote for one unit and for
-//! the smallest lot of each bulk tier. The persona voices these numbers and never invents others.
+//! Structural only: the stalls and items of the place, each item's quote for one unit and for
+//! the smallest lot of each bulk tier, and the things in sight there with how each looks. The
+//! persona voices these numbers and never invents others.
 //! What a viewer is told depends on who they are: the keeper of a stall sees all of it (ask, tiers,
 //! floor), anyone else only what the stall posts, so a customer's persona cannot repeat the floor.
 
@@ -50,6 +51,12 @@ pub(super) fn place_facts(bible: &WorldBible, place: &Place, viewer: Option<&str
     });
     if !bible.coins.is_empty() {
         facts["coins"] = json!(bible.coins);
+    }
+    if !place.things.is_empty() {
+        facts["in_sight"] = json!(place.things);
+    }
+    if place.stalls.is_empty() {
+        return facts;
     }
     if place.stalls.iter().any(keeps) {
         facts["viewer_role"] = json!("keeper");

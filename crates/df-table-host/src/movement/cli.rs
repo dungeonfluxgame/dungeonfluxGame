@@ -1,8 +1,12 @@
 //! The `move` verbs of the dev command line for a scene transition: `move say` runs the whole path
 //! from a line to the brief, and `move interpret`, `move design` and `move brief` stop after one
 //! stage. Every stage runs on its fake, so no provider is called, except the plate step: `plate=NAME`
-//! makes the new backdrop through `deliver_plate`. `move act` has a character say a line through
-//! `persona say` and runs that line as a move.
+//! makes the new backdrop through `deliver_plate`, and the designed place, with the things in sight
+//! there, becomes the world's active place (`POST /dev/world/arrive`, its id the plate's name), so
+//! a frame judge can name one of them for a close look. `move act` has a character say a line
+//! through `persona say` and runs that line as a move: Jev is told the line was said toward going
+//! somewhere (`declared: move`), and a first answer that finds no destination in it is read once
+//! more with its own reason, as a `retry` record in the trace.
 //!
 //! The party is the shown scene's characters that have a stored persona, read from the host's cast
 //! route exactly as `persona converse` reads them. Each stage either advances the transition with a
@@ -11,14 +15,15 @@
 use std::fmt;
 use std::time::Instant;
 
-use super::brief::{BriefCharacter, LookSheets, build_brief};
+use super::brief::{BriefCharacter, LookSheets, build_brief, scene_words};
+use super::interpret::retry_after;
 use super::routes::{
     DesignReply, DesignRequest, InterpretReply, InterpretRequest, path as move_path,
 };
 use super::transition::{Deadlines, Transition, format_trace};
 use super::types::{
-    Depth, Interpreted, MoveIntent, PartyMember, PlateBrief, Resident, SceneDesign, Side,
-    TransitionStage,
+    Clarification, Declared, Depth, Interpreted, MoveIntent, PartyMember, PlateBrief, Resident,
+    SceneDesign, Side, TransitionStage, Unclear,
 };
 use crate::cast::request::{CastList, CastReply};
 use crate::cast::routes::path as cast_path;
@@ -31,10 +36,18 @@ use crate::imagegen::model::plain_name;
 use crate::locate::request::CharacterRequest;
 use crate::persona::options::take_options;
 use crate::persona::request::{
-    GenerateRequest, Generation, PersonaReply, PersonaSummary, SayRequest, Spoken,
+    GenerateRequest, Generation, PersonaReply, PersonaSummary, SaidLine, SayRequest, Spoken,
 };
 use crate::persona::routes::path as persona_path;
-use crate::persona::{Painting, deliver_plate};
+use crate::persona::{
+    Painting, deliver_plate, image_limits, inventory_sheets, items_that_fit, sheets_for_gains,
+};
+use crate::world::InventoryItem;
+use crate::world::inventory::request::{InventoryReply, InventoryView};
+use crate::world::inventory::routes::path as inventory_path;
+use crate::world::request::{ArriveRequest, PlaceSet, WorldReply};
+use crate::world::routes::path as world_path;
+use df_content::world_bible::Place;
 
 /// Every `move` stage verb, for the unknown-verb refusal and the help.
 pub const MOVEMENT_USAGE: &str = concat!(
@@ -63,17 +76,30 @@ pub enum MoveCommand {
 }
 
 /// Why a movement could not be carried through. `report` is everything printed before the failure
-/// and the transition's records, ending in the failed record.
+/// and the transition's records, ending in the failed record; `message` is the failed record's
+/// words (the typed cause of a refused answer, never the model's text).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MoveError {
-    Failed { report: String, key: String },
+    Failed {
+        report: String,
+        key: String,
+        message: String,
+    },
 }
 
 impl fmt::Display for MoveError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Failed { report, key } => {
-                write!(formatter, "{report}\nthe transition failed: {key}")
+            Self::Failed {
+                report,
+                key,
+                message,
+            } => {
+                let message = message.lines().collect::<Vec<_>>().join(" ");
+                write!(
+                    formatter,
+                    "{report}\nthe transition failed: {key}: {message}"
+                )
             }
         }
     }
@@ -148,24 +174,46 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
     let present = present_personas(&cast);
     let outcome = match command {
         MoveCommand::Say { line, plate } => {
-            walk(port, &line, None, &present, None, None, plate.as_deref()).await
+            walk(port, &line, None, &present, None, plate.as_deref()).await
         }
         MoveCommand::Act {
             character,
             situation,
             plate,
         } => {
-            let line = speak(port, &character, situation.clone()).await?;
+            let said = speak(port, &character, situation.clone()).await?;
+            // What the line used up or gained of what the speaker holds, as the host took it.
+            let inventory: Vec<String> = said
+                .inventory
+                .iter()
+                .map(|change| {
+                    format!(
+                        "inventory: {} {} -> {} ({})",
+                        change.item, change.before, change.after, change.why
+                    )
+                })
+                .chain(sheets_for_gains(port, &character, &said.inventory).await)
+                .collect();
+            let spoken = Said {
+                speaker: &character,
+                situation: &situation,
+            };
             walk(
                 port,
-                &line,
+                &said.line,
                 None,
                 &present,
-                Some(character.as_str()),
-                Some(situation.as_str()),
+                Some(spoken),
                 plate.as_deref(),
             )
             .await
+            .map(|report| {
+                [report]
+                    .into_iter()
+                    .chain(inventory)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
         }
         MoveCommand::Interpret(line) => {
             walk(
@@ -173,7 +221,6 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
                 &line,
                 Some(TransitionStage::Interpreting),
                 &present,
-                None,
                 None,
                 None,
             )
@@ -187,7 +234,6 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
                 &present,
                 None,
                 None,
-                None,
             )
             .await
         }
@@ -199,7 +245,6 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
                 &present,
                 None,
                 None,
-                None,
             )
             .await
         }
@@ -208,7 +253,7 @@ pub async fn run(port: u16, command: MoveCommand) -> Result<String, DevError> {
 }
 
 /// The line `character` says about `situation`, worded by `persona say` and not voiced.
-async fn speak(port: u16, character: &str, situation: String) -> Result<String, DevError> {
+async fn speak(port: u16, character: &str, situation: String) -> Result<SaidLine, DevError> {
     let request = SayRequest {
         character: character.to_owned(),
         situation,
@@ -221,7 +266,7 @@ async fn speak(port: u16, character: &str, situation: String) -> Result<String, 
     };
     let reply: PersonaReply<Spoken> = post_json(port, persona_path::PERSONA_SAY, &request).await?;
     let spoken = dev_client::reply_value(reply)?;
-    Ok(spoken.said.line)
+    Ok(spoken.said)
 }
 
 /// The shown scene's characters that have a stored persona, in the scene's order.
@@ -235,6 +280,13 @@ fn present_personas(cast: &CastList) -> Vec<PersonaSummary> {
                 .cloned()
         })
         .collect()
+}
+
+/// A line a character said toward going somewhere (`move act`): who said it and the situation
+/// they said it in. Jev reads such a line as declared a move.
+pub(super) struct Said<'a> {
+    pub(super) speaker: &'a str,
+    pub(super) situation: &'a str,
 }
 
 /// One transition being walked through its stages, with the text printed so far.
@@ -276,7 +328,32 @@ impl Walk {
         MoveError::Failed {
             report: self.report.join("\n"),
             key: key.to_owned(),
+            message: message.to_owned(),
         }
+    }
+
+    /// Asks Jev for one reading of the request; a refusal or a route that cannot be reached fails
+    /// the transition.
+    async fn read(
+        &mut self,
+        port: u16,
+        request: &InterpretRequest,
+    ) -> Result<Interpreted, MoveError> {
+        match post_json::<_, InterpretReply>(port, move_path::MOVE_INTERPRET, request).await {
+            Ok(DevReply::Done { value }) => Ok(value),
+            Ok(DevReply::Rejected { error, message }) => Err(self.failed(error.key(), &message)),
+            Err(error) => Err(self.failed("route_unreachable", &error.to_string())),
+        }
+    }
+
+    /// Records that the line is read a second time, with the reason of the first reading: the
+    /// record's time is the end of the first attempt.
+    fn retry(&mut self, refused: &Clarification) {
+        let now = self.now_ms();
+        self.transition.note(
+            now,
+            &format!("retry reason={}", clarification_text(refused)),
+        );
     }
 
     /// Ends a line that is not a movement: the transition fails with its key and the answer is
@@ -295,16 +372,31 @@ impl Walk {
     }
 }
 
+/// What a clarification leaves unclear, in a sentence, with the model's reason when it gave one.
+fn clarification_text(clarification: &Clarification) -> String {
+    let what = match clarification.unclear {
+        Unclear::Destination => "the movement names no destination",
+        Unclear::Other => "the line cannot be read as one movement",
+    };
+    match clarification.reason.as_deref() {
+        Some(reason) => {
+            let reason: Vec<&str> = reason.split_whitespace().collect();
+            format!("{what}: {}", reason.join(" "))
+        }
+        None => what.to_owned(),
+    }
+}
+
 /// The stages in order, stopping after `stop`; `None` runs the whole path (`move say`, `move act`).
-/// `speaker` is the character who said `line` in `move act`: the line is printed first, and Jev is
-/// told who said it. `plate` makes the plate and puts it on the scene.
-async fn walk(
+/// `said` is the character who said `line` toward going somewhere in `move act`: the line is
+/// printed first, and Jev is told who said it and that it was meant as a move. `plate` makes the
+/// plate and puts it on the scene.
+pub(super) async fn walk(
     port: u16,
     line: &str,
     stop: Option<TransitionStage>,
     present: &[PersonaSummary],
-    speaker: Option<&str>,
-    context: Option<&str>,
+    said: Option<Said<'_>>,
     plate: Option<&str>,
 ) -> Result<String, MoveError> {
     let party: Vec<PartyMember> = present
@@ -315,35 +407,42 @@ async fn walk(
         })
         .collect();
     let mut walk = Walk::start(line);
-    if let Some(speaker) = speaker {
-        walk.report.push(format!("{speaker} says: {line}"));
+    if let Some(said) = &said {
+        walk.report.push(format!("{} says: {line}", said.speaker));
     }
+    let context = said.as_ref().map(|said| said.situation);
+    let declared = if said.is_some() {
+        Declared::Move
+    } else {
+        Declared::Unknown
+    };
 
-    let request = InterpretRequest {
+    let mut request = InterpretRequest {
         line: line.to_owned(),
-        speaker: speaker.map(str::to_owned),
+        speaker: said.as_ref().map(|said| said.speaker.to_owned()),
         context: context.map(str::to_owned),
+        declared,
+        refused_before: None,
         party: party.clone(),
         model: None,
     };
-    let intent =
-        match post_json::<_, InterpretReply>(port, move_path::MOVE_INTERPRET, &request).await {
-            Ok(DevReply::Done {
-                value: Interpreted::Move { intent },
-            }) => intent,
-            Ok(DevReply::Done {
-                value: Interpreted::NotAMove,
-            }) => return Ok(walk.unmoved("not_a_move", "the line is not a movement")),
-            Ok(DevReply::Done {
-                value: Interpreted::NeedsClarification,
-            }) => {
-                return Ok(walk.unmoved("needs_clarification", "the movement names no destination"));
-            }
-            Ok(DevReply::Rejected { error, message }) => {
-                return Err(walk.failed(error.key(), &message));
-            }
-            Err(error) => return Err(walk.failed("route_unreachable", &error.to_string())),
-        };
+    let mut reading = walk.read(port, &request).await?;
+    // One more reading, never a loop: Jev found no destination in a line said toward going
+    // somewhere, so it is shown its own reason and asked again.
+    if let Some(refused) = retry_after(&reading, declared).cloned() {
+        walk.retry(&refused);
+        request.refused_before = Some(refused);
+        reading = walk.read(port, &request).await?;
+    }
+    let intent = match reading {
+        Interpreted::Move { intent } => intent,
+        Interpreted::NotAMove => {
+            return Ok(walk.unmoved("not_a_move", "the line is not a movement"));
+        }
+        Interpreted::NeedsClarification(clarification) => {
+            return Ok(walk.unmoved("needs_clarification", &clarification_text(&clarification)));
+        }
+    };
     walk.report.push(reading_text(&intent));
     walk.advance(&format!(
         "kind={} who={} to={}",
@@ -371,8 +470,9 @@ async fn walk(
         };
     walk.report.push(design_text(&design));
     walk.advance(&format!(
-        "place={} placements={} residents={} left_behind={}",
+        "place={} things={} placements={} residents={} left_behind={}",
         design.place,
+        design.things.len(),
         design.placements.len(),
         design.residents.len(),
         design.left_behind.len()
@@ -381,9 +481,15 @@ async fn walk(
         return Ok(walk.finished());
     }
 
+    // What each mover carries that the picture shows, in the design's order, read from what they
+    // hold now: the brief says where it is, and the plate attaches its sheets after the people's.
+    let shown = match shown_items(port, &design).await {
+        Ok(shown) => shown,
+        Err(error) => return Err(walk.failed("inventory_unreadable", &error.to_string())),
+    };
     let characters: Vec<BriefCharacter> = present
         .iter()
-        .map(brief_character)
+        .map(|summary| brief_character(summary, &shown))
         .chain(design.residents.iter().map(resident_character))
         .collect();
     let brief = match build_brief(&design, &characters, &LookSheets::empty()) {
@@ -391,6 +497,10 @@ async fn walk(
         Err(error) => return Err(walk.failed(error.key(), &error.to_string())),
     };
     walk.report.push(brief_text(&brief));
+    // What the plate shows, in the prompt's words without the style: a frame watch's `scene=`.
+    if let Ok(words) = scene_words(&design, &characters, &LookSheets::empty()) {
+        walk.report.push(format!("picture: {words}"));
+    }
     walk.advance(&format!(
         "prompt_chars={} references={}",
         brief.prompt.chars().count(),
@@ -419,10 +529,41 @@ async fn walk(
             }
         })
         .collect();
+    // The sheets of what the movers hold that the picture shows: the plate's room for pictures
+    // takes them after the people's sheets, in the design's order, and the rest are left out.
+    let shown = match image_limits(port).await {
+        Ok(limits) => {
+            let listed = shown.len();
+            let fitting = items_that_fit(&limits, placed.len(), false, shown);
+            if fitting.len() < listed {
+                walk.report.push(format!(
+                    "items left out for want of room: {} of {listed} fit beside {} people",
+                    fitting.len(),
+                    placed.len()
+                ));
+            }
+            fitting
+        }
+        Err(error) => return Err(walk.failed("image_limits", &error.to_string())),
+    };
+    let sheets = match inventory_sheets(port, &shown).await {
+        Ok(made) => {
+            for name in &made.requested {
+                walk.report.push(format!(
+                    "sheet {name}: none yet, asked for (told in words this time)"
+                ));
+            }
+            for refused in &made.not_requested {
+                walk.report.push(format!("sheet {refused}: not asked for"));
+            }
+            made.sheets
+        }
+        Err((step, error)) => return Err(walk.failed(step.key(), &error.to_string())),
+    };
     let painting = Painting {
         prompt: &brief.prompt,
         avoid: &brief.avoid,
-        sheets: &[],
+        sheets: &sheets,
     };
     match deliver_plate(port, name, &painting, placed, None).await {
         Ok(summary) => walk.report.push(summary),
@@ -432,12 +573,84 @@ async fn walk(
     walk.advance(&format!("plate={name} generated and stored"))?;
     walk.advance("characters located and named in the picture")?;
     walk.advance("backdrop swapped behind the scene")?;
+    walk.report.push(arrive(port, name, &design).await);
     // A resident has a persona only once the plate has named them in the scene.
     for resident in &design.residents {
         let line = resident_persona(port, resident, &design.place).await;
         walk.report.push(line);
     }
     Ok(walk.finished())
+}
+
+/// Each item `design` shows, with its owner, in the design's order, read from what they hold now.
+/// An item its owner does not hold any more is left out.
+async fn shown_items(
+    port: u16,
+    design: &SceneDesign,
+) -> Result<Vec<(String, InventoryItem)>, DevError> {
+    let mut inventories: Vec<InventoryView> = Vec::new();
+    let mut shown = Vec::new();
+    for item in &design.shown_items {
+        if !inventories
+            .iter()
+            .any(|view| view.inventory.owner == item.owner)
+        {
+            let address = format!("{}?owner={}", inventory_path::INVENTORY_OWNER, item.owner);
+            let view: InventoryView = dev_client::reply_value(
+                get_json::<InventoryReply<InventoryView>>(port, &address).await?,
+            )?;
+            inventories.push(view);
+        }
+        let found = inventories
+            .iter()
+            .filter(|view| view.inventory.owner == item.owner)
+            .flat_map(|view| view.inventory.held())
+            .find(|held| held.id == item.item);
+        if let Some(found) = found {
+            shown.push((item.owner.clone(), found.clone()));
+        }
+    }
+    Ok(shown)
+}
+
+/// Makes the place `design` describes, painted as the plate `plate`, the world's active place, and
+/// the line that says so. A place that could not be kept is reported, not fatal: the plate is up.
+async fn arrive(port: u16, plate: &str, design: &SceneDesign) -> String {
+    let request = ArriveRequest {
+        place: Place {
+            id: plate.to_ascii_lowercase(),
+            name: design.place.clone(),
+            description: format!(
+                "Mood: {}. In sight: {}.",
+                design.mood,
+                design.elements.join("; ")
+            ),
+            stalls: Vec::new(),
+            things: design.things.clone(),
+        },
+    };
+    let set: Result<PlaceSet, DevError> = match post_json::<_, WorldReply<PlaceSet>>(
+        port,
+        world_path::WORLD_ARRIVE,
+        &request,
+    )
+    .await
+    {
+        Ok(reply) => dev_client::reply_value(reply),
+        Err(error) => Err(error),
+    };
+    match set {
+        Ok(_) => format!(
+            "place {}: the active place, {} thing(s) worth a close look",
+            request.place.id,
+            request.place.things.len()
+        ),
+        Err(error) => format!(
+            "place {}: not made the active place ({error}); nothing there can be looked at \
+             closely",
+            request.place.id
+        ),
+    }
 }
 
 /// The persona of `resident`, made through the persona generate route as `persona generate <id>`
@@ -484,18 +697,23 @@ async fn resident_persona(port: u16, resident: &Resident, place: &str) -> String
                 "resident {}: no persona could be made ({}); run `persona generate {0}` ",
                 "once the scene names them"
             ),
-            resident.id,
-            error
+            resident.id, error
         ),
     }
 }
 
-fn brief_character(summary: &PersonaSummary) -> BriefCharacter {
+/// A party member as the brief knows a character, with the names of the `shown` items they hold.
+fn brief_character(summary: &PersonaSummary, shown: &[(String, InventoryItem)]) -> BriefCharacter {
     BriefCharacter {
         id: summary.id.clone(),
         display_name: summary.display_name.clone(),
         job: summary.job.clone(),
         portrait: None,
+        carrying: shown
+            .iter()
+            .filter(|(owner, _)| *owner == summary.id)
+            .map(|(_, item)| item.name.clone())
+            .collect(),
     }
 }
 
@@ -506,6 +724,7 @@ fn resident_character(resident: &Resident) -> BriefCharacter {
         display_name: resident.display_name.clone(),
         job: format!("{}, {}", resident.job, resident.look),
         portrait: None,
+        carrying: Vec::new(),
     }
 }
 
@@ -523,6 +742,20 @@ fn design_text(design: &SceneDesign) -> String {
         format!("design: place={} mood={}", design.place, design.mood),
         format!("elements: {}", design.elements.join(", ")),
     ];
+    for thing in &design.things {
+        lines.push(format!(
+            "thing {} ({}): {}",
+            thing.id, thing.name, thing.look
+        ));
+    }
+    if !design.shown_items.is_empty() {
+        let shown: Vec<String> = design
+            .shown_items
+            .iter()
+            .map(|shown| format!("{}:{}", shown.owner, shown.item))
+            .collect();
+        lines.push(format!("items in sight: {}", shown.join(", ")));
+    }
     for resident in &design.residents {
         lines.push(format!(
             "resident {} ({}): {}, {}",

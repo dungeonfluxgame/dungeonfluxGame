@@ -15,6 +15,7 @@ use df_content::persona::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::declare::DeclaredAction;
 use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::io_cause::IoCause;
 use crate::playground::SceneApplyError;
@@ -520,6 +521,14 @@ pub struct SaidLine {
     /// The characters present whose name the character learned with this line.
     #[serde(default)]
     pub names_learned: Vec<String>,
+    /// What the line used up or gained of what the character carries, as taken (a change the
+    /// check refused is none).
+    #[serde(default)]
+    pub inventory: Vec<crate::world::InventoryApplied>,
+    /// The action the line declares the character is doing right now, when it is a declaration
+    /// (`persona declare`), checked against what they hold.
+    #[serde(default)]
+    pub declared: Option<DeclaredAction>,
     /// The character's state after this line.
     #[serde(default)]
     pub state: PersonaState,
@@ -589,6 +598,9 @@ pub enum LineError {
     UnknownId { kind: LineIdKind, id: String },
     /// The answer's gaps are not gaps a backfill can fill.
     Gaps { cause: BackfillError },
+    /// A declaration that does not match the facts, after it was worded again once with why (or
+    /// whose items the caller named and the character does not hold).
+    Declaration { detail: String },
 }
 
 /// What an id of a line's answer names.
@@ -628,6 +640,12 @@ impl fmt::Display for LineError {
                 kind.key()
             ),
             Self::Gaps { cause } => write!(formatter, "the answer's gaps are not valid: {cause}"),
+            Self::Declaration { detail } => {
+                write!(
+                    formatter,
+                    "the declaration does not match the facts: {detail}"
+                )
+            }
         }
     }
 }

@@ -14,11 +14,11 @@ use df_providers::{
 use tempfile::TempDir;
 
 use super::backend::{
-    BackendError, BackendLimits, CodexBackend, CodexSettings, ForgeImageBackend, ImageBackend,
-    SwitchedOff, backend_for, forge_image_job,
+    BackendError, BackendLimits, BackendTuning, CodexBackend, CodexSettings, ForgeImageBackend,
+    ImageBackend, SwitchedOff, backend_for, forge_image_job,
 };
 use super::limits::{CODEX_MAXIMUM_PICTURES, MAXIMUM_PICTURES};
-use super::model::BackendRequest;
+use super::model::{BackendRequest, InferenceSteps, PictureSize, Priority};
 use crate::io_cause::IoCause;
 
 /// A signed-in-looking home: the login file is only looked for, so its content is irrelevant.
@@ -343,6 +343,7 @@ async fn a_text_longer_than_forge_takes_is_refused_by_its_length_and_never_sent(
         height_px: 928,
         base: None,
         references: Vec::new(),
+        priority: Priority::Normal,
     };
     // Nothing listens, so a request that was sent would end as a transport failure, not this.
     let refused = forge
@@ -379,9 +380,10 @@ fn a_forge_job_carries_its_negative_prompt_with_the_guidance_that_applies_it() {
         height_px: 941,
         base: None,
         references: Vec::new(),
+        priority: Priority::Normal,
     };
     let staged = ["0f8e2a8e-7c1d-4b55-9d0e-2a3b4c5d6e7f.png".to_owned()];
-    let job = forge_image_job(&request, &staged);
+    let job = forge_image_job(&request, &staged, BackendTuning::default());
     assert_eq!(job["prompt"], "a scriptorium");
     assert_eq!(job["negative_prompt"], "painting, readable text");
     assert_eq!(job["true_cfg_scale"], FORGE_IMAGE_NEGATIVE_GUIDANCE);
@@ -392,6 +394,45 @@ fn a_forge_job_carries_its_negative_prompt_with_the_guidance_that_applies_it() {
     );
     // Forge refuses guidance without a negative prompt, so neither goes alone.
     request.negative = None;
-    let plain = forge_image_job(&request, &[]);
+    let plain = forge_image_job(&request, &[], BackendTuning::default());
     assert!(plain.get("negative_prompt").is_none() && plain.get("true_cfg_scale").is_none());
+}
+
+#[test]
+fn a_forge_job_takes_the_set_size_and_steps_and_without_them_the_request_s_own() {
+    let request = BackendRequest {
+        text: "a scriptorium".to_owned(),
+        negative: None,
+        width_px: 1672,
+        height_px: 941,
+        base: None,
+        references: Vec::new(),
+        priority: Priority::Normal,
+    };
+    let size = |text: &str| Some(text.parse::<PictureSize>().expect("a size"));
+    let sides = |job: &serde_json::Value| (job["width"].as_u64(), job["height"].as_u64());
+    // Unset: the request's own size, and no steps sent, so the studio's default applies.
+    let default = forge_image_job(&request, &[], BackendTuning::default());
+    assert_eq!(sides(&default), (Some(1664), Some(928)));
+    assert!(default.get("num_inference_steps").is_none());
+    // Set: the size replaces the shape's, whatever aspect the request had, and the steps go out.
+    let tuning = BackendTuning {
+        size: size("512x512"),
+        steps: Some(InferenceSteps::new(20).expect("steps")),
+    };
+    let small = forge_image_job(&request, &[], tuning);
+    assert_eq!(sides(&small), (Some(512), Some(512)));
+    assert_eq!(small["num_inference_steps"], 20);
+    // Forge's own rounding and clamping apply to a size it does not take as given.
+    let odd = BackendTuning {
+        size: size("500x9000"),
+        steps: None,
+    };
+    let clamped = forge_image_job(&request, &[], odd);
+    assert_eq!(sides(&clamped), (Some(512), Some(2752)));
+    assert!(clamped.get("num_inference_steps").is_none());
+    // The backend reports what it was given; a plain Forge backend and the off switch report none.
+    assert_eq!(unreachable_forge().with_tuning(tuning).tuning(), tuning);
+    assert_eq!(unreachable_forge().tuning(), BackendTuning::default());
+    assert_eq!(SwitchedOff.tuning(), BackendTuning::default());
 }

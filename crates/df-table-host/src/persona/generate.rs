@@ -135,11 +135,20 @@ pub(super) async fn other_personas(
         .into_iter()
         .filter(|name| name != character)
         .collect();
+    personas_named(app, others).await
+}
+
+/// The stored personas of the characters called `names`, in that order; a name with no stored
+/// persona is left out.
+pub(super) async fn personas_named(
+    app: &AppState,
+    names: Vec<String>,
+) -> Result<Vec<Persona>, PersonaError> {
     let directory = persona_directory(app);
     run_blocking(
         move || {
             let mut personas = Vec::new();
-            for name in &others {
+            for name in &names {
                 // A cast name is a layout label, which has the persona id grammar (a test keeps
                 // the two in step).
                 let Ok(other) = PersonaId::new(name) else {

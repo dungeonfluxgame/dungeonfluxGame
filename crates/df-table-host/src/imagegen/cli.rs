@@ -2,7 +2,9 @@
 //! request, read the typed answer, print it). It never prints and never starts a server.
 //!
 //! `media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H]
-//! [wait=true] [base=<picture>] [refs=<picture>,<picture>...] [look=house|none]`. `refs=` names
+//! [wait=true] [base=<picture>] [refs=<picture>,<picture>...] [look=house|none]
+//! [priority=normal|emergency]`. `priority=emergency` puts the picture first in a backend's own
+//! queue (Forge's waiting line); `refs=` names
 //! pictures of the media library (character reference sheets) the new picture follows for the
 //! people's looks. Any word that is not one of the keys is
 //! part of the prompt, in order, so a prompt with commas and colons needs no quoting (a prompt
@@ -12,14 +14,21 @@
 //! `media generate status` lists the generations so far.
 //!
 //! `media backend` shows the image backend new jobs start on and what it takes; `media backend
-//! codex-cli` and `media backend forge [url=<origin>] [project=<id>]` switch it while the host
-//! runs (jobs already running finish on the backend they started on).
+//! codex-cli` and `media backend forge [url=<origin>] [project=<id>] [size=<W>x<H>] [steps=<N>]`
+//! switch it while the host runs (jobs already running finish on the backend they started on).
+//! `size=` and `steps=` make every Forge picture that size (whatever shape was asked) and take
+//! that many steps, until the next `media backend` switch; Codex takes neither.
 
 use std::collections::BTreeSet;
 
+use df_providers::FORGE_IMAGE_MAXIMUM_STEPS;
+
 use super::format::{format_backend, format_job, format_jobs};
 use super::limits::{MAXIMUM_ASPECT_PART, MAXIMUM_ASPECT_RATIO, MAXIMUM_NAME_CHARS};
-use super::model::{Aspect, GenerateRequestError, Purpose};
+use super::model::{
+    Aspect, GenerateRequestError, InferenceSteps, MAXIMUM_SIZE_SIDE_PX, PictureSize, Priority,
+    Purpose,
+};
 use super::request::{
     BackendSwitch, BackendView, GenerateError, GenerateReply, GenerateRequest, JobState, JobView,
 };
@@ -34,18 +43,25 @@ pub const MEDIA_GENERATE_USAGE: &str = concat!(
     "media generate <prompt...> as=NAME [purpose=plate|background|portrait] [aspect=W:H] ",
     "[wait=true] [base=<picture to edit, such as bar.png>] ",
     "[refs=<reference pictures, such as ref-warrior.png,ref-mara_adventurer.png>] ",
-    "[look=house|none] | ",
+    "[look=house|none] [priority=normal|emergency] | ",
     "media generate status"
 );
 
-pub const MEDIA_BACKEND_USAGE: &str =
-    "media backend [codex-cli | forge [url=<loopback origin>] [project=<forge project id>]]";
+pub const MEDIA_BACKEND_USAGE: &str = concat!(
+    "media backend [codex-cli | forge [url=<loopback origin>] [project=<forge project id>] ",
+    "[size=<W>x<H>] [steps=<N>]]"
+);
 
-const KEYS: [&str; 7] = ["as", "purpose", "aspect", "wait", "base", "refs", "look"];
+const KEYS: [&str; 8] = [
+    "as", "purpose", "aspect", "wait", "base", "refs", "look", "priority",
+];
 
 /// `prompt` as `look` asks, and what the picture must not show: inside the house look (the
 /// default), or as written with nothing to avoid.
-fn with_look(prompt: String, look: Option<&str>) -> Result<(String, Vec<String>), CommandError> {
+pub(crate) fn with_look(
+    prompt: String,
+    look: Option<&str>,
+) -> Result<(String, Vec<String>), CommandError> {
     match look {
         None | Some("house") => {
             let style = BriefStyle::default();
@@ -82,6 +98,11 @@ fn purpose(text: &str) -> Result<Purpose, CommandError> {
         .ok_or_else(|| bad_choice("purpose", text, "plate, background or portrait".to_owned()))
 }
 
+fn priority(text: &str) -> Result<Priority, CommandError> {
+    Priority::from_key(text)
+        .ok_or_else(|| bad_choice("priority", text, "normal or emergency".to_owned()))
+}
+
 fn aspect(text: &str) -> Result<Aspect, CommandError> {
     text.parse().map_err(|_| {
         let allowed = format!(
@@ -92,6 +113,21 @@ fn aspect(text: &str) -> Result<Aspect, CommandError> {
             MAXIMUM_ASPECT_PART, MAXIMUM_ASPECT_RATIO
         );
         bad_choice("aspect", text, allowed)
+    })
+}
+
+fn picture_size(text: &str) -> Result<PictureSize, CommandError> {
+    text.parse().map_err(|_| {
+        let allowed =
+            format!("W x H in pixels such as 512x512, each side from 1 to {MAXIMUM_SIZE_SIDE_PX}");
+        bad_choice("size", text, allowed)
+    })
+}
+
+fn inference_steps(text: &str) -> Result<InferenceSteps, CommandError> {
+    text.parse().map_err(|_| {
+        let allowed = format!("a whole number from 1 to {FORGE_IMAGE_MAXIMUM_STEPS}");
+        bad_choice("steps", text, allowed)
     })
 }
 
@@ -149,6 +185,7 @@ pub fn parse_backend(words: &[String]) -> Result<MediaGenerate, CommandError> {
         }
         "forge" => {
             let (mut url, mut project) = (None, None);
+            let (mut size, mut steps) = (None, None);
             for word in options {
                 let (key, value) = word
                     .split_once('=')
@@ -156,15 +193,19 @@ pub fn parse_backend(words: &[String]) -> Result<MediaGenerate, CommandError> {
                 let slot = match key {
                     "url" => &mut url,
                     "project" => &mut project,
+                    "size" => &mut size,
+                    "steps" => &mut steps,
                     _ => return Err(CommandError::Usage(MEDIA_BACKEND_USAGE)),
                 };
-                if slot.replace(value.to_owned()).is_some() {
+                if slot.replace(value).is_some() {
                     return Err(CommandError::DuplicateKey(key.to_owned()));
                 }
             }
             Ok(MediaGenerate::SwitchBackend(BackendSwitch::Forge {
-                url,
-                project,
+                url: url.map(str::to_owned),
+                project: project.map(str::to_owned),
+                size: size.map(picture_size).transpose()?,
+                steps: steps.map(inference_steps).transpose()?,
             }))
         }
         "codex-cli" => Err(CommandError::Usage(MEDIA_BACKEND_USAGE)),
@@ -184,7 +225,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
     let mut prompt_words = Vec::new();
     let mut seen = BTreeSet::new();
     let (mut name, mut purpose_key, mut aspect_text, mut wait_text) = (None, None, None, None);
-    let (mut base, mut refs, mut look) = (None, None, None);
+    let (mut base, mut refs, mut look, mut urgency) = (None, None, None, None);
     for word in words {
         let Some((key, value)) = option_key(word) else {
             prompt_words.push(word.as_str());
@@ -200,6 +241,7 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
             "base" => &mut base,
             "refs" => &mut refs,
             "look" => &mut look,
+            "priority" => &mut urgency,
             _ => &mut wait_text,
         };
         *slot = Some(value);
@@ -222,6 +264,8 @@ pub fn parse(words: &[String]) -> Result<MediaGenerate, CommandError> {
             .unwrap_or_default(),
         things: Vec::new(),
         avoid,
+        left_out: Vec::new(),
+        priority: urgency.map(priority).transpose()?.unwrap_or_default(),
     };
     request.checked().map_err(request_error)?;
     Ok(MediaGenerate::Generate(request))

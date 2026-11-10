@@ -20,6 +20,8 @@ pub mod types;
 #[cfg(test)]
 mod brief_tests;
 #[cfg(test)]
+mod cli_tests;
+#[cfg(test)]
 mod design_tests;
 #[cfg(test)]
 mod interpret_tests;

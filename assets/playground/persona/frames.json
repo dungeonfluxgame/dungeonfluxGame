@@ -64,6 +64,8 @@
   "show": {
     "minimum_shown_seconds": 8,
     "insert_hold_seconds": 20,
+    "declare_hold_seconds": 20,
+    "declare_framing": "a medium-wide shot at eye level, the person at work at the centre with their hands and what they hold in plain view and the place behind them",
     "every_seconds": 30,
     "detail_topic": "The making of the item named below, and how it looks up close as its maker would point it out: each of its parts, its marks and their colour, its finish.",
     "detail_lead": "Up close, as its maker knows it:"

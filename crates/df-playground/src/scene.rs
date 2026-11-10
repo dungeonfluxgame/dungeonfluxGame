@@ -23,7 +23,9 @@ use crate::limits::{
     MAXIMUM_SLIDE_MS, MAXIMUM_VOLUME_PERCENT, MAXIMUM_ZOOM_PERCENT, MINIMUM_ZOOM_PERCENT,
 };
 use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
-use crate::overlay::{Edit, Glyph, NarrationBox, NarrationPlacement, Progress, SeatStrip};
+use crate::overlay::{
+    Edit, Glyph, NarrationBox, NarrationPlacement, Progress, SeatStrip, StoryMark,
+};
 
 /// Which screens a sound is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,6 +168,10 @@ pub struct SceneOverlay {
     /// The clue board on the shared screen: set whole, or cleared.
     #[serde(skip_serializing_if = "Edit::is_keep")]
     pub clues: Edit<ClueBoard>,
+    /// The story's title and the place reached, at the top right of the shared screen: set whole,
+    /// or cleared.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub story: Edit<StoryMark>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
     pub cue_count: u64,
@@ -253,6 +259,13 @@ pub enum SceneChange {
     },
     /// Takes the clue board away.
     ClearClues {},
+    /// Sets the story's mark on the shared screen (its title and the place reached), replacing the
+    /// one shown.
+    Story {
+        mark: StoryMark,
+    },
+    /// Takes the story's mark away.
+    ClearStory {},
     /// Plays a sound once.
     Sound {
         media: String,
@@ -497,6 +510,7 @@ impl SceneOverlay {
             phone_image,
             music,
             clues,
+            story,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -522,6 +536,7 @@ impl SceneOverlay {
             ("phone_image", phone_image.is_keep()),
             ("music", music.is_keep()),
             ("clues", clues.is_keep()),
+            ("story", story.is_keep()),
         ]
         .into_iter()
         .filter_map(|(name, kept)| (!kept).then_some(name))
@@ -577,6 +592,7 @@ impl SceneOverlay {
             phone_image,
             music,
             clues,
+            story,
             cue_count: _,
             slide_count: _,
             camera_count: _,
@@ -603,5 +619,6 @@ impl SceneOverlay {
         phone_image.apply_to(&mut phone.image);
         music.apply_to(&mut fixture.music);
         clues.apply_to(&mut fixture.tv.clues);
+        story.apply_to(&mut fixture.tv.story);
     }
 }

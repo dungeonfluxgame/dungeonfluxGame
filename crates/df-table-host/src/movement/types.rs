@@ -4,6 +4,7 @@
 //! Characters are named by persona id (the grammar of a SAM layout label), as everywhere else in
 //! the host. Everything here crosses a route or a record, so it is serializable.
 
+use df_content::world_bible::Thing;
 use serde::{Deserialize, Serialize};
 
 /// The closed list of ways a party moves, as Jev's label list names them. `key` is the word a
@@ -64,14 +65,69 @@ pub struct MoveIntent {
     pub line: String,
 }
 
+/// How the caller says the speaker meant a line, apart from what the line says. `Move` is for a
+/// line the speaker said toward going somewhere (`move act`); every other line is `Unknown`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Declared {
+    #[default]
+    Unknown,
+    Move,
+}
+
+impl Declared {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Move => "move",
+        }
+    }
+}
+
+/// What a line that asks for clarification leaves unclear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unclear {
+    /// Where to: the line names nothing to go to or toward.
+    Destination,
+    /// Anything else that stops the line being one movement.
+    Other,
+}
+
+impl Unclear {
+    pub const ALL: [Self; 2] = [Self::Destination, Self::Other];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Destination => "destination",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|unclear| unclear.key() == key)
+    }
+}
+
+/// Why Jev asked for clarification: what is unclear, and its reason in its own words (data for a
+/// second reading and for the report, never read by code).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Clarification {
+    pub unclear: Unclear,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 /// Jev's reading of one line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reading", rename_all = "snake_case")]
 pub enum Interpreted {
-    Move { intent: MoveIntent },
+    Move {
+        intent: MoveIntent,
+    },
     /// Not a movement: a question, a social line or another action.
     NotAMove,
-    NeedsClarification,
+    NeedsClarification(Clarification),
 }
 
 /// How far back from the viewer a character stands.
@@ -115,17 +171,29 @@ pub struct Resident {
 }
 
 /// The narrative engine's design of the scene a move arrives in. The place and mood are words for
-/// the picture; `placements` has one entry for each character who is in the scene, the party
-/// members who moved and the `residents` alike, and `left_behind` names the party members who
-/// stayed in the scene before.
+/// the picture; `things` are what is in sight there worth a close look, each with its look, which
+/// the place offers once it is the active one; `placements` has one entry for each character who
+/// is in the scene, the party members who moved and the `residents` alike, and `left_behind` names
+/// the party members who stayed in the scene before.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SceneDesign {
     pub place: String,
     pub mood: String,
     pub elements: Vec<String>,
+    pub things: Vec<Thing>,
+    /// What the movers hold that the picture shows on or beside them, most noticeable first: the
+    /// reference sheets a plate attaches when its room for pictures is short go in this order.
+    pub shown_items: Vec<ShownItem>,
     pub residents: Vec<Resident>,
     pub placements: Vec<Placement>,
     pub left_behind: Vec<String>,
+}
+
+/// An item the picture shows: whose it is and its id among what they hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShownItem {
+    pub owner: String,
+    pub item: String,
 }
 
 /// What keeps one character looking the same in every plate: their look in words, and a library

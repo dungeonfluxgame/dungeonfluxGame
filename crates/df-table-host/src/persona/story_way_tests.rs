@@ -388,3 +388,43 @@ async fn way_plates_keeps_each_stage_plate_already_made_and_records_it_on_its_st
         host.persona_lines()
     );
 }
+
+#[test]
+fn the_story_mark_names_the_title_and_the_place_reached_out_of_the_places() {
+    use super::story_mark::story_mark;
+
+    let mut story = story_with_ways();
+    let before = story_mark(&story);
+    assert_eq!(before.title, "The Charter");
+    assert_eq!(before.progress, None, "no place before play begins");
+
+    story.phase = Some(PlayPhase::Place {
+        place: "reliquary".to_owned(),
+    });
+    let at = story_mark(&story).progress.expect("play is at a place");
+    assert_eq!((at.index, at.total), (2, 3));
+    assert_eq!(at.title.as_deref(), Some("The reliquary."));
+}
+
+#[test]
+fn on_the_way_the_mark_stays_at_the_place_left_and_names_no_place_ahead() {
+    use super::story_mark::story_mark;
+
+    let mut story = story_with_ways();
+    story.phase = Some(set_off(&story.ways, "scriptorium", "reliquary"));
+    let on_the_way = story_mark(&story).progress.expect("play is on the way");
+    assert_eq!((on_the_way.index, on_the_way.total), (1, 3));
+    let words = on_the_way.title.expect("the line says it is on the way");
+    assert!(!words.contains("reliquary") && !words.contains("scriptorium"));
+}
+
+#[test]
+fn a_phase_at_a_place_the_story_does_not_have_shows_the_title_alone() {
+    use super::story_mark::story_mark;
+
+    let mut story = story_with_ways();
+    story.phase = Some(PlayPhase::Place {
+        place: "nowhere".to_owned(),
+    });
+    assert_eq!(story_mark(&story).progress, None);
+}

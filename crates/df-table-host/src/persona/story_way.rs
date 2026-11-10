@@ -48,6 +48,7 @@ use super::story::{
     StoryRoutes, StoryScene, WAYS_INSTRUCTION, ask_once, author_view, flag_of, malformed, plain_id,
     read_story, refused, story_path, text_of, write_story,
 };
+use super::story_mark::show_story_mark;
 use super::story_next::{judge, the_look};
 use crate::blocking::{run_blocking, run_owned};
 use crate::command::CommandError;
@@ -495,27 +496,31 @@ pub(super) async fn keep_phase(
     after: PlayPhase,
 ) -> Result<(), StoryRouteError> {
     let bad = |cause| StoryRouteError::BadRequest { cause };
-    let _writing = routes.story_write.lock().await;
+    let writing = routes.story_write.lock().await;
     let path = story_path(&routes.app);
     let line = phase_line(&after);
     let kept = run_blocking(
         move || {
             let mut story = read_story(&path).map_err(bad)?;
             if story.phase != expected {
-                return Ok(false);
+                return Ok(None);
             }
             story.phase = Some(after);
             write_story(&path, &story).map_err(bad)?;
-            Ok(true)
+            Ok(Some(story))
         },
         StoryRouteError::Stopped,
     )
     .await?;
-    routes.app.record_line(if kept {
+    drop(writing);
+    routes.app.record_line(if kept.is_some() {
         line
     } else {
         "PERSONA story_phase_stale".to_owned()
     });
+    if let Some(story) = kept {
+        show_story_mark(&routes.app, &story).await;
+    }
     Ok(())
 }
 

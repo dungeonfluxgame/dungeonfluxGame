@@ -167,6 +167,29 @@ fn custom_deadlines_replace_the_defaults_and_live_has_none() {
 }
 
 #[test]
+fn a_note_is_recorded_at_the_current_stage_without_leaving_it() {
+    let mut transition = started_at(100, Deadlines::default());
+    transition.note(140, "retry reason=no destination");
+    transition.note(120, "an earlier clock is recorded at the last time");
+    assert_eq!(transition.stage(), TransitionStage::Interpreting);
+    assert_eq!(
+        transition.advance(160, "read"),
+        Ok(TransitionStage::Designing)
+    );
+    let at_ms: Vec<u64> = transition.records().iter().map(|r| r.at_ms).collect();
+    assert_eq!(at_ms, vec![100, 140, 140, 160]);
+    assert_eq!(
+        format_record(&transition.records()[1]),
+        "TRANSITION id=7 stage=interpreting at_ms=140 detail=retry reason=no destination"
+    );
+
+    transition.fail(170, "x", "failed");
+    let records = transition.records().len();
+    transition.note(180, "after the end");
+    assert_eq!(transition.records().len(), records);
+}
+
+#[test]
 fn replay_rebuilds_the_stage_and_the_trace_of_a_transition() {
     let mut transition = started_at(100, Deadlines::default());
     transition

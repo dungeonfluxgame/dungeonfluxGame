@@ -1,0 +1,68 @@
+# Free roam: one lone traveller wanders from town to town, twenty moves, with nobody answering.
+# The runner's roam mode (`@roam <id>`) plays it: before each move the traveller says in his own
+# words where he goes next (`move act`), Jev reads the move, the destination is designed and
+# painted, and the plate replaces the backdrop; there he looks closely at one thing he would like
+# to paint (`persona say`), so the frame judge cuts to an insert of it, the room comes back, he sets
+# up and paints it with what he carries (`@roam_paint`: the per-line judge turns what he says he
+# uses, spends or buys into inventory changes), and he moves on. Each `@move <way>` line is one move, in order; `@way <way> <situation>` says what that
+# kind of move is. Nothing here names a destination: the traveller chooses it.
+# The host's standard memory API keeps the day: every plate that goes live is captured as a memory
+# of kind `@roam_scene_kind`; each painting (`@roam_art_*`) is made after the move's plate, kept as
+# a memory of kind `@roam_art_kind` and added to what he holds as a kept item; the last line,
+# `@roam_show`, is a move to where the work is shown: the paintings are composed into one gallery
+# sheet that the show plate follows (`@roam_show_look`), and he says a line toward `@roam_show_say`.
+# With `@roam_perceive on` he looks at the new plate before he speaks of it (`persona perceive`: the
+# picture itself goes to the model with the scan and his own state): what he sees, what he attends to and
+# what he is thinking about (`[see NN]`, `[thought NN]`) join the situation of his look and paint lines.
+# With `@roam_declare` he does not say a separate paint line: he declares what his hands are doing
+# right now (`persona declare`), and that is his painting line. The words are spoken, the supplies they
+# use are judged as before, and an emergency plate shows him mid-action (`[declare NN]`) for
+# `@roam_declare_hold` seconds; the study painting is made only after a judged line toward
+# `@roam_painted` used up the board he painted on (the board becomes the painting; a study he has
+# nothing to paint on for is not made and the log says why), and he moves on. Without supplies
+# the situation lets him declare what he can do with what he holds, or that he goes to buy: the
+# facts decide.
+@roam danny
+@inventory development/market-threads/danny.inventory.json
+@roam_goal You are a travelling painter wandering the countryside with no fixed plan, looking for places and things worth painting before the season turns. Say in your own words, in one line to yourself, where you are going next and why.
+@roam_look Look around this place and pick out the one thing here you would most like to paint. Step right up to it, say aloud that you are stepping up to it, and study it up close: say what you see of its material, colour and wear.
+@roam_paint You have just studied that thing and want to paint it now. Say in one line, to yourself, that you set up here and paint it with what you carry, and which of your things you use as you do: the board you prime, the pigments you mix, the brush you work with, the oil, the rags. If a supply you need is low or gone, say that you buy or trade for more here, how many, and then paint it.
+@roam_declare You have just studied that thing and set up to paint it here. Declare aloud, in one line, the one physical action you are doing right now as you do it: in the first person and the present tense, what your hands are doing and with which of your things (the board on the easel, the brush, the pigment). If a supply you need is low or gone, declare what you can do with what you hold (sketch it with charcoal on a page) or that you set off to buy more.
+@roam_declare_hold 20
+@roam_perceive on
+@roam_scene_kind scene
+@roam_art_kind artwork
+@roam_art_item painting
+@roam_art_board boards
+@roam_art_title Painting of {thing}
+@roam_painted You have just finished the study of this place on the board. Say in one line, aloud, that it is finished, and which of your things were used up in making it: the primed board you painted on, the pigments you mixed, the oil, the rags. Your brushes and easel are not used up. Name only what you really had; if you had nothing to paint on or with, say so instead. Do not list the finished painting itself as something you gained.
+@roam_art_look A small finished oil-on-board study of the place seen in the reference picture, painted as a landscape painter paints the view in front of him: the place itself, its buildings, ground, light and sky, with no figures in the foreground and nobody painted into the scene, or at most a few tiny indistinct figures far away. Seen flat and square-on and filling the whole frame, the primed board's pale unpainted margin showing at its edge. Oil paint in loose, visible brushstrokes, a limited earth palette, a little thickly built in the lights, simplified shapes, nothing photographic.
+@roam_show_look A wide, unretouched photograph of the centre of a medieval town in daylight, by its fountain. Every painting on the reference sheet is set out in the open, each shown as it is on the sheet: laid in rows on trestle tables and leaned along the stone edge of the fountain, small painted boards a hand span wide. The man from the reference sheet stands beside them with his easel, looking over his work.
+@roam_show_say The day is over and all your paintings are laid out around you. Say in a line or two, aloud, what you made of the day, speaking of the work before you.
+@way road You have seen what you came to see in this town. Leave it by the road and set off for the next town along it, one you have not been to yet.
+@way town You are not done with this town yet. Go to another spot within it that you have not seen.
+@way market Take stock of what you carry. Make for this town's market or a trading stop and get more of what is low or gone: sell a small painting of yours for pennies if you are short of money, then buy or trade for the supplies you need (pigments, boards, charcoal, oil), saying what you get and how many.
+@frames gate=100
+@frames every=0
+@frames insert_hold=20
+@move road
+@move town
+@move market
+@move road
+@move town
+@move town
+@move market
+@move road
+@move town
+@move town
+@move road
+@move town
+@move market
+@move town
+@move road
+@move town
+@move town
+@move road
+@move market
+@move town
+@roam_show You have painted all through the season and it is time to show it. Go to the centre of this town, to its square, and lay out all your paintings there to show them. Say in one line, to yourself, that you are going to the centre of town to show your paintings, and why.

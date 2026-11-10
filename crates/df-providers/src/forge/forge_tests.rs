@@ -1,6 +1,8 @@
+use serde_json::json;
+
 use super::{
     FORGE_TTS_SPEAKERS, ForgeCause, ForgeConfig, MAXIMUM_REASON_CHARACTERS, forge_speaker,
-    picture_type, refusal_reason,
+    picture_type, queue_blocker, refusal_reason,
 };
 
 const PROJECT: &str = "41fbb3c9-ac91-4897-b890-7a056b4ae371";
@@ -89,4 +91,63 @@ fn a_refusal_keeps_forge_s_sentence_bounded_and_on_one_line() {
     ] {
         assert_eq!(refusal_reason(body), None);
     }
+}
+
+#[test]
+fn only_a_job_ahead_that_waits_for_memory_or_a_person_blocks_the_queue() {
+    let queue = |jobs: serde_json::Value| json!({ "jobs": jobs });
+    let ours = Some("ours");
+    let blocked = queue(json!([
+        {"id": "a", "status": "completed"},
+        {"id": "b", "status": "waiting_memory"},
+        {"id": "ours", "status": "queued"},
+    ]));
+    assert_eq!(
+        queue_blocker(&blocked, ours),
+        Some(ForgeCause::QueueWaitingMemory)
+    );
+    for (status, cause) in [
+        ("interrupted", ForgeCause::QueueInterrupted),
+        ("needs_attention", ForgeCause::QueueNeedsAttention),
+    ] {
+        let reply = queue(json!([
+            {"id": "b", "status": status},
+            {"id": "ours", "status": "queued"},
+        ]));
+        assert_eq!(queue_blocker(&reply, ours), Some(cause));
+    }
+    // Running, waiting-for-engine, finished and unknown jobs ahead do not block.
+    let clear = queue(json!([
+        {"id": "a", "status": "running"},
+        {"id": "b", "status": "waiting_engine"},
+        {"id": "c", "status": "failed"},
+        {"id": "d", "status": "from_the_future"},
+        {"id": "ours", "status": "queued"},
+    ]));
+    assert_eq!(queue_blocker(&clear, ours), None);
+    // A blocked job behind it does not hold it back; one not yet queued has them all ahead.
+    let behind = queue(json!([
+        {"id": "ours", "status": "queued"},
+        {"id": "b", "status": "interrupted"},
+    ]));
+    assert_eq!(queue_blocker(&behind, ours), None);
+    assert_eq!(
+        queue_blocker(&behind, None),
+        Some(ForgeCause::QueueInterrupted)
+    );
+    // A reply without the list says nothing.
+    assert_eq!(queue_blocker(&json!({"job": {}}), None), None);
+}
+
+#[test]
+fn a_queue_cause_has_its_own_closed_key() {
+    for (cause, key) in [
+        (ForgeCause::QueueWaitingMemory, "queue_waiting_memory"),
+        (ForgeCause::QueueInterrupted, "queue_interrupted"),
+        (ForgeCause::QueueNeedsAttention, "queue_needs_attention"),
+    ] {
+        assert_eq!(cause.key(), key);
+        assert!(cause.is_queue_block());
+    }
+    assert!(!ForgeCause::Deadline.is_queue_block());
 }

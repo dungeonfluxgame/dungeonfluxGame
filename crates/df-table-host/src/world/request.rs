@@ -6,7 +6,7 @@
 use std::fmt;
 
 use axum::http::StatusCode;
-use df_content::world_bible::{BibleError, PriceQuote, QuoteError};
+use df_content::world_bible::{BibleError, Place, PriceQuote, QuoteError};
 use serde::{Deserialize, Serialize};
 
 use crate::dev_http::{BodyError, DevReply, RouteError};
@@ -20,6 +20,24 @@ pub type WorldReply<T> = DevReply<T, WorldError>;
 #[serde(deny_unknown_fields)]
 pub struct PlaceRequest {
     pub place: Option<String>,
+}
+
+/// `POST /dev/world/arrive`: a place designed in play (a move's destination, with the things in
+/// sight there worth a close look) that becomes the active place. It is checked as a place of the
+/// bible is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArriveRequest {
+    pub place: Place,
+}
+
+/// `POST /dev/world/picture`: keeps `picture` as the close-up of the thing `item` at the active
+/// place (a place designed in play), its reference sheet from then on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ThingPicture {
+    pub item: String,
+    pub picture: String,
 }
 
 /// The query of `GET /dev/world/quote`.
@@ -103,6 +121,16 @@ pub enum WorldError {
     UnknownPlace {
         id: String,
     },
+    /// A place designed in play is not a valid place; `cause` says where and why.
+    PlaceInvalid {
+        cause: BibleError,
+    },
+    /// A thing's picture is kept only at a place designed in play.
+    NotDesigned,
+    /// The active place has no such thing.
+    UnknownThing {
+        id: String,
+    },
     /// A quote needs a place and none is active (`world place <id>`).
     NoActivePlace,
     /// The quote cannot be made.
@@ -123,6 +151,9 @@ impl WorldError {
             Self::StateInvalid { .. } => "state_invalid",
             Self::StateUnwritable { .. } => "state_unwritable",
             Self::UnknownPlace { .. } => "unknown_place",
+            Self::PlaceInvalid { .. } => "place_invalid",
+            Self::NotDesigned => "not_designed",
+            Self::UnknownThing { .. } => "unknown_thing",
             Self::NoActivePlace => "no_active_place",
             Self::Quote { cause } => cause.key(),
             Self::Stopped => "stopped",
@@ -155,6 +186,10 @@ impl fmt::Display for WorldError {
             Self::UnknownPlace { id } => {
                 write!(formatter, "the bible has no place {id:?} (see: world show)")
             }
+            Self::PlaceInvalid { cause } => write!(formatter, "the designed place: {cause}"),
+            Self::NotDesigned => formatter
+                .write_str("the active place was not designed in play, so it keeps no picture"),
+            Self::UnknownThing { id } => write!(formatter, "the active place has no thing {id:?}"),
             Self::NoActivePlace => {
                 formatter.write_str("no place is active (set one with: world place <id>)")
             }
@@ -169,9 +204,13 @@ impl std::error::Error for WorldError {}
 impl RouteError for WorldError {
     fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidBody(_) | Self::InvalidQuery { .. } => StatusCode::BAD_REQUEST,
-            Self::UnknownPlace { .. } => StatusCode::NOT_FOUND,
-            Self::NoActivePlace | Self::Quote { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::InvalidBody(_) | Self::InvalidQuery { .. } | Self::PlaceInvalid { .. } => {
+                StatusCode::BAD_REQUEST
+            }
+            Self::UnknownPlace { .. } | Self::UnknownThing { .. } => StatusCode::NOT_FOUND,
+            Self::NoActivePlace | Self::NotDesigned | Self::Quote { .. } => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             Self::BibleUnreadable { .. }
             | Self::BibleInvalid { .. }
             | Self::StateUnreadable { .. }

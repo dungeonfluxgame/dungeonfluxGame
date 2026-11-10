@@ -79,6 +79,11 @@ pub fn anchors_differ(before: &TvScene, after: &TvScene) -> bool {
     anchor_inputs(before) != anchor_inputs(after)
 }
 
+/// Whether the story's mark differs; the chip and the line read nothing but it.
+pub fn story_differ(before: &TvScene, after: &TvScene) -> bool {
+    before.story != after.story
+}
+
 /// Whether the clue board differs; the board reads nothing but itself.
 pub fn clues_differ(before: &TvScene, after: &TvScene) -> bool {
     before.clues != after.clues

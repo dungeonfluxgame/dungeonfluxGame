@@ -7,25 +7,30 @@ use serde_json::json;
 
 use super::cli::{PersonaCommand, parse};
 use super::converse::Speaker;
+use super::fixtures::scripted_host;
 use super::frame::{
     FrameAsk, FrameConfig, FrameError, FrameMoment, FrameReason, FrameReply, FrameRequest,
     FrameScheduleRequest, FrameTimingReply, FrameTimingRequest, PERSONA_FRAME,
-    PERSONA_FRAME_SCHEDULE, PERSONA_FRAME_TIMING, parse_frame, read_frames,
+    PERSONA_FRAME_SCHEDULE, PERSONA_FRAME_TIMING, items_in_view, parse_frame, read_frames,
 };
 use super::frame_watch::{
     FrameWatch, MAXIMUM_PARALLEL_FRAMES, WatchInput, needs_lead, painted_prompt, picture_target,
     slot_due, slots_due,
 };
 use super::plate::{
-    Painting, SharedScreen, claim_room, fit_pictures, plate_request, reference_sheets, with_sheets,
+    InsertRequest, Painting, SharedScreen, claim_room, fit_pictures, insert_request,
+    inventory_sheets, items_that_fit, make_insert, plate_request, reference_sheets,
+    sheets_for_gains, with_sheets,
 };
 use super::story::StoryItem;
+use super::story_items::thing_of;
 use crate::imagegen::limits::{CODEX_MAXIMUM_PICTURES, MAXIMUM_PICTURES};
-use crate::imagegen::{BackendLimits, ThingReference};
+use crate::imagegen::model::PictureSize;
+use crate::imagegen::{Aspect, BackendLimits, ThingReference};
 use crate::locate::request::CharacterRequest;
 use crate::movement::brief::BriefStyle;
-use crate::world::PlaceItem;
-use df_content::world_bible::Item;
+use crate::world::{InventoryItem, PlaceItem};
+use df_content::world_bible::Thing;
 use df_providers::{
     FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS, FORGE_IMAGE_MAXIMUM_NEGATIVE_CHARACTERS,
 };
@@ -112,16 +117,24 @@ fn an_answer_is_kept_only_with_listed_characters_and_kinds_and_a_percent_to_100(
 #[test]
 fn an_inspected_item_is_one_offered_here_or_null() {
     let config = FrameConfig::default();
-    let items = [PlaceItem {
-        item: Item {
+    let items = [
+        PlaceItem {
             id: "frostline_longsword".to_owned(),
             name: "Frostline longsword".to_owned(),
-            unit: "each".to_owned(),
-            base_value_cp: 45_000,
             tags: vec!["frost-runes".to_owned()],
+            look: None,
+            keeper: Some("weapon_seller".to_owned()),
+            picture: None,
         },
-        keeper: "weapon_seller".to_owned(),
-    }];
+        PlaceItem {
+            id: "well".to_owned(),
+            name: "the old well".to_owned(),
+            tags: Vec::new(),
+            look: Some("mossy stones, a rope worn pale".to_owned()),
+            keeper: None,
+            picture: Some("well-closeup.png".to_owned()),
+        },
+    ];
     let answer = |inspected: serde_json::Value| {
         json!({
             "changed_percent": 10,
@@ -140,8 +153,15 @@ fn an_inspected_item_is_one_offered_here_or_null() {
     )
     .unwrap();
     assert_eq!(
-        parsed.inspected.map(|offered| offered.item.id).as_deref(),
+        parsed.inspected.map(|offered| offered.id).as_deref(),
         Some("frostline_longsword")
+    );
+    let kept_by_nobody = parse_frame(&answer(json!("well")), &speakers(), &items, &config).unwrap();
+    assert_eq!(
+        kept_by_nobody
+            .inspected
+            .map(|offered| (offered.id, offered.keeper)),
+        Some(("well".to_owned(), None))
     );
     let nobody = parse_frame(&answer(json!(null)), &speakers(), &items, &config).unwrap();
     assert_eq!(nobody.inspected, None);
@@ -351,6 +371,7 @@ async fn a_focus_is_an_insert_of_its_look_and_each_frame_moment_is_one_line() {
         moment: FrameMoment::Ended,
         reason: FrameReason::Focus,
         took_ms: 20_400,
+        declared: None,
     };
     let timed: FrameTimingReply = post_json(port, PERSONA_FRAME_TIMING, &timing)
         .await
@@ -433,6 +454,7 @@ async fn the_watch_s_schedule_and_moments_become_the_toolbar_s_plate_timer_and_t
         moment,
         reason: FrameReason::Schedule,
         took_ms: 0,
+        declared: None,
     };
     for request in [
         moment("plates-1", FrameMoment::Started),
@@ -554,7 +576,7 @@ fn a_room_frame_is_told_how_each_thing_in_sight_looks() {
         evidence: Some("cipher_wheel".to_owned()),
         picture: None,
     };
-    let prompt = with_sheets("The flooded room.".to_owned(), &[wheel]);
+    let prompt = with_sheets("The flooded room.".to_owned(), &[thing_of(wheel)]);
     assert!(prompt.starts_with("The flooded room. "));
     assert!(prompt.ends_with(
         "Brass cipher wheel: A flat brass disc with engraved signs and one bright notch."
@@ -564,15 +586,15 @@ fn a_room_frame_is_told_how_each_thing_in_sight_looks() {
 
 /// A reference sheet of the drowned archive's scriptorium, as `persona story plot` wrote it, with
 /// the close-up its first insert kept.
-fn scriptorium_sheet(id: &str, name: &str, look: &str) -> StoryItem {
-    StoryItem {
+fn scriptorium_sheet(id: &str, name: &str, look: &str) -> Thing {
+    thing_of(StoryItem {
         id: id.to_owned(),
         name: name.to_owned(),
         place: "scriptorium".to_owned(),
         look: look.to_owned(),
         evidence: None,
         picture: Some(format!("archive-scriptorium-{id}.png")),
-    }
+    })
 }
 
 /// The Forge studio's limits, as its backend gives them.
@@ -654,6 +676,17 @@ fn a_plate_attaches_people_first_then_the_things_close_ups_and_tells_the_rest_in
         ]
     );
     assert_eq!(fitted.described.len(), 3);
+    // The job says what it left out for want of room, so its audit line can.
+    let request = plate_request("archive-2", &painting, None, fitted);
+    assert_eq!(request.references, people);
+    assert!(request.things.is_empty());
+    assert_eq!(
+        request.left_out,
+        [
+            "archive-scriptorium-ledger_leaves.png",
+            "archive-scriptorium-brass_cipher_device.png"
+        ]
+    );
     // An edit's base takes one, and people beyond the room are dropped too.
     let fitted = fit_pictures(codex_limits().maximum_pictures - 1, people, &[]);
     assert_eq!(fitted.people.len(), 4);
@@ -668,7 +701,7 @@ fn the_judge_s_target_is_the_room_the_backend_leaves_with_a_margin_and_a_floor()
 
 /// The drowned archive's scriptorium (`development/market-threads/drowned-archive.beats`, live
 /// run 2026-11-09): its three things' sheets.
-fn scriptorium_sheets() -> Vec<StoryItem> {
+fn scriptorium_sheets() -> Vec<Thing> {
     vec![
         scriptorium_sheet(
             "ledger_leaves",
@@ -902,5 +935,391 @@ async fn a_room_plate_is_drawn_after_the_reference_sheets_the_library_holds() {
             .expect("the library answers"),
         ["ref-ferryman.png", "ref-warden.png"],
         "in the cast's order, without the one who has no sheet"
+    );
+}
+
+fn held(id: &str, name: &str) -> InventoryItem {
+    InventoryItem {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        look: format!("the {name} as it looks"),
+        usage: crate::world::ItemUse::Consumed,
+        count: 1,
+    }
+}
+
+#[tokio::test]
+async fn an_inventory_item_without_a_sheet_is_told_in_words_and_its_sheet_is_asked_for() {
+    use crate::test_support::{STARTER_FILES, start};
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("media/item-danny-easel.png", "a sheet");
+    let shown = [
+        ("danny".to_owned(), held("easel", "folding easel")),
+        ("danny".to_owned(), held("satchel", "leather satchel")),
+    ];
+    let made = inventory_sheets(running.port, &shown)
+        .await
+        .expect("the library answers");
+    let pictures: Vec<Option<&str>> = made
+        .sheets
+        .iter()
+        .map(|sheet| sheet.picture.as_deref())
+        .collect();
+    assert_eq!(pictures, [Some("item-danny-easel.png"), None]);
+    let asked: Vec<&String> = made.requested.iter().chain(&made.not_requested).collect();
+    assert_eq!(asked.len(), 1, "only the missing sheet is asked for");
+    assert!(asked[0].starts_with("item-danny-satchel.png"));
+    // The plate still goes ahead: the item without a sheet is told in its words.
+    let fitted = fit_pictures(codex_limits().maximum_pictures, Vec::new(), &made.sheets);
+    assert_eq!(fitted.things.len(), 1);
+    assert_eq!(fitted.described[0].id, "satchel");
+}
+
+#[test]
+fn inventory_sheets_fill_the_room_after_the_people_in_the_order_the_picture_shows_them() {
+    let sheets: Vec<Thing> = ["easel", "satchel", "brushes", "hat"]
+        .into_iter()
+        .map(|id| Thing {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            look: format!("{id} up close"),
+            picture: Some(format!("item-danny-{id}.png")),
+        })
+        .collect();
+    let people = vec!["ref-danny.png".to_owned(), "ref-baker.png".to_owned()];
+    let fitted = fit_pictures(codex_limits().maximum_pictures, people.clone(), &sheets);
+    assert_eq!(fitted.people, people, "character sheets come first");
+    let attached: Vec<&str> = fitted
+        .things
+        .iter()
+        .map(|thing| thing.shows.as_str())
+        .collect();
+    assert_eq!(attached, ["easel", "satchel", "brushes"]);
+    assert_eq!(fitted.dropped, ["item-danny-hat.png"]);
+    assert_eq!(
+        fitted.described[0].id, "hat",
+        "what finds no room is told in words"
+    );
+}
+
+#[test]
+fn the_items_a_frame_shows_are_ones_its_speakers_hold() {
+    let inventory_of = vec![(
+        "tavern_server".to_owned(),
+        vec![held("tray", "pewter tray")],
+    )];
+    let shows =
+        |listed: serde_json::Value| items_in_view(&json!({"items_in_view": listed}), &inventory_of);
+    let shown = shows(json!([{"owner": "tavern_server", "item": "tray"}])).unwrap();
+    assert_eq!(shown[0].item.name, "pewter tray");
+    assert_eq!(
+        shows(json!([{"owner": "tavern_server", "item": "lute"}])),
+        Err(FrameError::ItemNotHeld {
+            owner: "tavern_server".to_owned(),
+            item: "lute".to_owned()
+        })
+    );
+    let twice = json!([
+        {"owner": "tavern_server", "item": "tray"},
+        {"owner": "tavern_server", "item": "tray"}
+    ]);
+    assert!(shows(twice).is_err());
+    assert_eq!(items_in_view(&json!({}), &inventory_of), Ok(Vec::new()));
+}
+
+#[test]
+fn a_thing_in_sight_studied_aloud_begins_a_look_though_the_judge_says_it_goes_on() {
+    let config = FrameConfig::default();
+    let items = [PlaceItem {
+        id: "blue_door".to_owned(),
+        name: "blue door".to_owned(),
+        tags: Vec::new(),
+        look: Some("worn blue paint over brown wood, an iron latch".to_owned()),
+        keeper: None,
+        picture: None,
+    }];
+    let answer = json!({
+        "changed_percent": 0, "changes": [], "next_picture": "The blue door fills the frame.",
+        "shot": "wide", "inspected_item": "blue_door", "new_look": false
+    });
+    let parsed = parse_frame(&answer, &speakers(), &items, &config).unwrap();
+    assert!(parsed.begins_look(None), "nothing was looked at before");
+    assert!(parsed.begins_look(Some("well")), "another item was");
+    assert!(
+        !parsed.begins_look(Some("blue_door")),
+        "the same item goes on when the judge says so"
+    );
+    let nobody = json!({
+        "changed_percent": 0, "changes": [], "next_picture": "The lane.", "shot": "wide",
+        "inspected_item": null, "new_look": true
+    });
+    let parsed = parse_frame(&nobody, &speakers(), &items, &config).unwrap();
+    assert!(
+        parsed.inspected.is_none(),
+        "nothing named, so no look to begin"
+    );
+    assert!(
+        super::frame::FRAME_INSTRUCTION.contains("with a look and no keeper"),
+        "the judge is told what looking closely at a thing in sight is"
+    );
+}
+
+/// The first live roam: a traveller said, at each place designed in play, a line about one thing
+/// in sight there, and no close-up ever fired (`inspected=-` on 19 of 19 lines). The judge is
+/// offered the designed place's things when the line is judged, and a look it names is cut to.
+#[tokio::test]
+async fn a_look_at_a_thing_in_sight_of_a_designed_place_cuts_to_an_insert() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    use df_ai::text::TextOutcome;
+    use df_ai::text_fixture::ScriptedBackend;
+
+    use crate::dev_client::post_json;
+    use crate::dev_http::DevReply;
+    use crate::test_support::{STARTER_FILES, start};
+    use crate::text::{BackendChoice, TextRuntime};
+    use crate::world::request::{PlaceSet, WorldReply};
+    use crate::world::routes::path as world_path;
+
+    let running = start(&STARTER_FILES).await;
+    running.write_asset(
+        "world/bible.json",
+        &json!({"items": [], "places": [], "voice_packs": []}).to_string(),
+    );
+    let arrive = json!({"place": {
+        "id": "roam-01", "name": "a cottage lane", "description": "Mood: quiet.",
+        "things": [{"id": "blue_door", "name": "the blue door",
+                    "look": "worn blue paint over brown wood, an iron latch"}]
+    }});
+    let arrived: WorldReply<PlaceSet> = post_json(running.port, world_path::WORLD_ARRIVE, &arrive)
+        .await
+        .unwrap();
+    assert!(matches!(arrived, DevReply::Done { .. }), "{arrived:?}");
+
+    let answer = |inspected: serde_json::Value, new_look: bool| {
+        json!({
+            "changed_percent": 0, "changes": [], "next_picture": "The blue door fills the frame.",
+            "shot": "wide", "inspected_item": inspected, "new_look": new_look
+        })
+    };
+    let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let script = ScriptedBackend::new(
+        [
+            answer(json!("blue_door"), false),
+            answer(json!("blue_door"), false),
+        ]
+        .into_iter()
+        .map(TextOutcome::Answered),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .recording(Arc::clone(&asked));
+    let recorder = Arc::clone(&running.state);
+    let text = TextRuntime::new(
+        BackendChoice::Scripted(Arc::new(script), None),
+        Arc::new(move |line| recorder.record_line(line)),
+    );
+    let app = super::frame::router_with(Arc::clone(&running.state), Arc::new(text));
+    let listener = crate::server::bind(0).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        // The server runs until the test's runtime stops; its end is the test's end.
+        let _ = axum::serve(listener, app).await;
+    });
+    let request = |last_inspected: Option<&str>| FrameRequest {
+        picture: "A cottage lane; the blue door stands in plain sight.".to_owned(),
+        lines: vec!["Danny: That blue door. The paint at the threshold is worn soft.".to_owned()],
+        speakers: speakers(),
+        gate_percent: Some(100),
+        model: None,
+        last_shot: None,
+        peak_percent: 0,
+        last_inspected: last_inspected.map(str::to_owned),
+        ask: FrameAsk::Line {},
+        picture_target_characters: None,
+    };
+
+    let first: FrameReply = post_json(port, PERSONA_FRAME, &request(None))
+        .await
+        .unwrap();
+    let DevReply::Done { value } = first else {
+        panic!("judged: {first:?}");
+    };
+    assert!(value.inspection && value.triggered, "{value:?}");
+    assert_eq!(value.shot, "insert");
+    assert_eq!(
+        value.inspecting.map(|item| item.id).as_deref(),
+        Some("blue_door")
+    );
+    let second: FrameReply = post_json(port, PERSONA_FRAME, &request(Some("blue_door")))
+        .await
+        .unwrap();
+    let DevReply::Done { value } = second else {
+        panic!("judged: {second:?}");
+    };
+    assert!(
+        !value.inspection,
+        "the same look goes on, and is not cut to twice"
+    );
+
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked[0].facts["items"][0]["id"], "blue_door");
+    assert!(asked[0].facts["items"][0].get("keeper").is_none());
+    assert_eq!(
+        asked[0].output_schema["properties"]["inspected_item"]["enum"],
+        json!(["blue_door", null])
+    );
+    let judged: Vec<String> = running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .filter(|text| text.starts_with("PERSONA frame_judged "))
+        .collect();
+    assert!(
+        judged[0].contains(" offered=1 inspected=blue_door inspection=true reason=line "),
+        "{judged:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_new_item_a_line_brought_in_has_its_sheet_asked_for_once() {
+    use crate::test_support::{STARTER_FILES, start};
+    use crate::world::InventoryApplied;
+    use crate::world::inventory::request::SetRequest;
+    use crate::world::inventory::routes::path;
+    use crate::world::inventory::{ChangeKind, OwnerKind};
+    let running = start(&STARTER_FILES).await;
+    let items = vec![held("easel", "folding easel"), held("lapis", "blue lapis")];
+    let request = SetRequest {
+        owner: "danny".to_owned(),
+        kind: OwnerKind::Character,
+        items,
+    };
+    let _: serde_json::Value =
+        crate::dev_client::post_json(running.port, path::INVENTORY_SET, &request)
+            .await
+            .expect("the owner is set");
+    running.write_asset("media/item-danny-easel.png", "a sheet");
+    let taken = |item: &str, kind: ChangeKind, before: u64, after: u64| InventoryApplied {
+        owner: "danny".to_owned(),
+        item: item.to_owned(),
+        kind,
+        before,
+        after,
+        why: String::new(),
+    };
+    // Only a gain from none is a new item; a use, a count that grows, and a sheet held are not.
+    let nothing = [
+        taken("lapis", ChangeKind::Consume, 2, 1),
+        taken("lapis", ChangeKind::Add, 1, 2),
+        taken("easel", ChangeKind::Add, 0, 1),
+    ];
+    assert!(
+        sheets_for_gains(running.port, "danny", &nothing)
+            .await
+            .is_empty()
+    );
+    let lines = sheets_for_gains(
+        running.port,
+        "danny",
+        &[taken("lapis", ChangeKind::Add, 0, 2)],
+    )
+    .await;
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].starts_with("sheet item-danny-lapis.png"),
+        "the missing sheet is asked for: {lines:?}"
+    );
+}
+
+#[test]
+fn the_items_a_picture_shows_are_capped_to_the_room_after_the_people_in_the_design_order() {
+    let items = || {
+        [
+            "satchel",
+            "brushes",
+            "sketchbook",
+            "boards",
+            "charcoal",
+            "rags",
+        ]
+        .map(str::to_owned)
+    };
+    let fit = |limits: &BackendLimits, taken: usize, edits: bool| {
+        items_that_fit(limits, taken, edits, items().to_vec())
+    };
+    // Codex takes five pictures: two people leave three, kept in the order the design listed them.
+    assert_eq!(
+        fit(&codex_limits(), 2, false),
+        ["satchel", "brushes", "sketchbook"]
+    );
+    // An edit's base takes one of the room too.
+    assert_eq!(fit(&codex_limits(), 2, true), ["satchel", "brushes"]);
+    // Forge takes eight: all six fit beside two people, and four beside three people and a base.
+    assert_eq!(fit(&forge_limits(), 2, false).len(), 6);
+    assert_eq!(
+        fit(&forge_limits(), 3, true),
+        ["satchel", "brushes", "sketchbook", "boards"]
+    );
+    // The people come first: with the room full, or more people than room, no item is taken.
+    assert!(fit(&codex_limits(), 5, false).is_empty());
+    assert!(fit(&codex_limits(), 9, true).is_empty());
+}
+
+/// Roam run 2: every insert was an edit of the room plate (so three of six kept the person
+/// standing in the wide shot) and carried the room's lower-third band. An insert is painted anew:
+/// no base, no reference, no thing's picture, and the shape the backend makes.
+#[test]
+fn an_insert_is_painted_anew_with_no_base_and_no_reference_in_the_shape_the_backend_makes() {
+    let style = BriefStyle::default();
+    let painting = Painting {
+        prompt: "The iron latch fills the picture.",
+        avoid: &style.avoid,
+        sheets: &[],
+    };
+    let square = PictureSize::new(512, 512).expect("a size");
+    let request = insert_request("roam-06-look-1", &painting, Some(square));
+    assert_eq!(request.base, None);
+    assert!(request.references.is_empty() && request.things.is_empty());
+    assert_eq!(request.aspect, Some(Aspect::new(1, 1).expect("a shape")));
+    let checked = request.checked().expect("a valid request");
+    assert_eq!(checked.base(), None);
+    assert_eq!(checked.aspect().requested_size(), (1672, 1672));
+    // A backend with no size set makes the purpose's own wide shape.
+    let wide = insert_request("roam-06-look-2", &painting, None);
+    assert_eq!(wide.aspect, None);
+    assert_eq!(
+        wide.checked().expect("valid").aspect(),
+        Aspect::WIDE,
+        "the wide shape the screen has"
+    );
+}
+
+/// A second look at the same item shows the close-up its sheet kept and makes no picture.
+#[tokio::test]
+async fn a_second_look_shows_the_kept_close_up_and_makes_none() {
+    let host = scripted_host(Vec::new()).await;
+    host.running
+        .write_asset("media/archive-ledger.png", "archive-ledger.png");
+    let request = InsertRequest {
+        name: "roam-06-look-2",
+        prompt: "The ledger fills the picture.",
+        avoid: &[],
+        drawn: Some("archive-ledger.png"),
+        room: "plate.png",
+        caption: None,
+        caption_title: None,
+        hold: Duration::ZERO,
+    };
+    let (summary, picture, _) = make_insert(host.running.port, &SharedScreen::default(), request)
+        .await
+        .expect("the kept picture is shown");
+    assert_eq!(picture, "archive-ledger.png");
+    assert!(summary.contains("its sheet's picture"), "{summary}");
+    assert!(
+        host.lines_starting_with("IMAGEGEN requested").is_empty(),
+        "no picture was asked for"
     );
 }

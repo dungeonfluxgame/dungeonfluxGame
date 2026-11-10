@@ -528,3 +528,66 @@ async fn the_backend_route_shows_the_backend_and_refuses_one_it_cannot_switch_to
         "{lines:?}"
     );
 }
+
+#[tokio::test]
+async fn the_backend_switch_sets_a_forge_size_and_steps_until_the_next_switch() {
+    let running = start(&[]).await;
+    let port = serve_route(
+        &running,
+        generator(FakeBackend::new(Script::Picture(picture()))),
+    )
+    .await;
+    let project = "41fbb3c9-ac91-4897-b890-7a056b4ae371";
+    let switch = |extra: &str| format!(r#"{{"backend":"forge","project":"{project}"{extra}}}"#);
+    // A size or steps outside the bounds are refused, and nothing changes.
+    for extra in [
+        r#","size":"0x512""#,
+        r#","size":"512""#,
+        r#","steps":0"#,
+        r#","steps":101"#,
+        r#","steps":"20""#,
+    ] {
+        let refused = post_json(port, path::BACKEND, &switch(extra))
+            .await
+            .expect("answers");
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{extra}");
+        assert!(matches!(
+            rejected(&refused.body),
+            GenerateError::InvalidBody(_)
+        ));
+    }
+    let unchanged: BackendView = done(&get(port, path::BACKEND).await.expect("answers").body);
+    assert_eq!(unchanged.backend, "fake");
+    assert_eq!((unchanged.size, unchanged.steps), (None, None));
+    // Set with the switch, shown by the status and recorded in the switch line.
+    let set = post_json(
+        port,
+        path::BACKEND,
+        &switch(r#","size":"512x512","steps":20"#),
+    )
+    .await
+    .expect("answers");
+    assert_eq!(set.status, StatusCode::OK, "{}", set.body);
+    let shown: BackendView = done(&get(port, path::BACKEND).await.expect("answers").body);
+    assert_eq!(shown.backend, "forge");
+    assert_eq!(
+        shown.size.map(|size| size.to_string()).as_deref(),
+        Some("512x512")
+    );
+    assert_eq!(shown.steps.map(|steps| steps.get()), Some(20));
+    let lines = imagegen_lines(&running);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line
+                .starts_with("IMAGEGEN switched from=fake to=forge size=512x512 steps=20")),
+        "{lines:?}"
+    );
+    // The next switch without them clears both.
+    let plain = post_json(port, path::BACKEND, &switch(""))
+        .await
+        .expect("answers");
+    assert_eq!(plain.status, StatusCode::OK, "{}", plain.body);
+    let cleared: BackendView = done(&get(port, path::BACKEND).await.expect("answers").body);
+    assert_eq!((cleared.size, cleared.steps), (None, None));
+}

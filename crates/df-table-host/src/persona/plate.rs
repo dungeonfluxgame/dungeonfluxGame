@@ -21,11 +21,13 @@ use df_playground::scene::{ImageSlot, SceneChange};
 use df_scene_layout::SceneLayout;
 
 use super::converse::{Table, Turn};
-use super::story::StoryItem;
 use crate::dev::DevError;
 use crate::dev_client::{get_json, post_json, reply_value};
-use crate::imagegen::request::{GenerateReply, GenerateRequest, JobState};
-use crate::imagegen::{BackendLimits, Purpose, ThingReference, routes::path as image_path};
+use crate::imagegen::model::PictureSize;
+use crate::imagegen::request::{BackendView, GenerateReply, GenerateRequest, JobState};
+use crate::imagegen::{
+    Aspect, BackendLimits, Priority, Purpose, ThingReference, routes::path as image_path,
+};
 use crate::locate::cli::show as show_layout;
 use crate::locate::request::{
     CharacterRequest, IdentifiedLayout, IdentifyRequest, LocateReply, LocateRequest, LocatedLayout,
@@ -36,6 +38,7 @@ use crate::playground::ChangeReply;
 use crate::services::request::{ServicesReply, ServicesReport};
 use crate::services::routes::path as services_path;
 use crate::wire::{ControlsReply, route};
+use df_content::world_bible::Thing;
 
 // TODO(DEV-12): tests for the prompt, the title put back after a failed step and the `plate=`
 // option, and a live plate run once a dedicated signed-in Codex home exists (the image service
@@ -77,13 +80,15 @@ impl PlateStep {
     }
 }
 
-/// The text the image service is asked to paint: the room, who sits in it, and what they have
-/// just been talking about. It forbids readable writing, because the page draws the words.
+/// The text the image service is asked to paint: the room, who sits in it (each by what they are
+/// and look like, never by name: the image model paints any word it is given, and a name came out
+/// on a signboard), and what they have just been talking about. It forbids readable writing,
+/// because the page draws the words.
 pub(super) fn picture_prompt(table: &Table, history: &[Turn]) -> String {
     let people: Vec<String> = table
         .speakers()
         .iter()
-        .map(|speaker| format!("{} ({})", speaker.display_name, speaker.job))
+        .map(|speaker| format!("a person ({})", speaker.job))
         .collect();
     let style = BriefStyle::default();
     let mut text = format!(
@@ -109,16 +114,17 @@ pub(super) fn picture_prompt(table: &Table, history: &[Turn]) -> String {
 }
 
 /// What a plate is painted from: its prompt, what it must not show (`BriefStyle::avoid`) and the
-/// story's reference sheets of the things in sight, each attached as its close-up when it has one
-/// and room is left after the people's sheets, otherwise described in the prompt.
+/// reference sheets of the things it shows (the story's things in sight, what the characters
+/// carry, in the order they matter), each attached as its picture when it has one and room is left
+/// after the people's sheets, otherwise described in the prompt.
 pub(crate) struct Painting<'a> {
     pub prompt: &'a str,
     pub avoid: &'a [String],
-    pub sheets: &'a [StoryItem],
+    pub sheets: &'a [Thing],
 }
 
 /// `prompt` with how each of `sheets` looks, so a frame painted anew draws them as before.
-pub(super) fn with_sheets(prompt: String, sheets: &[StoryItem]) -> String {
+pub(super) fn with_sheets(prompt: String, sheets: &[Thing]) -> String {
     if sheets.is_empty() {
         return prompt;
     }
@@ -141,7 +147,7 @@ pub(super) struct FittedPictures {
     pub things: Vec<ThingReference>,
     /// The sheets described in words: those with no close-up yet, and those whose close-up found
     /// no room.
-    pub described: Vec<StoryItem>,
+    pub described: Vec<Thing>,
     /// The pictures left out for want of room.
     pub dropped: Vec<String>,
 }
@@ -152,7 +158,7 @@ pub(super) struct FittedPictures {
 pub(super) fn fit_pictures(
     room: usize,
     mut people: Vec<String>,
-    sheets: &[StoryItem],
+    sheets: &[Thing],
 ) -> FittedPictures {
     let mut dropped = people.split_off(room.min(people.len()));
     let mut things = Vec::new();
@@ -196,11 +202,33 @@ pub(super) fn plate_request(
         references: fitted.people,
         things: fitted.things,
         avoid: painting.avoid.to_vec(),
+        left_out: fitted.dropped,
+        priority: Priority::Normal,
     }
 }
 
+/// The request the insert `name` is generated with: painted anew from `painting` (never an edit of
+/// the room, whose people it would keep, and no reference sheet: nobody's face is in an insert), in
+/// the shape of the picture the backend makes when it was switched to a `size`, so the shape asked
+/// for is the shape that comes back and nothing is padded to fit.
+pub(super) fn insert_request(
+    name: &str,
+    painting: &Painting<'_>,
+    size: Option<PictureSize>,
+) -> GenerateRequest {
+    let mut request = plate_request(name, painting, None, fit_pictures(0, Vec::new(), &[]));
+    request.aspect = size.and_then(Aspect::of_size);
+    request
+}
+
+/// The size the host's image backend makes every picture at, when it was switched to one.
+async fn backend_size(port: u16) -> Result<Option<PictureSize>, DevError> {
+    let view: GenerateReply<BackendView> = get_json(port, image_path::BACKEND).await?;
+    Ok(reply_value(view)?.size)
+}
+
 /// What the host's image backend takes, from the services report.
-pub(super) async fn image_limits(port: u16) -> Result<BackendLimits, DevError> {
+pub(crate) async fn image_limits(port: u16) -> Result<BackendLimits, DevError> {
     let reply: ServicesReply<ServicesReport> = get_json(port, services_path::SERVICES).await?;
     Ok(reply_value(reply)?.imagegen.limits)
 }
@@ -329,6 +357,7 @@ pub(crate) async fn deliver_plate(
         screen: SharedScreen::default(),
         cast_from: None,
         cued: false,
+        emergency: None,
     };
     let made = make_frame(port, name, painting, characters, base, alone)
         .await
@@ -368,6 +397,20 @@ pub(super) struct RoomTurn {
     /// Whether a line cued it (a change in the talk), not the schedule: once it is up, no older
     /// room frame follows it.
     pub cued: bool,
+    /// The hold of an emergency plate (a declared action): it is made first in the backend's own
+    /// line, goes up as soon as it is ready, without a slot, and holds the screen for this long.
+    pub emergency: Option<Duration>,
+}
+
+impl RoomTurn {
+    /// How urgent the plate's picture is for the image backend.
+    fn priority(&self) -> Priority {
+        if self.emergency.is_some() {
+            Priority::Emergency
+        } else {
+            Priority::Normal
+        }
+    }
 }
 
 /// A frame put on screen: what was done, whether it shows with its own scan (every character
@@ -422,8 +465,6 @@ pub(super) struct InsertRequest<'a> {
     pub prompt: &'a str,
     /// What the picture must not show.
     pub avoid: &'a [String],
-    /// The picture the insert is an edit of, when it is one.
-    pub base: Option<&'a str>,
     /// The close-up the item's reference sheet keeps: shown again, none made.
     pub drawn: Option<&'a str>,
     /// The picture it cuts away from, whose cast the scene keeps.
@@ -439,7 +480,8 @@ pub(super) struct InsertRequest<'a> {
 /// Makes the insert `request.name` (a cut to an item filling the screen) and puts it behind the
 /// scene as soon as it is made and the last picture has been up the screen's least time: it waits
 /// for no room frame, and holds the screen for `hold`, so a room frame that finishes meanwhile
-/// waits. Nobody's face is in it, so it is not scanned: it is shown with the layout of `room`, the
+/// waits. It is painted anew from the item's look, never an edit of the room (`insert_request`).
+/// Nobody's face is in it, so it is not scanned: it is shown with the layout of `room`, the
 /// picture it cuts away from, so the scene keeps its cast (who may speak, and where their bubbles
 /// sit) while the camera is on the item. With a `caption` (a found clue's words, titled by
 /// `caption_title`), the scene's caption bar shows it from the moment the insert is up; the
@@ -455,7 +497,6 @@ pub(super) async fn make_insert(
         name,
         prompt,
         avoid,
-        base,
         drawn,
         room,
         caption,
@@ -464,15 +505,14 @@ pub(super) async fn make_insert(
     } = request;
     let picture = match drawn {
         Some(drawn) => drawn.to_owned(),
-        // Nobody's face is in an insert, so it is given no reference sheet.
         None => {
             let painting = Painting {
                 prompt,
                 avoid,
                 sheets: &[],
             };
-            let fitted = fit_pictures(0, Vec::new(), &[]);
-            generate(port, plate_request(name, &painting, base, fitted)).await?
+            let size = backend_size(port).await.map_err(at(PlateStep::Generate))?;
+            generate(port, insert_request(name, &painting, size)).await?
         }
     };
     let layout = layout_of(port, room).await?;
@@ -537,6 +577,10 @@ pub(super) struct Screen {
     /// The newest room frame cued by a line that has gone up: an older one would step the screen
     /// back past the change it shows.
     cued_up: Option<u32>,
+    /// The newest declaration (an emergency plate): its frame number and its name. Every room
+    /// plate started before it, still waiting or being made, is superseded: the talk it shows is
+    /// older than the action declared.
+    declared: Option<(u32, String)>,
 }
 
 pub(super) type SharedScreen = Arc<Mutex<Screen>>;
@@ -656,7 +700,9 @@ pub(super) async fn claim_room(screen: &SharedScreen, number: u32, cued: bool) -
             .iter()
             .filter(|ready| **ready > number)
             .count();
-        let overtaken = newer_waiting >= ROOM_QUEUE || state.cued_up.is_some_and(|up| up > number);
+        let overtaken = newer_waiting >= ROOM_QUEUE
+            || state.cued_up.is_some_and(|up| up > number)
+            || state.declared.as_ref().is_some_and(|(at, _)| *at > number);
         if overtaken {
             state.room_ready.retain(|ready| *ready != number);
             return ControlFlow::Break(false);
@@ -686,6 +732,80 @@ pub(super) async fn claim_room(screen: &SharedScreen, number: u32, cued: bool) -
         ControlFlow::Break(true)
     })
     .await
+}
+
+/// Records that frame `number`, `name`, is a declaration (an emergency plate). Every room plate
+/// started before it that waits for its slot gives up its place at once, so it holds back no newer
+/// one; one still being made is dropped when it is made. Answers how many waiting plates gave up.
+pub(super) fn begin_declaration(screen: &SharedScreen, number: u32, name: &str) -> usize {
+    let mut state = screen.lock().unwrap_or_else(PoisonError::into_inner);
+    state.declared = Some((number, name.to_owned()));
+    let before = state.room_ready.len();
+    state.room_ready.retain(|ready| *ready > number);
+    before - state.room_ready.len()
+}
+
+/// The name of the declared plate that supersedes room frame `number`, when one does: a
+/// declaration made after the frame started.
+pub(super) fn superseded_by(screen: &SharedScreen, number: u32) -> Option<String> {
+    screen
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .declared
+        .as_ref()
+        .filter(|(at, _)| *at > number)
+        .map(|(_, name)| name.clone())
+}
+
+/// Claims the screen for the emergency plate `number`, or answers `false` when a newer declaration
+/// took its place. It waits for no slot and for no insert's hold, nor for the plates ahead of it:
+/// only the least time the picture before it stays up (so nothing flickers faster than it can be
+/// followed). Once up it holds the screen for `hold`, and the next room plate's slot counts from
+/// it.
+pub(super) async fn claim_declared(screen: &SharedScreen, number: u32, hold: Duration) -> bool {
+    wait_on_screen(screen, |state, now| {
+        if state.declared.as_ref().is_some_and(|(at, _)| *at > number) {
+            return ControlFlow::Break(false);
+        }
+        let shown_by = state.last_shown.map(|shown| shown + state.minimum_shown);
+        if let Some(wait) = wait_until(shown_by, now) {
+            return ControlFlow::Continue(wait);
+        }
+        state.last_shown = Some(now);
+        state.held_until = Some(now + hold);
+        state.last_room = Some((number, now));
+        ControlFlow::Break(true)
+    })
+    .await
+}
+
+/// Waits for the screen as `turn` asks: an emergency plate takes it at once, a room plate waits
+/// for its slot. `false`: it was overtaken or superseded.
+async fn claim(turn: &RoomTurn) -> bool {
+    match turn.emergency {
+        Some(hold) => claim_declared(&turn.screen, turn.number, hold).await,
+        None => claim_room(&turn.screen, turn.number, turn.cued).await,
+    }
+}
+
+/// The room frame `name` made but not shown: a declaration made after it started superseded it,
+/// else a newer plate took its slot.
+pub(super) fn not_shown(
+    turn: &RoomTurn,
+    name: &str,
+    own_cast: bool,
+    making: Option<Duration>,
+) -> Shown {
+    match superseded_by(&turn.screen, turn.number) {
+        Some(by) => Shown {
+            summary: format!("plate {name}: made, not shown, superseded by {by}"),
+            own_cast,
+            captioned: None,
+            on_screen: false,
+            making,
+        },
+        None => overtaken(name, own_cast, making),
+    }
 }
 
 /// The frame `name` made but not shown, as a newer one took its slot.
@@ -812,6 +932,18 @@ pub(super) async fn scan_plate(
     characters: Vec<CharacterRequest>,
     base: Option<&str>,
 ) -> Result<ScannedPlate, PlateFailure> {
+    scan_plate_with(port, name, painting, characters, base, Priority::Normal).await
+}
+
+/// [`scan_plate`] with the picture's urgency for the image backend.
+async fn scan_plate_with(
+    port: u16,
+    name: &str,
+    painting: &Painting<'_>,
+    characters: Vec<CharacterRequest>,
+    base: Option<&str>,
+    priority: Priority,
+) -> Result<ScannedPlate, PlateFailure> {
     let kept = format!("{name}.png");
     if show_layout(port, &kept).await.is_ok() {
         return Ok(ScannedPlate {
@@ -844,7 +976,9 @@ pub(super) async fn scan_plate(
             limits.maximum_pictures
         ));
     }
-    let picture = generate(port, plate_request(name, painting, base, fitted)).await?;
+    let mut request = plate_request(name, painting, base, fitted);
+    request.priority = priority;
+    let picture = generate(port, request).await?;
     let located: LocateReply<LocatedLayout> = post_json(
         port,
         locate_path::LOCATE,
@@ -894,10 +1028,11 @@ async fn build(
     base: Option<&str>,
     turn: RoomTurn,
 ) -> Result<Shown, PlateFailure> {
-    let ScannedPlate { picture, made } = scan_plate(port, name, painting, characters, base).await?;
+    let ScannedPlate { picture, made } =
+        scan_plate_with(port, name, painting, characters, base, turn.priority()).await?;
     let Some(made) = made else {
-        if !claim_room(&turn.screen, turn.number, turn.cued).await {
-            return Ok(overtaken(name, true, None));
+        if !claim(&turn).await {
+            return Ok(not_shown(&turn, name, true, None));
         }
         put_backdrop(port, &picture, None, PlateKind::Room).await?;
         return Ok(Shown {
@@ -923,8 +1058,8 @@ async fn build(
         _ => None,
     };
     let making = Some(made.since.elapsed());
-    if !claim_room(&turn.screen, turn.number, turn.cued).await {
-        return Ok(overtaken(name, own_cast, making));
+    if !claim(&turn).await {
+        return Ok(not_shown(&turn, name, own_cast, making));
     }
     let cast_note = kept_cast.as_ref().map_or_else(String::new, |(room, _)| {
         format!(", with the cast of {room}")
@@ -958,22 +1093,179 @@ pub(super) async fn reference_sheets(
     let mut sheets = Vec::new();
     for character in characters {
         let sheet = reference_sheet_name(&character.name);
-        let answer = crate::client::head(port, &df_playground::path::media_file(&sheet))
+        if library_holds(port, &sheet)
             .await
-            .map_err(|error| at(PlateStep::References)(DevError::Client(error)))?;
-        match answer.status {
-            StatusCode::OK => sheets.push(sheet),
-            StatusCode::NOT_FOUND => {}
-            status => {
-                return Err(at(PlateStep::References)(DevError::UnexpectedAnswer {
-                    status,
-                    body: String::new(),
-                    reason: Some(format!("the media library's answer for {sheet}")),
-                }));
-            }
+            .map_err(at(PlateStep::References))?
+        {
+            sheets.push(sheet);
         }
     }
     Ok(sheets)
+}
+
+/// Whether the media library holds the picture `name` (it answers 404 when not); any other answer
+/// is an error.
+async fn library_holds(port: u16, name: &str) -> Result<bool, DevError> {
+    let answer = crate::client::head(port, &df_playground::path::media_file(name))
+        .await
+        .map_err(DevError::Client)?;
+    match answer.status {
+        StatusCode::OK => Ok(true),
+        StatusCode::NOT_FOUND => Ok(false),
+        status => Err(DevError::UnexpectedAnswer {
+            status,
+            body: String::new(),
+            reason: Some(format!("the media library's answer for {name}")),
+        }),
+    }
+}
+
+/// The first of `items` (most noticeable first, the order the picture shows them) that the
+/// backend's room for pictures takes once `taken` of them are spoken for (the people's sheets
+/// first, then the place's things) and the picture to edit, if any, has its place. What does not
+/// fit is left out, never described: a picture that shows few things draws them well.
+pub(crate) fn items_that_fit<T>(
+    limits: &BackendLimits,
+    taken: usize,
+    edits_a_picture: bool,
+    items: Vec<T>,
+) -> Vec<T> {
+    let room = limits
+        .maximum_pictures
+        .saturating_sub(usize::from(edits_a_picture))
+        .saturating_sub(taken);
+    items.into_iter().take(room).collect()
+}
+
+/// What came of the reference sheets of inventory items a picture shows: each item as a sheet (its
+/// picture when the library holds one), and the sheets asked for because the library has none
+/// yet, or why one could not be asked for.
+pub(crate) struct InventorySheets {
+    pub sheets: Vec<Thing>,
+    pub requested: Vec<String>,
+    pub not_requested: Vec<String>,
+}
+
+/// The reference sheets of `shown`, items by their owner, in their order (the order the picture's
+/// room takes them in). An item whose sheet (`world::inventory::sheet_name`) the
+/// library does not hold yet is described in words this time, and its sheet is asked of the image
+/// service in the background, so a later picture has it; one already being made is not asked
+/// again. A picture never waits for a sheet.
+pub(crate) async fn inventory_sheets(
+    port: u16,
+    shown: &[(String, crate::world::InventoryItem)],
+) -> Result<InventorySheets, PlateFailure> {
+    let mut made = InventorySheets {
+        sheets: Vec::new(),
+        requested: Vec::new(),
+        not_requested: Vec::new(),
+    };
+    for (owner, item) in shown {
+        let name = crate::world::sheet_name(owner, &item.id);
+        let held = library_holds(port, &name)
+            .await
+            .map_err(at(PlateStep::References))?;
+        if !held {
+            match request_sheet(port, &name, item).await {
+                Ok(()) => made.requested.push(name.clone()),
+                Err(error) => made.not_requested.push(format!("{name} ({error})")),
+            }
+        }
+        made.sheets.push(Thing {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            look: item.look.clone(),
+            picture: held.then_some(name),
+        });
+    }
+    Ok(made)
+}
+
+/// Asks for the reference sheet of each item `applied` brought in from none (a gain from a count
+/// of zero), so a new item has its sheet before a picture shows it; a sheet the library holds is
+/// not asked for again. Answers the lines for a transcript, one for each sheet asked for and one
+/// when the inventory or the image service cannot be reached.
+pub(crate) async fn sheets_for_gains(
+    port: u16,
+    owner: &str,
+    applied: &[crate::world::InventoryApplied],
+) -> Vec<String> {
+    use crate::world::inventory::ChangeKind;
+    let gained: Vec<&str> = applied
+        .iter()
+        .filter(|taken| taken.kind == ChangeKind::Add && taken.before == 0)
+        .map(|taken| taken.item.as_str())
+        .collect();
+    if gained.is_empty() {
+        return Vec::new();
+    }
+    let address = format!(
+        "{}?owner={owner}",
+        crate::world::inventory::routes::path::INVENTORY_OWNER
+    );
+    let view: Result<crate::world::inventory::request::InventoryView, DevError> =
+        match get_json::<crate::world::inventory::request::InventoryReply<_>>(port, &address).await
+        {
+            Ok(reply) => reply_value(reply),
+            Err(error) => Err(error),
+        };
+    let shown: Vec<(String, crate::world::InventoryItem)> = match view {
+        Ok(view) => view
+            .inventory
+            .items
+            .into_iter()
+            .filter(|item| gained.contains(&item.id.as_str()))
+            .map(|item| (owner.to_owned(), item))
+            .collect(),
+        Err(error) => return vec![format!("sheets of the new items not read: {error}")],
+    };
+    match inventory_sheets(port, &shown).await {
+        Ok(made) => made
+            .requested
+            .iter()
+            .map(|name| format!("sheet {name}: none yet, asked for"))
+            .chain(
+                made.not_requested
+                    .iter()
+                    .map(|refused| format!("sheet {refused}: not asked for")),
+            )
+            .collect(),
+        Err((_, error)) => vec![format!("sheets of the new items not asked for: {error}")],
+    }
+}
+
+/// Asks the image service for the reference sheet `name` of `item`, without waiting: the thing
+/// alone from two sides on a plain ground, in the house look.
+async fn request_sheet(
+    port: u16,
+    name: &str,
+    item: &crate::world::InventoryItem,
+) -> Result<(), DevError> {
+    let (prompt, avoid) = crate::imagegen::cli::with_look(
+        format!(
+            "a reference sheet of one thing, {}: {}. The thing alone, whole and sharp, seen from \
+             the front and at three-quarters, side by side on a plain mid-grey ground.",
+            item.name, item.look
+        ),
+        None,
+    )
+    .map_err(DevError::Command)?;
+    let request = GenerateRequest {
+        prompt,
+        name: name.trim_end_matches(".png").to_owned(),
+        purpose: Some(Purpose::Portrait),
+        aspect: None,
+        wait: false,
+        base: None,
+        references: Vec::new(),
+        things: Vec::new(),
+        avoid,
+        left_out: Vec::new(),
+        priority: Priority::Normal,
+    };
+    let reply: GenerateReply<crate::imagegen::request::JobView> =
+        post_json(port, image_path::GENERATE, &request).await?;
+    reply_value(reply).map(|_| ())
 }
 
 /// The media library's name of the reference sheet of the persona `id`.

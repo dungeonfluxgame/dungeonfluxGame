@@ -17,6 +17,7 @@ pub use df_scene_layout::{
 };
 
 use crate::lobby::model::{Bubble, BubbleTone, TAIL_INSET_PERCENT};
+use crate::plate_fit::PlateFit;
 
 /// A bubble's anchor: the name of a character in the backdrop's layout and the point of that
 /// character its tail points at.
@@ -33,24 +34,29 @@ pub struct BubbleAnchor {
     pub point: CharacterPoint,
 }
 
-/// The region targets of `layout` as stage elements the camera can follow. They are positions
-/// only: they are handed to the camera, never drawn as figures.
+/// The region targets of `layout` as stage elements the camera can follow, each at its place on
+/// the screen under the picture's fit. They are positions only: they are handed to the camera,
+/// never drawn as figures.
 pub fn region_target_elements(layout: &ImageLayout) -> Vec<crate::fixture::StageElement> {
+    let fit = PlateFit::of_picture(layout.picture());
     region_targets(layout)
         .into_iter()
-        .map(|(id, (x, y))| crate::fixture::StageElement {
-            label: id.clone(),
-            id,
-            kind: "region".to_owned(),
-            x: f32::from(x) / 10.0,
-            y: f32::from(y) * 56.25 / 1000.0,
-            color: None,
-            shape: crate::fixture::ElementShape::Rect,
-            width_units: 0.0,
-            height_units: 0.0,
-            fields: serde_json::Map::new(),
-            rotation_degrees: 0,
-            pivot: crate::fixture::StagePivot::default(),
+        .map(|(id, point)| {
+            let (x, y) = fit.stage_units(point);
+            crate::fixture::StageElement {
+                label: id.clone(),
+                id,
+                kind: "region".to_owned(),
+                x,
+                y,
+                color: None,
+                shape: crate::fixture::ElementShape::Rect,
+                width_units: 0.0,
+                height_units: 0.0,
+                fields: serde_json::Map::new(),
+                rotation_degrees: 0,
+                pivot: crate::fixture::StagePivot::default(),
+            }
         })
         .collect()
 }
@@ -75,8 +81,10 @@ pub struct CharacterMarker {
 /// Where `marker` is drawn, in thousandths of the screen, or `None` when the layout has no
 /// character of its name (a marker without a character is not drawn).
 pub fn marker_place(marker: &CharacterMarker, layout: Option<&ImageLayout>) -> Option<(u16, u16)> {
-    let region = layout?.region(&marker.region)?;
-    let (x, y) = point_of(region, marker.point);
+    let layout = layout?;
+    let region = layout.region(&marker.region)?;
+    let (x, y) =
+        PlateFit::of_picture(layout.picture()).stage_permille(point_of(region, marker.point));
     let moved = |value: u16, by: i8| {
         u16::try_from((i32::from(value) + i32::from(by) * 10).clamp(0, i32::from(FULL_PERMILLE)))
             .unwrap_or(0)
@@ -110,9 +118,11 @@ const ANCHORED_WIDTH_PERCENT: u16 = 31;
 /// own place).
 pub fn anchored_place(bubble: &Bubble, layout: Option<&ImageLayout>) -> Option<AnchoredPlace> {
     let anchor = bubble.anchor.as_ref()?;
-    let region = layout?.region(&anchor.region)?;
+    let layout = layout?;
+    let region = layout.region(&anchor.region)?;
     let width = u16::from(bubble.width_percent).clamp(ANCHORED_WIDTH_PERCENT, 100) * 10;
-    let (point_x, point_y) = point_of(region, anchor.point);
+    let (point_x, point_y) =
+        PlateFit::of_picture(layout.picture()).stage_permille(point_of(region, anchor.point));
     let head_x = point_x.min(FULL_PERMILLE);
     // Over the head the tip stops short of the hair; at any other point it touches it.
     let gap = if anchor.point == CharacterPoint::Head {

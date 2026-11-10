@@ -24,6 +24,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time::Instant;
 
+use super::declare::{
+    DECLARE_INSTRUCTION, DeclaredAction, add_declared_to, declared_miss, distinct,
+};
 use super::emotions::load_emotions;
 use super::generate::{
     PUBLIC_NOTE, ShownScene, compact, operation_key, other_personas, text_request,
@@ -36,6 +39,7 @@ use super::reveal::{RevealQuestion, early_reveals, revealable_of};
 use super::state::{apply_appraisal, crossing_triggers, learn_names, load_state, state_triggers};
 use crate::state::AppState;
 use crate::text::TextRoute;
+use crate::world::{InventoryDelta, InventoryItem, InventoryReason, ItemUse};
 
 /// The name of the answer object of a line.
 const LINE_OUTPUT_NAME: &str = "persona_line";
@@ -91,6 +95,18 @@ const SAY_INSTRUCTION: &str = concat!(
     "character now knows from context (said aloud in recent or now: a name given, or one person ",
     "calling another by it), from the narrative (the situation says they know them) or from their ",
     "own backstory; empty when none. ",
+    "now.inventory is what the character holds, each item with its count and its use: the line ",
+    "knows what it has left and what is running low. An item whose use is consumed is used up ",
+    "by using it; an item whose use is kept (a tool, a possession) is not used up by using it, ",
+    "so using it never lowers its count. inventory_changes lists each item the line shows ",
+    "moving right now: item is its id; change is below zero for what leaves and above zero for ",
+    "what is gained; reason is gained (bought, found, given or received), used_up (a consumed ",
+    "item spent or applied), worn_out (an item that wears out after long use is now worn out), ",
+    "broken, lost or given_away; why is a few words. Never give used_up for a kept item. A ",
+    "gain of something the character does not hold yet gives it a new id (lowercase letters, ",
+    "digits, '_' or '-'), a name, a look (its plain visible detail up close) and its use; for ",
+    "an item already held name, look and use are null. A plan, a wish or something only talked ",
+    "about changes nothing, and inventory_changes is empty when nothing moves. ",
     "When now holds narrative guidance, the line serves it: every fact in must_establish is ",
     "true of the character and the line never contradicts one, nothing in must_avoid is stated, ",
     "implied or contradicted, the tone applies, and latitude says how closely to follow it ",
@@ -187,11 +203,15 @@ pub(super) struct Occasion<'a> {
     pub(super) intent: Option<&'a str>,
     /// Whether the line is the story's strike: the moment the character's purpose shows.
     pub(super) strike: bool,
+    /// Whether the line is a declaration of the physical action the character is doing right now
+    /// (`persona declare`): the answer then also reports `declared_action`, checked against what
+    /// the character holds.
+    pub(super) declare: bool,
 }
 
 /// The emotions and tones the answer may name: the campaign's list, or the built-in one (recorded)
 /// when the file does not read, so a line is never stopped by it.
-fn emotion_config(app: &AppState) -> EmotionConfig {
+pub(super) fn emotion_config(app: &AppState) -> EmotionConfig {
     load_emotions(app).unwrap_or_else(|error| {
         app.record_line(format!(
             "PERSONA state_unavailable id=emotions error={}",
@@ -272,13 +292,22 @@ fn appraisal_schema(config: &EmotionConfig) -> Value {
 fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
     let mut behavior_ids: Vec<Value> = behaviors.into_iter().map(Value::from).collect();
     behavior_ids.push(Value::Null);
+    let reasons: Vec<&str> = InventoryReason::ALL
+        .into_iter()
+        .map(InventoryReason::key)
+        .collect();
+    let mut uses: Vec<Value> = ItemUse::ALL
+        .into_iter()
+        .map(|usage| Value::from(usage.key()))
+        .collect();
+    uses.push(Value::Null);
     json!({
         "type": "object",
         "additionalProperties": false,
         "required": [
             "line", "behavior", "fired_triggers", "fired_emotional_triggers", "revealed_secrets",
             "quotes", "gaps", "appraisal", "repeats_recent", "repeat_reason", "follows_intent",
-            "intent_miss", "names_learned"
+            "intent_miss", "names_learned", "inventory_changes"
         ],
         "properties": {
             "line": { "type": "string", "description": "What the character says, one short line." },
@@ -311,6 +340,28 @@ fn line_schema(config: &EmotionConfig, behaviors: Vec<&str>) -> Value {
             "follows_intent": { "type": "boolean" },
             "intent_miss": nullable("string", "How the line misses now.intent, or null."),
             "names_learned": id_list("Ids in others whose name the character now knows."),
+            "inventory_changes": {
+                "type": "array",
+                "description": "Each item the line moves now; empty when none.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["item", "change", "reason", "why", "name", "look", "use"],
+                    "properties": {
+                        "item": { "type": "string" },
+                        "change": { "type": "integer" },
+                        "reason": { "type": "string", "enum": reasons },
+                        "why": { "type": "string" },
+                        "name": nullable("string", "A new item's name, else null."),
+                        "look": nullable("string", "A new item's visible look, else null."),
+                        "use": {
+                            "type": ["string", "null"],
+                            "enum": uses,
+                            "description": "A new item's use, else null.",
+                        },
+                    },
+                },
+            },
         },
     })
 }
@@ -342,6 +393,10 @@ struct LineRecord {
     intent_miss: Option<String>,
     #[serde(default)]
     names_learned: Vec<String>,
+    #[serde(default)]
+    inventory_changes: Vec<InventoryDelta>,
+    #[serde(default)]
+    declared_action: Option<DeclaredAction>,
 }
 
 /// An answer that does not say is taken to follow its intent (a line with no intent always does).
@@ -375,6 +430,11 @@ struct Answer {
     slot_miss: Option<String>,
     /// The characters present whose name the character learned with this line.
     names_learned: Vec<String>,
+    /// What the model says the line used up or gained of what the character carries, checked
+    /// against it only when the line is settled.
+    inventory_changes: Vec<InventoryDelta>,
+    /// What the line declares the character is doing, for a declaration.
+    declared: Option<DeclaredAction>,
     leak_suspect: bool,
 }
 
@@ -515,6 +575,11 @@ fn read_line(answer: &Value, own: &Persona, lists: &Lists<'_>) -> Result<Answer,
         intent_miss,
         slot_miss,
         names_learned: record.names_learned,
+        inventory_changes: record.inventory_changes,
+        declared: record.declared_action.map(|action| DeclaredAction {
+            items_in_use: distinct(action.items_in_use),
+            ..action
+        }),
         leak_suspect: report.leaks,
     })
 }
@@ -667,7 +732,7 @@ fn present_speakers(scene: &ShownScene, speaker: &str, asked_by: Option<&str>) -
 
 /// The state as a prompt carries it: the emotions above zero, the mood, the attention and the
 /// standings.
-fn state_facts(state: &PersonaState) -> Value {
+pub(super) fn state_facts(state: &PersonaState) -> Value {
     let felt: Vec<_> = state
         .emotions
         .iter()
@@ -707,7 +772,7 @@ fn stable_facts(
 /// everyone whose name the character does not know under their handle (`handles`).
 fn live_facts(
     occasion: &Occasion<'_>,
-    (state, handles): (&PersonaState, &Handles),
+    (state, handles, inventory): (&PersonaState, &Handles, &[InventoryItem]),
     state_triggered: &[&EmotionalTrigger],
     (present, revealable): (&[String], &[String]),
     retry_reason: Option<&str>,
@@ -725,6 +790,7 @@ fn live_facts(
     json!({
         "state": state_facts(&handles.state(state)),
         "state_triggered": triggered,
+        "inventory": inventory,
         "present": present,
         "recent": recent,
         "asked_by": occasion.asked_by.map(|asker| handles.shown(asker)),
@@ -877,10 +943,16 @@ async fn ask_line(
     facts: Value,
     schema: Value,
     lists: &Lists<'_>,
+    declaring: bool,
 ) -> Result<(Answer, u64), PersonaError> {
+    let instruction = if declaring {
+        format!("{SAY_INSTRUCTION} {DECLARE_INSTRUCTION} {LEAK_REPORT_INSTRUCTION}")
+    } else {
+        format!("{SAY_INSTRUCTION} {LEAK_REPORT_INSTRUCTION}")
+    };
     let request = text_request(
         route.profile(),
-        &format!("{SAY_INSTRUCTION} {LEAK_REPORT_INSTRUCTION}"),
+        &instruction,
         facts,
         LINE_OUTPUT_NAME,
         schema,
@@ -941,7 +1013,10 @@ pub(super) async fn say_line(
         .iter()
         .map(|item| item.id.as_str())
         .collect();
-    let schema = with_leak_report(line_schema(&config, behavior_ids));
+    let mut schema = with_leak_report(line_schema(&config, behavior_ids));
+    if occasion.declare {
+        add_declared_to(&mut schema);
+    }
     let lists = Lists {
         config: &config,
         present: &present,
@@ -956,16 +1031,21 @@ pub(super) async fn say_line(
     let shown_asked = occasion.asked_by.map(|id| handles.shown(id));
     // The secrets of this character the story's play has made revealable since its strike.
     let revealable = revealable_of(app, character);
+    let inventory = crate::world::inventory_of(app, character);
     let answer = loop {
-        let now = live_facts(
+        let mut now = live_facts(
             &occasion,
-            (&state, &handles),
+            (&state, &handles, &inventory),
             &by_state,
             (&present, &revealable),
             retry_reason.as_deref(),
         );
+        if occasion.declare {
+            now["declare"] = json!(true);
+        }
         let facts = compact(json!({ "context": stable.clone(), "now": now }));
-        let (answer, took) = ask_line(route, own, facts, schema.clone(), &lists).await?;
+        let (answer, took) =
+            ask_line(route, own, facts, schema.clone(), &lists, occasion.declare).await?;
         let answer = with_ids(answer, &handles);
         model_ms += took;
         // A secret the line lets out is weighed against its reveal conditions (`reveal.rs`), on
@@ -1008,6 +1088,7 @@ pub(super) async fn say_line(
         // repeats itself, or states a total the stall would not charge (the spoken number and the
         // held quote would disagree).
         let reason = early
+            .or_else(|| declared_miss(occasion.declare, answer.declared.as_ref(), &inventory))
             .or_else(|| answer.intent_miss.clone())
             .or_else(|| answer.repeat.clone())
             .or_else(|| answer.slot_miss.clone())
@@ -1017,6 +1098,10 @@ pub(super) async fn say_line(
             _ => break answer,
         }
     };
+    // A declaration that still names what the character does not hold is refused, never shown.
+    if let Some(detail) = declared_miss(occasion.declare, answer.declared.as_ref(), &inventory) {
+        return Err(super::declare::refused(detail));
+    }
     let said = settle(app, own, &config, &by_state, answer, retry_reason);
     let said = SaidLine {
         model_ms,
@@ -1088,6 +1173,8 @@ fn settle(
     let line = fill_price_slots(app, &answer.line, &held_cp);
     let quotes: Vec<QuoteReport> = lots.into_iter().flatten().collect();
     learn_names(app, own, &answer.names_learned);
+    let inventory =
+        crate::world::take_judged_changes(app, own.id().as_str(), &answer.inventory_changes);
     let state = apply_appraisal(app, own, &appraisal);
     let tone = appraisal
         .tone
@@ -1111,6 +1198,8 @@ fn settle(
         repeat_retried: retried_for.is_some(),
         retry_reason: retried_for,
         names_learned: answer.names_learned,
+        inventory,
+        declared: answer.declared,
         state,
         model_ms: 0,
         total_ms: 0,

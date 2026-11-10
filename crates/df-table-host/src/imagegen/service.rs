@@ -28,13 +28,34 @@ use tokio::task::JoinHandle;
 use super::backend::{BackendError, BackendLimits, ImageBackend, backend_from_environment};
 use super::events::ImageGenEvent;
 use super::limits::{DEFAULT_DEADLINE, DEFAULT_GRACE, MAXIMUM_REMEMBERED_JOBS, PROVENANCE_SUFFIX};
-use super::model::{BackendRequest, GeneratedImage, ImageRequest};
+use super::model::{BackendRequest, GeneratedImage, ImageRequest, Priority};
 use super::request::{
     BackendView, GenerateError, JobState, JobView, PictureCause, Provenance, Sidecar,
 };
 use crate::io_cause::IoCause;
 use crate::media_library::{media_directory, store_bytes};
 use crate::state::AppState;
+
+/// How far the shape of a delivered picture may be from the asked one, in percent: a backend
+/// rounds its sides to a step of its own.
+const SHAPE_TOLERANCE_PERCENT: u64 = 3;
+
+/// The width and height asked of `backend` for `request`: a size the backend was switched to
+/// replaces the shape's own.
+fn asked_size(request: &ImageRequest, backend: &dyn ImageBackend) -> (u32, u32) {
+    backend.tuning().size.map_or_else(
+        || request.aspect().requested_size(),
+        |size| (size.width_px(), size.height_px()),
+    )
+}
+
+/// Whether a picture of `delivered` sides has the shape of `asked` (within
+/// `SHAPE_TOLERANCE_PERCENT`), so nothing was padded or stretched to fit.
+pub(super) fn shape_kept(asked: (u32, u32), delivered: (u32, u32)) -> bool {
+    let across = u64::from(asked.0) * u64::from(delivered.1);
+    let down = u64::from(delivered.0) * u64::from(asked.1);
+    across.abs_diff(down) * 100 <= across.max(down) * SHAPE_TOLERANCE_PERCENT
+}
 
 /// The variable that sets the deadline of each generation, in whole seconds above zero.
 pub const DEADLINE_SECONDS_VARIABLE: &str = "DF_IMAGEGEN_DEADLINE_SECS";
@@ -241,10 +262,13 @@ impl ImageGenerator {
     /// The backend new jobs start on, what it takes and how many jobs are running.
     pub fn backend_view(&self) -> BackendView {
         let backend = self.backend();
+        let tuning = backend.tuning();
         BackendView {
             backend: backend.name().to_owned(),
             limits: backend.limits(),
             running: u64::try_from(self.running()).unwrap_or(u64::MAX),
+            size: tuning.size,
+            steps: tuning.steps,
         }
     }
 
@@ -262,6 +286,7 @@ impl ImageGenerator {
             .map_err(|_| GenerateError::Stopped { job: None })?
             .map_err(|backend| GenerateError::Backend { job: None, backend })?;
         let to = backend.name();
+        let view_tuning = backend.tuning();
         let from = {
             let mut slot = self.backend.write().unwrap_or_else(PoisonError::into_inner);
             std::mem::replace(&mut *slot, backend).name()
@@ -271,6 +296,7 @@ impl ImageGenerator {
             ImageGenEvent::Switched {
                 from,
                 to,
+                tuning: view_tuning,
                 running: self.running(),
             }
             .line(),
@@ -359,6 +385,7 @@ impl ImageGenerator {
                 name: request.name().to_owned(),
                 purpose: request.purpose(),
                 aspect: request.aspect(),
+                size: asked_size(&request, backend.as_ref()),
                 prompt_chars: request.prompt().chars().count(),
                 deadline: self.deadline,
                 backend: backend.name(),
@@ -366,6 +393,36 @@ impl ImageGenerator {
             }
             .line(),
         );
+        if request.priority() != Priority::Normal {
+            app.record_line(
+                ImageGenEvent::Prioritised {
+                    job: view.job,
+                    name: request.name().to_owned(),
+                    priority: request.priority(),
+                    backend: backend.name(),
+                }
+                .line(),
+            );
+        }
+        let attached: Vec<String> = request
+            .references()
+            .iter()
+            .cloned()
+            .chain(request.things().iter().map(|thing| thing.picture.clone()))
+            .collect();
+        if request.base().is_some() || !attached.is_empty() || !request.left_out().is_empty() {
+            app.record_line(
+                ImageGenEvent::References {
+                    job: view.job,
+                    name: request.name().to_owned(),
+                    base: request.base().map(str::to_owned),
+                    attached,
+                    maximum: limits.maximum_pictures,
+                    left_out: request.left_out().to_vec(),
+                }
+                .line(),
+            );
+        }
         let generator = Arc::clone(self);
         let app = Arc::clone(app);
         let job = view.job;
@@ -528,16 +585,28 @@ impl ImageGenerator {
             .chain(request.things().iter().map(|thing| &thing.picture));
         let mut references =
             Vec::with_capacity(request.references().len() + request.things().len());
-        for reference in attached {
-            references.push(read_picture(app, job, reference).await?.map_err(|cause| {
+        for (index, reference) in attached.enumerate() {
+            let mut bytes = read_picture(app, job, reference).await?.map_err(|cause| {
                 GenerateError::ReferenceUnreadable {
                     job,
                     reference: reference.clone(),
                     cause,
                 }
-            })?);
+            })?;
+            // A person's sheet shows several views side by side; an edit of a picture that is
+            // shown the whole sheet can paint each view as another person. It is shown the front
+            // view alone.
+            if request.base().is_some() && index < request.references().len() {
+                bytes = self
+                    .front_view(app, job, request.name(), reference, bytes)
+                    .await?;
+            }
+            references.push(bytes);
         }
         let limits = backend.limits();
+        // A size the backend was switched to replaces the shape's own, so the provenance says what
+        // was asked of the supplier.
+        let requested_px = asked_size(request, backend);
         let backend_request = BackendRequest {
             text: request.sent_text(&limits),
             negative: request.negative_text(&limits),
@@ -545,12 +614,26 @@ impl ImageGenerator {
             height_px,
             base,
             references,
+            priority: request.priority(),
         };
         let image = self.generate(job, &backend_request, backend).await?;
         if let Some(cause) = image.cleanup {
             app.record_line_and_echo(ImageGenEvent::CleanupFailed { job, cause }.line());
         }
         check_picture(&image).map_err(|cause| GenerateError::InvalidPicture { job, cause })?;
+        let delivered_px = (image.width_px, image.height_px);
+        if !shape_kept(requested_px, delivered_px) {
+            app.record_line_and_echo(
+                ImageGenEvent::Reshaped {
+                    job,
+                    name: request.name().to_owned(),
+                    asked: requested_px,
+                    delivered: delivered_px,
+                    backend: backend.name(),
+                }
+                .line(),
+            );
+        }
         let file = format!("{}.{}", request.name(), extension_of(&image.mime));
         let directory = media_directory(app.playground().files());
         store_bytes(directory, &file, &image.bytes)
@@ -563,8 +646,8 @@ impl ImageGenerator {
             backend: backend.name().to_owned(),
             purpose: request.purpose(),
             aspect: request.aspect(),
-            requested_width_px: width_px,
-            requested_height_px: height_px,
+            requested_width_px: requested_px.0,
+            requested_height_px: requested_px.1,
             prompt: request.prompt().to_owned(),
             sent_text: backend_request.text,
             negative: backend_request.negative,
@@ -598,6 +681,44 @@ impl ImageGenerator {
         );
         let sidecar = self.write_provenance(request.name(), &provenance).await;
         Ok((provenance, sidecar))
+    }
+
+    /// The front view of the person's sheet `picture` (its `bytes`) when it is a multi-view sheet,
+    /// recorded; the bytes as they are when it has one view.
+    async fn front_view(
+        &self,
+        app: &AppState,
+        job: u64,
+        name: &str,
+        picture: &str,
+        bytes: Vec<u8>,
+    ) -> Result<Vec<u8>, GenerateError> {
+        let unreadable = || GenerateError::ReferenceUnreadable {
+            job,
+            reference: picture.to_owned(),
+            cause: IoCause::from_kind(std::io::ErrorKind::InvalidData),
+        };
+        let cut = tokio::task::spawn_blocking(move || {
+            df_imagery::sheet_view::sheet_view(&bytes, df_imagery::sheet_view::SheetView::Front)
+                .map(|front| (front, bytes))
+        })
+        .await
+        .map_err(|_| GenerateError::Stopped { job: Some(job) })?
+        .map_err(|_| unreadable())?;
+        match cut {
+            (Some(front), _) => {
+                app.record_line(
+                    ImageGenEvent::SheetView {
+                        job,
+                        name: name.to_owned(),
+                        picture: picture.to_owned(),
+                    }
+                    .line(),
+                );
+                Ok(front)
+            }
+            (None, whole) => Ok(whole),
+        }
     }
 
     /// Awaits the backend on the job's task. The backend enforces the deadline itself; the host

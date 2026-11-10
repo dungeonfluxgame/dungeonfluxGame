@@ -191,6 +191,12 @@ fn spoken_lines(spoken: &Spoken, after_line: &str) -> Vec<String> {
             said.names_learned.join(", ")
         ));
     }
+    lines.extend(said.inventory.iter().map(|change| {
+        format!(
+            "  inventory: {} {} -> {} ({})",
+            change.item, change.before, change.after, change.why
+        )
+    }));
     if said.repeat_retried {
         lines.push(format!(
             "  worded again: {}{}",

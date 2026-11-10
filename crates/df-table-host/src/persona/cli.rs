@@ -73,6 +73,9 @@ pub const PERSONA_USAGE: &str = concat!(
     "[model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
     "[from=<id>] [intent=<text>] [strike=true|false] <situation...> | ",
+    "persona declare <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
+    "[from=<id>] [text=<the declaration>] [doing=<what the picture shows>] ",
+    "[uses=<item id>,<item id>...] [<situation...>] | ",
     "persona converse [turns=N] [opener=<character>] [speak=true|false] [pace=true|false] ",
     "[model=<name>] [frames=<name> <frame options>] [<topic...>] | ",
     "persona frame [gate=0-100] [model=<name>] [line=<text>]... <what the picture shows...> | ",
@@ -93,6 +96,11 @@ pub const PERSONA_USAGE: &str = concat!(
     "persona narrate [speak=true|false] <text...> | ",
     "persona addressed <speaker> [recent=<text>]... [intent=<text>] [reply=true|false] ",
     "[model=<name>] <line...> | ",
+    "persona perceive <who> [mode=glance|study] [picture=<name>] [focus=<id>] [recent=<text>]... ",
+    "[scene=<words>] [vision=true|false] [model=<name>] | ",
+    "persona perceive scene [who=<id>,<id>...] [mode=glance|study] [picture=<name>] ",
+    "[recent=<text>]... [scene=<words>] [vision=true|false] [parallel=<n>] [model=<name>] | ",
+    "persona thoughts <who> [limit=<n>] | ",
     "persona ask <character> [model=<name>] [backfill=true|false|sync] [coverage=true|false] ",
     "[speak=true|false] [situation=<text>] [recent=<text>]... [from=<id>] ",
     "<guidance options> <question...> | ",
@@ -192,8 +200,9 @@ pub const PERSONA_WATCH_USAGE: &str = concat!(
     "persona watch frames=<name> [gate=0-100] [scene=<what the picture shows>] ",
     "[edit=true|false] [edit_from=first|last] [hold=<seconds>] [insert_hold=<seconds>] ",
     "[max_frames=N (none by default)] [parallel=1-8 (8 by default)] [every=<seconds>] ",
-    "[place=<story place>] [judge_model=<name>], with one '<speaker id> | <line>' or ",
-    "'@focus [<item> | ]<text>' per line of standard input",
+    "[declare_hold=<seconds>] [place=<story place>] [judge_model=<name>], with one ",
+    "'<speaker id> | <line>', '@focus [<item> | ]<text>' or '@declare <speaker id> | <json>' ",
+    "(printed by `persona declare`) per line of standard input",
 );
 /// `persona addressed`: whom a line is directed at, and whether an answer is owed, by the
 /// addressee judge.
@@ -428,6 +437,10 @@ pub enum PersonaCommand {
         scene: String,
         model: Option<String>,
     },
+    /// What a character sees on screen and thinks, one or several (`perceive`).
+    Perceive(super::perceive::cli::PerceiveCommand),
+    /// A character declares the action they are doing right now (`declare`).
+    Declare(super::declare::DeclareCommand),
     /// Put a question to a character: coverage, backfill of gaps, then the line.
     Ask {
         character: PersonaId,
@@ -784,6 +797,7 @@ fn frame_options(given: &[(&str, &str)]) -> Result<Option<FrameOptions>, Command
         parallel,
         judge_model: value("judge_model").map(str::to_owned),
         every: None,
+        declare_hold: None,
         place: None,
     }))
 }
@@ -1002,6 +1016,7 @@ fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
             "judge_model",
             "parallel",
             "every",
+            "declare_hold",
             "place",
         ],
     );
@@ -1018,6 +1033,20 @@ fn parse_watch(words: &[String]) -> Result<PersonaCommand, CommandError> {
             .filter(|seconds| *seconds <= 3_600)
             .ok_or_else(|| bad_choice("every", text, "a whole number from 0 to 3600".to_owned()))?;
         options = options.with_every(Duration::from_secs(every));
+    }
+    if let Some((_, text)) = given.iter().find(|(key, _)| *key == "declare_hold") {
+        let hold = text
+            .parse::<u64>()
+            .ok()
+            .filter(|seconds| *seconds <= 3_600)
+            .ok_or_else(|| {
+                bad_choice(
+                    "declare_hold",
+                    text,
+                    "a whole number from 0 to 3600".to_owned(),
+                )
+            })?;
+        options = options.with_declare_hold(Duration::from_secs(hold));
     }
     // The watch makes frames for as long as it runs, unless `max_frames=` caps them, and as many
     // at once as a plate every `every` needs, unless `parallel=` says fewer.
@@ -1205,6 +1234,13 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
         ("watch", words) => parse_watch(words),
         ("story", words) => parse_story(words),
         ("addressed", words) => parse_addressed(words),
+        ("perceive", words) => {
+            super::perceive::cli::parse_perceive(words).map(PersonaCommand::Perceive)
+        }
+        ("thoughts", words) => {
+            super::perceive::cli::parse_thoughts(words).map(PersonaCommand::Perceive)
+        }
+        ("declare", words) => super::declare::parse_declare(words).map(PersonaCommand::Declare),
         ("remove", [id]) => Ok(PersonaCommand::Remove { id: id_word(id)? }),
         ("remove", _) => Err(CommandError::Usage(PERSONA_REMOVE_USAGE)),
         _ => Err(CommandError::Usage(PERSONA_USAGE)),
@@ -1393,10 +1429,20 @@ async fn ask_character(
     };
     let started = Instant::now();
     let answered: Answered = reply_value(post_json(port, path::PERSONA_ASK, &request).await?)?;
+    let sheets = super::plate::sheets_for_gains(
+        port,
+        &answered.spoken.character,
+        &answered.spoken.said.inventory,
+    )
+    .await;
     Ok(format!(
-        "{}\n  total: {} ms",
+        "{}\n  total: {} ms{}",
         format_answered(&answered),
-        started.elapsed().as_millis()
+        started.elapsed().as_millis(),
+        sheets
+            .iter()
+            .map(|line| format!("\n  {line}"))
+            .collect::<String>()
     ))
 }
 
@@ -1457,7 +1503,16 @@ async fn say(
         strike: talk.3,
     };
     let spoken: Spoken = reply_value(post_json(port, path::PERSONA_SAY, &request).await?)?;
-    Ok(format_spoken(&spoken))
+    let sheets =
+        super::plate::sheets_for_gains(port, &spoken.character, &spoken.said.inventory).await;
+    Ok(format!(
+        "{}{}",
+        format_spoken(&spoken),
+        sheets
+            .iter()
+            .map(|line| format!("\n  {line}"))
+            .collect::<String>()
+    ))
 }
 
 async fn narrate(port: u16, line: NarrateLine) -> Result<String, DevError> {
@@ -1738,6 +1793,8 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
             };
             super::converse::who_is_addressed(port, request).await
         }
+        PersonaCommand::Perceive(command) => super::perceive::cli::run(port, command).await,
+        PersonaCommand::Declare(command) => super::declare::run(port, command).await,
         PersonaCommand::StoryApply { model } => super::story::apply_story(port, model).await,
         PersonaCommand::Say {
             character,

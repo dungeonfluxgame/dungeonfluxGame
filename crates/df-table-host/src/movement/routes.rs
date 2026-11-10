@@ -1,10 +1,14 @@
 //! The movement routes: each is one model call against a closed schema. `POST /dev/move/interpret`
 //! has Jev read one line a player said and answers a `DevReply` of an `Interpreted` reading, or a
 //! typed [`InterpretRouteError`] with one `MOVE refused verb=interpret error=<key>` audit line. A
-//! reading is one `MOVE interpreted reading=<key> duration_ms=..` line. `POST /dev/move/design`
+//! reading is one `MOVE interpreted reading=<key> unclear=<key|-> declared=<key>
+//! second_reading=<bool> duration_ms=..` line. `POST /dev/move/design`
 //! designs the scene a move arrives in, residents included, and answers a `DevReply` of a
 //! `SceneDesign` or a [`DesignRouteError`], with `MOVE designed ..` and `MOVE refused verb=design`
-//! lines. A line never reaches an audit line: it is data for the model.
+//! lines. A refused answer to the design call is asked for once more, with the rule it broke as
+//! `refused_before` and one `MOVE retry verb=design reason=<key> detail=<rule>` line; a refusal
+//! that stands names its typed cause on its `MOVE refused` line. A line never reaches an audit
+//! line: it is data for the model.
 //!
 //! The question runs under the persona text scope and the default persona model, as the persona
 //! questions do (`persona::generate`). The call runs on a task of its own that the handler waits
@@ -19,15 +23,17 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Response;
 use axum::routing::post;
+use df_ai::text_attempts::OperationKey;
 use serde::{Deserialize, Serialize};
 
 use super::design::{
-    DESIGN_INSTRUCTION, DesignError, check_move, design_facts, design_schema, parse_design,
+    DESIGN_INSTRUCTION, DesignError, MoverInventories, check_move, check_shown_items, design_facts,
+    design_schema, parse_design,
 };
 use super::interpret::{
     InterpretError, JEV_INSTRUCTION, jev_facts, jev_schema, parse_reading, require_text,
 };
-use super::types::{Interpreted, MoveIntent, PartyMember, SceneDesign};
+use super::types::{Clarification, Declared, Interpreted, MoveIntent, PartyMember, SceneDesign};
 use crate::blocking::run_owned;
 use crate::dev_http::{BodyError, DevReply, RouteError, parse_body, reply};
 use crate::persona::generate::{operation_key, text_request};
@@ -51,8 +57,9 @@ const OUTPUT_NAME: &str = "movement_reading";
 const DESIGN_OUTPUT_NAME: &str = "scene_design";
 
 /// The body of `POST /dev/move/interpret`: the line, the speaker's persona id when a character
-/// said it, the party that may move, and the model to ask instead of the persona default. The
-/// line is not derived for debugging, so it has no `Debug`.
+/// said it, how the caller says the speaker meant it, the party that may move, and the model to
+/// ask instead of the persona default. `refused_before` is Jev's own earlier clarification of this
+/// line, sent on a second reading. The line is not derived for debugging, so it has no `Debug`.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterpretRequest {
@@ -62,6 +69,11 @@ pub struct InterpretRequest {
     /// What the scene is and who has been talking; Jev reads "we" and "us" against it.
     #[serde(default)]
     pub context: Option<String>,
+    /// `move` when the speaker said the line toward going somewhere; the default is `unknown`.
+    #[serde(default)]
+    pub declared: Declared,
+    #[serde(default)]
+    pub refused_before: Option<Clarification>,
     pub party: Vec<PartyMember>,
     #[serde(default)]
     pub model: Option<String>,
@@ -110,6 +122,16 @@ impl InterpretRouteError {
             Self::AnswerRefused { .. } => "answer_refused",
             Self::InvalidOperationKey => "invalid_operation_key",
             Self::Stopped => "stopped",
+        }
+    }
+}
+
+impl InterpretRouteError {
+    /// The typed cause of a refused answer, for the audit line.
+    fn cause(&self) -> Option<String> {
+        match self {
+            Self::AnswerRefused { cause, .. } => Some(format!("cause={}", cause.key())),
+            _ => None,
         }
     }
 }
@@ -170,15 +192,23 @@ struct MoveRoutes {
     text: Arc<TextRuntime>,
 }
 
-/// Answers `result`, recording a refusal first as `MOVE refused verb=<verb> error=<key>`.
+/// Answers `result`, recording a refusal first as `MOVE refused verb=<verb> error=<key>`, with
+/// `cause_of`'s words after it when the refusal has a typed cause (`cause=<key> detail=<rule>`,
+/// never the model's text).
 fn answer<T: Serialize, E: RouteError + Serialize>(
     app: &AppState,
     verb: &str,
     key_of: fn(&E) -> &'static str,
+    cause_of: fn(&E) -> Option<String>,
     result: Result<T, E>,
 ) -> Response {
     if let Err(error) = &result {
-        app.record_line(format!("MOVE refused verb={verb} error={}", key_of(error)));
+        let cause = cause_of(error).map(|cause| format!(" {cause}"));
+        app.record_line(format!(
+            "MOVE refused verb={verb} error={}{}",
+            key_of(error),
+            cause.unwrap_or_default()
+        ));
     }
     reply(result)
 }
@@ -224,7 +254,15 @@ fn reading_key(reading: &Interpreted) -> &'static str {
     match reading {
         Interpreted::Move { .. } => "move",
         Interpreted::NotAMove => "not_a_move",
-        Interpreted::NeedsClarification => "needs_clarification",
+        Interpreted::NeedsClarification(_) => "needs_clarification",
+    }
+}
+
+/// The audit word of what a clarification leaves unclear; `-` for any other reading.
+fn unclear_key(reading: &Interpreted) -> &'static str {
+    match reading {
+        Interpreted::NeedsClarification(clarification) => clarification.unclear.key(),
+        Interpreted::Move { .. } | Interpreted::NotAMove => "-",
     }
 }
 
@@ -240,6 +278,8 @@ async fn interpret_line(
         &request.line,
         request.speaker.as_deref(),
         request.context.as_deref(),
+        request.declared,
+        request.refused_before.as_ref(),
         &request.party,
     );
     let question = text_request(
@@ -257,8 +297,11 @@ async fn interpret_line(
         .await?
         .value;
     routes.app.record_line(format!(
-        "MOVE interpreted reading={} duration_ms={}",
+        "MOVE interpreted reading={} unclear={} declared={} second_reading={} duration_ms={}",
         reading_key(&reading),
+        unclear_key(&reading),
+        request.declared.key(),
+        request.refused_before.is_some(),
         started.elapsed().as_millis()
     ));
     Ok(reading)
@@ -272,6 +315,7 @@ async fn interpret(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Respo
                 &routes.app,
                 "interpret",
                 InterpretRouteError::key,
+                InterpretRouteError::cause,
                 Err(InterpretRouteError::InvalidBody(error)),
             );
         }
@@ -282,7 +326,13 @@ async fn interpret(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Respo
         InterpretRouteError::Stopped,
     )
     .await;
-    answer(&routes.app, "interpret", InterpretRouteError::key, result)
+    answer(
+        &routes.app,
+        "interpret",
+        InterpretRouteError::key,
+        InterpretRouteError::cause,
+        result,
+    )
 }
 
 /// The body of `POST /dev/move/design`: the move, the party that may move, what the scene was and
@@ -339,6 +389,19 @@ impl DesignRouteError {
             Self::AnswerRefused { .. } => "answer_refused",
             Self::InvalidOperationKey => "invalid_operation_key",
             Self::Stopped => "stopped",
+        }
+    }
+}
+
+impl DesignRouteError {
+    /// The typed cause of a refused move or answer, for the audit line: its key and the rule it
+    /// broke, never the model's text.
+    fn cause(&self) -> Option<String> {
+        match self {
+            Self::BadMove { cause } | Self::AnswerRefused { cause, .. } => {
+                Some(format!("cause={} detail={cause}", cause.key()))
+            }
+            _ => None,
         }
     }
 }
@@ -402,7 +465,54 @@ async fn design_scene(
         .map_err(|cause| DesignRouteError::BadMove { cause })?;
     let route = route_for(&routes.text, request.model.as_deref())?;
     let key = operation_key("design").map_err(|_| DesignRouteError::InvalidOperationKey)?;
-    let facts = design_facts(&request.intent, &request.party, request.context.as_deref());
+    let inventories: MoverInventories = request
+        .intent
+        .who
+        .iter()
+        .map(|who| (who.clone(), crate::world::inventory_of(&routes.app, who)))
+        .filter(|(_, items)| !items.is_empty())
+        .collect();
+    let started = Instant::now();
+    // One more asking, never a loop: a refused answer is shown to the model as the rule it broke
+    // and asked for again, so one invalid answer does not lose the move.
+    let (design, retried) = match ask_design(&route, &key, request, &inventories, None).await {
+        Err(TextAskError::AnswerRefused(cause)) => {
+            routes.app.record_line(format!(
+                "MOVE retry verb=design reason={} detail={cause}",
+                cause.key()
+            ));
+            let key = operation_key("design").map_err(|_| DesignRouteError::InvalidOperationKey)?;
+            let second = ask_design(&route, &key, request, &inventories, Some(&cause)).await;
+            (second?, true)
+        }
+        first => (first?, false),
+    };
+    routes.app.record_line(format!(
+        "MOVE designed placements={} residents={} retried={retried} duration_ms={}",
+        design.placements.len(),
+        design.residents.len(),
+        started.elapsed().as_millis()
+    ));
+    Ok(design)
+}
+
+/// One asking of the design call: the move, what the movers hold and, on a second asking, what was
+/// refused of the first answer; the answer is checked against the move, the party and the
+/// movers' inventories.
+async fn ask_design(
+    route: &TextRoute,
+    key: &OperationKey,
+    request: &DesignRequest,
+    inventories: &MoverInventories,
+    refused_before: Option<&DesignError>,
+) -> Result<SceneDesign, TextAskError<DesignError>> {
+    let facts = design_facts(
+        &request.intent,
+        &request.party,
+        request.context.as_deref(),
+        inventories,
+        refused_before,
+    );
     let question = text_request(
         route.profile(),
         DESIGN_INSTRUCTION,
@@ -410,20 +520,15 @@ async fn design_scene(
         DESIGN_OUTPUT_NAME,
         design_schema(),
     );
-    let started = Instant::now();
-    let design = route
-        .ask(&key, &question, |answer| {
-            parse_design(answer, &request.intent, &request.party)
+    let asked = route
+        .ask(key, &question, |answer| {
+            parse_design(answer, &request.intent, &request.party).and_then(|design| {
+                check_shown_items(&design, inventories)?;
+                Ok(design)
+            })
         })
-        .await?
-        .value;
-    routes.app.record_line(format!(
-        "MOVE designed placements={} residents={} duration_ms={}",
-        design.placements.len(),
-        design.residents.len(),
-        started.elapsed().as_millis()
-    ));
-    Ok(design)
+        .await?;
+    Ok(asked.value)
 }
 
 async fn design(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Response {
@@ -434,6 +539,7 @@ async fn design(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Response
                 &routes.app,
                 "design",
                 DesignRouteError::key,
+                DesignRouteError::cause,
                 Err(DesignRouteError::InvalidBody(error)),
             );
         }
@@ -444,7 +550,13 @@ async fn design(State(routes): State<Arc<MoveRoutes>>, bytes: Bytes) -> Response
         DesignRouteError::Stopped,
     )
     .await;
-    answer(&routes.app, "design", DesignRouteError::key, result)
+    answer(
+        &routes.app,
+        "design",
+        DesignRouteError::key,
+        DesignRouteError::cause,
+        result,
+    )
 }
 
 /// The movement routes, asking the text service of `text`.

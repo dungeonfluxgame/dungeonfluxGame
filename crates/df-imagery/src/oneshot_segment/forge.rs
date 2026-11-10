@@ -192,9 +192,12 @@ fn cause_of(cause: ForgeCause) -> SegmentCause {
     match cause {
         ForgeCause::InvalidConfiguration => SegmentCause::Configuration,
         ForgeCause::InvalidRequest => SegmentCause::Picture,
-        ForgeCause::Rejected | ForgeCause::EngineUnavailable | ForgeCause::JobNeedsAttention => {
-            SegmentCause::Refused
-        }
+        ForgeCause::Rejected
+        | ForgeCause::EngineUnavailable
+        | ForgeCause::JobNeedsAttention
+        | ForgeCause::QueueWaitingMemory
+        | ForgeCause::QueueInterrupted
+        | ForgeCause::QueueNeedsAttention => SegmentCause::Refused,
         ForgeCause::Transport(NativeHttpCause::Deadline) | ForgeCause::Deadline => {
             SegmentCause::Expired
         }

@@ -354,3 +354,27 @@ fn a_bulk_tier_is_unposted_unless_the_bible_says_so() {
     posted["places"][0]["stalls"][0]["bulk"][0]["posted"] = json!(true);
     assert!(parse(&posted).unwrap().places[0].stalls[0].bulk[0].posted);
 }
+
+#[test]
+fn a_place_lists_things_in_sight_with_their_own_ids_and_looks() {
+    let mut bible = good();
+    bible["places"][0]["things"] = json!([
+        {"id": "well", "name": "the old well", "look": "mossy stones, a rope worn pale"}
+    ]);
+    assert_eq!(parse(&bible).unwrap().places[0].things[0].id, "well");
+    bible["places"][0]["things"][0]["id"] = json!("pear");
+    assert_eq!(
+        parse(&bible),
+        Err(BibleError::DuplicateId {
+            list: "places[0].things and items".to_owned(),
+            id: "pear".to_owned()
+        })
+    );
+    bible["places"][0]["things"][0]["id"] = json!("well");
+    bible["places"][0]["things"][0]["look"] = json!(" ");
+    assert_eq!(parse(&bible).unwrap_err().key(), "empty_text");
+    let checked = parse(&good()).unwrap();
+    let mut designed = checked.places[0].clone();
+    designed.id = "Square!".to_owned();
+    assert_eq!(checked.check_place(&designed).unwrap_err().key(), "bad_id");
+}

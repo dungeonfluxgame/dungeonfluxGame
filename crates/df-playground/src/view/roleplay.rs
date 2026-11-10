@@ -22,6 +22,7 @@ use crate::kit::speaker::SpeakerPanel;
 use crate::kit::speech::{NameStyle, SpeechBubble, TailLean, TailSide};
 use crate::kit::title_card::TitleCard;
 use crate::lobby::model::{Bubble, BubbleTone, RoleplayScene, tail_of};
+use crate::plate_fit::PlateFit;
 use crate::speaker_card::{SpeakerCard, scene_card as speaker_card, scene_twin};
 use crate::view::kit::glyph;
 
@@ -111,9 +112,10 @@ pub fn anchored(document: &Document, scene: &TvScene) -> Result<Option<Element>,
     };
     let root = element(document, "div", "tv-anchors")?;
     let mut any = false;
+    let fit = PlateFit::of_picture(layout.picture());
     // The speakers' outlines come first, so every bubble is over them.
     for (character, mask) in speaker_masks(&card.bubbles, Some(layout)) {
-        append(&root, &outline_element(document, character, mask)?)?;
+        append(&root, &outline_element(document, character, mask, fit)?)?;
         any = true;
     }
     for bubble in &card.bubbles {
@@ -147,8 +149,14 @@ pub fn anchored(document: &Document, scene: &TvScene) -> Result<Option<Element>,
 
 /// The outline of the speaking character `character`, traced from its `mask`: a rim and a glow
 /// around the silhouette, outside it, so the figure itself is never covered. The silhouette is
-/// cut out of the glow in the theme (`.rp-outline`).
-fn outline_element(document: &Document, character: &str, mask: &str) -> Result<Element, JsValue> {
+/// cut out of the glow in the theme (`.rp-outline`). The mask is the size of the picture, so the
+/// outline lies where the picture does (`fit`).
+fn outline_element(
+    document: &Document,
+    character: &str,
+    mask: &str,
+    fit: PlateFit,
+) -> Result<Element, JsValue> {
     let outline = element(document, "div", "rp-outline")?;
     outline.set_attribute("data-character", character)?;
     outline.set_attribute("aria-hidden", "true")?;
@@ -161,8 +169,9 @@ fn outline_element(document: &Document, character: &str, mask: &str) -> Result<E
     set_style(
         &outline,
         &format!(
-            "-webkit-mask-image:url(\"{mask}\"),linear-gradient(#000,#000);\
-             mask-image:url(\"{mask}\"),linear-gradient(#000,#000);"
+            "{}-webkit-mask-image:url(\"{mask}\"),linear-gradient(#000,#000);\
+             mask-image:url(\"{mask}\"),linear-gradient(#000,#000);",
+            fit.box_style()
         ),
     )?;
     Ok(outline)
@@ -320,12 +329,16 @@ pub fn named_faces(layout: &ImageLayout) -> String {
         .join(";")
 }
 
-/// A character's face box as `left,top,right,bottom` in thousandths of the picture.
+/// A character's face box as `left,top,right,bottom` in thousandths of the screen, where the
+/// picture's fit puts it.
 fn face_text(layout: &ImageLayout, region: &df_scene_layout::SceneRegion) -> String {
     let picture = layout.picture();
     let face = df_scene_layout::face_box(region, picture.width_px, picture.height_px);
-    format!(
-        "{},{},{},{}",
-        face.left_permille, face.top_permille, face.right_permille, face.bottom_permille
-    )
+    let (left, top, right, bottom) = PlateFit::of_picture(picture).stage_box_permille((
+        face.left_permille,
+        face.top_permille,
+        face.right_permille,
+        face.bottom_permille,
+    ));
+    format!("{left},{top},{right},{bottom}")
 }

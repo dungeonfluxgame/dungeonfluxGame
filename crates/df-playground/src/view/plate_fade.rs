@@ -12,9 +12,10 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Element, HtmlImageElement};
 
 use crate::controls::Transition;
-use crate::dom::{append, clear, set_style};
+use crate::dom::{append, clear, element, set_style};
 use crate::page_log::{now_ms, with_log};
 use crate::plate_fade::{FadeStage, PlateFade, crossfade_ms};
+use crate::plate_fit::{FIT_ATTRIBUTE, Fit, PlateFit};
 use crate::timeline::{EndReason, TimelineKind};
 
 /// A layer whose picture is fading in or waiting to load.
@@ -176,9 +177,49 @@ pub fn swap(
         && image.complete()
         && image.natural_width() > 0
     {
+        fit_loaded(&image)?;
         start_fade(&built, &media)?;
     }
     Ok(())
+}
+
+/// Draws a backdrop `layer` for the way its picture lies in the frame (`plate_fit`): a picture
+/// that is not near the frame's shape is shown whole, over a blurred copy of itself that the theme
+/// draws from the second image added here (`.tv-backdrop-fill`, under `data-fit=contain`). The
+/// fit is written as an attribute, which a layer keeps when its classes are reset.
+pub fn fit_backdrop(layer: &Element, fit: PlateFit) -> Result<(), JsValue> {
+    let key = fit.fit().key();
+    if layer.get_attribute(FIT_ATTRIBUTE).as_deref() != Some(key) {
+        layer.set_attribute(FIT_ATTRIBUTE, key)?;
+    }
+    if fit.fit() != Fit::Contain || layer.query_selector(".tv-backdrop-fill")?.is_some() {
+        return Ok(());
+    }
+    let (Some(picture), Some(document)) = (
+        layer.query_selector(".tv-backdrop-image")?,
+        layer.owner_document(),
+    ) else {
+        return Ok(());
+    };
+    let Some(source) = picture.get_attribute("src") else {
+        return Ok(());
+    };
+    let fill = element(&document, "img", "tv-backdrop-fill")?;
+    fill.set_attribute("src", &source)?;
+    fill.set_attribute("alt", "")?;
+    fill.set_attribute("aria-hidden", "true")?;
+    append(layer, &fill)
+}
+
+/// Fits the backdrop layer of a picture that has loaded to the picture's own pixel size.
+fn fit_loaded(image: &HtmlImageElement) -> Result<(), JsValue> {
+    match image.closest(".tv-backdrop")? {
+        Some(layer) => fit_backdrop(
+            &layer,
+            PlateFit::of_size(image.natural_width(), image.natural_height()),
+        ),
+        None => Ok(()),
+    }
 }
 
 /// Holds a layer that was fading in at the opacity it has now, so a newer picture can fade in
@@ -231,6 +272,9 @@ fn settle(layer: &Element) -> Result<(), JsValue> {
 /// An image of the page loaded or failed. An incoming picture's image that loaded starts its
 /// fade; one that failed is shown at once, as the broken picture it is, so the failure is seen.
 pub fn on_image(image: &HtmlImageElement, failed: bool) -> Result<(), JsValue> {
+    if !failed {
+        fit_loaded(image)?;
+    }
     let Some(layer) = image.closest(&format!(".{INCOMING}"))? else {
         return Ok(());
     };

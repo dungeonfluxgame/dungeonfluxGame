@@ -228,6 +228,7 @@ impl PlateTimer {
             FrameReason::Schedule => "scheduled",
             FrameReason::Inspection => "inspection insert",
             FrameReason::Focus => "focus insert",
+            FrameReason::Declared => "declared",
         };
         format!(
             "{text} \u{b7} last {kind} {} {} ago",
@@ -253,7 +254,7 @@ pub struct PlateFrame {
 }
 
 /// Why a frame was made: a line's change past the gate, the schedule, a close look the judge saw
-/// begin, or a clue's focus.
+/// begin, a clue's focus, or an action a character declared they are doing right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FrameReason {
@@ -261,6 +262,7 @@ pub enum FrameReason {
     Schedule,
     Inspection,
     Focus,
+    Declared,
 }
 
 impl FrameReason {
@@ -270,6 +272,7 @@ impl FrameReason {
             Self::Schedule => "schedule",
             Self::Inspection => "inspection",
             Self::Focus => "focus",
+            Self::Declared => "declared",
         }
     }
 

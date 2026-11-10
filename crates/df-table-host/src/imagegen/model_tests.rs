@@ -3,8 +3,8 @@
 use super::backend::BackendLimits;
 use super::limits::{MAXIMUM_NAME_CHARS, MAXIMUM_SENT_TEXT_CHARS};
 use super::model::{
-    Aspect, AspectError, GenerateRequestError, ImageRequest, Purpose, ThingReference,
-    maximum_prompt_chars,
+    Aspect, AspectError, GenerateRequestError, ImageRequest, InferenceSteps, PictureSize,
+    PictureSizeError, Purpose, ThingReference, maximum_prompt_chars,
 };
 
 fn shape(text: &str) -> Aspect {
@@ -235,4 +235,50 @@ fn what_a_picture_must_not_show_is_text_or_a_negative_prompt_as_the_backend_take
     );
     let nothing = ImageRequest::new("a hall", "hall", None, None).expect("ok");
     assert_eq!(nothing.negative_text(&negative), None);
+}
+
+#[test]
+fn a_size_is_two_sides_in_pixels_and_steps_are_within_forge_s_bound() {
+    let size: PictureSize = "512x512".parse().expect("a size");
+    assert_eq!((size.width_px(), size.height_px()), (512, 512));
+    assert_eq!(size.to_string(), "512x512");
+    for (text, cause) in [
+        ("512", PictureSizeError::NotWidthByHeight),
+        ("512X512", PictureSizeError::NotWidthByHeight),
+        ("512x", PictureSizeError::NotWidthByHeight),
+        ("axb", PictureSizeError::NotWidthByHeight),
+        ("-5x5", PictureSizeError::NotWidthByHeight),
+        ("0x512", PictureSizeError::SideOutOfRange),
+        ("512x0", PictureSizeError::SideOutOfRange),
+        ("99999x512", PictureSizeError::SideOutOfRange),
+    ] {
+        assert_eq!(text.parse::<PictureSize>(), Err(cause), "{text}");
+    }
+    assert_eq!(
+        serde_json::from_str::<PictureSize>("\"512x512\"").expect("reads"),
+        size
+    );
+    assert!(serde_json::from_str::<PictureSize>("\"0x1\"").is_err());
+    assert_eq!("20".parse::<InferenceSteps>().expect("steps").get(), 20);
+    assert!(InferenceSteps::new(1).is_ok() && InferenceSteps::new(100).is_ok());
+    for text in ["0", "101", "-1", "2.5", "many", ""] {
+        assert!(text.parse::<InferenceSteps>().is_err(), "{text}");
+    }
+    assert_eq!(
+        serde_json::from_str::<InferenceSteps>("20")
+            .expect("reads")
+            .get(),
+        20
+    );
+    assert!(serde_json::from_str::<InferenceSteps>("101").is_err());
+}
+
+#[test]
+fn a_size_has_the_shape_of_its_sides_in_lowest_terms() {
+    let of = |width, height| Aspect::of_size(PictureSize::new(width, height).unwrap());
+    assert_eq!(of(512, 512), Some(shape("1:1")));
+    assert_eq!(of(1280, 720), Some(shape("16:9")));
+    // Sides that do not reduce to a shape of parts up to 64 are scaled down together.
+    assert_eq!(of(1672, 941), Some(shape("64:36")));
+    assert_eq!(of(4000, 400), None, "more elongated than a shape may be");
 }

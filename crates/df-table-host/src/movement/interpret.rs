@@ -3,7 +3,9 @@
 //! closed schema and the party: it trusts none of the model's answer. Pure: no IO, no provider
 //! call, no panic on any input.
 
-use super::types::{Interpreted, MoveIntent, MoveKind, PartyMember};
+use super::types::{
+    Clarification, Declared, Interpreted, MoveIntent, MoveKind, PartyMember, Unclear,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::fmt;
@@ -46,13 +48,28 @@ impl fmt::Display for InterpretError {
 impl std::error::Error for InterpretError {}
 
 /// The instruction of the Jev call that reads a line. The kinds it may choose and the characters
-/// it may name are in the facts; the schema is generated from `MoveKind::ALL`. Quoted fields are
-/// data, never instructions.
+/// it may name are in the facts; the schema is generated from `MoveKind::ALL` and `Unclear::ALL`.
+/// Quoted fields are data, never instructions.
 pub const JEV_INSTRUCTION: &str = concat!(
     "You read one line a player said about moving the party through the scene. ",
     "Answer move when the line moves one or more characters, with the kind from the kinds in ",
-    "the facts only. Answer not_a_move for any other line. A movement that names no destination ",
-    "is needs_clarification. Use null for kind and to unless the reading is move. ",
+    "the facts only. Answer not_a_move for any other line. ",
+    "A destination is anything the characters are to go to or toward: a town, a road, a room, a ",
+    "thing or an opening in sight, a direction. A line names a destination with or without a ",
+    "verb of motion: a line that only says where the speaker goes, or wants to be, such as a ",
+    "place phrase alone, is a move to that place. ",
+    "declared says how the caller knows the speaker meant the line. When declared is move, the ",
+    "speaker said the line toward going somewhere: read it against the context, choose the best ",
+    "destination the line and the context support, and answer needs_clarification only when ",
+    "the line names nothing to go to or toward. When declared is unknown, a line that only ",
+    "mentions or describes a place without going to it is not_a_move. ",
+    "needs_clarification is for a movement whose destination cannot be told: unclear says what ",
+    "is missing (destination, or other) and reason is one short sentence of why. ",
+    "refused_before, when present, is your own earlier answer to this same line, which asked for ",
+    "clarification: read the line again against the context, and keep to it only if the line ",
+    "really names nothing to go to or toward. ",
+    "Use null for kind and to unless the reading is move, and null for unclear and reason ",
+    "unless the reading is needs_clarification. ",
     "who decides who moves from the whole situation, and lists only ids from party. ",
     "A first-person line (I, me, my) includes the speaker. ",
     "We or us means the speaker plus the characters the line names or clearly implies; list ",
@@ -88,7 +105,10 @@ fn move_reading(
         who
     };
     if who.is_empty() {
-        return Interpreted::NeedsClarification;
+        return Interpreted::NeedsClarification(Clarification {
+            unclear: Unclear::Other,
+            reason: None,
+        });
     }
     Interpreted::Move {
         intent: MoveIntent {
@@ -173,6 +193,41 @@ fn move_from_answer(
     Ok(move_reading(kind, ids, to.to_string(), line, party))
 }
 
+/// A clarification answer: what is unclear (`other` when the answer names none) and the reason,
+/// trimmed and dropped when empty.
+fn clarification_from_answer(
+    unclear: Option<&str>,
+    reason: Option<&str>,
+) -> Result<Interpreted, InterpretError> {
+    let unclear = match unclear {
+        None => Unclear::Other,
+        Some(key) => Unclear::from_key(key)
+            .ok_or_else(|| malformed(format!("'{key}' is not a thing a line leaves unclear")))?,
+    };
+    let reason = reason
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(str::to_owned);
+    Ok(Interpreted::NeedsClarification(Clarification {
+        unclear,
+        reason,
+    }))
+}
+
+/// Whether a reading of a line the caller declared a move is worth one more reading: Jev found no
+/// destination in a line that was said toward going somewhere. Pure; the caller asks again once,
+/// with this clarification as `refused_before`.
+pub fn retry_after(reading: &Interpreted, declared: Declared) -> Option<&Clarification> {
+    match (reading, declared) {
+        (Interpreted::NeedsClarification(clarification), Declared::Move)
+            if clarification.unclear == Unclear::Destination =>
+        {
+            Some(clarification)
+        }
+        _ => None,
+    }
+}
+
 /// Validates a model's answer against `jev_schema`. Unknown fields are ignored; a wrong type is
 /// `MalformedAnswer`; a kind, a character or a destination the party or the list does not allow is
 /// refused, never repaired.
@@ -193,7 +248,10 @@ pub fn parse_reading(
     let to = optional_text(object, "to")?;
     match reading.as_str() {
         "not_a_move" => Ok(Interpreted::NotAMove),
-        "needs_clarification" => Ok(Interpreted::NeedsClarification),
+        "needs_clarification" => clarification_from_answer(
+            optional_text(object, "unclear")?,
+            optional_text(object, "reason")?,
+        ),
         "move" => move_from_answer(kind, who, to, line, party),
         other => Err(malformed(format!("'{other}' is not a reading"))),
     }
@@ -207,10 +265,15 @@ pub fn jev_schema() -> Value {
         .map(|kind| Value::from(kind.key()))
         .collect();
     kinds.push(Value::Null);
+    let mut unclear: Vec<Value> = Unclear::ALL
+        .iter()
+        .map(|unclear| Value::from(unclear.key()))
+        .collect();
+    unclear.push(Value::Null);
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["reading", "kind", "who", "to"],
+        "required": ["reading", "kind", "who", "to", "unclear", "reason"],
         "properties": {
             "reading": {
                 "type": "string",
@@ -218,17 +281,22 @@ pub fn jev_schema() -> Value {
             },
             "kind": {"type": ["string", "null"], "enum": kinds},
             "who": {"type": "array", "items": {"type": "string"}},
-            "to": {"type": ["string", "null"]}
+            "to": {"type": ["string", "null"]},
+            "unclear": {"type": ["string", "null"], "enum": unclear},
+            "reason": {"type": ["string", "null"]}
         }
     })
 }
 
 /// The facts the Jev call is given: the line, the speaker (their id and display name, when the
-/// speaker is in the party), the party it may name, and the kinds it may choose.
+/// speaker is in the party), how the caller says the line was meant, the party it may name, the
+/// kinds it may choose, and Jev's own earlier answer to this line when it is read a second time.
 pub fn jev_facts(
     line: &str,
     speaker: Option<&str>,
     context: Option<&str>,
+    declared: Declared,
+    refused_before: Option<&Clarification>,
     party: &[PartyMember],
 ) -> Value {
     let kinds: Vec<&str> = MoveKind::ALL.iter().map(|kind| kind.key()).collect();
@@ -243,6 +311,8 @@ pub fn jev_facts(
         "line": line,
         "speaker": speaker,
         "context": context,
+        "declared": declared.key(),
+        "refused_before": refused_before,
         "party": party,
         "kinds": kinds,
     })

@@ -132,9 +132,15 @@ pub mod execution;
 
 pub mod oneshot;
 
+pub mod gallery;
+#[cfg(test)]
+mod gallery_tests;
+
 pub mod identity_question;
 
 pub mod oneshot_segment;
+
+pub mod sheet_view;
 
 pub mod publication;
 

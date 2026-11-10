@@ -2,7 +2,8 @@
 //! (`planning/persona-voice-and-world-bible.md`).
 //!
 //! A bible holds `items` (what a thing is worth), `places` (who keeps a stall there and what it
-//! sells, with bulk tiers and a haggle floor) and `voice_packs` (how a community talks). The code
+//! sells, with bulk tiers and a haggle floor, and the things in sight there worth a close look) and
+//! `voice_packs` (how a community talks). The code
 //! prices; the model only voices the quoted number. [`WorldBible::from_json_str`] checks a bible
 //! whole: ids are lowercase letters, digits, `_` or `-` and unique within their list, every
 //! reference resolves, and every range is sane.
@@ -90,6 +91,21 @@ pub struct Place {
     pub description: String,
     #[serde(default)]
     pub stalls: Vec<Stall>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub things: Vec<Thing>,
+}
+
+/// A thing someone may look at closely, and its reference sheet: in sight at a place (nobody keeps
+/// it and it has no price) or carried. `look` is its visible detail up close, and `picture` the
+/// media library's picture of it once one is drawn, so every later picture of it agrees.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Thing {
+    pub id: String,
+    pub name: String,
+    pub look: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 /// How a community talks, in word choice, rhythm and idiom, never in spelling.
@@ -310,11 +326,7 @@ impl WorldBible {
         let mut place_ids = BTreeSet::new();
         for (index, place) in self.places.iter().enumerate() {
             check_id("places", &place.id, &mut place_ids)?;
-            check_text(format!("places[{index}].name"), &place.name)?;
-            for (stall_index, stall) in place.stalls.iter().enumerate() {
-                let path = format!("places[{index}].stalls[{stall_index}]");
-                check_stall(&path, stall, &item_ids)?;
-            }
+            check_place(&format!("places[{index}]"), place, &item_ids)?;
         }
         let mut pack_ids = BTreeSet::new();
         for (index, pack) in self.voice_packs.iter().enumerate() {
@@ -325,6 +337,14 @@ impl WorldBible {
             )?;
         }
         Ok(())
+    }
+
+    /// Checks a place that is not in the bible (one designed in play) as the bible's own places are
+    /// checked, against the bible's items.
+    pub fn check_place(&self, place: &Place) -> Result<(), BibleError> {
+        check_id("place", &place.id, &mut BTreeSet::new())?;
+        let item_ids = self.items.iter().map(|item| item.id.clone()).collect();
+        check_place("place", place, &item_ids)
     }
 
     pub fn item(&self, id: &str) -> Option<&Item> {
@@ -393,6 +413,29 @@ impl WorldBible {
             .find(|stall| stall.keeper == keeper && stall.sells.contains(&item.id))?;
         quote(item, qty, stall).ok()
     }
+}
+
+/// The name, stalls and things of the place at `path`. A thing's id is unique among the place's
+/// things and is no item's id, so a judge that names one by id names one thing.
+fn check_place(path: &str, place: &Place, item_ids: &BTreeSet<String>) -> Result<(), BibleError> {
+    check_text(format!("{path}.name"), &place.name)?;
+    for (index, stall) in place.stalls.iter().enumerate() {
+        check_stall(&format!("{path}.stalls[{index}]"), stall, item_ids)?;
+    }
+    let mut thing_ids = BTreeSet::new();
+    for (index, thing) in place.things.iter().enumerate() {
+        let list = format!("{path}.things");
+        check_id(&list, &thing.id, &mut thing_ids)?;
+        if item_ids.contains(&thing.id) {
+            return Err(BibleError::DuplicateId {
+                list: format!("{list} and items"),
+                id: thing.id.clone(),
+            });
+        }
+        check_text(format!("{list}[{index}].name"), &thing.name)?;
+        check_text(format!("{list}[{index}].look"), &thing.look)?;
+    }
+    Ok(())
 }
 
 fn check_stall(path: &str, stall: &Stall, item_ids: &BTreeSet<String>) -> Result<(), BibleError> {

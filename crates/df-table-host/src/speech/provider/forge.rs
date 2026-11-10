@@ -154,7 +154,10 @@ fn provider_error(error: ForgeError) -> SpeechError {
         ForgeCause::Malformed => SpeechProviderCause::Unusable,
         ForgeCause::EngineUnavailable
         | ForgeCause::JobInterrupted
-        | ForgeCause::JobNeedsAttention => SpeechProviderCause::Unavailable,
+        | ForgeCause::JobNeedsAttention
+        | ForgeCause::QueueWaitingMemory
+        | ForgeCause::QueueInterrupted
+        | ForgeCause::QueueNeedsAttention => SpeechProviderCause::Unavailable,
         ForgeCause::Failed | ForgeCause::JobFailed | ForgeCause::Session => {
             SpeechProviderCause::Supplier
         }

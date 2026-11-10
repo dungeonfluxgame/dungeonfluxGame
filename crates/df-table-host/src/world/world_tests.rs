@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::cli::{WorldCommand, parse};
 use super::request::{PlaceSet, Quoted, Validated, WorldReply, WorldView};
 use super::routes::path;
-use super::{available_packs, check_quote, context_for, context_for_viewer};
+use super::{PlaceItem, available_packs, check_quote, context_for, context_for_viewer, place_items};
 use crate::command::CommandError;
 use crate::dev_client::{get_json, post_json};
 use crate::dev_http::DevReply;
@@ -194,7 +194,10 @@ async fn the_context_holds_the_facts_of_the_active_place_and_the_named_packs() {
     assert_eq!(lot(apple, 5)["floor_total_cp"], 13);
     assert_eq!(lot(apple, 10)["tier_total_cp"], 27);
     assert!(
-        apple["rule"].as_str().unwrap().contains("from 5 on, 100 permille off"),
+        apple["rule"]
+            .as_str()
+            .unwrap()
+            .contains("from 5 on, 100 permille off"),
         "the keeper's price rule is built from the bible's numbers"
     );
     assert_eq!(context.facts["viewer_role"], "keeper");
@@ -454,4 +457,96 @@ fn lot(item: &Value, qty: u64) -> &Value {
         .iter()
         .find(|quote| quote["qty"] == qty)
         .unwrap()
+}
+
+#[tokio::test]
+async fn a_designed_place_is_the_active_one_and_offers_its_things_without_a_keeper() {
+    let host = host().await;
+    host.write_asset("world/bible.json", &bible(3));
+    let square = json!({"place": {
+        "id": "roam-03",
+        "name": "a village square",
+        "description": "Mood: quiet.",
+        "things": [{"id": "well", "name": "the old well", "look": "mossy stones"}]
+    }});
+    let arrive = |body: Value| {
+        let port = host.port;
+        async move {
+            post_json::<_, WorldReply<PlaceSet>>(port, path::WORLD_ARRIVE, &body)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        done(arrive(square.clone()).await).place.as_deref(),
+        Some("roam-03")
+    );
+    assert_eq!(
+        place_items(&host.state),
+        vec![PlaceItem {
+            id: "well".to_owned(),
+            name: "the old well".to_owned(),
+            tags: Vec::new(),
+            look: Some("mossy stones".to_owned()),
+            keeper: None,
+            picture: None,
+        }]
+    );
+    let facts = context_for(&host.state, &[]).facts;
+    assert_eq!(facts["place"]["name"], "a village square");
+    assert_eq!(facts["in_sight"][0]["look"], "mossy stones");
+    assert!(facts.get("viewer_role").is_none() && facts.get("note").is_none());
+    let view: WorldView = done(get_json(host.port, path::WORLD).await.unwrap());
+    assert_eq!(view.place.as_deref(), Some("roam-03"));
+    assert!(lines(&host).contains(&"WORLD arrived place=roam-03 things=1".to_owned()));
+
+    let mut bad = square;
+    bad["place"]["things"][0]["id"] = json!("Old Well");
+    assert_eq!(refusal(arrive(bad).await), "place_invalid");
+    assert_eq!(place_items(&host.state)[0].id, "well");
+
+    done(set_place(&host, Some("market")).await);
+    let sold: Vec<(String, Option<String>)> = place_items(&host.state)
+        .into_iter()
+        .map(|offered| (offered.id, offered.keeper))
+        .collect();
+    let keeper = Some("fruit_vendor".to_owned());
+    assert_eq!(
+        sold,
+        vec![
+            ("apple".to_owned(), keeper.clone()),
+            ("pear".to_owned(), keeper)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_thing_keeps_its_first_close_up_as_its_sheet_at_a_designed_place() {
+    let host = host().await;
+    let keep = |body: Value| {
+        let port = host.port;
+        async move {
+            post_json::<_, WorldReply<PlaceSet>>(port, path::WORLD_PICTURE, &body)
+                .await
+                .unwrap()
+        }
+    };
+    let picture = json!({"item": "well", "picture": "roam-1-2.png"});
+    assert_eq!(refusal(keep(picture.clone()).await), "not_designed");
+    let square = json!({"place": {"id": "roam-03", "name": "a square",
+        "things": [{"id": "well", "name": "the old well", "look": "mossy stones"}]}});
+    let _: PlaceSet = done(
+        post_json(host.port, path::WORLD_ARRIVE, &square)
+            .await
+            .unwrap(),
+    );
+    done(keep(picture).await);
+    assert_eq!(
+        place_items(&host.state)[0].picture.as_deref(),
+        Some("roam-1-2.png")
+    );
+    assert_eq!(
+        refusal(keep(json!({"item": "cart", "picture": "x.png"})).await),
+        "unknown_thing"
+    );
 }

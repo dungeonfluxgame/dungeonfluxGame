@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::home::glyph::{HomeGlyph, HomeIcon};
 use crate::kit::{Step, shown, steps};
 use crate::lobby::model::{TopBar, party_text, session_text};
-use crate::overlay::{Glyph, Progress};
+use crate::overlay::{Glyph, Progress, StoryMark};
 
 /// One chip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +62,20 @@ impl TitleChip {
     /// The track's dots; none without a track of at least two scenes.
     pub fn track(&self) -> Vec<Step> {
         self.track.as_ref().map(steps).unwrap_or_default()
+    }
+}
+
+impl From<&StoryMark> for TitleChip {
+    /// The story's title alone, under the kit's compass; where the party is stands in the progress
+    /// line.
+    fn from(mark: &StoryMark) -> Self {
+        Self {
+            icon: None,
+            title: mark.title.clone(),
+            subtitle: None,
+            parts: Vec::new(),
+            track: None,
+        }
     }
 }
 

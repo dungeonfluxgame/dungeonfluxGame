@@ -116,6 +116,15 @@ impl SceneOverlay {
                 self.clues = Edit::Clear;
                 Ok(())
             }
+            SceneChange::Story { mark } => {
+                mark.check()?;
+                self.story = Edit::Set(mark);
+                Ok(())
+            }
+            SceneChange::ClearStory {} => {
+                self.story = Edit::Clear;
+                Ok(())
+            }
             SceneChange::Sound {
                 media,
                 target,

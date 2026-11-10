@@ -9,6 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::checks::labelled;
+use crate::scene::SceneError;
+
 pub mod changes;
 pub mod checks;
 pub mod rules;
@@ -215,6 +218,37 @@ pub struct Progress {
     pub index: u16,
     pub total: u16,
     pub title: Option<String>,
+}
+
+/// The story the table is playing, for the title chip and the progress line at the top right of
+/// the shared screen (`kit::title_chip`, `kit::progress_line`). The host words it from what the
+/// players may see: the story's title and, once play has begun, the place it has reached.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoryMark {
+    pub title: String,
+    /// The place reached out of the story's places, named for the table; none before play begins.
+    #[serde(default)]
+    pub progress: Option<Progress>,
+}
+
+impl StoryMark {
+    /// Checks the mark the way a live change is checked.
+    pub fn check(&self) -> Result<(), SceneError> {
+        labelled("the story's title", &self.title)?;
+        if let Some(progress) = &self.progress {
+            if progress.index == 0 || progress.index > progress.total {
+                return Err(SceneError::InvalidProgress {
+                    index: progress.index,
+                    total: progress.total,
+                });
+            }
+            if let Some(title) = &progress.title {
+                labelled("the place's name", title)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Where the narration box sits across the screen.

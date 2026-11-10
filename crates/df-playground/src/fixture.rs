@@ -299,6 +299,9 @@ pub struct TvScene {
     /// The clue board: every clue found so far (see `clues`).
     #[serde(default)]
     pub clues: Option<crate::clues::ClueBoard>,
+    /// The story being played: its title and the place the party has reached.
+    #[serde(default)]
+    pub story: Option<crate::overlay::StoryMark>,
     pub elements: ElementSource,
 }
 

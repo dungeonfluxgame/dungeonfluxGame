@@ -12,22 +12,38 @@
 //!   Nemotron, which loads its model as it starts. Both are Forge's own memory-checked paths.
 //! - `POST /api/projects/<id>/references` stages raw picture bytes for a render.
 //! - `POST /api/runtime/jobs` queues one render; `GET /api/runtime/jobs/<id>` polls it;
-//!   `POST /api/runtime/jobs/<id>/cancel` withdraws one no engine has taken yet.
+//!   `POST /api/runtime/jobs/<id>/cancel` withdraws one no engine has taken yet;
+//!   `POST /api/runtime/jobs/<id>/move` (`{"to": "top"}`) puts a waiting one first in the line.
 //! - `GET /api/projects/<id>/asset?path=` reads a render's output.
 //! - `WS /api/asr/realtime` transcribes PCM16 (`realtime`).
 //!
 //! The queue's rules hold here: a job is submitted once and never again. A job whose outcome is
 //! unknown (`interrupted`) or that waits for a person (`needs_attention`) is an error the caller
-//! sees; nothing resubmits or resolves it. A job still waiting when its deadline passes is
-//! cancelled (Forge cancels only a job no engine has taken); one that runs is left to finish. The
-//! client starts at most one engine per call and never offloads or stops one: Forge's memory
-//! admission decides what loads.
+//! sees; nothing resubmits or resolves it. The client starts at most one engine per call and never
+//! offloads or stops one: Forge's memory admission decides what loads.
+//!
+//! Forge runs one render at a time from the head of its queue, and a head that waits for GPU
+//! memory, was interrupted or needs a person holds every render behind it. So `render` reads
+//! `GET /api/runtime/jobs` before it submits and every few seconds while its job waits, and
+//! refuses with a `Queue*` cause instead of waiting out the deadline behind a blocked queue (the
+//! read is advisory: a failed read never fails a render).
+//!
+//! A render the client stops waiting for is withdrawn, never left behind: whenever a call ends in
+//! an error while its job was last seen waiting (a passed deadline, a blocked queue, a failed
+//! poll), the client cancels it (Forge cancels only a job no engine has taken) and reads the job
+//! to confirm. A job that started meanwhile finishes on its own and the line says so.
 //!
 //! Every exchange writes the shared `PROVIDER exchange` line (`provider=forge`). The client adds
 //! `FORGE` lines of closed keys and times, never text, audio, pictures, paths or Forge's ids:
 //!
 //! - `FORGE engine engine=<id> action=<started|loading|ready> duration_ms=<n>`
-//! - `FORGE job kind=<kind> outcome=<status|deadline> queued_ms=<n> render_ms=<n> polls=<n>`
+//! - `FORGE job kind=<kind> outcome=<status|deadline|transport|queue_*> queued_ms=<n>
+//!   render_ms=<n> polls=<n>`
+//! - `FORGE withdrawn outcome=<cancelled|taken|refused|unreachable> answer=<http|none>
+//!   job_status=<status|unknown> attempts=<n>`
+//! - `FORGE prioritised job=<first 8 characters of the job's id, to find it in the studio's job
+//!   records> outcome=<moved|refused|unavailable> status=<job status> answer=<http|none>
+//!   position=<n|-> waiting=<n|->`
 //! - `FORGE transcribed audio_bytes=<n> ready_ms=<n> duration_ms=<n> outcome=<key>`
 
 mod realtime;
@@ -72,12 +88,26 @@ pub const FORGE_SEGMENTATION_MAXIMUM_INSTANCES: u32 = 50;
 pub const FORGE_IMAGE_SIDE_STEP_PX: u32 = 32;
 /// The longest image side Forge accepts, in pixels (its request contract).
 pub const FORGE_IMAGE_MAXIMUM_SIDE_PX: u32 = 2752;
+/// The most `num_inference_steps` Forge accepts for an image job, from 1 (its request contract,
+/// `runtime/jobs.js`); Forge's own default is 40.
+pub const FORGE_IMAGE_MAXIMUM_STEPS: u32 = 100;
 
 /// How often a queued job is read while it runs: a loopback read costs about a millisecond, and a
 /// voiced line should reach the table as soon as it is written.
 const JOB_POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// How often a starting engine's state is read.
 const ENGINE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// How often the queue ahead of a waiting render is read: the list carries every open job, so it is
+/// read far less often than the one job.
+const QUEUE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+/// How soon after the submit the queue is read first: a blocked head is seen without a long wait.
+const QUEUE_FIRST_CHECK: Duration = Duration::from_secs(1);
+/// How long a withdrawal may take, with its own clock: the caller's deadline has passed by then.
+const WITHDRAW_WINDOW: Duration = Duration::from_secs(10);
+/// The pause between two cancel attempts of a job Forge is checking (`preparing`).
+const WITHDRAW_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+/// The most cancel attempts of one withdrawal.
+const WITHDRAW_ATTEMPTS: u32 = 20;
 /// The longest one exchange may take: a deadline of the caller is usually shorter.
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// The largest request sent, in bytes: a staged picture (Forge's reference bound is lower).
@@ -117,6 +147,13 @@ pub enum ForgeCause {
     JobInterrupted,
     /// The render waits for a person in Forge (a missing model, a failed start).
     JobNeedsAttention,
+    /// A render ahead of this one waits for GPU memory in Forge, which holds this one behind it.
+    QueueWaitingMemory,
+    /// A render ahead of this one was interrupted with an unknown outcome; it halts Forge's queue
+    /// until a person resolves it.
+    QueueInterrupted,
+    /// A render ahead of this one needs a person in Forge and halts its queue.
+    QueueNeedsAttention,
     /// The caller's deadline passed while the render or the session was under way.
     Deadline,
     /// The realtime session failed: an error event, a closed socket or an invalid event.
@@ -138,9 +175,20 @@ impl ForgeCause {
             Self::JobCancelled => "job_cancelled",
             Self::JobInterrupted => "job_interrupted",
             Self::JobNeedsAttention => "job_needs_attention",
+            Self::QueueWaitingMemory => "queue_waiting_memory",
+            Self::QueueInterrupted => "queue_interrupted",
+            Self::QueueNeedsAttention => "queue_needs_attention",
             Self::Deadline => "deadline",
             Self::Session => "session",
         }
+    }
+
+    /// Whether the cause is a queue ahead holding the render back.
+    const fn is_queue_block(self) -> bool {
+        matches!(
+            self,
+            Self::QueueWaitingMemory | Self::QueueInterrupted | Self::QueueNeedsAttention
+        )
     }
 }
 
@@ -186,6 +234,14 @@ impl fmt::Display for ForgeError {
             ),
             ForgeCause::JobNeedsAttention => {
                 formatter.write_str("the forge render needs attention in forge")
+            }
+            ForgeCause::QueueWaitingMemory => {
+                formatter.write_str("a forge render ahead of this one waits for GPU memory")
+            }
+            ForgeCause::QueueInterrupted => formatter
+                .write_str("a forge render ahead of this one was interrupted; resolve it in forge"),
+            ForgeCause::QueueNeedsAttention => {
+                formatter.write_str("a forge render ahead of this one needs attention in forge")
             }
             ForgeCause::Deadline => formatter.write_str("the forge call ran out of time"),
             ForgeCause::Session => formatter.write_str("the forge speech session failed"),
@@ -344,6 +400,15 @@ pub struct ForgeRender {
     pub rendering: Duration,
 }
 
+/// How urgent a render is. An emergency render is put first in Forge's waiting line once it is
+/// queued (`ForgeClient::render_with`); a normal one waits its turn.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ForgePriority {
+    #[default]
+    Normal,
+    Emergency,
+}
+
 /// The status of a Forge job (`runtime/jobs.js`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum JobStatus {
@@ -398,12 +463,31 @@ impl JobStatus {
         Self::ALL.into_iter().find(|status| status.key() == key)
     }
 
+    /// Forge can still move the job within its waiting line (`queue-order.js` `WAITING_STATUSES`).
+    const fn is_movable(self) -> bool {
+        matches!(
+            self,
+            Self::Queued | Self::WaitingEngine | Self::WaitingMemory
+        )
+    }
+
     /// No engine has taken the job yet, so Forge can still cancel it.
     const fn is_waiting(self) -> bool {
         matches!(
             self,
             Self::Queued | Self::WaitingEngine | Self::WaitingMemory | Self::Preparing
         )
+    }
+
+    /// The cause a job of this status holds the queue behind it with: Forge works the head of its
+    /// queue only, and these three statuses do not move on without a change outside the queue.
+    const fn queue_block(self) -> Option<ForgeCause> {
+        match self {
+            Self::WaitingMemory => Some(ForgeCause::QueueWaitingMemory),
+            Self::Interrupted => Some(ForgeCause::QueueInterrupted),
+            Self::NeedsAttention => Some(ForgeCause::QueueNeedsAttention),
+            _ => None,
+        }
     }
 }
 
@@ -451,6 +535,19 @@ fn read_matches(result: &Value) -> Option<ForgeMatches> {
         used: count("used")?,
         scores,
     })
+}
+
+/// What holds back a render in the list of `GET /api/runtime/jobs` (open jobs first, in queue
+/// order): the first job ahead of `ours` that blocks the queue. Without `ours` every listed job is
+/// ahead, as a job not yet submitted would queue behind them all. An entry of a status this client
+/// does not know is skipped, and a reply without the list says nothing.
+fn queue_blocker(reply: &Value, ours: Option<&str>) -> Option<ForgeCause> {
+    reply["jobs"]
+        .as_array()?
+        .iter()
+        .take_while(|job| ours.is_none_or(|ours| job["id"].as_str() != Some(ours)))
+        .filter_map(|job| job["status"].as_str().and_then(JobStatus::from_key))
+        .find_map(JobStatus::queue_block)
 }
 
 /// An engine as `GET /api/runtime/services` describes it.
@@ -628,17 +725,40 @@ impl ForgeClient {
     /// Queues one render of `kind` with `request` (Forge's request object for that kind), waits
     /// for it and answers where its output is. It is submitted once: a failure after the submit
     /// is the caller's, and nothing here resubmits.
+    ///
+    /// A queue held by a render ahead (waiting for memory, interrupted, needing a person) is
+    /// refused with its `Queue*` cause before the submit and while the job waits. A job last seen
+    /// waiting when the call ends in an error is withdrawn, so no render is left for nobody.
     pub async fn render(
         &self,
         kind: ForgeJobKind,
         request: Value,
         until: Instant,
     ) -> Result<ForgeRender, ForgeError> {
+        self.render_with(kind, request, until, ForgePriority::Normal)
+            .await
+    }
+
+    /// [`Self::render`] with a priority. An emergency render, once Forge has queued it, is moved
+    /// to the front of the waiting line (this host's own job, never another's, and never a job
+    /// Forge is already running); `FORGE prioritised` says whether Forge did.
+    pub async fn render_with(
+        &self,
+        kind: ForgeJobKind,
+        request: Value,
+        until: Instant,
+        priority: ForgePriority,
+    ) -> Result<ForgeRender, ForgeError> {
         let body = serde_json::json!({
             "type": kind.key(),
             "projectId": self.config.project,
             "request": request,
         });
+        if let Some(cause) = self.queue_blocker(None, until).await {
+            let refusal = Err(ForgeError::new(cause));
+            JobWatch::new(kind, Instant::now()).record(&refusal);
+            return refusal;
+        }
         let submitted = Instant::now();
         let reply = self
             .post_json(
@@ -650,10 +770,89 @@ impl ForgeClient {
             )
             .await?;
         let job = JobRecord::read(&reply)?;
+        let id = job.id.clone();
+        if priority == ForgePriority::Emergency {
+            self.prioritise(&job, until).await;
+        }
         let mut watch = JobWatch::new(kind, submitted);
         let outcome = self.wait(job, &mut watch, until).await;
+        if outcome.is_err() && watch.last.is_some_and(JobStatus::is_waiting) {
+            self.withdraw(&id).await;
+        }
         watch.record(&outcome);
         outcome
+    }
+
+    /// Asks Forge to put `job`, which this client has just queued, first in its waiting line
+    /// (`POST .../move` with `{"to": "top"}`). It is asked only for a job still waiting, so a job
+    /// Forge is running is never touched, and only for this client's own job, so no other render
+    /// moves except by being passed. The outcome is a `FORGE prioritised` line and never fails the
+    /// render: `unavailable` when the studio has no such route or cannot be reached (the render
+    /// keeps its place in the line), `refused` when the studio understood and said no.
+    async fn prioritise(&self, job: &JobRecord, until: Instant) {
+        let status = job.status;
+        let mut answer = None;
+        let mut moved = (None, None);
+        let outcome = if status.is_movable() {
+            let path = format!("/api/runtime/jobs/{}/move", encode_path_segment(&job.id));
+            let call = Call {
+                method: HttpMethod::Post,
+                path: &path,
+                kind: RouteKind::Runtime,
+                content_type: Some("application/json"),
+                body: br#"{"to":"top"}"#.to_vec(),
+                profile: NativeResponseProfile::Json,
+                operation: "forge_move_job",
+            };
+            match self.send(call, until).await {
+                Ok(response) => {
+                    answer = Some(response.status);
+                    let body: Option<Value> = serde_json::from_slice(&response.body).ok();
+                    let understood = body
+                        .as_ref()
+                        .is_some_and(|body| body["code"].is_string() || body["moved"].is_boolean());
+                    match (response.status, understood) {
+                        (200..=299, true) => {
+                            let place = |field: &str| {
+                                body.as_ref()
+                                    .and_then(|body| body[field].as_u64())
+                                    .and_then(|number| u32::try_from(number).ok())
+                            };
+                            moved = (place("position"), place("count"));
+                            "moved"
+                        }
+                        (400..=499, true) => "refused",
+                        _ => "unavailable",
+                    }
+                }
+                Err(_) => "unavailable",
+            }
+        } else {
+            "refused"
+        };
+        let number = |value: Option<u32>| value.map_or_else(|| "-".to_owned(), |n| n.to_string());
+        df_observe::record_audit_line(
+            "FORGE",
+            format!(
+                "FORGE prioritised job={} outcome={outcome} status={} answer={} position={} \
+                 waiting={}",
+                job.id.chars().take(8).collect::<String>(),
+                status.key(),
+                answer.map_or_else(|| "none".to_owned(), |status| status.to_string()),
+                number(moved.0),
+                number(moved.1),
+            ),
+        );
+    }
+
+    /// What holds a render back in Forge's queue (`queue_blocker`). The read is advisory: when it
+    /// fails the render goes on, and the poll of the job itself says what is wrong.
+    async fn queue_blocker(&self, ours: Option<&str>, until: Instant) -> Option<ForgeCause> {
+        let reply = self
+            .get_json("/api/runtime/jobs", "forge_queue", until)
+            .await
+            .ok()?;
+        queue_blocker(&reply, ours)
     }
 
     async fn wait(
@@ -677,10 +876,13 @@ impl ForgeClient {
                 }
                 _ => {}
             }
-            if Instant::now() + JOB_POLL_INTERVAL >= until {
-                if job.status.is_waiting() {
-                    self.withdraw(&job.id).await;
+            if job.status.is_waiting() && watch.queue_check_due() {
+                if let Some(cause) = self.queue_blocker(Some(&job.id), until).await {
+                    return Err(ForgeError::new(cause));
                 }
+                watch.queue_checked();
+            }
+            if Instant::now() + JOB_POLL_INTERVAL >= until {
                 return Err(ForgeError::new(ForgeCause::Deadline));
             }
             tokio::time::sleep(JOB_POLL_INTERVAL).await;
@@ -691,28 +893,67 @@ impl ForgeClient {
     }
 
     /// Cancels a job no engine has taken, so a caller that stopped waiting leaves no render
-    /// behind. Forge refuses (409) a job that started meanwhile; it then finishes on its own.
+    /// behind, and reads the job to see what became of it: Forge's cancel answer alone is not
+    /// taken for the outcome. Forge refuses a job it is checking (`preparing`) for a moment, so
+    /// that is tried again; a job that started meanwhile finishes on its own and is left. The
+    /// window is its own: the caller's deadline has passed by now.
     async fn withdraw(&self, job: &str) {
-        let path = format!("/api/runtime/jobs/{}/cancel", encode_path_segment(job));
-        // A short window of its own: the caller's deadline has passed.
-        let until = Instant::now() + Duration::from_secs(5);
-        let cancelled = self
-            .post_json(
-                &path,
-                RouteKind::Runtime,
-                &serde_json::json!({}),
-                "forge_cancel_job",
-                until,
-            )
-            .await;
-        // The exchange line already records the answer; this line says what it was for.
+        let until = Instant::now() + WITHDRAW_WINDOW;
+        let mut attempts = 0;
+        let mut answer = None;
+        let mut seen = None;
+        let outcome = loop {
+            attempts += 1;
+            match self.cancel_once(job, until).await {
+                Ok(status) => answer = Some(status),
+                Err(_) => break "unreachable",
+            }
+            seen = self.job_status(job, until).await;
+            match seen {
+                Some(JobStatus::Cancelled) => break "cancelled",
+                Some(status) if status.is_waiting() => {
+                    if attempts >= WITHDRAW_ATTEMPTS
+                        || Instant::now() + WITHDRAW_RETRY_INTERVAL >= until
+                    {
+                        break "refused";
+                    }
+                    tokio::time::sleep(WITHDRAW_RETRY_INTERVAL).await;
+                }
+                Some(_) => break "taken",
+                None => break "refused",
+            }
+        };
+        // The exchange lines already record the answers; this line says what they were for.
         df_observe::record_audit_line(
             "FORGE",
             format!(
-                "FORGE withdrawn outcome={}",
-                cancelled.map_or_else(|error| error.cause.key(), |_| "cancelled")
+                "FORGE withdrawn outcome={outcome} answer={} job_status={} attempts={attempts}",
+                answer.map_or_else(|| "none".to_owned(), |status| status.to_string()),
+                seen.map_or("unknown", JobStatus::key),
             ),
         );
+    }
+
+    /// One `POST .../cancel`: the HTTP status Forge answered, or why it gave none.
+    async fn cancel_once(&self, job: &str, until: Instant) -> Result<u16, ForgeError> {
+        let path = format!("/api/runtime/jobs/{}/cancel", encode_path_segment(job));
+        let call = Call {
+            method: HttpMethod::Post,
+            path: &path,
+            kind: RouteKind::Runtime,
+            content_type: Some("application/json"),
+            body: b"{}".to_vec(),
+            profile: NativeResponseProfile::Json,
+            operation: "forge_cancel_job",
+        };
+        Ok(self.send(call, until).await?.status)
+    }
+
+    /// The status Forge reports for `job` now, or none when it cannot be read.
+    async fn job_status(&self, job: &str, until: Instant) -> Option<JobStatus> {
+        let path = format!("/api/runtime/jobs/{}", encode_path_segment(job));
+        let reply = self.get_json(&path, "forge_job", until).await.ok()?;
+        JobRecord::read(&reply).ok().map(|job| job.status)
     }
 
     /// The bytes of the project's output at `path`, which must be `media`.
@@ -837,6 +1078,8 @@ struct JobWatch {
     running: Option<Instant>,
     last: Option<JobStatus>,
     polls: u32,
+    /// When the queue ahead is read next.
+    next_queue_check: Instant,
 }
 
 impl JobWatch {
@@ -847,7 +1090,16 @@ impl JobWatch {
             running: None,
             last: None,
             polls: 0,
+            next_queue_check: submitted + QUEUE_FIRST_CHECK,
         }
+    }
+
+    fn queue_check_due(&self) -> bool {
+        Instant::now() >= self.next_queue_check
+    }
+
+    fn queue_checked(&mut self) {
+        self.next_queue_check = Instant::now() + QUEUE_CHECK_INTERVAL;
     }
 
     fn observe(&mut self, status: JobStatus) {
@@ -882,6 +1134,7 @@ impl JobWatch {
         let status = match outcome {
             Err(error) if error.cause == ForgeCause::Deadline => "deadline",
             Err(error) if matches!(error.cause, ForgeCause::Transport(_)) => "transport",
+            Err(error) if error.cause.is_queue_block() => error.cause.key(),
             _ => self.last.map_or("unknown", JobStatus::key),
         };
         df_observe::record_audit_line(

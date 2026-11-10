@@ -2,12 +2,14 @@
 //!
 //! The bible (`bible.json`) is read fresh on every call, so a designer's edit needs no rebuild and
 //! no restart. A missing bible is an empty one; a file that does not read or is not a valid bible
-//! is a typed error. The active place is `state.json`: `{"place": "<id>"}`, written whole or not
-//! at all; a missing file is no active place.
+//! is a typed error. The active place is `state.json`: `{"place": "<id>"}` for a place of the
+//! bible, or `{"place": "<id>", "designed": {<place>}}` for a place designed in play (a move's
+//! destination), which the state holds whole. It is written whole or not at all; a missing file
+//! is no active place.
 
 use std::path::{Path, PathBuf};
 
-use df_content::world_bible::{WorldBible, is_valid_id};
+use df_content::world_bible::{Place, Thing, WorldBible, is_valid_id};
 use serde::{Deserialize, Serialize};
 
 use super::request::WorldError;
@@ -30,6 +32,9 @@ pub(super) static WORLD_WRITES: WriteLock = WriteLock::new();
 struct WorldState {
     #[serde(default)]
     place: Option<String>,
+    /// The active place when it was designed in play rather than written in the bible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    designed: Option<Place>,
 }
 
 /// The `world` folder of the host's playground.
@@ -53,33 +58,121 @@ pub(super) fn read_bible(directory: &Path) -> Result<WorldBible, WorldError> {
     WorldBible::from_json_str(&text).map_err(|cause| WorldError::BibleInvalid { cause })
 }
 
-/// The active place in `directory`: none when there is no state file, or it names none.
-pub(super) fn read_place(directory: &Path) -> Result<Option<String>, WorldError> {
+/// The stored state in `directory`: the default when there is no state file.
+fn read_state(directory: &Path) -> Result<WorldState, WorldError> {
     let text = match std::fs::read_to_string(directory.join(STATE_FILE)) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(WorldState::default());
+        }
         Err(error) => {
             return Err(WorldError::StateUnreadable {
                 cause: IoCause::from_kind(error.kind()),
             });
         }
     };
-    let state: WorldState =
-        serde_json::from_str(&text).map_err(|error| WorldError::StateInvalid {
-            cause: BodyError::from_json(&error),
-        })?;
-    Ok(state.place.filter(|place| is_valid_id(place)))
+    serde_json::from_str(&text).map_err(|error| WorldError::StateInvalid {
+        cause: BodyError::from_json(&error),
+    })
 }
 
-/// Makes `place` the active one (none for no place), whole or not at all.
+/// The id of the active place in `directory`: none when there is no state file, or it names none.
+pub(super) fn read_place(directory: &Path) -> Result<Option<String>, WorldError> {
+    Ok(read_state(directory)?
+        .place
+        .filter(|place| is_valid_id(place)))
+}
+
+/// The active place in `directory` as `bible` has it, or as it was designed in play: none when
+/// there is no active place, or the bible no longer holds it.
+pub(super) fn read_active_place(
+    directory: &Path,
+    bible: &WorldBible,
+) -> Result<Option<Place>, WorldError> {
+    let state = read_state(directory)?;
+    Ok(match state.designed {
+        Some(designed) => Some(designed),
+        None => state
+            .place
+            .filter(|place| is_valid_id(place))
+            .and_then(|id| bible.place(&id).cloned()),
+    })
+}
+
+/// Makes the bible's `place` the active one (none for no place), whole or not at all.
 pub(super) fn write_place(directory: &Path, place: Option<&str>) -> Result<(), WorldError> {
-    let state = WorldState {
-        place: place.map(str::to_owned),
-    };
-    let unwritable = |cause| WorldError::StateUnwritable { cause };
-    let text =
-        serde_json::to_string_pretty(&state).map_err(|_| unwritable(IoCause::InvalidData))?;
+    write_state(
+        directory,
+        &WorldState {
+            place: place.map(str::to_owned),
+            designed: None,
+        },
+    )
+}
+
+/// Makes `designed`, a place designed in play, the active one, whole or not at all.
+pub(super) fn write_designed(directory: &Path, designed: Place) -> Result<(), WorldError> {
+    write_state(
+        directory,
+        &WorldState {
+            place: Some(designed.id.clone()),
+            designed: Some(designed),
+        },
+    )
+}
+
+/// Keeps `picture` as the close-up of the thing `item` at the active place, which must be a place
+/// designed in play (a bible place is the designer's file, never written by the host).
+pub(super) fn keep_thing_picture(
+    directory: &Path,
+    item: &str,
+    picture: &str,
+) -> Result<String, WorldError> {
     let _writing = WORLD_WRITES.lock();
+    let mut state = read_state(directory)?;
+    let designed = state.designed.as_mut().ok_or(WorldError::NotDesigned)?;
+    let thing = designed
+        .things
+        .iter_mut()
+        .find(|thing| thing.id == item)
+        .ok_or_else(|| WorldError::UnknownThing {
+            id: item.to_owned(),
+        })?;
+    thing.picture = Some(picture.to_owned());
+    let place = designed.id.clone();
+    write_state_locked(directory, &state)?;
+    Ok(place)
+}
+
+/// Adds `things` to the active place, which must be a place designed in play, after checking the
+/// whole place as a designed place is checked (`check_place`: ids in the grammar, none twice among
+/// the place's things and the bible's items, a name and a look that say something). All of them
+/// are added, or none. Answers the place's id.
+pub(super) fn add_things(
+    directory: &Path,
+    bible: &WorldBible,
+    things: Vec<Thing>,
+) -> Result<String, WorldError> {
+    let _writing = WORLD_WRITES.lock();
+    let mut state = read_state(directory)?;
+    let designed = state.designed.as_mut().ok_or(WorldError::NotDesigned)?;
+    designed.things.extend(things);
+    bible
+        .check_place(designed)
+        .map_err(|cause| WorldError::PlaceInvalid { cause })?;
+    let place = designed.id.clone();
+    write_state_locked(directory, &state)?;
+    Ok(place)
+}
+
+fn write_state(directory: &Path, state: &WorldState) -> Result<(), WorldError> {
+    let _writing = WORLD_WRITES.lock();
+    write_state_locked(directory, state)
+}
+
+fn write_state_locked(directory: &Path, state: &WorldState) -> Result<(), WorldError> {
+    let unwritable = |cause| WorldError::StateUnwritable { cause };
+    let text = serde_json::to_string_pretty(state).map_err(|_| unwritable(IoCause::InvalidData))?;
     crate::atomic_file::write_atomically(directory, STATE_FILE, text.as_bytes())
         .map_err(|error| unwritable(IoCause::from_kind(error.kind())))
 }

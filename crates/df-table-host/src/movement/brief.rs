@@ -5,17 +5,20 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use super::types::{Depth, PlateBrief, Placement, ReferenceCard, SceneDesign, Side};
+use super::types::{Depth, Placement, PlateBrief, ReferenceCard, SceneDesign, Side};
 use crate::imagegen::limits::MAXIMUM_SENT_TEXT_CHARS;
 
-/// A character who may be placed in the picture: the persona id, the name the prompt uses, the job
-/// that stands in when there is no look sheet, and a library portrait when one exists.
+/// A character who may be placed in the picture: the persona id, the display name (for the
+/// scan that names them in the picture, never for the prompt: a name painted by the image model
+/// ends up on a signboard), the job that stands in when there is no look sheet, a library portrait
+/// when one exists, and the names of what the design shows them with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BriefCharacter {
     pub id: String,
     pub display_name: String,
     pub job: String,
     pub portrait: Option<String>,
+    pub carrying: Vec<String>,
 }
 
 /// The look of each character in words, by persona id. A content file the host loads; a character
@@ -75,7 +78,10 @@ impl fmt::Display for BriefError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownCharacter { id } => {
-                write!(formatter, "'{id}' is placed in the scene but is not in the cast")
+                write!(
+                    formatter,
+                    "'{id}' is placed in the scene but is not in the cast"
+                )
             }
             Self::BadLooks { reason } => write!(formatter, "the look sheets are bad: {reason}"),
             Self::PromptTooLong { length, maximum } => write!(
@@ -104,29 +110,21 @@ pub fn build_brief(
     build_brief_with(&BriefStyle::default(), design, characters, looks)
 }
 
-/// The fixed template: the style's direction, the place, mood and elements, one sentence per
-/// placed character, and how writing shows; the brief carries what the picture must not show.
+/// The fixed template: the style's direction, the scene ([`scene_words`]) and how writing shows;
+/// the brief carries what the picture must not show.
 pub fn build_brief_with(
     style: &BriefStyle,
     design: &SceneDesign,
     characters: &[BriefCharacter],
     looks: &LookSheets,
 ) -> Result<PlateBrief, BriefError> {
-    let mut placed = Vec::with_capacity(design.placements.len());
-    for placement in &design.placements {
-        let character = characters
-            .iter()
-            .find(|character| character.id == placement.character)
-            .ok_or_else(|| BriefError::UnknownCharacter {
-                id: placement.character.clone(),
-            })?;
-        placed.push(PlacedCharacter {
-            placement,
-            character,
-            look: look_or_job(looks, character),
-        });
-    }
-    let prompt = prompt_text(style, design, &placed);
+    let placed = placed_characters(design, characters, looks)?;
+    let prompt = format!(
+        "{} {}{}",
+        style.direction,
+        scene_text(design, &placed),
+        style.writing
+    );
     let length = prompt.chars().count();
     if length > MAXIMUM_SENT_TEXT_CHARS {
         return Err(BriefError::PromptTooLong {
@@ -147,6 +145,43 @@ pub fn build_brief_with(
         avoid: style.avoid.clone(),
         references,
     })
+}
+
+/// What the picture of `design` shows, in the words of its prompt without the style around them:
+/// the place, mood, elements and things in sight, and one sentence per placed character. A frame
+/// judge reads it as the picture now on screen.
+pub fn scene_words(
+    design: &SceneDesign,
+    characters: &[BriefCharacter],
+    looks: &LookSheets,
+) -> Result<String, BriefError> {
+    let placed = placed_characters(design, characters, looks)?;
+    Ok(scene_text(design, &placed).trim_end().to_owned())
+}
+
+/// Each placement of `design` with its character and look.
+fn placed_characters<'a>(
+    design: &'a SceneDesign,
+    characters: &'a [BriefCharacter],
+    looks: &'a LookSheets,
+) -> Result<Vec<PlacedCharacter<'a>>, BriefError> {
+    design
+        .placements
+        .iter()
+        .map(|placement| {
+            let character = characters
+                .iter()
+                .find(|character| character.id == placement.character)
+                .ok_or_else(|| BriefError::UnknownCharacter {
+                    id: placement.character.clone(),
+                })?;
+            Ok(PlacedCharacter {
+                placement,
+                character,
+                look: look_or_job(looks, character),
+            })
+        })
+        .collect()
 }
 
 fn look_or_job<'a>(looks: &'a LookSheets, character: &'a BriefCharacter) -> &'a str {
@@ -228,31 +263,39 @@ impl Default for BriefStyle {
     }
 }
 
-fn prompt_text(
-    style: &BriefStyle,
-    design: &SceneDesign,
-    placed: &[PlacedCharacter<'_>],
-) -> String {
-    let mut text = format!("{} {}. Mood: {}. ", style.direction, design.place, design.mood);
+fn scene_text(design: &SceneDesign, placed: &[PlacedCharacter<'_>]) -> String {
+    let mut text = format!("{}. Mood: {}. ", design.place, design.mood);
     if !design.elements.is_empty() {
         text.push_str(&format!(
             "Elements in the scene: {}. ",
             design.elements.join("; ")
         ));
     }
+    if !design.things.is_empty() {
+        let things: Vec<String> = design
+            .things
+            .iter()
+            .map(|thing| format!("{} ({})", thing.name, thing.look))
+            .collect();
+        text.push_str(&format!("In plain sight: {}. ", things.join("; ")));
+    }
     for entry in placed {
         text.push_str(&placement_sentence(entry));
         text.push(' ');
     }
-    text.push_str(&style.writing);
     text
 }
 
+/// One sentence for a placed character, by their look and never by their name or id: the picture
+/// is painted from it, and a name in it comes out as writing on a sign.
 fn placement_sentence(entry: &PlacedCharacter<'_>) -> String {
     let placement = entry.placement;
+    let carrying = match entry.character.carrying.as_slice() {
+        [] => String::new(),
+        names => format!(", with their {} in view", names.join(" and ")),
+    };
     format!(
-        "{} ({}) stands in the {} {}, {}.",
-        entry.character.display_name,
+        "A person ({}) stands in the {} {}, {}{carrying}.",
         entry.look,
         depth_words(placement.depth),
         side_words(placement.side),

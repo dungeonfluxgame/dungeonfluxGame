@@ -29,6 +29,7 @@ use df_table::ports::Clock;
 use super::backfill::{
     BackfillJob, backfill_persona, check_gaps, consider, coverage_of, give_guidance,
 };
+use super::declare::{DeclareRequest, PERSONA_DECLARE, declared_line};
 use super::emotion_routes;
 use super::emotions::load_emotions;
 use super::generate::{
@@ -576,6 +577,7 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
                 asked_by: request.asked_by.as_deref(),
                 intent: request.intent.as_deref(),
                 strike: request.strike,
+                declare: false,
             };
             let said = match say_line(&owned.app, &route, &scene, &own, occasion).await {
                 Ok(said) => said,
@@ -604,6 +606,50 @@ async fn say(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response
     match result {
         Ok(spoken) => reply(spoken),
         Err(error) => answer::<Spoken>(&routes.app, "say", known.as_deref(), Err(error)),
+    }
+}
+
+/// A character declares the action they are doing right now (`persona declare`): worded and
+/// checked by `declared_line`, then cued and voiced like any line.
+async fn declare_action(State(routes): State<Arc<PersonaRoutes>>, bytes: Bytes) -> Response {
+    let request: DeclareRequest = match parse_body(&bytes) {
+        Ok(request) => request,
+        Err(error) => return answer::<Spoken>(&routes.app, "declare", None, Err(error.into())),
+    };
+    let known = known_id(&request.character).map(str::to_owned);
+    let owned = Arc::clone(&routes);
+    let result = run_owned(
+        async move {
+            let (scene, route, own) =
+                asked_of(&owned, &request.character, request.model.as_deref()).await?;
+            let others = others_of(&scene, &request.character);
+            cue_thinking(&owned.app, &request.character).await?;
+            let said = match declared_line(&owned.app, &route, &scene, &own, &request).await {
+                Ok(said) => said,
+                Err(error) => {
+                    clear_thinking(&owned.app, &request.character).await;
+                    return Err(error);
+                }
+            };
+            let spoken = cue_line(
+                &owned,
+                request.character.clone(),
+                said,
+                request.speak,
+                &others,
+            )
+            .await;
+            if spoken.is_err() {
+                clear_thinking(&owned.app, &request.character).await;
+            }
+            Ok(spoken)
+        },
+        PersonaError::Stopped,
+    )
+    .await;
+    match result {
+        Ok(spoken) => reply(spoken),
+        Err(error) => answer::<Spoken>(&routes.app, "declare", known.as_deref(), Err(error)),
     }
 }
 
@@ -776,6 +822,7 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -
         .route(path::PERSONA_GENERATE, post(generate))
         .route(path::PERSONA_GENERATE_CAST, post(generate_scene_cast))
         .route(path::PERSONA_SAY, post(say))
+        .route(PERSONA_DECLARE, post(declare_action))
         .route(path::PERSONA_NARRATE, post(narrate))
         .route(path::PERSONA_ASK, post(ask))
         .route(path::PERSONA_COVERAGE, post(coverage))
@@ -787,5 +834,9 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -
             text: Arc::clone(&text),
             speech,
         }))
+        .merge(super::perceive::router_with(
+            Arc::clone(&app),
+            Arc::clone(&text),
+        ))
         .merge(emotion_routes::router(app, text))
 }

@@ -12,9 +12,17 @@ pub(super) fn format_backend(view: &BackendView) -> String {
     let limit = |maximum: Option<usize>, none: &str| {
         maximum.map_or_else(|| none.to_owned(), |maximum| format!("at most {maximum}"))
     };
+    let tuned = [
+        view.size.map(|size| format!("size {size}")),
+        view.steps.map(|steps| format!("steps {steps}")),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|setting| format!(", {setting}"))
+    .collect::<String>();
     format!(
         concat!(
-            "image backend: {} (text {} characters, negative prompt {}, {} pictures); ",
+            "image backend: {} (text {} characters, negative prompt {}, {} pictures{}); ",
             "{} running on the backend each started on"
         ),
         view.backend,
@@ -27,6 +35,7 @@ pub(super) fn format_backend(view: &BackendView) -> String {
             "none: bans go in the text,"
         ),
         view.limits.maximum_pictures,
+        tuned,
         view.running
     )
 }

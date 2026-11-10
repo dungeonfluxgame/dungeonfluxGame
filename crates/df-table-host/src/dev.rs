@@ -25,7 +25,6 @@ use crate::limits::UPLOAD_PIECE_BYTES;
 use crate::locate::request::LocateError;
 use crate::persona::request::PersonaError;
 use crate::persona::{ConverseError, EmotionError, PlateStep};
-use crate::world::WorldError;
 use crate::playground::{
     ChangeReply, ClientsError, FixtureNameError, PlaygroundChangeError, fixture_file_name,
 };
@@ -41,6 +40,9 @@ use crate::wire::{
     ClientView, ControlsBatch, ControlsReply, FixtureRemove, FixtureWrite, MediaRemove, Reply,
     route,
 };
+use crate::world::WorldError;
+use crate::world::inventory::InventoryError;
+use crate::world::memory::MemoryError;
 
 mod reads;
 
@@ -66,6 +68,8 @@ pub enum ReplyError {
     Emotion(EmotionError),
     Speech(SpeechError),
     World(WorldError),
+    Inventory(InventoryError),
+    Memory(MemoryError),
     RulesCheck(RulesCheckError),
     /// A host route: the events query or the host status.
     Host(HostError),
@@ -76,6 +80,8 @@ pub enum ReplyError {
     Address(crate::persona::address::AddressRouteError),
     /// The frame judge (`POST /dev/persona/frame`).
     Frame(crate::persona::frame::FrameRouteError),
+    /// What a character sees and thinks (`/dev/persona/perceive`).
+    Perceive(crate::persona::perceive::request::PerceiveRouteError),
     /// The storyteller's plot (`/dev/persona/story`).
     Story(crate::persona::story::StoryRouteError),
     /// A character's voice cast (`POST /dev/speech/cast`).
@@ -103,12 +109,15 @@ impl fmt::Display for ReplyError {
             Self::Emotion(error) => write!(formatter, "{error}"),
             Self::Speech(error) => write!(formatter, "{error}"),
             Self::World(error) => write!(formatter, "{error}"),
+            Self::Inventory(error) => write!(formatter, "{error}"),
+            Self::Memory(error) => write!(formatter, "{error}"),
             Self::RulesCheck(error) => write!(formatter, "{error}"),
             Self::Host(error) => write!(formatter, "{error}"),
             Self::Clients(error) => write!(formatter, "{error}"),
             Self::Services(error) => write!(formatter, "{error}"),
             Self::Address(error) => write!(formatter, "{error}"),
             Self::Frame(error) => write!(formatter, "{error}"),
+            Self::Perceive(error) => write!(formatter, "{error}"),
             Self::Story(error) => write!(formatter, "{error}"),
             Self::VoiceCast(error) => write!(formatter, "{error}"),
         }
@@ -130,6 +139,12 @@ impl From<crate::speech::request::VoiceCastError> for ReplyError {
 impl From<crate::persona::address::AddressRouteError> for ReplyError {
     fn from(error: crate::persona::address::AddressRouteError) -> Self {
         Self::Address(error)
+    }
+}
+
+impl From<crate::persona::perceive::request::PerceiveRouteError> for ReplyError {
+    fn from(error: crate::persona::perceive::request::PerceiveRouteError) -> Self {
+        Self::Perceive(error)
     }
 }
 
@@ -225,6 +240,18 @@ impl From<WorldError> for ReplyError {
     }
 }
 
+impl From<InventoryError> for ReplyError {
+    fn from(error: InventoryError) -> Self {
+        Self::Inventory(error)
+    }
+}
+
+impl From<MemoryError> for ReplyError {
+    fn from(error: MemoryError) -> Self {
+        Self::Memory(error)
+    }
+}
+
 impl From<SpeechError> for ReplyError {
     fn from(error: SpeechError) -> Self {
         Self::Speech(error)
@@ -267,11 +294,14 @@ fn write_refusal(
         ReplyError::Emotion(error) => error.key(),
         ReplyError::Speech(error) => error.key(),
         ReplyError::World(error) => error.key(),
+        ReplyError::Inventory(error) => error.key(),
+        ReplyError::Memory(error) => error.key(),
         ReplyError::Host(error) => error.key(),
         ReplyError::Clients(error) => error.key(),
         ReplyError::Services(error) => error.key(),
         ReplyError::Address(error) => error.key(),
         ReplyError::Frame(error) => error.key(),
+        ReplyError::Perceive(error) => error.key(),
         ReplyError::Story(error) => error.key(),
         ReplyError::VoiceCast(error) => error.key(),
     };

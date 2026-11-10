@@ -1,6 +1,8 @@
 //! The world routes. Each runs its file work on the blocking pool and answers a `WorldReply`; a
 //! refusal is a typed [`WorldError`] and one `WORLD refused verb=.. error=<key>` audit line, and a
-//! change of the active place is `WORLD place place=<id|none>`.
+//! change of the active place is `WORLD place place=<id|none>`, or `WORLD arrived place=<id>
+//! things=<n>` for a place designed in play. A thing's kept close-up is `WORLD thing_picture
+//! place=.. item=..`. The inventory routes are `inventory::routes`.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -11,13 +13,17 @@ use axum::extract::rejection::QueryRejection;
 use axum::extract::{Query, State};
 use axum::response::Response;
 use axum::routing::{get, post};
-use df_content::world_bible::{WorldBible, is_valid_id};
+use df_content::world_bible::{Place, WorldBible, is_valid_id};
 
 use super::facts::place_facts;
 use super::request::{
-    Listed, PlaceRequest, PlaceSet, QuoteQuery, Quoted, Validated, WorldError, WorldView,
+    ArriveRequest, Listed, PlaceRequest, PlaceSet, QuoteQuery, Quoted, ThingPicture, Validated,
+    WorldError, WorldView,
 };
-use super::store::{read_bible, read_place, world_directory, write_place};
+use super::store::{
+    keep_thing_picture, read_active_place, read_bible, read_place, world_directory, write_designed,
+    write_place,
+};
 use crate::blocking::run_blocking;
 use crate::dev_http::{parse_body, reply};
 use crate::state::AppState;
@@ -28,6 +34,10 @@ pub mod path {
     pub const WORLD: &str = "/dev/world";
     /// Sets or clears the active place (POST a `PlaceRequest`).
     pub const WORLD_PLACE: &str = "/dev/world/place";
+    /// Makes a place designed in play the active one (POST an `ArriveRequest`).
+    pub const WORLD_ARRIVE: &str = "/dev/world/arrive";
+    /// Keeps a close-up as a thing's reference sheet (POST a `ThingPicture`).
+    pub const WORLD_PICTURE: &str = "/dev/world/picture";
     /// The price quote of an item at the active place (GET with `?item=&qty=`).
     pub const WORLD_QUOTE: &str = "/dev/world/quote";
     /// Reads the bible now and counts what it holds (GET).
@@ -50,12 +60,9 @@ fn answer<T: serde::Serialize>(
 pub(super) fn view(directory: &Path) -> Result<WorldView, WorldError> {
     let bible = read_bible(directory)?;
     let place = read_place(directory)?;
-    let facts = place
-        .as_deref()
-        .and_then(|id| bible.place(id))
-        .map_or(serde_json::Value::Null, |place| {
-            place_facts(&bible, place, None)
-        });
+    let facts = read_active_place(directory, &bible)?.map_or(serde_json::Value::Null, |place| {
+        place_facts(&bible, &place, None)
+    });
     Ok(WorldView {
         place,
         items: bible.items.iter().map(|item| item.id.clone()).collect(),
@@ -88,6 +95,16 @@ pub(super) fn set_place(directory: &Path, place: Option<String>) -> Result<Place
     }
     write_place(directory, place.as_deref())?;
     Ok(PlaceSet { place })
+}
+
+/// Makes `place`, designed in play, the active one after checking it as the bible's places are.
+pub(super) fn arrive_at(directory: &Path, place: Place) -> Result<PlaceSet, WorldError> {
+    read_bible(directory)?
+        .check_place(&place)
+        .map_err(|cause| WorldError::PlaceInvalid { cause })?;
+    let id = place.id.clone();
+    write_designed(directory, place)?;
+    Ok(PlaceSet { place: Some(id) })
 }
 
 /// The quote of `query.item` at the active place.
@@ -138,6 +155,49 @@ async fn place(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
     answer(&app, "place", result)
 }
 
+async fn arrive(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
+    let mut things = 0;
+    let result = async {
+        let request: ArriveRequest = parse_body(&bytes)?;
+        things = request.place.things.len();
+        let directory = world_directory(&app);
+        run_blocking(
+            move || arrive_at(&directory, request.place),
+            WorldError::Stopped,
+        )
+        .await
+    }
+    .await;
+    if let Ok(PlaceSet { place: Some(id) }) = &result {
+        app.record_line(format!("WORLD arrived place={id} things={things}"));
+    }
+    answer(&app, "arrive", result)
+}
+
+async fn picture(State(app): State<Arc<AppState>>, bytes: Bytes) -> Response {
+    let result = async {
+        let request: ThingPicture = parse_body(&bytes)?;
+        let directory = world_directory(&app);
+        run_blocking(
+            move || {
+                keep_thing_picture(&directory, &request.item, &request.picture)
+                    .map(|place| (place, request.item))
+            },
+            WorldError::Stopped,
+        )
+        .await
+    }
+    .await;
+    if let Ok((place, item)) = &result {
+        app.record_line(format!("WORLD thing_picture place={place} item={item}"));
+    }
+    answer(
+        &app,
+        "picture",
+        result.map(|(place, _)| PlaceSet { place: Some(place) }),
+    )
+}
+
 async fn quote(
     State(app): State<Arc<AppState>>,
     query: Result<Query<QuoteQuery>, QueryRejection>,
@@ -168,7 +228,11 @@ pub fn router_with(app: Arc<AppState>) -> Router {
     Router::new()
         .route(path::WORLD, get(show))
         .route(path::WORLD_PLACE, post(place))
+        .route(path::WORLD_ARRIVE, post(arrive))
+        .route(path::WORLD_PICTURE, post(picture))
         .route(path::WORLD_QUOTE, get(quote))
         .route(path::WORLD_VALIDATE, get(validate))
-        .with_state(app)
+        .with_state(Arc::clone(&app))
+        .merge(super::memory::routes::router_with(Arc::clone(&app)))
+        .merge(super::inventory::routes::router_with(app))
 }

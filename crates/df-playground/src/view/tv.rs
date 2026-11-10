@@ -32,11 +32,12 @@ use crate::media::{MediaKind, media_kind};
 use crate::motion_style::{CameraAction, CameraDrawn, camera_action, camera_style};
 use crate::overlay::NarrationBox;
 use crate::path::media_file;
+use crate::plate_fit::PlateFit;
 use crate::view::bubble_layout::BubbleLayout;
 use crate::view::kit::dwell_note;
 
 /// The parts of the shared screen, in the order they are drawn.
-pub const PARTS: [Part; 12] = [
+pub const PARTS: [Part; 13] = [
     Part::TvBackdrop,
     Part::TvGrid,
     Part::TvSam,
@@ -49,6 +50,7 @@ pub const PARTS: [Part; 12] = [
     Part::TvCaption,
     Part::TvParty,
     Part::TvClues,
+    Part::TvStory,
 ];
 
 fn figure_class(shape: ElementShape) -> &'static str {
@@ -242,7 +244,7 @@ pub struct TvHandles {
 #[derive(Clone, Copy)]
 struct ZoomCeiling {
     serial: u64,
-    plate_width_px: Option<u32>,
+    plate_px: Option<(u32, u32)>,
     limit: ZoomLimit,
     percent: u16,
 }
@@ -291,18 +293,18 @@ impl TvHandles {
         self.frame_camera(&plan)
     }
 
-    /// The pixel width of the backdrop's picture, once it has loaded. During a crossfade the slot
+    /// The pixel size of the backdrop's picture, once it has loaded. During a crossfade the slot
     /// holds several pictures: the newest one that has loaded counts, so the camera keeps its
     /// ceiling while the new plate loads.
-    fn plate_width_px(&self) -> Option<u32> {
+    fn plate_px(&self) -> Option<(u32, u32)> {
         let layers = self.backdrop.children();
         (0..layers.length())
             .rev()
             .filter_map(|index| layers.item(index))
             .filter_map(|frame| frame.first_element_child())
             .filter_map(|image| image.dyn_into::<HtmlImageElement>().ok())
-            .map(|image| image.natural_width())
-            .find(|width| *width > 0)
+            .map(|image| (image.natural_width(), image.natural_height()))
+            .find(|(width, _)| *width > 0)
     }
 
     /// The zoom the picture can bear for this move. A request over it is drawn at the ceiling and
@@ -310,19 +312,25 @@ impl TvHandles {
     /// when the move or the plate changes, because reading its width makes the browser lay the
     /// page out.
     fn zoom_ceiling(&mut self, camera: &Camera, limit: ZoomLimit) -> u16 {
-        let plate = self.plate_width_px();
+        let plate = self.plate_px();
         let known = self.ceiling.filter(|known| {
-            known.serial == camera.serial && known.plate_width_px == plate && known.limit == limit
+            known.serial == camera.serial && known.plate_px == plate && known.limit == limit
         });
         let percent = match known {
             Some(known) => known.percent,
             None => {
                 let ratio = web_sys::window().map_or(1.0, |window| window.device_pixel_ratio());
-                let stage_px = (f64::from(self.world.client_width()) * ratio).round() as u32;
-                let percent = zoom_ceiling_under(limit, plate, stage_px);
+                // The picture's pixels are spread over the width it is drawn at, which is the
+                // stage's only when the picture fills the frame's width.
+                let drawn = plate.map_or(1.0, |(width, height)| {
+                    f64::from(PlateFit::of_size(width, height).width())
+                });
+                let stage_px =
+                    (f64::from(self.world.client_width()) * ratio * drawn).round() as u32;
+                let percent = zoom_ceiling_under(limit, plate.map(|(width, _)| width), stage_px);
                 self.ceiling = Some(ZoomCeiling {
                     serial: camera.serial,
-                    plate_width_px: plate,
+                    plate_px: plate,
                     limit,
                     percent,
                 });
@@ -556,7 +564,18 @@ pub fn build_part(
         Part::TvBackdrop => scene
             .backdrop
             .as_ref()
-            .map(|image| picture(document, "tv-backdrop", image))
+            .map(|image| {
+                let layer = picture(document, "tv-backdrop", image)?;
+                // A plate with a scan is fitted at once from the scan's picture size; any other
+                // when its image has loaded (`plate_fade::on_image`).
+                if let Some(layout) = scene.backdrop_layout() {
+                    crate::view::plate_fade::fit_backdrop(
+                        &layer,
+                        PlateFit::of_picture(layout.picture()),
+                    )?;
+                }
+                Ok(layer)
+            })
             .transpose(),
         Part::TvGrid => controls.show_grid.then(|| grid(document)).transpose(),
         Part::TvAnchors => crate::view::roleplay::anchored(document, scene),
@@ -578,6 +597,7 @@ pub fn build_part(
         Part::TvCaption => caption(document, scene, controls),
         Part::TvParty => party(document, scene),
         Part::TvClues => crate::view::clues::board(document, scene),
+        Part::TvStory => crate::view::story::mark(document, scene),
         other => Err(JsValue::from_str(&format!(
             "{} is not a piece of the shared screen",
             other.dom_marker()

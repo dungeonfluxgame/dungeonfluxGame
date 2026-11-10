@@ -30,6 +30,9 @@
 //!   question to a character, the judgement of whether the persona answers it, the filling of what
 //!   it lacks by adding detail only, and the record of what was added. `coverage: false` skips
 //!   the coverage question and the backfill (one model call); `speak: true` voices the line.
+//! - `POST /dev/persona/perceive`, `perceive/scene` and `GET /dev/persona/thoughts`: what a
+//!   character, or each of several, sees on the screen and is thinking about, and the thoughts
+//!   kept (see `perceive`).
 //!
 //! The dev CLI's `persona` verbs are these routes. `scene cast` also lists the summary of each
 //! cast member that has a stored persona; a persona file that does not read is left out of that
@@ -46,6 +49,7 @@ mod judge_route;
 mod backfill;
 pub mod cli;
 mod converse;
+mod declare;
 mod edit_verbs;
 mod emotion_routes;
 mod emotions;
@@ -55,6 +59,7 @@ pub(crate) mod generate;
 mod handles;
 mod line;
 pub(crate) mod options;
+pub(crate) mod perceive;
 mod plate;
 mod reveal;
 pub mod request;
@@ -65,6 +70,7 @@ mod storage;
 pub(crate) mod story;
 mod story_clues;
 mod story_items;
+mod story_mark;
 mod story_narrate;
 mod story_next;
 mod story_way;
@@ -73,7 +79,9 @@ pub use self::cli::{PersonaCommand, parse};
 pub use self::converse::ConverseError;
 pub use self::emotions::EmotionError;
 pub use self::plate::PlateStep;
-pub(crate) use self::plate::{Painting, deliver_plate};
+pub(crate) use self::plate::{
+    Painting, deliver_plate, image_limits, inventory_sheets, items_that_fit, sheets_for_gains,
+};
 pub use self::request::{PersonaError, PersonaSummary};
 pub use self::routes::router_with;
 pub(crate) use self::storage::summaries_of;
@@ -86,6 +94,8 @@ mod ask_tests;
 mod backfill_tests;
 #[cfg(test)]
 mod converse_tests;
+#[cfg(test)]
+mod declare_tests;
 #[cfg(test)]
 mod frame_tests;
 #[cfg(test)]
@@ -100,6 +110,8 @@ mod handles_tests;
 mod line_facts_tests;
 #[cfg(test)]
 mod line_tests;
+#[cfg(test)]
+mod perceive_tests;
 #[cfg(test)]
 mod persona_tests;
 #[cfg(test)]

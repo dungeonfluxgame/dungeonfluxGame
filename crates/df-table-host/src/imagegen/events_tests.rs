@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::backend::BackendError;
+use super::backend::{BackendError, BackendTuning};
 use super::events::ImageGenEvent;
-use super::model::{GenerateRequestError, ImageRequest};
+use super::model::{GenerateRequestError, ImageRequest, InferenceSteps, PictureSize};
 use super::request::GenerateError;
 
 #[test]
@@ -17,6 +17,7 @@ fn an_audit_line_never_holds_the_prompt() {
         name: request.name().to_owned(),
         purpose: request.purpose(),
         aspect: request.aspect(),
+        size: (1672, 941),
         prompt_chars: request.prompt().chars().count(),
         deadline: Duration::from_secs(900),
         backend: "fake",
@@ -27,13 +28,36 @@ fn an_audit_line_never_holds_the_prompt() {
         line,
         format!(
             concat!(
-                "IMAGEGEN requested job=1 name=hall purpose=background aspect=16:9 ",
+                "IMAGEGEN requested job=1 name=hall purpose=background aspect=16:9 size=1672x941 ",
                 "prompt_chars={} deadline_ms=900000 backend=fake running=2"
             ),
             secret.chars().count()
         )
     );
     assert!(!line.contains("dragon"));
+}
+
+#[test]
+fn the_pictures_a_job_follows_are_one_line_of_names() {
+    let line = ImageGenEvent::References {
+        job: 3,
+        name: "roam-01".to_owned(),
+        base: None,
+        attached: vec![
+            "ref-danny.png".to_owned(),
+            "item-danny-easel.png".to_owned(),
+        ],
+        maximum: 8,
+        left_out: Vec::new(),
+    }
+    .line();
+    assert_eq!(
+        line,
+        concat!(
+            "IMAGEGEN references job=3 name=roam-01 base=- ",
+            "attached=ref-danny.png,item-danny-easel.png count=2 maximum=8 left_out=-"
+        )
+    );
 }
 
 #[test]
@@ -203,4 +227,48 @@ fn a_scratch_folder_left_behind_is_named_by_its_cleanup_key() {
     }
     .line();
     assert_eq!(line, "IMAGEGEN cleanup_failed job=3 kind=permission_denied");
+}
+
+#[test]
+fn a_switch_line_shows_the_size_and_steps_set_and_nothing_when_none_is() {
+    let switched = |tuning| {
+        ImageGenEvent::Switched {
+            from: "codex-cli",
+            to: "forge",
+            tuning,
+            running: 1,
+        }
+        .line()
+    };
+    assert_eq!(
+        switched(BackendTuning::default()),
+        "IMAGEGEN switched from=codex-cli to=forge running=1"
+    );
+    let tuning = BackendTuning {
+        size: Some("512x512".parse::<PictureSize>().expect("a size")),
+        steps: Some(InferenceSteps::new(20).expect("steps")),
+    };
+    assert_eq!(
+        switched(tuning),
+        "IMAGEGEN switched from=codex-cli to=forge size=512x512 steps=20 running=1"
+    );
+}
+
+#[test]
+fn a_picture_of_another_shape_than_asked_is_one_line_of_both_sizes() {
+    let line = ImageGenEvent::Reshaped {
+        job: 12,
+        name: "roam-06-look-1".to_owned(),
+        asked: (1672, 941),
+        delivered: (512, 512),
+        backend: "forge",
+    }
+    .line();
+    assert_eq!(
+        line,
+        concat!(
+            "IMAGEGEN reshaped job=12 name=roam-06-look-1 asked=1672x941 delivered=512x512 ",
+            "backend=forge"
+        )
+    );
 }

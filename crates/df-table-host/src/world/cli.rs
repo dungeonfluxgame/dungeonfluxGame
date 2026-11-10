@@ -1,9 +1,12 @@
 //! The `world` verbs of the dev command line: their grammar, the request each sends, and the text
 //! of each answer. A designer edits `world/bible.json`; these verbs choose the active place and
-//! read what the persona prompts would be given.
+//! read what the persona prompts would be given. `world inventory` is the inventory of any owner
+//! (`inventory::cli`).
 
 use df_content::world_bible::{MAXIMUM_ID_CHARS, PriceQuote};
 
+use super::inventory::cli::{self as inventory_cli, InventoryCommand};
+use super::memory::cli::{self as memory_cli, MemoryCommand};
 use super::request::{PlaceRequest, PlaceSet, Quoted, Validated, WorldReply, WorldView};
 use super::routes::path;
 use crate::command::{CommandError, bad_choice};
@@ -11,8 +14,10 @@ use crate::dev::DevError;
 use crate::dev_client::{self, get_json, post_json};
 
 /// Every `world` verb, for the unknown-verb refusal and the help.
-pub const WORLD_USAGE: &str =
-    "world [show] | world place <id|-> | world quote <item> <qty> | world validate";
+pub const WORLD_USAGE: &str = concat!(
+    "world [show] | world place <id|-> | world quote <item> <qty> | world validate | ",
+    "world inventory ... (world inventory help) | world memory ... (world memory help)"
+);
 /// `world place`: the active place (`-` for none).
 pub const WORLD_PLACE_USAGE: &str = "world place <id|->";
 /// `world quote`: the price of a lot at the active place.
@@ -29,6 +34,10 @@ pub enum WorldCommand {
     Quote { item: String, qty: u32 },
     /// Read the bible now and count what it holds.
     Validate,
+    /// An inventory operation.
+    Inventory(InventoryCommand),
+    /// A memory operation.
+    Memory(MemoryCommand),
 }
 
 fn id_word(key: &str, word: &str) -> Result<String, CommandError> {
@@ -63,6 +72,8 @@ pub fn parse(words: &[String]) -> Result<WorldCommand, CommandError> {
         }),
         ("quote", _) => Err(CommandError::Usage(WORLD_QUOTE_USAGE)),
         ("validate", []) => Ok(WorldCommand::Validate),
+        ("inventory", words) => inventory_cli::parse(words).map(WorldCommand::Inventory),
+        ("memory", words) => memory_cli::parse(words).map(WorldCommand::Memory),
         _ => Err(CommandError::Usage(WORLD_USAGE)),
     }
 }
@@ -133,6 +144,8 @@ pub async fn run(port: u16, command: WorldCommand) -> Result<String, DevError> {
             let quoted: Quoted = reply_value(get_json(port, &address).await?)?;
             Ok(format_quote(&quoted))
         }
+        WorldCommand::Inventory(command) => inventory_cli::run(port, command).await,
+        WorldCommand::Memory(command) => memory_cli::run(port, command).await,
         WorldCommand::Validate => {
             let counts: Validated = reply_value(get_json(port, path::WORLD_VALIDATE).await?)?;
             Ok(format!(

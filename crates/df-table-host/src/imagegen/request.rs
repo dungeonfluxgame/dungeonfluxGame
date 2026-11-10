@@ -14,7 +14,10 @@ use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use super::backend::{BackendError, BackendLimits};
-use super::model::{Aspect, GenerateRequestError, ImageRequest, Purpose, ThingReference};
+use super::model::{
+    Aspect, GenerateRequestError, ImageRequest, InferenceSteps, PictureSize, Priority, Purpose,
+    ThingReference,
+};
 use crate::dev_http::{BodyError, DevReply, RouteError};
 use crate::io_cause::IoCause;
 
@@ -50,12 +53,22 @@ pub struct GenerateRequest {
     /// it takes one, otherwise a line of the text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub avoid: Vec<String>,
+    /// Pictures of the media library the caller would have attached but left out for want of
+    /// room (the backend takes only so many): never sent, only written to the job's audit line.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<String>,
+    /// How urgent the picture is: an emergency one (an action a character declares they are doing
+    /// right now) is put first by a backend that has a queue of its own, as Forge does.
+    #[serde(default, skip_serializing_if = "Priority::is_normal")]
+    pub priority: Priority,
 }
 
 /// The body of `POST /dev/media/backend`: the image backend new jobs start on. Codex runs with the
 /// settings the host was started with; Forge with the studio's address and project the host was
-/// started with (`DF_FORGE_URL`, `DF_FORGE_PROJECT`), or `url` and `project` when given. Every
-/// variant is a struct, so a field another backend takes is refused, not ignored.
+/// started with (`DF_FORGE_URL`, `DF_FORGE_PROJECT`), or `url` and `project` when given. Forge also
+/// takes a `size` (`WxH`) that replaces every picture's own size and `steps` that replace the
+/// studio's default; both stay until the next switch. Every variant is a struct, so a field
+/// another backend takes is refused, not ignored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "backend", deny_unknown_fields)]
 pub enum BackendSwitch {
@@ -67,6 +80,10 @@ pub enum BackendSwitch {
         url: Option<String>,
         #[serde(default)]
         project: Option<String>,
+        #[serde(default)]
+        size: Option<PictureSize>,
+        #[serde(default)]
+        steps: Option<InferenceSteps>,
     },
 }
 
@@ -87,6 +104,12 @@ pub struct BackendView {
     pub backend: String,
     pub limits: BackendLimits,
     pub running: u64,
+    /// The size every picture is made at, when a switch set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<PictureSize>,
+    /// The steps every picture is made with, when a switch set them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<InferenceSteps>,
 }
 
 impl GenerateRequest {
@@ -101,7 +124,9 @@ impl GenerateRequest {
         Ok(request
             .following(&self.references)?
             .showing(&self.things)?
-            .avoiding(&self.avoid))
+            .avoiding(&self.avoid)
+            .leaving_out(&self.left_out)
+            .prioritised(self.priority))
     }
 }
 

@@ -10,9 +10,9 @@
 
 use std::time::Duration;
 
-use super::backend::BackendError;
+use super::backend::{BackendError, BackendTuning};
 use super::limits::MAXIMUM_NAME_CHARS;
-use super::model::{Aspect, Purpose};
+use super::model::{Aspect, Priority, Purpose};
 use super::request::GenerateError;
 use df_imagery::oneshot::CleanupCause;
 
@@ -33,10 +33,39 @@ pub enum ImageGenEvent {
         name: String,
         purpose: Purpose,
         aspect: Aspect,
+        /// The width and height asked of the backend: the shape's own, or the size the backend
+        /// was switched to.
+        size: (u32, u32),
         prompt_chars: usize,
         deadline: Duration,
         backend: &'static str,
         running: usize,
+    },
+    /// A job that is not of normal urgency, the line after its request: an emergency picture is
+    /// put first by a backend that has a queue of its own.
+    Prioritised {
+        job: u64,
+        name: String,
+        priority: Priority,
+        backend: &'static str,
+    },
+    /// A person's sheet showed several views side by side and an edit was given its front view
+    /// alone, so no view is painted as another person.
+    SheetView {
+        job: u64,
+        name: String,
+        picture: String,
+    },
+    /// The pictures a job was given to follow, the line after its request: the picture it edits,
+    /// the references attached in order, the `maximum` the backend takes, and what its caller left
+    /// out for want of room. Only written for a job that has any of them.
+    References {
+        job: u64,
+        name: String,
+        base: Option<String>,
+        attached: Vec<String>,
+        maximum: usize,
+        left_out: Vec<String>,
     },
     /// The job's own task began its work, `wait` after the request arrived (the check included).
     Started { job: u64, wait: Duration },
@@ -54,6 +83,15 @@ pub enum ImageGenEvent {
         /// The token counts the backend reported, when it reported them.
         tokens_in: Option<u64>,
         tokens_out: Option<u64>,
+    },
+    /// The backend delivered a picture of another shape than the one asked of it, the line before
+    /// its `stored` line: whatever shows the picture shows it in the wrong shape or pads it.
+    Reshaped {
+        job: u64,
+        name: String,
+        asked: (u32, u32),
+        delivered: (u32, u32),
+        backend: &'static str,
     },
     /// The job ended without a stored picture.
     Failed {
@@ -78,10 +116,12 @@ pub enum ImageGenEvent {
     },
     /// The job's scratch folder could not be removed after the attempt; the job's outcome stands.
     CleanupFailed { job: u64, cause: CleanupCause },
-    /// New jobs start on `to` from now; the `running` jobs go on with the backend they started on.
+    /// New jobs start on `to` from now, with the `tuning` set on it; the `running` jobs go on with
+    /// the backend they started on.
     Switched {
         from: &'static str,
         to: &'static str,
+        tuning: BackendTuning,
         running: usize,
     },
     /// A switch of the backend was refused and nothing changed: `to` is the backend asked for,
@@ -92,19 +132,32 @@ pub enum ImageGenEvent {
     },
 }
 
+/// Picture names as a line writes them: each one plain word, comma-separated, or `-` for none.
+fn names_or_dash(names: &[String]) -> String {
+    if names.is_empty() {
+        return "-".to_owned();
+    }
+    names
+        .iter()
+        .map(|name| plain_word(name))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// A count as a line writes it: the number, or `-` when it is not known.
 fn count_or_dash(count: Option<u64>) -> String {
     count.map_or_else(|| "-".to_owned(), |count| count.to_string())
 }
 
-/// A name as one plain word of a line: anything that is not a letter, digit, '-' or '_' becomes
-/// '_', and a long name is cut, so a refused request cannot break the line's shape.
+/// A name as one plain word of a line: anything that is not a letter, digit, '-', '_' or '.' (a
+/// picture's file name keeps its extension) becomes '_', and a long name is cut, so a refused
+/// request cannot break the line's shape.
 fn plain_word(name: &str) -> String {
     let word: String = name
         .chars()
         .take(MAXIMUM_NAME_CHARS)
         .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
                 character
             } else {
                 '_'
@@ -149,8 +202,12 @@ impl ImageGenEvent {
         match self {
             Self::Check { .. } => "check",
             Self::Requested { .. } => "requested",
+            Self::Prioritised { .. } => "priority",
+            Self::SheetView { .. } => "sheet_view",
+            Self::References { .. } => "references",
             Self::Started { .. } => "started",
             Self::Stored { .. } => "stored",
+            Self::Reshaped { .. } => "reshaped",
             Self::Failed { .. } => "failed",
             Self::Refused { .. } => "refused",
             Self::InvalidSetting { .. } => "setting",
@@ -178,13 +235,14 @@ impl ImageGenEvent {
                 name,
                 purpose,
                 aspect,
+                size,
                 prompt_chars,
                 deadline,
                 backend,
                 running,
             } => format!(
                 concat!(
-                    "IMAGEGEN {} job={} name={} purpose={} aspect={} prompt_chars={} ",
+                    "IMAGEGEN {} job={} name={} purpose={} aspect={} size={}x{} prompt_chars={} ",
                     "deadline_ms={} backend={} running={}"
                 ),
                 verb,
@@ -192,10 +250,48 @@ impl ImageGenEvent {
                 name,
                 purpose.key(),
                 aspect,
+                size.0,
+                size.1,
                 prompt_chars,
                 deadline.as_millis(),
                 backend,
                 running
+            ),
+            Self::SheetView { job, name, picture } => format!(
+                "IMAGEGEN {verb} job={job} name={} picture={} view=front",
+                plain_word(name),
+                plain_word(picture)
+            ),
+            Self::Prioritised {
+                job,
+                name,
+                priority,
+                backend,
+            } => format!(
+                "IMAGEGEN {verb} job={job} name={} level={} backend={backend}",
+                plain_word(name),
+                priority.key()
+            ),
+            Self::References {
+                job,
+                name,
+                base,
+                attached,
+                maximum,
+                left_out,
+            } => format!(
+                concat!(
+                    "IMAGEGEN {} job={} name={} base={} attached={} count={} maximum={} ",
+                    "left_out={}"
+                ),
+                verb,
+                job,
+                plain_word(name),
+                base.as_deref().map_or_else(|| "-".to_owned(), plain_word),
+                names_or_dash(attached),
+                attached.len(),
+                maximum,
+                names_or_dash(left_out)
             ),
             Self::Started { job, wait } => {
                 format!("IMAGEGEN {verb} job={job} wait_ms={}", wait.as_millis())
@@ -230,6 +326,20 @@ impl ImageGenEvent {
                 count_or_dash(*tokens_in),
                 count_or_dash(*tokens_out)
             ),
+            Self::Reshaped {
+                job,
+                name,
+                asked,
+                delivered,
+                backend,
+            } => format!(
+                "IMAGEGEN {verb} job={job} name={} asked={}x{} delivered={}x{} backend={backend}",
+                plain_word(name),
+                asked.0,
+                asked.1,
+                delivered.0,
+                delivered.1
+            ),
             Self::Failed {
                 job,
                 name,
@@ -257,9 +367,12 @@ impl ImageGenEvent {
             Self::CleanupFailed { job, cause } => {
                 format!("IMAGEGEN {verb} job={job} kind={}", cause.key())
             }
-            Self::Switched { from, to, running } => {
-                format!("IMAGEGEN {verb} from={from} to={to} running={running}")
-            }
+            Self::Switched {
+                from,
+                to,
+                tuning,
+                running,
+            } => format!("IMAGEGEN {verb} from={from} to={to}{tuning} running={running}"),
             Self::SwitchRefused { to, error } => format!(
                 "IMAGEGEN {verb} verb=backend to={} {}",
                 to.unwrap_or("_"),

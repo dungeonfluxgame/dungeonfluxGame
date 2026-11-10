@@ -2,7 +2,7 @@
 
 use super::cli::{MEDIA_BACKEND_USAGE, MEDIA_GENERATE_USAGE, MediaGenerate, parse};
 use super::limits::MAXIMUM_SENT_TEXT_CHARS;
-use super::model::{Aspect, Purpose};
+use super::model::{Aspect, InferenceSteps, Priority, Purpose};
 use super::request::{BackendSwitch, GenerateRequest};
 use crate::command::{self, Command, CommandError, split_words};
 
@@ -34,6 +34,8 @@ fn media_generate_parses_a_prompt_with_options() {
             references: Vec::new(),
             things: Vec::new(),
             avoid: Vec::new(),
+            left_out: Vec::new(),
+            priority: Priority::Normal,
         }))
     );
     let quoted = parsed("media generate \"one word=prompt\" as=x look=none").expect("parses");
@@ -49,8 +51,20 @@ fn media_generate_parses_a_prompt_with_options() {
             references: Vec::new(),
             things: Vec::new(),
             avoid: Vec::new(),
+            left_out: Vec::new(),
+            priority: Priority::Normal,
         }))
     );
+    let urgent =
+        parsed("media generate one door as=x priority=emergency look=none").expect("parses");
+    assert!(matches!(
+        urgent,
+        Command::MediaGenerate(MediaGenerate::Generate(GenerateRequest {
+            priority: Priority::Emergency,
+            ..
+        }))
+    ));
+    assert!(parsed("media generate one door as=x priority=urgent").is_err());
     assert_eq!(
         parsed("media generate status").expect("parses"),
         Command::MediaGenerate(MediaGenerate::Status)
@@ -166,16 +180,55 @@ fn media_backend_shows_or_switches_the_image_backend() {
         switch("media backend forge"),
         BackendSwitch::Forge {
             url: None,
-            project: None
+            project: None,
+            size: None,
+            steps: None
         }
     );
     assert_eq!(
         switch("media backend forge url=http://127.0.0.1:5174 project=abc"),
         BackendSwitch::Forge {
             url: Some("http://127.0.0.1:5174".to_owned()),
-            project: Some("abc".to_owned())
+            project: Some("abc".to_owned()),
+            size: None,
+            steps: None
         }
     );
+    // The size and steps are set with the switch, in either order.
+    let tuned = BackendSwitch::Forge {
+        url: None,
+        project: None,
+        size: Some("512x512".parse().expect("a size")),
+        steps: Some(InferenceSteps::new(20).expect("steps")),
+    };
+    assert_eq!(switch("media backend forge size=512x512 steps=20"), tuned);
+    assert_eq!(switch("media backend forge steps=20 size=512x512"), tuned);
+    for line in [
+        "media backend forge size=512",
+        "media backend forge size=0x512",
+        "media backend forge size=512x512x3",
+        "media backend forge steps=0",
+        "media backend forge steps=101",
+        "media backend forge steps=many",
+    ] {
+        assert!(
+            matches!(
+                parsed(line),
+                Err(CommandError::BadChoice { ref key, .. }) if key == "size" || key == "steps"
+            ),
+            "{line}: {:?}",
+            parsed(line)
+        );
+    }
+    assert!(matches!(
+        parsed("media backend forge size=512x512 size=64x64"),
+        Err(CommandError::DuplicateKey(key)) if key == "size"
+    ));
+    // Codex takes neither.
+    assert!(matches!(
+        parsed("media backend codex-cli size=512x512"),
+        Err(CommandError::Usage(MEDIA_BACKEND_USAGE))
+    ));
     assert!(matches!(
         parsed("media backend dall-e"),
         Err(CommandError::BadChoice { key, .. }) if key == "backend"
@@ -199,7 +252,10 @@ fn media_backend_shows_or_switches_the_image_backend() {
         BackendSwitch::Forge {
             url: None,
             project: None,
+            size: None,
+            steps: None,
         },
+        tuned,
     ] {
         assert_eq!(
             serde_json::to_value(&switch).expect("writes")["backend"],

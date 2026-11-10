@@ -17,7 +17,7 @@ use super::model::{GeneratedImage, ImageRequest, Purpose};
 use super::request::{GenerateError, JobState, JobView, PictureCause, Provenance, Sidecar};
 use super::service::{
     DEADLINE_SECONDS_VARIABLE, DeadlineSettingError, ImageGenerator, deadline_or_default,
-    deadline_setting, forget_oldest_finished,
+    deadline_setting, forget_oldest_finished, shape_kept,
 };
 use crate::media_library::media_entries;
 use crate::test_support::{Running, start};
@@ -287,10 +287,11 @@ async fn a_refusal_by_the_service_ends_the_job_with_its_typed_error() {
 async fn references_reach_the_backend_in_order_after_the_base() {
     let rig = Rig::new().await;
     std::fs::create_dir_all(rig.media()).expect("makes the library");
+    let (first, second) = (flat_png(2, 2, [9, 9, 9]), flat_png(2, 3, [8, 8, 8]));
     for (name, bytes) in [
         ("door.png", b"base".as_slice()),
-        ("ref-a.png", b"first"),
-        ("ref-b.png", b"second"),
+        ("ref-a.png", first.as_slice()),
+        ("ref-b.png", second.as_slice()),
     ] {
         std::fs::write(rig.media().join(name), bytes).expect("writes");
     }
@@ -299,15 +300,27 @@ async fn references_reach_the_backend_in_order_after_the_base() {
     let request = request("hall")
         .editing("door.png")
         .and_then(|request| request.following(&["ref-a.png".to_owned(), "ref-b.png".to_owned()]))
-        .expect("a request");
+        .expect("a request")
+        .leaving_out(&["ref-c.png".to_owned()]);
     let view = rig.run_to_end(&generator, request).await.expect("stored");
+    // The audit line says what the job followed and what its caller left out for want of room;
+    // a job with no pictures writes none (the other tests count their lines).
+    let lines = rig.lines();
+    let references = lines
+        .iter()
+        .find(|line| line.starts_with("IMAGEGEN references "))
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(
+        references.starts_with(concat!(
+            "IMAGEGEN references job=1 name=hall base=door.png ",
+            "attached=ref-a.png,ref-b.png count=2 maximum="
+        )) && references.ends_with(" left_out=ref-c.png"),
+        "{references}"
+    );
     let asked = backend.asked();
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0].0.base.as_deref(), Some(b"base".as_slice()));
-    assert_eq!(
-        asked[0].0.references,
-        [b"first".to_vec(), b"second".to_vec()]
-    );
+    assert_eq!(asked[0].0.references, [first, second]);
     let (provenance, _) = stored(&view);
     assert!(
         provenance
@@ -563,7 +576,7 @@ async fn a_check_and_a_started_line_take_their_times_from_the_injected_clock() {
             format!(
                 concat!(
                     "IMAGEGEN requested job=1 name=hall purpose=background aspect=16:9 ",
-                    "prompt_chars=24 deadline_ms={} backend=fake running=1"
+                    "size=1672x941 prompt_chars=24 deadline_ms={} backend=fake running=1"
                 ),
                 DEFAULT_DEADLINE.as_millis()
             ),
@@ -691,5 +704,173 @@ async fn a_switched_backend_takes_new_jobs_while_a_running_one_ends_on_its_own()
     assert_eq!(
         generator.backend_limits().maximum_text_characters,
         Some(FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS)
+    );
+}
+
+#[tokio::test]
+async fn an_emergency_picture_reaches_the_backend_as_one_and_says_so_in_the_log() {
+    use super::model::Priority;
+    let rig = Rig::new().await;
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    rig.run_to_end(&generator, request("hall"))
+        .await
+        .expect("stored");
+    rig.run_to_end(&generator, request("door").prioritised(Priority::Emergency))
+        .await
+        .expect("stored");
+    let asked = backend.asked();
+    assert_eq!(asked[0].0.priority, Priority::Normal);
+    assert_eq!(
+        asked[1].0.priority,
+        Priority::Emergency,
+        "the backend that has a queue of its own puts it first"
+    );
+    let lines = rig.lines();
+    let priorities: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("IMAGEGEN priority "))
+        .collect();
+    assert_eq!(
+        priorities,
+        ["IMAGEGEN priority job=2 name=door level=emergency backend=fake"],
+        "a normal request writes none: {lines:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_picture_of_another_shape_than_asked_is_said_so_before_its_stored_line() {
+    let rig = Rig::new().await;
+    let square = GeneratedImage {
+        width_px: 512,
+        height_px: 512,
+        ..picture()
+    };
+    let generator = rig.generator(FakeBackend::new(Script::Picture(square)));
+    rig.run_to_end(&generator, request("hall"))
+        .await
+        .expect("stored");
+    let lines = rig.lines();
+    assert!(
+        lines[1].contains(" aspect=16:9 size=1672x941 "),
+        "the request says the size asked: {lines:?}"
+    );
+    assert_eq!(
+        lines[3],
+        "IMAGEGEN reshaped job=1 name=hall asked=1672x941 delivered=512x512 backend=fake"
+    );
+    assert!(lines[4].starts_with("IMAGEGEN stored job=1 "), "{lines:?}");
+}
+
+#[test]
+fn a_backend_s_rounded_sides_keep_the_shape_and_a_square_for_a_wide_one_does_not() {
+    assert!(shape_kept((1672, 941), (1664, 928)));
+    assert!(shape_kept((512, 512), (512, 512)));
+    assert!(!shape_kept((1672, 941), (512, 512)));
+    assert!(!shape_kept((512, 512), (1672, 941)));
+}
+
+/// A real PNG of `width` by `height` whose pixels are all `rgb`: stored (uncompressed) blocks, so
+/// the test needs no encoder.
+fn flat_png(width: u32, height: u32, rgb: [u8; 3]) -> Vec<u8> {
+    fn crc(bytes: &[u8]) -> u32 {
+        let mut crc = u32::MAX;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    0xEDB8_8320 ^ (crc >> 1)
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc(&body).to_be_bytes());
+    }
+    // Each row starts with its filter byte (none), then the pixels.
+    let row: Vec<u8> = std::iter::once(0)
+        .chain(rgb.iter().copied().cycle().take(rgb.len() * width as usize))
+        .collect();
+    let raw: Vec<u8> = row.repeat(height as usize);
+    let (mut low, mut high) = (1_u32, 0_u32);
+    for byte in &raw {
+        low = (low + u32::from(*byte)) % 65_521;
+        high = (high + low) % 65_521;
+    }
+    let mut zlib = vec![0x78, 0x01, 1];
+    let length = u16::try_from(raw.len()).unwrap();
+    zlib.extend_from_slice(&length.to_le_bytes());
+    zlib.extend_from_slice(&(!length).to_le_bytes());
+    zlib.extend_from_slice(&raw);
+    zlib.extend_from_slice(&((high << 16) | low).to_be_bytes());
+    let mut header = Vec::new();
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, 2, 0, 0, 0]);
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    chunk(&mut out, b"IHDR", &header);
+    chunk(&mut out, b"IDAT", &zlib);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+fn size_of_png(png: &[u8]) -> (u32, u32) {
+    let side = |from: usize| u32::from_be_bytes(png[from..from + 4].try_into().unwrap());
+    (side(16), side(20))
+}
+
+#[tokio::test]
+async fn an_edit_is_shown_the_front_view_of_a_multi_view_sheet_and_a_fresh_picture_the_whole() {
+    let rig = Rig::new().await;
+    std::fs::create_dir_all(rig.media()).expect("makes the library");
+    let sheet = flat_png(9, 3, [200, 10, 10]);
+    let portrait = flat_png(3, 6, [10, 200, 10]);
+    for (name, bytes) in [
+        ("door.png", b"base".to_vec()),
+        ("ref-wide.png", sheet.clone()),
+        ("ref-tall.png", portrait.clone()),
+    ] {
+        std::fs::write(rig.media().join(name), bytes).expect("writes");
+    }
+    let backend = FakeBackend::new(Script::Picture(picture()));
+    let generator = rig.generator(Arc::clone(&backend));
+    let people = ["ref-wide.png".to_owned(), "ref-tall.png".to_owned()];
+    let edit = request("hall")
+        .editing("door.png")
+        .and_then(|request| request.following(&people))
+        .expect("a request");
+    rig.run_to_end(&generator, edit).await.expect("stored");
+    let fresh = request("lane").following(&people).expect("a request");
+    rig.run_to_end(&generator, fresh).await.expect("stored");
+    let asked = backend.asked();
+    assert_eq!(
+        size_of_png(&asked[0].0.references[0]),
+        (3, 3),
+        "the edit is shown the front third of the sheet, not three people side by side"
+    );
+    assert_eq!(
+        asked[0].0.references[1], portrait,
+        "a sheet with one view is shown as it is"
+    );
+    assert_eq!(
+        asked[1].0.references,
+        [sheet, portrait],
+        "a picture painted anew is shown the whole sheet"
+    );
+    let views: Vec<String> = rig
+        .lines()
+        .into_iter()
+        .filter(|line| line.starts_with("IMAGEGEN sheet_view "))
+        .collect();
+    assert_eq!(
+        views,
+        ["IMAGEGEN sheet_view job=1 name=hall picture=ref-wide.png view=front"]
     );
 }

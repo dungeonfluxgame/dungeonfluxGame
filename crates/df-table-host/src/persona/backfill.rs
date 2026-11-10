@@ -605,6 +605,7 @@ pub(super) async fn consider(
         asked_by: request.asked_by.as_deref(),
         intent: None,
         strike: false,
+        declare: false,
     };
     if request.coverage {
         let filled = fill_gaps(app, route, scene, persona, request, at_ms).await;

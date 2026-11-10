@@ -28,7 +28,7 @@ pub const GUIDANCE_SUFFIX: &str = ".guidance.json";
 
 /// The words no persona can be called: the last segments of the dev API's paths and the words of
 /// the persona command line, which would be read as a verb or as a route instead of an id.
-pub const RESERVED_IDS: [&str; 15] = [
+pub const RESERVED_IDS: [&str; 18] = [
     "remove",
     "edit",
     "voice",
@@ -42,6 +42,9 @@ pub const RESERVED_IDS: [&str; 15] = [
     "backfill",
     "backfills",
     "guide",
+    "perceive",
+    "scene",
+    "thoughts",
     "list",
     "all",
 ];

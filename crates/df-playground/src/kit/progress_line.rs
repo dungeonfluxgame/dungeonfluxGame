@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::kit::{Step, current_index, shown, steps};
-use crate::overlay::Progress;
+use crate::overlay::{Progress, StoryMark};
 
 /// The progress line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +22,15 @@ pub struct ProgressLine {
 }
 
 impl ProgressLine {
+    /// The line of the place a story's mark says the party has reached; none before play begins.
+    pub fn of_story(mark: &StoryMark) -> Option<Self> {
+        mark.progress.clone().map(|progress| Self {
+            progress,
+            show_play: false,
+            continue_label: None,
+        })
+    }
+
     /// A run of one scene has no line.
     pub fn is_drawn(&self) -> bool {
         self.progress.total >= 2

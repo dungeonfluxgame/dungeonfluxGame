@@ -23,14 +23,15 @@ use df_imagery::oneshot::{self, OneShotConfig, OneShotError, OneShotRequest};
 use df_providers::{
     FORGE_IMAGE_MAXIMUM_DESCRIPTION_CHARACTERS, FORGE_IMAGE_MAXIMUM_NEGATIVE_CHARACTERS,
     FORGE_IMAGE_MAXIMUM_SIDE_PX, FORGE_IMAGE_NEGATIVE_GUIDANCE, FORGE_IMAGE_SIDE_STEP_PX,
-    ForgeCause, ForgeClient, ForgeEngine, ForgeError, ForgeJobKind, ForgeMedia, NativeHttpCause,
+    ForgeCause, ForgeClient, ForgeEngine, ForgeError, ForgeJobKind, ForgeMedia, ForgePriority,
+    NativeHttpCause,
 };
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::limits::{CODEX_MAXIMUM_PICTURES, MAXIMUM_PICTURES};
-use super::model::{BackendRequest, GeneratedImage};
+use super::model::{BackendRequest, GeneratedImage, InferenceSteps, PictureSize, Priority};
 use super::request::BackendSwitch;
 use crate::forge::{FORGE_BACKEND, ForgeSetupError, client_from_environment, client_with};
 use crate::io_cause::IoCause;
@@ -296,6 +297,30 @@ impl fmt::Display for BackendError {
 
 impl std::error::Error for BackendError {}
 
+/// What a runtime switch set on a backend beyond its limits: the size and steps of every picture
+/// it makes, in place of the request's shape and the supplier's own steps. Only the Forge backend
+/// takes either; nothing set is the default of every backend.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BackendTuning {
+    /// The width and height of every picture, whatever shape the request had.
+    pub size: Option<PictureSize>,
+    /// The `num_inference_steps` of every picture.
+    pub steps: Option<InferenceSteps>,
+}
+
+impl fmt::Display for BackendTuning {
+    /// ` size=512x512 steps=20` for what is set, nothing for what is not: an audit line's tail.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(size) = self.size {
+            write!(formatter, " size={size}")?;
+        }
+        if let Some(steps) = self.steps {
+            write!(formatter, " steps={steps}")?;
+        }
+        Ok(())
+    }
+}
+
 /// What one backend takes, so a request is fitted to it before it is sent: callers read it (the
 /// services report carries it) to size what they ask for, and the service checks every request
 /// against it.
@@ -356,6 +381,11 @@ pub trait ImageBackend: Send + Sync {
     /// What the backend takes.
     fn limits(&self) -> BackendLimits {
         BackendLimits::REQUEST
+    }
+
+    /// What a runtime switch set beyond the limits; nothing for a backend that takes none.
+    fn tuning(&self) -> BackendTuning {
+        BackendTuning::default()
     }
 
     /// Whether the backend was given a Codex home. Only a Codex backend has one.
@@ -624,10 +654,19 @@ pub fn backend_of(switch: &BackendSwitch) -> Arc<dyn ImageBackend> {
         BackendSwitch::CodexCli {} => {
             Arc::new(CodexBackend::new(CodexSettings::from_process_environment()))
         }
-        BackendSwitch::Forge { url, project } => Arc::new(ForgeImageBackend::new(client_with(
-            url.as_deref(),
-            project.as_deref(),
-        ))),
+        BackendSwitch::Forge {
+            url,
+            project,
+            size,
+            steps,
+        } => Arc::new(
+            ForgeImageBackend::new(client_with(url.as_deref(), project.as_deref())).with_tuning(
+                BackendTuning {
+                    size: *size,
+                    steps: *steps,
+                },
+            ),
+        ),
     }
 }
 
@@ -640,11 +679,22 @@ pub fn backend_of(switch: &BackendSwitch) -> Arc<dyn ImageBackend> {
 /// Recovery panel.
 pub struct ForgeImageBackend {
     client: Result<ForgeClient, ForgeSetupError>,
+    tuning: BackendTuning,
 }
 
 impl ForgeImageBackend {
     pub fn new(client: Result<ForgeClient, ForgeSetupError>) -> Self {
-        Self { client }
+        Self {
+            client,
+            tuning: BackendTuning::default(),
+        }
+    }
+
+    /// The backend with a size and steps that replace the request's shape and Forge's default.
+    #[must_use]
+    pub fn with_tuning(mut self, tuning: BackendTuning) -> Self {
+        self.tuning = tuning;
+        self
     }
 
     fn client(&self) -> Result<&ForgeClient, BackendError> {
@@ -663,6 +713,10 @@ impl ImageBackend for ForgeImageBackend {
 
     fn check(&self) -> Result<(), BackendError> {
         self.client().map(|_| ())
+    }
+
+    fn tuning(&self) -> BackendTuning {
+        self.tuning
     }
 
     /// Forge's bounds on an image job's description and negative prompt, and the pictures the host
@@ -701,9 +755,14 @@ impl ImageBackend for ForgeImageBackend {
                     .map_err(forge_error)?;
                 references.push(staged.as_str().to_owned());
             }
-            let body = forge_image_job(request, &references);
+            let body = forge_image_job(request, &references, self.tuning);
+            // An emergency picture (a declared action) is put first in Forge's waiting line.
+            let urgency = match request.priority {
+                Priority::Normal => ForgePriority::Normal,
+                Priority::Emergency => ForgePriority::Emergency,
+            };
             let render = client
-                .render(ForgeJobKind::Images, body, until)
+                .render_with(ForgeJobKind::Images, body, until, urgency)
                 .await
                 .map_err(forge_error)?;
             let bytes = client
@@ -730,14 +789,27 @@ impl ImageBackend for ForgeImageBackend {
 
 /// The body of Forge's image job for `request` with its staged `references`. A negative prompt
 /// goes with the guidance that makes Forge apply it (`FORGE_IMAGE_NEGATIVE_GUIDANCE`); Forge
-/// refuses either without the other.
-pub(super) fn forge_image_job(request: &BackendRequest, references: &[String]) -> Value {
+/// refuses either without the other. A `tuning` size replaces the request's own, and its steps
+/// are sent as `num_inference_steps`; without them Forge's own default steps apply.
+pub(super) fn forge_image_job(
+    request: &BackendRequest,
+    references: &[String],
+    tuning: BackendTuning,
+) -> Value {
+    let (width_px, height_px) = tuning
+        .size
+        .map_or((request.width_px, request.height_px), |size| {
+            (size.width_px(), size.height_px())
+        });
     let mut body = serde_json::json!({
         "prompt": request.text,
-        "width": forge_side(request.width_px),
-        "height": forge_side(request.height_px),
+        "width": forge_side(width_px),
+        "height": forge_side(height_px),
         "references": references,
     });
+    if let Some(steps) = tuning.steps {
+        body["num_inference_steps"] = Value::from(steps.get());
+    }
     if let Some(negative) = &request.negative {
         body["negative_prompt"] = Value::from(negative.as_str());
         body["true_cfg_scale"] = Value::from(FORGE_IMAGE_NEGATIVE_GUIDANCE);

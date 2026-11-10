@@ -40,10 +40,11 @@ const OUTLINES: &str = ".tv-anchors .rp-outline[data-character]";
 const LOWER_THIRD: &str = ".tv-caption, .kit-caption";
 
 /// The chrome that stays clear of the bubbles: the logo, the place name, the scene's title banner,
-/// the top bar's pills, the status chip, the caption bars, the party strip, the markers and
-/// the clue board.
+/// the top bar's pills, the story's chip and line, the status chip, the caption bars, the party
+/// strip, the markers and the clue board.
 const KEEP_OUT: &str = ".kit-brand, .tv-place, .rp-title-wrap, .tb-pills, .tv-status, \
-                       .tv-caption, .kit-caption, .tv-party, .rp-marker, .tv-clues .kit-clues";
+                       .tv-caption, .kit-caption, .tv-party, .rp-marker, .tv-clues .kit-clues, \
+                       .tv-story .kit-chip, .tv-story .kit-progress";
 
 /// The room a bubble narrower than its frame keeps beyond its words, in layout pixels.
 const BUBBLE_ROOM_PX: i32 = 2;
@@ -120,12 +121,14 @@ impl BubbleLayout {
         };
         let faces = all_faces(stage, framing, (width, height));
         settle_clue_board(stage, &to_stage, &faces)?;
+        settle_story_mark(stage, &to_stage, &faces)?;
         let bubbles = self.measure_bubbles(stage, framing, (width, height))?;
         self.settle_repeats(&bubbles);
         self.settle_outlines(stage)?;
         if bubbles.is_empty() {
             self.chosen.clear();
-            return settle_clue_board(stage, &to_stage, &faces);
+            settle_clue_board(stage, &to_stage, &faces)?;
+            return settle_story_mark(stage, &to_stage, &faces);
         }
         let mut keep_out = Vec::new();
         let chrome = stage.query_selector_all(KEEP_OUT)?;
@@ -168,7 +171,8 @@ impl BubbleLayout {
             present.insert(placement.id.clone(), placement.choice());
         }
         self.chosen = present;
-        settle_clue_board(stage, &to_stage, &faces)
+        settle_clue_board(stage, &to_stage, &faces)?;
+        settle_story_mark(stage, &to_stage, &faces)
     }
 
     /// Marks the bubbles that show what their character's bubble already showed as settled, so
@@ -401,6 +405,26 @@ fn settle_clue_board(
     set_class(&layer, "clue-hidden", covers)
 }
 
+/// Keeps the story's chip and progress line off the people and the lower third. The mark fades
+/// out (`story-hidden`) while either of them covers a face, a bubble, the narration, the caption
+/// bar or the clue board, and back in once clear. The mark never moves.
+fn settle_story_mark(
+    stage: &Element,
+    to_stage: &dyn Fn(&web_sys::DomRect) -> Rect,
+    faces: &[Rect],
+) -> Result<(), JsValue> {
+    let Some(layer) = stage.query_selector(".tv-story")? else {
+        return Ok(());
+    };
+    let mut boxes = rects_of(stage, LOWER_THIRD, to_stage)?;
+    boxes.extend(rects_of(stage, BUBBLES, to_stage)?);
+    boxes.extend(rects_of(stage, ".tv-clues .kit-clues", to_stage)?);
+    let covers = rects_of(&layer, ".kit-chip, .kit-progress", to_stage)?
+        .iter()
+        .any(|mark| board_covers(mark, faces, &boxes));
+    set_class(&layer, "story-hidden", covers)
+}
+
 /// The boxes of the elements of `stage` that match `selector`, on the stage.
 fn rects_of(
     stage: &Element,
@@ -457,7 +481,7 @@ fn all_faces(stage: &Element, framing: &Framing, size: (f32, f32)) -> Vec<Rect> 
         .unwrap_or_default()
 }
 
-/// A face as `left,top,right,bottom` thousandths of the picture.
+/// A face as `left,top,right,bottom` thousandths of the stage (`roleplay::face_text`).
 fn face_of(text: &str) -> Option<(u16, u16, u16, u16)> {
     let mut parts = text.split(',').map(|part| part.trim().parse::<u16>());
     let face = (
@@ -469,7 +493,7 @@ fn face_of(text: &str) -> Option<(u16, u16, u16, u16)> {
     parts.next().is_none().then_some(face)
 }
 
-/// A face (thousandths of the picture) as a box on the stage under the camera's resting framing.
+/// A face (thousandths of the stage) as a box on the stage under the camera's resting framing.
 fn face_on_stage(
     face: (u16, u16, u16, u16),
     framing: &Framing,

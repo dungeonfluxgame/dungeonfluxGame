@@ -1653,7 +1653,7 @@ pub(super) fn without_play(story: Story) -> Story {
 
 /// Clears the stored story's play state and the stuck-party count, for a run to start clean.
 async fn reset_play(routes: &StoryRoutes) -> Result<Story, StoryRouteError> {
-    let _writing = routes.story_write.lock().await;
+    let writing = routes.story_write.lock().await;
     let path = story_path(&routes.app);
     let story = crate::blocking::run_blocking(
         move || {
@@ -1664,6 +1664,7 @@ async fn reset_play(routes: &StoryRoutes) -> Result<Story, StoryRouteError> {
         StoryRouteError::Stopped,
     )
     .await?;
+    drop(writing);
     *routes
         .stretch
         .lock()
@@ -1671,6 +1672,7 @@ async fn reset_play(routes: &StoryRoutes) -> Result<Story, StoryRouteError> {
     routes
         .app
         .record_line(format!("PERSONA story_reset items={}", story.items.len()));
+    super::story_mark::show_story_mark(&routes.app, &story).await;
     Ok(story)
 }
 

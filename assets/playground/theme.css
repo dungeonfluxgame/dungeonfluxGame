@@ -699,6 +699,16 @@ body {
 /* Pictures */
 .tv-backdrop { position: absolute; inset: 0; }
 .tv-backdrop-image { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A plate whose shape is not near the frame's is shown whole (`data-fit=contain`, `plate_fit`), over a blurred, dimmed
+   copy of itself (the second image `.tv-backdrop-fill`, added by `plate_fade::fit_backdrop`), so nobody in the picture is
+   cropped away. A plate near the frame's shape keeps `object-fit: cover` and draws no copy. */
+.tv-backdrop-fill { display: none; }
+.tv-backdrop[data-fit="contain"] { isolation: isolate; }
+.tv-backdrop[data-fit="contain"] .tv-backdrop-image { object-fit: contain; }
+.tv-backdrop[data-fit="contain"] .tv-backdrop-fill {
+  display: block; position: absolute; left: -4%; top: -4%; width: 108%; height: 108%; z-index: -1;
+  object-fit: cover; filter: blur(2.2cqw) brightness(.55) saturate(1.15); pointer-events: none;
+}
 /* A new backdrop plate fades in over the old one (`view::plate_fade`): the layer is invisible until its image has loaded, then
    fades for the transition's length (--fade-ms, the controls' transition); the layers under it go when the fade ends. */
 .tv-backdrop-incoming { opacity: 0; }
@@ -2239,3 +2249,18 @@ body {
   :is(.tv-clues.clue-shut, .tv-stage:has(.kit-tc) .tv-clues) .kit-note { animation: none; }
 }
 /* === end component: clue-board === */
+
+/* === component: story mark === */
+/* The story's title chip at the top right with the progress line under it (`view::story`). The line is the kit's, made compact
+   for the corner: its words right-aligned over a short track, on the chip's night glass. When the mark would cover a person, a
+   bubble, the narration, the caption bar or the clue board (`view::bubble_layout`) it fades out (story-hidden) until it is clear;
+   it never moves. */
+.tv-story { z-index: 2; transition: opacity 400ms ease; }
+.tv-story.story-hidden { opacity: 0; }
+.tv-story .kit-progress {
+  align-self: flex-end; height: auto; max-width: 40cqw; flex-direction: column; align-items: flex-end; gap: .5cqw;
+  padding: .55cqw 1.2cqw; border-radius: 1.6cqw; background: #0e1426cc;
+}
+.tv-story .kit-progress-label { flex-wrap: wrap; justify-content: flex-end; column-gap: .6cqw; text-align: right; text-wrap: balance; }
+.tv-story .kit-progress-track { position: static; transform: none; width: 18cqw; }
+@media (prefers-reduced-motion: reduce) { .tv-story { transition: none; } }

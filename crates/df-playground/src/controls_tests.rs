@@ -365,6 +365,7 @@ fn the_plate_timer_counts_down_to_the_next_scheduled_frame_and_says_the_last() {
         FrameReason::Schedule,
         FrameReason::Inspection,
         FrameReason::Focus,
+        FrameReason::Declared,
     ] {
         assert_eq!(serde_json::json!(reason), serde_json::json!(reason.key()));
     }

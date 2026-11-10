@@ -307,3 +307,45 @@ fn the_board_fades_only_when_it_covers_a_face_or_a_box() {
     assert!(board_covers(&board, &[clear, face], &[]));
     assert!(board_covers(&board, &[clear], &[face]));
 }
+
+#[test]
+fn only_the_story_slot_is_redrawn_when_the_story_mark_changes() {
+    use crate::overlay::StoryMark;
+
+    let before = snapshot(&base());
+    let mut overlay = SceneOverlay::default();
+    overlay
+        .apply(
+            SceneChange::Story {
+                mark: StoryMark {
+                    title: "The Charter".to_owned(),
+                    progress: None,
+                },
+            },
+            &base(),
+        )
+        .expect("sets");
+    assert_eq!(overlay.changed_slots(), ["story"]);
+    let after = snapshot(&drawn(&overlay));
+    let plan = DrawPlan::between(Some(&before), &after);
+    assert_eq!(plan.parts, BTreeSet::from([Part::TvStory]));
+    assert!(!plan.devices && !plan.stage);
+}
+
+#[test]
+fn a_story_mark_outside_its_run_or_without_a_title_is_refused() {
+    use crate::overlay::{Progress, StoryMark};
+
+    let mark = |title: &str, index: u16| StoryMark {
+        title: title.to_owned(),
+        progress: Some(Progress {
+            index,
+            total: 3,
+            title: None,
+        }),
+    };
+    assert!(mark("The Charter", 3).check().is_ok());
+    assert!(mark("The Charter", 0).check().is_err());
+    assert!(mark("The Charter", 4).check().is_err());
+    assert!(mark(" ", 1).check().is_err());
+}
