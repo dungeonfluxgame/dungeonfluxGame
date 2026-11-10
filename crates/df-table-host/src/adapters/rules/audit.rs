@@ -1,6 +1,7 @@
 //! The lines the production rules owner writes: `RULES resolved` for every check or urging it
-//! resolved through the rules port, and `RULES refused` with a closed cause for every call it
-//! could not answer.
+//! resolved through the rules port, `RULES rolled` for every typed roll it resolved (every die,
+//! the modifiers, the total, the target and the outcome), and `RULES refused` with a closed cause
+//! for every call it could not answer.
 //!
 //! They hold the action's checked name, the operation id, closed keys and numbers, never a hero's
 //! name or a player's words. They go through df-observe's shared audit path, the one the host
@@ -10,6 +11,7 @@
 use std::fmt::Write;
 
 use df_rules::influence::RollMode;
+use df_rules::roll::{DiePlace, RollError, RollResult, RollSubject, RolledDie};
 use df_table::event::FailureCause;
 use df_table::identity::OperationId;
 use df_table::ports::{ActionId, PortError, PortName};
@@ -24,8 +26,8 @@ pub enum RulesRefusal {
     DrawsUnfit,
     /// A drawn value that is no d20 face.
     FaceOutOfRange,
-    /// `df-rules` refused the inputs of an ability check.
-    CheckRefused,
+    /// `df-rules` refused the request or the faces of a roll.
+    RollRefused(RollError),
     /// `df-rules` refused the inputs of an influence urging.
     InfluenceRefused,
     /// A rolled urging came back without its counted die or its total.
@@ -42,7 +44,7 @@ impl RulesRefusal {
     pub const ALL: [Self; 7] = [
         Self::DrawsUnfit,
         Self::FaceOutOfRange,
-        Self::CheckRefused,
+        Self::RollRefused(RollError::UnusedDraws),
         Self::InfluenceRefused,
         Self::InfluenceIncomplete,
         Self::FactName,
@@ -53,7 +55,7 @@ impl RulesRefusal {
         match self {
             Self::DrawsUnfit => "draws_unfit",
             Self::FaceOutOfRange => "face_out_of_range",
-            Self::CheckRefused => "check_refused",
+            Self::RollRefused(_) => "roll_refused",
             Self::InfluenceRefused => "influence_refused",
             Self::InfluenceIncomplete => "influence_incomplete",
             Self::FactName => "fact_name",
@@ -145,12 +147,78 @@ pub fn resolved_line(action: &ActionId, operation: OperationId, line: &ResolvedL
     text
 }
 
-/// `RULES refused action=<id> operation=<id> cause=<key>`.
+/// `RULES refused action=<id> operation=<id> cause=<key>`, and `error=<key>` after a refused roll.
 pub fn refused_line(action: &ActionId, operation: OperationId, cause: RulesRefusal) -> String {
+    let detail = match cause {
+        RulesRefusal::RollRefused(error) => format!(" error={}", error.key()),
+        _ => String::new(),
+    };
     format!(
-        "{AREA} refused action={} operation={operation} cause={}",
+        "{AREA} refused action={} operation={operation} cause={}{detail}",
         action.as_str(),
         cause.key()
+    )
+}
+
+/// The subject of a roll as one closed key, `skill_check:athletics`.
+pub fn subject_key(subject: RollSubject) -> String {
+    match subject {
+        RollSubject::AbilityCheck(ability) => format!("ability_check:{}", ability.key()),
+        RollSubject::SkillCheck(skill) => format!("skill_check:{}", skill.key()),
+        RollSubject::SavingThrow(ability) => format!("saving_throw:{}", ability.key()),
+        RollSubject::Attack(kind) => format!("attack:{}", kind.key()),
+        RollSubject::Initiative => "initiative".to_owned(),
+        RollSubject::DeathSave => "death_save".to_owned(),
+        RollSubject::PassivePerception => "passive_perception".to_owned(),
+        RollSubject::Dice(role) => format!("dice:{}", role.key()),
+    }
+}
+
+/// One die as `d20:14:kept`, with its place in a percentile pair after it.
+pub fn die_text(die: &RolledDie) -> String {
+    let place = match die.place {
+        DiePlace::Whole => String::new(),
+        place => format!(":{}", place.key()),
+    };
+    let kept = if die.kept { "kept" } else { "set_aside" };
+    format!("d{}:{}:{kept}{place}", die.sides, die.face)
+}
+
+fn list_or_dash(items: impl Iterator<Item = String>) -> String {
+    let joined = items.collect::<Vec<_>>().join(",");
+    if joined.is_empty() {
+        "-".to_owned()
+    } else {
+        joined
+    }
+}
+
+/// `RULES rolled action=<id> operation=<id> subject=.. mode=.. dice=.. modifiers=.. total=..
+/// target=.. outcome=.. natural=.. replaced=..`: every die, set-aside ones included.
+pub fn rolled_line(action: &ActionId, operation: OperationId, result: &RollResult) -> String {
+    let target = result.target.map_or_else(
+        || "-".to_owned(),
+        |target| format!("{}:{}", target.label.key(), target.value),
+    );
+    format!(
+        "{AREA} rolled action={} operation={operation} subject={} mode={} dice={} modifiers={} \
+         total={} target={target} outcome={} natural={} replaced={}",
+        action.as_str(),
+        subject_key(result.subject),
+        mode_key(result.mode),
+        list_or_dash(result.dice.iter().map(die_text)),
+        list_or_dash(result.modifiers.iter().map(|modifier| format!(
+            "{}:{}",
+            modifier.label.key(),
+            modifier.value
+        ))),
+        result.total,
+        result.outcome.key(),
+        result.natural.key(),
+        result
+            .inspiration_reroll
+            .as_ref()
+            .map_or_else(|| "-".to_owned(), die_text),
     )
 }
 

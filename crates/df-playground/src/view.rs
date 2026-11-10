@@ -16,6 +16,7 @@ pub mod phone;
 pub mod pills;
 pub mod plate_fade;
 pub mod roleplay;
+pub mod roll;
 pub mod sam;
 pub mod seats;
 pub mod story;

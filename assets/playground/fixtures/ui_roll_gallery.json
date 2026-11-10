@@ -1,0 +1,46 @@
+{
+  "name": "UI: roll card gallery",
+  "description": "One roll on the shared screen over a busy plate, with the narrator's box under it, for judging how a roll is displayed (crates/df-playground/src/roll.rs, kit/roll_card.rs). The card in this file plays once when the scene is loaded; development/playground-scripts/roll-gallery.txt rolls one of every kind and every die size in turn with fixed values (scene roll).",
+  "tv": {
+    "place": "The roll gallery",
+    "status": { "kind": "ok" },
+    "caption": null,
+    "backdrop": { "media": "lobby-hall-plate.webp", "caption": null },
+    "card": null,
+    "narration": {
+      "speaker": "Dungeon Master",
+      "text": "Athletics, Strength. The difficulty is fifteen. Roll the dice and let us see whether the rope holds.",
+      "continue_label": null,
+      "badge": null,
+      "voice": true
+    },
+    "roll": {
+      "view": {
+        "id": "gallery-athletics",
+        "title": "Athletics (Strength)",
+        "kind": "skill_check",
+        "dice": [{ "sides": 20, "face": 14, "role": "test" }],
+        "modifiers": [
+          { "label": "Strength", "value": 3 },
+          { "label": "Proficiency", "value": 2 }
+        ],
+        "total": 19,
+        "target": { "label": "DC", "value": 15 },
+        "outcome": "success"
+      },
+      "min_hold_ms": 0
+    },
+    "elements": []
+  },
+  "phone": {
+    "hero": "Kael",
+    "goal": null,
+    "status": { "kind": "ok" },
+    "narration": [],
+    "suggested": [],
+    "groups": [],
+    "unavailable": [],
+    "note": null,
+    "image": null
+  }
+}

@@ -7,6 +7,7 @@
 pub(super) mod home;
 pub(super) mod lobby;
 pub(super) mod pills;
+mod roll;
 mod ui;
 
 use std::collections::BTreeSet;
@@ -540,6 +541,9 @@ pub(super) fn scene(words: &[String]) -> Result<Command, CommandError> {
         }
         Some((verb, rest)) if verb == "sound" => sound(rest),
         Some((verb, rest)) if verb == "clues" => clues(rest),
+        Some((verb, rest)) if matches!(verb.as_str(), "roll" | "roll-clear") => {
+            roll::parse(verb, rest)
+        }
         Some((verb, rest)) if verb == "reset" && rest.is_empty() => {
             Ok(Command::Scene(SceneChange::Reset {}))
         }

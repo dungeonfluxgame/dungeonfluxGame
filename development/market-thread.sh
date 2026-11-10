@@ -131,6 +131,31 @@
 # the table, runs `tempo prepare` (`[music] prepared: ..`) and starts the base track, then posts the
 # events it already has (`arrival`, `look`, `declare`, `painted`, `trade`, `show`; an arrival is tried
 # as `arrival_<way>` first) as the kinds the `@tempo` lines name, and prints `[tempo NN]` and `[music NN]`.
+#
+# The dice gauntlet (`@gauntlet <character>`): one character meets the stations of `@gauntlet_stations`
+# in the order of the `@station <id> | player|narrator | <the dungeon master's scene line> | <what he
+# sets out to do>` lines (a narrator's station has no fourth field: the dungeon master calls the
+# check). At each station the plate replaces the backdrop with a fade (the page's fade, set once from
+# `@gauntlet_fade <ms>`), the dungeon master sets the scene (`persona narrate`), the character says
+# what he does (`persona say`) and `persona check run` judges the line, calls the check aloud, rolls
+# real dice, shows the roll card and reads the result ("The check judge and the DM's checks" in the
+# runbook). `@station_sight <id> <what is in sight>` joins the judge's facts (the ground of an
+# advantage or a disadvantage), `@station_inspire <id> <die place>` spends Heroic Inspiration on that
+# die, `@station_plate <id> <plate>` and `@station_place <id> <words>` replace the stations file's
+# plate and setting for every run of that id (the judge's `place=` and the character's surroundings),
+# and a station id may be listed again (a repeat). `@gauntlet_persona`, `@gauntlet_sheet` and `@gauntlet_stations` name the files,
+# `@gauntlet_breath <seconds>` is the pause between stations and `@gauntlet_limit <seconds>` the time
+# a station may take before it is logged `[station NN] stuck` and left. The log: `[station NN]`,
+# `[dm NN]`, `[said NN]`, `[check NN]`, `[roll NN]`, `[hold NN]`, `[inspire NN]`, `[host NN]`,
+# `[time NN]` and a closing `[summary]`, from the command's answer and the host's own `CHECK`,
+# `TIMING roll`, `RULES rolled` and `PERSONA check_*` audit lines. `--plan` after the beats file (or
+# `DF_RUN_PLAN=1`) prints and checks every station's steps and calls no host.
+# Before the first station the prep gives every plate (once) a layout with the character named
+# (`media locate show`, `media locate`, `media locate identify` by `@gauntlet_look` and
+# `@gauntlet_portrait`, `[prep] ..`): a plate where he is not found makes its stations narrator-only.
+# A station that runs out of time is cleared (`scene roll-clear`) and the host waited for before the
+# next. Once this host's `persona check` usage shows `intent=`, a narrator station passes its own
+# test as `intent=<kind[:ability[:skill]]>`.
 cd "$(dirname "$0")/.."
 D=${DF_TABLE_EXE:-./artifacts/build/bubbles/debug/df-table.exe}
 P=${DF_TABLE_PORT:-7879}
@@ -143,7 +168,27 @@ LAST=""
 LAST_SPEAKER=""
 MOVE_TO=""
 HISTORY=()
-BEATS=${1:?usage: bash development/market-thread.sh <beats-file>}
+BEATS=${1:?usage: bash development/market-thread.sh <beats-file> [--plan]}
+PLAN=${DF_RUN_PLAN:-}
+[ "${2:-}" = --plan ] && PLAN=1
+# A run never turns on a switch that spends money (owner, 2026-11-10): the toolbar keeps TTS and
+# Music from one run to the next, and the host calls its voice and composer only while they are on.
+# `DF_RUN_TTS` and `DF_RUN_MUSIC` (`on` or `off`) set one for this run alone; unset, what the host
+# remembers stands. The line printed says which it was: `[settings] tts=<on|off> (from <stored|flag>)`.
+run_setting() {
+  local key=$1 flag=$2 source=stored state
+  case "$flag" in
+    on) $D dev --port $P playground set "$key=true" >/dev/null 2>&1; source=flag ;;
+    off) $D dev --port $P playground set "$key=false" >/dev/null 2>&1; source=flag ;;
+  esac
+  state=$($D dev --port $P playground 2>/dev/null | sed -n "s/^$key: //p")
+  case "$state" in true) state=on ;; false) state=off ;; *) state=unknown ;; esac
+  printf '[settings] %s=%s (from %s)\n' "$key" "$state" "$source"
+}
+if [ -z "$PLAN" ]; then
+  run_setting tts "${DF_RUN_TTS:-}"
+  run_setting music "${DF_RUN_MUSIC:-}"
+fi
 KEEPER=""
 KEEPER_SITUATION=""
 SPEAKER_SITUATION=""
@@ -189,7 +234,17 @@ PERCEIVED_THINGS=""
 MOVES=()
 TEMPO_TABLE=""
 declare -A PLACE_PLATE PLACE_KEEPER PLACE_KEEPER_SITUATION PLACE_SITUATION PLACE_SCENE WAY ARRIVAL
-declare -A TEMPO_EVENT WALK_STAGES WALK_TOWN
+declare -A TEMPO_EVENT WALK_STAGES WALK_TOWN STATION_SIGHT STATION_INSPIRE STATION_PLATE STATION_PLACE
+GAUNTLET=""
+GAUNTLET_PERSONA=""
+GAUNTLET_SHEET=""
+GAUNTLET_STATIONS=""
+GAUNTLET_FADE=800
+GAUNTLET_BREATH=1.5
+GAUNTLET_LIMIT=180
+GAUNTLET_LOOK=""
+GAUNTLET_PORTRAIT=""
+STATIONS=()
 WALK_HOLD=
 WALK_SECONDS=0
 while IFS= read -r setting; do
@@ -243,6 +298,20 @@ while IFS= read -r setting; do
     '@walk '*) read -r walk_way walk_n walk_town <<< "$value"
       WALK_STAGES[$walk_way]=$walk_n; WALK_TOWN[$walk_way]=$walk_town ;;
     '@move '*) MOVES+=("$value") ;;
+    '@gauntlet '*) GAUNTLET=$value ;;
+    '@gauntlet_persona '*) GAUNTLET_PERSONA=$value ;;
+    '@gauntlet_sheet '*) GAUNTLET_SHEET=$value ;;
+    '@gauntlet_stations '*) GAUNTLET_STATIONS=$value ;;
+    '@gauntlet_fade '*) GAUNTLET_FADE=$value ;;
+    '@gauntlet_breath '*) GAUNTLET_BREATH=$value ;;
+    '@gauntlet_limit '*) GAUNTLET_LIMIT=$value ;;
+    '@gauntlet_look '*) GAUNTLET_LOOK=$value ;;
+    '@gauntlet_portrait '*) GAUNTLET_PORTRAIT=$value ;;
+    '@station '*) STATIONS+=("$value") ;;
+    '@station_sight '*) STATION_SIGHT[${value%% *}]+="${value#* }"$'\n' ;;
+    '@station_inspire '*) STATION_INSPIRE[${value%% *}]=${value#* } ;;
+    '@station_plate '*) STATION_PLATE[${value%% *}]=${value#* } ;;
+    '@station_place '*) STATION_PLACE[${value%% *}]=${value#* } ;;
   esac
 done < <(grep '^@' "$BEATS")
 # The day's show is the last move of a roam: a move like the others, ended differently.
@@ -404,7 +473,7 @@ narrate_spoken() { # speaks the narrator's word being composed, if any, once it 
 }
 
 # A scripted scene names its keeper and where it is; a flowing one has them per place.
-if [ -z "$FLOW" ] && [ -z "$ROAM" ] && { [ -z "$KEEPER" ] || [ -z "$KEEPER_SITUATION" ] ||
+if [ -z "$FLOW" ] && [ -z "$ROAM" ] && [ -z "$GAUNTLET" ] && { [ -z "$KEEPER" ] || [ -z "$KEEPER_SITUATION" ] ||
   [ -z "$SPEAKER_SITUATION" ]; }; then
   echo "$BEATS names no @keeper, @keeper_situation and @speaker_situation" >&2
   exit 2
@@ -1499,5 +1568,634 @@ play_roam() {
   fi
 }
 [ -n "$ROAM" ] && play_roam
+
+# The dice gauntlet (`@gauntlet`, see the header): the counters of the closing summary, then the
+# helpers, one station and the run. Everything it reads of a station is in `@gauntlet_stations`.
+declare -A G_KINDS G_DICE G_MODES G_NARRATOR_KINDS
+G_RUN=0
+G_SKIPPED=0
+G_STUCK=0
+G_FAILED=0
+G_NO_ROLL=0
+G_NO_CHECK_FIRST=0
+G_ROLLED=0
+G_PLAYER=0
+G_NARRATOR=0
+G_MATCH=0
+G_DIFFER=0
+G_JUDGE_RETRIES=0
+G_LINE_RETRIES=0
+G_REFUSALS=0
+G_INSPIRED=0
+G_SHORT=0
+G_CARD_ONE=0
+G_CARD_TWENTY=0
+G_D20_ONE=0
+G_D20_TWENTY=0
+G_TOTAL_SECONDS=0
+G_LONGEST=0
+G_SHORTEST=0
+G_STUCK_IDS=""
+G_PROBLEMS=0
+STATION_ID=""
+STATION_BEGAN=0
+GAUNTLET_DEADLINE=0
+CHECK_ARGS=()
+CHECK_LAUNCHED=""
+GAUNTLET_INTENT=""
+GAUNTLET_TOLD=""
+declare -A NO_WARRIOR
+G_PREP_FAILED=0
+G_PREP_ONLY=0
+
+gauntlet_trim() { # text without the spaces around it
+  printf '%s' "$1" | sed 's/^ *//;s/ *$//'
+}
+# A string field of the station $1 in the stations file (`null` for a null, nothing for no field).
+gauntlet_field() { # station id, key
+  awk -v id="$1" -v key="$2" '
+    $0 == "      \"id\": \"" id "\"," { inside = 1; next }
+    inside && /^      "id": / { exit }
+    inside && index($0, "      \"" key "\": ") == 1 {
+      value = substr($0, length("      \"" key "\": ") + 1)
+      sub(/,$/, "", value); gsub(/^"|"$/, "", value); print value; exit }
+  ' "$GAUNTLET_STATIONS"
+}
+# The station ids of the stations file, in its order.
+gauntlet_ids() {
+  sed -n 's/^      "id": "\(.*\)",$/\1/p' "$GAUNTLET_STATIONS"
+}
+# The plate and the place of a station: its own in the stations file, or what `@station_plate` and
+# `@station_place` give every run of that id (a bout at the ford for the attack and damage stations).
+gauntlet_plate_of() { # station id
+  printf '%s\n' "${STATION_PLATE[$1]:-$(gauntlet_field "$1" plate)}"
+}
+gauntlet_setting_of() { # station id
+  printf '%s\n' "${STATION_PLACE[$1]:-$(gauntlet_field "$1" setting)}"
+}
+# The kinds the stations file allows.
+gauntlet_kinds() {
+  sed -n '/"kinds": \[/,/\]/p' "$GAUNTLET_STATIONS" | sed -n 's/^ *"\([a-z_]*\)",\{0,1\}$/\1/p'
+}
+# Sleeps for $1 milliseconds.
+gauntlet_pause() {
+  sleep "$(($1 / 1000)).$(printf '%03d' $(($1 % 1000)))"
+}
+# Milliseconds as seconds with one decimal, or - when unknown.
+gauntlet_s() {
+  case "$1" in
+    ''|-|*[!0-9]*) printf '%s' - ;;
+    *) printf '%s.%s' "$((($1 + 50) / 1000))" "$(((($1 + 50) % 1000) / 100))" ;;
+  esac
+}
+# Runs a command for what is left of the station's time; 124 when that has run out (stuck).
+gauntlet_timed() {
+  local left=$((GAUNTLET_DEADLINE - SECONDS))
+  [ "$left" -gt 0 ] || return 124
+  timeout "$left" "$@"
+}
+# The text of the host's audit lines of an area after event $1, one to a line.
+gauntlet_lines() { # after-sequence, area
+  local sequence text
+  $D dev --port $P events "${1:-0}" "area=$2" limit=2000 2>/dev/null | grep -E '^ *[0-9]+ ' |
+    while read -r sequence _ text; do printf '%s\n' "$text"; done
+}
+# The value of key $3 in the last of the lines $1 that begin with $2.
+gauntlet_last() { # lines, prefix, key
+  field_of "$(printf '%s\n' "$1" | grep -F "$2" | tail -1)" "$3"
+}
+# How many of the lines $1 begin with $2.
+gauntlet_count() { # lines, prefix
+  printf '%s\n' "$1" | grep -c "^$2" || true
+}
+# The test a station was designed for as `intent=` writes it: `<kind>[:<ability>[:<skill>]]`, the
+# abilities by the roll vocabulary's keys (the stations file has the short ones).
+gauntlet_intent() { # station id
+  local intent ability skill
+  intent=$(gauntlet_field "$1" kind)
+  ability=$(gauntlet_field "$1" ability)
+  skill=$(gauntlet_field "$1" skill)
+  case "$ability" in
+    str) ability=strength ;;
+    dex) ability=dexterity ;;
+    con) ability=constitution ;;
+    int) ability=intelligence ;;
+    wis) ability=wisdom ;;
+    cha) ability=charisma ;;
+    *) ability="" ;;
+  esac
+  [ -n "$ability" ] && intent="$intent:$ability"
+  [ -n "$ability" ] && [ -n "$skill" ] && [ "$skill" != null ] && intent="$intent:$skill"
+  printf '%s' "$intent"
+}
+# The options of `persona check run` for the station $1 (initiated by $2, who said $3) in CHECK_ARGS:
+# the files, the moment, what is in sight and the die Heroic Inspiration is spent on.
+gauntlet_check_args() { # station id, player|narrator, what he said, the scene line just spoken
+  local sight
+  CHECK_ARGS=("sheet=$GAUNTLET_SHEET" "stations=$GAUNTLET_STATIONS" "station=$1")
+  if [ "$2" = player ]; then
+    CHECK_ARGS+=("moment=player" "action=$3")
+  else
+    CHECK_ARGS+=("moment=narrator")
+    # The narrator's own authored test, once this host's `persona check` takes `intent=`.
+    [ -n "$GAUNTLET_INTENT" ] && CHECK_ARGS+=("intent=$(gauntlet_intent "$1")")
+  fi
+  while IFS= read -r sight; do
+    [ -n "$sight" ] && CHECK_ARGS+=("sight=$sight")
+  done <<< "${STATION_SIGHT[$1]:-}"
+  [ -n "${STATION_INSPIRE[$1]:-}" ] && CHECK_ARGS+=("inspiration=${STATION_INSPIRE[$1]}")
+  [ -n "$GAUNTLET_TOLD" ] && [ -n "$4" ] && CHECK_ARGS+=("told=$4")
+  [ -n "${STATION_PLACE[$1]:-}" ] && CHECK_ARGS+=("place=${STATION_PLACE[$1]}")
+}
+gauntlet_problem() {
+  printf '[plan] PROBLEM: %s\n' "$*"
+  G_PROBLEMS=$((G_PROBLEMS + 1))
+}
+
+# `--plan`: every station's steps and their checks against the files, with no call to the host. The
+# exit status is 0 when nothing is wrong.
+gauntlet_plan() {
+  local number=0 spec id who scene goal title kind plate seen=" " kinds file heard plates=0 repeat
+  local media=${DF_PLAYGROUND:-artifacts/tmp/persona-live/playground}/media
+  printf '[plan] %s with %s stations of %s (media %s)\n' "$GAUNTLET" "${#STATIONS[@]}" \
+    "$GAUNTLET_STATIONS" "$media"
+  for file in "$GAUNTLET_PERSONA" "$GAUNTLET_SHEET" "$GAUNTLET_STATIONS"; do
+    [ -f "$file" ] || gauntlet_problem "$file does not exist"
+  done
+  if [ ! -f "$GAUNTLET_STATIONS" ]; then
+    printf 'PLAN RESULT FAIL (%s problems)\n' "$G_PROBLEMS"
+    exit 1
+  fi
+  kinds=$(gauntlet_kinds)
+  # `intent=` and `told=` are shown as they are sent once this host's `persona check` usage text has them.
+  GAUNTLET_INTENT=yes
+  GAUNTLET_TOLD=yes
+  [ -n "$GAUNTLET_LOOK" ] || gauntlet_problem "no @gauntlet_look: the prep has nothing to name him by"
+  [ -f "$media/${GAUNTLET_PORTRAIT:-ref-$GAUNTLET.png}" ] ||
+    gauntlet_problem "portrait ${GAUNTLET_PORTRAIT:-ref-$GAUNTLET.png} is not in $media"
+  for spec in "${STATIONS[@]}"; do
+    number=$((number + 1))
+    IFS='|' read -r id who scene goal <<< "$spec"
+    id=$(gauntlet_trim "$id"); who=$(gauntlet_trim "$who")
+    scene=$(gauntlet_trim "$scene"); goal=$(gauntlet_trim "$goal")
+    title=$(gauntlet_field "$id" title); kind=$(gauntlet_field "$id" kind)
+    plate=$(gauntlet_plate_of "$id")
+    if [ -z "$title" ]; then
+      gauntlet_problem "station $number: no station $id in the stations file"
+      continue
+    fi
+    repeat=""
+    case "$seen" in *" $id "*) repeat=" (repeat)" ;; esac
+    seen="$seen$id "
+    printf '%s\n' "$kinds" | grep -qx "$kind" ||
+      gauntlet_problem "station $id: kind $kind is not one of the file's kinds"
+    case "$who" in
+      player)
+        [ -n "$goal" ] || gauntlet_problem "station $id: a player station needs what he sets out to do"
+        G_PLAYER=$((G_PLAYER + 1)) ;;
+      narrator)
+        [ -z "$goal" ] || gauntlet_problem "station $id: a narrator station has no fourth field"
+        G_NARRATOR=$((G_NARRATOR + 1))
+        G_NARRATOR_KINDS[$kind]=$((${G_NARRATOR_KINDS[$kind]:-0} + 1)) ;;
+      *) gauntlet_problem "station $id: the initiator is player or narrator, not '$who'" ;;
+    esac
+    [ -n "$scene" ] || gauntlet_problem "station $id: no scene line for the dungeon master"
+    case "$scene" in *';'*) gauntlet_problem "station $id: the scene line has a semicolon" ;; esac
+    if [ -f "$media/$plate" ]; then
+      plates=$((plates + 1))
+    else
+      gauntlet_problem "station $id: plate $plate is not in $media"
+    fi
+    heard=$((3 + ${#scene} * 70 / 1000))
+    printf '[plan %02d] %s%s | %s | %s | %s | ability=%s skill=%s | plate %s\n' "$number" "$id" \
+      "$repeat" "$title" "$kind" "$who" "$(gauntlet_field "$id" ability)" "$(gauntlet_field "$id" skill)" "$plate"
+    printf '          1 plate  scene image tv-backdrop %s (page fade %s ms)\n' "$plate" "$GAUNTLET_FADE"
+    printf '          2 dm     persona narrate speak=true "%s" (heard out in %s s)\n' "$scene" "$heard"
+    if [ "$who" = player ]; then
+      printf '          3 says   persona say %s speak=true "intent=%s"\n' "$GAUNTLET" "$goal"
+    else
+      printf '          3 says   nothing: the dungeon master calls the check\n'
+    fi
+    gauntlet_check_args "$id" "$who" "<the line he said>" "$scene"
+    printf '          4 check  persona check run %s' "$GAUNTLET"
+    printf ' "%s"' "${CHECK_ARGS[@]}"
+    printf '\n'
+  done
+  printf '[plan] prep, before the first station (%s plates, once each):\n' \
+    "$(gauntlet_plates | wc -l | tr -d ' ')"
+  printf '          media locate show <plate>: a layout with %s named means already; no layout: media locate <plate>\n' \
+    "$GAUNTLET"
+  printf '          then media locate identify <plate> "%s=%s" "portrait.%s=%s"\n' "$GAUNTLET" \
+    "$GAUNTLET_LOOK" "$GAUNTLET" "${GAUNTLET_PORTRAIT:-ref-$GAUNTLET.png}"
+  printf '          plates:'
+  for plate in $(gauntlet_plates); do printf ' %s' "$plate"; done
+  printf '\n          a plate where he is not found makes its stations narrator-only (no persona say)\n'
+  for id in $(gauntlet_ids); do
+    case "$seen" in
+      *" $id "*) ;;
+      *) gauntlet_problem "station $id of the stations file is not in the beats" ;;
+    esac
+  done
+  for id in "${!STATION_SIGHT[@]}" "${!STATION_INSPIRE[@]}" "${!STATION_PLATE[@]}" "${!STATION_PLACE[@]}"; do
+    case "$seen" in
+      *" $id "*) ;;
+      *) gauntlet_problem "a @station_ line names $id, which is not a station" ;;
+    esac
+  done
+  [ "${#STATION_INSPIRE[@]}" -le 1 ] ||
+    gauntlet_problem "Heroic Inspiration is spent once, ${#STATION_INSPIRE[@]} stations spend it"
+  printf '[plan] stations=%s of %s in the file, player=%s narrator=%s, plates found=%s\n' \
+    "${#STATIONS[@]}" "$(gauntlet_ids | wc -l | tr -d ' ')" "$G_PLAYER" "$G_NARRATOR" "$plates"
+  printf '[plan] narrator-initiated by kind:'
+  for kind in $(printf '%s\n' "${!G_NARRATOR_KINDS[@]}" | sort); do
+    printf ' %s=%s' "$kind" "${G_NARRATOR_KINDS[$kind]}"
+  done
+  printf '\n[plan] sights on: %s | Heroic Inspiration on: %s\n' \
+    "$(printf '%s\n' "${!STATION_SIGHT[@]}" | sort | paste -sd ' ' -)" \
+    "$(printf '%s\n' "${!STATION_INSPIRE[@]}" | sort | paste -sd ' ' -)"
+  if [ "$G_PROBLEMS" -eq 0 ]; then
+    printf 'PLAN RESULT PASS\n'
+    exit 0
+  fi
+  printf 'PLAN RESULT FAIL (%s problems)\n' "$G_PROBLEMS"
+  exit 1
+}
+
+# The plates of the stations, each once, in the order they are met.
+gauntlet_plates() {
+  local spec id
+  for spec in "${STATIONS[@]}"; do
+    IFS='|' read -r id _ <<< "$spec"
+    gauntlet_plate_of "$(gauntlet_trim "$id")"
+  done | awk 'NF && !seen[$0]++'
+}
+
+# Before the first station every plate must hold a layout with the character named, or the host
+# refuses his line (`no_layout`, `unknown_character`). A plate whose `media locate show` already names
+# him is `already`; one with no layout is scanned (`media locate`); one without him named is asked
+# (`media locate identify`, by his look and his reference sheet, never a name). A plate where he is
+# not found, or the prep failed, is remembered in NO_WARRIOR: its stations are the narrator's.
+gauntlet_prep() {
+  local plate shown out rc result portrait=${GAUNTLET_PORTRAIT:-ref-$GAUNTLET.png}
+  local total=0 already=0 scanned=0 named=0 failed=0 only=""
+  while IFS= read -r plate; do
+    total=$((total + 1))
+    shown=$($D dev --port $P media locate show "$plate" 2>&1)
+    rc=$?
+    if [ "$rc" -eq 0 ] && printf '%s\n' "$shown" | grep -q "^ *[0-9]*: $GAUNTLET \["; then
+      printf '[prep] %s already\n' "$plate"
+      already=$((already + 1))
+      continue
+    fi
+    if [ "$rc" -ne 0 ]; then
+      out=$(timeout 300 $D dev --port $P media locate "$plate" 2>&1)
+      rc=$?
+      if [ "$rc" -ne 0 ]; then
+        printf '[prep] %s FAILED(scan: %s)\n' "$plate" "$(printf '%s\n' "$out" | head -1)"
+        failed=$((failed + 1)); NO_WARRIOR[$plate]=1; only="$only $plate"
+        continue
+      fi
+      printf '[prep] %s scanned\n' "$plate"
+      scanned=$((scanned + 1))
+    fi
+    out=$(timeout 300 $D dev --port $P media locate identify "$plate" \
+      "$GAUNTLET=$GAUNTLET_LOOK" "portrait.$GAUNTLET=$portrait" 2>&1)
+    rc=$?
+    result=$(printf '%s\n' "$out" | sed -n "s/^  $GAUNTLET: .* -> \(.*\)\$/\1/p" | head -1)
+    if [ "$rc" -eq 0 ] && [ "$result" = named ]; then
+      printf '[prep] %s named\n' "$plate"
+      named=$((named + 1))
+    else
+      printf '[prep] %s FAILED(%s)\n' "$plate" \
+        "${result:-identify: $(printf '%s\n' "$out" | head -1)}"
+      failed=$((failed + 1)); NO_WARRIOR[$plate]=1; only="$only $plate"
+    fi
+  done < <(gauntlet_plates)
+  G_PREP_FAILED=$failed
+  printf '[prep] %s plates: already=%s scanned=%s named=%s failed=%s | narrator-only plates:%s\n' \
+    "$total" "$already" "$scanned" "$named" "$failed" "${only:- none}"
+}
+
+# A step of a station ended it: rc 124 is the station running out of its time (stuck), anything else
+# an error that skips it. A check that was under way goes on in the host, so its card is waited for.
+gauntlet_halt() { # number, rc, step, output, after-sequence
+  if [ "$2" = 124 ]; then
+    printf '[station %02d] stuck at %s after %s s (limit %s s): skipped\n' "$1" "$3" \
+      "$((SECONDS - STATION_BEGAN))" "$GAUNTLET_LIMIT"
+    G_STUCK=$((G_STUCK + 1))
+    G_STUCK_IDS="${G_STUCK_IDS:+$G_STUCK_IDS }$STATION_ID"
+  else
+    printf '[station %02d] skipped at %s: %s\n' "$1" "$3" "$(printf '%s\n' "$4" | head -1)"
+    G_SKIPPED=$((G_SKIPPED + 1))
+  fi
+  [ "$3" = check ] && [ "$CHECK_LAUNCHED" = yes ] && gauntlet_settle "$1" "$5"
+  return 0
+}
+# A check the station gave up on is still in the host's flow. The card is cleared (`scene roll-clear`),
+# the flow is waited for until a `CHECK cleared`, a `CHECK skipped` or a refusal of the check ends it
+# (two minutes at most), and the card is cleared once more, so a stuck station cannot cover the next.
+gauntlet_settle() { # number, after-sequence
+  local waited=0 chk idle=no
+  $D dev --port $P scene roll-clear 2>&1 | head -1 | sed 's/^/       ~ /'
+  while [ "$waited" -lt 120 ]; do
+    chk=$({ gauntlet_lines "$2" CHECK; gauntlet_lines "$2" PERSONA | grep '^PERSONA refused verb=check'; })
+    if printf '%s\n' "$chk" | grep -q '^\(CHECK cleared\|CHECK skipped\|PERSONA refused verb=check\)'; then
+      idle=yes
+      break
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  $D dev --port $P scene roll-clear 2>&1 | head -1 | sed 's/^/       ~ /'
+  if [ "$idle" = yes ]; then
+    printf '[station %02d] cleared after stuck (the host was idle %s s later)\n' "$1" "$waited"
+  else
+    printf '[station %02d] cleared after stuck, but the host did not end its check within %s s\n' \
+      "$1" "$waited"
+  fi
+}
+
+# What the check run's answer says, as the `[check]`, `[roll]` and `[dm]` lines (and the tallies).
+gauntlet_report() { # number, the answer of persona check run
+  local number=$1 header call designed roll called result faces die sides face kept mode kind title
+  local match dice
+  header=$(printf '%s\n' "$2" | sed -n '1p')
+  call=$(printf '%s\n' "$2" | sed -n 's/^  call: //p')
+  designed=$(printf '%s\n' "$2" | sed -n 's/^  designed: //p')
+  roll=$(printf '%s\n' "$2" | sed -n 's/^  roll: //p')
+  called=$(printf '%s\n' "$2" | sed -n 's/^  called ([^)]*): //p')
+  result=$(printf '%s\n' "$2" | sed -n 's/^  result ([^)]*): //p')
+  if [ "$(field_of "$header" required)" != true ]; then
+    printf '[check %02d] required=%s initiator=%s reason=%s: no roll was called\n' "$number" \
+      "$(field_of "$header" required)" "$(field_of "$header" initiator)" \
+      "$(field_of "$header" reason)"
+    G_NO_ROLL=$((G_NO_ROLL + 1))
+    return
+  fi
+  kind=$(field_of "$call" kind)
+  mode=$(field_of "$call" mode)
+  case "$(field_of "$designed" match)" in
+    true) match=match; G_MATCH=$((G_MATCH + 1)) ;;
+    false) match="differs($(field_of "$designed" kind))"; G_DIFFER=$((G_DIFFER + 1)) ;;
+    *) match=- ;;
+  esac
+  printf '[check %02d] required=true kind=%s ability=%s skill=%s dc=%s mode=%s grounds=%s uses=%s initiator=%s reason=%s retried=%s judge_ms=%s designed=%s\n' \
+    "$number" "$kind" "$(field_of "$call" ability)" "$(field_of "$call" skill)" \
+    "$(field_of "$call" dc)" "$mode" "$(field_of "$call" grounds)" "$(field_of "$call" uses)" \
+    "$(field_of "$header" initiator)" "$(field_of "$header" reason)" "$(field_of "$header" retried)" \
+    "$(field_of "$header" duration_ms)" "$match"
+  faces=$(field_of "$roll" dice)
+  title=$(printf '%s\n' "$roll" | sed 's/ kind=.*//')
+  printf '[roll %02d] faces=%s total=%s outcome=%s natural=%s card=%s target=%s (%s)\n' "$number" \
+    "${faces:--}" "$(field_of "$roll" total)" "$(field_of "$roll" outcome)" \
+    "$(field_of "$roll" natural)" "$(field_of "$roll" kind)" \
+    "$(printf '%s\n' "$roll" | sed -n 's/.* target=\(.*\) outcome=.*/\1/p')" "$title"
+  printf '[dm %02d] call: %s\n' "$number" "${called:--}"
+  printf '[dm %02d] result: %s\n' "$number" "${result:--}"
+  G_ROLLED=$((G_ROLLED + 1))
+  G_KINDS[$kind]=$((${G_KINDS[$kind]:-0} + 1))
+  G_MODES[$mode]=$((${G_MODES[$mode]:-0} + 1))
+  case "$(field_of "$roll" natural)" in
+    one) G_CARD_ONE=$((G_CARD_ONE + 1)) ;;
+    twenty) G_CARD_TWENTY=$((G_CARD_TWENTY + 1)) ;;
+  esac
+  IFS=',' read -ra dice <<< "$faces"
+  for die in "${dice[@]}"; do
+    sides=${die%%=*}
+    face=${die#*=}
+    kept=true
+    case "$face" in *x) kept=false; face=${face%x} ;; esac
+    G_DICE[$sides]=$((${G_DICE[$sides]:-0} + 1))
+    if [ "$sides" = d20 ] && [ "$kept" = true ]; then
+      case "$face" in
+        1) G_D20_ONE=$((G_D20_ONE + 1)) ;;
+        20) G_D20_TWENTY=$((G_D20_TWENTY + 1)) ;;
+      esac
+    fi
+  done
+}
+
+# What the host's own audit lines say of the station's check (events after $2): the times of the card
+# and of the dungeon master's lines (`CHECK`, `TIMING roll`), the Heroic Inspiration spent (`RULES
+# rolled`) and the judge's refusals and retries (`PERSONA check_*`).
+gauntlet_audit() { # number, after-sequence, judge ms, seconds the station took
+  local number=$1 chk persona rules page card drawn shown min_hold rstart rend cleared hold
+  local ok=ok tries judge line_retries refused replaced old new total mode target voice seen_ms
+  chk=$(gauntlet_lines "$2" CHECK)
+  drawn=$(gauntlet_last "$chk" 'CHECK rolled ' drawn_ms)
+  shown=$(gauntlet_last "$chk" 'CHECK shown ' at_ms)
+  card=$(gauntlet_last "$chk" 'CHECK shown ' id)
+  min_hold=$(gauntlet_last "$chk" 'CHECK shown ' min_hold_ms)
+  rstart=$(gauntlet_last "$chk" 'CHECK result_read ' start_ms)
+  rend=$(gauntlet_last "$chk" 'CHECK result_read ' end_ms)
+  cleared=$(gauntlet_last "$chk" 'CHECK cleared ' at_ms)
+  hold=$(gauntlet_last "$chk" 'CHECK cleared ' hold_ms)
+  if [ -n "$shown" ] && [ -n "$cleared" ] && [ -n "$rend" ] && [ -n "$hold" ]; then
+    if [ "$hold" -lt 6000 ] || [ "$((cleared - rend))" -lt 2000 ]; then
+      ok=SHORT
+      G_SHORT=$((G_SHORT + 1))
+    fi
+  else
+    ok=unknown
+  fi
+  # The page's own record of the card (`TIMING roll`), which reaches the host a moment after the card goes.
+  page=""
+  for tries in 1 2 3; do
+    [ -n "$card" ] || break
+    page=$(gauntlet_lines "$2" TIMING | grep -F "TIMING roll " | grep -F " id=$card " | tail -1)
+    [ -n "$page" ] && break
+    sleep 1
+  done
+  voice=$(gauntlet_last "$chk" 'CHECK result_read ' voice)
+  seen_ms=$(field_of "$page" shown_ms)
+  printf '[hold %02d] card_up_ms=%s dm_result_ms=%s hold_ms=%s min_hold_ms=%s result_to_clear_ms=%s page_card_ms=%s voice=%s held=%s\n' \
+    "$1" "$(span "$shown" "$cleared")" "$(span "$rstart" "$rend")" "${hold:--}" "${min_hold:--}" \
+    "$(span "$rend" "$cleared")" "${seen_ms:--}" "${voice:--}" "$ok"
+  printf '[time %02d] station took %s s (judge %s, call %s, roll %s, result %s, hold %s)\n' "$1" \
+    "$4" "$(gauntlet_s "$3")" "$(gauntlet_s "$(span "$drawn" "$shown")")" \
+    "$(gauntlet_s "$(span "$shown" "$rstart")")" "$(gauntlet_s "$(span "$rstart" "$rend")")" \
+    "$(gauntlet_s "$(span "$rend" "$cleared")")"
+  persona=$(gauntlet_lines "$2" PERSONA)
+  judge=$(gauntlet_count "$persona" 'PERSONA check_judge_retried')
+  line_retries=$(gauntlet_count "$persona" 'PERSONA check_line_retried')
+  refused=$(gauntlet_count "$persona" 'PERSONA refused verb=check')
+  G_JUDGE_RETRIES=$((G_JUDGE_RETRIES + judge))
+  G_LINE_RETRIES=$((G_LINE_RETRIES + line_retries))
+  G_REFUSALS=$((G_REFUSALS + refused))
+  printf '[host %02d] judge_retries=%s line_retries=%s refused=%s\n' "$1" "$judge" \
+    "$line_retries" "$refused"
+  rules=$(gauntlet_lines "$2" RULES | grep '^RULES rolled ' | tail -1)
+  replaced=$(field_of "$rules" replaced)
+  if [ -n "$replaced" ] && [ "$replaced" != - ]; then
+    G_INSPIRED=$((G_INSPIRED + 1))
+    mode=$(field_of "$rules" mode)
+    old=$(printf '%s' "$replaced" | cut -d: -f2)
+    new=$(field_of "$rules" dice | cut -d, -f1 | cut -d: -f2)
+    total=$(field_of "$rules" total)
+    target=$(field_of "$rules" target)
+    printf '[inspire %02d] Heroic Inspiration replaced %s (was %s, now %s) mode=%s modifiers=%s total_now=%s' \
+      "$1" "$replaced" "$old" "$new" "$mode" "$(field_of "$rules" modifiers)" "$total"
+    if [ "$mode" = normal ]; then
+      printf ' total_before=%s target=%s\n' "$((total - new + old))" "$target"
+    else
+      printf ' total_before=- target=%s\n' "$target"
+    fi
+  fi
+}
+
+# One station: the plate, the dungeon master's scene, his line, the check, and what the host says of it.
+gauntlet_station() { # number, the @station line
+  local number=$1 id who scene goal title kind plate setting out rc said="" after took attempt header
+  IFS='|' read -r id who scene goal <<< "$2"
+  id=$(gauntlet_trim "$id"); who=$(gauntlet_trim "$who")
+  scene=$(gauntlet_trim "$scene"); goal=$(gauntlet_trim "$goal")
+  STATION_ID=$id
+  title=$(gauntlet_field "$id" title); kind=$(gauntlet_field "$id" kind)
+  plate=$(gauntlet_plate_of "$id"); setting=$(gauntlet_setting_of "$id")
+  STATION_BEGAN=$SECONDS
+  GAUNTLET_DEADLINE=$((SECONDS + GAUNTLET_LIMIT))
+  printf '[station %02d] %s | %s | %s\n' "$number" "$id" "${title:-?}" "${kind:-?}"
+  if [ -z "$title" ]; then
+    gauntlet_halt "$number" 1 "stations file" "the stations file has no station $id" 0
+    return
+  fi
+  after=$(latest_event)
+  after=${after:-0}
+  # He is not in every plate (the prep found him in none of this one): the dungeon master sets the
+  # scene and calls the check, and nobody speaks.
+  if [ "$who" = player ] && [ -n "${NO_WARRIOR[$plate]:-}" ]; then
+    printf '[station %02d] narrator-only: %s has no %s named in it, so there is no persona say\n' \
+      "$number" "$plate" "$GAUNTLET"
+    who=narrator
+    G_PREP_ONLY=$((G_PREP_ONLY + 1))
+  fi
+  # (a) the plate, with the page's fade
+  out=$(gauntlet_timed $D dev --port $P scene image tv-backdrop "$plate" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then gauntlet_halt "$number" "$rc" plate "$out" "$after"; return; fi
+  gauntlet_pause "$GAUNTLET_FADE"
+  # (b) the dungeon master sets the scene, and is heard out before anyone answers
+  printf '[dm %02d] scene: %s\n' "$number" "$scene"
+  out=$(gauntlet_timed $D dev --port $P persona narrate speak=true "$scene" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then gauntlet_halt "$number" "$rc" scene "$out" "$after"; return; fi
+  heard_out "$scene"
+  wait_heard
+  # (c) he says what he does; at a narrator's station the dungeon master calls the check unasked
+  # (d) judge, call, dice, card, result, clear. A player's line the judge calls no roll for, at a
+  # station designed as a roll, is logged and asked once more with a firmer goal; both are logged.
+  attempt=1
+  while :; do
+    if [ "$who" = player ]; then
+      out=$(gauntlet_timed $D dev --port $P persona say "$GAUNTLET" speak=true \
+        "recent=The dungeon master: $scene" "intent=$goal" "Where you are: $setting" 2>&1)
+      rc=$?
+      said=$(printf '%s\n' "$out" | sed -n '1s/.*says: //p')
+      if [ "$rc" -ne 0 ] || [ -z "$said" ]; then
+        gauntlet_halt "$number" "$rc" says "${out:-he said nothing}" "$after"
+        return
+      fi
+      printf '[said %02d] %s%s\n' "$number" "$([ "$attempt" -gt 1 ] && printf 'retry: ')" "$said"
+      heard_out "$said"
+      wait_heard
+    else
+      printf '[said %02d] (nobody: the dungeon master calls the check)\n' "$number"
+    fi
+    gauntlet_check_args "$id" "$who" "$said" "$scene"
+    CHECK_LAUNCHED=""
+    [ $((GAUNTLET_DEADLINE - SECONDS)) -gt 0 ] && CHECK_LAUNCHED=yes
+    out=$(gauntlet_timed $D dev --port $P persona check run "$GAUNTLET" "${CHECK_ARGS[@]}" 2>&1)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+      if [ "$rc" = 124 ]; then
+        gauntlet_halt "$number" "$rc" check "$out" "$after"
+      else
+        printf '[check %02d] failed: %s\n' "$number" "$(printf '%s\n' "$out" | head -1)"
+        G_FAILED=$((G_FAILED + 1))
+      fi
+      return
+    fi
+    header=$(printf '%s\n' "$out" | sed -n '1p')
+    [ "$(field_of "$header" required)" = true ] && break
+    # No roll was called.
+    printf '[station %02d] NO CHECK (judge: %s; he said: %s)\n' "$number" \
+      "$(field_of "$header" reason)" "${said:-nobody, the dungeon master called it}"
+    if [ "$who" = player ] && [ "$kind" != passive ] && [ "$attempt" -eq 1 ]; then
+      G_NO_CHECK_FIRST=$((G_NO_CHECK_FIRST + 1))
+      printf '[station %02d] retry: asking him again with "You commit to it: do it, in a sentence."\n' \
+        "$number"
+      goal="$goal You commit to it: do it, in a sentence."
+      attempt=2
+      continue
+    fi
+    [ "$attempt" -gt 1 ] && printf '[station %02d] NO CHECK after the retry: given up\n' "$number"
+    break
+  done
+  G_RUN=$((G_RUN + 1))
+  [ "$who" = player ] && G_PLAYER=$((G_PLAYER + 1)) || G_NARRATOR=$((G_NARRATOR + 1))
+  gauntlet_report "$number" "$out"
+  took=$((SECONDS - STATION_BEGAN))
+  gauntlet_audit "$number" "$after" "$(field_of "$(printf '%s\n' "$out" | sed -n '1p')" duration_ms)" \
+    "$took"
+  G_TOTAL_SECONDS=$((G_TOTAL_SECONDS + took))
+  [ "$took" -le "$G_LONGEST" ] || G_LONGEST=$took
+  { [ "$G_SHORTEST" -ne 0 ] && [ "$G_SHORTEST" -le "$took" ]; } || G_SHORTEST=$took
+}
+
+# The closing table.
+gauntlet_summary() { # seconds the run took
+  local key
+  printf '\n[summary] ------------------------------------------------------------\n'
+  printf '[summary] stations planned=%s run=%s no_check=%s (first asks with no check, then retried: %s) rolled=%s skipped=%s stuck=%s failed=%s\n' \
+    "${#STATIONS[@]}" "$G_RUN" "$G_NO_ROLL" "$G_NO_CHECK_FIRST" "$G_ROLLED" "$G_SKIPPED" "$G_STUCK" \
+    "$G_FAILED"
+  printf '[summary] stuck: %s\n' "${G_STUCK_IDS:--}"
+  printf '[summary] initiated by: player=%s narrator=%s | prep: plates failed=%s, stations made narrator-only=%s\n' \
+    "$G_PLAYER" "$G_NARRATOR" "$G_PREP_FAILED" "$G_PREP_ONLY"
+  printf '[summary] rolls by kind:'
+  for key in $(printf '%s\n' "${!G_KINDS[@]}" | sort); do printf ' %s=%s' "$key" "${G_KINDS[$key]}"; done
+  printf '\n[summary] rolls by die size (set-aside dice included):'
+  for key in $(printf '%s\n' "${!G_DICE[@]}" | sort -V); do printf ' %s=%s' "$key" "${G_DICE[$key]}"; done
+  printf '\n[summary] modes:'
+  for key in $(printf '%s\n' "${!G_MODES[@]}" | sort); do printf ' %s=%s' "$key" "${G_MODES[$key]}"; done
+  printf ' | Heroic Inspiration spent=%s\n' "$G_INSPIRED"
+  printf '[summary] natural marks on the card: one=%s twenty=%s | kept d20 faces: 1=%s 20=%s\n' \
+    "$G_CARD_ONE" "$G_CARD_TWENTY" "$G_D20_ONE" "$G_D20_TWENTY"
+  printf '[summary] the judge: designed test matched=%s differed=%s | retries judge=%s line=%s refusals=%s\n' \
+    "$G_MATCH" "$G_DIFFER" "$G_JUDGE_RETRIES" "$G_LINE_RETRIES" "$G_REFUSALS"
+  printf '[summary] cards held too short=%s\n' "$G_SHORT"
+  printf '[summary] time: run %s s, stations %s s in all' "$1" "$G_TOTAL_SECONDS"
+  if [ "$G_RUN" -gt 0 ]; then
+    printf ', mean %s s, shortest %s s, longest %s s' "$((G_TOTAL_SECONDS / G_RUN))" "$G_SHORTEST" "$G_LONGEST"
+  fi
+  printf '\n'
+}
+
+# The run: store the character, set the fade, meet the stations one after the other.
+play_gauntlet() {
+  local number=0 spec began=$SECONDS usage
+  [ -n "$PLAN" ] && gauntlet_plan
+  printf '[gauntlet] %s: %s stations, fade %s ms, breath %s s, limit %s s a station\n' "$GAUNTLET" \
+    "${#STATIONS[@]}" "$GAUNTLET_FADE" "$GAUNTLET_BREATH" "$GAUNTLET_LIMIT"
+  $D dev --port $P persona write "$GAUNTLET" "$GAUNTLET_PERSONA" | head -1 | sed 's/^/       ~ /'
+  $D dev --port $P persona state "$GAUNTLET" reset | head -1 | sed 's/^/       ~ /'
+  $D dev --port $P playground set device=tv transition=fade "ms=$GAUNTLET_FADE" | head -1 |
+    sed 's/^/       ~ /'
+  # The narrator's authored test goes to the judge as `intent=`, and the scene line just spoken as
+  # `told=` (so the call does not restate it), once this host's usage text has each.
+  usage=$($D dev --port $P persona check 2>&1 </dev/null)
+  printf '%s\n' "$usage" | grep -q 'intent=' && GAUNTLET_INTENT=yes
+  printf '%s\n' "$usage" | grep -q 'told=' && GAUNTLET_TOLD=yes
+  printf '[gauntlet] persona check takes intent=: %s\n' "${GAUNTLET_INTENT:-no}"
+  printf '[gauntlet] persona check takes told=: %s\n' "${GAUNTLET_TOLD:-no}"
+  gauntlet_prep
+  for spec in "${STATIONS[@]}"; do
+    number=$((number + 1))
+    gauntlet_station "$number" "$spec"
+    sleep "$GAUNTLET_BREATH"
+  done
+  gauntlet_summary "$((SECONDS - began))"
+}
+[ -n "$GAUNTLET" ] && play_gauntlet
 
 stop_watch

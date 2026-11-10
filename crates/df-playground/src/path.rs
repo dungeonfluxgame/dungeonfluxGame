@@ -16,8 +16,11 @@ pub const FIXTURE_FILE: &str = "/playground/fixtures/{name}";
 /// One file of the media library, `NAME_PLACEHOLDER` standing for its name (GET). `media_file`
 /// fills it.
 pub const MEDIA_FILE: &str = "/playground/media/{name}";
-/// The part of `FIXTURE_FILE` and `MEDIA_FILE` that names the file, as the host's router writes a
-/// path parameter.
+/// One picture of the dice, `NAME_PLACEHOLDER` standing for its file name (GET). `dice_file`
+/// fills it.
+pub const DICE_FILE: &str = "/playground/dice/{name}";
+/// The part of `FIXTURE_FILE`, `MEDIA_FILE` and `DICE_FILE` that names the file, as the host's
+/// router writes a path parameter.
 pub const NAME_PLACEHOLDER: &str = "{name}";
 /// A long poll for the next frame (GET, with the parameters below).
 pub const FRAME: &str = "/playground/frame";
@@ -71,4 +74,9 @@ pub const CLIENT_HEADER: &str = "x-df-client";
 /// The address of the timeline of the page `client`.
 pub fn client_timeline(client: &str) -> String {
     CLIENT_TIMELINE.replace(CLIENT_PLACEHOLDER, client)
+}
+
+/// The address of the dice picture `name`.
+pub fn dice_file(name: &str) -> String {
+    DICE_FILE.replace(NAME_PLACEHOLDER, name)
 }

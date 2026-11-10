@@ -137,6 +137,7 @@ pub async fn run_serve(options: ServeOptions, announce: impl Fn(&str)) -> Result
         ),
     ));
     state.record_line(shared_path_audit);
+    state.record_line(state.playground().restore_line());
     // Show a fixture from the first request: the host reconciles what is shown with the files at
     // startup and when a fixture is written or removed, never when a page reads.
     if let Err(problem) = crate::playground::reconcile_fixtures(&state) {

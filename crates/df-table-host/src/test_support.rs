@@ -50,6 +50,14 @@ impl Running {
             .expect("the switches are changed");
     }
 
+    /// Turns the playground's music switch on (it starts off), for a test of the calls that follow.
+    pub fn switch_music_on(&self) {
+        self.state
+            .playground()
+            .change_all(vec![ControlsChange::Music(true)], &[], 0, |_| {})
+            .expect("the switch is changed");
+    }
+
     /// Starts the host's real clock, for a test of travel that runs on its own.
     pub fn start_clock(&mut self) {
         if self.clock.is_none() {

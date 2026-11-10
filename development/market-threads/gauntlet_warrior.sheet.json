@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "id": "gauntlet_warrior",
+  "rules_source": "SRD 5.2.1",
+  "species": "Human",
+  "class": "Fighter",
+  "subclass": "Champion",
+  "level": 3,
+  "background": "Soldier",
+  "ability_scores": {
+    "str": 16,
+    "dex": 12,
+    "con": 15,
+    "int": 10,
+    "wis": 13,
+    "cha": 8
+  },
+  "ability_score_note": "Point buy 14/12/14/10/13/8 (25 points), then the Soldier background raises Strength by 2 and Constitution by 1. No Ability Score Improvement before level 4.",
+  "proficiency_bonus": 2,
+  "saving_throw_proficiencies": ["str", "con"],
+  "skill_proficiencies": {
+    "athletics": "Soldier background",
+    "intimidation": "Soldier background",
+    "perception": "Fighter class choice",
+    "survival": "Fighter class choice"
+  },
+  "skill_note": "Exactly the four skills of the owner brief: two from the Soldier background and two Fighter picks. The human species Skillful trait, which would add a fifth skill, is not taken here (gap: the brief's four are kept; the rules owner may add one skill without changing any station).",
+  "tool_proficiencies": ["gaming set (Soldier)"],
+  "expertise": [],
+  "species_traits": {
+    "resourceful": "Heroic Inspiration at the end of every long rest (one reroll of any die he has just rolled, the new roll must be used).",
+    "skillful": "not taken, see skill_note",
+    "versatile": "Origin feat Alert: adds the proficiency bonus to initiative."
+  },
+  "origin_feats": ["Savage Attacker (Soldier background)", "Alert (human Versatile)"],
+  "class_features": {
+    "fighting_style": "Defense (+1 Armor Class while wearing armor)",
+    "second_wind": {
+      "dice": "1d10+3",
+      "uses_at_level_3": 2,
+      "note": "1d10 plus Fighter level."
+    },
+    "action_surge": { "uses_at_level_3": 1 },
+    "tactical_mind": "Add 1d10 to a failed ability check (spend a Second Wind use).",
+    "weapon_mastery": ["longsword (Sap)", "greataxe (Cleave)", "longbow (Slow)"],
+    "champion_improved_critical": "Weapon attacks score a critical hit on a natural 19 or 20.",
+    "champion_remarkable_athlete": "SRD 5.2.1 Champion level 3 feature: advantage on Initiative rolls and on Strength (Athletics) checks. Not in the owner brief; flagged for the rules owner (the Athletics and initiative stations roll with advantage unless the rules owner decides otherwise)."
+  },
+  "hit_die": "d10",
+  "hit_points": {
+    "maximum": 28,
+    "note": "10 + 2 (CON) at level 1, then 6 + 2 each at levels 2 and 3. Hit points are not tracked in the gauntlet phase."
+  },
+  "armor_class": {
+    "value": 19,
+    "note": "Chain mail 16, shield +2, Defense +1."
+  },
+  "speed_feet": 30,
+  "initiative_modifier": {
+    "value": 3,
+    "note": "Dexterity +1 and Alert +2, with advantage from Remarkable Athlete."
+  },
+  "passive_perception": 13,
+  "ability_modifiers": { "str": 3, "dex": 1, "con": 2, "int": 0, "wis": 1, "cha": -1 },
+  "saving_throws": { "str": 5, "dex": 1, "con": 4, "int": 0, "wis": 1, "cha": -1 },
+  "skills": {
+    "athletics": 5,
+    "acrobatics": 1,
+    "sleight_of_hand": 1,
+    "stealth": 1,
+    "arcana": 0,
+    "history": 0,
+    "investigation": 0,
+    "nature": 0,
+    "religion": 0,
+    "animal_handling": 1,
+    "insight": 1,
+    "medicine": 1,
+    "perception": 3,
+    "survival": 3,
+    "deception": -1,
+    "intimidation": 1,
+    "performance": -1,
+    "persuasion": -1
+  },
+  "attacks": [
+    {
+      "id": "longsword",
+      "name": "Longsword",
+      "kind": "melee",
+      "ability": "str",
+      "attack_bonus": 5,
+      "damage": "1d8+3",
+      "damage_type": "slashing",
+      "versatile_damage": "1d10+3"
+    },
+    {
+      "id": "greataxe",
+      "name": "Greataxe",
+      "kind": "melee",
+      "ability": "str",
+      "attack_bonus": 5,
+      "damage": "1d12+3",
+      "damage_type": "slashing"
+    },
+    {
+      "id": "dagger",
+      "name": "Dagger",
+      "kind": "melee_or_thrown",
+      "ability": "str",
+      "attack_bonus": 5,
+      "damage": "1d4+3",
+      "damage_type": "piercing",
+      "note": "Finesse: Dexterity +1 gives only +3 to hit and +1 to damage, so Strength is used."
+    },
+    {
+      "id": "longbow",
+      "name": "Longbow",
+      "kind": "ranged",
+      "ability": "dex",
+      "attack_bonus": 3,
+      "damage": "1d8+1",
+      "damage_type": "piercing"
+    },
+    {
+      "id": "shortbow",
+      "name": "Shortbow",
+      "kind": "ranged",
+      "ability": "dex",
+      "attack_bonus": 3,
+      "damage": "1d6+1",
+      "damage_type": "piercing"
+    }
+  ],
+  "healing": [
+    { "id": "second_wind", "dice": "1d10+3" },
+    { "id": "short_rest_hit_die", "dice": "1d10+2" }
+  ],
+  "equipment": ["chain mail", "shield", "longsword", "greataxe", "dagger", "longbow with 20 arrows", "traveller's pack"],
+  "critical_range": [19, 20]
+}

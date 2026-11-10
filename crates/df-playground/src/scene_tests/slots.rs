@@ -5,8 +5,8 @@
 
 use crate::clues::{ClueBoard, ClueNote};
 use crate::fixture::{
-    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, PhoneScene, PlateKind,
-    TvScene, UnavailableChoice,
+    Camera, Caption, Choice, ChoiceGroup, DieRole, Fixture, ImageRef, NaturalMark, PartyMember,
+    PhoneScene, PlateKind, RollDie, RollKind, RollMode, RollView, TvScene, UnavailableChoice,
 };
 use crate::home::model::HomeScene;
 use crate::inventory::{InventoryPanel, InventoryRow, RowUse};
@@ -14,6 +14,7 @@ use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
 use crate::overlay::{
     Edit, NarrationBox, NarrationPlacement, PartyLook, Progress, SeatStrip, StoryMark,
 };
+use crate::roll::ShownRoll;
 use crate::scene::{SceneChange, SceneOverlay, Target, Track};
 
 fn image(media: &str) -> ImageRef {
@@ -163,6 +164,33 @@ fn inventory_panel(owner: &str) -> InventoryPanel {
     }
 }
 
+fn shown_roll(id: &str) -> ShownRoll {
+    ShownRoll {
+        view: RollView {
+            id: id.to_owned(),
+            title: "Fireball".to_owned(),
+            kind: RollKind::Damage,
+            mode: RollMode::Normal,
+            dice: vec![RollDie {
+                sides: 6,
+                face: 4,
+                role: DieRole::Damage,
+                kept: true,
+            }],
+            modifiers: Vec::new(),
+            total: 4,
+            target: None,
+            outcome: None,
+            natural: NaturalMark::Unmarked,
+            inspiration_reroll: None,
+        },
+        min_hold_ms: 0,
+        serial: 1,
+        began_ms: 0,
+        elapsed_ms: 0,
+    }
+}
+
 fn story_mark(title: &str) -> StoryMark {
     StoryMark {
         title: title.to_owned(),
@@ -217,6 +245,7 @@ fn base() -> Fixture {
     tv.roleplay = Some(roleplay("Base inn"));
     tv.pills = Some(pills("Base session"));
     tv.home = Some(home("actions:1"));
+    tv.roll = Some(shown_roll("base-roll"));
     let phone = &mut fixture.phone;
     phone.suggested = vec![choice("Sit down")];
     phone.groups = vec![group("Talk")];
@@ -250,9 +279,11 @@ fn all_set() -> SceneOverlay {
         clues: Edit::Set(clue_board("live-clue")),
         story: Edit::Set(story_mark("Live story")),
         inventory: Edit::Set(inventory_panel("live-owner")),
+        roll: Edit::Set(shown_roll("live-roll")),
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
+        roll_count: 0,
         cues: Vec::new(),
     }
 }
@@ -281,9 +312,11 @@ fn all_clear() -> SceneOverlay {
         clues: Edit::Clear,
         story: Edit::Clear,
         inventory: Edit::Clear,
+        roll: Edit::Clear,
         cue_count: 0,
         slide_count: 0,
         camera_count: 0,
+        roll_count: 0,
         cues: Vec::new(),
     }
 }
@@ -340,6 +373,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
         clues,
         story,
         inventory,
+        roll,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -369,6 +403,7 @@ fn every_tv_field_is_patched_or_fixture_only() {
     assert_eq!(clues.as_ref(), overlay.clues.set_value());
     assert_eq!(story.as_ref(), overlay.story.set_value());
     assert_eq!(inventory.as_ref(), overlay.inventory.set_value());
+    assert_eq!(roll.as_ref(), overlay.roll.set_value());
     assert_eq!(Some(&suggested), overlay.suggested.set_value());
     assert_eq!(Some(&groups), overlay.groups.set_value());
     assert_eq!(Some(&unavailable), overlay.unavailable.set_value());
@@ -406,6 +441,7 @@ fn every_slot_clears() {
         clues,
         story,
         inventory,
+        roll,
         elements: _,
     } = tv;
     let PhoneScene {
@@ -435,6 +471,7 @@ fn every_slot_clears() {
     assert_eq!(clues, None);
     assert_eq!(story, None);
     assert_eq!(inventory, None);
+    assert_eq!(roll, None);
     assert!(suggested.is_empty());
     assert!(groups.is_empty());
     assert!(unavailable.is_empty());
@@ -451,14 +488,19 @@ fn changed_slots_match_wire_names() {
         .expect("an object")
         .keys()
         .map(String::as_str)
-        .filter(|key| !matches!(*key, "cue_count" | "slide_count" | "camera_count" | "cues"))
+        .filter(|key| {
+            !matches!(
+                *key,
+                "cue_count" | "slide_count" | "camera_count" | "roll_count" | "cues"
+            )
+        })
         .collect();
     let mut slots = overlay.changed_slots();
-    assert_eq!(slots.len(), 21, "{slots:?}");
+    assert_eq!(slots.len(), 22, "{slots:?}");
     slots.sort_unstable();
     keys.sort_unstable();
     assert_eq!(slots, keys);
-    assert_eq!(all_clear().changed_slots().len(), 21);
+    assert_eq!(all_clear().changed_slots().len(), 22);
     assert!(!overlay.is_empty() && !all_clear().is_empty());
 }
 
@@ -481,7 +523,7 @@ fn the_default_overlay_is_written_with_only_its_counts() {
     let written = serde_json::to_string(&SceneOverlay::default()).expect("writes");
     assert_eq!(
         written,
-        r#"{"cue_count":0,"slide_count":0,"camera_count":0,"cues":[]}"#
+        r#"{"cue_count":0,"slide_count":0,"camera_count":0,"roll_count":0,"cues":[]}"#
     );
     let read: SceneOverlay = serde_json::from_str(&written).expect("reads");
     assert_eq!(read, SceneOverlay::default());
@@ -511,7 +553,7 @@ fn a_party_clear_and_a_camera_move_are_written_as_clear_and_set() {
         concat!(
             r#"{"party":"clear","camera":{"set":{"target":"door","zoom_percent":150,"#,
             r#""duration_ms":400,"serial":1,"began_ms":1000,"elapsed_ms":0}},"#,
-            r#""cue_count":0,"slide_count":0,"camera_count":1,"cues":[]}"#
+            r#""cue_count":0,"slide_count":0,"camera_count":1,"roll_count":0,"cues":[]}"#
         )
     );
     let read: SceneOverlay = serde_json::from_str(&written).expect("reads");

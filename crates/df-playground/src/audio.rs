@@ -9,9 +9,10 @@
 //! volumes. Each sound and song started is a timeline record (`page_log`) that ends when it plays
 //! out, is stopped or replaced, or is refused.
 //!
-//! This viewer's own preferences (`AudioPrefs`: sound muted or not, the music on or off, a master
-//! volume over each sound's own) scale and mute what the page plays, never what the scene asks
-//! for. They are kept in browser storage, and a storage the browser blocks leaves the defaults.
+//! The preferences (`AudioPrefs`: sound muted or not, the music on or off, a master volume over
+//! each sound's own) scale and mute what the page plays, never what the scene asks for. The host
+//! keeps them (`Controls::audio`) and the page takes them from each reply, so a page that opens
+//! plays as it was last left; the page keeps none of its own.
 
 use std::cell::RefCell;
 
@@ -26,7 +27,7 @@ use crate::media::AudioState;
 use crate::page_log::{self, now_ms, with_log};
 use crate::path::media_file;
 use crate::scene::{Cue, Track};
-use crate::sound_plan::{AUDIO_PREFS_KEY, AudioPrefs, MusicChange, fresh_cues, music_change};
+use crate::sound_plan::{AudioPrefs, MusicChange, fresh_cues, music_change};
 use crate::timeline::{EndReason, ErrorSource, TimelineKind};
 
 /// The attribute of an audio element that holds the sequence number of its timeline record.
@@ -37,7 +38,7 @@ const VOLUME_ATTRIBUTE: &str = "data-volume-percent";
 
 #[derive(Default)]
 struct Engine {
-    /// This viewer's preferences, read from browser storage when the page starts.
+    /// The preferences of the host's controls last taken in, the defaults before the first.
     prefs: AudioPrefs,
     /// Whether the person has clicked or pressed a key on the page.
     gesture_seen: bool,
@@ -58,10 +59,7 @@ struct Engine {
 }
 
 thread_local! {
-    static ENGINE: RefCell<Engine> = RefCell::new(Engine {
-        prefs: stored_prefs(),
-        ..Engine::default()
-    });
+    static ENGINE: RefCell<Engine> = RefCell::new(Engine::default());
     /// The one handler every effect's `error` event calls.
     static EFFECT_FAILED: Closure<dyn FnMut(Event)> =
         Closure::<dyn FnMut(Event)>::new(|event: Event| on_effect_error(&event));
@@ -74,25 +72,13 @@ fn with_engine<R>(change: impl FnOnce(&mut Engine) -> R) -> R {
     ENGINE.with(|engine| change(&mut engine.borrow_mut()))
 }
 
-/// The browser storage of this page, when the browser allows one.
-fn storage() -> Option<web_sys::Storage> {
-    web_sys::window().and_then(|window| window.local_storage().ok().flatten())
-}
-
-/// The preferences kept in browser storage; the defaults when there are none or it is blocked.
-fn stored_prefs() -> AudioPrefs {
-    let text = storage().and_then(|storage| storage.get_item(AUDIO_PREFS_KEY).ok().flatten());
-    AudioPrefs::from_stored(text.as_deref())
-}
-
-/// This viewer's sound preferences now.
+/// The sound preferences now.
 pub fn prefs() -> AudioPrefs {
     with_engine(|engine| engine.prefs)
 }
 
-/// Takes `prefs` as this viewer's: every sound and the song playing take the master volume and
-/// the mute at once, the music stops or plays on where it was, and they are kept for the next
-/// load (a blocked storage keeps them for this page only, and says so once).
+/// Takes `prefs` as the page's: every sound and the song playing take the master volume and the
+/// mute at once, and the music stops or plays on where it was. Keeping them is the host's.
 pub fn set_prefs(prefs: AudioPrefs) {
     let (before, music, effects) = with_engine(|engine| {
         let before = std::mem::replace(&mut engine.prefs, prefs);
@@ -119,20 +105,6 @@ pub fn set_prefs(prefs: AudioPrefs) {
                 note_error(format!("could not pause the music: {}", js_message(&error)));
             }
         }
-    }
-    match storage() {
-        Some(storage) => {
-            if let Err(error) = storage.set_item(AUDIO_PREFS_KEY, &prefs.stored()) {
-                note_error(format!(
-                    "the sound settings are not kept for the next load: {}",
-                    js_message(&error)
-                ));
-            }
-        }
-        None => note_error(
-            "the sound settings are not kept for the next load: the browser blocks storage"
-                .to_owned(),
-        ),
     }
 }
 

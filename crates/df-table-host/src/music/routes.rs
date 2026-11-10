@@ -256,6 +256,11 @@ async fn ensure_in_turn(
             })
         }
         Track::Compose { file } => {
+            // The one place a track is paid for, so the switch is checked here: nothing is sent to
+            // the composer while the music is off, whoever asks.
+            if !app.playground().snapshot().controls.audio.music_on {
+                return Err(MusicError::Disabled);
+            }
             let composed = compose_and_store(app, composer, request, &file, deadline).await?;
             Ok(Ensured {
                 file,
@@ -338,6 +343,12 @@ impl MusicService {
             ensure_in_turn(app, self.composer.as_ref(), request, COMPOSE_DEADLINE).await
         };
         self.tracks.release(&request.name, lock).await;
+        if let Err(MusicError::Disabled) = &ensured {
+            app.record_line(format!(
+                "MUSIC refused name={} error=disabled",
+                request.name
+            ));
+        }
         ensured
     }
 }

@@ -121,6 +121,7 @@ fn the_playground_is_printed_one_setting_per_line_with_the_fixtures() {
         concat!(
             "fixture: a.json\ndevice: both\npace: normal\nstatus: fixture\n",
             "unavailable: false\ngrid: false\nsam: false\ntts: false\nstt: false\n",
+            "sound: true\nmusic: false\nvolume: 80\n",
             "zoom_limit: model\n",
             "transition: fade 700 ms\nscene: as the fixture has it\nrevision: 3\n",
             "fixtures: a.json, b.json"

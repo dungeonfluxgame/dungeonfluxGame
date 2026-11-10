@@ -504,6 +504,12 @@ fn every_refusal_answers_its_status_and_its_key_is_its_serde_tag() {
             StatusCode::SERVICE_UNAVAILABLE,
         ),
         (
+            RulesCheckError::InvalidRoll {
+                cause: df_rules::roll::RollError::UnusedDraws,
+            },
+            StatusCode::BAD_REQUEST,
+        ),
+        (
             RulesCheckError::UnexpectedResolution,
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
@@ -528,4 +534,542 @@ fn every_refusal_answers_its_status_and_its_key_is_its_serde_tag() {
             )
         );
     }
+}
+
+// ---- `rules roll`: any typed roll through the production adapter with recorded draws ----
+
+use df_rules::roll::{
+    AttackKind, D20Request, D20Test, DiceExpression, DiceRequest, DieRole, DieSize,
+    HeroicInspiration, ModifierLabel, PassivePerceptionRequest, Proficiency, RollError, RollMode,
+    RollOutcome, RollRequest, Target, TargetLabel,
+};
+
+use super::dev_check::{
+    RULES_ROLL_USAGE, RulesRollReply, RulesRollReport, format_rules_roll, parse_roll,
+    roll_audit_line, roll_refusal_audit_line,
+};
+
+fn rolled(line: &str) -> Result<RollRequest, CommandError> {
+    parse_roll(&words(line)[1..])
+}
+
+fn d20_request(
+    test: D20Test,
+    mode: RollMode,
+    modifier: i8,
+    proficiency: Proficiency,
+    target: Option<Target>,
+) -> D20Request {
+    D20Request {
+        test,
+        mode,
+        ability_modifier: modifier,
+        proficiency,
+        target,
+        heroic_inspiration: None,
+    }
+}
+
+fn d20_roll(
+    test: D20Test,
+    mode: RollMode,
+    modifier: i8,
+    proficiency: Proficiency,
+    target: Option<Target>,
+) -> RollRequest {
+    RollRequest::D20(d20_request(test, mode, modifier, proficiency, target))
+}
+
+fn target(label: TargetLabel, value: i16) -> Option<Target> {
+    Some(Target { label, value })
+}
+
+fn table_roll() -> DiceRequest {
+    DiceRequest {
+        role: DieRole::Table,
+        expression: DiceExpression {
+            count: 1,
+            die: DieSize::D100,
+            modifier: 0,
+        },
+        modifier_label: ModifierLabel::Flat,
+        critical: false,
+        heroic_inspiration: None,
+    }
+}
+
+#[test]
+fn the_roll_verb_reads_every_kind_with_its_options() {
+    let proficient = Proficiency::Proficient { bonus: 2 };
+    assert_eq!(
+        rolled("rules roll skill athletics mod=3 prof=2 dc=15 mode=advantage"),
+        Ok(d20_roll(
+            D20Test::SkillCheck(Skill::Athletics),
+            RollMode::Advantage,
+            3,
+            proficient,
+            target(TargetLabel::DifficultyClass, 15)
+        ))
+    );
+    assert_eq!(
+        rolled("rules roll ability strength dc=10"),
+        Ok(d20_roll(
+            D20Test::AbilityCheck(Ability::Strength),
+            RollMode::Normal,
+            0,
+            Proficiency::None,
+            target(TargetLabel::DifficultyClass, 10)
+        ))
+    );
+    assert_eq!(
+        rolled("rules roll save constitution mod=2 prof=2 dc=13"),
+        Ok(d20_roll(
+            D20Test::SavingThrow(Ability::Constitution),
+            RollMode::Normal,
+            2,
+            proficient,
+            target(TargetLabel::DifficultyClass, 13)
+        ))
+    );
+    assert_eq!(
+        rolled("rules roll attack melee mod=3 prof=2 ac=16 crit=19"),
+        Ok(d20_roll(
+            D20Test::Attack {
+                ability: Ability::Strength,
+                kind: AttackKind::Melee,
+                critical_from: 19
+            },
+            RollMode::Normal,
+            3,
+            proficient,
+            target(TargetLabel::ArmorClass, 16)
+        ))
+    );
+    assert_eq!(
+        rolled("rules roll attack ranged mod=2 ac=12 mode=disadvantage"),
+        Ok(d20_roll(
+            D20Test::Attack {
+                ability: Ability::Dexterity,
+                kind: AttackKind::Ranged,
+                critical_from: 20
+            },
+            RollMode::Disadvantage,
+            2,
+            Proficiency::None,
+            target(TargetLabel::ArmorClass, 12)
+        ))
+    );
+    assert_eq!(
+        rolled("rules roll skill perception dc=15 stealth_total=17").map(|_| ()),
+        Err(CommandError::Usage(RULES_ROLL_USAGE))
+    );
+    assert_eq!(
+        rolled("rules roll initiative mod=2 mode=advantage"),
+        Ok(d20_roll(
+            D20Test::Initiative,
+            RollMode::Advantage,
+            2,
+            Proficiency::None,
+            None
+        ))
+    );
+    assert_eq!(
+        rolled("rules roll death_save reroll=0"),
+        Ok(RollRequest::D20(D20Request {
+            heroic_inspiration: Some(HeroicInspiration { replaces_die: 0 }),
+            ..d20_request(
+                D20Test::DeathSave,
+                RollMode::Normal,
+                0,
+                Proficiency::None,
+                None
+            )
+        }))
+    );
+    assert_eq!(
+        rolled("rules roll passive_perception mod=2 expertise=2 mode=advantage"),
+        Ok(RollRequest::PassivePerception(PassivePerceptionRequest {
+            ability_modifier: 2,
+            proficiency: Proficiency::Expertise { bonus: 2 },
+            mode: RollMode::Advantage,
+        }))
+    );
+    assert_eq!(
+        rolled("rules roll dice damage 2d6+3 label=strength critical=true"),
+        Ok(RollRequest::Dice(DiceRequest {
+            role: DieRole::Damage,
+            expression: DiceExpression {
+                count: 2,
+                die: DieSize::D6,
+                modifier: 3
+            },
+            modifier_label: ModifierLabel::Strength,
+            critical: true,
+            heroic_inspiration: None,
+        }))
+    );
+}
+
+#[test]
+fn the_roll_verb_names_what_is_wrong_and_never_ignores_a_word() {
+    let usage = Err(CommandError::Usage(RULES_ROLL_USAGE));
+    for line in ["rules roll", "rules roll skill", "rules roll dice damage"] {
+        assert_eq!(rolled(line), usage, "{line}");
+    }
+    assert_eq!(rolled("rules roll attack melee ac=10 dc=10"), usage);
+    assert_eq!(rolled("rules roll initiative prof=2 expertise=2"), usage);
+    assert_eq!(
+        rolled("rules roll initiative mod=1 mod=2"),
+        Err(CommandError::DuplicateKey("mod".to_owned()))
+    );
+    assert!(matches!(
+        rolled("rules roll initiative 15"),
+        Err(CommandError::BadPair(_))
+    ));
+    for line in [
+        "rules roll lockpick",
+        "rules roll skill lockpicking",
+        "rules roll ability might",
+        "rules roll attack thrown ac=10",
+        "rules roll initiative mode=lucky",
+        "rules roll dice loot 1d6",
+        "rules roll dice damage 1d7",
+        "rules roll dice damage 1d6 critical=maybe",
+        "rules roll initiative crit=19",
+        "rules roll dice damage 1d6 mod=2",
+    ] {
+        assert!(
+            matches!(rolled(line), Err(CommandError::BadChoice { .. })),
+            "{line}: {:?}",
+            rolled(line)
+        );
+    }
+    assert!(matches!(
+        rolled("rules roll initiative mod=high"),
+        Err(CommandError::BadCount { what: "mod", .. })
+    ));
+}
+
+fn roll_report(request: &RollRequest) -> RulesRollReport {
+    kit().roll(request).expect("answers")
+}
+
+#[test]
+fn a_roll_draws_each_die_of_its_plan_from_the_recording_dice_and_reports_them_in_order() {
+    let request = d20_roll(
+        D20Test::SkillCheck(Skill::Athletics),
+        RollMode::Advantage,
+        3,
+        Proficiency::Proficient { bonus: 2 },
+        target(TargetLabel::DifficultyClass, 15),
+    );
+    let seeded = RecordedDice::seeded(SEED);
+    let expected: Vec<u16> = (0..2)
+        .map(|_| {
+            seeded
+                .draw(
+                    correlation(1),
+                    DrawRequest {
+                        sides: NonZeroU16::new(20).expect("sides"),
+                    },
+                )
+                .expect("a draw")
+                .value()
+        })
+        .collect();
+
+    let report = roll_report(&request);
+
+    let drawn: Vec<(u64, u16, u16)> = report
+        .draws
+        .iter()
+        .map(|draw| (draw.sequence, draw.sides, draw.value))
+        .collect();
+    assert_eq!(drawn, [(1, 20, expected[0]), (2, 20, expected[1])]);
+    let faces: Vec<u16> = report.result.dice.iter().map(|die| die.face).collect();
+    assert_eq!(faces, expected);
+    let kept = expected[0].max(expected[1]);
+    assert_eq!(report.result.total, i16::try_from(kept).expect("small") + 5);
+    assert_eq!(report.audit.len(), 1);
+    assert!(
+        report.audit[0].starts_with("RULES rolled action=dev_roll operation="),
+        "{}",
+        report.audit[0]
+    );
+    assert!(
+        report.audit[0].contains(" subject=skill_check:athletics mode=advantage dice=d20:"),
+        "{}",
+        report.audit[0]
+    );
+}
+
+#[test]
+fn every_kind_of_roll_resolves_through_the_adapter_with_the_dice_its_plan_names() {
+    let dc = target(TargetLabel::DifficultyClass, 12);
+    let requests = [
+        d20_roll(
+            D20Test::AbilityCheck(Ability::Wisdom),
+            RollMode::Normal,
+            1,
+            Proficiency::None,
+            dc,
+        ),
+        d20_roll(
+            D20Test::SavingThrow(Ability::Dexterity),
+            RollMode::Disadvantage,
+            2,
+            Proficiency::None,
+            dc,
+        ),
+        d20_roll(
+            D20Test::Attack {
+                ability: Ability::Strength,
+                kind: AttackKind::Melee,
+                critical_from: 19,
+            },
+            RollMode::Advantage,
+            3,
+            Proficiency::Proficient { bonus: 2 },
+            target(TargetLabel::ArmorClass, 15),
+        ),
+        d20_roll(
+            D20Test::Initiative,
+            RollMode::Advantage,
+            2,
+            Proficiency::None,
+            None,
+        ),
+        d20_roll(
+            D20Test::DeathSave,
+            RollMode::Normal,
+            0,
+            Proficiency::None,
+            None,
+        ),
+        RollRequest::PassivePerception(PassivePerceptionRequest {
+            ability_modifier: 1,
+            proficiency: Proficiency::Proficient { bonus: 2 },
+            mode: RollMode::Normal,
+        }),
+        RollRequest::Dice(DiceRequest::damage(
+            DiceExpression {
+                count: 3,
+                die: DieSize::D8,
+                modifier: 2,
+            },
+            Ability::Strength,
+            true,
+        )),
+        RollRequest::Dice(table_roll()),
+    ];
+
+    for request in requests {
+        let report = roll_report(&request);
+
+        let planned = request.draw_plan().expect("a plan");
+        assert_eq!(report.draws.len(), planned.len(), "{request:?}");
+        let faces: Vec<u16> = report.draws.iter().map(|draw| draw.value).collect();
+        assert_eq!(
+            request
+                .resolve(&faces)
+                .expect("resolves from the recorded faces"),
+            report.result,
+            "{request:?}"
+        );
+    }
+}
+
+#[test]
+fn heroic_inspiration_draws_one_more_die_and_the_recorded_faces_reproduce_the_result() {
+    let request = RollRequest::D20(D20Request {
+        heroic_inspiration: Some(HeroicInspiration { replaces_die: 0 }),
+        ..d20_request(
+            D20Test::SkillCheck(Skill::Stealth),
+            RollMode::Normal,
+            2,
+            Proficiency::None,
+            target(TargetLabel::DifficultyClass, 15),
+        )
+    });
+
+    let report = roll_report(&request);
+
+    assert_eq!(report.draws.len(), 2);
+    assert_eq!(
+        report.result.inspiration_reroll.map(|die| die.face),
+        Some(report.draws[0].value)
+    );
+    assert_eq!(report.result.dice[0].face, report.draws[1].value);
+    let faces: Vec<u16> = report.draws.iter().map(|draw| draw.value).collect();
+    assert_eq!(request.resolve(&faces), Ok(report.result));
+}
+
+#[test]
+fn a_roll_df_rules_refuses_is_a_typed_refusal_and_draws_nothing() {
+    let refused = d20_roll(
+        D20Test::AbilityCheck(Ability::Strength),
+        RollMode::Normal,
+        0,
+        Proficiency::None,
+        None,
+    );
+
+    let error = kit().roll(&refused).expect_err("a check needs a target");
+
+    assert_eq!(
+        error,
+        RulesCheckError::InvalidRoll {
+            cause: RollError::MissingTarget
+        }
+    );
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(error.key(), "invalid_roll");
+    assert_eq!(
+        roll_refusal_audit_line(&error, 3),
+        "ENGINE refused verb=rules_roll error=invalid_roll duration_ms=3"
+    );
+    let written = serde_json::to_value(&error).expect("writes");
+    assert_eq!(
+        serde_json::from_value::<RulesCheckError>(written).expect("reads"),
+        error
+    );
+}
+
+#[test]
+fn the_text_of_a_roll_names_the_result_every_die_the_modifiers_the_source_and_the_audit() {
+    let request = d20_roll(
+        D20Test::Attack {
+            ability: Ability::Strength,
+            kind: AttackKind::Melee,
+            critical_from: 19,
+        },
+        RollMode::Advantage,
+        3,
+        Proficiency::Proficient { bonus: 2 },
+        target(TargetLabel::ArmorClass, 15),
+    );
+    let report = roll_report(&request);
+
+    let text = format_rules_roll(&report);
+
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[0].starts_with("1: attack:melee advantage: "),
+        "{text}"
+    );
+    assert!(lines[0].contains("against armor_class 15"), "{text}");
+    assert!(lines[1].starts_with("2: dice d20:"), "{text}");
+    assert_eq!(lines[2], "3: modifiers strength +3, proficiency +2");
+    assert!(
+        text.contains("source SRD-5.2.1:page-7:D20-Tests:Attack-Rolls"),
+        "{text}"
+    );
+    assert!(text.contains("recorded draw 1: d20 = "), "{text}");
+    assert!(text.contains("RULES rolled action=dev_roll"), "{text}");
+    assert!(matches!(
+        report.result.outcome,
+        RollOutcome::Hit | RollOutcome::Miss | RollOutcome::CriticalHit
+    ));
+    assert_eq!(
+        roll_audit_line(&request, &report),
+        format!(
+            "ENGINE rules_roll kind=d20 subject=attack:melee outcome={}",
+            report.result.outcome.key()
+        )
+    );
+}
+
+#[tokio::test]
+async fn the_roll_route_answers_json_audits_one_line_and_refuses_a_bad_roll_by_type() {
+    let host = start(&STARTER_FILES).await;
+    let listener = crate::server::bind(0).await.expect("binds");
+    let port = listener.local_addr().expect("an address").port();
+    let router = dev_route::router(Arc::clone(&host.state), Some(kit()));
+    let serving = tokio::spawn(async move {
+        let _ = axum::serve(listener, router).await;
+    });
+    let damage = serde_json::to_string(&RollRequest::Dice(DiceRequest::damage(
+        DiceExpression {
+            count: 2,
+            die: DieSize::D6,
+            modifier: 3,
+        },
+        Ability::Strength,
+        false,
+    )))
+    .expect("writes");
+    let test_role = serde_json::to_string(&RollRequest::Dice(DiceRequest {
+        role: DieRole::Test,
+        ..table_roll()
+    }))
+    .expect("writes");
+
+    let answered = client::post_json(port, path::RULES_ROLL, &damage)
+        .await
+        .expect("answered");
+    let refused = client::post_json(port, path::RULES_ROLL, &test_role)
+        .await
+        .expect("answered");
+
+    serving.abort();
+    assert_eq!(answered.status, StatusCode::OK, "{}", answered.body);
+    let parsed: RulesRollReply = serde_json::from_str(&answered.body).expect("a reply");
+    let DevReply::Done { value } = parsed else {
+        panic!("rejected: {}", answered.body);
+    };
+    assert_eq!(value.result.dice.len(), 2);
+    assert_eq!(value.audit.len(), 2, "the rules line and the engine line");
+    assert_eq!(refused.status, StatusCode::BAD_REQUEST, "{}", refused.body);
+    let DevReply::Rejected { error, .. } =
+        serde_json::from_str::<RulesRollReply>(&refused.body).expect("a reply")
+    else {
+        panic!("not a refusal: {}", refused.body);
+    };
+    assert_eq!(
+        error,
+        RulesCheckError::InvalidRoll {
+            cause: RollError::InvalidRole
+        }
+    );
+    let logged = host.state.log().after_sequence(0, 100_000);
+    let lines: Vec<&str> = logged.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("ENGINE rules_roll kind=dice subject=damage "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line
+                .starts_with("ENGINE refused verb=rules_roll error=invalid_roll duration_ms="))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn the_dev_command_line_reaches_the_roll_verb_and_a_scripted_table_refuses_it_by_type() {
+    let host = start(&STARTER_FILES).await;
+
+    let refused = run_dev(host.port, &words("rules roll initiative mod=2"))
+        .await
+        .expect_err("the scripted backend has no roll kit");
+
+    assert_eq!(
+        refused,
+        DevError::Rejected {
+            error: ReplyError::RulesCheck(RulesCheckError::ScriptedBackend),
+            message: RulesCheckError::ScriptedBackend.to_string(),
+        }
+    );
+    let usage = run_dev(host.port, &words("rules roll"))
+        .await
+        .expect_err("a usage error");
+    assert!(
+        matches!(usage, DevError::Command(CommandError::Usage(_))),
+        "{usage:?}"
+    );
 }

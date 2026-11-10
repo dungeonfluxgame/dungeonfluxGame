@@ -41,6 +41,7 @@ pub mod overlay;
 pub mod path;
 pub mod plate_fade;
 pub mod plate_fit;
+pub mod roll;
 pub mod scene;
 mod scene_apply;
 pub mod sound_plan;
@@ -123,6 +124,8 @@ mod overlay_tests;
 mod plate_fade_tests;
 #[cfg(test)]
 mod plate_fit_tests;
+#[cfg(test)]
+mod roll_tests;
 #[cfg(test)]
 mod scene_tests;
 #[cfg(test)]

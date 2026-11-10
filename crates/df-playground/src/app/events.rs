@@ -6,13 +6,13 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{Element, Event, HtmlImageElement, HtmlSelectElement};
 
 use super::frames::send_change;
-use super::page::{on_animation_end, place_bubbles, render};
+use super::page::{on_animation_end, on_animation_start, place_bubbles, render};
 use super::report::schedule_report;
 use super::sound;
 use super::state::with_app;
 use super::voice;
 use crate::audio;
-use crate::controls::{ControlsChange, Device};
+use crate::controls::{ControlsChange, Device, Switch};
 use crate::copy::ReadingPace;
 use crate::page_log;
 use crate::timeline::ErrorSource;
@@ -60,6 +60,18 @@ pub fn on_media_event(event: &Event, failed: bool) {
     let Ok(image) = target.dyn_into::<HtmlImageElement>() else {
         return;
     };
+    if failed && let Some(die) = image.get_attribute("data-die") {
+        // The die keeps its plain shape and its face: the roll stays readable without the art.
+        if let Err(error) = image.set_attribute("data-failed", "true") {
+            page_log::note_error(ErrorSource::Draw, &crate::dom::js_message(&error));
+        }
+        page_log::note_error(
+            ErrorSource::Asset,
+            &format!("dice picture '{die}' did not load"),
+        );
+        schedule_report();
+        return;
+    }
     let Some(name) = image.get_attribute("data-media") else {
         return;
     };
@@ -84,19 +96,13 @@ pub fn on_click(event: &Event) {
     let Some((_, action)) = action else {
         return;
     };
-    if voice::on_action(&action) || sound::on_action(&action) {
+    if voice::on_action(&action) {
         return;
     }
     let change = with_app(|app| match action.split_once(':') {
         Some(("device", key)) => Device::from_key(key).map(ControlsChange::Device),
         Some(("pace", key)) => ReadingPace::from_key(key).map(ControlsChange::Pace),
-        Some(("toggle", "unavailable")) => Some(ControlsChange::ShowUnavailable(
-            !app.controls.show_unavailable,
-        )),
-        Some(("toggle", "grid")) => Some(ControlsChange::ShowGrid(!app.controls.show_grid)),
-        Some(("toggle", "sam")) => Some(ControlsChange::ShowSam(!app.controls.show_sam)),
-        Some(("toggle", "tts")) => Some(ControlsChange::Tts(!app.controls.tts_on)),
-        Some(("toggle", "stt")) => Some(ControlsChange::Stt(!app.controls.stt_on)),
+        Some(("toggle", key)) => Switch::from_key(key).map(|switch| switch.toggled(&app.controls)),
         _ => None,
     });
     if let Some(change) = change {
@@ -105,6 +111,9 @@ pub fn on_click(event: &Event) {
 }
 
 pub fn on_change(event: &Event) {
+    if sound::on_release(event) {
+        return;
+    }
     let Some((carrier, action)) = action_of(event) else {
         return;
     };
@@ -123,6 +132,15 @@ pub fn on_change(event: &Event) {
     };
     if let Some(change) = change {
         spawn_local(send_change(change));
+    }
+}
+
+pub fn on_animation_started(event: &Event) {
+    if let Some(target) = event
+        .target()
+        .and_then(|target| target.dyn_into::<Element>().ok())
+    {
+        on_animation_start(&target);
     }
 }
 

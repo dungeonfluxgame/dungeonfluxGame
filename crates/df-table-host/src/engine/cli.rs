@@ -19,8 +19,11 @@ pub mod play;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use df_rules::roll::RollRequest;
+
 use crate::adapters::dev_check::{
-    RULES_CHECK_USAGE, RulesCheckRequest, parse as parse_rules_check, run as run_rules_check,
+    RULES_CHECK_USAGE, RULES_ROLL_USAGE, RulesCheckRequest, parse as parse_rules_check,
+    parse_roll as parse_rules_roll, run as run_rules_check, run_roll as run_rules_roll,
 };
 use crate::command::CommandError;
 use crate::dev::DevError;
@@ -135,6 +138,7 @@ pub enum EngineCommand {
     ChaosShow,
     Chaos(ChaosRequest),
     RulesCheck(RulesCheckRequest),
+    RulesRoll(RollRequest),
     History(HistoryRequest),
     Trace {
         operation: TraceOperation,
@@ -147,7 +151,7 @@ pub enum EngineCommand {
 
 /// Every verb's usage line and the lines of its help, in the order `describe` and `help` list
 /// them.
-const VERB_HELP: [(&str, &[&str]); 23] = [
+const VERB_HELP: [(&str, &[&str]); 24] = [
     (
         INPUT_USAGE,
         &[
@@ -239,6 +243,14 @@ const VERB_HELP: [(&str, &[&str]); 23] = [
         &[
             "run one real skill check through the df-rules adapter with a recorded draw (needs",
             "DF_RULES_BACKEND=df-rules; the DC is 15 when not given)",
+        ],
+    ),
+    (
+        RULES_ROLL_USAGE,
+        &[
+            "roll any kind of d20 test or dice expression through the df-rules adapter with",
+            "recorded draws and print every die, the modifiers, the total, the outcome and the",
+            "audit lines (needs DF_RULES_BACKEND=df-rules; modifiers and targets are given)",
         ],
     ),
     (
@@ -367,6 +379,9 @@ pub fn parse(verb: &str, words: &[String]) -> Result<EngineCommand, CommandError
         "clock" => clock(words),
         "dice" => dice(words),
         "chaos" => chaos(words),
+        "rules" if words.first().is_some_and(|word| word == "roll") => {
+            parse_rules_roll(words).map(EngineCommand::RulesRoll)
+        }
         "rules" => parse_rules_check(words).map(EngineCommand::RulesCheck),
         "history" => parse_history(words).map(EngineCommand::History),
         "trace" => parse_trace(words).map(|operation| EngineCommand::Trace { operation }),
@@ -786,6 +801,7 @@ pub async fn run(port: u16, command: EngineCommand) -> Result<String, DevError> 
         // The rules-check route answers its own typed refusal (`RulesCheckError`), not
         // `EngineError`, so the verb reads it through its own call.
         EngineCommand::RulesCheck(request) => run_rules_check(port, &request).await,
+        EngineCommand::RulesRoll(request) => run_rules_roll(port, &request).await,
         EngineCommand::History(request) => run_history(port, request).await,
         EngineCommand::Trace { operation } => run_trace(port, operation).await,
         EngineCommand::Replay(request) => run_replay(port, request).await,

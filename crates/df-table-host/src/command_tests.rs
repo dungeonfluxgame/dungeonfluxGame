@@ -261,7 +261,7 @@ fn a_playground_value_that_is_not_a_choice_names_the_key_and_the_choices() {
             "{line}"
         );
     }
-    let unknown = parse(&words("playground set volume=3")).expect_err("refused");
+    let unknown = parse(&words("playground set loudness=3")).expect_err("refused");
     assert!(unknown.to_string().contains("fixture=<name>"));
 }
 
@@ -428,7 +428,7 @@ fn the_help_text_starts_an_entry_with_every_top_level_verb() {
 }
 
 /// Every sub-verb `scene` accepts.
-const SCENE_SUB_VERBS: [&str; 31] = [
+const SCENE_SUB_VERBS: [&str; 33] = [
     "caption",
     "caption-clear",
     "party",
@@ -450,6 +450,8 @@ const SCENE_SUB_VERBS: [&str; 31] = [
     "seats",
     "logo",
     "clues",
+    "roll",
+    "roll-clear",
     "lobby",
     "loading",
     "roleplay",

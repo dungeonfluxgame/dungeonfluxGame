@@ -1,5 +1,7 @@
 //! The production `RulesOwner` over `df-rules`: ability and skill checks and the influence flow,
 //! with explicit draws, and a typed `not_supported_yet` decline for everything else (RES31, O.10).
+//! Any other typed roll (saves, attacks, initiative, Death Saving Throws, passive scores and dice
+//! expressions) goes through `prepare_roll` and `resolve_roll` (`roll`).
 //!
 //! It owns the mapping from an action name (through the `ActionBook`) and a seat (through the
 //! `SeatRoster`) to a `df-rules` call, the number of d20s a call needs, and the typed facts of a
@@ -8,7 +10,7 @@
 //! never holds state, so the same draws always give the same resolution. The d20 rules are SRD
 //! 5.2.1 page 6: the total is the die plus the ability modifier plus the proficiency bonus when
 //! proficient, and it meets the DC when it equals or exceeds it; a natural 1 or 20 does not
-//! decide an ability check (it does decide an attack roll, which this adapter does not run).
+//! decide an ability check (it does decide an attack roll, which the roll path runs).
 //!
 //! What is declined and why, from the RR readiness table (O.16): legal choices of an actor exist
 //! only as the book's runnable actions (`df-rules` has no producer of a full action list); the
@@ -23,11 +25,14 @@
 //! the cause (`audit`). A decline and a call for more dice are answers, not lines of their own.
 
 mod audit;
+mod roll;
 
 use std::num::NonZeroU16;
 
-use df_rules::ability_check::{self, AbilityCheckInput};
 use df_rules::influence::{self, InfluenceInput, InfluenceOutcome, NoRollCause, RollMode};
+use df_rules::roll::{
+    D20Request, D20Test, Proficiency, RollOutcome, RollRequest, Target, TargetLabel,
+};
 use df_table::element::NameError;
 use df_table::envelope::PendingId;
 use df_table::identity::{Correlation, OperationId, SeatId};
@@ -42,8 +47,11 @@ use super::action_book::{
 };
 use super::hero_profile::{HeroProfile, SeatRoster, Skill, SkillBonus};
 
-pub use self::audit::{ResolvedKind, ResolvedLine, ResolvedResult, RulesRefusal};
+pub use self::audit::{
+    ResolvedKind, ResolvedLine, ResolvedResult, RulesRefusal, die_text, rolled_line, subject_key,
+};
 use self::audit::{record, refused_line, resolved_line};
+pub use self::roll::{RollStep, prepare_roll, resolve_roll};
 
 /// The die of every d20 test: 20 sides (the smallest non-zero number, plus 19).
 const D20_SIDES: NonZeroU16 = NonZeroU16::MIN.saturating_add(19);
@@ -252,32 +260,46 @@ fn resolve_skill_check(
     difficulty_class: DifficultyClass,
     draws: &[Draw],
 ) -> Result<Resolving, RulesRefusal> {
-    let faces = match supply(draws, 1)? {
-        Supply::Missing(requests) => {
-            return Ok(Resolving::answer(Resolution::NeedsDraws(requests)));
-        }
-        Supply::Faces(faces) => faces,
-    };
-    let [die] = faces.as_slice() else {
-        return Err(RulesRefusal::DrawsUnfit);
-    };
     let SkillBonus {
         ability_modifier,
         proficiency_bonus,
     } = hero.skill_bonus(skill);
-    let result = ability_check::resolve(AbilityCheckInput {
-        die: *die,
+    let request = RollRequest::D20(D20Request {
+        test: D20Test::SkillCheck(skill),
+        mode: RollMode::Normal,
         ability_modifier,
-        proficiency_bonus,
-        difficulty_class: difficulty_class.get(),
-    })
-    .map_err(|_| RulesRefusal::CheckRefused)?;
+        proficiency: if proficiency_bonus == 0 {
+            Proficiency::None
+        } else {
+            Proficiency::Proficient {
+                bonus: proficiency_bonus,
+            }
+        },
+        target: Some(Target {
+            label: TargetLabel::DifficultyClass,
+            value: i16::from(difficulty_class.get()),
+        }),
+        heroic_inspiration: None,
+    });
+    let result = match roll::step(&request, draws)? {
+        RollStep::NeedsDraws(requests) => {
+            return Ok(Resolving::answer(Resolution::NeedsDraws(requests)));
+        }
+        RollStep::Rolled(result) => result,
+    };
+    let natural = result
+        .dice
+        .iter()
+        .find(|die| die.kept)
+        .and_then(|die| u8::try_from(die.face).ok())
+        .ok_or(RulesRefusal::FaceOutOfRange)?;
+    let succeeded = result.outcome == RollOutcome::Success;
     let line = ResolvedLine {
         kind: ResolvedKind::SkillCheck,
-        natural: Some(result.die),
+        natural: Some(natural),
         total: Some(result.total),
-        difficulty_class: result.difficulty_class,
-        result: if result.succeeded {
+        difficulty_class: difficulty_class.get(),
+        result: if succeeded {
             ResolvedResult::Success
         } else {
             ResolvedResult::Failure
@@ -285,23 +307,23 @@ fn resolve_skill_check(
         mode: RollMode::Normal,
     };
     let resolved = Resolved::default()
-        .with_fact("natural_die", u64::from(result.die))
+        .with_fact("natural_die", u64::from(natural))
         .map_err(name_refused)?;
     let resolved = signed_fact(
         resolved,
         "ability_bonus",
         "ability_penalty",
-        i16::from(result.ability_modifier),
+        i16::from(ability_modifier),
     )?;
     let resolved = resolved
-        .with_fact("proficiency_bonus", u64::from(result.proficiency_bonus))
+        .with_fact("proficiency_bonus", u64::from(proficiency_bonus))
         .map_err(name_refused)?;
     let resolved = signed_fact(resolved, "total", "negative_total", result.total)?;
     let resolved = resolved
-        .with_fact("difficulty_class", u64::from(result.difficulty_class))
+        .with_fact("difficulty_class", u64::from(difficulty_class.get()))
         .map_err(name_refused)?;
     Ok(Resolving {
-        resolution: Resolution::Applied(flag_fact(resolved, "succeeded", result.succeeded)?),
+        resolution: Resolution::Applied(flag_fact(resolved, "succeeded", succeeded)?),
         line: Some(line),
     })
 }
@@ -507,3 +529,5 @@ impl RulesOwner for DfRulesOwner {
 
 #[cfg(test)]
 mod audit_tests;
+#[cfg(test)]
+mod roll_tests;

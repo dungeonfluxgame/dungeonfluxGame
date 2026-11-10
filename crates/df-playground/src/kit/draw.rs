@@ -37,6 +37,7 @@ pub mod narration;
 pub mod party;
 pub mod place_label;
 pub mod progress_line;
+pub mod roll_card;
 pub mod section_label;
 pub mod speaker;
 pub mod speech;

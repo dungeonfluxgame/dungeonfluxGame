@@ -69,13 +69,17 @@ pub enum TimelineKind {
     /// draw that changed or took it away. Its id is `clues-<notes>-<hash>`
     /// (`ClueBoard::board_identity`).
     Clues,
+    /// The roll card on the shared screen and its stages. The card's id is the roll's; its stages
+    /// are `<roll>.call` (the title and the target), `<roll>.tumble` (the dice rolling in) and
+    /// `<roll>.sum` (the sum held to be read). The card ends when it has left.
+    Roll,
     /// An error the page met. The page never sends this kind as a record; the host makes one from
     /// each error a report carries, so a timeline read shows errors in their place.
     Error,
 }
 
 impl TimelineKind {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Line,
         Self::Plate,
         Self::Figure,
@@ -93,6 +97,7 @@ impl TimelineKind {
         Self::Fade,
         Self::Third,
         Self::Clues,
+        Self::Roll,
         Self::Error,
     ];
 
@@ -116,6 +121,7 @@ impl TimelineKind {
             Self::Fade => "fade",
             Self::Third => "third",
             Self::Clues => "clues",
+            Self::Roll => "roll",
             Self::Error => "error",
         }
     }

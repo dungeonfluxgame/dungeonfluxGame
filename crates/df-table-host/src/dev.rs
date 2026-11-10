@@ -83,6 +83,8 @@ pub enum ReplyError {
     Frame(crate::persona::frame::FrameRouteError),
     /// What a character sees and thinks (`/dev/persona/perceive`).
     Perceive(crate::persona::perceive::request::PerceiveRouteError),
+    /// The check judge and the dungeon master's checks (`/dev/persona/check`).
+    Check(crate::persona::check::CheckRouteError),
     /// The storyteller's plot (`/dev/persona/story`).
     Story(crate::persona::story::StoryRouteError),
     /// A character's voice cast (`POST /dev/speech/cast`).
@@ -120,6 +122,7 @@ impl fmt::Display for ReplyError {
             Self::Address(error) => write!(formatter, "{error}"),
             Self::Frame(error) => write!(formatter, "{error}"),
             Self::Perceive(error) => write!(formatter, "{error}"),
+            Self::Check(error) => write!(formatter, "{error}"),
             Self::Story(error) => write!(formatter, "{error}"),
             Self::VoiceCast(error) => write!(formatter, "{error}"),
         }
@@ -129,6 +132,12 @@ impl fmt::Display for ReplyError {
 impl From<crate::persona::story::StoryRouteError> for ReplyError {
     fn from(error: crate::persona::story::StoryRouteError) -> Self {
         Self::Story(error)
+    }
+}
+
+impl From<crate::persona::check::CheckRouteError> for ReplyError {
+    fn from(error: crate::persona::check::CheckRouteError) -> Self {
+        Self::Check(error)
     }
 }
 
@@ -311,6 +320,7 @@ fn write_refusal(
         ReplyError::Address(error) => error.key(),
         ReplyError::Frame(error) => error.key(),
         ReplyError::Perceive(error) => error.key(),
+        ReplyError::Check(error) => error.key(),
         ReplyError::Story(error) => error.key(),
         ReplyError::VoiceCast(error) => error.key(),
     };

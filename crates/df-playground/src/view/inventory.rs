@@ -20,11 +20,11 @@ use web_sys::{Document, Element};
 use crate::controls::Controls;
 use crate::dom::{append, element, set_style, text_element};
 use crate::fixture::TvScene;
-use crate::inventory::{FlashClock, Flashing, InventoryPanel, picture_is_up};
+use crate::inventory::{FlashClock, Flashing, InventoryPanel, is_covered};
 use crate::kit::draw::ledger;
 use crate::page_log::now_ms;
 
-/// The class that fades the panel out while a full-frame picture is up.
+/// The class that fades the panel out while a full-frame picture or the roll card is up.
 const COVERED: &str = "inventory-covered";
 
 thread_local! {
@@ -50,9 +50,10 @@ pub fn panel(
     // A panel drawn again for the same owner does not fade its glass in a second time.
     let before = DRAWN.with(|drawn| drawn.borrow_mut().replace(inventory.owner.clone()));
     let redrawn = before.as_ref() == Some(&inventory.owner);
-    let covered = picture_is_up(
+    let covered = is_covered(
         &controls.plate,
         scene.backdrop.as_ref().map(|image| image.plate),
+        crate::view::roll::is_up(scene),
     );
     let returning = COVER.with(|cover| cover.replace(covered)) && !covered;
     let flashing = CLOCK.with(|clock| clock.borrow_mut().flashing(inventory, now_ms(), !covered));

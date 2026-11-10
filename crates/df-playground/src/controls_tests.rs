@@ -1,11 +1,12 @@
 use crate::controls::{
     Controls, ControlsChange, ControlsChangeReply, ControlsError, ControlsReply, Device,
-    FIXTURE_STATUS_KEY, PlateTimer, Transition, TransitionStyle, ZoomLimit,
+    FIXTURE_STATUS_KEY, PlateTimer, Switch, Transition, TransitionStyle, ZoomLimit,
 };
 use crate::copy::ReadingPace;
 use crate::fixture::Status;
 use crate::fixtures::assert_keys_are_serde_names;
-use crate::limits::MAXIMUM_TRANSITION_MS;
+use crate::limits::{MAXIMUM_TRANSITION_MS, MAXIMUM_VOLUME_PERCENT};
+use crate::sound_plan::AudioPrefs;
 
 #[test]
 fn by_default_both_devices_show_and_the_fixtures_own_status_is_used() {
@@ -99,6 +100,7 @@ fn each_change_sets_its_own_control() {
             show_sam: false,
             tts_on: false,
             stt_on: false,
+            audio: AudioPrefs::default(),
             transition: Transition::default(),
             zoom_limit: ZoomLimit::default(),
             plate: PlateTimer::default(),
@@ -463,4 +465,116 @@ mod plate_words {
             "Plate: no schedule \u{b7} last revealed picture shown 1:12 ago"
         );
     }
+}
+
+#[test]
+fn a_first_run_is_safe_nothing_that_spends_money_or_opens_a_microphone_is_on() {
+    let controls = Controls::default();
+    for switch in [Switch::Tts, Switch::Stt, Switch::Music] {
+        assert!(!switch.is_on(&controls), "{} starts off", switch.words());
+    }
+    assert!(Switch::Sound.is_on(&controls), "sound is harmless");
+    for switch in [Switch::Unavailable, Switch::Grid, Switch::Sam] {
+        assert!(!switch.is_on(&controls), "{} starts off", switch.words());
+    }
+    assert_eq!(controls.audio.volume_percent, 80);
+}
+
+#[test]
+fn a_click_on_each_switch_asks_for_the_other_way_round_and_a_second_click_asks_for_it_back() {
+    for switch in Switch::ALL {
+        let mut controls = Controls::default();
+        let first_state = switch.is_on(&controls);
+        let click = switch.toggled(&controls);
+        controls.apply(click).expect("a click is a valid change");
+        assert_eq!(switch.is_on(&controls), !first_state, "{}", switch.words());
+        let again = switch.toggled(&controls);
+        controls.apply(again).expect("the second click is valid");
+        assert_eq!(switch.is_on(&controls), first_state, "{}", switch.words());
+        assert_eq!(controls, Controls::default(), "{}", switch.words());
+    }
+}
+
+#[test]
+fn a_click_on_one_switch_changes_that_setting_and_no_other() {
+    for switch in Switch::ALL {
+        let mut controls = Controls::default();
+        controls.apply(switch.toggled(&controls)).expect("applies");
+        for other in Switch::ALL.into_iter().filter(|other| *other != switch) {
+            assert_eq!(
+                other.is_on(&controls),
+                other.is_on(&Controls::default()),
+                "clicking {} moved {}",
+                switch.words(),
+                other.words()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_switch_is_found_by_its_key_and_its_key_is_unique() {
+    for switch in Switch::ALL {
+        assert_eq!(Switch::from_key(switch.key()), Some(switch));
+    }
+    let mut keys: Vec<_> = Switch::ALL.map(Switch::key).to_vec();
+    keys.sort_unstable();
+    keys.dedup();
+    assert_eq!(keys.len(), Switch::ALL.len());
+    assert_eq!(Switch::from_key("volume"), None);
+}
+
+#[test]
+fn the_sound_music_and_volume_changes_are_written_and_read_as_a_change_and_a_value() {
+    for (change, text) in [
+        (
+            ControlsChange::Sound(false),
+            r#"{"change":"sound","value":false}"#,
+        ),
+        (
+            ControlsChange::Music(true),
+            r#"{"change":"music","value":true}"#,
+        ),
+        (
+            ControlsChange::Volume(35),
+            r#"{"change":"volume","value":35}"#,
+        ),
+    ] {
+        assert_eq!(serde_json::to_string(&change).expect("writes"), text);
+        assert_eq!(
+            serde_json::from_str::<ControlsChange>(text).expect("reads"),
+            change
+        );
+    }
+}
+
+#[test]
+fn the_volume_slider_sets_the_master_volume_up_to_the_limit_and_no_higher() {
+    let mut controls = Controls::default();
+    controls.apply(ControlsChange::Volume(0)).expect("silent");
+    assert_eq!(controls.audio.volume_percent, 0);
+    controls
+        .apply(ControlsChange::Volume(MAXIMUM_VOLUME_PERCENT))
+        .expect("full");
+    assert_eq!(controls.audio.volume_percent, MAXIMUM_VOLUME_PERCENT);
+    let error = controls
+        .apply(ControlsChange::Volume(MAXIMUM_VOLUME_PERCENT + 1))
+        .expect_err("too loud");
+    assert_eq!(
+        error,
+        ControlsError::VolumeTooHigh(MAXIMUM_VOLUME_PERCENT + 1)
+    );
+    assert_eq!(controls.audio.volume_percent, MAXIMUM_VOLUME_PERCENT);
+    assert!(error.to_string().contains("0 to 100"));
+}
+
+#[test]
+fn a_controls_record_written_before_the_sound_switches_reads_with_the_safe_defaults() {
+    let old: Controls = serde_json::from_str(concat!(
+        r#"{"fixture":null,"device":"both","pace":"normal","status_key":"fixture","#,
+        r#""show_unavailable":false,"show_grid":false,"tts_on":false,"stt_on":false}"#,
+    ))
+    .expect("reads");
+    assert_eq!(old.audio, AudioPrefs::default());
+    assert!(!old.audio.music_on);
 }

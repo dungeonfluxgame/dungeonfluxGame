@@ -93,3 +93,9 @@ pub fn inventory_differ(before: &TvScene, after: &TvScene) -> bool {
 pub fn clues_differ(before: &TvScene, after: &TvScene) -> bool {
     before.clues != after.clues
 }
+
+/// Whether the roll card differs: another roll, by its serial. The host's stamps of how far along
+/// the roll is change with every frame and do not redraw it (the card runs on its own).
+pub fn roll_differ(before: &TvScene, after: &TvScene) -> bool {
+    before.roll.as_ref().map(|roll| roll.serial) != after.roll.as_ref().map(|roll| roll.serial)
+}

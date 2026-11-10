@@ -316,8 +316,27 @@ fn leaving_copy(old: &Element, transition: Transition) -> Result<Element, JsValu
     Ok(copy)
 }
 
+/// A stage of the roll card has begun: the card that begins to leave lets the panels it covered
+/// return, and the inventory panel is drawn again for it.
+pub fn on_animation_start(target: &Element) {
+    match view::roll::on_animation_start(target) {
+        Ok(true) => render(),
+        Ok(false) => {}
+        Err(error) => {
+            log_error(ErrorSource::Draw, &js_message(&error));
+        }
+    }
+}
+
 /// Takes the leaving copy away when its animation has ended.
 pub fn on_animation_end(target: &Element) {
+    match view::roll::on_animation_end(target) {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(error) => {
+            log_error(ErrorSource::Draw, &js_message(&error));
+        }
+    }
     match view::clues::on_animation_end(target) {
         Ok(true) => {
             // The board folded: the bubbles are placed again, now clear of the strip.
@@ -502,11 +521,13 @@ fn draw(document: &Document, root: &Element, app: &mut App) -> Result<(), JsValu
     if change.devices || !change.parts.is_empty() {
         place_bubbles_of(app);
     }
-    // A full-frame picture (a reveal, a close-up insert) fades the inventory panel out in place.
+    // A full-frame picture (a reveal, a close-up insert) or the roll card fades the inventory
+    // panel out in place.
     let covered = shown_fixture(app).is_some_and(|fixture| {
-        crate::inventory::picture_is_up(
+        crate::inventory::is_covered(
             &app.controls.plate,
             fixture.tv.backdrop.as_ref().map(|image| image.plate),
+            view::roll::is_up(&fixture.tv),
         )
     });
     if view::inventory::settle_cover(document, covered)?

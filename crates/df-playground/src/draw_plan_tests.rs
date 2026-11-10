@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use crate::controls::{Controls, Device};
+use crate::controls::{Controls, ControlsChange, Device};
 use crate::copy::ReadingPace;
 use crate::draw_plan::{DrawPlan, Part, Snapshot, frame_action, wants_live};
 use crate::fixture::{Fixture, FixtureTitle, PlateKind};
@@ -302,6 +302,21 @@ fn a_toolbar_control_redraws_the_toolbar_and_a_cli_scene_change_does_not() {
     sound_on.audio_unlocked = true;
     let plan = DrawPlan::between(Some(&old), &sound_on);
     assert!(plan.toolbar && plan.parts.is_empty());
+    for change in [
+        ControlsChange::Sound(false),
+        ControlsChange::Music(true),
+        ControlsChange::Volume(30),
+        ControlsChange::Tts(true),
+    ] {
+        let mut switched = old.clone();
+        switched.controls.apply(change.clone()).expect("applies");
+        let plan = DrawPlan::between(Some(&old), &switched);
+        assert!(
+            plan.toolbar,
+            "{change:?} redraws the toolbar so its state is shown"
+        );
+        assert!(!plan.devices, "{change:?}");
+    }
     let mut names = old.clone();
     names.names.push(FixtureTitle {
         file: "tavern.json".to_owned(),

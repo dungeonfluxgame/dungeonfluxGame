@@ -23,6 +23,8 @@
 //! The authority supplies every die face, so results are reproducible. Nothing
 //! here draws randomness or reads a clock.
 
+use serde::{Deserialize, Serialize};
+
 /// Pinned source for this rule: SRD 5.2.1 English, Influence glossary entry.
 pub const SOURCE_REVISION: &str = "SRD-5.2.1:page-184:Influence-Action";
 /// Shared attribution; the PDF checksum matches the rules-sources manifest.
@@ -138,7 +140,8 @@ pub struct ModeSource {
 
 /// Combined roll mode. Several sources on one side never stack: two d20s are
 /// still rolled (p. 8).
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RollMode {
     Normal,
     Advantage,

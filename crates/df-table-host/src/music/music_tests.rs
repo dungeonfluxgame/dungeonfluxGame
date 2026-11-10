@@ -4,12 +4,13 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use df_playground::controls::ControlsChange;
 use df_playground::media::{MediaEntry, MediaKind};
 use df_playground::scene::{SceneChange, Target, Track as SceneTrack};
 
 use super::backend::{ComposeFuture, Composer};
 use super::request::{MusicError, MusicProviderCause, MusicRequest, MusicSource};
-use super::routes::{Track, TrackLocks, choose_track, play};
+use super::routes::{MusicService, Track, TrackLocks, choose_track, play};
 use crate::command::{Command, CommandError, DEFAULT_VOLUME, parse, split_words};
 use crate::media_library::media_entries;
 use crate::test_support::{Running, STARTER_FILES, start};
@@ -244,6 +245,7 @@ const DEADLINE: Duration = Duration::from_secs(60);
 #[tokio::test]
 async fn a_new_name_is_composed_once_and_the_same_name_plays_again_with_no_second_call() {
     let running = start(&STARTER_FILES).await;
+    running.switch_music_on();
     with_fixture(&running).await;
     let composer = FakeComposer::new(Answer::Music);
 
@@ -299,6 +301,7 @@ async fn a_new_name_is_composed_once_and_the_same_name_plays_again_with_no_secon
 #[tokio::test]
 async fn two_requests_at_once_for_a_new_name_compose_it_once() {
     let running = start(&STARTER_FILES).await;
+    running.switch_music_on();
     with_fixture(&running).await;
     let composer = FakeComposer::new(Answer::Music);
     let tracks = TrackLocks::default();
@@ -327,6 +330,7 @@ async fn two_requests_at_once_for_a_new_name_compose_it_once() {
 #[tokio::test]
 async fn a_failed_or_late_composition_stores_nothing_and_keeps_the_music_playing() {
     let running = start(&STARTER_FILES).await;
+    running.switch_music_on();
     with_fixture(&running).await;
     play(
         &running.state,
@@ -374,6 +378,91 @@ async fn a_failed_or_late_composition_stores_nothing_and_keeps_the_music_playing
     assert!(lines(&running).iter().any(|line| {
         line.starts_with("MUSIC compose_failed name=crypt error=provider cause=deadline")
     }));
+}
+
+#[tokio::test]
+async fn nothing_is_composed_while_the_music_is_off_but_a_track_already_held_still_plays() {
+    let running = start(&STARTER_FILES).await;
+    with_fixture(&running).await;
+    let composer = FakeComposer::new(Answer::Music);
+    let tracks = TrackLocks::default();
+    assert_eq!(
+        play(
+            &running.state,
+            &composer,
+            &tracks,
+            request("crypt"),
+            DEADLINE
+        )
+        .await,
+        Err(MusicError::Disabled),
+        "a first run has the music off"
+    );
+    assert_eq!(composer.calls(), 0, "nothing was sent to the composer");
+    assert!(library(&running).is_empty());
+    assert!(music(&running).await.is_none());
+
+    running.switch_music_on();
+    play(
+        &running.state,
+        &composer,
+        &tracks,
+        request("crypt"),
+        DEADLINE,
+    )
+    .await
+    .expect("composes while the music is on");
+    assert_eq!(composer.calls(), 1);
+    running
+        .state
+        .playground()
+        .change_all(vec![ControlsChange::Music(false)], &[], 0, |_| {})
+        .expect("the switch is changed");
+    let again = play(
+        &running.state,
+        &composer,
+        &tracks,
+        request("crypt"),
+        DEADLINE,
+    )
+    .await
+    .expect("the held track plays with the music off");
+    assert_eq!(again.source, MusicSource::Library);
+    assert_eq!(
+        play(
+            &running.state,
+            &composer,
+            &tracks,
+            request("hall"),
+            DEADLINE
+        )
+        .await,
+        Err(MusicError::Disabled)
+    );
+    assert_eq!(composer.calls(), 1, "no second composition");
+}
+
+#[tokio::test]
+async fn the_tempo_directors_path_to_the_composer_is_refused_and_logged_while_the_music_is_off() {
+    let running = start(&STARTER_FILES).await;
+    with_fixture(&running).await;
+    let composer = std::sync::Arc::new(FakeComposer::new(Answer::Music));
+    let service = MusicService::with_composer(composer.clone());
+    assert_eq!(
+        service
+            .ensure(&running.state, &request("crypt"))
+            .await
+            .err(),
+        Some(MusicError::Disabled)
+    );
+    assert_eq!(composer.calls(), 0);
+    assert!(
+        lines(&running)
+            .iter()
+            .any(|line| line == "MUSIC refused name=crypt error=disabled"),
+        "{:?}",
+        lines(&running)
+    );
 }
 
 #[tokio::test]

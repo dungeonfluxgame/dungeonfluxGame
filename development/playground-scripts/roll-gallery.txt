@@ -1,0 +1,61 @@
+# One roll card of every kind and every die size in turn, with fixed values, for the visual inspector.
+# Needs the playground host running (df-table serve). Each card stays about 11 seconds. Run:
+#   df-table dev --port 7879 script development/playground-scripts/roll-gallery.txt
+playground go ui_roll_gallery
+scene reset
+scene image tv-backdrop lobby-hall-plate.webp
+scene narration set "Athletics, Strength. The difficulty is fifteen. Roll the dice and let us see whether the rope holds." speaker="Dungeon Master" voice=false
+wait 1500
+scene roll ability_check "Strength check" id=g-ability dice=20:14 mods=Strength:3 target=DC:15 outcome=success
+wait 11500
+scene roll skill_check "Athletics (Strength)" id=g-skill dice=20:14 mods=Strength:3,Proficiency:2 target=DC:15 outcome=success
+wait 11500
+scene roll skill_check "Stealth (Dexterity)" id=g-skill-fail dice=20:5 mods=Dexterity:2,Proficiency:2 target=DC:13 outcome=failure
+wait 11500
+scene roll passive_perception "Passive Perception" id=g-passive mods=Base:10,Wisdom:1,Proficiency:2 target=DC:12 outcome=success
+wait 11500
+scene roll saving_throw "Constitution saving throw" id=g-save dice=20:11 mods=Constitution:3,Proficiency:2 target=DC:14 outcome=success
+wait 11500
+scene roll melee_attack "Longsword attack" id=g-melee dice=20:12 mods=Strength:3,Proficiency:2 target=AC:15 outcome=hit
+wait 11500
+scene roll ranged_attack "Longbow attack" id=g-ranged dice=20:8 mods=Dexterity:2,Proficiency:2 target=AC:14 outcome=miss
+wait 11500
+scene roll melee_attack "Longsword attack" id=g-natural-twenty dice=20:20 mods=Strength:3,Proficiency:2 target=AC:16 outcome=critical_hit natural=twenty
+wait 11500
+scene roll melee_attack "Longsword attack" id=g-natural-one dice=20:1 mods=Strength:3,Proficiency:2 target=AC:16 outcome=miss natural=one
+wait 11500
+scene roll contested_check "Athletics against Acrobatics" id=g-contested dice=20:13 mods=Strength:3,Proficiency:2 target=Acrobatics:16 outcome=won
+wait 11500
+scene roll initiative "Initiative" id=g-initiative dice=20:9 mods=Dexterity:2
+wait 11500
+scene roll death_saving_throw "Death saving throw" id=g-death dice=20:14 target=DC:10 outcome=success
+wait 11500
+scene roll damage "Longsword damage" id=g-d8 dice=8:5 mods=Strength:3
+wait 11500
+scene roll damage "Fireball" id=g-d6 dice=6:4,6:2,6:6,6:5,6:3,6:6,6:1,6:5
+wait 11500
+scene roll healing "Cure Wounds" id=g-heal dice=8:6,8:3 mods=Wisdom:3
+wait 11500
+scene roll hit_die "Hit die" id=g-d10 dice=10:7 mods=Constitution:2
+wait 11500
+scene roll bonus_die "Bless" id=g-d4 dice=4:3
+wait 11500
+scene roll table_roll "Treasure hoard" id=g-d100 dice=100:57
+wait 11500
+scene roll table_roll "Wild magic" id=g-d12 dice=12:9
+wait 11500
+scene roll skill_check "Perception (Wisdom)" id=g-advantage mode=advantage dice=20:6:dropped,20:17 mods=Wisdom:1,Proficiency:2 target=DC:15 outcome=success
+wait 11500
+scene roll skill_check "Stealth (Dexterity)" id=g-disadvantage mode=disadvantage dice=20:15:dropped,20:4 mods=Dexterity:2,Proficiency:2 target=DC:12 outcome=failure
+wait 11500
+scene roll ability_check "Dexterity check" id=g-inspiration dice=20:15 reroll=0:4 mods=Dexterity:2 target=DC:15 outcome=success
+wait 11500
+scene roll ability_check "Strength check" id=g-negative dice=20:12 mods=Strength:-1 target=DC:13 outcome=failure
+wait 11500
+scene roll damage "Meteor Swarm" id=g-twelve dice=6:3,6:5,6:1,6:6,6:2,6:4,6:6,6:5,6:3,6:2,6:4,6:6
+wait 11500
+scene roll damage "Great Ruin" id=g-twenty dice=10:7,10:3,10:9,10:1,10:10,10:4,10:6,10:2,10:8,10:5,10:10,10:3,10:7,10:1,10:9,10:6,10:2,10:8,10:4,10:5
+wait 11500
+scene roll saving_throw "Dexterity saving throw against the Ancient Red Dragon breath weapon" id=g-long mode=advantage dice=20:6:dropped,20:17 mods=Dexterity:2,Proficiency:3,"Cloak of Protection":1,Bless:2,Aura:1 target=DC:21 outcome=success
+wait 11500
+scene roll-clear

@@ -266,3 +266,132 @@ fn replay_dice_serve_what_a_refused_batch_gave_back_in_order() {
 
     assert_eq!(dice.remaining(), 0);
 }
+
+/// Draws per die size in the statistical tests: twice the 10,000 the gauntlet asks for.
+const DRAWS_PER_SIZE: usize = 20_000;
+
+/// The chi-square critical values of a die with `sides - 1` degrees of freedom at p = 0.001, for
+/// d4, d6, d8, d10, d12, d20 and d100. A uniform die exceeds one with probability 0.001, so a
+/// seeded run that stays under it is a fixed pass, not a lucky one.
+const SEEDED_BOUNDS: [(u16, f64); 7] = [
+    (4, 16.27),
+    (6, 20.52),
+    (8, 24.32),
+    (10, 27.88),
+    (12, 31.26),
+    (20, 43.82),
+    (100, 148.23),
+];
+
+/// The same at p = 1e-9, for the system-keyed source, whose numbers change on every run: a fair
+/// source exceeds these once in a billion runs per size.
+const SYSTEM_BOUNDS: [(u16, f64); 7] = [
+    (4, 44.8),
+    (6, 50.7),
+    (8, 55.9),
+    (10, 60.7),
+    (12, 65.2),
+    (20, 81.6),
+    (100, 207.9),
+];
+
+fn chi_square(sides: u16, rolled: &[u16]) -> f64 {
+    let mut counts = vec![0_u32; usize::from(sides)];
+    for value in rolled {
+        counts[usize::from(*value) - 1] += 1;
+    }
+    let expected = rolled.len() as f64 / f64::from(sides);
+    counts
+        .iter()
+        .map(|count| (f64::from(*count) - expected).powi(2) / expected)
+        .sum()
+}
+
+#[test]
+fn every_die_size_is_uniform_over_many_draws_from_the_seeded_source() {
+    for (sides, bound) in SEEDED_BOUNDS {
+        let rolled = values(&RecordedDice::seeded(20_261_110), sides, DRAWS_PER_SIZE);
+
+        let statistic = chi_square(sides, &rolled);
+
+        assert!(
+            statistic < bound,
+            "d{sides}: chi-square {statistic:.2} is not under {bound}"
+        );
+    }
+}
+
+#[test]
+fn every_die_size_is_uniform_over_many_draws_from_the_system_source() {
+    for (sides, bound) in SYSTEM_BOUNDS {
+        let rolled = values(&RecordedDice::from_system_entropy(), sides, DRAWS_PER_SIZE);
+
+        let statistic = chi_square(sides, &rolled);
+
+        assert!(
+            statistic < bound,
+            "d{sides}: chi-square {statistic:.2} is not under {bound}"
+        );
+    }
+}
+
+#[test]
+fn a_percentile_roll_of_two_d10_is_uniform_over_one_to_one_hundred_and_reaches_both_ends() {
+    use df_rules::roll::{
+        DiceExpression, DiceRequest, DieRole, DieSize, ModifierLabel, RollRequest,
+    };
+
+    let request = RollRequest::Dice(DiceRequest {
+        role: DieRole::Table,
+        expression: DiceExpression {
+            count: 1,
+            die: DieSize::D100,
+            modifier: 0,
+        },
+        modifier_label: ModifierLabel::Flat,
+        critical: false,
+        heroic_inspiration: None,
+    });
+    let dice = RecordedDice::seeded(20_261_110);
+    let plan = request.draw_plan().expect("a plan");
+    let mut rolled = Vec::with_capacity(DRAWS_PER_SIZE);
+    for turn in 0..DRAWS_PER_SIZE {
+        let faces: Vec<u16> = plan
+            .iter()
+            .map(|size| {
+                dice.draw(correlation(turn as u64 + 1), die(size.sides()))
+                    .expect("a draw")
+                    .value()
+            })
+            .collect();
+        let result = request.resolve(&faces).expect("a percentile roll");
+        rolled.push(u16::try_from(result.total).expect("a percentile is positive"));
+    }
+
+    assert_eq!(plan, [DieSize::D10, DieSize::D10]);
+    assert!(rolled.contains(&1) && rolled.contains(&100));
+    let statistic = chi_square(100, &rolled);
+    assert!(
+        statistic < 148.23,
+        "chi-square {statistic:.2} is not under 148.23"
+    );
+}
+
+#[test]
+fn replayed_dice_reproduce_a_run_of_every_die_size_exactly() {
+    let sizes = [4, 6, 8, 10, 12, 20, 100, 20, 10, 10];
+    let recorded = RecordedDice::seeded(20_261_110);
+    let rolled: Vec<_> = sizes
+        .iter()
+        .map(|sides| recorded.draw(correlation(1), die(*sides)).expect("a draw"))
+        .collect();
+    let replay = ReplayDice::new(recorded.records());
+
+    let replayed: Vec<_> = sizes
+        .iter()
+        .map(|sides| replay.draw(correlation(1), die(*sides)).expect("a draw"))
+        .collect();
+
+    assert_eq!(replayed, rolled);
+    assert_eq!(replay.remaining(), 0);
+}

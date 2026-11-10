@@ -73,6 +73,11 @@ pub const PERSONA_USAGE: &str = concat!(
     "[model=<name>] <guidance options> [hint <text...>] | ",
     "persona say <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
     "[from=<id>] [intent=<text>] [strike=true|false] <situation...> | ",
+    "persona check judge|run <character> [sheet=<file>] [stations=<file>] [station=<id>] ",
+    "[action=<line>] [moment=player|narrator] [place=<words>] [sight=<words>]... ",
+    "[checked=<kind>[:<ability>[:<skill>]]]... [intent=<kind>[:<ability>[:<skill>]]] ",
+    "[model=<name>] [inspiration=<die>] [told=<line>] ",
+    "[speak=true|false] | ",
     "persona declare <character> [model=<name>] [speak=true|false] [recent=<text>]... ",
     "[from=<id>] [text=<the declaration>] [doing=<what the picture shows>] ",
     "[uses=<item id>,<item id>...] [<situation...>] | ",
@@ -446,6 +451,8 @@ pub enum PersonaCommand {
     },
     /// What a character sees on screen and thinks, one or several (`perceive`).
     Perceive(super::perceive::cli::PerceiveCommand),
+    /// The check judge, or a whole check on the TV (`check`).
+    Check(super::check::CheckCommand),
     /// A character declares the action they are doing right now (`declare`).
     Declare(super::declare::DeclareCommand),
     /// Show a picture the library already holds, without a watch (`show-picture`).
@@ -1303,6 +1310,7 @@ pub fn parse(words: &[String]) -> Result<PersonaCommand, CommandError> {
             super::perceive::cli::parse_thoughts(words).map(PersonaCommand::Perceive)
         }
         ("declare", words) => super::declare::parse_declare(words).map(PersonaCommand::Declare),
+        ("check", words) => super::check::cli::parse_check(words).map(PersonaCommand::Check),
         ("show-picture", words) => parse_show_picture(words),
         ("remove", [id]) => Ok(PersonaCommand::Remove { id: id_word(id)? }),
         ("remove", _) => Err(CommandError::Usage(PERSONA_REMOVE_USAGE)),
@@ -1873,6 +1881,7 @@ pub async fn run(port: u16, command: PersonaCommand) -> Result<String, DevError>
         }
         PersonaCommand::Perceive(command) => super::perceive::cli::run(port, command).await,
         PersonaCommand::Declare(command) => super::declare::run(port, command).await,
+        PersonaCommand::Check(command) => super::check::cli::run(port, command).await,
         PersonaCommand::StoryApply { model } => super::story::apply_story(port, model).await,
         PersonaCommand::Say {
             character,

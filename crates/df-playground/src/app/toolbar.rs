@@ -12,13 +12,15 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{Document, Element};
 
-use super::sound::{MUSIC_ACTION, SOUND_ACTION, VOLUME_ACTION};
+use super::sound::VOLUME_ACTION;
 use super::state::{App, try_with_app};
 use crate::audio;
-use crate::controls::{Device, FIXTURE_STATUS_KEY};
+use crate::controls::{Controls, Device, FIXTURE_STATUS_KEY, Switch};
 use crate::copy::{ReadingPace, STATUS_KEYS};
 use crate::dom::{append, button, element, now_ms, option, select, text_element};
 use crate::media::AudioState;
+use crate::page_log;
+use crate::timeline::ErrorSource;
 
 /// A labelled control inside a group: the small label, then the control.
 fn field(document: &Document, label: &str, control: &Element) -> Result<Element, JsValue> {
@@ -77,8 +79,11 @@ fn segment_option(
     Ok(button)
 }
 
-fn switch(document: &Document, action: &str, label: &str, on: bool) -> Result<Element, JsValue> {
-    let button = button(document, "studio-switch", label, action)?;
+/// The button of a switch, lit exactly when the host holds the setting on.
+fn switch(document: &Document, which: Switch, controls: &Controls) -> Result<Element, JsValue> {
+    let action = format!("toggle:{}", which.key());
+    let button = button(document, "studio-switch", which.words(), &action)?;
+    let on = which.is_on(controls);
     button.set_attribute("aria-pressed", if on { "true" } else { "false" })?;
     Ok(button)
 }
@@ -186,8 +191,8 @@ fn speech_switches(document: &Document, app: &App) -> Result<Element, JsValue> {
         document,
         "Speech",
         &[
-            switch(document, "toggle:tts", "TTS", controls.tts_on)?,
-            switch(document, "toggle:stt", "STT", controls.stt_on)?,
+            switch(document, Switch::Tts, controls)?,
+            switch(document, Switch::Stt, controls)?,
         ],
     )
 }
@@ -198,29 +203,25 @@ fn overlay_switches(document: &Document, app: &App) -> Result<Element, JsValue> 
         document,
         "Overlays",
         &[
-            switch(
-                document,
-                "toggle:unavailable",
-                "Unavailable",
-                controls.show_unavailable,
-            )?,
-            switch(document, "toggle:grid", "Grid", controls.show_grid)?,
-            switch(document, "toggle:sam", "SAM", controls.show_sam)?,
+            switch(document, Switch::Unavailable, controls)?,
+            switch(document, Switch::Grid, controls)?,
+            switch(document, Switch::Sam, controls)?,
         ],
     )
 }
 
-/// The sound: a button that lets the browser play sound, and once it has, a plain "Sound on";
-/// then this viewer's own switches (all sound, the music) and master volume.
-fn sound_control(document: &Document) -> Result<Element, JsValue> {
+/// The sound: a button that lets the browser play sound, and once it has, a plain "Audio unlocked"
+/// (the browser's permission, not the Sound switch: that one mutes); then the host's switches
+/// (all sound, the music) and master volume.
+fn sound_control(document: &Document, app: &App) -> Result<Element, JsValue> {
     let control = if audio::state() == AudioState::Unlocked {
-        let state = text_element(document, "span", "studio-state", "Sound on")?;
+        let state = text_element(document, "span", "studio-state", "Audio unlocked")?;
         state.set_attribute("role", "status")?;
         state
     } else {
         action_button(document, "audio:unlock", "Enable sound")?
     };
-    let prefs = audio::prefs();
+    let prefs = app.controls.audio;
     let volume = element(document, "input", "studio-volume")?;
     for (name, value) in [
         ("type", "range"),
@@ -238,12 +239,16 @@ fn sound_control(document: &Document) -> Result<Element, JsValue> {
         "Sound",
         &[
             control,
-            switch(document, SOUND_ACTION, "Sound", prefs.sound_on)?,
-            switch(document, MUSIC_ACTION, "Music", prefs.music_on)?,
+            switch(document, Switch::Sound, &app.controls)?,
+            switch(document, Switch::Music, &app.controls)?,
             field(document, "Volume", &volume)?,
         ],
     )
 }
+
+/// The attribute of the plate timer that says whether a watch runs, for its dot to be lit only
+/// then.
+const RUNNING_ATTRIBUTE: &str = "data-running";
 
 /// How often the plate timer's words are read again: once a second, so it never changes faster.
 const PLATE_TICK_MS: u32 = 1_000;
@@ -272,11 +277,15 @@ pub fn refresh_plate() {
     let Ok(Some(timer)) = document.query_selector(".studio-plate") else {
         return;
     };
-    let Some(words) = try_with_app(plate_words) else {
+    let Some((words, running)) = try_with_app(|app| (plate_words(app), app.controls.plate.running))
+    else {
         return;
     };
     if timer.text_content().as_deref() != Some(words.as_str()) {
         timer.set_text_content(Some(&words));
+    }
+    if let Err(error) = timer.set_attribute(RUNNING_ATTRIBUTE, &running.to_string()) {
+        page_log::note_error(ErrorSource::Draw, &crate::dom::js_message(&error));
     }
 }
 
@@ -310,6 +319,7 @@ fn plate_timer(document: &Document, app: &App) -> Result<Element, JsValue> {
     )?;
     // A timer is not read out on every change.
     timer.set_attribute("role", "timer")?;
+    timer.set_attribute(RUNNING_ATTRIBUTE, &app.controls.plate.running.to_string())?;
     if !PLATE_TICKING.with(|ticking| ticking.replace(true)) {
         spawn_local(async {
             loop {
@@ -331,7 +341,7 @@ pub fn toolbar(document: &Document, app: &App) -> Result<Element, JsValue> {
     append(&bar, &view_segment(document, app)?)?;
     append(&bar, &simulate_group(document, app)?)?;
     append(&bar, &overlay_switches(document, app)?)?;
-    append(&bar, &sound_control(document)?)?;
+    append(&bar, &sound_control(document, app)?)?;
     append(&bar, &speech_switches(document, app)?)?;
     append(&bar, &plate_timer(document, app)?)?;
     Ok(bar)

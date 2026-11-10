@@ -49,7 +49,8 @@ pub(super) const SCENE_USAGE: &str = concat!(
     "scene caption <text> [speaker=NAME] | caption-clear | party ... | choices ... | image ... | ",
     "image-clear <slot> | slide ... | camera ... | camera-reset ... | camera-on ... | cast | ",
     "cue ... | music ... | music-stop | sound ... | reset | narration ... | seat ... | seats ... ",
-    "| logo ... | clues ... | lobby ... | loading ... | roleplay ... | pill ... | home ... | ",
+    "| logo ... | clues ... | roll ... | roll-clear | lobby ... | loading ... | roleplay ... | ",
+    "pill ... | home ... | ",
     "start ... | ",
     "build ... | show | lookahead ... | timing ..."
 );
@@ -86,6 +87,12 @@ pub(super) const CLUES_USAGE: &str = concat!(
     "scene clues set \"id|name|detail|seen\" \"id|name|detail|worked|picture.png\" ... (oldest ",
     "first, the newest last) | scene clues clear",
 );
+pub(super) const ROLL_USAGE: &str = concat!(
+    "scene roll <kind> \"<title>\" [id=NAME] [mode=normal|advantage|disadvantage] ",
+    "[dice=SIDES:FACE[:ROLE][:dropped],...] [mods=LABEL:N,...] [target=LABEL:N] [outcome=KEY] ",
+    "[natural=one|twenty|none] [reroll=INDEX:WAS] [total=N] [hold=MS]",
+);
+pub(super) const ROLL_CLEAR_USAGE: &str = "scene roll-clear";
 pub(super) const LOGO_USAGE: &str = "scene logo on|off";
 pub(super) const MEDIA_USAGE: &str =
     "media | media head <name> | media add <file> [as=NAME] | media remove <name>";
@@ -99,7 +106,7 @@ pub(super) const REPL_USAGE: &str = "repl";
 pub(super) const CLIENTS_USAGE: &str = concat!(
     "clients [<client>] | clients timeline <client> ",
     "[kind=line|plate|figure|clip|scene|sound|music|draw|camera|capture|transcribe|ask|outline|",
-    "card|fade|third|clues|error] ",
+    "card|fade|third|clues|roll|error] ",
     "[after=SEQ]",
 );
 pub(super) const FIXTURES_USAGE: &str = "fixtures";
@@ -109,8 +116,8 @@ pub(super) fn playground_keys() -> String {
     format!(
         "fixture=<name>, device=both|tv|phone, pace=slow|normal|fast, status=fixture|<status>, \
          unavailable=true|false, grid=true|false, sam=true|false, tts=true|false, \
-         stt=true|false, transition=cut|fade|wipe, \
-         ms=0-{MAXIMUM_TRANSITION_MS}, zoom_limit=model|pixels"
+         stt=true|false, sound=true|false, music=true|false, volume=0-100, \
+         transition=cut|fade|wipe, ms=0-{MAXIMUM_TRANSITION_MS}, zoom_limit=model|pixels"
     )
 }
 
@@ -217,6 +224,12 @@ pub fn usage_text() -> String {
          \n  {SEATS_USAGE}\n      open seats after the heroes, or take every look and open seat \
          away\n\
          \n  {LOGO_USAGE}\n      the DungeonFlux logo at the top left of the shared screen\n\
+         \n  {ROLL_USAGE}\n      put one roll on the shared screen as the roll card, from the \
+         values given (kind is a roll kind such as skill_check, saving_throw or damage; dice are \
+         SIDES:FACE, ROLE one of test, bonus, damage, healing, hit_die, table; total defaults to \
+         the kept dice and the modifiers added up; hold=MS is the least the card stays after its \
+         verdict appears, never under 6 s); the page shows exactly what is given and rolls \
+         nothing; {ROLL_CLEAR_USAGE} takes it away\n\
          \n  {CLUES_USAGE}\n      the clue board down the left of the shared screen: every clue \
          found so far, one quoted word each: id, name, detail, seen or worked (resolved)\n      \
          and an optional picture from the library; or take it away\n\

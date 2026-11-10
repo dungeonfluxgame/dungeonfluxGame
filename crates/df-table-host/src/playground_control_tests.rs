@@ -149,7 +149,7 @@ async fn a_refused_change_is_a_400_that_says_why_and_leaves_the_controls_alone()
 #[tokio::test]
 async fn a_body_that_is_not_a_change_is_a_400_and_recorded() {
     let running = start(&STARTER_FILES).await;
-    for body in ["", "nope", r#"{"change":"volume","value":3}"#] {
+    for body in ["", "nope", r#"{"change":"loudness","value":3}"#] {
         let response = post_json(running.port, "/dev/playground/controls", body)
             .await
             .expect("answers");

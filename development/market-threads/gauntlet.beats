@@ -1,0 +1,106 @@
+# The dice gauntlet: one warrior meets every station of gauntlet.stations.json, one after the other,
+# and at each one a check is judged, called aloud, rolled with real dice, shown on a roll card and read
+# aloud. The runner's gauntlet mode (`@gauntlet <character>`) plays it; planning/dice-gauntlet.md is the
+# brief and development/runbook-dev-playground.md ("The gauntlet run") the procedure.
+# At every station: (a) the plate replaces the backdrop with the page's fade (`@gauntlet_fade`), (b) the
+# dungeon master sets the scene (the second field below, spoken in "you", no semicolons, no names),
+# (c) the warrior says in his own words what he does toward the goal (the third field; he is never told
+# a name, a die or a difficulty). He is a plain-spoken veteran who may refuse a distasteful act, and a
+# station that rolls nothing is a hole in a gauntlet of checks, so every goal is a decision already taken
+# ("You have decided to .. and you do it now"), never a question or an option, and where an honest man
+# would still refuse (theft, a lie, a threat) the scene or the goal gives him a motive (the coin was
+# stolen from a starving village, the guard is a smuggler's man, a family cannot cross). The runner asks
+# once more with "You commit to it: do it, in a sentence." when the judge calls no roll, and logs both
+# (`NO CHECK`); and (d) `persona check run` judges his line, calls the check, rolls,
+# shows the card, reads the result and clears it. A station marked `narrator` has no line of his: the
+# dungeon master calls the check unasked (the judge's `moment=narrator`, the station's own test passed as
+# `intent=`). Eighteen of the 45 runs are the narrator's, the calls a table makes without being asked: a
+# hazard (the four saving throws of the flood, the blade, the fume and the apparition), an ambush
+# (initiative), a grab (the contested test), the fallen man's two death saves, a skittish horse, a lost
+# trail, a long climb, a swaying bridge, a passive score and the six raw-ability stations. The rest are
+# the warrior's own acts. 45 runs are the 39 stations of the file and six repeats (a second shot at the
+# range, a second round at the ford, three more damage weapons, a second death save). The judge is never
+# told a station's designed test at a player station; the log says whether its answer matched.
+# `@station_sight <id> <what is in sight>` gives the judge a ground for a mode other than normal that is
+# true of the fiction (the warrior wears chain mail), and `@station_inspire <id> <die place>` spends his
+# Heroic Inspiration, once, on the d20 of that station after the dice are drawn (the flow takes the die
+# before the draw, so a failure is likely but not certain: the log's [inspire] line says what the first
+# roll was). Advantage comes from the sheet (Remarkable Athlete: Athletics and initiative, so the
+# athletics, contested and initiative stations), disadvantage from his armour (stealth).
+# `@gauntlet_look` and `@gauntlet_portrait` are what the runner's prep names him by on each plate before
+# the first station (a plate where he is not found makes its stations narrator-only).
+# Run it with `DF_RUN_TTS=on` for the voiced run; the runner never turns a paid switch on by itself.
+@gauntlet gauntlet_warrior
+@gauntlet_persona development/market-threads/gauntlet_warrior.persona.json
+@gauntlet_sheet development/market-threads/gauntlet_warrior.sheet.json
+@gauntlet_stations development/market-threads/gauntlet.stations.json
+@gauntlet_look a broad grey-bearded man in chain mail with a round wooden shield
+@gauntlet_portrait ref-gauntlet_warrior.png
+@gauntlet_fade 800
+@gauntlet_breath 1.5
+@gauntlet_limit 180
+@station_sight stealth His chain mail clinks softly whenever he moves.
+@station_inspire persuasion 0
+@station athletics | player | A sheer grey cliff rises ahead of you with ledges and cracks in the stone and a rope hanging down the face. The only way on is up. | You have decided to go up this cliff by the rope and the cracks in the rock, and you do it now. Say, in one short line, exactly what you do.
+@station acrobatics | narrator | An old rope bridge sways over a deep wooded gorge, its plank treads narrow and the far side a long way off. The first plank gives under your boot.
+@station sleight_of_hand | player | The village market is crowded and loud. A merchant's fat leather purse hangs loose at his belt, turned half away from you, and the coin in it was stolen from your starving village. | The coin in that purse was stolen from your starving village, and you have decided to take it back without being noticed. You do it now. Say, in one short line, exactly what your hands do.
+@station stealth | player | A long stone corridor runs away into shadow, lit by a single torch far off. A guard dozes on a stool at the end of it. | The prisoner you came to free is locked in the room behind the dozing guard, and you have decided to creep past him along the wall, and you do it now. Say, in one short line, exactly what you do.
+@station arcana | player | In a dry cellar of cut rock a sealed stone door stands shut. It is covered with old carved ward marks. | The only way out of the cellar is the sealed door, and you have decided to work out what its ward marks mean and open it, and you do it now. Say, in one short line, exactly what you do.
+@station history | player | A weathered carved stone stands alone in a field of long grass, its face worn almost smooth by the years. | Your employer pays only if you can say who raised this stone, and you have decided to work it out from the carving, and you do it now. Say, in one short line, exactly what you do.
+@station investigation | player | A scholar's study lies in disorder, with papers heaped on the table, a locked chest and a drawer left half open. | The proof that clears a friend's name is somewhere in this study, and you have decided to search it thoroughly, and you do it now. Say, in one short line, exactly what you do.
+@station nature | player | Fresh tracks cross a quiet forest glade, and an odd cluster of pale mushrooms grows beside the trodden track. | A lost child's trail may be among the tracks in this glade, and you have decided to read what passed here, and you do it now. Say, in one short line, exactly what you do.
+@station religion | player | A small wayside shrine of weathered stone stands at the crossroads, with wilted flowers and a heel of bread left before it. | The villagers behind you will not pass until they know whose shrine this is, and you have decided to work out whose it is and what it asks, and you do it now. Say, in one short line, exactly what you do.
+@station animal_handling | narrator | A frightened carthorse rears in a farmyard with its eyes wide, and it is plunging your way.
+@station insight | player | A wary merchant stands behind his stall with folded arms, swearing that every one of his goods is honest. | Your company's pay is in this merchant's hands, and you have decided to study his face for a lie, and you do it now. Say, in one short line, exactly what you do.
+@station medicine | player | A wounded traveller sits against a milestone with a bloody bandage on one arm, his face grey with pain. | The wounded traveller will bleed out if he is left, and you have decided to tend his wound with what you carry, and you do it now. Say, in one short line, exactly what you do.
+@station perception | player | You stand on a stone watchtower on a ridge above a wide valley, and far off something is moving. | A column of riders may be coming, and you have decided to scan the valley from the watchtower for anything that moves, and you do it now. Say, in one short line, exactly what you do.
+@station survival | narrator | The faint trail fades into rough moorland. Old tracks and a cold fire ring are all that is left to follow.
+@station deception | player | A stern gate guard bars the town gate with his spear and lets nobody through. He is a smuggler's man, and he would hurt anyone who looked too close at what he guards. | The guard would hurt you if he learned why you are here, and a starving village needs what lies beyond the gate. You have decided to lie to him with a false story, and you do it now. Say, in one short line, exactly the story you tell him.
+@station intimidation | player | A bandit with a cudgel stands in the river ford, wary and half afraid, and he blocks the crossing. Behind you a family of travellers waits to cross. | The family behind you cannot cross while the bandit stands in the ford, and you have decided to frighten him off. You do it now. Say, in one short line, exactly what you say and do to him.
+@station performance | player | A low plank stage with a stool stands empty in the tavern, and a few seated villagers wait for a song or a tale. | The innkeeper will feed your hungry company for a good performance, and you have decided to take the stage and give one, and you do it now. Say, in one short line, exactly what you perform.
+@station persuasion | player | A village elder sits on a bench before his thatched cottage with his hands folded, and he will not be hurried. | The elder's word decides whether the village shelters the refugees with you, and you have decided to make your honest case to him, and you do it now. Say, in one short line, exactly what you tell him.
+# The six raw-ability stations are the narrator's: the judge picks a skill whenever one fits a player's
+# line (run 1: raw Strength came out Athletics, raw Dexterity Acrobatics, raw Intelligence Investigation),
+# but at a narrator moment with the station's own test as `intent=` it calls exactly that test, and
+# refuses it (`intent_unsuitable`) when the situation does not make it sensible. So each scene is a pure
+# act of the ability with no skill framing: a bare heave, a reflexive catch, a half-remembered fact, a
+# gut sense of danger, sheer presence, and the long climb that tests endurance.
+@station raw_str | narrator | A rusted portcullis has jammed half raised over a wagon, and its weight is crushing the wagon slowly down. There is nothing to climb or brace on, only a bare heave of your whole body at the bars.
+@station raw_dex | narrator | A heavy lantern slips off the bridge rail beside you and falls past your hip toward the planks. Only a flash of reflex can catch it before it shatters and sets the dry rope alight.
+@station raw_con | narrator | A long steep road climbs a bare hill at dusk. You have walked it for hours and the miles still stretch ahead.
+@station raw_int | narrator | The locked chest will open only to a number you once read in this study and have half forgotten. It floats at the edge of your memory, and only a hard effort of raw wit will bring it back.
+@station raw_wis | narrator | The valley below the watchtower has gone dead silent, and every instinct you own says that something is stalking the tower. You must decide in a breath whether to trust that gut sense and douse the lamp.
+@station raw_cha | narrator | A cry goes up behind the cottage and the villagers panic toward a stampede. The elder can calm them, but only if someone commands their attention by sheer force of presence.
+@station passive_perception | narrator | You stand the watch on the tower as the afternoon wears on, and the wide valley lies still below you.
+@station save_str | narrator | A wall of flood water comes roaring down the narrow gully straight at you.
+@station save_dex | narrator | A blade swings out of the corridor wall at chest height.
+@station save_con | narrator | A foul yellow green fume rolls out of the cave mouth and into your face.
+@station save_int | player | In a bare round chamber a great stone face is set in the wall, and it whispers into your mind. | You have decided to fight the whisper and keep your thoughts clear, and you do it now. Say, in one short line, exactly what you do.
+@station save_wis | narrator | A pale hooded figure stands among the graves in the fog, and a cold dread comes off it.
+@station save_cha | player | A ring of old standing stones circles the moor in fog, and the air presses heavily on your will. | You have decided to hold on to yourself against the pressure of the old stones, and you do it now. Say, in one short line, exactly what you do.
+# The bout at the ford. A straw dummy has no armor class to roll against, so the melee attacks and the
+# damage that follows are against the bandit of the intimidation plate, a live armed foe who strikes
+# back (`@station_plate` and `@station_place` put every run of those ids there). Every goal is an
+# act in the fiction: nothing says roll, dice or damage, the judge decides what the act needs. The
+# damage runs use each weapon of the sheet once, so the d8, d12, d4 and d6 all roll (the longbow is a d8
+# too, Second Wind and the table are d10). Two shots at the range, two rounds of the bout and two death
+# saves give more attack d20s and death-save d20s than the 39 stations did, where a natural 1 or 20
+# matters (the dice are real, so nothing here forces one).
+@station_plate attack_melee gauntlet-ford.png
+@station_place attack_melee A river ford where a bandit with a cudgel has come to blows with the warrior, who has drawn his longsword.
+@station_plate damage gauntlet-ford.png
+@station_place damage A river ford where a bandit with a cudgel has come to blows with the warrior.
+@station attack_ranged | player | A straw target stands at the far end of a meadow at the archery range. | You have decided to draw your longbow on the distant straw target and loose, and you do it now. Say, in one short line, exactly what you do.
+@station attack_ranged | player | The range keeper sets a fresh straw target farther back at the end of the meadow, and the wind has picked up. | You have decided to draw your longbow on the farther target and loose again, and you do it now. Say, in one short line, exactly what you do.
+@station attack_melee | player | At the river ford the bandit has had enough of talk. He swings his cudgel at your head, and it whistles past your ear. | The bandit's cudgel just missed your head, and you have decided to answer by cutting at him with your longsword. You do it now. Say, in one short line, exactly what you do.
+@station damage | player | Your cut has opened the bandit's guard and the longsword bites into him. | Your longsword cut has landed on the bandit, and you press it home with all your weight behind the blade. You do it now. Say, in one short line, exactly what you do.
+@station attack_melee | player | The bandit staggers but keeps his feet, and he raises the cudgel and swings again. | The bandit is still on his feet and swinging, and you have decided to strike at him again with your longsword. You do it now. Say, in one short line, exactly what you do.
+@station damage | player | The bandit is reeling and you drop your sword for the greataxe on your back. | Your blow has landed and the bandit reels, so you have swung the greataxe from your back with both hands and you drive it home into him. You do it now. Say, in one short line, exactly what you do.
+@station damage | player | The bandit lurches at you in desperation, inside the reach of an axe. | The bandit is inside your reach and you have hit him, so you have decided to drive your dagger into him. You do it now. Say, in one short line, exactly what you do.
+@station damage | player | The bandit breaks and runs for the far bank, and a shortbow lies at your feet. | An arrow from your shortbow has struck the fleeing bandit square in the back, and you watch it bite deep. You have decided to draw and loose it now. Say, in one short line, exactly what you do.
+@station contested | narrator | A burly dockhand will not give way on the quay, and he seizes you by the arms and shoves.
+@station initiative | narrator | The forest road runs quiet between the trees, and then something stirs on both sides of it.
+@station death_save | narrator | You lie fallen on the field at dusk among broken spears, and your strength is draining away.
+@station death_save | narrator | Dusk is darkening on the field and you still lie among the broken spears, too weak to stand, and your strength ebbs again.
+@station healing | player | A quiet campfire burns in a woodland clearing, with a bedroll and a water flask beside it. | You are spent from the fight, and you have decided to sit by the fire to recover your strength: you catch your breath and drink from your flask. You do it now. Say, in one short line, exactly what you do.
+@station table_d100 | player | A stone table in the treasure vault is heaped with coins, and chests stand open behind it. An offering urn of lots stands at its edge. | The vault holds more than you can carry, and you have decided to draw a lot from the offering urn to choose which prize is within your reach. You do it now. Say, in one short line, exactly what you do.

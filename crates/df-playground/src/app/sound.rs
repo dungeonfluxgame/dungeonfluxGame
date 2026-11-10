@@ -1,62 +1,63 @@
 //! Makes the sound match what the scene wants. It runs only when the controls, the scene or the
-//! scenario changed, never for a frame that only moved figures. Also this viewer's own sound
-//! controls in the toolbar: the sound and music switches and the master volume.
+//! scenario changed, never for a frame that only moved figures. Also the master volume slider of
+//! the toolbar; the sound and music switches are the toolbar's `Switch`es, sent to the host like
+//! the others.
 
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
 use web_sys::{Event, HtmlInputElement};
 
-use super::page::render;
+use super::frames::send_change;
 use super::report::schedule_report;
 use super::state::with_app;
 use crate::audio;
+use crate::controls::ControlsChange;
 use crate::sound_plan::AudioPrefs;
 
-/// The toolbar action of the sound switch, the music switch and the volume slider.
-pub const SOUND_ACTION: &str = "audio:sound";
-pub const MUSIC_ACTION: &str = "audio:music";
+/// The `data-action` of the volume slider.
 pub const VOLUME_ACTION: &str = "audio:volume";
 
-/// A click on the sound or music switch: flips it, redraws the toolbar and tells the host.
-/// Whether the action was one of them.
-pub fn on_action(action: &str) -> bool {
-    let prefs = audio::prefs();
-    let next = match action {
-        SOUND_ACTION => AudioPrefs {
-            sound_on: !prefs.sound_on,
-            ..prefs
-        },
-        MUSIC_ACTION => AudioPrefs {
-            music_on: !prefs.music_on,
-            ..prefs
-        },
-        _ => return false,
-    };
-    audio::set_prefs(next);
-    render();
-    schedule_report();
-    true
+/// The volume the slider of the event holds, when the event is the slider's.
+fn slider_of(event: &Event) -> Option<u8> {
+    let slider = event
+        .target()
+        .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
+        .filter(|input| input.get_attribute("data-action").as_deref() == Some(VOLUME_ACTION))?;
+    let volume_percent = slider.value().parse::<u8>().ok()?;
+    Some(volume_percent.min(100))
 }
 
 /// The volume slider moved: the master volume takes its value at once (each step is small while
-/// it is dragged, so the sound never jumps), and the host is told. The toolbar is not redrawn, so
-/// the drag goes on.
+/// it is dragged, so the sound never jumps). The toolbar is not redrawn, so the drag goes on, and
+/// the host hears the value only when the slider is let go (`on_release`), so a drag is one
+/// change, not a hundred. Whether the event was the slider's.
 pub fn on_input(event: &Event) -> bool {
-    let Some(slider) = event
-        .target()
-        .and_then(|target| target.dyn_into::<HtmlInputElement>().ok())
-        .filter(|input| input.get_attribute("data-action").as_deref() == Some(VOLUME_ACTION))
-    else {
+    let Some(volume_percent) = slider_of(event) else {
         return false;
     };
-    let Ok(volume_percent) = slider.value().parse::<u8>() else {
-        return true;
-    };
     audio::set_prefs(AudioPrefs {
-        volume_percent: volume_percent.min(100),
+        volume_percent,
         ..audio::prefs()
     });
     schedule_report();
     true
+}
+
+/// The volume slider was let go: the host keeps the volume it ended on, for the next run. Whether
+/// the event was the slider's.
+pub fn on_release(event: &Event) -> bool {
+    let Some(volume_percent) = slider_of(event) else {
+        return false;
+    };
+    spawn_local(send_change(ControlsChange::Volume(volume_percent)));
+    true
+}
+
+/// Takes `prefs`, which the host now holds, as the page's. A volume dragged and not yet let go is
+/// left alone until the host's own volume changes, because the host only hears it on release.
+pub fn take_host_prefs(prefs: AudioPrefs) {
+    audio::set_prefs(prefs);
+    schedule_report();
 }
 
 /// Makes the music and the sounds match the scene: music is started, replaced, changed in place

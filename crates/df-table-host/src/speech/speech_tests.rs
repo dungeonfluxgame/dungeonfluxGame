@@ -17,7 +17,7 @@ use super::limits::{AUDIO_CONTENT_TYPE, KEY_VARIABLES};
 use super::request::{
     ClipCause, ClipPlayed, ClipRow, ClipsCleared, MissingSetting, QueryCause, SpeechError,
     SpeechErrorKind, SpeechFeature, SpeechProviderCause, SpeechReply, SpeechStatus, Transcript,
-    VoiceCause, VoiceChanged, VoicesCause,
+    VoiceCause, VoiceChanged, Voiced, VoicesCause,
 };
 use super::routes::{check_content_type, path, router_with};
 use super::voices::{VOICES_FILE, VoiceBook, VoiceSource, change_voice};
@@ -422,6 +422,49 @@ async fn a_call_of_a_feature_that_is_switched_off_is_refused_before_the_supplier
             .transcribe(AUDIO_CONTENT_TYPE, &vec![0; ONE_SECOND], "")
             .await,
     ));
+}
+
+#[tokio::test]
+async fn a_host_whose_switches_were_never_touched_sends_nothing_to_the_supplier() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("voices.json", VOICES);
+    let fake = Arc::new(FakePort::answering());
+    let speech = speech_over(&running.state, &fake);
+
+    let voiced = speech.voice_line("innkeeper", "Welcome.").await;
+    assert!(
+        matches!(
+            voiced,
+            Voiced::Failed {
+                error: SpeechError::Disabled {
+                    feature: SpeechFeature::Tts
+                }
+            }
+        ),
+        "a line is shown as text only while TTS is off"
+    );
+    let heard = speech.transcribe(vec![0; ONE_SECOND], Vec::new()).await;
+    assert!(matches!(
+        heard,
+        Err(SpeechError::Disabled {
+            feature: SpeechFeature::Stt
+        })
+    ));
+    assert!(fake.voices().is_empty(), "no voice call was made");
+    assert!(fake.heard().is_empty(), "no transcription call was made");
+    let lines: Vec<String> = running
+        .state
+        .log()
+        .after_sequence(0, usize::MAX)
+        .into_iter()
+        .map(|line| line.text)
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "SPEECH line_unvoiced character=innkeeper error=disabled"),
+        "{lines:?}"
+    );
 }
 
 #[tokio::test]

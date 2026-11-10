@@ -74,6 +74,7 @@ pub mod path {
     /// GET reads the faults in force; POST puts one in force.
     pub const CHAOS: &str = "/dev/engine/chaos";
     pub const RULES_CHECK: &str = "/dev/engine/rules/check";
+    pub const RULES_ROLL: &str = "/dev/engine/rules/roll";
     pub const HISTORY: &str = "/dev/engine/history";
     pub const TRACE: &str = "/dev/engine/trace";
     pub const REPLAY: &str = "/dev/engine/replay";

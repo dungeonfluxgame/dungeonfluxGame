@@ -1,6 +1,7 @@
 //! The wire values of `rules check`: the request, the report, the typed refusal and the reply.
 
 use axum::http::StatusCode;
+use df_rules::roll::{RollError, RollResult};
 use df_table::event::FailureCause;
 use df_table::outcome::DeclineCode;
 use df_table::ports::{PortError, PortName};
@@ -55,8 +56,17 @@ pub enum RulesCheckReport {
     },
 }
 
-/// Why a `rules check` call was refused. A decline of the rules is not a refusal: it is a
-/// `RulesCheckReport::Declined`.
+/// The answer to `rules roll`: the typed result, the dice the port drew for it in order, and the
+/// audit lines that describe it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RulesRollReport {
+    pub result: RollResult,
+    pub draws: Vec<ReportedDraw>,
+    pub audit: Vec<String>,
+}
+
+/// Why a `rules check` or `rules roll` call was refused. A decline of the rules is not a refusal:
+/// it is a `RulesCheckReport::Declined`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "error", rename_all = "snake_case")]
 pub enum RulesCheckError {
@@ -72,6 +82,8 @@ pub enum RulesCheckError {
     UnexpectedResolution,
     /// The rules adapter resolved the check without a `succeeded` fact.
     NoVerdict,
+    /// `df-rules` refused the roll before any die was drawn.
+    InvalidRoll { cause: RollError },
 }
 
 impl RulesCheckError {
@@ -84,6 +96,7 @@ impl RulesCheckError {
             Self::PortFailed { .. } => "port_failed",
             Self::UnexpectedResolution => "unexpected_resolution",
             Self::NoVerdict => "no_verdict",
+            Self::InvalidRoll { .. } => "invalid_roll",
         }
     }
 }
@@ -126,6 +139,7 @@ impl std::fmt::Display for RulesCheckError {
                 formatter.write_str("the rules adapter asked for more than a check needs")
             }
             Self::NoVerdict => formatter.write_str("the rules adapter reported no verdict"),
+            Self::InvalidRoll { cause } => write!(formatter, "the roll is refused: {cause}"),
         }
     }
 }
@@ -136,6 +150,7 @@ impl RouteError for RulesCheckError {
     fn status(&self) -> StatusCode {
         match self {
             Self::InvalidBody(_)
+            | Self::InvalidRoll { .. }
             | Self::UnreadableBody {
                 cause: UnreadableBodyCause::Interrupted,
             } => StatusCode::BAD_REQUEST,
@@ -151,3 +166,6 @@ impl RouteError for RulesCheckError {
 
 /// The answer of the `rules check` route.
 pub type RulesCheckReply = DevReply<RulesCheckReport, RulesCheckError>;
+
+/// The answer of the `rules roll` route.
+pub type RulesRollReply = DevReply<RulesRollReport, RulesCheckError>;

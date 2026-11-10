@@ -7,10 +7,11 @@
 
 use crate::checks;
 use crate::clues::{ClueBoard, ClueNote};
-use crate::fixture::{Camera, UnavailableChoice};
+use crate::fixture::{Camera, RollView, UnavailableChoice};
 use crate::fixture::{Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember};
 use crate::limits::{MAXIMUM_CAPTION_CHARACTERS, MAXIMUM_CUES_KEPT, MAXIMUM_PARTY_MEMBERS};
 use crate::overlay::Edit;
+use crate::roll::ShownRoll;
 use crate::scene::{Cue, ImageSlot, SceneChange, SceneError, SceneOverlay, Target, Track};
 
 mod ui;
@@ -132,6 +133,11 @@ impl SceneOverlay {
             }
             SceneChange::ClearInventory {} => {
                 self.inventory = Edit::Clear;
+                Ok(())
+            }
+            SceneChange::Roll { view, min_hold_ms } => self.show_roll(view, min_hold_ms, now_ms),
+            SceneChange::ClearRoll {} => {
+                self.roll = Edit::Clear;
                 Ok(())
             }
             SceneChange::Sound {
@@ -309,6 +315,25 @@ impl SceneOverlay {
         let board = ClueBoard { notes };
         board.check()?;
         self.clues = Edit::Set(board);
+        Ok(())
+    }
+
+    /// Checks `view` and shows it as a card that begins now (`now_ms`).
+    fn show_roll(
+        &mut self,
+        view: RollView,
+        min_hold_ms: u64,
+        now_ms: u64,
+    ) -> Result<(), SceneError> {
+        view.check()?;
+        self.roll_count += 1;
+        self.roll = Edit::Set(ShownRoll {
+            view,
+            min_hold_ms,
+            serial: self.roll_count,
+            began_ms: now_ms,
+            elapsed_ms: 0,
+        });
         Ok(())
     }
 

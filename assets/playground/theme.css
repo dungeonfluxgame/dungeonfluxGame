@@ -271,6 +271,11 @@ body {
   background: var(--ui-ready);
   box-shadow: none;
 }
+/* The plate timer's dot is lit only while the frame watch runs. */
+.studio-plate[data-running="false"]::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--studio-edge);
+}
 /* The master volume: a slider as tall as the switches beside it. */
 .studio-volume { width: 110px; height: var(--studio-control-h); accent-color: var(--brass); }
 /* The plate timer: its digits keep their width, so the countdown never jitters. */
@@ -2282,3 +2287,89 @@ body {
   100% { opacity: 0; }
 }
 /* === end component: inventory panel === */
+
+/* === component: roll card === */
+/* One resolved roll is a tall panel docked in the right third of the shared screen (`view::roll`, the kit's `kit-roll`): the call,
+   the dice, the total, the sum and the verdict, staged by CSS animations the page times (`roll::RollSchedule`). The plates keep a
+   calm third on the right and most scenes keep their subject in the middle, so the card covers no face: the right third is
+   dimmed a quarter behind it, and it lies over the bubbles and outlines (z-index 3). While it is up the clue board, the story's
+   mark and the party strip fade out, the narration box becomes a low strip on the very foot of the screen, left of the card and
+   dressed as the card is (dark glass, gold rim), so it hides the least of the plates (their figures stand to the foot), and the
+   inventory panel fades out (`inventory::is_covered`); they come back as the card begins to leave (`roll-left`). The animations
+   always run. */
+.tv-roll {
+  z-index: 3;
+  --kit-rise: 0px;
+  --roll-in: 400ms;
+  animation: roll-in var(--roll-in) ease calc(0ms - var(--roll-age)) 1 both, roll-out var(--roll-exit) ease calc(var(--roll-off-at) - var(--roll-age)) 1 both;
+}
+.tv-roll::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 56cqw;
+  background: linear-gradient(90deg, #0a091000, #0a091040 45%, #0a091066);
+}
+.tv-roll .kit-roll {
+  position: absolute;
+  right: 2.6cqw;
+  top: 2.6cqw;
+  width: 33cqw;
+  animation: roll-slide 400ms cubic-bezier(.2, .8, .3, 1) calc(0ms - var(--roll-age)) 1 both;
+}
+.tv-roll.roll-gone {
+  display: none;
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) :is(.tv-clues, .tv-story, .tv-party) {
+  opacity: 0;
+}
+.tv-party {
+  transition: opacity 400ms ease;
+}
+.tv-caption.tv-narration {
+  transition: bottom 400ms ease, left 400ms ease, transform 400ms ease;
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration {
+  bottom: 0;
+  left: 0;
+  transform: none;
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-narration {
+  width: 61cqw;
+  --kit-cut: 1.4cqw;
+  --kit-rim-w: .12cqw;
+  --kit-halo-a: .5;
+  --kit-fill-solid: #0b0a12e6;
+  --kit-tint: #f1d9a018;
+  --kit-rim: var(--kit-rim-gold);
+  --kit-halo: linear-gradient(90deg, var(--kit-ember), var(--kit-amethyst) 55%, var(--kit-ember));
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-pane {
+  padding: .7cqw 2cqw .8cqw 1.8cqw;
+  gap: 1.2cqw;
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration :is(.kit-medal, .kit-nar-rule, .kit-nar-emphasis) {
+  display: none;
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-nar-main {
+  display: flex;
+  align-items: baseline;
+  gap: 1.2cqw;
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-nar-head {
+  flex: none;
+  margin: 0;
+}
+.tv-stage:has(.tv-roll:not(.roll-left)) .tv-caption.tv-narration .kit-nar-line {
+  font-size: 1.6cqw;
+  line-height: 1.32;
+}
+@keyframes roll-in {
+  from { opacity: 0; }
+}
+@keyframes roll-out {
+  to { opacity: 0; }
+}
+@keyframes roll-slide {
+  from { translate: 3cqw 0; }
+}
+/* === end component: roll card === */

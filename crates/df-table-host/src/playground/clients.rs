@@ -278,7 +278,8 @@ fn ending_line(client: &str, entry: &TimelineEntry) -> Option<String> {
             | TimelineKind::Card
             | TimelineKind::Fade
             | TimelineKind::Third
-            | TimelineKind::Clues,
+            | TimelineKind::Clues
+            | TimelineKind::Roll,
             _,
         ) => Some(format!(
             "TIMING {} client={client} id={id} start_ms={} end_ms={end_ms} shown_ms={} \

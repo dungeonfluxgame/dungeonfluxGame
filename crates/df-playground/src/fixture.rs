@@ -265,6 +265,279 @@ impl PlateKind {
     }
 }
 
+/// What a roll tests or rolls for. The page words it as the card's kicker and decides nothing
+/// else from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RollKind {
+    AbilityCheck,
+    SkillCheck,
+    PassivePerception,
+    SavingThrow,
+    MeleeAttack,
+    RangedAttack,
+    ContestedCheck,
+    Initiative,
+    DeathSavingThrow,
+    Damage,
+    Healing,
+    HitDie,
+    BonusDie,
+    TableRoll,
+}
+
+impl RollKind {
+    pub const ALL: [Self; 14] = [
+        Self::AbilityCheck,
+        Self::SkillCheck,
+        Self::PassivePerception,
+        Self::SavingThrow,
+        Self::MeleeAttack,
+        Self::RangedAttack,
+        Self::ContestedCheck,
+        Self::Initiative,
+        Self::DeathSavingThrow,
+        Self::Damage,
+        Self::Healing,
+        Self::HitDie,
+        Self::BonusDie,
+        Self::TableRoll,
+    ];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::AbilityCheck => "ability_check",
+            Self::SkillCheck => "skill_check",
+            Self::PassivePerception => "passive_perception",
+            Self::SavingThrow => "saving_throw",
+            Self::MeleeAttack => "melee_attack",
+            Self::RangedAttack => "ranged_attack",
+            Self::ContestedCheck => "contested_check",
+            Self::Initiative => "initiative",
+            Self::DeathSavingThrow => "death_saving_throw",
+            Self::Damage => "damage",
+            Self::Healing => "healing",
+            Self::HitDie => "hit_die",
+            Self::BonusDie => "bonus_die",
+            Self::TableRoll => "table_roll",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+}
+
+/// How the d20 of a test was rolled.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RollMode {
+    #[default]
+    Normal,
+    Advantage,
+    Disadvantage,
+}
+
+impl RollMode {
+    pub const ALL: [Self; 3] = [Self::Normal, Self::Advantage, Self::Disadvantage];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Advantage => "advantage",
+            Self::Disadvantage => "disadvantage",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+}
+
+/// What a die of a roll is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DieRole {
+    Test,
+    Bonus,
+    Damage,
+    Healing,
+    HitDie,
+    Table,
+}
+
+impl DieRole {
+    pub const ALL: [Self; 6] = [
+        Self::Test,
+        Self::Bonus,
+        Self::Damage,
+        Self::Healing,
+        Self::HitDie,
+        Self::Table,
+    ];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Test => "test",
+            Self::Bonus => "bonus",
+            Self::Damage => "damage",
+            Self::Healing => "healing",
+            Self::HitDie => "hit_die",
+            Self::Table => "table",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+}
+
+/// Which natural face of the d20 earns a mark on the card. The server says so only for the test
+/// types the rules give a natural 1 or 20 an effect.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NaturalMark {
+    One,
+    Twenty,
+    #[default]
+    #[serde(rename = "none")]
+    Unmarked,
+}
+
+impl NaturalMark {
+    pub const ALL: [Self; 3] = [Self::One, Self::Twenty, Self::Unmarked];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::One => "one",
+            Self::Twenty => "twenty",
+            Self::Unmarked => "none",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+}
+
+/// The verdict a test earns, as the server worded it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RollOutcome {
+    Success,
+    Failure,
+    Hit,
+    Miss,
+    CriticalHit,
+    Won,
+    Lost,
+    Tied,
+}
+
+impl RollOutcome {
+    pub const ALL: [Self; 8] = [
+        Self::Success,
+        Self::Failure,
+        Self::Hit,
+        Self::Miss,
+        Self::CriticalHit,
+        Self::Won,
+        Self::Lost,
+        Self::Tied,
+    ];
+
+    /// The serde name.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+            Self::CriticalHit => "critical_hit",
+            Self::Won => "won",
+            Self::Lost => "lost",
+            Self::Tied => "tied",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.key() == key)
+    }
+}
+
+/// One die of a roll with the face the server rolled. A percentile roll is one die of 100 sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RollDie {
+    pub sides: u8,
+    pub face: u8,
+    pub role: DieRole,
+    /// Whether the die counts in the sum: the d20 an advantage or disadvantage left out, and a
+    /// die dropped from a pool, are not kept.
+    #[serde(default = "kept_by_default")]
+    pub kept: bool,
+}
+
+fn kept_by_default() -> bool {
+    true
+}
+
+/// A number added to the dice, with the name the table knows it by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RollModifier {
+    pub label: String,
+    pub value: i32,
+}
+
+/// What the total is set against: a difficulty class, an armour class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RollTarget {
+    pub label: String,
+    pub value: i32,
+}
+
+/// The die a Heroic Inspiration reroll replaced: `index` is its place in `RollView::dice`, where
+/// the new face stands, and `was` the face it had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InspirationReroll {
+    pub index: usize,
+    pub was: u8,
+}
+
+/// One resolved roll as the shared screen shows it: every face, modifier, total and verdict is the
+/// server's, and the page works none of them out (`roll`, `kit::roll_card`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RollView {
+    /// A plain name (letters, digits, `_`, `-` and `.`): it names the roll in the timeline.
+    pub id: String,
+    /// What is tested, such as "Athletics (Strength)".
+    pub title: String,
+    pub kind: RollKind,
+    #[serde(default)]
+    pub mode: RollMode,
+    pub dice: Vec<RollDie>,
+    #[serde(default)]
+    pub modifiers: Vec<RollModifier>,
+    pub total: i32,
+    #[serde(default)]
+    pub target: Option<RollTarget>,
+    /// The verdict; a roll that is not a test (damage, a table) has none.
+    #[serde(default)]
+    pub outcome: Option<RollOutcome>,
+    #[serde(default)]
+    pub natural: NaturalMark,
+    #[serde(default)]
+    pub inspiration_reroll: Option<InspirationReroll>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TvScene {
@@ -316,6 +589,9 @@ pub struct TvScene {
     /// `inventory`).
     #[serde(default)]
     pub inventory: Option<crate::inventory::InventoryPanel>,
+    /// The roll card: one resolved roll, staged over the screen (see `roll`).
+    #[serde(default)]
+    pub roll: Option<crate::roll::ShownRoll>,
     pub elements: ElementSource,
 }
 

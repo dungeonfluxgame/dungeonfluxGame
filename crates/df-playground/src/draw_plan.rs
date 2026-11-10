@@ -32,6 +32,7 @@ pub enum Part {
     TvClues,
     TvStory,
     TvInventory,
+    TvRoll,
     PhoneHead,
     PhoneStatus,
     PhoneImage,
@@ -60,6 +61,7 @@ impl Part {
             Self::TvClues => "tv-clues",
             Self::TvStory => "tv-story",
             Self::TvInventory => "tv-inventory",
+            Self::TvRoll => "tv-roll",
             Self::PhoneHead => "phone-head",
             Self::PhoneStatus => "phone-status",
             Self::PhoneImage => "phone-image",
@@ -231,6 +233,10 @@ impl DrawPlan {
             Part::TvInventory,
             crate::overlay::changes::inventory_differ(&before.tv, &after.tv),
         );
+        self.mark(
+            Part::TvRoll,
+            crate::overlay::changes::roll_differ(&before.tv, &after.tv),
+        );
     }
 
     /// The pieces of a phone that differ. Returns whether the choices differ.
@@ -295,6 +301,7 @@ fn toolbar_changed(old: &Snapshot, new: &Snapshot) -> bool {
             before.show_sam,
             before.tts_on,
             before.stt_on,
+            before.audio,
         ) != (
             &after.fixture,
             after.device,
@@ -305,6 +312,7 @@ fn toolbar_changed(old: &Snapshot, new: &Snapshot) -> bool {
             after.show_sam,
             after.tts_on,
             after.stt_on,
+            after.audio,
         )
 }
 

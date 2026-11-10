@@ -675,3 +675,26 @@ async fn a_controls_body_that_breaks_off_is_recorded_as_unreadable() {
     }
     panic!("no unreadable line: {:?}", playground_lines(&running));
 }
+
+#[tokio::test]
+async fn the_host_serves_a_dice_picture_as_a_png_the_browser_may_keep_and_nothing_else() {
+    let running = start(&STARTER_FILES).await;
+    running.write_asset("dice/d20.png", "png bytes");
+    running.write_asset("dice/notes.html", "<p>no</p>");
+    let raw = raw_exchange(
+        running.port,
+        "GET /playground/dice/d20.png HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .await
+    .to_ascii_lowercase();
+    assert!(raw.starts_with("http/1.1 200"), "{raw}");
+    assert!(raw.contains("content-type: image/png"), "{raw}");
+    assert!(raw.contains("cache-control: max-age=600"), "{raw}");
+    assert_eq!(
+        get(running.port, "/playground/dice/notes.html")
+            .await
+            .expect("answers")
+            .status,
+        StatusCode::NOT_FOUND
+    );
+}

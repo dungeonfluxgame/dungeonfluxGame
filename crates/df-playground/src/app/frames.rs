@@ -13,7 +13,7 @@ use wasm_bindgen_futures::spawn_local;
 use super::assets::{load_selected_fixture, refresh_assets};
 use super::page::{render, update_stage};
 use super::report::{schedule_forced_report, send_report};
-use super::sound::sync_audio;
+use super::sound::{sync_audio, take_host_prefs};
 use super::state::{PageError, log_error, set_problem, with_app, with_app_mut};
 use super::voice;
 use crate::audio;
@@ -27,6 +27,7 @@ use crate::frame::{FrameReply, LiveCanvas, LiveFrame, frame_address, parse_frame
 use crate::limits::{HEARTBEAT_POLLS, LONGEST_BROWSER_TIMER_MS, POLL_MS};
 use crate::net::{NetError, fetch_text, post_json};
 use crate::path;
+use crate::sound_plan::AudioPrefs;
 use crate::timeline::ErrorSource;
 
 /// What a look at the host's controls found.
@@ -38,6 +39,8 @@ pub struct ControlsUpdate {
     pub boot_changed: bool,
     /// The answer is from an older run than the one followed, and was left.
     pub stale_run: bool,
+    /// The sound preferences the host now holds, when they are not the ones the page had from it.
+    pub audio: Option<AudioPrefs>,
 }
 
 /// Takes the host's controls as the page's own when the gate lets them through: from a newer run
@@ -72,10 +75,13 @@ pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
             boot_changed,
         );
         super::toolbar::note_plate_reply(reply.controls.plate.now_ms);
+        let audio_before = app.controls.audio;
+        let audio_after = reply.controls.audio;
         app.controls = reply.controls;
         app.scene = reply.scene;
         app.reshow();
         ControlsUpdate {
+            audio: (audio_before != audio_after).then_some(audio_after),
             changed: true,
             fixture_changed: effect.fixture_changed,
             boot_changed,
@@ -84,6 +90,9 @@ pub fn apply_controls(reply: ControlsReply) -> ControlsUpdate {
     });
     if update.changed {
         super::toolbar::refresh_plate();
+    }
+    if let Some(prefs) = update.audio {
+        take_host_prefs(prefs);
     }
     update
 }

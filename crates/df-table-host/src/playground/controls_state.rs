@@ -24,6 +24,7 @@ use df_types::saturating_millis;
 
 use super::clients::ClientTable;
 use super::files::PlaygroundFiles;
+use super::settings::{Restore, restore};
 use crate::limits::MAXIMUM_BATCH_CHANGES;
 use crate::wire::ClientView;
 
@@ -70,6 +71,7 @@ impl ControlsChangeError {
             Self::Invalid(ControlsError::UnknownStatus(_)) => "unknown_status",
             Self::Invalid(ControlsError::EmptyFixtureName) => "empty_fixture_name",
             Self::Invalid(ControlsError::TransitionTooLong(_)) => "transition_too_long",
+            Self::Invalid(ControlsError::VolumeTooHigh(_)) => "volume_too_high",
         }
     }
 }
@@ -196,6 +198,8 @@ pub struct PlaygroundState {
     /// Milliseconds of this run of the host, so a move can say how long ago it started and a page
     /// how long ago it last spoke.
     clock: Arc<dyn Clock>,
+    /// How the remembered switches of this run came to be (`settings`).
+    restored: Restore,
 }
 
 impl fmt::Debug for PlaygroundState {
@@ -210,22 +214,32 @@ impl fmt::Debug for PlaygroundState {
 }
 
 impl PlaygroundState {
-    /// The playground of this run, timed by a `RunClock` started now.
+    /// The playground of this run, timed by a `RunClock` started now. The switches the host
+    /// remembers (`settings`) are read from the playground's directory; with none saved, or none
+    /// readable, they are at their defaults.
     pub fn new(files: PlaygroundFiles, boot_id: String) -> Self {
+        let restored = restore(files.assets());
+        let controls = restored.settings().applied_to(Controls::default());
         Self {
             files,
             shown: Mutex::new(Shown {
                 reply: ControlsReply {
                     revision: 0,
                     boot_id,
-                    controls: Controls::default(),
+                    controls,
                     scene: SceneOverlay::default(),
                 },
                 generation: 0,
             }),
             clients: ClientTable::default(),
             clock: Arc::new(RunClock::new()),
+            restored,
         }
+    }
+
+    /// The audit line that says where this run's remembered switches came from.
+    pub(crate) fn restore_line(&self) -> String {
+        self.restored.line()
     }
 
     /// The same playground timed by `clock`, so a test moves time itself.

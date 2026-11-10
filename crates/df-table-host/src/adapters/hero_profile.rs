@@ -1,17 +1,17 @@
 //! What the rules adapter knows about a hero: ability scores, proficiency bonus and skills (SRD
 //! 5.2.1 pages 5, 6, 8 and 9).
 //!
-//! It owns the closed lists of abilities and skills with the ability each skill uses, the validated
-//! numbers a check needs, and the roster that says which hero a seat plays. It never rolls, never
-//! decides a difficulty and never invents a hero: a seat with no profile is simply absent, and the
-//! adapter declines for it. It fails with `AdapterError` when a score or bonus is outside the range
-//! `df-rules` accepts, so a profile that exists can always be turned into a check.
+//! It owns the validated numbers a check needs and the roster that says which hero a seat plays;
+//! the closed lists of abilities and skills are `df-rules`', re-exported here. It never rolls,
+//! never decides a difficulty and never invents a hero: a seat with no profile is simply absent,
+//! and the adapter declines for it. It fails with `AdapterError` when a score or bonus is outside
+//! the range `df-rules` accepts, so a profile that exists can always be turned into a check.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use df_rules::local_journey::ability_modifier;
+pub use df_rules::roll::{Ability, Skill};
 use df_table::identity::SeatId;
-use serde::{Deserialize, Serialize};
 
 use super::error::AdapterError;
 
@@ -24,152 +24,6 @@ pub const MINIMUM_PROFICIENCY_BONUS: u8 = 2;
 /// The highest proficiency bonus `df-rules` accepts in a check (SRD 5.2.1 page 8, levels 17 to 20).
 pub const MAXIMUM_PROFICIENCY_BONUS: u8 = 6;
 
-/// The six abilities, in the order of a score array (`LegalCharacter::abilities` in `df-rules`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Ability {
-    Strength,
-    Dexterity,
-    Constitution,
-    Intelligence,
-    Wisdom,
-    Charisma,
-}
-
-impl Ability {
-    pub const ALL: [Ability; 6] = [
-        Self::Strength,
-        Self::Dexterity,
-        Self::Constitution,
-        Self::Intelligence,
-        Self::Wisdom,
-        Self::Charisma,
-    ];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Strength => "strength",
-            Self::Dexterity => "dexterity",
-            Self::Constitution => "constitution",
-            Self::Intelligence => "intelligence",
-            Self::Wisdom => "wisdom",
-            Self::Charisma => "charisma",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|ability| ability.key() == key)
-    }
-
-    /// Always below six, the length of every array indexed by an ability.
-    fn index(self) -> usize {
-        match self {
-            Self::Strength => 0,
-            Self::Dexterity => 1,
-            Self::Constitution => 2,
-            Self::Intelligence => 3,
-            Self::Wisdom => 4,
-            Self::Charisma => 5,
-        }
-    }
-}
-
-/// The eighteen skills of the SRD 5.2.1 Skills table (page 9), with the ability each most often
-/// uses. The key is snake_case like every closed key (`animal_handling`); `df-rules`' content
-/// spells skills in kebab-case, which is mapped where that content is read, never here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Skill {
-    Acrobatics,
-    AnimalHandling,
-    Arcana,
-    Athletics,
-    Deception,
-    History,
-    Insight,
-    Intimidation,
-    Investigation,
-    Medicine,
-    Nature,
-    Perception,
-    Performance,
-    Persuasion,
-    Religion,
-    SleightOfHand,
-    Stealth,
-    Survival,
-}
-
-impl Skill {
-    pub const ALL: [Skill; 18] = [
-        Self::Acrobatics,
-        Self::AnimalHandling,
-        Self::Arcana,
-        Self::Athletics,
-        Self::Deception,
-        Self::History,
-        Self::Insight,
-        Self::Intimidation,
-        Self::Investigation,
-        Self::Medicine,
-        Self::Nature,
-        Self::Perception,
-        Self::Performance,
-        Self::Persuasion,
-        Self::Religion,
-        Self::SleightOfHand,
-        Self::Stealth,
-        Self::Survival,
-    ];
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Acrobatics => "acrobatics",
-            Self::AnimalHandling => "animal_handling",
-            Self::Arcana => "arcana",
-            Self::Athletics => "athletics",
-            Self::Deception => "deception",
-            Self::History => "history",
-            Self::Insight => "insight",
-            Self::Intimidation => "intimidation",
-            Self::Investigation => "investigation",
-            Self::Medicine => "medicine",
-            Self::Nature => "nature",
-            Self::Perception => "perception",
-            Self::Performance => "performance",
-            Self::Persuasion => "persuasion",
-            Self::Religion => "religion",
-            Self::SleightOfHand => "sleight_of_hand",
-            Self::Stealth => "stealth",
-            Self::Survival => "survival",
-        }
-    }
-
-    /// The skill a key names, at the parse boundary of a command.
-    pub fn from_key(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|skill| skill.key() == key)
-    }
-
-    /// The ability a check of this skill adds (SRD 5.2.1 page 9, Skills table).
-    pub fn ability(self) -> Ability {
-        match self {
-            Self::Athletics => Ability::Strength,
-            Self::Acrobatics | Self::SleightOfHand | Self::Stealth => Ability::Dexterity,
-            Self::Arcana | Self::History | Self::Investigation | Self::Nature | Self::Religion => {
-                Ability::Intelligence
-            }
-            Self::AnimalHandling
-            | Self::Insight
-            | Self::Medicine
-            | Self::Perception
-            | Self::Survival => Ability::Wisdom,
-            Self::Deception | Self::Intimidation | Self::Performance | Self::Persuasion => {
-                Ability::Charisma
-            }
-        }
-    }
-}
-
 /// The ability modifiers of six validated scores, in the order of `Ability::ALL`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct AbilityModifiers([i8; 6]);
@@ -177,7 +31,7 @@ struct AbilityModifiers([i8; 6]);
 impl AbilityModifiers {
     fn from_scores(scores: [u8; 6]) -> Result<Self, AdapterError> {
         let mut modifiers = [0_i8; 6];
-        for ability in Ability::ALL {
+        for &ability in Ability::ALL {
             let score = scores[ability.index()];
             let out_of_range = AdapterError::AbilityScoreOutOfRange { ability, score };
             if !(MINIMUM_ABILITY_SCORE..=MAXIMUM_ABILITY_SCORE).contains(&score) {

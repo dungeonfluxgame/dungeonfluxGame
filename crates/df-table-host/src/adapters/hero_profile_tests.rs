@@ -40,7 +40,7 @@ fn every_skill_uses_the_ability_the_srd_skills_table_gives_it() {
 
 #[test]
 fn a_skill_key_round_trips_through_its_parse_and_its_serde_name() {
-    for skill in Skill::ALL {
+    for &skill in Skill::ALL {
         assert_eq!(Skill::from_key(skill.key()), Some(skill));
         let written = serde_json::to_string(&skill).expect("a skill serializes");
         assert_eq!(written, format!("\"{}\"", skill.key()));

@@ -3874,3 +3874,710 @@
     transform: translateY(.25cqw);
   }
 }
+
+/* === the roll card (`kit::roll_card`, `kit::roll_tray`, `kit::draw::roll_card`) ===
+   One resolved roll as a tall panel docked in the right third of the screen, so the scene's
+   subject (the plates keep a calm third on the right, and most scenes keep faces in the middle) is
+   never covered. From the top: what is tested and the target (the call), the tray with the dice,
+   the total, the sum written once and the verdict stamped last. Every time comes from the page
+   (`roll::RollSchedule`) as custom properties on the holder: --roll-age is how far along the card
+   already is, the --roll-*-at variables are when a stage begins, and each animation starts at its
+   own time minus the age, so a card drawn late carries on. Nothing moves once the dice lie still:
+   the faces, the sum, the total and the verdict only fade in (the verdict settles for 250 ms).
+   A few dice lie in a grid whose cells the page sizes to the tray (--cols, --cell); a crowd is a
+   small cluster of dice that tumble beside a tally of the faces. A die is thrown across the tray
+   (`roll-toss` moves it across and turns it, `roll-hop` bounces it) and lands on the page's own
+   random spot. Sizes: the total is the hero at 10cqw of font (its numerals are over 6 percent of the screen's
+   height, which is 56.25cqw), the sum and the target 3cqw and over (over 3.5 percent), a lone die's
+   numeral over 6 percent. The verdict is a seal that overlaps the panel's foot; a card taller than the
+   screen is drawn smaller (--roll-fit, worked out in `kit::roll_card`). Only transforms and opacity
+   move, and no moving element carries a filter, a blend or a mask that must be redrawn each frame. Numerals use
+   the body serif, whose figures are lining (the display face's are old-style). The animations
+   always run. */
+.kit-roll {
+  --roll-leather: #2a170d;
+  --roll-numeral: var(--kit-text-strong);
+  --roll-figures: var(--kit-body);
+  --roll-face-ink: #0e1530;
+  --roll-face-halo: #fff3cf;
+  --roll-positive: #c2e06c;
+  --roll-negative: #ff7a52;
+  --roll-neutral: #bcd3f2;
+  --roll-fade: 300ms;
+  --kit-cut: 1.4cqw;
+  --kit-fill-solid: #0b0a12f6;
+  --kit-tint: #f1d9a018;
+  --kit-halo-a: .5;
+  font-variant-numeric: lining-nums tabular-nums;
+  transform-origin: top right;
+  scale: var(--roll-fit, 1);
+}
+.kit-roll .kit-pane {
+  display: flex;
+  flex-direction: column;
+  gap: .7cqw;
+  padding: 1.3cqw 2.2cqw 1.4cqw;
+  text-shadow: none;
+}
+.kit-roll-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.2cqw;
+}
+.kit-roll-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kit-roll-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .3cqw .7cqw;
+  min-height: 2.4cqw;
+}
+.kit-roll-kicker {
+  font: 700 2cqw/1.2 var(--kit-body);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--kit-gold);
+}
+.kit-roll-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font: 700 2.9cqw/1.1 var(--kit-display);
+  color: var(--kit-gold-hi);
+}
+.kit-roll-title-long {
+  font-size: 2.2cqw;
+}
+.kit-roll-mode {
+  font: 800 1.5cqw/1 var(--kit-body);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: .35cqw .9cqw;
+  border-radius: 99cqw;
+  border: .14cqw solid currentColor;
+}
+.kit-roll-mode-advantage {
+  color: var(--roll-positive);
+}
+.kit-roll-mode-disadvantage {
+  color: var(--roll-negative);
+}
+.kit-roll-mode-inspiration {
+  color: var(--kit-gold);
+}
+.kit-roll-natural-high {
+  color: #1a1204;
+  border-color: var(--kit-gold-title);
+  background: var(--kit-gold-title);
+  box-shadow: 0 0 1.2cqw #f1c96aaa;
+}
+.kit-roll-natural-low {
+  color: #230806;
+  border-color: var(--roll-negative);
+  background: var(--roll-negative);
+  box-shadow: 0 0 1.2cqw #ff3b2f88;
+}
+.kit-roll-natural-high,
+.kit-roll-natural-low,
+.kit-roll-mode-inspiration {
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+/* The tray: leather with a worn crosshatch grain, a gold inlaid rim and a stitched line inside
+   it, a pool of warm light where the dice land and a vignette, so the dice stand on something. */
+.kit-roll-tray {
+  position: relative;
+  height: var(--tray-h, 11.5cqw);
+  overflow: hidden;
+  contain: layout paint;
+  border-radius: 1.4cqw;
+  background:
+    radial-gradient(ellipse 55% 75% at 50% 55%, #d9904a30 0, #d9904a00 72%),
+    repeating-linear-gradient(45deg, #ffffff06 0 .1cqw, #0000 .1cqw .45cqw),
+    repeating-linear-gradient(-45deg, #0000001c 0 .1cqw, #0000 .1cqw .45cqw),
+    radial-gradient(ellipse 75% 95% at 28% 18%, #6a4126 0, #3f2616 48%, var(--roll-leather) 100%);
+  box-shadow:
+    inset 0 .35cqw 1cqw #ffffff1c,
+    inset 0 0 2.4cqw #000e,
+    inset 0 0 0 .5cqw #1a0e07,
+    inset 0 0 0 .66cqw #c6a36bcc,
+    inset 0 0 0 .78cqw #1a0e07;
+}
+.kit-roll-tray::after {
+  content: "";
+  position: absolute;
+  inset: 1.05cqw;
+  border: .12cqw dashed #c6a36b66;
+  border-radius: 1cqw;
+  pointer-events: none;
+}
+.kit-roll-dice {
+  position: absolute;
+  inset: 1cqw 1cqw calc(1cqw + var(--caption-room, 0cqw));
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 1), var(--cell, 9cqw));
+  grid-auto-rows: var(--cell, 9cqw);
+  justify-content: center;
+  align-content: center;
+}
+.kit-roll-die {
+  --throw: 0ms;
+  --rx: calc(var(--rest-x, 0%) * var(--scatter, 1));
+  --ry: calc(var(--rest-y, 0%) * var(--scatter, 1));
+  position: relative;
+  justify-self: center;
+  align-self: center;
+  width: calc(var(--roll-die) * var(--art-scale, 1));
+  aspect-ratio: 1;
+  translate: var(--rx) 0;
+  rotate: var(--r3, 0deg);
+  will-change: translate, rotate, opacity;
+  animation: roll-toss calc(var(--roll-tumble) - var(--throw)) cubic-bezier(.12, .6, .25, 1) calc(var(--roll-tumble-at) + var(--throw) - var(--roll-age)) 1 both;
+}
+/* The contact shadow stays on the tray while the die hops above it, and a softer one spreads wide
+   under it. */
+.kit-roll-die::after {
+  content: "";
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  bottom: 8%;
+  height: 18%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, #000e 40%, #0000);
+}
+.kit-roll-hop {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  translate: 0 var(--ry, 0%);
+  will-change: translate;
+  animation: roll-hop calc(var(--roll-tumble) - var(--throw)) linear calc(var(--roll-tumble-at) + var(--throw) - var(--roll-age)) 1 both;
+}
+.kit-roll-art,
+.kit-roll-base,
+.kit-roll-shine {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.kit-roll-art[data-failed] {
+  display: none;
+}
+/* A plain shape inside the art's outline: the art covers it, and a die whose picture is missing
+   still shows its face on gold. */
+.kit-roll-base {
+  background: linear-gradient(145deg, #ecd28f, #c79a48 55%, #1b2547);
+  clip-path: polygon(50% 15%, 80% 32%, 80% 68%, 50% 85%, 20% 68%, 20% 32%);
+}
+.kit-roll-art-d4 .kit-roll-base {
+  clip-path: polygon(50% 20%, 80% 80%, 20% 80%);
+}
+.kit-roll-art-d8 .kit-roll-base {
+  clip-path: polygon(50% 17%, 80% 50%, 50% 83%, 20% 50%);
+}
+.kit-roll-art-d10 .kit-roll-base {
+  clip-path: polygon(50% 14%, 78% 42%, 50% 86%, 22% 42%);
+}
+.kit-roll-art-d12 .kit-roll-base {
+  clip-path: polygon(50% 15%, 77% 27%, 83% 56%, 66% 83%, 34% 83%, 17% 56%, 23% 27%);
+}
+/* The light on the enamel: a specular glint and a sheen from the upper left, cut to the die's own
+   outline with the art as a mask. */
+.kit-roll-shine {
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 30% 20% at 34% 22%, #ffffffd0, #ffffff00 72%),
+    linear-gradient(132deg, #ffffff42 0, #ffffff00 42%),
+    radial-gradient(ellipse 60% 40% at 70% 92%, #f1c96a40, #f1c96a00 70%);
+  -webkit-mask: var(--art-url) center / contain no-repeat;
+  mask: var(--art-url) center / contain no-repeat;
+}
+/* A face is written on the pale-gold panel that faces the viewer, dark navy with a pale-gold
+   halo so it reads on the enamel too, kept within 10 degrees of upright however the die lies.
+   It appears when the die lies still. */
+.kit-roll-face {
+  position: absolute;
+  z-index: 1;
+  left: var(--face-x);
+  top: var(--face-y);
+  translate: -50% -50%;
+  rotate: calc(var(--r3, 0deg) * -1 + clamp(-10deg, var(--r3, 0deg), 10deg));
+  font: 800 calc(var(--numeral) * var(--face-fit, 1)) / 1 var(--roll-figures);
+  color: var(--roll-face-ink);
+  -webkit-text-stroke: .1em var(--roll-face-halo);
+  paint-order: stroke fill;
+  white-space: nowrap;
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-face-wide {
+  --face-fit: var(--wide-fit, .85);
+}
+/* A die left out is dimmed, smaller and struck with a short line under its numeral. */
+.kit-roll-strike {
+  position: absolute;
+  left: var(--face-x);
+  top: calc(var(--face-y) + var(--numeral) * .36);
+  width: calc(var(--numeral) * 1.4);
+  height: .3cqw;
+  translate: -50% 0;
+  border-radius: 1cqw;
+  background: var(--roll-negative);
+  box-shadow: 0 0 .4cqw #000c;
+  opacity: 0;
+}
+.kit-roll-die-unused .kit-roll-strike,
+.kit-roll-die-replaced .kit-roll-strike {
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-die-unused :is(.kit-roll-art, .kit-roll-base),
+.kit-roll-die-replaced :is(.kit-roll-art, .kit-roll-base) {
+  animation: roll-dim var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-die-unused .kit-roll-shine,
+.kit-roll-die-replaced .kit-roll-shine {
+  animation: roll-away var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-die-unused .kit-roll-hop,
+.kit-roll-die-replaced .kit-roll-hop {
+  animation:
+    roll-hop calc(var(--roll-tumble) - var(--throw)) linear calc(var(--roll-tumble-at) + var(--throw) - var(--roll-age)) 1 both,
+    roll-lean var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-die-unused .kit-roll-face,
+.kit-roll-die-replaced .kit-roll-face {
+  opacity: .55;
+}
+/* The die that counts glows. */
+.kit-roll-die-counted::before {
+  content: "";
+  position: absolute;
+  inset: -6% -6% -2%;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, #f1c96a8c, #f1c96a00);
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2%;
+  z-index: 2;
+  text-align: center;
+  rotate: calc(var(--r3, 0deg) * -1);
+  font: 700 1.3cqw/1 var(--kit-body);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--kit-gold);
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+/* A crowd of dice: a cluster that tumbles, and the faces counted beside it. */
+.kit-roll-tray-tally {
+  display: flex;
+  align-items: stretch;
+  gap: .8cqw;
+  padding: 1cqw 1.4cqw;
+}
+.kit-roll-cluster {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: var(--cluster);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.kit-roll-die-decor {
+  --roll-die: calc(var(--cluster) * .8);
+  margin: -1.1cqw 0;
+}
+.kit-roll-tally {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(var(--chip-cols, 3), 1fr);
+  grid-template-rows: repeat(var(--chip-rows, 3), 1fr);
+  gap: .45cqw;
+}
+.kit-roll-chip {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: .25cqw;
+  padding-top: .2cqw;
+  border-radius: .8cqw;
+  border: .12cqw solid #c6a36b66;
+  background: #f1d9a01c;
+  line-height: 1;
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-chip-face {
+  font: 800 2.9cqw/1 var(--roll-figures);
+  color: var(--roll-numeral);
+  align-self: center;
+}
+.kit-roll-chip-count {
+  font: 700 1.7cqw/1 var(--kit-body);
+  color: var(--kit-gold);
+}
+.kit-roll-chip-unused {
+  opacity: .4;
+}
+.kit-roll-chip-unused .kit-roll-chip-face {
+  text-decoration: line-through;
+}
+/* The total is the hero of the card: the number large on the left, the target in a pill beside it. */
+.kit-roll-total {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.2cqw;
+  padding: .6cqw 1.6cqw;
+  border-radius: 1.4cqw;
+  background: radial-gradient(ellipse 80% 80% at 35% 45%, #f1d9a01c, #f1d9a000 80%);
+  box-shadow: inset 0 0 0 .14cqw #c6a36b66;
+}
+.kit-roll-total > * {
+  position: relative;
+}
+.kit-roll-total .kit-roll-pending,
+.kit-roll-total .kit-roll-aura {
+  position: absolute;
+}
+.kit-roll-total-number {
+  flex: none;
+  font: 800 10cqw/1 var(--roll-figures);
+  color: var(--roll-numeral);
+  text-shadow: 0 .3cqw .9cqw #000c;
+}
+.kit-roll-total-wide,
+.kit-roll-total-long .kit-roll-total-number {
+  font-size: 8cqw;
+}
+.kit-roll-total-long .kit-roll-against {
+  padding: .7cqw 1.1cqw .8cqw;
+}
+.kit-roll-against {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .2cqw;
+  padding: .7cqw 1.5cqw .8cqw;
+  border-radius: 1.2cqw;
+  border: .16cqw solid #c6a36b99;
+  background: #f1d9a014;
+  text-align: center;
+  text-wrap: balance;
+  overflow-wrap: break-word;
+  font: 700 3cqw/1.1 var(--kit-body);
+  color: var(--kit-text);
+}
+.kit-roll-against-vs {
+  font: 700 1.7cqw/1 var(--kit-body);
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--kit-gold);
+}
+.kit-roll-total-number,
+.kit-roll-against {
+  animation: roll-fade var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
+}
+/* The verdict tints the total's box and the panel as it is stamped, in its tone's colour: the ring
+   of the box, the box's own glow and a wash from the foot of the panel. */
+.kit-roll-aura,
+.kit-roll-wash {
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  animation: roll-fade var(--roll-sum) ease calc(var(--roll-verdict-at) - var(--roll-age)) 1 both;
+}
+.kit-pane > .kit-roll-wash {
+  position: absolute;
+  z-index: 0;
+}
+.kit-roll-tone-positive .kit-roll-aura {
+  background: radial-gradient(ellipse 70% 90% at 35% 50%, #c2e06c4a, #c2e06c00 78%);
+  box-shadow: inset 0 0 0 .22cqw #c2e06ccc, inset 0 0 1.6cqw #c2e06c66;
+}
+.kit-roll-tone-negative .kit-roll-aura {
+  background: radial-gradient(ellipse 70% 90% at 35% 50%, #ff5a2e4a, #ff5a2e00 78%);
+  box-shadow: inset 0 0 0 .22cqw #ff7a52cc, inset 0 0 1.6cqw #ff5a2e66;
+}
+.kit-roll-tone-neutral .kit-roll-aura {
+  background: radial-gradient(ellipse 70% 90% at 35% 50%, #bcd3f23c, #bcd3f200 78%);
+  box-shadow: inset 0 0 0 .22cqw #bcd3f2cc, inset 0 0 1.6cqw #bcd3f255;
+}
+.kit-roll-tone-positive .kit-roll-wash {
+  background: radial-gradient(ellipse 95% 55% at 50% 100%, #c2e06c30, #c2e06c00 75%);
+}
+.kit-roll-tone-negative .kit-roll-wash {
+  background: radial-gradient(ellipse 95% 55% at 50% 100%, #ff5a2e30, #ff5a2e00 75%);
+}
+.kit-roll-tone-neutral .kit-roll-wash {
+  background: radial-gradient(ellipse 95% 55% at 50% 100%, #bcd3f226, #bcd3f200 75%);
+}
+/* While the dice roll the total's place shows the target, or a dash, dim; it gives way to the
+   total. */
+.kit-roll-pending {
+  inset: 0 1cqw;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-align: center;
+  text-wrap: balance;
+  font: 700 4.4cqw/1.1 var(--roll-figures);
+  color: var(--kit-gold);
+  animation: roll-away var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: .9cqw;
+  padding-bottom: 2.7cqw;
+}
+.kit-roll-sum {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .2cqw .8cqw;
+  font: 700 3cqw/1.2 var(--kit-body);
+  color: var(--roll-numeral);
+  animation: roll-fade var(--roll-sum) ease calc(var(--roll-sum-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-sum-long {
+  font-size: 2.3cqw;
+}
+.kit-roll-term {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .6cqw;
+  white-space: nowrap;
+}
+.kit-roll-number,
+.kit-roll-sum-total {
+  font-weight: 800;
+}
+.kit-roll-op {
+  color: var(--kit-gold-mid);
+  font-weight: 700;
+}
+.kit-roll-term-label {
+  font: 700 2cqw/1.2 var(--kit-body);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--kit-gold);
+}
+/* The verdict is a seal pressed on the panel's foot, half over its edge: the word large on dark
+   glass in a double ring of the verdict's colour, set down once (it grows from 1.25 to 1 and a
+   flash crosses it) and tilted a little. It belongs to the glass itself, not to its pane, whose
+   mask would cut it at the edge. */
+.kit-roll-verdict {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  bottom: -3cqw;
+  translate: -50% 0;
+  padding: .7cqw 3cqw .9cqw;
+  border-radius: 99cqw;
+  border: .3cqw solid currentColor;
+  background: #0b0a12;
+  box-shadow:
+    0 0 0 .35cqw #0b0a12,
+    0 0 0 .6cqw currentColor,
+    0 .7cqw 1.6cqw #000c,
+    0 0 2.4cqw -.2cqw currentColor;
+  rotate: -2.5deg;
+  animation: roll-seal 250ms cubic-bezier(.2, .8, .3, 1) calc(var(--roll-verdict-at) - var(--roll-age)) 1 both;
+}
+.kit-roll-verdict::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(ellipse 80% 120% at 50% 40%, #ffffffc0, #ffffff00 70%);
+  pointer-events: none;
+  opacity: 0;
+  animation: roll-flash 500ms ease-out calc(var(--roll-verdict-at) - var(--roll-age)) 1 forwards;
+}
+.kit-roll-verdict-word {
+  font: 800 3.7cqw/1 var(--kit-display);
+  white-space: nowrap;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  text-shadow: 0 0 1cqw currentColor;
+}
+.kit-roll-verdict-long .kit-roll-verdict-word {
+  font-size: 2.6cqw;
+  letter-spacing: .06em;
+}
+.kit-roll-verdict-positive {
+  color: var(--roll-positive);
+}
+.kit-roll-verdict-negative {
+  color: var(--roll-negative);
+}
+.kit-roll-verdict-neutral {
+  color: var(--roll-neutral);
+}
+/* A natural 20 wears a gold glow on its seal and a natural 1 chills the tray; only where the
+   rules give the face an effect, and only as the faces appear. */
+.kit-roll-crit .kit-roll-verdict {
+  box-shadow:
+    0 0 0 .35cqw #0b0a12,
+    0 0 0 .6cqw currentColor,
+    0 .7cqw 1.6cqw #000c,
+    0 0 3cqw .2cqw #f1c96ab0;
+}
+.kit-roll-fumble .kit-roll-tray::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: #5b709840;
+  animation: roll-fade var(--roll-faces) ease calc(var(--roll-faces-at) - var(--roll-age)) 1 both;
+}
+/* The stage timers: invisible, they only begin and end with their stage so the page can log it. */
+.roll-clock {
+  position: absolute;
+  width: 0;
+  height: 0;
+  visibility: hidden;
+  animation: roll-clock 1ms linear 1 both;
+}
+.roll-clock-call {
+  animation-duration: calc(var(--roll-tumble-at) - var(--roll-call-at));
+  animation-delay: calc(var(--roll-call-at) - var(--roll-age));
+}
+.roll-clock-tumble {
+  animation-duration: var(--roll-tumble);
+  animation-delay: calc(var(--roll-tumble-at) - var(--roll-age));
+}
+.roll-clock-sum {
+  animation-duration: calc(var(--roll-off-at) - var(--roll-sum-at));
+  animation-delay: calc(var(--roll-sum-at) - var(--roll-age));
+}
+.roll-clock-exit {
+  animation-duration: var(--roll-exit);
+  animation-delay: calc(var(--roll-off-at) - var(--roll-age));
+}
+/* How a die is thrown: it crosses the tray and turns the whole time, quick at first and slowing
+   as it comes to rest (`roll-toss`), while it falls, bounces three times with less each time and
+   lies (`roll-hop`). Each die's numbers are its own (the page's random choice); the keyframes are
+   the same. */
+@keyframes roll-toss {
+  from {
+    translate: var(--from-x) 0;
+    rotate: var(--r0);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+}
+@keyframes roll-hop {
+  0% {
+    translate: 0 var(--from-y);
+    animation-timing-function: cubic-bezier(.45, 0, .9, .55);
+  }
+  34% {
+    translate: 0 var(--ry);
+    animation-timing-function: cubic-bezier(.1, .5, .4, 1);
+  }
+  47% {
+    translate: 0 calc(var(--ry) + var(--hop));
+    animation-timing-function: cubic-bezier(.5, 0, .9, .6);
+  }
+  58% {
+    translate: 0 var(--ry);
+    animation-timing-function: cubic-bezier(.1, .5, .4, 1);
+  }
+  67% {
+    translate: 0 calc(var(--ry) + var(--hop) * .4);
+    animation-timing-function: cubic-bezier(.5, 0, .9, .6);
+  }
+  75% {
+    translate: 0 var(--ry);
+    animation-timing-function: cubic-bezier(.1, .5, .4, 1);
+  }
+  81% {
+    translate: 0 calc(var(--ry) + var(--hop) * .12);
+    animation-timing-function: cubic-bezier(.5, 0, .9, .6);
+  }
+  86%,
+  100% {
+    translate: 0 var(--ry);
+  }
+}
+@keyframes roll-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes roll-away {
+  from {
+    opacity: .6;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes roll-dim {
+  to {
+    opacity: .4;
+  }
+}
+@keyframes roll-lean {
+  to {
+    scale: .78;
+  }
+}
+@keyframes roll-seal {
+  from {
+    opacity: 0;
+    scale: 1.25;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@keyframes roll-flash {
+  from {
+    opacity: .9;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes roll-clock {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 0;
+  }
+}
+/* === end the roll card === */

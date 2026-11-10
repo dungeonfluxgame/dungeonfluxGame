@@ -163,6 +163,9 @@ pub enum MusicError {
     InvalidVolume {
         volume_percent: u8,
     },
+    /// The music switch is off (`playground set music=true`), so nothing is composed. A track the
+    /// library already holds is still found; only the paid call is refused.
+    Disabled,
     /// The music supplier is not set up; `missing` says what to set.
     NotConfigured {
         missing: MissingSetting,
@@ -193,6 +196,7 @@ impl MusicError {
             Self::InvalidPrompt { .. } => "invalid_prompt",
             Self::InvalidLength { .. } => "invalid_length",
             Self::InvalidVolume { .. } => "invalid_volume",
+            Self::Disabled => "disabled",
             Self::NotConfigured { .. } => "not_configured",
             Self::Provider { .. } => "provider",
             Self::LibraryUnreadable { .. } => "library_unreadable",
@@ -225,6 +229,10 @@ impl fmt::Display for MusicError {
                 formatter,
                 "the volume is 0 to {MAXIMUM_VOLUME_PERCENT}, not {volume_percent}"
             ),
+            Self::Disabled => formatter.write_str(concat!(
+                "the music is switched off, so no track is composed: use the Music switch or ",
+                "`playground set music=true`"
+            )),
             Self::NotConfigured { missing } => write!(
                 formatter,
                 "the music supplier is not set up: set {}",
@@ -257,6 +265,7 @@ impl RouteError for MusicError {
             | Self::InvalidPrompt { .. }
             | Self::InvalidLength { .. }
             | Self::InvalidVolume { .. } => StatusCode::BAD_REQUEST,
+            Self::Disabled => StatusCode::CONFLICT,
             Self::NotConfigured { .. } => StatusCode::SERVICE_UNAVAILABLE,
             Self::Provider {
                 cause: MusicProviderCause::Deadline,

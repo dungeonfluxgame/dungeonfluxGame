@@ -130,6 +130,10 @@ pub const MAXIMUM_CLUE_NOTES: usize = 1_000;
 pub const MAXIMUM_SPEECH_BUBBLES: usize = 1_000;
 /// Most character markers on a roleplay card.
 pub const MAXIMUM_CHARACTER_MARKERS: usize = 1_000;
+/// Most dice one roll card draws.
+pub const MAXIMUM_ROLL_DICE: usize = 1_000;
+/// Most modifiers one roll card sums.
+pub const MAXIMUM_ROLL_MODIFIERS: usize = 1_000;
 
 // Tuning values. These are not caps; they are how often and how long.
 
@@ -139,6 +143,29 @@ pub const CLUE_NOTES_BEFORE_COMPACT: usize = 5;
 /// How long the clue board stays open after it changes before it eases down to a strip, in
 /// milliseconds.
 pub const CLUE_BOARD_OPEN_MS: u64 = 10_000;
+
+/// How long the roll card shows what is tested and the target before the dice roll in, in
+/// milliseconds: the narrator says the call meanwhile (`planning/dice-gauntlet.md`, display
+/// rule 1).
+pub const ROLL_CALL_MS: u64 = 2_000;
+/// The shortest tumble of the dice, in milliseconds (display rule 2).
+pub const MINIMUM_ROLL_TUMBLE_MS: u64 = 1_200;
+/// The longest tumble of the dice, in milliseconds (display rule 2).
+pub const MAXIMUM_ROLL_TUMBLE_MS: u64 = 1_800;
+/// How long the dice lie still after the tumble before the sum is written, in milliseconds: the
+/// faces appear in the first part of it, so nothing moves while the sum is read.
+pub const ROLL_SETTLE_MS: u64 = 700;
+/// How long the faces take to appear on the settled dice, in milliseconds.
+pub const ROLL_FACES_MS: u64 = 300;
+/// How long the sum takes to appear, in milliseconds.
+pub const ROLL_BREAKDOWN_MS: u64 = 300;
+/// How long after the sum the verdict appears, in milliseconds.
+pub const ROLL_VERDICT_DELAY_MS: u64 = 600;
+/// The least time the roll card stays up after the verdict appears, in milliseconds (display rule
+/// 3, and the owner's: at least six seconds of the whole result).
+pub const MINIMUM_ROLL_HOLD_MS: u64 = 6_000;
+/// How long the roll card takes to leave, in milliseconds.
+pub const ROLL_EXIT_MS: u64 = 400;
 
 /// Milliseconds between looks at the server for changed files, a rebuilt package and a changed
 /// fixture list. The canvas and the controls do not wait for this.

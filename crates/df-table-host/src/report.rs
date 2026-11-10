@@ -141,6 +141,9 @@ grid: {}
 sam: {}
 tts: {}
 stt: {}
+sound: {}
+music: {}
+volume: {}
 zoom_limit: {}
 transition: {} {} ms
 scene: {scene}
@@ -152,6 +155,9 @@ fixtures: {listed}",
         controls.show_sam,
         controls.tts_on,
         controls.stt_on,
+        controls.audio.sound_on,
+        controls.audio.music_on,
+        controls.audio.volume_percent,
         controls.zoom_limit.key(),
         controls.transition.style.key(),
         controls.transition.duration_ms,

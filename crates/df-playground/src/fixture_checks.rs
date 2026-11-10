@@ -282,6 +282,20 @@ fn overlay_problems(found: &mut Vec<Problem>, fixture: &Fixture) {
     if let Some(seats) = &fixture.tv.seats {
         add_found(found, overlay_checks::seat_strip(&at("seats"), seats));
     }
+    if let Some(roll) = &fixture.tv.roll {
+        host_owned(
+            found,
+            &at("roll"),
+            [
+                ("serial", roll.serial),
+                ("began_ms", roll.began_ms),
+                ("elapsed_ms", roll.elapsed_ms),
+            ],
+        );
+        if let Err(error) = roll.check() {
+            found.push(Problem::at(&at("roll"), error));
+        }
+    }
     screen_percent_problems(found, fixture);
 }
 

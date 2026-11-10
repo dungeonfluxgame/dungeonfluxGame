@@ -134,15 +134,11 @@ fn a_volume_is_a_share_of_full_and_is_held_at_full() {
 
 #[test]
 fn the_master_volume_scales_each_sound_s_own_and_the_toggles_mute_without_losing_it() {
-    let prefs = AudioPrefs::default();
-    assert_eq!(
-        prefs,
-        AudioPrefs {
-            sound_on: true,
-            music_on: true,
-            volume_percent: 80
-        }
-    );
+    let prefs = AudioPrefs {
+        music_on: true,
+        ..AudioPrefs::default()
+    };
+    assert_eq!(prefs.volume_percent, 80);
     assert!((prefs.volume_for(50) - 0.4).abs() < 1e-9);
     assert!((prefs.volume_for(100) - 0.8).abs() < 1e-9);
     let silent = AudioPrefs {
@@ -176,23 +172,13 @@ fn the_master_volume_scales_each_sound_s_own_and_the_toggles_mute_without_losing
 }
 
 #[test]
-fn stored_prefs_read_back_and_anything_else_is_the_defaults() {
-    let prefs = AudioPrefs {
-        sound_on: false,
-        music_on: true,
-        volume_percent: 35,
-    };
-    assert_eq!(AudioPrefs::from_stored(Some(&prefs.stored())), prefs);
-    assert_eq!(AudioPrefs::from_stored(None), AudioPrefs::default());
-    assert_eq!(
-        AudioPrefs::from_stored(Some("not json")),
-        AudioPrefs::default()
+fn a_first_run_has_the_sound_on_the_music_off_and_a_volume_a_slider_can_reach() {
+    let prefs = AudioPrefs::default();
+    assert!(prefs.sound_on, "sound is harmless");
+    assert!(
+        !prefs.music_on,
+        "composing music spends money, so it starts off"
     );
-    assert_eq!(
-        AudioPrefs::from_stored(Some(
-            r#"{"sound_on":true,"music_on":true,"volume_percent":250}"#
-        ))
-        .volume_percent,
-        100
-    );
+    assert!(!prefs.music_plays());
+    assert!(prefs.volume_percent <= 100);
 }

@@ -56,6 +56,8 @@ const MAP: &str = "crates/df-rules/src/tactical/map.rs";
 const INVARIANTS: &str = "crates/df-combat/tests/rules_invariants.rs";
 const AUDIT: &str = "crates/df-combat/tests/support/rules_audit.rs";
 const CHECK: &str = "crates/df-rules/src/ability_check.rs";
+const ROLL: &str = "crates/df-rules/src/roll.rs";
+const ROLL_D20: &str = "crates/df-rules/src/roll/d20.rs";
 const INFLUENCE: &str = "crates/df-rules/src/influence.rs";
 const LOCAL: &str = "crates/df-rules/src/local_journey.rs";
 const CREATURES: &str = "crates/df-rules/src/srd_creatures.rs";
@@ -72,10 +74,14 @@ pub const ROWS: &[Row] = &[
         native_test: Yes,
         browser: Unverified,
         display: Unverified,
-        note: "one normal d20 check against a DC with the proficiency bonus; no Advantage or \
-            Disadvantage on checks, no passive checks, no group or contested checks",
+        note: "typed rolls (roll module): ability and skill checks with proficiency and Expertise, \
+            Advantage and Disadvantage, Heroic Inspiration, passive Perception. The SRD has no \
+            opposed-check rule, so a grapple escape and a hidden creature are checks against an \
+            escape DC and a Stealth total. No group checks; the dev verb and the host adapter \
+            reach the roll path, a live scene does not yet",
         evidence: &[
             (CHECK, "pub fn resolve"),
+            (ROLL, "pub fn draw_plan"),
             (LOCAL, "pub const fn ability_modifier"),
         ],
         browser_scripts: &["investigate-mystery.mjs"],
@@ -101,11 +107,14 @@ pub const ROWS: &[Row] = &[
         native_test: Partial,
         browser: No,
         display: No,
-        note: "only the Zombie's Undead Fortitude Constitution save and the Dexterity cover/Dodge \
-            adjustments exist; there is no general saving-throw resolver or proficiency in saves",
+        note: "the roll module resolves a saving throw of any ability with proficiency and \
+            Advantage or Disadvantage against a DC, and gives the Unarmed Strike grapple and \
+            shove DC. Combat still uses only the Zombie's Undead Fortitude save and the \
+            Dexterity cover and Dodge adjustments",
         evidence: &[
             (RESOLVE, "pub fn dexterity_save_adjustments"),
             (RESOLVE, "Zombie"),
+            (ROLL_D20, "pub const fn unarmed_strike_dc"),
         ],
         browser_scripts: &[],
     },

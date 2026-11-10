@@ -14,6 +14,7 @@ pub mod ability_check;
 pub mod current_responses;
 pub mod influence;
 pub mod preconditions;
+pub mod roll;
 
 pub mod coins;
 #[cfg(test)]

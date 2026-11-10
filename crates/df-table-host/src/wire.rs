@@ -31,6 +31,8 @@ pub mod path {
     pub const PLAYGROUND_REVISION: &str = df_playground::path::REVISION;
     pub const PLAYGROUND_FIXTURE_LIST: &str = df_playground::path::FIXTURE_LIST;
     pub const PLAYGROUND_FIXTURE: &str = df_playground::path::FIXTURE_FILE;
+    /// One picture of the dice (GET).
+    pub const PLAYGROUND_DICE_FILE: &str = df_playground::path::DICE_FILE;
     pub const PLAYGROUND_PACKAGE_FILE: &str = "/playground/pkg/{name}";
     /// A long poll for the next frame (GET with `?after=N&boot=B`): answers at once when the host
     /// has changed since frame N or is not the run B, otherwise holds the request until it changes

@@ -23,6 +23,7 @@ mod files;
 mod request;
 #[cfg(test)]
 mod request_tests;
+mod settings;
 
 use std::fmt;
 use std::path::Path;
@@ -264,7 +265,8 @@ async fn apply_controls(
             state.record_line(file_reject_line(error.key(), &origin.pairs()));
             PlaygroundChangeError::from(error)
         })?;
-    state
+    let before = state.playground().snapshot().controls;
+    let reply = state
         .playground()
         .change_all(changes.clone(), &names, generation, |reply| {
             let mut pairs = controls_pairs(&changes);
@@ -272,7 +274,12 @@ async fn apply_controls(
             pairs.extend(origin.pairs());
             state.record_line(playground_line("set", &pairs));
         })
-        .map_err(|refusal| refuse_controls(state, origin, invalid, refusal.key(), refusal))
+        .map_err(|refusal| refuse_controls(state, origin, invalid, refusal.key(), refusal))?;
+    // The change is applied either way; a switch that could not be saved is said, not hidden.
+    if settings::is_remembered_change(&before, &reply.controls) {
+        settings::save(state).await?;
+    }
+    Ok(reply)
 }
 
 async fn change_controls(
@@ -703,6 +710,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(path::PLAYGROUND_REVISION, get(files::revision_text))
         .route(path::PLAYGROUND_FIXTURE_LIST, get(files::fixture_list))
         .route(path::PLAYGROUND_FIXTURE, get(files::fixture))
+        .route(path::PLAYGROUND_DICE_FILE, get(files::dice))
         .route(path::PLAYGROUND_PACKAGE_FILE, get(files::package_file))
         .route(path::PLAYGROUND_CONTROLS, get(controls_json))
         .route(path::DEV_PLAYGROUND_CONTROLS, post(change_controls))

@@ -1,0 +1,414 @@
+{
+  "schema": 1,
+  "id": "gauntlet",
+  "character": "gauntlet_warrior",
+  "calm_third": "right",
+  "size": [
+    1672,
+    941
+  ],
+  "kinds": [
+    "ability_check",
+    "passive",
+    "saving_throw",
+    "attack_roll",
+    "contested",
+    "initiative",
+    "death_save",
+    "damage",
+    "healing",
+    "table"
+  ],
+  "stations": [
+    {
+      "id": "athletics",
+      "title": "Athletics (Strength)",
+      "kind": "ability_check",
+      "ability": "str",
+      "skill": "athletics",
+      "plate": "gauntlet-cliff.png",
+      "setting": "A sheer grey limestone cliff face with ledges and cracks, a rope hanging down it.",
+      "situation": "The only way on is up a sheer cliff face, and he sets his hands to the rock."
+    },
+    {
+      "id": "acrobatics",
+      "title": "Acrobatics (Dexterity)",
+      "kind": "ability_check",
+      "ability": "dex",
+      "skill": "acrobatics",
+      "plate": "gauntlet-bridge.png",
+      "setting": "A narrow old rope bridge with plank treads over a deep wooded gorge.",
+      "situation": "An old rope bridge sways over the gorge, and he steps onto the first plank."
+    },
+    {
+      "id": "sleight_of_hand",
+      "title": "Sleight of Hand (Dexterity)",
+      "kind": "ability_check",
+      "ability": "dex",
+      "skill": "sleight_of_hand",
+      "plate": "gauntlet-market.png",
+      "setting": "A crowded village market with a fat leather purse hanging loose at a merchant's belt.",
+      "situation": "A merchant's fat purse hangs loose in the crowd, and he reaches for it."
+    },
+    {
+      "id": "stealth",
+      "title": "Stealth (Dexterity)",
+      "kind": "ability_check",
+      "ability": "dex",
+      "skill": "stealth",
+      "plate": "gauntlet-corridor.png",
+      "setting": "A long shadowed stone corridor lit by one far torch, a sleeping guard at the end.",
+      "situation": "A guard dozes at the end of a dark corridor, and he creeps along the wall."
+    },
+    {
+      "id": "arcana",
+      "title": "Arcana (Intelligence)",
+      "kind": "ability_check",
+      "ability": "int",
+      "skill": "arcana",
+      "plate": "gauntlet-rune_door.png",
+      "setting": "A sealed stone door cut with old carved ward marks in a cellar of dry rock.",
+      "situation": "A sealed door is cut with old ward marks, and he tries to make sense of them."
+    },
+    {
+      "id": "history",
+      "title": "History (Intelligence)",
+      "kind": "ability_check",
+      "ability": "int",
+      "skill": "history",
+      "plate": "gauntlet-stele.png",
+      "setting": "A weathered carved stone stele standing in a field of long grass.",
+      "situation": "A worn carved stone stands in the grass, and he tries to recall who raised it."
+    },
+    {
+      "id": "investigation",
+      "title": "Investigation (Intelligence)",
+      "kind": "ability_check",
+      "ability": "int",
+      "skill": "investigation",
+      "plate": "gauntlet-study.png",
+      "setting": "A cluttered scholar's study of papers, a locked chest and a half-open drawer.",
+      "situation": "A scholar's study lies in disorder, and he searches it for what matters."
+    },
+    {
+      "id": "nature",
+      "title": "Nature (Intelligence)",
+      "kind": "ability_check",
+      "ability": "int",
+      "skill": "nature",
+      "plate": "gauntlet-glade.png",
+      "setting": "A quiet forest glade with a trodden animal track and an odd cluster of mushrooms.",
+      "situation": "Fresh tracks and an odd growth mark the glade, and he tries to read what passed here."
+    },
+    {
+      "id": "religion",
+      "title": "Religion (Intelligence)",
+      "kind": "ability_check",
+      "ability": "int",
+      "skill": "religion",
+      "plate": "gauntlet-shrine.png",
+      "setting": "A small wayside shrine of weathered stone with offerings of wilted flowers and bread.",
+      "situation": "A small shrine stands at the crossroads, and he tries to recall whose it is and what it asks."
+    },
+    {
+      "id": "animal_handling",
+      "title": "Animal Handling (Wisdom)",
+      "kind": "ability_check",
+      "ability": "wis",
+      "skill": "animal_handling",
+      "plate": "gauntlet-horse.png",
+      "setting": "A skittish carthorse rearing slightly in a farmyard, eyes wide.",
+      "situation": "A frightened carthorse rears in the yard, and he steps close to calm it."
+    },
+    {
+      "id": "insight",
+      "title": "Insight (Wisdom)",
+      "kind": "ability_check",
+      "ability": "wis",
+      "skill": "insight",
+      "plate": "gauntlet-merchant.png",
+      "setting": "A wary merchant behind a stall, arms folded, eyeing a customer.",
+      "situation": "A merchant swears his goods are honest, and he studies the man's face."
+    },
+    {
+      "id": "medicine",
+      "title": "Medicine (Wisdom)",
+      "kind": "ability_check",
+      "ability": "wis",
+      "skill": "medicine",
+      "plate": "gauntlet-traveller.png",
+      "setting": "A wounded traveller sitting against a milestone, a bloody bandage on one arm.",
+      "situation": "A wounded traveller sits against a milestone, and he kneels to tend the wound."
+    },
+    {
+      "id": "perception",
+      "title": "Perception (Wisdom)",
+      "kind": "ability_check",
+      "ability": "wis",
+      "skill": "perception",
+      "plate": "gauntlet-tower.png",
+      "setting": "A stone watchtower on a ridge overlooking a wide valley with something moving far off.",
+      "situation": "From the watchtower he scans the valley for anything that moves."
+    },
+    {
+      "id": "survival",
+      "title": "Survival (Wisdom)",
+      "kind": "ability_check",
+      "ability": "wis",
+      "skill": "survival",
+      "plate": "gauntlet-trail.png",
+      "setting": "A faint wilderness trail through rough moorland with old tracks and a cold fire ring.",
+      "situation": "The trail fades into the moor, and he reads the ground for the way."
+    },
+    {
+      "id": "deception",
+      "title": "Deception (Charisma)",
+      "kind": "ability_check",
+      "ability": "cha",
+      "skill": "deception",
+      "plate": "gauntlet-gate_guard.png",
+      "setting": "A stern gate guard at a town gate, spear in hand, blocking the way.",
+      "situation": "A guard bars the gate, and he spins a story to get past him."
+    },
+    {
+      "id": "intimidation",
+      "title": "Intimidation (Charisma)",
+      "kind": "ability_check",
+      "ability": "cha",
+      "skill": "intimidation",
+      "plate": "gauntlet-ford.png",
+      "setting": "A bandit with a cudgel at a river ford, wary and half-afraid.",
+      "situation": "A bandit blocks the ford, and he squares up to make him think twice."
+    },
+    {
+      "id": "performance",
+      "title": "Performance (Charisma)",
+      "kind": "ability_check",
+      "ability": "cha",
+      "skill": "performance",
+      "plate": "gauntlet-tavern.png",
+      "setting": "A tavern's low plank stage with a stool and an audience of a few seated villagers.",
+      "situation": "The tavern wants a song or a tale, and he steps onto the stage."
+    },
+    {
+      "id": "persuasion",
+      "title": "Persuasion (Charisma)",
+      "kind": "ability_check",
+      "ability": "cha",
+      "skill": "persuasion",
+      "plate": "gauntlet-elder.png",
+      "setting": "A village elder seated on a bench before a thatched cottage, hands folded.",
+      "situation": "The village elder will not be hurried, and he makes his honest case."
+    },
+    {
+      "id": "raw_str",
+      "title": "Strength check",
+      "kind": "ability_check",
+      "ability": "str",
+      "skill": null,
+      "plate": "gauntlet-portcullis.png",
+      "setting": "A heavy iron portcullis stuck half-raised in a stone gateway.",
+      "situation": "A rusted portcullis jams the gateway half raised, and he heaves at the bars."
+    },
+    {
+      "id": "raw_dex",
+      "title": "Dexterity check",
+      "kind": "ability_check",
+      "ability": "dex",
+      "skill": null,
+      "plate": "gauntlet-bridge.png",
+      "setting": "A narrow old rope bridge with plank treads over a deep wooded gorge.",
+      "situation": "The bridge planks tilt underfoot, and he must keep his feet on pure balance."
+    },
+    {
+      "id": "raw_con",
+      "title": "Constitution check",
+      "kind": "ability_check",
+      "ability": "con",
+      "skill": null,
+      "plate": "gauntlet-march.png",
+      "setting": "A long steep road up a bare hill at dusk, a weary traveller on the climb.",
+      "situation": "The long climb goes on into dusk, and he grinds out one more mile."
+    },
+    {
+      "id": "raw_int",
+      "title": "Intelligence check",
+      "kind": "ability_check",
+      "ability": "int",
+      "skill": null,
+      "plate": "gauntlet-study.png",
+      "setting": "A cluttered scholar's study of papers, a locked chest and a half-open drawer.",
+      "situation": "A puzzle of papers and clues lies on the scholar's table, and he works it through."
+    },
+    {
+      "id": "raw_wis",
+      "title": "Wisdom check",
+      "kind": "ability_check",
+      "ability": "wis",
+      "skill": null,
+      "plate": "gauntlet-tower.png",
+      "setting": "A stone watchtower on a ridge overlooking a wide valley with something moving far off.",
+      "situation": "Something about the valley feels wrong, and he trusts his sense of it."
+    },
+    {
+      "id": "raw_cha",
+      "title": "Charisma check",
+      "kind": "ability_check",
+      "ability": "cha",
+      "skill": null,
+      "plate": "gauntlet-elder.png",
+      "setting": "A village elder seated on a bench before a thatched cottage, hands folded.",
+      "situation": "The room is waiting on him, and he leans on the plain force of his presence."
+    },
+    {
+      "id": "passive_perception",
+      "title": "Passive Perception",
+      "kind": "passive",
+      "ability": "wis",
+      "skill": "perception",
+      "plate": "gauntlet-tower.png",
+      "setting": "A stone watchtower on a ridge overlooking a wide valley with something moving far off.",
+      "situation": "As he stands the watch, the question is whether he notices the thing nobody points out."
+    },
+    {
+      "id": "save_str",
+      "title": "Strength saving throw",
+      "kind": "saving_throw",
+      "ability": "str",
+      "skill": null,
+      "plate": "gauntlet-flood.png",
+      "setting": "A narrow gully with a wall of flood water rushing down it.",
+      "situation": "A wall of flood water comes down the gully, and he braces against it."
+    },
+    {
+      "id": "save_dex",
+      "title": "Dexterity saving throw",
+      "kind": "saving_throw",
+      "ability": "dex",
+      "skill": null,
+      "plate": "gauntlet-blade_trap.png",
+      "setting": "A stone corridor with a blade swinging out of the wall at chest height.",
+      "situation": "A blade swings out of the corridor wall, and he throws himself aside."
+    },
+    {
+      "id": "save_con",
+      "title": "Constitution saving throw",
+      "kind": "saving_throw",
+      "ability": "con",
+      "skill": null,
+      "plate": "gauntlet-gas.png",
+      "setting": "A foul marshy cave mouth breathing out a thick yellow-green fume.",
+      "situation": "A foul fume rolls out of the cave, and he holds his breath against it."
+    },
+    {
+      "id": "save_int",
+      "title": "Intelligence saving throw",
+      "kind": "saving_throw",
+      "ability": "int",
+      "skill": null,
+      "plate": "gauntlet-riddle.png",
+      "setting": "A bare round chamber with a single carved stone face set in the wall, whispering.",
+      "situation": "A great stone face whispers into his mind, and he fights to keep it clear."
+    },
+    {
+      "id": "save_wis",
+      "title": "Wisdom saving throw",
+      "kind": "saving_throw",
+      "ability": "wis",
+      "skill": null,
+      "plate": "gauntlet-apparition.png",
+      "setting": "A foggy old graveyard with a pale hooded figure standing between the stones.",
+      "situation": "A pale figure stands among the graves, and he steels himself against the dread."
+    },
+    {
+      "id": "save_cha",
+      "title": "Charisma saving throw",
+      "kind": "saving_throw",
+      "ability": "cha",
+      "skill": null,
+      "plate": "gauntlet-standing_stones.png",
+      "setting": "A ring of old standing stones in fog on a moor, the air heavy and strange.",
+      "situation": "The old stones press on his will, and he holds on to himself."
+    },
+    {
+      "id": "attack_melee",
+      "title": "Melee attack roll (longsword)",
+      "kind": "attack_roll",
+      "ability": "str",
+      "skill": null,
+      "plate": "gauntlet-yard.png",
+      "setting": "A castle training yard with a straw dummy, a weapon rack and a sand floor.",
+      "situation": "He sets his feet before the dummy and swings the longsword."
+    },
+    {
+      "id": "attack_ranged",
+      "title": "Ranged attack roll (longbow)",
+      "kind": "attack_roll",
+      "ability": "dex",
+      "skill": null,
+      "plate": "gauntlet-range.png",
+      "setting": "An archery range with a straw target at the end of a meadow.",
+      "situation": "He draws the longbow on the distant target and looses."
+    },
+    {
+      "id": "contested",
+      "title": "Athletics contested by Athletics",
+      "kind": "contested",
+      "ability": "str",
+      "skill": "athletics",
+      "plate": "gauntlet-wrestle.png",
+      "setting": "A burly dockhand and the warrior locked in a shoving contest on a quayside.",
+      "situation": "A dockhand will not give way, and they grapple on the quay to see who is stronger."
+    },
+    {
+      "id": "initiative",
+      "title": "Initiative (Dexterity)",
+      "kind": "initiative",
+      "ability": "dex",
+      "skill": null,
+      "plate": "gauntlet-ambush.png",
+      "setting": "A forest road with something stirring in the trees on both sides.",
+      "situation": "Something stirs in the trees on both sides of the road, and he reacts first or last."
+    },
+    {
+      "id": "death_save",
+      "title": "Death saving throw",
+      "kind": "death_save",
+      "ability": null,
+      "skill": null,
+      "plate": "gauntlet-battlefield.png",
+      "setting": "A bleak battlefield at dusk with a fallen man lying among broken spears.",
+      "situation": "He lies fallen on the field at dusk, and the fight to stay alive is decided on one die."
+    },
+    {
+      "id": "damage",
+      "title": "Damage dice",
+      "kind": "damage",
+      "ability": null,
+      "skill": null,
+      "plate": "gauntlet-yard.png",
+      "setting": "A castle training yard with a straw dummy, a weapon rack and a sand floor.",
+      "situation": "He strikes true, and the dice say how hard."
+    },
+    {
+      "id": "healing",
+      "title": "Second Wind and healing dice",
+      "kind": "healing",
+      "ability": null,
+      "skill": null,
+      "plate": "gauntlet-camp.png",
+      "setting": "A quiet campfire in a woodland clearing with a bedroll and a water flask.",
+      "situation": "He catches his breath by the fire, and the dice say how much he recovers."
+    },
+    {
+      "id": "table_d100",
+      "title": "Percentile table roll (d100)",
+      "kind": "table",
+      "ability": null,
+      "skill": null,
+      "plate": "gauntlet-vault.png",
+      "setting": "A treasure vault with a stone table, chests and a modest heap of coins.",
+      "situation": "The vault holds more than he can carry, and a percentile roll decides what is in reach."
+    }
+  ]
+}

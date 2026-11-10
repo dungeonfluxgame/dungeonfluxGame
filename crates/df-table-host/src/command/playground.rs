@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use df_playground::controls::{ControlsChange, Device, TransitionStyle, ZoomLimit};
 use df_playground::copy::ReadingPace;
-use df_playground::limits::MAXIMUM_TRANSITION_MS;
+use df_playground::limits::{MAXIMUM_TRANSITION_MS, MAXIMUM_VOLUME_PERCENT};
 
 use super::usage::{FIXTURE_USAGE, MEDIA_USAGE, PLAYGROUND_USAGE, playground_keys};
 use super::{Command, CommandError, bad_choice, keyed, pair, truth};
@@ -54,6 +54,20 @@ fn playground_change(key: &str, value: &str) -> Result<ControlsChange, CommandEr
         "sam" => truth(key, value).map(ControlsChange::ShowSam),
         "tts" => truth(key, value).map(ControlsChange::Tts),
         "stt" => truth(key, value).map(ControlsChange::Stt),
+        "sound" => truth(key, value).map(ControlsChange::Sound),
+        "music" => truth(key, value).map(ControlsChange::Music),
+        "volume" => value
+            .parse::<u8>()
+            .ok()
+            .filter(|percent| *percent <= MAXIMUM_VOLUME_PERCENT)
+            .map(ControlsChange::Volume)
+            .ok_or_else(|| {
+                bad_choice(
+                    key,
+                    value,
+                    format!("a whole number from 0 to {MAXIMUM_VOLUME_PERCENT}"),
+                )
+            }),
         "zoom_limit" => ZoomLimit::from_key(value)
             .map(ControlsChange::ZoomLimit)
             .ok_or_else(|| bad_choice(key, value, "model or pixels")),

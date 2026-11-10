@@ -9,12 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::controls::Device;
 use crate::scene::{Cue, Track};
 
-/// The browser storage key of this viewer's sound preferences.
-pub const AUDIO_PREFS_KEY: &str = "df-playground-audio-prefs";
-
-/// This viewer's playback preferences: sound on or muted, the background music on or off, and a
-/// master volume over each sound's own. They are the page's, not the game's: the host still says
-/// what plays, and the page only scales or mutes its own output.
+/// The playback preferences: sound on or muted, the background music on or off, and a master
+/// volume over each sound's own. The host keeps them across restarts (`Controls::audio`), so every
+/// page plays by the same ones; the host still says what plays, and the page only scales or mutes
+/// its own output. The music is off by default (owner, 2026-11-10): composing a track spends money.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioPrefs {
@@ -28,34 +26,13 @@ impl Default for AudioPrefs {
     fn default() -> Self {
         Self {
             sound_on: true,
-            music_on: true,
+            music_on: false,
             volume_percent: 80,
         }
     }
 }
 
 impl AudioPrefs {
-    /// The preferences kept in browser storage as `text`; the defaults when there are none or
-    /// they do not read (a volume over 100 is held at 100).
-    pub fn from_stored(text: Option<&str>) -> Self {
-        text.and_then(|text| serde_json::from_str::<Self>(text).ok())
-            .map(|prefs| Self {
-                volume_percent: prefs.volume_percent.min(100),
-                ..prefs
-            })
-            .unwrap_or_default()
-    }
-
-    /// The text kept in browser storage.
-    pub fn stored(&self) -> String {
-        serde_json::json!({
-            "sound_on": self.sound_on,
-            "music_on": self.music_on,
-            "volume_percent": self.volume_percent,
-        })
-        .to_string()
-    }
-
     /// The browser's volume, from 0 to 1, of a sound whose own volume is `percent`: its own
     /// scaled by the master volume. Muting is the element's own switch, so the volume stays.
     pub fn volume_for(&self, percent: u8) -> f64 {

@@ -12,8 +12,9 @@ use crate::copy::{ReadingPace, status_from_key};
 use crate::dev_reply::HostReply;
 use crate::fixture::Status;
 use crate::scene::SceneOverlay;
+use crate::sound_plan::AudioPrefs;
 
-use crate::limits::{DEFAULT_TRANSITION_MS, MAXIMUM_TRANSITION_MS};
+use crate::limits::{DEFAULT_TRANSITION_MS, MAXIMUM_TRANSITION_MS, MAXIMUM_VOLUME_PERCENT};
 
 /// The key of the menu entry that keeps the fixture's own status.
 pub const FIXTURE_STATUS_KEY: &str = "fixture";
@@ -146,6 +147,11 @@ pub struct Controls {
     /// by default, like `tts_on`.
     #[serde(default)]
     pub stt_on: bool,
+    /// How loud the sound is, whether it is muted and whether the music plays. The host keeps it
+    /// with the other switches, so a page that opens plays by what was last chosen. The music is
+    /// off by default: a track the library lacks is composed (and paid for) only while it is on.
+    #[serde(default)]
+    pub audio: AudioPrefs,
     /// How the next change of scene is drawn.
     #[serde(default)]
     pub transition: Transition,
@@ -368,6 +374,7 @@ impl Default for Controls {
             show_sam: false,
             tts_on: false,
             stt_on: false,
+            audio: AudioPrefs::default(),
             transition: Transition::default(),
             zoom_limit: ZoomLimit::default(),
             plate: PlateTimer::default(),
@@ -441,6 +448,12 @@ pub enum ControlsChange {
     Tts(bool),
     /// Turns the taking of spoken questions on or off.
     Stt(bool),
+    /// Mutes or unmutes every sound the pages play.
+    Sound(bool),
+    /// Turns the background music on or off; with it off no track is composed either.
+    Music(bool),
+    /// Sets the master volume, 0 to `MAXIMUM_VOLUME_PERCENT`.
+    Volume(u8),
     /// Sets how the next change of scene is drawn; the scene itself is not changed.
     TransitionStyle(TransitionStyle),
     /// Sets how long the next change of scene takes, up to `MAXIMUM_TRANSITION_MS`.
@@ -455,6 +468,7 @@ pub enum ControlsError {
     UnknownStatus(String),
     EmptyFixtureName,
     TransitionTooLong(u64),
+    VolumeTooHigh(u8),
 }
 
 impl fmt::Display for ControlsError {
@@ -470,11 +484,97 @@ impl fmt::Display for ControlsError {
                 formatter,
                 "a transition is at most {MAXIMUM_TRANSITION_MS} ms, not {ms}"
             ),
+            Self::VolumeTooHigh(percent) => write!(
+                formatter,
+                "the volume is from 0 to {MAXIMUM_VOLUME_PERCENT} percent, not {percent}"
+            ),
         }
     }
 }
 
 impl std::error::Error for ControlsError {}
+
+/// An on/off switch of the toolbar. A click on one asks for the change `toggled` gives, and the
+/// switch is drawn lit exactly when `is_on` says so, so what is shown is what the host holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Switch {
+    Unavailable,
+    Grid,
+    Sam,
+    Sound,
+    Music,
+    Tts,
+    Stt,
+}
+
+impl Switch {
+    pub const ALL: [Self; 7] = [
+        Self::Unavailable,
+        Self::Grid,
+        Self::Sam,
+        Self::Sound,
+        Self::Music,
+        Self::Tts,
+        Self::Stt,
+    ];
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|switch| switch.key() == key)
+    }
+
+    /// The word after `toggle:` in the `data-action` of the switch's button.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Unavailable => "unavailable",
+            Self::Grid => "grid",
+            Self::Sam => "sam",
+            Self::Sound => "sound",
+            Self::Music => "music",
+            Self::Tts => "tts",
+            Self::Stt => "stt",
+        }
+    }
+
+    /// The words on the switch's button.
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Unavailable => "Unavailable",
+            Self::Grid => "Grid",
+            Self::Sam => "SAM",
+            Self::Sound => "Sound",
+            Self::Music => "Music",
+            Self::Tts => "TTS",
+            Self::Stt => "STT",
+        }
+    }
+
+    /// Whether the setting the switch stands for is on.
+    pub fn is_on(self, controls: &Controls) -> bool {
+        match self {
+            Self::Unavailable => controls.show_unavailable,
+            Self::Grid => controls.show_grid,
+            Self::Sam => controls.show_sam,
+            Self::Sound => controls.audio.sound_on,
+            Self::Music => controls.audio.music_on,
+            Self::Tts => controls.tts_on,
+            Self::Stt => controls.stt_on,
+        }
+    }
+
+    /// The change a click asks for: the setting the other way round from how `controls` holds it.
+    pub fn toggled(self, controls: &Controls) -> ControlsChange {
+        let on = !self.is_on(controls);
+        match self {
+            Self::Unavailable => ControlsChange::ShowUnavailable(on),
+            Self::Grid => ControlsChange::ShowGrid(on),
+            Self::Sam => ControlsChange::ShowSam(on),
+            Self::Sound => ControlsChange::Sound(on),
+            Self::Music => ControlsChange::Music(on),
+            Self::Tts => ControlsChange::Tts(on),
+            Self::Stt => ControlsChange::Stt(on),
+        }
+    }
+}
 
 impl Controls {
     /// The status to draw: the chosen one, or the fixture's own when none is chosen.
@@ -504,6 +604,14 @@ impl Controls {
             ControlsChange::ShowSam(shown) => self.show_sam = shown,
             ControlsChange::Tts(on) => self.tts_on = on,
             ControlsChange::Stt(on) => self.stt_on = on,
+            ControlsChange::Sound(on) => self.audio.sound_on = on,
+            ControlsChange::Music(on) => self.audio.music_on = on,
+            ControlsChange::Volume(percent) => {
+                if percent > MAXIMUM_VOLUME_PERCENT {
+                    return Err(ControlsError::VolumeTooHigh(percent));
+                }
+                self.audio.volume_percent = percent;
+            }
             ControlsChange::TransitionStyle(style) => self.transition.style = style,
             ControlsChange::TransitionMs(ms) => {
                 if ms > MAXIMUM_TRANSITION_MS {

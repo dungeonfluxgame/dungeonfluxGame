@@ -113,6 +113,12 @@ pub fn picture_is_up(plate: &PlateTimer, backdrop: Option<PlateKind>) -> bool {
         })
 }
 
+/// Whether the panel steps aside: a full-frame picture is up (`picture_is_up`) or the roll card is
+/// (`roll_is_up`, `roll::covers_panels`), which takes the screen for its own reading.
+pub fn is_covered(plate: &PlateTimer, backdrop: Option<PlateKind>, roll_is_up: bool) -> bool {
+    roll_is_up || picture_is_up(plate, backdrop)
+}
+
 /// How a row's count moved, for its flash.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flash {

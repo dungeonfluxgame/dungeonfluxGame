@@ -46,6 +46,7 @@ use super::storage::{
     PERSONA_WRITES, check_reserved, forget_given_guidance, list_personas, persona_directory,
     persona_id, read_backfills, read_persona, remove_persona, write_persona,
 };
+use crate::adapters::RecordedDice;
 use crate::blocking::{run_blocking, run_owned};
 use crate::dev_http::{parse_body, reply};
 use crate::observe::WallClock;
@@ -123,10 +124,10 @@ pub struct Narrated {
 
 /// What every persona route works with: the host, the text surface the questions go to, and the
 /// speech service that voices a line when asked.
-struct PersonaRoutes {
-    app: Arc<AppState>,
-    text: Arc<TextRuntime>,
-    speech: Speech,
+pub(super) struct PersonaRoutes {
+    pub(super) app: Arc<AppState>,
+    pub(super) text: Arc<TextRuntime>,
+    pub(super) speech: Speech,
 }
 
 /// `text` when it is a persona id, so it can go into an audit line.
@@ -477,7 +478,7 @@ async fn cue_line(
 /// Shows `line` in the dungeon master's box, voiced first when asked so the box and the voice
 /// start together, and takes the box away once it has been up long enough to read and hear out
 /// (a later line keeps it up).
-async fn narrate_line(
+pub(super) async fn narrate_line(
     routes: &PersonaRoutes,
     line: &NarrateLine,
 ) -> Result<Narrated, PersonaError> {
@@ -813,6 +814,11 @@ async fn backfills(
 
 /// The persona routes, asking the text service of `text` and voicing lines with `speech`.
 pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -> Router {
+    let routes = Arc::new(PersonaRoutes {
+        app: Arc::clone(&app),
+        text: Arc::clone(&text),
+        speech,
+    });
     Router::new()
         .route(path::PERSONA, get(list).post(write))
         .route(path::PERSONA_ONE, get(show))
@@ -829,11 +835,11 @@ pub fn router_with(app: Arc<AppState>, text: Arc<TextRuntime>, speech: Speech) -
         .route(path::PERSONA_BACKFILL, post(backfill))
         .route(path::PERSONA_BACKFILLS, get(backfills))
         .route(path::PERSONA_GUIDE, post(guide))
-        .with_state(Arc::new(PersonaRoutes {
-            app: Arc::clone(&app),
-            text: Arc::clone(&text),
-            speech,
-        }))
+        .with_state(Arc::clone(&routes))
+        .merge(super::check::router_over(
+            routes,
+            Arc::new(RecordedDice::from_system_entropy()),
+        ))
         .merge(super::perceive::router_with(
             Arc::clone(&app),
             Arc::clone(&text),

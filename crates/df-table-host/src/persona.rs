@@ -44,6 +44,7 @@
 //! names a `model` (see `text`).
 
 pub(crate) mod address;
+pub(crate) mod check;
 pub(crate) mod frame;
 mod judge_route;
 mod backfill;

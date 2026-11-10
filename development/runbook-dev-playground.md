@@ -198,15 +198,17 @@ development/market-threads/danny.persona.json` first when that file changed):
 $D dev --port 7879 persona state danny reset
 ```
 
-**12. Page settings:** the TV layout, a 1.5 s fade between plates, and voices on.
+**12. Page settings:** the TV layout and a 1.5 s fade between plates.
 
 ```bash
 $D dev --port 7879 playground set device=tv transition=fade ms=1500
 ```
 
-```bash
-$D dev --port 7879 playground set tts=true
-```
+Leave the paid switches (TTS, STT, Music) alone. The host remembers every toolbar switch across
+restarts ("Toolbar settings"), so what the owner left in the toolbar stands, and a first run has
+all three off. The procedure never turns one on (owner, 2026-11-10): a voice or a composed track
+is paid for. The owner turns TTS on in the toolbar, or a run that wants it says so in step 15 with
+`DF_RUN_TTS=on` (`DF_RUN_MUSIC=on` for the show's music).
 
 **13. Clear the clue board and the narration box** of the last run:
 
@@ -230,7 +232,13 @@ sed -i 's#^cd .*#cd /c/Users/mreca/Desktop/dungeonfluxGame#' artifacts/tmp/roam-
 ```
 
 **15. Run it** in the background, with the next free run number for `N`. `FRAMES_LOG` names the
-frame transcripts (`frames<N>-<plate>.log` beside it):
+frame transcripts (`frames<N>-<plate>.log` beside it). The runner never turns a paid switch on by
+itself. Add `DF_RUN_TTS=on` (voices) and `DF_RUN_MUSIC=on` (the score is composed at the start)
+only for a run that should spend; `off` turns one off for the run. Unset, the stored switch
+stands, and the first line of `play<N>.log` says which it was: `[settings] tts=<on|off> (from
+<stored|flag>)`, then the same for `music`. With Music off `tempo prepare` composes nothing (the
+log reads `6 failed`, each `failed (disabled)`) and the roam plays on silent unless the library
+already holds the tracks:
 
 ```bash
 N=11; DF_TABLE_EXE=$D DF_TABLE_PORT=7879 FRAMES_LOG=artifacts/tmp/roam-live/frames$N.log bash artifacts/tmp/roam-live/runner.sh development/market-threads/free-roam.beats > artifacts/tmp/roam-live/play$N.log 2>&1 &
@@ -245,8 +253,8 @@ tail -n +1 -f artifacts/tmp/roam-live/play$N.log | grep --line-buffered -E '^\[(
 
 **17. Reload the page and click Enable sound.** Open `http://localhost:7879/playground/`, reload
 it so it runs the package built in step 4, and click Enable sound in the toolbar: the click is
-what unlocks the page's audio. `$D dev --port 7879 playground` shows `tts: true` and `audio
-unlocked` when it took. A host restart turns TTS off again (step 12). Do this in the first
+what unlocks the page's audio. `$D dev --port 7879 playground` shows `audio unlocked` when it
+took, and `tts:` is what the owner left it: a restart keeps it, it never turns it on. Do this in the first
 minute: the first move's plate is up after about 65 s on Forge and 1.5 to 2.5 minutes on Codex
 (run 10: 145 s). Do not reload the page again mid-run.
 
@@ -289,6 +297,7 @@ replies. A move that did not go live says why and he tries the next one from whe
 | `[paint NN] <line>` | His line toward `@roam_paint`; only in a beats file that has no `@roam_declare`. |
 | `[show] composed gallery of N pieces -> gallery-danny-1.png`, `[show] plate .. after ..`, `[show] piece <id> <picture> \| <title> \| 5 s`, `[pace show] piece <picture> up <ms> of 5000 ms`, `[show] <line>`, then `[memory] owners: ..` | The day's end: the paintings composed into one sheet, the show plate edited after it and his character sheet, the last 20 paintings (`@roam_show_each 20 5`: count, seconds) shown for 5 s each, then the show plate stays up (run 9, with a count of 6, measured 5005 to 5236 ms; a piece that was not shown reads `piece - up - of 5000 ms`), what he says, and the owners' memory counts. |
 | `[tempo NN] ..`, `[music NN] cue=.. track=.. \| decision=..` | The tempo engine and the music director's cue for the move ("Tempo and the music director"). |
+| `[settings] tts=<on\|off> (from <stored\|flag>)`, `[settings] music=..` | The first lines of a run: whether each paid switch is on and whether the run set it (`DF_RUN_TTS`, `DF_RUN_MUSIC`) or found it as the host remembered it ("Toolbar settings"). |
 
 ### Measured timings (runs 4 and 5, 2026-11-09)
 
@@ -356,6 +365,11 @@ the decision's.
   `prefers-reduced-motion`; animations always run. A test fails if one does
   (`crates/df-playground/src/motion_style_tests/theme.rs`). Do not add one to the page; the
   account app's reduced-motion rule is a different surface.
+- **A run never turns a paid switch on** (owner, 2026-11-10). TTS, STT and Music are off on a first
+  run and the host remembers each across restarts; no procedure, runner, start script or page load
+  sets one. The owner turns it on in the toolbar, or a run asks for it with `DF_RUN_TTS=on` or
+  `DF_RUN_MUSIC=on`, and its first log lines say which. With a switch off the host sends nothing
+  to the supplier ("Toolbar settings"). See "Toolbar settings".
 - **One dev host.** Only the host on port 7879 runs. You stop only the host you started, found by
   its command line (`*serve --port 7879*`), never by name. **Subagents start no servers**: they
   build and run unit checks, and the coordinator checks live.
@@ -1009,9 +1023,12 @@ its judges and its voice).
    - The same steps play `drowned-archive.beats` (the quest of dungeon runs 1 to 23, scenes
      scriptorium, reliquary, vault), which sets `@frames every=60` (see "Plates on the schedule").
 3. **Voices.** Open `http://localhost:7879/playground/` in the browser pane and click TTS in the
-   toolbar. The click is what unlocks the page's audio. Check with `$D dev --port 7879
-   playground`: it should show `tts: true` and `audio unlocked`. A host restart turns TTS off
-   again. The runner asks for every line with `speak=true`, and the toolbar decides.
+   toolbar (or start the runner with `DF_RUN_TTS=on`). The click is what unlocks the page's audio.
+   Check with `$D dev --port 7879 playground`: it should show `tts: true` and `audio unlocked`.
+   The host remembers the switch across restarts and a first run has it off; nothing but the
+   owner or that flag turns it on. The runner asks for every line with `speak=true`, and the
+   switch decides: with TTS off a line is shown as text only (`SPEECH line_unvoiced
+   error=disabled`) and nothing is sent to the supplier.
 4. **Run a copy of the runner,** never the script itself while it runs, with its `cd` line
    pointing at the checkout:
    ```bash
@@ -1912,6 +1929,60 @@ start (`play_roam`). Check it live: `dev --port 7879 world inventory show danny`
 `world inventory consume danny boards 1` and watch the TV; `scene` lines and the page's timeline
 (`clients timeline <client>`) show the redraw of the `tv-inventory` part.
 
+## Toolbar settings
+
+The page's toolbar rows and where each switch lives. The host holds all of them in the playground's
+controls (`playground` prints them) and keeps them in `settings.json` in the playground directory
+(the one `--playground` names; for the roam `artifacts/tmp/persona-live/playground/settings.json`),
+written whole after each change of one of them and read once when the host starts. The page keeps
+none of its own: it draws what the host holds, so a reload or a second page shows the same. A first
+run with no file starts safe: TTS, STT and Music off, Sound on, volume 80, Unavailable, Grid and
+SAM off. The start line `PLAYGROUND settings_restored source=defaults|file|defaults_after_error`
+names what the host started with (`error=malformed|unreadable` when the file could not be taken,
+which leaves every switch at its default), and each save writes `PLAYGROUND settings_saved ..` (or
+`settings_unsaved error=..`, with the change answered as a failure).
+
+| Toolbar control | Setting | `playground set` key | Spends or listens |
+| --- | --- | --- | --- |
+| Unavailable, Grid, SAM | what the page draws over the picture | `unavailable=`, `grid=`, `sam=` | no |
+| Sound | every sound the page plays, muted when off | `sound=` | no |
+| Music | the background music plays; a missing track is composed only while on | `music=` | composing a track (ElevenLabs) |
+| Volume | master volume, 0 to 100 | `volume=` | no |
+| TTS | lines are voiced (ElevenLabs text to speech) | `tts=` | yes |
+| STT | spoken questions are taken (speech to text, microphone) | `stt=` | yes |
+| Plate | the frame watch's schedule, read only | (set by `persona watch`) | no |
+
+"Enable sound" / "Audio unlocked" is the browser's permission to play audio, not a switch: the
+first click or key press on the page unlocks it, whatever it was on. The Sound switch mutes.
+
+**The spend gates.** Each is checked at the one place the supplier is called, so no caller can
+bypass it: TTS in `Speech::synthesize` (every spoken line, `speech speak`, `persona ... speak=true`),
+STT in `Speech::transcribe`, Music in the music engine's compose step (`scene music generate` and
+`tempo prepare` both reach it). A refusal is typed (`SpeechError::Disabled`, `MusicError::Disabled`),
+nothing is sent, and it is logged: `SPEECH line_unvoiced character=.. error=disabled` (the line is
+shown as text only), `SPEECH refused verb=.. error=disabled`, `MUSIC refused name=.. error=disabled`.
+A track the library already holds is still found and set on the scene with Music off, and the page
+plays it only while Music is on. Casting a character's voice lists the supplier's voices and asks
+the text model; it is not synthesis and is not gated.
+
+**Live click check** (the coordinator, in the browser pane, with the preview host; expected state
+after each click, from the page and `$D dev --port 7879 playground`):
+
+1. Reload: Overlays Unavailable, Grid, SAM unlit; Speech TTS and STT unlit; Sound lit, Music
+   unlit; the Plate dot hollow while it reads `Plate: off`.
+2. Click each of Unavailable, Grid, SAM, Music, TTS, STT: it lights at once, `playground` shows
+   that key `true`; click it again: unlit, `false`. Click Sound: it goes unlit (`sound: false`) and
+   the page is muted; again: lit.
+3. Before any click the toolbar reads "Enable sound"; after the first click anywhere it reads
+   "Audio unlocked", and that first click still toggled the switch it was on.
+4. Drag Volume and let go: the loudness follows the drag, and on release `playground` shows the
+   new `volume:`; reload the page: the slider is where it was left.
+5. Turn TTS on, Music on and Volume to 35, restart the host, reload: all three are as left. Turn
+   TTS off, restart, reload: it stays off, and `settings.json` and the `settings_restored
+   source=file` line agree.
+6. With TTS off a spoken line appears as text and the log shows `SPEECH line_unvoiced .. error=disabled`
+   and no `SPEECH synthesized`; with Music off `tempo prepare` reports every profile `failed (disabled)`.
+
 ## Clue board
 
 The shared screen can show every clue found so far as a slim column of cards down the left (under
@@ -1988,6 +2059,449 @@ what a look shows. The pairing rule above holds at every moment. The stretch liv
 host's memory, so a host restart or `persona story reset` clears it. Audit lines: `PERSONA story_narrate place=.. moment=..
 speak=.. duration_ms=..`, `PERSONA story_narrate_retried place=.. why=names|hidden|unreadable`
 and `PERSONA narrated chars=.. voiced=.. rest_ms=.. revision=..` (no story text).
+
+## The check judge and the DM's checks
+
+Owner goal 2026-11-10 (`planning/dice-gauntlet.md`): a judge decides whether a player's action needs
+a roll, or whether the narrator wants one called, and the dungeon master says the call aloud and
+reads the result in plain words with flair. Code: `crates/df-table-host/src/persona/check/`
+(`judge`, `rolling`, `numbers`, `lines`, `view`, `flow`, `routes`, `cli`, `sheet`). It uses the rules
+owner's `df_rules::roll` and the host's `RulesCheckKit::roll` over `RecordedDice::from_system_entropy`
+(real entropy; never seeded in the host), and the display's `SceneChange::Roll` / `ClearRoll`
+(`RollView`, the roll card). Nothing in it reads words: what an action means is the judge's closed
+answer, validated in code.
+
+```
+persona check judge <character> [sheet=<file>] [stations=<file>] [station=<id>] [action=<line>] \
+  [moment=player|narrator] [place=<words>] [sight=<words>]... \
+  [checked=<kind>[:<ability>[:<skill>]]]... [intent=<kind>[:<ability>[:<skill>]]] [model=<name>]
+persona check run <character> <the same options> [inspiration=<die place>] [speak=true|false] \
+  [told=<what the runner just said aloud>]
+```
+
+| Verb | Route | Body | Answers |
+| --- | --- | --- | --- |
+| `persona check judge` | `POST /dev/persona/check/judge` | `{character, sheet, moment, action?, station?, place?, in_sight?, checked?, model?}` | `{verdict: {initiator, reason, call?}, retried, duration_ms, designed?}` |
+| `persona check run` | `POST /dev/persona/check/run` | `{judge: <the judge body>, speak?, inspiration?}` | `{judged, rolled?: {called_line, result_line, called_voice, result_voice, view, times}}` |
+
+The command line reads the sheet (default `development/market-threads/<character>.sheet.json`) and,
+with `station=`, the station (`stations=`, default `development/market-threads/gauntlet.stations.json`)
+and sends them typed. `moment` is `player` when an `action=` is given and `narrator` when not; a
+player moment must state its action and a narrator moment must not. `run` needs the character's
+persona stored (its display name is kept out of the lines) and a shown scene (the dungeon master's
+box). The judge is never told the station's designed test; the reply says whether it matches
+(`designed: kind=.. match=true|false`). `checked=` lists tests already rolled at this place so the
+judge does not call one twice (the host keeps no list: pass the ones a run printed).
+
+**The narrator's intent.** `intent=<kind>[:<ability>[:<skill>]]` (for example
+`intent=ability_check:dexterity:acrobatics`, the station's designed test) is legal only at a narrator
+moment (an `action=` or `moment=player` with it is refused `intent_needs_narrator`). It reaches the
+judge as the fact `narrator_intent`: the narrator has authored that test. The judge calls exactly
+that kind (and the ability and skill when given) and still sets the band, the mode and its grounds;
+or, when the test makes no sense for the situation, answers `check_required=false` with reason
+`intent_unsuitable` (a typed refusal the runner logs; `already_checked` stays legal). Code refuses a
+call of another test (`intent_ignored`), any other no-roll reason while an intent stands, and
+`intent_unsuitable` when no intent was given (`no_intent_to_refuse`); each is asked again. A runner
+passes the station's designed test as `intent=` at narrator stations; at player stations the judge
+stays free and `designed: .. match=` is the check.
+
+What each prints:
+
+```
+gauntlet_warrior check: required=true initiator=player reason=uncertain_with_consequence retried=0 duration_ms=4120
+  call: kind=ability_check ability=strength skill=athletics dc=15 mode=normal grounds=none uses=-
+  designed: kind=ability_check match=true
+  called (text_only): The rock is cold under your hands. Athletics, Strength. Difficulty fifteen. Roll it.
+  result (text_only): Fourteen on the die, plus three for Strength, plus two for proficiency. Nineteen against fifteen. A success. The ledge holds, and so do you.
+  roll: Athletics (Strength) kind=skill_check total=19 target=DC 15 outcome=success natural=none dice=d20=14
+  times: drawn_ms=.. called_ms=.. shown_ms=.. result_start_ms=.. result_end_ms=.. cleared_ms=.. hold_ms=.. min_hold_ms=..
+```
+
+(`judge` prints the first three lines; a judgement that calls no roll prints `required=false` and
+`run` then says `no roll was called`; a die set aside by advantage or disadvantage shows as `d20=5x`.)
+
+**Closed keys** (each an enum with `key()`, serde name equal to the key):
+
+| Field | Keys |
+| --- | --- |
+| `kind` | `ability_check`, `saving_throw`, `attack_roll`, `initiative`, `death_save`, `passive`, `contested`, `damage`, `healing`, `table` |
+| `initiator` | `player`, `narrator` (the moment's; any other is refused) |
+| `reason`, a roll is called | `uncertain_with_consequence` (player), `narrator_hazard`, `narrator_obstacle`, `narrator_reaction` (narrator) |
+| `reason`, none is called | `trivial_no_check`, `impossible_no_check`, `no_stakes`, `already_checked`, `intent_unsuitable` (the narrator's intended test makes no sense here) |
+| `dc_band` | 5, 10, 15, 20, 25, 30 (SRD 5.2.1 page 6); an attack roll's band is the target's Armor Class |
+| `mode` and `grounds` | `normal` with `none`; `advantage` with `character_feature`, `ally_help`, `favorable_circumstance`, `unaware_opponent`; `disadvantage` with `unfavorable_circumstance`, `armor_penalty` |
+| `tone` of a flourish | `triumph`, `relief`, `wry`, `awe`, `neutral`, `dry_humor`, `setback`, `dread`, `rue`, `anticipation` (allowed ones by outcome in "The lines") |
+
+**What code refuses in the judge's answer** (each a typed `CheckError`, asked again with every
+refusal so far in `previous_refusal`, until an answer stands or the text deadline ends it): an
+initiator that is not the moment's; a reason that does not fit `check_required` or the initiator; a
+field the kind does not use, or one it needs (`ability_check` needs an ability or a skill and a
+band; `saving_throw` an ability and a band, no skill; `attack_roll` a weapon of the sheet (`uses`)
+and a band, its ability the weapon's; `initiative` only Dexterity, no band; `death_save` nothing;
+`passive` only Wisdom (Perception), no band; `contested` athletics, acrobatics or perception and a
+band; `damage` a weapon; `healing` a healing of the sheet; `table` nothing); an ability that is not
+the skill's (SRD page 9); a band off the ladder; a mode with no ground, a ground that gives the
+other mode, a ground the sheet cannot back (`character_feature` needs a feature, `armor_penalty`
+equipment) or a mode on a roll with no d20; a test already in `checked`; `already_checked` with
+nothing checked. Trivial, impossible and no-stakes actions are answered `check_required=false` and
+nothing is rolled. Contested rolls are the SRD's two plain tests (pages 183, 190): Athletics or
+Acrobatics against an escape difficulty, Perception against a Stealth total.
+
+**One check** (`persona check run`, `flow.rs`; times in ms from the start, logged as `CHECK ..`):
+
+1. The judge answers. No roll: `CHECK skipped character=.. reason=..` and nothing else happens.
+2. The dice are drawn from the recording dice and resolved by `df-rules` (nothing shows them) and
+   the card is built. The call is worded first (one model call, about 6 s) and cued as soon as it
+   stands; the result is worded after it exists, told the call as `said_before` so it repeats
+   neither its image nor its opening, while the call is cued and heard out (each line has a
+   budget, below). `CHECK read_len moment=check_called|check_result chars=.. est_s=..` records
+   each line's length and its read time at 14 characters a second (target: a call about 10 s, a
+   result about 12 s, the game's own words included). `RULES rolled` is the rules adapter's own
+   line.
+3. `CHECK called at_ms=.. kind=.. skill=.. dc=.. voice=played|failed|text_only`: the call is shown
+   in the dungeon master's box (voiced when TTS is on), then the run waits for it to be heard out:
+   3 s plus 70 ms a character.
+4. `CHECK rolled at_ms=.. drawn_ms=.. dice=.. total=.. outcome=.. natural=..` and `CHECK shown
+   at_ms=.. id=.. revision=.. min_hold_ms=..`: the card (`SceneChange::Roll`) goes up with
+   `min_hold_ms` = 0.6 s (the page picks its tumble between 1.2 and 1.8 s) + the result line's
+   heard-out time + 2 s. The page stages it: call 2 s, tumble, settle 0.7 s, then the sum.
+5. At 4.5 s after the card (the latest the sum can be on screen) the result is cued:
+   `CHECK result_read start_ms=.. end_ms=.. voice=..`; the run waits for it to be heard out.
+6. The card is held until max(6 s, result line heard + 2 s) after the sum, plus its 0.4 s exit, then
+   `ClearRoll`: `CHECK cleared at_ms=.. hold_ms=..` (`hold_ms` counts from 4.5 s after the card).
+   A failure after the card is up still clears it.
+
+With TTS off (the default) each line is shown as text only and the log says so
+(`CHECK called .. voice=text_only`, `PERSONA narrated .. voiced=false`); `speak=false` does the same
+with TTS on. Never turn TTS on for a check test without the owner. A voice that fails shows the
+line as text (`voice=failed`, `SPEECH line_unvoiced`) and the run goes on.
+
+**The lines** (`lines.rs`, `numbers.rs`): code composes the numeric slot from the resolved roll as
+words and the storyteller words ONE short flourish beside it in one call: a call's `before` (at
+most one short sentence of about twelve words, first; silent when the player has just acted, since
+the numbers are the call; at a narrator station the place was already described aloud, so it is
+the single sentence naming only the immediate trigger of the check, never silent) or a result's
+`after` (one short sentence following the verdict, about the outcome and what it means for him,
+never re-describing the scene or the call). It is told the outcome, whether a natural 1 or 20
+happened (only where the rules give it an effect: attack rolls and death saves), how close the roll
+was (`narrow`, `clear`, `wide`), no numbers, `room_chars` (about how many characters fit the target
+read time beside the game's words; guidance in the instruction, never a cap in code), and its last
+six flourishes (`said_before`) and the closing sentence of each of the last twelve
+(`closers_used`), kept in the host's memory across the run, the call of this very roll last, so it
+varies shape and imagery and not only words: the run-1 flourishes ended again and again on "the X
+keeps its counsel" and "the X has the last word", so the instruction names concrete sensory detail
+of THIS scene (a sound, a texture, a smell, a light, from the place, the situation and what is in
+sight) in place of a stock formula, in one short sentence, and forbids those closers. The flourish names its one `tone`, a closed key, and code checks the tone
+against how things stand, so a flourish cannot cheer a failure or mourn a success and no judge
+call is made. The schema offers only the allowed tones; a tone outside them is refused
+(`tone_not_allowed`) and asked again.
+
+**Speech rules the flourish keeps** (instruction and code): it speaks to the party as "you", never
+of the character as he, she, they or a man, and code refuses a flourish that uses a third-person
+pronoun as a whole word (`not_spoken_to_the_party`; the model's own output against a closed list,
+like the name check, so a person is said by their look or trade and a thing by its name). A roll
+with no verdict (damage, healing, initiative, a table roll, a passive score) is never a win or a
+loss and nothing waits to be learned: its flourish is about the effect (the blow's weight, the
+warmth, the readiness, the prize), never about a verdict. `told=` passes what the runner has just
+said aloud (a station's scene line) as the fact `already_told_aloud`; a call never restates or
+paraphrases it and adds only the immediate trigger of the check.
+
+The numeric part says nothing twice: a single die that is the whole total is not said as the die
+and then as the total (`Eleven against fifteen. A failure.`, `Twelve against ten. A success.`,
+`One hit point restored.`); with a modifier, an advantage or a disadvantage the dice are read once
+and the total once.
+
+| How it stands | Allowed tones |
+| --- | --- |
+| the call (before anyone has seen the dice) | `neutral`, `anticipation`, `awe`, `wry`, `dry_humor` (no `dread`: it telegraphs a failure) |
+| natural 20 | `awe`, `triumph` |
+| natural 1 | `dread`, `rue`, `wry`, `dry_humor` |
+| a win within 2 of the target (success, hit, critical hit, death save success or revived) | `relief`, `wry` |
+| a loss within 2 of the target | `rue`, `wry` |
+| any other win | `triumph`, `relief`, `wry`, `awe`, `neutral`, `dry_humor` |
+| any other loss (failure, miss, death save failure) | `setback`, `dread`, `rue`, `wry`, `neutral`, `dry_humor` |
+| no verdict (initiative, damage, a table, a passive score) | `neutral`, `wry`, `dry_humor`, `awe` |
+
+All tones: `triumph`, `relief`, `wry`, `awe`, `neutral`, `dry_humor`, `setback`, `dread`, `rue`,
+`anticipation` (`Tone` in `request.rs`).
+
+**The call is worded blind to the dice** (audit, gauntlet runs 1 and 2). The dice are drawn before
+the call is spoken, so the result line can be worded while the call is heard; the call must not
+lean on them. Code check: the `check_called` request carries the test name, the scene, the
+initiator, `allowed_tones`, `said_before`, `closers_used` and `room_chars` only. `outcome`,
+`natural`, `how_close` are null; the difficulty band, the mode and its grounds (a disadvantage
+leans toward failure, and the game says them itself) are withheld from a call; `said_before` and
+`closers_used` hold earlier checks' flourishes, and the same check's result is worded after the
+call exists; `previous_refusal` holds only the call's own refusals. A test runs the same call
+with dice showing 2 and 19 and requires identical facts. Statistics from the logs (play1 and
+play2, 52 rolls, calls whose flourish has a failure-flavoured image such as slip, almost,
+nearly, falter, fall, reach, catches): of 8 such calls 4 were failures, 3 wins and 1 had no
+verdict, against 31 failures in the 51 rolls with a verdict (61 percent), so no association;
+the failures the owner found came from the model's own bias toward dread and from a high base
+failure rate (DCs of 15 and above against small modifiers, two disadvantage rolls). Hardening: the call instruction says it is spoken before anyone has seen
+the dice, describes only the situation and the stakes, and never hints at how it will go (no
+slipping, falling short, almost, nearly, too late, no chance, nor a promise of success either),
+and a call's tones are `neutral`, `anticipation`, `awe`, `wry`, `dry_humor` (`dread` removed).
+
+**Repairs and refusals** (`lines.rs`). Code repairs what is formatting and never asks the model
+again for it: a semicolon in a flourish becomes a sentence break (`a; b` is `A. B.`), so it is
+never refused (run 2 refused three flourishes for semicolons and the line fell back to bare
+numbers). Code refuses what is content, with a typed reason, and asks once more with it
+(`ASKS_PER_LINE` is 2, since each ask is about 5 s of the budget): a slot that is not the roll's
+(`numbers_mismatch`), a tone that does not fit (`tone_not_allowed`), a digit or nothing in a
+flourish, a word of the persona's display name (a whole-word check of the model's output,
+`names_called`; the model is not told the name) and a third-person pronoun
+(`not_spoken_to_the_party`). A call's flourish carries no outcome by its tones alone.
+
+**Budget and fallback.** A line has `LINE_BUDGET_MS` (14 s). When the budget runs out, or both
+asks are refused, the line is the LAST answer read with the sentences that hold a digit, a name or
+a third-person word dropped, if any sentence is left (the tone of the answer was allowed when it
+was read), else its composed numbers alone, no flourish. The log says `CHECK line_unjudged
+moment=check_called|check_result budget_ms=14000 why=budget|refused kept=true|false`; `kept=true`
+means a flourish was kept. The numbers and the verdict are the roll's either way. In a healthy run
+there is no `line_unjudged`. The narrator's rules hold: to the party as "you", no semicolons,
+naming nobody, speaking for no character, solving nothing. Spoken text, by kind (the call, then
+the result):
+
+| Roll | Call | Result |
+| --- | --- | --- |
+| Ability check | Athletics, Strength. Difficulty fifteen. Roll it. | Fourteen on the die, plus three for Strength, plus two for proficiency. Nineteen against fifteen. A success. |
+| Advantage | .. You have advantage, so roll two dice and keep the higher. | Seventeen and five with advantage, so seventeen counts, plus three for Strength, plus two for proficiency. Twenty-two against fifteen. A success. |
+| Saving throw | Constitution saving throw. Difficulty fifteen. Roll it. | Nine on the die, plus two for Constitution, plus two for proficiency. Thirteen against fifteen. A failure. |
+| Attack, critical | Melee attack roll. Armor class sixteen. Roll it. | Nineteen on the die, plus three for Strength, plus two for proficiency. Twenty-four against armor class sixteen. A critical hit. |
+| Natural 1 / 20 | | One on the die, .. Six against armor class sixteen. A natural one, which always misses. / .. A natural twenty, a critical hit. |
+| Heroic Inspiration | | Heroic Inspiration rerolled a six into a fourteen. Fourteen on the die, .. |
+| Initiative | Initiative. Roll it. | Twelve and three with advantage, so twelve counts, plus one for Dexterity, plus two for proficiency. Your initiative is fifteen. |
+| Death save | Death saving throw. Difficulty ten. Roll it. | Twenty against ten. A natural twenty, and you regain one hit point. |
+| Passive | Passive Perception. Nothing is rolled, your score is read. | Ten to start, plus one for Wisdom, plus two for proficiency. Your passive Perception is thirteen. |
+| Contest | Athletics, Strength, to break free. Difficulty fifteen. Roll it. | .. Nineteen against an escape difficulty of fifteen. A success. |
+| Damage | Damage. Roll one eight-sided die and add three. | Six on the eight-sided die, plus three for Strength. Nine damage. |
+| Healing | Healing. Roll one ten-sided die and add three. | Seven on the ten-sided die, plus three. Ten hit points restored. |
+| Table (d100) | Table roll. Roll percentile dice, two ten-sided dice, tens first. | The tens die shows sixty and the ones die shows two. Sixty-two on the table. |
+
+The card (`view.rs`): a percentile pair is one die of 100 sides; the death-save verdicts the card
+has no word for read success or failure with the natural mark; a contest reads won or lost; a roll
+with no target (initiative, damage, a table) has no verdict. The wire type is the display's
+`RollView` only.
+
+**Audit lines** (no story text): `PERSONA check_judged character=.. moment=.. required=.. kind=..
+reason=.. mode=.. retried=.. duration_ms=..`, `PERSONA check_judge_retried why=<error key>`,
+`PERSONA check_line moment=check_called|check_result tone=.. retried=.. duration_ms=..`,
+`PERSONA check_line_retried moment=.. why=<error key>`, the `CHECK ..` lines above and
+`PERSONA refused verb=check error=<key>`.
+
+**Run one station.** With the host up (one dev host, port 7879) and `gauntlet_warrior` stored
+(`persona write gauntlet_warrior development/market-threads/gauntlet_warrior.persona.json`):
+
+```bash
+$D dev --port 7879 persona check judge gauntlet_warrior station=athletics            # the narrator's moment
+$D dev --port 7879 persona check judge gauntlet_warrior station=athletics "action=I set my hands to the rock and climb."
+$D dev --port 7879 persona check run gauntlet_warrior station=athletics "action=I set my hands to the rock and climb."
+```
+
+**Live checklist** (coordinator, with TTS off unless the owner says): (1) `judge` gives a typed
+answer and `designed: .. match=true` for the station; trivial and impossible actions are not
+rolled; (2) `run`: `CHECK called` before `CHECK rolled`, the card appears after the call has been
+heard (3 s plus 70 ms a character); (3) the card holds at least 6 s and until `result_read` has
+ended plus 2 s (`cleared_ms - result_end_ms >= 2000`, `hold_ms >= 6000`); (4) the numbers on the
+card equal the numbers in the result line, word for word; (5) with TTS off the log says
+`voice=text_only`; (6) a second run at the same place with `checked=` naming the first test does
+not call it twice; (7) real entropy: two runs of one station differ and `RULES rolled` lines show
+the faces; (8) no `CHECK` line carries story text.
+
+**Why the 2026-11-10 trials stalled, and what to measure.** First trial, host log `TEXT answered ..
+duration_ms=`: the judge 6.9 s; flourish calls 4.6 to 6.2 s; names judge 3.4 to 6.0 s (one 56.9 s);
+consistency judge 7.0 s, 47.9 s, 50.8 s, 52.7 s, 53.3 s; three of four lines refused `contradicts`.
+Cause one was a code defect (the judge saw the composed numbers, so "Difficulty fifteen" read as a
+number said), fixed by judging the flourish alone. Second trial: every line still hit its 14 s
+budget, because the consistency judge (a Codex call of about 50 s) was on the critical path. It is
+gone, with its `Contradiction` reasons: the flourish names a `tone` and code checks it, the names
+judge is a whole-word check of the model's output, and a line is one model call. Scripted tests
+cannot show latency; measure live (`grep -E 'TEXT answered|CHECK|check_line' host.log`): the
+judge about 7 s; `check_called_line` and `check_result_line` about 5 to 6 s each, started together
+and with no `check_line_consistency` or `story_names` after them; `PERSONA check_line .. tone=..
+retried=0` per line (a retry costs another call); no `CHECK line_unjudged` in a healthy run;
+`CHECK called` within about 8 s of the judge's answer; and the whole run (judge, call heard out,
+card, result read, cleared) near 50 s, excluding TTS audio length. Check that consecutive flourishes
+open differently. Third trial: the flourish returned, but a call of 40 words and a result of 25 s
+read (the card up 32 s) were not quick, and the result re-described the call's image because both
+were worded in the same breath. Now the result is worded after the call, told it, and both
+flourishes are one short sentence; measure `CHECK read_len`: a call about 10 s and a result about
+12 s at 14 characters a second, and a station of about 60 s with the dungeon master's scene line
+spoken by the runner first (a narrator station's call must not describe that scene again).
+
+Not verified without a live model run: how often the judge's answers are refused and asked again,
+and the flourishes themselves (every scripted test pins the code around them). Gaps: no tool or
+Expertise rolls (a Fighter has none), no social contests beyond the two SRD tests (a model that
+wants one is told to pick another kind), and the story narrator's `Moment` has no `check_call`
+variant (the narrator's moment is the judge's `moment=narrator`).
+
+## The gauntlet run
+
+One run of 45 stations: every station in `market-threads/gauntlet.stations.json` (39: 18 skills, 6 raw
+abilities, passive Perception, 6 saving throws, 2 attack rolls, the contest, initiative, a death save,
+damage, healing and a percentile table) and six repeats (below), played by the runner's gauntlet mode from
+`market-threads/gauntlet.beats`. Design: `planning/dice-gauntlet.md`; the flow it drives is "The check
+judge and the DM's checks" above. Files: `gauntlet_warrior.persona.json` (stored by the runner),
+`gauntlet_warrior.sheet.json`, the stations file and the plates `gauntlet-<name>.png` in the scratch
+playground's `media/`.
+
+**Prep (before the first station).** The host refuses a spoken line on a plate that has no layout
+(`no_layout`) or none with him named (`unknown_character`), so the runner makes every station plate
+(33, each once) ready itself. For each it reads `media locate show <plate>`: a layout with
+`gauntlet_warrior` named is `already`; none is scanned (`media locate <plate>`, `scanned`); then
+`media locate identify <plate> "gauntlet_warrior=<@gauntlet_look>" "portrait.gauntlet_warrior=<@gauntlet_portrait>"`
+names him (`named`; the look has no name, the portrait defaults to `ref-<id>.png`). A plate where he
+is not found, or where the scan or the ask failed, logs `[prep] <plate> FAILED(<reason>)` and its
+stations become narrator-only (`[station NN] narrator-only: ..`: the dungeon master sets the scene
+and calls the check, no `persona say`; the `glade` plate has no warrior in it). A closing
+`[prep] N plates: already= scanned= named= failed= | narrator-only plates: ..` counts them. A
+scan and an ask take about 6 s each, so a cold prep is about 3 minutes; a second run finds them
+`already`.
+
+**Per station** the runner does: (a) `scene image tv-backdrop <plate>` (the page's fade is set once
+from `@gauntlet_fade 800`), (b) `persona narrate` of the station's scene line (the dungeon master,
+voiced when TTS is on, waited out at 3 s plus 70 ms a character), (c) `persona say gauntlet_warrior`
+toward the station's goal (his own words; at the 18 narrator runs nothing is said and the
+dungeon master calls the check unasked) and (d) `persona check run gauntlet_warrior station=<id>
+moment=player action=<his line>` (or `moment=narrator`), which judges, calls, rolls with real
+entropy, shows the card, reads the result and clears it. Then a 1.5 s breath. Narrator stations:
+acrobatics, animal_handling, survival, the six raw abilities (raw_str, raw_dex, raw_con, raw_int, raw_wis,
+raw_cha: the judge picks a skill whenever one fits a player's line, so these are narrator scenes of a pure act of the
+ability with the test passed as `intent=`), passive_perception, save_str, save_dex, save_con, save_wis,
+contested, initiative and death_save (twice). Advantage is the sheet's (Remarkable Athlete:
+athletics, contested, initiative), disadvantage the armour's (`@station_sight stealth` says his chain
+mail clinks); Heroic Inspiration is spent on the d20 of persuasion (`@station_inspire persuasion 0`).
+
+**Directives** (`@` lines of the beats file): `@gauntlet <character>`, `@gauntlet_persona`,
+`@gauntlet_sheet`, `@gauntlet_stations` (files), `@gauntlet_look <short look, no name>`,
+`@gauntlet_portrait <reference sheet>` (the prep), `@gauntlet_fade <ms>`, `@gauntlet_breath <s>`,
+`@gauntlet_limit <s>` (a station past this is logged `[station NN] stuck` and left), `@station <id> |
+player|narrator | <the dungeon master's scene line> | <his goal>`, `@station_sight <id> <words>` (a
+fact in sight for the judge, repeatable), `@station_inspire <id> <die place>`, and `@station_plate <id>
+<plate>` / `@station_place <id> <words>` (a different plate and setting for every run of that id). A
+station id listed again is a repeat. The six repeats: a second shot at the range, a second round of the
+bout, three more damage runs and a second death save. The bout is at the ford (the intimidation plate): a
+straw dummy has no armor class, so the melee attacks (`attack_melee` twice) and the damage runs
+(`damage`: longsword d8, greataxe d12, dagger d4, shortbow d6) are against the bandit, a live armed foe
+who strikes back. Every goal is an act in the fiction, never "roll", dice, damage or a table; the
+percentile table is a lot drawn from an offering urn and healing is catching his breath and drinking.
+
+**`intent=`.** At a narrator station the called check should be the designed one. The runner asks the
+host's `persona check` usage text at the start (`[gauntlet] persona check takes intent=: yes|no`) and,
+only when it shows `intent=`, adds `intent=<kind[:ability[:skill]]>` from the station's own kind,
+ability and skill (the abilities as the roll vocabulary writes them: `intent=saving_throw:dexterity`,
+`intent=ability_check:wisdom:survival`, `intent=death_save`) to every station run as the narrator's,
+the narrator-only ones included. Nothing changes on a host build without it.
+
+**`told=`.** The runner has just spoken the station's scene line before the check, and a narrator
+station's call must not say it again. The same usage-text gate (`[gauntlet] persona check takes
+told=: yes|no`) adds `told=<the scene line>` to `persona check run` at every station that has one (all
+of them), which the host gives the model as the fact `already_told_aloud`. At player stations his own
+line still goes through `action=`. The line is passed as one argument, so apostrophes and commas need
+no quoting. `--plan` shows `told=` on every check line, as it is sent once the host takes it.
+
+**A station with no roll.** He is a plain-spoken veteran who may refuse a distasteful act (live trial 4:
+at the purse he said he would leave it, the judge rightly called no roll, and the gauntlet had a
+station with none). So every player goal in the beats is a decision already taken ("You have decided
+to .. and you do it now. Say, in one short line, exactly what you do"), never a question, an option,
+a die, a difficulty, a skill or his name, and where an honest man would refuse (theft, the lie, the
+threat) the scene or the goal gives him a motive (the coin was stolen from a starving village, the
+guard is a smuggler's man, a family cannot cross). When `persona check run` still answers
+`required=false` the runner logs `[station NN] NO CHECK (judge: <reason>; he said: <line>)`; at a
+player station whose designed kind is a roll it then asks him once more (`persona say` with "You
+commit to it: do it, in a sentence." added to the goal, `[said NN] retry: ..`) and runs the check
+again, and a second miss logs `NO CHECK after the retry: given up`. Both are logged and the
+`[summary]` counts them (`no_check=N` stations that ended with no roll, and how many first asks were
+retried). Nothing is hidden: a retry that rolls is still a station whose first answer was a refusal.
+
+**A station that runs out of time** (`@gauntlet_limit`) is logged `stuck at <step>`; when its
+`persona check run` had begun, the runner then runs `scene roll-clear`, waits (two minutes at most)
+until the host's flow ends it (`CHECK cleared`, `CHECK skipped` or `PERSONA refused verb=check`),
+clears again and logs `[station NN] cleared after stuck`, so a stuck station cannot cover the next.
+
+**Check the plan first** (no host, no spend; it lists every station's four steps and the prep, and
+fails on a missing plate, portrait, file, station or look, or a scene line with a semicolon, and
+prints `PLAN RESULT PASS`; the plan shows `intent=` as it is sent once the host takes it):
+
+```bash
+bash development/market-thread.sh development/market-threads/gauntlet.beats --plan
+```
+
+**Start** (voiced; leave out `DF_RUN_TTS=on` for a text-only run, and the host's stored switch
+stands). Needs the one dev host on 7879 as the roam procedure leaves it (steps 6 and 7 of "Free roam:
+the current run procedure": the scratch playground, Codex text, a shown scene) and the page open on
+`http://localhost:7879/playground/` with the TV layout and Enable sound clicked, reloaded before the
+run. `D` is the host's exe. The runner stores the persona, resets its state, sets the fade and shows
+each plate itself:
+
+```bash
+D=$PWD/artifacts/build/roam/debug/df-table.exe
+$D dev --port 7879 scene clues clear
+$D dev --port 7879 scene narration clear
+mkdir -p artifacts/tmp/gauntlet-live && cp development/market-thread.sh artifacts/tmp/gauntlet-live/runner.sh
+sed -i 's#^cd .*#cd /c/Users/mreca/Desktop/dungeonfluxGame#' artifacts/tmp/gauntlet-live/runner.sh
+N=1; DF_RUN_TTS=on DF_TABLE_EXE=$D DF_TABLE_PORT=7879 bash artifacts/tmp/gauntlet-live/runner.sh \
+  development/market-threads/gauntlet.beats > artifacts/tmp/gauntlet-live/play$N.log 2>&1 &
+```
+
+**Monitor** (the same pipe as the roam's):
+
+```bash
+tail -n +1 -f artifacts/tmp/gauntlet-live/play$N.log | grep --line-buffered -E '^\[(settings|gauntlet|prep|station|dm|said|check|roll|hold|time|host|inspire|summary)' | stdbuf -oL cut -c1-260
+```
+
+**Length:** about 60 to 90 s a station (run 1: mean 66 s, 48.7 minutes for 39), so about 50 minutes for the 45 (a slow model call can add
+to it, and a station gets 180 s), after a prep of about 3 minutes on a cold start (seconds when every
+plate is `already`). Do not reload the page mid-run.
+
+**Log lines** (all from the command's answer and the host's own `CHECK`, `TIMING roll`, `RULES rolled`
+and `PERSONA check_*` lines read after each station; none is a guess):
+
+| Line | Meaning |
+| --- | --- |
+| `[settings] tts=on (from flag)` | The first lines: whether the paid switches are on and who set them. |
+| `[station NN] id \| title \| kind` | A station starts. Then `[dm NN] scene: ..` and `[said NN] ..` (`(nobody: ..)` at a narrator station). |
+| `[check NN] required=.. kind=.. ability=.. skill=.. dc=.. mode=.. grounds=.. uses=.. initiator=.. reason=.. retried=.. judge_ms=.. designed=match\|differs(kind)` | The judge's typed answer; `designed` says whether it is the station's designed test. `required=false` is an action the judge called no roll for (`reason=trivial_no_check` and the like). |
+| `[roll NN] faces=d20=14,d20=5x total=.. outcome=.. natural=.. card=.. target=.. (title)` | The dice (`x` is the one set aside) and the card's numbers. |
+| `[dm NN] call: ..` and `[dm NN] result: ..` | What the dungeon master said before the dice and after them. |
+| `[hold NN] card_up_ms dm_result_ms hold_ms min_hold_ms result_to_clear_ms page_card_ms voice held` | `card_up_ms` is `CHECK shown` to `CHECK cleared`, `dm_result_ms` the result line's `result_read` start to end, `result_to_clear_ms` the card's time left after the line ended (at least 2000), `page_card_ms` the page's own `TIMING roll` for the card (`-` when no page reported it), `held=ok` when `hold_ms` is at least 6000 and `result_to_clear_ms` at least 2000, else `SHORT`. |
+| `[time NN] station took N s (judge, call, roll, result, hold)` | Seconds: the judge's model call, the draw to the card up (wording, the call heard out), the card up to the sum, the result line, the rest of the hold. |
+| `[host NN] judge_retries=.. line_retries=.. refused=..` | The judge asked again, a line asked again, `PERSONA refused verb=check`. |
+| `[inspire NN] Heroic Inspiration replaced d20:6:kept (was 6, now 14) .. total_before=.. target=..` | The die replaced by Heroic Inspiration and the total before the reroll against the target, from `RULES rolled replaced=`. |
+| `[prep] <plate> already\|scanned\|named\|FAILED(<reason>)` and `[prep] N plates: ..` | The layout prep of each plate, once, before the first station. |
+| `[station NN] narrator-only: ..` | The prep found no warrior in the plate: no `persona say`, the dungeon master calls the check. |
+| `[station NN] stuck at <step> after N s` / `skipped at <step>: ..` | A station left (the time ran out; or a plate, line or file failed). |
+| `[station NN] cleared after stuck (the host was idle N s later)` | After a stuck check: `scene roll-clear`, then the host's flow ended (or `.. did not end its check within N s`). |
+| `[summary] ..` | Stations planned, run, no_check (and how many first asks were retried), rolled, skipped, stuck, failed; initiated by; rolls by kind and die size; modes and Heroic Inspiration; natural marks; the judge's matches and retries; cards held too short; times. |
+
+**What to look for** (the coordinator and the inspector): (0) `[prep]` ends with `failed=0` (else the
+narrator-only stations are listed); (1) 45 `[station NN]` lines, `stuck=0`,
+`skipped=0`, `failed=0`; (2) every `[hold NN]` says `held=ok` and `card_up_ms` is at least 10000
+(4.5 s to the sum, at least 6 s of hold, 0.4 s exit); (3) `[dm NN] call` before the card and
+`[dm NN] result` after the dice, and the numbers in the result equal `[roll NN]`; (4) 18 narrator runs (plus any the prep made narrator-only)
+stations show `initiator=narrator` with a `narrator_*` reason, the 27 others `player` with
+`uncertain_with_consequence` (a `NO CHECK` line is a station with no roll, a failure to count: `no_check=0`);
+(5) athletics, contested and initiative show `mode=advantage grounds=character_feature` when the
+judge accepts the feature, stealth `disadvantage armor_penalty`; (6) one `[inspire NN]` line, at
+persuasion; (7) two stations of one kind do not roll the same dice (real entropy); (8) `rolls by die
+size` has d20 and, from the damage runs, healing and the table, d4, d6, d8, d10, d12 and d100 (the
+damage runs use all four weapons); (9) a `time` per station near 60 to 90 s; (10) with TTS off `voice=text_only`, with it on
+`voice=played`; (11) frames: a `TIMING roll` for each card in the host log, then the inspector goes
+through the screen captures one by one against `planning/dice-gauntlet.md`'s display rules.
+
+**Gaps and limits.** Every kind of the flow runs (ability_check, saving_throw, attack_roll,
+initiative, death_save, passive, contested, damage, healing, table); the judge picks the kind from the
+line he said, so `designed=differs(..)` is possible and is logged, not forced. Heroic Inspiration is
+committed to a die before the dice are drawn (the flow takes `inspiration=` with the request), so the
+run cannot spend it only on a failed roll: it is spent at persuasion, where his Charisma is negative
+and a failure is likely, and `[inspire NN]` says what the first total was. A natural 1 or 20 shows on
+a card only for attack rolls and death saves, and the run does not force one (the dice are real):
+the summary counts them; the run has four attack rolls and two death saves for the chance, and a second run adds more. Advantage by
+`ally_help`, `favorable_circumstance` and `unaware_opponent`, and disadvantage by
+`unfavorable_circumstance`, are not exercised (no station gives them; a `@station_sight` line could).
+Expertise has no Fighter source. Not verified without a live run: the judge's refusals, the lines
+themselves, the 60 to 90 s pace and the page's `TIMING roll` records.
 
 ## The way between places
 
@@ -2691,7 +3205,7 @@ What plates must respect:
 | `cargo build` of the host says the exe is in use during a roam | the host is running from the roam lane's `df-table.exe` | stop your host by its command line (step 2), then build |
 | `scene cast` does not list `danny` after showing `roam-00.png` | the plate's scan or his name is missing (a scratch rebuilt without the layout) | "Making the starting pictures" under "Free roam" |
 | an `emotions.json` or persona edit has no effect | the host reads its scratch copy (`artifacts/tmp/persona-live/playground`), not `assets/` | edit both, or copy the file into the scratch copy; no restart needed |
-| no line is voiced | the host was started without `DF_ELEVENLABS_API_KEY`, TTS is off, or the page's audio is locked | export the key and restart; click TTS in the toolbar (it also unlocks audio); `playground` shows `tts:` and `audio` |
+| no line is voiced | the host was started without `DF_ELEVENLABS_API_KEY`, TTS is off (the first-run default; a restart keeps it as it was), or the page's audio is locked | export the key and restart; click TTS in the toolbar (the click also unlocks audio); `playground` shows `tts:` and `audio` |
 | a place goes round and round, nobody leaves | the pace judge keeps reading it as not served | a middle place is left once every player has said about three lines there; read `PERSONA story_next served=` in the host log |
 | an earlier story or a past run leaks into lines (Kael's arrest at the market) | personas keep what earlier stories and runs wrote into them | restore the cast's clean personas before the run (Play the quest, step 2) |
 | a close look finds nothing, or names go unchecked | an old `story moves` saved its nameless view, blanking names and other scenes' exhibits | fixed at `f0bd97da`; restore the plot from a copy made before, or plot again |
@@ -2954,9 +3468,9 @@ instead: a gap to close if lines are lost under the strings.
 (`artifacts/tmp/persona-live/playground/voices.json`) and now in `assets/playground/voices.json`
 (an opaque ElevenLabs voice id, the same one the scratch file gives the village torchbearer).
 `speech cast danny` would choose another from the supplier's list by his persona. A line is voiced
-when the runner asks with `speak=true`, the playground's `tts` switch is on (`playground set
-tts=true`, step 12 of the run procedure; a host restart turns it off) and the page's audio is
-unlocked by a click.
+when the runner asks with `speak=true`, the playground's `tts` switch is on (the toolbar, or
+`DF_RUN_TTS=on` for the run; the host remembers it across restarts and it starts off) and the
+page's audio is unlocked by a click.
 
 **Running it.** Rebuild the host in the roam lane (step 3 of the run procedure; the page is
 unchanged). Then, with the host up and the keys exported as in step 6:

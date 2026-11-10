@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::clues::{ClueBoard, ClueNote};
 use crate::controls::Device;
 use crate::fixture::{
-    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, PlateKind, Slide,
-    UnavailableChoice,
+    Camera, Caption, Choice, ChoiceGroup, Fixture, ImageRef, PartyMember, PlateKind, RollView,
+    Slide, UnavailableChoice,
 };
 use crate::inventory::InventoryPanel;
 use crate::limits::{
@@ -27,6 +27,7 @@ use crate::lobby::model::{LoadingScreen, LobbyScreen, RoleplayScene, TopBar};
 use crate::overlay::{
     Edit, Glyph, NarrationBox, NarrationPlacement, Progress, SeatStrip, StoryMark,
 };
+use crate::roll::ShownRoll;
 
 /// Which screens a sound is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +177,9 @@ pub struct SceneOverlay {
     /// The inventory panel on the shared screen: set whole by the host, or cleared.
     #[serde(skip_serializing_if = "Edit::is_keep")]
     pub inventory: Edit<InventoryPanel>,
+    /// The roll card on the shared screen: set by the host, which stamps it, or cleared.
+    #[serde(skip_serializing_if = "Edit::is_keep")]
+    pub roll: Edit<ShownRoll>,
     /// How many cues there have ever been. It only rises, so a page can tell a new cue from one it
     /// has played even after a reset.
     pub cue_count: u64,
@@ -183,6 +187,8 @@ pub struct SceneOverlay {
     pub slide_count: u64,
     /// How many camera moves there have ever been; it only rises, like `slide_count`.
     pub camera_count: u64,
+    /// How many rolls there have ever been; it only rises, like `slide_count`.
+    pub roll_count: u64,
     /// The newest cues, oldest first.
     pub cues: Vec<Cue>,
 }
@@ -278,6 +284,15 @@ pub enum SceneChange {
     },
     /// Takes the inventory panel away.
     ClearInventory {},
+    /// Puts one resolved roll on the shared screen as a card, replacing the one shown. The card
+    /// stays at least `min_hold_ms` after its verdict appears, and never under six seconds.
+    Roll {
+        view: RollView,
+        #[serde(default)]
+        min_hold_ms: u64,
+    },
+    /// Takes the roll card away at once.
+    ClearRoll {},
     /// Plays a sound once.
     Sound {
         media: String,
@@ -388,6 +403,20 @@ pub enum SceneError {
     DuplicateRow(String),
     /// The inventory panel moved a row it does not have.
     UnknownRow(String),
+    /// A roll's id is not a plain name.
+    InvalidRollId(String),
+    /// A roll holds a die the page cannot draw, or a face the die does not have.
+    InvalidDie {
+        sides: u8,
+        face: u8,
+    },
+    /// A roll's Heroic Inspiration reroll names no die of the roll, or a face it cannot have.
+    InvalidReroll,
+    /// A roll's total is not its kept dice and modifiers added up.
+    RollTotalMismatch {
+        sum: i64,
+        total: i32,
+    },
     /// A scene's number is 0 or past its total.
     InvalidProgress {
         index: u16,
@@ -421,6 +450,22 @@ impl fmt::Display for SceneError {
                     "the inventory moved '{id}', which is not a row of it"
                 )
             }
+            Self::InvalidRollId(id) => write!(
+                formatter,
+                "a roll's id is a plain name of letters, digits, '_', '-' and '.', not '{id}'"
+            ),
+            Self::InvalidDie { sides, face } => write!(
+                formatter,
+                "a roll holds a d4, d6, d8, d10, d12, d20 or d100, with a face from 1 to its \
+                 sides, not face {face} of {sides} sides"
+            ),
+            Self::InvalidReroll => formatter.write_str(
+                "the Heroic Inspiration reroll must name a die of the roll and a face it has",
+            ),
+            Self::RollTotalMismatch { sum, total } => write!(
+                formatter,
+                "the roll's kept dice and modifiers add up to {sum}, not its total {total}"
+            ),
             Self::UnknownMember(name) => write!(formatter, "'{name}' is not in the party"),
             Self::TooManyMembers => write!(
                 formatter,
@@ -501,6 +546,7 @@ impl SceneOverlay {
             cue_count: self.cue_count,
             slide_count: self.slide_count,
             camera_count: self.camera_count,
+            roll_count: self.roll_count,
             ..Self::default()
         }
     }
@@ -535,9 +581,11 @@ impl SceneOverlay {
             clues,
             story,
             inventory,
+            roll,
             cue_count: _,
             slide_count: _,
             camera_count: _,
+            roll_count: _,
             cues: _,
         } = self;
         [
@@ -562,6 +610,7 @@ impl SceneOverlay {
             ("clues", clues.is_keep()),
             ("story", story.is_keep()),
             ("inventory", inventory.is_keep()),
+            ("roll", roll.is_keep()),
         ]
         .into_iter()
         .filter_map(|(name, kept)| (!kept).then_some(name))
@@ -585,6 +634,9 @@ impl SceneOverlay {
             {
                 slide.elapsed_ms = now_ms.saturating_sub(slide.began_ms);
             }
+        }
+        if let Edit::Set(roll) = &mut stamped.roll {
+            roll.elapsed_ms = now_ms.saturating_sub(roll.began_ms);
         }
         stamped
     }
@@ -619,9 +671,11 @@ impl SceneOverlay {
             clues,
             story,
             inventory,
+            roll,
             cue_count: _,
             slide_count: _,
             camera_count: _,
+            roll_count: _,
             cues: _,
         } = self;
         let tv = &mut fixture.tv;
@@ -647,5 +701,6 @@ impl SceneOverlay {
         clues.apply_to(&mut fixture.tv.clues);
         story.apply_to(&mut fixture.tv.story);
         inventory.apply_to(&mut fixture.tv.inventory);
+        roll.apply_to(&mut fixture.tv.roll);
     }
 }

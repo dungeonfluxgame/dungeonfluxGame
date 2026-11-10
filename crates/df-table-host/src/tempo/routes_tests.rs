@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use df_playground::controls::ControlsChange;
 use df_playground::scene::Track as SceneTrack;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -76,6 +77,8 @@ impl Drop for Harness {
 
 async fn harness(fail_on: Option<usize>) -> Harness {
     let running = start(&STARTER_FILES).await;
+    // The music starts off, and a prepare composes only while it is on.
+    running.switch_music_on();
     running.write_asset(
         "fixtures/one.json",
         concat!(
@@ -301,6 +304,33 @@ async fn prepare_composes_each_profile_once_and_a_second_prepare_reuses_them() {
     );
     assert_eq!(harness.composer.calls.load(Ordering::SeqCst), 6);
     assert!(second.contains("show  tempo-show-"), "{second}");
+}
+
+#[tokio::test]
+async fn prepare_composes_nothing_while_the_music_is_off_and_names_each_profile_refused() {
+    let harness = harness(None).await;
+    harness
+        .running
+        .state
+        .playground()
+        .change_all(vec![ControlsChange::Music(false)], &[], 0, |_| {})
+        .expect("the switch is changed");
+    harness
+        .ok(TempoCommand::Load(harness.table_file.clone()))
+        .await;
+    let report = harness.ok(TempoCommand::Prepare).await;
+    assert!(
+        report.starts_with(
+            "prepared 6 profiles: 0 reused, 0 composed (0 s of music asked), 6 failed"
+        ),
+        "{report}"
+    );
+    assert_eq!(report.matches("failed (disabled)").count(), 6, "{report}");
+    assert_eq!(
+        harness.composer.calls.load(Ordering::SeqCst),
+        0,
+        "no composition was sent"
+    );
 }
 
 #[tokio::test]

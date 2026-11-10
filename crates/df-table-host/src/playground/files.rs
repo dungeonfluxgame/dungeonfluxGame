@@ -31,6 +31,9 @@ const INDEX_FILE: &str = "index.html";
 const THEME_FILE: &str = "theme.css";
 pub(super) const FIXTURE_DIRECTORY: &str = "fixtures";
 pub(super) const FIXTURE_EXTENSIONS: [&str; 1] = ["json"];
+const DICE_DIRECTORY: &str = "dice";
+const DICE_EXTENSIONS: [&str; 1] = ["png"];
+const DICE_CACHE_CONTROL: &str = "max-age=600";
 const PACKAGE_EXTENSIONS: [&str; 2] = ["js", "wasm"];
 const ASSET_EXTENSIONS: [&str; 2] = ["html", "css"];
 const LAYOUT_EXTENSIONS: [&str; 1] = ["json"];
@@ -154,6 +157,7 @@ pub fn content_type(name: &str) -> &'static str {
         Some("json") => "application/json",
         Some("js") => "text/javascript; charset=utf-8",
         Some("wasm") => "application/wasm",
+        Some("png") => "image/png",
         _ => "application/octet-stream",
     }
 }
@@ -284,16 +288,19 @@ pub enum ServedFileKind {
     FixtureList,
     Fixture,
     Package,
+    /// One picture of the dice, which the roll card draws its dice from.
+    Dice,
 }
 
 impl ServedFileKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Asset,
         Self::Theme,
         Self::Revision,
         Self::FixtureList,
         Self::Fixture,
         Self::Package,
+        Self::Dice,
     ];
 
     pub fn key(self) -> &'static str {
@@ -304,6 +311,7 @@ impl ServedFileKind {
             Self::FixtureList => "fixture_list",
             Self::Fixture => "fixture",
             Self::Package => "package",
+            Self::Dice => "dice",
         }
     }
 
@@ -410,6 +418,29 @@ pub(super) async fn fixture(
         })
     })
     .await
+}
+
+pub(super) async fn dice(
+    State(state): State<Arc<AppState>>,
+    UrlPath(name): UrlPath<String>,
+) -> Response {
+    let files = state.playground().files().clone();
+    let read_name = name.clone();
+    let mut response = blocking(&state, ServedFileKind::Dice, Some(&name), move || {
+        let name = read_name;
+        read_file(&files.assets.join(DICE_DIRECTORY), &name, &DICE_EXTENSIONS)
+            .map(|bytes| (bytes, content_type(&name)))
+    })
+    .await;
+    if response.status() == StatusCode::OK {
+        // The dice art is large and changes rarely: a card draws it from the browser's memory
+        // after the page's first read, so the first roll does not wait for it.
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(DICE_CACHE_CONTROL),
+        );
+    }
+    response
 }
 
 pub(super) async fn package_file(

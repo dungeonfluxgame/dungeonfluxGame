@@ -26,6 +26,8 @@ pub mod narration;
 pub mod party;
 pub mod place_label;
 pub mod progress_line;
+pub mod roll_card;
+pub mod roll_tray;
 pub mod section_label;
 pub mod speaker;
 pub mod speech;
@@ -64,6 +66,8 @@ mod party_tests;
 mod place_label_tests;
 #[cfg(test)]
 mod progress_line_tests;
+#[cfg(test)]
+mod roll_card_tests;
 #[cfg(test)]
 mod section_label_tests;
 #[cfg(test)]
