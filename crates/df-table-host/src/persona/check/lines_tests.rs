@@ -683,6 +683,10 @@ async fn the_instruction_asks_for_one_short_sentence_and_the_trigger_only() {
         "Never use he, she, they",
         "already_told_aloud",
         "one concrete sensory detail",
+        "Every flourish carries a fresh image",
+        "are already used up",
+        "never echo any image, noun or setting detail",
+        "the opponent or the thing being tried",
         "ONE short sentence",
         "never describe it again",
         "14 characters a second",
@@ -747,9 +751,9 @@ fn a_flourish_closes_on_its_last_sentence() {
 }
 
 #[tokio::test]
-async fn the_last_six_flourishes_are_told_whole_and_the_closers_of_all_twelve_with_none_twice() {
+async fn the_last_sixteen_flourishes_are_told_whole_and_their_closers_with_none_twice() {
     let table = table(vec![line_answer("The wall looms.", "")]).await;
-    let said: Vec<String> = (0..8)
+    let said: Vec<String> = (0..18)
         .map(|number| {
             if number % 2 == 0 {
                 format!("Opening {number}. The fire keeps its counsel.")
@@ -763,6 +767,7 @@ async fn the_last_six_flourishes_are_told_whole_and_the_closers_of_all_twelve_wi
         .expect("stands");
     let facts = table.facts_of(0);
     assert_eq!(facts["said_before"], json!(said[2..]));
+    assert_eq!(facts["said_before"].as_array().map(Vec::len), Some(16));
     assert_eq!(
         facts["closers_used"],
         json!([

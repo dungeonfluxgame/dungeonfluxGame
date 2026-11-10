@@ -379,6 +379,25 @@ fn healing_reads_the_die_the_flat_bonus_and_the_hit_points_restored() {
     assert_eq!(said(&one_point, &[1]), "One hit point restored.");
 }
 
+#[test]
+fn a_healing_modifier_the_roll_labels_is_named_by_its_source() {
+    let hit_die = RollRequest::Dice(DiceRequest {
+        role: DieRole::Healing,
+        expression: DiceExpression {
+            count: 1,
+            die: DieSize::D10,
+            modifier: 2,
+        },
+        modifier_label: ModifierLabel::Constitution,
+        critical: false,
+        heroic_inspiration: None,
+    });
+    assert_eq!(
+        said(&hit_die, &[7]),
+        "Seven on the ten-sided die, plus two for Constitution. Nine hit points restored."
+    );
+}
+
 fn percentile() -> RollRequest {
     RollRequest::Dice(DiceRequest {
         role: DieRole::Table,

@@ -492,17 +492,17 @@ async fn what_the_runner_just_said_aloud_reaches_the_call_so_it_is_not_restated(
 }
 
 #[tokio::test]
-async fn the_host_remembers_the_last_twelve_flourishes_and_forgets_the_oldest() {
+async fn the_host_remembers_the_last_sixteen_flourishes_and_forgets_the_oldest() {
     let table = table(Vec::new()).await;
     let routes = routes_over(&table, dice_showing(&[]));
-    for number in 0..14 {
+    for number in 0..18 {
         routes.remember(format!("Flourish {number}."));
     }
     routes.remember(String::new());
     let kept = routes.said_before();
-    assert_eq!(kept.len(), 12);
+    assert_eq!(kept.len(), 16);
     assert_eq!(kept[0], "Flourish 2.");
-    assert_eq!(kept[11], "Flourish 13.");
+    assert_eq!(kept[15], "Flourish 17.");
 }
 
 #[tokio::test]

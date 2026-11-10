@@ -46,11 +46,12 @@ pub(super) const RESULT_READ_TARGET_S: u64 = 12;
 
 /// How many of the dungeon master's last flourishes are remembered across the run, so the next
 /// does not repeat them or their closing phrases; the oldest is forgotten first.
-pub(super) const MAXIMUM_REMEMBERED_FLOURISHES: usize = 12;
+pub(super) const MAXIMUM_REMEMBERED_FLOURISHES: usize = 16;
 
-/// How many of those are told whole to the next flourish, as `said_before`; the closing sentences
-/// of all of them are told as `closers_used`.
-pub(super) const FLOURISHES_TOLD_WHOLE: usize = 6;
+/// How many of those are told whole to the next flourish, as `said_before` (all of them, about
+/// eight stations of a call and a result each, so a scene's stock image is not reused within a
+/// scene); the closing sentences of all of them are told as `closers_used`.
+pub(super) const FLOURISHES_TOLD_WHOLE: usize = 16;
 
 /// How many times a line is asked of the model: a first ask and one more when the first answer is
 /// refused for its content (a tone, a digit, a name, a third-person word). A repair that code can

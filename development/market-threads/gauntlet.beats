@@ -14,12 +14,12 @@
 # (`NO CHECK`); and (d) `persona check run` judges his line, calls the check, rolls,
 # shows the card, reads the result and clears it. A station marked `narrator` has no line of his: the
 # dungeon master calls the check unasked (the judge's `moment=narrator`, the station's own test passed as
-# `intent=`). Eighteen of the 45 runs are the narrator's, the calls a table makes without being asked: a
+# `intent=`). Twenty of the 48 runs are the narrator's, the calls a table makes without being asked: a
 # hazard (the four saving throws of the flood, the blade, the fume and the apparition), an ambush
-# (initiative), a grab (the contested test), the fallen man's two death saves, a skittish horse, a lost
-# trail, a long climb, a swaying bridge, a passive score and the six raw-ability stations. The rest are
-# the warrior's own acts. 45 runs are the 39 stations of the file and six repeats (a second shot at the
-# range, a second round at the ford, three more damage weapons, a second death save). The judge is never
+# (initiative), a grab (the contested test), the fallen man's three death saves, a skittish horse, a lost
+# trail, a long climb, a swaying bridge, a passive score and the six raw-ability stations and the whispering stone face. The rest are
+# the warrior's own acts. 48 runs are the 39 stations of the file and nine repeats (a second and third shot at the
+# range, a second and third round at the ford, three more damage weapons, a second and third death save). The judge is never
 # told a station's designed test at a player station; the log says whether its answer matched.
 # `@station_sight <id> <what is in sight>` gives the judge a ground for a mode other than normal that is
 # true of the fiction (the warrior wears chain mail), and `@station_inspire <id> <die place>` spends his
@@ -57,7 +57,7 @@
 @station survival | narrator | The faint trail fades into rough moorland. Old tracks and a cold fire ring are all that is left to follow.
 @station deception | player | A stern gate guard bars the town gate with his spear and lets nobody through. He is a smuggler's man, and he would hurt anyone who looked too close at what he guards. | The guard would hurt you if he learned why you are here, and a starving village needs what lies beyond the gate. You have decided to lie to him with a false story, and you do it now. Say, in one short line, exactly the story you tell him.
 @station intimidation | player | A bandit with a cudgel stands in the river ford, wary and half afraid, and he blocks the crossing. Behind you a family of travellers waits to cross. | The family behind you cannot cross while the bandit stands in the ford, and you have decided to frighten him off. You do it now. Say, in one short line, exactly what you say and do to him.
-@station performance | player | A low plank stage with a stool stands empty in the tavern, and a few seated villagers wait for a song or a tale. | The innkeeper will feed your hungry company for a good performance, and you have decided to take the stage and give one, and you do it now. Say, in one short line, exactly what you perform.
+@station performance | player | A low plank stage with a stool stands empty in the tavern, and a few seated villagers wait for a song or a tale. The crowd will decide tonight whether your travelling company is sheltered from the cold, and it hinges on what you give them. | The tavern crowd decides whether your company is sheltered for the night, and it hinges on your song. You have decided to take the stage and sing the best you can, and you do it now. Say, in one short line, exactly what you perform.
 @station persuasion | player | A village elder sits on a bench before his thatched cottage with his hands folded, and he will not be hurried. | The elder's word decides whether the village shelters the refugees with you, and you have decided to make your honest case to him, and you do it now. Say, in one short line, exactly what you tell him.
 # The six raw-ability stations are the narrator's: the judge picks a skill whenever one fits a player's
 # line (run 1: raw Strength came out Athletics, raw Dexterity Acrobatics, raw Intelligence Investigation),
@@ -75,7 +75,7 @@
 @station save_str | narrator | A wall of flood water comes roaring down the narrow gully straight at you.
 @station save_dex | narrator | A blade swings out of the corridor wall at chest height.
 @station save_con | narrator | A foul yellow green fume rolls out of the cave mouth and into your face.
-@station save_int | player | In a bare round chamber a great stone face is set in the wall, and it whispers into your mind. | You have decided to fight the whisper and keep your thoughts clear, and you do it now. Say, in one short line, exactly what you do.
+@station save_int | narrator | In a bare round chamber a great stone face is set in the wall, and it whispers into your mind. If its voice takes hold it will bend your thoughts to its will and turn you on your companions.
 @station save_wis | narrator | A pale hooded figure stands among the graves in the fog, and a cold dread comes off it.
 @station save_cha | player | A ring of old standing stones circles the moor in fog, and the air presses heavily on your will. | You have decided to hold on to yourself against the pressure of the old stones, and you do it now. Say, in one short line, exactly what you do.
 # The bout at the ford. A straw dummy has no armor class to roll against, so the melee attacks and the
@@ -83,24 +83,30 @@
 # back (`@station_plate` and `@station_place` put every run of those ids there). Every goal is an
 # act in the fiction: nothing says roll, dice or damage, the judge decides what the act needs. The
 # damage runs use each weapon of the sheet once, so the d8, d12, d4 and d6 all roll (the longbow is a d8
-# too, Second Wind and the table are d10). Two shots at the range, two rounds of the bout and two death
+# too, Second Wind and the table are d10). Three shots at the range, three rounds of the bout and three death
 # saves give more attack d20s and death-save d20s than the 39 stations did, where a natural 1 or 20
 # matters (the dice are real, so nothing here forces one).
+# A damage roll is called only where the blow has already landed (a scene that opens a new strike is
+# judged an attack roll), so each damage scene says the hit is done and he follows through.
 @station_plate attack_melee gauntlet-ford.png
 @station_place attack_melee A river ford where a bandit with a cudgel has come to blows with the warrior, who has drawn his longsword.
 @station_plate damage gauntlet-ford.png
 @station_place damage A river ford where a bandit with a cudgel has come to blows with the warrior.
-@station attack_ranged | player | A straw target stands at the far end of a meadow at the archery range. | You have decided to draw your longbow on the distant straw target and loose, and you do it now. Say, in one short line, exactly what you do.
-@station attack_ranged | player | The range keeper sets a fresh straw target farther back at the end of the meadow, and the wind has picked up. | You have decided to draw your longbow on the farther target and loose again, and you do it now. Say, in one short line, exactly what you do.
+@station_place attack_ranged A wide meadow beside a shepherd's barn, with the archery range at its near end.
+@station attack_ranged | player | A starving wolf bursts from the tall grass at the far end of the meadow and races toward a shepherd's lamb. | The wolf will reach the lamb in moments, and you have decided to draw your longbow and loose at the wolf to save it. You do it now. Say, in one short line, exactly what you do.
+@station attack_ranged | player | A bandit archer rises from behind a boulder at the far end of the meadow and nocks an arrow at you, and the wind has picked up. | The bandit has you in his sights, and you have decided to draw your longbow and loose at him first. You do it now. Say, in one short line, exactly what you do.
+@station attack_ranged | player | A raider at the very end of the meadow holds a lit torch to the thatch of the shepherd's barn, and a gust blows across the line. | The barn will burn unless he drops, and you have decided to draw your longbow and loose at the raider. You do it now. Say, in one short line, exactly what you do.
 @station attack_melee | player | At the river ford the bandit has had enough of talk. He swings his cudgel at your head, and it whistles past your ear. | The bandit's cudgel just missed your head, and you have decided to answer by cutting at him with your longsword. You do it now. Say, in one short line, exactly what you do.
 @station damage | player | Your cut has opened the bandit's guard and the longsword bites into him. | Your longsword cut has landed on the bandit, and you press it home with all your weight behind the blade. You do it now. Say, in one short line, exactly what you do.
 @station attack_melee | player | The bandit staggers but keeps his feet, and he raises the cudgel and swings again. | The bandit is still on his feet and swinging, and you have decided to strike at him again with your longsword. You do it now. Say, in one short line, exactly what you do.
-@station damage | player | The bandit is reeling and you drop your sword for the greataxe on your back. | Your blow has landed and the bandit reels, so you have swung the greataxe from your back with both hands and you drive it home into him. You do it now. Say, in one short line, exactly what you do.
-@station damage | player | The bandit lurches at you in desperation, inside the reach of an axe. | The bandit is inside your reach and you have hit him, so you have decided to drive your dagger into him. You do it now. Say, in one short line, exactly what you do.
-@station damage | player | The bandit breaks and runs for the far bank, and a shortbow lies at your feet. | An arrow from your shortbow has struck the fleeing bandit square in the back, and you watch it bite deep. You have decided to draw and loose it now. Say, in one short line, exactly what you do.
+@station damage | player | The axe has already struck true, and the bandit reels from the blow. | Your greataxe has already struck the bandit true, and your arm drives it home through him with both hands on the haft. You do it now. Say, in one short line, exactly what you do.
+@station attack_melee | player | The bandit is on one knee but still has his cudgel, and he lurches inside the reach of your axe. | The bandit has lurched inside the reach of your axe, and you have decided to stab at him with your dagger. You do it now. Say, in one short line, exactly what you do.
+@station damage | player | The dagger has already struck home in the bandit's side. | Your dagger has already struck the bandit true, and you drive it in to the hilt. You do it now. Say, in one short line, exactly what you do.
+@station damage | player | The bandit breaks and runs for the far bank, and the arrow has already struck the runner true in the back. | The arrow from your shortbow has already struck the fleeing bandit in the back, and you put your full draw behind it, driving the arrow deep. You do it now. Say, in one short line, exactly what you do, naming your shortbow.
 @station contested | narrator | A burly dockhand will not give way on the quay, and he seizes you by the arms and shoves.
 @station initiative | narrator | The forest road runs quiet between the trees, and then something stirs on both sides of it.
 @station death_save | narrator | You lie fallen on the field at dusk among broken spears, and your strength is draining away.
 @station death_save | narrator | Dusk is darkening on the field and you still lie among the broken spears, too weak to stand, and your strength ebbs again.
-@station healing | player | A quiet campfire burns in a woodland clearing, with a bedroll and a water flask beside it. | You are spent from the fight, and you have decided to sit by the fire to recover your strength: you catch your breath and drink from your flask. You do it now. Say, in one short line, exactly what you do.
+@station death_save | narrator | Night is closing in on the field, and you lie where you fell with the cold creeping in and your strength ebbing once more.
+@station healing | player | A quiet campfire burns in a woodland clearing, with a bedroll and a water flask beside it. The cut across your ribs is still bleeding through your mail, and the road will not wait. | The cut across your ribs is still bleeding and you must close it before the road, so you have decided to catch your breath by the fire, steady yourself and pull the wound shut. You do it now. Say, in one short line, exactly what you do.
 @station table_d100 | player | A stone table in the treasure vault is heaped with coins, and chests stand open behind it. An offering urn of lots stands at its edge. | The vault holds more than you can carry, and you have decided to draw a lot from the offering urn to choose which prize is within your reach. You do it now. Say, in one short line, exactly what you do.

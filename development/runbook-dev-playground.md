@@ -2144,7 +2144,11 @@ the skill's (SRD page 9); a band off the ladder; a mode with no ground, a ground
 other mode, a ground the sheet cannot back (`character_feature` needs a feature, `armor_penalty`
 equipment) or a mode on a roll with no d20; a test already in `checked`; `already_checked` with
 nothing checked. Trivial, impossible and no-stakes actions are answered `check_required=false` and
-nothing is rolled. Contested rolls are the SRD's two plain tests (pages 183, 190): Athletics or
+nothing is rolled. The judge's instruction names an opponent (a living creature or enemy in the
+situation or `in_sight` that can act, defend, dodge, take cover or answer back) and says a declared weapon
+attack on one is uncertain, so it is an `attack_roll`, never `trivial_no_check` or `no_stakes`; only an
+attack on a thing that cannot resist or respond, with no consequence for missing, may be `no_stakes`.
+Contested rolls are the SRD's two plain tests (pages 183, 190): Athletics or
 Acrobatics against an escape difficulty, Perception against a Stealth total.
 
 **One check** (`persona check run`, `flow.rs`; times in ms from the start, logged as `CHECK ..`):
@@ -2186,12 +2190,16 @@ never re-describing the scene or the call). It is told the outcome, whether a na
 happened (only where the rules give it an effect: attack rolls and death saves), how close the roll
 was (`narrow`, `clear`, `wide`), no numbers, `room_chars` (about how many characters fit the target
 read time beside the game's words; guidance in the instruction, never a cap in code), and its last
-six flourishes (`said_before`) and the closing sentence of each of the last twelve
-(`closers_used`), kept in the host's memory across the run, the call of this very roll last, so it
-varies shape and imagery and not only words: the run-1 flourishes ended again and again on "the X
-keeps its counsel" and "the X has the last word", so the instruction names concrete sensory detail
-of THIS scene (a sound, a texture, a smell, a light, from the place, the situation and what is in
-sight) in place of a stock formula, in one short sentence, and forbids those closers. The flourish names its one `tone`, a closed key, and code checks the tone
+sixteen flourishes in full (`said_before`, the host's whole memory, never reset per station) and
+their closing sentences (`closers_used`), kept in the host's memory across the run, the call of this
+very roll last, so it varies shape and imagery and not only words: the run-1 flourishes ended again
+and again on "the X keeps its counsel" and "the X has the last word", so the instruction forbids
+those closers. The 17-station run (play3) reused one setting image across a scene (the ford's
+cold spray at stations 6 to 11, the dusk wind at the death saves), so the instruction also says the
+scene's stock details are used up by the earlier flourishes, forbids echoing any image, noun or
+setting detail they used even reworded, and points the model at the outcome's effect on the body, a
+sound, the opponent, the sound of the roll settling or an unnamed detail of what is in sight; the
+fix is by prompt only, never by comparing the model's text. The flourish is one short sentence and names its one `tone`, a closed key, and code checks the tone
 against how things stand, so a flourish cannot cheer a failure or mourn a success and no judge
 call is made. The schema offers only the allowed tones; a tone outside them is refused
 (`tone_not_allowed`) and asked again.
@@ -2284,6 +2292,12 @@ has no word for read success or failure with the natural mark; a contest reads w
 with no target (initiative, damage, a table) has no verdict. The wire type is the display's
 `RollView` only.
 
+A modifier is spoken by the source its roll labels ("plus three for Strength" for a damage roll).
+A healing of the sheet has only a bare dice expression (`1d10+2`), so its request is built with the
+`Flat` label and its modifier is spoken unlabelled ("plus two"), not "for Constitution": naming it
+needs a label on the sheet's healing entry (the hit die's Constitution, a Second Wind's Fighter
+level, which `df-rules` has no `ModifierLabel` for), an open item.
+
 **Audit lines** (no story text): `PERSONA check_judged character=.. moment=.. required=.. kind=..
 reason=.. mode=.. retried=.. duration_ms=..`, `PERSONA check_judge_retried why=<error key>`,
 `PERSONA check_line moment=check_called|check_result tone=.. retried=.. duration_ms=..`,
@@ -2338,9 +2352,9 @@ variant (the narrator's moment is the judge's `moment=narrator`).
 
 ## The gauntlet run
 
-One run of 45 stations: every station in `market-threads/gauntlet.stations.json` (39: 18 skills, 6 raw
+One run of 48 stations: every station in `market-threads/gauntlet.stations.json` (39: 18 skills, 6 raw
 abilities, passive Perception, 6 saving throws, 2 attack rolls, the contest, initiative, a death save,
-damage, healing and a percentile table) and six repeats (below), played by the runner's gauntlet mode from
+damage, healing and a percentile table) and nine repeats (below), played by the runner's gauntlet mode from
 `market-threads/gauntlet.beats`. Design: `planning/dice-gauntlet.md`; the flow it drives is "The check
 judge and the DM's checks" above. Files: `gauntlet_warrior.persona.json` (stored by the runner),
 `gauntlet_warrior.sheet.json`, the stations file and the plates `gauntlet-<name>.png` in the scratch
@@ -2362,14 +2376,14 @@ scan and an ask take about 6 s each, so a cold prep is about 3 minutes; a second
 **Per station** the runner does: (a) `scene image tv-backdrop <plate>` (the page's fade is set once
 from `@gauntlet_fade 800`), (b) `persona narrate` of the station's scene line (the dungeon master,
 voiced when TTS is on, waited out at 3 s plus 70 ms a character), (c) `persona say gauntlet_warrior`
-toward the station's goal (his own words; at the 18 narrator runs nothing is said and the
+toward the station's goal (his own words; at the 20 narrator runs nothing is said and the
 dungeon master calls the check unasked) and (d) `persona check run gauntlet_warrior station=<id>
 moment=player action=<his line>` (or `moment=narrator`), which judges, calls, rolls with real
 entropy, shows the card, reads the result and clears it. Then a 1.5 s breath. Narrator stations:
 acrobatics, animal_handling, survival, the six raw abilities (raw_str, raw_dex, raw_con, raw_int, raw_wis,
 raw_cha: the judge picks a skill whenever one fits a player's line, so these are narrator scenes of a pure act of the
-ability with the test passed as `intent=`), passive_perception, save_str, save_dex, save_con, save_wis,
-contested, initiative and death_save (twice). Advantage is the sheet's (Remarkable Athlete:
+ability with the test passed as `intent=`), passive_perception, save_str, save_dex, save_con, save_int, save_wis,
+contested, initiative and death_save (three times). Advantage is the sheet's (Remarkable Athlete:
 athletics, contested, initiative), disadvantage the armour's (`@station_sight stealth` says his chain
 mail clinks); Heroic Inspiration is spent on the d20 of persuasion (`@station_inspire persuasion 0`).
 
@@ -2380,12 +2394,17 @@ mail clinks); Heroic Inspiration is spent on the d20 of persuasion (`@station_in
 player|narrator | <the dungeon master's scene line> | <his goal>`, `@station_sight <id> <words>` (a
 fact in sight for the judge, repeatable), `@station_inspire <id> <die place>`, and `@station_plate <id>
 <plate>` / `@station_place <id> <words>` (a different plate and setting for every run of that id). A
-station id listed again is a repeat. The six repeats: a second shot at the range, a second round of the
-bout, three more damage runs and a second death save. The bout is at the ford (the intimidation plate): a
-straw dummy has no armor class, so the melee attacks (`attack_melee` twice) and the damage runs
+station id listed again is a repeat. The nine repeats: a second and third shot at the range, a second and third round of the
+bout, three more damage runs and a second and third death save. The bout is at the ford (the intimidation plate): a
+straw dummy has no armor class, so the melee attacks (`attack_melee` three times) and the damage runs
 (`damage`: longsword d8, greataxe d12, dagger d4, shortbow d6) are against the bandit, a live armed foe
-who strikes back. Every goal is an act in the fiction, never "roll", dice, damage or a table; the
-percentile table is a lot drawn from an offering urn and healing is catching his breath and drinking.
+who strikes back. Every goal is an act in the fiction, never "roll", dice, damage or a table. A damage
+roll is called only where the scene says the blow has already landed (a scene that opens a new strike
+is judged an attack roll: run 2 got no d6 or d12 that way), so each damage scene says the hit is done
+and he follows through. The percentile table is a lot drawn from an offering urn. Healing has a stake
+(an open cut across his ribs that must be closed before the road; the judge called no stakes for a man
+who only sat and drank), and the performance stage has one too (the tavern crowd decides tonight whether
+the company is sheltered, and it hinges on his song).
 
 **`intent=`.** At a narrator station the called check should be the designed one. The runner asks the
 host's `persona check` usage text at the start (`[gauntlet] persona check takes intent=: yes|no`) and,
@@ -2451,7 +2470,7 @@ N=1; DF_RUN_TTS=on DF_TABLE_EXE=$D DF_TABLE_PORT=7879 bash artifacts/tmp/gauntle
 tail -n +1 -f artifacts/tmp/gauntlet-live/play$N.log | grep --line-buffered -E '^\[(settings|gauntlet|prep|station|dm|said|check|roll|hold|time|host|inspire|summary)' | stdbuf -oL cut -c1-260
 ```
 
-**Length:** about 60 to 90 s a station (run 1: mean 66 s, 48.7 minutes for 39), so about 50 minutes for the 45 (a slow model call can add
+**Length:** about 60 to 90 s a station (run 1: mean 66 to 68 s, 48.7 minutes for 39 and 45 stations), so about 55 minutes for the 48 (a slow model call can add
 to it, and a station gets 180 s), after a prep of about 3 minutes on a cold start (seconds when every
 plate is `already`). Do not reload the page mid-run.
 
@@ -2476,11 +2495,11 @@ and `PERSONA check_*` lines read after each station; none is a guess):
 | `[summary] ..` | Stations planned, run, no_check (and how many first asks were retried), rolled, skipped, stuck, failed; initiated by; rolls by kind and die size; modes and Heroic Inspiration; natural marks; the judge's matches and retries; cards held too short; times. |
 
 **What to look for** (the coordinator and the inspector): (0) `[prep]` ends with `failed=0` (else the
-narrator-only stations are listed); (1) 45 `[station NN]` lines, `stuck=0`,
+narrator-only stations are listed); (1) 48 `[station NN]` lines, `stuck=0`,
 `skipped=0`, `failed=0`; (2) every `[hold NN]` says `held=ok` and `card_up_ms` is at least 10000
 (4.5 s to the sum, at least 6 s of hold, 0.4 s exit); (3) `[dm NN] call` before the card and
-`[dm NN] result` after the dice, and the numbers in the result equal `[roll NN]`; (4) 18 narrator runs (plus any the prep made narrator-only)
-stations show `initiator=narrator` with a `narrator_*` reason, the 27 others `player` with
+`[dm NN] result` after the dice, and the numbers in the result equal `[roll NN]`; (4) 20 narrator runs (plus any the prep made narrator-only)
+stations show `initiator=narrator` with a `narrator_*` reason, the 28 others `player` with
 `uncertain_with_consequence` (a `NO CHECK` line is a station with no roll, a failure to count: `no_check=0`);
 (5) athletics, contested and initiative show `mode=advantage grounds=character_feature` when the
 judge accepts the feature, stealth `disadvantage armor_penalty`; (6) one `[inspire NN]` line, at
@@ -2497,7 +2516,7 @@ committed to a die before the dice are drawn (the flow takes `inspiration=` with
 run cannot spend it only on a failed roll: it is spent at persuasion, where his Charisma is negative
 and a failure is likely, and `[inspire NN]` says what the first total was. A natural 1 or 20 shows on
 a card only for attack rolls and death saves, and the run does not force one (the dice are real):
-the summary counts them; the run has four attack rolls and two death saves for the chance, and a second run adds more. Advantage by
+the summary counts them; the run has six attack rolls and three death saves for the chance, and a second run adds more. Advantage by
 `ally_help`, `favorable_circumstance` and `unaware_opponent`, and disadvantage by
 `unfavorable_circumstance`, are not exercised (no station gives them; a `@station_sight` line could).
 Expertise has no Fighter source. Not verified without a live run: the judge's refusals, the lines
@@ -3227,6 +3246,20 @@ residents; their ids are not checked against the persona routes' reserved words 
 marked `TODO(DEV-12)`. The transition's Generating, Locating and Placing timings are written
 after the plate call returns. `persona converse` has no topic shifts. Each plate run spends an
 image generation and a fal scan.
+
+**Dice gauntlet, state after run 5 (2026-11-10).** The 48-station beats ran unvoiced end to end
+(46 rolled, none stuck or failed, every card held long enough, d6 to d100 and every check kind
+rolled; a voiced 17-station subset ran before it). Open: (1) a declared ranged shot at a hostile
+creature is still sometimes ruled `no_stakes` on the first ask (stations 33 and 34 of the full
+run, the barn raider and the wolf in the re-runs) even after the judge instruction names what an
+opponent is; the runner's one retry usually gets a roll, the barn raider did not. (2) A natural
+1 or 20 has not yet shown its mark on a card (a natural 1 on an ability check shows none by rule).
+(3) The healing line says "plus two" with no ability named, because the sheet's healing entry
+and `ModifierLabel::Flat` carry no label. (4) The flourish-repetition fix (fresh image per
+flourish, 16 lines of history) was written after the full run and is only seen in the ranged
+re-run. (5) The card's runtime animation and real frame rate have not been viewed on the owner's
+screen (the pane's clock stops when the window is hidden), and the visual refinement round 4 is
+owed.
 
 **H-1, "the host stops logging" (2026-11-10): CLOSED, not a host defect.** On the live host the log was
 checked read-only after run 9: `latest` did not move for a `GET` and a `world inventory get`

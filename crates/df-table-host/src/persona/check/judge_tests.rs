@@ -5,7 +5,9 @@ use df_rules::roll::{Ability, RollMode, Skill};
 use serde_json::{Value, json};
 
 use super::fixtures::{athletics_answer, judge_request, table, trivial_answer, with};
-use super::judge::{check_request, judge_check, judge_facts, judge_schema, parse_verdict};
+use super::judge::{
+    JUDGE_INSTRUCTION, check_request, judge_check, judge_facts, judge_schema, parse_verdict,
+};
 use super::request::{
     AnswerField, CheckCall, CheckError, CheckKind, CheckReason, CheckRouteError, CheckTest,
     CheckVerdict, DcBand, Initiator, ModeGround, Tone, mode_from_key, mode_key,
@@ -570,6 +572,28 @@ fn the_facts_give_the_action_the_place_the_sheet_and_what_was_rolled_but_not_the
         "the station's designed kind is not told to the judge: {told}"
     );
     assert_eq!(judge_facts(&narrator())["action"], Value::Null);
+}
+
+#[test]
+fn the_instruction_names_an_opponent_and_keeps_a_declared_attack_on_one_out_of_no_stakes() {
+    let told = JUDGE_INSTRUCTION;
+    for part in [
+        "An opponent is any living creature or enemy present in the situation or in_sight",
+        "that can act, defend, dodge, take cover or answer back",
+        "attack the character declares on an opponent",
+        "kind is attack_roll with the character's weapon in uses",
+        "It is never trivial_no_check or no_stakes",
+        concat!(
+            "Only an attack on a thing that cannot resist or respond, ",
+            "with no consequence for missing, may be no_stakes"
+        ),
+    ] {
+        assert!(told.contains(part), "the instruction lacks: {part}");
+    }
+    assert!(
+        told.contains("never by matching words"),
+        "the judge still judges by meaning"
+    );
 }
 
 #[tokio::test]

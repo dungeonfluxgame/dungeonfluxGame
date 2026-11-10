@@ -34,7 +34,7 @@ use crate::text::TextRoute;
 const OUTPUT_NAME: &str = "check";
 
 /// The instruction of the check judge.
-const JUDGE_INSTRUCTION: &str = concat!(
+pub(super) const JUDGE_INSTRUCTION: &str = concat!(
     "You judge, for a tabletop role-playing game on the SRD 5.2.1 rules, whether a roll is called ",
     "now. moment says why you are asked: player (the character stated an action, action, and you ",
     "say whether it needs a roll) or narrator (nothing was stated: the narrator decides whether ",
@@ -44,7 +44,16 @@ const JUDGE_INSTRUCTION: &str = concat!(
     "with the reason, when anyone would do it (trivial_no_check), when it cannot be done ",
     "(impossible_no_check), when nothing rides on it (no_stakes) or when the same test was ",
     "already rolled here (already_checked, see already_checked), and then kind, ability, skill, ",
-    "dc_band and uses are null, mode is normal and grounds is none. When it is true, reason is ",
+    "dc_band and uses are null, mode is normal and grounds is none. no_stakes is for a test with ",
+    "nothing to lose or gain, such as acting on an inert, unattended thing where failing costs ",
+    "nothing. An opponent is any living creature or enemy present in the situation or in_sight ",
+    "that can act, defend, dodge, take cover or answer back, hostile or about to be. A weapon ",
+    "attack the character declares on an opponent, at a distance or up close, is uncertain by the ",
+    "rules, because the opponent's Armor Class may turn it aside and the opponent answers: ",
+    "check_required is true, kind is attack_roll with the character's weapon in uses, and the ",
+    "reason is uncertain_with_consequence at a player moment. It is never trivial_no_check or ",
+    "no_stakes. Only an attack on a thing that cannot resist or respond, with no consequence for ",
+    "missing, may be no_stakes. When it is true, reason is ",
     "uncertain_with_consequence at a player moment and narrator_hazard, narrator_obstacle or ",
     "narrator_reaction at a narrator moment, and you never call a test already in ",
     "already_checked. kind is the roll: ability_check (an ability, or a skill of it), ",
