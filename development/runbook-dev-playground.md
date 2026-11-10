@@ -3247,19 +3247,20 @@ marked `TODO(DEV-12)`. The transition's Generating, Locating and Placing timings
 after the plate call returns. `persona converse` has no topic shifts. Each plate run spends an
 image generation and a fal scan.
 
-**Dice gauntlet, state after run 5 (2026-11-10).** The 48-station beats ran unvoiced end to end
-(46 rolled, none stuck or failed, every card held long enough, d6 to d100 and every check kind
-rolled; a voiced 17-station subset ran before it). Open: (1) a declared ranged shot at a hostile
-creature is still sometimes ruled `no_stakes` on the first ask (stations 33 and 34 of the full
-run, the barn raider and the wolf in the re-runs) even after the judge instruction names what an
-opponent is; the runner's one retry usually gets a roll, the barn raider did not. (2) A natural
-1 or 20 has not yet shown its mark on a card (a natural 1 on an ability check shows none by rule).
-(3) The healing line says "plus two" with no ability named, because the sheet's healing entry
-and `ModifierLabel::Flat` carry no label. (4) The flourish-repetition fix (fresh image per
-flourish, 16 lines of history) was written after the full run and is only seen in the ranged
-re-run. (5) The card's runtime animation and real frame rate have not been viewed on the owner's
-screen (the pane's clock stops when the window is hidden), and the visual refinement round 4 is
-owed.
+**Dice gauntlet, state after the last runs (2026-11-10).** The 48-station beats ran unvoiced end to
+end (46 rolled, none stuck or failed, every card held long enough, d6 to d100 and every check kind
+rolled; a voiced 17-station subset ran before it and rolled the d4). Two things found and closed:
+a declared ranged shot was ruled `no_stakes` when the plate's scanned layout showed only a straw
+target (the judge reads what is in sight from the plate, so a scene whose opponent is not on the
+plate reads as an inert target: give a station a plate that shows its opponent; the three ranged
+stations now use the ford plate with a bandit and all three rolled on the first ask), and a
+healing roll's flat bonus was unlabelled (the sheet's healing entry now carries a `bonus_label`;
+the hit die says "plus two for Constitution", Second Wind "plus three for class level").
+Open: (1) a natural 1 or 20 has not yet shown its mark on a card (a natural 1 on an ability check
+shows none by rule). (2) The roll card's visual review ran to round 10 in an isolated headless
+Edge with paused animations (rounds 9 and 10 found nothing above polish on the 13 cards; a 20-dice
+roll shows no tumbling dice, a polish item); the display was not looked at on the owner's own
+screen. (3) The toolbar toggles' mouse-click and restart checklist is still owed.
 
 **H-1, "the host stops logging" (2026-11-10): CLOSED, not a host defect.** On the live host the log was
 checked read-only after run 9: `latest` did not move for a `GET` and a `world inventory get`
